@@ -58,6 +58,13 @@ const EVENTS = new Set([
   "change", "click", "input", "submit", "keydown", "pointerdown", "pointermove", "pointerup", "dragstart", "dragover",
   "drop", "dragend", "scroll",
 ]);
+// Two names that are not events of the element: `mounted` runs its handler once, when the tree is
+// in the document, and `resize` runs it each time the window is resized, both with the element as
+// `currentTarget`. A page uses them to read the layout (what fits) after the elements are there.
+const HOOKS = new Set(["mounted", "resize"]);
+const ALL_EVENTS = new Set([...EVENTS, ...HOOKS]);
+// What the window of the last mount listens to for `resize`, taken off at the next mount.
+let windowListeners = [];
 
 function flatten(children, out) {
   for (const child of children) {
@@ -124,7 +131,7 @@ export function icon(name) {
   }, ICONS[name].map(([tag, attrs]) => h(tag, attrs)));
 }
 
-function build(doc, node) {
+function build(doc, node, hooks) {
   if (typeof node.text === "string") {
     return doc.createTextNode(node.text);
   }
@@ -152,8 +159,12 @@ function build(doc, node) {
     }
   }
   for (const [event, handler] of Object.entries(node.on)) {
-    if (!EVENTS.has(event)) {
+    if (!ALL_EVENTS.has(event)) {
       throw new Error(`no event ${event}`);
+    }
+    if (HOOKS.has(event)) {
+      hooks.push({ event, element, handler });
+      continue;
     }
     element.addEventListener(event, (e) => {
       if (event === "submit") {
@@ -163,14 +174,30 @@ function build(doc, node) {
     });
   }
   for (const child of node.children) {
-    element.appendChild(build(doc, child));
+    element.appendChild(build(doc, child, hooks));
   }
   return element;
 }
 
 // Replaces what `root` shows with `tree`.
 export function mount(doc, root, tree) {
-  root.replaceChildren(build(doc, tree));
+  const hooks = [];
+  const built = build(doc, tree, hooks);
+  const view = doc.defaultView;
+  for (const [on, type, listener] of windowListeners) {
+    on.removeEventListener(type, listener);
+  }
+  windowListeners = [];
+  root.replaceChildren(built);
+  for (const { event, element, handler } of hooks) {
+    if (event === "mounted") {
+      handler({ currentTarget: element });
+    } else if (view) {
+      const listener = () => handler({ currentTarget: element });
+      view.addEventListener("resize", listener);
+      windowListeners.push([view, "resize", listener]);
+    }
+  }
 }
 
 // The words an operator reads for an error: the code and the refusal token, never more.

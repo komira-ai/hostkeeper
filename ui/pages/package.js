@@ -697,7 +697,7 @@ function publishersSection(ctx, pkg, state, redraw) {
     }
     redraw();
     return `Removed ${shown}.`;
-  });
+  }, { class: "danger" });
 
   const rows = () => state.entries.map((entry) => h("tr", {},
     h("td", {}, entry.repository || "any"),

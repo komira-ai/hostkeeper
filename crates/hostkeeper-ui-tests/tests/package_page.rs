@@ -1154,3 +1154,20 @@ return seen.reports;"#,
         ]
     );
 }
+
+#[test]
+fn the_remove_button_of_a_trusted_publisher_is_the_danger_button() {
+    // Proves: each trusted publisher's Remove is of class `danger`, as the Remove of a package, a
+    // repository and an inventory record is.
+    // Catches: a Remove that looks like a plain button beside the danger ones of the other pages.
+    let mut ui = Ui::start();
+    script(&ui, vec![db_status()]);
+    ui.reply(&m("Services/ListTrustedPublishers"), publishers_reply());
+    let out = package(
+        &mut ui,
+        r#"{ package: "api" }"#,
+        "[]",
+        r#"return named(tree, "remove-publisher").map((n) => n.attrs.class || "");"#,
+    );
+    assert_eq!(out["out"], json!(["danger", "danger"]));
+}

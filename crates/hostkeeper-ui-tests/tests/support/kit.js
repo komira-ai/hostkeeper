@@ -209,8 +209,27 @@ export function fakeDocument() {
         this.attributes[name] = String(value);
       },
       appendChild(child) {
+        child.parentNode = this;
         this.children.push(child);
         return child;
+      },
+      // The first element below this one matching `.class` or `[name=value]`, null for none.
+      querySelector(selector) {
+        const byName = /^\[name=(.+)\]$/.exec(selector);
+        const match = (e) => (byName
+          ? e.attributes["name"] === byName[1]
+          : (e.attributes["class"] || "").split(" ").includes(selector.slice(1)));
+        return elements(this).find((e) => e !== this && match(e)) || null;
+      },
+      classList: {
+        classes: new Set(),
+        toggle(name, on) {
+          if (on) {
+            this.classes.add(name);
+          } else {
+            this.classes.delete(name);
+          }
+        },
       },
       replaceChildren(...children) {
         this.children = children;
@@ -230,6 +249,16 @@ export function fakeDocument() {
       return { nodeType: 3, data };
     },
     root: createElement("div"),
+    // The window: the listeners the page keeps on it, by event name (`resize`).
+    defaultView: {
+      listeners: {},
+      addEventListener(event, listener) {
+        this.listeners[event] = (this.listeners[event] || []).concat([listener]);
+      },
+      removeEventListener(event, listener) {
+        this.listeners[event] = (this.listeners[event] || []).filter((l) => l !== listener);
+      },
+    },
   };
 }
 

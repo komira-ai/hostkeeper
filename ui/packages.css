@@ -53,6 +53,9 @@
 
 .packages table {
   width: 100%;
+  /* Separate borders: with collapsed ones the first row's rule was drawn half a pixel off in the cell of buttons. */
+  border-collapse: separate;
+  border-spacing: 0;
 }
 
 .packages td.row-actions {
@@ -62,6 +65,14 @@
 
 .packages td.row-actions button + button {
   margin-left: 10px;
+}
+
+/* A fixed height for the buttons of a row, so that the row is a whole number of pixels high and the
+   rule under it meets the rule under the other cells (a button of 29.5px put the cell half a pixel off). */
+.packages td.row-actions button {
+  box-sizing: border-box;
+  height: 30px;
+  vertical-align: middle;
 }
 
 .packages button.danger {
