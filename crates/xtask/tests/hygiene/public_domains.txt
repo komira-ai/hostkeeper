@@ -152,3 +152,6 @@ fleetdm.com
 # The DNS provider API of the MDM name's certificate (hostkeeper-coordinator, src/mdm_acme/godaddy.rs):
 # the one host the coordinator sends the DNS credential to.
 =api.godaddy.com
+
+# Where an operator makes the GoDaddy API key the coordinator's DNS credential is (docs/operations/mdm-setup.md).
+=developer.godaddy.com
