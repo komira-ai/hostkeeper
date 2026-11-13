@@ -50,7 +50,7 @@
     --ink-2: #c4d0dc;
     --muted: #8fa1b3;
     --accent-text: #fe9e62;
-    --ok: #2fa36b;
+    --ok: #3db97d;
     --ok-bg: #12301f;
     --warn: #e0a94a;
     --warn-bg: #33270f;
@@ -73,7 +73,7 @@
   --ink-2: #c4d0dc;
   --muted: #8fa1b3;
   --accent-text: #fe9e62;
-  --ok: #2fa36b;
+  --ok: #3db97d;
   --ok-bg: #12301f;
   --warn: #e0a94a;
   --warn-bg: #33270f;
@@ -175,10 +175,28 @@ code {
 
 .mark {
   flex: none;
-  width: 3px;
-  height: 20px;
-  border-radius: 2px;
-  background: var(--accent);
+  display: inline-flex;
+  color: var(--accent);
+}
+
+.mark .icon {
+  width: 22px;
+  height: 22px;
+}
+
+.icon {
+  flex: none;
+  width: 18px;
+  height: 18px;
+}
+
+.sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .side nav {
@@ -201,8 +219,8 @@ code {
   width: 100%;
   height: 36px;
   padding: 0 8px;
+  justify-content: flex-start;
   border: 0;
-  border-left: 3px solid transparent;
   border-radius: var(--radius);
   background: none;
   color: var(--side-ink);
@@ -215,7 +233,6 @@ code {
 
 .side button.current {
   background: var(--side-active);
-  border-left-color: var(--accent);
   font-weight: 600;
 }
 
@@ -226,10 +243,6 @@ code {
   justify-content: center;
   width: 20px;
   height: 20px;
-  border-radius: var(--radius-s);
-  background: var(--side-hover);
-  font-size: 10px;
-  font-weight: 600;
   color: var(--side-muted);
 }
 
@@ -237,9 +250,70 @@ code {
   color: var(--accent);
 }
 
-.side .collapse {
+.side .side-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--side-hover);
+}
+
+.side .side-foot button {
   color: var(--side-muted);
+}
+
+.side .side-foot button.current {
+  color: var(--side-ink);
+}
+
+.side .side-foot button:hover {
+  color: var(--side-ink);
+}
+
+/* The theme control shows what it is set to as a small pill at the right of its row. */
+.side .theme-toggle .value {
+  margin-left: auto;
+  padding: 1px 8px;
+  border: 1px solid var(--side-active);
+  border-radius: 999px;
+  font-size: 11px;
+  text-transform: capitalize;
+  color: var(--side-ink);
+}
+
+.side .collapse {
+  margin-top: 4px;
+}
+
+/* The tabs of Settings. */
+
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 20px 0 0;
+  border-bottom: 1px solid var(--rule);
+}
+
+.tabs button {
+  margin-bottom: -1px;
+  padding: 8px 14px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: none;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.tabs button:hover {
+  color: var(--ink);
+}
+
+.tabs button.current {
+  border-bottom-color: var(--accent);
+  color: var(--ink);
 }
 
 .collapsed .label,
@@ -285,6 +359,18 @@ code {
 
 .top .menu {
   display: none;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  padding: 0;
+}
+
+.top [name="who"] {
+  padding: 2px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-size: 12px;
 }
 
 .status {
@@ -310,14 +396,6 @@ main > h2 {
   font-size: 22px;
 }
 
-.page h2::before {
-  content: "";
-  display: block;
-  width: 2rem;
-  height: 3px;
-  margin-bottom: 8px;
-  background: var(--accent);
-}
 
 /* Cards. */
 
@@ -373,6 +451,20 @@ thead th {
   font-size: 12px;
   font-weight: 500;
   color: var(--muted);
+}
+
+/* A table of names and values has an empty header row: it shows no bar. */
+thead:not(:has(th:not(:empty))) {
+  display: none;
+}
+
+/* Buttons in a cell sit in one row, a gap apart, and the cell does not wrap them. */
+td:has(> button) {
+  white-space: nowrap;
+}
+
+td > button + button {
+  margin-left: 8px;
 }
 
 tbody tr:last-child > * {
@@ -449,8 +541,14 @@ label.check input {
 }
 
 button {
-  min-height: 30px;
-  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 14px;
+  line-height: 1;
+  white-space: nowrap;
   border: 1px solid var(--rule-strong);
   border-radius: var(--radius);
   background: var(--surface);
@@ -477,7 +575,17 @@ button.primary:hover {
 
 button.danger {
   border-color: var(--bad);
+  background: transparent;
   color: var(--bad);
+}
+
+button.danger:hover {
+  background: var(--bad);
+  color: var(--surface);
+}
+
+button.danger:focus-visible {
+  outline-color: var(--bad);
 }
 
 button:disabled {
@@ -498,6 +606,7 @@ button.linkish {
 .buttons {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
   margin: 8px 0;
 }
@@ -533,6 +642,7 @@ ul.plain {
 
 .error,
 .warning,
+.notice,
 .alerts,
 .secret {
   padding: 8px 12px;
@@ -540,6 +650,26 @@ ul.plain {
   border-radius: var(--radius);
   background: var(--bad-bg);
   color: var(--bad);
+}
+
+/* A warning is amber; a notice is information, blue, for what is true and needs no action. */
+.warning {
+  border-left-color: var(--warn);
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.notice {
+  border-left-color: var(--info);
+  background: var(--info-bg);
+  color: var(--info);
+}
+
+/* A banner with nothing in it (a field's error slot before there is an error) shows nothing. */
+.error:empty,
+.warning:empty,
+.notice:empty {
+  display: none;
 }
 
 .secret {
@@ -552,6 +682,35 @@ ul.plain {
 
 .alert strong {
   color: var(--bad);
+}
+
+.alerts {
+  margin: 16px 0;
+  padding: 10px 14px;
+  font-size: 13px;
+}
+
+.alerts h3 {
+  margin: 0 0 4px;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.alerts ul,
+.alerts p {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.alerts p {
+  padding-left: 0;
+}
+
+.alerts.none {
+  border-left-color: var(--ok);
+  background: var(--ok-bg);
+  color: var(--ok);
 }
 
 pre.log {
@@ -658,11 +817,17 @@ form.sign-in button:not(.primary) {
   }
 
   .top .menu {
-    display: inline-block;
+    display: inline-flex;
   }
 
   .side .collapse {
     display: none;
+  }
+
+  .top .crumb {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   main {

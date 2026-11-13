@@ -523,6 +523,7 @@ export async function main() {
         r#"
 import { domTexts, domNamed, fire } from "../test/kit.js";
 export async function main() {
+  fire(domNamed(globalThis.doc.root, "page-settings"), "click", {});
   fire(domNamed(globalThis.doc.root, "page-audit"), "click", {});
 }"#,
     );

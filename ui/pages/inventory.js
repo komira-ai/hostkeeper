@@ -16,6 +16,8 @@ const SERVER_NAME = /^(?=.{1,63}$)[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
 const MAX_DATA_MACS = 16;
 const MAC_PROBLEM = "is not a MAC: twelve hex digits, with or without : - . between them.";
 const NOTES_PROBLEM = "Notes are at most 256 bytes, with no control character but the line break.";
+// What an empty field of a row shows, by its key: an example of what goes there.
+const PLACEHOLDERS = { server: "Server name", bmcMac: "aa:bb:cc:dd:ee:ff", dataMac: "aa:bb:cc:dd:ee:01", notes: "Notes" };
 
 // A MAC in any common spelling (aa:bb:cc:dd:ee:ff, AA-BB-CC-DD-EE-FF, aabb.ccdd.eeff,
 // aabbccddeeff, with spaces around) as the one the coordinator keeps: lower case, colon-separated;
@@ -104,7 +106,7 @@ function inputs(prefix, form) {
   const marks = {};
   return {
     cell(key, label, tag) {
-      const common = { name: `${prefix}-${key}`, "aria-label": label, spellcheck: "false", value: form[key] || "" };
+      const common = { name: `${prefix}-${key}`, "aria-label": label, spellcheck: "false", value: form[key] || "", placeholder: PLACEHOLDERS[key] };
       const input = h(tag, tag === "textarea"
         ? Object.assign({ rows: 2, maxlength: 300 }, common)
         : Object.assign({ type: "text", autocomplete: "off" }, common));
@@ -142,7 +144,7 @@ function recordRow(ctx, record, chosen) {
     h("td", {}, record.bmcMac || "-"),
     h("td", {}, (record.dataMacs || []).join(", ") || "-"),
     h("td", {}, record.notes ? h("pre", {}, record.notes) : "-"),
-    h("td", {},
+    h("td", { class: "row-actions" },
       action(ctx, "Edit", "edit-record", async () => {
         ctx.navigate("inventory", Object.assign({}, ctx.params, { edit: record.hostId }));
         return undefined;
@@ -154,7 +156,7 @@ function recordRow(ctx, record, chosen) {
         await ctx.api.enrollment.removeRecord({ hostId: record.hostId, reason: "removed on the Inventory page" });
         ctx.refresh();
         return `Removed ${record.hostId}.`;
-      })));
+      }, { class: "danger" })));
 }
 
 function editRow(ctx, record) {
@@ -174,7 +176,7 @@ function editRow(ctx, record) {
     h("td", {}, fields.cell("bmcMac", "BMC MAC", "input")),
     h("td", {}, fields.cell("dataMac", "Data MAC", "input")),
     h("td", {}, fields.cell("notes", "Notes", "textarea")),
-    h("td", {},
+    h("td", { class: "row-actions" },
       action(ctx, "Save", "save-record", async () => {
         const { errors, body } = checkForm(form, false, Boolean(record.serial));
         fields.show(errors);
@@ -186,7 +188,7 @@ function editRow(ctx, record) {
         });
         leave();
         return `Saved ${record.hostId}.`;
-      }),
+      }, { class: "primary" }),
       action(ctx, "Cancel", "cancel-edit", async () => {
         leave();
         return undefined;
@@ -196,12 +198,12 @@ function editRow(ctx, record) {
 function addRow(ctx) {
   const form = { server: "", bmcMac: "", dataMac: "", notes: "" };
   const fields = inputs("add", form);
-  return h("tr", {},
+  return h("tr", { class: "add-row" },
     h("td", {}, fields.cell("server", "Server name", "input")),
     h("td", {}, fields.cell("bmcMac", "BMC MAC", "input")),
     h("td", {}, fields.cell("dataMac", "Data MAC", "input")),
     h("td", {}, fields.cell("notes", "Notes", "textarea")),
-    h("td", {}, action(ctx, "Add", "add-record", async () => {
+    h("td", { class: "row-actions" }, action(ctx, "Add", "add-record", async () => {
       const { errors, body } = checkForm(form, true, false);
       fields.show(errors);
       if (Object.keys(errors).length > 0) {
@@ -210,7 +212,7 @@ function addRow(ctx) {
       await ctx.api.enrollment.addRecord(body);
       ctx.refresh();
       return `Added ${body.hostId}.`;
-    })));
+    }, { class: "primary" })));
 }
 
 export async function render(ctx) {
@@ -227,8 +229,9 @@ export async function render(ctx) {
   const rows = records.map((record) => (record.hostId === param("edit")
     ? editRow(ctx, record)
     : recordRow(ctx, record, record.hostId === param("record"))));
-  return h("section", { class: "page" },
+  return h("section", { class: "page inventory" },
     h("h2", {}, "Inventory"),
+    h("p", { class: "note" }, "The servers you built: each with its name, BMC MAC, data MAC and notes."),
     table(["Server name", "BMC MAC", "Data MAC", "Notes", ""], rows.concat([addRow(ctx)])),
     h("div", { class: "buttons" },
       pageToken === "" ? null : h("button", {

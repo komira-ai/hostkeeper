@@ -1,5 +1,7 @@
-// MDM setup: one plain form and nothing else but a one-line status above it and a Verify button
-// below it. Calls: Mdm.Status, Mdm.ListSettings and Mdm.ListSecrets on every drawing; on Save,
+// MDM setup: one plain form in three titled groups (Apple push certificate, Apple Business Manager,
+// TLS certificate via GoDaddy), a status header above it (a pill, "Configured" or "Needs attention",
+// and the status line) and one action bar below it with Save and Verify side by side; what Verify
+// found is listed under the bar. Page styles are in styles/forms.css. Calls: Mdm.Status, Mdm.ListSettings and Mdm.ListSecrets on every drawing; on Save,
 // PutPushCertificate, PutSecret (the ABM key and certificate, the DNS credential), PutAbmToken and
 // PutSetting (`dns_zone`, `acme_contact`), and PutName while no name is set; on the link next to the token field, GetAbmPublicKey; on
 // Verify, Verify.
@@ -117,13 +119,23 @@ export function registrableDomain(name) {
   return labels.slice(-keep).join(".");
 }
 
-// "stored" with the expiry when the part has one; "" when nothing is held.
-function storedWords(info, notAfterUnix) {
-  if (!info) {
-    return "";
+// How soon a stored part expires counts as "soon": a chip then turns amber.
+const SOON_SECONDS = 30 * 86400;
+
+// The chip beside a field: "stored ✓" with the expiry when the part has one, amber when the
+// expiry is within 30 days and red once it has passed; "Not stored" when nothing is held. The
+// chip never holds a value of the part. A key that is not a part of the coordinator's records
+// (the secret of a pair, the contact address) has no chip.
+function storedChip(now, key, info, notAfterUnix) {
+  if (info === undefined || info === null || info === false) {
+    return h("span", { class: "chip none", name: `${key}-empty` }, "Not stored");
   }
-  const date = fmtUnix(notAfterUnix === undefined ? info.notAfterUnix : notAfterUnix).slice(0, 10);
-  return date === "-" ? "stored ✓" : `stored ✓ (expires ${date})`;
+  const raw = notAfterUnix === undefined ? info.notAfterUnix : notAfterUnix;
+  const date = fmtUnix(raw).slice(0, 10);
+  const left = Number(raw) - now;
+  const tone = date === "-" || !Number.isFinite(left) ? "ok" : left <= 0 ? "bad" : left <= SOON_SECONDS ? "warn" : "ok";
+  return h("span", { class: `chip ${tone}`, name: `${key}-stored` },
+    date === "-" ? "stored ✓" : `stored ✓ (expires ${date})`);
 }
 
 // The version in use of the secret `kind` in a `ListSecrets` reply, or undefined.
@@ -148,14 +160,21 @@ async function optional(read) {
 
 // One field of the form: its input, what is stored, the hint, the link to the documentation (when
 // there is a `help` anchor) and the coordinator's refusal of the last Save.
-function row(flow, key, input, hint, stored, help) {
+function row(flow, key, input, hint, chip, help) {
   const refused = flow.errors[key];
-  return h("div", { class: "field", name: `row-${key}` },
-    input,
-    stored === "" ? null : h("span", { class: "note", name: `${key}-stored` }, stored),
+  return h("div", { class: "field mdm-field", name: `row-${key}` },
+    h("div", { class: "mdm-control" }, input, chip),
     h("p", { class: "note" }, hint,
       help === undefined ? null : [" ", docLink(`${key}-help`, "How do I get this?", DOC, help)]),
     refused === undefined ? null : h("p", { class: "error", role: "alert", name: `${key}-error` }, refused));
+}
+
+// One titled group of the form: what the group is for, then its fields.
+function group(name, title, intro, ...fields) {
+  return h("section", { class: "mdm-group", name: `group-${name}` },
+    h("h3", {}, title),
+    h("p", { class: "note mdm-intro" }, intro),
+    fields);
 }
 
 // The bytes of a chosen file within `limit`, else a sentence saying it is too long. The size is
@@ -367,7 +386,7 @@ export function verifyResult(reply) {
     ["ABM", (ABM_WORDS[token] || token) + (abm.organization ? ` Account: ${abm.organization}.` : "")
       + (abm.detail ? ` (${abm.detail})` : "")],
   ];
-  return h("ul", { name: "verify-result" }, lines.map(([k, v]) => h("li", {}, `${k}: ${v}`)));
+  return h("ul", { name: "verify-result", class: "plain mdm-verify" }, lines.map(([k, v]) => h("li", {}, `${k}: ${v}`)));
 }
 
 async function again(ctx, flow) {
@@ -379,7 +398,7 @@ async function again(ctx, flow) {
 function publicCertificateLink(ctx, flow) {
   return h("button", {
     type: "button",
-    class: "linkish",
+    class: "linkish mdm-download",
     name: "download-abm-certificate",
     on: {
       click: async () => {
@@ -415,46 +434,60 @@ async function view(ctx, flow) {
     flow.acmeEmail = state.acmeContact !== "" ? state.acmeContact : username.includes("@") ? username : "";
     flow.acmeEmailShown = flow.acmeEmail;
   }
+  const now = ctx.now();
   const abmKey = inUse(secrets, "abm_key");
-  const form = h("div", { class: "form", name: "mdm-form" },
-    state.mdmName !== "" ? null : row(flow, "mdmName", field("MDM name", "mdm-name", flow, "mdmName", { maxlength: 253 }),
-      "The DNS name the Macs enroll at, such as mdm.example.com. It cannot be changed once a Mac has enrolled."),
-    row(flow, "pushCert", filePicker("Push certificate (PEM)", "push-cert", flow, "pushCert"),
-      "The Apple push certificate, from mdmcert.download or the Apple Push Certificates Portal.",
-      storedWords(status.pushCert, status.pushNotAfterUnix), "push-certificate"),
-    row(flow, "pushKey", filePicker("Push certificate private key (PEM)", "push-key", flow, "pushKey"),
-      "The private key the push certificate was made with.", storedWords(status.pushKey), "push-certificate"),
-    row(flow, "abmToken", filePicker("Apple Business Manager token (.p7m or JSON)", "abm-token", flow, "abmToken"),
-      "The token downloaded from ABM (a .p7m file), or an existing token (JSON).",
-      storedWords(status.abmToken, status.abmNotAfterUnix), "abm-token"),
-    secrets !== null && abmKey === undefined ? publicCertificateLink(ctx, flow) : null,
-    row(flow, "abmKey", filePicker("Apple Business Manager private key (PEM)", "abm-key", flow, "abmKey"),
-      "The key the ABM token is encrypted to, when taking over an existing ABM server.",
-      storedWords(abmKey), "abm-key-pair"),
-    row(flow, "abmCert", filePicker("Apple Business Manager certificate (PEM)", "abm-cert", flow, "abmCert"),
-      "The certificate of that key.", storedWords(inUse(secrets, "abm_cert")), "abm-key-pair"),
-    row(flow, "dnsKey", field("GoDaddy API key", "dns-key", flow, "dnsKey", { maxlength: 512 }),
-      "For the TLS certificate of the MDM name from Let's Encrypt.", storedWords(status.dnsCredential), "godaddy-api-key"),
-    row(flow, "dnsSecret", field("GoDaddy API secret", "dns-secret", flow, "dnsSecret", { type: "password", maxlength: 512 }),
-      "The secret of that key.", "", "godaddy-api-key"),
-    row(flow, "contact", field("Contact email for Let's Encrypt", "contact", flow, "acmeEmail", { maxlength: 254 }),
-      "Let's Encrypt writes here about the certificate.", ""),
-    action(ctx, "Save", "save", async () => {
-      const said = await save(ctx, flow, state);
-      await again(ctx, flow);
-      return said;
-    }));
-  return h("section", { class: "page" },
-    h("h2", {}, TITLE),
-    h("p", { name: "mdm-status" }, statusLine(status)),
-    form,
-    h("div", { name: "verify-section" },
+  const abmCert = inUse(secrets, "abm_cert");
+  const form = h("div", { class: "form mdm-form", name: "mdm-form" },
+    state.mdmName !== "" ? null : group("name", "MDM name", "The name the Macs enroll at. It is set once.",
+      row(flow, "mdmName", field("MDM name", "mdm-name", flow, "mdmName", { maxlength: 253 }),
+        "The DNS name the Macs enroll at, such as mdm.example.com. It cannot be changed once a Mac has enrolled.")),
+    group("push", "Apple push certificate",
+      "Lets the coordinator wake your Macs. The certificate and its key are checked together.",
+      row(flow, "pushCert", filePicker("Push certificate (PEM)", "push-cert", flow, "pushCert"),
+        "The Apple push certificate, from mdmcert.download or the Apple Push Certificates Portal.",
+        storedChip(now, "pushCert", status.pushCert, status.pushNotAfterUnix), "push-certificate"),
+      row(flow, "pushKey", filePicker("Push certificate private key (PEM)", "push-key", flow, "pushKey"),
+        "The private key the push certificate was made with.", storedChip(now, "pushKey", status.pushKey), "push-certificate")),
+    group("abm", "Apple Business Manager",
+      "Hands new Macs to the coordinator when they are bought. The token is checked against the key held here.",
+      row(flow, "abmToken", filePicker("Apple Business Manager token (.p7m or JSON)", "abm-token", flow, "abmToken"),
+        "The token downloaded from ABM (a .p7m file), or an existing token (JSON).",
+        storedChip(now, "abmToken", status.abmToken, status.abmNotAfterUnix), "abm-token"),
+      secrets !== null && abmKey === undefined ? publicCertificateLink(ctx, flow) : null,
+      row(flow, "abmKey", filePicker("Apple Business Manager private key (PEM)", "abm-key", flow, "abmKey"),
+        "The key the ABM token is encrypted to, when taking over an existing ABM server.",
+        storedChip(now, "abmKey", abmKey), "abm-key-pair"),
+      row(flow, "abmCert", filePicker("Apple Business Manager certificate (PEM)", "abm-cert", flow, "abmCert"),
+        "The certificate of that key.", storedChip(now, "abmCert", abmCert), "abm-key-pair")),
+    group("tls", "TLS certificate via GoDaddy",
+      "The coordinator gets and renews the TLS certificate of the MDM name from Let's Encrypt, proving the name through your GoDaddy DNS.",
+      row(flow, "dnsKey", field("GoDaddy API key", "dns-key", flow, "dnsKey", { maxlength: 512 }),
+        "For the TLS certificate of the MDM name from Let's Encrypt.",
+        storedChip(now, "dnsKey", status.dnsCredential), "godaddy-api-key"),
+      row(flow, "dnsSecret", field("GoDaddy API secret", "dns-secret", flow, "dnsSecret", { type: "password", maxlength: 512 }),
+        "The secret of that key.", null, "godaddy-api-key"),
+      row(flow, "contact", field("Contact email for Let's Encrypt", "contact", flow, "acmeEmail", { maxlength: 254 }),
+        "Let's Encrypt writes here about the certificate.", null)),
+    h("div", { class: "mdm-actions", name: "mdm-actions" },
+      action(ctx, "Save", "save", async () => {
+        const said = await save(ctx, flow, state);
+        await again(ctx, flow);
+        return said;
+      }, { class: "primary" }),
       action(ctx, "Verify", "verify", async () => {
         flow.verified = await ctx.api.mdm.verify({});
         await again(ctx, flow);
         return "Verified. See what each part found.";
-      }),
-      flow.verified === null ? null : verifyResult(flow.verified)));
+      })));
+  const line = statusLine(status);
+  return h("section", { class: "page mdm-page" },
+    h("h2", {}, TITLE),
+    h("div", { class: "mdm-status" },
+      h("span", { class: `pill ${status.configured === true ? "ok" : "warn"}` }, status.configured === true ? "Configured" : "Needs attention"),
+      h("p", { name: "mdm-status" }, line)),
+    form,
+    flow.verified === null ? null : h("div", { name: "verify-section", class: "mdm-result" },
+      h("h3", {}, "What Verify found"), verifyResult(flow.verified)));
 }
 
 export async function render(ctx) {

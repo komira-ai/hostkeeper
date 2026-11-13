@@ -28,8 +28,8 @@ MDM setup), Fleet a table of hosts. After: a side menu, and Home a picture of th
 +-----------+-------------------------------------------------------------+
 ```
 
-- Menu (wide, 232 px; collapsed to 56 px icons by a button; a drawer under 640 px): Host groups, Inventory, Enrollment, then Admin
-  (Users, API tokens, MDM setup, Audit). The Packages entry arrives with the Packages page (a line of `GROUPS` in `ui/app.js`).
+- Menu (wide, 232 px; collapsed to 56 px icons by a button; a drawer under 640 px): Host groups, Inventory, Enrollment, then, at the bottom, Settings
+  (tabs: Users, API tokens, MDM, Audit), the theme toggle, Sign out and Collapse. MDM is a setting, not a page of the daily work. The Packages entry arrives with the Packages page (a line of `GROUPS` in `ui/app.js`).
   No Fleet, Release, Rollout or Holds entry. The wordmark at the top goes Home. The top bar shows where the operator is, the user,
   the theme toggle (browser, light, dark; in memory only) and Sign out.
 - Home, three levels of one page. **Floor plan**: a band for each row of the cluster, each rack a footprint (number, U in use as a
@@ -52,6 +52,10 @@ MDM setup), Fleet a table of hosts. After: a side menu, and Home a picture of th
 - Enrollment: the approval form gets the Height (1U to 4U, 1U by default, chosen before the U position), the Row (a dropdown of the
   rows, first choice "Unplaced"), the Rack (that row's racks) and the U position (the free slots of the rack for that height). No
   free text. Placement is optional; an approval with none lands the host in Unplaced. Approve stores the placement in the same step.
+  Each pending request is one compact card (`ui/styles/enrollment.css`): the inventory match, one small table of the key facts (a
+  renewal or a nonce only when there is one), then one row of controls (Host id, Host group with "No group", Height, Row, Rack, U
+  position) with Approve and Reject; the explanations are small info marks, a contested or duplicate request a chip and a quiet
+  line, and "not recorded" is grey.
 - Host: a Placement section says where the server stands and has the same four choices (Place or Move) and Unplace.
 - Not changed: every other page, every existing endpoint, the sign-in. Release, Rollout and Holds open by their route.
 
@@ -112,6 +116,7 @@ approval asks for no placement); `hkctl` gets the verbs from the generated comma
   `ui/pages/enrollment.js`: the placement controls only; `ui/pages/host.js` also lays out the Host page above.
 - `ui/view.js`: `pill`, the `vars` of an element (custom properties), `aria-*`, `draggable`, `tabindex`, and the events the strip and the
   drag use. `ui/app.css` (tokens, frame, components) and `ui/lab.css` (the lab) are two files so that each stays under 1000 lines.
+  `ui/styles/forms.css` holds the page-scoped styles of sign-in, Inventory, Host groups and MDM setup (each rule starts with its page's class).
 
 ## 5. Tests
 
