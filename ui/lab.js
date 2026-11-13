@@ -104,7 +104,7 @@ export const CONSOLE_DEVICES = [
   "/dev/ttyS0", "/dev/ttyS1", "/dev/ttyS2", "/dev/ttyS3", "/dev/ttyACM0", "/dev/ttyACM1",
 ];
 export function consoleWords(device) {
-  return device.consoleHost === "" ? "none" : `${device.consoleDevice.replace(/^\/dev\//, "")} on ${device.consoleHost}`;
+  return device.consoleHost === "" ? "none" : `${device.consoleDevice.replace("/dev/", "")} on ${device.consoleHost}`;
 }
 
 // The request subject of a server: `{kind, id}` as the API spells it.
