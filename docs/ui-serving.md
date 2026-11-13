@@ -93,15 +93,37 @@ by their route and are not in the menu.
   `unknown: platform not reported`: the coordinator, which knows it, may pick it an entry. Counts of each pick
   cover every host; the table shows the first 200. A refusal (`NOT_FOUND release_unknown` for a
   version never set with targets) is shown as the API says it.
-- **Host groups** (a section of the Rollout page, under the services): every group the coordinator
-  holds (`HostGroups.List`, every page), with its packages, the policy keys that are set ("default"
-  when none is), its generation, its host count and its desired versions. Opening a group
-  (`HostGroups.Get`) shows, per package, the desired and minimum version and the convergence counts,
-  and the group's hosts 50 at a time, each a link to its Host page. One action: moving a host to a
-  group (`HostGroups.Move`), which needs the node id, the group and a reason (1 to 256 characters,
-  no control character) and asks to confirm first. Groups are created, changed and removed with
-  `hkctl host-groups put` and `remove`, not on this page. A refused List or Get is shown inline
-  with its code and reason, and the rest of the page still renders.
+- **Packages** (`Packages` in the page list; `ui/pages/packages.js`). The registry of what the coordinator can deploy.
+  A table of the registered packages (`Services.List`): its repository, its minimum version in each host group that has
+  one, and the host groups that run it, with *Edit* and *Remove* on each row. *Add package* is a form of a name and the
+  repository the package comes from, chosen from the registered repositories (the default, `komira`, preselected when it is
+  one); it sends `Services.Put`. *Edit* changes the repository (`Services.SetRepository`) and, for one of the host groups that
+  run the package, its minimum version (`Services.SetMinVersion`; empty removes it): a minimum version belongs to a host group,
+  so a package no group runs has none and the add form does not ask for one. *Remove* of a package some host group runs is
+  refused on the page, naming the groups; for one no group runs it asks first and sends `Services.Remove`, and the API's
+  `in_use` refusal (a group listed it since the page loaded) is shown in words. A package is registered when a host group lists
+  it or it was added here, so the packages of the farm's groups (`hostkeeper`, `tierstore`, `js-agent`, whatever the groups
+  list) are in the table without any step. Below, *Repositories* (`Repositories.List`): each repository's URL, suites,
+  components, access (public, or private: read by the coordinator alone), the packages that come from it and its signing keys
+  (the last 16 hex characters of each fingerprint), with *Edit* and *Remove*, and a form that adds or changes one
+  (`Repositories.Put`). The form asks for a name (not on *Edit*), the URL, the suites, the components, the signing key as a
+  file (a binary OpenPGP keyring, `gpg --export`), who reads it, and for a private repository the path of the credential file
+  on the coordinator's machine; each field has a one-line hint. The fingerprints are read from the key file in the page,
+  not typed, and the package manager (`apt`) is not asked for. *Edit* with no new key file keeps the key held
+  (`Repositories.Get`). A repository some package comes from is not removed, and the page names the packages. The reason of each
+  write is a fixed sentence; the audit log names the operator. Repositories that packages name and the registry lacks are shown as
+  an alert. A refused list is shown inline and the rest of the page still renders.
+- **Host groups**: every group the coordinator holds (`HostGroups.List`, every page), the built-in `all` marked as built in,
+  with its packages, the policy keys that are set ("default" when none is), its generation, its host count and its desired
+  versions. Opening a group (`HostGroups.Get`) shows, per package, the desired and minimum version and the convergence counts,
+  and the group's hosts 50 at a time, each a link to its Host page, with *Remove from group* beside each (not in `all`). The form
+  that creates or changes a group takes a name and the packages as a list of checkboxes, one for each registered package
+  (`Services.List`, the Packages page's): nothing is typed, the packages are installed in the order ticked, and with none
+  registered the form links to the Packages page. A package the group lists that is not registered stays in the list, ticked.
+  Saving a group (`HostGroups.Put`) keeps its policy and asks first when a package would be uninstalled. Moving a host to a
+  group (`HostGroups.Move`) needs the host, the group and a reason (1 to 256 characters, no control character) and asks to
+  confirm first; the hosts in no group are listed to pick. A refused List or Get is shown inline with its code and reason,
+  and the rest of the page still renders.
 - **Host**: the services that host runs because its group lists them (its Source column reads
   `role <name>`, the name being the host's group), the installed version against the desired one,
   and the minimum version.

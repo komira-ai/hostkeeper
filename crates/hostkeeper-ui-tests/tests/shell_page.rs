@@ -91,6 +91,7 @@ return { first, home, current, crumb: domTexts(crumb).join("") };"#,
         pages,
         [
             &"page-hostgroups",
+            &"page-packages",
             &"page-inventory",
             &"page-enrollment",
             &"page-users",

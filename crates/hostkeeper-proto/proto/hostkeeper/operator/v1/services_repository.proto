@@ -1,6 +1,7 @@
 // hostkeeper.operator.v1: the messages of `Services.SetRepository`, the call that sets which
 // repository of the coordinator's registry a package comes from (docs/design/hostgroups.md
-// section 9). The `Services` service, its refusals (`ServicesRefusal`) and the rest of the
+// section 9), and of `Services.Put` and `Services.Remove`, which register a package and take
+// one out. The `Services` service, its refusals (`ServicesRefusal`) and the rest of the
 // package, `Enrollment` and `EnrollmentRefusal` (enrollment.proto) and `Audit` and `AuditRefusal`
 // among it, are operator.proto; this file is the same package and API, kept apart so that each
 // file stays short.
@@ -36,6 +37,37 @@ message SetRepositoryRequest {
 }
 
 message SetRepositoryResponse {
+  // The audit entry the call wrote.
+  AuditEntry entry = 1;
+}
+
+// `Services.Put` and `Services.Remove`: the registry of packages the console's Packages page
+// edits. A package is registered when a host group lists it, the coordinator's rollout file
+// defines it, or the operator registered it with `Put`, which records the repository it comes
+// from; `Remove` takes a package out that no host group lists.
+message PutServiceRequest {
+  // The package: 1 to 64 bytes of `[a-z0-9-]`.
+  string service = 1;
+  // The registry's name of the repository the package comes from. Empty: the default repository,
+  // `komira`. It must be held by the registry.
+  string repository = 2;
+  // Why, 1 to 256 bytes; recorded in the audit entry.
+  string reason = 3;
+}
+
+message PutServiceResponse {
+  // The audit entry the call wrote.
+  AuditEntry entry = 1;
+}
+
+message RemoveServiceRequest {
+  // The package.
+  string service = 1;
+  // Why, 1 to 256 bytes; recorded in the audit entry.
+  string reason = 2;
+}
+
+message RemoveServiceResponse {
   // The audit entry the call wrote.
   AuditEntry entry = 1;
 }

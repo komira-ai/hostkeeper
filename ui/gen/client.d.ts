@@ -102,6 +102,8 @@ export interface Client {
     unassign(request: hostkeeper_operator_v1.UnassignRequest): Promise<hostkeeper_operator_v1.UnassignResponse>;
     setMinVersion(request: hostkeeper_operator_v1.SetMinVersionRequest): Promise<hostkeeper_operator_v1.SetMinVersionResponse>;
     setRepository(request: hostkeeper_operator_v1.SetRepositoryRequest): Promise<hostkeeper_operator_v1.SetRepositoryResponse>;
+    put(request: hostkeeper_operator_v1.PutServiceRequest): Promise<hostkeeper_operator_v1.PutServiceResponse>;
+    remove(request: hostkeeper_operator_v1.RemoveServiceRequest): Promise<hostkeeper_operator_v1.RemoveServiceResponse>;
     hold(request: hostkeeper_operator_v1.HoldRequest): Promise<hostkeeper_operator_v1.HoldResponse>;
     unhold(request: hostkeeper_operator_v1.UnholdRequest): Promise<hostkeeper_operator_v1.UnholdResponse>;
   };
@@ -693,6 +695,8 @@ export namespace hostkeeper_operator_v1 {
   export interface PutRepositoryResponse { repository?: hostkeeper_operator_v1.RegisteredRepository; entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface PutSecretRequest { kind?: string; material?: string; notAfterUnix?: string; withCertificate?: string; }
   export interface PutSecretResponse { secret?: hostkeeper_operator_v1.SecretInfo; }
+  export interface PutServiceRequest { service?: string; repository?: string; reason?: string; }
+  export interface PutServiceResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface PutSettingRequest { name?: string; value?: string; }
   export interface PutSettingResponse { name?: string; value?: string; }
   export type RecordState = "RECORD_STATE_UNSPECIFIED" | "RECORD_STATE_OPEN" | "RECORD_STATE_CLOSED" | "RECORD_STATE_USED";
@@ -709,6 +713,8 @@ export namespace hostkeeper_operator_v1 {
   export interface RemoveRecordResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface RemoveRepositoryRequest { name?: string; reason?: string; }
   export interface RemoveRepositoryResponse { generation?: string; entry?: hostkeeper_operator_v1.AuditEntry; }
+  export interface RemoveServiceRequest { service?: string; reason?: string; }
+  export interface RemoveServiceResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface Replaced { version?: string; minUp?: { [key: string]: number }; }
   export interface ResetPasswordRequest { name?: string; }
   export interface ResetPasswordResponse { user?: hostkeeper_operator_v1.UserInfo; password?: string; }

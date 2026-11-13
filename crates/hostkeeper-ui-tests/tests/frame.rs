@@ -334,3 +334,32 @@ export async function main() {
         json!([{"name": "abm-server.crt", "mime": "text/plain", "text": "CERTPEM"}])
     );
 }
+
+#[test]
+fn the_packages_page_is_in_the_page_list_and_the_host_groups_link_opens_it() {
+    // Proves: "Packages" is a page of the frame that lists the registered packages; from the Host
+    // groups page with no registered package, its link opens the Packages page, which calls
+    // Services.List and Repositories.List.
+    // Catches: a page missing from the frame's list, or a link that names a page the frame lacks.
+    let mut ui = Ui::start();
+    ui.session("tok_a");
+    ui.reply(&m("HostGroups/List"), json!({}));
+    ui.reply(&m("Hosts/List"), json!({}));
+    ui.reply(&m("Services/List"), json!({}));
+    ui.reply(
+        &m("Services/List"),
+        json!({"services": [{"service": "js-agent", "repository": "komira"}]}),
+    );
+    ui.reply(&m("Repositories/List"), json!({}));
+    ui.run(&start("hostgroups"));
+    let out = ui.run(&steps(
+        r#"
+const before = text().includes("No package is registered yet.");
+click("open-packages");
+await settle();
+return { before, listed: text().includes("js-agent"), nav: elements(doc.root).some((e) => e.attributes["name"] === "page-packages") };
+"#,
+    ));
+    assert_eq!(out, json!({"before": true, "listed": true, "nav": true}));
+    assert_eq!(bodies_of(&ui, &m("Repositories/List")), [json!({})]);
+}

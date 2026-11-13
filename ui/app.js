@@ -14,6 +14,7 @@ import { h, describeError, errorView, mount } from "./view.js";
 import * as home from "./pages/home.js";
 import * as host from "./pages/host.js";
 import * as rollout from "./pages/rollout.js";
+import * as packages from "./pages/packages.js";
 import * as hostgroups from "./pages/hostgroups.js";
 import * as release from "./pages/release.js";
 import * as holds from "./pages/holds.js";
@@ -30,6 +31,7 @@ import * as mdm from "./pages/mdm.js";
 const GROUPS = [
   ["Manage", [
     ["hostgroups", "Host groups", hostgroups, "Hg"],
+    ["packages", "Packages", packages, "Pk"],
     ["inventory", "Inventory", inventory, "In"],
     ["enrollment", "Enrollment", enrollment, "En"],
   ]],
