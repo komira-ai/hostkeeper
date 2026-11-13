@@ -78,12 +78,17 @@ pub enum StartError {
     PrivateListen(SocketAddr),
     /// `--lan-listen` is a wildcard address.
     #[error(
-        "--lan-listen: {0} is a wildcard address; the LAN listener's address is named in the server certificate, so name the address of one interface"
+        "--lan-listen: {0} is a wildcard address; the LAN listener's address is named in the server certificate, so name the address of one interface, or give --lan-listen-wildcard and --lan-address where the port is published on the host"
     )]
     LanListen(SocketAddr),
+    /// `--lan-address` is a wildcard address.
+    #[error(
+        "--lan-address: {0} is a wildcard address; it is the address daemons dial and the server certificate names, so name the address of one interface of the LAN"
+    )]
+    LanAddress(std::net::IpAddr),
     /// `--mdm-listen` is a wildcard address.
     #[error(
-        "--mdm-listen: {0} is a wildcard address; the Macs' listener is reached by the name of the MDM server, which is the address of one interface of the LAN, so name that address"
+        "--mdm-listen: {0} is a wildcard address; the Macs' listener is reached by the name of the MDM server, which is the address of one interface of the LAN, so name that address, or give --mdm-listen-wildcard where the port is published on the host"
     )]
     MdmListen(SocketAddr),
     /// `--health-listen` is not a loopback address.

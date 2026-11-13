@@ -215,11 +215,15 @@ pub struct Serve {
     /// A third listener, on the farm LAN, for network-installed hosts, which have no tailnet:
     /// it serves what the heartbeat listener serves (`Enroll` and `Poll` with no client
     /// certificate, the heartbeat and `Renew` with a host's) and never the operator API, the
-    /// JSON gateway or the UI. The server certificate names its IP address, so a daemon dials it
-    /// by address. It takes the address of one interface: a wildcard address is refused at
-    /// start. Requires --ca-key-file.
+    /// JSON gateway or the UI. The server certificate names its IP address (the one of
+    /// --lan-address with a wildcard), so a daemon dials it by address. It takes the address of
+    /// one interface: a wildcard address is refused at start unless --lan-listen-wildcard is
+    /// given with --lan-address. Requires --ca-key-file.
     #[arg(long, requires = "ca_key_file")]
     pub lan_listen: Option<SocketAddr>,
+    /// The opt-in of a wildcard --lan-listen and the address it is reached at.
+    #[command(flatten)]
+    pub lan: listen::LanFlags,
     /// A health listener, plain HTTP with no TLS and no token, for a probe on this machine: it
     /// answers `GET` and `HEAD` of `/healthz` only, `200 ok` while every listener is bound and
     /// serving and the store takes writes, and `503` with one reason token otherwise
@@ -487,7 +491,7 @@ pub struct Parts {
 /// # Errors
 /// [`StartError`]: a file is missing, unreadable or refused (the text names the flag or the
 /// file; the ops file must be one this build reads), `--ui-dir` is missing or not a directory,
-/// `--private-listen` (without `--private-listen-wildcard`) or `--lan-listen` is a wildcard
+/// `--private-listen` (without `--private-listen-wildcard`), `--mdm-listen` (without `--mdm-listen-wildcard`) or `--lan-listen` (without `--lan-listen-wildcard`) or `--lan-address` is a wildcard
 /// address, `--health-listen` is not a
 /// loopback address, `--quiet-secs` is below two
 /// heartbeat intervals,
@@ -620,11 +624,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
                 .unwrap_or_default();
             check_allowlist(&allowlist, &coordinator)?;
             // The LAN listener's address, an IPv4 one written as IPv6 named as IPv4.
-            let lan_ips: Vec<_> = flags
-                .lan_listen
-                .map(|lan| lan.ip().to_canonical())
-                .into_iter()
-                .collect();
+            let lan_ips: Vec<_> = flags.lan.named(flags.lan_listen).into_iter().collect();
             let max_pending = flags
                 .max_pending_enrollments
                 .map_or(DEFAULT_MAX_PENDING, |max| {

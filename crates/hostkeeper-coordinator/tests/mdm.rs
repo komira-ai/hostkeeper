@@ -790,9 +790,52 @@ fn the_macs_listener_needs_enrollment_and_a_named_interface() {
         flags.extend(["--mdm-listen", wildcard]);
         assert_eq!(
             refusal(&files, &flags),
-            format!("--mdm-listen: {wildcard} is a wildcard address; the Macs' listener is reached by the name of the MDM server, which is the address of one interface of the LAN, so name that address").replace("[::ffff:0.0.0.0]:443", "[::ffff:0.0.0.0]:443"),
+            format!("--mdm-listen: {wildcard} is a wildcard address; the Macs' listener is reached by the name of the MDM server, which is the address of one interface of the LAN, so name that address, or give --mdm-listen-wildcard where the port is published on the host").replace("[::ffff:0.0.0.0]:443", "[::ffff:0.0.0.0]:443"),
         );
     }
+}
+
+/// Proves: `--mdm-listen-wildcard` is in the usage and off unless given; it is a usage error
+/// (exit 2) without `--mdm-listen`; with it each spelling of a wildcard `--mdm-listen` is taken
+/// as given; an address of one interface is taken as without it; and the same wildcard without
+/// it is still refused by name.
+///
+/// Catches: an opt-in that is on by default, does not take a wildcard or one of its spellings,
+/// rewrites an address of one interface, or is accepted with no Macs' listener to apply to.
+#[test]
+fn the_macs_listener_takes_a_wildcard_only_with_its_opt_in() {
+    let files = Files::new("mdm-listen-wildcard");
+    let help = Cli::try_parse_from(["hostkeeper-coordinator", "serve", "--help"])
+        .expect_err("help")
+        .to_string();
+    assert!(help.contains("--mdm-listen-wildcard"), "{help}");
+
+    let mut alone = enrollment();
+    alone.push("--mdm-listen-wildcard");
+    assert_eq!(
+        hostkeeper_coordinator::config::main(files.args(&alone)),
+        ExitCode::from(2)
+    );
+
+    for wildcard in ["0.0.0.0:443", "[::]:443", "[::ffff:0.0.0.0]:443"] {
+        let mut flags = enrollment();
+        flags.extend(["--mdm-listen", wildcard, "--mdm-listen-wildcard"]);
+        let parts = start(&files, &flags).expect("the opt-in takes it");
+        assert_eq!(
+            parts.mdm_listen,
+            Some(wildcard.parse().expect("an address"))
+        );
+        drop(parts);
+
+        let mut without = enrollment();
+        without.extend(["--mdm-listen", wildcard]);
+        assert!(refusal(&files, &without).starts_with("--mdm-listen: "));
+    }
+
+    let mut one = macs();
+    one.push("--mdm-listen-wildcard");
+    let parts = start(&files, &one).expect("an interface address with the opt-in");
+    assert_eq!(parts.mdm_listen, Some(MACS.parse().expect("an address")));
 }
 
 /// Catches: the gate not running over the coordinator's own queue with `--mdm-listen` (it needs no

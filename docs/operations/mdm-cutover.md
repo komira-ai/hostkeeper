@@ -72,7 +72,7 @@ New flags, with the pull request that adds each and its default:
 
 | Flag | Pull request | The cutover | Default and meaning |
 |---|---|---|---|
-| `--mdm-listen IP:PORT` | open, #331 (CM11a) | set: the LAN address of the dev box, port 443 | none (no MDM listener). One interface address, no wildcard; needs the CA key flag and the enrollment store. It answers nothing until the setup holds the certificate of the MDM name |
+| `--mdm-listen IP:PORT` | open, #331 (CM11a) | set: the LAN address of the dev box, port 443 | none (no MDM listener). One interface address, no wildcard unless `--mdm-listen-wildcard` is given (section 3.1); needs the CA key flag and the enrollment store. It answers nothing until the setup holds the certificate of the MDM name |
 | `--mdm-secrets-key-file FILE` | open, #324 (CM20) | set by `coordinator_docker.sh` to `mdm-secrets.key` in the coordinator's state directory (the state volume) | none (no MDM secret kept; `Mdm.PutSecret` is refused). The coordinator makes the file (mode 0600) when it is absent and the store holds no sealed secret; a missing or wrong key with sealed secrets refuses the start |
 | `--mdm-pkg-dir DIR` | open, #332 (CM11c) | set: the host's pkg directory, mounted read-only (the old stack's, which holds the macOS pkg) | none (`/pkg/` answers 404). Files `<sha256>.pkg`, served for the digests the setting `installs` names. Needs `--mdm-listen` |
 | `--mdm-command-timeout-s N` | open, #331 | default | 86400: how long an unanswered command waits before it is queued and pushed again |
@@ -106,6 +106,42 @@ of the design and the Q4 note of section 4.1. It has a cost to know: any local u
 coordinator, may then bind ports 443 and up. The alternative is to give the container its own network
 namespace and publish the ports, which changes how every listener is bound; it was not chosen. The
 back-out removes the drop-in and restores the value the script recorded.
+
+### 3.1 As a Swarm service: `--mdm-listen-wildcard`
+
+A coordinator that runs as a Swarm service sits in a network namespace of its own, on an overlay
+network, and does not know the host's LAN address when it starts. For it `--mdm-listen` takes a
+wildcard address with the opt-in `--mdm-listen-wildcard` (it requires `--mdm-listen`; without it a
+wildcard is refused at start, as before). The Macs' listener is then given as
+`--mdm-listen 0.0.0.0:8443 --mdm-listen-wildcard`, and Docker publishes the port on the host:
+
+- published ports in `mode=host`, not the routing mesh: 443 for the Macs' listener
+  (`target=8443,published=443`, below), and 8446 for the LAN listener when the farm has one
+  (`target=8447,published=8446`, with `--lan-listen-wildcard` and `--lan-address`, below). `mode=host` keeps the Macs'
+  source addresses and binds the port on the host's own addresses; the service must be pinned to
+  the host (a placement constraint), and port 443 must be free on it (the old MDM stack's units
+  stopped);
+- the MDM name's A record is the host's LAN address, the address a Mac dials; the certificate is
+  the MDM name's, so the wildcard bind changes nothing in it (the LAN listener's is the one that does: below);
+- no macvlan network is needed. The coordinator's user cannot bind a port below 1024, so give
+  the flag a high target port and publish it as 443: `--mdm-listen 0.0.0.0:8443
+  --mdm-listen-wildcard` with `mode=host,target=8443,published=443`; the Macs still dial 443 on
+  the host;
+- the wildcard trusts no address: the listener answers what it answers with an address of one
+  interface. When the control plane moves to another host (the NUC), the same service definition
+  is deployed there and the A record is changed to that host's LAN address.
+
+The LAN listener takes the same shape with two flags. Its server certificate names the address a
+daemon dials, which a wildcard bind does not know, so `--lan-listen-wildcard` (it requires
+`--lan-listen` and `--lan-address`; without it a wildcard is refused at start, as before) comes
+with `--lan-address <ip>`, the host's LAN address: the coordinator binds the wildcard, and the server
+certificate it makes names `--lan-address` in place of the address of `--lan-listen`. On the dev
+box: `--lan-listen 0.0.0.0:8447 --lan-listen-wildcard --lan-address <lan-ip>`, published
+`mode=host,target=8447,published=8446` (the task's health listener holds `127.0.0.1:8446` inside
+the task, so the LAN listener's target is another port); the daemons dial `https://<lan-ip>:8446`.
+`--lan-address` is not a wildcard (the start stops), and the certificate is made again at the start
+that changes the address. Without the two flags nothing changes: `--lan-listen` takes the address
+of one interface and the certificate names it.
 
 How the coordinator is deployed matters for later deploys. The dev box's coordinator is a plain
 docker container made by `coordinator_docker.sh`. The script writes the new flags to a new file next
