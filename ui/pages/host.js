@@ -41,10 +41,8 @@ function plain(text) {
 // whose last update failed is `degraded`, never `healthy`. `[word, tone]`.
 export function statusOf(host) {
   const state = hostState(host);
-  const bad = list(host, "services").some((s) => s.health === "HEALTH_UNHEALTHY"
-    || (s.lastUpdate && /FAIL/.test(String(s.lastUpdate.outcome))));
   const heart = host.heartbeat && list(host.heartbeat, "services").some((s) => s.health === "HEALTH_UNHEALTHY");
-  if (state === "healthy" && (bad || heart)) {
+  if (state === "failed" || (state === "healthy" && heart)) {
     return ["degraded", "bad"];
   }
   return [state, { healthy: "ok", updating: "info", offline: "bad", pending: "muted" }[state]];
