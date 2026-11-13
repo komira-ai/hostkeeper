@@ -87,7 +87,7 @@ export async function main() {
 }
 
 fn rows(state: &str, age: &str) -> Value {
-    json!([["", ""], ["State", state], ["Age", age]])
+    json!([["State", state], ["Age", age]])
 }
 
 /// Catches a root that needs attention shown without its warning, a warning of another reason,

@@ -10,7 +10,7 @@
 import * as session from "./session.js";
 import { createApi, createAuth } from "./api.js";
 import { changeView, signInView, wordsFor } from "./signin.js";
-import { h, describeError, errorView, mount } from "./view.js";
+import { h, describeError, errorView, icon, mount } from "./view.js";
 import * as home from "./pages/home.js";
 import * as host from "./pages/host.js";
 import * as rollout from "./pages/rollout.js";
@@ -26,32 +26,37 @@ import * as tokens from "./pages/tokens.js";
 import * as mdm from "./pages/mdm.js";
 
 // The side menu: groups of pages, each `[name, title, module, glyph]`. The page's `name` is the
-// name of its button (`page-<name>`); `glyph` is the one or two letters its icon shows when the
-// menu is collapsed. Home has no entry: the "hostkeeper" wordmark at the top of the menu goes there.
+// name of its button (`page-<name>`); `glyph` names its icon (`view.js`), which is all the collapsed
+// menu shows. Home has no entry: the "hostkeeper" wordmark at the top of the menu goes there.
 const GROUPS = [
   ["Manage", [
-    ["hostgroups", "Host groups", hostgroups, "Hg"],
-    ["packages", "Packages", packages, "Pk"],
-    ["inventory", "Inventory", inventory, "In"],
-    ["enrollment", "Enrollment", enrollment, "En"],
+    ["hostgroups", "Host groups", hostgroups, "hostgroups"],
+    ["packages", "Packages", packages, "packages"],
+    ["inventory", "Inventory", inventory, "inventory"],
+    ["enrollment", "Enrollment", enrollment, "enrollment"],
   ]],
-  ["Admin", [
-    ["users", "Users", users, "Us"],
-    ["tokens", "API tokens", tokens, "Tk"],
-    ["mdm", "MDM setup", mdm, "Md"],
-    ["audit", "Audit", audit, "Au"],
-  ]],
+];
+// The pages of Settings, reached from the entry at the bottom of the menu and from the tabs above
+// each of them, each `[name, title, module]`. MDM is a setting, not a page of the daily work.
+const SETTINGS = [
+  ["users", "Users", users],
+  ["tokens", "API tokens", tokens],
+  ["mdm", "MDM", mdm],
+  ["audit", "Audit", audit],
 ];
 // The pages that are reached by a link and not by the menu, each `[name, title, module, crumb]`:
-// Home, a host of the lab view, and the three release pages, whose place is the package page.
+// Home, a host of the lab view, and the three release pages, whose place is the package page. The
+// crumb is the top bar's one line of where the page is; Home and the host page have their own
+// breadcrumbs (Lab > Row > Rack > Host) and so none here.
 const LINKED = [
-  ["home", "Lab", home, "Lab"],
-  ["host", "Host", host, "Lab / Host"],
-  ["release", "Release", release, "Packages / Release"],
-  ["rollout", "Rollout", rollout, "Packages / Rollout"],
-  ["holds", "Holds", holds, "Packages / Holds"],
+  ["home", "Lab", home, ""],
+  ["host", "Host", host, ""],
+  ["release", "Release", release, "Release"],
+  ["rollout", "Rollout", rollout, "Rollout"],
+  ["holds", "Holds", holds, "Holds"],
 ];
-const PAGES = GROUPS.flatMap(([group, pages]) => pages.map(([name, title, page, glyph]) => [name, title, page, glyph, `${group} / ${title}`]))
+const PAGES = GROUPS.flatMap(([group, pages]) => pages.map(([name, title, page, glyph]) => [name, title, page, glyph, title]))
+  .concat(SETTINGS.map(([name, title, page]) => [name, title, page, "", "Settings"]))
   .concat(LINKED.map(([name, title, page, crumb]) => [name, title, page, "", crumb]));
 
 // Routes that moved: a page that is no more is asked for by its old name and lands on the page
@@ -59,6 +64,7 @@ const PAGES = GROUPS.flatMap(([group, pages]) => pages.map(([name, title, page, 
 // through this table, so a link or a habit that still says `fleet` arrives at Home.
 export const ROUTES = {
   fleet: "home",
+  settings: "users",
 };
 
 // The themes the toggle cycles through; "system" follows the browser.
@@ -108,6 +114,15 @@ export function startApp({ doc, root, fetch, confirm, now, download, prefs = NO_
   function frame(content) {
     const who = session.who()?.username ?? "";
     const at = PAGES.find(([name]) => name === current.view);
+    const inSettings = SETTINGS.some(([name]) => name === current.view);
+    const tabs = !inSettings ? null : h("nav", { class: "tabs", "aria-label": "settings" },
+      SETTINGS.map(([name, title]) => h("button", {
+        type: "button",
+        name: `page-${name}`,
+        class: name === current.view ? "current" : "",
+        "aria-current": name === current.view ? "page" : "false",
+        on: { click: () => navigate(name, {}) },
+      }, title)));
     const entry = ([name, title, , glyph]) => h("button", {
       type: "button",
       name: `page-${name}`,
@@ -115,26 +130,48 @@ export function startApp({ doc, root, fetch, confirm, now, download, prefs = NO_
       title,
       "aria-current": name === current.view ? "page" : "false",
       on: { click: () => { drawer = false; navigate(name, {}); } },
-    }, h("span", { class: "glyph", "aria-hidden": "true" }, glyph), h("span", { class: "label" }, title));
+    }, h("span", { class: "glyph" }, icon(glyph)), h("span", { class: "label" }, title));
     return h("div", { class: `frame${collapsed ? " collapsed" : ""}${drawer ? " drawer-open" : ""}` },
       h("aside", { class: "side", id: "side" },
         h("div", { class: "brand" }, h("h1", {}, h("button", {
           type: "button", name: "home", class: "wordmark", title: "Home",
           on: { click: () => { drawer = false; navigate("home", {}); } },
-        }, h("span", { class: "mark", "aria-hidden": "true" }), h("span", { class: "word" }, "hostkeeper")))),
+        }, h("span", { class: "mark" }, icon("mark")), h("span", { class: "word" }, "hostkeeper")))),
         h("nav", { "aria-label": "pages" },
           GROUPS.map(([group, pages]) => h("div", { class: "group" },
             h("h3", {}, group),
             pages.map(entry)))),
-        h("button", {
-          type: "button",
-          name: "collapse",
-          class: "collapse",
-          title: collapsed ? "Expand the menu" : "Collapse the menu",
-          "aria-expanded": collapsed ? "false" : "true",
-          on: { click: () => { collapsed = !collapsed; draw(); } },
-        }, h("span", { class: "glyph", "aria-hidden": "true" }, collapsed ? ">" : "<"),
-        h("span", { class: "label" }, "Collapse"))),
+        h("div", { class: "side-foot" },
+          h("button", {
+            type: "button",
+            name: "page-settings",
+            class: inSettings ? "current" : "",
+            title: "Settings",
+            "aria-current": inSettings ? "page" : "false",
+            on: { click: () => { drawer = false; navigate("settings", {}); } },
+          }, h("span", { class: "glyph" }, icon("settings")), h("span", { class: "label" }, "Settings")),
+          h("button", {
+            type: "button",
+            name: "theme",
+            class: "theme-toggle",
+            title: `Theme: ${theme}. Click for the next.`,
+            on: { click: () => {
+              theme = THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length];
+              prefs.apply(theme);
+              draw();
+            } },
+          }, h("span", { class: "glyph" }, icon(`theme-${theme}`)), h("span", { class: "label" }, "Theme"), h("span", { class: "value label" }, theme)),
+          h("button", { type: "button", name: "sign-out", title: "Sign out", on: { click: () => signOutNow() } },
+            h("span", { class: "glyph" }, icon("signout")), h("span", { class: "label" }, "Sign out")),
+          h("button", {
+            type: "button",
+            name: "collapse",
+            class: "collapse",
+            title: collapsed ? "Expand the menu" : "Collapse the menu",
+            "aria-expanded": collapsed ? "false" : "true",
+            on: { click: () => { collapsed = !collapsed; draw(); } },
+          }, h("span", { class: "glyph" }, icon(collapsed ? "expand" : "collapse")),
+          h("span", { class: "label" }, "Collapse")))),
       h("div", {
         class: "scrim", name: "scrim", role: "presentation",
         on: { click: () => { drawer = false; draw(); } },
@@ -149,23 +186,12 @@ export function startApp({ doc, root, fetch, confirm, now, download, prefs = NO_
             "aria-expanded": drawer ? "true" : "false",
             "aria-controls": "side",
             on: { click: () => { drawer = !drawer; draw(); } },
-          }, "Menu"),
-          h("span", { class: "crumb" }, at[4]),
+          }, icon("menu"), h("span", { class: "sr" }, "Menu")),
+          at[4] === "" ? null : h("span", { class: "crumb" }, at[4]),
           h("span", { class: "grow" }),
-          h("span", { class: "note", name: "who" }, who),
-          h("button", {
-            type: "button",
-            name: "theme",
-            title: "Theme",
-            on: { click: () => {
-              theme = THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length];
-              prefs.apply(theme);
-              draw();
-            } },
-          }, `Theme: ${theme}`),
-          h("button", { type: "button", name: "sign-out", on: { click: () => signOutNow() } }, "Sign out")),
+          h("span", { class: "note", name: "who" }, who)),
         h("p", { class: "status", role: "status" }, status),
-        h("main", {}, content)));
+        h("main", {}, tabs, content)));
   }
 
   function draw() {

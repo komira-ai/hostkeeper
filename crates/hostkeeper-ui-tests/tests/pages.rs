@@ -738,7 +738,7 @@ return { absent, offered, kept, second: chosen(tree, "host-group", 1) };
     assert_eq!(seen["refreshes"], 2, "a refused approval refreshes nothing");
     assert_eq!(
         out["out"],
-        json!({"absent": [0, 0, 0], "offered": ["", "storage", "web"],
+        json!({"absent": [0, 0, 0], "offered": ["No group", "storage", "web"],
                "kept": [" web-7 ", "web"], "second": ""}),
         "a refusal keeps what the operator typed and chose"
     );

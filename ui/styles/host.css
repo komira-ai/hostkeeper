@@ -1,0 +1,476 @@
+/* The Host page: status header, mini rack elevation, tabs, cards and the danger zone. Everything is
+   scoped to .hostpage so no other page changes; colours are the tokens of app.css. */
+
+.hostpage {
+  --h-led-ok: #3ddc84;
+  --h-led-info: #f5b83d;
+  --h-led-bad: #ff5a4a;
+  --h-led-muted: #7d8c9b;
+  --h-hw-0: #090e13;
+  --h-hw-1: #17232f;
+  --h-hw-line: #2a3d50;
+}
+
+.hostpage > h2::before,
+.hostpage h2::before {
+  display: none;
+}
+
+.hostpage h2 {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 24px;
+  letter-spacing: 0.01em;
+}
+
+/* The status header: a dark instrument panel in both themes. */
+
+.hostbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 16px 28px;
+  margin: 8px 0 14px;
+  padding: 16px 20px;
+  border: 1px solid var(--h-hw-line);
+  border-radius: var(--radius-l);
+  background:
+    radial-gradient(ellipse at 0% 0%, rgb(253 79 29 / 0.14), transparent 55%),
+    linear-gradient(180deg, #101b25, var(--h-hw-0));
+  color: #e6eef5;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
+}
+
+.hb-main {
+  display: flex;
+  flex: 1 1 320px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.hb-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.hostpage .hb-title h2 {
+  color: #f3f7fa;
+  overflow-wrap: anywhere;
+}
+
+.kicker {
+  padding: 2px 6px;
+  border: 1px solid var(--h-hw-line);
+  border-radius: 3px;
+  color: #8da1b4;
+  font: 600 10px / 1.4 var(--mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.hb-led {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--h-led-muted);
+  box-shadow: 0 0 10px var(--h-led-muted);
+}
+
+.hb-led.ok {
+  background: var(--h-led-ok);
+  box-shadow: 0 0 12px var(--h-led-ok);
+}
+
+.hb-led.info {
+  background: var(--h-led-info);
+  box-shadow: 0 0 12px var(--h-led-info);
+}
+
+.hb-led.bad {
+  background: var(--h-led-bad);
+  box-shadow: 0 0 12px var(--h-led-bad);
+}
+
+.hb-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 22px;
+}
+
+.meta {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font: 500 13px / 1.3 var(--mono);
+  color: #e6eef5;
+}
+
+.meta small {
+  color: #8da1b4;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.hostbar .pill {
+  border: 1px solid currentColor;
+  background: transparent;
+}
+
+.hostbar .pill.ok { color: var(--h-led-ok); }
+.hostbar .pill.info { color: var(--h-led-info); }
+.hostbar .pill.bad { color: var(--h-led-bad); }
+.hostbar .pill.muted { color: #aab8c5; }
+
+/* The mini elevation of the rack the host stands in. */
+
+.mini {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.mini-rack {
+  --u: 4px;
+  display: grid;
+  flex: none;
+  grid-template-columns: 1fr;
+  grid-template-rows: repeat(var(--units), var(--u));
+  width: 54px;
+  padding: 3px;
+  border: 1px solid #34495d;
+  border-radius: 3px;
+  background: repeating-linear-gradient(0deg, #0c141b 0 3px, #101b25 3px 4px);
+  box-shadow: inset 0 0 0 1px #090e13;
+}
+
+.mini-rack.empty {
+  border-style: dashed;
+  background: transparent;
+}
+
+.mini-u {
+  grid-row: var(--r) / span var(--s);
+  background: #2c4054;
+  border-radius: 1px;
+}
+
+.mini-u.me {
+  background: var(--accent);
+  box-shadow: 0 0 8px rgb(253 79 29 / 0.8);
+}
+
+.mini-cap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  color: #8da1b4;
+  font: 11px / 1.3 var(--mono);
+}
+
+.mini-cap strong {
+  color: #e6eef5;
+  font-weight: 600;
+}
+
+/* Tabs: a segmented strip that scrolls sideways on a phone. */
+
+.tabs {
+  display: flex;
+  gap: 2px;
+  margin: 0 0 14px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--rule);
+  scrollbar-width: none;
+}
+
+.tab {
+  position: relative;
+  flex: none;
+  min-height: 38px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: var(--radius) var(--radius) 0 0;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.tab:hover {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
+.tab.on {
+  color: var(--ink);
+  background: var(--surface);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.tab .dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.tab .dot.warn { background: var(--warn); }
+.tab .dot.bad { background: var(--bad); }
+
+.panel.off {
+  display: none;
+}
+
+/* Cards inside a panel. */
+
+.hostpage .card,
+.hostpage section.service,
+.hostpage section.certificate,
+.hostpage section.trusted-root,
+.hostpage section.assigned {
+  margin: 0 0 14px;
+  padding: 14px 16px;
+  border-radius: var(--radius-l);
+}
+
+.hostpage section.assigned h3,
+.hostpage section.certificate h3,
+.hostpage section.trusted-root h3 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.hostpage section.assigned {
+  border: 1px solid var(--rule);
+  background: var(--surface);
+}
+
+.hostpage h3.sub {
+  margin: 12px 0 6px;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  margin-bottom: 10px;
+}
+
+.card-head h3 {
+  margin: 0 4px 0 0;
+  font: 600 16px / 1.2 var(--mono);
+}
+
+.card-head .ver {
+  margin-left: auto;
+  color: var(--muted);
+  font: 12px var(--mono);
+}
+
+/* Facts: a two-column grid of name over value, no empty heading strip. */
+
+.hostpage .table-wrap {
+  overflow: visible;
+  border: 0;
+  background: transparent;
+}
+
+.hostpage table.kv {
+  border: 0;
+}
+
+.hostpage .cols table.kv tbody {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 400px), 1fr));
+  column-gap: 36px;
+}
+
+.hostpage .cols table.kv tr {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.hostpage .cols table.kv th {
+  flex: none;
+  width: 130px;
+}
+
+.hostpage .cols table.kv td {
+  min-width: 0;
+}
+
+.hostpage table.kv th {
+  width: 38%;
+  padding: 5px 10px 5px 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  text-align: left;
+}
+
+.hostpage table.kv td {
+  padding: 5px 0;
+  border: 0;
+  font-family: var(--mono);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.hostpage table.kv tr {
+  border-top: 1px solid var(--rule);
+}
+
+.hostpage table.kv tr:first-child {
+  border-top: 0;
+}
+
+.hostpage .pair {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+}
+
+.hostpage .pair > section {
+  margin: 0;
+  border: 1px solid var(--rule);
+  background: var(--surface);
+}
+
+.hostpage .cols.card {
+  border: 1px solid var(--rule);
+  background: var(--surface);
+}
+
+.hostpage .update pre.log {
+  max-height: 140px;
+  overflow: auto;
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--h-hw-0);
+  color: #b8c7d4;
+  font-size: 12px;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.chip {
+  padding: 2px 9px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 999px;
+  background: var(--surface-2);
+  font: 12px var(--mono);
+}
+
+.quiet {
+  color: var(--muted);
+}
+
+.hostpage fieldset.act {
+  margin: 12px 0 0;
+  border-style: dashed;
+  box-shadow: none;
+  background: transparent;
+}
+
+.hostpage fieldset.act legend {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* The danger zone: apart, at the bottom, red by its border and its one button only. */
+
+.danger-zone {
+  margin: 28px 0 8px;
+  padding: 10px 16px 14px;
+  border: 1px solid var(--bad);
+  border-radius: var(--radius-l);
+  background: transparent;
+  box-shadow: none;
+}
+
+.danger-zone legend {
+  color: var(--bad);
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.dz-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px 24px;
+}
+
+.dz-text {
+  flex: 1 1 280px;
+}
+
+.dz-text p {
+  margin: 4px 0 0;
+}
+
+.dz-form {
+  display: flex;
+  flex: 1 1 320px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.dz-form label {
+  flex: 1 1 200px;
+}
+
+@media (max-width: 640px) {
+  .hostbar {
+    padding: 14px;
+  }
+
+  .mini-rack {
+    --u: 2px;
+  }
+
+  .tabs {
+    flex-wrap: wrap;
+    overflow-x: visible;
+  }
+
+  .tab {
+    min-height: 34px;
+    padding: 0 12px;
+  }
+
+  .hostpage .cols table.kv th {
+    width: 110px;
+  }
+
+}
