@@ -52,7 +52,7 @@ decides at each heartbeat:
   `unknown_host_group`, a coordinator that holds none included.
 - A host in no specific group runs the packages of `all` alone. A host is in none when it was
   approved naming no group (`Approve` with no `host_group` and no role), or before the coordinator
-  held a group, until `Move` puts it in one; [moving a fleet from roles](#moving-a-fleet-from-roles-to-host-groups)
+  held a group, or was moved back to none, until `Move` puts it in one; [moving a fleet from roles](#moving-a-fleet-from-roles-to-host-groups)
   puts every host of a role in the group of that name.
 - The role the coordinator's fleet records for a host is the name of its group (empty for a host in
   none). `Hosts.List` and `Hosts.Get` show a host in a group with the group's name as `role` and as
@@ -169,7 +169,8 @@ none, and orders no host anything. The entry is `host_group_remove`.
 
 **Move.** The entry is `host_move`, about the host (`node_id`) and the new group (`host_group`),
 with the reason `from <old> to <new>: <yours>`, or `into <new>: <yours>` for a host that was in
-none. The answer names the group the host was in. `unknown_host` is a host that is not enrolled
+none; a move out of a group into none names no group and has the reason `from <old> to no group:
+<yours>`. The answer names the group the host was in. `unknown_host` is a host that is not enrolled
 or is denied, and the checks run in the order of the table.
 
 ## The built-in group `all`
@@ -230,12 +231,23 @@ with `--replace` keeps the group of the host it replaces: naming another group i
 ## Moving a host
 
 A host in a group is changed to another by `Move`, and a host approved in none, or before the
-coordinator held groups, is put in one by `Move`. A host cannot be moved back into none, nor into
-`all` (`reserved_host_group`), which it is in already.
+coordinator held groups, is put in one by `Move`. A host in a group is moved back to none by a
+`Move` with an empty `host_group` (`hkctl host-groups move --host-group ""`, or **Remove from
+group** beside the host in a group's detail on the console's Host groups page): it then runs the
+packages of `all` alone, what its old group listed and `all` does not is uninstalled, and nothing
+is installed, so the host does not move; a host already in none is refused `same_host_group`. A
+host cannot be moved into `all` (`reserved_host_group`), which it is in already.
 
 ```
 hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     host-groups move --node-id web-17 --host-group web --reason "racked for the web tier"
+```
+
+Out of its group, into none:
+
+```
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    host-groups move --node-id web-17 --host-group "" --reason "no longer a web server"
 ```
 
 The host is in the new group from the call: its record is written first, and the old group's plans

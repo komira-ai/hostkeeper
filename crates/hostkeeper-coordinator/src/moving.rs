@@ -79,6 +79,11 @@ impl Fleet {
         );
     }
 
+    /// Drops the move of the host `id`, if one is under way, with its admission.
+    pub(crate) fn drop_move(&mut self, id: &HostId) {
+        self.moves.0.remove(id);
+    }
+
     /// Makes the move of the host `id` what its record says: under way into `group` when
     /// `moving` and in a group, else none. A move the fleet holds for another group is replaced.
     pub(crate) fn sync_move(&mut self, id: &HostId, group: Option<&GroupName>, moving: bool) {

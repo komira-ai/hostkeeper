@@ -9,7 +9,8 @@
 // group holds, and a new group has the default one (`hkctl host-groups put` sets one).
 // Calls: HostGroups.List (every page), HostGroups.Get on a group's name and its hosts' "Next",
 // HostGroups.Put on Save, which replaces the group named over the generation List gave (or
-// creates it), and HostGroups.Move on its button. The reason of a Put is optional here: it is
+// creates it), and HostGroups.Move on its button, and with an empty group on "Remove from group"
+// beside each host of a group's detail (a host in no group runs the packages of `all` alone). The reason of a Put is optional here: it is
 // sent as a default when left empty.
 
 import {
@@ -73,6 +74,8 @@ function counts(convergence) {
 // The reasons sent when the operator gives none: the API wants one, and the audit log names the
 // operator anyway.
 const DEFAULT_PUT_REASON = "set in the console";
+// The reason of a Move out of a group, which the button does not ask for.
+const DEFAULT_REMOVE_REASON = "removed from the group in the console";
 
 // The body of a group as List answers it (its name, packages and policy).
 const bodyOf = (one) => (one || {})["group"] || {};
@@ -146,7 +149,16 @@ export async function render(ctx) {
         h("button", {
           type: "button", class: "linklike", name: "open-host",
           on: { click: () => ctx.navigate("host", { nodeId }) },
-        }, nodeId)))),
+        }, nodeId),
+        // Every host is in all, which a host is not removed from.
+        open.groupName === ALL ? null : action(ctx, "Remove from group", "remove-from-group", async () => {
+          if (!ctx.confirm(`Remove ${nodeId} from host group ${open.groupName}? It then runs the packages of all alone, and what ${open.groupName} lists and all does not is uninstalled.`)) {
+            return "Not removed.";
+          }
+          await ctx.api.hostGroups.move({ nodeId, hostGroup: "", reason: DEFAULT_REMOVE_REASON });
+          ctx.refresh();
+          return `Removed ${nodeId} from host group ${open.groupName}: it runs the packages of all alone.`;
+        })))),
       open.pageToken !== ""
         ? action(ctx, "First page", "first-hosts", () => fetchHosts(open.groupName, ""))
         : null,

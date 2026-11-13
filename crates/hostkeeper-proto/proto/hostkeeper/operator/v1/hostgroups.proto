@@ -49,7 +49,9 @@ service HostGroups {
   // `host_group_remove`.
   rpc Remove(RemoveHostGroupRequest) returns (RemoveHostGroupResponse);
   // Move an enrolled host into another group, in one call: it is in the new group from this
-  // write, and is moving until its packages match the new group's. Audited `host_move`.
+  // write, and is moving until its packages match the new group's. An empty `host_group` moves
+  // it out of its specific group into none: it then runs the packages of `all` alone, and what
+  // its old group listed and `all` does not is uninstalled. Audited `host_move`.
   rpc Move(MoveHostRequest) returns (MoveHostResponse);
 }
 
@@ -94,7 +96,8 @@ enum HostGroupsRefusal {
   HOST_GROUPS_REFUSAL_NOT_EMPTY = 13;
   // NOT_FOUND: `Move` of a host the coordinator has not enrolled.
   HOST_GROUPS_REFUSAL_UNKNOWN_HOST = 14;
-  // FAILED_PRECONDITION: `Move` of a host into the group it is in.
+  // FAILED_PRECONDITION: `Move` of a host into the group it is in (an empty group, for a host
+  // in none).
   HOST_GROUPS_REFUSAL_SAME_HOST_GROUP = 15;
   // FAILED_PRECONDITION: the call would remove or create the built-in group `all`, or put a host
   // in it: it always exists, and every host is in it without being put there. `Put` of `all`
@@ -275,15 +278,16 @@ message RemoveHostGroupResponse {
 message MoveHostRequest {
   // The host, by the host id it was enrolled as.
   string node_id = 1;
-  // The group it moves into.
+  // The group it moves into; empty for none (the host runs the packages of `all` alone).
   string host_group = 2;
   // Why; 1 to 256 bytes.
   string reason = 3;
 }
 
 message MoveHostResponse {
-  // The `host_move` entry: its `node_id` is the host, its `host_group` the new group, and its
-  // reason "from <old> to <new>: " followed by the request's reason.
+  // The `host_move` entry: its `node_id` is the host, its `host_group` the new group (empty
+  // for none), and its reason "from <old> to <new>: " (or "to no group: ") followed by the
+  // request's reason.
   AuditEntry entry = 1;
   // The group the host was in.
   string from_host_group = 2;

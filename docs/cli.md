@@ -293,12 +293,14 @@ or Mac allowlist entry names, with its desired versions and plan positions. Audi
 `/hostkeeper.operator.v1.HostGroups/Move`
 
 Move an enrolled host into another group, in one call: it is in the new group from this
-write, and is moving until its packages match the new group's. Audited `host_move`.
+write, and is moving until its packages match the new group's. An empty `host_group` moves
+it out of its specific group into none: it then runs the packages of `all` alone, and what
+its old group listed and `all` does not is uninstalled. Audited `host_move`.
 
 | flag | value | meaning |
 |---|---|---|
 | `--node-id` | STRING | The host, by the host id it was enrolled as. |
-| `--host-group` | STRING | The group it moves into. |
+| `--host-group` | STRING | The group it moves into; empty for none (the host runs the packages of `all` alone). |
 | `--reason` | STRING | Why; 1 to 256 bytes. |
 
 ### `hosts`

@@ -622,3 +622,80 @@ fn a_refused_host_list_shows_its_reason_and_the_move_form_stays() {
         ],
     );
 }
+
+#[test]
+fn remove_from_group_asks_first_and_moves_the_host_to_an_empty_group() {
+    // Proves: each host of a specific group's detail has a Remove from group button that asks
+    // first, sends HostGroups.Move with an empty hostGroup and a reason, refreshes once, and
+    // reports; a refused call is reported and refreshes nothing; the detail of `all` has no such
+    // button, as every host stays in it.
+    // Catches: a removal sent without the yes, a body that names a group, a refresh after a refusal,
+    // or a button on the group every host is in.
+    let mut ui = Ui::start();
+    hosts_replies(&mut ui);
+    ui.reply(
+        &m("HostGroups/List"),
+        json!({"hostGroups": [
+            {"group": {"name": "storage", "packages": ["kbf"]}, "generation": "4", "hosts": 2},
+            {"group": {"name": "all", "packages": ["hostkeeper"]}, "generation": "1", "hosts": 2},
+        ]}),
+    );
+    ui.reply(&m("HostGroups/Get"), detail_reply(None));
+    ui.reply(&m("HostGroups/Move"), json!({"fromHostGroup": "storage"}));
+    ui.reply(&m("HostGroups/Move"), json!({}));
+    ui.refuse(
+        &m("HostGroups/Move"),
+        412,
+        "FAILED_PRECONDITION",
+        "same_host_group",
+    );
+    ui.reply(
+        &m("HostGroups/Get"),
+        json!({"hostGroup": {"group": {"name": "all"}}, "nodeIds": ["store-1"]}),
+    );
+    let out = ui.run(&page_driver(
+        "hostgroups",
+        "{}",
+        "[false, true, true, true]",
+        r#"
+await click(tree, "open-group", 0);
+const detail = seen.shown[seen.shown.length - 1];
+await click(detail, "remove-from-group", 0);
+const declined = seen.refreshes;
+await click(detail, "remove-from-group", 0);
+const once = seen.refreshes;
+await click(detail, "remove-from-group", 1);
+await click(detail, "remove-from-group", 1);
+await click(tree, "open-group", 1);
+const all = seen.shown[seen.shown.length - 1];
+return { declined, once, allButtons: nodes(all).filter((node) => (node.attrs || {})["name"] === "remove-from-group").length };
+"#,
+    ));
+    let moves: Vec<Value> = bodies(&ui)
+        .into_iter()
+        .filter(|(method, _)| method == &m("HostGroups/Move"))
+        .map(|(_, body)| body)
+        .collect();
+    let reason = "removed from the group in the console";
+    assert_eq!(
+        moves,
+        [
+            json!({"nodeId": "store-1", "hostGroup": "", "reason": reason}),
+            json!({"nodeId": "store-2", "hostGroup": "", "reason": reason}),
+            json!({"nodeId": "store-2", "hostGroup": "", "reason": reason}),
+        ]
+    );
+    assert_eq!(out["out"]["declined"], json!(0));
+    assert_eq!(out["out"]["once"], json!(1));
+    assert_eq!(out["out"]["allButtons"], json!(0));
+    assert_eq!(out["seen"]["refreshes"], json!(2));
+    assert_eq!(
+        out["seen"]["reports"],
+        json!([
+            "Not removed.",
+            "Removed store-1 from host group storage: it runs the packages of all alone.",
+            "Removed store-2 from host group storage: it runs the packages of all alone.",
+            "FAILED_PRECONDITION same_host_group",
+        ])
+    );
+}

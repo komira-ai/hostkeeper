@@ -473,10 +473,11 @@ applied. `--role` is accepted as an alias of `--host-group` for older scripts an
 group's name when `--host-group` is left out; with both, they must be the same name
 (`invalid_role`). With neither, the host is enrolled in no specific group: every host is in the
 built-in group `all` ([hostgroups.md](hostgroups.md#the-built-in-group-all)), so it runs the
-packages `all` lists, and no others, until `hkctl host-groups move` puts it in a group
-([hostgroups.md](hostgroups.md#moving-a-host)). `all` is not a group an approval names
+packages `all` lists, and no others, until `hkctl host-groups move` puts it in a group, and again
+whenever it is moved back to none ([hostgroups.md](hostgroups.md#moving-a-host)). `all` is not a group an approval names
 (`unknown_host_group`). The console's Enrollment page approves this way: a Host group dropdown of
-the specific groups with a blank choice, and nothing else to fill in. The reason is optional (1 to 256 bytes when given). An approval names no services
+the specific groups with a blank choice, and nothing else to fill in (no role, no services, no
+reason). The API's reason is optional (1 to 256 bytes when given); the console sends none. An approval names no services
 (`services_retired`): the host's group decides what it runs, and a host in a group is installed
 its group's packages from its first heartbeat. The approval's audit entry names the approver and
 the group (`group web`, and `hostGroup`; `no group` for a host approved in none) and the reason
@@ -540,7 +541,8 @@ Without `--replace` none of these is changed. For a renewal, `--replace` lifts o
 ## Reject
 
 A rejection names the request, and a reason if you give one (1 to 256 bytes; it may be left
-out). It asks nothing of the node: the request leaves the queue, which frees its place under the
+out, and the console's Enrollment page asks for none: its Reject button, after a confirmation,
+sends the request alone). It asks nothing of the node: the request leaves the queue, which frees its place under the
 [cap](#the-pending-enrollment-cap), and its key is refused from then on. The node's next `Poll`
 is answered `DENIED`, and a repost of the same key changes nothing. The rejection is audited
 `enroll_reject` with the request id, the claims and the reason; rejecting a request already
@@ -549,6 +551,13 @@ rejected succeeds and audits nothing.
 ```
 hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment reject --request-id <request-id> --reason "not one of ours"
+```
+
+The same, with no reason (`--reason` may be left out):
+
+```
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    enrollment reject --request-id <request-id>
 ```
 
 A request already approved or issued is `not_pending`: that host is retired, not rejected. A

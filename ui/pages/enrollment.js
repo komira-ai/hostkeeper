@@ -1,5 +1,5 @@
 // Enrollment: the hosts waiting for an operator, with what they claim, the inventory record each
-// matches, Approve and Reject; or, with the parameter `unenrolled`, the requests that expired, whose
+// matches, Approve and Reject (no reason is typed for either); or, with the parameter `unenrolled`, the requests that expired, whose
 // hosts are unenrolled, each with why, and no Approve. Calls: Enrollment.List (with
 // `unenrolled: true` for the second view); HostGroups.List (every page, for the pending view
 // only, when a request is listed) for the Host group choice; on a button, Enrollment.Approve,
@@ -27,7 +27,7 @@
 // (`record_contested`), until the operator rejects all but one.
 
 import {
-  h, action, allPages, checkbox, describeError, enumLabel, errorView, field, fmtUnix, reasonProblem,
+  h, action, allPages, checkbox, describeError, enumLabel, errorView, field, fmtUnix,
   select, table, trimmed,
 } from "../view.js";
 
@@ -272,23 +272,16 @@ function pending(ctx, request, groups) {
     rejectSection(ctx, request));
 }
 
-// Reject: the reason is optional; the request leaves the queue and its key is refused, so it asks
-// first.
+// Reject: the request leaves the queue and its key is refused, so it asks first. The page asks for
+// no reason (the API takes one, optional).
 function rejectSection(ctx, request) {
-  const form = { reason: "" };
   return h("fieldset", {},
     h("legend", {}, "Reject"),
-    field("Reason (optional)", "reject-reason", form, "reason", { maxlength: 256 }),
     action(ctx, "Reject", "reject", async () => {
-      const reason = trimmed(form.reason);
-      const problem = reason === "" ? null : reasonProblem(reason);
-      if (problem) {
-        return problem;
-      }
       if (!ctx.confirm(`Reject request ${request.requestId}? Its key is refused from then on.`)) {
         return "Not rejected.";
       }
-      await ctx.api.enrollment.reject({ requestId: request.requestId, reason });
+      await ctx.api.enrollment.reject({ requestId: request.requestId });
       ctx.refresh();
       return `Rejected request ${request.requestId}.`;
     }));

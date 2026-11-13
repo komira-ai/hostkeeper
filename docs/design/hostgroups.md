@@ -390,8 +390,8 @@ An uninstall is ordered for a package a host runs before a change and does not a
 - Files: the state file's `host_groups` key is left out while `all` is as made.
 - An existing coordinator's groups keep working. Hosts in a group keep it and now also run what `all` lists, which at the migration is `hostkeeper` alone, so no host gets a package it did not have. An operator who wants a package on every host puts it in `all`'s list and sets `all`'s desired version.
 - An existing group named `all` (a name the grammar always allowed) is kept as it is, becomes the built-in one, and loses the hosts that were in it as members of a specific group: they are in `all` still, and run what it lists.
-- A host is moved into no group (back to `all` alone) by nothing yet: `Move` takes a group name.
+- A host is moved out of its group into none (back to `all` alone) by `Move` with an empty `host_group`, which was `invalid_request` before and is read as none now, so no field is added and no number changes; a client that sent it got a refusal and a coordinator before this change refuses it as before. The record is written with the group empty and no `moving_from` (nothing is installed, so the host does not move), the uninstalls are those of the packages the old group lists and `all` does not (the same `lost_by` a move between groups uses), the audit entry `host_move` names no group, and a host already in none is refused `same_host_group`. The console's Reject sends no reason, which the API already took as optional.
 
 ### 15.7 Tests
 
-`host_group_all_tests` (the union and its order, a package both list, uninstalls, the reserved name, counts), the migration's pinned hash and its rows, the file's round trip without the key, the approval tests of `approve_ungrouped`, and the console's pages.
+`host_group_all_tests` (the union and its order, a package both list, uninstalls, the reserved name, counts), the migration's pinned hash and its rows, the file's round trip without the key, the approval tests of `approve_ungrouped`, the move to none of `host_group_move_tests`, and the console's pages.

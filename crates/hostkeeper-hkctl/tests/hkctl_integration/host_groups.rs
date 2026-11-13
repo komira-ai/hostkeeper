@@ -65,6 +65,38 @@ fn host_groups_move_posts_the_node_the_group_and_the_reason() {
     );
 }
 
+/// Proves: `host-groups move` with an empty `--host-group` posts an empty `hostGroup`, which the
+/// coordinator reads as no group.
+#[test]
+fn host_groups_move_with_an_empty_group_posts_an_empty_host_group() {
+    let rig = Rig::new("hg-move-none");
+    rig.reply(200, "{}");
+    let ran = rig.run(
+        Script::Real,
+        &call(
+            &rig,
+            &[
+                "host-groups",
+                "move",
+                "--node-id",
+                "web-04",
+                "--host-group",
+                "",
+                "--reason",
+                "r",
+            ],
+        ),
+        b"",
+        &[],
+    );
+    assert_eq!((ran.code, ran.stderr.as_str()), (0, ""));
+    let (_, body) = posted(&rig);
+    assert_eq!(
+        body,
+        "{\"nodeId\":\"web-04\",\"hostGroup\":\"\",\"reason\":\"r\"}"
+    );
+}
+
 /// Proves: `host-groups put` with a request file posts the file's `hostGroup` object with the
 /// `--if-generation` flag (a 64-bit integer, so written as a string) and the reason added.
 #[test]
