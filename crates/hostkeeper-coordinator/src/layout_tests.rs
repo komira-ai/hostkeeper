@@ -8,7 +8,8 @@ use std::sync::Arc;
 
 use super::{
     Kind, Layout, LayoutError, LayoutStore, MAX_HEIGHT_U, MAX_NAME_CHARS, MAX_PLACEMENTS,
-    MAX_RACKS, MAX_ROWS, Placement, Rack, Row, Subject, encode_file, layout_path, parse_file,
+    MAX_RACKS, MAX_ROWS, Placement, Rack, Records, Row, Subject, encode_file, layout_path,
+    parse_file,
 };
 use crate::operator_layout::placement_of;
 use crate::store::conformance_tests::rich_layout;
@@ -208,14 +209,14 @@ fn placements_of_a_rack_never_share_a_u() {
         .expect_err("U 2 and 3 share U 3");
     assert!(
         matches!(&refused, LayoutError::Overlap { rack, first, second }
-            if rack == "rack-1" && first == "host:b" && second == "host:a"),
+            if rack == "rack-1" && first == "sled-2" && second == "sled-1"),
         "{refused}"
     );
-    assert_eq!(refused.to_string(), "host:b and host:a share a U of rack-1");
+    assert_eq!(refused.to_string(), "sled-2 and sled-1 share a U of rack-1");
     let (_, moved) = held
         .with_placement(placement_of(host("a"), "rack-1", 3, 3))
         .expect("a subject overlaps only others");
-    assert_eq!(moved.height_u, 3);
+    assert_eq!(moved.1.height_u, 3);
     let (held, _) = touching
         .with_placement(placement_of(host("c"), "rack-1", 8, 1))
         .expect("far away");
@@ -240,7 +241,7 @@ fn a_subject_is_placed_once_and_a_host_and_an_entry_of_one_id_are_two() {
         .with_placement(placement_of(host("n1"), "rack-1", 9, 1))
         .expect("moved");
     assert_eq!(held.placements().len(), 1);
-    assert_eq!(held.placement(&host("n1")).map(|p| p.u), Some(9));
+    assert_eq!(held.placement(&host("n1")).map(|p| p.1.u), Some(9));
     let entry = Subject {
         kind: Kind::Inventory,
         id: "n1".to_owned(),
@@ -399,7 +400,7 @@ fn the_lists_come_in_the_order_the_page_draws() {
     let ids: Vec<_> = held
         .placements()
         .iter()
-        .map(|p| p.subject.id.clone())
+        .map(|p| p.0.subject.id.clone())
         .collect();
     assert_eq!(ids, ["low", "high"]);
     assert_eq!(held.row("row-1").map(|r| r.number), Some(1));
@@ -473,8 +474,15 @@ fn the_file_reads_back_the_layout_and_a_bad_file_is_refused_by_name() {
 fn records_are_read_as_strictly_as_the_file() {
     let place = std::path::Path::new("database:lab");
     let rows = vec![("row-1".to_owned(), serde_json::json!({"number": 1}))];
-    let ok = Layout::of_records(place, "Lab".into(), rows.clone(), vec![], vec![], vec![])
-        .expect("reads");
+    let ok = Layout::of_records(
+        place,
+        "Lab".into(),
+        rows.clone(),
+        vec![],
+        vec![],
+        Records::default(),
+    )
+    .expect("reads");
     assert_eq!((ok.rows().len(), ok.name()), (1, "Lab"));
     let bad = Layout::of_records(
         place,
@@ -482,7 +490,7 @@ fn records_are_read_as_strictly_as_the_file() {
         vec![("row-1".to_owned(), serde_json::json!({"number": "x"}))],
         vec![],
         vec![],
-        vec![],
+        Records::default(),
     )
     .expect_err("not a row");
     assert!(
@@ -499,7 +507,7 @@ fn records_are_read_as_strictly_as_the_file() {
             serde_json::json!({"row": "row-2", "number": 1, "height_u": 5}),
         )],
         vec![],
-        vec![],
+        Records::default(),
     )
     .expect_err("a rack in no row");
     assert!(

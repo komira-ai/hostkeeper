@@ -53,7 +53,7 @@ use hostkeeper_wire::{HostId, RoleName};
 use crate::enrollment::{ByRecord, Enrollment, MAC_APPROVER, RpcError};
 use crate::host_groups::GroupName;
 use crate::inventory::show_match;
-use crate::layout::{Kind, LayoutError, Subject};
+use crate::layout::{Kind, Layout, LayoutError, Subject};
 use crate::operator::{Caller, entry_proto};
 use crate::operator_layout::placement_of;
 use crate::ops::Write;
@@ -129,8 +129,11 @@ impl Coordinator {
         let known = |name: &str| self.services.get(name).is_some();
         let (role, services) = (request.role.clone(), request.services.clone());
         let records = self.ops.read(|state| state.inventory.clone());
-        let approved = if request.rack.is_empty() {
-            if request.placement_u != 0 || request.placement_height_u != 0 {
+        let approved = if request.rack.is_empty() && request.placement_sled.is_empty() {
+            if request.placement_u != 0
+                || request.placement_height_u != 0
+                || request.placement_slot.is_some()
+            {
                 return Err(EnrollmentRefusal::PlacementInvalid);
             }
             let _fleet = self.lock_fleet();
@@ -164,28 +167,39 @@ impl Coordinator {
         known: &dyn Fn(&str) -> bool,
         records: &[crate::inventory::InventoryRecord],
     ) -> Result<crate::enrollment::Approved, EnrollmentRefusal> {
+        // The place: a slot of a sled (`placement_sled`, `placement_slot`), or a new one-slot
+        // sled at a U of a rack (`rack`, `placement_u`, `placement_height_u`); never both.
         let (rack, u, height_u) = (
             request.rack.clone(),
             request.placement_u,
             request.placement_height_u,
         );
-        if u == 0 || height_u == 0 {
+        let (sled, slot) = (request.placement_sled.clone(), request.placement_slot);
+        let by_sled = !sled.is_empty();
+        let whole = if by_sled {
+            rack.is_empty() && u == 0 && height_u == 0
+        } else {
+            slot.is_none() && u != 0 && height_u != 0
+        };
+        if !whole {
             return Err(EnrollmentRefusal::PlacementInvalid);
         }
+        let place = |held: &Layout, subject: Subject| {
+            if by_sled {
+                held.with_sled_placement(&subject, &sled, slot)
+            } else {
+                held.with_placement(placement_of(subject, &rack, u, height_u))
+            }
+        };
         // Only the place is judged ahead of the approval; the subject's own rules are the approval's.
-        let probe = placement_of(
-            Subject {
-                kind: Kind::Host,
-                id: "probe".to_owned(),
-            },
-            &rack,
-            u,
-            height_u,
-        );
+        let probe = Subject {
+            kind: Kind::Host,
+            id: "probe".to_owned(),
+        };
         let mut refused = None;
         let mut done = None;
         let placed = self.layout().change(|held| {
-            held.with_placement(probe.clone())?;
+            place(held, probe.clone())?;
             let approved = {
                 let _fleet = self.lock_fleet();
                 enrollment.approve(by, request.clone(), known, records)
@@ -203,9 +217,8 @@ impl Coordinator {
             let subject = Subject { kind, id };
             let entry = Self::place_entry(by, &subject.key());
             let audited = self.ops.change(Write::BeforeMemory, entry, |_| {});
-            let placement = placement_of(subject, &rack, u, height_u);
             done = Some(approved);
-            let made = held.with_placement(placement)?;
+            let made = place(held, subject)?;
             Ok((made.0, audited))
         });
         if let Some(refusal) = refused {
@@ -325,7 +338,9 @@ impl Coordinator {
 pub(crate) fn placement_refusal(why: &LayoutError) -> EnrollmentRefusal {
     match why {
         LayoutError::UnknownRack(_) => EnrollmentRefusal::UnknownRack,
-        LayoutError::Overlap { .. } => EnrollmentRefusal::PlacementOverlap,
+        LayoutError::Overlap { .. } | LayoutError::SlotTaken { .. } => {
+            EnrollmentRefusal::PlacementOverlap
+        }
         LayoutError::OutOfRack { .. } => EnrollmentRefusal::PlacementOutOfRack,
         _ => EnrollmentRefusal::PlacementInvalid,
     }

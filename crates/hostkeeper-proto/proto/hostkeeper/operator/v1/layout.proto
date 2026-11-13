@@ -63,6 +63,12 @@ service Layout {
   rpc PutDevice(PutLayoutDeviceRequest) returns (PutLayoutDeviceResponse);
   // Removes a network device and its placement, if it has one.
   rpc RemoveDevice(RemoveLayoutDeviceRequest) returns (RemoveLayoutDeviceResponse);
+  // Adds a sled to a rack (empty `id`: its id is `sled-<n>`, one more than the highest held), or
+  // replaces the rack, lowest U, height and label of the sled `id` (a move or a resize): what
+  // stands on a sled moves with it.
+  rpc PutSled(PutLayoutSledRequest) returns (PutLayoutSledResponse);
+  // Removes a sled that holds nothing: refused `in_use`, naming what stands on it, otherwise.
+  rpc RemoveSled(RemoveLayoutSledRequest) returns (RemoveLayoutSledResponse);
 }
 
 // Why `Layout` refused a request. The token is the value's name without the prefix, in lower
@@ -88,10 +94,11 @@ enum LayoutRefusal {
   // ALREADY_EXISTS: not used, since the rows and racks are numbered by the coordinator; kept so
   // that no number is reused.
   LAYOUT_REFUSAL_NAME_TAKEN = 9;
-  // FAILED_PRECONDITION: `RemoveRow` of a row that holds a rack, or `RemoveRack` of a rack that
-  // holds a placement.
+  // FAILED_PRECONDITION: `RemoveRow` of a row that holds a rack, `RemoveRack` of a rack that
+  // holds a sled, or `RemoveSled` of a sled that holds a server or a switch.
   LAYOUT_REFUSAL_IN_USE = 10;
-  // FAILED_PRECONDITION: a placement that shares a U with another placement of the rack.
+  // FAILED_PRECONDITION: a sled that shares a U with another sled of the rack, or a placement
+  // on a slot another subject holds.
   LAYOUT_REFUSAL_OVERLAP = 11;
   // FAILED_PRECONDITION: a placement that is not within the rack's U 1 to its height, or a
   // rack made shorter than a placement it holds.
@@ -100,6 +107,8 @@ enum LayoutRefusal {
   LAYOUT_REFUSAL_CAPACITY = 13;
   // NOT_FOUND: a device id the layout does not hold.
   LAYOUT_REFUSAL_UNKNOWN_DEVICE = 14;
+  // NOT_FOUND: a sled id the layout does not hold.
+  LAYOUT_REFUSAL_UNKNOWN_SLED = 15;
 }
 
 // A row of racks: a band of the floor plan.
@@ -144,17 +153,53 @@ message LayoutSubject {
   string id = 2;
 }
 
-// A subject in a rack.
+// A subject on a slot of a sled. Its position is cluster / row / rack / sled / slot, written
+// `address`: `sled` and `slot` say where. `rack`, `u` and `height_u` are the sled's, repeated,
+// for a client that predates sleds; a subject has no U or height of its own.
 message LayoutPlacement {
   LayoutSubject subject = 1;
   // The id of the rack.
   string rack = 2;
   // Not used; kept so that no number is reused.
   reserved 3;
-  // How many U it occupies, 1 to the rack's height.
+  // How many U it occupies: the sled's height.
   uint32 height_u = 4;
-  // The lowest U it occupies, 1 to the rack's height minus `height_u` plus 1. U 1 is the bottom.
+  // The lowest U it occupies: the sled's. U 1 is the bottom.
   uint32 u = 5;
+  // The id of the sled.
+  string sled = 6;
+  // The slot of the sled, from 0, counted from the left as one faces the rack.
+  uint32 slot = 7;
+  // The address, computed, never stored: `C<cluster>-R<row>-R<rack>-S<sled>-S<slot>`, every
+  // number from 0 (`C0-R0-R0-S0-S0`: the one cluster, its first row, the first rack of the row,
+  // the lowest sled of the rack, its first slot). The row and the rack are the ones numbered
+  // `number` here, less one; the sled is counted from the bottom of the rack.
+  string address = 8;
+}
+
+// A sled: the only thing that occupies U of a rack. It occupies U `u` to `u + height_u - 1` of
+// its rack and carries the servers or switches placed on it side by side (two Mac Studios on a
+// 3 U sled, three NUCs on a 2 U one; a 4 U server is on a 4 U sled alone, a 1 U switch on a 1 U
+// one). A sled declares its slots, 1 to 8, side by side; an item stands on one slot. At most
+// 4096 are held. It shares no U with another sled of its rack.
+message LayoutSled {
+  // `sled-<n>`: made by the coordinator, never changed.
+  string id = 1;
+  // The id of the rack.
+  string rack = 2;
+  // Computed, never stored: its place among the sleds of its rack from the bottom, counted
+  // from 0 (the lowest sled is 0). It changes when a sled is put below it.
+  uint32 number = 3;
+  // The lowest U it occupies (U 1 is the bottom).
+  uint32 u = 4;
+  // How many U it occupies, 1 to 60.
+  uint32 height_u = 5;
+  // 0 to 32 characters of the cluster name's set ("Mac Studios"); empty for none.
+  string label = 6;
+  // Computed: `C<cluster>-R<row>-R<rack>-S<sled>`, as `LayoutPlacement.address` without the slot.
+  string address = 7;
+  // How many slots it declares, 1 to 8, numbered from 0 from the left as one faces the rack.
+  uint32 slots = 8;
 }
 
 message GetLayoutRequest {}
@@ -167,6 +212,8 @@ message GetLayoutResponse {
   string name = 4;
   // Every network device, by name.
   repeated NetworkDevice devices = 5;
+  // Every sled, by rack id, then lowest U.
+  repeated LayoutSled sleds = 6;
 }
 
 message PutLayoutNameRequest {
@@ -232,6 +279,14 @@ message PlaceLayoutRequest {
   // The lowest U it occupies; required (0 is refused).
   uint32 u = 5;
   string reason = 6;
+  // To put the subject on a sled: the sled's id (`Get`'s `sleds`), with `rack`, `u` and
+  // `height_u` left empty (a rack and a sled together is `invalid_request`). `slot` is the slot
+  // from 0; left out, the lowest free one. A slot another subject holds is `overlap`, one past 7
+  // `invalid_request`, a sled with no free slot `capacity`. With `rack`, `u` and `height_u`
+  // instead, a new sled of that U and height is made there and the subject stands on its slot 0
+  // (the sled goes when the subject leaves it and it is empty).
+  string sled = 7;
+  optional uint32 slot = 8;
 }
 
 message PlaceLayoutResponse {
@@ -303,5 +358,34 @@ message RemoveLayoutDeviceRequest {
 }
 
 message RemoveLayoutDeviceResponse {
+  AuditEntry entry = 1;
+}
+
+message PutLayoutSledRequest {
+  // Empty to add; else the sled to replace.
+  string id = 1;
+  // The id of the rack it stands in (or, with an `id`, is moved to).
+  string rack = 2;
+  // The lowest U it occupies, 1 or more; required.
+  uint32 u = 4;
+  // 1 to 60; required.
+  uint32 height_u = 5;
+  string label = 6;
+  string reason = 7;
+  // 1 to 8; 0 on an add is 1, 0 on a replace keeps the sled's count. A count below the slot of an item on the sled is `in_use`, naming it.
+  uint32 slots = 8;
+}
+
+message PutLayoutSledResponse {
+  LayoutSled sled = 1;
+  AuditEntry entry = 2;
+}
+
+message RemoveLayoutSledRequest {
+  string id = 1;
+  string reason = 2;
+}
+
+message RemoveLayoutSledResponse {
   AuditEntry entry = 1;
 }

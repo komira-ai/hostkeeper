@@ -100,7 +100,11 @@ fn an_approval_with_a_rack_places_the_host() {
     let held = layout(&rig);
     let placement = held.placement(&subject(Kind::Host, "w1")).expect("placed");
     assert_eq!(
-        (placement.rack.as_str(), placement.u, placement.height_u),
+        (
+            placement.1.rack.as_str(),
+            placement.1.u,
+            placement.1.height_u
+        ),
         ("rack-1", 5, 2)
     );
     let entries = audit_after(&rig.coordinator, before);

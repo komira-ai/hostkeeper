@@ -689,6 +689,8 @@ const FIELDS: [(&str, &[(&str, u32)]); 39] = [
             ("rack", 9),
             ("placement_u", 10),
             ("placement_height_u", 11),
+            ("placement_sled", 12),
+            ("placement_slot", 13),
         ],
     ),
     (

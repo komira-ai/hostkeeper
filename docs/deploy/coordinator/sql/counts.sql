@@ -48,5 +48,7 @@ SELECT format('  %s: %s rows', name, rows) FROM (VALUES
   (41, 'lab_racks', (SELECT count(*) FROM lab_racks)),
   (42, 'lab_placements', (SELECT count(*) FROM lab_placements)),
   (43, 'lab_cluster', (SELECT count(*) FROM lab_cluster)),
-  (44, 'lab_devices', (SELECT count(*) FROM lab_devices))
+  (44, 'lab_devices', (SELECT count(*) FROM lab_devices)),
+  (45, 'lab_sleds', (SELECT count(*) FROM lab_sleds)),
+  (46, 'lab_sled_items', (SELECT count(*) FROM lab_sled_items))
 ) AS counted (n, name, rows) ORDER BY n;
