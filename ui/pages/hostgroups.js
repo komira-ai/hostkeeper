@@ -7,9 +7,15 @@
 // of the registered packages, which the Packages page keeps, and installed in the order ticked;
 // no package is typed, and an empty list links to the Packages page; `all` lists `hostkeeper`,
 // which a specific group need not). A host is moved into a group on its own Host page, not here.
+// Each group but `all` has a Delete button (danger style, after a confirm) that sends
+// HostGroups.Remove, which drops the group with its desired versions and marks. A group that
+// still has hosts is refused (`not_empty`): the page then names its hosts (HostGroups.Get) and
+// changes nothing; a group only a record or the Mac allowlist names is refused the same way, and
+// the page says so.
 // A group's rollout policy is not edited here: a change keeps the policy the group holds, and a
 // new group has the default one (`hkctl host-groups put` sets one).
-// Calls: Services.List (the registered packages the form offers), HostGroups.List (every page), HostGroups.Get on a group's name and its hosts' "Next",
+// Calls: Services.List (the registered packages the form offers), HostGroups.List (every page), HostGroups.Get on a group's name and its hosts' "Next" and on a refused Delete,
+// HostGroups.Remove on Delete,
 // HostGroups.Put on Save, which replaces the group named over the generation List gave (or
 // creates it). The page never moves a host. The reason of a Put is optional here: it is sent as a
 // default when left empty.
@@ -75,6 +81,7 @@ function counts(convergence) {
 // The reasons sent when the operator gives none: the API wants one, and the audit log names the
 // operator anyway.
 const DEFAULT_PUT_REASON = "set in the console";
+const REMOVE_REASON = "removed in the console";
 
 // The body of a group as List answers it (its name, packages and policy).
 const bodyOf = (one) => (one || {})["group"] || {};
@@ -247,6 +254,36 @@ export async function render(ctx) {
         return `Saved host group ${name} (generation ${reply.generation || "-"}).`;
       })));
 
+  // Why a Remove was refused for `not_empty`, in words: the hosts the group still has (the first
+  // page of them), or the records that name it when it has none.
+  const stillHeld = async (name) => {
+    let reply;
+    try {
+      reply = await ctx.api.hostGroups.get({ hostGroup: name, limit: HOSTS_PER_PAGE });
+    } catch (error) {
+      return `${name}: not_empty (${describeError(error)})`;
+    }
+    const nodeIds = list(reply, "nodeIds");
+    if (nodeIds.length === 0) {
+      return `Host group ${name} is not deleted: an inventory record, a pending approval or the Mac allowlist still names it.`;
+    }
+    const more = typeof reply.nextPageToken === "string" && reply.nextPageToken !== "" ? ", and more" : "";
+    return `Host group ${name} is not deleted: it still has hosts ${nodeIds.join(", ")}${more}. Move them to another group on their Host page first.`;
+  };
+
+  const removeGroup = (name) => action(ctx, "Delete", "delete-group", async () => {
+    if (!ctx.confirm(`Delete host group ${name}? Its packages and desired versions are removed with it; no host is in it.`)) {
+      return "Not deleted.";
+    }
+    try {
+      await ctx.api.hostGroups.remove({ hostGroup: name, reason: REMOVE_REASON });
+    } catch (error) {
+      return error && error.reason === "not_empty" ? stillHeld(name) : `${name}: ${describeError(error)}`;
+    }
+    ctx.refresh();
+    return `Deleted host group ${name}.`;
+  }, { class: "danger" });
+
   const rows = () => groups.map((one) => {
     const { group = {} } = one;
     const { name } = group;
@@ -259,7 +296,8 @@ export async function render(ctx) {
       h("td", {}, one.generation || "-"),
       h("td", {}, String(one.hosts || 0)),
       h("td", {}, desiredLine(list(one, "packages"))),
-      h("td", {}, action(ctx, "Edit", "edit-group", () => edit(name))));
+      h("td", {}, action(ctx, "Edit", "edit-group", () => edit(name)),
+        name === ALL ? null : removeGroup(name)));
   });
 
   const page = () => h("section", { class: "page host-groups" },

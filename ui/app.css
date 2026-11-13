@@ -222,3 +222,8 @@ button.linkish {
 a {
   color: var(--accent);
 }
+
+button.danger {
+  border-color: var(--alert);
+  color: var(--alert);
+}
