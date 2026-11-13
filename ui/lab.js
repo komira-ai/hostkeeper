@@ -29,13 +29,14 @@ export const STATES = [
   ["pending", "warn"],
 ];
 
-// The layout a `Layout.Get` reply holds, with the lists in order and the numbers as numbers:
+// The layout a `Layout.Get` reply holds, with the lists in order and the numbers as numbers (a
+// number of 0, the first row or rack, is left out of the JSON of a message, so a missing one is 0):
 // `{name, rows, racks, placements}`; each placement is `{kind, id, key, rack, u, height}` where
 // `key` is `host:<id>` or `inventory:<id>` and `u` its lowest U.
 export function layoutOf(reply) {
-  const rows = list(reply, "rows").map((r) => ({ id: r.id, number: Number(r.number) }));
+  const rows = list(reply, "rows").map((r) => ({ id: r.id, number: Number(r.number ?? 0) }));
   const racks = list(reply, "racks").map((r) => ({
-    id: r.id, row: r.row, number: Number(r.number), height: Number(r.heightU),
+    id: r.id, row: r.row, number: Number(r.number ?? 0), height: Number(r.heightU),
   }));
   const placements = list(reply, "placements").map((p) => {
     const kind = p.subject && p.subject.kind === KIND_INVENTORY ? "inventory" : "host";
