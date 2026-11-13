@@ -187,6 +187,7 @@ fn a_matched_request_still_refuses_another_key() {
         replace: false,
         reason: "built today".to_owned(),
         host_group: String::new(),
+        ..Default::default()
     };
     let other = HostKey::new();
     let refused = rig

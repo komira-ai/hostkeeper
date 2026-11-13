@@ -13,6 +13,7 @@ use super::{Backend, BackendError, Commit, Health, Loaded};
 use crate::accounts::Accounts;
 use crate::audit_file::{AuditLine, Logged, Query};
 use crate::desired;
+use crate::layout::Layout;
 use crate::ops::OpsState;
 use crate::verdict_file;
 
@@ -27,6 +28,7 @@ struct Durable {
     ops: OpsState,
     verdicts: verdict_file::Held,
     accounts: Accounts,
+    layout: Layout,
     audit: Vec<AuditLine>,
     spent: BTreeMap<String, u64>,
     commits: u64,
@@ -134,6 +136,11 @@ impl Fake {
         self.lock().accounts.clone()
     }
 
+    /// The layout committed.
+    pub(crate) fn layout(&self) -> Layout {
+        self.lock().layout.clone()
+    }
+
     /// Every audit line committed, in order.
     pub(crate) fn audit(&self) -> Vec<AuditLine> {
         self.lock().audit.clone()
@@ -166,6 +173,7 @@ impl Backend for Fake {
             ops: durable.ops.clone(),
             verdicts: durable.verdicts.clone(),
             accounts: durable.accounts.clone(),
+            layout: durable.layout.clone(),
             spent: durable
                 .spent
                 .iter()
@@ -191,6 +199,9 @@ impl Backend for Fake {
         }
         if let Some((_, after)) = change.accounts {
             durable.accounts = after.clone();
+        }
+        if let Some((_, after)) = change.layout {
+            durable.layout = after.clone();
         }
         durable.audit.extend(change.audit.iter().cloned());
         durable.commits += 1;

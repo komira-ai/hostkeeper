@@ -9,14 +9,20 @@
 import { ApiError } from "./api.js";
 
 const TAGS = new Set([
-  "a", "button", "code", "div", "fieldset", "form", "h1", "h2", "h3", "header", "input", "label",
+  "a", "aside", "button", "code", "div", "fieldset", "form", "h1", "h2", "h3", "header", "input", "label",
   "legend", "li", "main", "nav", "option", "p", "pre", "section", "select", "small", "span",
   "strong", "table", "tbody", "td", "textarea", "th", "thead", "tr", "ul",
 ]);
 const ATTRIBUTES = new Set([
-  "aria-label", "href", "rel", "target", "autocomplete", "class", "id", "inputmode", "maxlength", "name", "placeholder",
-  "role", "rows", "spellcheck", "type",
+  "aria-controls", "aria-current", "aria-expanded", "aria-hidden", "aria-label", "aria-pressed", "href", "rel", "target",
+  "autocomplete", "class", "draggable", "id", "inputmode", "maxlength", "name", "placeholder", "role", "rows",
+  "spellcheck", "tabindex", "title", "type",
 ]);
+// Numbers the page hands its stylesheet, as custom properties of the element (`--row`, `--span`).
+// They are set through the element's style object, which a content security policy of
+// `default-src 'self'` allows (a `style` attribute it does not), and only a finite number under a
+// name of lower-case letters and dashes is accepted.
+const CUSTOM_PROPERTY = /^--[a-z][a-z-]*$/;
 // Set as properties, not attributes: what the element shows now.
 const PROPERTIES = new Set(["checked", "disabled", "selected", "value"]);
 // The one place a link may lead: the operator documentation as GitHub renders it. A link is a
@@ -30,7 +36,10 @@ export function docLink(name, text, page, anchor) {
   }, text);
 }
 
-const EVENTS = new Set(["change", "click", "input", "submit"]);
+const EVENTS = new Set([
+  "change", "click", "input", "submit", "keydown", "pointerdown", "pointermove", "pointerup", "dragstart", "dragover",
+  "drop", "dragend",
+]);
 
 function flatten(children, out) {
   for (const child of children) {
@@ -72,7 +81,14 @@ function build(doc, node) {
   }
   const element = doc.createElement(node.tag);
   for (const [key, value] of Object.entries(node.attrs)) {
-    if (PROPERTIES.has(key)) {
+    if (key === "vars") {
+      for (const [name, number] of Object.entries(value)) {
+        if (!CUSTOM_PROPERTY.test(name) || typeof number !== "number" || !Number.isFinite(number)) {
+          throw new Error(`no custom property ${name}`);
+        }
+        element.style.setProperty(name, String(number));
+      }
+    } else if (PROPERTIES.has(key)) {
       element[key] = value;
     } else if (ATTRIBUTES.has(key)) {
       if (key === "href" && !String(value).startsWith(DOCS)) {
@@ -319,8 +335,14 @@ export function words(value) {
   return trimmed(value).split(/[\s,]+/).filter((w) => w !== "");
 }
 
+// A status pill: `text` on the colour of `tone` (ok, warn, bad, info or muted). The text carries
+// the meaning, so a colour is never the only sign of it; `more` is text or elements after it (a count).
+export function pill(text, tone, ...more) {
+  return h("span", { class: `pill ${tone}` }, text, more);
+}
+
 export function table(headings, rows) {
-  return h("table", {},
+  return h("div", { class: "table-wrap" }, h("table", {},
     h("thead", {}, h("tr", {}, headings.map((title) => h("th", {}, title)))),
-    h("tbody", {}, rows));
+    h("tbody", {}, rows)));
 }

@@ -53,7 +53,10 @@ use hostkeeper_wire::{HostId, RoleName};
 use crate::enrollment::{ByRecord, Enrollment, MAC_APPROVER, RpcError};
 use crate::host_groups::GroupName;
 use crate::inventory::show_match;
+use crate::layout::{Kind, LayoutError, Subject};
 use crate::operator::{Caller, entry_proto};
+use crate::operator_layout::placement_of;
+use crate::ops::Write;
 use crate::service::Coordinator;
 
 impl Coordinator {
@@ -126,9 +129,14 @@ impl Coordinator {
         let known = |name: &str| self.services.get(name).is_some();
         let (role, services) = (request.role.clone(), request.services.clone());
         let records = self.ops.read(|state| state.inventory.clone());
-        let approved = {
+        let approved = if request.rack.is_empty() {
+            if request.placement_u != 0 || request.placement_height_u != 0 {
+                return Err(EnrollmentRefusal::PlacementInvalid);
+            }
             let _fleet = self.lock_fleet();
             enrollment.approve(by, request, &known, &records)?
+        } else {
+            self.approve_placed(by, enrollment, request, &known, &records)?
         };
         // An approval by group names none.
         if !services.is_empty() {
@@ -139,6 +147,85 @@ impl Coordinator {
             certificate_issued_at_poll: true,
             entry: approved.entry.as_ref().map(entry_proto),
         })
+    }
+
+    /// The approval of `request`, which names a rack, with the placement it asks for made in the
+    /// same step: both are judged first (the placement against the layout as it is, under the
+    /// layout's lock, which the approval runs inside), so a placement that cannot be made
+    /// refuses the approval and nothing changes. The placement is of the inventory entry the
+    /// approved host id names, else of the host; it is audited as `layout_place`. A placement
+    /// the store then cannot write leaves the approval standing, logged: place the host from the
+    /// lab view.
+    fn approve_placed(
+        &self,
+        by: &str,
+        enrollment: &Enrollment,
+        request: proto::ApproveRequest,
+        known: &dyn Fn(&str) -> bool,
+        records: &[crate::inventory::InventoryRecord],
+    ) -> Result<crate::enrollment::Approved, EnrollmentRefusal> {
+        let (rack, u, height_u) = (
+            request.rack.clone(),
+            request.placement_u,
+            request.placement_height_u,
+        );
+        if u == 0 || height_u == 0 {
+            return Err(EnrollmentRefusal::PlacementInvalid);
+        }
+        let probe_id = if request.host_id.is_empty() {
+            "probe"
+        } else {
+            &request.host_id
+        };
+        let probe = placement_of(
+            Subject {
+                kind: Kind::Host,
+                id: probe_id.to_owned(),
+            },
+            &rack,
+            u,
+            height_u,
+        );
+        let mut done: Option<Result<crate::enrollment::Approved, EnrollmentRefusal>> = None;
+        let placed = self.layout().change(|held| {
+            held.with_placement(probe.clone())?;
+            let approved = {
+                let _fleet = self.lock_fleet();
+                enrollment.approve(by, request.clone(), known, records)
+            };
+            let approved = match approved {
+                Ok(approved) => approved,
+                Err(refusal) => {
+                    done = Some(Err(refusal));
+                    return Err(LayoutError::Invalid(String::new()));
+                }
+            };
+            let id = approved.host_id.to_string();
+            let kind = if records.iter().any(|record| record.host_id == id) {
+                Kind::Inventory
+            } else {
+                Kind::Host
+            };
+            let subject = Subject { kind, id };
+            let entry = Self::place_entry(by, &subject.key());
+            if let Err(why) = self.ops.change(Write::BeforeMemory, entry, |_| {}) {
+                tracing::error!(%why, "the audit line of an approval's placement was not written");
+            }
+            let placement = placement_of(subject, &rack, u, height_u);
+            done = Some(Ok(approved));
+            let made = held.with_placement(placement)?;
+            Ok((made.0, ()))
+        });
+        match (done, placed) {
+            (Some(Ok(approved)), Ok(())) => Ok(approved),
+            (Some(Ok(approved)), Err(why)) => {
+                tracing::error!(%why, "an approval's placement was not written: place the host from the lab view");
+                Ok(approved)
+            }
+            (Some(Err(refusal)), _) => Err(refusal),
+            (None, Err(why)) => Err(placement_refusal(&why)),
+            (None, Ok(())) => Err(EnrollmentRefusal::StoreFailed),
+        }
     }
 
     /// `Enroll` of `hostkeeper.agent.v1.Coordinator` over `enrollment`, this coordinator's
@@ -231,5 +318,16 @@ impl Coordinator {
         Ok(proto::RejectResponse {
             entry: entry.as_ref().map(entry_proto),
         })
+    }
+}
+
+/// The refusal of an approval whose placement `why` was refused.
+fn placement_refusal(why: &LayoutError) -> EnrollmentRefusal {
+    match why {
+        LayoutError::UnknownRack(_) => EnrollmentRefusal::UnknownRack,
+        LayoutError::Overlap { .. } => EnrollmentRefusal::PlacementOverlap,
+        LayoutError::OutOfRack { .. } => EnrollmentRefusal::PlacementOutOfRack,
+        LayoutError::Invalid(_) => EnrollmentRefusal::PlacementInvalid,
+        _ => EnrollmentRefusal::StoreFailed,
     }
 }

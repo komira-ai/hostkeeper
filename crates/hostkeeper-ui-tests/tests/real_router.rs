@@ -169,6 +169,37 @@ const REQUESTS: &[(&str, &str)] = &[
         "hostkeeper.operator.v1.Hosts/SetLabels",
         r#"{"nodeId": "storage-1", "labels": {"rack": "r1"}}"#,
     ),
+    (
+        "hostkeeper.operator.v1.Layout/AddRow",
+        r#"{"reason": "add row"}"#,
+    ),
+    ("hostkeeper.operator.v1.Layout/Get", "{}"),
+    (
+        "hostkeeper.operator.v1.Layout/Place",
+        r#"{"subject": {"kind": "LAYOUT_SUBJECT_KIND_INVENTORY", "id": "storage-1"},
+            "rack": "rack-1", "heightU": 2, "u": 10, "reason": "lab move"}"#,
+    ),
+    (
+        "hostkeeper.operator.v1.Layout/PutName",
+        r#"{"name": "Lab 1", "reason": "rename"}"#,
+    ),
+    (
+        "hostkeeper.operator.v1.Layout/PutRack",
+        r#"{"row": "row-1", "heightU": 42, "reason": "add rack"}"#,
+    ),
+    (
+        "hostkeeper.operator.v1.Layout/RemoveRack",
+        r#"{"id": "rack-1", "reason": "remove"}"#,
+    ),
+    (
+        "hostkeeper.operator.v1.Layout/RemoveRow",
+        r#"{"id": "row-1", "reason": "remove"}"#,
+    ),
+    (
+        "hostkeeper.operator.v1.Layout/Unplace",
+        r#"{"subject": {"kind": "LAYOUT_SUBJECT_KIND_INVENTORY", "id": "storage-1"},
+            "reason": "retired"}"#,
+    ),
     ("hostkeeper.operator.v1.Mdm/GetAbmPublicKey", "{}"),
     ("hostkeeper.operator.v1.Mdm/ListSecrets", "{}"),
     ("hostkeeper.operator.v1.Mdm/ListSettings", "{}"),

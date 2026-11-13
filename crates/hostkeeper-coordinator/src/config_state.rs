@@ -34,6 +34,7 @@ use crate::backup::{migrate_marker, ops_path, restore_marker};
 use crate::enrollment::os_random;
 use crate::initial_admin::InitialAdmin;
 use crate::jti_file::jti_path;
+use crate::layout::layout_path;
 use crate::lock::{LockError, LockGuard, StateLock, lock_path};
 use crate::login::Login;
 use crate::mdm_secrets::MasterKey;
@@ -301,7 +302,8 @@ fn open(
         .with_desired(state, legacy)
         .with_ops(ops, rotation)?
         .with_verdicts(&verdicts_path(state))
-        .with_accounts(&accounts_path(state));
+        .with_accounts(&accounts_path(state))
+        .with_layout(&layout_path(state));
     let loaded = files.load()?;
     if let Some(numbers) = marker {
         settle_unfinished(ops, &numbers, &loaded.ops)?;
@@ -330,6 +332,7 @@ impl From<BackendError> for StartError {
             BackendError::Ops(why) => why.into(),
             BackendError::Verdicts(why) => why.into(),
             BackendError::Accounts(why) => why.into(),
+            BackendError::Layout(why) => why.into(),
             BackendError::Jti(why) => why.into(),
             BackendError::Spent => Self::Io(io::Error::other(why)),
         }

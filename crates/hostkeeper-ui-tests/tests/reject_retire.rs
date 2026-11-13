@@ -46,6 +46,7 @@ await click(tree, "reject", 1);
         [
             (m("Enrollment/List"), json!({"limit": 50, "pageToken": ""})),
             (m("HostGroups/List"), json!({})),
+            (m("Layout/Get"), json!({})),
             (m("Enrollment/Reject"), json!({"requestId": one})),
             (m("Enrollment/Reject"), json!({"requestId": two})),
         ]
@@ -107,6 +108,7 @@ await click(tree, "retire");
         [
             (m("Hosts/Get"), json!({"nodeId": "web-2"})),
             (m("Services/List"), json!({})),
+            (m("Layout/Get"), json!({})),
             (m("Hosts/Retire"), json!({"nodeId": "web-2", "reason": ""})),
             (
                 m("Hosts/Retire"),

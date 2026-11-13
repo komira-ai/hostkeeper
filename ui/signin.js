@@ -59,7 +59,7 @@ export function signInView({ username, message, submit }) {
       type: "password", name: "password", autocomplete: "current-password", spellcheck: "false",
       on: { input: (e) => { form.password = e.target.value; } },
     })),
-  h("button", { type: "submit", name: "sign-in" }, "Sign in"),
+  h("button", { type: "submit", name: "sign-in", class: "primary" }, "Sign in"),
   alertLine(message));
 }
 
@@ -99,7 +99,7 @@ export function changeView({ username, until, message, submit, signOut }) {
       type: "password", name: "again", autocomplete: "new-password", spellcheck: "false",
       on: { input: (e) => { form.again = e.target.value; } },
     })),
-  h("button", { type: "submit", name: "change-password" }, "Change password"),
+  h("button", { type: "submit", name: "change-password", class: "primary" }, "Change password"),
   h("button", { type: "button", name: "sign-out", on: { click: () => signOut() } }, "Sign out"),
   alertLine(message));
 }

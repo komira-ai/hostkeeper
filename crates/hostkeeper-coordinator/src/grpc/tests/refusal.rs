@@ -386,6 +386,22 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
                 NotFound,
                 "unknown_host_group",
             ),
+            (
+                EnrollmentRefusal::PlacementInvalid,
+                InvalidArgument,
+                "placement_invalid",
+            ),
+            (EnrollmentRefusal::UnknownRack, NotFound, "unknown_rack"),
+            (
+                EnrollmentRefusal::PlacementOverlap,
+                FailedPrecondition,
+                "placement_overlap",
+            ),
+            (
+                EnrollmentRefusal::PlacementOutOfRack,
+                FailedPrecondition,
+                "placement_out_of_rack",
+            ),
         ],
         refusal::enrollment,
     );

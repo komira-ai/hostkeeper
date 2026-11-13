@@ -37,6 +37,32 @@ the coordinator for the session again, so a reload does not sign you out. A firs
 sign-in with a temporary password an admin set, shows only the form for choosing a new password.
 Sign out ends the session on the coordinator.
 
+## The frame and the lab
+
+After sign-in the app opens on **Home**, the lab (`docs/design/ui-shell-lab.md`). The frame around every page is a side menu with
+the "hostkeeper" wordmark on top (a click goes Home), the pages in two groups (Host groups, Inventory and Enrollment; then
+Users, API tokens, MDM setup and Audit) and a button that collapses it to icons; on a narrow screen it is a drawer opened by the
+top bar's Menu button. The top bar says where you are, who is signed in, the theme (the browser's own, light or dark; kept in
+memory only) and Sign out. The pages that moved keep their old route: `fleet` is Home, and Release, Rollout and Holds still open
+by their route and are not in the menu.
+
+- **Home**: the lab. The floor plan is a band for each row of the cluster with a footprint for each rack (its number, its U in use
+  and a dot for each state of its servers: healthy, updating, offline, pending); a click on a row opens its racks as front
+  elevations side by side in a strip that scrolls (wheel, drag, arrow keys), each server drawn over its U with a light for its
+  state and its name, a blank panel over a free run of U; a click on a server opens its host page, and hover says its name, group,
+  version and state. A click on a rack's head opens that rack with its servers in a table. Breadcrumbs lead back
+  (`Lab > Row > Rack > Host`). Below the floor plan: the servers not placed yet (the Unplaced list), the alerts of `Alerts.List`
+  and a table of every host. **Edit layout** shows the controls: rename the cluster, add a row (the next number), add a rack to a
+  row (its height from a list, 42 U by default), resize, move to another row or remove a rack, remove a row, and move a server by
+  picking it up (or dragging it) and putting it on a free U of a rack, or taking it out of its rack. A row or a rack that still
+  holds servers is not removed, and the page names them. A refusal is told in words. An empty lab says so and offers "Add a row".
+  Calls: `Hosts.List`, `Releases.Status`, `Alerts.List`, `Layout.Get`, `Enrollment.ListRecords`; on a button `Layout.PutName`,
+  `AddRow`, `RemoveRow`, `PutRack`, `RemoveRack`, `Place` and `Unplace`.
+- **Enrollment** (approval): besides the host group, the Height (1U to 4U, 1U by default), Row, Rack and U position of the server.
+  All four are choices from the layout, the U position only among the free slots of the rack for that height; Row's first choice,
+  Unplaced, places nothing. The placement is sent with the approval, which is refused whole when the slot is taken.
+- **Host** (Placement): where the host stands, and the same four choices to place or move it (Place, Move) and Unplace.
+
 ## What the pages do for services
 
 - **Rollout**: for each service, what `Services.List` says of it (the hosts it runs on, the hosts being uninstalled; the

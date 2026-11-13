@@ -82,6 +82,7 @@ fn approval(key: &HostKey, host: &str, replace: bool) -> proto::ApproveRequest {
         replace,
         reason: "built today".to_owned(),
         host_group: String::new(),
+        ..Default::default()
     }
 }
 

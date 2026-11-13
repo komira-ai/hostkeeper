@@ -15,6 +15,7 @@ import {
   h, action, checkbox, describeError, enumLabel, errorView, field, fmtUnix, list, reasonProblem, scopeLabel, table,
   trimmed,
 } from "../view.js";
+import { crumbs, layoutOf, layoutProblem, placementPanel, rackName, subjectOf } from "../lab.js";
 
 // A label key or value, as SetLabels takes it: 1 to 32 bytes of `[a-z0-9-]`.
 const LABEL = /^[a-z0-9-]{1,32}$/;
@@ -368,7 +369,7 @@ function chooser(ctx) {
   const form = { nodeId: "" };
   return h("section", { class: "page" },
     h("h2", {}, "Host"),
-    h("p", {}, "Choose a host on the Fleet page, or name one."),
+    h("p", {}, "Choose a host on Home, or name one."),
     field("Host id", "node-id", form, "nodeId"),
     action(ctx, "Open", "open", async () => {
       if (trimmed(form.nodeId) === "") {
@@ -405,10 +406,12 @@ export async function render(ctx) {
   }
   const now = ctx.now();
   const agent = host.heartbeat && host.heartbeat.agent;
+  const where = await placementSection(ctx, host, nodeId, () => ctx.show(root));
   const labelsForm = {
     labels: Object.entries(host.labels || {}).map(([k, v]) => `${k}=${v}`).join(", "),
   };
-  return h("section", { class: "page" },
+  const root = h("section", { class: "page" },
+    where.crumbs,
     h("h2", {}, `Host ${host.nodeId || nodeId}`),
     table(["", ""], [
       ["Role", host.role || "-"],
@@ -419,6 +422,7 @@ export async function render(ctx) {
       ["Excluded from", (host.exclusions || []).map((x) => `${x.service} (${x.reason || "-"})`).join(", ") || "-"],
       ...inventoryFacts(ctx, host),
     ].map(([k, v]) => h("tr", {}, h("th", {}, k), h("td", {}, v)))),
+    where.section,
     certificate(host, now),
     trustedRoot(host),
     h("fieldset", {},
@@ -442,6 +446,74 @@ export async function render(ctx) {
     assignedSection(listing, nodeId, ends),
     list(host, "services").map((view) => serviceSection(ctx, nodeId, view)),
     retireSection(ctx, nodeId));
+  return root;
+}
+
+// Where the host stands, and the controls that move it: the height, row, rack and U position, each
+// chosen from the lab's layout (the U position among the free slots of the rack), then Place or
+// Move, and Unplace. The place belongs to the physical server, which is the host's inventory
+// entry when one matches it, else the host. The lab layout is read once; when it cannot be, the
+// section says so and offers nothing. Every change is audited by the coordinator.
+async function placementSection(ctx, host, nodeId, show) {
+  let layout;
+  try {
+    layout = layoutOf(await ctx.api.layout.get({}));
+  } catch (error) {
+    return {
+      crumbs: null,
+      section: h("fieldset", {},
+        h("legend", {}, "Placement"),
+        h("p", { class: "warning", role: "alert" }, `The lab layout cannot be read: ${describeError(error)}`)),
+    };
+  }
+  const entry = typeof host.inventoryRecordId === "string" ? host.inventoryRecordId : "";
+  const server = entry === "" ? { kind: "host", id: nodeId } : { kind: "inventory", id: entry };
+  const key = `${server.kind}:${server.id}`;
+  const held = layout.placements.find((p) => p.key === key);
+  const rackAt = held === undefined ? undefined : layout.racks.find((r) => r.id === held.rack);
+  const state = {
+    height: held === undefined ? "1" : String(held.height),
+    row: rackAt === undefined ? "" : rackAt.row,
+    rack: held === undefined ? "" : held.rack,
+    u: held === undefined ? "" : String(held.u),
+  };
+  const panel = placementPanel(layout, state, key, false, show);
+  const standing = held === undefined
+    ? "Unplaced: it stands in no rack."
+    : `Stands at ${rackName(layout, held.rack)}, U${held.u}, ${held.height}U.`;
+  const spot = rackAt === undefined ? {} : { rack: rackAt.id };
+  return {
+    crumbs: crumbs(layout, { ...spot, host: host.nodeId || nodeId }, (view, params) => ctx.navigate(view, params)),
+    section: h("fieldset", {},
+      h("legend", {}, "Placement"),
+      h("p", { name: "standing" }, standing),
+      panel,
+      action(ctx, held === undefined ? "Place" : "Move", "place", async () => {
+        const chosen = panel.choices.request();
+        if (chosen === null) {
+          return panel.choices.note || "Choose a rack and a U position.";
+        }
+        try {
+          await ctx.api.layout.place({
+            subject: subjectOf(server), ...chosen,
+            reason: `${held === undefined ? "placed" : "moved"} ${nodeId}`,
+          });
+        } catch (error) {
+          return layoutProblem(error);
+        }
+        ctx.refresh();
+        return `${nodeId} is at ${rackName(layout, chosen.rack)}, U${chosen.u}.`;
+      }),
+      held === undefined ? null : action(ctx, "Unplace", "unplace", async () => {
+        try {
+          await ctx.api.layout.unplace({ subject: subjectOf(server), reason: `unplaced ${nodeId}` });
+        } catch (error) {
+          return layoutProblem(error);
+        }
+        ctx.refresh();
+        return `${nodeId} is unplaced.`;
+      })),
+  };
 }
 
 // Retire: the reason is optional; the host is refused from then on, so it asks first. The answer

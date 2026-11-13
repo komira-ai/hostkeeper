@@ -622,6 +622,7 @@ async fn an_operator_approval_does_not_mark_the_record_used() {
                 replace: false,
                 reason: "checked by hand".to_owned(),
                 host_group: String::new(),
+                ..Default::default()
             },
         )
         .expect("approved");

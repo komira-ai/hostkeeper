@@ -30,6 +30,7 @@ import {
   h, action, allPages, checkbox, describeError, enumLabel, errorView, field, fmtUnix,
   select, table, trimmed,
 } from "../view.js";
+import { layoutOf, layoutProblem, placementChoices, rackName } from "../lab.js";
 
 const PAGE_SIZE = 50;
 const UNENROLLED = "ENROLLMENT_REQUEST_STATE_UNENROLLED";
@@ -210,15 +211,42 @@ function groupChoices(groups) {
   }).filter(([name]) => name !== "" && name !== "all")];
 }
 
-function pending(ctx, request, groups) {
+// The placement controls of an approval: where the server stands, optional (no rack lands the host
+// in Unplaced). Height, row, rack and U position are choices from the lab's layout, the U position
+// only the free slots of the rack for the height chosen. A matched request names the record whose
+// server keeps its place across a wipe: where it stands now is said, and is kept unless another
+// place is chosen.
+function placementSection(request, form, lab) {
+  if (lab.failure !== null) {
+    return h("p", { class: "warning", role: "alert" },
+      `The lab layout cannot be read (${describeError(lab.failure)}): the host can be approved unplaced.`);
+  }
+  const record = request.inventoryMatch === "INVENTORY_MATCH_MATCHED" ? recordHostId(request) : "";
+  const held = record === "" ? undefined : lab.layout.placements.find((p) => p.key === `inventory:${record}`);
+  const chosen = placementChoices(lab.layout, form.place, held === undefined ? undefined : held.key, lab.redraw, true);
+  form.chosen = chosen;
+  return [
+    h("div", { class: "buttons" }, chosen.elements),
+    chosen.note === "" ? null : h("p", { class: "note" }, chosen.note),
+    held === undefined ? null : h("p", { class: "note" },
+      `${record} stands at ${rackName(lab.layout, held.rack)}, U${held.u}, and stays there unless another place is chosen.`),
+  ];
+}
+
+function pending(ctx, request, groups, lab) {
   const matched = request.inventoryMatch === "INVENTORY_MATCH_MATCHED";
   const choices = groupChoices(groups.held);
   const recorded = matched ? recordGroup(request) : "";
-  const form = {
-    hostId: request.renewalOf || recordHostId(request),
-    hostGroup: choices.some(([name]) => name === recorded) ? recorded : "",
-    replace: false,
-  };
+  if (!lab.forms.has(request.requestId)) {
+    lab.forms.set(request.requestId, {
+      hostId: request.renewalOf || recordHostId(request),
+      hostGroup: choices.some(([name]) => name === recorded) ? recorded : "",
+      replace: false,
+      place: { height: "1", row: "", rack: "", u: "" },
+      chosen: null,
+    });
+  }
+  const form = lab.forms.get(request.requestId);
   return h("section", { class: "service" },
     h("h3", {}, `Request ${request.requestId}`),
     request.duplicateClaim === true
@@ -246,6 +274,7 @@ function pending(ctx, request, groups) {
       h("legend", {}, "Approve"),
       field("Host id", "host-id", form, "hostId"),
       select("Host group", "host-group", form, "hostGroup", choices),
+      placementSection(request, form, lab),
       groups.failure === null ? null : h("p", { class: "warning", role: "alert" },
         `Host groups cannot be listed (${describeError(groups.failure)}): the host can be approved with no group.`),
       checkbox("Replace", "replace", form, "replace"),
@@ -262,12 +291,27 @@ function pending(ctx, request, groups) {
           `Approve request ${body.requestId} as ${named} and revoke the certificate of any host that holds ${named}?`)) {
           return "Not approved.";
         }
-        const reply = await ctx.api.enrollment.approve(body);
+        const spot = form.chosen === null ? null : form.chosen.request();
+        if (spot !== null) {
+          body.rack = spot.rack;
+          body.placementU = spot.u;
+          body.placementHeightU = spot.heightU;
+        }
+        let reply;
+        try {
+          reply = await ctx.api.enrollment.approve(body);
+        } catch (error) {
+          if (spot !== null && /^(placement_|unknown_rack$)/.test(error.reason || "")) {
+            return layoutProblem(error);
+          }
+          throw error;
+        }
         ctx.refresh();
         const placed = body.hostGroup === ""
           ? "with no host group (it runs the packages of all until it is put in one)"
           : `into host group ${body.hostGroup}`;
-        return `Approved ${reply.hostId || named} ${placed}: the host gets its certificate at its next poll.`;
+        const stands = spot === null ? "" : `, at ${rackName(lab.layout, spot.rack)}, U${spot.u}`;
+        return `Approved ${reply.hostId || named} ${placed}${stands}: the host gets its certificate at its next poll.`;
       })),
     rejectSection(ctx, request));
 }
@@ -348,15 +392,24 @@ export async function render(ctx) {
       groups.failure = error;
     }
   }
+  // The lab layout the placement controls choose from: read only when a request is shown.
+  const lab = { layout: layoutOf({}), failure: null, forms: new Map(), redraw: () => {} };
+  if (!expired && shown.length > 0) {
+    try {
+      lab.layout = layoutOf(await ctx.api.layout.get({}));
+    } catch (error) {
+      lab.failure = error;
+    }
+  }
   const empty = expired
     ? h("p", {}, requests.length === 0 ? "No request expired." : "This coordinator does not expire requests.")
     : h("p", {}, "No host is waiting.");
-  return h("section", { class: "page" },
+  const build = () => h("section", { class: "page" },
     h("h2", {}, expired ? "Enrollment: expired requests" : "Enrollment"),
     h("p", { class: "note" }, expired
       ? "A request no operator approves within the coordinator's request TTL expires, and its host is unenrolled."
       : "Claims are what a host says it is; they prove nothing. Approve names the key hash shown."),
-    shown.length === 0 ? empty : shown.map((request) => (expired ? unenrolled(request) : pending(ctx, request, groups))),
+    shown.length === 0 ? empty : shown.map((request) => (expired ? unenrolled(request) : pending(ctx, request, groups, lab))),
     h("div", { class: "buttons" },
       pageToken === "" ? null : h("button", {
         type: "button", name: "first-page", on: { click: () => ctx.navigate("enrollment", here) },
@@ -369,4 +422,6 @@ export async function render(ctx) {
         name: expired ? "show-pending" : "show-unenrolled",
         on: { click: () => ctx.navigate("enrollment", expired ? {} : { unenrolled: "yes" }) },
       }, expired ? "Pending requests" : "Expired requests")));
+  lab.redraw = () => ctx.show(build());
+  return build();
 }

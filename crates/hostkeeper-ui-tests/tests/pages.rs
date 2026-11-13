@@ -14,8 +14,8 @@ use support::pages::{
 const MARKUP: &str = "<img src=x onerror=alert(1)>";
 
 #[test]
-fn fleet_page_lists_hosts_and_alerts() {
-    // Catches: a Fleet page that calls another method, leaves out a host, its role, a service's
+fn home_page_lists_hosts_and_alerts() {
+    // Catches: a Home page that calls another method, leaves out a host, its role, a service's
     // version, health or marks, or an alert `Alerts.List` answers (its kind, whether it is
     // critical, its message and when it was first observed), a failed canary among them.
     let mut ui = Ui::start();
@@ -25,7 +25,7 @@ fn fleet_page_lists_hosts_and_alerts() {
     let out = ui.run(
         r#"
 import { api, recorder, text } from "../test/kit.js";
-import { render } from "./pages/fleet.js";
+import { render } from "./pages/home.js";
 export async function main() {
   const { ctx } = recorder(api("operator-token"), {}, []);
   const tree = await render(ctx);
@@ -37,7 +37,12 @@ export async function main() {
     );
     assert_eq!(
         ui.methods(),
-        [m("Hosts/List"), m("Releases/Status"), m("Alerts/List")]
+        [
+            m("Hosts/List"),
+            m("Releases/Status"),
+            m("Alerts/List"),
+            m("Layout/Get")
+        ]
     );
     assert!(
         bodies(&ui)
@@ -80,7 +85,7 @@ export async function main() {
 }
 
 #[test]
-fn fleet_alerts_show_nothing_when_nothing_needs_a_person() {
+fn home_alerts_show_nothing_when_nothing_needs_a_person() {
     // Catches: an alert the page makes up when `Alerts.List` answers none (a halt read from the
     // status, a gate reason of a host).
     let mut ui = Ui::start();
@@ -93,7 +98,7 @@ fn fleet_alerts_show_nothing_when_nothing_needs_a_person() {
         &m("Releases/Status"),
         json!({"quiet": true, "services": [{"service": "api", "convergence": {"state": "CONVERGENCE_STATE_CONVERGED"}}]}),
     );
-    let out = render(&mut ui, "fleet", "{}");
+    let out = render(&mut ui, "home", "{}");
     assert_shows(
         &out,
         &[
@@ -138,6 +143,7 @@ fn host_page_shows_services_marks_and_last_update() {
         [
             (m("Hosts/Get"), json!({"nodeId": "web-2"})),
             (m("Services/List"), json!({})),
+            (m("Layout/Get"), json!({})),
         ]
     );
     assert_shows(
@@ -183,7 +189,7 @@ fn host_page_without_a_host_asks_for_one_and_calls_nothing() {
         "[]",
         r#"await click(tree, "open"); type(tree, "node-id", " web-3 "); await click(tree, "open");"#,
     ));
-    assert_shows(&out, &["Choose a host on the Fleet page"]);
+    assert_shows(&out, &["Choose a host on Home"]);
     assert_eq!(out["seen"]["reports"], json!(["Name a host first."]));
     assert_eq!(
         out["seen"]["navigations"],
@@ -254,6 +260,7 @@ return {
         [
             (m("Hosts/Get"), json!({"nodeId": "web-2"})),
             (m("Services/List"), json!({})),
+            (m("Layout/Get"), json!({})),
             (
                 m("Hosts/Exclude"),
                 json!({"service": "api", "nodeId": "web-2", "reason": reason, "abandon": false})
@@ -394,6 +401,7 @@ return shown;
         [
             (m("Hosts/Get"), json!({"nodeId": "web-3"})),
             (m("Services/List"), json!({})),
+            (m("Layout/Get"), json!({})),
             (
                 m("Hosts/SetLabels"),
                 json!({"nodeId": "web-3", "labels": {}})
@@ -720,6 +728,7 @@ return { absent, offered, kept, second: chosen(tree, "host-group", 1) };
     let mut expected = vec![
         (m("Enrollment/List"), json!({"limit": 50, "pageToken": ""})),
         (m("HostGroups/List"), json!({})),
+        (m("Layout/Get"), json!({})),
     ];
     expected.extend((0..6).map(|_| (m("Enrollment/Approve"), first.clone())));
     expected.push((m("Enrollment/Approve"), second));
@@ -807,7 +816,7 @@ fn every_page_shows_the_refusal_when_its_call_is_unimplemented() {
     // The rollout page stops at its first call: without Releases.Status it has no services to
     // show, so it never asks Services.List.
     for (page, params) in [
-        ("fleet", "{}"),
+        ("home", "{}"),
         ("host", r#"{ nodeId: "web-1" }"#),
         ("rollout", "{}"),
         ("holds", "{}"),

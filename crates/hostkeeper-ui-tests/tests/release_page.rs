@@ -588,7 +588,7 @@ import { startApp } from "./app.js";
 export async function main() {
   const doc = fakeDocument();
   globalThis.doc = doc;
-  startApp({ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000 });
+  globalThis.app = startApp({ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000 });
   await settle();
 }"#,
     );
@@ -604,9 +604,7 @@ export async function main() {{
         )
     };
     // Each run settles every job the one before it started, so a run reads what the page drew.
-    ui.run(&step(
-        r#"fire(domNamed(doc.root, "page-release"), "click", {});"#,
-    ));
+    ui.run(&step(r#"globalThis.app.navigate("release", {});"#));
     let before = ui.run(&step(""));
     ui.run(&step(
         r#"fire(domNamed(doc.root, "service"), "input", { target: { value: "web" } });

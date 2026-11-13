@@ -107,6 +107,13 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   before never reads either table, so going back below this release needs no restore for it.
   The login, the initial-admin file and the `Users` and `ApiTokens` services write these rows; `export` writes them to the
   accounts file.
+- **The lab layout.** Migration `0014` adds `lab_cluster` (one row, `name`, the cluster's name as a JSON text), `lab_rows`,
+  `lab_racks` and `lab_placements`, one row per row, rack and placement, keyed by id (`row-<n>`, `rack-<n>`) or by subject
+  (`host:<id>` or `inventory:<id>`), holding the record as the layout file holds it
+  (`docs/design/ui-shell-lab.md`). A database that holds no row holds no layout, which is how a coordinator of this release
+  starts on a database the release before migrated. `0014` says older releases may run on it (`may-run`): they never read
+  the tables. The `Layout` service and the approval of an enrollment with a placement write these rows; `export` writes them
+  to the layout file.
 - **MDM tables.** Migration `0011` adds the tables of the MDM server inside the coordinator
   (`mdm_enrollments`, `mdm_identities`, `mdm_commands`, `abm_devices`, `abm_state`). Nothing writes
   them yet. `0011` says older releases may run on it (the release before never reads these tables),
@@ -256,6 +263,9 @@ hostkeeper-coordinator export --database-dsn-file <file> --state-file <file> [--
   database held, hashes and all; a database that holds neither is exported with no such file. There
   is no import: a file store's accounts file does not reach a database by any verb, and a database
   is filled by serving on it.
+- The rows of `lab_cluster`, `lab_rows`, `lab_racks` and `lab_placements` are written as `<state-file>.layout` (mode 0600, JSON,
+  the file the file store keeps), which a coordinator started on the files reads as the layout the database held; a database
+  that holds none is exported with no such file. There is no import, as for the accounts.
 - The MDM tables (`mdm_*` and `abm_*`, the setup's sealed secrets and settings among them) are not
   exported: a file store's MDM setup is its own directory, and no verb moves one store's MDM data to the
   other. The sealed secrets of a database stay in it, and their key file is not copied.
@@ -278,6 +288,7 @@ The rest of this page is the file store.
 | `<state-file>.jti` | The ids of CI's OIDC tokens already spent, each with the second until which it is refused. | A CI token spent before the loss can be used again until it expires. |
 | `<state-file>.verdicts` | Per service and host, the last release verdict the coordinator acknowledged, and the verdicts it counts toward an automatic rollback. | A host whose daemon stopped resending its verdict is no longer read as having failed it, so it can be ordered that version again; the count toward an automatic rollback starts again. |
 | `<state-file>.accounts` | The operator's users and API tokens (`docs/design/operator-login.md`, komira-ai/hostkeeper#300, sections 6, 7 and 9): per user, the Argon2id hash of the password, whether the user is enabled, whether it must change its password, the deadline of an initial or reset password, who made the user and when, and when it last signed in; per token, the SHA-256 of the token, who made it and when. Written whole, mode 0600, when a change of a user or a token is made, and only then. A coordinator before the users does not read it; a key this release does not know is skipped, and a value it cannot read stops the start, naming the file. The writers are `--initial-admin-file` (below), a password change at sign-in, and the `Users` and `ApiTokens` calls ("Users and API tokens", below), by the Users and API tokens pages of the web app and by `hkctl`. | No user and no API token made in the UI exists; the tokens of `--tokens-file` still work. |
+| `<state-file>.layout` | The lab's layout (`docs/design/ui-shell-lab.md`): the one cluster's name, its numbered rows, the numbered racks of each row with their height in U, and the placements of servers (an inventory entry, or a host no entry matches) in racks, each with its lowest U and its height in U. Written whole when a change of the layout commits, and only then; a file that is not there is an empty layout, and one that breaks a rule of it (a placement outside its rack, two on one U) stops the start, naming the file. Backed up and restored with the state file. | The Home page shows an empty lab and every server unplaced; rows, racks and placements are made again on the page. |
 | `<state-file>.mdm-setup/` | The MDM setup (`docs/design/coordinator-mdm.md`, section 4.9): `secrets.json`, each version of each secret as sealed bytes in hex with its fingerprint, expiry and times, and `settings.json`, the settings that were set. Written whole when a setup call changes it, and only then; a directory that is not there holds nothing. A field of a later release is kept and written back with its row. A file that does not read stops the start, naming it. `backup` and `restore` do not copy it in this release (nor the key file): copy it, stopped, with the key file kept apart from it. | No secret and no setting of the MDM setup: the secrets are uploaded again, and what was sealed under the key file can no longer be opened. |
 | `<state-file>.mdm/` | The MDM tables (`docs/design/coordinator-mdm.md`, sections 4.2, 5.2 and 9.1): one `<family>.json` file per table (`enrollments`, `identities`, `commands`, `abm_devices`, `abm_state`), each `{"schema": 1, "rows": [...]}`, replaced whole when a change touches it; the commands before the enrollments. With `--mdm-listen` the coordinator writes it: an enrollment when a Mac sends `Authenticate`, its push token when `TokenUpdate` comes, a command when the gate queues it, and its answer when the Mac gives it. A directory that is not there holds nothing; a file that does not read stops the start. `backup`, `restore`, `export` and the database import do not carry it in this release (as for `<state-file>.mdm-setup/`): copy it, stopped. With the database the same rows are in `mdm_enrollments`, `mdm_identities`, `mdm_commands`, `abm_devices` and `abm_state`. | No Mac is enrolled in the coordinator's tables and no command is queued: the Macs' next `Authenticate` or `TokenUpdate` is refused `401` until they enroll again (the issued identities are lost with the table), and the gate's records say what they said. |
 | `<state-file>.lock` | Nothing: the lock `serve` holds while it runs, so a second coordinator on the same files is refused. | Nothing. It is not backed up. |
@@ -515,3 +526,28 @@ call both, and the audit's `by` is the name of whichever called. A CI token is r
   nothing, and leaves the audit entry written before it. No password, hash, token or session id is ever in an audit entry.
 
 A coordinator before this release has neither service: it answers the paths `UNIMPLEMENTED`, and never reads the accounts file.
+
+## The lab layout
+
+The operator API has one service for the lab (`docs/design/ui-shell-lab.md`), `Layout`, which takes an operator only (a CI token is
+`forbidden`) and which `hkctl layout ...` (`docs/cli.md`) and the Home page call. A hostkeeper runs one lab: the layout has one
+cluster name, rows numbered 1, 2, 3, racks numbered within their row (each 1 to 60 U high, 42 by default) and placements. A
+placement puts a server in a rack from its lowest U, so many U high; U 1 is the bottom. It belongs to the physical server, which
+is its inventory entry when one matches the host (so a wipe and a new enrollment keep the place), else the host.
+
+- `Layout.Get` changes nothing. `PutName` names the cluster; `AddRow` adds the next row number; `PutRack` adds a rack to a row (the
+  next number of the row) or resizes or moves one (it takes the next number of the row it moves to); `RemoveRow` and `RemoveRack`
+  refuse `in_use` while the row holds a rack or the rack a placement; `Place` puts or moves a server, `Unplace` takes it out.
+- A placement that shares a U with another placement of the rack is refused `overlap`, one that is not within the rack's
+  U 1 to its height, or a rack made shorter than a placement it holds, `out_of_rack`, a rack the layout lacks `unknown_rack`;
+  the layout holds at most 64 rows, 512 racks and 4096 placements (`capacity`). A refusal changes nothing and writes no audit line.
+- `Enrollment.Approve` takes an optional placement (`rack`, `placement_u`, `placement_height_u`, all three or none): the approval and
+  the placement are judged first, so a placement that cannot be made refuses the approval (`placement_overlap`,
+  `placement_out_of_rack`, `unknown_rack`, `placement_invalid`) and nothing changes; the audit holds `enroll_approve` and then
+  `layout_place` with the reason `approval`. An approval with no placement places nothing, and the host is listed as unplaced.
+- Each write is audited by the caller: `layout_name_put`, `layout_row_add`, `layout_row_remove`, `layout_rack_put`,
+  `layout_rack_remove`, `layout_place`, `layout_unplace`; a call whose audit line cannot be written changes nothing
+  (`audit_unavailable`), and one the store then cannot write is `store_failed` and leaves the audit entry written before it.
+
+A coordinator before this release has no `Layout` service (`UNIMPLEMENTED`), never reads the layout file or tables, and an
+`ApproveRequest` that carries a placement is read by it with the placement dropped, as every unknown field is.

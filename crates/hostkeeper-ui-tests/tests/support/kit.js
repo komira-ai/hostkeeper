@@ -187,6 +187,14 @@ export function fakeDocument() {
       attributes: {},
       children: [],
       listeners: {},
+      // The element's style object: only custom properties are set through it, which the page's
+      // content security policy allows (a `style` attribute it does not).
+      style: {
+        properties: {},
+        setProperty(name, value) {
+          this.properties[name] = value;
+        },
+      },
       setAttribute(name, value) {
         this.attributes[name] = String(value);
       },

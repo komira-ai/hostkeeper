@@ -153,6 +153,7 @@ await click(tree, "approve", 3);
         [
             (m("Enrollment/List"), json!({"limit": 50, "pageToken": ""})),
             (m("HostGroups/List"), json!({})),
+            (m("Layout/Get"), json!({})),
             (
                 m("Enrollment/Approve"),
                 json!({"requestId": d, "keySha256": d, "hostId": "db-4", "hostGroup": "storage",

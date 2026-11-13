@@ -81,6 +81,7 @@ use crate::host_groups::GroupName;
 use crate::http::Surface;
 use crate::initial_admin::{LoginFlags, watch_every};
 use crate::inventory::RecordWindow;
+use crate::layout::LayoutStore;
 use crate::listen::{
     CLIENT_PATIENCE, Listener, MAX_CONNECTIONS, Remote, reload_every, serve, together,
 };
@@ -575,6 +576,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         .with_marker(marker)
         .with_record_window(record_window);
     let accounts = AccountStore::over(Arc::clone(&backend), loaded.accounts);
+    let layout = LayoutStore::over(Arc::clone(&backend), loaded.layout);
     let verdicts = VerdictFile::over(backend, loaded.verdicts);
     let ui = flags.ui_dir.as_deref().map(UiDir::new).transpose()?;
     let interval = Duration::from_secs(flags.tls_reload_secs);
@@ -594,6 +596,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         .with_ops(ops)
         .with_verdicts(verdicts)
         .with_accounts(accounts)
+        .with_layout(layout)
         .with_ui(ui)
         .with_alert_thresholds(alert_thresholds(flags))
         .with_repository_origin(crate::repository_origin::RepositoryOrigin::new(

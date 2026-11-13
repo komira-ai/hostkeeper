@@ -33,6 +33,7 @@ fn writes(moved: &Moved) -> Vec<Stmt> {
         ops: Some((&ops, &moved.loaded.ops)),
         verdicts: Some((&verdicts, &moved.loaded.verdicts)),
         accounts: Some((&held, &moved.loaded.accounts)),
+        layout: Some((&crate::layout::Layout::default(), &moved.loaded.layout)),
         audit: &moved.audit,
     })
     .expect("the state makes rows");

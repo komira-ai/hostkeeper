@@ -18,9 +18,9 @@ import {{ startApp }} from "./app.js";
 export async function main() {{
   const doc = fakeDocument();
   globalThis.doc = doc;
-  startApp({{ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000 }});
+  globalThis.app = startApp({{ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000 }});
   await settle();
-  fire(domNamed(doc.root, "page-{page}"), "click", {{}});
+  globalThis.app.navigate("{page}", {{}});
 }}"#
     )
 }

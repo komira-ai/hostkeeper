@@ -24,7 +24,7 @@ import { startApp } from "./app.js";
 export async function main() {
   const doc = fakeDocument();
   globalThis.doc = doc;
-  startApp({ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000 });
+  globalThis.app = startApp({ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000 });
   await settle();
 }"#;
 
@@ -490,7 +490,7 @@ export async function main() {
   const doc = globalThis.doc;
   const pages = [];
   for (const name of ["host", "rollout", "holds", "enrollment", "inventory", "audit"]) {
-    fire(domNamed(doc.root, `page-${name}`), "click", {});
+    globalThis.app.navigate(name, {});
     await null;
     pages.push(domTexts(doc.root).join(" "));
   }
@@ -568,7 +568,7 @@ export async function main() {
 }"#,
     );
     let text = shown.as_str().expect("the frame's text");
-    assert!(text.contains("Fleet the app failed unexpectedly"), "{text}");
+    assert!(text.contains("Lab the app failed unexpectedly"), "{text}");
     assert!(!text.contains("Loading..."), "{text}");
 }
 
@@ -614,6 +614,7 @@ export async function main() {
             LIST,
             "hostkeeper.operator.v1.Releases/Status",
             "hostkeeper.operator.v1.Alerts/List",
+            "hostkeeper.operator.v1.Layout/Get",
             "v1/logout"
         ]
     );
