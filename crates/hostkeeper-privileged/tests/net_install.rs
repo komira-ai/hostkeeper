@@ -463,7 +463,6 @@ fn an_assigned_pxe_package_prepares_serves_and_uninstalls() {
     let bench = Bench::new("pxe_package");
     let _host = HostPaths::claim(
         &[
-            "/etc/hostkeeper",
             PXE_SETTINGS_DIR,
             PXE_BOOT_DIR,
             "/usr/lib/pxe",
