@@ -740,7 +740,7 @@ only point hosts at bytes that went through CI.
 ### 8.2 The manifest is not attested
 
 The manifest comes from the deploy call, not from the attested bytes. Whoever can call `SetDesired` for a service (CI
-with an OIDC token its allow-list entry admits for that service, an operator token, or anyone who controls the
+with an OIDC token a trusted publisher of that service admits, an operator token, or anyone who controls the
 coordinator) decides the manifest. That is a change: today the signer's bytes decide the hook and the units.
 
 What that caller can decide:
@@ -757,7 +757,7 @@ The plain consequence: most artifacts hold a program that runs what it is told (
 own binary with a script flag). So **calling `SetDesired` with targets for a service is as good as running commands as
 root on that service's hosts.** The same is true of anyone who controls the coordinator. The path guards and the name
 rules are guards against mistakes, as they are today, and not a boundary against such a caller. What bounds the caller
-is who may call: the OIDC allow-list names the service, the repository, the workflow and the ref, and every set with
+is who may call: the package's trusted publishers name the repository, the workflow file and the ref (set per package in the console, imported from the OIDC allow-list file until an operator changes the package's list; docs/deploy/ci-client.md, "Trusted publishers"), and every set with
 targets becomes an audit entry recording each entry's manifest digest (section 3.4).
 
 The `hostkeeper-archive` installer keeps its manifest inside the attested archive. A service already installed from

@@ -405,6 +405,9 @@ const RPCS: [(&str, &[&str]); 7] = [
             "SetRepository(SetRepositoryRequest) SetRepositoryResponse",
             "Put(PutServiceRequest) PutServiceResponse",
             "Remove(RemoveServiceRequest) RemoveServiceResponse",
+            "ListTrustedPublishers(ListTrustedPublishersRequest) ListTrustedPublishersResponse",
+            "PutTrustedPublisher(PutTrustedPublisherRequest) PutTrustedPublisherResponse",
+            "RemoveTrustedPublisher(RemoveTrustedPublisherRequest) RemoveTrustedPublisherResponse",
             "Hold(HoldRequest) HoldResponse",
             "Unhold(UnholdRequest) UnholdResponse",
         ],
@@ -880,6 +883,7 @@ fn wire_names_are_pinned() {
                 "not_in_host_group",
                 "repository_unknown",
                 "in_use",
+                "publisher_unknown",
             ],
         ),
         (

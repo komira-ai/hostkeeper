@@ -35,7 +35,7 @@ use hostkeeper_oidc::testkit::{
     STATIC_ISSUER, StaticKeys, clock as oidc_clock, config_text, good_claims, jwks_of, keys, mint,
     spent,
 };
-use hostkeeper_oidc::{OidcConfig, Verifier};
+use hostkeeper_oidc::{AllowList, OidcConfig, Verifier};
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use hostkeeper_proto::hostkeeper::operator::v1::{GetHostRequest, HostService};
 use hostkeeper_steps::Settled;
@@ -111,6 +111,7 @@ pub fn coordinator_over(dir: &Path, service: &str, rollout: &str) -> Arc<Coordin
     let rollout = format!("[[service]]\nname = \"{service}\"\nroles = [\"daemon\"]\n{rollout}\n");
     Arc::new(
         Coordinator::new(desired, Arc::new(verifier), OPERATOR.to_owned(), clock)
+            .with_allow_list(&AllowList::parse(&allow).expect("the allow-list"), None)
             .with_services(Services::parse(&rollout).expect("the rollout file"))
             .with_quiet(Duration::ZERO)
             .with_ops(ops)

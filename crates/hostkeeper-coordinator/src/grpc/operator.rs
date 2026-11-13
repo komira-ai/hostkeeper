@@ -711,6 +711,39 @@ impl ServicesApi for ServicesService {
             .map_err(refusal::services)
     }
 
+    async fn list_trusted_publishers(
+        &self,
+        request: Request<proto::ListTrustedPublishersRequest>,
+    ) -> Result<Response<proto::ListTrustedPublishersResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .list_trusted_publishers(&caller, &request.into_inner())
+            .map(Response::new)
+            .map_err(refusal::services)
+    }
+
+    async fn put_trusted_publisher(
+        &self,
+        request: Request<proto::PutTrustedPublisherRequest>,
+    ) -> Result<Response<proto::PutTrustedPublisherResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .put_trusted_publisher(&caller, request.into_inner())
+            .map(Response::new)
+            .map_err(refusal::services)
+    }
+
+    async fn remove_trusted_publisher(
+        &self,
+        request: Request<proto::RemoveTrustedPublisherRequest>,
+    ) -> Result<Response<proto::RemoveTrustedPublisherResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .remove_trusted_publisher(&caller, request.into_inner())
+            .map(Response::new)
+            .map_err(refusal::services)
+    }
+
     async fn hold(
         &self,
         request: Request<proto::HoldRequest>,

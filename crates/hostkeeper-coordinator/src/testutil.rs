@@ -371,6 +371,11 @@ pub fn unreachable_verifier() -> Arc<Verifier> {
     ))
 }
 
+/// The allow-list `text`.
+pub fn allow_list(text: &str) -> AllowList {
+    AllowList::parse(text).expect("an allow-list")
+}
+
 pub fn clock_of(seconds: &Arc<AtomicU64>) -> Clock {
     let seconds = Arc::clone(seconds);
     Arc::new(move || Duration::from_secs(seconds.load(Ordering::SeqCst)))
@@ -422,6 +427,7 @@ impl Rig {
             DesiredStore::open(&dir.path().join("desired.json"), Some(LEGACY)).expect("a store");
         let (verifier, _) = static_verifier();
         Coordinator::new(store, verifier, OPERATOR.to_owned(), clock_of(clock))
+            .with_allow_list(&allow_list(&config_text(STATIC_ISSUER)), Some(LEGACY))
             .with_services(kbf_services())
             .with_legacy_service(Some(LEGACY.to_owned()))
             .with_prefixes(kbf_prefixes())
@@ -456,6 +462,7 @@ impl Rig {
             OPERATOR.to_owned(),
             clock_of(clock),
         )
+        .with_allow_list(&allow_list(text), Some(LEGACY))
         .with_services(kbf_services())
         .with_legacy_service(Some(LEGACY.to_owned()))
         .with_prefixes(kbf_prefixes())

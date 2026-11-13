@@ -35,6 +35,9 @@ pub use keys::{KeyCache, KeySource};
 /// The most `jti`s remembered. A full cache refuses new tokens rather than forget one.
 pub const MAX_REMEMBERED_JTIS: usize = 10_000;
 
+/// What [`Verifier::verify_open`] asks about the run of a token before it is spent.
+pub type RunJudge<'a> = dyn Fn(&Verified) -> Result<(), Refusal> + Sync + 'a;
+
 /// Where the spent `jti`s are kept beyond the verifier's memory, so that a restart does not
 /// forget them: the caller's port (the coordinator keeps them in a file).
 pub trait SpentJtis: Send + Sync {
@@ -167,14 +170,26 @@ pub struct Verified {
     pub git_ref: Option<String>,
     /// The `sha` of the commit, if the token had one.
     pub sha: Option<String>,
+    /// The `repository` claim (`owner/name`), if the token had one.
+    pub repository: Option<String>,
+    /// The `repository_id` claim: the repository's numeric id, as GitHub sets it.
+    pub repository_id: String,
+    /// The `workflow_ref` claim, if the token had one: the workflow that started the run (the
+    /// caller's, when `job_workflow_ref` is a reusable workflow it calls), as
+    /// `owner/name/.github/workflows/file.yml@ref`.
+    pub workflow_ref: Option<String>,
+    /// The `environment` claim, if the job ran in one.
+    pub environment: Option<String>,
     /// Which entry of the allow-list admitted the token (its place in the file, from 0).
     pub entry: usize,
     /// The services that entry lets the token set; `None` when the entry has no `services`
     /// key, which the caller (the coordinator, `hostkeeper-coordinator`) reads as its legacy
-    /// service; `Some([])` when it names none, so the token may set none.
+    /// service; `Some([])` when it names none, so the token may set none. Always `None` of a
+    /// token [`Verifier::verify_open`] checked: the caller decides who may set what.
     pub services: Option<Vec<String>>,
     /// The host groups that entry lets the token deploy to; `None` when the entry has no
     /// `host_groups` key (any group that lists the services); `Some([])` when it names none.
+    /// Always `None` of a token [`Verifier::verify_open`] checked.
     pub host_groups: Option<Vec<String>>,
 }
 
@@ -261,6 +276,34 @@ impl Verifier {
     /// # Errors
     /// The first [`Refusal`] in the rule set's order.
     pub async fn verify(&self, token: &str) -> Result<Verified, Refusal> {
+        self.verify_as(token, None).await
+    }
+
+    /// [`Self::verify`] for a caller that judges who the token's run is itself: the allow-list's
+    /// `repository_id`, `repository`, `job_workflow_ref`, `refs` and `environments` are not
+    /// matched (what they say is the caller's to import), and every other rule is, against the
+    /// first entry whose `iss`, `aud`, times, `event_name` and `runner_environment` rules the
+    /// token meets. Before the `jti` is spent, `admits` is asked about the token's run
+    /// ([`Verified::repository`], [`Verified::workflow_ref`] and the rest); the refusal it
+    /// answers ([`Refusal::Repository`], [`Refusal::Workflow`], [`Refusal::Ref`] or
+    /// [`Refusal::Environment`], as the file's own rules would) refuses the token before it is
+    /// spent, so a token minted by a stranger for this audience leaves no trace.
+    ///
+    /// # Errors
+    /// The first [`Refusal`] in the rule set's order, then the caller's.
+    pub async fn verify_open(
+        &self,
+        token: &str,
+        admits: &RunJudge<'_>,
+    ) -> Result<Verified, Refusal> {
+        self.verify_as(token, Some(admits)).await
+    }
+
+    async fn verify_as(
+        &self,
+        token: &str,
+        open: Option<&RunJudge<'_>>,
+    ) -> Result<Verified, Refusal> {
         let parsed = jwt::parse(token)?;
         let key = self.keys.key(&parsed.kid, (self.clock)()).await?;
         // Read after the keys are in hand: a fetch can take long, and the times are judged,
@@ -275,7 +318,7 @@ impl Verifier {
         let mut first_refusal = None;
         let mut admitted = None;
         for (entry, c) in self.config.entries().iter().enumerate() {
-            match Self::check(c, claims, now) {
+            match Self::check(c, claims, now, open.is_some()) {
                 Ok(found) => {
                     admitted = Some((entry, c, found));
                     break;
@@ -292,16 +335,25 @@ impl Verifier {
         if jti.is_empty() || jti.len() > 256 {
             return Err(Refusal::MissingClaim("jti"));
         }
-        self.spend(jti, exp, now)?;
-        Ok(Verified {
+        let own = |name| text(claims, name).ok().map(str::to_owned);
+        let verified = Verified {
             jti: jti.to_owned(),
             job_workflow_ref: workflow.to_owned(),
-            git_ref: text(claims, "ref").ok().map(str::to_owned),
-            sha: text(claims, "sha").ok().map(str::to_owned),
+            git_ref: own("ref"),
+            sha: own("sha"),
+            repository: own("repository"),
+            repository_id: own("repository_id").unwrap_or_default(),
+            workflow_ref: own("workflow_ref"),
+            environment: own("environment"),
             entry,
-            services: c.services.clone(),
-            host_groups: c.host_groups.clone(),
-        })
+            services: c.services.clone().filter(|_| open.is_none()),
+            host_groups: c.host_groups.clone().filter(|_| open.is_none()),
+        };
+        if let Some(admits) = open {
+            admits(&verified)?;
+        }
+        self.spend(jti, exp, now)?;
+        Ok(verified)
     }
 
     /// The claims against one entry; returns `exp` and the workflow.
@@ -309,6 +361,7 @@ impl Verifier {
         c: &OidcConfig,
         claims: &'a Map<String, Value>,
         now: u64,
+        open: bool,
     ) -> Result<(i64, &'a str), Refusal> {
         if text(claims, "iss")? != c.issuer {
             return Err(Refusal::Issuer);
@@ -317,6 +370,10 @@ impl Verifier {
             return Err(Refusal::Audience);
         }
         let exp = Self::times(c, claims, now)?;
+        if open {
+            let workflow = text(claims, "job_workflow_ref")?;
+            return Self::check_run(c, claims).map(|()| (exp, workflow));
+        }
         if text(claims, "repository_id")? != c.repository_id
             || c.repository
                 .as_deref()
@@ -334,13 +391,19 @@ impl Verifier {
         if !c.environments.is_empty() && !is_one_of(&c.environments, text(claims, "environment")?) {
             return Err(Refusal::Environment);
         }
+        Self::check_run(c, claims).map(|()| (exp, workflow))
+    }
+
+    /// The rules of an entry that do not name who the run is: `event_name` and
+    /// `runner_environment`.
+    fn check_run(c: &OidcConfig, claims: &Map<String, Value>) -> Result<(), Refusal> {
         if !is_one_of(&c.event_names, text(claims, "event_name")?) {
             return Err(Refusal::Event);
         }
         if text(claims, "runner_environment")? != c.runner_environment {
             return Err(Refusal::Runner);
         }
-        Ok((exp, workflow))
+        Ok(())
     }
 
     /// `exp`, `nbf` and `iat` against `now`; returns `exp`.
@@ -412,5 +475,7 @@ mod tests;
 mod tests_edges;
 #[cfg(test)]
 mod tests_entries;
+#[cfg(test)]
+mod tests_open;
 #[cfg(test)]
 mod tests_spent;

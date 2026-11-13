@@ -109,6 +109,10 @@ impl Spec {
             OPERATOR.to_owned(),
             clock_of(clock),
         )
+        .with_allow_list(
+            &AllowList::parse(&self.allow_list()).expect("an allow-list"),
+            legacy.as_deref(),
+        )
         .with_services(Services::parse(&self.services).expect("services"))
         .with_legacy_service(legacy)
         .with_prefixes(self.flags.prefixes())

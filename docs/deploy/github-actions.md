@@ -228,7 +228,7 @@ when other groups list the service but none of the list does, and `not_in_host_g
 group lists it. On a coordinator that holds no group, an entry with `host_groups`
 is refused every set (`forbidden`): its deployments are limited to groups, and there are none.
 
-Restart the coordinator after changing the file: it reads the allow-list when it starts.
+Restart the coordinator after changing the file: it reads the allow-list when it starts. The file's entries are the trusted publishers of the packages they name until an operator changes a package's list in the console ([Trusted publishers](ci-client.md#trusted-publishers)); after that, the package's list wins.
 
 **Moving the pin.** Add the new commit to `job_workflow_ref` and restart the coordinator before
 the pull request that moves the pin merges, or the first run after it is refused

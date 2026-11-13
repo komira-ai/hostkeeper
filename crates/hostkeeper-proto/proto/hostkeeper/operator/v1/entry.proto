@@ -27,7 +27,7 @@ message AuditEntry {
   Actor by = 2;
   // What it was, as a token (`exclude`, `include`, `set_labels`, `clear_halt`, `force`,
   // `force_ended`, `mark_bad`, `unmark_bad`, `halt`, `last_good`, `assign`, `unassign`,
-  // `set_min_version`, `set_repository`, `service_put`, `service_remove`, `uninstalled`, `uninstall_cancelled`, `hold`, `unhold`, `abort`,
+  // `set_min_version`, `set_repository`, `service_put`, `service_remove`, `trusted_publisher_put`, `trusted_publisher_remove`, `trusted_publishers_import`, `uninstalled`, `uninstall_cancelled`, `hold`, `unhold`, `abort`,
   // `exclude_abandon`, `rollout_advance`, `rollout_pause`, `rollout_resume`, `enroll_approve`,
   // `enroll_replace`, `enroll_approve_refused`, `mac_auto_approve_declined`, `record_add`,
   // `record_remove`, `enroll_requested`, `enroll_issued`, `cert_renewed`, `request_expired`,

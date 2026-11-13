@@ -261,7 +261,9 @@ pub struct Serve {
     /// otherwise.
     #[arg(long, requires = "database_dsn_file")]
     pub halt_marker_file: Option<PathBuf>,
-    /// The allow-list of CI's OIDC token: a TOML file with a `[remote_operator]` table.
+    /// The allow-list of CI's OIDC token: a TOML file with a `[remote_operator]` table. Its
+    /// issuer, audience, event and runner rules apply to every token; its entries are also each
+    /// package's trusted publishers until an operator changes the package's list in the state.
     #[arg(long)]
     pub oidc_config: PathBuf,
     /// The operator's tokens: a TOML file with a `[[token]]` table for each, with its `name` (1
@@ -564,7 +566,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
     let lease = Lease::of_store(Arc::clone(&backend));
     let wiring = mdm_listener::wire(flags, &mdm_store, &mdm_setup, &lease);
     let verifier = Verifier::new(
-        oidc,
+        oidc.clone(),
         Arc::new(keys),
         KEY_REFETCH,
         Arc::clone(&oidc_clock),
@@ -587,6 +589,9 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
     let clock: Clock = Arc::new(move || origin.elapsed());
     let mut coordinator = Coordinator::new(desired, Arc::new(verifier), tokens, clock)
         .with_legacy_service(legacy.map(str::to_owned))
+        // The allow-list's entries are each package's trusted publishers until the state holds
+        // the package's own (docs/deploy/ci-client.md, "Trusted publishers").
+        .with_allow_list(&oidc, legacy)
         .with_quiet(Duration::from_secs(flags.quiet_secs))
         .with_live_rollouts(flags.live_rollouts)
         .with_clock_skew(Duration::from_secs(flags.clock_skew_secs))

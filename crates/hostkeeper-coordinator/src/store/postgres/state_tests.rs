@@ -72,8 +72,25 @@ fn full_ops() -> OpsState {
             ..crate::ops::ServiceOps::default()
         },
     );
+    // A package whose trusted publishers were all removed keeps a row: an empty list is not none.
+    state.services.insert(
+        "emptied".to_owned(),
+        crate::ops::ServiceOps {
+            trusted_publishers: Some(Vec::new()),
+            ..crate::ops::ServiceOps::default()
+        },
+    );
     let marks = state.services.get_mut("kbf").expect("kbf marks");
     marks.repository = Some("komira-next".to_owned());
+    marks.trusted_publishers = Some(vec![crate::trusted_publishers::TrustedPublisher {
+        repository: "acme/kbf".to_owned(),
+        workflow: ".github/workflows/release.yml".to_owned(),
+        git_ref: "refs/heads/main".to_owned(),
+        environment: "prod".to_owned(),
+        repository_id: "42".to_owned(),
+        called_workflows: vec!["acme/hk/.github/workflows/set.yml@abc".to_owned()],
+        host_groups: Some(vec!["lab".to_owned()]),
+    }]);
     marks.force = Some(ForceRecord {
         version: version("2.0"),
         generation: 2,
@@ -139,6 +156,7 @@ fn an_operations_state_round_trips_through_its_rows() {
         tables["services"].keys().cloned().collect::<Vec<_>>(),
         vec![
             key(&["bare"]),
+            key(&["emptied"]),
             key(&["kbf"]),
             key(&["only-assigned"]),
             key(&["only-repository"])

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use hostkeeper_oidc::testkit::{
-    STATIC_ISSUER, good_claims, keys, mint, mint_with, static_verifier,
+    STATIC_ISSUER, config_text, good_claims, keys, mint, mint_with, static_verifier,
 };
 use hostkeeper_wire::RoleName;
 use hostkeeper_wire::wire::{Outcome, Reply};
@@ -14,8 +14,8 @@ use crate::identity::Identity;
 use crate::service::{CiRefused, ConvergenceError, Coordinator, SetError, Unauthorized};
 use crate::services::Services;
 use crate::testutil::{
-    KBF_ENTRY, LEGACY, OPERATOR, Rig, beat, ci_token, clock_of, id, kbf_services, last, role,
-    scratch, updating, version,
+    KBF_ENTRY, LEGACY, OPERATOR, Rig, allow_list, beat, ci_token, clock_of, id, kbf_services, last,
+    role, scratch, updating, version,
 };
 
 const STATE: &str = r#"{"version":"2.0","max_updating":{"daemon":1},
@@ -196,6 +196,7 @@ async fn failures_that_are_not_the_callers_are_told_apart() {
     )
     .expect("store");
     let coordinator = Coordinator::new(store, verifier, OPERATOR.to_owned(), clock_of(&clock))
+        .with_allow_list(&allow_list(&config_text(STATIC_ISSUER)), Some(LEGACY))
         .with_services(kbf_services())
         .with_legacy_service(Some(LEGACY.to_owned()));
     let set = coordinator
@@ -735,4 +736,5 @@ async fn an_order_for_a_new_version_replaces_the_old_one() {
     );
 }
 
+mod publishers;
 mod services;
