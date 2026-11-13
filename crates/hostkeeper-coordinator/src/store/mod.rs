@@ -30,6 +30,7 @@ use crate::accounts::{Accounts, AccountsError};
 use crate::audit_file::{AuditLine, Logged, Query};
 use crate::desired::{self, StoreError};
 use crate::jti_file::JtiError;
+use crate::layout::{Layout, LayoutError};
 use crate::ops::{OpsError, OpsState};
 use crate::verdict_file::{self, VerdictsError};
 
@@ -152,6 +153,8 @@ pub(crate) struct Commit<'a> {
     pub(crate) verdicts: Option<(&'a verdict_file::Held, &'a verdict_file::Held)>,
     /// The operator's users and API tokens.
     pub(crate) accounts: Option<(&'a Accounts, &'a Accounts)>,
+    /// The lab's layout.
+    pub(crate) layout: Option<(&'a Layout, &'a Layout)>,
     /// The audit lines of the change, in their order.
     pub(crate) audit: &'a [AuditLine],
 }
@@ -165,6 +168,7 @@ impl Commit<'_> {
                 ops: None,
                 verdicts: None,
                 accounts: None,
+                layout: None,
                 audit: [],
                 ..
             }
@@ -183,6 +187,8 @@ pub(crate) struct Loaded {
     pub(crate) verdicts: verdict_file::Held,
     /// The operator's users and API tokens.
     pub(crate) accounts: Accounts,
+    /// The lab's layout.
+    pub(crate) layout: Layout,
     /// The spent ids of CI's tokens, each with the second until which it is refused.
     pub(crate) spent: Vec<(String, u64)>,
 }
@@ -203,6 +209,9 @@ pub(crate) enum BackendError {
     /// The users and API tokens could not be read or written.
     #[error(transparent)]
     Accounts(#[from] AccountsError),
+    /// The lab's layout could not be read or written.
+    #[error(transparent)]
+    Layout(#[from] LayoutError),
     /// The spent token ids could not be read or written.
     #[error(transparent)]
     Jti(#[from] JtiError),
@@ -219,7 +228,8 @@ impl BackendError {
             Self::Desired(e)
             | Self::Ops(OpsError::Io(e))
             | Self::Verdicts(VerdictsError::Io(e))
-            | Self::Accounts(AccountsError::Io(e)) => e,
+            | Self::Accounts(AccountsError::Io(e))
+            | Self::Layout(LayoutError::Io(e)) => e,
             other => StoreError::Io {
                 path: PathBuf::from("store"),
                 source: io::Error::other(other.to_string()),
@@ -333,6 +343,10 @@ mod files_repositories_tests;
 #[cfg(test)]
 #[path = "files_accounts_tests.rs"]
 mod files_accounts_tests;
+
+#[cfg(test)]
+#[path = "files_layout_tests.rs"]
+mod files_layout_tests;
 
 #[cfg(test)]
 #[path = "files_host_groups_tests.rs"]

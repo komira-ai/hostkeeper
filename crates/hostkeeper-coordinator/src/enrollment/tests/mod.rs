@@ -8,6 +8,7 @@
 
 mod approve;
 mod approve_groups;
+mod approve_placement;
 mod approve_refusals;
 mod approve_ungrouped;
 mod audit;

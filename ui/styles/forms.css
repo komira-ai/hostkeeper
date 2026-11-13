@@ -1,0 +1,613 @@
+/* The form pages: sign-in, Inventory, Host groups and MDM setup. Page-scoped on purpose: every rule
+   starts with the page's own class, and only the tokens of app.css are used, so both themes follow.
+   Loaded after app.css and lab.css. */
+
+/* Sign-in and change of password. */
+
+form.sign-in {
+  position: relative;
+  max-width: 24rem;
+  margin: 14vh auto 0;
+  padding: 32px 28px 28px;
+  border-radius: 14px;
+  box-shadow: 0 18px 48px rgb(13 24 34 / 0.14), 0 1px 2px rgb(13 24 34 / 0.08);
+}
+
+form.sign-in h1 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 6px;
+  font-size: 22px;
+  letter-spacing: -0.01em;
+}
+
+form.sign-in h1::before {
+  content: "";
+  width: 6px;
+  height: 22px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+form.sign-in h2 {
+  margin: 12px 0 4px;
+  font-size: 16px;
+}
+
+form.sign-in .lede {
+  margin: 0 0 12px;
+  color: var(--muted);
+}
+
+form.sign-in label {
+  margin: 12px 0 0;
+  font-size: 13px;
+}
+
+form.sign-in label input {
+  height: 40px;
+  margin-top: 6px;
+  font-size: 15px;
+}
+
+form.sign-in button {
+  min-height: 40px;
+  margin-top: 16px;
+}
+
+form.sign-in button.primary {
+  margin-top: 20px;
+  font-weight: 600;
+}
+
+form.sign-in .error {
+  margin: 4px 0 8px;
+  font-size: 13px;
+}
+
+@media (max-width: 480px) {
+  form.sign-in {
+    margin: 8vh 16px 0;
+    padding: 24px 20px;
+  }
+}
+
+/* Row-level buttons, shared by the form pages: side by side, the dangerous one told apart. */
+
+.row-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.row-actions button {
+  min-height: 28px;
+  padding: 0 12px;
+  font-size: 12.5px;
+}
+
+button.danger {
+  background: transparent;
+}
+
+button.danger:hover {
+  background: var(--bad-bg);
+}
+
+/* Inventory: a table of four fields; on a phone, one card per server. */
+
+.inventory .note {
+  margin: 0 0 8px;
+}
+
+.inventory td input,
+.inventory td textarea {
+  width: 100%;
+  min-width: 9rem;
+  margin: 0;
+  height: 30px;
+  padding: 0 8px;
+  font-size: 13px;
+}
+
+.inventory td input {
+  font-weight: 400;
+}
+
+.inventory td textarea {
+  height: auto;
+  min-height: 30px;
+  padding: 5px 8px;
+}
+
+.inventory td .error {
+  display: block;
+  margin-top: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.inventory td .error:empty {
+  display: none;
+}
+
+.inventory td pre {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.inventory td:first-child {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.inventory td:nth-child(2),
+.inventory td:nth-child(3) {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.inventory small[name="enrolled-note"] {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--ok-bg);
+  color: var(--ok);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.inventory tr.add-row {
+  background: var(--surface-2);
+}
+
+.inventory tr.add-row:hover {
+  background: var(--surface-2);
+}
+
+.inventory .buttons {
+  margin: 12px 0;
+  gap: 8px;
+  background: none;
+  padding: 0;
+}
+
+@media (max-width: 720px) {
+  .inventory thead {
+    display: none;
+  }
+
+  .inventory table,
+  .inventory tbody,
+  .inventory tr,
+  .inventory td {
+    display: block;
+  }
+
+  .inventory tr {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  .inventory td {
+    padding: 3px 0;
+    border: 0;
+  }
+
+  .inventory td:nth-child(2)::before,
+  .inventory td:nth-child(3)::before,
+  .inventory td:nth-child(4)::before {
+    display: block;
+    color: var(--muted);
+    font-family: var(--font);
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .inventory td:nth-child(2)::before {
+    content: "BMC MAC";
+  }
+
+  .inventory td:nth-child(3)::before {
+    content: "Data MAC";
+  }
+
+  .inventory td:nth-child(4)::before {
+    content: "Notes";
+  }
+
+  .inventory td:nth-child(4):has(pre)::before,
+  .inventory td:nth-child(4)::before {
+    margin-top: 2px;
+  }
+
+  .inventory td.row-actions {
+    display: flex;
+    padding-top: 8px;
+  }
+}
+
+/* Host groups: the groups as a table, the form as a card, the packages as ticks on a grid. */
+
+.host-groups > .note {
+  margin: 0 0 8px;
+}
+
+.host-groups td button.linklike {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-text);
+  font-weight: 600;
+  text-align: left;
+  text-decoration: none;
+}
+
+.host-groups td button.linklike:hover {
+  text-decoration: underline;
+}
+
+.host-groups > .table-wrap td:nth-child(3),
+.host-groups > .table-wrap td:nth-child(6) {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.host-groups > .table-wrap td:last-child {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.host-groups fieldset {
+  padding: 8px 20px 20px;
+  border-radius: 12px;
+}
+
+.host-groups legend {
+  padding: 0 8px;
+  font-size: 15px;
+}
+
+.host-groups fieldset > .note {
+  max-width: 60rem;
+  margin: 4px 0 12px;
+}
+
+.host-groups .package-picker ul.plain {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr));
+  gap: 8px;
+  margin: 6px 0;
+}
+
+.host-groups .package-picker li {
+  margin: 0;
+}
+
+.host-groups .package-picker label.check {
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--bg);
+  cursor: pointer;
+}
+
+.host-groups .package-picker label.check:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--surface-2);
+}
+
+.host-groups fieldset > .buttons {
+  margin: 16px 0 0;
+  padding: 0;
+  background: none;
+}
+
+.host-groups fieldset > .buttons button {
+  min-width: 96px;
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.host-groups .group-detail {
+  margin: 16px 0;
+}
+
+.host-groups .group-detail h4 {
+  margin: 16px 0 6px;
+  font-size: 14px;
+}
+
+.host-groups .group-detail ul.plain {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.host-groups .group-detail ul.plain button.linklike {
+  padding: 4px 10px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 999px;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+@media (max-width: 720px) {
+  .host-groups > .table-wrap thead {
+    display: none;
+  }
+
+  .host-groups > .table-wrap table,
+  .host-groups > .table-wrap tbody,
+  .host-groups > .table-wrap tr,
+  .host-groups > .table-wrap td {
+    display: block;
+  }
+
+  .host-groups > .table-wrap tr {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  .host-groups > .table-wrap td {
+    padding: 3px 0;
+    border: 0;
+    text-align: left;
+  }
+
+  .host-groups > .table-wrap td:nth-child(2)::before,
+  .host-groups > .table-wrap td:nth-child(3)::before,
+  .host-groups > .table-wrap td:nth-child(4)::before,
+  .host-groups > .table-wrap td:nth-child(5)::before,
+  .host-groups > .table-wrap td:nth-child(6)::before {
+    display: block;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .host-groups > .table-wrap td:nth-child(2)::before {
+    content: "Packages";
+  }
+
+  .host-groups > .table-wrap td:nth-child(3)::before {
+    content: "Policy";
+  }
+
+  .host-groups > .table-wrap td:nth-child(4)::before {
+    content: "Generation";
+  }
+
+  .host-groups > .table-wrap td:nth-child(5)::before {
+    content: "Hosts";
+  }
+
+  .host-groups > .table-wrap td:nth-child(6)::before {
+    content: "Desired";
+  }
+
+  .host-groups > .table-wrap td:last-child {
+    padding-top: 8px;
+  }
+}
+
+/* MDM setup: a status header, three groups of fields, one action bar. */
+
+.mdm-page {
+  max-width: 52rem;
+}
+
+.mdm-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 0 0 16px;
+  padding: 12px 16px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-l);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.mdm-status p {
+  margin: 0;
+  color: var(--ink-2);
+}
+
+.mdm-group {
+  margin: 0 0 16px;
+  padding: 4px 20px 8px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-l);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.mdm-group h3 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 16px 0 2px;
+  font-size: 15px;
+}
+
+.mdm-group h3::before {
+  content: "";
+  width: 4px;
+  height: 16px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.mdm-group .mdm-intro {
+  margin: 0 0 4px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.mdm-field {
+  margin: 0;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--rule);
+}
+
+.mdm-field:last-child {
+  border-bottom: 0;
+}
+
+.mdm-control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+
+.mdm-control > label {
+  flex: 1 1 16rem;
+  margin: 0;
+  font-size: 13px;
+}
+
+.mdm-control > label input {
+  max-width: none;
+}
+
+.mdm-control input[type="file"] {
+  height: 34px;
+  padding: 3px;
+  border: 1px dashed var(--rule-strong);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+}
+
+.mdm-control input[type="file"]::file-selector-button {
+  height: 26px;
+  margin-right: 10px;
+  padding: 0 12px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.mdm-control input[type="text"],
+.mdm-control input[type="password"] {
+  height: 34px;
+}
+
+.mdm-field .note {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+}
+
+.mdm-field .error {
+  margin: 8px 0 0;
+  font-size: 13px;
+}
+
+.chip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-family: var(--font);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.chip.ok {
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+
+.chip.warn {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.chip.bad {
+  background: var(--bad-bg);
+  color: var(--bad);
+}
+
+.chip.none {
+  background: var(--surface-2);
+  color: var(--muted);
+}
+
+.mdm-download {
+  display: block;
+  margin: 12px 0 0;
+  font-size: 13px;
+}
+
+.mdm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 16px;
+  padding: 12px 16px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-l);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.mdm-actions button {
+  min-width: 96px;
+  min-height: 36px;
+}
+
+.mdm-result {
+  margin: 0 0 24px;
+  padding: 4px 20px 12px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-l);
+  background: var(--surface);
+}
+
+.mdm-result h3 {
+  margin: 12px 0 8px;
+  font-size: 15px;
+}
+
+.mdm-verify li {
+  padding: 8px 0;
+  border-top: 1px solid var(--rule);
+}
+
+@media (max-width: 480px) {
+  .mdm-group {
+    padding: 4px 14px 8px;
+  }
+
+  .mdm-actions button {
+    flex: 1;
+  }
+}

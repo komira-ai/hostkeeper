@@ -30,27 +30,13 @@ import {
   h, action, allPages, checkbox, describeError, enumLabel, errorView, field, fmtUnix,
   select, table, trimmed,
 } from "../view.js";
+import { layoutOf, layoutProblem, placementChoices, rackName } from "../lab.js";
 
 const PAGE_SIZE = 50;
 const UNENROLLED = "ENROLLMENT_REQUEST_STATE_UNENROLLED";
 // The grammar of operator.proto: a host id is a node id (1 to 63 of `[a-z0-9-]`, not starting or
 // ending with `-`).
 const HOST_ID = /^(?=.{1,63}$)[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
-
-function claimTable(c) {
-  const facts = [
-    ["Machine id", c.machineId],
-    ["DMI serial", c.dmiSerial],
-    ["Product UUID", c.productUuid],
-    ["Addresses", (c.addresses || []).join(", ")],
-    ["Mac serial", c.macSerial],
-    ["Platform UUID", c.platformUuid],
-    ["BMC MAC", c.bmcMac],
-  ].filter(([, v]) => typeof v === "string" && v !== "");
-  return facts.length === 0
-    ? h("p", {}, "No claims.")
-    : table(["Claim", ""], facts.map(([k, v]) => h("tr", {}, h("th", {}, k), h("td", {}, v))));
-}
 
 // The host id of the one record `request` (a PendingEnrollment) matches, when it is not a
 // renewal: the host id its approval is made as; "" otherwise.
@@ -180,14 +166,14 @@ export function hardClaims(request) {
   ].map(([name, claimed, recorded, same]) => [name, claimed, recorded, check(claimed, recorded, same)]);
   const bmcUnclaimed = rows[1][3] === "not claimed" && rows[1][2] !== "";
   return h("div", {},
-    table(["Hard to copy", "This request", "The record", ""], rows.map(([name, claimed, recorded, how]) =>
+    compact(["Hard to copy", "This request", "The record", ""], rows.map(([name, claimed, recorded, how]) =>
       h("tr", how === "same" ? {} : { class: "warning" },
         h("th", {}, name),
         h("td", {}, claimed || "not claimed"),
         h("td", {}, recorded || "not recorded"),
-        h("td", {}, how)))),
+        h("td", {}, h("span", { class: `verdict ${how === "differs" ? "differs" : how === "same" ? "same" : "unknown"}` }, how))))),
     bmcUnclaimed
-      ? h("p", { class: "warning", role: "alert" },
+      ? h("p", { class: "flag warn" },
         `The record holds the BMC MAC ${rows[1][2]}, and this request does not claim one: `
         + "it matched on a data MAC alone.")
       : null);
@@ -204,87 +190,167 @@ export function contestedLine(request) {
 // The choices of the Host group control: blank, then each group of `groups` by name but `all`,
 // which every host is in already.
 function groupChoices(groups) {
-  return [["", ""], ...groups.map((held) => {
+  return [["", "No group"], ...groups.map((held) => {
     const name = (held["group"] || {}).name || "";
     return [name, name];
   }).filter(([name]) => name !== "" && name !== "all")];
 }
 
-function pending(ctx, request, groups) {
+// The placement controls of an approval: where the server stands, optional (no rack lands the host
+// in Unplaced). Height, row, rack and U position are choices from the lab's layout, the U position
+// only the free slots of the rack for the height chosen. A matched request names the record whose
+// server keeps its place across a wipe: where it stands now is said, and is kept unless another
+// place is chosen.
+function placementSection(request, form, lab) {
+  if (lab.failure !== null) {
+    return h("p", { class: "flag warn" },
+      `The lab layout cannot be read (${describeError(lab.failure)}): the host can be approved unplaced.`);
+  }
+  const record = request.inventoryMatch === "INVENTORY_MATCH_MATCHED" ? recordHostId(request) : "";
+  const held = record === "" ? undefined : lab.layout.placements.find((p) => p.key === `inventory:${record}`);
+  const chosen = placementChoices(lab.layout, form.place, held === undefined ? undefined : held.key, lab.redraw, true);
+  form.chosen = chosen;
+  return [
+    ...chosen.elements,
+    chosen.note === "" ? null : h("p", { class: "note wide" }, chosen.note),
+    held === undefined ? null : h("p", { class: "note wide" },
+      `${record} stands at ${rackName(lab.layout, held.rack)}, U${held.u}, and stays there unless another place is chosen.`),
+  ];
+}
+
+const CLAIM_ROWS = [
+  ["machineId", "Machine id"],
+  ["dmiSerial", "DMI serial"],
+  ["productUuid", "Product UUID"],
+  ["addresses", "Addresses"],
+  ["macSerial", "Mac serial"],
+  ["platformUuid", "Platform UUID"],
+  ["bmcMac", "BMC MAC"],
+];
+const DUPLICATE_HINT = "Another host presents the same machine id or key, or a MAC of an enrolled host. "
+  + "Approving it needs Replace.";
+const REPLACE_HINT = "Replace takes the host id from the host that holds it and revokes that host's certificate. "
+  + "It is also needed to approve a duplicate claim or a denied host id. Leave it off unless you mean that.";
+
+// A claim as text: a list joined, a string trimmed; "" for none.
+function claimText(claims, key) {
+  const value = claims[key];
+  return Array.isArray(value) ? value.join(", ") : text(value);
+}
+
+// A table made small: the same `table` of the shared view, in a wrapper the page styles.
+function compact(headings, rows) {
+  return h("div", { class: "facts" }, table(headings, rows));
+}
+
+// A small "i" mark with its explanation: shown on hover or focus, and read by a screen reader. The
+// text is in the page either way. `shown` false draws nothing.
+function hint(words, shown) {
+  return shown
+    ? h("span", { class: "i-hint", tabindex: "0", role: "note" }, h("span", { class: "i-dot", "aria-hidden": "true" }, "i"), h("span", { class: "i-text" }, words))
+    : null;
+}
+
+function pending(ctx, request, groups, lab) {
   const matched = request.inventoryMatch === "INVENTORY_MATCH_MATCHED";
   const choices = groupChoices(groups.held);
   const recorded = matched ? recordGroup(request) : "";
-  const form = {
-    hostId: request.renewalOf || recordHostId(request),
-    hostGroup: choices.some(([name]) => name === recorded) ? recorded : "",
-    replace: false,
-  };
-  return h("section", { class: "service" },
-    h("h3", {}, `Request ${request.requestId}`),
+  if (!lab.forms.has(request.requestId)) {
+    lab.forms.set(request.requestId, {
+      hostId: request.renewalOf || recordHostId(request),
+      hostGroup: choices.some(([name]) => name === recorded) ? recorded : "",
+      replace: false,
+      place: { height: "1", row: "", rack: "", u: "" },
+      chosen: null,
+    });
+  }
+  const form = lab.forms.get(request.requestId);
+  const contested = contestedBy(request).length > 0;
+  const record = recordHostId(request);
+  const ambiguous = request.inventoryMatch === "INVENTORY_MATCH_AMBIGUOUS";
+  const claims = request["claims"] || {};
+  const hard = linuxMatch(request);
+  const hardNames = hard ? new Set(["dmiSerial", "bmcMac", "productUuid"]) : new Set();
+  const facts = [
+    ["Key SHA-256", request.keySha256 || "-"],
+    ["Image", request.image || "-"],
+    ["First seen", fmtUnix(request.firstSeenUnix)],
+    request.renewalOf ? ["Renewal of", request.renewalOf] : null,
+    request.macNoncePresented === true ? ["Mac nonce presented", "yes"] : null,
+    ...CLAIM_ROWS.filter(([key]) => !hardNames.has(key)).map(([key, name]) => [name, claimText(claims, key)]),
+  ].filter((row) => row !== null && row[1] !== "");
+  return h("section", { class: contested ? "service enroll-card contested" : "service enroll-card" },
+    h("header", { class: "enroll-head" },
+      h("div", { class: "enroll-title" },
+        h("h3", {}, `Request ${request.requestId}`),
+        h("p", { class: ambiguous ? "enroll-match ambiguous" : "enroll-match" }, matchLine(request))),
+      h("div", { class: "enroll-flags" },
+        request.duplicateClaim === true ? h("span", { class: "chip bad" }, "Duplicate claim") : null,
+        contested ? h("span", { class: "chip bad" }, "Contested") : null,
+        hint(NOT_PROOF, hard))),
     request.duplicateClaim === true
-      ? h("p", { class: "error", role: "alert" },
-        "Duplicate claim: another host presents the same machine id or key, or a MAC of an enrolled host. "
-        + "Approving it needs Replace.")
+      ? h("p", { class: "flag bad" }, DUPLICATE_HINT)
       : null,
-    contestedBy(request).length > 0
-      ? h("p", { class: "error", role: "alert" }, contestedLine(request))
-      : null,
-    h("p", { class: request.inventoryMatch === "INVENTORY_MATCH_AMBIGUOUS" ? "warning" : "note" },
-      matchLine(request)),
-    recordWindowLine(request) === "" ? null : h("p", { class: "note" }, recordWindowLine(request)),
-    linuxMatch(request) ? h("p", { class: "warning" }, NOT_PROOF) : null,
+    contested ? h("p", { class: "flag bad" }, contestedLine(request)) : null,
+    recordWindowLine(request) === "" ? null : h("p", { class: "note small" }, recordWindowLine(request)),
     hardClaims(request),
-    table(["", ""], [
-      ["Key SHA-256", request.keySha256 || "-"],
-      ["Image", request.image || "-"],
-      ["First seen", fmtUnix(request.firstSeenUnix)],
-      ["Renewal of", request.renewalOf || "-"],
-      ["Mac nonce presented", request.macNoncePresented === true ? "yes" : "no"],
-    ].map(([k, v]) => h("tr", {}, h("th", {}, k), h("td", {}, v)))),
-    claimTable(request["claims"] || {}),
-    h("fieldset", {},
-      h("legend", {}, "Approve"),
-      field("Host id", "host-id", form, "hostId"),
+    compact(["Fact", "Value"], facts.map(([k, v]) => h("tr", {}, h("th", {}, k), h("td", { class: k === "Key SHA-256" ? "mono" : "" }, v)))),
+    h("div", { class: "approve-row" },
+      field("Host id", "host-id", form, "hostId", { placeholder: record === "" ? "host id" : record }),
       select("Host group", "host-group", form, "hostGroup", choices),
-      groups.failure === null ? null : h("p", { class: "warning", role: "alert" },
+      placementSection(request, form, lab),
+      groups.failure === null ? null : h("p", { class: "flag warn wide" },
         `Host groups cannot be listed (${describeError(groups.failure)}): the host can be approved with no group.`),
-      checkbox("Replace", "replace", form, "replace"),
-      h("p", { class: "warning" },
-        "Replace takes the host id from the host that holds it and revokes that host's certificate. "
-        + "It is also needed to approve a duplicate claim or a denied host id. Leave it off unless you mean that."),
-      action(ctx, "Approve", "approve", async () => {
-        const body = approval(request, form);
-        if (typeof body === "string") {
-          return body;
-        }
-        const named = body.hostId || recordHostId(request);
-        if (body.replace && !ctx.confirm(
-          `Approve request ${body.requestId} as ${named} and revoke the certificate of any host that holds ${named}?`)) {
-          return "Not approved.";
-        }
-        const reply = await ctx.api.enrollment.approve(body);
-        ctx.refresh();
-        const placed = body.hostGroup === ""
-          ? "with no host group (it runs the packages of all until it is put in one)"
-          : `into host group ${body.hostGroup}`;
-        return `Approved ${reply.hostId || named} ${placed}: the host gets its certificate at its next poll.`;
-      })),
-    rejectSection(ctx, request));
+      h("div", { class: "replace wide" },
+        checkbox("Replace", "replace", form, "replace"),
+        hint(REPLACE_HINT, true)),
+      h("div", { class: "decide wide" },
+        action(ctx, "Approve", "approve", async () => {
+          const body = approval(request, form);
+          if (typeof body === "string") {
+            return body;
+          }
+          const named = body.hostId || recordHostId(request);
+          if (body.replace && !ctx.confirm(
+            `Approve request ${body.requestId} as ${named} and revoke the certificate of any host that holds ${named}?`)) {
+            return "Not approved.";
+          }
+          const spot = form.chosen === null ? null : form.chosen.request();
+          if (spot !== null) {
+            body.rack = spot.rack;
+            body.placementU = spot.u;
+            body.placementHeightU = spot.heightU;
+          }
+          let reply;
+          try {
+            reply = await ctx.api.enrollment.approve(body);
+          } catch (error) {
+            if (spot !== null && /^(placement_|unknown_rack$)/.test(error.reason || "")) {
+              return layoutProblem(error);
+            }
+            throw error;
+          }
+          ctx.refresh();
+          const placed = body.hostGroup === ""
+            ? "with no host group (it runs the packages of all until it is put in one)"
+            : `into host group ${body.hostGroup}`;
+          const stands = spot === null ? "" : `, at ${rackName(lab.layout, spot.rack)}, U${spot.u}`;
+          return `Approved ${reply.hostId || named} ${placed}${stands}: the host gets its certificate at its next poll.`;
+        }, { class: "primary" }),
+        rejectButton(ctx, request))));
 }
 
 // Reject: the request leaves the queue and its key is refused, so it asks first. The page asks for
-// no reason (the API takes one, optional).
-function rejectSection(ctx, request) {
-  return h("fieldset", {},
-    h("legend", {}, "Reject"),
-    action(ctx, "Reject", "reject", async () => {
-      if (!ctx.confirm(`Reject request ${request.requestId}? Its key is refused from then on.`)) {
-        return "Not rejected.";
-      }
-      await ctx.api.enrollment.reject({ requestId: request.requestId });
-      ctx.refresh();
-      return `Rejected request ${request.requestId}.`;
-    }));
+// no reason (the API takes one, optional). The button sits beside Approve, drawn as a danger.
+function rejectButton(ctx, request) {
+  return action(ctx, "Reject", "reject", async () => {
+    if (!ctx.confirm(`Reject request ${request.requestId}? Its key is refused from then on.`)) {
+      return "Not rejected.";
+    }
+    await ctx.api.enrollment.reject({ requestId: request.requestId });
+    ctx.refresh();
+    return `Rejected request ${request.requestId}.`;
+  }, { class: "danger" });
 }
 
 // A request TTL of `secs` seconds, in the largest whole unit.
@@ -308,17 +374,21 @@ export function unenrolledLine(request) {
 }
 
 function unenrolled(request) {
-  return h("section", { class: "service" },
-    h("h3", {}, `Request ${request.requestId}`),
-    h("p", { class: "warning" }, unenrolledLine(request)),
-    table(["", ""], [
-      ["Key SHA-256", request.keySha256 || "-"],
-      ["Image", request.image || "-"],
-      ["First seen", fmtUnix(request.firstSeenUnix)],
-      ["Expired", fmtUnix(request.unenrolledUnix)],
-      ["Renewal of", request.renewalOf || "-"],
-    ].map(([k, v]) => h("tr", {}, h("th", {}, k), h("td", {}, v)))),
-    claimTable(request["claims"] || {}));
+  const claims = request["claims"] || {};
+  const facts = [
+    ["Key SHA-256", request.keySha256 || "-"],
+    ["Image", request.image || "-"],
+    ["First seen", fmtUnix(request.firstSeenUnix)],
+    ["Expired", fmtUnix(request.unenrolledUnix)],
+    request.renewalOf ? ["Renewal of", request.renewalOf] : null,
+    ...CLAIM_ROWS.map(([key, name]) => [name, claimText(claims, key)]),
+  ].filter((row) => row !== null && row[1] !== "");
+  return h("section", { class: "service enroll-card" },
+    h("header", { class: "enroll-head" },
+      h("div", { class: "enroll-title" },
+        h("h3", {}, `Request ${request.requestId}`),
+        h("p", { class: "enroll-match" }, unenrolledLine(request)))),
+    compact(["Fact", "Value"], facts.map(([k, v]) => h("tr", {}, h("th", {}, k), h("td", { class: k === "Key SHA-256" ? "mono" : "" }, v)))));
 }
 
 export async function render(ctx) {
@@ -348,15 +418,24 @@ export async function render(ctx) {
       groups.failure = error;
     }
   }
+  // The lab layout the placement controls choose from: read only when a request is shown.
+  const lab = { layout: layoutOf({}), failure: null, forms: new Map(), redraw: () => {} };
+  if (!expired && shown.length > 0) {
+    try {
+      lab.layout = layoutOf(await ctx.api.layout.get({}));
+    } catch (error) {
+      lab.failure = error;
+    }
+  }
   const empty = expired
     ? h("p", {}, requests.length === 0 ? "No request expired." : "This coordinator does not expire requests.")
     : h("p", {}, "No host is waiting.");
-  return h("section", { class: "page" },
+  const build = () => h("section", { class: "page" },
     h("h2", {}, expired ? "Enrollment: expired requests" : "Enrollment"),
-    h("p", { class: "note" }, expired
+    h("p", { class: "note small" }, expired
       ? "A request no operator approves within the coordinator's request TTL expires, and its host is unenrolled."
       : "Claims are what a host says it is; they prove nothing. Approve names the key hash shown."),
-    shown.length === 0 ? empty : shown.map((request) => (expired ? unenrolled(request) : pending(ctx, request, groups))),
+    shown.length === 0 ? empty : shown.map((request) => (expired ? unenrolled(request) : pending(ctx, request, groups, lab))),
     h("div", { class: "buttons" },
       pageToken === "" ? null : h("button", {
         type: "button", name: "first-page", on: { click: () => ctx.navigate("enrollment", here) },
@@ -369,4 +448,6 @@ export async function render(ctx) {
         name: expired ? "show-pending" : "show-unenrolled",
         on: { click: () => ctx.navigate("enrollment", expired ? {} : { unenrolled: "yes" }) },
       }, expired ? "Pending requests" : "Expired requests")));
+  lab.redraw = () => ctx.show(build());
+  return build();
 }

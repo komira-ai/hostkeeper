@@ -24,6 +24,7 @@ use crate::backup::{self, BackupError, Report, StatePaths};
 use crate::config::StartError;
 use crate::desired;
 use crate::jti_file::{self, jti_path};
+use crate::layout::{self, layout_path};
 use crate::lock::StateLock;
 use crate::mdm::DEVICES_DIR;
 use crate::ops_file;
@@ -131,6 +132,13 @@ fn render(
         let text = verdict_file::text_of(&path, &loaded.verdicts).map_err(StartError::from)?;
         files.push((path, text));
     }
+    if !loaded.layout.is_empty() {
+        let path = layout_path(state);
+        let text = layout::encode_file(&loaded.layout)
+            .map_err(io::Error::from)
+            .map_err(io_at(&path))?;
+        files.push((path, text));
+    }
     if !loaded.accounts.is_empty() {
         let path = accounts_path(state);
         let text = accounts::encode_file(&loaded.accounts)
@@ -213,6 +221,10 @@ mod releases_tests;
 #[cfg(test)]
 #[path = "transfer_accounts_tests.rs"]
 mod accounts_tests;
+
+#[cfg(test)]
+#[path = "transfer_layout_tests.rs"]
+mod layout_tests;
 
 #[cfg(test)]
 #[path = "transfer_repositories_tests.rs"]

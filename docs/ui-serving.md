@@ -37,6 +37,32 @@ the coordinator for the session again, so a reload does not sign you out. A firs
 sign-in with a temporary password an admin set, shows only the form for choosing a new password.
 Sign out ends the session on the coordinator.
 
+## The frame and the lab
+
+After sign-in the app opens on **Home**, the lab (`docs/design/ui-shell-lab.md`). The frame around every page is a side menu with
+the "hostkeeper" wordmark on top (a click goes Home), the pages (Host groups, Packages, Inventory and Enrollment) and, at the bottom, **Settings**
+(one page with the tabs Users, API tokens, MDM and Audit), the theme (the browser's own, light or dark; kept in memory only),
+Sign out and a button that collapses the menu to icons; on a narrow screen it is a drawer opened by the top bar's Menu button.
+The top bar says where you are and who is signed in. The menu's icons are small inline SVG drawings (`icon` in `ui/view.js`; no image or font is loaded). Banners come in three kinds: `error` (red), `warning` (amber) and `notice` (blue, for what is true and needs no action); an empty one shows nothing. The pages that moved keep their old route: `fleet` is Home, and Release, Rollout and Holds still open
+by their route and are not in the menu.
+
+- **Home**: the lab. The floor plan is a band for each row of the cluster with a footprint for each rack (its number, its U in use
+  and a dot for each state of its servers: healthy, updating, offline, pending); a click on a row opens its racks as front
+  elevations side by side in a strip that scrolls (wheel, drag, arrow keys), each server drawn over its U with a light for its
+  state and its name, a blank panel over a free run of U; a click on a server opens its host page, and hover says its name, group,
+  version and state. A click on a rack's head opens that rack with its servers in a table. Breadcrumbs lead back
+  (`Lab > Row > Rack > Host`). Below the floor plan: the servers not placed yet (the Unplaced list), the alerts of `Alerts.List`
+  and a table of every host. **Edit layout** shows the controls: rename the cluster, add a row (the next number), add a rack to a
+  row (its height from a list, 42 U by default), resize, move to another row or remove a rack, remove a row, and move a server by
+  picking it up (or dragging it) and putting it on a free U of a rack, or taking it out of its rack. A row or a rack that still
+  holds servers is not removed, and the page names them. A refusal is told in words. An empty lab says so and offers "Add a row".
+  Calls: `Hosts.List`, `Releases.Status`, `Alerts.List`, `Layout.Get`, `Enrollment.ListRecords`; on a button `Layout.PutName`,
+  `AddRow`, `RemoveRow`, `PutRack`, `RemoveRack`, `Place` and `Unplace`.
+- **Enrollment** (approval): besides the host group, the Height (1U to 4U, 1U by default), Row, Rack and U position of the server.
+  All four are choices from the layout, the U position only among the free slots of the rack for that height; Row's first choice,
+  Unplaced, places nothing. The placement is sent with the approval, which is refused whole when the slot is taken.
+- **Host** (Placement): where the host stands, and the same four choices to place or move it (Place, Move) and Unplace.
+
 ## What the pages do for services
 
 - **Rollout**: for each service, what `Services.List` says of it (the hosts it runs on, the hosts being uninstalled; the
@@ -116,7 +142,7 @@ Sign out ends the session on the coordinator.
   and pressing **Move** calls `HostGroups.Move` after a confirmation, with the reason "moved in the
   console" (the form has no reason field); choosing the blank moves the host to no group. A refused List is shown inline and the rest of the page renders.
 - **MDM setup** (`MDM setup` in the page list; `docs/operations/mdm-setup.md`, `docs/design/coordinator-mdm.md` section 4.9).
-  One plain form and nothing else but a one-line status above it and a *Verify* button below it. The status line is `Mdm.Status`
+  A tab of Settings. One plain form and nothing else but a one-line status above it and a *Verify* button below it. The status line is `Mdm.Status`
   in a line: `MDM: configured`, or `MDM: missing push certificate, ABM token` (a part that is there and wrong, such as an expired
   certificate, is named after a semicolon), and `Name:` with the MDM name, read-only. Each field is one labelled input with a one-line
   hint of where its file comes from and a *How do I get this?* link to the section of `docs/operations/mdm-setup.md` (as GitHub renders

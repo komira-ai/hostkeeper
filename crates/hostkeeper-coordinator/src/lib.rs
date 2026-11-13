@@ -159,6 +159,7 @@ pub(crate) mod install_order;
 pub(crate) mod intents;
 pub mod inventory;
 pub mod jti_file;
+pub mod layout;
 pub mod listen;
 mod live;
 pub mod lock;
@@ -185,6 +186,7 @@ pub(crate) mod operator_abm;
 pub mod operator_accounts;
 pub mod operator_enrollment;
 pub mod operator_host_groups;
+pub mod operator_layout;
 pub mod operator_mdm;
 mod operator_mdm_enroll;
 pub mod operator_mdm_push;
@@ -266,6 +268,8 @@ mod audit_refusal_tests;
 mod audit_rotation_tests;
 #[cfg(test)]
 pub(crate) mod backup_accounts_tests;
+#[cfg(test)]
+pub(crate) mod backup_layout_tests;
 #[cfg(test)]
 mod backup_refusal_tests;
 #[cfg(test)]
@@ -421,6 +425,8 @@ mod one_live_update_coordinator_tests;
 mod one_live_update_release_tests;
 #[cfg(test)]
 mod one_live_update_tests;
+#[cfg(test)]
+mod operator_layout_tests;
 #[cfg(test)]
 mod operator_mdm_devices_tests;
 #[cfg(test)]

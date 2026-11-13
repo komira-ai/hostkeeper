@@ -21,7 +21,7 @@ import { startApp } from "./app.js";
 export async function main() {
   const doc = fakeDocument();
   globalThis.doc = doc;
-  startApp({ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000 });
+  globalThis.theApp = startApp({ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000 });
   await settle();
 }"#;
 
@@ -104,7 +104,7 @@ fn a_reload_with_a_live_session_shows_the_pages_without_a_form() {
     ui.reply(&m("Alerts/List"), json!({}));
     ui.run(START);
     let out = shown(&mut ui);
-    assert!(has(&out, "page-fleet") && has(&out, "sign-out"), "{out}");
+    assert!(has(&out, "home") && has(&out, "sign-out"), "{out}");
     assert!(!has(&out, "username") && !has(&out, "password"), "{out}");
     assert!(text_of(&out).contains("operator"), "{out}");
     let requests = ui.requests();
@@ -133,7 +133,7 @@ fn a_reload_with_no_session_shows_the_sign_in_form_and_no_token_box() {
     );
     assert!(!text.contains("token") && !text.contains("Paste"), "{text}");
     assert!(has(&out, "username") && has(&out, "password") && has(&out, "sign-in"));
-    assert!(!has(&out, "token") && !has(&out, "page-fleet"), "{out}");
+    assert!(!has(&out, "token") && !has(&out, "home"), "{out}");
     assert!(!has(&out, "sign-out"), "{out}");
     assert!(!text.contains("session"), "no error is shown: {text}");
     assert_eq!(ui.methods(), [SESSION]);
@@ -166,7 +166,7 @@ fn signing_in_posts_the_name_and_password_and_shows_the_pages() {
     ui.reply(&m("Alerts/List"), json!({}));
     sign_in(&mut ui);
     let out = shown(&mut ui);
-    assert!(has(&out, "page-fleet") && !has(&out, "password"), "{out}");
+    assert!(has(&out, "home") && !has(&out, "password"), "{out}");
     assert!(text_of(&out).contains("alice"), "{out}");
     let requests = ui.requests();
     let login = requests
@@ -241,7 +241,7 @@ fn each_refusal_of_a_sign_in_is_worded_and_the_name_is_kept() {
         let out = shown(&mut ui);
         assert!(text_of(&out).contains(words), "{token}: {out}");
         assert!(!text_of(&out).contains(token), "{token}: {out}");
-        assert!(has(&out, "password") && !has(&out, "page-fleet"), "{token}");
+        assert!(has(&out, "password") && !has(&out, "home"), "{token}");
         let kept = ui.run(&steps(r#"return domNamed(doc.root, "username").value;"#));
         assert_eq!(kept, "alice", "{token}");
         assert!(!document_holds(&mut ui, PASSWORD_TYPED), "{token}");
@@ -270,7 +270,7 @@ fn an_answer_that_is_not_a_session_signs_nobody_in() {
         text_of(&out).contains("The coordinator's answer was not a session."),
         "{out}"
     );
-    assert!(has(&out, "password") && !has(&out, "page-fleet"));
+    assert!(has(&out, "password") && !has(&out, "home"));
 }
 
 #[test]
@@ -318,7 +318,7 @@ fn a_first_sign_in_shows_only_the_form_of_a_new_password() {
     for name in ["current", "new", "again", "change-password", "sign-out"] {
         assert!(has(&out, name), "{name}");
     }
-    assert!(!has(&out, "page-fleet") && !has(&out, "username"), "{out}");
+    assert!(!has(&out, "home") && !has(&out, "username"), "{out}");
     assert_eq!(ui.methods(), [SESSION, LOGIN]);
 }
 
@@ -344,10 +344,7 @@ submit();
 await settle();"#,
     ));
     let out = shown(&mut ui);
-    assert!(
-        has(&out, "page-fleet") && !has(&out, "change-password"),
-        "{out}"
-    );
+    assert!(has(&out, "home") && !has(&out, "change-password"), "{out}");
     let requests = ui.requests();
     let change = requests
         .iter()

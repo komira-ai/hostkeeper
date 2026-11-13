@@ -232,6 +232,7 @@ mod coordinator;
 mod devices;
 mod generations;
 mod host_groups;
+mod layout;
 mod lost;
 mod mdm;
 mod mdm_setup;

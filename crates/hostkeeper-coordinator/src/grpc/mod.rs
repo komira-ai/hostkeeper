@@ -45,6 +45,7 @@ use hostkeeper_proto::hostkeeper::operator::v1::audit_server::AuditServer;
 use hostkeeper_proto::hostkeeper::operator::v1::enrollment_server::EnrollmentServer;
 use hostkeeper_proto::hostkeeper::operator::v1::host_groups_server::HostGroupsServer;
 use hostkeeper_proto::hostkeeper::operator::v1::hosts_server::HostsServer;
+use hostkeeper_proto::hostkeeper::operator::v1::layout_server::LayoutServer;
 use hostkeeper_proto::hostkeeper::operator::v1::mdm_server::MdmServer;
 use hostkeeper_proto::hostkeeper::operator::v1::releases_server::ReleasesServer;
 use hostkeeper_proto::hostkeeper::operator::v1::repositories_server::RepositoriesServer;
@@ -67,6 +68,7 @@ use self::operator::{
 };
 use self::operator_accounts::{ApiTokensService, UsersService};
 use self::operator_host_groups::HostGroupsService;
+use self::operator_layout::LayoutService;
 use self::operator_mdm::MdmService;
 use self::operator_repositories::RepositoriesService;
 use self::refusal::token_status;
@@ -87,6 +89,7 @@ pub(crate) mod gateway;
 pub(crate) mod operator;
 mod operator_accounts;
 mod operator_host_groups;
+mod operator_layout;
 mod operator_mdm;
 mod operator_repositories;
 pub(crate) mod refusal;
@@ -134,6 +137,8 @@ const HOST_GROUPS: &str = "hostkeeper.operator.v1.HostGroups";
 const USERS: &str = "hostkeeper.operator.v1.Users";
 /// The full name of the operator API's `ApiTokens`.
 const API_TOKENS: &str = "hostkeeper.operator.v1.ApiTokens";
+/// The full name of the operator API's `Layout`.
+const LAYOUT: &str = "hostkeeper.operator.v1.Layout";
 
 /// The path of `Coordinator.Heartbeat`, which needs a client certificate that names a host.
 const HEARTBEAT: &str = "/hostkeeper.agent.v1.Coordinator/Heartbeat";
@@ -327,7 +332,7 @@ pub(crate) async fn admit_via(
             Surface::Control,
             Some(
                 HOSTS | RELEASES | SERVICES | ENROLLMENT | AUDIT | ALERTS | ROLLOUTS | MDM
-                | REPOSITORIES | HOST_GROUPS | USERS | API_TOKENS,
+                | REPOSITORIES | HOST_GROUPS | USERS | API_TOKENS | LAYOUT,
             ),
         ) => Served::Operator,
         _ => return Err(Status::unimplemented("")),
@@ -550,6 +555,11 @@ where
         }
         Some(API_TOKENS) => {
             let server = ApiTokensServer::new(ApiTokensService::new(coordinator))
+                .max_decoding_message_size(MAX_OPERATOR_BYTES);
+            call(server, request).await
+        }
+        Some(LAYOUT) => {
+            let server = LayoutServer::new(LayoutService::new(coordinator))
                 .max_decoding_message_size(MAX_OPERATOR_BYTES);
             call(server, request).await
         }

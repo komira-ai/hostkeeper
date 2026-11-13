@@ -26,6 +26,7 @@ mod devices;
 mod dsn;
 mod generations;
 mod groups;
+mod layout;
 #[allow(
     dead_code,
     reason = "the MDM tables land before the code that uses them (CM6; CM11a, CM12c and CM13 call them)"
@@ -60,6 +61,7 @@ use super::{Backend, BackendError, Commit, Health, Loaded};
 use crate::accounts::Accounts;
 use crate::audit_file::{Actor, AuditLine, Detail, Logged, Query, UnixClock};
 use crate::desired::{self, StoreError};
+use crate::layout::Layout;
 use crate::ops::{AUDIT_RING, OpsError, OpsState};
 use crate::verdict_file;
 
@@ -136,6 +138,7 @@ pub(crate) struct Owned {
     ops: Option<(OpsState, OpsState)>,
     verdicts: Option<(verdict_file::Held, verdict_file::Held)>,
     accounts: Option<(Accounts, Accounts)>,
+    layout: Option<(Layout, Layout)>,
     audit: Vec<AuditLine>,
 }
 
@@ -146,6 +149,7 @@ impl Owned {
             ops: change.ops.map(|(b, a)| (b.clone(), a.clone())),
             verdicts: change.verdicts.map(|(b, a)| (b.clone(), a.clone())),
             accounts: change.accounts.map(|(b, a)| (b.clone(), a.clone())),
+            layout: change.layout.map(|(b, a)| (b.clone(), a.clone())),
             audit: change.audit.to_vec(),
         }
     }
@@ -218,6 +222,17 @@ impl Landing {
         );
         accounts::of_tables(&over).ok()
     }
+
+    /// `memory` with the layout of the change laid over it, when it landed and had one.
+    pub(crate) fn layout_over(&self, memory: &Layout) -> Option<Layout> {
+        let (before, after) = self.landed()?.layout.as_ref()?;
+        let over = laid_over(
+            &layout::rows(memory),
+            &layout::rows(before),
+            &layout::rows(after),
+        );
+        layout::of_tables(&over).ok()
+    }
 }
 
 struct Inner {
@@ -264,6 +279,7 @@ fn load_all(session: &mut Session, now: u64) -> Result<Loaded, BackendError> {
     let mut ops = state::ops_of(&read(session, &state::OPS)?)?;
     let verdicts = state::verdicts_of(&read(session, &state::VERDICTS)?)?;
     let accounts = accounts::of_tables(&read(session, &accounts::TABLES)?)?;
+    let layout = layout::of_tables(&read(session, &layout::TABLES)?)?;
     let ring = session
         .query(
             "SELECT seq, at_unix, by_name, action, service, node_id, reason, host_group FROM audit \
@@ -293,6 +309,7 @@ fn load_all(session: &mut Session, now: u64) -> Result<Loaded, BackendError> {
         ops,
         verdicts,
         accounts,
+        layout,
         spent,
     })
 }
@@ -357,6 +374,13 @@ fn statements(change: &Commit<'_>) -> Result<Vec<Stmt>, BackendError> {
             &accounts::TABLES,
             &accounts::rows(before),
             &accounts::rows(after),
+        ));
+    }
+    if let Some((before, after)) = change.layout {
+        out.extend(changes(
+            &layout::TABLES,
+            &layout::rows(before),
+            &layout::rows(after),
         ));
     }
     for line in change.audit {

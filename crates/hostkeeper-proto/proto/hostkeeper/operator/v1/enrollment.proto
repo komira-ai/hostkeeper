@@ -148,6 +148,16 @@ enum EnrollmentRefusal {
   // NOT_FOUND: `Approve` or `AddRecord` that names a host group the coordinator does not hold
   // (any, for a coordinator that holds none).
   ENROLLMENT_REFUSAL_UNKNOWN_HOST_GROUP = 26;
+  // INVALID_ARGUMENT: `Approve` whose placement is half given (`rack` without `u` and
+  // `placement_height_u`, or either without `rack`), or whose height or `u` is not a whole number
+  // of U in the rack.
+  ENROLLMENT_REFUSAL_PLACEMENT_INVALID = 27;
+  // NOT_FOUND: `Approve` that names a `rack` the lab layout does not hold.
+  ENROLLMENT_REFUSAL_UNKNOWN_RACK = 28;
+  // FAILED_PRECONDITION: `Approve` whose placement shares a U with a server already in the rack.
+  ENROLLMENT_REFUSAL_PLACEMENT_OVERLAP = 29;
+  // FAILED_PRECONDITION: `Approve` whose placement is not within the rack's U 1 to its height.
+  ENROLLMENT_REFUSAL_PLACEMENT_OUT_OF_RACK = 30;
 }
 
 message ListPendingRequest {
@@ -370,6 +380,19 @@ message ApproveRequest {
   // names (`unknown_host_group`). With a renewal or `replace`, the group of that host
   // (`host_group_differs`); empty keeps it.
   string host_group = 8;
+  // Where the server stands, an optional placement the approval makes in the same step
+  // (`docs/design/ui-shell-lab.md`): the lab layout's rack id, which must exist
+  // (`unknown_rack`); empty for none, and then `placement_u` and `placement_height_u` are 0
+  // (`placement_invalid`): the host is unplaced until it is placed (`Place` of `Layout`). A coordinator that holds no
+  // layout refuses a rack (`unknown_rack`). The placement is of the inventory entry the host id
+  // names when there is one, so the server keeps its place across a wipe, else of the host.
+  // A refused placement refuses the approval, and nothing changes (`placement_overlap`,
+  // `placement_out_of_rack`).
+  string rack = 9;
+  // The lowest U the server occupies, from 1 (the bottom); required with `rack`.
+  uint32 placement_u = 10;
+  // How many U it occupies; required with `rack`.
+  uint32 placement_height_u = 11;
 }
 
 message ApproveResponse {

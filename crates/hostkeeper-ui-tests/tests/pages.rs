@@ -14,8 +14,8 @@ use support::pages::{
 const MARKUP: &str = "<img src=x onerror=alert(1)>";
 
 #[test]
-fn fleet_page_lists_hosts_and_alerts() {
-    // Catches: a Fleet page that calls another method, leaves out a host, its role, a service's
+fn home_page_lists_alerts() {
+    // Catches: a Home page that calls another method, leaves out a host, its role, a service's
     // version, health or marks, or an alert `Alerts.List` answers (its kind, whether it is
     // critical, its message and when it was first observed), a failed canary among them.
     let mut ui = Ui::start();
@@ -25,19 +25,24 @@ fn fleet_page_lists_hosts_and_alerts() {
     let out = ui.run(
         r#"
 import { api, recorder, text } from "../test/kit.js";
-import { render } from "./pages/fleet.js";
+import { render } from "./pages/home.js";
 export async function main() {
   const { ctx } = recorder(api("operator-token"), {}, []);
   const tree = await render(ctx);
-  const box = tree.children.find((child) => child.attrs && child.attrs.class === "alerts");
+  const box = tree.children.find((child) => child.attrs && (child.attrs.class || "").split(" ").includes("alert-strip"));
   // The kit joins text nodes with a space; the page's DOM does not.
-  const one = (li) => text(li).split(/\s+/).join(" ").replace(" :", ":");
+  const one = (li) => text(li).split(/\s+/).join(" ").trim();
   return { text: text(tree), alerts: box.children[1].children.map(one) };
 }"#,
     );
     assert_eq!(
         ui.methods(),
-        [m("Hosts/List"), m("Releases/Status"), m("Alerts/List")]
+        [
+            m("Hosts/List"),
+            m("Releases/Status"),
+            m("Alerts/List"),
+            m("Layout/Get")
+        ]
     );
     assert!(
         bodies(&ui)
@@ -47,11 +52,11 @@ export async function main() {
     assert_eq!(
         out["alerts"],
         json!([
-            "halt (critical): api is halted at 1.4.0 by web-2, check disk_full (since 2027-01-15 08:00:00 UTC)",
-            "waiting for operator: request ab waits for an operator's approval (since 2027-01-15 08:00:00 UTC)",
-            "failed canary (critical): web-4, a canary of api, failed 1.3.0 (since 2027-01-15 08:00:00 UTC)",
-            "held on bad version: an operator holds web-2 on api 1.3.0 (since 2027-01-15 08:00:00 UTC)",
-            "silent host: new-1 has not heartbeated for 300 s (since 2027-01-15 08:00:00 UTC)",
+            "halt critical api is halted at 1.4.0 by web-2, check disk_full since 2027-01-15 08:00:00 UTC",
+            "waiting for operator request ab waits for an operator's approval since 2027-01-15 08:00:00 UTC",
+            "failed canary critical web-4, a canary of api, failed 1.3.0 since 2027-01-15 08:00:00 UTC",
+            "held on bad version an operator holds web-2 on api 1.3.0 since 2027-01-15 08:00:00 UTC",
+            "silent host new-1 has not heartbeated for 300 s since 2027-01-15 08:00:00 UTC",
         ])
     );
     assert_shows(
@@ -59,28 +64,14 @@ export async function main() {
         &[
             "Alerts (5)",
             "failed canary",
-            "Hosts (4)",
-            "web-1",
-            "web-2",
-            "new-1",
-            "clone-1",
-            "db",
-            "live",
-            "silent",
-            "1.4.0",
-            "healthy",
-            "unhealthy",
-            "not installed",
-            "held",
-            "holds the update slot",
-            "excluded",
+            "critical",
             "2027-01-15 08:00:00 UTC",
         ],
     );
 }
 
 #[test]
-fn fleet_alerts_show_nothing_when_nothing_needs_a_person() {
+fn home_alerts_show_nothing_when_nothing_needs_a_person() {
     // Catches: an alert the page makes up when `Alerts.List` answers none (a halt read from the
     // status, a gate reason of a host).
     let mut ui = Ui::start();
@@ -93,16 +84,8 @@ fn fleet_alerts_show_nothing_when_nothing_needs_a_person() {
         &m("Releases/Status"),
         json!({"quiet": true, "services": [{"service": "api", "convergence": {"state": "CONVERGENCE_STATE_CONVERGED"}}]}),
     );
-    let out = render(&mut ui, "fleet", "{}");
-    assert_shows(
-        &out,
-        &[
-            "Alerts (0)",
-            "Nothing needs a person.",
-            "quiet start",
-            "Hosts (1)",
-        ],
-    );
+    let out = render(&mut ui, "home", "{}");
+    assert_shows(&out, &["No alerts: nothing needs a person.", "quiet start"]);
 }
 
 #[test]
@@ -139,6 +122,7 @@ fn host_page_shows_services_marks_and_last_update() {
             (m("Hosts/Get"), json!({"nodeId": "web-2"})),
             (m("Services/List"), json!({})),
             (m("HostGroups/List"), json!({})),
+            (m("Layout/Get"), json!({})),
         ]
     );
     assert_shows(
@@ -184,7 +168,7 @@ fn host_page_without_a_host_asks_for_one_and_calls_nothing() {
         "[]",
         r#"await click(tree, "open"); type(tree, "node-id", " web-3 "); await click(tree, "open");"#,
     ));
-    assert_shows(&out, &["Choose a host on the Fleet page"]);
+    assert_shows(&out, &["Choose a host on Home"]);
     assert_eq!(out["seen"]["reports"], json!(["Name a host first."]));
     assert_eq!(
         out["seen"]["navigations"],
@@ -256,6 +240,7 @@ return {
             (m("Hosts/Get"), json!({"nodeId": "web-2"})),
             (m("Services/List"), json!({})),
             (m("HostGroups/List"), json!({})),
+            (m("Layout/Get"), json!({})),
             (
                 m("Hosts/Exclude"),
                 json!({"service": "api", "nodeId": "web-2", "reason": reason, "abandon": false})
@@ -397,6 +382,7 @@ return shown;
             (m("Hosts/Get"), json!({"nodeId": "web-3"})),
             (m("Services/List"), json!({})),
             (m("HostGroups/List"), json!({})),
+            (m("Layout/Get"), json!({})),
             (
                 m("Hosts/SetLabels"),
                 json!({"nodeId": "web-3", "labels": {}})
@@ -723,6 +709,7 @@ return { absent, offered, kept, second: chosen(tree, "host-group", 1) };
     let mut expected = vec![
         (m("Enrollment/List"), json!({"limit": 50, "pageToken": ""})),
         (m("HostGroups/List"), json!({})),
+        (m("Layout/Get"), json!({})),
     ];
     expected.extend((0..6).map(|_| (m("Enrollment/Approve"), first.clone())));
     expected.push((m("Enrollment/Approve"), second));
@@ -751,7 +738,7 @@ return { absent, offered, kept, second: chosen(tree, "host-group", 1) };
     assert_eq!(seen["refreshes"], 2, "a refused approval refreshes nothing");
     assert_eq!(
         out["out"],
-        json!({"absent": [0, 0, 0], "offered": ["", "storage", "web"],
+        json!({"absent": [0, 0, 0], "offered": ["No group", "storage", "web"],
                "kept": [" web-7 ", "web"], "second": ""}),
         "a refusal keeps what the operator typed and chose"
     );
@@ -810,7 +797,7 @@ fn every_page_shows_the_refusal_when_its_call_is_unimplemented() {
     // The rollout page stops at its first call: without Releases.Status it has no services to
     // show, so it never asks Services.List.
     for (page, params) in [
-        ("fleet", "{}"),
+        ("home", "{}"),
         ("host", r#"{ nodeId: "web-1" }"#),
         ("rollout", "{}"),
         ("holds", "{}"),
