@@ -371,18 +371,14 @@ impl<'a> RecordIndex<'a> {
     /// host enrolled against it (the first by host id when several are).
     #[must_use]
     pub fn enrolled_as(&self, hosts: &[EnrolledHost]) -> BTreeMap<String, String> {
+        let mut by_host: Vec<&EnrolledHost> = hosts.iter().collect();
+        by_host.sort_by_key(|host| host.host_id.to_string());
         let mut found: BTreeMap<String, String> = BTreeMap::new();
-        for host in hosts {
+        for host in by_host {
             if let Some(record) = self.matched(&host.claims) {
-                let id = host.host_id.to_string();
                 found
                     .entry(record.host_id.clone())
-                    .and_modify(|first| {
-                        if id < *first {
-                            first.clone_from(&id);
-                        }
-                    })
-                    .or_insert(id);
+                    .or_insert_with(|| host.host_id.to_string());
             }
         }
         found
