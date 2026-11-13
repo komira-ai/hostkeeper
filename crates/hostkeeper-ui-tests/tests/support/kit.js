@@ -180,8 +180,9 @@ export async function click(tree, name, index) {
 // A document that makes plain objects and records every element it makes.
 export function fakeDocument() {
   const created = [];
-  function createElement(tag) {
+  function createElement(tag, namespace) {
     const element = {
+      namespace,
       nodeType: 1,
       tagName: tag.toUpperCase(),
       attributes: {},
@@ -215,6 +216,7 @@ export function fakeDocument() {
   return {
     created,
     createElement,
+    createElementNS: (namespace, tag) => createElement(tag, namespace),
     createTextNode(data) {
       return { nodeType: 3, data };
     },

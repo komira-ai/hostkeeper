@@ -73,12 +73,14 @@ fn the_menu_has_the_wordmark_and_the_groups_and_no_fleet_release_rollout_or_hold
         r#"
 const first = names();
 const home = text();
+await click("page-settings");
+const tabs = names().filter((n) => n.startsWith("page-") && n !== "page-settings" && !["page-hostgroups", "page-packages", "page-inventory", "page-enrollment"].includes(n));
 await click("page-audit");
 const current = elements(doc.root)
   .filter((e) => e.attributes["aria-current"] === "page")
   .map((e) => e.attributes["name"]);
 const crumb = elements(doc.root).find((e) => e.attributes["class"] === "crumb");
-return { first, home, current, crumb: domTexts(crumb).join("") };"#,
+return { first, home, tabs, current, crumb: domTexts(crumb).join("") };"#,
     );
     let names: Vec<&str> = out["first"]
         .as_array()
@@ -94,13 +96,24 @@ return { first, home, current, crumb: domTexts(crumb).join("") };"#,
             &"page-packages",
             &"page-inventory",
             &"page-enrollment",
-            &"page-users",
-            &"page-tokens",
-            &"page-mdm",
-            &"page-audit"
+            &"page-settings"
         ]
     );
     assert_eq!(names[0], "home", "the wordmark leads the menu");
+    for settings in ["page-users", "page-tokens", "page-mdm", "page-audit"] {
+        assert!(
+            !names.contains(&settings),
+            "{settings} is in the menu, not under Settings"
+        );
+    }
+    assert_eq!(
+        out["tabs"],
+        json!(["page-users", "page-tokens", "page-mdm", "page-audit"]),
+        "Settings opens with its tabs"
+    );
+    for foot in ["theme", "sign-out", "collapse"] {
+        assert!(names.contains(&foot), "{foot} is at the bottom of the menu");
+    }
     for gone in [
         "page-fleet",
         "page-release",
@@ -114,8 +127,8 @@ return { first, home, current, crumb: domTexts(crumb).join("") };"#,
         out["home"].as_str().unwrap().contains("Lab 1"),
         "Home is the first page"
     );
-    assert_eq!(out["current"], json!(["page-audit"]));
-    assert_eq!(out["crumb"], "Admin / Audit");
+    assert_eq!(out["current"], json!(["page-settings", "page-audit"]));
+    assert_eq!(out["crumb"], "Settings");
 }
 
 #[test]
@@ -126,6 +139,7 @@ fn the_wordmark_goes_home_and_the_old_fleet_route_lands_there() {
     let out = steps(
         &mut ui,
         r#"
+await click("page-settings");
 await click("page-audit");
 const audit = text();
 await click("home");
@@ -135,13 +149,16 @@ await settle();
 globalThis.theApp.navigate("fleet", { row: "row-1" });
 await settle();
 const fleet = text();
-const crumb = domTexts(elements(doc.root).find((e) => e.attributes["class"] === "crumb")).join("");
-return { audit: audit.includes("Audit"), home: home.includes("Lab 1") && home.includes("Row 1"), fleet: fleet.includes("Lab 1") && fleet.includes("Row 1"), crumb };"#,
+const crumbs = elements(doc.root).filter((e) => e.attributes["class"] === "crumb").length;
+return { audit: audit.includes("Audit"), home: home.includes("Lab 1") && home.includes("Row 1"), fleet: fleet.includes("Lab 1") && fleet.includes("Row 1"), crumbs };"#,
     );
     assert_eq!(out["audit"], true);
     assert_eq!(out["home"], true);
     assert_eq!(out["fleet"], true);
-    assert_eq!(out["crumb"], "Lab");
+    assert_eq!(
+        out["crumbs"], 0,
+        "Home has its own breadcrumbs, so the top bar has none"
+    );
 }
 
 #[test]
@@ -157,19 +174,15 @@ const shown = [];
 for (const route of ["release", "rollout", "holds", "host"]) {
   globalThis.theApp.navigate(route, {});
   await settle();
-  const crumb = domTexts(elements(doc.root).find((e) => e.attributes["class"] === "crumb")).join("");
-  shown.push(crumb);
+  const crumb = elements(doc.root).find((e) => e.attributes["class"] === "crumb");
+  shown.push(crumb === undefined ? null : domTexts(crumb).join(""));
 }
 return shown;"#,
     );
     assert_eq!(
         out,
-        json!([
-            "Packages / Release",
-            "Packages / Rollout",
-            "Packages / Holds",
-            "Lab / Host"
-        ])
+        json!(["Release", "Rollout", "Holds", null]),
+        "the host page has the lab breadcrumbs and no top-bar crumb"
     );
 }
 
@@ -192,7 +205,7 @@ const open = { classes: classes(), expanded: domNamed(doc.root, "menu").attribut
 await click("scrim");
 const closed = classes();
 await click("menu");
-await click("page-users");
+await click("page-settings");
 const chosen = classes();
 return { start, collapsed, back, open, closed, chosen };"#,
     );
@@ -221,7 +234,7 @@ fn the_theme_toggle_cycles_system_light_dark_through_the_theme_port() {
     let out = steps(
         &mut ui,
         r#"
-const label = () => text().match(/Theme: \w+/)[0];
+const label = () => text().match(/Theme \w+/)[0];
 const seen = [label()];
 for (let i = 0; i < 4; i++) {
   await click("theme");
@@ -232,11 +245,11 @@ return { seen, applied: globalThis.applied };"#,
     assert_eq!(
         out["seen"],
         json!([
-            "Theme: system",
-            "Theme: light",
-            "Theme: dark",
-            "Theme: system",
-            "Theme: light"
+            "Theme system",
+            "Theme light",
+            "Theme dark",
+            "Theme system",
+            "Theme light"
         ])
     );
     assert_eq!(
@@ -246,7 +259,7 @@ return { seen, applied: globalThis.applied };"#,
 }
 
 #[test]
-fn the_top_bar_names_the_user_and_signs_out() {
+fn the_top_bar_names_the_user_and_the_menu_signs_out() {
     // Catches: a top bar that does not say who is signed in, or a sign-out that leaves the frame.
     let mut ui = start();
     ui.reply_raw(support::LOGOUT, 200, "{}");
@@ -259,4 +272,57 @@ return { who, after: text().includes("Sign in with your user name and password."
     );
     assert_eq!(out["who"], "operator");
     assert_eq!(out["after"], true);
+}
+
+#[test]
+fn every_menu_entry_has_a_drawn_icon_in_the_svg_namespace_and_no_letters() {
+    // Catches: an icon made as an html element (it would not draw), a glyph of two letters left in
+    // a button, and an icon a screen reader would read out.
+    let mut ui = start();
+    let out = steps(
+        &mut ui,
+        r#"
+const side = elements(doc.root).find((e) => e.tagName === "ASIDE");
+const buttons = elements(side).filter((e) => e.tagName === "BUTTON");
+const icons = buttons.map((b) => elements(b).filter((e) => e.tagName === "SVG"));
+const first = icons[0][0];
+return {
+  buttons: buttons.length,
+  oneEach: icons.every((i) => i.length === 1),
+  namespace: first.namespace,
+  hidden: first.attributes["aria-hidden"],
+  strokes: elements(first).filter((e) => e.tagName !== "SVG").every((e) => e.namespace === first.namespace),
+  glyphs: elements(side).filter((e) => e.attributes["class"] === "glyph").map((g) => domTexts(g).join("")),
+};"#,
+    );
+    assert_eq!(out["oneEach"], true);
+    assert!(out["buttons"].as_u64().unwrap() >= 9);
+    assert_eq!(out["namespace"], "http://www.w3.org/2000/svg");
+    assert_eq!(out["hidden"], "true");
+    assert_eq!(out["strokes"], true);
+    assert!(
+        out["glyphs"].as_array().unwrap().iter().all(|g| g == ""),
+        "no letters in a glyph: {}",
+        out["glyphs"]
+    );
+}
+
+#[test]
+fn the_settings_tabs_open_their_pages_and_the_theme_button_names_its_setting() {
+    // Catches: a tab that does not switch the page, a Settings entry that is not marked current
+    // under a tab, and a theme control whose state is only in its icon.
+    let mut ui = start();
+    let out = steps(
+        &mut ui,
+        r#"
+await click("page-settings");
+const users = text().includes("Users");
+await click("page-mdm");
+const current = elements(doc.root).filter((e) => e.attributes["aria-current"] === "page").map((e) => e.attributes["name"]);
+const theme = domNamed(doc.root, "theme").attributes["title"];
+return { users, current, theme };"#,
+    );
+    assert_eq!(out["users"], true);
+    assert_eq!(out["current"], json!(["page-settings", "page-mdm"]));
+    assert_eq!(out["theme"], "Theme: system. Click for the next.");
 }

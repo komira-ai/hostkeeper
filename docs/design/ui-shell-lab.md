@@ -28,8 +28,8 @@ MDM setup), Fleet a table of hosts. After: a side menu, and Home a picture of th
 +-----------+-------------------------------------------------------------+
 ```
 
-- Menu (wide, 232 px; collapsed to 56 px icons by a button; a drawer under 640 px): Host groups, Inventory, Enrollment, then Admin
-  (Users, API tokens, MDM setup, Audit). The Packages entry arrives with the Packages page (a line of `GROUPS` in `ui/app.js`).
+- Menu (wide, 232 px; collapsed to 56 px icons by a button; a drawer under 640 px): Host groups, Inventory, Enrollment, then, at the bottom, Settings
+  (tabs: Users, API tokens, MDM, Audit), the theme toggle, Sign out and Collapse. MDM is a setting, not a page of the daily work. The Packages entry arrives with the Packages page (a line of `GROUPS` in `ui/app.js`).
   No Fleet, Release, Rollout or Holds entry. The wordmark at the top goes Home. The top bar shows where the operator is, the user,
   the theme toggle (browser, light, dark; in memory only) and Sign out.
 - Home, three levels of one page. **Floor plan**: a band for each row of the cluster, each rack a footprint (number, U in use as a
