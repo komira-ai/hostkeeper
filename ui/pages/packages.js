@@ -99,10 +99,10 @@ export async function render(ctx) {
   } catch (error) {
     repositoriesFailure = error;
   }
-  const names = repositories.map((one) => (one.repository || {}).name).filter((name) => typeof name === "string");
+  const names = repositories.map((one) => (one.repository || {})["name"]).filter((name) => typeof name === "string");
   const state = {
-    pkg: { editing: false, name: "", repository: names.includes(DEFAULT_REPOSITORY) ? DEFAULT_REPOSITORY : "", minGroup: "", minVersion: "" },
-    repo: { editing: false, name: "", uri: "", suites: "", components: "main", access: "public", credentialFile: "", key: null },
+    pkg: { editing: false, service: "", repository: names.includes(DEFAULT_REPOSITORY) ? DEFAULT_REPOSITORY : "", minGroup: "", minVersion: "" },
+    repo: { editing: false, called: "", uri: "", suites: "", components: "main", access: "public", credentialFile: "", key: null },
   };
   const show = () => ctx.show(page());
   const packageOf = (name) => packages.find((entry) => entry.service === name);
@@ -110,17 +110,17 @@ export async function render(ctx) {
   // Loads the package `name` into the form.
   const editPackage = (name) => {
     const entry = packageOf(name) || {};
-    state.pkg = { editing: true, name, repository: entry.repository || DEFAULT_REPOSITORY, minGroup: "", minVersion: "" };
+    state.pkg = { editing: true, service: name, repository: entry.repository || DEFAULT_REPOSITORY, minGroup: "", minVersion: "" };
     show();
   };
 
   const packageForm = () => {
     const { pkg } = state;
-    const entry = packageOf(pkg.name) || {};
+    const entry = packageOf(pkg.service) || {};
     const groups = list(entry, "hostGroups");
     return h("fieldset", {},
-      h("legend", {}, pkg.editing ? `Change package ${pkg.name}` : "Add package"),
-      pkg.editing ? null : hinted(field("Name", "package-name", pkg, "name"),
+      h("legend", {}, pkg.editing ? `Change package ${pkg.service}` : "Add package"),
+      pkg.editing ? null : hinted(field("Name", "package-name", pkg, "service"),
         "The package's name as its repository publishes it: lower case letters, digits and -."),
       hinted(
         select("Repository", "package-repository", pkg, "repository",
@@ -142,7 +142,7 @@ export async function render(ctx) {
         : null,
       h("div", { class: "buttons" },
         action(ctx, pkg.editing ? "Save package" : "Add package", "put-package", async () => {
-          const name = trimmed(pkg.name);
+          const name = trimmed(pkg.service);
           if (!PACKAGE_NAME.test(name)) {
             return "Name the package: 1 to 64 lower case letters, digits or -.";
           }
@@ -151,7 +151,7 @@ export async function render(ctx) {
           }
           if (!pkg.editing) {
             await ctx.api.services.put({ service: name, repository: pkg.repository, reason: PUT_REASON });
-            state.pkg.name = "";
+            state.pkg.service = "";
             ctx.refresh();
             return `Added package ${name} from ${pkg.repository}.`;
           }
@@ -170,7 +170,7 @@ export async function render(ctx) {
         }),
         pkg.editing
           ? action(ctx, "Cancel", "cancel-package", () => {
-            state.pkg = { editing: false, name: "", repository: names.includes(DEFAULT_REPOSITORY) ? DEFAULT_REPOSITORY : "", minGroup: "", minVersion: "" };
+            state.pkg = { editing: false, service: "", repository: names.includes(DEFAULT_REPOSITORY) ? DEFAULT_REPOSITORY : "", minGroup: "", minVersion: "" };
             show();
           })
           : null));
@@ -209,7 +209,7 @@ export async function render(ctx) {
     const body = one.repository || {};
     state.repo = {
       editing: true,
-      name: body.name,
+      called: body["name"],
       uri: body.uri || "",
       suites: list(body, "suites").join(", "),
       components: list(body, "components").join(", "),
@@ -224,7 +224,7 @@ export async function render(ctx) {
   // for a repository changed without one, from what the registry holds. A sentence when it cannot.
   const repositoryFromForm = async () => {
     const { repo } = state;
-    const name = trimmed(repo.name);
+    const name = trimmed(repo.called);
     const uri = trimmed(repo.uri);
     const suites = words(repo.suites);
     const components = words(repo.components);
@@ -282,8 +282,8 @@ export async function render(ctx) {
   const repositoryForm = () => {
     const { repo } = state;
     return h("fieldset", {},
-      h("legend", {}, repo.editing ? `Change repository ${repo.name}` : "Add repository"),
-      repo.editing ? null : hinted(field("Name", "repository-name", repo, "name"),
+      h("legend", {}, repo.editing ? `Change repository ${repo.called}` : "Add repository"),
+      repo.editing ? null : hinted(field("Name", "repository-name", repo, "called"),
         "What packages call it: lower case letters, digits and -."),
       hinted(field("URL", "repository-uri", repo, "uri"), "The repository's root: an https address with a host."),
       hinted(field("Suites", "repository-suites", repo, "suites"),
@@ -309,11 +309,11 @@ export async function render(ctx) {
           }
           await ctx.api.repositories.put({ repository: built.repository, reason: PUT_REASON });
           ctx.refresh();
-          return `Saved repository ${built.repository.name}.`;
+          return `Saved repository ${built.repository["name"]}.`;
         }),
         repo.editing
           ? action(ctx, "Cancel", "cancel-repository", () => {
-            state.repo = { editing: false, name: "", uri: "", suites: "", components: "main", access: "public", credentialFile: "", key: null };
+            state.repo = { editing: false, called: "", uri: "", suites: "", components: "main", access: "public", credentialFile: "", key: null };
             show();
           })
           : null));
@@ -340,7 +340,7 @@ export async function render(ctx) {
   const repositoryRows = () => repositories.map((one) => {
     const body = one.repository || {};
     return h("tr", {},
-      h("td", {}, body.name),
+      h("td", {}, body["name"]),
       h("td", {}, body.uri || "-"),
       h("td", {}, list(body, "suites").join(", ") || "-"),
       h("td", {}, list(body, "components").join(", ") || "-"),
