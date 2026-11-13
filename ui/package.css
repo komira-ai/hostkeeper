@@ -343,7 +343,7 @@ button.collapser::before {
   transition: transform 0.15s;
 }
 
-button.collapser.open::before {
+button.collapser.is-open::before {
   transform: rotate(45deg);
 }
 
@@ -382,7 +382,7 @@ pre.code {
   color: var(--pk-bad);
 }
 
-.package .danger-zone.open .danger-toggle {
+.package .danger-zone.is-open .danger-toggle {
   margin-bottom: 8px;
 }
 
