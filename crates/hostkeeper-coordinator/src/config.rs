@@ -216,8 +216,8 @@ pub struct Serve {
     /// it serves what the heartbeat listener serves (`Enroll` and `Poll` with no client
     /// certificate, the heartbeat and `Renew` with a host's) and never the operator API, the
     /// JSON gateway or the UI. The server certificate names its IP address (the one of
-    /// --lan-address with a wildcard), so a daemon dials it by address. It takes the address of
-    /// one interface: a wildcard address is refused at start unless --lan-listen-wildcard is
+    /// --lan-address with a wildcard) and each --lan-name, so a daemon dials it by either. It
+    /// takes the address of one interface: a wildcard address is refused at start unless --lan-listen-wildcard is
     /// given with --lan-address. Requires --ca-key-file.
     #[arg(long, requires = "ca_key_file")]
     pub lan_listen: Option<SocketAddr>,
@@ -332,7 +332,7 @@ pub struct Serve {
     pub ca_init: bool,
     /// The coordinator's server certificate, the CA certificate and its key, one PEM file
     /// (mode 0600) the coordinator writes: made at start when missing, within the last third
-    /// of its validity, or naming other names than --server-name and --lan-listen.
+    /// of its validity, or naming other names than --server-name, --lan-name and --lan-listen.
     #[arg(long, requires = "ca_key_file")]
     pub server_cert_file: Option<PathBuf>,
     /// A DNS name of the coordinator, as daemons dial it: the server certificate names each
@@ -492,7 +492,7 @@ pub struct Parts {
 /// [`StartError`]: a file is missing, unreadable or refused (the text names the flag or the
 /// file; the ops file must be one this build reads), `--ui-dir` is missing or not a directory,
 /// `--private-listen` (without `--private-listen-wildcard`), `--mdm-listen` (without `--mdm-listen-wildcard`) or `--lan-listen` (without `--lan-listen-wildcard`) or `--lan-address` is a wildcard
-/// address, `--health-listen` is not a
+/// address, a `--lan-name` is no DNS name, `--health-listen` is not a
 /// loopback address, `--quiet-secs` is below two
 /// heartbeat intervals,
 /// another coordinator holds the lock of the state files, a halt was being written when the
@@ -625,6 +625,8 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
             check_allowlist(&allowlist, &coordinator)?;
             // The LAN listener's address, an IPv4 one written as IPv6 named as IPv4.
             let lan_ips: Vec<_> = flags.lan.named(flags.lan_listen).into_iter().collect();
+            // The DNS names: those of --server-name and those of --lan-name.
+            let dns_names = flags.lan.dns_names(&flags.server_names);
             let max_pending = flags
                 .max_pending_enrollments
                 .map_or(DEFAULT_MAX_PENDING, |max| {
@@ -658,7 +660,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
                     ca_key,
                     ca_init: flags.ca_init,
                     server_cert,
-                    server_names: &flags.server_names,
+                    server_names: &dns_names,
                     server_ips: &lan_ips,
                 },
                 Arc::new(SystemClock),

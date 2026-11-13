@@ -86,6 +86,14 @@ pub enum StartError {
         "--lan-address: {0} is a wildcard address; it is the address daemons dial and the server certificate names, so name the address of one interface of the LAN"
     )]
     LanAddress(std::net::IpAddr),
+    /// A `--lan-name` is no DNS name the server certificate can name.
+    #[error("--lan-name {name:?}: {reason}")]
+    LanName {
+        /// The name as given.
+        name: String,
+        /// Why it is refused.
+        reason: &'static str,
+    },
     /// `--mdm-listen` is a wildcard address.
     #[error(
         "--mdm-listen: {0} is a wildcard address; the Macs' listener is reached by the name of the MDM server, which is the address of one interface of the LAN, so name that address, or give --mdm-listen-wildcard where the port is published on the host"

@@ -43,6 +43,7 @@ the farm LAN serves the same, to network-installed hosts, which have no tailnet
 | `--mdm-api-url <url>` | NanoHUB's API, on loopback: `http://<loopback address>:<port>`, as `http://127.0.0.1:9004`; a name (even `localhost`), another address, `https://`, a path or a query stops the start. With it the coordinator runs the MDM policy gate (below). Requires the two below and enrollment (`--ca-key-file`, with `--enrollment-dir` or `--database-dsn-file`); the gate's device records are kept with the enrollment store, in `--enrollment-dir` or in the database's table `mdm_devices`. |
 | `--mdm-api-key-file <file>` | NanoHUB's API key (NanoHUB's `-api-key`): one key of visible ASCII, in a file of mode 0600 or 0400 owned by the coordinator's user; a link, another mode or owner, or an empty file stops the start, and the message names the flag, never the path or the key. Requires `--mdm-api-url`. |
 | `--mdm-webhook-listen <addr>` | Where the gate serves NanoHUB's webhook: a loopback address and port, as `127.0.0.1:9100`; another address stops the start. Requires `--mdm-api-url`. |
+| `--lan-name <dns-name>` | A DNS name daemons dial the LAN listener by: the server certificate names each one given, beside its IP address. Repeatable. Lowercase letters, digits, `-` and `.`, at most 253 bytes, each label 1 to 63 and not starting or ending with `-`; a wildcard, an IP address or a trailing dot stops the start. A name given with `--server-name` too is named once. Requires `--lan-listen`, with or without `--lan-listen-wildcard`. |
 | `--mdm-listen <addr>` | The listener of the Macs and of a host's apt (`docs/design/coordinator-mdm.md` section 4.1): the address of one interface of the LAN and its port (443 on the farm), as `192.0.2.7:443`; a wildcard stops the start unless `--mdm-listen-wildcard` is given (a Swarm task on an overlay network, its port published on the host in `mode=host`: `docs/operations/mdm-cutover.md` section 3.1). It serves `PUT /checkin` and `PUT /mdm` over TLS with the certificate of the MDM name that the setup holds (answering no handshake until one is stored, and serving a renewed one from the next handshake), and `404` for every other path. With it the gate's commands are queued in the coordinator and the Macs' check-ins and results reach the gate directly: NanoHUB's three flags are not read and no webhook is served, so the gate needs none of them (its enrollment side flags below go with `--mdm-listen` as with `--mdm-api-url`). `/enroll` and `/scep` are not served yet; Caddy keeps routing them to the old stack. Requires the enrollment store, as the gate does. |
 | `--mdm-listen-wildcard` | Take a wildcard `--mdm-listen` (`0.0.0.0` or `[::]`): the Macs' listener listens on every interface of the coordinator's network namespace. Off unless given; an address of one interface is taken as without it. `--lan-listen` has no such flag: its certificate names its address. Requires `--mdm-listen`. |
 | `--mdm-command-timeout-s <n>` | How long a command sent to a Mac that has not answered waits before it is queued again and the Mac is pushed (default 86400). Delivery is at least once: a Mac that answers later sees the command twice. Requires `--mdm-listen`. |
@@ -56,7 +57,7 @@ the farm LAN serves the same, to network-installed hosts, which have no tailnet
 
 The CA is made once. Every daemon config pins the SHA-256 of its certificate (`ca_sha256`); the
 start logs it at info as `ca_sha256`. The server certificate names the DNS names of
-`--server-name` and then, with `--lan-listen`, its IP address (`--lan-address` when the listener is a wildcard; an IPv4 address written as IPv6 is
+`--server-name` and each `--lan-name`, and then, with `--lan-listen`, its IP address (`--lan-address` when the listener is a wildcard; an IPv4 address written as IPv6 is
 named as IPv4), so a daemon may dial the LAN listener by address. It is made again when its file is
 missing, does not start with a certificate, has less than a third of its 90 days left (60 days
 after it was made), or names other names than these (a name or the address added, removed or
@@ -65,7 +66,7 @@ changed; their order is not compared): at the start, and while the coordinator r
 heartbeat listener serves the new certificate from that same tick. A restart is not needed. The
 new file, with a new key and a serial from the store, is written whole: a temporary file
 `<file>.tmp` beside it (mode 0600), fsync, rename over the old one, fsync of the directory. New
-`--server-name` values or a new `--lan-listen` take effect at the restart that gives them; delete
+`--server-name` or `--lan-name` values or a new `--lan-listen` take effect at the restart that gives them; delete
 the file to have one made sooner for any other reason: the next tick makes it.
 
 A renewal that fails (the file cannot be read, or the new one cannot be made or written) changes

@@ -355,6 +355,245 @@ fn a_wildcard_lan_listener_needs_the_address_the_certificate_and_daemons_use() {
     );
 }
 
+/// The LAN listener's DNS name in the tests: an example.com name, never resolved.
+const LAN_NAME: &str = "coordinator.internal.example.com";
+
+/// The enrollment flags with the LAN listener at [`LAN`] and each of `names` as a `--lan-name`.
+fn with_lan_names<'a>(names: &[&'a str]) -> Vec<&'a str> {
+    let mut flags = vec!["--lan-listen", LAN];
+    for name in names {
+        flags.extend(["--lan-name", name]);
+    }
+    with_enrollment(&flags)
+}
+
+/// Proves: `--lan-name` is in the usage; it is a usage error (exit 2) without `--lan-listen`;
+/// the server certificate names each name given as a DNS name, after the `--server-name` names
+/// and before the address, with and without the wildcard opt-in; a name given to `--server-name`
+/// too is named once; a restart with the same names keeps the certificate (in whatever order),
+/// and one that adds, changes or drops a name makes it again.
+///
+/// Catches: a certificate a daemon dialing the DNS name refuses, a changed name list that takes
+/// effect only when someone deletes the file, and a certificate made again at every start.
+#[test]
+fn the_server_certificate_names_the_lan_names_and_follows_them() {
+    let files = Files::new("lan-names");
+    let help = Cli::try_parse_from(["hostkeeper-coordinator", "serve", "--help"])
+        .expect_err("help")
+        .to_string();
+    assert!(help.contains("--lan-name <LAN_NAMES>"), "{help}");
+    assert_eq!(
+        hostkeeper_coordinator::config::main(
+            files.args(&with_enrollment(&["--lan-name", LAN_NAME]))
+        ),
+        ExitCode::from(2),
+        "no --lan-listen"
+    );
+
+    drop(start(&files, &with_lan_names(&[LAN_NAME])).expect("started"));
+    let (names, first) = names_and_serial(&files);
+    assert_eq!(
+        names,
+        [
+            "dns:localhost".to_owned(),
+            format!("dns:{LAN_NAME}"),
+            "ip:[192, 0, 2, 7]".to_owned()
+        ]
+    );
+
+    drop(start(&files, &with_lan_names(&[LAN_NAME])).expect("started"));
+    assert_eq!(names_and_serial(&files).1, first, "kept: the same names");
+
+    drop(start(&files, &with_lan_names(&[LAN_NAME, "localhost"])).expect("started"));
+    assert_eq!(
+        names_and_serial(&files).1,
+        first,
+        "kept: a name of --server-name is named once"
+    );
+
+    drop(start(&files, &with_lan_names(&[LAN_NAME, "other.example.com"])).expect("started"));
+    let (names, second) = names_and_serial(&files);
+    assert_eq!(
+        names,
+        [
+            "dns:localhost".to_owned(),
+            format!("dns:{LAN_NAME}"),
+            "dns:other.example.com".to_owned(),
+            "ip:[192, 0, 2, 7]".to_owned()
+        ]
+    );
+    assert_ne!(second, first, "made again: a name added");
+
+    drop(start(&files, &with_lan_names(&["other.example.com", LAN_NAME])).expect("started"));
+    assert_eq!(
+        names_and_serial(&files).1,
+        second,
+        "kept: the order is not looked at"
+    );
+
+    drop(start(&files, &with_lan_names(&["third.example.com"])).expect("started"));
+    let (names, third) = names_and_serial(&files);
+    assert_eq!(
+        names,
+        [
+            "dns:localhost",
+            "dns:third.example.com",
+            "ip:[192, 0, 2, 7]"
+        ]
+    );
+    assert_ne!(third, second, "made again: names changed and dropped");
+
+    let wildcard = with_enrollment(&[
+        "--lan-listen",
+        "0.0.0.0:3",
+        "--lan-listen-wildcard",
+        "--lan-address",
+        "192.0.2.9",
+        "--lan-name",
+        LAN_NAME,
+    ]);
+    drop(start(&files, &wildcard).expect("started"));
+    let (names, _) = names_and_serial(&files);
+    assert_eq!(
+        names,
+        [
+            "dns:localhost".to_owned(),
+            format!("dns:{LAN_NAME}"),
+            "ip:[192, 0, 2, 9]".to_owned()
+        ],
+        "with the wildcard opt-in"
+    );
+}
+
+/// Proves: a `--lan-name` that is no DNS name the certificate can name stops the start with
+/// `LanName`, whose text names the flag, the name and why, before the enrollment starts (no
+/// certificate file is written): an empty name, a trailing dot, a wildcard, an IPv4 and an IPv6
+/// address, a name over 253 bytes, an empty label, a label over 63 bytes, a label that starts or
+/// ends with `-`, an uppercase letter and an underscore; the longest valid name is taken.
+///
+/// Catches: a bad name that stops the start only at the certificate's signing with a text that
+/// does not name the flag, or one that is taken and makes a certificate no daemon can check.
+#[test]
+fn a_lan_name_that_is_no_dns_name_stops_the_start() {
+    let files = Files::new("lan-name-refused");
+    let long_label = "a".repeat(64);
+    let long_name = format!("{0}.{0}.{0}.{0}.com", "a".repeat(62));
+    for (name, reason) in [
+        ("", "is empty"),
+        (
+            "coordinator.example.com.",
+            "has a trailing dot; write the name without it",
+        ),
+        ("*.example.com", "is a wildcard; name each host"),
+        (
+            "192.0.2.7",
+            "is an IP address; --lan-address or --lan-listen names the address",
+        ),
+        (
+            "2001:db8::1",
+            "is an IP address; --lan-address or --lan-listen names the address",
+        ),
+        (long_name.as_str(), "is longer than 253 bytes"),
+        ("a..example.com", "has an empty label"),
+        (".example.com", "has an empty label"),
+        (long_label.as_str(), "has a label longer than 63 bytes"),
+        (
+            "a.-b.example.com",
+            "has a label that starts or ends with '-'",
+        ),
+        ("a-.example.com", "has a label that starts or ends with '-'"),
+        (
+            "Coordinator.example.com",
+            "has a character other than a-z, 0-9, '-' and '.'",
+        ),
+        (
+            "a_b.example.com",
+            "has a character other than a-z, 0-9, '-' and '.'",
+        ),
+    ] {
+        let flags = with_enrollment(&["--lan-listen", LAN, "--lan-name", name]);
+        match start(&files, &flags) {
+            Err(error @ StartError::LanName { .. }) => assert_eq!(
+                error.to_string(),
+                format!("--lan-name {name:?}: {reason}"),
+                "{name}"
+            ),
+            Err(other) => panic!("refused otherwise: {other}"),
+            Ok(_) => panic!("started with {name:?}"),
+        }
+    }
+    assert!(
+        !files.path("server.pem").exists(),
+        "refused before enrollment starts"
+    );
+
+    let longest = format!("{0}.{0}.{0}.{1}", "a".repeat(63), "a".repeat(61));
+    assert_eq!(longest.len(), 253);
+    let flags = with_enrollment(&[
+        "--lan-listen",
+        LAN,
+        "--lan-name",
+        &longest,
+        "--lan-name",
+        "a-1.b",
+    ]);
+    drop(start(&files, &flags).expect("the longest valid name is taken"));
+    let (names, _) = names_and_serial(&files);
+    assert_eq!(
+        names,
+        [
+            "dns:localhost".to_owned(),
+            format!("dns:{longest}"),
+            "dns:a-1.b".to_owned(),
+            "ip:[192, 0, 2, 7]".to_owned()
+        ]
+    );
+}
+
+/// Proves: a caller that dials the LAN listener by the DNS name of `--lan-name`, with the farm
+/// CA as its only root, finishes the handshake against the certificate the start made and posts
+/// `Enroll` (answered pending); one that dials by a DNS name the certificate does not name is
+/// refused in the handshake.
+///
+/// Catches: a certificate that names the address and not the name the daemons dial, and one that
+/// names more than it was asked.
+#[tokio::test]
+async fn a_daemon_dials_the_lan_listener_by_its_dns_name() {
+    let files = Files::new("lan-dns-dial");
+    let flags = with_enrollment(&["--lan-listen", LAN, "--lan-name", LAN_NAME]);
+    let parts = start(&files, &flags).expect("started");
+    let ca = parts
+        .coordinator
+        .enrollment()
+        .expect("enrollment")
+        .ca_bundle()
+        .certificate_der()
+        .to_vec();
+    let running = serve(parts).await;
+    let addr = running.bound.lan.expect("the LAN listener");
+    let config = client(&ca, None);
+
+    let key = HostKey::new();
+    let (status, body) = call(
+        &running.net,
+        addr,
+        LAN_NAME,
+        &config,
+        ENROLL,
+        None,
+        &key.enroll("machine-1"),
+    )
+    .await;
+    assert_eq!((status.code(), status.message()), (Code::Ok, ""));
+    let enrolled = EnrollResponse::decode(body).expect("an answer");
+    assert_eq!(enrolled.state, EnrollState::Pending as i32);
+
+    let stream = running.net.connect(addr).expect("connected");
+    let name = ServerName::try_from("unnamed.example.com").expect("a name");
+    let refused = TlsConnector::from(config).connect(name, stream).await;
+    assert!(refused.is_err(), "a name the certificate does not carry");
+}
+
 /// A running coordinator on an in-memory network: the addresses it bound, in the order it bound
 /// them, and the network.
 struct Running {
