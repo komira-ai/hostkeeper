@@ -36,6 +36,7 @@ ui_files![
     "app.css",
     "lab.css",
     "styles/forms.css",
+    "styles/enrollment.css",
     "calls.json",
     "api.js",
     "app.js",
