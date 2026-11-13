@@ -143,6 +143,17 @@ the task, so the LAN listener's target is another port); the daemons dial `https
 that changes the address. Without the two flags nothing changes: `--lan-listen` takes the address
 of one interface and the certificate names it.
 
+The owner's coordinator is dialed by the DNS name `coordinator.internal.example.com` (an A record
+to the services host's LAN address), so the certificate must name it too: `--lan-name <dns-name>`
+(repeatable; it requires `--lan-listen`, with or without the wildcard) adds each name to the server
+certificate as a DNS name, beside the IP address. A name is lowercase letters, digits, `-` and `.`,
+at most 253 bytes with each label 1 to 63 and not starting or ending with `-`; a wildcard, an IP
+address, a trailing dot or any other name stops the start with the name and the reason. The
+certificate is made again at the start that adds, drops or changes a name. The daemons dial
+`https://coordinator.internal.example.com:8446`: the published port, which reaches the LAN listener
+on target 8447. `--server-name` names go into the same certificate (the LAN listener serves the
+heartbeat listener's), so `--lan-name` and `--server-name` of one name make one name in it.
+
 How the coordinator is deployed matters for later deploys. The dev box's coordinator is a plain
 docker container made by `coordinator_docker.sh`. The script writes the new flags to a new file next
 to the old one; **every later deploy must use the new file**, or the next deploy replaces the

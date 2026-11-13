@@ -22,6 +22,46 @@ pub struct LanFlags {
     /// address of --lan-listen. Not a wildcard address. Requires --lan-listen-wildcard.
     #[arg(long, requires = "lan_listen_wildcard")]
     pub lan_address: Option<IpAddr>,
+    /// A DNS name daemons dial the LAN listener by, such as `coordinator.internal.example.com`:
+    /// the server certificate names each one given as a DNS name, beside the IP address it
+    /// names. Repeatable, so a name can be added before daemons move to it. Lowercase letters,
+    /// digits, `-` and `.`; at most 253 bytes, each label 1 to 63 and not starting or ending
+    /// with `-`; no wildcard, no IP address, no trailing dot. A certificate that names other
+    /// names is made again at start. Requires --lan-listen.
+    #[arg(long = "lan-name", requires = "lan_listen")]
+    pub lan_names: Vec<String>,
+}
+
+/// Why `--lan-name` takes `name` as no DNS name, as the start's refusal states it, or `Ok`.
+fn lan_name_refusal(name: &str) -> Option<&'static str> {
+    let bare = name.strip_suffix('.');
+    if bare.is_some() {
+        Some("has a trailing dot; write the name without it")
+    } else if name.is_empty() {
+        Some("is empty")
+    } else if name.contains('*') {
+        Some("is a wildcard; name each host")
+    } else if name.parse::<IpAddr>().is_ok() {
+        Some("is an IP address; --lan-address or --lan-listen names the address")
+    } else if name.len() > 253 {
+        Some("is longer than 253 bytes")
+    } else if name.split('.').any(str::is_empty) {
+        Some("has an empty label")
+    } else if name.split('.').any(|label| label.len() > 63) {
+        Some("has a label longer than 63 bytes")
+    } else if name
+        .split('.')
+        .any(|label| label.starts_with('-') || label.ends_with('-'))
+    {
+        Some("has a label that starts or ends with '-'")
+    } else if !name
+        .bytes()
+        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'.')
+    {
+        Some("has a character other than a-z, 0-9, '-' and '.'")
+    } else {
+        None
+    }
 }
 
 impl LanFlags {
@@ -32,10 +72,22 @@ impl LanFlags {
             .or_else(|| lan_listen.map(|lan| lan.ip()))
             .map(|ip| ip.to_canonical())
     }
+
+    /// The DNS names the server certificate names: `server_names` (`--server-name`) and then
+    /// each `--lan-name` not among them, so a name given to both is named once.
+    pub(super) fn dns_names(&self, server_names: &[String]) -> Vec<String> {
+        let mut names = server_names.to_vec();
+        for name in &self.lan_names {
+            if !names.contains(name) {
+                names.push(name.clone());
+            }
+        }
+        names
+    }
 }
 
 /// Refuses the listen addresses `flags` name that the start does not take: a wildcard
-/// `--private-listen` unless `--private-listen-wildcard` is given, a wildcard `--lan-listen` unless `--lan-listen-wildcard` is given, a wildcard `--lan-address`, a wildcard `--mdm-listen` unless `--mdm-listen-wildcard` is given,
+/// `--private-listen` unless `--private-listen-wildcard` is given, a wildcard `--lan-listen` unless `--lan-listen-wildcard` is given, a wildcard `--lan-address`, a `--lan-name` that is no DNS name, a wildcard `--mdm-listen` unless `--mdm-listen-wildcard` is given,
 /// and a `--health-listen` that is not a loopback address. An IPv4 address written as IPv6 is
 /// judged as the IPv4 address it is.
 pub(super) fn check_listen(flags: &Serve) -> Result<(), StartError> {
@@ -54,6 +106,17 @@ pub(super) fn check_listen(flags: &Serve) -> Result<(), StartError> {
         .filter(|address| address.to_canonical().is_unspecified())
     {
         return Err(StartError::LanAddress(address));
+    }
+    if let Some((name, reason)) = flags
+        .lan
+        .lan_names
+        .iter()
+        .find_map(|name| lan_name_refusal(name).map(|reason| (name, reason)))
+    {
+        return Err(StartError::LanName {
+            name: name.clone(),
+            reason,
+        });
     }
     if let Some(mdm) = flags
         .mdm
