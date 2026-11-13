@@ -148,7 +148,7 @@ that lies can only make a file unavailable.
   and its base URL gives it the descriptor; when its apt root is the one the descriptor names, the entry hosts are sent
   does not change.
 
-Two coordinator flags bound the read: `--repository-discover-secs` (20) for the time both reads may take together and
+Two coordinator flags bound the read: `--repository-discover-secs` (20) for the time each of the two reads may take and
 `--repository-descriptor-max-bytes` (65536) for the descriptor's size. The coordinator reads the URL an operator
 names, including one on a private network (the operator's token is required); it follows no redirect and shows only
 the parsed fields, never the body or an error body.

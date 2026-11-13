@@ -65,8 +65,8 @@ place the files the flags name:
 
 Two keys bound how the coordinator reads a repository when an operator adds one
 ([package-repositories.md](../package-repositories.md#structure-of-a-repository)):
-`repository-discover-secs` (20, at least 1) is the time reading the descriptor and the key may take
-together, and `repository-descriptor-max-bytes` (65536, 1 to 65536) is the most bytes of a descriptor.
+`repository-discover-secs` (20, at least 1) is the time each of the two reads, the descriptor and
+the key, may take, and `repository-descriptor-max-bytes` (65536, 1 to 65536) is the most bytes of a descriptor.
 The built-in repository `komira` and its key are in the program, not in a flag.
 
 ## Starting it

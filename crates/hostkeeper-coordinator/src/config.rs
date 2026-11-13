@@ -426,8 +426,8 @@ pub struct Serve {
         value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..=16)
     )]
     pub live_rollouts: usize,
-    /// How long `Repositories.Discover` and `Repositories.Add` may take to read a repository's
-    /// descriptor and its keyring, together, in seconds.
+    /// How long each of the two reads of `Repositories.Discover` and `Repositories.Add` (a
+    /// repository's descriptor, then its keyring) may take, in seconds.
     #[arg(
         long,
         default_value_t = crate::repository_discover::DISCOVER_SECS,

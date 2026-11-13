@@ -3,7 +3,7 @@
 //! the repository's origin, `<base_uri>/hostkeeper-repository.json` and the keyring the descriptor
 //! names, over HTTPS to the roots the coordinator is built with, by the client private repositories
 //! are read with ([`crate::repository_origin`]): no redirect, a `Content-Length` and the
-//! descriptor's bound before a byte of the body is read, and a deadline over both reads.
+//! descriptor's bound before a byte of the body is read, and a deadline over each read.
 //!
 //! Nothing here trusts the repository: the descriptor is judged by
 //! [`hostkeeper_release::descriptor::check`], the keyring by [`registry::keys`], the fingerprints
@@ -32,7 +32,7 @@ pub const DESCRIPTOR_MAX_BYTES: usize = descriptor::MAX_BYTES;
 /// The bounds of a read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Limits {
-    /// The time the two reads may take, together.
+    /// The time each of the two reads may take.
     pub(crate) timeout: Duration,
     /// The most bytes of a descriptor.
     pub(crate) descriptor_max_bytes: usize,
@@ -97,45 +97,36 @@ impl Coordinator {
             return Err(Refusal::DiscoveryFailed);
         };
         let limits = self.discovery;
-        let read = async {
-            let descriptor_bytes = origin
-                .read_file(
-                    base_uri,
-                    descriptor::FILE,
-                    authorization,
-                    limits.descriptor_max_bytes,
-                    limits.timeout,
-                )
-                .await
-                .map_err(|why| {
-                    tracing::warn!(%why, "discovery failed reading the descriptor");
-                    Refusal::DiscoveryFailed
-                })?;
-            let parsed = descriptor::check(&descriptor_bytes).map_err(|why| {
-                tracing::warn!(%why, "discovery refused the descriptor");
-                Refusal::DescriptorInvalid
-            })?;
-            let keyring = origin
-                .read_file(
-                    base_uri,
-                    &parsed.keyring,
-                    authorization,
-                    MAX_KEYRING,
-                    limits.timeout,
-                )
-                .await
-                .map_err(|why| {
-                    tracing::warn!(%why, "discovery failed reading the keyring");
-                    Refusal::DiscoveryFailed
-                })?;
-            Ok::<_, Refusal>((descriptor_bytes, parsed, keyring))
-        };
-        let (descriptor_bytes, parsed, keyring) = tokio::time::timeout(limits.timeout, read)
+        let descriptor_bytes = origin
+            .read_file(
+                base_uri,
+                descriptor::FILE,
+                authorization,
+                limits.descriptor_max_bytes,
+                limits.timeout,
+            )
             .await
-            .map_err(|_| {
-                tracing::warn!("discovery failed: the reads took longer than allowed");
+            .map_err(|why| {
+                tracing::warn!(%why, "discovery failed reading the descriptor");
                 Refusal::DiscoveryFailed
-            })??;
+            })?;
+        let parsed = descriptor::check(&descriptor_bytes).map_err(|why| {
+            tracing::warn!(%why, "discovery refused the descriptor");
+            Refusal::DescriptorInvalid
+        })?;
+        let keyring = origin
+            .read_file(
+                base_uri,
+                &parsed.keyring,
+                authorization,
+                MAX_KEYRING,
+                limits.timeout,
+            )
+            .await
+            .map_err(|why| {
+                tracing::warn!(%why, "discovery failed reading the keyring");
+                Refusal::DiscoveryFailed
+            })?;
         let invalid = |why: &dyn std::fmt::Display| {
             tracing::warn!(%why, "discovery refused the keyring");
             Refusal::DescriptorInvalid

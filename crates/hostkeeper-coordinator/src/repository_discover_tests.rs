@@ -801,3 +801,64 @@ async fn add_over_a_legacy_entry_with_the_same_apt_root_keeps_the_host_digest() 
     assert_eq!(held.generation, 2);
     assert_eq!(host_digest(&rig, "origin"), before);
 }
+
+/// The two flags of a `serve` given `extra`: the discovery deadline and the descriptor bound.
+fn discovery_flags(extra: &[&str]) -> Result<(u64, usize), clap::Error> {
+    use clap::Parser as _;
+
+    use crate::config::{Cli, Command};
+
+    let mut args = vec!["hostkeeper-coordinator", "serve"];
+    for flag in [
+        "--heartbeat-listen",
+        "--private-listen",
+        "--tls-cert",
+        "--tls-key",
+        "--client-ca",
+        "--state-file",
+        "--oidc-config",
+        "--operator-token-file",
+    ] {
+        args.push(flag);
+        args.push(if flag.ends_with("listen") {
+            "192.0.2.1:1"
+        } else {
+            "unread"
+        });
+    }
+    args.extend_from_slice(extra);
+    let Command::Serve(flags) = Cli::try_parse_from(args)?.command else {
+        panic!("serve")
+    };
+    Ok((
+        flags.repository_discover_secs,
+        flags.repository_descriptor_max_bytes,
+    ))
+}
+
+/// Proves: `--repository-discover-secs` defaults to 20 and `--repository-descriptor-max-bytes` to
+/// 65536, each takes the value given, and a deadline of 0 and a bound of 0 or past 65536 are
+/// refused at the command line.
+///
+/// Catches: a tunable that is not a flag, has no default, or takes a value the read cannot use.
+#[test]
+fn the_discovery_flags_default_to_the_documented_values_and_are_bounded() {
+    assert_eq!(discovery_flags(&[]).expect("flags"), (20, 65_536));
+    assert_eq!(
+        discovery_flags(&[
+            "--repository-discover-secs",
+            "5",
+            "--repository-descriptor-max-bytes",
+            "1"
+        ])
+        .expect("flags"),
+        (5, 1)
+    );
+    for bad in [
+        ["--repository-discover-secs", "0"],
+        ["--repository-descriptor-max-bytes", "0"],
+        ["--repository-descriptor-max-bytes", "65537"],
+    ] {
+        assert!(discovery_flags(&bad).is_err(), "{bad:?}");
+    }
+}
