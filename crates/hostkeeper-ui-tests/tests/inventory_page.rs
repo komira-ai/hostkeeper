@@ -70,6 +70,8 @@ return {
     assert_eq!(
         out["out"]["buttons"],
         json!([
+            "kind-server",
+            "kind-switch",
             "edit-record",
             "remove-record",
             "edit-record",

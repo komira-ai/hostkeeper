@@ -9,7 +9,7 @@
 import { h, action, errorView, pill } from "../view.js";
 import { consoleWords, crumbs, layoutOf, layoutProblem, roleWords } from "../lab.js";
 import { miniRack } from "./host.js";
-import { whereWords } from "./inventory_switch.js";
+import { whereWords } from "./inventory.js";
 
 export async function render(ctx) {
   const id = ctx.params && typeof ctx.params.id === "string" ? ctx.params.id : "";

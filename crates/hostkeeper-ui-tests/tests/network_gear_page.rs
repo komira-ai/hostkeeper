@@ -7,7 +7,7 @@ mod support;
 
 use serde_json::{Value, json};
 use support::Ui;
-use support::pages::{bodies, m, page_driver};
+use support::pages::{bodies, m};
 
 /// A lab of one row, one rack of 27 U and the two switches of the first rack: `bmc-switch` (BMC
 /// network, console on `node-1`, `/dev/ttyUSB0`, a management MAC, a note) at U 27 and `data-switch`
@@ -57,12 +57,26 @@ const cls = (tree, c) => nodes(tree).filter((n) => (n.attrs.class || "").split("
 const words = (n) => text(n).replace(/\s+/g, " ").trim();
 "#;
 
-fn run(ui: &mut Ui, page: &str, params: &str, answers: &str, then: &str) -> Value {
-    ui.run(&page_driver(
-        page,
-        params,
-        answers,
-        &format!("{HELPERS}{then}"),
+/// Renders `module` (a file under `ui/gear/`, or `pages/<page>` for a page) with `params`, then runs
+/// `then` with `tree`, `ctx`, `seen` and the kit's helpers in scope; the answer is `{text, seen, out}`
+/// as the page driver of `support` makes it.
+fn run(ui: &mut Ui, module: &str, params: &str, answers: &str, then: &str) -> Value {
+    let path = if module.contains('/') {
+        format!("./{module}")
+    } else {
+        format!("./gear/{module}")
+    };
+    ui.run(&format!(
+        r#"
+import {{ api, recorder, text, named, type, tick, choose, chosen, choices, click, nodes, rows, cell }} from "../test/kit.js";
+import {{ render }} from "{path}.js";
+export async function main() {{
+  const {{ ctx, seen }} = recorder(api("operator-token"), {params}, {answers});
+  const tree = await render(ctx);
+  const shown = text(tree);
+  const out = await (async () => {{ {HELPERS}{then} }})();
+  return {{ text: shown, seen, out: out === undefined ? null : out }};
+}}"#
     ))
 }
 
@@ -84,7 +98,7 @@ fn a_switch_is_a_faceplate_with_no_light_that_opens_its_page() {
     );
     let out = run(
         &mut ui,
-        "home",
+        "pages/home",
         r#"{ rack: "rack-1" }"#,
         "[]",
         r#"
@@ -170,7 +184,7 @@ fn the_summary_counts_switches_apart_and_an_unplaced_switch_waits_in_the_tray() 
     );
     let out = run(
         &mut ui,
-        "home",
+        "pages/home",
         "{}",
         "[]",
         r#"
@@ -222,7 +236,7 @@ fn inventory_has_a_kind_switch_and_the_server_kind_is_the_servers_page() {
     );
     let out = run(
         &mut ui,
-        "inventory_kinds",
+        "pages/inventory",
         "{}",
         "[]",
         r#"
@@ -262,7 +276,7 @@ fn the_switch_kind_lists_each_switch_with_its_fields_and_where_it_stands() {
     let mut ui = start();
     let out = run(
         &mut ui,
-        "inventory_kinds",
+        "pages/inventory",
         r#"{ kind: "switch" }"#,
         "[]",
         r#"
@@ -313,7 +327,7 @@ return { rows: rows(tree).slice(0, 3), pressed: nodes(tree).filter((n) => n.tag 
 
     let edit = run(
         &mut ui,
-        "inventory_switch",
+        "pages/inventory",
         r#"{ kind: "switch", edit: "net.1" }"#,
         "[]",
         r#"
@@ -359,7 +373,7 @@ fn a_switch_is_added_and_placed_and_a_wrong_field_sends_nothing() {
     ui.reply(&m("Layout/Place"), json!({}));
     let out = run(
         &mut ui,
-        "inventory_switch",
+        "pages/inventory",
         r#"{ kind: "switch" }"#,
         "[]",
         r#"
@@ -450,7 +464,7 @@ fn saving_a_switch_keeps_or_moves_or_clears_its_place_and_a_refusal_is_told_in_w
     ui.reply(&m("Layout/RemoveDevice"), json!({}));
     let out = run(
         &mut ui,
-        "inventory_switch",
+        "pages/inventory",
         r#"{ kind: "switch", edit: "net.1" }"#,
         "[false, true]",
         r#"
@@ -505,7 +519,7 @@ fn the_switch_page_shows_the_fields_and_the_place_and_removes_after_a_confirm() 
     ui.reply(&m("Layout/RemoveDevice"), json!({}));
     let out = run(
         &mut ui,
-        "switch",
+        "pages/switch",
         r#"{ id: "net.1" }"#,
         "[false, true]",
         r#"
@@ -553,7 +567,7 @@ return { facts, crumbs, title, tag, mini };"#,
 
     let gone = run(
         &mut ui,
-        "switch",
+        "pages/switch",
         r#"{ id: "net.9" }"#,
         "[]",
         r#"await click(tree, "to-inventory"); return words(tree);"#,
@@ -579,7 +593,7 @@ fn an_unplaced_switch_says_so_and_a_failed_read_is_told() {
     ui.reply(&m("Layout/Get"), lab);
     let out = run(
         &mut ui,
-        "switch",
+        "pages/switch",
         r#"{ id: "net.2" }"#,
         "[]",
         r#"return { facts: rows(tree).filter((r) => r.length === 2).map((r) => r[1]), crumbs: cls(tree, "crumbs").map(words) };"#,
@@ -594,7 +608,7 @@ fn an_unplaced_switch_says_so_and_a_failed_read_is_told() {
     broken.refuse(&m("Layout/Get"), 500, "INTERNAL", "store_failed");
     let failed = run(
         &mut broken,
-        "switch",
+        "pages/switch",
         r#"{ id: "net.1" }"#,
         "[]",
         "return null;",

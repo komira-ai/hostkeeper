@@ -17,7 +17,7 @@ import * as packages from "./pages/packages.js";
 import * as pkg from "./pages/package.js";
 import * as hostgroups from "./pages/hostgroups.js";
 import * as enrollment from "./pages/enrollment.js";
-import * as inventory from "./pages/inventory_kinds.js";
+import * as inventory from "./pages/inventory.js";
 import * as switchPage from "./pages/switch.js";
 import * as audit from "./pages/audit.js";
 import * as users from "./pages/users.js";

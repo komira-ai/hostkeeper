@@ -108,7 +108,7 @@ inventory Kind switch, the switch form checks, the faceplate and the switch page
 ## 9. Delivery
 
 Two PRs, stacked: (1) the API (built, komira-ai/hostkeeper#373): proto, coordinator, stores, migration `0016`, generated client, docs; it lands alone and
-changes nothing a user sees; (2) the UI on top of it (built): Inventory Kind (`ui/pages/inventory_kinds.js`, `inventory_switch.js`), the faceplate (`ui/pages/home.js`, `ui/styles/gear.css`), the switch page (`ui/pages/switch.js`); tests in `crates/hostkeeper-ui-tests/tests/network_gear_page.rs`.
+changes nothing a user sees; (2) the UI on top of it (built): Inventory Kind (`ui/pages/inventory.js`), the faceplate (`ui/pages/home.js`, `ui/styles/gear.css`), the switch page (`ui/pages/switch.js`); tests in `crates/hostkeeper-ui-tests/tests/network_gear_page.rs`.
 
 Tests of PR 1: `crates/hostkeeper-coordinator/src/layout/device_tests.rs`, `operator_layout_tests.rs` (devices), the Postgres and
 export tests (`rich_layout` now holds a placed device), `crates/hostkeeper-proto/tests/additions_network_devices.rs` (rule B8, both
