@@ -12,12 +12,43 @@
 // the "Host group" dropdown offers, and HostGroups.Move, after a confirm, moves the host into the
 // group chosen, or into none when the blank is chosen; the built-in `all` is never a choice. Retire is offered when Hosts.Get fails too,
 // for an enrolled host the coordinator has not heard from since it started (a dead one).
+//
+// The page is a status header (name, status LED and word, role, group, what it runs, the last
+// heartbeat, and a small elevation of the rack it stands in), then tabs (Overview, Services,
+// Certificate, Labels, Placement, Host group; every panel is in the page, the stylesheet shows the
+// chosen one, and the choice is kept across a refresh of the same host), then the danger zone,
+// which holds Retire. The status says "degraded" for a live host whose service is unhealthy or whose
+// last update failed; the lab's state alone would call it healthy.
 
 import {
-  h, action, allPages, checkbox, describeError, enumLabel, errorView, field, fmtUnix, list, reasonProblem,
+  h, action, allPages, checkbox, describeError, enumLabel, errorView, field, fmtUnix, list, pill, reasonProblem,
   scopeLabel, select, table, trimmed,
 } from "../view.js";
-import { crumbs, layoutOf, layoutProblem, placementPanel, rackName, subjectOf } from "../lab.js";
+import { crumbs, hostState, layoutOf, layoutProblem, placementPanel, rackName, subjectOf } from "../lab.js";
+
+// Rows of a facts table: a name and its value, no heading strip.
+function kv(rows, extra) {
+  return h("div", { class: `table-wrap ${extra || ""}`.trim() }, h("table", { class: "kv" },
+    h("tbody", {}, rows.map(([k, v]) => h("tr", {}, h("th", {}, k), h("td", {}, v))))));
+}
+
+// The words of an enum value without its underscores (`up_to_date` reads `up to date`).
+function plain(text) {
+  return typeof text === "string" ? text.replace(/_/g, " ") : text;
+}
+
+// The status a host header shows: the lab's state, but a host whose service reports unhealthy or
+// whose last update failed is `degraded`, never `healthy`. `[word, tone]`.
+export function statusOf(host) {
+  const state = hostState(host);
+  const bad = list(host, "services").some((s) => s.health === "HEALTH_UNHEALTHY"
+    || (s.lastUpdate && /FAIL/.test(String(s.lastUpdate.outcome))));
+  const heart = host.heartbeat && list(host.heartbeat, "services").some((s) => s.health === "HEALTH_UNHEALTHY");
+  if (state === "healthy" && (bad || heart)) {
+    return ["degraded", "bad"];
+  }
+  return [state, { healthy: "ok", updating: "info", offline: "bad", pending: "muted" }[state]];
+}
 
 // A label key or value, as SetLabels takes it: 1 to 32 bytes of `[a-z0-9-]`.
 const LABEL = /^[a-z0-9-]{1,32}$/;
@@ -66,7 +97,7 @@ function hostGroupSection(ctx, nodeId, host, groups, groupsFailure) {
     names.push(current);
   }
   const form = { hostGroup: current };
-  return h("fieldset", {},
+  return h("fieldset", { class: "card" },
     h("legend", {}, "Host group"),
     h("p", { class: "note" },
       "Every host is in all. A host may be in one host group besides, which adds its packages to those of all; the blank is no group."),
@@ -87,7 +118,7 @@ function hostGroupSection(ctx, nodeId, host, groups, groupsFailure) {
       const reply = await ctx.api.hostGroups.move({ nodeId, hostGroup: target, reason: DEFAULT_MOVE_REASON });
       ctx.refresh();
       return `Moved ${nodeId} from ${reply.fromHostGroup || "no group"} to ${target === "" ? "no group" : target}.`;
-    }));
+    }, { class: "primary" }));
 }
 
 // Less than this many seconds of a certificate left is a warning: 48 hours.
@@ -127,11 +158,11 @@ function certificate(host, now) {
   const skewed = host.clockSkewBeats === undefined ? "0" : String(host.clockSkewBeats);
   return h("section", { class: "certificate" },
     h("h3", {}, "Certificate"),
-    table(["", ""], [
+    kv([
       ["Ends", state === "unknown" ? "not reported" : ends],
       ["Last renewal error", error || "-"],
       ["Heartbeats with the clock off", skewed],
-    ].map(([k, v]) => h("tr", {}, h("th", {}, k), h("td", {}, v)))),
+    ]),
     warnings.map((text) => h("p", { class: "warning", role: "alert" }, text)));
 }
 
@@ -184,10 +215,10 @@ function trustedRoot(host) {
   const [said, warning] = ROOT_SAYS[rootState(host.trustedRootReason)];
   return h("section", { class: "trusted-root" },
     h("h3", {}, "Trusted root"),
-    table(["", ""], [
+    kv([
       ["State", said],
       ["Age", rootAge(host.trustedRootAgeSecs)],
-    ].map(([k, v]) => h("tr", {}, h("th", {}, k), h("td", {}, v)))),
+    ]),
     warning === null ? [] : [h("p", { class: "warning", role: "alert" }, warning)]);
 }
 
@@ -207,7 +238,8 @@ function lastUpdate(result) {
     ["Started", fmtUnix(result.startedUnix)],
   ];
   return h("div", { class: "update" },
-    table(["Last update", ""], facts.map(([k, v]) => h("tr", {}, h("th", {}, k), h("td", {}, v)))),
+    h("h3", { class: "sub" }, "Last update"),
+    kv(facts, "cols"),
     h("pre", { class: "log" }, (result.logTail || []).map((line) => `${line}\n`)));
 }
 
@@ -231,20 +263,27 @@ function serviceSection(ctx, nodeId, view) {
     return reasonProblem(trimmed(form.reason)) || run();
   };
   const reason = () => trimmed(form.reason);
-  return h("section", { class: "service" },
-    h("h3", {}, service),
-    table(["", ""], [
+  const healthWord = enumLabel(view["health"], "HEALTH_");
+  const tone = view.health === "HEALTH_UNHEALTHY" ? "bad" : view.health === "HEALTH_HEALTHY" ? "ok" : "muted";
+  return h("section", { class: "service card" },
+    h("div", { class: "card-head" },
+      h("h3", {}, service),
+      pill(healthWord, tone),
+      pill(view.up === true ? "up" : "down", view.up === true ? "ok" : "bad"),
+      view.holdsSlot === true ? pill("holds the update slot", "info") : null,
+      h("span", { class: "ver" }, typeof view.installedVersion === "string" ? view.installedVersion : "not installed")),
+    kv([
       ["Installed version", typeof view.installedVersion === "string" ? view.installedVersion : "not installed"],
-      ["Health", enumLabel(view["health"], "HEALTH_")],
+      ["Health", healthWord],
       ["Up", view.up === true ? "yes" : "no"],
       ["Update slot", view.holdsSlot === true ? "holds the update slot" : "-"],
-      ["Gate", enumLabel(view.gateReason, "GATE_REASON_")],
-      ["Membership", enumLabel(view.membership, "MEMBERSHIP_")],
+      ["Gate", plain(enumLabel(view.gateReason, "GATE_REASON_"))],
+      ["Membership", plain(enumLabel(view.membership, "MEMBERSHIP_"))],
       ["Excluded", typeof view.excludedReason === "string" ? `yes: ${view.excludedReason}` : "no"],
-    ].map(([k, v]) => h("tr", {}, h("th", {}, k), h("td", {}, v)))),
+    ], "cols"),
     holds(view),
     lastUpdate(view.lastUpdate),
-    h("fieldset", {},
+    h("fieldset", { class: "act" },
       h("legend", {}, `Act on ${service} here`),
       field("Reason", "reason", form, "reason", { maxlength: 256 }),
       checkbox("Abandon: also free the update slot this host holds for the service (the host is gone)",
@@ -456,27 +495,43 @@ export async function render(ctx) {
   }
   const now = ctx.now();
   const agent = host.heartbeat && host.heartbeat.agent;
-  const where = await placementSection(ctx, host, nodeId, () => ctx.show(root));
+  const where = await placementSection(ctx, host, nodeId, () => repaint());
   const labelsForm = {
     labels: Object.entries(host.labels || {}).map(([k, v]) => `${k}=${v}`).join(", "),
   };
-  const root = h("section", { class: "page" },
-    where.crumbs,
-    h("h2", {}, `Host ${host.nodeId || nodeId}`),
-    table(["", ""], [
-      ["Role", host.role || "-"],
-      ["Heartbeat", host["live"] === true ? "live" : "silent"],
-      ["Last heartbeat", fmtUnix(host.lastHeartbeatUnix)],
-      ["Agent", agent ? `${agent["name"] || "-"} ${agent.version || ""}` : "-"],
-      ["Labels", labelsForm.labels || "-"],
-      ["Excluded from", (host.exclusions || []).map((x) => `${x.service} (${x.reason || "-"})`).join(", ") || "-"],
-      ...inventoryFacts(ctx, host),
-    ].map(([k, v]) => h("tr", {}, h("th", {}, k), h("td", {}, v)))),
-    where.section,
-    certificate(host, now),
-    trustedRoot(host),
-    h("fieldset", {},
+  const [stateWord, stateTone] = statusOf(host);
+  const services = list(host, "services");
+  const certWord = certState(host.certNotAfterUnix, now);
+  const rootWord = rootState(host.trustedRootReason);
+  const servicesAttention = services.some((s) => s.health === "HEALTH_UNHEALTHY"
+    || (s.lastUpdate && /FAIL/.test(String(s.lastUpdate.outcome))));
+  const trustAttention = certWord === "expired" || certWord === "soon"
+    || (typeof host.lastRenewError === "string" && host.lastRenewError !== "")
+    || ["stale", "missing", "unparseable"].includes(rootWord);
+  const group = typeof host.hostGroup === "string" && host.hostGroup !== ALL ? host.hostGroup : "";
+  const version = services.length > 0 && typeof services[0].installedVersion === "string"
+    ? `${services[0].service} ${services[0].installedVersion}` : "";
+  const labelCount = Object.keys(host.labels || {}).length;
+  const panels = {
+    overview: [
+      kv([
+        ["Role", host.role || "-"],
+        ["Heartbeat", host["live"] === true ? "live" : "silent"],
+        ["Last heartbeat", fmtUnix(host.lastHeartbeatUnix)],
+        ["Agent", agent ? `${agent["name"] || "-"} ${agent.version || ""}` : "-"],
+        ["Labels", labelsForm.labels || "-"],
+        ["Excluded from", (host.exclusions || []).map((x) => `${x.service} (${x.reason || "-"})`).join(", ") || "-"],
+        ...inventoryFacts(ctx, host),
+      ], "cols card"),
+      assignedSection(listing, nodeId, ends),
+    ],
+    services: services.length === 0
+      ? [h("p", { class: "quiet" }, "The host reports no service.")]
+      : services.map((view) => serviceSection(ctx, nodeId, view)),
+    trust: [h("div", { class: "pair" }, certificate(host, now), trustedRoot(host))],
+    labels: [h("fieldset", { class: "card" },
       h("legend", {}, "Labels"),
+      h("div", { class: "chips" }, Object.entries(host.labels || {}).map(([k, v]) => h("span", { class: "chip" }, `${k}=${v}`))),
       field("Labels (key=value, separated by commas)", "labels", labelsForm, "labels"),
       action(ctx, "Set labels", "set-labels", async () => {
         const parsed = parseLabels(labelsForm.labels);
@@ -492,12 +547,77 @@ export async function render(ctx) {
         await ctx.api.hosts.setLabels({ nodeId, labels });
         ctx.refresh();
         return `Labels of ${nodeId} set.`;
-      })),
-    hostGroupSection(ctx, nodeId, host, groups, groupsFailure),
-    assignedSection(listing, nodeId, ends),
-    list(host, "services").map((view) => serviceSection(ctx, nodeId, view)),
-    retireSection(ctx, nodeId));
-  return root;
+      }, { class: "primary" }))],
+    placement: [where.section],
+    group: [hostGroupSection(ctx, nodeId, host, groups, groupsFailure)],
+  };
+  const tabs = [
+    ["overview", "Overview", ""],
+    ["services", "Services", servicesAttention ? "bad" : ""],
+    ["trust", "Certificate", trustAttention ? "warn" : ""],
+    ["labels", "Labels", ""],
+    ["placement", "Placement", where.held ? "" : "muted"],
+    ["group", "Host group", ""],
+  ];
+  if (!tabs.some(([id]) => id === chosen.tab) || chosen.node !== nodeId) {
+    chosen.node = nodeId;
+    chosen.tab = "overview";
+  }
+  let root;
+  const repaint = () => ctx.show(assemble());
+  const assemble = () => {
+    root = h("section", { class: "page hostpage" },
+      where.crumbs,
+      h("header", { class: "hostbar" },
+        h("div", { class: "hb-main" },
+          h("div", { class: "hb-title" },
+            h("span", { class: `hb-led ${stateTone}`, "aria-hidden": "true" }),
+            h("span", { class: "kicker" }, "Host"),
+            h("h2", {}, host.nodeId || nodeId),
+            pill(stateWord, stateTone)),
+          h("div", { class: "hb-meta" },
+            [["Role", host.role], ["Group", group || "no group"], ["Runs", version],
+              ["Last heartbeat", fmtUnix(host.lastHeartbeatUnix)],
+              ["Labels", labelCount === 0 ? "" : `${labelCount}`]]
+              .filter(([, v]) => typeof v === "string" && v !== "")
+              .map(([k, v]) => h("span", { class: "meta" }, h("small", {}, k), v)))),
+        where.mini),
+      h("nav", { class: "tabs", "aria-label": "host sections" },
+        tabs.map(([id, label, tone]) => h("button", {
+          type: "button", name: `tab-${id}`, class: `tab${chosen.tab === id ? " on" : ""}`,
+          "aria-pressed": String(chosen.tab === id),
+          on: { click: () => { chosen.tab = id; repaint(); } },
+        }, label, tone === "" ? null : h("span", { class: `dot ${tone}`, "aria-hidden": "true" })))),
+      tabs.map(([id]) => h("div", { class: `panel${chosen.tab === id ? "" : " off"}` }, panels[id])),
+      retireSection(ctx, nodeId));
+    return root;
+  };
+  return assemble();
+}
+
+// The tab the page shows, kept across refreshes of the same host.
+const chosen = { node: "", tab: "overview" };
+
+// The rack the host stands in, drawn small: the rack's U as a column, the other servers as dim
+// blocks and this host's U lit, with its place in words under it; an empty dashed column and
+// "Unplaced" for a host in no rack. 'held' is the host's placement, 'rackAt' its rack.
+function miniRack(layout, held, rackAt) {
+  if (held === undefined || rackAt === undefined) {
+    return h("div", { class: "mini" },
+      h("div", { class: "mini-rack empty", "aria-hidden": "true", vars: { "--units": 12 } }),
+      h("p", { class: "mini-cap" }, h("strong", {}, "Unplaced"), "in no rack"));
+  }
+  const block = (p, me) => h("span", {
+    class: me ? "mini-u me" : "mini-u", "aria-hidden": "true",
+    vars: { "--r": rackAt.height - (p.u + p.height - 1) + 1, "--s": p.height },
+  });
+  const others = layout.placements.filter((p) => p.rack === rackAt.id && p.key !== held.key);
+  return h("div", { class: "mini" },
+    h("div", { class: "mini-rack", role: "img", "aria-label": `${rackName(layout, rackAt.id)}, U${held.u}`, vars: { "--units": rackAt.height } },
+      others.map((p) => block(p, false)), block(held, true)),
+    h("p", { class: "mini-cap" },
+      h("strong", {}, rackName(layout, rackAt.id)),
+      `U${held.u}${held.height > 1 ? `-${held.u + held.height - 1}` : ""} of ${rackAt.height}`));
 }
 
 // Where the host stands, and the controls that move it: the height, row, rack and U position, each
@@ -512,7 +632,9 @@ async function placementSection(ctx, host, nodeId, show) {
   } catch (error) {
     return {
       crumbs: null,
-      section: h("fieldset", {},
+      mini: null,
+      held: false,
+      section: h("fieldset", { class: "card" },
         h("legend", {}, "Placement"),
         h("p", { class: "warning", role: "alert" }, `The lab layout cannot be read: ${describeError(error)}`)),
     };
@@ -535,11 +657,13 @@ async function placementSection(ctx, host, nodeId, show) {
   const spot = rackAt === undefined ? {} : { rack: rackAt.id };
   return {
     crumbs: crumbs(layout, { ...spot, host: host.nodeId || nodeId }, (view, params) => ctx.navigate(view, params)),
-    section: h("fieldset", {},
+    mini: miniRack(layout, held, rackAt),
+    held: held !== undefined,
+    section: h("fieldset", { class: "card" },
       h("legend", {}, "Placement"),
       h("p", { name: "standing" }, standing),
       panel,
-      action(ctx, held === undefined ? "Place" : "Move", "place", async () => {
+      h("div", { class: "buttons" }, action(ctx, held === undefined ? "Place" : "Move", "place", async () => {
         const chosen = panel.choices.request();
         if (chosen === null) {
           return panel.choices.note || "Choose a rack and a U position.";
@@ -554,7 +678,7 @@ async function placementSection(ctx, host, nodeId, show) {
         }
         ctx.refresh();
         return `${nodeId} is at ${rackName(layout, chosen.rack)}, U${chosen.u}.`;
-      }),
+      }, { class: "primary" }),
       held === undefined ? null : action(ctx, "Unplace", "unplace", async () => {
         try {
           await ctx.api.layout.unplace({ subject: subjectOf(server), reason: `unplaced ${nodeId}` });
@@ -563,7 +687,7 @@ async function placementSection(ctx, host, nodeId, show) {
         }
         ctx.refresh();
         return `${nodeId} is unplaced.`;
-      })),
+      }))),
   };
 }
 
@@ -571,25 +695,29 @@ async function placementSection(ctx, host, nodeId, show) {
 // says whether an update in flight still holds the host's slot.
 function retireSection(ctx, nodeId) {
   const form = { reason: "" };
-  return h("fieldset", {},
-    h("legend", {}, "Retire"),
-    h("p", { class: "warning" },
-      "Retire revokes the host: its heartbeats and renewals are refused, and its own service assignments are "
-      + "dropped. Nothing is uninstalled."),
-    field("Reason (optional)", "retire-reason", form, "reason", { maxlength: 256 }),
-    action(ctx, "Retire this host", "retire", async () => {
-      const reason = trimmed(form.reason);
-      const problem = reason === "" ? null : reasonProblem(reason);
-      if (problem) {
-        return problem;
-      }
-      if (!ctx.confirm(`Retire ${nodeId}? Its heartbeats and renewals are refused from then on.`)) {
-        return "Not retired.";
-      }
-      const reply = await ctx.api.hosts.retire({ nodeId, reason });
-      ctx.refresh();
-      return reply.updateInFlight === true
-        ? `Retired ${nodeId}: its update slot is freed when it reports its update final.`
-        : `Retired ${nodeId}.`;
-    }));
+  return h("fieldset", { class: "danger-zone" },
+    h("legend", {}, "Danger zone"),
+    h("div", { class: "dz-row" },
+      h("div", { class: "dz-text" },
+        h("strong", {}, "Retire this host"),
+        h("p", { class: "note" },
+          "Retire revokes the host: its heartbeats and renewals are refused, and its own service assignments are "
+          + "dropped. Nothing is uninstalled.")),
+      h("div", { class: "dz-form" },
+        field("Reason (optional)", "retire-reason", form, "reason", { maxlength: 256 }),
+        action(ctx, "Retire this host", "retire", async () => {
+          const reason = trimmed(form.reason);
+          const problem = reason === "" ? null : reasonProblem(reason);
+          if (problem) {
+            return problem;
+          }
+          if (!ctx.confirm(`Retire ${nodeId}? Its heartbeats and renewals are refused from then on.`)) {
+            return "Not retired.";
+          }
+          const reply = await ctx.api.hosts.retire({ nodeId, reason });
+          ctx.refresh();
+          return reply.updateInFlight === true
+            ? `Retired ${nodeId}: its update slot is freed when it reports its update final.`
+            : `Retired ${nodeId}.`;
+        }, { class: "danger" }))));
 }

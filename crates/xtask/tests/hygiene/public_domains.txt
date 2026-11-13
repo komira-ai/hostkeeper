@@ -182,3 +182,7 @@ fleetdm.com
 =server.host
 =server.id
 =server.name
+=chosen.tab
+=s.health
+=view.health
+=where.mini

@@ -40,6 +40,11 @@ MDM setup), Fleet a table of hosts. After: a side menu, and Home a picture of th
   run of U; hover says name, group, version, state; a click opens the host page. **Rack**: one rack larger, and a table of its
   servers. Breadcrumbs `Lab > Row > Rack > Host`. Below the floor plan: the servers not placed (the Unplaced list), the alerts and
   the table of every host that the Fleet page had.
+- **Host page** (`ui/pages/host.js`, `ui/styles/host.css`): a dark status header (name, a light and the state in words, role,
+  group, what it runs, the last heartbeat, and a small elevation of the rack the host stands in with its U lit, or "Unplaced"), then
+  tabs (Overview, Services, Certificate, Labels, Placement, Host group; a dot on Services or Certificate when something needs
+  attention; the tab chosen is kept across a refresh of the same host), then Retire alone in a red-bordered danger zone at the bottom.
+  The state is `degraded`, not `healthy`, for a live host whose service reports unhealthy or whose last update failed.
 - Edit layout (a toggle on Home) shows the controls: rename the cluster, add a row (the next number), add a rack to a row (height
   from a list, 42 U by default), resize, move to another row, remove; move a server by picking it up (or dragging it)
   and putting it on a free U, or taking it out of its rack. A row or rack that still holds servers is not removed: the page names
@@ -104,7 +109,7 @@ approval asks for no placement); `hkctl` gets the verbs from the generated comma
   port `prefs.apply`).
 - `ui/lab.js`: the model the views share (layout, servers joined with hosts and inventory entries, states, free U for a height,
   breadcrumbs, the placement choices, the words of a refusal). `ui/pages/home.js`: the three levels and the edit mode.
-  `ui/pages/enrollment.js` and `ui/pages/host.js`: the placement controls only.
+  `ui/pages/enrollment.js`: the placement controls only; `ui/pages/host.js` also lays out the Host page above.
 - `ui/view.js`: `pill`, the `vars` of an element (custom properties), `aria-*`, `draggable`, `tabindex`, and the events the strip and the
   drag use. `ui/app.css` (tokens, frame, components) and `ui/lab.css` (the lab) are two files so that each stays under 1000 lines.
 
