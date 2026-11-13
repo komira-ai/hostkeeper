@@ -395,6 +395,13 @@ impl Farm {
         let (verifier, _) = static_verifier();
         let coordinator = Arc::new(
             Coordinator::new(store, verifier, OPERATOR.to_owned(), clock_of(&clock))
+                .with_allow_list(
+                    &hostkeeper_oidc::AllowList::parse(&hostkeeper_oidc::testkit::config_text(
+                        hostkeeper_oidc::testkit::STATIC_ISSUER,
+                    ))
+                    .expect("an allow-list"),
+                    flags.legacy_service.as_deref(),
+                )
                 .with_services(
                     Services::parse(&recorded("kbf.services.toml")).expect("kbf's definition"),
                 )

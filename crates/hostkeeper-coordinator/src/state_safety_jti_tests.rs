@@ -130,6 +130,10 @@ async fn a_jti_that_cannot_be_written_refuses_the_token() {
         OPERATOR.to_owned(),
         clock_of(&Arc::new(std::sync::atomic::AtomicU64::new(1_000))),
     )
+    .with_allow_list(
+        &crate::testutil::allow_list(&config_text(STATIC_ISSUER)),
+        Some(LEGACY),
+    )
     .with_services(kbf_services())
     .with_legacy_service(Some(LEGACY.to_owned()))
     .with_prefixes(kbf_prefixes());

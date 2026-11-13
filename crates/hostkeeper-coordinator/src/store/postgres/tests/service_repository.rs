@@ -102,7 +102,7 @@ fn this_release_starts_on_a_database_the_release_before_migrated_and_runs_0009_a
     store.stop();
 
     let after = db.rows(migrated);
-    assert_eq!(after.len(), 13, "{after:?}");
+    assert_eq!(after.len(), 14, "{after:?}");
     assert_eq!(after[..8], before[..], "0001 to 0008 were not run again");
     assert_eq!(
         after[8][..2],
@@ -123,6 +123,10 @@ fn this_release_starts_on_a_database_the_release_before_migrated_and_runs_0009_a
     assert_eq!(
         after[12][..2],
         [Some("13".to_owned()), Some("host_group_all".to_owned())]
+    );
+    assert_eq!(
+        after[13][..2],
+        [Some("14".to_owned()), Some("trusted_publishers".to_owned())]
     );
     assert_eq!(db.rows(COLUMN), vec![vec![Some("1".to_owned())]]);
     assert_eq!(
@@ -159,7 +163,7 @@ fn the_release_before_runs_on_a_database_this_release_migrated() {
     assert_eq!(ran, Vec::<i32>::new());
     assert_eq!(
         db.rows("SELECT version FROM schema_version ORDER BY version"),
-        (1..=13)
+        (1..=14)
             .map(|n| vec![Some(n.to_string())])
             .collect::<Vec<_>>()
     );
@@ -167,4 +171,44 @@ fn the_release_before_runs_on_a_database_this_release_migrated() {
         db.rows("SELECT repository FROM services WHERE service = 'web'"),
         vec![vec![Some("acme".to_owned())]]
     );
+}
+
+/// Proves: the release before (migrations `0001` to `0013`) accepts a database this release
+/// migrated and wrote a package's trusted publishers into, because `0014` says `may-run`: its
+/// runner runs nothing and answers, the versions are as they were, its own write of the service's
+/// row (naming the columns it knows) leaves the publishers, and this release reads them back, an
+/// empty list as empty and a package with none as none.
+///
+/// Catches: a `0014` marked `refuse`, which would stop a rollback the column alone does not need,
+/// and a write of the release before that takes the list away.
+#[test]
+fn the_release_before_runs_on_a_database_with_trusted_publishers_and_leaves_them() {
+    let db = TestDatabase::new();
+    let (store, _) = db.open("this release").expect("the store opens");
+    store.stop();
+    db.run(
+        "INSERT INTO services (service, halt_generation, trusted_publishers) VALUES \
+         ('web', 1, '[{\"repository\": \"acme/web\", \"workflow\": \".github/workflows/r.yml\", \
+         \"ref\": \"refs/heads/main\"}]'), ('gone', 1, '[]'), ('plain', 1, NULL)",
+    )
+    .expect("publishers written");
+    let ran = with_session(&db, |session| {
+        let before = migrate::checked(&migrate::SHIPPED[..13]).expect("the release before's set");
+        migrate::apply(session, &before).expect("the release before is accepted")
+    });
+    assert_eq!(ran, Vec::<i32>::new());
+    db.run("UPDATE services SET halt_generation = 2 WHERE service = 'web'")
+        .expect("the release before's write");
+    let (store, loaded) = db.open("again").expect("this release again");
+    store.stop();
+    let web = &loaded.ops.services["web"];
+    assert_eq!(web.halt_generation, 2);
+    let held = web.trusted_publishers.as_ref().expect("held");
+    assert_eq!(held[0].repository, "acme/web");
+    assert_eq!(held[0].git_ref, "refs/heads/main");
+    assert_eq!(
+        loaded.ops.services["gone"].trusted_publishers,
+        Some(Vec::new())
+    );
+    assert_eq!(loaded.ops.services["plain"].trusted_publishers, None);
 }

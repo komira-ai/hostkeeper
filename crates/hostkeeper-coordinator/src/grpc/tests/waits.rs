@@ -63,6 +63,12 @@ async fn world(name: &str) -> World {
         DesiredStore::open(&rig.dir.path().join("desired.json"), Some(LEGACY)).expect("a store");
     let (verifier, issuer) = static_verifier();
     let coordinator = Coordinator::new(store, verifier, OPERATOR.to_owned(), clock_of(&rig.clock))
+        .with_allow_list(
+            &crate::testutil::allow_list(&hostkeeper_oidc::testkit::config_text(
+                hostkeeper_oidc::testkit::STATIC_ISSUER,
+            )),
+            Some(LEGACY),
+        )
         .with_services(kbf_services())
         .with_legacy_service(Some(LEGACY.to_owned()))
         .with_prefixes(kbf_prefixes())

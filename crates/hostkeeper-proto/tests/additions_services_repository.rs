@@ -49,10 +49,21 @@ fn set_repository_is_a_method_the_release_before_does_not_have() {
         "SetRepositoryResponse".to_owned(),
     );
     assert!(now.contains(&want));
-    // `Put` and `Remove` came after it (tests/additions_services_put.rs).
+    // `Put` and `Remove` came after it (tests/additions_services_put.rs), then the three calls of
+    // trusted publishers (tests/additions_trusted_publishers.rs).
     let kept: Vec<_> = now
         .iter()
-        .filter(|m| **m != want && !["Put", "Remove"].contains(&m.0.as_str()))
+        .filter(|m| {
+            **m != want
+                && ![
+                    "Put",
+                    "Remove",
+                    "ListTrustedPublishers",
+                    "PutTrustedPublisher",
+                    "RemoveTrustedPublisher",
+                ]
+                .contains(&m.0.as_str())
+        })
         .cloned()
         .collect();
     assert_eq!(kept, older);

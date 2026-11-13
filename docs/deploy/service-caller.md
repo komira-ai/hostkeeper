@@ -160,7 +160,10 @@ the tailnet's admin, not by the service's CI.
    ([Host groups](../operations/hostgroups.md)), and the group's policy is its plan
    ([Rollout plans](../operations/rollout-plans.md)); otherwise the set is refused
    (`not_in_host_group`). There is no rollout file: `serve` refuses `--rollout-file`.
-5. **The allow-list entry.** The coordinator's `--oidc-config` file has a `[[remote_operator]]`
+5. **The trusted publisher.** The service's package lists the calling repository, workflow file and
+   branch as a trusted publisher ([Trusted publishers](ci-client.md#trusted-publishers); on the
+   package's page in the console, or imported from the allow-list entry below), and the allow-list
+   accepts the audience. The coordinator's `--oidc-config` file has a `[[remote_operator]]`
    entry for the service's repository ([The allow-list entry](ci-client.md#the-allow-list-entry)):
    its `repository` and `repository_id`, `job_workflow_ref` naming
    `komira-ai/hostkeeper/.github/workflows/set-desired.yml@` and the commit of the template's

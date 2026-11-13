@@ -224,8 +224,10 @@ export async function render(ctx) {
   }, { class: "danger" });
 
   const packageRows = () => packages.map((entry) => h("tr", {},
-    // The detail page of a package is not routed yet (the address never changes), so the name is text.
-    h("td", {}, entry.service),
+    h("td", {}, h("button", {
+      type: "button", class: "linklike", name: "open-package",
+      on: { click: () => ctx.navigate("package", { package: entry.service }) },
+    }, entry.service)),
     h("td", {}, entry.repository || DEFAULT_REPOSITORY),
     h("td", {}, list(entry, "hostGroups").join(", ") || "-"),
     h("td", { class: "row-actions" }, action(ctx, "Edit", "edit-package", () => editPackage(entry.service)),
