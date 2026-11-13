@@ -466,9 +466,9 @@ fn a_remove_names_an_entry_as_listed_with_empty_fields_left_empty() {
 }
 
 /// Proves: the allow-list the control plane's coordinator runs with (the four entries of
-/// komira-internal's `controlplane/hostkeeper-coordinator/oidc.toml`: tierstore's two workflows,
-/// jobscheduler's and hostkeeper's hello) imports as one publisher for each of `tierstore`,
-/// `js-agent` and `hello`, each keeping its repository, its repository id and the pins of
+/// the control plane's `oidc.toml`: one caller's two workflows, a second caller's and
+/// hostkeeper's hello) imports as one publisher for each of `tierstore`,
+/// `worker` and `hello`, each keeping its repository, its repository id and the pins of
 /// `set-desired.yml` it called, with tierstore's two entries one publisher listing both pins; and
 /// the token of each entry still sets the service the entry named and no other.
 ///
@@ -513,12 +513,12 @@ fn the_control_planes_allow_list_imports_as_the_ci_deploys_it_runs_today() {
             "tierstore",
         ),
         entry(
-            "jobscheduler-hostkeeper-desired",
+            "scheduler-hostkeeper-desired",
             "1434971668",
-            "komira-ai/jobscheduler",
+            "komira-ai/scheduler",
             c,
             "\"workflow_run\", \"workflow_dispatch\"",
-            "js-agent",
+            "worker",
         ),
         entry(
             "hostkeeper-coordinator-devbox",
@@ -547,15 +547,15 @@ fn the_control_planes_allow_list_imports_as_the_ci_deploys_it_runs_today() {
     };
     assert_eq!(
         held.keys().map(String::as_str).collect::<Vec<_>>(),
-        ["hello", "js-agent", "tierstore"]
+        ["hello", "tierstore", "worker"]
     );
     assert_eq!(
         held["tierstore"],
         want("komira-ai/tierstore", "1440761269", &[a, b])
     );
     assert_eq!(
-        held["js-agent"],
-        want("komira-ai/jobscheduler", "1434971668", &[c])
+        held["worker"],
+        want("komira-ai/scheduler", "1434971668", &[c])
     );
     assert_eq!(
         held["hello"],
