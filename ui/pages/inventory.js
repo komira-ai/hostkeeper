@@ -15,7 +15,7 @@ const PAGE_SIZE = 50;
 const SERVER_NAME = /^(?=.{1,63}$)[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
 const MAX_DATA_MACS = 16;
 const MAC_PROBLEM = "is not a MAC: twelve hex digits, with or without : - . between them.";
-const NOTES_PROBLEM = "Notes are at most 256 bytes, with no control character but the line break.";
+export const NOTES_PROBLEM = "Notes are at most 256 bytes, with no control character but the line break.";
 // What an empty field of a row shows, by its key: an example of what goes there.
 const PLACEHOLDERS = { server: "Server name", bmcMac: "aa:bb:cc:dd:ee:ff", dataMac: "aa:bb:cc:dd:ee:01", notes: "Notes" };
 
@@ -47,7 +47,7 @@ export function dataMacs(text) {
 }
 
 // Notes with their line breaks written as `\n`, trimmed.
-function notesOf(text) {
+export function notesOf(text) {
   return trimmed(String(text || "").replace(/\r\n?/g, "\n"));
 }
 

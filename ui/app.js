@@ -17,7 +17,8 @@ import * as packages from "./pages/packages.js";
 import * as pkg from "./pages/package.js";
 import * as hostgroups from "./pages/hostgroups.js";
 import * as enrollment from "./pages/enrollment.js";
-import * as inventory from "./pages/inventory.js";
+import * as inventory from "./pages/inventory_kinds.js";
+import * as switchPage from "./pages/switch.js";
 import * as audit from "./pages/audit.js";
 import * as users from "./pages/users.js";
 import * as tokens from "./pages/tokens.js";
@@ -50,6 +51,7 @@ const LINKED = [
   ["home", "Lab", home, ""],
   ["host", "Host", host, ""],
   ["package", "Package", pkg, "Package"],
+  ["switch", "Switch", switchPage, ""],
 ];
 const PAGES = GROUPS.flatMap(([group, pages]) => pages.map(([name, title, page, glyph]) => [name, title, page, glyph, title]))
   .concat(SETTINGS.map(([name, title, page]) => [name, title, page, "", "Settings"]))
