@@ -6,6 +6,9 @@
 // Releases.Converge, Releases.Force, Releases.SetDesired, Rollouts.Advance, Rollouts.Pause,
 // Rollouts.Resume, Services.Assign, Services.Unassign and Services.SetMinVersion, and Hosts.List
 // to count a force's hosts. The desired version is set here or by CI.
+//
+// The page list has no entry for this page any more: its route opens the package page
+// (`pages/package.js`), which builds on the parts this module exports.
 
 import {
   h, action, allPages, area, checkbox, describeError, enumLabel, errorView, field, list, reasonProblem, select,
@@ -127,7 +130,7 @@ function forceReply(reply) {
 // until its answer. Each count is an attempt with its own number: a count that finishes after it
 // was cancelled or started again changes nothing. Cancel is offered while counting and
 // confirming, never once the force is sent: a sent force cannot be called back.
-function forceSection(ctx, services, state, redraw) {
+export function forceSection(ctx, services, state, redraw) {
   const form = state.force;
   const reset = () => {
     state.attempt += 1;
@@ -236,11 +239,11 @@ function forceSection(ctx, services, state, redraw) {
     confirmation());
 }
 
-function slotHolders(svc) {
+export function slotHolders(svc) {
   return (svc.hosts || []).filter((host) => host.view && host.view.holdsSlot === true).map((host) => host.nodeId);
 }
 
-function byGate(svc, reason) {
+export function byGate(svc, reason) {
   return (svc.hosts || []).filter((host) => host.view && host.view.gateReason === reason).map((host) => host.nodeId);
 }
 
@@ -334,7 +337,7 @@ export function planWaiting(plan) {
 }
 
 // The stages with their hosts, one row to a host; the stage's own cells are on its first row.
-function planTable(plan) {
+export function planTable(plan) {
   const body = [];
   for (const stage of planStages(plan)) {
     const members = list(stage, "members");
@@ -354,7 +357,7 @@ function planTable(plan) {
 }
 
 // The limits of a desired state that an operator's set keeps: CI's per-role maxUpdating and minUp.
-function limitsOf(desired) {
+export function limitsOf(desired) {
   const limits = {};
   for (const key of ["maxUpdating", "minUp"]) {
     if (desired && desired[key] !== undefined) {
@@ -364,7 +367,7 @@ function limitsOf(desired) {
   return limits;
 }
 
-function setDesired(ctx, svc, form) {
+export function setDesired(ctx, svc, form) {
   const service = svc.service;
   return action(ctx, "Set desired", "set-desired", async () => {
     const version = trimmed(form.version);
@@ -375,6 +378,10 @@ function setDesired(ctx, svc, form) {
       return "Desired version not changed.";
     }
     const request = { service, desired: Object.assign({ version }, limitsOf(svc.desired)) };
+    // A status entry of one host group sets that group alone.
+    if (typeof svc.hostGroup === "string" && svc.hostGroup !== "") {
+      request.hostGroup = svc.hostGroup;
+    }
     // The release index and its digest go together or not at all; the API checks the pair. The
     // index goes as typed, not trimmed: its digest is of its exact bytes, a final newline included.
     if (trimmed(form.indexDigest) !== "") {
@@ -440,11 +447,15 @@ function minVersionButton(ctx, service, form) {
   });
 }
 
+// The empty state of the assign and set-desired form.
+export function newAssignForm() {
+  return { version: "", indexDigest: "", index: "", role: "", uninstall: false, minVersion: "" };
+}
+
 // The role, version, digest and release index grammar is the API's to check: the form only
 // refuses a blank version and role.
-function assignFieldset(ctx, svc) {
+export function assignFieldset(ctx, svc, form = newAssignForm()) {
   const service = svc.service;
-  const form = { version: "", indexDigest: "", index: "", role: "", uninstall: false, minVersion: "" };
   return h("fieldset", {},
     h("legend", {}, `Assign and set the desired version of ${service}`),
     field("Version", "desired-version", form, "version"),
@@ -484,7 +495,7 @@ function assignmentRows(entries, service) {
 
 // The buttons of the plan: Advance while it waits for an operator to enter its next stage, Pause
 // while it runs and Resume while it is paused. Each needs a reason and asks first.
-function planButtons(ctx, service, plan, withReason) {
+export function planButtons(ctx, service, plan, withReason) {
   const buttons = [];
   if (plan && plan.waiting === "PLAN_WAIT_MANUAL_ADVANCE") {
     const next = waitStage(plan);
@@ -519,12 +530,12 @@ function planButtons(ctx, service, plan, withReason) {
   return buttons;
 }
 
-// `listing` is `{entries}` of Services.List, or `{error}` when it failed.
-function serviceSection(ctx, svc, listing) {
+// The fieldset of the operator's acts on one service: mark bad, halt, the plan's buttons and the
+// convergence check, each with the reason typed in `form`.
+export function actFieldset(ctx, svc, form) {
   const service = svc.service;
   const marks = svc.marks || {};
   const convergence = svc.convergence || {};
-  const form = { reason: "", version: "" };
   const { halt } = marks;
   const halted = Boolean(halt) || convergence.state === "CONVERGENCE_STATE_HALTED";
   const withReason = (run) => async () => {
@@ -533,6 +544,56 @@ function serviceSection(ctx, svc, listing) {
     }
     return reasonProblem(trimmed(form.reason)) || run(trimmed(form.reason));
   };
+  const plan = svc.plan;
+  return h("fieldset", {},
+    h("legend", {}, `Act on ${service}`),
+    field("Reason", "reason", form, "reason", { maxlength: 256 }),
+    field("Version to mark bad", "bad-version", form, "version"),
+    h("div", { class: "buttons" },
+      action(ctx, "Mark bad", "mark-bad", withReason(async (reason) => {
+        const version = trimmed(form.version);
+        if (version === "") {
+          return "Name the version to mark bad.";
+        }
+        await ctx.api.releases.markBad({ service, version, reason });
+        ctx.refresh();
+        return `Marked ${service} ${version} bad.`;
+      })),
+      (marks.bad || []).map((version) => action(ctx, `Unmark ${version}`, "unmark-bad", withReason(async (reason) => {
+        await ctx.api.releases.unmarkBad({ service, version, reason });
+        ctx.refresh();
+        return `Unmarked ${service} ${version}.`;
+      }))),
+      halted
+        ? action(ctx, "Clear the halt", "clear-halt", withReason(async (reason) => {
+          await ctx.api.releases.clearHalt({ service, reason });
+          ctx.refresh();
+          return `Cleared the halt of ${service}.`;
+        }))
+        : action(ctx, "Halt", "halt", withReason(async (reason) => {
+          if (!ctx.confirm(`Halt ${service}? No host of it is ordered until the halt is cleared.`)) {
+            return "Not halted.";
+          }
+          await ctx.api.releases.halt({ service, reason });
+          ctx.refresh();
+          return `Halted ${service}.`;
+        })),
+      planButtons(ctx, service, plan, withReason),
+      action(ctx, "Check convergence", "converge", async () => {
+        const reply = await ctx.api.releases.converge({ service });
+        const c = reply.convergence || {};
+        return `${service}: ${enumLabel(c.state, "CONVERGENCE_STATE_")}, desired ${c.desired || "none"}`
+          + (c.quiet === true ? ", quiet start" : "") + ".";
+      })));
+}
+
+// `listing` is `{entries}` of Services.List, or `{error}` when it failed.
+function serviceSection(ctx, svc, listing) {
+  const service = svc.service;
+  const marks = svc.marks || {};
+  const convergence = svc.convergence || {};
+  const { halt } = marks;
+  const halted = Boolean(halt) || convergence.state === "CONVERGENCE_STATE_HALTED";
   const plan = svc.plan;
   const baking = byGate(svc, "GATE_REASON_BAKING");
   const holders = slotHolders(svc);
@@ -562,46 +623,7 @@ function serviceSection(ctx, svc, listing) {
     table(["Role", "At desired", "Updating", "Failed", "Down"], roles),
     planStages(plan).length > 0 ? planTable(plan) : null,
     assignFieldset(ctx, svc),
-    h("fieldset", {},
-      h("legend", {}, `Act on ${service}`),
-      field("Reason", "reason", form, "reason", { maxlength: 256 }),
-      field("Version to mark bad", "bad-version", form, "version"),
-      h("div", { class: "buttons" },
-        action(ctx, "Mark bad", "mark-bad", withReason(async (reason) => {
-          const version = trimmed(form.version);
-          if (version === "") {
-            return "Name the version to mark bad.";
-          }
-          await ctx.api.releases.markBad({ service, version, reason });
-          ctx.refresh();
-          return `Marked ${service} ${version} bad.`;
-        })),
-        (marks.bad || []).map((version) => action(ctx, `Unmark ${version}`, "unmark-bad", withReason(async (reason) => {
-          await ctx.api.releases.unmarkBad({ service, version, reason });
-          ctx.refresh();
-          return `Unmarked ${service} ${version}.`;
-        }))),
-        halted
-          ? action(ctx, "Clear the halt", "clear-halt", withReason(async (reason) => {
-            await ctx.api.releases.clearHalt({ service, reason });
-            ctx.refresh();
-            return `Cleared the halt of ${service}.`;
-          }))
-          : action(ctx, "Halt", "halt", withReason(async (reason) => {
-            if (!ctx.confirm(`Halt ${service}? No host of it is ordered until the halt is cleared.`)) {
-              return "Not halted.";
-            }
-            await ctx.api.releases.halt({ service, reason });
-            ctx.refresh();
-            return `Halted ${service}.`;
-          })),
-        planButtons(ctx, service, plan, withReason),
-        action(ctx, "Check convergence", "converge", async () => {
-          const reply = await ctx.api.releases.converge({ service });
-          const c = reply.convergence || {};
-          return `${service}: ${enumLabel(c.state, "CONVERGENCE_STATE_")}, desired ${c.desired || "none"}`
-            + (c.quiet === true ? ", quiet start" : "") + ".";
-        }))));
+    actFieldset(ctx, svc, { reason: "", version: "" }));
 }
 
 export async function render(ctx) {

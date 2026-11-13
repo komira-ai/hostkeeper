@@ -194,7 +194,10 @@ export async function render(ctx) {
   });
 
   const packageRows = () => packages.map((entry) => h("tr", {},
-    h("td", {}, entry.service),
+    h("td", {}, h("button", {
+      type: "button", class: "linklike", name: "open-package",
+      on: { click: () => ctx.navigate("package", { package: entry.service }) },
+    }, entry.service)),
     h("td", {}, entry.repository || DEFAULT_REPOSITORY),
     h("td", {}, minimums(entry).join(", ") || "-"),
     h("td", {}, list(entry, "hostGroups").join(", ") || "-"),

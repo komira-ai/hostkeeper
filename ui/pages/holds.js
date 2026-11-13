@@ -1,6 +1,9 @@
 // Holds: every hold that stands, with its reason, scope, setter and time; set and release one
 // for a host, a role or the whole fleet. Calls: Services.List; on a button, Services.Hold or
 // Services.Unhold. Both need a reason: a hold with an empty one is never sent.
+//
+// The page list has no entry for this page any more: its route opens the package page
+// (`pages/package.js`), which builds on the parts this module exports.
 
 import {
   h, action, errorView, field, fmtUnix, list, reasonProblem, scopeLabel, select, table, trimmed,

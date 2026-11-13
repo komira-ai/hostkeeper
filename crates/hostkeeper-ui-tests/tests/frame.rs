@@ -25,6 +25,22 @@ export async function main() {{
     )
 }
 
+/// A driver that starts the app as `start` does and opens the package page of `api`, which the
+/// page list does not offer: it is reached from the Packages page.
+fn start_package() -> String {
+    r#"
+import { fakeDocument, settle } from "../test/kit.js";
+import { startApp } from "./app.js";
+export async function main() {
+  const doc = fakeDocument();
+  globalThis.doc = doc;
+  const app = startApp({ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000 });
+  await settle();
+  app.navigate("package", { package: "api" });
+}"#
+    .to_owned()
+}
+
 /// A driver that runs `steps` (JavaScript with `doc`, `fire`, `domNamed`, `domTexts`, `elements`
 /// `settle` and `getCsrf` in scope) and returns what they return.
 fn steps(steps: &str) -> String {
@@ -76,7 +92,7 @@ fn a_late_answer_from_a_previous_sign_in_changes_nothing() {
         ui.reply(&m("Releases/Status"), status_reply());
         ui.reply(&m("Releases/Status"), status_reply());
         ui.hold(&m("Releases/Converge"), status, &body.to_string());
-        ui.run(&start("rollout"));
+        ui.run(&start_package());
         ui.run(&steps(
             r#"
 click("converge");
@@ -97,7 +113,7 @@ await settle();"#,
         assert_eq!(after["status"], "", "{status}");
         let shown = after["text"].as_str().expect("the frame's text");
         assert!(
-            shown.contains("Rollout") && shown.contains("Desired 1.4.0"),
+            shown.contains("Host groups") && shown.contains("Desired 1.4.0"),
             "{shown}"
         );
         assert!(!shown.contains("refused"), "{status}: {shown}");
@@ -255,7 +271,7 @@ fn the_elements_show_what_was_typed_after_the_frame_draws_again() {
     let mut ui = Ui::start();
     ui.reply(&m("Releases/Status"), status_reply());
     ui.session("tok_a");
-    ui.run(&start("rollout"));
+    ui.run(&start_package());
     let shown = ui.run(&steps(
         r#"
 type("reason", "crash loop");

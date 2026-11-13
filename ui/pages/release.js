@@ -6,6 +6,9 @@
 //
 // An installer's name is shown as it is, whatever it is: the page knows no installer and gives
 // none a column or a word of its own, so a kind no daemon lists yet reads as every other.
+//
+// The page list has no entry for this page any more: its route opens the package page
+// (`pages/package.js`), which builds on the parts this module exports.
 
 import { h, action, allPages, describeError, errorView, field, fmtUnix, list, table, trimmed } from "../view.js";
 
@@ -106,17 +109,17 @@ function hostsOf(hosts, service) {
 }
 
 // An entry's locations, in preference order, each as `store:locator`.
-function locations(entry) {
+export function locations(entry) {
   const all = list(entry, "locations");
   return all.length === 0 ? "-" : all.map((at) => `${at["store"] || "-"}:${at["locator"] || "-"}`).join(", ");
 }
 
-function digestCell(digest) {
+export function digestCell(digest) {
   return typeof digest === "string" && digest !== "" ? h("code", {}, digest) : "-";
 }
 
 // One platform's list: a row per entry, in the order set.
-function platformSection(key, targetList) {
+export function platformSection(key, targetList) {
   const entries = list(targetList, "entries");
   const rows = entries.map((entry, i) => {
     const manifest = entry.manifest || {};
@@ -140,7 +143,7 @@ function platformSection(key, targetList) {
 
 // Each host of the service with its pick: the counts of every pick first, then a row per host,
 // at most MAX_HOST_ROWS of them.
-function picksSection(ctx, service, targets, hosts) {
+export function picksSection(ctx, service, targets, hosts) {
   const mine = hostsOf(hosts, service);
   const picked = mine.map((host) => [host, pickFor(host, service, targets)]);
   const counts = new Map();
