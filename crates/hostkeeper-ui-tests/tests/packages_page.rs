@@ -1,7 +1,8 @@
 //! The Packages page, run in the JavaScript engine against the fake gateway of `support`: the
 //! table of registered packages, the form that adds one (its repository chosen from the registry's
-//! repositories), Edit and Remove on each row, the Repositories section with its form, and the
-//! reading of a keyring's fingerprints that the form relies on.
+//! repositories), Edit and Remove on each row, the Repositories section with its form (a name, a
+//! URL and an access; a check that shows what the repository serves and its key, and an add that
+//! carries what was shown), and the reading of a keyring's fingerprints (`openpgp.js`).
 
 mod support;
 
@@ -14,6 +15,7 @@ const HELPERS: &str = r#"
 const last = () => seen.shown[seen.shown.length - 1];
 const file = (bytes, size) => ({ name: "key.gpg", size: size === undefined ? bytes.length : size, arrayBuffer: async () => Uint8Array.from(bytes).buffer });
 const chooseKey = (t, f) => named(t, "repository-key")[0].on.change({ target: { files: [f] } });
+const count = (t, name) => nodes(t).filter((n) => n.attrs && n.attrs["name"] === name).length;
 "#;
 
 /// A keyring of one version 4 public key made from `seed`, as the registry's tests build one.
@@ -78,11 +80,14 @@ fn repositories_reply() -> Value {
                         "suites": ["testing"], "components": ["main"],
                         "fingerprints": ["AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA11112222"],
                         "access": "hosts", "credentialFile": "/etc/hostkeeper/acme.cred"},
-         "keyringSha256": "ab", "generation": "2", "services": ["js-agent"]},
+         "keyringSha256": "ab", "generation": "2", "services": ["js-agent"],
+         "platforms": ["linux-x86_64", "linux-arm64"]},
         {"repository": {"name": "komira", "kind": "apt", "uri": "https://packages.example.com/apt",
                         "suites": ["testing", "stable"], "components": ["main", "extra"],
-                        "fingerprints": ["BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB33334444"]},
-         "keyringSha256": "cd", "generation": "1", "services": ["hostkeeper", "tierstore"]},
+                        "fingerprints": ["BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB33334444"],
+                        "baseUri": "https://packages.example.com"},
+         "keyringSha256": "cd", "generation": "1", "services": ["hostkeeper", "tierstore"],
+         "platforms": ["linux-x86_64", "linux-arm64", "macos-arm64"]},
     ], "generation": "2"})
 }
 
@@ -157,7 +162,7 @@ return { flags, shown: seen.shown.length };
 #[test]
 fn no_form_is_visible_by_default_and_each_add_button_opens_its_own_with_save_and_cancel() {
     // Proves: the page opens with no field and no Save button; "Add repository" opens the
-    // repository form alone, "Add package" the package form alone (replacing the other), Cancel
+    // repository form alone (Check repository and Cancel), "Add package" the package form alone (replacing the other), Cancel
     // closes each, and a form is not shown again by the redraw after it.
     // Catches: a form shown by default, or an Add button that opens the wrong form.
     let mut ui = Ui::start();
@@ -170,11 +175,12 @@ fn no_form_is_visible_by_default_and_each_add_button_opens_its_own_with_save_and
             r#"{HELPERS}
 const form = (t) => nodes(t).filter((n) => n.tag === "fieldset").length;
 const names = (t) => nodes(t).filter((n) => n.tag === "button").map((n) => n.attrs["name"]);
-const start = [form(tree), names(tree).filter((n) => n.startsWith("put-") || n.startsWith("cancel-"))];
+const forms = (t) => names(t).filter((n) => n.startsWith("put-") || n.startsWith("check-repository") || n.startsWith("cancel-"));
+const start = [form(tree), forms(tree)];
 await click(tree, "add-repository");
-const repo = [form(last()), names(last()).filter((n) => n.startsWith("put-") || n.startsWith("cancel-"))];
+const repo = [form(last()), forms(last())];
 await click(last(), "add-package");
-const pkg = [form(last()), names(last()).filter((n) => n.startsWith("put-") || n.startsWith("cancel-"))];
+const pkg = [form(last()), forms(last())];
 await click(last(), "cancel-package");
 const closed = form(last());
 await click(last(), "add-repository");
@@ -187,7 +193,7 @@ return {{ start, repo, pkg, closed, again: form(last()) }};
         out["out"],
         json!({
             "start": [0, []],
-            "repo": [1, ["put-repository", "cancel-repository"]],
+            "repo": [1, ["check-repository", "cancel-repository"]],
             "pkg": [1, ["put-package", "cancel-package"]],
             "closed": 0,
             "again": 0
@@ -209,8 +215,8 @@ fn the_repositories_are_listed_above_the_packages() {
             .unwrap_or_else(|| panic!("{piece:?} not in {text}"))
     };
     assert!(at("Repositories") < at("Add repository"));
-    assert!(at("Add repository") < at("Repository URL Used by"));
-    assert!(at("Repository URL Used by") < at("Add package"));
+    assert!(at("Add repository") < at("Repository URL Platforms Used by"));
+    assert!(at("Repository URL Platforms Used by") < at("Add package"));
     assert!(at("Add package") < at("Package Repository Host groups"));
 }
 
@@ -218,7 +224,8 @@ fn the_repositories_are_listed_above_the_packages() {
 fn each_list_has_one_description_and_marks_add_primary_and_remove_danger() {
     // Proves: each list's header holds its title, one description and its Add button in a
     // `list-head`; every Add is `primary` and every Remove, of a package and of a repository, is
-    // `danger`; each row's Edit and Remove sit in one `row-actions` cell; Edit is not danger.
+    // `danger`; each row's Edit (a repository's: Check again) and Remove sit in one `row-actions`
+    // cell; Edit is not danger.
     // Catches: an Add button outside its header, a Remove that looks like Edit, or a second
     // description repeated under the page title.
     let mut ui = Ui::start();
@@ -233,7 +240,7 @@ const heads = nodes(tree).filter((n) => n.attrs && n.attrs.class === "list-head"
 return {
   add: [...classes("add-repository"), ...classes("add-package")],
   remove: [...classes("remove-package"), ...classes("remove-repository")],
-  edit: [...classes("edit-package"), ...classes("edit-repository")],
+  edit: [...classes("edit-package"), ...classes("check-again-repository")],
   heads: heads.length,
   notes: heads.map((n) => nodes(n).filter((m) => m.attrs && m.attrs.class === "note").length),
   cells: nodes(tree).filter((n) => n.attrs && n.attrs.class === "row-actions").length,
@@ -491,11 +498,13 @@ return {{ groups, repository, note, none, reports: seen.reports }};
 }
 
 #[test]
-fn the_repositories_section_lists_each_with_its_packages_keys_and_access() {
-    // Proves: each repository is a row with its name, its URL and how many packages come from it,
-    // with Edit and Remove; a repository packages name that the registry lacks is shown as an
+fn the_repositories_section_lists_each_with_its_platforms_and_packages() {
+    // Proves: each repository is a row with its name, its URL (the base URL it was added with, else
+    // its apt root), the platforms it serves in words, and how many packages come from it, with
+    // Check again and Remove; a repository packages name that the registry lacks is shown as an
     // alert.
-    // Catches: a table that hides how many packages use a repository, or an unregistered one.
+    // Catches: a table that hides the platforms or how many packages use a repository, or an
+    // unregistered one.
     let mut ui = Ui::start();
     ui.reply(&m("Services/List"), json!({}));
     let mut reply = repositories_reply();
@@ -506,18 +515,20 @@ fn the_repositories_section_lists_each_with_its_packages_keys_and_access() {
     assert_eq!(
         rows[..3],
         [
-            json!(["Repository", "URL", "Used by", ""]),
+            json!(["Repository", "URL", "Platforms", "Used by", ""]),
             json!([
                 "acme",
                 "https://acme.example.com/apt",
+                "Linux x86-64, Linux arm64",
                 "used by 1 package",
-                "Edit Remove"
+                "Check again Remove"
             ]),
             json!([
                 "komira",
-                "https://packages.example.com/apt",
+                "https://packages.example.com",
+                "Linux x86-64, Linux arm64, macOS arm64",
                 "used by 2 packages",
-                "Edit Remove"
+                "Check again Remove"
             ]),
         ]
     );
@@ -528,16 +539,78 @@ fn the_repositories_section_lists_each_with_its_packages_keys_and_access() {
 }
 
 #[test]
-fn adding_a_repository_reads_the_fingerprints_from_the_key_file_and_puts_it() {
-    // Proves: Add repository sends Repositories.Put with the name, URL, suites and components as
-    // typed (commas and spaces divide), kind apt, the keyring as base64 and the fingerprints the
-    // registry reads from that keyring (never typed), access public and a fixed reason.
-    // Catches: a fingerprint typed or wrongly derived, a keyring sent in another encoding, or a
-    // field the form should not ask for.
-    let key = keyring(7);
+fn the_built_in_repository_is_tagged_and_has_no_remove() {
+    // Proves: a repository the coordinator has built in shows a "built in" tag beside its name and
+    // a Check again but no Remove; one put keeps its Remove.
+    // Catches: a Remove offered for a repository the coordinator refuses to remove.
+    let mut ui = Ui::start();
+    ui.reply(&m("Services/List"), json!({}));
+    let mut reply = repositories_reply();
+    reply["repositories"][1]["builtin"] = json!(true);
+    ui.reply(&m("Repositories/List"), reply);
+    let out = ui.run(&page_driver(
+        "packages",
+        "{}",
+        "[]",
+        r#"return [rows(tree).slice(1, 3), named(tree, "remove-repository").length];"#,
+    ));
+    assert_eq!(
+        out["out"],
+        json!([
+            [
+                [
+                    "acme",
+                    "https://acme.example.com/apt",
+                    "Linux x86-64, Linux arm64",
+                    "used by 1 package",
+                    "Check again Remove"
+                ],
+                [
+                    "komira built in",
+                    "https://packages.example.com",
+                    "Linux x86-64, Linux arm64, macOS arm64",
+                    "used by 2 packages",
+                    "Check again"
+                ]
+            ],
+            1
+        ])
+    );
+}
+
+/// What a check of `https://origin.example.com` answers: Linux and macOS, two channels, one
+/// macOS package kept in another directory, the key `user id` and its two fingerprints.
+fn discovery(pinned: bool) -> Value {
+    json!({"discovery": {
+        "name": "origin", "description": "an origin's packages",
+        "channels": ["testing", "stable"],
+        "platforms": ["linux-x86_64", "linux-arm64", "macos-arm64"],
+        "macosPackages": ["hello"],
+        "fingerprints": [
+            "CB09CF205649494A92DFC22C70D1F2A25906CB22",
+            "F767235D83B0410CFAF4779E8738AD1BE061EEDD"
+        ],
+        "userIds": ["origin packages <packages@example.com>"],
+        "descriptorSha256": "ab".repeat(32),
+        "keyringSha256": "cd".repeat(32),
+        "pinned": pinned
+    }})
+}
+
+#[test]
+fn checking_a_repository_shows_what_it_serves_and_adding_confirms_exactly_that() {
+    // Proves: Check repository sends Repositories.Discover with the trimmed URL and access, shows
+    // the platforms in words, the channels, the macOS packages, the key's user id and its
+    // fingerprints in groups of four with the line that says to compare them, and fills the name
+    // the repository suggests; Add repository then sends Repositories.Add with that name, the URL
+    // and access that were checked, the descriptor digest and the fingerprints shown, and a fixed
+    // reason, and the page draws again.
+    // Catches: a fingerprint typed or altered on the way, an Add that does not carry what was
+    // confirmed, or a field the form should not ask for.
     let mut ui = Ui::start();
     replies(&mut ui);
-    ui.reply(&m("Repositories/Put"), json!({}));
+    ui.reply(&m("Repositories/Discover"), discovery(false));
+    ui.reply(&m("Repositories/Add"), json!({}));
     let out = ui.run(&page_driver(
         "packages",
         "{}",
@@ -545,74 +618,117 @@ fn adding_a_repository_reads_the_fingerprints_from_the_key_file_and_puts_it() {
         &format!(
             r#"{HELPERS}
 await click(tree, "add-repository");
-const form = last();
-type(form, "repository-name", "spare");
-type(form, "repository-uri", " https://spare.example.com/apt ");
-type(form, "repository-suites", "testing, stable");
-type(form, "repository-components", "main contrib");
-chooseKey(form, file({}));
-await click(form, "put-repository");
-return null;
-"#,
-            js_bytes(&key)
+const before = nodes(last()).filter((n) => n.tag === "input" || n.tag === "select").map((n) => n.attrs["name"]);
+type(last(), "repository-uri", " https://origin.example.com ");
+await click(last(), "check-repository");
+const found = text(last());
+const name = named(last(), "repository-name")[0].attrs.value;
+await click(last(), "add-repository-confirm");
+return {{ before, found, name }};
+"#
         ),
     ));
     assert_eq!(
-        bodies_of(&ui, "Repositories/Put"),
+        out["out"]["before"],
+        json!(["repository-name", "repository-uri", "repository-access"])
+    );
+    assert_eq!(out["out"]["name"], "origin");
+    let found = out["out"]["found"].as_str().expect("text");
+    for piece in [
+        "an origin's packages",
+        "Platforms: Linux x86-64, Linux arm64, macOS arm64.",
+        "Channels: testing, stable.",
+        "hello",
+        "Key: origin packages <packages@example.com>",
+        "CB09 CF20 5649 494A 92DF C22C 70D1 F2A2 5906 CB22",
+        "F767 235D 83B0 410C FAF4 779E 8738 AD1B E061 EEDD",
+        "Compare this fingerprint with the one the repository's owner publishes.",
+    ] {
+        assert!(found.contains(piece), "{piece:?} not in {found}");
+    }
+    assert!(!found.contains("pinned"));
+    assert_eq!(
+        bodies_of(&ui, "Repositories/Discover"),
+        [json!({"baseUri": "https://origin.example.com", "access": "public"})]
+    );
+    assert_eq!(
+        bodies_of(&ui, "Repositories/Add"),
         [json!({
-            "repository": {
-                "name": "spare", "kind": "apt", "uri": "https://spare.example.com/apt",
-                "suites": ["testing", "stable"], "components": ["main", "contrib"],
-                "fingerprints": [fingerprint_of(7)], "keyring": base64(&key), "access": "public"
-            },
+            "name": "origin", "baseUri": "https://origin.example.com", "access": "public",
+            "descriptorSha256": "ab".repeat(32),
+            "fingerprints": [
+                "CB09CF205649494A92DFC22C70D1F2A25906CB22",
+                "F767235D83B0410CFAF4779E8738AD1BE061EEDD"
+            ],
             "reason": "set in the console"
         })]
     );
-    assert_eq!(out["seen"]["reports"], json!(["Saved repository spare."]));
+    assert_eq!(out["seen"]["reports"], json!(["Added repository origin."]));
     assert_eq!(out["seen"]["refreshes"], json!(1));
 }
 
 #[test]
-fn a_repository_form_that_breaks_a_rule_sends_nothing_and_says_why() {
-    // Proves: a bad name, a URL that is not https, no suite, a private repository without its
-    // credential file, no key file, a key that is armored text, one that is not a keyring, one
-    // that is too big and one that cannot be read each report a sentence and send no Put.
-    // Catches: a Put the coordinator would refuse, or a key file sent that was never read.
+fn a_pinned_key_says_so_instead_of_asking_to_compare() {
+    // Proves: a key the coordinator says is pinned shows "This is komira's pinned key." and not the
+    // line that asks the operator to compare it.
+    // Catches: a pinned key presented as one to verify by hand, or the reverse.
     let mut ui = Ui::start();
     replies(&mut ui);
+    ui.reply(&m("Repositories/Discover"), discovery(true));
     let out = ui.run(&page_driver(
         "packages",
         "{}",
         "[]",
         &format!(
             r#"{HELPERS}
-const say = async () => {{ await click(last(), "put-repository"); return seen.reports[seen.reports.length - 1]; }};
+await click(tree, "add-repository");
+type(last(), "repository-uri", "https://packages.komira.ai");
+await click(last(), "check-repository");
+return text(last());
+"#
+        ),
+    ));
+    let found = out["out"].as_str().expect("text");
+    assert!(found.contains("This is komira's pinned key."), "{found}");
+    assert!(!found.contains("Compare this fingerprint"), "{found}");
+}
+
+#[test]
+fn a_repository_form_that_breaks_a_rule_sends_nothing_and_says_why() {
+    // Proves: a URL that is not https or ends in `/`, and a private repository without its
+    // credential file, each report a sentence and send no Discover; Add is not offered before a
+    // check; after one, a changed URL is refused "check it again" and a bad name is refused, and
+    // neither sends an Add.
+    // Catches: a call the coordinator would refuse, or an Add of an address other than the one
+    // whose key was shown.
+    let mut ui = Ui::start();
+    replies(&mut ui);
+    ui.reply(&m("Repositories/Discover"), discovery(false));
+    let out = ui.run(&page_driver(
+        "packages",
+        "{}",
+        "[]",
+        &format!(
+            r#"{HELPERS}
+const say = async (name) => {{ await click(last(), name); return seen.reports[seen.reports.length - 1]; }};
 const out = [];
 await click(tree, "add-repository");
-out.push(await say());
-type(last(), "repository-name", "spare");
-out.push(await say());
-type(last(), "repository-uri", "http://spare.example.com");
-out.push(await say());
-type(last(), "repository-uri", "https://spare.example.com");
-out.push(await say());
-type(last(), "repository-suites", "testing");
-out.push(await say());
+out.push(count(last(), "add-repository-confirm"));
+out.push(await say("check-repository"));
+type(last(), "repository-uri", "http://origin.example.com");
+out.push(await say("check-repository"));
+type(last(), "repository-uri", "https://origin.example.com/");
+out.push(await say("check-repository"));
+type(last(), "repository-uri", "https://origin.example.com");
 choose(last(), "repository-access", "hosts");
-const priv = last();
-out.push(await say());
+out.push(await say("check-repository"));
 choose(last(), "repository-access", "public");
-out.push(await say());
-chooseKey(last(), file([45, 45, 45, 45, 45]));
-out.push(await say());
-chooseKey(last(), file([1, 2, 3]));
-out.push(await say());
-chooseKey(last(), file([], 70000));
-out.push(await say());
-chooseKey(last(), file([], 0));
-out.push(await say());
-chooseKey(last(), {{ name: "k", arrayBuffer: async () => new ArrayBuffer(70000) }});
-out.push(await say());
+await click(last(), "check-repository");
+type(last(), "repository-name", "Bad Name");
+out.push(await say("add-repository-confirm"));
+type(last(), "repository-name", "origin");
+type(last(), "repository-uri", "https://other.example.com");
+out.push(await say("add-repository-confirm"));
 return out;
 "#
         ),
@@ -620,33 +736,29 @@ return out;
     assert_eq!(
         out["out"],
         json!([
-            "Name the repository: 1 to 32 lower case letters, digits or -.",
-            "The URL is an https address with a host.",
-            "The URL is an https address with a host.",
-            "Name at least one suite and one component.",
-            "Choose the signing key file.",
+            0,
+            "The URL is an https address with a host and no trailing /.",
+            "The URL is an https address with a host and no trailing /.",
+            "The URL is an https address with a host and no trailing /.",
             "A private repository needs the credential file's path on the coordinator.",
-            "Choose the signing key file.",
-            "The signing key is armored text; export it in binary form (gpg --export, without --armor).",
-            "The signing key file is not a binary OpenPGP keyring.",
-            "The signing key file is at most 65536 bytes; this one is 70000.",
-            "The signing key file is empty.",
-            "The signing key file is at most 65536 bytes; this one is 70000."
+            "Name the repository: 1 to 32 lower case letters, digits or -.",
+            "The address changed since it was checked: check it again."
         ])
     );
-    assert_eq!(bodies_of(&ui, "Repositories/Put"), Vec::<Value>::new());
+    assert_eq!(bodies_of(&ui, "Repositories/Discover").len(), 1);
+    assert_eq!(bodies_of(&ui, "Repositories/Add"), Vec::<Value>::new());
 }
 
 #[test]
 fn a_private_repository_sends_its_credential_file_and_a_public_one_sends_none() {
-    // Proves: access `hosts` shows the credential file field and sends its path; changing it back
-    // to public drops the path from the request.
+    // Proves: access `hosts` shows the credential file field and sends its trimmed path in the
+    // check and in the add; changing it back to public drops the field and the path.
     // Catches: a credential path sent with a public repository, which the coordinator refuses.
-    let key = keyring(9);
     let mut ui = Ui::start();
     replies(&mut ui);
-    ui.reply(&m("Repositories/Put"), json!({}));
-    ui.reply(&m("Repositories/Put"), json!({}));
+    ui.reply(&m("Repositories/Discover"), discovery(false));
+    ui.reply(&m("Repositories/Add"), json!({}));
+    ui.reply(&m("Repositories/Discover"), discovery(false));
     let out = ui.run(&page_driver(
         "packages",
         "{}",
@@ -654,103 +766,196 @@ fn a_private_repository_sends_its_credential_file_and_a_public_one_sends_none() 
         &format!(
             r#"{HELPERS}
 await click(tree, "add-repository");
-type(last(), "repository-name", "priv");
 type(last(), "repository-uri", "https://priv.example.com");
-type(last(), "repository-suites", "web");
-chooseKey(last(), file({}));
 choose(last(), "repository-access", "hosts");
 const shown = last();
 type(shown, "repository-credential", " /etc/hostkeeper/priv.cred ");
-await click(shown, "put-repository");
-choose(shown, "repository-access", "public");
+await click(shown, "check-repository");
+await click(last(), "add-repository-confirm");
+choose(last(), "repository-access", "public");
 const credentials = nodes(last()).filter((n) => n.attrs["name"] === "repository-credential").length;
-await click(last(), "put-repository");
+await click(last(), "check-repository");
 return credentials;
-"#,
-            js_bytes(&key)
+"#
         ),
     ));
     assert_eq!(out["out"], 0);
-    let puts = bodies_of(&ui, "Repositories/Put");
-    assert_eq!(puts.len(), 2);
-    assert_eq!(puts[0]["repository"]["access"], "hosts");
+    let discovers = bodies_of(&ui, "Repositories/Discover");
     assert_eq!(
-        puts[0]["repository"]["credentialFile"],
-        "/etc/hostkeeper/priv.cred"
+        discovers[0],
+        json!({"baseUri": "https://priv.example.com", "access": "hosts", "credentialFile": "/etc/hostkeeper/priv.cred"})
     );
-    assert_eq!(puts[1]["repository"]["access"], "public");
-    assert!(puts[1]["repository"].get("credentialFile").is_none());
-    assert_eq!(out["seen"]["refreshes"], json!(2));
+    assert_eq!(
+        discovers[1],
+        json!({"baseUri": "https://priv.example.com", "access": "public"})
+    );
+    let adds = bodies_of(&ui, "Repositories/Add");
+    assert_eq!(adds.len(), 1);
+    assert_eq!(adds[0]["access"], "hosts");
+    assert_eq!(adds[0]["credentialFile"], "/etc/hostkeeper/priv.cred");
+    assert_eq!(out["seen"]["refreshes"], json!(1));
 }
 
 #[test]
-fn changing_a_repository_keeps_the_key_it_holds_unless_a_new_one_is_chosen() {
-    // Proves: Edit loads the repository's URL, suites, components and access; Save with no key
-    // file reads the repository (Repositories.Get) and puts it again with the keyring and
-    // fingerprints held; Save with a key file puts the new key and reads nothing.
-    // Catches: a change that drops or silently rotates the signing key.
-    let held = keyring(3);
-    let fresh = keyring(5);
+fn the_refusals_of_a_check_and_an_add_are_shown_in_words() {
+    // Proves: `discovery_failed`, `descriptor_invalid` and `credential_unusable` of a check, and
+    // `descriptor_changed` and `builtin` of an add, each report their own sentence, and a refused
+    // check leaves no result to add.
+    // Catches: a token shown raw, or an Add offered after a check that failed.
     let mut ui = Ui::start();
     replies(&mut ui);
-    ui.reply(
-        &m("Repositories/Get"),
-        json!({"repository": {"repository": {
-            "name": "komira", "kind": "apt", "uri": "https://packages.example.com/apt",
-            "suites": ["testing", "stable"], "components": ["main", "extra"],
-            "fingerprints": [fingerprint_of(3)], "keyring": base64(&held)}}}),
+    ui.refuse(
+        &m("Repositories/Discover"),
+        503,
+        "UNAVAILABLE",
+        "discovery_failed",
     );
-    ui.reply(&m("Repositories/Put"), json!({}));
-    ui.reply(&m("Repositories/Put"), json!({}));
+    ui.refuse(
+        &m("Repositories/Discover"),
+        400,
+        "INVALID_ARGUMENT",
+        "descriptor_invalid",
+    );
+    ui.refuse(
+        &m("Repositories/Discover"),
+        412,
+        "FAILED_PRECONDITION",
+        "credential_unusable",
+    );
+    ui.reply(&m("Repositories/Discover"), discovery(false));
+    ui.refuse(
+        &m("Repositories/Add"),
+        412,
+        "FAILED_PRECONDITION",
+        "descriptor_changed",
+    );
+    ui.refuse(
+        &m("Repositories/Add"),
+        412,
+        "FAILED_PRECONDITION",
+        "builtin",
+    );
+    ui.refuse(
+        &m("Repositories/Add"),
+        404,
+        "NOT_FOUND",
+        "unknown_repository",
+    );
     let out = ui.run(&page_driver(
         "packages",
         "{}",
         "[]",
         &format!(
             r#"{HELPERS}
-await click(tree, "edit-repository", 1);
-const loaded = last();
-const form = [named(loaded, "repository-uri")[0].attrs.value, named(loaded, "repository-suites")[0].attrs.value, named(loaded, "repository-components")[0].attrs.value, chosen(loaded, "repository-access")];
-type(loaded, "repository-uri", "https://mirror.example.com/apt");
-await click(loaded, "put-repository");
-chooseKey(loaded, file({}));
-await click(loaded, "put-repository");
-return [...form, text(loaded).includes("Signing keys held: BBBBBBBB33334444.")];
-"#,
-            js_bytes(&fresh)
+const say = async (name) => {{ await click(last(), name); return seen.reports[seen.reports.length - 1]; }};
+const out = [];
+await click(tree, "add-repository");
+type(last(), "repository-uri", "https://origin.example.com");
+out.push(await say("check-repository"));
+out.push(await say("check-repository"));
+out.push(await say("check-repository"));
+out.push(count(last(), "add-repository-confirm"));
+out.push(await say("check-repository"));
+out.push(await say("add-repository-confirm"));
+out.push(await say("add-repository-confirm"));
+out.push(await say("add-repository-confirm"));
+return out;
+"#
+        ),
+    ));
+    let said = out["out"].as_array().expect("sentences");
+    assert!(
+        said[0]
+            .as_str()
+            .expect("text")
+            .starts_with("The coordinator could not read a repository at that address")
+    );
+    assert!(
+        said[1]
+            .as_str()
+            .expect("text")
+            .starts_with("That address does not serve a valid repository descriptor")
+    );
+    assert!(
+        said[2]
+            .as_str()
+            .expect("text")
+            .starts_with("The coordinator cannot use that credential file")
+    );
+    assert_eq!(said[3], 0);
+    assert!(
+        said[5]
+            .as_str()
+            .expect("text")
+            .starts_with("What the repository serves changed since it was checked")
+    );
+    assert!(
+        said[6]
+            .as_str()
+            .expect("text")
+            .starts_with("komira is the organisation's built-in repository")
+    );
+    assert!(
+        said[7]
+            .as_str()
+            .expect("text")
+            .contains("unknown_repository")
+    );
+    assert_eq!(out["seen"]["refreshes"], json!(0));
+}
+
+#[test]
+fn check_again_opens_the_form_for_a_repository_with_its_name_locked() {
+    // Proves: Check again on a row opens the form with that repository's URL (its base URL, or an
+    // apt root without its `/apt`) and access, the name locked (no name field), and its Add sends
+    // that repository's name; the doc link of the form leads to the structure section of the
+    // repository documentation.
+    // Catches: a re-check that can rename the repository, or a form that does not say how a
+    // repository is structured.
+    let mut ui = Ui::start();
+    replies(&mut ui);
+    ui.reply(&m("Repositories/Discover"), discovery(false));
+    ui.reply(&m("Repositories/Add"), json!({}));
+    let out = ui.run(&page_driver(
+        "packages",
+        "{}",
+        "[]",
+        &format!(
+            r#"{HELPERS}
+await click(tree, "check-again-repository", 0);
+const acme = last();
+const first = [named(acme, "repository-uri")[0].attrs.value, chosen(acme, "repository-access"), named(acme, "repository-credential")[0].attrs.value];
+await click(tree, "check-again-repository", 1);
+const komira = last();
+const second = [named(komira, "repository-uri")[0].attrs.value, count(komira, "repository-name"), text(komira).includes("Check repository komira again")];
+const link = named(komira, "repository-structure-help")[0];
+await click(komira, "check-repository");
+await click(last(), "add-repository-confirm");
+return {{ first, second, href: link.attrs.href, text: link.children.map((c) => c.text).join("") }};
+"#
         ),
     ));
     assert_eq!(
-        out["out"],
+        out["out"]["first"],
         json!([
-            "https://packages.example.com/apt",
-            "testing, stable",
-            "main, extra",
-            "public",
-            true
+            "https://acme.example.com",
+            "hosts",
+            "/etc/hostkeeper/acme.cred"
         ])
     );
     assert_eq!(
-        bodies_of(&ui, "Repositories/Get"),
-        [json!({"name": "komira"})]
+        out["out"]["second"],
+        json!(["https://packages.example.com", 0, true])
     );
-    let puts = bodies_of(&ui, "Repositories/Put");
-    assert_eq!(puts.len(), 2);
     assert_eq!(
-        puts[0]["repository"]["uri"],
-        "https://mirror.example.com/apt"
+        out["out"]["href"],
+        "https://github.com/komira-ai/hostkeeper/blob/main/docs/deploy/package-repositories.md#structure-of-a-repository"
     );
-    assert_eq!(puts[0]["repository"]["keyring"], base64(&held));
-    assert_eq!(
-        puts[0]["repository"]["fingerprints"],
-        json!([fingerprint_of(3)])
-    );
-    assert_eq!(puts[1]["repository"]["keyring"], base64(&fresh));
-    assert_eq!(
-        puts[1]["repository"]["fingerprints"],
-        json!([fingerprint_of(5)])
-    );
-    assert_eq!(puts[1]["repository"]["name"], "komira");
+    assert_eq!(out["out"]["text"], "How do I structure a repository?");
+    let adds = bodies_of(&ui, "Repositories/Add");
+    assert_eq!(adds.len(), 1);
+    assert_eq!(adds[0]["name"], "komira");
+    assert_eq!(adds[0]["baseUri"], "https://packages.example.com");
 }
 
 #[test]

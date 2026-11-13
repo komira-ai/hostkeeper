@@ -22,11 +22,20 @@ const PROPERTIES = new Set(["checked", "disabled", "selected", "value"]);
 // The one place a link may lead: the operator documentation as GitHub renders it. A link is a
 // navigation the operator chooses, not a load; any other address is refused before mounting.
 const DOCS = "https://github.com/komira-ai/hostkeeper/blob/main/docs/operations/";
+// The deployment documentation, the second place a link may lead: how a repository is structured.
+const DEPLOY_DOCS = "https://github.com/komira-ai/hostkeeper/blob/main/docs/deploy/";
 
 // A link that opens `page` (a file of docs/operations) at `anchor` in a new tab, with `text`.
 export function docLink(name, text, page, anchor) {
   return h("a", {
     name, href: `${DOCS}${page}#${anchor}`, target: "_blank", rel: "noopener noreferrer",
+  }, text);
+}
+
+// A link that opens `page` (a file of docs/deploy) at `anchor` in a new tab, with `text`.
+export function deployDocLink(name, text, page, anchor) {
+  return h("a", {
+    name, href: `${DEPLOY_DOCS}${page}#${anchor}`, target: "_blank", rel: "noopener noreferrer",
   }, text);
 }
 
@@ -75,7 +84,7 @@ function build(doc, node) {
     if (PROPERTIES.has(key)) {
       element[key] = value;
     } else if (ATTRIBUTES.has(key)) {
-      if (key === "href" && !String(value).startsWith(DOCS)) {
+      if (key === "href" && !String(value).startsWith(DOCS) && !String(value).startsWith(DEPLOY_DOCS)) {
         throw new Error("no link outside the documentation");
       }
       element.setAttribute(key, String(value));
