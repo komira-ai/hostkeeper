@@ -1,0 +1,327 @@
+/* The Enrollment page: one compact card per request. Colours come from the tokens of app.css. */
+
+.enroll-card {
+  margin: 12px 0;
+  padding: 14px 16px;
+}
+
+.enroll-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.enroll-title h3 {
+  margin: 0 0 2px;
+  font-size: 1rem;
+}
+
+.enroll-match {
+  margin: 0;
+  color: var(--ink-2);
+}
+
+.enroll-match.ambiguous {
+  color: var(--warn);
+}
+
+.enroll-flags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.enroll-card .note.small {
+  margin: 6px 0 0;
+  font-size: 0.85rem;
+}
+
+.chip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: var(--surface-2);
+  color: var(--muted);
+}
+
+.chip.bad {
+  background: var(--bad-bg);
+  color: var(--bad);
+}
+
+/* A flag: one quiet line, not an alert box. */
+.flag {
+  margin: 8px 0 0;
+  padding: 0 0 0 10px;
+  border-left: 2px solid var(--rule-strong);
+  background: none;
+  color: var(--ink-2);
+  font-size: 0.85rem;
+}
+
+.flag.bad {
+  border-left-color: var(--bad);
+}
+
+.flag.warn {
+  border-left-color: var(--warn);
+}
+
+/* The info mark: its text shows on hover or focus. */
+.i-hint {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  cursor: help;
+}
+
+.i-hint .i-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 50%;
+  color: var(--muted);
+  font: italic 700 0.7rem/1 Georgia, serif;
+}
+
+.i-hint:hover .i-dot,
+.i-hint:focus .i-dot {
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+.i-hint .i-text {
+  display: none;
+  position: absolute;
+  top: 24px;
+  right: 0;
+  z-index: 5;
+  width: min(320px, 80vw);
+  padding: 8px 10px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: 0 6px 20px rgb(13 24 34 / 0.25);
+  color: var(--ink);
+  font-size: 0.8rem;
+  font-weight: 400;
+  line-height: 1.4;
+  text-align: left;
+}
+
+.i-hint:hover .i-text,
+.i-hint:focus .i-text {
+  display: block;
+}
+
+/* The key facts: one small table. */
+.enroll-card .facts {
+  margin: 10px 0;
+}
+
+.enroll-card .facts table {
+  width: 100%;
+  font-size: 0.85rem;
+}
+
+.enroll-card .facts thead {
+  display: none;
+}
+
+.enroll-card .facts th {
+  width: 9.5em;
+  padding: 3px 12px 3px 0;
+  color: var(--muted);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.enroll-card .facts td {
+  padding: 3px 0;
+  overflow-wrap: anywhere;
+}
+
+.enroll-card .mono {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+}
+
+.enroll-card .facts tbody tr {
+  border-top: 1px solid var(--rule);
+}
+
+.enroll-card .facts tbody tr:first-child {
+  border-top: 0;
+}
+
+/* The hard-to-copy claims beside the record: neutral when unknown, a mark when different. */
+.enroll-card .facts tr.warning {
+  background: none;
+  color: inherit;
+}
+
+.verdict {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.verdict.same {
+  color: var(--ok);
+}
+
+.verdict.differs {
+  color: var(--bad);
+}
+
+/* The approval controls: one row that wraps. */
+.approve-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px 12px;
+  align-items: end;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--rule);
+}
+
+.approve-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.approve-row label.check {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-2);
+  font-size: 0.85rem;
+}
+
+.approve-row select,
+.approve-row input[type="text"] {
+  width: 100%;
+  min-width: 0;
+}
+
+.approve-row .wide {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.approve-row .replace {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.approve-row .decide {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.approve-row .decide button {
+  min-width: 96px;
+}
+
+@media (max-width: 640px) {
+  .enroll-card {
+    padding: 12px;
+  }
+
+  .approve-row {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .approve-row .decide button {
+    flex: 1;
+  }
+
+  .enroll-card .facts th {
+    width: 7em;
+  }
+}
+
+.enroll-card .facts tr.warning,
+.enroll-card .facts tr.warning > * {
+  border-left: 0;
+  border-radius: 0;
+  background: none;
+  color: inherit;
+}
+
+.enroll-card .facts th,
+.enroll-card .facts td {
+  padding-left: 8px;
+}
+
+.enroll-card .facts thead th {
+  background: none;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.enroll-card .facts table:has(thead th:nth-child(3)) thead {
+  display: table-header-group;
+}
+
+.verdict {
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .verdict {
+    white-space: normal;
+  }
+}
+
+@media (max-width: 640px) {
+  .enroll-head {
+    flex-direction: column;
+  }
+
+  .enroll-flags {
+    flex-wrap: wrap;
+  }
+
+  .enroll-card .facts table:has(thead th:nth-child(3)) {
+    font-size: 0.78rem;
+  }
+
+  .enroll-card .facts table:has(thead th:nth-child(3)) td,
+  .enroll-card .facts table:has(thead th:nth-child(3)) th {
+    padding: 3px 4px;
+    overflow-wrap: anywhere;
+  }
+}
+
+.enroll-card {
+  position: relative;
+}
+
+@media (max-width: 640px) {
+  .i-hint {
+    position: static;
+  }
+
+  .i-hint .i-text {
+    top: auto;
+    right: 12px;
+    left: 12px;
+    width: auto;
+    margin-top: 24px;
+  }
+}
