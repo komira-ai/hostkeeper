@@ -77,7 +77,8 @@ Sled { id sled-<n>, rack, u (lowest U, 1 is the bottom), height_u 1..60, slots 1
 - **Drag and drop in Edit layout**: drag a sled up or down its rack or to another rack (everything on it moves; only where it fits, the
   target outline shows, a refusal otherwise); drag an item between slots or from the Unplaced tray onto an empty slot. Keyboard: select a
   sled or item, arrow keys move it, Enter drops; a Move... dialog does the same. Each move is one `PutSled` or `Place` call; the screen
-  redraws from the reply of `Get`, so the API is the source of truth.
+  redraws from the reply of `Get`, so the API is the source of truth. A one-slot sled with an item is dragged by its faceplate (the sled
+  moves); an item of a tray is dragged by its box; a sled drops where its lowest fitting U holds the free U under the pointer.
 - **Row view**: a sled is drawn across its U range; a one-slot sled with an item is exactly today's server or switch faceplate (no visible
   tray); a sled of more than one slot is a tray with N bays, each a small Mac Studio / NUC style box for its item (empty: a gap), clickable to the host
   page, same state colours.
