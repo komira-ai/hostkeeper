@@ -6,6 +6,9 @@
 //
 // An installer's name is shown as it is, whatever it is: the page knows no installer and gives
 // none a column or a word of its own, so a kind no daemon lists yet reads as every other.
+//
+// The page list has no entry for this page any more: its route opens the package page
+// (`pages/package.js`), which builds on the parts this module exports.
 
 import { h, action, allPages, describeError, errorView, field, fmtUnix, list, table, trimmed } from "../view.js";
 
@@ -92,12 +95,44 @@ export function pickFor(host, service, targets) {
   return { installer: entries[at].installer, position: at + 1 };
 }
 
+// The words for the reasons no entry is picked, as the coordinator spells them.
+const PICK_REASONS = {
+  no_target: "No build for this platform",
+  unheard: "Installer not reported",
+  installer_dropped: "Installer missing",
+  no_build_for_host: "No build for this host",
+};
+
 // What the page says of a pick.
 export function pickLabel(pick) {
   if (typeof pick.unknown === "string") {
-    return `unknown: ${pick.unknown}`;
+    return `Unknown (${pick.unknown})`;
   }
-  return typeof pick.reason === "string" ? `none: ${pick.reason}` : `${pick.installer} (entry ${pick.position})`;
+  if (typeof pick.reason === "string") {
+    return Object.prototype.hasOwnProperty.call(PICK_REASONS, pick.reason) ? PICK_REASONS[pick.reason] : pick.reason;
+  }
+  return `${pick.installer} (entry ${pick.position})`;
+}
+
+// The installers the host's daemon lists: those it reported when it announced `target-v1`, the
+// archive alone when it did not; empty when it announced the feature and reported none.
+export function installersListed(host) {
+  const beat = (host && host.heartbeat) || {};
+  return list(beat, "features").includes(TARGET_FEATURE) ? list(host, "installers") : [ARCHIVE];
+}
+
+// What the host runs `service` with: the installer its heartbeat names (the archive when it
+// names none, or its daemon did not announce `target-v1`); "Not installed" when the heartbeat
+// does not have the service running.
+export function runsWith(host, service) {
+  const beat = (host && host.heartbeat) || {};
+  const word = list(beat, "services").find((one) => one["name"] === service);
+  if (word === undefined || word["health"] === "HEALTH_ABSENT") {
+    return "Not installed";
+  }
+  const named = list(beat, "features").includes(TARGET_FEATURE) && typeof word.installer === "string"
+    && word.installer !== "";
+  return named ? word.installer : ARCHIVE;
 }
 
 // The hosts of Hosts.List that the coordinator says something of `service` for.
@@ -106,17 +141,17 @@ function hostsOf(hosts, service) {
 }
 
 // An entry's locations, in preference order, each as `store:locator`.
-function locations(entry) {
+export function locations(entry) {
   const all = list(entry, "locations");
   return all.length === 0 ? "-" : all.map((at) => `${at["store"] || "-"}:${at["locator"] || "-"}`).join(", ");
 }
 
-function digestCell(digest) {
+export function digestCell(digest) {
   return typeof digest === "string" && digest !== "" ? h("code", {}, digest) : "-";
 }
 
 // One platform's list: a row per entry, in the order set.
-function platformSection(key, targetList) {
+export function platformSection(key, targetList) {
   const entries = list(targetList, "entries");
   const rows = entries.map((entry, i) => {
     const manifest = entry.manifest || {};
@@ -140,7 +175,7 @@ function platformSection(key, targetList) {
 
 // Each host of the service with its pick: the counts of every pick first, then a row per host,
 // at most MAX_HOST_ROWS of them.
-function picksSection(ctx, service, targets, hosts) {
+export function picksSection(ctx, service, targets, hosts) {
   const mine = hostsOf(hosts, service);
   const picked = mine.map((host) => [host, pickFor(host, service, targets)]);
   const counts = new Map();
@@ -151,7 +186,6 @@ function picksSection(ctx, service, targets, hosts) {
   const shown = picked.slice(0, MAX_HOST_ROWS);
   const rows = shown.map(([host, pick]) => {
     const beat = host.heartbeat || {};
-    const word = list(beat, "services").find((one) => one["name"] === service);
     return h("tr", {},
       h("td", {},
         h("button", {
@@ -159,8 +193,8 @@ function picksSection(ctx, service, targets, hosts) {
           on: { click: () => ctx.navigate("host", { nodeId: host.nodeId }) },
         }, host.nodeId || "-")),
       h("td", {}, platformKey(beat.platform) || "-"),
-      h("td", {}, list(host, "installers").join(", ") || "-"),
-      h("td", {}, word && typeof word.installer === "string" ? word.installer : "-"),
+      h("td", {}, installersListed(host).join(", ") || "none reported"),
+      h("td", {}, runsWith(host, service)),
       h("td", {}, fmtUnix(host.lastHeartbeatUnix)),
       h("td", {}, pickLabel(pick)));
   });

@@ -13,11 +13,9 @@ import { changeView, signInView, wordsFor } from "./signin.js";
 import { h, describeError, errorView, mount } from "./view.js";
 import * as fleet from "./pages/fleet.js";
 import * as host from "./pages/host.js";
-import * as rollout from "./pages/rollout.js";
 import * as packages from "./pages/packages.js";
+import * as pkg from "./pages/package.js";
 import * as hostgroups from "./pages/hostgroups.js";
-import * as release from "./pages/release.js";
-import * as holds from "./pages/holds.js";
 import * as enrollment from "./pages/enrollment.js";
 import * as inventory from "./pages/inventory.js";
 import * as audit from "./pages/audit.js";
@@ -25,28 +23,46 @@ import * as users from "./pages/users.js";
 import * as tokens from "./pages/tokens.js";
 import * as mdm from "./pages/mdm.js";
 
+// The pages: name, title, module, and whether the page list shows a button for it. The package
+// page is reached from the Packages page, not from the list.
 const PAGES = [
-  ["fleet", "Fleet", fleet],
-  ["host", "Host", host],
-  ["rollout", "Rollout", rollout],
-  ["packages", "Packages", packages],
-  ["hostgroups", "Host groups", hostgroups],
-  ["release", "Release", release],
-  ["holds", "Holds", holds],
-  ["enrollment", "Enrollment", enrollment],
-  ["inventory", "Inventory", inventory],
-  ["audit", "Audit", audit],
-  ["users", "Users", users],
-  ["tokens", "API tokens", tokens],
-  ["mdm", "MDM setup", mdm],
+  ["fleet", "Fleet", fleet, true],
+  ["host", "Host", host, true],
+  ["packages", "Packages", packages, true],
+  ["package", "Package", pkg, false],
+  ["hostgroups", "Host groups", hostgroups, true],
+  ["enrollment", "Enrollment", enrollment, true],
+  ["inventory", "Inventory", inventory, true],
+  ["audit", "Audit", audit, true],
+  ["users", "Users", users, true],
+  ["tokens", "API tokens", tokens, true],
+  ["mdm", "MDM setup", mdm, true],
 ];
+
+// Where the routes of the pages that were removed lead now: the package the route names, else the
+// Packages page. A bookmark or a link in the docs to one of them keeps working.
+export function redirected(name, params) {
+  const service = params && typeof params.service === "string" ? params.service : "";
+  if ((name === "release" || name === "rollout") && service !== "") {
+    const to = { package: service };
+    if (typeof params.version === "string") {
+      to.version = params.version;
+    }
+    return ["package", to];
+  }
+  if (name === "release" || name === "rollout" || name === "holds") {
+    return ["packages", {}];
+  }
+  return [name, params || {}];
+}
 
 // Starts the app in `root`. `doc` is the document, `fetch` the browser's fetch, `confirm` a
 // yes-or-no question to the operator (the browser's confirm), `now` the time in unix seconds and
-// `download` the saving of a file the page offers (`{name, mime, text}` or `{name, mime, base64}`),
-// each injected so tests can fake them. Returns the frame's controls, which the browser does not
-// need.
-export function startApp({ doc, root, fetch, confirm, now, download }) {
+// `download` the saving of a file the page offers (`{name, mime, text}` or `{name, mime, base64}`)
+// and `every` (`(run, milliseconds)` to a function that stops it) the repeating of a call a page
+// asks for, each injected so tests can fake them; without `every` a page's repeat never runs.
+// Returns the frame's controls, which the browser does not need.
+export function startApp({ doc, root, fetch, confirm, now, download, every }) {
   // Why the session last ended on the coordinator's word, shown on the sign-in form it returns to.
   let notice = null;
   // A sign-in or a change of password is on its way: a second submit waits for it.
@@ -77,7 +93,7 @@ export function startApp({ doc, root, fetch, confirm, now, download }) {
       h("header", {},
         h("h1", {}, "hostkeeper"),
         h("nav", { "aria-label": "pages" },
-          PAGES.map(([name, title]) => h("button", {
+          PAGES.filter(([, , , listed]) => listed).map(([name, title]) => h("button", {
             type: "button",
             name: `page-${name}`,
             class: name === current.view ? "current" : "",
@@ -215,6 +231,22 @@ export function startApp({ doc, root, fetch, confirm, now, download }) {
       now: () => now(),
       download: (file) => download(file),
       navigate,
+      // Runs `run` every `seconds` while this rendering of the page is the latest; it stops itself
+      // on the first tick after the operator has left, signed out or the page was drawn again, and
+      // the returned function stops it at once.
+      every: (run, seconds) => {
+        if (typeof every !== "function") {
+          return () => {};
+        }
+        const stop = every(() => {
+          if (here() && mine === generation) {
+            run();
+          } else {
+            stop();
+          }
+        }, seconds * 1000);
+        return stop;
+      },
       refresh: () => {
         if (here()) {
           show();
@@ -254,8 +286,9 @@ export function startApp({ doc, root, fetch, confirm, now, download }) {
     }
   }
 
-  function navigate(name, params) {
-    current = { view: name, params: params || {} };
+  function navigate(asked, given) {
+    const [name, params] = redirected(asked, given);
+    current = { view: name, params };
     status = "";
     show();
   }

@@ -61,10 +61,12 @@ Sign out ends the session on the coordinator.
   the service with the entry it is picked by the coordinator's rule
   ([packages design](design/packages.md), section 3.3), worked out from `Hosts.List`: the entry of
   the installer it runs the service with, else the first entry whose installer its daemon lists;
-  or why none (`no_target`, `no_build_for_host`, `installer_dropped`, or `unheard` while the
-  coordinator has read no installer of a daemon that announced `target-v1`). A host whose platform
+  or why none, in words (`no_target` as "No build for this platform", `no_build_for_host` as "No build for this
+  host", `installer_dropped` as "Installer missing", `unheard` as "Installer not reported", while the
+  coordinator has read no installer of a daemon that announced `target-v1`); "Runs with" is the installer the host's
+  heartbeat names, the archive when it names none, and "Not installed" when the service is not running. A host whose platform
   `Hosts.List` does not name (one whose only word of the service is that it is a member) is
-  `unknown: platform not reported`: the coordinator, which knows it, may pick it an entry. Counts of each pick
+  "Unknown (platform not reported)": the coordinator, which knows it, may pick it an entry. Counts of each pick
   cover every host; the table shows the first 200. A refusal (`NOT_FOUND release_unknown` for a
   version never set with targets) is shown as the API says it.
 - **Packages** (`Packages` in the page list; `ui/pages/packages.js`). The registry of what the coordinator can deploy.

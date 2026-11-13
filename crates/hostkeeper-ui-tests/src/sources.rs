@@ -34,6 +34,7 @@ macro_rules! ui_files {
 ui_files![
     "index.html",
     "app.css",
+    "package.css",
     "calls.json",
     "api.js",
     "app.js",
@@ -53,6 +54,7 @@ ui_files![
     "pages/host.js",
     "pages/inventory.js",
     "pages/mdm.js",
+    "pages/package.js",
     "pages/packages.js",
     "pages/release.js",
     "pages/rollout.js",
