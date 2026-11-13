@@ -188,3 +188,4 @@ fleetdm.com
 =where.mini
 n.attrs.name
 y.name
+span.mini
