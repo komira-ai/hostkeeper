@@ -8,12 +8,14 @@
 // host, Audit.List of the host's entries, page by page, to mark a service whose last uninstall was
 // cancelled; on
 // a button, one of Hosts.Exclude, Hosts.Include, Hosts.Abort, Hosts.SetLabels, Services.Hold,
-// Services.Unhold and, after a confirm, Hosts.Retire. Retire is offered when Hosts.Get fails too,
+// Services.Unhold and, after a confirm, Hosts.Retire. HostGroups.List (every page) gives the groups
+// the "Host group" dropdown offers, and HostGroups.Move, after a confirm, moves the host into the
+// group chosen, or into none when the blank is chosen; the built-in `all` is never a choice. Retire is offered when Hosts.Get fails too,
 // for an enrolled host the coordinator has not heard from since it started (a dead one).
 
 import {
-  h, action, checkbox, describeError, enumLabel, errorView, field, fmtUnix, list, reasonProblem, scopeLabel, table,
-  trimmed,
+  h, action, allPages, checkbox, describeError, enumLabel, errorView, field, fmtUnix, list, reasonProblem,
+  scopeLabel, select, table, trimmed,
 } from "../view.js";
 
 // A label key or value, as SetLabels takes it: 1 to 32 bytes of `[a-z0-9-]`.
@@ -45,6 +47,46 @@ export function parseLabels(text) {
     return { problem: `A host has at most ${MAX_LABELS} labels, not ${count}.` };
   }
   return { labels };
+}
+
+// The built-in group every host is in: a host is moved into no group instead of into it.
+const ALL = "all";
+
+// The reason sent with every move: the form asks for none.
+const DEFAULT_MOVE_REASON = "moved in the console";
+
+// The Host group form: a dropdown of the groups held but `all`, the host's own selected (the
+// blank for a host in no group, or only in `all`), and Move. `groups` is the
+// names the coordinator holds, or null with `groupsFailure` when it could not be listed.
+function hostGroupSection(ctx, nodeId, host, groups, groupsFailure) {
+  const current = typeof host.hostGroup === "string" && host.hostGroup !== ALL ? host.hostGroup : "";
+  const names = (groups || []).filter((name) => name !== ALL);
+  if (current !== "" && !names.includes(current)) {
+    names.push(current);
+  }
+  const form = { hostGroup: current };
+  return h("fieldset", {},
+    h("legend", {}, "Host group"),
+    h("p", { class: "note" },
+      "Every host is in all. A host may be in one host group besides, which adds its packages to those of all; the blank is no group."),
+    groupsFailure === null ? null : h("p", { class: "error", role: "alert" }, `Host groups: ${describeError(groupsFailure)}`),
+    select("Host group", "host-group", form, "hostGroup",
+      [["", "No group (all alone)"], ...names.map((name) => [name, name])]),
+    action(ctx, "Move", "move-host", async () => {
+      const target = trimmed(form.hostGroup);
+      if (target === current) {
+        return current === "" ? `${nodeId} is in no host group.` : `${nodeId} is already in host group ${current}.`;
+      }
+      const question = target === ""
+        ? `Remove ${nodeId} from host group ${current}? It then runs the packages of all alone, and what ${current} lists and all does not is uninstalled.`
+        : `Move ${nodeId} to host group ${target}? It is ordered that group's packages at its next heartbeat.`;
+      if (!ctx.confirm(question)) {
+        return "Not moved.";
+      }
+      const reply = await ctx.api.hostGroups.move({ nodeId, hostGroup: target, reason: DEFAULT_MOVE_REASON });
+      ctx.refresh();
+      return `Moved ${nodeId} from ${reply.fromHostGroup || "no group"} to ${target === "" ? "no group" : target}.`;
+    }));
 }
 
 // Less than this many seconds of a certificate left is a warning: 48 hours.
@@ -403,6 +445,14 @@ export async function render(ctx) {
       errorView(`Host ${nodeId}`, failure).children, assignedSection(listing, nodeId, ends),
       retireSection(ctx, nodeId));
   }
+  let groups = null;
+  let groupsFailure = null;
+  try {
+    groups = (await allPages((token) => ctx.api.hostGroups.list(token === "" ? {} : { pageToken: token }), "hostGroups"))
+      .map((one) => ((one || {}).group || {}).name);
+  } catch (error) {
+    groupsFailure = error;
+  }
   const now = ctx.now();
   const agent = host.heartbeat && host.heartbeat.agent;
   const labelsForm = {
@@ -439,6 +489,7 @@ export async function render(ctx) {
         ctx.refresh();
         return `Labels of ${nodeId} set.`;
       })),
+    hostGroupSection(ctx, nodeId, host, groups, groupsFailure),
     assignedSection(listing, nodeId, ends),
     list(host, "services").map((view) => serviceSection(ctx, nodeId, view)),
     retireSection(ctx, nodeId));

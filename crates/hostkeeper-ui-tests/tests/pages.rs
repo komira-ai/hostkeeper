@@ -138,6 +138,7 @@ fn host_page_shows_services_marks_and_last_update() {
         [
             (m("Hosts/Get"), json!({"nodeId": "web-2"})),
             (m("Services/List"), json!({})),
+            (m("HostGroups/List"), json!({})),
         ]
     );
     assert_shows(
@@ -254,6 +255,7 @@ return {
         [
             (m("Hosts/Get"), json!({"nodeId": "web-2"})),
             (m("Services/List"), json!({})),
+            (m("HostGroups/List"), json!({})),
             (
                 m("Hosts/Exclude"),
                 json!({"service": "api", "nodeId": "web-2", "reason": reason, "abandon": false})
@@ -394,6 +396,7 @@ return shown;
         [
             (m("Hosts/Get"), json!({"nodeId": "web-3"})),
             (m("Services/List"), json!({})),
+            (m("HostGroups/List"), json!({})),
             (
                 m("Hosts/SetLabels"),
                 json!({"nodeId": "web-3", "labels": {}})
