@@ -19,7 +19,7 @@ marked **specified, not built**, with the pull request that builds it.
 | running a hook step on a Mac | the daemon runs each step as a launchd job through `LaunchdLauncher` (`hostkeeper-launchd`), and links and loads the package's plists (`docs/macos.md`) | — |
 | the UI's pages and their calls | the pages, and the HTTP/JSON gateway they call (`docs/gateway.md`) | — |
 | placing hello on hosts | a host group that lists hello (`HostGroups.Put`, `examples/hello/host-group.json`), an approval into it (`Enrollment.Approve` or an inventory record naming the group) or `HostGroups.Move` for a host to get into it, the coordinator's `install` order, and the daemon's heartbeat loop, which announces `install-v1` and runs the install | the daemon's heartbeat link to the coordinator: the shipped daemon gives its loop `NoLink`, so no order reaches a host |
-| setting the desired version | `hkctl releases set-desired` (with `--host-group` to name the group), CI's set-desired workflow and its hello caller `hello-desired.yml`, the package page's Set desired (through the gateway) | `host_group` as an input of the CI client: the callers' pinned release does not take it (see "The proof from CI") |
+| setting the desired version | `hkctl releases set-desired` (with `--host-group` to name the group), CI's set-desired workflow and its hello caller `hello-desired.yml`, the package page's Set version (through the gateway) | `host_group` as an input of the CI client: the callers' pinned release does not take it (see "The proof from CI") |
 | taking hello out with uninstall | the daemon's uninstall verb, hello's `uninstall` step, a `Put` of the group without hello, and the daemon's heartbeat loop, which runs the uninstall | the daemon's heartbeat link to the coordinator (`NoLink`) |
 
 ## The package
@@ -224,7 +224,7 @@ After the hosts have baked (two healthy beats each), `<v1>` is hello's last good
 ## 3. Set v2
 
 Repeat step 2 with the next release, `<v2>`, and its digest (in the package page's `Set
-desired`, or the other ways).
+version`, or the other ways).
 
 **Watch:** the same pages. On each host the other slot now serves, at `<v2>`, and the one
 that served `<v1>` is stopped. When the hosts have baked, `<v2>` is the last good version.

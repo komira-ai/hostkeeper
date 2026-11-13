@@ -286,7 +286,7 @@ export function stageProgress(plan) {
 // The stage that a wait is about: the stage waiting for its Advance is the next one, the other
 // waits that name a stage are the current one. The waits of the whole service (halt, pause, quiet
 // start, other rollouts) and no wait name none.
-function waitStage(plan) {
+export function waitStage(plan) {
   const current = plan.current || 0;
   switch (plan.waiting) {
     case "PLAN_WAIT_MANUAL_ADVANCE":
