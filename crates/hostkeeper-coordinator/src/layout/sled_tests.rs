@@ -653,6 +653,10 @@ fn placements_from_before_sleds_become_one_slot_sleds() {
             "a U and a height are 1 or more",
         ),
         (
+            r#"{"host:a": {"rack": "rack-1", "u": 1, "height_u": 0}}"#,
+            "a U and a height are 1 or more",
+        ),
+        (
             r#"{"host:a": {"rack": "rack-9", "u": 1, "height_u": 1}}"#,
             "there is no rack rack-9",
         ),
