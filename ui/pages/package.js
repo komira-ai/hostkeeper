@@ -436,7 +436,7 @@ function planOf(statuses) {
 // closed until the operator opens it.
 function dangerZone(ctx, pkg, statuses, versions, state, redraw) {
   const toggle = h("button", {
-    type: "button", name: "open-danger", class: `collapser danger-toggle${state.danger ? " open" : ""}`,
+    type: "button", name: "open-danger", class: `collapser danger-toggle${state.danger ? " is-open" : ""}`,
     on: { click: () => { state.danger = !state.danger; redraw(); } },
   }, "Danger zone");
   if (!state.danger) {
@@ -450,7 +450,7 @@ function dangerZone(ctx, pkg, statuses, versions, state, redraw) {
   if (!versions.includes(form.version)) {
     form.version = versions[0] || "";
   }
-  return h("section", { class: "card danger-zone open" }, toggle,
+  return h("section", { class: "card danger-zone is-open" }, toggle,
     h("p", { class: "note" },
       "These acts stop updates, mark a version bad, or switch hosts at once. Each is audited, and the ones that cut running work ask first."),
     field("Reason", "reason", form, "reason", { maxlength: 256 }),
@@ -534,7 +534,7 @@ function manifestCard(ctx, pkg, state, redraw) {
       h("p", { class: "note" }, "No version is known of this package yet."));
   }
   const toggle = h("button", {
-    type: "button", name: "manifest-open", class: `collapser${state.manifestOpen ? " open" : ""}`,
+    type: "button", name: "manifest-open", class: `collapser${state.manifestOpen ? " is-open" : ""}`,
     on: { click: () => { state.manifestOpen = !state.manifestOpen; redraw(); } },
   }, `Manifest of ${pkg} ${shown}`);
   if (!state.manifestOpen) {
