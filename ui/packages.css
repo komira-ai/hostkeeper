@@ -1,0 +1,75 @@
+/* The Packages page: a list's header (title and one line left, its button right and centred),
+   and the row's Edit and Remove. Colours come from the app's tokens, with fallbacks. */
+.packages .list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 28px 0 10px;
+}
+
+.packages .list-title h3 {
+  margin: 0 0 2px;
+}
+
+.packages .list-title .note {
+  margin: 0;
+}
+
+.packages .list-head button {
+  flex: none;
+  white-space: nowrap;
+}
+
+.packages button.primary {
+  background: #fd4f1d;
+  color: #0b0b0a;
+  border-color: transparent;
+  font-weight: 600;
+}
+
+.packages button.primary:disabled {
+  opacity: 0.45;
+}
+
+.packages table {
+  width: 100%;
+}
+
+.packages td.row-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.packages td.row-actions button + button {
+  margin-left: 10px;
+}
+
+.packages button.danger {
+  background: transparent;
+  color: var(--bad, #b3261e);
+  border: 1px solid var(--bad, #b3261e);
+}
+
+.packages button.danger:hover {
+  background: var(--bad-bg, #fbe9e7);
+}
+
+@media (max-width: 600px) {
+  .packages .list-head {
+    flex-wrap: wrap;
+  }
+
+  .packages table {
+    display: block;
+    overflow-x: auto;
+  }
+
+  .packages td.row-actions {
+    display: table-cell;
+  }
+
+  .packages td.row-actions button + button {
+    margin-left: 8px;
+  }
+}
