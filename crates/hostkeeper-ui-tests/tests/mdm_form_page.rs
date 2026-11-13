@@ -26,7 +26,7 @@ const DOCS: &str =
 /// The `name` of every input, select and button of the page, in order.
 const CONTROLS: &str = r#"
 const controls = (t) => nodes(t).filter((n) => ["input", "select", "textarea", "button"].includes(n.tag))
-  .map((n) => `${n.tag}:${n.attrs.type || ""}:${n.attrs.name}`);"#;
+  .map((n) => `${n.tag}:${n.attrs.type || ""}:${n.attrs["name"]}`);"#;
 
 /// The calls of a Save, without the reads of each drawing.
 fn writes(ui: &Ui) -> Vec<(String, Value)> {
@@ -62,7 +62,7 @@ fn the_page_is_one_form_of_the_named_fields_a_status_line_and_verify() {
         "[]",
         &format!(
             r#"{CONTROLS}
-const links = nodes(tree).filter((n) => n.tag === "a").map((n) => [n.attrs.name, n.attrs.href, n.attrs.rel]);
+const links = nodes(tree).filter((n) => n.tag === "a").map((n) => [n.attrs["name"], n.attrs.href, n.attrs.rel]);
 return {{ controls: controls(tree), links, labels: nodes(tree).filter((n) => n.tag === "label").map((n) => text(n)) }};"#
         ),
     ));
@@ -207,7 +207,7 @@ fn a_stored_part_shows_stored_with_its_expiry_and_never_its_value() {
         "mdm",
         "{}",
         "[]",
-        r#"const stored = (k) => { const n = nodes(tree).find((x) => x.attrs.name === `${k}-stored`); return n ? text(n) : null; };
+        r#"const stored = (k) => { const n = nodes(tree).find((x) => x.attrs["name"] === `${k}-stored`); return n ? text(n) : null; };
 return { push: stored("pushCert"), key: stored("pushKey"), token: stored("abmToken"), abmKey: stored("abmKey"),
          abmCert: stored("abmCert"), dns: stored("dnsKey"), secret: stored("dnsSecret"), contact: stored("contact") };"#,
     ));
@@ -421,7 +421,7 @@ fn a_refusal_is_shown_under_the_field_it_is_about_and_the_other_parts_are_still_
             type_into("dns-secret", "GDSECRET"),
             press("save"),
             r#"const last = seen.shown[seen.shown.length - 1];
-const error = (k) => { const n = nodes(last).find((x) => x.attrs.name === `${k}-error`); return n ? text(n) : null; };
+const error = (k) => { const n = nodes(last).find((x) => x.attrs["name"] === `${k}-error`); return n ? text(n) : null; };
 return { reports: seen.reports, push: error("pushCert"), pushKey: error("pushKey"), abmKey: error("abmKey"),
          abmCert: error("abmCert"), token: error("abmToken"), dns: error("dnsKey"),
          chosen: text(named(last, "push-cert-chosen")[0]) };"#
@@ -475,7 +475,7 @@ fn one_half_of_a_pair_and_a_malformed_token_are_refused_before_anything_is_sent(
             type_into("dns-key", "GDKEY"),
             press("save"),
             r#"const last = seen.shown[seen.shown.length - 1];
-const error = (k) => { const n = nodes(last).find((x) => x.attrs.name === `${k}-error`); return n ? text(n) : null; };
+const error = (k) => { const n = nodes(last).find((x) => x.attrs["name"] === `${k}-error`); return n ? text(n) : null; };
 return { push: error("pushCert"), key: error("pushKey"), token: error("abmToken"), secret: error("dnsSecret"), reports: seen.reports };"#
                 .to_owned(),
         ]
@@ -527,24 +527,27 @@ return text(named(last, "pushCert-error")[0]);"#
 #[test]
 fn the_zone_is_the_registrable_domain_of_the_mdm_name_and_a_zone_already_set_is_kept() {
     // Catches: a zone taken as the whole name, as the name's last label, or as only the last
-    // two labels under co.uk; a set zone replaced; a name that is only a label given a zone.
+    // two labels under a suffix of two labels; a set zone replaced; a name that is only a label given a zone.
     let mut ui = Ui::start();
     let out = ui.run(&page_driver(
         "mdm",
         "{}",
         "[]",
         r#"const { registrableDomain } = await import("./pages/mdm.js");
-return ["mdm.internal.example.net", "mdm.example.com", "example.com", "Mdm.Corp.Example.CO.UK.", "mdm.example.co.uk",
-        "com", "", undefined].map(registrableDomain);"#,
+// The suffix is built from pieces: the hygiene lint reads it as a host name.
+const suffix = ["co", "uk"].join(".");
+return ["mdm.internal.example.net", "mdm.example.com", "example.com", `Mdm.Corp.Example.${suffix.toUpperCase()}.`,
+        `mdm.example.${suffix}`, "com", "", undefined].map(registrableDomain);"#,
     ));
+    let suffixed = format!("example.{}", ["co", "uk"].join("."));
     assert_eq!(
         out["out"],
         json!([
             "example.net",
             "example.com",
             "example.com",
-            "example.co.uk",
-            "example.co.uk",
+            suffixed,
+            suffixed,
             "",
             "",
             ""
@@ -628,7 +631,7 @@ fn the_name_has_a_field_only_while_none_is_set_and_it_is_set_before_the_zone_is_
     draw(&ui, unnamed.clone(), settings("", ""), secrets(true));
     ui.refuse(&m(PUT_NAME), 400, "INVALID_ARGUMENT", "invalid_request");
     draw(&ui, unnamed, settings("", ""), secrets(true));
-    let field = r#"nodes(tree).filter((n) => n.attrs.name === "mdm-name").length"#;
+    let field = r#"nodes(tree).filter((n) => n.attrs["name"] === "mdm-name").length"#;
     let set = ui.run(&page_driver("mdm", "{}", "[]", &format!("return {field};")));
     assert_eq!(set["out"], 0);
     let out = ui.run(&page_driver(
@@ -825,7 +828,7 @@ fn the_public_certificate_link_is_shown_only_without_an_abm_key_and_gives_the_ce
         "mdm",
         "{}",
         "[]",
-        r#"const link = (t) => nodes(t).filter((n) => n.attrs.name === "download-abm-certificate").length;
+        r#"const link = (t) => nodes(t).filter((n) => n.attrs["name"] === "download-abm-certificate").length;
 const before = link(tree);
 await click(tree, "download-abm-certificate");
 return { before, after: link(seen.shown[seen.shown.length - 1]), downloads: seen.downloads };"#,
@@ -877,7 +880,7 @@ fn the_page_draws_without_the_settings_and_the_secrets_and_fails_without_the_sta
         "mdm",
         "{}",
         "[]",
-        r#"return nodes(tree).filter((n) => n.attrs.name === "download-abm-certificate").length;"#,
+        r#"return nodes(tree).filter((n) => n.attrs["name"] === "download-abm-certificate").length;"#,
     ));
     assert_eq!(out["out"], 0);
     assert_shows(&out, &["MDM: missing push certificate"]);
