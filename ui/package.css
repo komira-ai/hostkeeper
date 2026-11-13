@@ -1,0 +1,420 @@
+/* The Package page: header card, one rollout card with a big bar and a row per host group, small
+   forms that open under the buttons, a collapsible manifest, and a collapsed danger zone. The
+   colours are the shell's tokens (see app.css), with the palette's values as the fallback. */
+
+.package {
+  --pk-surface: var(--surface, #ffffff);
+  --pk-surface-2: var(--surface-2, #f1f4f8);
+  --pk-rule: var(--rule, #dce3ea);
+  --pk-ink: var(--ink, #0b0b0a);
+  --pk-muted: var(--muted, #5f7186);
+  --pk-accent: var(--accent, #fd4f1d);
+  --pk-ok: var(--ok, #1f7a4d);
+  --pk-ok-bg: var(--ok-bg, #e3f3ea);
+  --pk-warn: var(--warn, #9a5b00);
+  --pk-warn-bg: var(--warn-bg, #fbefd9);
+  --pk-bad: var(--bad, #b3261e);
+  --pk-bad-bg: var(--bad-bg, #fbe9e7);
+  --pk-info: var(--info, #1f6e8c);
+  --pk-info-bg: var(--info-bg, #e2f1f7);
+  display: grid;
+  gap: 16px;
+  max-width: 980px;
+  padding-bottom: 32px;
+}
+
+.package > * {
+  margin: 0;
+}
+
+.package h2::before {
+  display: none;
+}
+
+.package .card {
+  padding: 16px 20px;
+  border: 1px solid var(--pk-rule);
+  border-radius: var(--radius-l, 10px);
+  background: var(--pk-surface);
+  box-shadow: var(--shadow, 0 1px 2px rgb(13 24 34 / 0.06));
+}
+
+.package .card h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.package .card h3.panel-title,
+.package h3.panel-title {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+/* Header. */
+
+.pkg-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.pkg-title h2 {
+  margin: 0;
+  font-size: 24px;
+  letter-spacing: -0.01em;
+}
+
+.package .repo {
+  margin: 4px 0 0;
+  color: var(--pk-muted);
+  overflow-wrap: anywhere;
+}
+
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 32px;
+  margin: 16px 0 12px;
+}
+
+.fact {
+  display: grid;
+  gap: 2px;
+}
+
+.fact .k {
+  font-size: 12px;
+  color: var(--pk-muted);
+}
+
+.fact .v {
+  font-size: 18px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.package .versions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 13px;
+  color: var(--pk-muted);
+}
+
+button.vchip {
+  min-height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+button.vchip.current {
+  border-color: var(--pk-accent);
+  background: var(--pk-surface-2);
+  font-weight: 600;
+}
+
+/* Pills: a state in words, the tone a hint. */
+
+.pk-pill {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+  white-space: nowrap;
+  background: var(--pk-surface-2);
+  color: var(--pk-muted);
+}
+
+.pk-pill.ok {
+  background: var(--pk-ok-bg);
+  color: var(--pk-ok);
+}
+
+.pk-pill.warn {
+  background: var(--pk-warn-bg);
+  color: var(--pk-warn);
+}
+
+.pk-pill.bad {
+  background: var(--pk-bad-bg);
+  color: var(--pk-bad);
+}
+
+.pk-pill.info {
+  background: var(--pk-info-bg);
+  color: var(--pk-info);
+}
+
+/* The rollout card. */
+
+.rollout-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.rollout-top .actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.rollout-top .actions button.on {
+  background: var(--pk-surface-2);
+  border-color: var(--pk-accent);
+}
+
+.panel {
+  margin: 0 0 16px;
+  padding: 12px 16px;
+  border: 1px solid var(--pk-rule);
+  border-radius: var(--radius, 6px);
+  background: var(--pk-surface-2);
+}
+
+.panel label {
+  max-width: 28rem;
+}
+
+.package progress {
+  appearance: none;
+  -webkit-appearance: none;
+  display: block;
+  width: 100%;
+  height: 10px;
+  border: 0;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--pk-surface-2);
+  accent-color: var(--pk-ok);
+}
+
+.package progress::-webkit-progress-bar {
+  background: var(--pk-surface-2);
+  border-radius: 999px;
+}
+
+.package progress::-webkit-progress-value {
+  background: var(--pk-ok);
+  border-radius: 999px;
+}
+
+.package progress::-moz-progress-bar {
+  background: var(--pk-ok);
+  border-radius: 999px;
+}
+
+.rollout-big progress {
+  height: 18px;
+  box-shadow: inset 0 0 0 1px var(--pk-rule);
+}
+
+.big-text {
+  margin: 8px 0 0;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+.pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.groups {
+  display: grid;
+  margin-top: 16px;
+  border-top: 1px solid var(--pk-rule);
+}
+
+.group-row {
+  padding: 14px 0;
+  border-bottom: 1px solid var(--pk-rule);
+}
+
+.group-row:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.group-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin-bottom: 8px;
+}
+
+.group-name {
+  font-size: 15px;
+}
+
+.group-facts {
+  flex-basis: 100%;
+  font-size: 13px;
+  color: var(--pk-muted);
+}
+
+@media (min-width: 720px) {
+  .group-facts {
+    flex-basis: auto;
+    margin-left: auto;
+  }
+}
+
+.rollout-bar.mini {
+  display: grid;
+  grid-template-columns: minmax(80px, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+
+.rollout-bar.mini progress {
+  height: 8px;
+}
+
+.rollout-bar .counts {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 560px) {
+  .rollout-bar.mini {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+}
+
+.package .group-notes {
+  margin: 8px 0 0;
+  font-size: 13px;
+}
+
+.package .group-failed {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--pk-bad);
+}
+
+.package button.linklike {
+  min-height: 0;
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  color: var(--accent-text, #c23a12);
+  text-decoration: underline;
+}
+
+/* Collapsible parts: the manifest and the danger zone. */
+
+button.collapser {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 15px;
+  font-weight: 600;
+  text-align: left;
+}
+
+button.collapser::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid var(--pk-muted);
+  border-bottom: 2px solid var(--pk-muted);
+  transform: rotate(-45deg);
+  transition: transform 0.15s;
+}
+
+button.collapser.open::before {
+  transform: rotate(45deg);
+}
+
+.manifest-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+pre.code {
+  max-height: 28em;
+  margin: 0;
+  padding: 12px 14px;
+  overflow: auto;
+  border-radius: var(--radius, 6px);
+  background: var(--pk-surface-2);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.manifest section.platform h3,
+.manifest section.picks h3 {
+  margin: 16px 0 6px;
+  font-size: 14px;
+}
+
+.package .danger-zone {
+  border-color: var(--pk-bad);
+}
+
+.package .danger-toggle {
+  color: var(--pk-bad);
+}
+
+.package .danger-zone.open .danger-toggle {
+  margin-bottom: 8px;
+}
+
+.package .danger-zone section.force {
+  margin: 12px 0 0;
+  box-shadow: none;
+}
+
+.package .card .note {
+  margin: 8px 0;
+  font-size: 13px;
+}
+
+.package .buttons button.danger {
+  border-color: var(--pk-bad);
+  color: var(--pk-bad);
+}
+
+.package .card table {
+  width: 100%;
+}
+
+.package .holds td:last-child {
+  text-align: right;
+}
+
+@media (max-width: 560px) {
+  .package .card {
+    padding: 14px;
+  }
+
+  .big-text {
+    font-size: 19px;
+  }
+}

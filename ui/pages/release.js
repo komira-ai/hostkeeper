@@ -95,12 +95,44 @@ export function pickFor(host, service, targets) {
   return { installer: entries[at].installer, position: at + 1 };
 }
 
+// The words for the reasons no entry is picked, as the coordinator spells them.
+const PICK_REASONS = {
+  no_target: "No build for this platform",
+  unheard: "Installer not reported",
+  installer_dropped: "Installer missing",
+  no_build_for_host: "No build for this host",
+};
+
 // What the page says of a pick.
 export function pickLabel(pick) {
   if (typeof pick.unknown === "string") {
-    return `unknown: ${pick.unknown}`;
+    return `Unknown (${pick.unknown})`;
   }
-  return typeof pick.reason === "string" ? `none: ${pick.reason}` : `${pick.installer} (entry ${pick.position})`;
+  if (typeof pick.reason === "string") {
+    return Object.prototype.hasOwnProperty.call(PICK_REASONS, pick.reason) ? PICK_REASONS[pick.reason] : pick.reason;
+  }
+  return `${pick.installer} (entry ${pick.position})`;
+}
+
+// The installers the host's daemon lists: those it reported when it announced `target-v1`, the
+// archive alone when it did not; empty when it announced the feature and reported none.
+export function installersListed(host) {
+  const beat = (host && host.heartbeat) || {};
+  return list(beat, "features").includes(TARGET_FEATURE) ? list(host, "installers") : [ARCHIVE];
+}
+
+// What the host runs `service` with: the installer its heartbeat names (the archive when it
+// names none, or its daemon did not announce `target-v1`); "Not installed" when the heartbeat
+// does not have the service running.
+export function runsWith(host, service) {
+  const beat = (host && host.heartbeat) || {};
+  const word = list(beat, "services").find((one) => one["name"] === service);
+  if (word === undefined || word["health"] === "HEALTH_ABSENT") {
+    return "Not installed";
+  }
+  const named = list(beat, "features").includes(TARGET_FEATURE) && typeof word.installer === "string"
+    && word.installer !== "";
+  return named ? word.installer : ARCHIVE;
 }
 
 // The hosts of Hosts.List that the coordinator says something of `service` for.
@@ -154,7 +186,6 @@ export function picksSection(ctx, service, targets, hosts) {
   const shown = picked.slice(0, MAX_HOST_ROWS);
   const rows = shown.map(([host, pick]) => {
     const beat = host.heartbeat || {};
-    const word = list(beat, "services").find((one) => one["name"] === service);
     return h("tr", {},
       h("td", {},
         h("button", {
@@ -162,8 +193,8 @@ export function picksSection(ctx, service, targets, hosts) {
           on: { click: () => ctx.navigate("host", { nodeId: host.nodeId }) },
         }, host.nodeId || "-")),
       h("td", {}, platformKey(beat.platform) || "-"),
-      h("td", {}, list(host, "installers").join(", ") || "-"),
-      h("td", {}, word && typeof word.installer === "string" ? word.installer : "-"),
+      h("td", {}, installersListed(host).join(", ") || "none reported"),
+      h("td", {}, runsWith(host, service)),
       h("td", {}, fmtUnix(host.lastHeartbeatUnix)),
       h("td", {}, pickLabel(pick)));
   });

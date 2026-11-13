@@ -145,44 +145,50 @@ fn the_page_shows_the_repository_the_versions_the_groups_and_each_rollouts_progr
         &ui,
         vec![web_status(web_hosts(), running_plan()), db_status()],
     );
-    let out = package(&mut ui, r#"{ package: "api" }"#, "[]", "return rows(tree);");
+    let out = package(
+        &mut ui,
+        r#"{ package: "api" }"#,
+        "[]",
+        r#"return { web: text(named(tree, "group-web")[0]), db: text(named(tree, "group-db")[0]),
+         big: text(named(tree, "progress-total-text")[0]) };"#,
+    );
     let text = &shown(&out).split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(
         text.contains("Repository: komira (https://packages.example.test/apt)"),
         "{text}"
     );
     assert!(text.contains("Versions: 1.4.0 1.3.2 1.3.0"), "{text}");
-    let rows = out["out"].as_array().expect("rows");
-    let row = |first: &str| {
-        rows.iter()
-            .find(|r| r[0] == first && r.as_array().map_or(0, Vec::len) == 6)
-            .unwrap_or_else(|| panic!("no group row {first}: {rows:?}"))
-            .clone()
+    assert!(text.contains("Latest version 1.4.0"), "{text}");
+    let flat = |v: &Value| {
+        v.as_str()
+            .expect("text")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
     };
-    assert_eq!(
-        row("web"),
-        json!([
-            "web",
-            "1.4.0",
-            "1.2.0",
-            "1.4.0 (8 hosts), 1.3.2 (5 hosts)",
-            "in_progress",
-            "8 of 13 updated, 1 updating, 1 failed, 2 held, 1 down"
-        ])
+    let web = flat(&out["out"]["web"]);
+    assert!(
+        web.contains("Desired 1.4.0 / minimum 1.2.0 / running 1.4.0 (8 hosts), 1.3.2 (5 hosts)"),
+        "{web}"
     );
-    assert_eq!(
-        row("db"),
-        json!([
-            "db",
-            "1.3.2",
-            "-",
-            "1.3.2 (2 hosts)",
-            "converged",
-            "2 of 2 updated"
-        ])
+    assert!(web.contains("Blocked"), "{web}");
+    assert!(
+        web.contains("8 of 13 updated, 1 updating, 1 failed, 2 held, 1 down"),
+        "{web}"
+    );
+    assert!(web.contains("Failed on web-10"), "{web}");
+    let db = flat(&out["out"]["db"]);
+    assert!(
+        db.contains("Desired 1.3.2 / minimum none / running 1.3.2 (2 hosts)"),
+        "{db}"
     );
     assert!(
-        text.contains("web: rollout under way") && text.contains("db: no rollout under way"),
+        db.contains("Up to date") && db.contains("2 of 2 updated"),
+        "{db}"
+    );
+    assert_eq!(out["out"]["big"], "10 of 15 hosts updated, 1 failed");
+    assert!(
+        !text.contains("in_progress") && !text.contains("converged"),
         "{text}"
     );
 }
@@ -205,7 +211,7 @@ return { value: bar.attrs.value, max: bar.attrs.max, label: bar.attrs["aria-labe
     assert_eq!(
         out["out"],
         json!({"value": 8, "max": 13, "label": "web: 61% updated",
-               "words": " 8 of 13 updated, 1 updating, 1 failed, 2 held, 1 down"})
+               "words": "8 of 13 updated, 1 updating, 1 failed, 2 held, 1 down"})
     );
 }
 
@@ -250,7 +256,7 @@ export async function main() {{
 }}"#
     ));
     let zero = json!({"total": 0, "updated": 0, "updating": 0, "failed": 0, "held": 0, "down": 0,
-                      "waiting": "-", "paused": false, "finished": false, "active": false, "percent": 0});
+                      "pending": 0, "waiting": "-", "paused": false, "finished": false, "active": false, "percent": 0});
     let with = |changes: Value| {
         let mut base = zero.clone();
         for (key, value) in changes.as_object().expect("changes") {
@@ -263,7 +269,7 @@ export async function main() {{
         out["all_down"],
         with(json!({"total": 2, "down": 2, "active": true}))
     );
-    assert_eq!(out["no_desired"], with(json!({"total": 1})));
+    assert_eq!(out["no_desired"], with(json!({"total": 1, "pending": 1})));
     assert_eq!(
         out["one_short"],
         with(json!({"total": 3, "updated": 2, "updating": 1, "active": true, "percent": 66}))
@@ -273,7 +279,7 @@ export async function main() {{
         with(json!({"total": 1, "updated": 1, "finished": true, "percent": 100}))
     );
     assert_eq!(out["paused"]["paused"], true);
-    assert_eq!(out["paused"]["waiting"], "paused by ops: freeze");
+    assert_eq!(out["paused"]["waiting"], "Paused by ops: freeze");
     assert_eq!(out["paused"]["active"], true);
     assert_eq!(out["plan_says_finished"]["finished"], true);
     assert_eq!(out["plan_says_finished"]["active"], false);
@@ -296,13 +302,17 @@ fn the_manifest_is_readable_and_the_raw_toggle_shows_the_reply() {
         r#"{ package: "api", version: "1.3.2" }"#,
         "[]",
         r#"
-await click(tree, "manifest-toggle");
-const raw = seen.shown[0];
-const pre = nodes(raw).find((n) => n.tag === "pre");
-const toggled = text(named(raw, "manifest-toggle")[0]);
-await click(raw, "manifest-toggle");
-return { rows: rows(tree), raw: JSON.parse(text(pre)), toggled, back: text(named(seen.shown[1], "manifest-toggle")[0]),
-         platforms: nodes(raw).filter((n) => n.attrs["class"] === "platform").length };"#,
+await click(tree, "manifest-open");
+const code = seen.shown[0];
+const opened = nodes(code).find((n) => n.tag === "pre");
+const rawText = JSON.parse(text(opened));
+const toggled = text(named(code, "manifest-toggle")[0]);
+await click(code, "manifest-toggle");
+const readable = seen.shown[1];
+await click(readable, "manifest-toggle");
+return { rows: rows(readable), raw: rawText, toggled, back: text(named(seen.shown[2], "manifest-toggle")[0]),
+         collapsedBefore: nodes(tree).filter((x) => x.attrs["name"] === "manifest-toggle").length,
+         platforms: nodes(readable).filter((n) => n.attrs["class"] === "platform").length };"#,
     );
     assert!(
         shown(&out).contains("Manifest of api 1.3.2"),
@@ -314,9 +324,10 @@ return { rows: rows(tree), raw: JSON.parse(text(pre)), toggled, back: text(named
         vec![json!({"service": "api", "version": "1.3.2"})]
     );
     assert_eq!(out["out"]["raw"], release());
+    assert_eq!(out["out"]["collapsedBefore"], 0);
     assert_eq!(out["out"]["toggled"], "Readable");
-    assert_eq!(out["out"]["back"], "Raw");
-    assert_eq!(out["out"]["platforms"], 0);
+    assert_eq!(out["out"]["back"], "Readable");
+    assert_eq!(out["out"]["platforms"], 2);
     let rows = out["out"]["rows"].as_array().expect("rows");
     assert!(rows.contains(&json!(["Platforms", "linux-x86_64, macos-arm64"])));
     assert!(
@@ -342,11 +353,19 @@ return { rows: rows(tree), raw: JSON.parse(text(pre)), toggled, back: text(named
         "NOT_FOUND",
         "release_unknown",
     );
-    let out = package(&mut ui, r#"{ package: "api" }"#, "[]", "return null;");
+    let out = package(
+        &mut ui,
+        r#"{ package: "api" }"#,
+        "[]",
+        "await click(tree, \"manifest-open\"); return text(seen.shown[0]);",
+    );
     assert!(
-        shown(&out).contains("NOT_FOUND release_unknown"),
+        out["out"]
+            .as_str()
+            .expect("text")
+            .contains("NOT_FOUND release_unknown"),
         "{}",
-        shown(&out)
+        out["out"]
     );
 }
 
@@ -378,28 +397,28 @@ fn the_buttons_call_the_operator_methods_with_the_group_and_the_reason() {
         r#"{ package: "api" }"#,
         "[true, true, true]",
         r#"
-type(tree, "desired-version", "1.5.0", 0);
-await click(tree, "set-desired", 0);
-type(tree, "reason", "freeze for audit", 0);
-await click(tree, "pause", 0);
-type(tree, "reason", "thaw", 1);
-await click(tree, "resume", 0);
-choose(tree, "hold-scope", "role");
-type(tree, "hold-value", "web", 0);
-await click(tree, "hold");
-type(tree, "hold-reason", "canary looks bad", 0);
-await click(tree, "hold");
-type(tree, "unhold-reason", "fixed", 0);
-await click(tree, "unhold");
-return seen.reports;"#,
+const last = () => seen.shown[seen.shown.length - 1];
+const count = (t, n) => nodes(t).filter((x) => x.attrs["name"] === n).length;
+const before = count(tree, "desired-version") + count(tree, "hold-reason") + count(tree, "reason");
+await click(tree, "open-set");
+type(last(), "desired-version", "1.5.0", 0);
+await click(last(), "set-desired", 0);
+await click(last(), "open-plan");
+type(last(), "reason", "thaw", 0);
+await click(last(), "resume", 0);
+await click(last(), "open-hold");
+choose(last(), "hold-scope", "role");
+await click(last(), "hold");
+choose(last(), "hold-scope", "role");
+type(last(), "hold-reason", "canary looks bad", 0);
+await click(last(), "hold");
+type(last(), "unhold-reason", "fixed", 0);
+await click(last(), "unhold");
+return { reports: seen.reports, before, holdTargets: choices(last(), "hold-value") };"#,
     );
     assert_eq!(
         bodies_of(&ui, "Releases/SetDesired"),
         vec![json!({"service": "api", "desired": {"version": "1.5.0"}, "hostGroup": "web"})]
-    );
-    assert_eq!(
-        bodies_of(&ui, "Rollouts/Pause"),
-        vec![json!({"service": "api", "reason": "freeze for audit"})]
     );
     assert_eq!(
         bodies_of(&ui, "Rollouts/Resume"),
@@ -413,7 +432,12 @@ return seen.reports;"#,
         bodies_of(&ui, "Services/Unhold"),
         vec![json!({"scope": {"host": "web-11"}, "service": "api", "reason": "fixed"})]
     );
-    let reports = out["out"].as_array().expect("reports");
+    assert_eq!(
+        out["out"]["before"], 0,
+        "no form is open before its button is clicked"
+    );
+    assert_eq!(out["out"]["holdTargets"], json!(["web", "db"]));
+    let reports = out["out"]["reports"].as_array().expect("reports");
     assert!(
         reports.contains(&json!("A hold needs a reason.")),
         "{reports:?}"
@@ -503,7 +527,7 @@ return { first, seconds: ticks[0].seconds, second, failed, failedWords, stopsBef
     assert_eq!(out["out"]["seconds"], 5);
     assert_eq!(
         out["out"]["second"],
-        " 9 of 13 updated, 1 failed, 2 held, 1 down"
+        "9 of 13 updated, 1 failed, 2 held, 1 down"
     );
     let failed = out["out"]["failed"].as_str().expect("text");
     assert!(
@@ -512,10 +536,10 @@ return { first, seconds: ticks[0].seconds, second, failed, failedWords, stopsBef
     );
     assert_eq!(
         out["out"]["failedWords"],
-        " 9 of 13 updated, 1 failed, 2 held, 1 down"
+        "9 of 13 updated, 1 failed, 2 held, 1 down"
     );
     assert_eq!(out["out"]["stopsBefore"], 0);
-    assert_eq!(out["out"]["third"], " 13 of 13 updated");
+    assert_eq!(out["out"]["third"], "13 of 13 updated");
     assert_eq!(out["out"]["stops"], 1);
 }
 
@@ -634,7 +658,7 @@ export async function main() {
   const listed = names();
   app.navigate("rollout", { service: "api", version: "1.3.2" });
   await settle();
-  const package_ = elements(doc.root).some((e) => e.attributes["name"] === "manifest-toggle");
+  const package_ = elements(doc.root).some((e) => e.attributes["name"] === "manifest-open");
   app.navigate("holds", {});
   await settle();
   const current = elements(doc.root).filter((e) => e.attributes["class"] === "current").map((e) => e.attributes["name"]);
@@ -721,8 +745,13 @@ fn package_detail_calls_are_existing_operator_methods() {
         BTreeSet::from(
             [
                 "hosts.list",
+                "releases.clearHalt",
+                "releases.converge",
                 "releases.getRelease",
+                "releases.halt",
+                "releases.markBad",
                 "releases.status",
+                "releases.unmarkBad",
                 "repositories.list",
                 "services.hold",
                 "services.list",
@@ -730,5 +759,163 @@ fn package_detail_calls_are_existing_operator_methods() {
             ]
             .map(str::to_owned)
         )
+    );
+}
+
+#[test]
+fn pause_is_sent_from_its_form_with_the_reason_and_asks_first() {
+    // Catches: a Pause that goes without the reason, one sent without the question answered yes,
+    // and a Pause button shown for a plan that is already paused.
+    let mut ui = Ui::start();
+    script(&ui, vec![web_status(web_hosts(), running_plan())]);
+    ui.reply(&m("Rollouts/Pause"), json!({}));
+    let out = package(
+        &mut ui,
+        r#"{ package: "api" }"#,
+        "[false, true]",
+        r#"
+const last = () => seen.shown[seen.shown.length - 1];
+await click(tree, "open-plan");
+await click(last(), "pause", 0);
+type(last(), "reason", "freeze for audit", 0);
+await click(last(), "pause", 0);
+await click(last(), "pause", 0);
+return { reports: seen.reports, resume: nodes(last()).filter((x) => x.attrs["name"] === "resume").length };"#,
+    );
+    assert_eq!(
+        bodies_of(&ui, "Rollouts/Pause"),
+        vec![json!({"service": "api", "reason": "freeze for audit"})]
+    );
+    assert_eq!(out["out"]["resume"], 0);
+    assert_eq!(out["out"]["reports"][0], json!("Give a reason first."));
+}
+
+#[test]
+fn each_host_is_counted_in_exactly_one_state_and_the_card_adds_the_groups_up() {
+    // Catches: a host counted in two states (a held host that is also down), counts that do not
+    // add up to the hosts of the group, and a big bar that is not the sum of the groups' bars.
+    let mut ui = Ui::start();
+    let mut both = held("a");
+    both["live"] = json!(false);
+    let mut busy = member("b", Some("1.3.2"), "GATE_REASON_UPDATING", false);
+    busy["view"]["holds"] = json!([{"scope": {"host": "b"}}]);
+    let hosts = json!([
+        both,
+        busy,
+        member("c", Some("1.4.0"), "GATE_REASON_FAILED_HERE", true),
+        member("d", Some("1.3.2"), "GATE_REASON_FAILED_HERE", true),
+        member("e", Some("1.3.2"), "GATE_REASON_BAKING", true)
+    ]);
+    let out = ui.run(&format!(
+        r#"
+import {{ rolloutProgress, totalProgress, hostBucket }} from "./pages/package.js";
+export async function main() {{
+  const svc = {{ service: "api", desired: {{ version: "1.4.0" }}, hosts: {hosts} }};
+  const one = rolloutProgress(svc);
+  const sum = ["updated", "updating", "failed", "held", "down", "pending"].reduce((n, k) => n + one[k], 0);
+  return {{ one, sum, buckets: svc.hosts.map((h) => hostBucket(h, "1.4.0")), twice: totalProgress([one, one]) }};
+}}"#
+    ));
+    assert_eq!(out["sum"], out["one"]["total"]);
+    assert_eq!(
+        out["buckets"],
+        json!(["held", "updating", "updated", "failed", "pending"])
+    );
+    assert_eq!(out["twice"]["total"], 10);
+    assert_eq!(out["twice"]["failed"], 2);
+    assert_eq!(out["twice"]["updated"], 2);
+}
+
+#[test]
+fn states_are_shown_in_words_and_the_forms_start_closed() {
+    // Catches: raw enum names on the page (`in_progress`, `installer_dropped`), a form, the
+    // manifest or the force open before its button is clicked, and the danger zone's acts
+    // visible while it is collapsed.
+    let mut ui = Ui::start();
+    script(
+        &ui,
+        vec![web_status(web_hosts(), running_plan()), db_status()],
+    );
+    let out = package(
+        &mut ui,
+        r#"{ package: "api" }"#,
+        "[]",
+        r#"
+const last = () => seen.shown[seen.shown.length - 1];
+const count = (t, n) => nodes(t).filter((x) => x.attrs["name"] === n).length;
+const closed = { force: count(tree, "force-prepare"), markBad: count(tree, "mark-bad"),
+  set: count(tree, "set-desired"), hold: count(tree, "hold"), manifest: count(tree, "manifest-raw") };
+await click(tree, "open-danger");
+const opened = { force: count(last(), "force-prepare"), markBad: count(last(), "mark-bad"),
+  versions: choices(last(), "bad-version") };
+return { closed, opened };"#,
+    );
+    let text = shown(&out);
+    for raw in [
+        "in_progress",
+        "installer_dropped",
+        "no_target",
+        "unheard",
+        "GATE_REASON",
+        "CONVERGENCE_STATE",
+    ] {
+        assert!(!text.contains(raw), "{raw} is shown: {text}");
+    }
+    assert_eq!(
+        out["out"]["closed"],
+        json!({"force": 0, "markBad": 0, "set": 0, "hold": 0, "manifest": 0})
+    );
+    assert_eq!(out["out"]["opened"]["force"], 1);
+    assert_eq!(out["out"]["opened"]["markBad"], 1);
+    assert_eq!(
+        out["out"]["opened"]["versions"],
+        json!(["1.4.0", "1.3.2", "1.3.0"])
+    );
+}
+
+#[test]
+fn the_danger_zone_marks_a_version_bad_halts_and_clears_with_the_reason() {
+    // Catches: a Mark bad that names a version the operator did not choose, an act sent with no
+    // reason, a Halt sent without the question answered yes, and an Unmark or Clear the halt that
+    // goes to the wrong method.
+    let mut ui = Ui::start();
+    script(&ui, vec![web_status(web_hosts(), running_plan())]);
+    ui.reply(&m("Releases/MarkBad"), json!({}));
+    ui.reply(&m("Releases/UnmarkBad"), json!({}));
+    ui.reply(&m("Releases/Halt"), json!({}));
+    let out = package(
+        &mut ui,
+        r#"{ package: "api" }"#,
+        "[false, true]",
+        r#"
+const last = () => seen.shown[seen.shown.length - 1];
+await click(tree, "open-danger");
+await click(last(), "mark-bad");
+type(last(), "reason", "crash loop", 0);
+choose(last(), "bad-version", "1.3.2");
+await click(last(), "mark-bad");
+await click(last(), "unmark-bad");
+await click(last(), "halt");
+await click(last(), "halt");
+return seen.reports;"#,
+    );
+    assert_eq!(
+        bodies_of(&ui, "Releases/MarkBad"),
+        vec![json!({"service": "api", "version": "1.3.2", "reason": "crash loop"})]
+    );
+    assert_eq!(
+        bodies_of(&ui, "Releases/UnmarkBad"),
+        vec![json!({"service": "api", "version": "1.3.0", "reason": "crash loop"})]
+    );
+    assert_eq!(
+        bodies_of(&ui, "Releases/Halt"),
+        vec![json!({"service": "api", "reason": "crash loop"})]
+    );
+    assert_eq!(out["out"][0], "Give a reason first.");
+    assert!(
+        out["out"]
+            .as_array()
+            .expect("reports")
+            .contains(&json!("Not halted."))
     );
 }

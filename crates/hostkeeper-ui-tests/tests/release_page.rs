@@ -230,22 +230,22 @@ fn each_host_of_the_service_is_shown_with_its_pick_or_why_it_has_none() {
             row(
                 "old-1",
                 "linux-x86_64",
-                "-",
-                "-",
+                "hostkeeper-archive",
+                "hostkeeper-archive",
                 "hostkeeper-archive (entry 3)"
             ),
             row(
                 "new-1",
                 "linux-x86_64",
                 "hostkeeper-archive, deb",
-                "-",
+                "Not installed",
                 "deb (entry 2)"
             ),
             row(
                 "runs-1",
                 "linux-x86_64",
                 "hostkeeper-archive, deb",
-                "-",
+                "hostkeeper-archive",
                 "hostkeeper-archive (entry 3)"
             ),
             row(
@@ -259,7 +259,7 @@ fn each_host_of_the_service_is_shown_with_its_pick_or_why_it_has_none() {
                 "absent-1",
                 "linux-x86_64",
                 "hostkeeper-archive, deb",
-                "rpm",
+                "Not installed",
                 "deb (entry 2)"
             ),
             row(
@@ -267,44 +267,56 @@ fn each_host_of_the_service_is_shown_with_its_pick_or_why_it_has_none() {
                 "linux-x86_64",
                 "hostkeeper-archive",
                 "rpm",
-                "none: installer_dropped"
+                "Installer missing"
             ),
             row(
                 "arm-1",
                 "linux-arm64",
                 "hostkeeper-archive, deb",
-                "-",
-                "none: no_build_for_host"
+                "Not installed",
+                "No build for this host"
             ),
             row(
                 "odd-1",
                 "linux-arm64",
                 "future-kind",
-                "-",
+                "Not installed",
                 "future-kind (entry 1)"
             ),
             row(
                 "mac-1",
                 "macos-arm64",
-                "-",
-                "-",
+                "hostkeeper-archive",
+                "Not installed",
                 "hostkeeper-archive (entry 1)"
             ),
-            row("quiet-1", "linux-x86_64", "-", "-", "none: unheard"),
-            row("blank-1", "-", "-", "-", "unknown: platform not reported"),
+            row(
+                "quiet-1",
+                "linux-x86_64",
+                "none reported",
+                "Not installed",
+                "Installer not reported"
+            ),
+            row(
+                "blank-1",
+                "-",
+                "hostkeeper-archive",
+                "Not installed",
+                "Unknown (platform not reported)"
+            ),
         ]])
     );
     assert_eq!(
         out["out"]["counts"],
         json!([[
+            "Installer missing: 1",
+            "Installer not reported: 1",
+            "No build for this host: 1",
+            "Unknown (platform not reported): 1",
             "deb (entry 2): 3",
             "future-kind (entry 1): 1",
             "hostkeeper-archive (entry 1): 1",
             "hostkeeper-archive (entry 3): 2",
-            "none: installer_dropped: 1",
-            "none: no_build_for_host: 1",
-            "none: unheard: 1",
-            "unknown: platform not reported: 1",
         ]])
     );
     assert!(shown(&out).contains("Hosts of web (11)"), "{}", shown(&out));
@@ -326,7 +338,10 @@ fn a_release_with_no_target_says_so_and_picks_every_host_nothing() {
     assert_eq!(out["out"]["digest"], json!("-"));
     assert_eq!(out["out"]["keys"], json!("none"));
     assert_eq!(out["out"]["platforms"], json!([]));
-    assert_eq!(out["out"]["counts"], json!([["none: no_target: 1"]]));
+    assert_eq!(
+        out["out"]["counts"],
+        json!([["No build for this platform: 1"]])
+    );
     assert!(
         shown(&out).contains("This release names no targets."),
         "{}",

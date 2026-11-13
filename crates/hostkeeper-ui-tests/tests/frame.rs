@@ -274,6 +274,7 @@ fn the_elements_show_what_was_typed_after_the_frame_draws_again() {
     ui.run(&start_package());
     let shown = ui.run(&steps(
         r#"
+click("open-danger");
 type("reason", "crash loop");
 click("mark-bad");
 fire(domNamed(doc.root, "force-include-held"), "change", { target: { checked: true } });
