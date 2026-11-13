@@ -77,6 +77,11 @@ yaml.org
 =hook.group
 =hook.environment.name
 
+# The operator API's call `Repositories.Discover` as the web app's client and its docs name it
+# (`repositories.discover`, the function and the generated client's table): `discover` is a word
+# the IANA list delegates as a top-level domain. A name, not a host.
+=repositories.discover
+
 # The SVG namespace URI every diagram under docs/design/diagrams declares; a namespace name, not a host the code reaches.
 =www.w3.org
 # Field paths of hostkeeper-proto's tests (the kbf JSON keys and proto fields they map onto, and

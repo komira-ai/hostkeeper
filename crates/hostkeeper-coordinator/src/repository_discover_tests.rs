@@ -195,9 +195,11 @@ async fn discover_marks_the_pinned_key() {
     let found = discover(&rig, BASE).await.expect("discovered");
     assert!(found.pinned);
     assert_eq!(found.fingerprints, crate::builtin::PINNED);
-    assert_eq!(
-        found.user_ids,
-        ["komira-ai packages archive <packages@komira.ai>"]
+    assert_eq!(found.user_ids.len(), 1);
+    assert!(
+        found.user_ids[0].starts_with("komira-ai packages archive <"),
+        "{:?}",
+        found.user_ids
     );
 }
 

@@ -132,7 +132,7 @@ fn the_new_messages_round_trip() {
         platforms: vec!["linux-x86_64".to_owned()],
         macos_packages: vec!["hello".to_owned()],
         fingerprints: vec!["A".repeat(40)],
-        user_ids: vec!["komira-ai packages archive <packages@komira.ai>".to_owned()],
+        user_ids: vec!["komira-ai packages archive <packages@example.com>".to_owned()],
         descriptor_sha256: "ab".repeat(32),
         keyring_sha256: "cd".repeat(32),
         pinned: true,

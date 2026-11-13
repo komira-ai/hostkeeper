@@ -502,5 +502,8 @@ fn a_base_uri_is_an_https_uri_without_a_trailing_slash() {
     assert!(is_base_uri("https://packages.example.com:8443/org/repo"));
     assert!(!is_base_uri("https://packages.example.com/"));
     assert!(!is_base_uri("http://packages.example.com"));
-    assert!(!is_base_uri(&format!("https://e.com/{}", "a".repeat(512))));
+    assert!(!is_base_uri(&format!(
+        "https://example.com/{}",
+        "a".repeat(512)
+    )));
 }

@@ -241,7 +241,7 @@ fn the_key_is_a_relative_keyring_and_well_formed_fingerprints() {
         ),
         ("apt/../key.gpg", "key.keyring has a `.` or `..` segment"),
         (
-            "https://x/key.gpg",
+            "https://example.com/key.gpg",
             "key.keyring has an empty segment (a leading, trailing or doubled `/`)",
         ),
         ("", "key.keyring is empty"),

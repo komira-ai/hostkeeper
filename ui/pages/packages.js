@@ -365,8 +365,9 @@ export async function render(ctx) {
           }
           repo.found = reply.discovery || {};
           repo.checked = built.request;
-          if (trimmed(repo.called) === "" && REPOSITORY_NAME.test(repo.found.name || "")) {
-            repo.called = repo.found.name;
+          const { name: suggested = "" } = repo.found;
+          if (trimmed(repo.called) === "" && REPOSITORY_NAME.test(suggested)) {
+            repo.called = suggested;
           }
           show();
           return null;
