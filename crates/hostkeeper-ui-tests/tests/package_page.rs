@@ -198,7 +198,7 @@ fn a_bar_is_a_progress_element_that_counts_updated_hosts_of_the_group() {
         &mut ui,
         r#"{ package: "api" }"#,
         "[]",
-        r#"const bar = nodes(tree).find((n) => n.tag === "progress" && n.attrs.name === "progress-web");
+        r#"const bar = nodes(tree).find((n) => n.tag === "progress" && n.attrs["name"] === "progress-web");
 return { value: bar.attrs.value, max: bar.attrs.max, label: bar.attrs["aria-label"],
          words: text(named(tree, "progress-text-web")[0]) };"#,
     );
@@ -556,7 +556,7 @@ export async function main() {
   await settle();
   app.navigate("package", { package: "api" });
   await settle();
-  const started = timers.map((t) => t.ms);
+  const started = timers.map((t) => t["ms"]);
   app.navigate("packages", {});
   await settle();
   timers[0].run();

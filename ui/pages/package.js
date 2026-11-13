@@ -92,7 +92,7 @@ export function rolloutProgress(svc) {
   };
   for (const host of list(svc, "hosts")) {
     const view = host.view || {};
-    progress.total += 1;
+    progress["total"] += 1;
     const updated = desired !== "" && view.installedVersion === desired;
     if (updated) {
       progress.updated += 1;
@@ -105,7 +105,7 @@ export function rolloutProgress(svc) {
     if (list(view, "holds").length > 0 || view.gateReason === "GATE_REASON_HELD") {
       progress.held += 1;
     }
-    if (host.live === false) {
+    if (host["live"] === false) {
       progress.down += 1;
     }
   }
@@ -114,16 +114,16 @@ export function rolloutProgress(svc) {
     progress.waiting = planWaiting(plan);
   }
   progress.finished = desired !== "" && (Boolean(plan) && plan.finished === true
-    || (progress.total > 0 && progress.updated === progress.total));
-  progress.active = desired !== "" && !progress.finished && (progress.total > 0 || plan !== null);
-  progress.percent = progress.total === 0 ? 0 : Math.floor((100 * progress.updated) / progress.total) | 0;
+    || (progress["total"] > 0 && progress.updated === progress["total"]));
+  progress.active = desired !== "" && !progress.finished && (progress["total"] > 0 || plan !== null);
+  progress.percent = progress["total"] === 0 ? 0 : Math.floor((100 * progress.updated) / progress["total"]) | 0;
   return progress;
 }
 
 // The progress bar of a rollout: a native `progress` element, with the counts in words beside it
 // (a failure or a hold is never a colour alone).
 export function progressBar(group, progress) {
-  const counts = [`${progress.updated} of ${progress.total} updated`];
+  const counts = [`${progress.updated} of ${progress["total"]} updated`];
   if (progress.updating > 0) {
     counts.push(`${progress.updating} updating`);
   }
@@ -138,7 +138,7 @@ export function progressBar(group, progress) {
   }
   return h("div", { class: "rollout-bar" },
     h("progress", {
-      name: `progress-${group}`, value: progress.updated, max: progress.total || 1,
+      name: `progress-${group}`, value: progress.updated, max: progress["total"] || 1,
       "aria-label": `${group}: ${progress.percent}% updated`,
     }),
     h("span", { name: `progress-text-${group}` }, ` ${counts.join(", ")}`));
@@ -283,8 +283,8 @@ async function loadManifest(ctx, pkg, state, groups) {
     return;
   }
   const request = { service: pkg, version: state.version };
-  if (state.group !== "") {
-    request.hostGroup = state.group;
+  if (state["group"] !== "") {
+    request.hostGroup = state["group"];
   } else if (groups.length === 1 && groups[0] !== "-") {
     request.hostGroup = groups[0];
   }
