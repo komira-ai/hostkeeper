@@ -102,6 +102,9 @@ pub const STAGES: [&str; 10] = [
     "check-pkg",
 ];
 
+/// The job that writes the repository's descriptor.
+pub const DESCRIPTOR_JOB: &str = "descriptor";
+
 /// The prefix of the jobs of the suite `testing-fail` (hello's failing build alone).
 pub const FAIL_JOB_PREFIX: &str = "testing-fail-";
 
@@ -371,6 +374,28 @@ pub fn rows() -> Vec<Row> {
         ),
         &["pkg check"],
     ));
+    // The descriptor of the repository: after the apt write that listed the release's packages and
+    // the installers' upload, and a need of no promotion and no set: a failing descriptor never
+    // holds a release.
+    let mut descriptor = plain(
+        DESCRIPTOR_JOB,
+        &[
+            "plan",
+            "testing-apt-write",
+            "testing-apt-write-2",
+            "testing-apt-write-3",
+            "testing-pkg-upload",
+        ],
+        format!(
+            "${{{{ !cancelled() && {P} && needs.testing-pkg-upload.outputs.enabled == 'true' && ({}) }}}}",
+            written("apt")
+        ),
+        &["assume", "descriptor write", "gate"],
+    );
+    descriptor.environment = Some(PUBLISH_ENV);
+    descriptor.permissions = vec![("contents", "read"), ("id-token", "write")];
+    descriptor.gated = true;
+    rows.push(descriptor);
     let mut needs = vec!["newest", "plan"];
     needs.extend(STAGES);
     rows.push(plain(
@@ -456,7 +481,7 @@ fn channel_verb(args: &[String]) -> Option<String> {
     }
     let word = |i: usize| rest.get(i).map_or("", String::as_str);
     Some(match word(0) {
-        "apt" | "pkg" => format!("{} {}", word(0), word(1)),
+        "apt" | "pkg" | "descriptor" => format!("{} {}", word(0), word(1)),
         "rpm" if word(1) == "repo" => format!("rpm repo {}", word(2)),
         "rpm" => format!("rpm {}", word(1)),
         other => other.to_owned(),
@@ -647,9 +672,20 @@ fn step_problems(row: &Row, job: &Node) -> Vec<String> {
         }
         return problems;
     }
+    // The descriptor job works on none of the release's files: it runs the xtask of the
+    // workflow's own commit (its verb is newer than the oldest release a run may publish, which
+    // `release_ref` holds every call under the release's commit to), with no release's commit and
+    // tag in its environment.
+    let own = row.name == DESCRIPTOR_JOB;
     let env = pairs(entry(job, "env"));
     for (key, want) in [("COMMIT", NEWEST_COMMIT), ("TAG", NEWEST_TAG)] {
-        if !env.contains(&(key.to_owned(), want.to_owned())) {
+        if own {
+            if env.iter().any(|(k, _)| k == key) {
+                say(format!(
+                    "must not set `env: {key}`: it works on no release's files"
+                ));
+            }
+        } else if !env.contains(&(key.to_owned(), want.to_owned())) {
             say(format!(
                 "needs `env: {key}: {want}`: it works on the newest release of the run"
             ));
@@ -659,7 +695,14 @@ fn step_problems(row: &Row, job: &Node) -> Vec<String> {
         .first()
         .filter(|s| text_of(Some(s), "uses").is_some_and(|u| u.starts_with("actions/checkout@")));
     let with = checkout.and_then(|s| entry(s, "with"));
-    if text_of(with, "ref") != Some(NEWEST_COMMIT) {
+    if own {
+        if text_of(with, "ref").is_some() {
+            say(
+                "needs a first step that checks out the workflow's own commit (no `ref`)"
+                    .to_owned(),
+            );
+        }
+    } else if text_of(with, "ref") != Some(NEWEST_COMMIT) {
         say(format!(
             "needs a first step that checks out `ref: {NEWEST_COMMIT}`"
         ));

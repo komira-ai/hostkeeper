@@ -101,7 +101,9 @@ tool both run; a descriptor that breaks one is refused (`descriptor_invalid`) na
    are what an operator compares.
 3. Write `hostkeeper-repository.json` at the base. A repository shared by several products (packages.komira.ai) must
    write it by merging what each product publishes into what is there, never by overwriting it, and must never change
-   `key.fingerprints` without every product agreeing.
+   `key.fingerprints` without every product agreeing: `cargo xtask channels descriptor write` does that for this
+   product's facts (see "What the release workflow does"), and `cargo xtask channels descriptor check --url <base>`
+   reads the descriptor and the keyring a host serves as the coordinator does.
 4. Add the repository in the web app (Packages, Add repository) and read what the check shows: it is what the
    coordinator will derive from the descriptor.
 
@@ -174,6 +176,11 @@ or any other version in it is refused in the same way, and an `X.Y.Z~fail.ready`
 | apt, packages `hostkeeper`, `hostkeeper-coordinator`, `hello` and `pxe`, architectures `amd64` and `arm64`, and `mdm`, `amd64` | `https://packages.komira.ai/apt`, suite `testing`, component `main` | the same repository, suite `stable` |
 | rpm, packages `hostkeeper` and `hostkeeper-coordinator`, architectures `x86_64` and `aarch64` | `https://packages.komira.ai/rpm/testing/<arch>/` | `https://packages.komira.ai/rpm/stable/<arch>/` |
 | macOS installers, `hostkeeper` and `hello`, `macos-arm64` | the directory `https://packages.komira.ai/pkg/hostkeeper/<version>/` | the pointer `https://packages.komira.ai/pkg/hostkeeper/stable.json` |
+
+The repository also serves the descriptor, `https://packages.komira.ai/hostkeeper-repository.json`
+([Structure of a repository](#structure-of-a-repository)), which the release workflow writes by merging this
+product's facts into what is there. Until the first release after the job `descriptor` was added has run, the host
+answers 404 for it and the coordinator's built-in `komira` carries the same facts.
 
 The packages themselves are in a pool every suite shares: `apt/pool/hostkeeper/<name>_<version>_<arch>.deb`
 and `rpm/pool/hostkeeper/<name>-<version>-1.<arch>.rpm`. A suite is an index that lists packages of
@@ -457,6 +464,15 @@ changes of the older ones. Each job is a green no-op until the settings below ex
    same pool files and the same installer files that were installed and checked are the ones the
    `stable` channel names.
 
+5. **The descriptor.** `descriptor` (`cargo xtask channels descriptor write`) runs after the apt write that listed
+   the release and the installers' upload, from a checkout of the workflow's own commit (it writes nothing of the
+   release): it reads `hostkeeper-repository.json` and its ETag, merges this product's channels, architectures,
+   installers and packages into it, judges the result by the coordinator's own rules, and writes it with `If-Match` on
+   that ETag (`If-None-Match: *` when none is there), reading and merging again after a lost race, then invalidates the
+   path. It keeps every other product's packages and refuses to change the key, a path or a package's directory another
+   product put there. It is no need of `no-downgrade`, `set-desired` or any promotion, so a failing descriptor never holds a
+   release.
+
 Re-running the failed jobs of a run resumes it: every write is write-once or idempotent, and
 `promote-check` reads the results again.
 
@@ -485,7 +501,7 @@ settings ends green; a job with some of them fails and names the missing ones).
 
 | Where | Name | Holds |
 |---|---|---|
-| environment `apt-publish` | variable `APT_PUBLISH_ROLE_ARN` | the role the jobs assume through OIDC; its policy must let it write `apt/pool/hostkeeper/*` and `rpm/pool/hostkeeper/*` (only when the object is absent), the shared `apt/dists/*` and `rpm/<suite>/*` indexes (with `If-Match` or only when absent), and `pkg/hostkeeper/*`, and trust this workflow on `main` in this environment |
+| environment `apt-publish` | variable `APT_PUBLISH_ROLE_ARN` | the role the jobs assume through OIDC; its policy must let it write `apt/pool/hostkeeper/*` and `rpm/pool/hostkeeper/*` (only when the object is absent), the shared `apt/dists/*` and `rpm/<suite>/*` indexes (with `If-Match` or only when absent), and `pkg/hostkeeper/*`, and trust this workflow on `main` in this environment; it must also let the job `descriptor` read and write the object `hostkeeper-repository.json` at the bucket's root (with `If-Match`, or only when absent) |
 | environment `apt-publish` | variables `APT_BUCKET`, `APT_DISTRIBUTION_ID`, `APT_HOSTNAME` | the bucket, the CDN distribution to invalidate, and the public host |
 | environment `apt-signing` | variable `APT_GPG_FINGERPRINT`, secrets `APT_GPG_PRIVATE_KEY` and `APT_GPG_PASSPHRASE` | the archive signing subkey |
 | the repository | variable `RPM_REPO_READY` | `true` once the rpm tree of the repository is deployed; until then the rpm jobs end green and write nothing |
