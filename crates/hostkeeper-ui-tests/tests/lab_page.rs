@@ -340,7 +340,14 @@ return { rows: rows(tree), big: cls(tree, "rack").map((n) => n.attrs.class) };"#
         out["rows"],
         json!([
             ["Server", "Address", "U", "State", "Group", "Version"],
-            ["db-1", "C0-R0-R0-S0-S0", "U1", "updating", "storage", "1.4.0"],
+            [
+                "db-1",
+                "C0-R0-R0-S0-S0",
+                "U1",
+                "updating",
+                "storage",
+                "1.4.0"
+            ],
             ["web-1", "C0-R0-R0-S1-S0", "U41", "healthy", "web", "1.4.0"],
         ])
     );

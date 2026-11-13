@@ -194,7 +194,7 @@ const REQUESTS: &[(&str, &str)] = &[
     ),
     (
         "hostkeeper.operator.v1.Layout/PutSled",
-        r#"{"rack": "rack-1", "u": 10, "heightU": 3, "slots": 2, "reason": "add sled"}"#,
+        r#"{"rack": "r", "u": 1, "heightU": 1, "reason": "x"}"#,
     ),
     (
         "hostkeeper.operator.v1.Layout/PutDevice",
@@ -211,7 +211,7 @@ const REQUESTS: &[(&str, &str)] = &[
     ),
     (
         "hostkeeper.operator.v1.Layout/RemoveSled",
-        r#"{"id": "sled-1", "reason": "remove"}"#,
+        r#"{"id": "s", "reason": "x"}"#,
     ),
     (
         "hostkeeper.operator.v1.Layout/RemoveRow",

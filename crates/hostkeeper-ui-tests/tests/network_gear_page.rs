@@ -148,7 +148,13 @@ return {
     assert_eq!(
         o["network"],
         json!([
-            ["data-switch", "C0-R0-R0-S2-S0", "U26", "Data network", "none"],
+            [
+                "data-switch",
+                "C0-R0-R0-S2-S0",
+                "U26",
+                "Data network",
+                "none"
+            ],
             [
                 "bmc-switch",
                 "C0-R0-R0-S3-S0",

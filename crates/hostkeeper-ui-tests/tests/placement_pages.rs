@@ -89,7 +89,12 @@ return { selects, slots, first, reports: seen.reports };"#,
     assert_eq!(out["out"]["selects"], json!(["host-group", "place-slot"]));
     assert_eq!(
         out["out"]["slots"],
-        json!(["Unplaced", "C0-R0-R0-S1-S0", "C0-R0-R0-S1-S1", "C0-R1-R0-S0-S0"])
+        json!([
+            "Unplaced",
+            "C0-R0-R0-S1-S0",
+            "C0-R0-R0-S1-S1",
+            "C0-R1-R0-S0-S0"
+        ])
     );
     assert_eq!(out["out"]["first"], "");
     assert_eq!(
