@@ -92,17 +92,19 @@ Sign out ends the session on the coordinator.
 - **Host groups**: every group the coordinator holds (`HostGroups.List`, every page), the built-in `all` marked as built in,
   with its packages, the policy keys that are set ("default" when none is), its generation, its host count and its desired
   versions. Opening a group (`HostGroups.Get`) shows, per package, the desired and minimum version and the convergence counts,
-  and the group's hosts 50 at a time, each a link to its Host page, with *Remove from group* beside each (not in `all`). The form
+  and the group's hosts 50 at a time, each a link to its Host page. A host is not moved here but on its Host page (below). The form
   that creates or changes a group takes a name and the packages as a list of checkboxes, one for each registered package
   (`Services.List`, the Packages page's): nothing is typed, the packages are installed in the order ticked, and with none
   registered the form links to the Packages page. A package the group lists that is not registered stays in the list, ticked.
-  Saving a group (`HostGroups.Put`) keeps its policy and asks first when a package would be uninstalled. Moving a host to a
-  group (`HostGroups.Move`) needs the host, the group and a reason (1 to 256 characters, no control character) and asks to
-  confirm first; the hosts in no group are listed to pick. A refused List or Get is shown inline with its code and reason,
+  Saving a group (`HostGroups.Put`) keeps its policy and asks first when a package would be uninstalled. A refused List or Get is shown inline with its code and reason,
   and the rest of the page still renders.
 - **Host**: the services that host runs because its group lists them (its Source column reads
   `role <name>`, the name being the host's group), the installed version against the desired one,
-  and the minimum version.
+  and the minimum version. A **Host group** form moves the host: a dropdown of the groups the
+  coordinator holds (`HostGroups.List`, every page) but the built-in `all`, with the host's own
+  group selected and, for a host in none, the blank "No group (all alone)". Choosing another group
+  and pressing **Move** calls `HostGroups.Move` after a confirmation, with the reason "moved in the
+  console" (the form has no reason field); choosing the blank moves the host to no group. A refused List is shown inline and the rest of the page renders.
 - **MDM setup** (`MDM setup` in the page list; `docs/operations/mdm-setup.md`, `docs/design/coordinator-mdm.md` section 4.9).
   One plain form and nothing else but a one-line status above it and a *Verify* button below it. The status line is `Mdm.Status`
   in a line: `MDM: configured`, or `MDM: missing push certificate, ABM token` (a part that is there and wrong, such as an expired

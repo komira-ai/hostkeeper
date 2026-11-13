@@ -131,6 +131,7 @@ fn an_added_record_keeps_one_spelling_of_each_mac_and_is_listed_and_audited() {
         used_unix: 0,
         platform: 0,
         host_group: String::new(),
+        enrolled_host_id: String::new(),
     };
     assert_eq!(added.record.as_ref(), Some(&want));
     let entry = added.entry.expect("an audit entry");
@@ -236,7 +237,7 @@ fn an_add_outside_the_grammar_is_refused_and_changes_nothing() {
         ),
         (
             proto::AddRecordRequest {
-                notes: "line\nbreak".to_owned(),
+                notes: "tab\there".to_owned(),
                 ..good()
             },
             Refusal::InvalidRequest,

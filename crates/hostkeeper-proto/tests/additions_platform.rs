@@ -65,6 +65,7 @@ struct AddBefore {
 
 fn record(platform: Platform) -> op::InventoryRecord {
     op::InventoryRecord {
+        enrolled_host_id: String::new(),
         host_id: "db-1".to_owned(),
         role: "storage".to_owned(),
         data_macs: vec!["0c:c4:7a:00:00:02".to_owned()],
