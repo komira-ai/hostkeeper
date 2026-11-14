@@ -86,3 +86,23 @@ pub(crate) fn remove_after(
         Err(SwitchError::Failed(why)) => Err(why),
     }
 }
+
+/// The removal of a first install's package when the hook's `rollback` could not be started:
+/// there is nothing to stop, so the switch's `Back` is made at once. `Some` is the exit a removal
+/// that ended the step gave; `None` when it was made, or when this is not a first install's
+/// `rollback`. A failed removal is the `Err`, the step still pending.
+pub(crate) fn remove_unstarted(
+    switch: Option<&Switch>,
+    order: &UpdateOrder,
+    step: Step,
+) -> Result<Option<StepExit>, String> {
+    let Some(switch) = switch.filter(|_| (step == Step::Rollback) & order.previous.is_none())
+    else {
+        return Ok(None);
+    };
+    match switch(Toward::Back, order) {
+        Ok(()) => Ok(None),
+        Err(SwitchError::Ended(ended)) => Ok(Some(ended)),
+        Err(SwitchError::Failed(why)) => Err(why),
+    }
+}

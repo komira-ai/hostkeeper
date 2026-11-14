@@ -101,7 +101,7 @@ it has ended does the daemon do the package-level rollback (`apt-mark unhold`, `
 the removal of `current`). The removal is made when the hook's `rollback` succeeded or declined the install
 (`no_previous_release`). A `rollback` that fails or defers leaves the package where it is: it is run again within its
 retries, and when it ends in a `halt` the package stays for whoever looks at the halt. A removal that fails ends the
-switch as before (`link_failed`, the step still pending, run again; `rollback` is idempotent, as `remove` is), and one
+switch as before (`link_failed`); the hook's `rollback` is already recorded done, so the removal alone is run again, also after a crash, and the hook never runs on a purged package. A hook that cannot be started leaves nothing to stop: the package is removed at once. A removal
 that ends the step itself (a package manager that stayed busy) gives its exit in place of the hook's. An update's
 rollback is unchanged: the previous version is activated again before the hook's `rollback`, which restarts it.
 

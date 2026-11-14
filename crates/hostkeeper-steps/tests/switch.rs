@@ -321,12 +321,13 @@ fn a_first_installs_package_stays_when_its_hook_rollback_halts() {
 }
 
 /// Proves a removal that fails after the hook's `rollback` has ended stops the runner with
-/// `RunError::Switch`, and the next run, with the removal working, ends the rollback: the hook's
-/// `rollback` (idempotent) runs again and the package is removed after it.
+/// `RunError::Switch`, and the next run, with the removal working, only removes the package: the
+/// hook's `rollback` is recorded done and is not run again on a package that may be half removed
+/// (the same resume as after a crash between the removal and the next record).
 ///
-/// Catches: a failed removal that loses the rollback, or one that is made before the hook.
+/// Catches: a failed removal or a crash after it that runs the hook again on a purged package.
 #[test]
-fn a_failed_removal_after_the_hook_rollback_is_tried_again_after_the_hook() {
+fn a_failed_removal_after_the_hook_rollback_is_tried_again_without_the_hook() {
     let rig = Rig::new("switch-first-install-removal-fails");
     let log = Lines::default();
     let failing = Arc::new(AtomicBool::new(false));
@@ -334,13 +335,12 @@ fn a_failed_removal_after_the_hook_rollback_is_tried_again_after_the_hook() {
     rig.fake.say(Step::Verify, &[FAIL]);
     let order = first_install(&rig);
     let failing_later = Arc::clone(&failing);
-    let tripped = AtomicBool::new(false);
     let ran = Arc::clone(&log);
     rig.fake.on_run(move |call| {
         ran.lock()
             .expect("the log")
             .push(format!("run {}", call.invocation.step));
-        if call.invocation.step == Step::Rollback && !tripped.swap(true, Ordering::SeqCst) {
+        if call.invocation.step == Step::Rollback {
             failing_later.store(true, Ordering::SeqCst);
         }
     });
@@ -358,13 +358,30 @@ fn a_failed_removal_after_the_hook_rollback_is_tried_again_after_the_hook() {
     );
     let log = lines(&log);
     assert_eq!(
-        log[log.len() - 4..],
-        [
-            "run rollback",
-            "switch Back 2.0.0",
-            "run rollback",
-            "switch Back 2.0.0"
-        ]
+        log[log.len() - 3..],
+        ["run rollback", "switch Back 2.0.0", "switch Back 2.0.0"]
+    );
+}
+
+/// Proves a first install whose hook `rollback` cannot be started (a missing or unexecutable
+/// hook) still has its package removed, once, as before the hook ran first: there is nothing
+/// to stop.
+///
+/// Catches: a package left installed and held on a host when the hook of its first install
+/// could not be started.
+#[test]
+fn a_first_installs_package_is_removed_when_its_hook_rollback_cannot_start() {
+    let rig = Rig::new("switch-first-install-nostart");
+    let log = Lines::default();
+    let failing = Arc::new(AtomicBool::new(false));
+    let runner = switching(&rig, &log, &failing);
+    rig.fake.say(Step::Verify, &[FAIL]);
+    rig.fake.say(Step::Rollback, &[Reply::NoStart]);
+    runner.run(&first_install(&rig)).expect("runs");
+    let log = lines(&log);
+    assert!(
+        log.iter().any(|line| line == "switch Back 2.0.0"),
+        "{log:?}"
     );
 }
 

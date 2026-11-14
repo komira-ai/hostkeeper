@@ -471,7 +471,7 @@ dependency but its C library baseline (packages.md section 5.4), so it passes on
   `Acquire::Check-Valid-Until=false`, this run only: P's index was checked within its validity at P's stage, is
   sealed and re-hashed before the step, and a rollback must not depend on how long ago that was. The repository need
   not still list P, and the network need not be up. A `ForceRollback` and an automatic rollback take the same path. A first install
-  that fails has no previous version: `remove` purges it.
+  that fails has no previous version: the hook's `rollback` runs first, while the package is still installed, and then `remove` purges it.
 - **A version no longer on the host** (a `Force` or `ForceRollback` to an older version than `previous`) is staged
   again from the repository, which must still list it: otherwise `not_in_repository`.
 - **Uninstall** keeps today's order (packages-lifecycle.md section 6.5), with `remove` above. **Purge, not remove:**
