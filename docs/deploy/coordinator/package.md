@@ -64,10 +64,10 @@ place the files the flags name:
 [coordinator-state.md](../../operations/coordinator-state.md) lists each flag's refusals.
 
 Two keys bound how the coordinator reads a repository when an operator adds one
-([package-repositories.md](../package-repositories.md#structure-of-a-repository)):
+([package-repositories.md](../package-repositories.md#hostkeeper-repository-format-version-1)):
 `repository-discover-secs` (20, at least 1) is the time each of the two reads, the descriptor and
 the key, may take, and `repository-descriptor-max-bytes` (65536, 1 to 65536) is the most bytes of a descriptor.
-The built-in repository `komira` and its key are in the program, not in a flag.
+No repository is built into the program: the organisation's `komira` is added by an operator like any other.
 
 ## Starting it
 

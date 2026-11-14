@@ -1,5 +1,5 @@
-//! The descriptor of a package repository (docs/deploy/package-repositories.md, "Structure of a
-//! repository"): the small file `<base>/hostkeeper-repository.json` through which one URL says
+//! The descriptor of a package repository (docs/deploy/package-repositories.md, "hostkeeper
+//! repository format, version 1"): the small file `<base>/hostkeeper-repository.json` through which one URL says
 //! what a repository serves, so that adding it needs a name and that URL and nothing else.
 //!
 //! The descriptor names the channels (apt suites, rpm directories, pointer names), the keyring

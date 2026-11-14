@@ -60,6 +60,36 @@ pub(crate) fn komira(seed: u8) -> Repository {
     )
 }
 
+/// The descriptor of the repository `komira` of the tests (docs/deploy/package-repositories.md):
+/// the channels `testing` and `stable`, an apt format, and a macOS format whose packages are
+/// `hostkeeper` and `hello` (hello's installer is in hostkeeper's directory), made for `keyring`.
+pub(crate) fn komira_descriptor(keyring: &[u8]) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "version": 1,
+        "name": "komira",
+        "channels": ["testing", "stable"],
+        "key": {"keyring": "k.gpg", "fingerprints": [fingerprint(keyring)]},
+        "formats": {
+            "apt": {"path": "apt", "components": ["main"]},
+            "macos-pkg": {
+                "path": "pkg",
+                "platforms": ["macos-arm64"],
+                "packages": {"hostkeeper": {"dir": "hostkeeper"}, "hello": {"dir": "hostkeeper"}}
+            }
+        }
+    }))
+    .expect("json")
+}
+
+/// [`komira`] as `Repositories.Add` keeps it: with the descriptor of [`komira_descriptor`] and
+/// its base URL.
+pub(crate) fn komira_added(seed: u8) -> Repository {
+    let mut entry = komira(seed);
+    entry.base_uri = "https://packages.example.com".to_owned();
+    entry.descriptor = komira_descriptor(&entry.keyring);
+    entry
+}
+
 /// A repository entry of `service` that passes every rule of the release: `apt` from the entry
 /// `repository` of the registry at `1:1.6.0-1`, pinned by the digest all `a`, its manifest naming
 /// the package `service`.

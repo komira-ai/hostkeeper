@@ -520,15 +520,12 @@ fn the_repositories_section_lists_each_with_its_platforms_and_packages() {
 }
 
 #[test]
-fn the_built_in_repository_is_tagged_and_has_no_remove() {
-    // Proves: a repository the coordinator has built in shows a "built in" tag beside its name and
-    // a Check again but no Remove; one put keeps its Remove.
-    // Catches: a Remove offered for a repository the coordinator refuses to remove.
+fn every_repository_row_offers_check_again_and_remove() {
+    // Proves: each registered repository, `komira` among them, is a row with its base URL,
+    // platforms and package count, with a Check again and a Remove and no tag beside its name.
+    // Catches: a repository the page treats as built in, with no Remove or a tag.
     let mut ui = Ui::start();
-    ui.reply(&m("Services/List"), json!({}));
-    let mut reply = repositories_reply();
-    reply["repositories"][1]["builtin"] = json!(true);
-    ui.reply(&m("Repositories/List"), reply);
+    replies(&mut ui);
     let out = ui.run(&page_driver(
         "packages",
         "{}",
@@ -547,21 +544,21 @@ fn the_built_in_repository_is_tagged_and_has_no_remove() {
                     "Check again Remove"
                 ],
                 [
-                    "komira built in",
+                    "komira",
                     "https://packages.example.com",
                     "Linux x86-64, Linux arm64, macOS arm64",
                     "used by 2 packages",
-                    "Check again"
+                    "Check again Remove"
                 ]
             ],
-            1
+            2
         ])
     );
 }
 
 /// What a check of `https://origin.example.com` answers: Linux and macOS, two channels, one
 /// macOS package kept in another directory, the key `user id` and its two fingerprints.
-fn discovery(pinned: bool) -> Value {
+fn discovery() -> Value {
     json!({"discovery": {
         "name": "origin", "description": "an origin's packages",
         "channels": ["testing", "stable"],
@@ -573,8 +570,7 @@ fn discovery(pinned: bool) -> Value {
         ],
         "userIds": ["origin packages <packages@example.com>"],
         "descriptorSha256": "ab".repeat(32),
-        "keyringSha256": "cd".repeat(32),
-        "pinned": pinned
+        "keyringSha256": "cd".repeat(32)
     }})
 }
 
@@ -590,7 +586,7 @@ fn checking_a_repository_shows_what_it_serves_and_adding_confirms_exactly_that()
     // confirmed, or a field the form should not ask for.
     let mut ui = Ui::start();
     replies(&mut ui);
-    ui.reply(&m("Repositories/Discover"), discovery(false));
+    ui.reply(&m("Repositories/Discover"), discovery());
     ui.reply(&m("Repositories/Add"), json!({}));
     let out = ui.run(&page_driver(
         "packages",
@@ -649,32 +645,6 @@ return {{ before, found, name }};
 }
 
 #[test]
-fn a_pinned_key_says_so_instead_of_asking_to_compare() {
-    // Proves: a key the coordinator says is pinned shows "This is komira's pinned key." and not the
-    // line that asks the operator to compare it.
-    // Catches: a pinned key presented as one to verify by hand, or the reverse.
-    let mut ui = Ui::start();
-    replies(&mut ui);
-    ui.reply(&m("Repositories/Discover"), discovery(true));
-    let out = ui.run(&page_driver(
-        "packages",
-        "{}",
-        "[]",
-        &format!(
-            r#"{HELPERS}
-await click(tree, "add-repository");
-type(last(), "repository-uri", "https://packages.komira.ai");
-await click(last(), "check-repository");
-return text(last());
-"#
-        ),
-    ));
-    let found = out["out"].as_str().expect("text");
-    assert!(found.contains("This is komira's pinned key."), "{found}");
-    assert!(!found.contains("Compare this fingerprint"), "{found}");
-}
-
-#[test]
 fn a_repository_form_that_breaks_a_rule_sends_nothing_and_says_why() {
     // Proves: a URL that is not https or ends in `/`, and a private repository without its
     // credential file, each report a sentence and send no Discover; Add is not offered before a
@@ -684,7 +654,7 @@ fn a_repository_form_that_breaks_a_rule_sends_nothing_and_says_why() {
     // whose key was shown.
     let mut ui = Ui::start();
     replies(&mut ui);
-    ui.reply(&m("Repositories/Discover"), discovery(false));
+    ui.reply(&m("Repositories/Discover"), discovery());
     let out = ui.run(&page_driver(
         "packages",
         "{}",
@@ -737,9 +707,9 @@ fn a_private_repository_sends_its_credential_file_and_a_public_one_sends_none() 
     // Catches: a credential path sent with a public repository, which the coordinator refuses.
     let mut ui = Ui::start();
     replies(&mut ui);
-    ui.reply(&m("Repositories/Discover"), discovery(false));
+    ui.reply(&m("Repositories/Discover"), discovery());
     ui.reply(&m("Repositories/Add"), json!({}));
-    ui.reply(&m("Repositories/Discover"), discovery(false));
+    ui.reply(&m("Repositories/Discover"), discovery());
     let out = ui.run(&page_driver(
         "packages",
         "{}",
@@ -780,7 +750,7 @@ return credentials;
 #[test]
 fn the_refusals_of_a_check_and_an_add_are_shown_in_words() {
     // Proves: `discovery_failed`, `descriptor_invalid` and `credential_unusable` of a check, and
-    // `descriptor_changed` and `builtin` of an add, each report their own sentence, and a refused
+    // `descriptor_changed` and `unknown_repository` of an add, each report their own sentence, and a refused
     // check leaves no result to add.
     // Catches: a token shown raw, or an Add offered after a check that failed.
     let mut ui = Ui::start();
@@ -803,18 +773,12 @@ fn the_refusals_of_a_check_and_an_add_are_shown_in_words() {
         "FAILED_PRECONDITION",
         "credential_unusable",
     );
-    ui.reply(&m("Repositories/Discover"), discovery(false));
+    ui.reply(&m("Repositories/Discover"), discovery());
     ui.refuse(
         &m("Repositories/Add"),
         412,
         "FAILED_PRECONDITION",
         "descriptor_changed",
-    );
-    ui.refuse(
-        &m("Repositories/Add"),
-        412,
-        "FAILED_PRECONDITION",
-        "builtin",
     );
     ui.refuse(
         &m("Repositories/Add"),
@@ -837,7 +801,6 @@ out.push(await say("check-repository"));
 out.push(await say("check-repository"));
 out.push(count(last(), "add-repository-confirm"));
 out.push(await say("check-repository"));
-out.push(await say("add-repository-confirm"));
 out.push(await say("add-repository-confirm"));
 out.push(await say("add-repository-confirm"));
 return out;
@@ -874,12 +837,6 @@ return out;
         said[6]
             .as_str()
             .expect("text")
-            .starts_with("komira is the organisation's built-in repository")
-    );
-    assert!(
-        said[7]
-            .as_str()
-            .expect("text")
             .contains("unknown_repository")
     );
     assert_eq!(out["seen"]["refreshes"], json!(0));
@@ -895,7 +852,7 @@ fn check_again_opens_the_form_for_a_repository_with_its_name_locked() {
     // repository is structured.
     let mut ui = Ui::start();
     replies(&mut ui);
-    ui.reply(&m("Repositories/Discover"), discovery(false));
+    ui.reply(&m("Repositories/Discover"), discovery());
     ui.reply(&m("Repositories/Add"), json!({}));
     let out = ui.run(&page_driver(
         "packages",
@@ -930,7 +887,7 @@ return {{ first, second, href: link.attrs.href, text: link.children.map((c) => c
     );
     assert_eq!(
         out["out"]["href"],
-        "https://github.com/komira-ai/hostkeeper/blob/main/docs/deploy/package-repositories.md#structure-of-a-repository"
+        "https://github.com/komira-ai/hostkeeper/blob/main/docs/deploy/package-repositories.md#hostkeeper-repository-format-version-1"
     );
     assert_eq!(out["out"]["text"], "How do I structure a repository?");
     let adds = bodies_of(&ui, "Repositories/Add");

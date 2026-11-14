@@ -21,6 +21,10 @@
 //!   coordinator's) and its macOS installer (signed by the release, not notarized) reaching the repositories at
 //!   `packages.komira.ai`: testing first, the install checks, then the decision to promote and
 //!   the promotion. Copied from komira-ai/tierstore (`channels`).
+//! - `repository check <base-url-or-dir>`: the conformance check of the hostkeeper repository
+//!   format (`docs/deploy/package-repositories.md`): the descriptor, the keyring and the layout
+//!   of a repository, judged by the rules a coordinator adds it by, so a publisher can test a
+//!   tree before publishing it (`repository`).
 //! - `debs`: the Debian packages a CI job installs with `dpkg`, pinned by version and SHA-256 in a
 //!   file of `.github/debs/`, kept from the actions cache or fetched from the pinned mirrors in
 //!   turn (`debs`), so that no job runs `apt-get`.
@@ -59,6 +63,7 @@ mod mirrored;
 mod netboot_iso;
 mod netinstall_report;
 mod release;
+mod repository;
 mod stamp;
 
 #[cfg(feature = "test-support")]
@@ -183,6 +188,14 @@ enum Verb {
         #[arg(long, default_value = coordinator_update::public::CA_BUNDLE)]
         ca_bundle: PathBuf,
     },
+    /// The conformance check of the hostkeeper repository format
+    /// (`docs/deploy/package-repositories.md`): the descriptor, the keyring and the layout of a
+    /// repository judged by the rules a coordinator adds it by, for a publisher to run before
+    /// publishing.
+    Repository {
+        #[command(subcommand)]
+        verb: repository::Verb,
+    },
     /// Fetch the ISO of a boot set of network install into `--dir`, by its pin in the pins
     /// file: from the pinned URL, then each `--mirror` in turn (three rounds), its size and
     /// SHA-256 checked. A file of its name and pin already there is kept.
@@ -237,6 +250,10 @@ fn run(cli: Cli) -> Result<Vec<String>, Error> {
         Verb::NetinstallReport(flags) => Ok(netinstall_report::run(&flags)?),
         Verb::DbBackup(flags) => Ok(db_backup::run(&flags)?),
         Verb::Channels { verb } => Ok(channels::run(verb, &release::real::exec())?),
+        Verb::Repository { verb } => Ok(repository::run(
+            verb,
+            &channels::host::ExecHost(&release::real::exec()),
+        )?),
         Verb::Debs {
             pins,
             dir,

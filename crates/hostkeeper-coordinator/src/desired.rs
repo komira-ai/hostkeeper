@@ -880,6 +880,24 @@ impl DesiredStore {
         read(&self.lock().repositories)
     }
 
+    /// Puts `kept` into a registry that holds nothing and never changed, in memory only: the
+    /// repository the tests of the coordinator's sets and picks name, as an operator's `Add` made.
+    #[cfg(test)]
+    pub(crate) fn seed_repository(&self, kept: crate::repositories::Kept) {
+        let mut held = self.lock();
+        if held.repositories == crate::repositories::Registry::default() {
+            held.repositories
+                .entries
+                .insert(kept.repository.name.clone(), kept);
+        }
+    }
+
+    /// Empties the registry in memory, as a coordinator that was given no repository holds it.
+    #[cfg(test)]
+    pub(crate) fn forget_repositories(&self) {
+        self.lock().repositories = crate::repositories::Registry::default();
+    }
+
     /// The desired state with the registry `edit` makes of the registry now, staged under the
     /// writers' lock and not committed: for `Repositories.Put` and `Repositories.Remove`, which
     /// commit it with their audit entries ([`crate::ops::OpsStore::decide_changes_with`]). The

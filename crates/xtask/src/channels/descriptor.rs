@@ -1,7 +1,9 @@
 //! `cargo xtask channels descriptor`: the descriptor of the repository at `packages.komira.ai`,
 //! `hostkeeper-repository.json` ([`hostkeeper_release::descriptor`], docs/deploy/package-repositories.md,
-//! "Structure of a repository"), which lets an operator add the whole repository to a coordinator
-//! with its URL alone.
+//! "hostkeeper repository format, version 1"), which lets an operator add the whole repository to a
+//! coordinator with its URL alone. It is how the organisation's own repository, `komira`, is
+//! published in the standard format; no coordinator holds it built in, and an operator adds it
+//! like any other (`Repositories.Add`).
 //!
 //! The host is shared by the organisation's products, so the descriptor is **merged**, never
 //! overwritten: `write` reads the object that is there with its ETag, adds this product's
@@ -314,7 +316,7 @@ pub(crate) fn merge(existing: Option<Value>, ours: &Value) -> Result<Value, Erro
 }
 
 /// The fingerprints of the keyring `bytes`: each primary key's and its subkeys', in order.
-fn fingerprints_of(bytes: &[u8], what: &str) -> Result<Vec<String>, Error> {
+pub(crate) fn fingerprints_of(bytes: &[u8], what: &str) -> Result<Vec<String>, Error> {
     let keys = hostkeeper_release::registry::keys(bytes)
         .map_err(|e| Error::Failed(format!("{what} is not a keyring of public keys: {e}")))?;
     Ok(keys

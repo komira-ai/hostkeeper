@@ -17,12 +17,12 @@
 // A repository is one entry that serves every platform it publishes for, and adding one asks for a
 // name, a URL and, for a private one, the credential file on the coordinator's machine. "Check
 // repository" has the coordinator read the repository's descriptor (docs/deploy/package-repositories.md,
-// "Structure of a repository") and shows what it found: the platforms, the channels, the packages
+// "hostkeeper repository format, version 1") and shows what it found: the platforms, the channels, the packages
 // published for macOS and the signing key's fingerprints, worked out by the coordinator from the key
 // itself. The operator compares the fingerprint with the one the repository's owner publishes and
 // adds it; the coordinator reads the repository again and refuses if anything differs from what was
-// shown. `komira`, the organisation's repository, is built in: it is listed with a "built in" tag and
-// has no Remove. A row's "Check again" opens the same form for a repository already added (its name
+// shown. No repository is built in: every one, the organisation's `komira` included, is added here.
+// A row's "Check again" opens the same form for a repository already added (its name
 // locked), which is how an entry added before descriptors learns the platforms its repository
 // serves. The suites, components and key file are not asked for: they come from the descriptor, and
 // the API's `Repositories.Put` still takes them by hand.
@@ -87,7 +87,6 @@ const REPOSITORY_REFUSALS = {
   discovery_failed: "The coordinator could not read a repository at that address: check the URL, and the credential file if it is private.",
   descriptor_invalid: "That address does not serve a valid repository descriptor (hostkeeper-repository.json); see How do I structure a repository?",
   descriptor_changed: "What the repository serves changed since it was checked: check it again and compare the fingerprint.",
-  builtin: "komira is the organisation's built-in repository and its key is pinned: this key is not the pinned one.",
   conflict: "A channel of this repository is already a channel of another one.",
   capacity: "The coordinator holds as many repositories as it can.",
   credential_unusable: "The coordinator cannot use that credential file (it must be a file of the coordinator's user, mode 0600, one line).",
@@ -323,9 +322,7 @@ export async function render(ctx) {
         : null,
       list(found, "userIds").map((id) => h("p", { name: "found-key-user" }, `Key: ${id}`)),
       list(found, "fingerprints").map((print) => h("p", { class: "fingerprint", name: "found-fingerprint" }, h("code", {}, grouped(print)))),
-      found.pinned
-        ? h("p", { class: "note", name: "found-pinned" }, "This is komira's pinned key.")
-        : h("p", { class: "note", name: "found-compare" }, "Compare this fingerprint with the one the repository's owner publishes."));
+      h("p", { class: "note", name: "found-compare" }, "Compare this fingerprint with the one the repository's owner publishes."));
   };
 
   const repositoryForm = () => {
@@ -347,7 +344,7 @@ export async function render(ctx) {
           "The absolute path, on the coordinator's machine, of the file that holds the Authorization header's value.")
         : null,
       h("p", { class: "note" }, deployDocLink("repository-structure-help", "How do I structure a repository?",
-        "package-repositories.md", "structure-of-a-repository")),
+        "package-repositories.md", "hostkeeper-repository-format-version-1")),
       repo.found !== null ? foundCard(repo.found) : null,
       h("div", { class: "buttons" },
         action(ctx, repo.found === null ? "Check repository" : "Check again", "check-repository", async () => {
@@ -427,13 +424,13 @@ export async function render(ctx) {
   const repositoryRows = () => repositories.map((one) => {
     const body = one.repository || {};
     return h("tr", {},
-      h("td", {}, body["name"], one.builtin === true ? [" ", h("span", { class: "tag" }, "built in")] : null),
+      h("td", {}, body["name"]),
       h("td", {}, body.baseUri || body.uri || "-"),
       h("td", {}, list(one, "platforms").map(platformName).join(", ") || "-"),
       h("td", {}, `used by ${packagesCount(list(one, "services").length)}`),
       h("td", { class: "row-actions" },
         action(ctx, "Check again", "check-again-repository", () => checkAgain(one)),
-        one.builtin === true ? null : removeRepository(one)));
+        removeRepository(one)));
   });
 
   // A list's header: its title and the button that opens its add form.

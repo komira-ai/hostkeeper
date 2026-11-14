@@ -287,8 +287,8 @@ fn a_restart_keeps_the_repository() {
 
 /// Proves: `Repositories.Remove` of a repository a service names is refused `in_use` and the
 /// registry lists the service as naming it; once the service is cleared the remove is taken. The
-/// default repository (the built-in `komira`) is named by a package a host group lists, which the
-/// rollout file does not define; it is refused `builtin`, and an entry put over it is removed.
+/// default repository (`komira`) is named by a package a host group lists, which the rollout file
+/// does not define; it is refused `in_use` like any other.
 ///
 /// Catches: a repository removed from under a package that comes from it, or a package of a host
 /// group that is not counted as coming from the default repository.
@@ -330,16 +330,11 @@ fn a_repository_a_service_names_is_in_use() {
         remove("acme").map(drop),
         Err(proto::RepositoriesRefusal::InUse)
     );
-    // The built-in `komira` is no entry to remove, whoever names it; one put over it is, and the
-    // built-in is back after.
+    // `komira` is an entry like another: services name it, so it is in use.
     assert_eq!(
         remove("komira").map(drop),
-        Err(proto::RepositoriesRefusal::Builtin)
+        Err(proto::RepositoriesRefusal::InUse)
     );
-    put(&farm, "komira");
-    remove("komira")
-        .expect("an entry put over the built-in one is removed though services name it");
-    assert_eq!(naming(&farm, "komira"), ["cfg-alpha", "db", "hostkeeper"]);
 
     set_as(&farm, &operator(), "web", "", "back").expect("cleared");
     remove("acme").expect("taken once no service names it");
@@ -400,10 +395,10 @@ fn a_repository_left_on_a_package_no_group_lists_can_be_cleared() {
 }
 
 /// Proves: `Repositories.List` names a repository the registry lacks when a package a host group
-/// lists comes from it, and does not name the default `komira`, which is built in.
+/// lists comes from it, and does not name the default `komira`, which the registry holds.
 ///
 /// Catches: a group's package that comes from a repository no one can see is missing, or the
-/// built-in repository listed as lacking.
+/// repository the registry holds listed as lacking.
 #[test]
 fn a_group_package_from_a_repository_the_registry_lacks_is_listed_unregistered() {
     let farm = Farm::new("sr-unregistered");
@@ -415,7 +410,7 @@ fn a_group_package_from_a_repository_the_registry_lacks_is_listed_unregistered()
             .expect("the list")
             .unregistered
     };
-    assert!(listed().is_empty(), "komira is built in");
+    assert!(listed().is_empty(), "the registry holds komira");
     farm.world
         .coordinator()
         .ops()

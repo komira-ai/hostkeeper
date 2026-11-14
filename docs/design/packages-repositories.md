@@ -276,14 +276,14 @@ daemon that announces `private-repository-v1`, which writes its entry's `URIs` a
 (`Repositories.Add`, after `Repositories.Discover`): the coordinator reads the descriptor
 `<URL>/hostkeeper-repository.json` and the keyring it names, shows the operator the platforms, channels,
 packages and the fingerprints it computed from the keyring, and `Add` reads them again and refuses
-(`descriptor_changed`) when either differs from what was confirmed; docs/deploy/package-repositories.md ("Structure of a
-repository") is the descriptor's specification and the layout a repository follows. The stored `Repository`
+(`descriptor_changed`) when either differs from what was confirmed; docs/deploy/package-repositories.md ("hostkeeper repository
+format, version 1") is the descriptor's specification and the layout a repository follows. The stored `Repository`
 gains two optional fields, `descriptor` (the file, byte for byte) and `base_uri`, and nothing is re-meant: `uri` stays
 the apt root and `kind` stays `apt`, so an apt host's entry and the digest of what hosts are sent are those of an entry
 put by hand, and a coordinator before this reads and ignores the new keys of a stored record. `Put` stays for every field
-by hand. `komira` is **built in** (`crates/hostkeeper-coordinator/src/builtin.rs`): the coordinator answers it at generation 0
-with its keyring and pinned fingerprints in code until an entry of that name is put over it; it cannot be removed (`builtin`),
-and `Add` of the name with another key is refused. An entry put before descriptors serves Linux only and gains the
+by hand. No repository is built in, `komira` included: a coordinator with no entry lists none, and an operator adds `komira`
+like any other repository (an earlier release of this design answered it at generation 0 from code, with a pinned key;
+that was removed so that the organisation's repository is one repository of the standard format among others). An entry put before descriptors serves Linux only and gains the
 descriptor, and the macOS source it describes, when it is added again with the same name and URL.
 
 **The push.** At each heartbeat of a daemon that announces `repositories-v1` (a Linux daemon), the coordinator takes

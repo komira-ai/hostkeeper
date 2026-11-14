@@ -25,7 +25,6 @@ use hostkeeper_release::descriptor::Descriptor;
 use hostkeeper_release::grammar::is_repository_name;
 use hostkeeper_release::registry;
 
-use crate::builtin;
 use crate::operator::{Caller, entry_proto, valid_reason};
 use crate::ops::AuditEntry;
 use crate::repositories::{Kept, PutError, Registry, platforms_of, put_reason, remove_reason};
@@ -95,16 +94,13 @@ impl Coordinator {
             repository.keyring.clear();
             repository.descriptor.clear();
         }
-        let builtin = self
-            .desired
-            .with_repositories(|held| held.is_builtin(&kept.repository.name));
         proto::RegisteredRepository {
             platforms: platforms_of(&kept.repository),
             repository: Some(repository),
             keyring_sha256,
             generation: kept.generation,
             services: self.services_naming(&kept.repository.name),
-            builtin,
+            builtin: false,
         }
     }
 
@@ -247,7 +243,7 @@ impl Coordinator {
                     .iter()
                     .flat_map(|mac| mac.packages.keys().cloned())
                     .collect(),
-                pinned: builtin::is_pinned(&found.fingerprints),
+                pinned: false,
                 fingerprints: found.fingerprints,
                 user_ids: found.user_ids,
                 descriptor_sha256: found.descriptor_sha256,
@@ -261,8 +257,7 @@ impl Coordinator {
     /// `repository_put`.
     ///
     /// # Errors
-    /// Those of `Discover`, `descriptor_changed`, `builtin` (the name `komira` with a key other
-    /// than the pinned one), and those of `Put`.
+    /// Those of `Discover`, `descriptor_changed`, and those of `Put`.
     pub async fn repositories_add(
         &self,
         caller: &Caller,
@@ -282,9 +277,6 @@ impl Coordinator {
         if request.descriptor_sha256 != found.descriptor_sha256 || confirmed != read {
             tracing::warn!(repository = %request.name, "refused an add: what the repository serves is not what was confirmed");
             return Err(Refusal::DescriptorChanged);
-        }
-        if request.name == builtin::NAME && !builtin::is_pinned(&found.fingerprints) {
-            return Err(Refusal::Builtin);
         }
         let private = request.access == registry::ACCESS_HOSTS;
         let suites = if private {
@@ -340,14 +332,8 @@ impl Coordinator {
             .repository_naming
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // An entry put over the built-in one is removed whatever services name it: they are served
-        // by the built-in one after.
-        let in_use =
-            request.name != builtin::NAME && !self.services_naming(&request.name).is_empty();
+        let in_use = !self.services_naming(&request.name).is_empty();
         let staged = self.desired.stage_repositories(|held| {
-            if held.is_builtin(&request.name) {
-                return Err(Refusal::Builtin);
-            }
             let next = held
                 .remove(&request.name)
                 .ok_or(Refusal::UnknownRepository)?;

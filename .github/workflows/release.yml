@@ -2209,7 +2209,7 @@ jobs:
         run: cargo xtask channels pkg upload --dir dist --tag "$TAG" --commit "$COMMIT" --bucket "$APT_BUCKET" --work "$RUNNER_TEMP/pkg-upload"
 
   # descriptor  the repository's descriptor, `hostkeeper-repository.json` at the root of the host
-  #          (docs/deploy/package-repositories.md, "Structure of a repository"), which lets an operator
+  #          (docs/deploy/package-repositories.md, "hostkeeper repository format, version 1"), which lets an operator
   #          add the whole repository to a coordinator by its URL. After the apt write that listed the
   #          release's packages and the installers' upload, so that what it describes is there:
   #          `cargo xtask channels descriptor write` merges this product's channels, architectures,
@@ -2218,7 +2218,8 @@ jobs:
   #          it with If-Match on the ETag it read. The cloud role through OIDC, no signing key. A
   #          green no-op until the settings exist and the upload ran with them. It is not a need of
   #          no-downgrade, set-desired or any promotion: a failing descriptor never holds a release,
-  #          and the coordinator's built-in `komira` carries the same facts until this has run.
+  #          and `komira` cannot be added to a coordinator until this has run: adding it is the operator's, and a
+  #          set-desired of the release is refused `repository_unknown` until it is added.
   descriptor:
     needs: [plan, testing-pkg-upload, testing-apt-write, testing-apt-write-2, testing-apt-write-3]
     if: ${{ !cancelled() && needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' && needs.testing-pkg-upload.outputs.enabled == 'true' && (needs.testing-apt-write.outputs.conflict == 'false' || needs.testing-apt-write-2.outputs.conflict == 'false' || needs.testing-apt-write-3.outputs.conflict == 'false') }}

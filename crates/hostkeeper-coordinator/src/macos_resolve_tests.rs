@@ -11,23 +11,26 @@ use hostkeeper_proto::hostkeeper::agent::v1 as agent;
 use hostkeeper_proto::hostkeeper::release::v1::{Location, Target, TargetList};
 use hostkeeper_release::target::check_entry;
 use hostkeeper_wire::version::Version;
-use serde_json::json;
 
-use crate::builtin;
 use crate::macos_resolve::{Source, has_named, is_named, resolve, resolved, sources_of};
 use crate::marks_support::{AGENT, WEB, ask_heard, beat_on, rig, who};
 use crate::picks::{COORDINATOR_STORE, Pick, TARGET_FEATURE, pick};
 use crate::releases::Release;
 use crate::repositories::Registry;
-use crate::repositories_support::{komira, macos_entry, repository_entry};
+use crate::repositories_support::{komira, komira_added, macos_entry, repository_entry};
 use crate::repository_push::PRIVATE_FEATURE;
 use crate::testutil::id;
 
-fn sources() -> BTreeMap<String, Source> {
-    sources_of(&Registry::default())
+/// The registry of an organisation's repository `komira`, put as `Repositories.Add` puts it.
+fn komira_registry() -> Registry {
+    Registry::default().put(komira_added(1)).expect("put")
 }
 
-/// Proves: a named-version entry of the built-in `komira` resolves to the artifact entry daemons
+fn sources() -> BTreeMap<String, Source> {
+    sources_of(&komira_registry())
+}
+
+/// Proves: a named-version entry of the repository `komira` resolves to the artifact entry daemons
 /// install: the installer, digest, size and manifest as CI sent them, no repository, no version,
 /// no attestation, and one location in the `coordinator` store whose locator is
 /// `repositories/komira/pkg/<dir>/<version>/<package>-<version>-macos-arm64.pkg`.
@@ -127,38 +130,31 @@ fn a_resolved_entry_passes_the_daemons_artifact_checks() {
 }
 
 /// Proves: the registry's sources are one per channel of a public repository whose descriptor has
-/// a macOS format (the built-in `komira`'s two), and none for an entry put without a descriptor,
-/// for a private one, or once an entry without a descriptor is put over the built-in one.
+/// a macOS format (`komira`'s two), and none for a registry with no repository, for an entry put
+/// without a descriptor, and for a private one.
 ///
-/// Catches: a legacy apt entry claiming a macOS source it was never given.
+/// Catches: a legacy apt entry claiming a macOS source it was never given, or a source made for a
+/// registry that holds nothing.
 #[test]
 fn only_a_repository_with_a_macos_format_is_a_source() {
+    assert!(sources_of(&Registry::default()).is_empty());
     let fresh = sources();
     assert_eq!(
         fresh.keys().collect::<Vec<_>>(),
         ["komira-stable", "komira-testing"]
     );
-    assert_eq!(fresh["komira-testing"].repository, builtin::NAME);
+    assert_eq!(fresh["komira-testing"].repository, "komira");
     assert_eq!(fresh["komira-testing"].platforms, ["macos-arm64"]);
     let legacy = Registry::default().put(komira(1)).expect("put");
     assert!(sources_of(&legacy).is_empty());
-    let mut with = komira(1);
-    with.base_uri = "https://packages.example.com".to_owned();
-    with.descriptor = serde_json::to_vec(&json!({
-        "version": 1,
-        "channels": ["testing", "stable"],
-        "key": {"keyring": "k.gpg", "fingerprints": [crate::repositories_support::fingerprint(&with.keyring)]},
-        "formats": {
-            "apt": {"path": "apt", "components": ["main"]},
-            "macos-pkg": {"path": "pkg", "platforms": ["macos-arm64"]}
-        }
-    }))
-    .expect("json");
-    let put = Registry::default().put(with.clone()).expect("put");
-    assert_eq!(sources_of(&put)["komira-testing"].repository, "komira");
-    with.access = "hosts".to_owned();
-    with.credential_file = "/etc/cred".to_owned();
-    let private = Registry::default().put(with).expect("put");
+    let mut private = komira_registry()
+        .get("komira")
+        .expect("held")
+        .repository
+        .clone();
+    private.access = "hosts".to_owned();
+    private.credential_file = "/etc/cred".to_owned();
+    let private = Registry::default().put(private).expect("put");
     assert!(sources_of(&private).is_empty());
 }
 

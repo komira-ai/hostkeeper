@@ -46,14 +46,12 @@ service Repositories {
   // registry's generation grows by one. Writes the audit entry `repository_put`.
   rpc Put(PutRepositoryRequest) returns (PutRepositoryResponse);
   // Removes a repository no package comes from. The registry's generation grows
-  // by one. Writes the audit entry `repository_remove`. The built-in repository `komira` is
-  // removed by no `Remove`, unless an entry of its name was put over it: then the built-in is
-  // back.
+  // by one. Writes the audit entry `repository_remove`.
   rpc Remove(RemoveRepositoryRequest) returns (RemoveRepositoryResponse);
   // Reads what the repository at a URL serves: its descriptor (`<base_uri>/hostkeeper-repository.json`)
   // and the signing key it names, over HTTPS, and answers the platforms, the channels, the packages
   // and the key's fingerprints, computed from the keyring, for the operator to confirm. Changes
-  // nothing (docs/deploy/package-repositories.md, "Structure of a repository").
+  // nothing (docs/deploy/package-repositories.md, "hostkeeper repository format, version 1").
   rpc Discover(DiscoverRepositoryRequest) returns (DiscoverRepositoryResponse);
   // Adds the repository at a URL, as `Discover` showed it: reads the descriptor and the key again,
   // refuses when either differs from what the operator confirmed, and then does what `Put` does
@@ -104,8 +102,9 @@ enum RepositoriesRefusal {
   REPOSITORIES_REFUSAL_DESCRIPTOR_INVALID = 13;
   // FAILED_PRECONDITION: `Add` reads a descriptor or a key other than the operator confirmed.
   REPOSITORIES_REFUSAL_DESCRIPTOR_CHANGED = 14;
-  // FAILED_PRECONDITION: `Remove` of the built-in repository `komira`; or `Add` of the name
-  // `komira` with a key other than the pinned one (a key rotation goes through `Put`).
+  // FAILED_PRECONDITION: unused, no repository is built in, so nothing answers it. The number stays
+  // reserved and is never renumbered or given another meaning (an older coordinator answered it
+  // for `Remove` of the built-in `komira` and `Add` of that name with another key).
   REPOSITORIES_REFUSAL_BUILTIN = 15;
 }
 
@@ -119,7 +118,8 @@ message RegisteredRepository {
   uint64 generation = 3;
   // The packages that come from it, by name.
   repeated string services = 4;
-  // Whether the entry is the built-in one (`komira`, in the coordinator's code), not one put.
+  // Unused, always false: no repository is built in. Kept so that the numbers and a reader of an
+  // older coordinator's answer stay as they were.
   bool builtin = 5;
   // The platforms it serves, derived: `linux-x86_64` and `linux-arm64` for an apt entry (put
   // without a descriptor, or with one), and the platforms of its descriptor's `macos-pkg` format.
@@ -221,7 +221,7 @@ message Discovery {
   string descriptor_sha256 = 8;
   // The SHA-256 of the keyring read, 64 lower-case hex characters.
   string keyring_sha256 = 9;
-  // Whether the fingerprints are the pinned ones of the built-in repository `komira`.
+  // Unused, always false: no key is pinned. Kept so that the numbers stay as they were.
   bool pinned = 10;
 }
 

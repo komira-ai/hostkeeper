@@ -113,6 +113,7 @@ impl World {
         let enrollment =
             EnrollmentRig::over_records(&format!("{name}-enrollment"), records.clone());
         let mut rig = Rig::new(name);
+        fake.seed_komira();
         rig.coordinator = coordinator_listed(
             &fake,
             &rig.clock,
