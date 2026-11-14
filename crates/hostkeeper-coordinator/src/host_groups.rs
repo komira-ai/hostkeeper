@@ -55,8 +55,12 @@ pub(crate) const MAX_PACKAGE_BYTES: usize = 255;
 /// The most packages of one group that may roll at once, when its policy names a number.
 pub(crate) const MAX_LIVE_ROLLOUTS: u32 = 16;
 
-/// A group's `max_updating` when its policy names none.
-pub(crate) const DEFAULT_MAX_UPDATING: u32 = 1;
+/// A group's `max_updating` when its policy names none: the whole stage, so every host a stage
+/// enters updates at once ([`MAX_COUNT`], the ceiling of the key).
+pub(crate) const DEFAULT_MAX_UPDATING: u32 = MAX_COUNT;
+
+/// The percents of a group's stages when its policy names none: half the hosts, then all of them.
+pub(crate) const GROUP_DEFAULT_STAGES: [u32; 2] = [50, 100];
 
 /// The name of a host group: the grammar of a role name ([`RoleName`]), 1 to 32 bytes of `a-z`,
 /// `0-9` and `-`, a letter first, no `--`, not ending in `-`, so that every role name is a group
@@ -154,7 +158,7 @@ pub(crate) struct PolicyCanary {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub(crate) struct Policy {
-    /// The stages; none is the default plan, 1, 10, 50 and 100 percent.
+    /// The stages; none is the group's default plan, 50 and 100 percent ([`GROUP_DEFAULT_STAGES`]).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) stages: Vec<PolicyStage>,
     /// The canary, which goes before the first stage.
@@ -173,7 +177,7 @@ pub(crate) struct Policy {
     #[serde(skip_serializing_if = "is_default_backoff")]
     pub(crate) defer_backoff: DeferBackoff,
     /// The most hosts of the group updating one package at once, 0 to [`MAX_COUNT`]; 0 holds
-    /// the group.
+    /// the group; the default is the whole stage ([`DEFAULT_MAX_UPDATING`]).
     #[serde(skip_serializing_if = "is_default_max_updating")]
     pub(crate) max_updating: u32,
     /// The fewest of the group's live hosts that stay up for a package, 0 to [`MAX_COUNT`].
@@ -246,14 +250,19 @@ impl Policy {
     /// [`PolicyError`] of `stages`: more than 16, a percent outside 1 to 100, percents that do
     /// not rise, or a last that is not 100.
     pub(crate) fn plan(&self) -> Result<Plan, PolicyError> {
-        let stages = (!self.stages.is_empty()).then(|| {
+        let stages = if self.stages.is_empty() {
+            GROUP_DEFAULT_STAGES
+                .iter()
+                .map(|percent| RawStage::Percent(*percent))
+                .collect()
+        } else {
             self.stages
                 .iter()
                 .map(|s| RawStage::table(s.percent, s.advance))
                 .collect()
-        });
+        };
         let canary = self.canary.map(|c| Canary { count: c.count });
-        Plan::read(stages, canary).map_err(|why| PolicyError { key: "stages", why })
+        Plan::read(Some(stages), canary).map_err(|why| PolicyError { key: "stages", why })
     }
 
     /// The keys whose value differs between `self` and `other`, in the order of the policy.

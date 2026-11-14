@@ -122,8 +122,8 @@ message HostGroup {
 
 // The rollout policy of every package of a group. A key left out takes its default.
 message RolloutPolicy {
-  // The update plan: 1 to 16 stages whose percents rise strictly to 100. Empty: the default plan,
-  // `[1, 10, 50, 100]`, every stage entered by itself.
+  // The update plan: 1 to 16 stages whose percents rise strictly to 100. Empty: the group's
+  // default plan, `[50, 100]`, every stage entered by itself.
   repeated PolicyStage stages = 1;
   // A first stage of this many hosts, entered by itself, before the stages; absent: none.
   Canary canary = 2;
@@ -136,8 +136,8 @@ message RolloutPolicy {
   FailThreshold rollback_after_failed = 5;
   // How long a host that deferred an update is left alone; absent: 300, 2 and 3600.
   DeferBackoff defer_backoff = 6;
-  // How many hosts of the group may update one package at once, 0 to 10000; absent: 1. 0 holds
-  // the group: none of its hosts is ordered.
+  // How many hosts of the group may update one package at once, 0 to 10000; absent: no cap beyond
+  // the stage (the whole stage updates at once). 0 holds the group: none of its hosts is ordered.
   optional uint32 max_updating = 7;
   // The fewest live hosts of the group that must stay up for a package while others update it, 0
   // (the default) to 10000.

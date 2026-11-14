@@ -1,6 +1,8 @@
 //! Which services' rollouts are live, and so take the farm's `--live-rollouts` (default 1): a
-//! service whose own rollout is not live is told `rollout_elsewhere` while that many others are
-//! ([`crate::stages`]'s `elsewhere`).
+//! service whose own rollout is not live is told `rollout_elsewhere` while that many others are, or
+//! while services set before it queue for the places ([`crate::stages`]'s `elsewhere`,
+//! [`crate::queue`]). In a coordinator with host groups the count is over every group, a service
+//! being a package name, and a group's `live_rollouts` can only lower it.
 //!
 //! Only a service that is moving takes a place: one of its hosts runs an update (updating, or its
 //! promotion pending), an order the coordinator sent it is outstanding, one of its plan's hosts
@@ -43,6 +45,9 @@ pub(crate) enum Why {
     Baking,
     /// The plan has started a host and has one left to order.
     PlanUnderWay,
+    /// Not live: the service waits for its turn in the queue ([`crate::queue`]) and was set
+    /// before the one it holds.
+    Queued,
 }
 
 /// Why a service's rollout is live, and the host that makes it so (none for
@@ -149,10 +154,12 @@ fn is_baking(def: &ServiceDef, want: &Desired, fleet: &Fleet, id: &HostId, now: 
         && fleet.is_baking(service, id, host, &want.version, def.bake_beats, now)
 }
 
-/// When `service` may not start a rollout now, the services whose live rollouts hold it, by
-/// name, each with why it is live ([`why_live`]): its own rollout is not live and as many others
-/// are as `--live-rollouts` lets be. None when it may start one. What `Releases.Status` names for
-/// a plan that waits `rollout_elsewhere`.
+/// When `service` may not start a rollout now, the services that hold it, by name, each with why
+/// it is live ([`why_live`]) or [`Why::Queued`]: its own rollout is not live, and as many other
+/// services' rollouts are live as the cluster lets be (`--live-rollouts`, which a group's
+/// `live_rollouts` can only lower), or the places left are the services set before it
+/// ([`crate::queue`]). A service is a package, in every group that lists it. None when it may
+/// start one. What `Releases.Status` names for a plan that waits `rollout_elsewhere`.
 #[must_use]
 pub(crate) fn live_elsewhere(
     services: &Services,
@@ -161,16 +168,36 @@ pub(crate) fn live_elsewhere(
     fleet: &Fleet,
     now: Duration,
 ) -> Option<Vec<(String, Live)>> {
-    let live = |def: &ServiceDef| why_live(def, all.get(&def.name), fleet, now);
     let own = services.get(service);
-    if own.and_then(live).is_some() {
+    let limit = own.map_or(fleet.live_rollouts(), |def| fleet.live_limit(def));
+    let cluster = fleet.cluster();
+    if cluster.is_empty() {
+        let live = |def: &ServiceDef| why_live(def, all.get(&def.name), fleet, now);
+        if own.and_then(live).is_some() {
+            return None;
+        }
+        let others: Vec<(String, Live)> = services
+            .defs()
+            .filter(|def| def.name != service)
+            .filter_map(|def| live(def).map(|why| (def.name.clone(), why)))
+            .collect();
+        return (others.len() >= limit).then_some(others);
+    }
+    if cluster.is_live(service, fleet, now) {
         return None;
     }
-    let others: Vec<(String, Live)> = services
-        .defs()
-        .filter(|def| def.name != service)
-        .filter_map(|def| live(def).map(|why| (def.name.clone(), why)))
-        .collect();
-    let limit = own.map_or(fleet.live_rollouts(), |def| fleet.live_limit(def));
-    (others.len() >= limit).then_some(others)
+    let mut holding = cluster.live_others(service, fleet, now);
+    let free = limit.saturating_sub(holding.len());
+    let ahead = cluster.ahead_of(service, fleet, now);
+    if free > ahead.len() {
+        return None;
+    }
+    holding.extend(ahead.into_iter().map(|name| {
+        let queued = Live {
+            why: Why::Queued,
+            host: None,
+        };
+        (name, queued)
+    }));
+    Some(holding)
 }

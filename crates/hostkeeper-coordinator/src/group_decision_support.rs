@@ -78,6 +78,12 @@ impl Farm {
             .expect("a group put");
     }
 
+    /// The coordinator's `--live-rollouts` set to `n`: the most services that roll at once in the
+    /// whole cluster, which a group's `live_rollouts` can only lower.
+    pub(crate) fn flag(&self, n: usize) {
+        self.world.coordinator().lock_fleet().set_live_rollouts(n);
+    }
+
     /// The enrolled host `host`, placed in the group `group` with its move over: as a host
     /// approved into the group is.
     pub(crate) fn host(&self, host: &str, group: &str) {
