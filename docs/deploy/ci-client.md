@@ -215,7 +215,9 @@ keeps one desired version of a service for each group that lists it. The workflo
 `host_group` names the group the version is set in and waited on. With it empty, as before the
 input existed, the workflow names no group and the coordinator reads the call as one deployment to
 each group that lists the service, each rolled by its own group's policy. A coordinator that holds
-no host group takes the call as it always did.
+no host group takes the call as it always did. The coordinator has no built-in group, so no
+`host_group` reaches every host: a name it does not hold (`all`, unless an operator made a group of that name) is refused
+`unknown_host_group`, and a host in no group is ordered nothing by any call. Every group must list `hostkeeper`.
 
 A non-empty `host_group` needs a coordinator that holds host groups and the `hkctl` of a hostkeeper
 release that has `--host-group`: with `host_group` empty the workflow passes no `--host-group`
@@ -277,7 +279,7 @@ in order lands when that pin moves to a revision that has the input, and the cal
 | `service` | string | yes |  | The service whose desired version is set, as the coordinator names it. |
 | `version` | string | yes |  | The version of the service to set. |
 | `targets` | string | no |  | The targets of the version: one JSON object keyed by platform (`linux-x86_64`, `linux-arm64`, `macos-arm64`), each value `{"entries": [...]}` in the order the service prefers, under 128 KiB, the most the runner passes in one environment value or argument ([Targets](#targets)). Needs a coordinator that takes `SetDesired` with targets. |
-| `host_group` | string | no |  | The host group the version is set in and waited on, as the coordinator names it ([Host groups](#host-groups)). Empty: each group that lists the service (for a token whose allow-list entry names `host_groups`, each of those that lists it), the call sending no group, as before this input. A non-empty value needs a coordinator that holds host groups and the `hkctl` of a hostkeeper release that has `--host-group`. |
+| `host_group` | string | no |  | The host group the version is set in and waited on, as the coordinator names it ([Host groups](#host-groups)). Empty: each group that lists the service (for a token whose allow-list entry names `host_groups`, each of those that lists it), the call sending no group, as before this input. A non-empty value needs a coordinator that holds host groups and the `hkctl` of a hostkeeper release that has `--host-group`. The coordinator has no built-in group: a name it does not hold, `all` included, is refused `unknown_host_group`. |
 | `hostkeeper_version` | string | yes |  | The hostkeeper release whose command line, `hkctl`, makes the calls. |
 | `hostkeeper_commit` | string | yes |  | The commit of `komira-ai/hostkeeper` that release was built from, 40 lower-case hex digits. |
 | `coordinator_url` | string | yes |  | The coordinator's private listener, as `https://<host>[:<port>]`. |

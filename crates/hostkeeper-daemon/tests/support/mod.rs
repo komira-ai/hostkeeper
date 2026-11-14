@@ -46,6 +46,7 @@ use hostkeeper_proto::hostkeeper::agent::v1::{
 use hostkeeper_steps::record::{Loaded, Record, State};
 use hostkeeper_steps::{
     AdditiveCall, CrashPoint, Finished, LaunchError, RecordStore, StepCall, StepExit, StepLauncher,
+    ToolCall, ToolExit,
 };
 
 /// Links whose loops never run: both are left unstarted on a dispatcher nobody runs, for a test
@@ -740,5 +741,9 @@ impl StepLauncher for Tap {
         self.log
             .push(Event::Mark(format!("additive {}", call.step)));
         self.inner.run_additive(call)
+    }
+
+    fn run_tool(&self, call: &ToolCall<'_>) -> Result<ToolExit, LaunchError> {
+        self.inner.run_tool(call)
     }
 }

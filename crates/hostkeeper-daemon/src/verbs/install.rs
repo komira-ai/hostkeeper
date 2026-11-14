@@ -5,7 +5,9 @@
 //! immediately before `cutover`, and takes both off the host immediately before `rollback`
 //! ([`crate::place`]); a first install whose `rollback` declines with `no_previous_release` ends
 //! `Failed` with that reason, never in a halt, and the service is absent again, so that a later
-//! order is accepted.
+//! order is accepted. A package the host's package manager already has, which hostkeeper did not
+//! install, is no first install: it is adopted and the order is an update from the installed
+//! version, so its failure puts that version back and never removes it ([`super::update`]).
 
 use crate::executor::{Ctx, Reply};
 use crate::verb::{Hooked, HookedVerb};

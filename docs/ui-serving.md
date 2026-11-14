@@ -121,14 +121,14 @@ by their route and are not in the menu.
     router has a page for a package.
 
   The reason of each write is a fixed sentence; the audit log names the operator.
-- **Host groups**: every group the coordinator holds (`HostGroups.List`, every page), the built-in `all` marked as built in,
+- **Host groups**: every group the coordinator holds (`HostGroups.List`, every page; there is no built-in group),
   with its packages, the policy keys that are set ("default" when none is), its generation, its host count and its desired
   versions. Opening a group (`HostGroups.Get`) shows, per package, the desired and minimum version and the convergence counts,
   and the group's hosts 50 at a time, each a link to its Host page. A host is not moved here but on its Host page (below). The form
   that creates or changes a group takes a name and the packages as a list of checkboxes, one for each registered package
   (`Services.List`, the Packages page's): nothing is typed, the packages are installed in the order ticked, and with none
   registered the form links to the Packages page. A package the group lists that is not registered stays in the list, ticked.
-  Saving a group (`HostGroups.Put`) keeps its policy and asks first when a package would be uninstalled. Each group but `all` has
+  Saving a group (`HostGroups.Put`) keeps its policy and asks first when a package would be uninstalled. The page says that every group must list `hostkeeper` (a group that omits it is refused, `hostkeeper_not_listed`). Each group has
   a *Delete* button (danger style) that asks first and sends `HostGroups.Remove`, which drops the group with its desired versions and
   marks. A group that still has hosts is refused (`not_empty`): the page names its hosts (`HostGroups.Get`, the first 50) and says to
   move them on their Host page first; for a group with no host that an inventory record, a pending approval or the Mac allowlist
@@ -137,8 +137,8 @@ by their route and are not in the menu.
 - **Host**: the services that host runs because its group lists them (its Source column reads
   `role <name>`, the name being the host's group), the installed version against the desired one,
   and the minimum version. A **Host group** form moves the host: a dropdown of the groups the
-  coordinator holds (`HostGroups.List`, every page) but the built-in `all`, with the host's own
-  group selected and, for a host in none, the blank "No group (all alone)". Choosing another group
+  coordinator holds (`HostGroups.List`, every page), with the host's own
+  group selected and, for a host in none, the blank "Unassigned" (a host in no group is ordered no package). Pages label a host with no group "Unassigned". Choosing another group
   and pressing **Move** calls `HostGroups.Move` after a confirmation, with the reason "moved in the
   console" (the form has no reason field); choosing the blank moves the host to no group. A refused List is shown inline and the rest of the page renders.
 - **MDM setup** (`MDM setup` in the page list; `docs/operations/mdm-setup.md`, `docs/design/coordinator-mdm.md` section 4.9).

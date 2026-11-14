@@ -9,9 +9,10 @@
 //! - [`Toward::Target`], before `cutover`: the `activate` of the target ([`Repository::activate`]):
 //!   the package installed, its `run` units enabled and `current` switched to the target
 //!   (`previous` becomes the release it replaces).
-//! - [`Toward::Back`], before `rollback`: for an update, the release it replaced is activated
-//!   again from its sealed directory ([`Repository::back`]); for a first install, the package is
-//!   removed and `current` with it, when it names the target; the version directory stays, as a
+//! - [`Toward::Back`], before the `rollback` of an update: the release it replaced is activated
+//!   again from its sealed directory ([`Repository::back`]); for a first install, after the hook's
+//!   `rollback` has succeeded or declined (or could not start), the package is removed and
+//!   `current` with it, when it names the target; the version directory stays, as a
 //!   staged version a retry uses.
 //! - [`Toward::Confirmed`], after `cleanup` and before the verdict is written: nothing, as
 //!   nothing was placed.
@@ -119,7 +120,7 @@ pub fn retried(
 
 /// The switch of an order whose target the repository installer staged for `entry`: before
 /// `cutover` the installer's `activate` of the target; before `rollback` the previous version's
-/// `activate` from its own sealed `target.json`, or for a first install the package's removal;
+/// `activate` from its own sealed `target.json`, or for a first install, after its hook's `rollback`, the package's removal;
 /// nothing to confirm, as nothing was placed. A previous version with no `target.json` is none
 /// this daemon can activate again.
 fn repository_switch(

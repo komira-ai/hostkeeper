@@ -60,8 +60,8 @@ its server by hand. The group must be one the coordinator holds (`unknown_host_g
 `--role` beside `--host-group` must be the same name (`invalid_role`). The record keeps the
 group's name as its `role` too, and `list-records` shows it as both `role` and `hostGroup`.
 
-A coordinator that holds no host group yet but the built-in `all` refuses every `--host-group`
-(`unknown_host_group`); every host runs what `all` lists, `hostkeeper` alone at first: put a group first (`hkctl host-groups put`,
+A coordinator that holds no host group yet refuses every `--host-group`
+(`unknown_host_group`), and a host it enrolls is unassigned and is ordered nothing: put a group first (`hkctl host-groups put`,
 [hostgroups.md](hostgroups.md)), or move a fleet placed by roles to groups through the operator
 API ([hostgroups.md](hostgroups.md#moving-a-fleet-from-roles-to-host-groups)); `add-record` and
 `approve` name the group of each record and approval.
@@ -484,12 +484,13 @@ group and a reason. The group, when named, must be one the coordinator holds
 (`unknown_host_group`), and is not taken from the record: the record's group is shown, not
 applied. `--role` is accepted as an alias of `--host-group` for older scripts and is read as the
 group's name when `--host-group` is left out; with both, they must be the same name
-(`invalid_role`). With neither, the host is enrolled in no specific group: every host is in the
-built-in group `all` ([hostgroups.md](hostgroups.md#the-built-in-group-all)), so it runs the
-packages `all` lists, and no others, until `hkctl host-groups move` puts it in a group, and again
-whenever it is moved back to none ([hostgroups.md](hostgroups.md#moving-a-host)). `all` is not a group an approval names
-(`unknown_host_group`). The console's Enrollment page approves this way: a Host group dropdown of
-the specific groups with a blank choice, and nothing else to fill in (no role, no services, no
+(`invalid_role`). With neither, the host is enrolled in no group, **unassigned**: there is no built-in group
+([hostgroups.md](hostgroups.md#there-is-no-built-in-group)), so it is ordered no package at all,
+`hostkeeper` included, and keeps what it runs, until `hkctl host-groups move` puts it in a group, and again
+whenever it is moved back to none ([hostgroups.md](hostgroups.md#moving-a-host)). A group named
+`all` is a group like any other, and an approval that names one the coordinator does not hold is
+`unknown_host_group`. The console's Enrollment page approves this way: a Host group dropdown of
+the groups with a blank choice, Unassigned, and nothing else to fill in (no role, no services, no
 reason). The API's reason is optional (1 to 256 bytes when given); the console sends none. An approval names no services
 (`services_retired`): the host's group decides what it runs, and a host in a group is installed
 its group's packages from its first heartbeat. The approval's audit entry names the approver and

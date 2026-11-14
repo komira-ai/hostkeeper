@@ -8,10 +8,10 @@ mod support_apt;
 use std::sync::{Arc, Mutex};
 
 use hostkeeper_daemon::{Daemon, Placement, Ports, Reply};
-use hostkeeper_hook::{Class, Step};
+use hostkeeper_hook::{Class, Step, Verdict};
 use hostkeeper_placed::testing::FaultFs;
 use hostkeeper_placed::{CommandLauncher, LaunchError, Systemctl};
-use support::{OWN, alerting, config, install, lines, roots};
+use support::{OWN, Tap, alerting, config, install, lines, roots};
 use support_apt::seen::{failed, held, install_hooked, install_of, linked, recorded, succeeded};
 use support_apt::{
     AptRig, HOOK_PROGRAM, SERVICE, UNIT, entry, hooked_package, package, with_entry,
@@ -264,4 +264,98 @@ fn a_package_another_service_holds_is_a_conflict() {
         failed(Class::Release, "package_conflict")
     );
     assert_eq!(apt.host.installed(SERVICE), held("1.0.0-1"));
+}
+
+/// A daemon on the rig whose launcher writes, at each run of `rollback`, whether the package is
+/// still installed and how many purges the host has seen, to the returned list.
+fn daemon_watching_rollback(apt: &AptRig) -> (Daemon, Arc<Mutex<Vec<String>>>) {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let (host, log) = (Arc::clone(&apt.host), Arc::clone(&seen));
+    let ports = Ports {
+        launcher: Tap::before(
+            apt.rig.launcher.clone(),
+            apt.rig.placed_log.clone(),
+            move |step| {
+                if step == Step::Rollback {
+                    let word = host.installed(SERVICE).map_or("nothing", |_| "installed");
+                    log.lock()
+                        .expect("the log")
+                        .push(format!("rollback saw {word} and {} purges", purges(&host)));
+                }
+            },
+        ),
+        ..apt.ports()
+    };
+    (Daemon::new(config(), apt.rig.dirs(), ports, OWN), seen)
+}
+
+/// How many `dpkg --purge` runs the fake host has seen.
+fn purges(host: &support_apt::FakeHost) -> usize {
+    host.labels()
+        .iter()
+        .filter(|label| label.as_str() == "dpkg --purge")
+        .count()
+}
+
+/// Proves the hook's `rollback` of a failed first install runs before the package is removed:
+/// when `verify` fails, the hook's `rollback` still finds the package installed and nothing
+/// purged, and only after it has ended is the package purged, unheld and `current` removed, with
+/// the order ending `Failed` as it did before.
+///
+/// Catches: a first install whose package is purged before the hook's `rollback` runs, so that
+/// the hook cannot stop or inspect the units the package installed.
+#[test]
+fn the_hook_rollback_of_a_first_install_runs_before_the_package_is_purged() {
+    let apt = AptRig::new("apt-rollback-before-purge");
+    let (daemon, seen) = daemon_watching_rollback(&apt);
+    apt.rig
+        .launcher
+        .replies(SERVICE, Step::Verify, &[(1, r#"{"reason":"not_ready"}"#)]);
+    let one = apt.publish(hooked_package("1.0.0-1"));
+    let command = [&format!("/{HOOK_PROGRAM}")[..], "update-hook"];
+    let reply = daemon.order(&install_hooked("1.0.0", "1.0.0-1", &one, 1, &command));
+    let Reply::Finished { verdict, .. } = reply else {
+        panic!("not finished: {reply:?}");
+    };
+    assert!(matches!(verdict, Verdict::Failed { .. }), "{verdict:?}");
+    assert_eq!(
+        *seen.lock().expect("the log"),
+        ["rollback saw installed and 0 purges"]
+    );
+    assert_eq!(purges(&apt.host), 1);
+    assert_eq!(apt.host.installed(SERVICE), None);
+    assert_eq!(linked(&apt, "current"), None);
+    assert_eq!(recorded(&daemon), None);
+}
+
+/// Proves a hook `rollback` of a first install that fails ends as the runner's failure path
+/// always did, a halt, and that the package is then left as it is: installed, nothing purged,
+/// for whoever looks at the halt.
+///
+/// Catches: a package purged out from under a hook whose `rollback` failed.
+#[test]
+fn a_failing_hook_rollback_of_a_first_install_halts_and_purges_nothing() {
+    let apt = AptRig::new("apt-rollback-hook-fails");
+    let (daemon, seen) = daemon_watching_rollback(&apt);
+    apt.rig
+        .launcher
+        .replies(SERVICE, Step::Verify, &[(1, r#"{"reason":"not_ready"}"#)]);
+    apt.rig.launcher.replies(
+        SERVICE,
+        Step::Rollback,
+        &[(1, r#"{"reason":"unit_failed"}"#)],
+    );
+    let one = apt.publish(hooked_package("1.0.0-1"));
+    let command = [&format!("/{HOOK_PROGRAM}")[..], "update-hook"];
+    let reply = daemon.order(&install_hooked("1.0.0", "1.0.0-1", &one, 1, &command));
+    let Reply::Finished { verdict, .. } = reply else {
+        panic!("not finished: {reply:?}");
+    };
+    assert_eq!(verdict, Verdict::Halt);
+    assert_eq!(
+        *seen.lock().expect("the log"),
+        ["rollback saw installed and 0 purges"]
+    );
+    assert_eq!(purges(&apt.host), 0);
+    assert!(apt.host.installed(SERVICE).is_some());
 }

@@ -18,7 +18,10 @@
 //! keeping the order's target. A resend answered from the record prunes nothing.
 //!
 //! An `install` is the update path with no previous release: no `updater.previous_*` key in the
-//! params file and no `previous_digest` in the step record. The runner's switch
+//! params file and no `previous_digest` in the step record. The exception is an `install` of a
+//! package the host's package manager already has and `placed.json` does not record: it is
+//! adopted ([`crate::repository`], "adoption"), and the order replaces the installed version, so
+//! it has a previous release, which a failure puts back. The runner's switch
 //! ([`crate::place::hooked_switch`]) installs the package and points `current` at it immediately
 //! before `cutover`; before `rollback` it takes an install off the host, and puts an update back
 //! on the release it replaced.
@@ -31,7 +34,7 @@ use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_config::platform::Platform;
 use hostkeeper_hook::{Class, Phase};
 use hostkeeper_hook::{Params, Verdict};
-use hostkeeper_install::repository::DRIFT_REPAIRED;
+use hostkeeper_install::repository::{Backend, DRIFT_REPAIRED};
 use hostkeeper_proto::hostkeeper::release::v1::Target as Entry;
 use hostkeeper_steps::record::{Loaded, Record, RecordError, State};
 use hostkeeper_steps::{Bounds, Finished, RunError, Staged, UpdateOrder};
@@ -45,9 +48,11 @@ use crate::locks::{Held, Holder, Package, ServiceGuard};
 use crate::prune;
 use crate::refusal::Refusal;
 use crate::repository;
+use crate::repository::Adoption;
 use crate::selfupdate;
 use crate::target;
 use crate::verb::{Hooked, HookedVerb};
+use crate::verbs::force::SELF_SERVICE;
 
 /// `update`: refused below the running version, and for a service with no release installed.
 pub fn run(ctx: &Ctx, order: Hooked) -> Reply {
@@ -136,6 +141,10 @@ fn steps(
         .map_err(|e| Reply::refused(Refusal::StoreFailed, e))?;
     let runner = ctx.runner(service);
     let _step = guard.step(&ctx.step_lock);
+    if let Some((native, adoption)) = &prepared.adoption {
+        ctx.repository()
+            .adopt_installed(*native, service, adoption)?;
+    }
     // The runner stops where a pending promotion hands the record to the post-success watcher:
     // the update has ended `Succeeded` there, and its switch is confirmed before the watcher
     // runs, so the prune never waits for the promotion. The watcher then runs here, under the
@@ -278,6 +287,9 @@ pub(crate) struct Prepared {
     /// The entry the version directory was staged for, as its `target.json` holds it.
     pub entry: Entry,
     pub update: UpdateOrder,
+    /// The installed package the order adopts ([`crate::repository`], "adoption"): an `install`
+    /// of a package the host's package manager already has, handled as an update from it.
+    pub adoption: Option<(&'static dyn Backend, Adoption)>,
 }
 
 /// The checks of `order` that follow the try rules, in order, and the runner's order built from
@@ -357,8 +369,26 @@ pub(crate) fn prepare(
     };
     let manifest = target::manifest(dir.dir(), &expected, &ctx.own_version)
         .map_err(|e| Reply::refused(Refusal::from(&e), e))?;
+    let adoption = match (verb, running.is_none() & !resuming, service.as_str()) {
+        (HookedVerb::Install, true, name) if name != SELF_SERVICE => match native {
+            repository::Native::Repository(backend) => ctx
+                .repository()
+                .adoptable(backend, service, &order.version, entry, &dir)?
+                .map(|adoption| (backend, adoption)),
+            repository::Native::MacosPkg => None,
+        },
+        _ => None,
+    };
     let previous = match verb {
-        HookedVerb::Install => None,
+        // An adopted package is what the order replaces; an install resumed after it was
+        // adopted replaces it still (its step record names the release it replaces).
+        HookedVerb::Install => match &adoption {
+            Some((_, adopted)) => Some((adopted.version.clone(), adopted.staged.clone())),
+            None if resuming & last.is_some_and(|rec| rec.previous_digest.is_some()) => {
+                previous(ctx, service, &order.version, running)?
+            }
+            None => None,
+        },
         HookedVerb::Update | HookedVerb::ForceRollback | HookedVerb::Force => {
             previous(ctx, service, &order.version, running)?
         }
@@ -369,6 +399,7 @@ pub(crate) fn prepare(
         dir,
         entry: entry.clone(),
         update,
+        adoption,
     })
 }
 
