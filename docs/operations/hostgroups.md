@@ -1,8 +1,8 @@
 # Host groups: what each host runs
 
 A host group is a name, the ordered list of the packages its hosts run, and one rollout policy.
-Every enrolled host is in at most one group, and a host runs exactly the packages its group
-lists, at the group's desired version of each. This page is what the coordinator does with groups.
+Every enrolled host is in one group or is unassigned (there is no built-in group), a host runs exactly the
+packages its group lists, at the group's desired version of each, and an unassigned host is ordered none. This page is what the coordinator does with groups.
 The design is [hostgroups.md](../design/hostgroups.md). A fleet that was placed by roles and a
 rollout file moves through the operator API, by [Moving a fleet from roles to host groups](#moving-a-fleet-from-roles-to-host-groups).
 `hkctl` is [cli.md](../cli.md).
@@ -19,7 +19,7 @@ most 64 KiB; the gateway serves each call at `POST /hostkeeper.operator.v1.HostG
 | Field | Meaning |
 |---|---|
 | `name` | 1 to 32 bytes of `a-z`, `0-9` and `-`, a letter first, no `--`, not ending in `-`: the grammar of a role name. |
-| `packages` | 0 to 64 packages in order (1 to 64 for `all`), none twice, each a service name (`A-Za-z0-9._-`, 1 to 255 bytes). `all` lists `hostkeeper`; a specific group need not. The order is the order of installs; uninstalls run in the reverse order. |
+| `packages` | 1 to 64 packages in order, none twice, each a service name (`A-Za-z0-9._-`, 1 to 255 bytes). Every group lists `hostkeeper` (`hostkeeper_not_listed`), so that no host in a group loses its agent. The order is the order of installs; uninstalls run in the reverse order. |
 | `policy` | How every package of the group rolls out (see Policy below). |
 | `generation` | 1 for a new group, and one more for each `Put` that replaces it. |
 
@@ -37,12 +37,12 @@ nor resets it, so an incident's minimum is never undone by putting the group's f
 `--rollout-file` (`--rollout-file is not read by serve: start serve without it and place hosts with
 the operator API: HostGroups.Put each group, HostGroups.Move each host, Services.SetRepository and
 Services.SetMinVersion where needed, Releases.SetDesired per group (docs/operations/hostgroups.md)`)
-and has no rollout file, role or assignment to place by. A coordinator holds the built-in group `all` from its first start
-([below](#the-built-in-group-all)), so every host runs at least what `all` lists. The coordinator
+and has no rollout file, role or assignment to place by. A coordinator holds no group of its own
+making ([below](#there-is-no-built-in-group)): a host is in one of the groups an operator put, or is unassigned. The coordinator
 decides at each heartbeat:
 
-- A host runs the packages `all` lists, then those of its specific group, if it has one, that
-  `all` does not list, and no others. `Services.Assign` and
+- A host runs the packages of its group and no others; a host with no group is ordered no package at all
+  (no install, update or uninstall, `hostkeeper` included) and keeps what it runs. `Services.Assign` and
   `Services.Unassign` are refused `placed_by_host_group`, before anything is read, and an approval
   that names services is refused `services_retired`.
 - A host is put in its group when it is approved: by the group `Approve` names, the group of the
@@ -50,9 +50,10 @@ decides at each heartbeat:
   ([Enrolling a host into a group](#enrolling-a-host-into-a-group)). After that only `Move`
   changes it. An approval or a record that names a group the coordinator does not hold is refused
   `unknown_host_group`, a coordinator that holds none included.
-- A host in no specific group runs the packages of `all` alone. A host is in none when it was
+- A host in no group is **unassigned**. A host is unassigned when it was
   approved naming no group (`Approve` with no `host_group` and no role), or before the coordinator
-  held a group, or was moved back to none, until `Move` puts it in one; [moving a fleet from roles](#moving-a-fleet-from-roles-to-host-groups)
+  held a group, or was moved back to none, until `Move` puts it in one. It still enrolls, heartbeats and shows in
+  the inventory (the console labels it "Unassigned"); [moving a fleet from roles](#moving-a-fleet-from-roles-to-host-groups)
   puts every host of a role in the group of that name.
 - The role the coordinator's fleet records for a host is the name of its group (empty for a host in
   none). `Hosts.List` and `Hosts.Get` show a host in a group with the group's name as `role` and as
@@ -60,9 +61,6 @@ decides at each heartbeat:
   none shows the role it was approved for (none, for a host approved with no group) and an empty `host_group`. The slots of a package
   (`max_updating`), its `min_up` and its stages count the hosts of one group, so two groups never
   wait on each other; a hold of a role holds the group of that name.
-- A package of `all` that no specific group lists is counted over every host, as one group named
-  `all`: its slots, `min_up` and stages are `all`'s. A host whose own group lists the package is
-  counted in that group instead, and not in `all`'s.
 - A package's own settings are not the group's: its version scheme is the default, its minimum
   version is the one `Services.SetMinVersion` set for the group (see below), and its repository
   is the one `Services.SetRepository` set. Everything else that rolls it out is the group's
@@ -175,7 +173,7 @@ A package is **registered** when a host group lists it, or when an operator regi
 it. `Services.List` shows every registered package, with the groups that list it, so the console's
 Packages page (its second list, under the repositories) is that list and the Host groups page offers those packages and no other (it has
 no field to type one into). The packages of a farm that already runs through groups (`hostkeeper`
-from `all`, and each package its groups list) are registered by being listed: nothing is added to
+and each package its groups list) are registered by being listed: nothing is added to
 see them.
 
 ```
@@ -208,45 +206,39 @@ none; a move out of a group into none names no group and has the reason `from <o
 <yours>`. The answer names the group the host was in. `unknown_host` is a host that is not enrolled
 or is denied, and the checks run in the order of the table.
 
-## The built-in group `all`
+## There is no built-in group
 
-Every enrolled host is in `all`, and may be in one specific group besides: there is no stored
-membership of `all`, a host is in it by being enrolled. `all` is how an operator targets every host:
-a package it lists runs on every host, and a call that names a group (`Releases.SetDesired`,
-`Releases.Force`, the rollout calls, `Services.SetMinVersion`, alerts and holds by group) may name
-`all` and then reaches every host that runs the package as `all` says. The console shows it,
-marked built in, on the Host groups page, for editing its packages, and offers it nowhere else.
+The coordinator makes no group of its own. A host is in exactly one group (its enrollment record's
+`host_group`) or is unassigned, and `all` is an ordinary group name with no special meaning: it
+can be put, removed and named like any other, and no host is in it unless an operator moved the host
+into it. Removed on 2026-11-14 ([design](../design/hostgroups.md)); before, a built-in group `all` held
+every host.
 
-- It always exists. A coordinator that holds none makes it at its first start (the database's
-  migration `0013` makes it; a state file that lacks it gets it in memory, and its `host_groups`
-  key is left out while `all` is as made, so the release before reads the file). It cannot be
-  removed or renamed, and no group of any other path may take its name: `Remove` of `all`, `Put` that
-  would create it, and `Move` into it are refused `reserved_host_group`; an approval or an
-  inventory record that names it is refused `unknown_host_group`. A `Put` that replaces it is
-  taken, over its generation like any other.
-- The made one lists `hostkeeper` alone, so a coordinator that held groups before gets no
-  package it did not run: hosts that were in a group keep it, and now also run what `all` lists
-  (`hostkeeper`, which they already had). An operator adds the rest with `Put`.
-- `all` must list `hostkeeper` (`hostkeeper_not_listed`), so that every host keeps its daemon
-  whatever its own group lists. A specific group may list nothing, or leave `hostkeeper` out.
-- What a host runs is `all`'s packages in `all`'s order, then the packages of its own group that
-  `all` does not list, in that group's order. A package both list is run once, at the place `all`
-  lists it, and as the host's own group says: its desired version, its rollout policy, its
-  marks and its halts are the group's. A package only `all` lists is run as `all` says: the
-  desired version set for `all`, its policy, its marks. A host whose own group lists a package
-  that `all` has a desired version for and the group has none is not ordered it.
-- A change of a list that stops a host running a package uninstalls it; one that leaves the
-  package run by the other list does not. `Put` of `all` that drops a package uninstalls it from
-  every host whose own group does not list it, and `Move` keeps the packages of `all`.
-- `HostGroups.List` counts every enrolled host in `all`, and `Get` of `all` pages them all.
-- A host approved with no group runs the packages of `all` alone until it is moved
-  ([Enrolling a host into a group](#enrolling-a-host-into-a-group)).
+- **Unassigned hosts are not ordered anything.** A host in no group gets no install, update or
+  uninstall, `hostkeeper` included; it keeps what it runs, still enrolls and heartbeats, and the
+  inventory shows its group as "Unassigned".
+- **Every group lists `hostkeeper`.** `Put` of a group whose packages leave it out is refused
+  `hostkeeper_not_listed` (an empty list included), so a host that is assigned never loses its
+  agent. `hostkeeper`'s desired version is the group's, set with `Releases.SetDesired` like any
+  package's.
+- **Naming a group that does not exist** (`--host-group all` on a coordinator with no group `all`)
+  is `unknown_host_group`, in `Releases.SetDesired`, `Move`, an approval and the rest. A call that
+  names no group (`set-desired` with `--host-group` empty) still reaches each group that lists the
+  service.
+- **Targeting every host** is done by listing the package in each group and setting its desired
+  version for each, or by one `Releases.SetDesired` with no group, which sets it in every group that
+  lists it.
+- **A coordinator upgraded from one that held `all`** has the group and every row keyed by it deleted by the
+  migration that follows `0013` ([coordinator-state.md](coordinator-state.md)). A host in a specific group
+  is unchanged. A host that was in none was in `all` alone and is now unassigned: it keeps running what
+  it runs and is ordered nothing, `hostkeeper` included, until an operator moves it into a group. A group
+  stored without `hostkeeper` is not changed by the migration, but its next `Put` is refused until it lists it.
 
 ## Enrolling a host into a group
 
 In group mode an approval puts its host in the group it names, which must be one the coordinator
-holds (`unknown_host_group`) and is not `all`; an operator's approval may name none, and the host is
-then in `all` alone until `Move` ([enrollment.md](enrollment.md)):
+holds (`unknown_host_group`); an operator's approval may name none, and the host is
+then unassigned, and ordered nothing, until `Move` ([enrollment.md](enrollment.md)):
 
 - `hkctl enrollment add-record --host-group <group>`: the record is the approval, and the
   coordinator puts the host it approves in the record's group. A record added before the
@@ -268,12 +260,10 @@ with `--replace` keeps the group of the host it replaces: naming another group i
 A host in a group is changed to another by `Move`, and a host approved in none, or before the
 coordinator held groups, is put in one by `Move`. A host in a group is moved back to none by a
 `Move` with an empty `host_group` (`hkctl host-groups move --host-group ""`, the blank choice of the
-**Host group** dropdown on the host's own page in the console): it then runs the
-packages of `all` alone, what its old group listed and `all` does not is uninstalled, and nothing
-is installed, so the host does not move; a host already in none is refused `same_host_group`. A
-host cannot be moved into `all` (`reserved_host_group`), which it is in already: the console's
-dropdown does not offer it. In the console a host is moved on its Host page, whose **Host group**
-dropdown lists the groups held but `all`; the Host groups page lists each group's hosts, each a
+**Host group** dropdown on the host's own page in the console):
+it is then unassigned: it is ordered nothing and keeps what it runs, so the host does not move; a host already in none is refused `same_host_group`.
+In the console a host is moved on its Host page, whose **Host group**
+dropdown lists the groups held and a blank, Unassigned; the Host groups page lists each group's hosts, each a
 link to that page, and has no form that moves one.
 
 ```

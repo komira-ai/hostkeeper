@@ -162,7 +162,7 @@ the coordinator itself, in that group, while the record's window is open (`--rec
 `Approve` names the request, the SHA-256 of its key as listed (compared whole, in constant time;
 another request's key hash is `key_mismatch`), the host id, the host group (by `host_group`, or by
 `role` read as the group's name; it must be a group the coordinator holds, `unknown_host_group`;
-naming neither enrolls the host in no specific group, which leaves it with the packages of the built-in group `all` until `HostGroups.Move`; a `role` beside `host_group` that is another name is `invalid_role`) and, optionally, a
+naming neither enrolls the host in no group (unassigned: it is ordered no package, and keeps what it runs, until `HostGroups.Move`); a `role` beside `host_group` that is another name is `invalid_role`) and, optionally, a
 reason (1 to 256 bytes; the audit entry names the approver and the group either way). It names no services (`services_retired`): the host's group decides what it runs. A request (not a renewal) that matches exactly one record of
 the host inventory is approved as that record's host id: an empty host id is it, and the answer's
 `host_id` names it; another host id is `record_mismatch` unless `replace` is set. Any other request

@@ -87,8 +87,8 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   `moving_from` and `facts_generation`), `enrollment_requests` (`approved_host_group`), `inventory`
   and `audit`; a row written before has `NULL` there and is read as naming no group. While the
   database holds a group the coordinator places hosts by groups ([hostgroups.md](hostgroups.md)),
-  and one that holds none holds the built-in group `all` (migration `0013`, below), whose hosts are
-  every host: there is no placement by roles. `0008` says older releases must not run on it:
+  and one that holds none places no host (there is no built-in group, migration `0018`, below):
+  there is no placement by roles. `0008` says older releases must not run on it:
   a coordinator of the release before is refused on a database that has it (`the database's
   schema is newer than this coordinator (migration 8, host_groups)`), so going back below this
   release is restoring the dump taken before it. The tables of placement by roles stay as they
@@ -147,17 +147,19 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   (the release before never reads these tables). The file store keeps the same rows in the directory
   `<state-file>.mdm-setup/` (`secrets.json`, `settings.json`), made by the first change and not by a
   start; a file store's setup does not reach a database by any verb.
-- **The built-in host group `all`.** Migration `0013` inserts the group `all` (generation 1, author
-  `migration`, default policy) listing `hostkeeper` alone, unless a group of that name is there
-  already, in which case that one is kept as it is. Every enrolled host is in `all`
-  ([hostgroups.md](hostgroups.md#the-built-in-group-all)): a host that was in a group keeps it
-  and now also runs what `all` lists, which is `hostkeeper` alone until an operator adds to it, so
-  an upgrade installs no package a host did not run. `0013` says older releases may run on it: an
-  older release reads `all` as a group like any other that no host is in, and places every host as
-  it did; if it removes the group, this release holds it again at its next start. The file store holds
-  `all` in memory from the start of `serve`, and writes the `host_groups` key of the state file only
-  once `all` is changed or another group is held, so a state file of a coordinator that holds no
-  other group stays readable by the release before.
+- **No built-in host group.** Migration `0013` once inserted a group `all` that every host was in;
+  migration `0018` deletes it. `0018` deletes the group named `all` and every row keyed by it
+  (`host_group_packages`, `group_desired`, `group_min_versions`, `group_services`, `group_rollouts`,
+  `group_rollout_done`, and the halts and marks keyed by a group), and sets `enrollment_hosts.host_group`
+  to `NULL` where it is `all`. After it `all` is an ordinary name. A host is in one group or is
+  unassigned, and an unassigned host, which the `all` group used to give `hostkeeper`, is ordered no
+  package until an operator moves it into a group ([hostgroups.md](hostgroups.md#there-is-no-built-in-group)); every
+  group lists `hostkeeper`. `0018` says older releases may run on it: a release that holds `all` writes
+  the group back at its start, listing `hostkeeper` alone, and places every host that is in no group
+  in it again, so it orders such a host `hostkeeper` as it did, and no more; a release before `0013` reads
+  the database as it did. A shipped migration is never edited: `0013` stays as it is and its
+  SHA-256 stays pinned. The file store drops the group `all` and what is keyed by it from the
+  state file and the ops file when it reads them, and writes the `host_groups` key without it.
 - **The push certificate.** Its records are in `mdm_secrets`: `push_pending_key` (the key of the request
   being made and its CSR, two PEM blocks), `push_encryption_key` (the key the reply of mdmcert.download is
   encrypted to), and `push_key` and `push_cert` (the pair in use, the newest version of each; the key is

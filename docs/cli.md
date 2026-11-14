@@ -130,8 +130,8 @@ expired instead.
 
 Approve a pending request: the host gets its certificate at its next `Poll`, with the host
 id and host group the approval names. The group is optional: a host approved with none is
-enrolled in no specific group: it is in the built-in group `all` alone, and runs the packages
-`all` lists until `HostGroups.Move` puts it in one. The reason is optional too.
+enrolled in no group: it is unassigned, is ordered no package and keeps what it runs, until
+`HostGroups.Move` puts it in one. The reason is optional too.
 
 | flag | value | meaning |
 |---|---|---|
@@ -142,7 +142,7 @@ enrolled in no specific group: it is in the built-in group `all` alone, and runs
 | `--services` | STRING | Services to assign to the host; may be empty. Deprecated: a coordinator that holds host groups refuses any (`services_retired`). Repeat the flag for more. |
 | `--replace` | true\|false | Take the host id from the host that holds it, revoking that host's certificate; also needed to approve a `duplicate_claim` request or a denied host id. It never approves a contested request (`record_contested`). |
 | `--reason` | STRING | Why, for the audit log: 1 to 256 bytes with no control character, or empty for none. |
-| `--host-group` | STRING | The host group the host is in, which must exist (`unknown_host_group`; a coordinator that does not hold host groups refuses any); empty for none (with `role` empty too, from a coordinator that holds host groups): the host is enrolled in no specific group (in `all` alone) until `HostGroups.Move`. `all`, which every host is in, is no group a request names (`unknown_host_group`). With a renewal or `replace`, the group of that host (`host_group_differs`); empty keeps it. |
+| `--host-group` | STRING | The host group the host is in, which must exist (`unknown_host_group`; a coordinator that does not hold host groups refuses any); empty for none (with `role` empty too, from a coordinator that holds host groups): the host is enrolled in no group (unassigned, ordered no package) until `HostGroups.Move`. With a renewal or `replace`, the group of that host (`host_group_differs`); empty keeps it. |
 | `--rack` | STRING | Where the server stands, an optional placement the approval makes in the same step (`docs/design/ui-shell-lab.md`): the lab layout's rack id, which must exist (`unknown_rack`); empty for none, and then `placement_u` and `placement_height_u` are 0 (`placement_invalid`): the host is unplaced until it is placed (`Place` of `Layout`). A coordinator that holds no layout refuses a rack (`unknown_rack`). The placement is of the inventory entry the host id names when there is one, so the server keeps its place across a wipe, else of the host. A refused placement refuses the approval, and nothing changes (`placement_overlap`, `placement_out_of_rack`). |
 | `--placement-u` | UINT32 | The lowest U the server occupies, from 1 (the bottom); required with `rack`. |
 | `--placement-height-u` | UINT32 | How many U it occupies; required with `rack`. |
@@ -256,7 +256,7 @@ matches the record is approved then, as at `AddRecord`.
 
 ### `host-groups`
 
-The service `HostGroups` of the package `hostkeeper.operator.v1`. The host groups: what each group's hosts run, and by which rollout policy. Every enrolled host is in the built-in group `all`, which always exists, and may be in one specific group besides; it runs the packages `all` lists, then those its specific group lists that `all` does not. Each mutating call takes a reason and answers the audit entry it wrote.
+The service `HostGroups` of the package `hostkeeper.operator.v1`. The host groups: what each group's hosts run, and by which rollout policy. There is no built-in group: a host is in one group or is unassigned, runs the packages of its group, and is ordered no package at all while it is unassigned. Every group lists `hostkeeper`. Each mutating call takes a reason and answers the audit entry it wrote.
 
 #### `hkctl host-groups list`
 
@@ -318,13 +318,13 @@ or Mac allowlist entry names, with its desired versions and plan positions. Audi
 
 Move an enrolled host into another group, in one call: it is in the new group from this
 write, and is moving until its packages match the new group's. An empty `host_group` moves
-it out of its specific group into none: it then runs the packages of `all` alone, and what
-its old group listed and `all` does not is uninstalled. Audited `host_move`.
+it out of its group into none: it is then unassigned, is ordered no package and keeps what it
+runs. Audited `host_move`.
 
 | flag | value | meaning |
 |---|---|---|
 | `--node-id` | STRING | The host, by the host id it was enrolled as. |
-| `--host-group` | STRING | The group it moves into; empty for none (the host runs the packages of `all` alone). |
+| `--host-group` | STRING | The group it moves into; empty for none (the host is unassigned: it is ordered no package). |
 | `--reason` | STRING | Why; 1 to 256 bytes. |
 
 ### `hosts`
