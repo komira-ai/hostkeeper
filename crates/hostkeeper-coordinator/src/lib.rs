@@ -468,6 +468,8 @@ mod plan_status_tests;
 #[cfg(test)]
 mod priority_tests;
 #[cfg(test)]
+mod queue_stuck_tests;
+#[cfg(test)]
 mod queue_tests;
 #[cfg(test)]
 mod recorded_definition_tests;

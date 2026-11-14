@@ -982,22 +982,4 @@ impl Fleet {
         self.orders.remove(&(id.clone(), service.to_owned()));
         held
     }
-
-    /// Notes that the canary `node_id` failed the release of `version` of `service`; a later
-    /// canary failing the same version replaces it.
-    pub fn note_failed_canary(&mut self, service: &str, version: &Version, node_id: &str) {
-        self.canaries.insert(
-            (service.to_owned(), version.as_str().to_owned()),
-            node_id.to_owned(),
-        );
-    }
-
-    /// The canaries that failed a release of `service`: each version, by its text, with the node
-    /// id of the canary that failed it.
-    pub fn failed_canaries(&self, service: &str) -> impl Iterator<Item = (&str, &str)> {
-        self.canaries
-            .iter()
-            .filter(move |((s, _), _)| s == service)
-            .map(|((_, version), node)| (version.as_str(), node.as_str()))
-    }
 }

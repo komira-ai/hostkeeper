@@ -420,9 +420,7 @@ pub struct Serve {
     pub clock_skew_secs: u64,
     /// How many services may have a live rollout at once, 1 to 16: a service whose rollout is
     /// not live (none of its hosts updating or baking, and its update plan not under way) orders
-    /// no host while this many others are, in the whole cluster (a service is a package name); a
-    /// host group's `live_rollouts` can only lower it. Services that wait queue in the order their
-    /// versions were set.
+    /// no host while this many others are (by package across host groups, queued in set order).
     #[arg(
         long,
         default_value_t = 1,

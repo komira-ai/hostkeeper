@@ -277,9 +277,9 @@ fn a_group_limit_only_lowers_the_coordinators_and_the_status_names_the_holder() 
     assert_eq!(plan.queue_position, None);
 }
 
-/// Proves: a service set after two others that wait is third in the queue: the status of its plan
-/// names the two ahead as queued, in order, and gives position 3, and the first of the three, with
-/// nothing ahead, is not held.
+/// Proves: a service set after two others that wait, with one place free, is second in line for a
+/// place: the status of its plan names the two ahead as queued, in order, and gives position 2
+/// (the first of them gets the place), and the first of the three, with nothing ahead, is not held.
 ///
 /// Catches: a queue the status cannot show, or a head that is held by those behind it.
 #[test]
@@ -320,7 +320,7 @@ fn the_status_of_a_queued_plan_names_those_ahead_and_its_position() {
         now,
     );
     assert_eq!(plan.waiting_on, vec!["web".to_owned(), "db".to_owned()]);
-    assert_eq!(plan.queue_position, Some(3));
+    assert_eq!(plan.queue_position, Some(2));
     assert!(
         plan.waiting_on_why.iter().all(|w| w.reason
             == i32::from(hostkeeper_proto::hostkeeper::operator::v1::LiveReason::Queued))

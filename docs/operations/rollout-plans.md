@@ -198,7 +198,7 @@ the number for its own packages, never raise it. The services that wait are queu
 their desired versions were set, and the coordinator orders them in that order: a later-set service
 is held (`rollout_elsewhere`, the status names the services ahead as `QUEUED` and gives the
 plan's `queue_position`) even when the earlier one has no host updating at the moment. A service
-that nothing can order (halted, at a version marked bad, paused, held by a failed host, or whose
+that nothing can order (halted, at a version marked bad, paused, held by a failed host, waiting for an Advance or for `min_up`, or whose
 hosts that have not started all defer) takes no place in the queue. The order is kept in memory;
 after a coordinator restart the services that were waiting queue by their group's last change,
 then by group and package name. A rollout that is live is never held by the others. A rollout is live when one of its hosts runs an update (updating,

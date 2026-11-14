@@ -156,9 +156,9 @@ message RolloutPlan {
   // Why each service of `waiting_on` is live, one per service in the same order: what makes it
   // so and the host that does. Empty when `waiting_on` is, and from a coordinator before it.
   repeated LiveRollout waiting_on_why = 12;
-  // Where the plan stands in the queue of services waiting for the one live rollout, from 1,
-  // when services set before it are in `waiting_on` as queued; absent otherwise, and from a
-  // coordinator before it.
+  // Where the plan stands in the queue of services waiting for a live place, from 1 for the next
+  // to get one, when services set before it are in `waiting_on` as queued; absent otherwise, and
+  // from a coordinator before it.
   optional uint32 queue_position = 13;
 }
 

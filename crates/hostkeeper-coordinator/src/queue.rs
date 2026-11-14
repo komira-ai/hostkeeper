@@ -20,7 +20,7 @@ use crate::desired::Desired;
 use crate::fleet::Fleet;
 use crate::live::why_live;
 use crate::services::ServiceDef;
-use crate::stages::{HostState, current};
+use crate::stages::{HostState, Wait, current};
 
 /// One package of one group with its desired state.
 #[derive(Clone, Debug)]
@@ -72,7 +72,7 @@ impl Cluster {
     /// The cluster of `entries` at `now`: the desired versions already seen keep their stamp, the
     /// others are stamped `now`, and a stamp of a version no entry wants any more is dropped.
     pub(crate) fn refreshed(&self, entries: Vec<Entry>, now: Duration) -> Self {
-        let stamps = entries
+        let mut stamps: BTreeMap<_, _> = entries
             .iter()
             .map(|entry| {
                 let key = entry.key();
@@ -80,13 +80,29 @@ impl Cluster {
                 (key, at)
             })
             .collect();
+        // A package that wants no version for a moment keeps its place for the version it wanted.
+        let absent: BTreeSet<_> = entries
+            .iter()
+            .filter(|entry| entry.want.is_none())
+            .map(|entry| (entry.key().0, entry.key().1))
+            .collect();
+        for (key, at) in &self.stamps {
+            if absent.contains(&(key.0.clone(), key.1.clone())) {
+                stamps.entry(key.clone()).or_insert(*at);
+            }
+        }
         Self { entries, stamps }
+    }
+
+    /// When the desired version of `entry` was first seen; zero for one not stamped.
+    pub(crate) fn stamp_of(&self, entry: &Entry) -> Duration {
+        self.stamps.get(&entry.key()).copied().unwrap_or_default()
     }
 
     fn order(&self, entry: &Entry) -> Order {
         let key = entry.key();
         (
-            self.stamps.get(&key).copied().unwrap_or_default(),
+            self.stamp_of(entry),
             entry.at_unix,
             key.0,
             -i64::from(entry.def.priority),
@@ -126,17 +142,24 @@ impl Cluster {
 
     /// The services queued ahead of `name`, first in line first, each once: those with work left
     /// whose rollout is not live and that something can still order (a service that is halted, at
-    /// a version marked bad, paused, held by a failed host, or whose every host that has not
+    /// a version marked bad, paused, held by a failed host, waiting for an Advance or for `min_up`, or whose every host that has not
     /// started defers, takes no place), that were set before `name`. Empty when `name` has no
     /// entry.
     pub(crate) fn ahead_of(&self, name: &str, fleet: &Fleet, now: Duration) -> Vec<String> {
-        let Some(mine) = self.of(name).map(|e| self.order(e)).min() else {
+        // The place of the service is that of its entries something can order; a service with
+        // none holds the place of its first entry.
+        let own: Vec<(bool, Order)> = self
+            .of(name)
+            .map(|e| (orderable(e, fleet, now), self.order(e)))
+            .collect();
+        let ready = own.iter().filter(|(ok, _)| *ok).map(|(_, order)| order);
+        let Some(mine) = ready.min().or_else(|| own.iter().map(|(_, o)| o).min()) else {
             return Vec::new();
         };
         let mut waiting: BTreeMap<Order, &str> = BTreeMap::new();
         for entry in self.entries.iter().filter(|e| e.def.name != name) {
             let order = self.order(entry);
-            if order < mine && orderable(entry, fleet, now) {
+            if order < *mine && orderable(entry, fleet, now) {
                 waiting.entry(order).or_insert(entry.def.name.as_str());
             }
         }
@@ -150,7 +173,7 @@ impl Cluster {
 }
 
 /// Whether `entry` waits for its turn: no live rollout, a desired version not on every host, and a
-/// host something can order.
+/// host something can order now (not a plan that waits for an Advance or for `min_up`).
 fn orderable(entry: &Entry, fleet: &Fleet, now: Duration) -> bool {
     let Some(want) = entry.want.as_ref() else {
         return false;
@@ -160,7 +183,14 @@ fn orderable(entry: &Entry, fleet: &Fleet, now: Duration) -> bool {
         return false;
     }
     let view = current(def, want, fleet, now);
-    !view.finished()
+    // A plan that waits for an operator's Advance, or whose next host would leave too few up,
+    // orders nobody now: it holds no place, or it would hold every service behind it for good.
+    let blocked = matches!(
+        view.wait(def, want, fleet, now),
+        Some(Wait::ManualAdvance | Wait::BelowMinUp)
+    );
+    !blocked
+        && !view.finished()
         && view.paused.is_none()
         && !view.members.iter().any(|m| m.state == HostState::Failed)
         && view

@@ -457,19 +457,21 @@ pub(crate) fn plan_proto(
         finished: view.finished(),
         waiting_on: live_on.iter().map(|(name, _)| name.clone()).collect(),
         host_group: def.group().map(ToString::to_string).unwrap_or_default(),
-        queue_position: queue_position(&live_on),
+        queue_position: queue_position(&live_on, fleet.live_limit(def)),
         waiting_on_why: live_on.into_iter().map(live_proto).collect(),
     }
 }
 
-/// Where a plan held by `holding` stands in the queue: one past the services queued ahead of it;
-/// none when none is.
-fn queue_position(holding: &[(String, Live)]) -> Option<u32> {
-    let ahead = holding
+/// Where a plan held by `holding` stands in the queue, when the cluster lets `limit` services be
+/// live: the places the live services leave go to the first queued, so the plan is the one past
+/// those queued ahead of it that do not get a place; none when none is queued.
+fn queue_position(holding: &[(String, Live)], limit: usize) -> Option<u32> {
+    let queued = holding
         .iter()
         .filter(|(_, live)| live.why == Why::Queued)
         .count();
-    (ahead > 0).then(|| u32::try_from(ahead + 1).unwrap_or(u32::MAX))
+    let free = limit.saturating_sub(holding.len() - queued).max(1);
+    (queued > 0).then(|| u32::try_from(queued.saturating_sub(free) + 1).unwrap_or(u32::MAX))
 }
 
 /// Why the service `name` is live, as `hostkeeper.operator.v1` says it.
