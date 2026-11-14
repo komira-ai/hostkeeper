@@ -3,7 +3,8 @@
 //! A host whose last update to a service `Failed` in the `halt` phase has found something a
 //! new release cannot fix (a tainted disk, a state no hook can read). The coordinator raises a
 //! halt for the service: every host and role of it is held ([`Gate::Halted`]), a new desired
-//! version does not lift it, the convergence says `halted`, and nothing retries or rolls back.
+//! version does not lift it, the convergence says `halted`, and nothing rolls back. Nothing
+//! retries either, but for one halt: see [`clear_if_absent`].
 //! The coordinator has no pager: a standing halt is an alert ([`crate::alerts`]), logged at
 //! error with the field `alert = "halt"` once when it appears, which is what an operator alert
 //! watches.
@@ -25,6 +26,13 @@
 //! target ([`lift_by_ci`]): a fix-forward release is the remedy. A halt a hook raised (its exit
 //! 76; any other reason) is lifted only by `clear_halt`, and so is a halt an operator raised
 //! (`Releases.Halt`, [`raise_by_operator`]). A force lifts any of them ([`crate::force`]).
+//!
+//! One halt lifts itself: when the host that raised it reports the service absent (nothing is
+//! installed, so nothing is left to protect: the halted order's rollback took the package off the
+//! host), [`clear_if_absent`] clears it as an operator's `clear_halt` does, audited by the
+//! coordinator, and the host is ordered the install again. Only the first try's halt clears: if
+//! the install ordered again halts too, it stands until an operator clears it. The agent lifts
+//! its own hold from the new generation, as for any clear.
 //!
 //! The halted host keeps reporting the same `last_update` until it updates again, so a clear
 //! also records `(node, target)` as acknowledged, and a report for an acknowledged pair is
@@ -225,18 +233,31 @@ pub(crate) fn note(
     noted
 }
 
+/// Whether the halt `report` reports ended the first try of its order: a report that names no
+/// try (an updater that predates it) counts as the first. A halt of a later try is the install
+/// that a clear ordered again halting again, which no clear repeats.
+fn first_try(report: Option<&UpdateResult>) -> bool {
+    report.and_then(|r| r.order_try).is_none_or(|t| t <= 1)
+}
+
 /// Clears the halt of `service` when the host `id` raised it and reports the service absent, as
 /// an operator's clear does ([`clear_standing`]), written first so a clear that could not be
 /// written leaves the halt standing, and audited `clear_halt` by the coordinator
-/// ([`ABSENT_REASON`]). Decided under the writers' lock, on the state it changes: nothing changes
-/// for no halt, for a halt of another host or of an operator (it names no host), and for a halt
-/// another host reported too while it stood, which that host may still be running. Answers
+/// ([`ABSENT_REASON`]), through the same `Write::BeforeMemory` order. Decided under the writers'
+/// lock, on the state it changes: nothing changes for no halt, for a halt of another host or of
+/// an operator (it names no host), for a halt another host reported too while it stood, which
+/// that host may still be running, and for a halt of a later try than the first (the order a
+/// clear gave halted again: a failure the clear did not mend, left to an operator, so a check
+/// that fails before anything is placed does not clear and retry at every heartbeat). Answers
 /// whether a halt was cleared.
 fn clear_if_absent(ops: &OpsStore, group: Option<&GroupName>, service: &str, id: &HostId) -> bool {
     let node = id.to_string();
     let changed = ops.decide_change(Write::BeforeMemory, |state| {
         let halt = state.edit_marks_in(group, service, |marks| {
-            let ours = marks.halt.as_ref().is_some_and(|halt| halt.node_id == node)
+            let ours = marks
+                .halt
+                .as_ref()
+                .is_some_and(|halt| halt.node_id == node && first_try(halt.report.as_ref()))
                 && marks.halt_seen.iter().all(|seen| seen.node_id == node);
             if ours { clear_standing(marks) } else { None }
         });

@@ -250,3 +250,39 @@ async fn a_clear_that_cannot_be_written_leaves_the_halt_standing() {
     assert!(rig.coordinator.ops().marks(LEGACY).halt.is_some());
     assert!(entries(&rig, "clear_halt").is_empty());
 }
+
+/// `service` absent, reporting that its install of 2.0 halted at the try `order_try`.
+fn halting_at(service: &str, order_try: u64) -> ServiceBeat {
+    serde_json::from_value(json!({
+        "name": service, "version": "1.0", "health": "absent",
+        "last_update": {"target": "2.0", "outcome": "failed", "phase": "halt",
+            "reason": "unit_failed", "order_try": order_try}
+    }))
+    .expect("a service beat")
+}
+
+/// Proves: only a halt of the first try of its order clears itself: a halt that names try 1
+/// clears, and a halt of try 2 (the install a clear ordered again halted too) stands with its
+/// host held, no clear entry and no new generation, so a check that fails before anything is
+/// placed cannot clear and retry at every heartbeat; an operator's clear still lifts it.
+///
+/// Catches: a halt that is cleared and re-ordered at every heartbeat for as long as its cause
+/// stays.
+#[tokio::test]
+async fn a_halt_of_a_later_try_than_the_first_stays_for_an_operator() {
+    let rig = rig("halt-absent-later-try", "");
+    set(&rig, WEB, "2.0", 7).await;
+    assert_eq!(order_to(&rig, "d1", vec![halting_at(WEB, 2)]), None);
+    assert_eq!(halted_by(&rig), Some("d1".to_owned()));
+    assert_eq!(order_to(&rig, "d1", vec![halting_at(WEB, 2)]), None);
+    assert_eq!(halted_by(&rig), Some("d1".to_owned()));
+    assert_eq!(why_of(&rig, WEB, "d1"), Some(Why::Gate(Gate::Halted)));
+    assert_eq!(generation(&rig), 0);
+    assert!(entries(&rig, "clear_halt").is_empty());
+
+    let first = crate::marks_support::rig("halt-absent-first-try", "");
+    set(&first, WEB, "2.0", 7).await;
+    assert!(is_install(order_to(&first, "d1", vec![halting_at(WEB, 1)])));
+    assert_eq!(halted_by(&first), None);
+    assert_eq!(entries(&first, "clear_halt").len(), 1);
+}

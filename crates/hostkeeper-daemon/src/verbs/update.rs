@@ -222,8 +222,11 @@ fn forgets_halt(
     if tombstoned | running.is_some() {
         return Ok(false);
     }
-    super::clear_halt::clear_record(ctx, &order.service)
+    let lifted = super::clear_halt::clear_record(ctx, &order.service)
         .map_err(|refused| Reply::refused(refused.refusal, refused.detail))?;
+    if !lifted {
+        return Ok(false);
+    }
     ctx.log(&format!(
         "level=warn alert=halt_forgotten service={}: the step record held a halt, and the service is absent: the halt is lifted for the install of {}",
         order.service, order.version

@@ -167,3 +167,50 @@ fn a_halt_that_cannot_be_judged_or_cleared_stands() {
     let refused = dies.order(&farm.install("web", "2.0", 2));
     assert_eq!(refused.refusal(), Some(Refusal::StoreFailed), "{refused:?}");
 }
+
+/// Proves: the order's own package and try decide a resend, nothing else: the same package at
+/// another try runs, and another package at the same try is not answered from the record (the
+/// halt is lifted, then the try rules refuse the try the record already holds for the other
+/// package, `try_conflict`); a `force_rollback` of the absent service stays refused `halted`.
+///
+/// Catches: a resend test that reads only the package or only the try, and a halt lifted for a
+/// verb other than `install`.
+#[test]
+fn only_an_install_that_is_not_a_resend_runs_over_the_halt() {
+    let farm = NativeHost::new("halt-absent-resend-keys");
+    let daemon = halted_install(&farm);
+    let rollback = daemon.order(&farm.force_rollback("web", "2.0", 2));
+    assert_eq!(rollback.refusal(), Some(Refusal::Halted), "{rollback:?}");
+    let other = daemon.order(&farm.install("web", "2.1", 1));
+    assert_eq!(other.refusal(), Some(Refusal::TryConflict), "{other:?}");
+    assert_eq!(daemon.order(&farm.install("web", "2.0", 2)), succeeded());
+}
+
+/// Proves: a halted install of a service with an uninstall under way (a tombstone in
+/// `placed.json`) is not an absent service: the install is refused `halted` and the record still
+/// holds the halt, which is not lifted for it.
+///
+/// Catches: a halt lifted over an uninstall that is half done.
+#[test]
+fn a_halt_of_a_tombstoned_service_stays() {
+    let farm = NativeHost::new("halt-absent-tombstone");
+    let rig = farm.rig();
+    let daemon = halted_install(&farm);
+    let placer = daemon.ctx().placer();
+    let lock = placer.lock().expect("the lock");
+    let mut placed = placer.store().load().expect("placed.json");
+    placed
+        .uninstalling
+        .insert("web".to_owned(), hostkeeper_placed::Tombstone::default());
+    placer.store().save(&placed, &lock).expect("saved");
+    drop(lock);
+    let held = daemon.order(&farm.install("web", "2.0", 2));
+    assert_eq!(held.refusal(), Some(Refusal::Halted), "{held:?}");
+    assert!(matches!(
+        rig.record("web").expect("the record").state,
+        State::Finished {
+            verdict: Verdict::Halt,
+            ..
+        }
+    ));
+}

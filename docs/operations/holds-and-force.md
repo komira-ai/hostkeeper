@@ -110,7 +110,7 @@ the JSON heartbeat route; any other waits for the next heartbeat over gRPC.
   A halt clears itself, with no operator call, when the host that raised it reports the service absent
   (nothing installed: a first install whose rollback purged the package, or a package removed by
   hand): one `clear_halt` entry by `coordinator` names the host and the reason, and the host is
-  ordered the install again. A halt whose host still has the service installed, an operator's `Releases.Halt`,
+  ordered the install again, once: a halt of a later try (the install ordered again halted too) stays. A halt whose host still has the service installed, an operator's `Releases.Halt`,
   and a halt another host also reported stay until `ClearHalt`.
   The alert's message names the group; groups whose halt has the same service, host and version are
   one alert that names them all.
