@@ -38,7 +38,9 @@ use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::HostGroupsRefusal as Refusal;
 use hostkeeper_wire::HostId;
 
-use crate::group_uninstall::{cancel_uninstalls, listed_by, order_uninstalls};
+use crate::group_uninstall::{
+    cancel_all_uninstalls, cancel_uninstalls, listed_by, order_uninstalls,
+};
 use crate::holds::marks_of;
 use crate::host_groups::GroupName;
 use crate::inventory::unreadable;
@@ -141,8 +143,12 @@ impl Coordinator {
             .ops
             .decide_changes(Write::BeforeMemory, |state| -> Result<_, OpsError> {
                 let mut entries = vec![audit];
-                if let (Some(to), Some(into)) = (&to, &into) {
-                    entries.extend(cancel_uninstalls(state, to, &into.packages, &nodes));
+                match (&to, &into) {
+                    (Some(to), Some(into)) => {
+                        entries.extend(cancel_uninstalls(state, to, &into.packages, &nodes));
+                    }
+                    // An unassigned host is ordered nothing: its pending uninstalls go too.
+                    _ => entries.extend(cancel_all_uninstalls(state, &nodes)),
                 }
                 order_uninstalls(state, &wanted);
                 Ok(entries)

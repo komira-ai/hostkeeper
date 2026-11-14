@@ -361,7 +361,12 @@ fn migration_0018_removes_the_group_all_and_makes_every_group_list_hostkeeper() 
            first_heartbeat_unix, first_serving_unix, host_group) VALUES \
            ('h1', '\\x01', 'm-1', 'ungrouped', '{}', false, NULL, NULL, 'all'), \
            ('h2', '\\x02', 'm-2', 'web', '{}', false, NULL, NULL, 'web'), \
-           ('h3', '\\x03', 'm-3', 'ungrouped', '{}', false, NULL, NULL, NULL)",
+           ('h3', '\\x03', 'm-3', 'ungrouped', '{}', false, NULL, NULL, NULL); \
+         UPDATE enrollment_hosts SET moving_from = 'all' WHERE host_id = 'h2'; \
+         INSERT INTO inventory (host_id, role, data_macs, bmc_mac, serial, notes, by_name, \
+           at_unix, position, host_group) VALUES \
+           ('i1', 'web', '{}', '', 'SN1', '', 'op', 9, 0, 'all'), \
+           ('i2', 'web', '{}', '', 'SN2', '', 'op', 9, 1, 'web')",
     )
     .expect("the rows of 0017");
     with_session(&db, |session| {
@@ -419,6 +424,14 @@ fn migration_0018_removes_the_group_all_and_makes_every_group_list_hostkeeper() 
     assert_eq!(
         text("SELECT host_id, coalesce(host_group, '-') FROM enrollment_hosts ORDER BY 1"),
         ["h1 -", "h2 web", "h3 -"]
+    );
+    assert_eq!(
+        text("SELECT host_id, coalesce(moving_from, '-') FROM enrollment_hosts ORDER BY 1"),
+        ["h1 -", "h2 -", "h3 -"]
+    );
+    assert_eq!(
+        text("SELECT host_id, coalesce(host_group, '-') FROM inventory ORDER BY 1"),
+        ["i1 -", "i2 web"]
     );
     assert_eq!(
         text("SELECT host_group, service, node_id FROM group_rollout_done"),

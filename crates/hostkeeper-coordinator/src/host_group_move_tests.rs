@@ -12,6 +12,7 @@ use crate::host_groups_support::{
 };
 use crate::marks_support::operator;
 use crate::operator::{Caller, entry_proto};
+use crate::ops::AuditEntry;
 use crate::store::{Fake, audit_failure, store_failure};
 use crate::testutil::{Rig, id};
 
@@ -408,6 +409,48 @@ fn a_move_to_no_group_leaves_the_host_unassigned_and_orders_no_uninstall() {
     let fleet = world.coordinator().lock_fleet();
     assert_eq!(fleet.node(&id("d1")).expect("a node").role, "");
     assert!(!fleet.is_moving(&id("d1")));
+}
+
+/// Proves: a move to no group drops the uninstall intents an earlier move left for the host, one
+/// `uninstall_cancelled` entry naming no group each after the move's, so an unassigned host is
+/// ordered nothing.
+///
+/// Catches: an unassigned host that is still ordered an uninstall from an earlier move.
+#[test]
+fn a_move_to_no_group_cancels_the_uninstalls_an_earlier_move_left() {
+    let world = World::new("hg-move-none-cancels");
+    world.enroll("d1");
+    world
+        .put("alpha", &[SELF, "svc", "cfg"], None)
+        .expect("put");
+    world.put("beta", &[SELF], None).expect("put");
+    world.move_to("d1", "alpha").expect("moved");
+    world.beat("d1", &[SELF, "svc", "cfg"]);
+    world.move_to("d1", "beta").expect("moved");
+    assert_eq!(world.intents().len(), 2);
+    let audited = world.audit().len() as u64;
+
+    world.move_to("d1", "").expect("moved");
+
+    let dropped = |seq, service: &str| AuditEntry {
+        host_group: None,
+        ..cancelled(seq, "", service, "d1")
+    };
+    assert_eq!(
+        world.audit_after(audited as usize),
+        vec![
+            operator_entry(
+                audited + 1,
+                "host_move",
+                None,
+                Some("d1"),
+                &format!("from beta to no group: {REASON}"),
+            ),
+            dropped(audited + 2, "cfg"),
+            dropped(audited + 3, "svc"),
+        ]
+    );
+    assert_eq!(world.intents(), []);
 }
 
 /// Proves: a host in no group is refused a move to none as `same_host_group`, and a move from none

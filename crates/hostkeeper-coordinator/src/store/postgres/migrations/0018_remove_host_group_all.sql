@@ -3,7 +3,10 @@
 -- all"): a host is in one group or in none, and every group lists `hostkeeper`. Deletes the group
 -- named `all` and every row keyed by it (its packages, desired versions, minimum versions, marks,
 -- rollout positions and the hosts those recorded done); a host recorded in it is in no group
--- (`host_group` NULL). Then each group that does not list `hostkeeper` gets it, first in its list
+-- (`host_group` NULL), and so is a host that was moving from it, a pending approval that names it
+-- and an inventory record that names it (none of these can hold it on a database the earlier code
+-- wrote, which refused `all` there; they are cleared so that none can). Audit lines keep their
+-- history. Then each group that does not list `hostkeeper` gets it, first in its list
 -- and at the version `all` had for it when the group has none of its own, so that the hosts of
 -- such a group, which ran `hostkeeper` under `all`, keep their agent's updates.
 -- An older release may run on it: it holds `all` again in memory, listing `hostkeeper` alone with
@@ -39,3 +42,6 @@ DELETE FROM host_group_packages WHERE host_group = 'all';
 DELETE FROM host_groups WHERE name = 'all';
 
 UPDATE enrollment_hosts SET host_group = NULL WHERE host_group = 'all';
+UPDATE enrollment_hosts SET moving_from = NULL WHERE moving_from = 'all';
+UPDATE enrollment_requests SET approved_host_group = NULL WHERE approved_host_group = 'all';
+UPDATE inventory SET host_group = NULL WHERE host_group = 'all';

@@ -58,6 +58,24 @@ pub(crate) fn order_uninstalls(state: &mut OpsState, wanted: &[Wanted]) {
     }
 }
 
+/// Drops every uninstall intent of `hosts`, for a host put in no group, and answers the audit
+/// entries of those dropped, `uninstall_cancelled` by the coordinator, naming no group.
+pub(crate) fn cancel_all_uninstalls(state: &mut OpsState, hosts: &[String]) -> Vec<AuditEntry> {
+    let mut cancelled = Vec::new();
+    for (package, entries) in &mut state.assignments {
+        for host in hosts {
+            if entries.uninstall.remove(host).is_some() {
+                let mut entry = AuditEntry::new(COORDINATOR, CANCELLED);
+                entry.service = Some(package.clone());
+                entry.node_id = Some(host.clone());
+                cancelled.push(entry);
+            }
+        }
+    }
+    state.assignments.retain(|_, entries| !entries.is_empty());
+    cancelled
+}
+
 /// Drops the uninstall intents of `hosts` for `packages`, and answers the audit entries of those
 /// dropped, `uninstall_cancelled` by the coordinator, in the order of `packages` and then of
 /// `hosts`; each names `group`, the group the change that cancels it is of.
