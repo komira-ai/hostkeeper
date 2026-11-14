@@ -43,6 +43,8 @@ pub const STAGING_DIR: &str = "/var/lib/hostkeeper-bootstrap";
 /// The staged pkg's name, ending in `.pkg`, which `installer` requires.
 const STAGED: &str = "hostkeeper.pkg";
 /// The daemon config's file name, and the signers file's.
+/// The marker's name.
+const INSTALLED: &str = "installed";
 const DAEMON_CONFIG: &str = "hostkeeper.toml";
 const SIGNERS_FILE: &str = "macos-pkg.toml";
 
@@ -155,6 +157,8 @@ pub enum Error {
         #[source]
         source: std::io::Error,
     },
+    #[error("the staging directory {path} must be owned by uid {uid} and not writable by others")]
+    StagingNotTrusted { path: String, uid: u32 },
     #[error("{0} is not UTF-8")]
     NotUtf8(String),
 }
@@ -168,12 +172,18 @@ pub struct GaveUp {
     pub last: Error,
 }
 
-/// Whether hostkeeper is on this Mac: the binary its pkg installs is there, or the Mac holds a
-/// host certificate. The pkg lays its payload down before its postinstall runs, so a binary that
-/// is there is a Mac the pkg reached.
+/// The marker of a finished install, in the staging directory: made after `installer` exited 0.
+pub fn installed_marker(paths: &Paths) -> PathBuf {
+    paths.staging_dir.join(INSTALLED)
+}
+
+/// Whether hostkeeper is on this Mac: the Mac holds a host certificate, or the binary its pkg
+/// installs is there and an install of ours finished (the marker). The pkg lays its payload down
+/// before its postinstall runs, so a binary alone can be an install that failed half way; that Mac
+/// is installed again, which loads the job.
 pub fn is_set_up(paths: &Paths) -> bool {
     let there = |path: &Path| fs::symlink_metadata(path).is_ok();
-    there(&paths.binary) || there(&paths.pki_current)
+    there(&paths.pki_current) || (there(&paths.binary) && there(&installed_marker(paths)))
 }
 
 /// One run, as the module says.
@@ -264,6 +274,17 @@ fn install(paths: &Paths, ports: &Ports<'_>, settings: &Settings) -> Result<Outc
             .create(staging)
             .map_err(staging_error)?;
     }
+    {
+        use std::os::unix::fs::MetadataExt;
+        let meta = fs::metadata(staging).map_err(staging_error)?;
+        // One test of both: the owner differing, or any write bit of the group or others.
+        if (meta.uid() ^ paths.sources.trusted_uid) | (meta.mode() & 0o022) != 0 {
+            return Err(Error::StagingNotTrusted {
+                path: staging.display().to_string(),
+                uid: paths.sources.trusted_uid,
+            });
+        }
+    }
     let pkg = staging.join(STAGED);
     drop(fs::remove_file(&pkg));
     let outcome = stage_and_install(paths, ports, settings, &pkg);
@@ -312,13 +333,32 @@ fn stage_and_install(
             "/".to_owned(),
         ],
         settings.bounds.installer_timeout_secs,
-    )?;
-    if installed.code != Some(0) {
-        return Err(Error::Installer {
-            code: installed.code,
-            last: last_line(&installed),
-        });
-    }
+    );
+    let installed = match installed {
+        Ok(output) if output.code == Some(0) => output,
+        failed => {
+            // The files this attempt made are not authoritative: the next attempt reads the
+            // settings again, so a corrected value is not shadowed by a stale file.
+            for (written, name) in [(daemon_config, DAEMON_CONFIG), (signers_file, SIGNERS_FILE)] {
+                if written == Written::Made {
+                    drop(fs::remove_file(paths.config_dir.join(name)));
+                }
+            }
+            return Err(match failed {
+                Ok(output) => Error::Installer {
+                    code: output.code,
+                    last: last_line(&output),
+                },
+                Err(error) => error,
+            });
+        }
+    };
+    drop(installed);
+    let marker = installed_marker(paths);
+    fs::write(&marker, b"").map_err(|source| Error::Staging {
+        path: marker.display().to_string(),
+        source,
+    })?;
     Ok(Outcome::Installed {
         version: located.version,
         daemon_config,

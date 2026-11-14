@@ -144,3 +144,16 @@ fn a_failed_link_is_an_error_and_leaves_nothing() {
     assert!(matches!(error, FileError::Io { .. }), "{error}");
     assert!(!exists(&path));
 }
+
+/// A file that is there but writable by its group or others is not trusted, and is left.
+#[test]
+fn a_kept_file_others_can_write_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = scratch("files-writable");
+    let path = dir.path().join("hostkeeper.toml");
+    fs::write(&path, "loose\n").expect("write");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).expect("mode");
+    let error = write_if_absent(&path, "x\n", 0o600).expect_err("loose");
+    assert!(matches!(error, FileError::Writable { .. }), "{error}");
+    assert_eq!(read(&path), "loose\n");
+}

@@ -136,6 +136,8 @@ HTTPS under the system's roots; it never talks to the coordinator.
 constant time), and the claims "authorise nothing" (`claims.rs`). The bootstrap pkg is hosted at a public URL, so it could not hold a secret anyway:
 a secret in it is a secret everyone has. What keeps the wrong machine out is the approval, not the pkg (section 5).
 
+**Not checked, later work:** the pkg's identifier and a minimum version. The pin is the Team ID (section 7), so another pkg of the same team served from the repository would pass; the repository is the origin the owner trusts, and an identifier check needs `pkgutil --expand`, which was not measured.
+
 **Unverified:** whether a Blueprint of Apple Business's built-in management can carry a custom preference domain. If it cannot, the Macs use the
 fallback file (a held step of the owner's per Mac, or a per-org pkg built in the org's own pipeline, signed by the same identity, which is not a change of
 this repository).
@@ -173,7 +175,7 @@ exists, so "a reinstall never changes a Mac's trust root". The bootstrap uses ex
    `ca_sha256`, `release_channel` and `[trusted_signers]`, and `/etc/hostkeeper/macos-pkg.toml` (0644) from `macos_pkg_signers`, or, when that is empty,
    from the leaf certificate of the pkg it has just checked (its Team ID is pinned and Apple issued it, so the leaf is the signer a later release of the
    same identity needs a rotation for). Each is written whole to a temporary file in the same directory, synced, and hard-linked to its path, which fails when the
-   file appeared meanwhile; a file that is there as a regular file is kept as it is, and a link or a directory is refused and left.
+   file appeared meanwhile; a file that is there as a regular file is kept as it is (refused when group- or other-writable), and a link or a directory is refused and left. If `installer` then fails, the files this attempt made are removed. The staging directory must be owned by root and not group- or other-writable, or the attempt fails.
 2. The text was parsed by the daemon's own loader (`DaemonConfig::parse`, and the signers file's parser) when the settings were read, so a value the
    daemon would refuse stops the bootstrap, not the daemon.
 3. The pkg's postinstall loads the job; the daemon start finds the files and keeps them.
@@ -251,8 +253,8 @@ bootstrap stays installed, idle, rather than deleting itself, so a declarative "
 
 The bootstrap is a root launchd job (`dev.hostkeeper.bootstrap`, `RunAtLoad`, restarted by launchd only after a failure). On each start (`crates/hostkeeper-bootstrap/src/run.rs`):
 
-1. If `/usr/local/bin/hostkeeper` is there, or `/etc/updater/pki/current` is, exit 0 and do nothing. This makes it idempotent and a no-op on every enrolled Mac
-   and on one that has hostkeeper.
+1. If `/etc/updater/pki/current` is there, or `/usr/local/bin/hostkeeper` is there **and** the marker `/var/lib/hostkeeper-bootstrap/installed` is (made after `installer` exited 0), exit 0 and do nothing. This makes it idempotent and a no-op on every enrolled Mac
+   and on one the bootstrap installed. The binary alone is not enough: the pkg lays its payload down before its postinstall, so a failed postinstall leaves a binary and no loaded job, and that Mac is installed again. A Mac with a hand-installed binary and no marker is installed again too, which is harmless: existing configs are kept.
 2. Read the settings (section 4), then the repository's descriptor and pointer (`hostkeeper_release::descriptor`), and download the pkg into a new root-only file in
    `/var/lib/hostkeeper-bootstrap` (mode 0600, never replacing a file), hashed in the same pass, held to the pointer's size and SHA-256 and to `max_package_bytes`.
 3. `pkgutil --check-signature` and the Team ID pin (section 7). A pkg that fails any check is deleted, and nothing else is written or run.
@@ -312,7 +314,7 @@ rule "fix only lock-in now, defer refactors" applies. Idle costs nothing: with n
 | **Settings refused** (not owned by root, writable by others, a link, an unknown key, a value the daemon's loader refuses) | The same retry; the reason names the file and the key; nothing is fetched | the log |
 | **Repository unreachable, descriptor or pointer wrong** | The same retry; the reason names the URL and the status | the log; the host never has hostkeeper |
 | **Pkg refused** (size or digest differs from the pointer, `pkgutil` fails, the status is not Apple's, the Team ID is not the pinned one) | The file is deleted before anything is written or run: no config, no `installer`. The attempt is retried after `retry_secs`, since the pointer may move to a good file | the log, naming the Team ID found and the one pinned |
-| **`installer` fails** | The staged file is removed; the configs written stay (they are kept next time); the next attempt installs the same bytes again | the log, with `installer`'s last line |
+| **`installer` fails** | The staged file is removed, and so are the config files this attempt made (a file the operator had stays), so a corrected setting is read on the next attempt; that attempt installs again | the log, with `installer`'s last line |
 | **Coordinator unreachable at first boot** (down, wrong LAN, CA hash mismatch) | Not the bootstrap's: the daemon's CA check fails first, so nothing is sent and no key is made on a hash mismatch (`UntrustedCoordinator`); a connection failure is a failed step, retried every poll period | the daemon's log; no request in the queue |
 | **Approval never given** | The request waits and expires after `--enrollment-request-ttl` (72 h). The daemon posts again with the same key and the request is listed again | the request in the Enrollment page; after the TTL, under `unenrolled` |
 | **The Mac is re-imaged** | The Blueprint installs the bootstrap again; the files of the old install are gone, so it installs hostkeeper again, and the daemon makes a new key and a new request. The host id is held by the old key, so the record does not approve it (the record is used, and "no other key holds the host id" fails): an operator approves with `--replace true` in the same group. A different group is refused `host_group_differs` | one click; the old key's certificate stops being admitted |

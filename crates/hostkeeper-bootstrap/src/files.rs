@@ -9,7 +9,7 @@
 
 use std::fs::{self, DirBuilder, OpenOptions};
 use std::io::{self, Write};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 /// What [`write_if_absent`] did.
@@ -27,6 +27,9 @@ pub enum FileError {
     /// Something other than a regular file is at the path.
     #[error("{} is there but is not a regular file; it is not replaced", path.display())]
     NotAFile { path: PathBuf },
+    /// A file that is there is writable by its group or others, so it is not trusted as it is.
+    #[error("{} is writable by its group or others; it is not trusted", path.display())]
+    Writable { path: PathBuf },
     #[error("{}: {source}", path.display())]
     Io {
         path: PathBuf,
@@ -45,6 +48,11 @@ fn existing(path: &Path) -> Result<Option<Written>, FileError> {
     match fs::symlink_metadata(path) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(io_at(path)(e)),
+        Ok(meta) if meta.file_type().is_file() && meta.mode() & 0o022 != 0 => {
+            Err(FileError::Writable {
+                path: path.to_path_buf(),
+            })
+        }
         Ok(meta) if meta.file_type().is_file() => Ok(Some(Written::Kept)),
         Ok(_) => Err(FileError::NotAFile {
             path: path.to_path_buf(),

@@ -122,19 +122,24 @@ fn existing_configs_are_kept_and_the_install_still_runs() {
     assert_eq!(world.tools.ran(), [Tool::Pkgutil, Tool::Installer]);
 }
 
-/// A Mac that has hostkeeper's binary, or a host certificate, is a no-op: no request, no tool, no
+/// A Mac that has hostkeeper's binary and the marker of a finished install, or a host certificate, is a no-op: no request, no tool, no
 /// file written, not even the staging directory.
 #[test]
 fn a_mac_that_has_hostkeeper_is_left_alone() {
-    for marker in ["usr/local/bin/hostkeeper", "etc/updater/pki/current"] {
+    for markers in [
+        &["usr/local/bin/hostkeeper", "var/bootstrap/installed"][..],
+        &["etc/updater/pki/current"][..],
+    ] {
         let dir = scratch("run-noop");
         let paths = paths_in(dir.path(), "");
-        write_mode(&dir.path().join(marker), "x", 0o755);
+        for marker in markers {
+            write_mode(&dir.path().join(marker), "x", 0o755);
+        }
         let world = World::good();
         assert_eq!(world.run(&paths).expect("a no-op"), Outcome::AlreadySetUp);
         assert!(world.repo.asked.borrow().is_empty(), "nothing is fetched");
         assert!(world.tools.ran().is_empty(), "no tool runs");
-        assert!(!exists(&paths.config_dir) && !exists(&paths.staging_dir));
+        assert!(!exists(&paths.config_dir) && !exists(&paths.staging_dir.join("hostkeeper.pkg")));
         assert!(is_set_up(&paths));
         assert_eq!(
             Outcome::AlreadySetUp.to_string(),
@@ -143,6 +148,71 @@ fn a_mac_that_has_hostkeeper_is_left_alone() {
     }
     let dir = scratch("run-not-set-up");
     assert!(!is_set_up(&paths_in(dir.path(), "")));
+}
+
+/// The binary alone is an install that may have failed after the pkg laid its payload down (its
+/// postinstall did not load the job): the Mac is installed again, and the marker is made when
+/// `installer` exits 0.
+#[test]
+fn a_binary_without_a_finished_install_is_installed_again() {
+    let dir = scratch("run-half");
+    let paths = paths_in(dir.path(), "");
+    write_mode(&paths.binary, "x", 0o755);
+    assert!(!is_set_up(&paths));
+    let world = World::good();
+    world.run(&paths).expect("installed again");
+    assert_eq!(world.tools.ran(), [Tool::Pkgutil, Tool::Installer]);
+    assert!(is_set_up(&paths), "the marker is there after the install");
+}
+
+/// A marker that cannot be written is an error of the attempt.
+#[test]
+fn an_unwritable_marker_is_an_error() {
+    let dir = scratch("run-marker");
+    let paths = paths_in(dir.path(), no_wait());
+    fs::create_dir_all(paths.staging_dir.join("installed")).expect("a directory in its place");
+    let gave_up = World::good().run(&paths).expect_err("no marker");
+    assert!(matches!(gave_up.last, Error::Staging { .. }), "{gave_up}");
+}
+
+/// A staging directory another account owns, or others can write, is refused before anything is
+/// fetched.
+#[test]
+fn a_staging_directory_others_can_write_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = scratch("run-staging");
+    let paths = paths_in(dir.path(), no_wait());
+    fs::create_dir_all(&paths.staging_dir).expect("dir");
+    fs::set_permissions(&paths.staging_dir, fs::Permissions::from_mode(0o770)).expect("mode");
+    let world = World::good();
+    let gave_up = world.run(&paths).expect_err("refused");
+    assert!(
+        matches!(gave_up.last, Error::StagingNotTrusted { .. }),
+        "{gave_up}"
+    );
+    assert!(world.repo.asked.borrow().is_empty());
+}
+
+/// Config files an attempt made are removed when `installer` fails, so a corrected setting is
+/// not shadowed by a stale file; a file the operator had is left.
+#[test]
+fn a_failed_install_removes_the_configs_it_made() {
+    let dir = scratch("run-rollback");
+    let paths = paths_in(dir.path(), no_wait());
+    write_mode(
+        &paths.config_dir.join("macos-pkg.toml"),
+        "# the operator's signers\n",
+        0o644,
+    );
+    let world = World::good();
+    *world.tools.installer_code.lock().expect("code") = Some(1);
+    world.run(&paths).expect_err("failed");
+    assert!(!exists(&paths.config_dir.join("hostkeeper.toml")));
+    assert_eq!(
+        read(&paths.config_dir.join("macos-pkg.toml")),
+        "# the operator's signers\n"
+    );
+    assert!(!is_set_up(&paths));
 }
 
 /// Asserts that nothing was configured or installed and that the staged pkg was removed.
@@ -273,7 +343,6 @@ fn a_failed_installer_is_reported_and_its_pkg_removed() {
         "installer exited Some(1): installer: the install failed"
     );
     assert!(!exists(&paths.staging_dir.join("hostkeeper.pkg")));
-    assert!(exists(&paths.config_dir.join("hostkeeper.toml")));
     *world.tools.installer_spawn_fails.lock().expect("flag") = true;
     let gave_up = world.run(&paths).expect_err("failed");
     assert!(

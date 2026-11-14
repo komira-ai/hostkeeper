@@ -50,7 +50,7 @@ nothing to do`.
 | `installed hostkeeper <version>` | done: the daemon is loaded, finds `/etc/hostkeeper/hostkeeper.toml`, and enrolls |
 
 After that the request is in the coordinator's queue (or approved by the record) and the Mac is an
-ordinary host. A Mac that already has `/usr/local/bin/hostkeeper` or a host certificate is left alone
+ordinary host. A Mac that already has a host certificate, or `/usr/local/bin/hostkeeper` with the bootstrap's finished-install marker, is left alone
 by the bootstrap, however many times it runs.
 
 ## What the bootstrap does not do

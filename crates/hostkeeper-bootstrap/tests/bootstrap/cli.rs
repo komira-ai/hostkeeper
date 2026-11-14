@@ -71,6 +71,7 @@ fn an_installed_mac_exits_zero_without_a_request() {
     let dir = scratch("cli-noop");
     let world = World::good();
     write_mode(&dir.path().join("usr/local/bin/hostkeeper"), "x", 0o755);
+    write_mode(&dir.path().join("var/bootstrap/installed"), "", 0o600);
     let exit = execute(
         args(dir.path(), "", &[]),
         &world.repo,
@@ -129,6 +130,7 @@ fn off_a_mac_the_host_tools_say_they_are_not_a_mac() {
 fn the_program_exits_zero_on_an_installed_mac() {
     let dir = scratch("cli-binary");
     write_mode(&dir.path().join("usr/local/bin/hostkeeper"), "x", 0o755);
+    write_mode(&dir.path().join("var/bootstrap/installed"), "", 0o600);
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_hostkeeper-bootstrap"))
         .args(args(dir.path(), "", &[]).into_iter().skip(1))
         .output()
