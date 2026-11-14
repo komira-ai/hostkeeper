@@ -146,6 +146,8 @@ enrolled in no specific group: it is in the built-in group `all` alone, and runs
 | `--rack` | STRING | Where the server stands, an optional placement the approval makes in the same step (`docs/design/ui-shell-lab.md`): the lab layout's rack id, which must exist (`unknown_rack`); empty for none, and then `placement_u` and `placement_height_u` are 0 (`placement_invalid`): the host is unplaced until it is placed (`Place` of `Layout`). A coordinator that holds no layout refuses a rack (`unknown_rack`). The placement is of the inventory entry the host id names when there is one, so the server keeps its place across a wipe, else of the host. A refused placement refuses the approval, and nothing changes (`placement_overlap`, `placement_out_of_rack`). |
 | `--placement-u` | UINT32 | The lowest U the server occupies, from 1 (the bottom); required with `rack`. |
 | `--placement-height-u` | UINT32 | How many U it occupies; required with `rack`. |
+| `--placement-sled` | STRING | Or the sled the server stands on (`Layout.Get`'s `sleds`) and its slot from 0 (left out: the lowest free): `rack`, `placement_u` and `placement_height_u` left empty (`placement_invalid` otherwise). A slot another subject holds is `placement_overlap`, a sled the layout lacks `placement_invalid`. With `rack`, `placement_u` and `placement_height_u` instead, the approval makes a sled of that U and height for the server, which goes when the server leaves it. |
+| `--placement-slot` | UINT32 |  |
 
 #### `hkctl enrollment reject`
 
@@ -533,6 +535,8 @@ place.
 | `--height-u` | UINT32 | How many U it occupies, 1 to the rack's height; required (0 is refused). |
 | `--u` | UINT32 | The lowest U it occupies; required (0 is refused). |
 | `--reason` | STRING |  |
+| `--sled` | STRING | To put the subject on a sled: the sled's id (`Get`'s `sleds`), with `rack`, `u` and `height_u` left empty (a rack and a sled together is `invalid_request`). `slot` is the slot from 0; left out, the lowest free one. A slot another subject holds is `overlap`, one past 7 `invalid_request`, a sled with no free slot `capacity`. With `rack`, `u` and `height_u` instead, a new sled of that U and height is made there and the subject stands on its slot 0 (the sled goes when the subject leaves it and it is empty). |
+| `--slot` | UINT32 |  |
 
 Through `--request` only: `subject` (hostkeeper.operator.v1.LayoutSubject).
 
@@ -572,6 +576,35 @@ inventory entry: `Place` with the subject kind INVENTORY and the device's id.
 `/hostkeeper.operator.v1.Layout/RemoveDevice`
 
 Removes a network device and its placement, if it has one.
+
+| flag | value | meaning |
+|---|---|---|
+| `--id` | STRING |  |
+| `--reason` | STRING |  |
+
+#### `hkctl layout put-sled`
+
+`/hostkeeper.operator.v1.Layout/PutSled`
+
+Adds a sled to a rack (empty `id`: its id is `sled-<n>`, one more than the highest held), or
+replaces the rack, lowest U, height and label of the sled `id` (a move or a resize): what
+stands on a sled moves with it.
+
+| flag | value | meaning |
+|---|---|---|
+| `--id` | STRING | Empty to add; else the sled to replace. |
+| `--rack` | STRING | The id of the rack it stands in (or, with an `id`, is moved to). |
+| `--u` | UINT32 | The lowest U it occupies, 1 or more; required. |
+| `--height-u` | UINT32 | 1 to 60; required. |
+| `--label` | STRING |  |
+| `--reason` | STRING |  |
+| `--slots` | UINT32 | 1 to 8; 0 on an add is 1, 0 on a replace keeps the sled's count. A count below the slot of an item on the sled is `in_use`, naming it. |
+
+#### `hkctl layout remove-sled`
+
+`/hostkeeper.operator.v1.Layout/RemoveSled`
+
+Removes a sled that holds nothing: refused `in_use`, naming what stands on it, otherwise.
 
 | flag | value | meaning |
 |---|---|---|

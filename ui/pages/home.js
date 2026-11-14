@@ -7,28 +7,34 @@
 // `list` (true) shows every server in one compact list instead of the floor plan.
 // Breadcrumbs: Lab > Row > Rack > Host.
 //
-// The layout is the coordinator's own small model (rows 0, 1, 2, racks numbered in their row and
-// as many U high as they are made, placements of a server in a rack): `lab.js` reads it. A hostkeeper
+// The layout is the coordinator's own small model (rows, racks numbered in their row and as many U
+// high as they are made, sleds in the racks, items on the slots of the sleds; docs/design/rack-sleds.md):
+// `lab.js` reads it, `sleds.js` draws the sleds. A hostkeeper
 // runs one lab; the cluster has a name, shown on top and renamed in the edit mode. The edit mode
 // (`Edit layout`, `edit` in the page's params) adds the controls: add a row, add a rack (its height
-// from a list), resize, move to another row and remove a rack or a row, rename the cluster, and
-// move a server: pick it up (or drag it) and put it on a free U of any rack in view, or take it out
-// of its rack. Every change is one call of `Layout` and the page read again; a refusal is told in
-// words. A row or a rack that still holds servers is not removed; the refusal names them.
+// from a list), resize, move to another row and remove a rack or a row, rename the cluster, add a sled
+// (its size in U, its slots and the U where it fits), resize, move (by dragging it to a free U, or the
+// arrow keys, or Move...) and remove a sled, and assign a server or a switch to an empty bay (click it, or
+// drag the item there) or unassign it. Every change is one call of `Layout` and the page read again;
+// a refusal is told in words. A rack that holds sleds, or a sled that holds items, is not removed.
 //
 // Params: `row` (a row id) shows that row's racks, `rack` (a rack id) one rack with its hosts,
 // `edit` (true) the edit mode, `list` (true) the list of servers in place of the floor plan.
 // Calls: Hosts.List, Releases.Status and Alerts.List as the Fleet page made them, then Layout.Get
 // and Enrollment.ListRecords (the lab is shown without them when they fail, and says so); on a
-// button, Layout.PutName, AddRow, RemoveRow, PutRack, RemoveRack, Place or Unplace.
+// button, Layout.PutName, AddRow, RemoveRow, PutRack, RemoveRack, PutSled, RemoveSled, Place or Unplace.
 
 import {
   h, action, allPages, describeError, enumLabel, errorView, field, fmtUnix, list, pill, table, trimmed,
 } from "../view.js";
 import {
-  DEFAULT_RACK_HEIGHT, RACK_HEIGHTS, SERVER_HEIGHTS, STATES, consoleWords, counts, crumbs, gearOf, inRack,
-  layoutOf, layoutProblem, rackName, racksOf, roleWords, rowName, serversOf, stripPosition, subjectOf, worstState,
+  DEFAULT_RACK_HEIGHT, RACK_HEIGHTS, STATES, consoleWords, counts, crumbs, gearOf, inRack,
+  layoutOf, layoutProblem, rackName, racksOf, roleWords, rowName, serversOf, shownNumber, sledsIn, stripPosition,
+  subjectOf, usedU, worstState,
 } from "../lab.js";
+import { ApiError } from "../api.js";
+import { board, tip } from "../sleds.js";
+import { addSledPanel, assignPanel, pick, selectionPanel } from "../sledpanels.js";
 
 // How far an arrow key scrolls the rack strip when the width of a rack is not known: one rack's
 // width, in the browser's pixels; and the gap between two racks of the strip (the stylesheet's).
@@ -75,9 +81,21 @@ function listRecords(api) {
     pageToken === "" ? { limit: 256 } : { limit: 256, pageToken }), "records");
 }
 
-// The list view: every server in one compact table, with where it stands.
-function serversList(ctx, layout, servers) {
-  const sorted = [...servers].sort((x, y) => x.name.localeCompare(y.name));
+// Whether a server matches the text typed in the list's filter: its name contains it, or its address
+// is it or lies under it (`C0-R0-R0-S1` matches `C0-R0-R0-S1-S0`, not `C0-R0-R0-S10-S0`). No text: all.
+export function matches(server, text) {
+  const want = text.trim().toLowerCase();
+  if (want === "") {
+    return true;
+  }
+  const address = server.placement === null ? "" : server.placement.address.toLowerCase();
+  return server.name.toLowerCase().includes(want) || address === want || address.startsWith(`${want}-`);
+}
+
+// The list view: every server in one compact table, with its address and where it stands, under a
+// filter that takes a name or an address (the page is drawn again when it is applied).
+function serversList(ctx, layout, servers, state, redraw) {
+  const sorted = servers.filter((s) => matches(s, state.filter)).sort((x, y) => x.name.localeCompare(y.name));
   const rows = sorted.map((s) => h("tr", {},
     h("td", {},
       h("button", {
@@ -85,10 +103,25 @@ function serversList(ctx, layout, servers) {
         on: { click: () => (s.host !== null ? ctx.navigate("host", { nodeId: s.host }) : ctx.navigate("inventory", { record: s.id })) },
       }, s.name)),
     h("td", {}, pill(s.state, STATES.find(([x]) => x === s.state)[1])),
+    h("td", { class: "mono" }, s.placement === null ? "-" : s.placement.address),
     h("td", {}, s.placement === null ? "Unplaced" : `${rackName(layout, s.placement.rack)}, U${s.placement.u}`),
     h("td", {}, s.group || "-"),
     h("td", {}, s.version || "-")));
-  return table(["Server", "State", "Where", "Group", "Version"], rows);
+  const form = { text: state.filter };
+  const apply = () => {
+    state.filter = form.text;
+    redraw();
+  };
+  const input = field("Filter by name or address", "list-filter", form, "text", { placeholder: "C0-R0-R0-S1" });
+  input.children[1].on.keydown = (e) => {
+    if (e.key === "Enter") {
+      apply();
+    }
+  };
+  return [
+    h("div", { class: "buttons" }, input, h("button", { type: "button", name: "apply-filter", on: { click: apply } }, "Filter")),
+    table(["Server", "State", "Address", "Where", "Group", "Version"], rows),
+  ];
 }
 
 // The pills of the states, each with its count.
@@ -98,37 +131,14 @@ function stateStrip(servers, placedOnly) {
     STATES.map(([state, tone]) => pill(state, tone, ` ${by[state]}`)));
 }
 
-// What a server's tooltip says: its name, group, version and state.
-function tip(server) {
-  const parts = [server.name];
-  if (server.group !== "") {
-    parts.push(`group ${server.group}`);
-  }
-  if (server.version !== "") {
-    parts.push(`version ${server.version}`);
-  }
-  parts.push(server.state);
-  return parts.join(" | ");
-}
-
-// The page's own state across redraws that read nothing: the server picked up in the edit mode.
+// The page's own state across redraws that read nothing: what is picked up, dragged or being assigned
+// in the edit mode, the choices of the forms, and the filter of the list.
 function makeState() {
-  return { picked: null, height: "1", name: null, newRackHeight: String(DEFAULT_RACK_HEIGHT) };
-}
-
-// A select of `[value, label]` options whose choice is kept in `state[key]`.
-function pick(name, state, key, options, label) {
-  const choices = options.map(([value, text]) => h("option", { value: String(value), selected: String(state[key]) === String(value) }, text));
-  const control = h("select", { name }, choices);
-  control.on = {
-    change: (e) => {
-      state[key] = e.target.value;
-      for (const choice of choices) {
-        choice.attrs.selected = choice.attrs.value === String(state[key]);
-      }
-    },
+  return {
+    selected: null, target: null, drag: null, assign: null, moving: false, ghosts: new Map(), filter: "",
+    newSled: { rack: "", height: "1", slots: "1", u: "" }, resize: null, move: null,
+    name: null, newRackHeight: String(DEFAULT_RACK_HEIGHT),
   };
-  return h("label", {}, label, control);
 }
 
 // The names of the servers standing in the racks `racks`, as a sentence part.
@@ -165,169 +175,102 @@ function lab(app, data, state) {
     return typeof said === "function" ? said() : said;
   }, extra);
 
-  // Places `server`, picked up, with its lowest U at `u` of the rack `rackId`.
-  async function put(server, rackId, u) {
-    const height = server.placement === null ? Number(state.height) : server.placement.height;
-    try {
-      await app.api.layout.place({
-        subject: subjectOf(server), rack: rackId, heightU: height, u,
-        reason: `placed ${server.name}`,
-      });
-    } catch (error) {
-      app.report(layoutProblem(error));
-      return;
-    }
-    state.picked = null;
+  // The changes of the layout the sleds make, each one call, then the page is read again from the
+  // coordinator (it is the source of truth); a refusal is told in words and the page is read again too.
+  const done = (said) => {
+    state.selected = null;
+    state.target = null;
+    state.assign = null;
+    state.moving = false;
     app.refresh();
-    app.report(`${server.name} is at ${rackName(layout, rackId)}, U${u}.`);
-  }
-
-  // The U of a rack as a column of slots: a server over its U, a blank panel over a run of free
-  // U (in the edit mode, one button for each free U, to drop or put a server on).
-  function elevation(rack, big) {
-    const here = inRack(all, rack.id);
-    const parts = [];
-    for (let u = rack.height; u >= 1; u -= 1) {
-      parts.push(h("span", { class: u % 5 === 0 || u === 1 ? "u-num five" : "u-num", "aria-hidden": "true", vars: { "--r": rack.height - u + 1 } }, u));
-    }
-    const at = new Map(here.map((s) => [s.placement.u + s.placement.height - 1, s]));
-    const covered = new Set();
-    for (const s of here) {
-      for (let u = s.placement.u; u < s.placement.u + s.placement.height; u += 1) {
-        covered.add(u);
+    app.report(said);
+  };
+  const refused = (error) => {
+    app.refresh();
+    app.report(layoutProblem(error));
+  };
+  const itemOf = (key) => all.find((x) => x.key === key);
+  const ops = {
+    refuse: (words) => app.report(words),
+    // Puts the sled `id` at the lowest U `u` of `rackId`: one PutSled with the sled's other fields as they are.
+    async moveSled(id, rackId, u) {
+      const sled = layout.sleds.find((x) => x.id === id);
+      try {
+        await app.api.layout.putSled({
+          id, rack: rackId, u, heightU: sled.height, slots: sled.slots, label: sled.label, reason: `moved ${sled.address}`,
+        });
+      } catch (error) {
+        refused(error);
+        return;
       }
-    }
-    // A run of free U, top down, is one blank panel (the edit mode: a slot for each U instead).
-    let run = 0;
-    let runTop = 0;
-    const flush = () => {
-      if (run > 0) {
-        parts.push(h("span", { class: "blank", "aria-hidden": "true", vars: { "--r": rack.height - runTop + 1, "--s": run } }));
-      }
-      run = 0;
-    };
-    const dropOn = (u) => (state.picked === null ? undefined : put(all.find((x) => x.key === state.picked), rack.id, u));
-    for (let u = rack.height; u >= 1; u -= 1) {
-      const s = at.get(u);
-      if (s !== undefined) {
-        flush();
-        parts.push(s.device === undefined ? serverPlate(s, rack) : gearPlate(s, rack));
-      } else if (!covered.has(u)) {
-        if (edit) {
-          parts.push(h("button", {
-            type: "button", class: "slot", name: "slot", title: `${rackName(layout, rack.id)}, U${u}`,
-            "aria-label": `free U${u} of ${rackName(layout, rack.id)}`,
-            vars: { "--r": rack.height - u + 1 },
-            on: {
-              click: () => dropOn(u),
-              dragover: (e) => e.preventDefault(),
-              drop: (e) => {
-                e.preventDefault();
-                return dropOn(u);
-              },
-            },
-          }));
-        } else {
-          if (run === 0) {
-            runTop = u;
-          }
-          run += 1;
-        }
-      }
-    }
-    flush();
-    return h("div", { class: `chassis${big ? " big" : ""}`, vars: { "--units": rack.height } }, parts);
-  }
-
-  // A server's faceplate over its U: bezel, status LED, name. A click opens its host (the edit
-  // mode picks it up instead); hover says name, group, version and state.
-  function serverPlate(server, rack) {
-    const p = server.placement;
-    const picked = state.picked === server.key;
-    const open = () => {
-      if (server.host !== null && server.gone !== true) {
-        app.navigate("host", { nodeId: server.host });
-      } else if (server.gone !== true) {
-        app.navigate("inventory", { record: server.id });
-      }
-    };
-    return h("button", {
-      type: "button",
-      class: `server s-${server.state}${p.height >= 2 ? " tall" : ""}${picked ? " picked" : ""}`,
-      name: edit ? "pick-server" : "open-server",
-      title: tip(server),
-      "aria-pressed": edit ? (picked ? "true" : "false") : undefined,
-      draggable: edit ? "true" : undefined,
-      vars: { "--r": rack.height - (p.u + p.height - 1) + 1, "--s": p.height },
-      on: {
-        click: () => {
-          if (!edit) {
-            open();
-            return;
-          }
-          state.picked = picked ? null : server.key;
-          state.height = String(p.height);
-          redraw();
-        },
-        dragstart: () => {
-          state.picked = server.key;
-        },
-      },
+      done(`${sled.address} is at ${rackName(layout, rackId)}, U${u}.`);
     },
-    h("span", { class: "ear left", "aria-hidden": "true" }),
-    h("span", { class: "led", "aria-hidden": "true" }),
-    h("span", { class: "plate-id" },
-      h("span", { class: "plate-name" }, server.name),
-      p.height >= 2 && server.group !== "" ? h("span", { class: "plate-meta" }, server.group) : null),
-    h("span", { class: "plate-state" }, server.state),
-    h("span", { class: "bezel", "aria-hidden": "true" }),
-    h("span", { class: "ear right", "aria-hidden": "true" }));
-  }
-
-  // A network device's faceplate over its U: a flat plate with a strip of ports (two rows of them on
-  // a tall one), a tag for the network it carries, its name and a console jack when its console cable is set.
-  // No light and no state word: hostkeeper hears nothing from a switch. A click opens its page (the
-  // edit mode picks it up instead); hover says name, network and the console port.
-  function gearPlate(item, rack) {
-    const p = item.placement;
-    const picked = state.picked === item.key;
-    const device = item.device;
-    const ports = Array.from({ length: p.height >= 2 ? 24 : 12 }, () => h("span", { class: "port" }));
-    return h("button", {
-      type: "button",
-      class: `gear r-${device.role}${p.height >= 2 ? " tall" : ""}${picked ? " picked" : ""}`,
-      name: edit ? "pick-gear" : "open-gear",
-      title: `${device.name} | ${roleWords(device.role)} | console ${consoleWords(device)}`,
-      "aria-pressed": edit ? (picked ? "true" : "false") : undefined,
-      draggable: edit ? "true" : undefined,
-      vars: { "--r": rack.height - (p.u + p.height - 1) + 1, "--s": p.height },
-      on: {
-        click: () => {
-          if (!edit) {
-            app.navigate("switch", { id: device.id });
-            return;
-          }
-          state.picked = picked ? null : item.key;
-          state.height = String(p.height);
-          redraw();
-        },
-        dragstart: () => {
-          state.picked = item.key;
-        },
-      },
+    // Puts the item `key` on the slot `slot` of the sled `sledId`: one Place (it moves it when it is placed).
+    async place(key, sledId, slot) {
+      const item = itemOf(key);
+      const sled = layout.sleds.find((x) => x.id === sledId);
+      try {
+        await app.api.layout.place({ subject: subjectOf(item), sled: sledId, slot, reason: `placed ${item.name}` });
+      } catch (error) {
+        refused(error);
+        return;
+      }
+      done(`${item.name} stands at ${sled.address}-S${slot}.`);
     },
-    h("span", { class: "ear left", "aria-hidden": "true" }),
-    h("span", { class: "gear-tag" }, device.role === "bmc" ? "BMC" : "DATA"),
-    h("span", { class: "plate-name" }, device.name),
-    h("span", { class: "ports", "aria-hidden": "true" }, ports),
-    device.consoleHost === "" ? null : h("span", { class: "jack", "aria-hidden": "true", title: "console" }),
-    h("span", { class: "ear right", "aria-hidden": "true" }));
-  }
+    async unplace(key) {
+      const item = itemOf(key);
+      try {
+        await app.api.layout.unplace({ subject: subjectOf(item), reason: `unplaced ${item.name}` });
+      } catch (error) {
+        refused(error);
+        return;
+      }
+      done(`${item.name} is unplaced.`);
+    },
+  };
+  Object.assign(ops, {
+    // Adds an empty sled of `slots` slots, `height` U high, with its lowest U at `u` of `rackId`.
+    async addSled(rackId, height, slots, u) {
+      try {
+        await app.api.layout.putSled({ id: "", rack: rackId, u, heightU: height, slots, label: "", reason: "add sled" });
+      } catch (error) {
+        return layoutProblem(error);
+      }
+      done(`A sled ${height}U high with ${slots} ${slots === 1 ? "slot" : "slots"} is added at ${rackName(layout, rackId)}, U${u}.`);
+      return undefined;
+    },
+    // Gives the sled `id` the size, slots and label (its place stays).
+    async resizeSled(id, height, slots, label) {
+      const sled = layout.sleds.find((x) => x.id === id);
+      try {
+        await app.api.layout.putSled({
+          id, rack: sled.rack, u: sled.u, heightU: height, slots, label, reason: `resized ${sled.address}`,
+        });
+      } catch (error) {
+        return layoutProblem(error);
+      }
+      done(`${sled.address} is ${height}U with ${slots} ${slots === 1 ? "slot" : "slots"}.`);
+      return undefined;
+    },
+    // Removes the sled `id`; the coordinator refuses while items stand on it, and the words name them.
+    async removeSled(id, names) {
+      const sled = layout.sleds.find((x) => x.id === id);
+      try {
+        await app.api.layout.removeSled({ id, reason: `removed ${sled.address}` });
+      } catch (error) {
+        return error instanceof ApiError && error.reason === "in_use"
+          ? `${sled.address} still holds ${names.join(", ")}: unassign them first.`
+          : layoutProblem(error);
+      }
+      done(`${sled.address} is removed.`);
+      return undefined;
+    },
+  });
+  const sleds = board({ layout, all, edit, state, ops, go: (view2, params) => app.navigate(view2, params), redraw });
 
   // The head of a rack: its number, U in use and, in the edit mode, resize, move and remove.
   function rackHead(rack) {
-    const here = inRack(all, rack.id);
-    const used = here.reduce((n, s) => n + s.placement.height, 0);
+    const used = usedU(layout, rack.id);
     const form = { height: String(rack.height), row: rack.row };
     // On the strip the rack's number opens the rack alone; on the rack's own page it is only a label.
     const opens = !app.params.rack;
@@ -336,8 +279,8 @@ function lab(app, data, state) {
         ? h("button", {
           type: "button", class: "rack-no linkish", name: "open-rack", title: `Open ${rackName(layout, rack.id)}`,
           on: { click: () => go({ rack: rack.id }) },
-        }, `Rack ${rack.number}`)
-        : h("span", { class: "rack-no" }, `Rack ${rack.number}`),
+        }, `Rack ${shownNumber(rack.number)}`)
+        : h("span", { class: "rack-no" }, `Rack ${shownNumber(rack.number)}`),
       h("span", { class: "rack-use" }, `${used}/${rack.height} U`),
     ];
     if (!edit) {
@@ -350,7 +293,7 @@ function lab(app, data, state) {
         id: rack.id, row: rack.row, heightU: Number(form.height), reason: "resize",
       }), () => `${rackName(layout, rack.id)} is now ${form.height}U.`),
       layout.rows.length > 1
-        ? pick("rack-row", form, "row", layout.rows.map((r) => [r.id, `Row ${r.number}`]), "Row")
+        ? pick("rack-row", form, "row", layout.rows.map((r) => [r.id, rowName(layout, r.id)]), "Row")
         : null,
       layout.rows.length > 1
         ? change("Move", "move-rack", () => app.api.layout.putRack({
@@ -358,9 +301,10 @@ function lab(app, data, state) {
         }), "Rack moved.")
         : null,
       action(app, "Remove", "remove-rack", async () => {
-        const names = standing(all, [rack]);
-        if (names.length > 0) {
-          return `${rackName(layout, rack.id)} still holds ${names.join(", ")}: move them out first.`;
+        const held = sledsIn(layout, rack.id);
+        if (held.length > 0) {
+          const names = standing(all, [rack]);
+          return `${rackName(layout, rack.id)} still holds ${held.length} ${held.length === 1 ? "sled" : "sleds"}${names.length > 0 ? ` with ${names.join(", ")}` : ""}: remove the sleds first.`;
         }
         try {
           await app.api.layout.removeRack({ id: rack.id, reason: "remove" });
@@ -376,7 +320,7 @@ function lab(app, data, state) {
   function rackColumn(rack, big) {
     return h("div", { class: `rack${big ? " big" : ""}`, role: "group", "aria-label": rackName(layout, rack.id) },
       rackHead(rack),
-      h("div", { class: "cabinet" }, elevation(rack, big)));
+      h("div", { class: "cabinet" }, sleds.elevation(rack, big)));
   }
 
   // The racks of a row as a strip: it scrolls by wheel, touch, dragging the background, the arrow
@@ -452,61 +396,54 @@ function lab(app, data, state) {
       }, racks.map((rack) => rackColumn(rack, false))));
   }
 
-  // The servers and switches not in a rack, quietly: a muted line with an outlined chip for each, a
-  // button to its host or switch page (the edit mode: to pick it up).
+  // The servers and switches on no sled, quietly: a muted line with an outlined chip for each, a
+  // button to its host or switch page (the edit mode: to pick it up, or drag it to an empty bay).
   function tray() {
     const unplaced = all.filter((s) => s.placement === null);
     return h("section", { class: "tray" },
       h("h3", {}, "Unplaced ", h("span", { class: "tray-count" }, `(${unplaced.length})`)),
       unplaced.length === 0
-        ? h("p", { class: "note" }, "Every server stands in a rack.")
-        : h("ul", { class: "chips" }, unplaced.map((s) => h("li", {},
-          h("button", {
-            type: "button", class: `chip s-${s.device === undefined ? s.state : "gear"}${state.picked === s.key ? " picked" : ""}`,
-            name: canPlace ? "pick-unplaced" : "open-unplaced", title: s.device === undefined ? tip(s) : `${s.name} | ${roleWords(s.device.role)}`,
-            on: {
-              click: () => {
-                if (canPlace) {
-                  state.picked = state.picked === s.key ? null : s.key;
-                  redraw();
-                } else if (s.device !== undefined) {
-                  app.navigate("switch", { id: s.id });
-                } else if (s.host !== null) {
-                  app.navigate("host", { nodeId: s.host });
-                } else {
-                  app.navigate("inventory", { record: s.id });
-                }
+        ? h("p", { class: "note" }, "Every server stands on a sled.")
+        : h("ul", { class: "chips" }, unplaced.map((s) => {
+          const on = state.selected !== null && state.selected.kind === "item" && state.selected.id === s.key;
+          return h("li", {},
+            h("button", {
+              type: "button", class: `chip s-${s.device === undefined ? s.state : "gear"}${on ? " picked" : ""}`,
+              name: canPlace ? "pick-unplaced" : "open-unplaced", title: s.device === undefined ? tip(s) : `${s.name} | ${roleWords(s.device.role)}`,
+              "aria-pressed": canPlace ? (on ? "true" : "false") : undefined,
+              draggable: canPlace ? "true" : undefined,
+              on: {
+                click: () => {
+                  if (canPlace) {
+                    state.selected = on ? null : { kind: "item", id: s.key };
+                    state.target = null;
+                    state.assign = null;
+                    redraw();
+                  } else if (s.device !== undefined) {
+                    app.navigate("switch", { id: s.id });
+                  } else if (s.host !== null) {
+                    app.navigate("host", { nodeId: s.host });
+                  } else {
+                    app.navigate("inventory", { record: s.id });
+                  }
+                },
+                ...(canPlace ? sleds.draggable({ kind: "item", key: s.key }) : {}),
               },
-            },
-          }, s.device === undefined ? h("span", { class: "led", "aria-hidden": "true" }) : null, s.name,
-          h("span", { class: "plate-state" }, s.device === undefined ? ` ${s.state}` : ` ${roleWords(s.device.role)}`))))),
+            }, s.device === undefined ? h("span", { class: "led", "aria-hidden": "true" }) : null, s.name,
+            h("span", { class: "plate-state" }, s.device === undefined ? ` ${s.state}` : ` ${roleWords(s.device.role)}`)));
+        })),
       canPlace && unplaced.length > 0
-        ? h("div", { class: "buttons" },
-          pick("tray-height", state, "height", SERVER_HEIGHTS.map((n) => [n, `${n}U`]), "Height of the one picked"),
-          h("span", { class: "note" }, "Pick a server, then a free U of a rack."))
+        ? h("p", { class: "note" }, "Drag one onto an empty bay of a sled, or pick it and click the bay.")
         : null);
   }
 
-  // The banner of a move in progress: which server, and what can be done with it.
+  // What the edit mode shows above the racks: the sled or item picked up, or the bay to assign to.
   function moving() {
-    const server = all.find((s) => s.key === state.picked);
-    if (!canPlace || server === undefined) {
+    if (!canPlace) {
       return null;
     }
-    return h("div", { class: "moving", role: "status" },
-      h("strong", {}, server.name),
-      server.placement === null ? " is not placed: click a free U of a rack." : ` is at ${rackName(layout, server.placement.rack)}, U${server.placement.u}: click a free U to move it.`,
-      h("button", { type: "button", name: "cancel-move", on: { click: () => { state.picked = null; redraw(); } } }, "Cancel"),
-      server.placement === null ? null : action(app, "Take out of its rack", "unplace", async () => {
-        try {
-          await app.api.layout.unplace({ subject: subjectOf(server), reason: `unplaced ${server.name}` });
-        } catch (error) {
-          return layoutProblem(error);
-        }
-        state.picked = null;
-        app.refresh();
-        return `${server.name} is unplaced.`;
-      }));
+    const panels = { app, layout, all, state, ops, redraw };
+    return [selectionPanel(panels), assignPanel(panels)];
   }
 
   // The head: breadcrumbs (below the floor plan only), the title, the Floor / List switch of the
@@ -568,7 +505,7 @@ function lab(app, data, state) {
       const total = here.length;
       const by = counts(here, false);
       const capacity = racks.reduce((n, r) => n + r.height, 0);
-      const used = standingHere(all).reduce((n, sv) => n + sv.placement.height, 0);
+      const used = racks.reduce((n, r) => n + usedU(layout, r.id), 0);
       const open = h("button", {
         type: "button", class: `row-open s-${worstState(by)}`, name: "open-row",
         title: `${rowName(layout, row.id)}: ${racks.length} racks, ${total} servers`,
@@ -606,20 +543,31 @@ function lab(app, data, state) {
       edit ? change("Add row", "add-row", () => app.api.layout.addRow({ reason: "add row" }), "A row is added.") : null);
   }
 
-  // A rack's footprint in the floor plan: a small elevation (a block of its height for each server,
-  // coloured by state, at its U), the rack's number above and its U in use below.
+  // A rack's footprint in the floor plan: a small elevation (a block of its height for each sled,
+  // coloured by the state of what stands on it, at its U), the rack's number above and its U in use below.
   function footprint(rack) {
-    const here = inRack(all, rack.id);
-    const used = here.reduce((n, s) => n + s.placement.height, 0);
-    const by = counts(here.filter((s) => s.device === undefined), false);
+    const here = sledsIn(layout, rack.id);
+    const used = usedU(layout, rack.id);
+    const by = counts(inRack(all, rack.id).filter((s) => s.device === undefined), false);
     const round = (n) => Math.round(n * 100) / 100;
+    const looks = (sled) => {
+      const standing2 = all.filter((x) => x.placement !== null && x.placement.sled === sled.id);
+      const states = counts(standing2.filter((x) => x.device === undefined), false);
+      const worst = worstState(states);
+      return worst !== "empty" ? worst : (standing2.length > 0 ? "gear" : "vacant");
+    };
     return h("span", { class: `foot s-${worstState(by)}`, title: `${rackName(layout, rack.id)}: ${used}/${rack.height} U` },
-      h("span", { class: "foot-no" }, `${rack.number}`),
-      h("span", { class: "mini", "aria-hidden": "true" }, here.map((s) => h("span", {
-        class: `seg s-${s.device === undefined ? s.state : "gear"}`,
-        vars: { "--b": round(((s.placement.u - 1) * 100) / rack.height), "--h": round((s.placement.height * 100) / rack.height) },
+      h("span", { class: "foot-no" }, `${shownNumber(rack.number)}`),
+      h("span", { class: "mini", "aria-hidden": "true" }, here.map((sled) => h("span", {
+        class: `seg s-${looks(sled)}`,
+        vars: { "--b": round(((sled.u - 1) * 100) / rack.height), "--h": round((sled.height * 100) / rack.height) },
       }))),
       h("span", { class: "foot-use" }, `${used}/${rack.height}U`));
+  }
+
+  // The controls that add to the racks in view: a rack to the row (below) and, in a row or a rack, a sled.
+  function addSled(racks) {
+    return addSledPanel({ app, layout, state, ops, racks, redraw });
   }
 
   // Adds a rack to the row, at a height chosen from the list.
@@ -655,32 +603,33 @@ function lab(app, data, state) {
       const here = inRack(servers, rackAt.id);
       const network = inRack(gear, rackAt.id);
       return h("section", { class: "page lab" },
-        head(`${rowName(layout, rowAt.id)} / Rack ${rackAt.number}`),
+        head(`${rowName(layout, rowAt.id)} / Rack ${shownNumber(rackAt.number)}`),
+        edit ? addSled([rackAt]) : null,
         moving(),
         h("div", { class: "rack-solo" }, rackColumn(rackAt, true),
           h("div", { class: "rack-hosts" },
             h("h3", {}, `Servers (${here.length})`),
             here.length === 0
               ? h("p", { class: "empty" }, "No server stands in this rack yet.")
-              : table(["Server", "U", "Height", "State", "Group", "Version"], here.map((s) => h("tr", {},
+              : table(["Server", "Address", "U", "State", "Group", "Version"], here.map((s) => h("tr", {},
                 h("td", {}, h("button", {
                   type: "button", class: "linklike", name: "open-host",
                   on: { click: () => (s.host !== null ? app.navigate("host", { nodeId: s.host }) : app.navigate("inventory", { record: s.id })) },
                 }, s.name)),
+                h("td", { class: "mono" }, s.placement.address),
                 h("td", {}, `U${s.placement.u}`),
-                h("td", {}, `${s.placement.height}U`),
                 h("td", {}, pill(s.state, STATES.find(([x]) => x === s.state)[1])),
                 h("td", {}, s.group || "-"),
                 h("td", {}, s.version || "-"))))),
           network.length === 0 ? null : h("div", { class: "rack-hosts" },
             h("h3", {}, `Network (${network.length})`),
-            table(["Switch", "U", "Height", "Network", "Console"], network.map((s) => h("tr", {},
+            table(["Switch", "Address", "U", "Network", "Console"], network.map((s) => h("tr", {},
               h("td", {}, h("button", {
                 type: "button", class: "linklike", name: "open-gear-row",
                 on: { click: () => app.navigate("switch", { id: s.id }) },
               }, s.name)),
+              h("td", { class: "mono" }, s.placement.address),
               h("td", {}, `U${s.placement.u}`),
-              h("td", {}, `${s.placement.height}U`),
               h("td", {}, roleWords(s.device.role)),
               h("td", {}, consoleWords(s.device))))))),
         tray());
@@ -691,6 +640,7 @@ function lab(app, data, state) {
         head(`${title} / ${rowName(layout, rowAt.id)}`),
         stateStrip(servers, true),
         edit ? addRack(rowAt.id) : null,
+        edit ? addSled(racks) : null,
         moving(),
         racks.length === 0
           ? h("p", { class: "empty" }, "This row has no rack yet.")
@@ -704,7 +654,7 @@ function lab(app, data, state) {
       data.failure !== null
         ? h("p", { class: "error", role: "alert" }, `The lab could not be read: ${describeError(data.failure)}`)
         : [summary(), stateStrip(servers, false),
-          ...(app.params.list === true ? [serversList(app, layout, servers)] : [floorPlan(), moving(), tray()])],
+          ...(app.params.list === true ? [serversList(app, layout, servers, state, redraw)] : [floorPlan(), moving(), tray()])],
       data.notes);
   }
 

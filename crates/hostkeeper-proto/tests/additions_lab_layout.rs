@@ -36,6 +36,7 @@ fn placement() -> op::LayoutPlacement {
         rack: "rack-1".to_owned(),
         u: 40,
         height_u: 2,
+        ..op::LayoutPlacement::default()
     }
 }
 
@@ -74,6 +75,7 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
                 placements: vec![placement()],
                 name: "Lab".to_owned(),
                 devices: Vec::new(),
+                sleds: Vec::new(),
             }),
         ),
         (
@@ -107,6 +109,7 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
                 height_u: 2,
                 u: 40,
                 reason: "lab move".to_owned(),
+                ..op::PlaceLayoutRequest::default()
             }),
         ),
         (

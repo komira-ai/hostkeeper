@@ -58,6 +58,8 @@ export interface Client {
     unplace(request: hostkeeper_operator_v1.UnplaceLayoutRequest): Promise<hostkeeper_operator_v1.UnplaceLayoutResponse>;
     putDevice(request: hostkeeper_operator_v1.PutLayoutDeviceRequest): Promise<hostkeeper_operator_v1.PutLayoutDeviceResponse>;
     removeDevice(request: hostkeeper_operator_v1.RemoveLayoutDeviceRequest): Promise<hostkeeper_operator_v1.RemoveLayoutDeviceResponse>;
+    putSled(request: hostkeeper_operator_v1.PutLayoutSledRequest): Promise<hostkeeper_operator_v1.PutLayoutSledResponse>;
+    removeSled(request: hostkeeper_operator_v1.RemoveLayoutSledRequest): Promise<hostkeeper_operator_v1.RemoveLayoutSledResponse>;
   };
   readonly mdm: {
     listDevices(request: hostkeeper_operator_v1.ListDevicesRequest): Promise<hostkeeper_operator_v1.ListDevicesResponse>;
@@ -260,6 +262,8 @@ export namespace hostkeeper_operator_v1 {
     rack?: string;
     placementU?: number;
     placementHeightU?: number;
+    placementSled?: string;
+    placementSlot?: number;
   }
   export interface ApproveResponse { hostId?: string; certificateIssuedAtPoll?: boolean; entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface AssignRequest { nodeId?: string; service?: string; role?: string; }
@@ -412,6 +416,7 @@ export namespace hostkeeper_operator_v1 {
     placements?: hostkeeper_operator_v1.LayoutPlacement[];
     name?: string;
     devices?: hostkeeper_operator_v1.NetworkDevice[];
+    sleds?: hostkeeper_operator_v1.LayoutSled[];
   }
   export interface GetReleaseRequest { service?: string; version?: string; hostGroup?: string; }
   export interface GetReleaseResponse { targets?: { [key: string]: hostkeeper_release_v1.TargetList }; releaseIndexDigest?: string; }
@@ -504,9 +509,10 @@ export namespace hostkeeper_operator_v1 {
     hostGroup?: string;
     enrolledHostId?: string;
   }
-  export interface LayoutPlacement { subject?: hostkeeper_operator_v1.LayoutSubject; rack?: string; heightU?: number; u?: number; }
+  export interface LayoutPlacement { subject?: hostkeeper_operator_v1.LayoutSubject; rack?: string; heightU?: number; u?: number; sled?: string; slot?: number; address?: string; }
   export interface LayoutRack { id?: string; row?: string; heightU?: number; number?: number; }
   export interface LayoutRow { id?: string; number?: number; }
+  export interface LayoutSled { id?: string; rack?: string; number?: number; u?: number; heightU?: number; label?: string; address?: string; slots?: number; }
   export interface LayoutSubject { kind?: hostkeeper_operator_v1.LayoutSubjectKind; id?: string; }
   export type LayoutSubjectKind = "LAYOUT_SUBJECT_KIND_UNSPECIFIED" | "LAYOUT_SUBJECT_KIND_HOST" | "LAYOUT_SUBJECT_KIND_INVENTORY";
   export interface ListAlertsRequest {
@@ -693,7 +699,7 @@ export namespace hostkeeper_operator_v1 {
     recordApproveUntilUnix?: string;
     recordHostGroup?: string;
   }
-  export interface PlaceLayoutRequest { subject?: hostkeeper_operator_v1.LayoutSubject; rack?: string; heightU?: number; u?: number; reason?: string; }
+  export interface PlaceLayoutRequest { subject?: hostkeeper_operator_v1.LayoutSubject; rack?: string; heightU?: number; u?: number; reason?: string; sled?: string; slot?: number; }
   export interface PlaceLayoutResponse { placement?: hostkeeper_operator_v1.LayoutPlacement; entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface PlanHost { nodeId?: string; role?: string; state?: hostkeeper_operator_v1.PlanHostState; deferring?: boolean; }
   export type PlanHostState = "PLAN_HOST_STATE_UNSPECIFIED" | "PLAN_HOST_STATE_WAITING" | "PLAN_HOST_STATE_UPDATING" | "PLAN_HOST_STATE_BAKING" | "PLAN_HOST_STATE_DONE" | "PLAN_HOST_STATE_FAILED";
@@ -731,6 +737,8 @@ export namespace hostkeeper_operator_v1 {
   export interface PutLayoutNameResponse { name?: string; entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface PutLayoutRackRequest { id?: string; row?: string; heightU?: number; reason?: string; }
   export interface PutLayoutRackResponse { rack?: hostkeeper_operator_v1.LayoutRack; entry?: hostkeeper_operator_v1.AuditEntry; }
+  export interface PutLayoutSledRequest { id?: string; rack?: string; u?: number; heightU?: number; label?: string; reason?: string; slots?: number; }
+  export interface PutLayoutSledResponse { sled?: hostkeeper_operator_v1.LayoutSled; entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface PutNameRequest { name?: string; }
   export interface PutNameResponse { name?: string; enrollmentUrl?: string; }
   export interface PutPushCertificateRequest { certificatePem?: string; keyPem?: string; }
@@ -759,6 +767,8 @@ export namespace hostkeeper_operator_v1 {
   export interface RemoveLayoutRackResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface RemoveLayoutRowRequest { id?: string; reason?: string; }
   export interface RemoveLayoutRowResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
+  export interface RemoveLayoutSledRequest { id?: string; reason?: string; }
+  export interface RemoveLayoutSledResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface RemoveRecordRequest { hostId?: string; reason?: string; }
   export interface RemoveRecordResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface RemoveRepositoryRequest { name?: string; reason?: string; }

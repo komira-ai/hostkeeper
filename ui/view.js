@@ -56,7 +56,7 @@ export function deployDocLink(name, text, page, anchor) {
 
 const EVENTS = new Set([
   "change", "click", "input", "submit", "keydown", "pointerdown", "pointermove", "pointerup", "dragstart", "dragover",
-  "drop", "dragend", "scroll",
+  "drop", "dragend", "dragleave", "scroll",
 ]);
 // Two names that are not events of the element: `mounted` runs its handler once, when the tree is
 // in the document, and `resize` runs it each time the window is resized, both with the element as

@@ -393,6 +393,13 @@ message ApproveRequest {
   uint32 placement_u = 10;
   // How many U it occupies; required with `rack`.
   uint32 placement_height_u = 11;
+  // Or the sled the server stands on (`Layout.Get`'s `sleds`) and its slot from 0 (left out:
+  // the lowest free): `rack`, `placement_u` and `placement_height_u` left empty (`placement_invalid`
+  // otherwise). A slot another subject holds is `placement_overlap`, a sled the layout lacks
+  // `placement_invalid`. With `rack`, `placement_u` and `placement_height_u` instead, the approval
+  // makes a sled of that U and height for the server, which goes when the server leaves it.
+  string placement_sled = 12;
+  optional uint32 placement_slot = 13;
 }
 
 message ApproveResponse {

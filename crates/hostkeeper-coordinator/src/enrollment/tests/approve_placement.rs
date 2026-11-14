@@ -100,7 +100,11 @@ fn an_approval_with_a_rack_places_the_host() {
     let held = layout(&rig);
     let placement = held.placement(&subject(Kind::Host, "w1")).expect("placed");
     assert_eq!(
-        (placement.rack.as_str(), placement.u, placement.height_u),
+        (
+            placement.1.rack.as_str(),
+            placement.1.u,
+            placement.1.height_u
+        ),
         ("rack-1", 5, 2)
     );
     let entries = audit_after(&rig.coordinator, before);
@@ -330,4 +334,82 @@ fn a_refusal_of_the_layout_is_the_approvals_own_token() {
     );
     assert_eq!(of(&E::Capacity("x".into())), Refusal::PlacementInvalid);
     assert_eq!(of(&E::Invalid("x".into())), Refusal::PlacementInvalid);
+}
+
+/// Proves: an approval that names a sled lands the host on that slot (the lowest free one when it
+/// names none), a slot already taken, a slot past the sled and a sled the layout lacks refuse the
+/// approval with the layout unchanged, and a sled mixed with a rack, a U, a height, or a slot
+/// named without a sled, is `placement_invalid`.
+///
+/// Catches: an approval placed on a slot it did not name, or one that takes both place forms.
+#[test]
+fn an_approval_with_a_sled_places_the_host_on_a_slot_and_mixed_forms_are_refused() {
+    let enrollment = Rig::new("approve-sled");
+    let rig = coordinator("approve-sled-coordinator", &enrollment);
+    rig.coordinator
+        .layout_put_sled(
+            &operator(),
+            &proto::PutLayoutSledRequest {
+                rack: "rack-1".into(),
+                u: 1,
+                height_u: 2,
+                slots: 2,
+                ..Default::default()
+            },
+        )
+        .expect("a sled");
+    let with_sled =
+        |key: &HostKey, host: &str, sled: &str, slot: Option<u32>| proto::ApproveRequest {
+            placement_sled: sled.to_owned(),
+            placement_slot: slot,
+            ..approval(key, host, "", 0, 0)
+        };
+    let first = HostKey::new();
+    post(&enrollment, &first, "m-1", "");
+    rig.coordinator
+        .enrollment_approve(&operator(), with_sled(&first, "w1", "sled-1", Some(1)))
+        .expect("slot 1");
+    let key = HostKey::new();
+    post(&enrollment, &key, "m-2", "");
+    let (before, audited) = (layout(&rig), audit_of(&rig.coordinator).len());
+    let mixed = [
+        proto::ApproveRequest {
+            rack: "rack-1".into(),
+            ..with_sled(&key, "w2", "sled-1", None)
+        },
+        proto::ApproveRequest {
+            placement_u: 1,
+            ..with_sled(&key, "w2", "sled-1", None)
+        },
+        proto::ApproveRequest {
+            placement_height_u: 1,
+            ..with_sled(&key, "w2", "sled-1", None)
+        },
+        proto::ApproveRequest {
+            placement_slot: Some(0),
+            ..approval(&key, "w2", "", 0, 0)
+        },
+        proto::ApproveRequest {
+            placement_slot: Some(0),
+            ..approval(&key, "w2", "rack-1", 4, 1)
+        },
+    ];
+    for request in mixed {
+        let refused = rig.coordinator.enrollment_approve(&operator(), request);
+        assert_eq!(refused.err(), Some(Refusal::PlacementInvalid));
+    }
+    for (sled, slot) in [("sled-1", Some(1)), ("sled-1", Some(2)), ("sled-9", None)] {
+        let refused = rig
+            .coordinator
+            .enrollment_approve(&operator(), with_sled(&key, "w2", sled, slot));
+        assert!(refused.is_err(), "{sled} {slot:?}");
+    }
+    assert_eq!(state(&enrollment, &key), RequestState::Pending);
+    assert_eq!(layout(&rig), before);
+    assert_eq!(audit_of(&rig.coordinator).len(), audited);
+    rig.coordinator
+        .enrollment_approve(&operator(), with_sled(&key, "w2", "sled-1", None))
+        .expect("the lowest free slot");
+    assert_eq!(state(&enrollment, &key), RequestState::Approved);
+    assert_eq!(layout(&rig).sled_items().len(), 2);
 }

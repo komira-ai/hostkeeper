@@ -1,16 +1,20 @@
-//! The lab's layout ([`crate::layout`]) as the rows of the tables that migration `0015` adds:
-//! `lab_cluster`, `lab_rows`, `lab_racks`, `lab_placements` and, from migration `0016`, `lab_devices`, a row for the name and one per row, rack and placement, keyed by id
-//! (a placement by its subject's key), holding the record as the layout file holds it, without
-//! the key.
+//! The lab's layout ([`crate::layout`]) as the rows of the tables that migrations `0015`, `0016`
+//! and `0017` add: `lab_cluster`, `lab_rows` and `lab_racks` (`0015`), `lab_devices` (`0016`),
+//! `lab_sleds` and `lab_sled_items` (`0017`): a row for the name and one per row, rack, device,
+//! sled and subject on a sled, keyed by id (a subject by its key), holding the record as the
+//! layout file holds it, without the key.
 //!
-//! A database that holds no row holds an empty layout. An older release never reads any of the
-//! tables (`0015` is `may-run`). A load reads every row through the file's reader, so it is as
-//! strict as a start on the files, and refuses a layout that breaks a rule of [`Layout::new`],
-//! naming the tables.
+//! `lab_placements` (`0015`), where the release before kept what stands in a rack, is not read:
+//! migration `0017` turned its rows into sleds, once, and left it as it was for a rollback.
+//!
+//! A database that holds no row holds an empty layout. An older release never reads the tables
+//! of `0016` and `0017` (both are `may-run`). A load reads every row through the file's reader,
+//! so it is as strict as a start on the files, and refuses a layout that breaks a rule of
+//! [`Layout::new`], naming the tables.
 
 use super::rows::{KeyTy, KeyVal, Rows, Table, Tables, Ty, Val};
 use super::state::{json_of, place};
-use crate::layout::{Layout, LayoutError};
+use crate::layout::{Layout, LayoutError, Records};
 
 /// The table of the rows.
 pub(crate) const LAB_ROWS: Table = Table {
@@ -23,13 +27,6 @@ pub(crate) const LAB_ROWS: Table = Table {
 pub(crate) const LAB_RACKS: Table = Table {
     name: "lab_racks",
     keys: &[("id", KeyTy::Text)],
-    values: &[("record", Ty::Json)],
-};
-
-/// The table of the placements.
-pub(crate) const LAB_PLACEMENTS: Table = Table {
-    name: "lab_placements",
-    keys: &[("subject", KeyTy::Text)],
     values: &[("record", Ty::Json)],
 };
 
@@ -47,13 +44,28 @@ pub(crate) const LAB_DEVICES: Table = Table {
     values: &[("record", Ty::Json)],
 };
 
+/// The table of the sleds (migration `0017`).
+pub(crate) const LAB_SLEDS: Table = Table {
+    name: "lab_sleds",
+    keys: &[("id", KeyTy::Text)],
+    values: &[("record", Ty::Json)],
+};
+
+/// The table of the subjects on sleds, by subject key (migration `0017`).
+pub(crate) const LAB_SLED_ITEMS: Table = Table {
+    name: "lab_sled_items",
+    keys: &[("subject", KeyTy::Text)],
+    values: &[("record", Ty::Json)],
+};
+
 /// The layout's tables.
-pub(crate) const TABLES: [Table; 5] = [
+pub(crate) const TABLES: [Table; 6] = [
     LAB_CLUSTER,
     LAB_ROWS,
     LAB_RACKS,
-    LAB_PLACEMENTS,
     LAB_DEVICES,
+    LAB_SLEDS,
+    LAB_SLED_ITEMS,
 ];
 
 /// The rows of one table: a record for each key.
@@ -90,17 +102,21 @@ pub(crate) fn rows(layout: &Layout) -> Tables {
             rows_of(layout.racks().into_iter().map(|r| (r.id.clone(), r))),
         ),
         (
-            LAB_PLACEMENTS.name,
-            rows_of(
-                layout
-                    .placements()
-                    .into_iter()
-                    .map(|p| (p.subject.key(), p)),
-            ),
-        ),
-        (
             LAB_DEVICES.name,
             rows_of(layout.devices().into_iter().map(|d| (d.id.clone(), d))),
+        ),
+        (
+            LAB_SLEDS.name,
+            rows_of(layout.sleds().into_iter().map(|s| (s.id.clone(), s))),
+        ),
+        (
+            LAB_SLED_ITEMS.name,
+            rows_of(
+                layout
+                    .sled_items()
+                    .into_iter()
+                    .map(|i| (i.subject.key(), i)),
+            ),
         ),
     ])
 }
@@ -133,7 +149,11 @@ pub(crate) fn of_tables(tables: &Tables) -> Result<Layout, LayoutError> {
         name,
         records(&LAB_ROWS),
         records(&LAB_RACKS),
-        records(&LAB_PLACEMENTS),
-        records(&LAB_DEVICES),
+        Vec::new(),
+        Records {
+            devices: records(&LAB_DEVICES),
+            sleds: records(&LAB_SLEDS),
+            items: records(&LAB_SLED_ITEMS),
+        },
     )
 }

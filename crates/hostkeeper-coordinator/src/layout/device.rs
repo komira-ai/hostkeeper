@@ -8,7 +8,8 @@ use std::collections::BTreeMap;
 use hostkeeper_enrollment::names::MacAddress;
 use serde::{Deserialize, Serialize};
 
-use super::{Kind, Layout, LayoutError, MAX_NAME_CHARS, Subject, is_name};
+use super::sled;
+use super::{Extras, Kind, Layout, LayoutError, MAX_NAME_CHARS, Subject, is_name};
 use crate::inventory::valid_notes;
 
 /// The most network devices the layout holds.
@@ -179,11 +180,14 @@ impl Layout {
         };
         devices.insert(id.clone(), device);
         let next = Self::build(
-            devices,
+            Extras {
+                devices,
+                ..self.extras()
+            },
             self.name.clone(),
             self.rows.clone(),
             self.racks.clone(),
-            self.placements.clone(),
+            BTreeMap::new(),
         )?;
         let kept = next.devices[&id].clone();
         Ok((next, kept))
@@ -198,20 +202,20 @@ impl Layout {
         devices
             .remove(id)
             .ok_or_else(|| LayoutError::UnknownDevice(id.to_owned()))?;
-        let mut placements = self.placements.clone();
-        placements.remove(
-            &Subject {
-                kind: Kind::Inventory,
-                id: id.to_owned(),
-            }
-            .key(),
-        );
+        let mut extras = self.extras();
+        let key = Subject {
+            kind: Kind::Inventory,
+            id: id.to_owned(),
+        }
+        .key();
+        sled::release(&mut extras, &key, "");
+        extras.devices = devices;
         Self::build(
-            devices,
+            extras,
             self.name.clone(),
             self.rows.clone(),
             self.racks.clone(),
-            placements,
+            BTreeMap::new(),
         )
     }
 }

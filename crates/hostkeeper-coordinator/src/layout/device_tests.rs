@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use super::{Device, MAX_DEVICES, Segment};
-use crate::layout::{Kind, Layout, LayoutError, Subject, encode_file, parse_file};
+use crate::layout::{Extras, Kind, Layout, LayoutError, Records, Subject, encode_file, parse_file};
 
 fn device(name: &str) -> Device {
     Device {
@@ -154,7 +154,10 @@ fn each_field_of_a_device_is_checked() {
         .map(|n| (format!("net.{n}"), device(&format!("sw-{n}"))))
         .collect();
     let full = Layout::build(
-        many.clone(),
+        Extras {
+            devices: many,
+            ..Extras::default()
+        },
         String::new(),
         BTreeMap::new(),
         BTreeMap::new(),
@@ -169,7 +172,10 @@ fn each_field_of_a_device_is_checked() {
         let mut one = BTreeMap::new();
         one.insert(bad.to_owned(), device("sw"));
         let refused = Layout::build(
-            one,
+            Extras {
+                devices: one,
+                ..Extras::default()
+            },
             String::new(),
             BTreeMap::new(),
             BTreeMap::new(),
@@ -273,7 +279,10 @@ fn the_file_and_the_records_hold_the_devices() {
         vec![],
         vec![],
         vec![],
-        vec![("net.1".to_owned(), record)],
+        Records {
+            devices: vec![("net.1".to_owned(), record)],
+            ..Records::default()
+        },
     )
     .expect("reads");
     assert_eq!(read.devices().len(), 1);
@@ -283,7 +292,10 @@ fn the_file_and_the_records_hold_the_devices() {
         vec![],
         vec![],
         vec![],
-        vec![("net.1".to_owned(), serde_json::json!({"name": 5}))],
+        Records {
+            devices: vec![("net.1".to_owned(), serde_json::json!({"name": 5}))],
+            ..Records::default()
+        },
     )
     .expect_err("not a device");
     assert!(bad.to_string().contains("the record net.1"), "{bad}");

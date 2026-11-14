@@ -10,14 +10,17 @@
 //! store then cannot write is `store_failed` and leaves the audit entry that was written before it.
 //!
 //! The audit entry of a write is `layout_name_put`, `layout_row_add`, `layout_row_remove`,
-//! `layout_rack_put`, `layout_rack_remove`, `layout_place` or `layout_unplace`, about the id of the row or rack, or
+//! `layout_rack_put`, `layout_rack_remove`, `layout_place`, `layout_unplace`, `layout_device_put`,
+//! `layout_device_remove`, `layout_sled_put` or `layout_sled_remove`, about the id of the row, rack, device or sled, or
 //! the subject's key, with the operator's reason, or "layout edit" when there is none.
 
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::LayoutRefusal as Refusal;
 
 use crate::audit_actions::about;
-use crate::layout::{Device, Kind, Layout, LayoutError, Placement, Rack, Row, Segment, Subject};
+use crate::layout::{
+    Device, Kind, Layout, LayoutError, Placement, Rack, Row, Segment, Sled, SledItem, Subject,
+};
 use crate::operator::{Caller, entry_proto, optional_reason};
 use crate::ops::{AuditEntry, Write};
 use crate::service::Coordinator;
@@ -44,6 +47,11 @@ pub const LAYOUT_DEVICE_PUT: &str = "layout_device_put";
 /// The audit action of a network device removed.
 pub const LAYOUT_DEVICE_REMOVE: &str = "layout_device_remove";
 
+/// The audit action of a sled added, moved or resized.
+pub const LAYOUT_SLED_PUT: &str = "layout_sled_put";
+/// The audit action of a sled removed.
+pub const LAYOUT_SLED_REMOVE: &str = "layout_sled_remove";
+
 impl From<LayoutError> for Refusal {
     fn from(why: LayoutError) -> Self {
         match why {
@@ -53,8 +61,9 @@ impl From<LayoutError> for Refusal {
             LayoutError::UnknownRack(_) => Self::UnknownRack,
             LayoutError::UnknownPlacement(_) => Self::UnknownPlacement,
             LayoutError::UnknownDevice(_) => Self::UnknownDevice,
-            LayoutError::InUse(_) => Self::InUse,
-            LayoutError::Overlap { .. } => Self::Overlap,
+            LayoutError::UnknownSled(_) => Self::UnknownSled,
+            LayoutError::InUse(_) | LayoutError::SledInUse { .. } => Self::InUse,
+            LayoutError::Overlap { .. } | LayoutError::SlotTaken { .. } => Self::Overlap,
             LayoutError::OutOfRack { .. } => Self::OutOfRack,
             LayoutError::Capacity(_) => Self::Capacity,
             LayoutError::Io(_) | LayoutError::Stored { .. } => {
@@ -81,6 +90,20 @@ fn rack_proto(rack: &Rack) -> proto::LayoutRack {
     }
 }
 
+/// The sled as `layout` holds it: its number and address are computed from the layout.
+fn sled_proto(layout: &Layout, sled: &Sled) -> proto::LayoutSled {
+    proto::LayoutSled {
+        id: sled.id.clone(),
+        rack: sled.rack.clone(),
+        number: layout.sled_number(&sled.id).unwrap_or_default(),
+        u: sled.u,
+        height_u: sled.height_u,
+        label: sled.label.clone(),
+        slots: sled.slots,
+        address: layout.sled_address(&sled.id).unwrap_or_default(),
+    }
+}
+
 fn device_proto(device: &Device) -> proto::NetworkDevice {
     proto::NetworkDevice {
         id: device.id.clone(),
@@ -97,19 +120,28 @@ fn device_proto(device: &Device) -> proto::NetworkDevice {
     }
 }
 
-fn placement_proto(placement: &Placement) -> proto::LayoutPlacement {
-    let kind = match placement.subject.kind {
+fn subject_proto(subject: &Subject) -> proto::LayoutSubject {
+    let kind = match subject.kind {
         Kind::Host => proto::LayoutSubjectKind::Host,
         Kind::Inventory => proto::LayoutSubjectKind::Inventory,
     };
+    proto::LayoutSubject {
+        kind: kind.into(),
+        id: subject.id.clone(),
+    }
+}
+
+/// A subject on a slot of `sled`: `sled` and `slot`, and the sled's rack, U and height too, for
+/// a client that predates sleds.
+fn placement_proto(layout: &Layout, item: &SledItem, sled: &Sled) -> proto::LayoutPlacement {
     proto::LayoutPlacement {
-        subject: Some(proto::LayoutSubject {
-            kind: kind.into(),
-            id: placement.subject.id.clone(),
-        }),
-        rack: placement.rack.clone(),
-        u: placement.u,
-        height_u: placement.height_u,
+        subject: Some(subject_proto(&item.subject)),
+        rack: sled.rack.clone(),
+        u: sled.u,
+        height_u: sled.height_u,
+        sled: item.sled.clone(),
+        slot: item.slot,
+        address: layout.address(&item.sled, item.slot).unwrap_or_default(),
     }
 }
 
@@ -130,7 +162,8 @@ fn subject_of(subject: Option<&proto::LayoutSubject>) -> Result<Subject, Refusal
 /// The rack a new rack stands at height when the request names none: 42 U.
 const DEFAULT_HEIGHT_U: u32 = 42;
 
-/// The placement of `subject` in `rack`, from its lowest U `u`, `height_u` high.
+/// The placement of `subject` on a new one-slot sled in `rack`, from its lowest U `u`, `height_u`
+/// high.
 pub(crate) fn placement_of(subject: Subject, rack: &str, u: u32, height_u: u32) -> Placement {
     Placement {
         subject,
@@ -195,9 +228,14 @@ impl Coordinator {
             placements: layout
                 .placements()
                 .into_iter()
-                .map(placement_proto)
+                .map(|(item, sled)| placement_proto(&layout, item, sled))
                 .collect(),
             devices: layout.devices().into_iter().map(device_proto).collect(),
+            sleds: layout
+                .sleds()
+                .into_iter()
+                .map(|sled| sled_proto(&layout, sled))
+                .collect(),
         })
     }
 
@@ -307,11 +345,12 @@ impl Coordinator {
         Ok(proto::RemoveLayoutRackResponse { entry: Some(entry) })
     }
 
-    /// `Place` of `Layout`: puts a subject in a rack, or moves it there.
+    /// `Place` of `Layout`: puts a subject on a slot of a sled, or on a new one-slot sled at a U
+    /// of a rack, or moves it there.
     ///
     /// # Errors
-    /// `unauthorized`, `forbidden`, `invalid_request`, `unknown_rack`, `out_of_rack`, `overlap`,
-    /// `capacity`, `store_failed`, `audit_unavailable`.
+    /// `unauthorized`, `forbidden`, `invalid_request`, `unknown_rack`, `unknown_sled`,
+    /// `out_of_rack`, `overlap`, `capacity`, `store_failed`, `audit_unavailable`.
     pub fn layout_place(
         &self,
         caller: &Caller,
@@ -320,16 +359,35 @@ impl Coordinator {
         let by = caller.operator()?;
         let subject = subject_of(request.subject.as_ref())?;
         let entry = Self::layout_entry(by, LAYOUT_PLACE, &subject.key(), &request.reason)?;
-        let placement = placement_of(subject, &request.rack, request.u, request.height_u);
-        let (placement, entry) =
-            self.change_layout(entry, |held| held.with_placement(placement.clone()))?;
+        let by_rack = !request.rack.is_empty() || request.u != 0 || request.height_u != 0;
+        let (placed, entry) = if request.sled.is_empty() {
+            if request.slot.is_some() {
+                return Err(Refusal::InvalidRequest);
+            }
+            let placement = placement_of(subject, &request.rack, request.u, request.height_u);
+            self.change_layout(entry, |held| {
+                let (next, (item, sled)) = held.with_placement(placement.clone())?;
+                let at = placement_proto(&next, &item, &sled);
+                Ok((next, at))
+            })?
+        } else {
+            if by_rack {
+                return Err(Refusal::InvalidRequest);
+            }
+            self.change_layout(entry, |held| {
+                let (next, (item, sled)) =
+                    held.with_sled_placement(&subject, &request.sled, request.slot)?;
+                let at = placement_proto(&next, &item, &sled);
+                Ok((next, at))
+            })?
+        };
         Ok(proto::PlaceLayoutResponse {
-            placement: Some(placement_proto(&placement)),
+            placement: Some(placed),
             entry: Some(entry),
         })
     }
 
-    /// `Layout.Unplace`: takes a subject out of its rack.
+    /// `Layout.Unplace`: takes a subject off its sled.
     ///
     /// # Errors
     /// `unauthorized`, `forbidden`, `invalid_request`, `unknown_placement`, `store_failed`,
@@ -403,5 +461,62 @@ impl Coordinator {
             held.without_device(&request.id).map(|next| (next, ()))
         })?;
         Ok(proto::RemoveLayoutDeviceResponse { entry: Some(entry) })
+    }
+
+    /// `Layout.PutSled`: adds a sled to a rack, or moves or resizes one.
+    ///
+    /// # Errors
+    /// `unauthorized`, `forbidden`, `invalid_request`, `unknown_sled`, `unknown_rack`,
+    /// `out_of_rack`, `overlap`, `in_use`, `capacity`, `store_failed`, `audit_unavailable`.
+    pub fn layout_put_sled(
+        &self,
+        caller: &Caller,
+        request: &proto::PutLayoutSledRequest,
+    ) -> Result<proto::PutLayoutSledResponse, Refusal> {
+        let by = caller.operator()?;
+        let about = if request.id.is_empty() {
+            "sled"
+        } else {
+            &request.id
+        };
+        let entry = Self::layout_entry(by, LAYOUT_SLED_PUT, about, &request.reason)?;
+        let (sled, entry) = self.change_layout(entry, |held| {
+            let (next, sled) = held.with_sled(
+                &request.id,
+                &request.rack,
+                request.u,
+                request.height_u,
+                if request.slots == 0 {
+                    held.sled(&request.id).map_or(1, |kept| kept.slots)
+                } else {
+                    request.slots
+                },
+                &request.label,
+            )?;
+            let at = sled_proto(&next, &sled);
+            Ok((next, at))
+        })?;
+        Ok(proto::PutLayoutSledResponse {
+            sled: Some(sled),
+            entry: Some(entry),
+        })
+    }
+
+    /// `Layout.RemoveSled`: removes a sled that carries nothing.
+    ///
+    /// # Errors
+    /// `unauthorized`, `forbidden`, `invalid_request`, `unknown_sled`, `in_use`, `store_failed`,
+    /// `audit_unavailable`.
+    pub fn layout_remove_sled(
+        &self,
+        caller: &Caller,
+        request: &proto::RemoveLayoutSledRequest,
+    ) -> Result<proto::RemoveLayoutSledResponse, Refusal> {
+        let by = caller.operator()?;
+        let entry = Self::layout_entry(by, LAYOUT_SLED_REMOVE, &request.id, &request.reason)?;
+        let ((), entry) = self.change_layout(entry, |held| {
+            held.without_sled(&request.id).map(|next| (next, ()))
+        })?;
+        Ok(proto::RemoveLayoutSledResponse { entry: Some(entry) })
     }
 }

@@ -137,4 +137,26 @@ impl Api for LayoutService {
             .map(Response::new)
             .map_err(refusal::layout)
     }
+
+    async fn put_sled(
+        &self,
+        request: Request<proto::PutLayoutSledRequest>,
+    ) -> Result<Response<proto::PutLayoutSledResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .layout_put_sled(&caller, request.get_ref())
+            .map(Response::new)
+            .map_err(refusal::layout)
+    }
+
+    async fn remove_sled(
+        &self,
+        request: Request<proto::RemoveLayoutSledRequest>,
+    ) -> Result<Response<proto::RemoveLayoutSledResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .layout_remove_sled(&caller, request.get_ref())
+            .map(Response::new)
+            .map_err(refusal::layout)
+    }
 }

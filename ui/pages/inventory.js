@@ -12,8 +12,8 @@ import {
   h, action, allPages, area, errorView, field, reasonProblem, select, table, trimmed,
 } from "../view.js";
 import {
-  CONSOLE_DEVICES, NETWORK_ROLES, consoleWords, gearOf, layoutOf, layoutProblem, placementPanel, rackName,
-  roleWords, subjectOf,
+  CONSOLE_DEVICES, NETWORK_ROLES, consoleWords, gearOf, layoutOf, layoutProblem, rackName,
+  roleWords, slotOf, slotOptions, subjectOf,
 } from "../lab.js";
 
 const PAGE_SIZE = 50;
@@ -144,12 +144,13 @@ function enrolledNote(record) {
   return h("small", { name: "enrolled-note" }, host === "" || host === record.hostId ? " enrolled" : ` enrolled as ${host}`);
 }
 
-function recordRow(ctx, record, chosen) {
+function recordRow(ctx, record, chosen, address) {
   return h("tr", chosen ? { "aria-current": "true" } : {},
     h("td", {}, record.hostId, enrolledNote(record)),
     h("td", {}, record.bmcMac || "-"),
     h("td", {}, (record.dataMacs || []).join(", ") || "-"),
     h("td", {}, record.notes ? h("pre", {}, record.notes) : "-"),
+    h("td", { class: "mono", name: "address" }, address),
     h("td", { class: "row-actions" },
       action(ctx, "Edit", "edit-record", async () => {
         ctx.navigate("inventory", Object.assign({}, ctx.params, { edit: record.hostId }));
@@ -165,7 +166,7 @@ function recordRow(ctx, record, chosen) {
       }, { class: "danger" })));
 }
 
-function editRow(ctx, record) {
+function editRow(ctx, record, address) {
   const form = {
     bmcMac: record.bmcMac || "",
     dataMac: (record.dataMacs || []).join(", "),
@@ -182,6 +183,7 @@ function editRow(ctx, record) {
     h("td", {}, fields.cell("bmcMac", "BMC MAC", "input")),
     h("td", {}, fields.cell("dataMac", "Data MAC", "input")),
     h("td", {}, fields.cell("notes", "Notes", "textarea")),
+    h("td", { class: "mono", name: "address" }, address),
     h("td", { class: "row-actions" },
       action(ctx, "Save", "save-record", async () => {
         const { errors, body } = checkForm(form, false, Boolean(record.serial));
@@ -209,6 +211,7 @@ function addRow(ctx) {
     h("td", {}, fields.cell("bmcMac", "BMC MAC", "input")),
     h("td", {}, fields.cell("dataMac", "Data MAC", "input")),
     h("td", {}, fields.cell("notes", "Notes", "textarea")),
+    h("td", {}, "-"),
     h("td", { class: "row-actions" }, action(ctx, "Add", "add-record", async () => {
       const { errors, body } = checkForm(form, true, false);
       fields.show(errors);
@@ -232,13 +235,20 @@ async function renderServers(ctx) {
   }
   const records = listed.records || [];
   const next = typeof listed.nextPageToken === "string" ? listed.nextPageToken : "";
+  // Where each server stands: its address. A layout that cannot be read leaves the addresses out.
+  let layout = layoutOf({});
+  try {
+    layout = layoutOf(await ctx.api.layout.get({}));
+  } catch {
+    layout = layoutOf({});
+  }
   const rows = records.map((record) => (record.hostId === param("edit")
-    ? editRow(ctx, record)
-    : recordRow(ctx, record, record.hostId === param("record"))));
+    ? editRow(ctx, record, addressWords(layout, `inventory:${record.hostId}`))
+    : recordRow(ctx, record, record.hostId === param("record"), addressWords(layout, `inventory:${record.hostId}`))));
   return h("section", { class: "page inventory" },
     h("h2", {}, "Inventory"),
-    h("p", { class: "note" }, "The servers you built: each with its name, BMC MAC, data MAC and notes."),
-    table(["Server name", "BMC MAC", "Data MAC", "Notes", ""], rows.concat([addRow(ctx)])),
+    h("p", { class: "note" }, "The servers you built: each with its name, BMC MAC, data MAC and notes, and its address once it stands on a sled."),
+    table(["Server name", "BMC MAC", "Data MAC", "Notes", "Address", ""], rows.concat([addRow(ctx)])),
     h("div", { class: "buttons" },
       pageToken === "" ? null : h("button", {
         type: "button", name: "first-page", on: { click: () => ctx.navigate("inventory", {}) },
@@ -300,13 +310,15 @@ export function checkSwitch(form) {
   };
 }
 
-// The placement state a form starts from: the device's own place when it has one, else "Unplaced".
-function placementState(layout, held) {
-  if (held === undefined) {
-    return { height: "1", row: "", rack: "", u: "" };
-  }
-  const rack = layout.racks.find((r) => r.id === held.rack);
-  return { height: String(held.height), row: rack === undefined ? "" : rack.row, rack: held.rack, u: String(held.u) };
+// The placement state a form starts from: the slot the device stands on when it has one, else "Unplaced" ("").
+function placementState(held) {
+  return { slot: held === undefined ? "" : `${held.sled}:${held.slot}` };
+}
+
+// The address of the item `key`, "-" when it stands on no sled.
+export function addressWords(layout, key) {
+  const held = layout.placements.find((p) => p.key === key);
+  return held === undefined ? "-" : held.address;
 }
 
 // Where a device stands, in words.
@@ -341,7 +353,7 @@ async function renderSwitches(ctx) {
       mac: device.managementMac, notes: device.notes, keepDevice: device.consoleDevice,
     };
   const held = editing === undefined ? undefined : layout.placements.find((p) => p.key === editing.key);
-  const where = placementState(layout, held);
+  const where = placementState(held);
   const errorMarks = {};
   // A control with the place for its error under it, which `save` fills.
   const marked = (control, key) => {
@@ -350,14 +362,13 @@ async function renderSwitches(ctx) {
     return control;
   };
 
-  const repaint = () => ctx.show(assemble());
   const leave = () => {
     const params = Object.assign({}, ctx.params);
     delete params.edit;
     ctx.navigate("inventory", params);
   };
 
-  const panel = placementPanel(layout, where, editing === undefined ? undefined : editing.key, true, () => repaint());
+  const slots = slotOptions(layout, editing === undefined ? undefined : editing.key, true);
 
   const save = async () => {
     const { errors, body } = checkSwitch(form);
@@ -367,7 +378,7 @@ async function renderSwitches(ctx) {
     if (Object.keys(errors).length > 0) {
       return "Correct the marked fields.";
     }
-    const request = panel.choices.request();
+    const request = slotOf(where.slot);
     let reply;
     try {
       reply = await ctx.api.layout.putDevice(Object.assign({ id: editing === undefined ? "" : editing.id, reason: "saved on the Inventory page" }, body));
@@ -378,8 +389,8 @@ async function renderSwitches(ctx) {
     let said = editing === undefined ? `Added ${body.name}.` : `Saved ${body.name}.`;
     try {
       if (request !== null) {
-        await ctx.api.layout.place(Object.assign({ subject: subjectOf({ kind: "inventory", id }), reason: `placed ${body.name}` }, request));
-      } else if (where.row === "" && held !== undefined) {
+        await ctx.api.layout.place({ subject: subjectOf({ kind: "inventory", id }), sled: request.sled, slot: request.slot, reason: `placed ${body.name}` });
+      } else if (where.slot === "" && held !== undefined) {
         await ctx.api.layout.unplace({ subject: subjectOf({ kind: "inventory", id }), reason: `unplaced ${body.name}` });
       }
     } catch (error) {
@@ -406,6 +417,7 @@ async function renderSwitches(ctx) {
       h("td", {}, consoleWords(item.device)),
       h("td", {}, item.device.managementMac || "-"),
       h("td", {}, item.device.notes ? h("pre", {}, item.device.notes) : "-"),
+      h("td", { class: "mono", name: "address" }, addressWords(layout, item.key)),
       h("td", {}, whereWords(layout, layout.placements.find((p) => p.key === item.key))),
       h("td", { class: "row-actions" },
         action(ctx, "Open", "open-switch", async () => {
@@ -436,7 +448,7 @@ async function renderSwitches(ctx) {
       h("p", { class: "note" }, "The switches in the racks: each with its network, console, management MAC and place."),
       gear.length === 0
         ? h("p", { class: "empty" }, "No switch yet. Add the BMC switch and the data switch below.")
-        : table(["Name", "Network", "Console", "Management MAC", "Notes", "Where", ""], rows),
+        : table(["Name", "Network", "Console", "Management MAC", "Notes", "Address", "Where", ""], rows),
       h("div", { class: "switch-form" },
         h("h3", {}, device === undefined ? "Add a switch" : `Edit ${device.name}`),
         marked(field("Name", "switch-name", form, "name", { maxlength: 32, placeholder: "bmc-switch" }), "name"),
@@ -445,7 +457,8 @@ async function renderSwitches(ctx) {
         marked(select("Console device", "switch-console-device", form, "consoleDevice", consoleDevices), "console"),
         marked(field("Management MAC (optional)", "switch-mac", form, "mac", { placeholder: "aa:bb:cc:dd:ee:ff" }), "mac"),
         marked(area("Notes", "switch-notes", form, "notes", { rows: 2, maxlength: 300, placeholder: "Notes" }), "notes"),
-        h("div", { class: "buttons wide" }, panel),
+        select("Sled slot", "switch-slot", where, "slot", slots),
+        slots.length === 1 ? h("p", { class: "note wide" }, "No sled slot is free: add a sled on Home, in Edit layout.") : null,
         nodesFailure === null ? null : h("p", { class: "note wide" }, "The hosts could not be listed, so a console host cannot be chosen now."),
         h("div", { class: "buttons" },
           action(ctx, device === undefined ? "Add" : "Save", "save-switch", save, { class: "primary" }),

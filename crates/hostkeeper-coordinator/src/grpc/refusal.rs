@@ -293,7 +293,8 @@ pub(crate) fn layout(refusal: LayoutRefusal) -> Status {
         LayoutRefusal::UnknownRow
         | LayoutRefusal::UnknownRack
         | LayoutRefusal::UnknownPlacement
-        | LayoutRefusal::UnknownDevice => Code::NotFound,
+        | LayoutRefusal::UnknownDevice
+        | LayoutRefusal::UnknownSled => Code::NotFound,
         LayoutRefusal::NameTaken => Code::AlreadyExists,
         LayoutRefusal::InUse
         | LayoutRefusal::Overlap

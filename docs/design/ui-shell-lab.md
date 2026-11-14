@@ -50,17 +50,23 @@ MDM setup), Fleet a table of hosts. After: a side menu, and Home a picture of th
   attention; the tab chosen is kept across a refresh of the same host), then Retire alone in a red-bordered danger zone at the bottom.
   The state is `degraded`, not `healthy`, for a live host whose service reports unhealthy or whose last update failed.
 - Edit layout (a toggle on Home) shows the controls: rename the cluster, add a row (the next number), add a rack to a row (height
-  from a list, 42 U by default), resize, move to another row, remove; move a server by picking it up (or dragging it)
-  and putting it on a free U, or taking it out of its rack. A row or rack that still holds servers is not removed: the page names
-  them. A refusal (`overlap`, `out_of_rack`, ...) is told in words. An empty lab says so and offers "Add a row".
-- Enrollment: the approval form gets the Height (1U to 4U, 1U by default, chosen before the U position), the Row (a dropdown of the
-  rows, first choice "Unplaced"), the Rack (that row's racks) and the U position (the free slots of the rack for that height). No
-  free text. Placement is optional; an approval with none lands the host in Unplaced. Approve stores the placement in the same step.
+  from a list, 42 U by default), resize, move to another row, remove. A sled is what goes in a rack (docs/design/rack-sleds.md): **Add
+  sled** asks Size (1 to 60 U from a list), Slots (1 to 8) and U location (only where that size fits); a sled is resized, moved
+  (dragged to a free U of a rack in view, or picked and moved with the arrow keys and Enter, or Move... to any rack) and removed; an
+  item is assigned by clicking an empty bay (or dragging an item, or an Unplaced chip, onto it) and unassigned with Unassign. Each
+  change is one call (`PutSled`, `RemoveSled`, `Place`, `Unplace`) and the page is read again. A rack that holds sleds, or a sled that
+  holds items, is not removed: the page names them. A refusal (`overlap`, `out_of_rack`, ...) is told in words. An empty lab says so
+  and offers "Add a row". Rows and racks are labelled from 0 (their number less one) until the layout numbers them so.
+- Enrollment: the approval form gets one Sled slot (a dropdown of the free slots by address, e.g. C0-R0-R0-S2-S0, first choice
+  "Unplaced"). No free text and no height, row, rack or U. Placement is optional; an approval with none lands the host in Unplaced.
+  Approve stores the placement (`placement_sled`, `placement_slot`) in the same step.
   Each pending request is one compact card (`ui/styles/enrollment.css`): the inventory match, one small table of the key facts (a
-  renewal or a nonce only when there is one), then one row of controls (Host id, Host group with "No group", Height, Row, Rack, U
-  position) with Approve and Reject; the explanations are small info marks, a contested or duplicate request a chip and a quiet
+  renewal or a nonce only when there is one), then one row of controls (Host id, Host group with "No group", Sled slot)
+  with Approve and Reject; the explanations are small info marks, a contested or duplicate request a chip and a quiet
   line, and "not recorded" is grey.
-- Host: a Placement section says where the server stands and has the same four choices (Place or Move) and Unplace.
+- Host: a Placement section says the server's address and where it stands, with the same Sled slot choice (Place or Move) and Unplace.
+  The switch page and the Inventory rows show the address too, and Home's list has an Address column and a filter that takes a name or
+  an address.
 - Not changed: every other page, every existing endpoint, the sign-in. Release, Rollout and Holds open by their route.
 
 Look: the komira palette as CSS tokens (`ui/app.css`: the ink `#0B0B0A`, the accent `#FD4F1D`, a dark slate for the menu and for dark
@@ -117,9 +123,10 @@ approval asks for no placement); `hkctl` gets the verbs from the generated comma
 - `ui/app.js`: `GROUPS` (the menu), `LINKED` (pages with no entry: Home, Host, the three release pages), `ROUTES` (an old route and the page
   it lands on: `fleet` is `home`; `navigate(old, params)` resolves through it), the frame (side, scrim, top bar, collapse, drawer, theme
   port `prefs.apply`).
-- `ui/lab.js`: the model the views share (layout, servers joined with hosts and inventory entries, states, free U for a height,
-  breadcrumbs, the placement choices, the words of a refusal). `ui/pages/home.js`: the three levels and the edit mode.
-  `ui/pages/enrollment.js`: the placement controls only; `ui/pages/host.js` also lays out the Host page above.
+- `ui/lab.js`: the model the views share (layout, servers joined with hosts and inventory entries, states, free U for a sled height,
+  free slots, breadcrumbs, the words of a refusal). `ui/pages/home.js`: the three levels and the edit mode; `ui/sleds.js` draws the
+  sleds and decides the drops, `ui/sledpanels.js` has the edit panels, `ui/styles/sleds.css` the trays and boxes.
+  `ui/pages/enrollment.js`: the placement control only; `ui/pages/host.js` also lays out the Host page above.
 - `ui/view.js`: `pill`, the `vars` of an element (custom properties), `aria-*`, `draggable`, `tabindex`, and the events the strip and the
   drag use. `ui/app.css` (tokens, frame, components) and `ui/lab.css` (the lab) are two files so that each stays under 1000 lines.
   `ui/styles/forms.css` holds the page-scoped styles of sign-in, Inventory, Host groups and MDM setup (each rule starts with its page's class).

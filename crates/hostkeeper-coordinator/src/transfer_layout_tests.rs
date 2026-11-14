@@ -1,5 +1,5 @@
-//! `export` of the lab's layout: the tables `lab_rows`, `lab_racks` and `lab_placements` of a
-//! database become the layout file of a file store.
+//! `export` of the lab's layout: the tables `lab_rows`, `lab_racks`, `lab_devices`, `lab_sleds`
+//! and `lab_sled_items` of a database become the layout file of a file store.
 
 use super::export;
 use super::tests::{Store, clock, count, export_flags, loaded, seeded};
@@ -24,8 +24,10 @@ fn export_writes_the_layout_as_the_layout_file() {
     seeded(&from, &database);
     assert_eq!(count(&database, "lab_rows"), 1);
     assert_eq!(count(&database, "lab_racks"), 2);
-    assert_eq!(count(&database, "lab_placements"), 3);
+    assert_eq!(count(&database, "lab_placements"), 0);
     assert_eq!(count(&database, "lab_devices"), 1);
+    assert_eq!(count(&database, "lab_sleds"), 4);
+    assert_eq!(count(&database, "lab_sled_items"), 5);
     assert_eq!(loaded(&database).layout, rich_layout());
 
     let into = Store::new("transfer-layout-export-into");
@@ -35,8 +37,10 @@ fn export_writes_the_layout_as_the_layout_file() {
 
     assert!(report.contains("  lab_rows: 1 rows"), "{report}");
     assert!(report.contains("  lab_racks: 2 rows"), "{report}");
-    assert!(report.contains("  lab_placements: 3 rows"), "{report}");
+    assert!(report.contains("  lab_placements: 0 rows"), "{report}");
     assert!(report.contains("  lab_devices: 1 rows"), "{report}");
+    assert!(report.contains("  lab_sleds: 4 rows"), "{report}");
+    assert!(report.contains("  lab_sled_items: 5 rows"), "{report}");
     let path = layout_path(&into.paths.state_file);
     let written = std::fs::read(&path).expect("the file");
     assert_eq!(parse_file(&path, &written).expect("reads"), rich_layout());

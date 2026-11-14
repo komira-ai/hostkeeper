@@ -115,6 +115,29 @@ pub enum LayoutError {
     /// No network device has the id.
     #[error("there is no device {0}")]
     UnknownDevice(String),
+    /// No sled has the id.
+    #[error("there is no sled {0}")]
+    UnknownSled(String),
+    /// A sled carries servers, so it is not removed or made smaller than they need.
+    #[error("{sled} carries {}", .items.join(", "))]
+    SledInUse {
+        /// The sled.
+        sled: String,
+        /// The subjects on it, by slot.
+        items: Vec<String>,
+    },
+    /// Two subjects share a slot of a sled.
+    #[error("{first} and {second} share slot {slot} of {sled}")]
+    SlotTaken {
+        /// The sled.
+        sled: String,
+        /// The slot.
+        slot: u32,
+        /// The subject that sorts first.
+        first: String,
+        /// The other.
+        second: String,
+    },
     /// More rows, racks or placements than the layout holds.
     #[error("the layout holds at most {0}")]
     Capacity(String),
@@ -222,15 +245,9 @@ fn unplaced() -> Subject {
     }
 }
 
-impl Placement {
-    /// The highest U it occupies.
-    fn top(&self) -> u32 {
-        self.u.saturating_add(self.height_u).saturating_sub(1)
-    }
-}
-
-/// Everything the layout holds, by id (rows and racks) and by subject key (placements).
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// Everything the layout holds, by id (rows, racks, sleds, devices) and by subject key (what
+/// stands on the sleds).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct Layout {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     name: String,
@@ -239,9 +256,11 @@ pub struct Layout {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     racks: BTreeMap<String, Rack>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    placements: BTreeMap<String, Placement>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     devices: BTreeMap<String, Device>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    sleds: BTreeMap<String, Sled>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    sled_items: BTreeMap<String, SledItem>,
 }
 
 /// Whether `name` is a cluster's name.
@@ -259,6 +278,20 @@ fn is_id(id: &str, prefix: &str) -> bool {
     id.strip_prefix(prefix)
         .and_then(|rest| rest.strip_prefix('-'))
         .is_some_and(|n| (1..=9).contains(&n.len()) && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// The subject a placement key names, its id checked: 1 to [`MAX_SUBJECT_BYTES`] visible ASCII
+/// bytes.
+fn checked_subject(key: &str) -> Result<Subject, LayoutError> {
+    let subject = Subject::of_key(key)?;
+    let visible = (1..=MAX_SUBJECT_BYTES).contains(&subject.id.len())
+        && subject.id.bytes().all(|b| (0x21..=0x7e).contains(&b));
+    if !visible {
+        return Err(LayoutError::Invalid(format!(
+            "the placement {key}: an id is 1 to {MAX_SUBJECT_BYTES} visible ASCII bytes"
+        )));
+    }
+    Ok(subject)
 }
 
 /// The id after the highest of `ids`, which are all `prefix-<n>`.
@@ -282,20 +315,26 @@ impl Layout {
         racks: BTreeMap<String, Rack>,
         placements: BTreeMap<String, Placement>,
     ) -> Result<Self, LayoutError> {
-        Self::build(BTreeMap::new(), name, rows, racks, placements)
+        Self::build(Extras::default(), name, rows, racks, placements)
     }
 
-    /// The layout of `devices` (by id) and the parts [`Layout::new`] takes, judged whole.
+    /// The layout of `extras` (devices, sleds, subjects on sleds) and the parts [`Layout::new`]
+    /// takes, judged whole.
     ///
     /// # Errors
     /// [`LayoutError`]: the first rule broken.
     pub(crate) fn build(
-        devices: BTreeMap<String, Device>,
+        extras: Extras,
         name: String,
         rows: BTreeMap<String, Row>,
         racks: BTreeMap<String, Rack>,
         placements: BTreeMap<String, Placement>,
     ) -> Result<Self, LayoutError> {
+        let Extras {
+            devices,
+            mut sleds,
+            mut items,
+        } = extras;
         let devices = device::judge(devices)?;
         if !name.is_empty() && !is_name(&name) {
             return Err(LayoutError::Invalid(format!(
@@ -308,7 +347,7 @@ impl Layout {
         if racks.len() > MAX_RACKS {
             return Err(LayoutError::Capacity(format!("{MAX_RACKS} racks")));
         }
-        if placements.len() > MAX_PLACEMENTS {
+        if placements.len() + items.len() > MAX_PLACEMENTS {
             return Err(LayoutError::Capacity(format!(
                 "{MAX_PLACEMENTS} placements"
             )));
@@ -347,38 +386,11 @@ impl Layout {
             }
             id.clone_into(&mut rack.id);
         }
-        let mut placements = placements;
+        sled::convert(&mut sleds, &mut items, placements)?;
+        sled::judge_sleds(&mut sleds, &racks)?;
         let mut by_rack: BTreeMap<String, Vec<(u32, u32, String)>> = BTreeMap::new();
-        for (key, placement) in &mut placements {
-            let subject = Subject::of_key(key)?;
-            let visible = (1..=MAX_SUBJECT_BYTES).contains(&subject.id.len())
-                && subject.id.bytes().all(|b| (0x21..=0x7e).contains(&b));
-            if !visible {
-                return Err(LayoutError::Invalid(format!(
-                    "the placement {key}: an id is 1 to {MAX_SUBJECT_BYTES} visible ASCII bytes"
-                )));
-            }
-            if placement.u == 0 || placement.height_u == 0 {
-                return Err(LayoutError::Invalid(format!(
-                    "the placement {key}: a U and a height are 1 or more"
-                )));
-            }
-            let rack = racks
-                .get(&placement.rack)
-                .ok_or_else(|| LayoutError::UnknownRack(placement.rack.clone()))?;
-            if placement.top() > rack.height_u {
-                return Err(LayoutError::OutOfRack {
-                    rack: placement.rack.clone(),
-                    subject: key.clone(),
-                    height: rack.height_u,
-                });
-            }
-            by_rack.entry(placement.rack.clone()).or_default().push((
-                placement.u,
-                placement.top(),
-                key.clone(),
-            ));
-            placement.subject = subject;
+        for (rack, low, high, id) in sled::spans(&sleds) {
+            by_rack.entry(rack).or_default().push((low, high, id));
         }
         for (rack, mut spans) in by_rack {
             spans.sort_unstable();
@@ -392,12 +404,14 @@ impl Layout {
                 }
             }
         }
+        sled::judge_items(&mut items, &sleds)?;
         Ok(Self {
             name,
             rows,
             racks,
-            placements,
             devices,
+            sleds,
+            sled_items: items,
         })
     }
 
@@ -435,15 +449,6 @@ impl Layout {
         racks
     }
 
-    /// Every placement, by rack id, then lowest U, then key.
-    #[must_use]
-    pub fn placements(&self) -> Vec<&Placement> {
-        let mut placements: Vec<&Placement> = self.placements.values().collect();
-        placements
-            .sort_by(|a, b| (&a.rack, a.u, a.subject.key()).cmp(&(&b.rack, b.u, b.subject.key())));
-        placements
-    }
-
     /// The row `id`.
     #[must_use]
     pub fn row(&self, id: &str) -> Option<&Row> {
@@ -454,12 +459,6 @@ impl Layout {
     #[must_use]
     pub fn rack(&self, id: &str) -> Option<&Rack> {
         self.racks.get(id)
-    }
-
-    /// The placement of `subject`.
-    #[must_use]
-    pub fn placement(&self, subject: &Subject) -> Option<&Placement> {
-        self.placements.get(&subject.key())
     }
 
     /// The layout named `name`.
@@ -473,11 +472,11 @@ impl Layout {
             ));
         }
         Self::build(
-            self.devices.clone(),
+            self.extras(),
             name.to_owned(),
             self.rows.clone(),
             self.racks.clone(),
-            self.placements.clone(),
+            BTreeMap::new(),
         )
     }
 
@@ -499,11 +498,11 @@ impl Layout {
         };
         rows.insert(id, row.clone());
         let next = Self::build(
-            self.devices.clone(),
+            self.extras(),
             self.name.clone(),
             rows,
             self.racks.clone(),
-            self.placements.clone(),
+            BTreeMap::new(),
         )?;
         Ok((next, row))
     }
@@ -522,11 +521,11 @@ impl Layout {
         let mut rows = self.rows.clone();
         rows.remove(id);
         Self::build(
-            self.devices.clone(),
+            self.extras(),
             self.name.clone(),
             rows,
             self.racks.clone(),
-            self.placements.clone(),
+            BTreeMap::new(),
         )
     }
 
@@ -581,11 +580,11 @@ impl Layout {
         };
         racks.insert(id, rack.clone());
         let next = Self::build(
-            self.devices.clone(),
+            self.extras(),
             self.name.clone(),
             self.rows.clone(),
             racks,
-            self.placements.clone(),
+            BTreeMap::new(),
         )?;
         Ok((next, rack))
     }
@@ -598,58 +597,17 @@ impl Layout {
         if !self.racks.contains_key(id) {
             return Err(LayoutError::UnknownRack(id.to_owned()));
         }
-        if self
-            .placements
-            .values()
-            .any(|placement| placement.rack == id)
-        {
+        if self.sleds.values().any(|sled| sled.rack == id) {
             return Err(LayoutError::InUse(id.to_owned()));
         }
         let mut racks = self.racks.clone();
         racks.remove(id);
         Self::build(
-            self.devices.clone(),
+            self.extras(),
             self.name.clone(),
             self.rows.clone(),
             racks,
-            self.placements.clone(),
-        )
-    }
-
-    /// The layout with `placement` made: the subject moved there from where it was.
-    ///
-    /// # Errors
-    /// [`LayoutError`]: the result breaks a rule (a rack the layout lacks, a subject's id, a U
-    /// outside the rack, a U another placement holds).
-    pub fn with_placement(&self, placement: Placement) -> Result<(Self, Placement), LayoutError> {
-        let key = placement.subject.key();
-        let mut placements = self.placements.clone();
-        placements.insert(key, placement.clone());
-        let next = Self::build(
-            self.devices.clone(),
-            self.name.clone(),
-            self.rows.clone(),
-            self.racks.clone(),
-            placements,
-        )?;
-        Ok((next, placement))
-    }
-
-    /// The layout without the placement of `subject`.
-    ///
-    /// # Errors
-    /// [`LayoutError::UnknownPlacement`]: it is not placed.
-    pub fn without_placement(&self, subject: &Subject) -> Result<Self, LayoutError> {
-        let mut placements = self.placements.clone();
-        placements
-            .remove(&subject.key())
-            .ok_or_else(|| LayoutError::UnknownPlacement(subject.key()))?;
-        Self::build(
-            self.devices.clone(),
-            self.name.clone(),
-            self.rows.clone(),
-            self.racks.clone(),
-            placements,
+            BTreeMap::new(),
         )
     }
 
@@ -665,7 +623,7 @@ impl Layout {
         rows: Vec<(String, serde_json::Value)>,
         racks: Vec<(String, serde_json::Value)>,
         placements: Vec<(String, serde_json::Value)>,
-        devices: Vec<(String, serde_json::Value)>,
+        extras: Records,
     ) -> Result<Self, LayoutError> {
         let refused = |why: String| LayoutError::Stored {
             path: place.to_owned(),
@@ -685,7 +643,11 @@ impl Layout {
                 .collect()
         }
         Self::build(
-            read(devices, &refused)?,
+            Extras {
+                devices: read(extras.devices, &refused)?,
+                sleds: read(extras.sleds, &refused)?,
+                items: read(extras.items, &refused)?,
+            },
             name,
             read(rows, &refused)?,
             read(racks, &refused)?,
@@ -693,6 +655,26 @@ impl Layout {
         )
         .map_err(|why| refused(why.to_string()))
     }
+}
+
+/// The file as it is read: what [`Layout`] writes, and the `placements` of a coordinator before
+/// sleds, which [`Layout::build`] turns into one-slot sleds.
+#[derive(Deserialize)]
+struct Wire {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    rows: BTreeMap<String, Row>,
+    #[serde(default)]
+    racks: BTreeMap<String, Rack>,
+    #[serde(default)]
+    placements: BTreeMap<String, Placement>,
+    #[serde(default)]
+    devices: BTreeMap<String, Device>,
+    #[serde(default)]
+    sleds: BTreeMap<String, Sled>,
+    #[serde(default)]
+    sled_items: BTreeMap<String, SledItem>,
 }
 
 /// The layout as the text of the file `<state-file>.layout`.
@@ -714,9 +696,13 @@ pub(crate) fn parse_file(path: &Path, bytes: &[u8]) -> Result<Layout, LayoutErro
         path: path.to_owned(),
         why,
     };
-    let held: Layout = serde_json::from_slice(bytes).map_err(|e| refused(e.to_string()))?;
+    let held: Wire = serde_json::from_slice(bytes).map_err(|e| refused(e.to_string()))?;
     Layout::build(
-        held.devices,
+        Extras {
+            devices: held.devices,
+            sleds: held.sleds,
+            items: held.sled_items,
+        },
         held.name,
         held.rows,
         held.racks,
@@ -822,7 +808,22 @@ impl LayoutStore {
 }
 
 mod device;
+mod sled;
 pub use device::{Device, MAX_DEVICES, Segment};
+pub(crate) use sled::Extras;
+pub use sled::{MAX_SLED_HEIGHT_U, MAX_SLEDS, MAX_SLOTS, Sled, SledItem};
+
+/// The stored records of the parts a later change added, by key, as [`Layout::of_records`] reads
+/// them.
+#[derive(Debug, Default)]
+pub(crate) struct Records {
+    /// The network devices.
+    pub(crate) devices: Vec<(String, serde_json::Value)>,
+    /// The sleds.
+    pub(crate) sleds: Vec<(String, serde_json::Value)>,
+    /// The subjects on sleds.
+    pub(crate) items: Vec<(String, serde_json::Value)>,
+}
 
 #[cfg(test)]
 #[path = "layout_tests.rs"]
