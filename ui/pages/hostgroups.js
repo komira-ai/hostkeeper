@@ -13,7 +13,8 @@
 // changes nothing; a group only a record or the Mac allowlist names is refused the same way, and
 // the page says so.
 // A group's rollout policy is not edited here: a change keeps the policy the group holds, and a
-// new group has the default one (`hkctl host-groups put` sets one).
+// new group has the default one (stages 50 and 100, no cap on hosts updating at once;
+// `hkctl host-groups put` sets one).
 // Calls: Services.List (the registered packages the form offers), HostGroups.List (every page), HostGroups.Get on a group's name and its hosts' "Next" and on a refused Delete,
 // HostGroups.Remove on Delete,
 // HostGroups.Put on Save, which replaces the group named over the generation List gave (or

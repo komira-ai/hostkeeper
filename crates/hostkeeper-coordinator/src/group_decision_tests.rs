@@ -4,6 +4,7 @@
 
 use hostkeeper_wire::wire::{Phase, ServiceReply};
 
+use crate::decide::{Gate, Why};
 use crate::group_decision_support::{Farm, failed, policy, stages};
 use crate::host_groups::GroupName;
 use crate::marks_support::{runs, update};
@@ -252,14 +253,15 @@ fn the_groups_canary_and_bake_hold_the_rest() {
     assert_eq!(farm.tell("a3", &[("web", "1.0")]), update("web", "2.0"));
 }
 
-/// Proves: `live_rollouts` counts within the group: with the default of one, a second package of
-/// a group waits while the first rolls (`rollout_elsewhere`) and a package of another group does
-/// not; with a policy of two, the second package rolls beside the first.
+/// Proves: `--live-rollouts` counts services over every group, a service being a package: with the
+/// default of one, a package of another group waits while the first group's rolls
+/// (`rollout_elsewhere`), the same package in another group rolls beside it, and a group's
+/// `live_rollouts` can only lower the coordinator's, never raise it.
 ///
-/// Catches: the live rollouts counted over every group's packages, which would hold the second
-/// group's package while the first group's rolls.
+/// Catches: the live rollouts counted within each group, which would let every group roll a
+/// package of its own at once.
 #[test]
-fn live_rollouts_count_within_the_group_and_not_across_groups() {
+fn live_rollouts_count_over_every_group_and_a_group_can_only_lower_them() {
     let farm = Farm::new("gd-live");
     farm.group("one", &["web", "db"], None);
     farm.group(
@@ -286,6 +288,13 @@ fn live_rollouts_count_within_the_group_and_not_across_groups() {
     assert_eq!(farm.tell("o2", &both), NOTHING);
     assert_eq!(farm.tell("x1", &[("web", "1.0")]), update("web", "2.0"));
     assert_eq!(farm.tell("t1", &both), update("web", "2.0"));
+    assert_eq!(farm.tell("t2", &both), NOTHING);
+    assert_eq!(
+        farm.why("t2", "db"),
+        Some(Why::Gate(Gate::RolloutElsewhere))
+    );
+
+    farm.flag(2);
     assert_eq!(farm.tell("t2", &both), update("db", "2.0"));
 }
 
@@ -338,6 +347,8 @@ fn a_halt_stops_the_plan_of_its_group_alone() {
         farm.tell("a2", &[("web", "1.0"), ("db", "1.0")]),
         update("db", "2.0")
     );
+    assert_eq!(farm.tell("b1", &[("web", "1.0")]), NOTHING);
+    farm.flag(2);
     assert_eq!(farm.tell("b1", &[("web", "1.0")]), update("web", "2.0"));
 }
 

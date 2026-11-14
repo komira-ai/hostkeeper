@@ -113,7 +113,7 @@ pub(crate) fn policy_proto(policy: &Policy) -> proto::RolloutPolicy {
             factor: Some(policy.defer_backoff.factor),
             max_secs: Some(policy.defer_backoff.max_secs),
         }),
-        max_updating: Some(policy.max_updating),
+        max_updating: (policy.max_updating != DEFAULT_MAX_UPDATING).then_some(policy.max_updating),
         min_up: policy.min_up,
         live_rollouts: policy.live_rollouts,
     }

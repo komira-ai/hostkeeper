@@ -263,6 +263,7 @@ async fn a_moving_host_waits_while_a_plan_it_needs_is_paused_halted_bad_or_full(
 #[tokio::test]
 async fn a_moving_host_waits_for_a_free_place_in_the_stage_of_a_plan() {
     let farm = Farm::new("mv-full");
+    farm.flag(4);
     farm.group("old", &["oldsvc", "oldcfg"], Some(wide()));
     farm.group(
         "new",
