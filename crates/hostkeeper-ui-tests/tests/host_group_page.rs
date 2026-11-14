@@ -1,5 +1,5 @@
 //! The Host page's "Host group" form, run in the JavaScript engine against the fake gateway of
-//! `support`: the dropdown of the groups held but `all` with the host's own selected, the move
+//! `support`: the dropdown of the groups held, `all` among them as an ordinary name, with the host's own selected, the move
 //! into another group, the move into none by the blank, and the refusals.
 
 mod support;
@@ -42,12 +42,13 @@ fn moves(ui: &Ui) -> Vec<Value> {
 }
 
 #[test]
-fn the_host_page_offers_every_group_but_all_with_the_hosts_own_selected() {
+fn the_host_page_offers_every_group_with_the_hosts_own_selected_and_unassigned_for_none() {
     // Proves: the Host group dropdown lists a blank (no group) and every group of every page of
-    // HostGroups.List except the built-in `all`, selects the host's own group, and selects the
-    // blank for a host in `all` alone.
-    // Catches: `all` offered as a choice, a list that stops at its first page, or a dropdown that
-    // does not show where the host is.
+    // HostGroups.List (a group named `all` is an ordinary choice, and a host in it has it
+    // selected), selects the host's own group, and selects the blank, labelled Unassigned, for a
+    // host in no group.
+    // Catches: a group name still filtered out or still read as every host's group, a list that
+    // stops at its first page, or a dropdown that does not show where the host is.
     let mut ui = start("web");
     let out = ui.run(&page_driver(
         "host",
@@ -57,10 +58,10 @@ fn the_host_page_offers_every_group_but_all_with_the_hosts_own_selected() {
     ));
     assert_eq!(
         out["out"],
-        json!({"choices": ["No group (all alone)", "storage", "web"], "chosen": "web"})
+        json!({"choices": ["Unassigned", "all", "storage", "web"], "chosen": "web"})
     );
     assert_shows(&out, &["Host group", "Move"]);
-    let mut ui = start("all");
+    let mut ui = start("");
     let out = ui.run(&page_driver(
         "host",
         NODE,
@@ -69,7 +70,7 @@ fn the_host_page_offers_every_group_but_all_with_the_hosts_own_selected() {
     ));
     assert_eq!(
         out["out"],
-        json!({"choices": ["No group (all alone)", "storage", "web"], "chosen": ""})
+        json!({"choices": ["Unassigned", "all", "storage", "web"], "chosen": ""})
     );
 }
 
@@ -115,7 +116,7 @@ return { declined, once, fields: nodes(tree).filter((n) => ["move-reason", "reas
 #[test]
 fn choosing_the_blank_moves_the_host_to_no_group() {
     // Proves: the blank choice sends HostGroups.Move with an empty hostGroup after a question
-    // that says the host then runs the packages of all alone, and reports "no group".
+    // that says the host is then Unassigned and ordered no package, and reports "Unassigned".
     // Catches: a blank that is refused on the page or sent as a group named "".
     let mut ui = start("web");
     ui.reply(&m("HostGroups/Move"), json!({"fromHostGroup": "web"}));
@@ -136,12 +137,12 @@ return null;
     assert_eq!(
         out["seen"]["questions"],
         json!([
-            "Remove web-2 from host group web? It then runs the packages of all alone, and what web lists and all does not is uninstalled."
+            "Remove web-2 from host group web? It is then Unassigned: it is ordered no package and keeps what it runs."
         ])
     );
     assert_eq!(
         out["seen"]["reports"],
-        json!(["Moved web-2 from web to no group."])
+        json!(["Moved web-2 from web to Unassigned."])
     );
 }
 
@@ -172,7 +173,7 @@ await click(tree, "move-host");
 return seen.reports;
 "#,
     ));
-    assert_eq!(out["out"], json!(["web-2 is in no host group."]));
+    assert_eq!(out["out"], json!(["web-2 is Unassigned."]));
     assert_eq!(moves(&ui), Vec::<Value>::new());
 }
 
@@ -218,7 +219,7 @@ return null;
         "[]",
         r#"return choices(tree, "host-group");"#,
     ));
-    assert_eq!(out["out"], json!(["No group (all alone)", "web"]));
+    assert_eq!(out["out"], json!(["Unassigned", "web"]));
     assert_shows(
         &out,
         &[
@@ -227,4 +228,44 @@ return null;
             "Retire",
         ],
     );
+}
+
+#[test]
+fn a_host_in_no_group_is_shown_unassigned_and_one_in_a_group_named_all_is_shown_in_it() {
+    // Proves: the header's Group line says "Unassigned" for a host with no group, names the group
+    // for a host in one (a group named `all` included: it has no special meaning), and the Host
+    // group panel says a host is in one group or Unassigned and is then ordered no package.
+    // Catches: "no group" wording, a group named all hidden as if it were no group, or the old
+    // text that every host is in all.
+    let mut ui = start("");
+    let out = ui.run(&page_driver("host", NODE, "[]", "return null;"));
+    assert_shows(
+        &out,
+        &[
+            "Group",
+            "Unassigned",
+            "A host is in one host group or is Unassigned.",
+            "an Unassigned host is ordered no package and keeps what it runs.",
+        ],
+    );
+    let text = shown_text(&out);
+    assert!(!text.contains("Every host is in all"), "{text}");
+    assert!(!text.contains("no group"), "{text}");
+
+    let mut ui = start("all");
+    let out = ui.run(&page_driver(
+        "host",
+        NODE,
+        "[]",
+        r#"return chosen(tree, "host-group");"#,
+    ));
+    assert_eq!(
+        out["out"],
+        json!("all"),
+        "a host in all is in the group all"
+    );
+}
+
+fn shown_text(out: &Value) -> String {
+    support::pages::shown(out).to_owned()
 }
