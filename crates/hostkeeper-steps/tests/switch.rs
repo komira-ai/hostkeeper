@@ -385,6 +385,57 @@ fn a_first_installs_package_is_removed_when_its_hook_rollback_cannot_start() {
     );
 }
 
+/// Proves a first install whose hook `rollback` declines (`no_previous_release`) has its package
+/// removed after it, and the order ends `Failed` as the decline says.
+///
+/// Catches: a declined first install left installed because only a successful `rollback` was
+/// followed by the removal.
+#[test]
+fn a_first_installs_package_is_removed_after_its_hook_rollback_declines() {
+    let rig = Rig::new("switch-first-install-declined");
+    let log = Lines::default();
+    let failing = Arc::new(AtomicBool::new(false));
+    let runner = switching(&rig, &log, &failing);
+    rig.fake.say(Step::Verify, &[FAIL]);
+    rig.fake.say(Step::Rollback, &[DECLINED]);
+    let ended = runner.run(&first_install(&rig)).expect("runs");
+    assert!(matches!(ended.verdict, Verdict::Failed { .. }), "{ended:?}");
+    let log = lines(&log);
+    assert_eq!(log[log.len() - 2..], ["run rollback", "switch Back 2.0.0"]);
+}
+
+/// Proves a removal that ends the step when the hook's `rollback` could not be started (a
+/// package manager that stayed busy: exit 75) is the step's exit: the step is tried again, the
+/// removal is made, and the order ends.
+///
+/// Catches: an `Ended` removal read as a finished step when there was no hook run.
+#[test]
+fn a_removal_that_ends_an_unstarted_rollback_is_tried_again() {
+    let rig = Rig::new("switch-first-install-nostart-ended");
+    let log = Lines::default();
+    let (seen, first) = (Arc::clone(&log), Arc::new(AtomicBool::new(false)));
+    let switch: Switch = Arc::new(move |toward: Toward, _: &UpdateOrder| {
+        seen.lock()
+            .expect("the log")
+            .push(format!("switch {toward:?}"));
+        match toward == Toward::Back && !first.swap(true, Ordering::SeqCst) {
+            true => Err(SwitchError::Ended(StepExit {
+                code: Some(75),
+                last_line: None,
+            })),
+            false => Ok(()),
+        }
+    });
+    rig.fake.say(Step::Verify, &[FAIL]);
+    rig.fake
+        .say(Step::Rollback, &[Reply::NoStart, Reply::NoStart]);
+    let runner =
+        StepRunner::new(rig.fake.clone(), rig.clock.clone(), rig.store()).with_switch(switch);
+    runner.run(&first_install(&rig)).expect("runs");
+    let backs = lines(&log).iter().filter(|l| *l == "switch Back").count();
+    assert_eq!(backs, 2);
+}
+
 /// Proves a removal that ends the rollback step itself (the switch's `Ended`, a package manager
 /// that stayed busy: exit 75) is the step's exit, in place of the hook's success: the rollback is
 /// run again, and the order ends as the runner's table says for that exit.
