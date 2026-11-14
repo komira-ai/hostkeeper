@@ -271,11 +271,17 @@ fn a_hook_command_missing_from_the_package_is_manifest_invalid_at_stage() {
 #[test]
 fn the_manifest_hook_runs_the_steps_and_its_rollback_runs_when_verify_fails() {
     let rig = Rig::new("apt-hook", Trust::Entry);
-    let (daemon, _, _scratch) = daemon::daemon(&rig);
+    let (daemon, _, scratch) = daemon::daemon(&rig);
     let (one, two) = (rig.pin("0.7-hook"), rig.pin("0.8-hook"));
 
     let install = daemon::install_of(hooked(&rig, "0.7-hook"), "0.7-hook", &one, 1);
-    assert_eq!(finished(daemon.order(&install)), succeeded());
+    let installed = finished(daemon.order(&install));
+    assert_eq!(
+        installed,
+        succeeded(),
+        "the install order did not succeed:\n{}",
+        daemon::explain(&scratch)
+    );
     let log = fs::read_to_string(HOOK_LOG).expect("the hook's log");
     for step in ["prepare", "cutover", "verify"] {
         assert!(
@@ -291,7 +297,8 @@ fn the_manifest_hook_runs_the_steps_and_its_rollback_runs_when_verify_fails() {
     let (verdict, _) = finished(daemon.order(&update));
     assert!(
         matches!(verdict, hostkeeper_hook::Verdict::Failed { .. }),
-        "the update fails: {verdict:?}"
+        "the update fails: {verdict:?}\n{}",
+        daemon::explain(&scratch)
     );
     let log = fs::read_to_string(HOOK_LOG).expect("the hook's log");
     let steps: Vec<&str> = log.lines().collect();
