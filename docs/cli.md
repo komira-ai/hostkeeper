@@ -478,7 +478,7 @@ Names the cluster.
 
 `/hostkeeper.operator.v1.Layout/AddRow`
 
-Adds the next row: its number is one more than the highest row number held (1 for the first).
+Adds the next row: its number is one more than the highest row number held (0 for the first).
 
 | flag | value | meaning |
 |---|---|---|
@@ -501,7 +501,7 @@ holds no placement, so a row's servers are named by `Get` (the page names them).
 `/hostkeeper.operator.v1.Layout/PutRack`
 
 Adds a rack to a row (empty `id`): its number is one more than the highest rack number of
-that row. With an `id`, resizes that rack and, when `row` names another row, moves it there
+that row, 0 for the first. With an `id`, resizes that rack and, when `row` names another row, moves it there
 (it takes that row's next number). A rack made shorter than a placement it holds is refused.
 
 | flag | value | meaning |

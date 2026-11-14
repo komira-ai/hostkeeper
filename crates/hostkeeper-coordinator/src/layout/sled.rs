@@ -320,7 +320,8 @@ impl Layout {
 
     /// The address of the sled `sled`: `C0-R<row>-R<rack>-S<sled>`, every number counted from
     /// 0 (the cluster is always 0: a hostkeeper runs one lab), the row and the rack as numbered
-    /// by the layout less one, the sled from the bottom of its rack. Computed, never stored.
+    /// by the layout (which counts from 0), the sled from the bottom of its rack. Computed, never
+    /// stored.
     #[must_use]
     pub fn sled_address(&self, sled: &str) -> Option<String> {
         let held = self.sleds.get(sled)?;
@@ -328,8 +329,8 @@ impl Layout {
         let row = self.rows.get(&rack.row)?;
         Some(format!(
             "C0-R{}-R{}-S{}",
-            row.number.saturating_sub(1),
-            rack.number.saturating_sub(1),
+            row.number,
+            rack.number,
             self.sled_number(sled)?,
         ))
     }

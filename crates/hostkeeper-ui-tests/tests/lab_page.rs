@@ -18,11 +18,11 @@ use support::pages::{bodies, m, page_driver};
 fn layout() -> Value {
     json!({
         "name": "Lab 1",
-        "rows": [{"id": "row-1", "number": 1}, {"id": "row-2", "number": 2}],
+        "rows": [{"id": "row-1", "number": 0}, {"id": "row-2", "number": 1}],
         "racks": [
-            {"id": "rack-1", "row": "row-1", "number": 1, "heightU": 42},
-            {"id": "rack-2", "row": "row-1", "number": 2, "heightU": 24},
-            {"id": "rack-3", "row": "row-2", "number": 1, "heightU": 42},
+            {"id": "rack-1", "row": "row-1", "number": 0, "heightU": 42},
+            {"id": "rack-2", "row": "row-1", "number": 1, "heightU": 24},
+            {"id": "rack-3", "row": "row-2", "number": 0, "heightU": 42},
         ],
         "sleds": [
             {"id": "sled-1", "rack": "rack-1", "number": 1, "u": 41, "heightU": 2, "slots": 1,
@@ -357,8 +357,8 @@ return { rows: rows(tree), big: cls(tree, "rack").map((n) => n.attrs.class) };"#
     ui.reply(
         &m("Layout/Get"),
         json!({
-            "rows": [{"id": "row-1", "number": 1}],
-            "racks": [{"id": "rack-1", "row": "row-1", "number": 1, "heightU": 10}],
+            "rows": [{"id": "row-1", "number": 0}],
+            "racks": [{"id": "rack-1", "row": "row-1", "number": 0, "heightU": 10}],
             "sleds": [{"id": "sled-1", "rack": "rack-1", "u": 5, "heightU": 1, "slots": 1,
                        "address": "C0-R0-R0-S0"}],
             "placements": [{"subject": {"kind": "LAYOUT_SUBJECT_KIND_INVENTORY", "id": "new-1"},
@@ -545,7 +545,7 @@ return { reports: seen.reports, refreshes: seen.refreshes };"#,
     let mut ui = base();
     ui.reply(
         &m("Layout/Get"),
-        json!({"rows": [{"id": "row-1", "number": 1}]}),
+        json!({"rows": [{"id": "row-1", "number": 0}]}),
     );
     ui.refuse(&m("Layout/RemoveRow"), 412, "FAILED_PRECONDITION", "in_use");
     let out = home(
@@ -617,8 +617,8 @@ fn a_placement_whose_server_is_gone_is_shown_offline_and_opens_nothing() {
     ui.reply(
         &m("Layout/Get"),
         json!({
-            "rows": [{"id": "row-1", "number": 1}],
-            "racks": [{"id": "rack-1", "row": "row-1", "number": 1, "heightU": 10}],
+            "rows": [{"id": "row-1", "number": 0}],
+            "racks": [{"id": "rack-1", "row": "row-1", "number": 0, "heightU": 10}],
             "sleds": [{"id": "sled-1", "rack": "rack-1", "u": 3, "heightU": 1, "slots": 1,
                        "address": "C0-R0-R0-S0"}],
             "placements": [{"subject": {"kind": "LAYOUT_SUBJECT_KIND_HOST", "id": "ghost"},
@@ -745,22 +745,22 @@ return steps;"#,
     );
     assert_eq!(
         out["mounted"],
-        json!({"prev": true, "next": true, "pos": "Rack 1 of 2", "classes": ["at-end", "at-start"]}),
+        json!({"prev": true, "next": true, "pos": "Rack 0 of 2", "classes": ["at-end", "at-start"]}),
         "every rack fits: no arrow can move"
     );
     assert_eq!(
         out["narrow"],
-        json!({"prev": true, "next": false, "pos": "Rack 1 of 2", "classes": ["at-start"]}),
+        json!({"prev": true, "next": false, "pos": "Rack 0 of 2", "classes": ["at-start"]}),
         "a narrower window: a rack runs off the right edge"
     );
     assert_eq!(
         out["scrolled"],
-        json!({"prev": false, "next": true, "pos": "Rack 2 of 2", "classes": ["at-end"]}),
+        json!({"prev": false, "next": true, "pos": "Rack 1 of 2", "classes": ["at-end"]}),
         "at the right end: next is disabled, previous enabled"
     );
     assert_eq!(
         out["wide"],
-        json!({"prev": true, "next": true, "pos": "Rack 1 of 2", "classes": ["at-end", "at-start"]})
+        json!({"prev": true, "next": true, "pos": "Rack 0 of 2", "classes": ["at-end", "at-start"]})
     );
 }
 

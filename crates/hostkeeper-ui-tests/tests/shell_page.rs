@@ -22,7 +22,7 @@ fn start() -> Ui {
         ui.reply(&m("Alerts/List"), json!({}));
         ui.reply(
             &m("Layout/Get"),
-            json!({"name": "Lab 1", "rows": [{"id": "row-1", "number": 1}]}),
+            json!({"name": "Lab 1", "rows": [{"id": "row-1", "number": 0}]}),
         );
         ui.reply(&m("Enrollment/ListRecords"), json!({}));
     }

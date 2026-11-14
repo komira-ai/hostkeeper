@@ -33,7 +33,8 @@ export const STATES = [
   ["pending", "warn"],
 ];
 
-// The layout a `Layout.Get` reply holds, with the lists in order and the numbers as numbers:
+// The layout a `Layout.Get` reply holds, with the lists in order and the numbers as numbers (a
+// number of 0, the first row or rack, is left out of the JSON of a message, so a missing one is 0):
 // `{name, rows, racks, sleds, placements, devices}`; each sled is `{id, rack, number, u, height,
 // label, address, slots}` (`u` its lowest U, `number` its place counted from the bottom of its
 // rack, `address` as the coordinator computed it: `C0-R0-R0-S2`); each placement is `{kind, id,
@@ -44,9 +45,9 @@ export const STATES = [
 // its placement (a device is placed as an inventory entry, under the id `net.<n>`) and `role`
 // `bmc` or `data`.
 export function layoutOf(reply) {
-  const rows = list(reply, "rows").map((r) => ({ id: r.id, number: Number(r.number) }));
+  const rows = list(reply, "rows").map((r) => ({ id: r.id, number: Number(r.number ?? 0) }));
   const racks = list(reply, "racks").map((r) => ({
-    id: r.id, row: r.row, number: Number(r.number), height: Number(r.heightU),
+    id: r.id, row: r.row, number: Number(r.number ?? 0), height: Number(r.heightU),
   }));
   const placements = list(reply, "placements").map((p) => {
     const kind = p.subject && p.subject.kind === KIND_INVENTORY ? "inventory" : "host";
@@ -112,10 +113,10 @@ export function subjectOf(server) {
   return { kind: server.kind === "inventory" ? KIND_INVENTORY : KIND_HOST, id: server.id };
 }
 
-// The number a row or a rack is called by: its number less one, since the lab counts from 0 (the
+// The number a row or a rack is called by: its number, which counts from 0 (the
 // address `C0-R0-R0-S0-S0`). The ids stay as they are.
 export function shownNumber(number) {
-  return Number(number) - 1;
+  return Number(number);
 }
 
 // "Row 1", "Rack 2" and "Row 1 / Rack 2" for the ids of a layout; an id it does not hold is shown as is.

@@ -17,8 +17,8 @@ use support::pages::{bodies, m};
 fn layout() -> Value {
     json!({
         "name": "Lab 1",
-        "rows": [{"id": "row-1", "number": 1}],
-        "racks": [{"id": "rack-1", "row": "row-1", "number": 1, "heightU": 27}],
+        "rows": [{"id": "row-1", "number": 0}],
+        "racks": [{"id": "rack-1", "row": "row-1", "number": 0, "heightU": 27}],
         "sleds": [
             {"id": "sled-1", "rack": "rack-1", "number": 3, "u": 27, "heightU": 1, "slots": 1,
              "address": "C0-R0-R0-S3"},

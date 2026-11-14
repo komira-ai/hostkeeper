@@ -21,10 +21,10 @@ fn layout() -> Value {
     };
     json!({
         "name": "Lab 1",
-        "rows": [{"id": "row-1", "number": 1}],
+        "rows": [{"id": "row-1", "number": 0}],
         "racks": [
-            {"id": "rack-1", "row": "row-1", "number": 1, "heightU": 10},
-            {"id": "rack-2", "row": "row-1", "number": 2, "heightU": 10},
+            {"id": "rack-1", "row": "row-1", "number": 0, "heightU": 10},
+            {"id": "rack-2", "row": "row-1", "number": 1, "heightU": 10},
         ],
         "sleds": [
             {"id": "sled-1", "rack": "rack-1", "u": 1, "heightU": 4, "slots": 1, "address": "C0-R0-R0-S0"},

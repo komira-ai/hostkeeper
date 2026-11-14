@@ -1,5 +1,5 @@
 //! The lab's layout, which the web page's Home draws (`docs/design/ui-shell-lab.md`): the one
-//! cluster's name, its rows (numbered 1, 2, 3, ...), the racks that stand in them (numbered within
+//! cluster's name, its rows (numbered 0, 1, 2, ...), the racks that stand in them (numbered within
 //! their row) and the placements of servers in the racks. A hostkeeper runs one lab only.
 //!
 //! The layout is a part of the store of its own, beside the desired state, the operations state,
@@ -19,7 +19,7 @@
 //!
 //! - the cluster's name is empty or 1 to [`MAX_NAME_CHARS`] characters of letters, digits, space,
 //!   `.`, `_` and `-`, none of them leading or trailing space; row numbers differ and so do the
-//!   rack numbers of one row, each from 1;
+//!   rack numbers of one row, each from 0;
 //! - a rack is 1 to [`MAX_HEIGHT_U`] U high and stands in a row the layout holds;
 //! - a placement is in a rack the layout holds, occupies U `u` to `u + height_u - 1`
 //!   within U 1 to the rack's height, and shares no U with another placement of the rack; a
@@ -149,7 +149,7 @@ pub struct Row {
     /// `row-<n>`.
     #[serde(skip)]
     pub id: String,
-    /// 1, 2, 3, ...: the number shown.
+    /// 0, 1, 2, ...: the number shown.
     pub number: u32,
 }
 
@@ -161,7 +161,7 @@ pub struct Rack {
     pub id: String,
     /// The id of the row it stands in.
     pub row: String,
-    /// 1, 2, 3, ... within its row: the number shown.
+    /// 0, 1, 2, ... within its row: the number shown.
     pub number: u32,
     /// How many U high it is.
     pub height_u: u32,
@@ -355,9 +355,9 @@ impl Layout {
         let mut seen = BTreeSet::new();
         let mut rows = rows;
         for (id, row) in &mut rows {
-            if !is_id(id, "row") || row.number == 0 {
+            if !is_id(id, "row") {
                 return Err(LayoutError::Invalid(format!(
-                    "the row {id}: an id is row-<n>, a number is 1 or more"
+                    "the row {id}: an id is row-<n>"
                 )));
             }
             if !seen.insert(row.number) {
@@ -368,9 +368,9 @@ impl Layout {
         let mut seen = BTreeSet::new();
         let mut racks = racks;
         for (id, rack) in &mut racks {
-            if !is_id(id, "rack") || rack.number == 0 {
+            if !is_id(id, "rack") {
                 return Err(LayoutError::Invalid(format!(
-                    "the rack {id}: an id is rack-<n>, a number is 1 or more"
+                    "the rack {id}: an id is rack-<n>"
                 )));
             }
             if !(1..=MAX_HEIGHT_U).contains(&rack.height_u) {
@@ -480,7 +480,7 @@ impl Layout {
         )
     }
 
-    /// The layout with the next row added, and the row: its number is one more than the highest.
+    /// The layout with the next row added, and the row: its number is one more than the highest, 0 for the first.
     ///
     /// # Errors
     /// [`LayoutError::Capacity`]: the layout holds the most rows.
@@ -491,8 +491,7 @@ impl Layout {
             .values()
             .map(|r| r.number)
             .max()
-            .unwrap_or(0)
-            .saturating_add(1);
+            .map_or(0, |highest| highest.saturating_add(1));
         let row = Row {
             id: id.clone(),
             number,
@@ -532,7 +531,7 @@ impl Layout {
 
     /// The layout with a rack added to the row `row`, or the rack `id` resized and, when `row`
     /// names another row, moved there, and the rack. A new rack, or one moved, takes the next
-    /// number of its row.
+    /// number of its row (0 for the first).
     ///
     /// # Errors
     /// [`LayoutError::UnknownRack`]: `id` names no rack. Any other: the result breaks a rule (a
@@ -571,8 +570,7 @@ impl Layout {
                 .filter(|rack| rack.row == row && rack.id != id)
                 .map(|rack| rack.number)
                 .max()
-                .unwrap_or(0)
-                .saturating_add(1),
+                .map_or(0, |highest| highest.saturating_add(1)),
         };
         let rack = Rack {
             id: id.clone(),

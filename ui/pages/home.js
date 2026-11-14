@@ -344,7 +344,7 @@ function lab(app, data, state) {
         scrollLeft: el.scrollLeft, scrollWidth: el.scrollWidth, clientWidth: el.clientWidth,
         pitch: pitchOf(el), count: racks.length,
       });
-      frame.querySelector(".strip-pos").textContent = `Rack ${at.first} of ${racks.length}`;
+      frame.querySelector(".strip-pos").textContent = `Rack ${(racks[at.first - 1] || racks[0]).number} of ${racks.length}`;
       frame.querySelector("[name=strip-prev]").disabled = at.atStart;
       frame.querySelector("[name=strip-next]").disabled = at.atEnd;
       frame.classList.toggle("at-start", at.atStart);
@@ -353,7 +353,7 @@ function lab(app, data, state) {
     return h("div", { class: "strip-frame at-start" },
       h("div", { class: "strip-bar" },
         h("button", { type: "button", name: "strip-prev", class: "strip-arrow", "aria-label": "previous rack", disabled: true, on: { click: move(-1) } }, "\u2039"),
-        h("span", { class: "strip-pos", role: "status" }, `Rack 1 of ${racks.length}`),
+        h("span", { class: "strip-pos", role: "status" }, `Rack ${racks[0].number} of ${racks.length}`),
         h("button", { type: "button", name: "strip-next", class: "strip-arrow", "aria-label": "next rack", on: { click: move(1) } }, "\u203a"),
         h("span", { class: "strip-hint" }, "scroll, drag or use the arrow keys")),
       h("div", {

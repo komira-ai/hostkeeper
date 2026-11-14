@@ -14,10 +14,10 @@ use support::pages::{bodies, m, page_driver};
 /// 4 U that holds an empty one-slot sled at U 1 (C0-R1-R0-S0).
 fn layout() -> Value {
     json!({
-        "rows": [{"id": "row-1", "number": 1}, {"id": "row-2", "number": 2}],
+        "rows": [{"id": "row-1", "number": 0}, {"id": "row-2", "number": 1}],
         "racks": [
-            {"id": "rack-1", "row": "row-1", "number": 1, "heightU": 10},
-            {"id": "rack-2", "row": "row-2", "number": 1, "heightU": 4},
+            {"id": "rack-1", "row": "row-1", "number": 0, "heightU": 10},
+            {"id": "rack-2", "row": "row-2", "number": 0, "heightU": 4},
         ],
         "sleds": [
             {"id": "sled-1", "rack": "rack-1", "u": 4, "heightU": 2, "slots": 1, "address": "C0-R0-R0-S0"},

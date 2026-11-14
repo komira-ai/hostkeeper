@@ -238,7 +238,7 @@ fn a_subject_takes_a_slot_and_a_slot_holds_one_subject() {
 }
 
 /// Proves: the address of a place is `C0-R<row>-R<rack>-S<sled>-S<slot>`, every number from 0:
-/// the row and rack are the layout's numbers less one, the sled is counted from the bottom of its
+/// the row and rack are the layout's numbers (which count from 0), the sled is counted from the bottom of its
 /// rack (the lowest is 0, whatever order the sleds were added in, and it follows a move), the
 /// slot is the slot; a sled or place the layout lacks has none.
 ///

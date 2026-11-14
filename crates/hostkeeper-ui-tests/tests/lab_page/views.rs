@@ -309,19 +309,19 @@ return {
     );
     assert_eq!(
         out["initial"],
-        json!(["Rack 1 of 2", true, null, "strip-frame at-start"])
+        json!(["Rack 0 of 2", true, null, "strip-frame at-start"])
     );
     assert_eq!(
         out["start"],
-        json!(["Rack 1 of 2", true, false, ["at-start", "strip-frame"]])
+        json!(["Rack 0 of 2", true, false, ["at-start", "strip-frame"]])
     );
     assert_eq!(
         out["middle"],
-        json!(["Rack 2 of 2", false, false, ["strip-frame"]])
+        json!(["Rack 1 of 2", false, false, ["strip-frame"]])
     );
     assert_eq!(
         out["end"],
-        json!(["Rack 2 of 2", false, true, ["at-end", "strip-frame"]])
+        json!(["Rack 1 of 2", false, true, ["at-end", "strip-frame"]])
     );
     assert_eq!(out["moves"], json!([300, -300]));
 }

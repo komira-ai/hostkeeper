@@ -30,8 +30,8 @@ Sled { id sled-<n>, rack, u (lowest U, 1 is the bottom), height_u 1..60, slots 1
 - A slot holds one item; an item is on at most one slot. A sled is made first (empty) and items are assigned to it afterwards.
 - Address: every item has **C\<cluster\>-R\<row\>-R\<rack\>-S\<sled\>-S\<slot\>**, all zero-based: `C0-R0-R0-S0-S0`. The sled number is its
   place in its rack counting from the bottom (the lowest sled is S0), so it changes when a sled is put below it. Computed by the
-  coordinator on every read, never stored; stored are numbers (rack, U, slot). The row and rack in the address are the layout's numbers
-  less one while rows and racks are numbered from 1 (see 7, question 4).
+  coordinator on every read, never stored; stored are numbers (rack, U, slot). The row and rack in the address are the layout's numbers,
+  which count from 0 (branch `zero-based-rows`, merged).
 
 ### Rules (judged whole by `Layout::build`, as every layout rule is)
 
@@ -96,7 +96,7 @@ migration). Proto (B8, both directions). UI through the test kit: add sled (what
 1. Limits: 1 to 8 slots, 1 to 60 U, 4096 sleds. Default as stated.
 2. Slot order left to right from the front. Default yes.
 3. Rollback on the file store loses placements (older release ignores the new keys). Default: accept, document.
-4. Zero-based labels: branch `zero-based-rows` makes new rows and racks start at 0. Until it lands the address uses number less one;
-   after it lands the number is used as is. Default: merge main in when it lands and drop the subtraction in the same commit.
+4. Zero-based labels: `zero-based-rows` landed, so new rows and racks start at 0 and the address uses the number as is.
+   Decided: the subtraction is dropped.
 5. Mixed gear on a sled (a Mac Studio beside a NUC): allowed; the sled does not know what it carries.
 6. Faceplate look by name ("studio", "nuc"): cosmetic, never a record field.
