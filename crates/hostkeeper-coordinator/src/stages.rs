@@ -28,7 +28,10 @@
 //! role (`no_slot`: that many hosts of the role hold an update slot of the service; a role the
 //! state does not name has the default, 1, or 2 for `daemon` and `mac-daemon`) and its `min_up` (`below_min_up`: the order would leave fewer
 //! of the role's live hosts up). Across services, a service whose rollout is not live is told
-//! `rollout_elsewhere` while the coordinator's `--live-rollouts` others are ([`is_live`]).
+//! `rollout_elsewhere` while the coordinator's `--live-rollouts` others are ([`is_live`]), or while
+//! services set before it wait for the place ([`crate::queue`]). A host group's plan with no `stages`
+//! is [`crate::host_groups::GROUP_DEFAULT_STAGES`], 50 and 100 percent; [`DEFAULT_STAGES`] is that of
+//! a service of the rollout file.
 //!
 //! For a service made for a host group ([`crate::group_scope`]) the plan is over the group's hosts,
 //! the role of a host is its group's name, `max_updating` and `min_up` are the group's policy, and
