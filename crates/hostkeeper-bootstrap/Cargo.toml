@@ -1,0 +1,44 @@
+[package]
+name = "hostkeeper-bootstrap"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "The hostkeeper bootstrap of a Mac: reads the farm's two values, fetches and checks hostkeeper's signed macOS pkg, writes the daemon config when it is absent, runs the installer and exits."
+
+# docs/design/mac-bootstrap.md. A small program that a one-time pkg installs and a launchd job runs:
+# it holds no secret and enrolls nothing (the daemon it installs enrolls through the normal
+# approval flow). The network, the Mac's tools (`pkgutil`, `installer`) and the pause between
+# attempts are ports, so every step is measured on Linux against fakes.
+[dependencies]
+clap.workspace = true
+# `read_trusted` for the farm values, and `DaemonConfig::parse`, which judges the config the
+# bootstrap writes before anything is fetched.
+hostkeeper-config = { path = "../hostkeeper-config" }
+# The tool port (`Tools`, `Tool::Pkgutil`, `Tool::Installer`) and the `pkgutil --check-signature`
+# reading of the macos-pkg installer, and its signers file's text check.
+hostkeeper-install = { path = "../hostkeeper-install" }
+# The path of the binary the hostkeeper pkg installs, which tells the bootstrap hostkeeper is installed.
+hostkeeper-launchd = { path = "../hostkeeper-launchd" }
+# The HTTPS transport port (`Transport`, `UreqTransport`) of the downloads.
+hostkeeper-package = { path = "../hostkeeper-package" }
+# The repository descriptor's reader.
+hostkeeper-release = { path = "../hostkeeper-release" }
+hex.workspace = true
+# The managed preferences of `dev.hostkeeper.config`, a property list.
+plist.workspace = true
+# The system's trust roots, which the download's TLS trusts.
+rustls-native-certs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }
+
+[lints]
+workspace = true

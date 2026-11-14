@@ -1,0 +1,14 @@
+[package]
+name = "hostkeeper-bootstrap"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+hostkeeper-config = { path = "../hostkeeper-config" }
+hostkeeper-install = { path = "../hostkeeper-install" }
+hostkeeper-launchd = { path = "../hostkeeper-launchd" }
+hostkeeper-package = { path = "../hostkeeper-package" }
+hostkeeper-release = { path = "../hostkeeper-release" }
+
+[dev-dependencies]
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }
