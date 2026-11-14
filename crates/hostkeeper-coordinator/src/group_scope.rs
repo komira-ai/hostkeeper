@@ -290,8 +290,7 @@ impl Coordinator {
                 .flat_map(|(name, group)| {
                     let wants = &wants[name];
                     group.packages.iter().filter_map(|package| {
-                        let def =
-                            package_def(name, group, &groups, &self.services, state, package)?;
+                        let def = package_def(name, group, &self.services, state, package)?;
                         Some(Entry {
                             want: wants.get(package).cloned(),
                             def,
