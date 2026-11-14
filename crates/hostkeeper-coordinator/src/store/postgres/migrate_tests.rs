@@ -93,7 +93,7 @@ const PINNED: [(i32, &str, &str); 18] = [
     (
         18,
         "remove_host_group_all",
-        "a97e4d845f6d928a2d86e2ceb376cd12dcf5f1c27c9c5c929d196884b4e7c0f2",
+        "1500ba573e6baf8ce359c6dafa72e6f03314153d4a4619fd49e8444ea32ca271",
     ),
 ];
 

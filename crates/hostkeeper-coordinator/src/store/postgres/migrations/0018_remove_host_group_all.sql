@@ -16,13 +16,13 @@
 -- A shipped migration is never edited: its SHA-256 is pinned by a test.
 
 INSERT INTO group_desired (host_group, service, version, generation, write_id, replaced_version)
-  SELECT g.name, d.service, d.version, d.generation, d.write_id, d.replaced_version
-  FROM host_groups g, group_desired d
-  WHERE d.host_group = 'all' AND d.service = 'hostkeeper' AND g.name <> 'all'
+  SELECT name, d.service, d.version, d.generation, d.write_id, d.replaced_version
+  FROM host_groups, group_desired d
+  WHERE d.host_group = 'all' AND d.service = 'hostkeeper' AND name <> 'all'
     AND NOT EXISTS (
-      SELECT 1 FROM host_group_packages p WHERE p.host_group = g.name AND p.service = 'hostkeeper')
+      SELECT 1 FROM host_group_packages p WHERE p.host_group = name AND p.service = 'hostkeeper')
     AND NOT EXISTS (
-      SELECT 1 FROM group_desired o WHERE o.host_group = g.name AND o.service = 'hostkeeper');
+      SELECT 1 FROM group_desired o WHERE o.host_group = name AND o.service = 'hostkeeper');
 
 UPDATE host_group_packages SET position = position + 1
   WHERE host_group <> 'all'
