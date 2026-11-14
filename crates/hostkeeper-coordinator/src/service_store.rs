@@ -69,6 +69,7 @@ impl Coordinator {
         fleet.store_lost = self.ops.health() != Health::Up;
         fleet.set_group_mode(self.desired.in_group_mode());
         fleet.set_marks(self.ops.read(marks_of));
+        fleet.set_cluster(self.cluster_entries(), (self.clock)());
         self.keep_releases(fleet);
     }
 

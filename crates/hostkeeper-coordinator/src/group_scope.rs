@@ -39,6 +39,7 @@ use crate::desired::Desired;
 use crate::host_groups::{GroupName, HostGroup, HostGroups};
 use crate::identity::Identity;
 use crate::ops::OpsState;
+use crate::queue::Entry;
 use crate::service::Coordinator;
 use crate::services::{ServiceDef, Services, VersionScheme};
 use crate::stages::Plan;
@@ -428,6 +429,39 @@ impl Coordinator {
                 .filter_map(|def| Some((def.name.clone(), self.desired.of_def(def)?)))
                 .collect(),
         }
+    }
+
+    /// Every package of every group with its desired state: what a decision reads of the other
+    /// services' rollouts ([`crate::queue`]). None without groups: a coordinator that places by
+    /// the rollout file counts the services of that file alone.
+    pub(crate) fn cluster_entries(&self) -> Vec<Entry> {
+        if !self.desired.in_group_mode() {
+            return Vec::new();
+        }
+        let groups = self.desired.host_groups();
+        let wants: BTreeMap<&GroupName, BTreeMap<String, Desired>> = groups
+            .0
+            .keys()
+            .map(|name| (name, self.desired.group_desireds(name)))
+            .collect();
+        self.ops.read(|state| {
+            groups
+                .0
+                .iter()
+                .flat_map(|(name, group)| {
+                    let wants = &wants[name];
+                    group.packages.iter().filter_map(|package| {
+                        let def =
+                            package_def(name, group, &groups, &self.services, state, package)?;
+                        Some(Entry {
+                            want: wants.get(package).cloned(),
+                            def,
+                            at_unix: group.at_unix,
+                        })
+                    })
+                })
+                .collect()
+        })
     }
 
     /// What a heartbeat of `host` is decided over ([`Basis`]).

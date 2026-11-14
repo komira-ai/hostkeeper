@@ -127,7 +127,7 @@ fn a_policy_reads_back_as_it_was_put_with_every_key_named() {
     assert_eq!(policy_of(Some(&said)), Ok(every_key()));
 
     let default = policy_proto(&Policy::default());
-    assert_eq!(default.max_updating, Some(1));
+    assert_eq!(default.max_updating, None);
     assert_eq!(default.rollback, i32::from(proto::RollbackMode::Manual));
     assert_eq!(
         default.rollback_after_failed,

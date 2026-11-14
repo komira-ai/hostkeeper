@@ -222,6 +222,9 @@ pub struct Fleet {
     pub(crate) moves: crate::moving::Moves,
     /// The facts generations daemons reported over gRPC ([`crate::facts`]).
     pub(crate) facts: crate::facts::Reported,
+    /// Every package of every group and its desired state, as of the last take of the lock: the
+    /// rollouts one service waits for, across groups ([`crate::queue`]).
+    cluster: crate::queue::Cluster,
 }
 
 impl Fleet {
@@ -253,6 +256,7 @@ impl Fleet {
             picks: crate::picks::Picks::default(),
             moves: crate::moving::Moves::default(),
             facts: crate::facts::Reported::default(),
+            cluster: crate::queue::Cluster::default(),
         }
     }
 
@@ -977,23 +981,5 @@ impl Fleet {
             .remove(id);
         self.orders.remove(&(id.clone(), service.to_owned()));
         held
-    }
-
-    /// Notes that the canary `node_id` failed the release of `version` of `service`; a later
-    /// canary failing the same version replaces it.
-    pub fn note_failed_canary(&mut self, service: &str, version: &Version, node_id: &str) {
-        self.canaries.insert(
-            (service.to_owned(), version.as_str().to_owned()),
-            node_id.to_owned(),
-        );
-    }
-
-    /// The canaries that failed a release of `service`: each version, by its text, with the node
-    /// id of the canary that failed it.
-    pub fn failed_canaries(&self, service: &str) -> impl Iterator<Item = (&str, &str)> {
-        self.canaries
-            .iter()
-            .filter(move |((s, _), _)| s == service)
-            .map(|((_, version), node)| (version.as_str(), node.as_str()))
     }
 }

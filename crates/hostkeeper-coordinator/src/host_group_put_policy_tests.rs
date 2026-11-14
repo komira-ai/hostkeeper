@@ -304,7 +304,7 @@ fn a_policy_is_read_back_as_it_was_put() {
     };
     assert_eq!(get("alpha"), policy);
     let default = get("beta");
-    assert_eq!(default.max_updating, Some(1));
+    assert_eq!(default.max_updating, None);
     assert_eq!(default.stages, Vec::new());
     assert_eq!(default.live_rollouts, None);
 }

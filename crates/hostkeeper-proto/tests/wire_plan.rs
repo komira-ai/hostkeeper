@@ -79,6 +79,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 13] = [
             ("waiting_on", 10),
             ("host_group", 11),
             ("waiting_on_why", 12),
+            ("queue_position", 13),
         ],
     ),
     (
@@ -205,6 +206,7 @@ fn wire_names_of_the_update_plan_are_pinned() {
                 "ordered",
                 "baking",
                 "plan_under_way",
+                "queued",
             ],
         ),
     ];

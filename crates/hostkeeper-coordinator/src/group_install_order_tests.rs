@@ -56,6 +56,7 @@ const INSTALL_ORDER: Option<Why> = Some(Why::Gate(Gate::InstallOrder));
 #[tokio::test]
 async fn a_package_added_to_a_group_is_installed_on_each_host_in_list_order() {
     let farm = Farm::new("io-list-order");
+    farm.flag(4);
     farm.group("alpha", &["base", "app"], Some(wide()));
     farm.group("beta", &["app", "base"], Some(wide()));
     farm.host("a1", "alpha");
@@ -128,7 +129,10 @@ async fn a_package_with_nothing_to_install_does_not_block_the_later_ones() {
     farm.group(
         "alpha",
         &["ghost", "plat", "tgt", "app"],
-        Some(policy(|p| p.stages = stages(&[100]))),
+        Some(policy(|p| {
+            p.stages = stages(&[100]);
+            p.max_updating = Some(1);
+        })),
     );
     farm.host("a1", "alpha");
     farm.host("a2", "alpha");
@@ -226,7 +230,8 @@ async fn an_earlier_package_that_is_halted_or_excluded_holds_the_later_ones_back
 #[test]
 fn an_uninstall_takes_a_slot_of_the_groups_max_updating() {
     let farm = Farm::new("io-uninstall-slot");
-    farm.group("one", &["cfg"], None);
+    let one = || Some(policy(|p| p.max_updating = Some(1)));
+    farm.group("one", &["cfg"], one());
     let two = || Some(policy(|p| p.max_updating = Some(2)));
     farm.group("two", &["cfg"], two());
     farm.group("kept", &["cfg"], None);
@@ -241,7 +246,7 @@ fn an_uninstall_takes_a_slot_of_the_groups_max_updating() {
         assert_eq!(verb(farm.order(host, &[("cfg", "1.0")])), None);
     }
     farm.world
-        .put("one", &["hostkeeper"], Some(1))
+        .put_with("one", &["hostkeeper"], one(), Some(1))
         .expect("put");
     farm.world
         .put_with("two", &["hostkeeper"], two(), Some(1))

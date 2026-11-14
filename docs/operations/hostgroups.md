@@ -395,7 +395,7 @@ approval, a hold, a minimum version or a new desired version never does. A packa
 listed and has no intent stays installed on the host, unmanaged: it is never ordered there again.
 
 The uninstall is decided under the halt, the hold, the quiet start, one update at a time on the
-host and the group's other live rollouts (`rollout_elsewhere`, `--live-rollouts`), and takes an
+host and the cluster's other live rollouts (`rollout_elsewhere`, `--live-rollouts`), and takes an
 update slot of the group's `max_updating` as an update does. It is not a stage of any plan. It
 stands across a coordinator restart, in the ops file (on the database store, the table
 `uninstall_intents`), and ends when the host reports the package gone from the services it lists
@@ -456,21 +456,24 @@ version, and the `targets` of the release).
 
 | Key | Default | Range, and where it is described |
 |---|---|---|
-| `stages` | `[1, 10, 50, 100]` | 1 to 16 stages whose percents rise strictly to 100, each `auto` or `manual` ([rollout-plans.md](rollout-plans.md#the-plan)) |
+| `stages` | `[50, 100]` | 1 to 16 stages whose percents rise strictly to 100, each `auto` or `manual` ([rollout-plans.md](rollout-plans.md#the-plan)) |
 | `canary` | none | `count` 1 to 10000 |
 | `bake_beats` | 0 | 0 to 100 |
 | `rollback` | manual | `ROLLBACK_MODE_MANUAL` or `ROLLBACK_MODE_AUTOMATIC`; automatic sets the group's desired version back to the group's last good one |
 | `rollback_after_failed` | 25 percent, 2 hosts | `percent` 1 to 100, `min_hosts` 1 to 10000 |
 | `defer_backoff` | 300 s, factor 2, 3600 s | `initial_secs` at least 1, `factor` 1 to 16, `max_secs` from `initial_secs` to 604800 |
-| `max_updating` | 1 | 0 to 10000; 0 holds the group |
+| `max_updating` | the whole stage | 0 to 10000; 0 holds the group; a number caps the hosts updating one package at once |
 | `min_up` | 0 | 0 to 10000 |
-| `live_rollouts` | the coordinator's `--live-rollouts` | 1 to 16 |
+| `live_rollouts` | the coordinator's `--live-rollouts` | 1 to 16; can only lower the coordinator's number |
 
 A key left out takes its default. Each package of the group rolls by this one policy: its stages
 are computed over the group's eligible hosts, `max_updating` caps the group's hosts updating that
 package at once (uninstalls count), `min_up` counts the group's live hosts up for it, and
-`live_rollouts` is how many of the group's packages may roll at once. `rollout_elsewhere` names
-the group's other packages that hold the place. The plan, the canary, the bake, the failed-host
+`live_rollouts` is how many services may roll at once, counted over every group and never above
+the coordinator's `--live-rollouts` (default 1): one service rolls in the whole cluster at a time,
+and the others queue in the order their versions were set. `rollout_elsewhere` names the services
+that hold the place. A group that stored a `max_updating` of 1 before this default changed wrote
+nothing, so it now has no cap; set 1 to cap it. The plan, the canary, the bake, the failed-host
 rules and `--live-rollouts` are otherwise as [rollout-plans.md](rollout-plans.md) says.
 
 ## Incidents are per host and per group

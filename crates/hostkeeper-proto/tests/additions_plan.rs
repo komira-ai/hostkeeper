@@ -78,6 +78,7 @@ fn plan() -> op::RolloutPlan {
             reason: op::LiveReason::Baking.into(),
             node_id: "db-5".to_owned(),
         }],
+        queue_position: Some(2),
     }
 }
 

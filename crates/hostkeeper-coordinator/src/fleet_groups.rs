@@ -184,14 +184,24 @@ impl Fleet {
             .filter(|id| self.in_group_of(def, id))
     }
 
-    /// How many services may have a live rollout at once for `def`: its group's policy says, else
-    /// the coordinator's.
+    /// How many services may have a live rollout at once for `def`: the coordinator's
+    /// `--live-rollouts`, which its group's policy can only lower.
     #[must_use]
     pub(crate) fn live_limit(&self, def: &ServiceDef) -> usize {
         def.scope
             .as_ref()
             .and_then(|scope| scope.live_rollouts)
-            .unwrap_or(self.live_rollouts)
+            .map_or(self.live_rollouts, |own| own.min(self.live_rollouts))
+    }
+
+    /// The packages of every group at the last take of the lock ([`crate::queue`]).
+    pub(crate) fn cluster(&self) -> &crate::queue::Cluster {
+        &self.cluster
+    }
+
+    /// Keeps `entries` as the cluster, at `now`.
+    pub(crate) fn set_cluster(&mut self, entries: Vec<crate::queue::Entry>, now: Duration) {
+        self.cluster = self.cluster.refreshed(entries, now);
     }
 
     /// [`Self::keep_verdicts_of`] for `def`: of a service made for a group, only the verdicts of
@@ -224,5 +234,23 @@ impl Fleet {
                 group.clone_into(&mut host.role);
             }
         }
+    }
+
+    /// Notes that the canary `node_id` failed the release of `version` of `service`; a later
+    /// canary failing the same version replaces it.
+    pub fn note_failed_canary(&mut self, service: &str, version: &Version, node_id: &str) {
+        self.canaries.insert(
+            (service.to_owned(), version.as_str().to_owned()),
+            node_id.to_owned(),
+        );
+    }
+
+    /// The canaries that failed a release of `service`: each version, by its text, with the node
+    /// id of the canary that failed it.
+    pub fn failed_canaries(&self, service: &str) -> impl Iterator<Item = (&str, &str)> {
+        self.canaries
+            .iter()
+            .filter(move |((s, _), _)| s == service)
+            .map(|((_, version), node)| (version.as_str(), node.as_str()))
     }
 }
