@@ -513,11 +513,13 @@ fn an_empty_registry_links_to_the_packages_page_and_a_refused_list_is_shown() {
         "hostgroups",
         "{}",
         "[]",
-        r#"
+        &format!(
+            r#"{PICK}
 const offered = [labels(tree), named(tree, "pick-package").map((b) => b.attrs.checked)];
 await click(tree, "open-packages");
 return offered;
-"#,
+"#
+        ),
     ));
     // hostkeeper is offered, ticked, even though nothing is registered, so a group can be saved.
     assert_eq!(out["out"], json!([["hostkeeper"], [true]]));
