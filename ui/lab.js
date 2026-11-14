@@ -31,8 +31,11 @@ export const STATES = [
 
 // The layout a `Layout.Get` reply holds, with the lists in order and the numbers as numbers (a
 // number of 0, the first row or rack, is left out of the JSON of a message, so a missing one is 0):
-// `{name, rows, racks, placements}`; each placement is `{kind, id, key, rack, u, height}` where
-// `key` is `host:<id>` or `inventory:<id>` and `u` its lowest U.
+// `{name, rows, racks, placements, devices}`; each placement is `{kind, id, key, rack, u, height}`
+// where `key` is `host:<id>` or `inventory:<id>` and `u` its lowest U; each device (a switch) is
+// `{id, key, name, role, consoleHost, consoleDevice, managementMac, notes}`, its `key` the key of
+// its placement (a device is placed as an inventory entry, under the id `net.<n>`) and `role`
+// `bmc` or `data`.
 export function layoutOf(reply) {
   const rows = list(reply, "rows").map((r) => ({ id: r.id, number: Number(r.number ?? 0) }));
   const racks = list(reply, "racks").map((r) => ({
@@ -43,12 +46,50 @@ export function layoutOf(reply) {
     const id = p.subject ? p.subject.id : "";
     return { kind, id, key: `${kind}:${id}`, rack: p.rack, u: Number(p.u), height: Number(p.heightU) };
   });
+  const devices = list(reply, "devices").map((d) => ({
+    id: d.id,
+    key: `inventory:${d.id}`,
+    name: d.name || "",
+    role: d.role === "NETWORK_ROLE_BMC" ? "bmc" : "data",
+    consoleHost: d.consoleHost || "",
+    consoleDevice: d.consoleDevice || "",
+    managementMac: d.managementMac || "",
+    notes: d.notes || "",
+  }));
   return {
     name: typeof reply?.name === "string" ? reply.name : "",
     rows: rows.sort((a, b) => a.number - b.number),
     racks: racks.sort((a, b) => a.number - b.number),
     placements,
+    devices,
   };
+}
+
+// The network devices of the lab, each joined with its place: `{key, kind: "inventory", id, name,
+// device, placement}` (the server shape, so a rack draws both from one list), `placement` null when
+// it stands in no rack. They are no server: they have no state, host or group.
+export function gearOf(layout) {
+  const placed = new Map(layout.placements.map((p) => [p.key, p]));
+  return layout.devices.map((device) => ({
+    key: device.key, kind: "inventory", id: device.id, name: device.name, device,
+    placement: placed.get(device.key) || null,
+  }));
+}
+
+// What a device's role is called, and the roles of the pick list: `[value, words]`.
+export const NETWORK_ROLES = [["NETWORK_ROLE_BMC", "BMC network"], ["NETWORK_ROLE_DATA", "Data network"]];
+export function roleWords(role) {
+  return role === "bmc" ? "BMC network" : "Data network";
+}
+
+// The console ports to pick from (never typed), and what a device's console is in words:
+// "ttyUSB0 on node-3", or "none".
+export const CONSOLE_DEVICES = [
+  "/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyUSB2", "/dev/ttyUSB3",
+  "/dev/ttyS0", "/dev/ttyS1", "/dev/ttyS2", "/dev/ttyS3", "/dev/ttyACM0", "/dev/ttyACM1",
+];
+export function consoleWords(device) {
+  return device.consoleHost === "" ? "none" : `${device.consoleDevice.replace(/^\/dev\//, "")} on ${device.consoleHost}`;
 }
 
 // The request subject of a server: `{kind, id}` as the API spells it.
@@ -149,8 +190,9 @@ export function serversOf(layout, hosts, records) {
       });
     }
   }
+  const gear = new Set(layout.devices.map((d) => d.key));
   for (const p of layout.placements) {
-    if (!seen.has(p.key)) {
+    if (!seen.has(p.key) && !gear.has(p.key)) {
       take({
         key: p.key, kind: p.kind, id: p.id, name: p.id, state: "offline", group: "", version: "",
         host: p.kind === "host" ? p.id : null, gone: true,
@@ -222,6 +264,8 @@ const PROBLEMS = {
   unknown_placement: "That server is not placed.",
   in_use: "It still holds something: remove what stands in it first.",
   capacity: "The lab holds no more of those.",
+  name_taken: "Another switch already has that name.",
+  unknown_device: "That switch no longer exists.",
   invalid_request: "The coordinator did not accept that value.",
   placement_overlap: "Another server already stands in one of those U.",
   placement_out_of_rack: "That does not fit in the rack: it would reach past U 1 or the top U.",
@@ -340,6 +384,9 @@ export function crumbs(layout, at, go) {
   }
   if (at.host) {
     trail.push([at.host, "host", "host", { nodeId: at.host }]);
+  }
+  if (at.leaf) {
+    trail.push([at.leaf, "leaf", "", {}]);
   }
   return h("nav", { class: "crumbs", "aria-label": "breadcrumbs" },
     trail.map(([label, name, view, params], i) => (i === trail.length - 1

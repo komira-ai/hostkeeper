@@ -682,6 +682,7 @@ button.rack-no:hover {
 .server:hover,
 .server:focus-visible {
   z-index: 2;
+  background: linear-gradient(180deg, #3a5068, #28394b 50%, #202e3d);
   border-color: var(--accent);
   box-shadow: 0 0 0 1px var(--glow), 0 0 16px rgb(253 79 29 / 0.28);
 }

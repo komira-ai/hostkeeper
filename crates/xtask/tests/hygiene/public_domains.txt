@@ -162,8 +162,20 @@ fleetdm.com
 =developer.godaddy.com
 
 # Not sites: property names of the web app's JavaScript (ui/lab.js, ui/pages/home.js, ui/pages/host.js,
-# ui/pages/enrollment.js) and the call `layout.place` of the generated client, whose last word is also a
-# top-level domain. Exact names only.
+# ui/pages/enrollment.js, ui/pages/inventory_switch.js, ui/pages/switch.js) and the call `layout.place`
+# of the generated client, whose last word is also a top-level domain. Exact names only.
+=body.name
+=ctx.params.id
+=d.id
+=d.name
+=device.id
+=device.name
+=editing.id
+=errors.name
+=g.id
+=item.id
+=item.name
+=reply.device.id
 =at.host
 =e.target
 =form.name
