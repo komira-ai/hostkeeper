@@ -4,7 +4,7 @@
 //!
 //! A host whose package was installed by hand (`dpkg -i`, a package set up with the host) has the
 //! package installed and no record of it in `placed.json`, so the coordinator orders its first
-//! install. Hostkeeper did not install that package, so it never removes it: instead of a first
+//! install. Hostkeeper did not install that package, so a failed install does not remove it: instead of a first
 //! install, whose rollback purges the package, the order is an update from the installed version.
 //!
 //! - [`Repository::adoptable`], in the order's checks and so writing nothing but staged version
