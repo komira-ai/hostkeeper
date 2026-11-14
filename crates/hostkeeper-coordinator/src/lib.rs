@@ -364,8 +364,6 @@ mod holds_tests;
 #[cfg(test)]
 mod host_cert_state_tests;
 #[cfg(test)]
-mod host_group_all_tests;
-#[cfg(test)]
 mod host_group_list_tests;
 #[cfg(test)]
 mod host_group_move_tests;
@@ -425,6 +423,8 @@ mod membership_tests;
 mod moving_facts_tests;
 #[cfg(test)]
 mod moving_tests;
+#[cfg(test)]
+mod no_all_group_tests;
 #[cfg(test)]
 mod one_live_update_coordinator_tests;
 #[cfg(test)]

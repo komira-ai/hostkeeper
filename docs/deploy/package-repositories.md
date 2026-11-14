@@ -447,7 +447,7 @@ the coordinator. A private repository is an entry of the coordinator's registry 
   alone, from the pool `pool/<group>/`, so a host learns nothing of another group's configuration.
   The entry's `suites` are the groups it serves; a release's repository entry names the channel
   `<name>-<group>` (`lab-web`), and `<name>-<group>` is at most 32 bytes. A coordinator that holds
-  a host group serves and pushes by the group in the host's enrollment record (a host in none
+  a host group serves and pushes by the group in the host's enrollment record (a host in none, unassigned,
   reads nothing; docs/operations/hostgroups.md); one that holds none
   uses the role the host's certificate names.
 - **What a host reads.** Only through the coordinator, over its mutual-TLS connection with its

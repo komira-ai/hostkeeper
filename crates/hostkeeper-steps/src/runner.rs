@@ -8,10 +8,10 @@
 //! stopped by name and is run again, a step found `done` is not.
 //!
 //! The daemon's own moves around the hook's steps, `current` and `previous` switched to
-//! the target immediately before `cutover` and back immediately before `rollback` (design
-//! section 5.2, steps 5 and 6), come in through [`StepRunner::with_switch`]: the runner calls the
-//! [`Switch`] before every run of those two steps, resumed ones included, so the switch must be
-//! idempotent. A third call, [`Toward::Confirmed`], comes once a `cleanup` has succeeded and
+//! the target immediately before `cutover` and back immediately before an update's `rollback`
+//! (design section 5.2, steps 5 and 6; a first install's package is removed after its hook's
+//! `rollback` is recorded done), come in through [`StepRunner::with_switch`]: the runner calls the
+//! [`Switch`] around those steps, resumed ones included, so the switch must be idempotent. A third call, [`Toward::Confirmed`], comes once a `cleanup` has succeeded and
 //! before the verdict is written (and before the post-success watcher begins): if it fails the
 //! runner stops with the record still at `cleanup` done, so the next run calls it again.
 //! A `force` of the service may flag the record `forced` while an update runs (design section
@@ -45,6 +45,7 @@ use crate::order_util::{
 };
 use crate::record::{HookSel, Loaded, Progress, Record, RecordError, RecordStore, SCHEMA, State};
 pub use crate::switch::{Builtin, Switch, SwitchError, Toward};
+use crate::switch::{remove_after, remove_unstarted};
 
 /// The protocol version of this updater: an order's `min_updater_protocol` above it is
 /// `Deferred` with the reason `updater_old` until the updater has updated itself.
@@ -350,6 +351,9 @@ impl StepRunner {
     fn switch_for(&self, order: &UpdateOrder, step: Step) -> Result<Option<StepExit>, RunError> {
         let toward = match step {
             Step::Cutover => Toward::Target,
+            // A first install's package is removed after its hook's `rollback` has run
+            // ([`crate::switch::remove_after`]), not before.
+            Step::Rollback if order.previous.is_none() => return Ok(None),
             Step::Rollback => Toward::Back,
             _ => return Ok(None),
         };
@@ -599,7 +603,13 @@ impl StepRunner {
                     self.write(&mut rec)?;
                 }
                 State::Pending => self.start(order, &mut rec)?,
-                State::Done { code, last_line } => self.after(order, &mut rec, code, last_line)?,
+                State::Done { code, last_line } => {
+                    // Removed only once `rollback` is recorded done: a crash never reruns it after.
+                    let exit = StepExit { code, last_line };
+                    let sw = self.switch.as_ref();
+                    let exit = remove_after(sw, order, rec.step, exit).map_err(RunError::Switch)?;
+                    self.after(order, &mut rec, exit.code, exit.last_line)?
+                }
             }
         }
     }
@@ -649,7 +659,14 @@ impl StepRunner {
                 last_line: exit.last_line,
             },
             Ran::NoStart => {
-                if rec.step == Step::Rollback
+                let sw = self.switch.as_ref();
+                let ended = remove_unstarted(sw, order, rec.step).map_err(RunError::Switch)?;
+                if let Some(exit) = ended {
+                    State::Done {
+                        code: exit.code,
+                        last_line: exit.last_line,
+                    }
+                } else if rec.step == Step::Rollback
                     && rec.hook == HookSel::New
                     && order.previous.is_some()
                 {

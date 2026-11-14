@@ -1,6 +1,6 @@
 //! `Enrollment.Approve` that names no host group, and none or an empty reason, from a coordinator
-//! that holds groups: the host is enrolled in no specific group, so it runs the packages of `all`
-//! alone until `HostGroups.Move` puts it in one; the approval is audited with the approver and the group, and
+//! that holds groups: the host is enrolled in no group, so it is ordered no package until
+//! `HostGroups.Move` puts it in one; the approval is audited with the approver and the group, and
 //! an empty reason is fine.
 
 use hostkeeper_enrollment::enroll::{Membership, RecordedApproval};
@@ -105,42 +105,31 @@ fn an_approval_naming_no_group_enrolls_the_host_in_none() {
     );
 }
 
-/// Proves: a host approved with no group is in the built-in group `all` alone: it is ordered the
-/// package `all` lists and none of the group `web`'s, while a host moved into `web` is ordered
-/// `all`'s package and then `web`'s; the approved host is ordered `web`'s once it is moved.
+/// Proves: a host approved with no group is unassigned: it is ordered no package, hostkeeper
+/// included, though its heartbeat is answered and a group lists packages it lacks; a host of
+/// `web` is ordered the group's package, and the approved host is put in `web` by a move.
 ///
-/// Catches: a host with no group that runs nothing, or one ordered the packages of a group it was
-/// never put in, or a group that orders nothing to its members.
+/// Catches: an unassigned host ordered the packages of a group it was never put in, or one that
+/// is implicitly in a group of every host, or a group that orders nothing to its members.
 #[tokio::test]
-async fn a_host_approved_with_no_group_runs_the_packages_of_all_until_it_is_moved() {
+async fn a_host_approved_with_no_group_is_ordered_nothing_until_it_is_moved() {
     let farm = farm("approve-ungrouped-orders");
     let world = &farm.world;
-    world.hold_all();
-    world
-        .put("all", &[SELF, "base"], Some(1))
-        .expect("all lists base");
-    farm.deploy("all", "base", "1.0", 1).await;
     let key = post(world, "machine-1");
     approve(world, ask(&key, "w1", "", "", &[])).expect("approved");
+    farm.deploy(GROUP, "tierstore", "1.0", 1).await;
 
     let installs = |host: &str, runs: &[(&str, &str)]| match farm.order(host, runs) {
         Some(Order::Install { service, .. }) => Some(service),
         _ => None,
     };
-    assert_eq!(installs("w1", &[]).as_deref(), Some("base"));
-    assert_eq!(installs("w1", &[("base", "1.0")]), None);
-    assert_eq!(farm.order("w1", &[("base", "1.0")]), None);
+    assert_eq!(farm.order("w1", &[]), None);
+    assert_eq!(farm.order("w1", &[("tierstore", "0.9")]), None);
 
     world.move_to("w1", GROUP).expect("moved");
-    farm.world.enroll("w2");
-    farm.world.move_to("w2", GROUP).expect("moved");
     assert_eq!(world.membership("w1").host_group, GROUP);
-    assert_eq!(installs("w2", &[]).as_deref(), Some("base"));
-    assert_eq!(
-        installs("w2", &[("base", "1.0")]).as_deref(),
-        Some("tierstore"),
-        "a host in the group is ordered the install after all's"
-    );
+    farm.host("w2", GROUP);
+    assert_eq!(installs("w2", &[]).as_deref(), Some("tierstore"));
 }
 
 /// Proves: an approval with an empty reason is accepted, records an empty reason, and is audited

@@ -24,11 +24,11 @@
 //!
 //! The entry names the host (`node_id`) and the new group (`host_group`); its reason is
 //! `from <old> to <new>: <reason>`, or `into <new>: <reason>` for a host that was in no group.
-//! An empty `host_group` in the request moves the host out of its specific group into none: it
-//! then runs the packages of `all` alone. The record is written with no `moving_from` (there is
-//! nothing to install), the uninstall intents are those of the packages the old group lists and
-//! `all` does not, the audit entry names no group and its reason is `from <old> to no group:
-//! <reason>`; a host already in no group is refused as `same_host_group`.
+//! An empty `host_group` in the request moves the host out of its group into none: it
+//! is unassigned and is ordered no package from then on, keeps what it runs, and no uninstall is
+//! ordered for the packages of its old group. The record is written with no `moving_from`
+//! (there is nothing to install), the audit entry names no group and its reason is `from <old>
+//! to no group: <reason>`; a host already in no group is refused as `same_host_group`.
 //! Each intent cancelled is an `uninstall_cancelled` entry after it, naming the new group. The sequence that follows
 //! the move (admission, the uninstalls, the installs) is [`crate::moving`].
 
@@ -38,7 +38,9 @@ use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::HostGroupsRefusal as Refusal;
 use hostkeeper_wire::HostId;
 
-use crate::group_uninstall::{cancel_uninstalls, lost_by, order_uninstalls, runs};
+use crate::group_uninstall::{
+    cancel_all_uninstalls, cancel_uninstalls, listed_by, order_uninstalls,
+};
 use crate::holds::marks_of;
 use crate::host_groups::GroupName;
 use crate::inventory::unreadable;
@@ -89,26 +91,35 @@ impl Coordinator {
             .membership(&enrolled)
             .map_err(unreadable(Refusal::StoreFailed))?
             .ok_or(Refusal::UnknownHost)?;
-        let groups = self.desired.host_groups();
-        if let Some(to) = &to {
-            if to.is_all() {
-                return Err(Refusal::ReservedHostGroup);
-            }
-            if !groups.0.contains_key(to) {
-                return Err(Refusal::UnknownHostGroup);
-            }
-        }
+        let into = match &to {
+            Some(to) => Some(
+                self.desired
+                    .host_group(to)
+                    .ok_or(Refusal::UnknownHostGroup)?,
+            ),
+            None => None,
+        };
         let target = to.as_ref().map_or("", GroupName::as_str);
         if before.host_group == target {
             return Err(Refusal::SameHostGroup);
         }
-        let from = before.host_group.parse::<GroupName>().ok();
-        let wanted = lost_by(
-            &fleet,
-            &groups,
-            &groups,
-            &[(host.clone(), from, to.clone())],
-        );
+        let from = before
+            .host_group
+            .parse::<GroupName>()
+            .ok()
+            .and_then(|name| self.desired.host_group(&name));
+        // A host put in a group is ordered the uninstall of what its old group lists and the new
+        // one does not; a host put in none is ordered nothing and keeps what it runs.
+        let wanted = match &into {
+            Some(into) => {
+                let leaving = from
+                    .iter()
+                    .flat_map(|group| group.packages.iter().rev())
+                    .filter(|package| !into.packages.contains(package));
+                listed_by(&fleet, leaving, std::slice::from_ref(&host))
+            }
+            None => Vec::new(),
+        };
         let nodes = [host.to_string()];
         let mut audit = AuditEntry::new(by, ACTION_MOVE);
         audit.node_id = Some(host.to_string());
@@ -123,7 +134,7 @@ impl Coordinator {
                 &enrolled,
                 Membership {
                     host_group: target.to_owned(),
-                    // A host in no specific group has nothing to install: it does not move.
+                    // A host in no group has nothing to install: it does not move.
                     moving_from: to.as_ref().map(|_| before.host_group.clone()),
                 },
             )
@@ -132,13 +143,13 @@ impl Coordinator {
             .ops
             .decide_changes(Write::BeforeMemory, |state| -> Result<_, OpsError> {
                 let mut entries = vec![audit];
-                let own = to.clone().unwrap_or_else(GroupName::all);
-                entries.extend(cancel_uninstalls(
-                    state,
-                    &own,
-                    &runs(&groups, to.as_ref()),
-                    &nodes,
-                ));
+                match (&to, &into) {
+                    (Some(to), Some(into)) => {
+                        entries.extend(cancel_uninstalls(state, to, &into.packages, &nodes));
+                    }
+                    // An unassigned host is ordered nothing: its pending uninstalls go too.
+                    _ => entries.extend(cancel_all_uninstalls(state, &nodes)),
+                }
                 order_uninstalls(state, &wanted);
                 Ok(entries)
             })

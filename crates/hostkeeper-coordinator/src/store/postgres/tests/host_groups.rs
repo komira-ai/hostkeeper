@@ -38,7 +38,7 @@ fn the_release_before_is_refused_on_a_database_with_0008() {
     );
     assert_eq!(
         db.rows("SELECT version FROM schema_version ORDER BY version"),
-        (1..=17)
+        (1..=18)
             .map(|n| vec![Some(n.to_string())])
             .collect::<Vec<_>>()
     );
@@ -74,8 +74,7 @@ fn this_release_reads_the_rows_of_the_release_before_as_naming_no_group() {
     assert_eq!(loaded.ops.inventory[0].host_group, "");
     assert_eq!(loaded.ops.audit.len(), 1);
     assert_eq!(loaded.ops.audit[0].host_group, None);
-    // `0013` made the built-in group, which lists `hostkeeper` alone.
-    assert_eq!(loaded.desired.host_groups, HostGroups::default().with_all());
+    assert_eq!(loaded.desired.host_groups, HostGroups::default());
     store.stop();
     let read = with_session(&db, |session| {
         records::read_all(session)
@@ -94,7 +93,7 @@ fn this_release_reads_the_rows_of_the_release_before_as_naming_no_group() {
     assert_eq!(
         db.rows("SELECT version FROM schema_version ORDER BY version")
             .len(),
-        17
+        18
     );
 }
 
@@ -319,4 +318,136 @@ fn a_group_packages_mark_rows_follow_its_commits() {
     let (store, last) = db.open("this release").expect("it starts again");
     assert_eq!(last.ops.host_groups, GroupsMarks::default());
     store.stop();
+}
+
+/// Proves: migration `0018` on a database `0017` left (the built-in group `all` with its packages,
+/// desired version, minimum version, marks, rollout position and a host recorded done, a group
+/// that lists no `hostkeeper`, one that lists it with its own desired version, one that lists
+/// nothing, and hosts recorded in `all`, in a group and in none): the group `all` and every row
+/// keyed by it are gone; the hosts recorded in `all` are in none, the others keep their group;
+/// each group that lacked `hostkeeper` lists it first, the rest of its list after it, at the
+/// version `all` had for it unless the group has its own; and this release then loads the groups
+/// that are left.
+///
+/// Catches: rows of the removed group left to be read as an ordinary group named `all`, a host
+/// left recorded in it, a group left without the package every group must list (a start refused
+/// by the strict reader), and a group's own desired version of `hostkeeper` overwritten.
+#[test]
+fn migration_0018_removes_the_group_all_and_makes_every_group_list_hostkeeper() {
+    let db = TestDatabase::new();
+    with_session(&db, |session| {
+        let before = migrate::checked(&migrate::SHIPPED[..17]).expect("the release before's set");
+        migrate::apply(session, &before).expect("the release before migrates")
+    });
+    db.run(
+        "INSERT INTO host_groups (name, generation, policy, by_name, at_unix) VALUES \
+           ('web', 1, '{}', 'op', 1), ('canary', 1, '{}', 'op', 1), ('empty', 1, '{}', 'op', 1); \
+         UPDATE host_groups SET generation = 4, by_name = 'op' WHERE name = 'all'; \
+         INSERT INTO host_group_packages (host_group, service, position) VALUES \
+           ('all', 'tierstore', 1), ('web', 'tierstore', 0), ('web', 'base', 1), \
+           ('canary', 'hostkeeper', 0), ('canary', 'tierstore', 1); \
+         INSERT INTO group_desired (host_group, service, version, generation) VALUES \
+           ('all', 'hostkeeper', '1.5', 3), ('all', 'tierstore', '1.0', 1), \
+           ('canary', 'hostkeeper', '2.0', 2); \
+         INSERT INTO group_min_versions (host_group, service, version) VALUES \
+           ('all', 'hostkeeper', '1.0'), ('web', 'tierstore', '0.9'); \
+         INSERT INTO group_services (host_group, service, last_good) VALUES \
+           ('all', 'hostkeeper', '1.4'), ('web', 'tierstore', '0.9'); \
+         INSERT INTO group_rollouts (host_group, service, version) VALUES \
+           ('all', 'hostkeeper', '1.5'), ('web', 'tierstore', '1.0'); \
+         INSERT INTO group_rollout_done (host_group, service, node_id) VALUES \
+           ('all', 'hostkeeper', 'h1'), ('web', 'tierstore', 'h2'); \
+         INSERT INTO enrollment_hosts (host_id, key_hash, machine_id, role, services, duplicate, \
+           first_heartbeat_unix, first_serving_unix, host_group) VALUES \
+           ('h1', '\\x01', 'm-1', 'ungrouped', '{}', false, NULL, NULL, 'all'), \
+           ('h2', '\\x02', 'm-2', 'web', '{}', false, NULL, NULL, 'web'), \
+           ('h3', '\\x03', 'm-3', 'ungrouped', '{}', false, NULL, NULL, NULL); \
+         UPDATE enrollment_hosts SET moving_from = 'all' WHERE host_id = 'h2'; \
+         INSERT INTO inventory (host_id, role, data_macs, bmc_mac, serial, notes, by_name, \
+           at_unix, position, host_group) VALUES \
+           ('i1', 'web', '{}', '', 'SN1', '', 'op', 9, 0, 'all'), \
+           ('i2', 'web', '{}', '', 'SN2', '', 'op', 9, 1, 'web')",
+    )
+    .expect("the rows of 0017");
+    with_session(&db, |session| {
+        let all = migrate::checked(&migrate::SHIPPED).expect("this release's set");
+        assert_eq!(migrate::apply(session, &all).expect("0018 runs"), vec![18]);
+    });
+
+    for table in [
+        "group_desired",
+        "group_min_versions",
+        "group_services",
+        "group_rollouts",
+        "group_rollout_done",
+        "host_group_packages",
+    ] {
+        assert_eq!(
+            db.rows(&format!("SELECT 1 FROM {table} WHERE host_group = 'all'")),
+            Vec::<Vec<Option<String>>>::new(),
+            "{table}"
+        );
+    }
+    let text = |sql: &str| -> Vec<String> {
+        db.rows(sql)
+            .into_iter()
+            .map(|row| row.into_iter().flatten().collect::<Vec<_>>().join(" "))
+            .collect()
+    };
+    assert_eq!(
+        text("SELECT name FROM host_groups ORDER BY name"),
+        ["canary", "empty", "web"]
+    );
+    assert_eq!(
+        text("SELECT host_group, service, position FROM host_group_packages ORDER BY 1, 3"),
+        [
+            "canary hostkeeper 0",
+            "canary tierstore 1",
+            "empty hostkeeper 0",
+            "web hostkeeper 0",
+            "web tierstore 1",
+            "web base 2",
+        ]
+    );
+    assert_eq!(
+        text("SELECT host_group, service, version, generation FROM group_desired ORDER BY 1, 2"),
+        [
+            "canary hostkeeper 2.0 2",
+            "empty hostkeeper 1.5 3",
+            "web hostkeeper 1.5 3",
+        ]
+    );
+    assert_eq!(
+        text("SELECT host_group, service FROM group_min_versions"),
+        ["web tierstore"]
+    );
+    assert_eq!(
+        text("SELECT host_id, coalesce(host_group, '-') FROM enrollment_hosts ORDER BY 1"),
+        ["h1 -", "h2 web", "h3 -"]
+    );
+    assert_eq!(
+        text("SELECT host_id, coalesce(moving_from, '-') FROM enrollment_hosts ORDER BY 1"),
+        ["h1 -", "h2 -", "h3 -"]
+    );
+    assert_eq!(
+        text("SELECT host_id, coalesce(host_group, '-') FROM inventory ORDER BY 1"),
+        ["i1 -", "i2 web"]
+    );
+    assert_eq!(
+        text("SELECT host_group, service, node_id FROM group_rollout_done"),
+        ["web tierstore h2"]
+    );
+
+    let (store, loaded) = db.open("this release").expect("this release starts");
+    store.stop();
+    assert_eq!(
+        loaded
+            .desired
+            .host_groups
+            .0
+            .keys()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        ["canary", "empty", "web"]
+    );
 }
