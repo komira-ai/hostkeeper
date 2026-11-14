@@ -95,6 +95,27 @@ fetched), so a rollback never fetches, for every format:
 
 A first install that fails has no previous version: `remove` takes it off the host, as `remove_all` does today.
 
+**A package that is already installed is adopted.** A failed first install never purges a package hostkeeper did not install. When an
+`install` order for a repository service finds its package installed whole in the host's package manager and no record of
+the service in `placed.json` (installed by hand, or with the host's setup), the order is not a first install: the
+daemon adopts the package and handles the order as an `update` from the installed version. In the order's checks it
+stages the installed version from the order's repository, as a version directory of the service (its name the version
+the package manager shows; its `target.json` the order's entry with that package version, the digest the signed
+index gives and no hook command, so it runs the built-in steps); the package is held and recorded as installed by the
+installer, and `current` names the adopted version before the step runs. The update's failure then restores that
+version (section 6.4's downgrade) and purges nothing; a verdict that needs the rollback is the update's, never a
+first install's. An order for the version that is installed adopts it, and its rollback installs it again. A package
+that is not installed, is installed half-way, or that `placed.json` already records for the service from a repository (an earlier try
+of this install left it, so it is hostkeeper's own) is a first install as before; the record an adoption writes names no repository, so an adoption that stopped before it made `current` is done again by the next order. A version the repository does not
+list ends the order `Deferred`, `not_in_repository`, and one whose text is no version name of a service ends it
+`Failed`, `manifest_invalid`; both leave the package as it was. The adopted version is pinned to the digest the signed
+index gives for that version string, whatever pin the order carries, so a package built by hand at the same version
+string as the repository's is taken as that release, and a later rollback installs the repository's copy over it. Once
+adopted, the package is the installer's own record: an uninstall (section 6.5) removes it as it removes any installed
+package. `macos-pkg` adopts nothing: `prepare` finds no installed package there, so a first install over an
+existing receipt that fails still rolls back by removing the package; this is open for the owner to decide, and is not
+what packages-repositories.md section 4.7 describes (it refuses a package found on the host).
+
 **The order of a first install's rollback: the hook first, then the package.** The hook's `rollback` runs while the
 package, its unit files and its loaded units are still on the host, so the hook can stop and inspect them; only after
 it has ended does the daemon do the package-level rollback (`apt-mark unhold`, `dpkg --purge`, the daemon reload, and

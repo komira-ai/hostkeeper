@@ -9,6 +9,7 @@
 //! | Where | What the daemon does for a repository version |
 //! |---|---|
 //! | the update's `prepare` ([`Repository::stage`]) | The order of the entry ([`Order::from_entry`]); the version staged into an empty staging directory by the installer's `stage`, the entry written beside it as `target.json` ([`crate::target`]), sealed and published as any version is ([`hostkeeper_install::version::stage_filled`]). A version already on the host is the sealed one, and an order whose entry is not the sealed `target.json` field for field is `target_changed` |
+//! | an `install` of an installed package (`adopt.rs`) | The package the host already has, which hostkeeper did not install, is staged as a version of the service, held and recorded, and `current` names it: the order replaces it as an update does, and its rollback puts it back instead of purging it (packages-lifecycle.md section 6.1) |
 //! | the switch before `cutover` ([`Repository::activate`]) | The installer's `activate` of the version, from its own copy of the index and the package, then `current` switched to it |
 //! | the switch before `rollback` ([`Repository::back`]) | The installer's `activate` of the previous version from its sealed directory, no fetch, then `current` switched back; for a first install, the `run` units stopped and the package removed, then `current` |
 //! | the uninstall's step 5 ([`Repository::remove`]) | The installer's `remove`, within the `remove_secs` of the version `current` names |
@@ -26,6 +27,10 @@
 //! ([`LauncherTools`]); a purge or a hold whose lock is held waits on the daemon's clock, up to
 //! `--package-lock-wait-secs` ([`RepositoryPorts::lock_wait_secs`]), and the wait is said in the
 //! log ([`ClockPause`], [`WARN_LOCK_WAIT`]).
+
+mod adopt;
+
+pub(crate) use adopt::Adoption;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

@@ -486,7 +486,8 @@ dependency but its C library baseline (packages.md section 5.4), so it passes on
   heartbeat; when it is not the version `placed.json` records, or the package is installed and no record names it,
   the heartbeat reports the service at the version found with a `drift` report (`ServiceBeat.drift = 14`: the
   version found and the version recorded, or none). The coordinator orders by what hosts report, so it orders the
-  desired version again; `install` or `update` then stages it, installs it over what was found (a downgrade if need
+  desired version again; `install` (which adopts the package found, packages-lifecycle.md section 6.1) or `update` then
+  stages it, installs it over what was found (a downgrade if need
   be, with `--allow-downgrades`), holds it, records it, and its verdict is `Succeeded` with the reason
   `drift_repaired` and the version found. It is a report, never a failure: it counts toward no rollback, and `Status`
   lists the host's drift until the next clean heartbeat. The only way to move a host off the desired version is a
@@ -793,8 +794,9 @@ there is nothing to hand over from, then `verify` and `cleanup`. The lab's plan 
 repository service is the coordinator's `install` of the hosts the service is assigned to, and `Force` is what moves a
 version off the plan afterwards: stop the `run` units, `stage` the target if it is not on the host, `activate` it (a
 downgrade if need be), start the units, report, with no hook. A host where the package is already installed (by hand,
-or by an earlier tool) reports it as drift, and the first `install` installs the desired version over it (section
-4.4).
+or by an earlier tool) reports it as drift, and the first `install` adopts the package and installs the desired version
+over it as an update from the installed version (packages-lifecycle.md section 6.1, "A package that is already
+installed is adopted"): a failed install puts the installed version back, and hostkeeper never purges it.
 
 **Later hand-offs.** With built-in steps, `cutover` restarts the `run` units: a gap of one restart. With a hook, the
 hook does the hand-over from the new version's tree, as for an archive: `prepare` runs before `activate`, and
