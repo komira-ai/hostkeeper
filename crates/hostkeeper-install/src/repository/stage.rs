@@ -5,10 +5,11 @@
 
 use std::fs;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
+use super::backend::Stanza;
 use super::mirror::mirrored_name;
 use super::outcome::{Failure, Reason};
 use super::{Mirror, Order, Repository, RepositoryInstaller, Staged, io_failure, record_failure};
@@ -31,10 +32,21 @@ pub fn file_sha256(path: &Path) -> std::io::Result<String> {
     }
 }
 
-impl RepositoryInstaller<'_> {
-    /// Makes `order`'s version in `staging`, an empty directory the core made: `tree/` and the
-    /// backend's copy of the index and the package.
-    pub fn stage(&self, order: &Order, staging: &Path) -> Result<Staged, Failure> {
+/// What `stage` reads of the repository before it checks the stanza: the repository's entry, its
+/// mirror, the work directory with the index fetched, the host's architecture and the stanza of
+/// the order's package version.
+struct Indexed<'a> {
+    repository: &'a Repository,
+    mirror: Option<&'a dyn Mirror>,
+    work: PathBuf,
+    architecture: String,
+    stanza: Stanza,
+}
+
+impl<'a> RepositoryInstaller<'a> {
+    /// The index of `order`'s repository fetched and its stanza of the order's package version
+    /// read; the steps of `stage` that come before any check of the stanza.
+    fn indexed(&self, order: &Order) -> Result<Indexed<'a>, Failure> {
         let fail = Failure::new;
         let holder = self
             .records
@@ -89,6 +101,36 @@ impl RepositoryInstaller<'_> {
                     ),
                 )
             })?;
+        Ok(Indexed {
+            repository,
+            mirror,
+            work,
+            architecture,
+            stanza,
+        })
+    }
+
+    /// The SHA-256 the repository's index gives for `order`'s package version, with the pin the
+    /// order carries ignored: what the daemon pins the version it adopts to (that version was
+    /// installed before hostkeeper ordered anything, so no order pins it), read from the same
+    /// signed index `stage` checks a pin against. Nothing is downloaded.
+    pub fn pin_of(&self, order: &Order) -> Result<String, Failure> {
+        self.indexed(order).map(|indexed| indexed.stanza.sha256)
+    }
+
+    /// Makes `order`'s version in `staging`, an empty directory the core made: `tree/` and the
+    /// backend's copy of the index and the package.
+    pub fn stage(&self, order: &Order, staging: &Path) -> Result<Staged, Failure> {
+        let fail = Failure::new;
+        let (backend, tools, bound) = (self.backend, self.tools, order.bounds.stage);
+        let Indexed {
+            repository,
+            mirror,
+            work,
+            architecture,
+            stanza,
+        } = self.indexed(order)?;
+        let (package, version) = (order.package.as_str(), order.package_version.as_str());
         if stanza.sha256 != order.pin {
             return Err(fail(
                 Reason::PackageDigestMismatch,

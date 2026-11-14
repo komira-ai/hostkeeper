@@ -377,3 +377,25 @@ fn a_failed_stage_still_fetches_only_with_its_two_commands() {
         );
     }
 }
+
+/// Proves `pin_of` answers the index's SHA-256 of the order's package version whatever pin the
+/// order carries, downloads nothing and changes nothing on the host, and refuses a version the
+/// index does not list with `not_in_repository`.
+///
+/// Catches: a pin read from the order instead of the index, which would pin an adopted package to
+/// a digest nobody checked, and a lookup that fetches the package.
+#[test]
+fn the_pin_of_a_version_is_the_indexs_digest_and_nothing_is_downloaded() {
+    let env = Env::new("apt-pin-of");
+    let package = deb(V1);
+    let mut order = env.publish(&package);
+    let pin = order.pin.clone();
+    order.pin = "0".repeat(64);
+    let before = env.snapshot();
+    assert_eq!(env.installer().pin_of(&order).expect("a pin"), pin);
+    env.assert_unchanged(&before);
+    assert!(!env.has_run("apt-get download"));
+    order.package_version = V2.to_owned();
+    let failure = env.installer().pin_of(&order).expect_err("unlisted");
+    assert_eq!(failure.reason(), Reason::NotInRepository);
+}

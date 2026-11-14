@@ -95,6 +95,22 @@ fetched), so a rollback never fetches, for every format:
 
 A first install that fails has no previous version: `remove` takes it off the host, as `remove_all` does today.
 
+**A package that is already installed is adopted.** Hostkeeper never removes a package it did not install. When an
+`install` order for a repository service finds its package installed whole in the host's package manager and no record of
+the service in `placed.json` (installed by hand, or with the host's setup), the order is not a first install: the
+daemon adopts the package and handles the order as an `update` from the installed version. In the order's checks it
+stages the installed version from the order's repository, as a version directory of the service (its name the version
+the package manager shows; its `target.json` the order's entry with that package version, the digest the signed
+index gives and no hook command, so it runs the built-in steps); the package is held and recorded as installed by the
+installer, and `current` names the adopted version before the step runs. The update's failure then restores that
+version (section 6.4's downgrade) and purges nothing; a verdict that needs the rollback is the update's, never a
+first install's. An order for the version that is installed adopts it, and its rollback installs it again. A package
+that is not installed, is installed half-way, or that `placed.json` already records for the service from a repository (an earlier try
+of this install left it, so it is hostkeeper's own) is a first install as before; the record an adoption writes names no repository, so an adoption that stopped before it made `current` is done again by the next order. A version the repository does not
+list ends the order `Deferred`, `not_in_repository`, and one whose text is no version name of a service ends it
+`Failed`, `manifest_invalid`; both leave the package as it was. `macos-pkg` adopts nothing (packages-repositories.md
+section 4.7).
+
 ### 6.5 Uninstall and closed-world removal
 
 Uninstall keeps today's order (`crates/hostkeeper-daemon/src/uninstall.rs`): tombstone, stop the `run` units, the hook's
