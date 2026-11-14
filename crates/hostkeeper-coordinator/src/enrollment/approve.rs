@@ -19,9 +19,8 @@
 //! its host in a group (`docs/design/hostgroups.md` section 1.2): the one its `host_group` names,
 //! or else its `role`, read as a group's name ([`group_in`]), which must be held
 //! (`unknown_host_group`); the role the store writes is the group's name. With neither named
-//! the host is enrolled in no specific group, under the placeholder role [`UNGROUPED_ROLE`], and
-//! runs the packages of the built-in group `all` alone until `HostGroups.Move`; the reason is
-//! optional. It names no services (`services_retired`): the group decides what
+//! the host is enrolled in no group, under the placeholder role [`UNGROUPED_ROLE`], and
+//! is ordered no package until `HostGroups.Move`; the reason is optional. It names no services (`services_retired`): the group decides what
 //! the host runs. A renewal, or a `replace` of a host in a group, keeps that group: naming
 //! another is `host_group_differs`, checked by the store under its lock. A coordinator that
 //! holds none approves by role and services, as before groups, and refuses a `host_group`

@@ -10,7 +10,9 @@
 //!
 //! A migration only adds: [`lint`] refuses `DROP`, `RENAME`, a column type change, `TRUNCATE`,
 //! `DELETE`, a `NOT NULL` column added without a default, and statements that end the
-//! transaction. The lint reads text; it is a review guard for what ships, not a security boundary.
+//! transaction. A migration that removes rows (the data of a feature the owner removed) says so
+//! on a line of its own that starts `-- deletes-rows:` and gives the reason; only then is its
+//! `DELETE` accepted, and everything else is refused as before. The lint reads text; it is a review guard for what ships, not a security boundary.
 
 use std::fmt;
 
@@ -49,7 +51,7 @@ pub(crate) struct Migration {
 }
 
 /// The migrations this binary ships, in order.
-pub(crate) const SHIPPED: [(i32, &str, &str); 17] = [
+pub(crate) const SHIPPED: [(i32, &str, &str); 18] = [
     (1, "state", include_str!("migrations/0001_state.sql")),
     (
         2,
@@ -118,6 +120,11 @@ pub(crate) const SHIPPED: [(i32, &str, &str); 17] = [
         17,
         "lab_sleds",
         include_str!("migrations/0017_lab_sleds.sql"),
+    ),
+    (
+        18,
+        "remove_host_group_all",
+        include_str!("migrations/0018_remove_host_group_all.sql"),
     ),
 ];
 
@@ -249,9 +256,13 @@ fn statements(sql: &str) -> Vec<Vec<String>> {
     out
 }
 
+/// The start of the line by which a migration says it removes rows ([`lint`]).
+const DELETES_ROWS: &str = "-- deletes-rows:";
+
 /// The first statement of `sql` that takes something away or ends the transaction, as what it
 /// is; `None` when every statement only adds.
 pub(crate) fn lint(sql: &str) -> Option<&'static str> {
+    let may_delete = sql.lines().any(|line| line.starts_with(DELETES_ROWS));
     for words in statements(sql) {
         let has = |w: &str| words.iter().any(|x| x == w);
         let first = words.first().map(String::as_str);
@@ -261,7 +272,7 @@ pub(crate) fn lint(sql: &str) -> Option<&'static str> {
             }
             Some("DROP") => return Some("a DROP"),
             Some("TRUNCATE") => return Some("a TRUNCATE"),
-            Some("DELETE") => return Some("a DELETE"),
+            Some("DELETE") if !may_delete => return Some("a DELETE"),
             _ => {}
         }
         if first == Some("ALTER") {
