@@ -146,7 +146,6 @@ impl Installed {
             &[
                 UNIT_FILE,
                 WANTS,
-                "/etc/hostkeeper",
                 "/etc/hostkeeper-ci-fixture",
                 "/usr/bin/hostkeeper-ci-fixture",
                 "/usr/lib/hostkeeper-ci-fixture",

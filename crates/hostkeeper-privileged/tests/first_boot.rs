@@ -16,8 +16,9 @@
 //! (`--host-cert-validity-secs 60`) renews it, for the same subject and key, and is heard over
 //! the renewed one.
 //!
-//! The daemon fixes its pki directory (`/etc/updater/pki`) and installs its self-update units
-//! under `/etc/systemd/system`; the test refuses to run on a host that has either and removes
+//! The daemon fixes its pki directory (`/etc/updater/pki`), keeps the repository entries the
+//! coordinator pushes it in `/etc/hostkeeper/repositories`, and installs its self-update units
+//! under `/etc/systemd/system`; the test refuses to run on a host that has any of them and removes
 //! them when it ends ([`support::pair::HostPaths`]). The tests of this file run one at a time
 //! (`--test-threads=1` in privileged.yml's job first-boot): they share those paths.
 //!
