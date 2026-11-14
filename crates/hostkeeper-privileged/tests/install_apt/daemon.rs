@@ -8,7 +8,7 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_config::manifest::HostkeeperVersion;
@@ -31,7 +31,7 @@ use hostkeeper_proto::hostkeeper::agent::v1::{Install, Order, Uninstall, Update,
 use hostkeeper_proto::hostkeeper::release::v1::{
     Hook, InstallerBounds, Manifest, StepBounds, Target,
 };
-use hostkeeper_steps::{ProcBootId, SystemClock, SystemdLauncher};
+use hostkeeper_steps::{Captured, ProcBootId, SystemClock, SystemdLauncher};
 use hostkeeper_testkit::Scratch;
 
 use super::repo::PACKAGE;
@@ -72,9 +72,77 @@ impl Packages for NoStore {
 /// directory under `target/` is not.
 pub const BASE: &str = "/run/hostkeeper-ci";
 
+/// What each step the daemon ran ended with, oldest first: the step's unit, its exit status and the
+/// kept end of its output. The launcher drops this unless it is given a log; a test that fails
+/// reads it through [`explain`]. The tests take turns on the host, and [`daemon`] empties it.
+static STEP_LOGS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Notes one run of a step in [`STEP_LOGS`].
+fn note_step(unit: &str, captured: &Captured) {
+    let entry = format!(
+        "{unit}: exit {:?}\n  stdout: {}\n  stderr: {}",
+        captured.code,
+        String::from_utf8_lossy(&captured.stdout.bytes()).trim_end(),
+        String::from_utf8_lossy(&captured.stderr.bytes()).trim_end(),
+    );
+    STEP_LOGS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(entry);
+}
+
+/// Every file under `dir`, with its contents (the first 4096 bytes), for a failure's message.
+fn dump(dir: &Path, out: &mut String) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut paths: Vec<_> = entries.flatten().map(|entry| entry.path()).collect();
+    paths.sort();
+    for path in paths {
+        if path.is_dir() {
+            dump(&path, out);
+        } else if let Ok(bytes) = fs::read(&path) {
+            let kept = &bytes[..bytes.len().min(4096)];
+            out.push_str(&format!(
+                "--- {}\n{}\n",
+                path.display(),
+                String::from_utf8_lossy(kept).trim_end()
+            ));
+        }
+    }
+}
+
+/// What a failed order leaves to read: the steps the daemon ran and how each ended, the daemon's
+/// state files (the step records and the halt marks), and the host's view of the unit. For the
+/// message of an assertion; it asserts nothing.
+pub fn explain(scratch: &Scratch) -> String {
+    let mut text = String::from("the steps the daemon ran:\n");
+    for entry in STEP_LOGS.lock().unwrap_or_else(|e| e.into_inner()).iter() {
+        text.push_str(entry);
+        text.push('\n');
+    }
+    text.push_str("the daemon's state files:\n");
+    dump(&scratch.path().join("state"), &mut text);
+    for (program, args) in [
+        (
+            "systemctl",
+            &["status", "hkaptfix.service", "--no-pager"][..],
+        ),
+        (
+            "journalctl",
+            &["--unit", "hkaptfix.service", "--no-pager", "--lines", "40"][..],
+        ),
+    ] {
+        text.push_str(&format!("$ {program} {}\n", args.join(" ")));
+        text.push_str(&super::rig::print(program, args).text);
+    }
+    text
+}
+
 /// The daemon on the rig's host, the installers the host announces, and the root-owned
 /// directory its state, packages and placed record are in, kept until the test ends.
 pub fn daemon(rig: &Rig) -> (Daemon, Vec<String>, Scratch) {
+    STEP_LOGS.lock().unwrap_or_else(|e| e.into_inner()).clear();
     fs::create_dir_all(BASE).expect("the root-owned base");
     fs::set_permissions(BASE, fs::Permissions::from_mode(0o755)).expect("its mode");
     let scratch = Scratch::under(Path::new(BASE), "apt-daemon").expect("the daemon's directory");
@@ -108,7 +176,7 @@ pub fn daemon(rig: &Rig) -> (Daemon, Vec<String>, Scratch) {
         ObserveOptions::default(),
     );
     let ports = Ports {
-        launcher: Arc::new(SystemdLauncher::system()),
+        launcher: Arc::new(SystemdLauncher::system().with_log(Arc::new(note_step))),
         packages: Arc::new(NoStore),
         clock: Arc::new(SystemClock::new(Box::new(ProcBootId::host()))),
         deadman_poll_secs: None,
