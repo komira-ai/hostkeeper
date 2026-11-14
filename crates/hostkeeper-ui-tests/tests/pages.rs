@@ -646,7 +646,7 @@ fn pending_reply() -> Value {
      "nextPageToken": "page-2"})
 }
 
-/// The host groups the approval's dropdown lists, but the built-in `all`, which every host is in.
+/// The host groups the approval's dropdown lists; `all` is an ordinary name among them.
 fn two_groups() -> Value {
     json!({"hostGroups": [{"group": {"name": "all"}}, {"group": {"name": "storage"}}, {"group": {"name": "web"}}]})
 }
@@ -732,13 +732,13 @@ return { absent, offered, kept, second: chosen(tree, "host-group", 1) };
             "FAILED_PRECONDITION denied",
             "Approved web-7 into host group web: the host gets its certificate at its next poll.",
             "Not approved.",
-            "Approved web-3 with no host group (it runs the packages of all until it is put in one): the host gets its certificate at its next poll.",
+            "Approved web-3 as Unassigned (it is ordered no package until it is put in a host group): the host gets its certificate at its next poll.",
         ])
     );
     assert_eq!(seen["refreshes"], 2, "a refused approval refreshes nothing");
     assert_eq!(
         out["out"],
-        json!({"absent": [0, 0, 0], "offered": ["No group", "storage", "web"],
+        json!({"absent": [0, 0, 0], "offered": ["Unassigned", "all", "storage", "web"],
                "kept": [" web-7 ", "web"], "second": ""}),
         "a refusal keeps what the operator typed and chose"
     );

@@ -12,6 +12,7 @@ use crate::host_groups_support::{
 };
 use crate::marks_support::operator;
 use crate::operator::{Caller, entry_proto};
+use crate::ops::AuditEntry;
 use crate::store::{Fake, audit_failure, store_failure};
 use crate::testutil::{Rig, id};
 
@@ -264,7 +265,7 @@ fn every_refusal_of_a_move_changes_nothing() {
     );
     assert_eq!(
         refused(&operator(), move_of("d1", "all")),
-        Refusal::ReservedHostGroup
+        Refusal::UnknownHostGroup
     );
     let wanted_in_none = proto::MoveHostRequest {
         host_group: String::new(),
@@ -371,19 +372,18 @@ fn a_record_that_fails_to_read_or_write_changes_nothing() {
     }
 }
 
-/// Proves: a move with an empty group takes a host out of its specific group into none: the
-/// answer names the group it left, the audit entry is `host_move` about the host with no group
-/// and the reason `from alpha to no group: ...`, the record has no group and no move under way,
-/// the host's node is placed in no group, the uninstall of what only alpha lists (and the host
-/// runs) is ordered and of what `all` lists is not, and the move under way into alpha is dropped.
+/// Proves: a move with an empty group takes a host out of its group into none: the answer names
+/// the group it left, the audit entry is `host_move` about the host with no group and the reason
+/// `from alpha to no group: ...`, the record has no group and no move under way, the host's node is
+/// placed in no group, no uninstall is ordered (the host keeps what it runs), and the move under
+/// way into alpha is dropped.
 ///
-/// Catches: a host left moving into a group it left, a package of `all` uninstalled with the
-/// group's, or an audit entry that names a group.
+/// Catches: a host left moving into a group it left, an unassigned host ordered an uninstall, or
+/// an audit entry that names a group.
 #[test]
-fn a_move_to_no_group_leaves_the_host_with_the_packages_of_all() {
+fn a_move_to_no_group_leaves_the_host_unassigned_and_orders_no_uninstall() {
     let world = World::new("hg-move-none");
     world.enroll("d1");
-    world.hold_all();
     world
         .put("alpha", &[SELF, "svc", "cfg"], None)
         .expect("put");
@@ -405,44 +405,69 @@ fn a_move_to_no_group_leaves_the_host_with_the_packages_of_all() {
         )]
     );
     assert_eq!(world.membership("d1"), membership("", None));
-    assert_eq!(
-        world.intents(),
-        [
-            ("cfg".to_owned(), "d1".to_owned(), 1),
-            ("svc".to_owned(), "d1".to_owned(), 2),
-        ]
-    );
+    assert_eq!(world.intents(), []);
     let fleet = world.coordinator().lock_fleet();
     assert_eq!(fleet.node(&id("d1")).expect("a node").role, "");
     assert!(!fleet.is_moving(&id("d1")));
 }
 
-/// Proves: a move to none orders no uninstall of a package `all` lists, though the old group
-/// lists it too; a host in no group is refused a move to none as `same_host_group`.
+/// Proves: a move to no group drops the uninstall intents an earlier move left for the host, one
+/// `uninstall_cancelled` entry naming no group each after the move's, so an unassigned host is
+/// ordered nothing.
 ///
-/// Catches: an audit entry for a move that changes nothing, or an uninstall of a package a host
-/// still runs because `all` lists it.
+/// Catches: an unassigned host that is still ordered an uninstall from an earlier move.
 #[test]
-fn a_move_to_no_group_keeps_the_packages_all_lists() {
-    let world = World::new("hg-move-none-cancel");
+fn a_move_to_no_group_cancels_the_uninstalls_an_earlier_move_left() {
+    let world = World::new("hg-move-none-cancels");
     world.enroll("d1");
-    world.hold_all();
-    world.put("alpha", &[SELF, "svc"], None).expect("put");
-    world.put("beta", &[SELF], None).expect("put");
     world
-        .put("all", &[SELF, "svc"], Some(1))
-        .expect("all lists svc");
+        .put("alpha", &[SELF, "svc", "cfg"], None)
+        .expect("put");
+    world.put("beta", &[SELF], None).expect("put");
     world.move_to("d1", "alpha").expect("moved");
-    world.beat("d1", &[SELF, "svc"]);
+    world.beat("d1", &[SELF, "svc", "cfg"]);
     world.move_to("d1", "beta").expect("moved");
-    assert_eq!(world.intents(), []);
+    assert_eq!(world.intents().len(), 2);
+    let audited = world.audit().len() as u64;
+
+    world.move_to("d1", "").expect("moved");
+
+    let dropped = |seq, service: &str| AuditEntry {
+        host_group: None,
+        ..cancelled(seq, "", service, "d1")
+    };
     assert_eq!(
-        world.move_to("d1", "").expect("moved").from_host_group,
-        "beta"
+        world.audit_after(audited as usize),
+        vec![
+            operator_entry(
+                audited + 1,
+                "host_move",
+                None,
+                Some("d1"),
+                &format!("from beta to no group: {REASON}"),
+            ),
+            dropped(audited + 2, "cfg"),
+            dropped(audited + 3, "svc"),
+        ]
     );
     assert_eq!(world.intents(), []);
+}
+
+/// Proves: a host in no group is refused a move to none as `same_host_group`, and a move from none
+/// into a group orders no uninstall.
+///
+/// Catches: an audit entry for a move that changes nothing, or an uninstall ordered for a host
+/// that was in no group.
+#[test]
+fn a_host_in_no_group_is_refused_a_move_to_none_and_moves_in_without_uninstalls() {
+    let world = World::new("hg-move-none-again");
+    world.enroll("d1");
+    world.put("alpha", &[SELF, "svc"], None).expect("put");
     assert_eq!(
         world.move_to("d1", "").expect_err("in none already"),
         Refusal::SameHostGroup
     );
+    world.beat("d1", &[SELF, "svc", "extra"]);
+    world.move_to("d1", "alpha").expect("moved");
+    assert_eq!(world.intents(), []);
 }

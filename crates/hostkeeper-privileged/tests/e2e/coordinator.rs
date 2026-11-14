@@ -410,9 +410,7 @@ impl CoordinatorHandle {
     }
 
     /// The status of `service` in the host group the hosts enroll into: its entry of `services`
-    /// in `Releases.Status` (the built-in group `all` has one too, with none of the hosts, since
-    /// a package the host's group lists is run as that group says), with its hosts, their
-    /// versions and last verdicts, and its marks.
+    /// in `Releases.Status`, with its hosts, their versions and last verdicts, and its marks.
     pub fn status(&self, service: &str) -> Value {
         let reply = must("releases status", self.api.status(service));
         reply["services"]

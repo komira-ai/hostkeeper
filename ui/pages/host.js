@@ -10,7 +10,7 @@
 // a button, one of Hosts.Exclude, Hosts.Include, Hosts.Abort, Hosts.SetLabels, Services.Hold,
 // Services.Unhold and, after a confirm, Hosts.Retire. HostGroups.List (every page) gives the groups
 // the "Host group" dropdown offers, and HostGroups.Move, after a confirm, moves the host into the
-// group chosen, or into none when the blank is chosen; the built-in `all` is never a choice. Retire is offered when Hosts.Get fails too,
+// group chosen, or into none when the blank is chosen; a host in no group is Unassigned and is ordered no package. Retire is offered when Hosts.Get fails too,
 // for an enrolled host the coordinator has not heard from since it started (a dead one).
 //
 // The page is a status header (name, status LED and word, role, group, what it runs, the last
@@ -79,18 +79,15 @@ export function parseLabels(text) {
   return { labels };
 }
 
-// The built-in group every host is in: a host is moved into no group instead of into it.
-const ALL = "all";
-
 // The reason sent with every move: the form asks for none.
 const DEFAULT_MOVE_REASON = "moved in the console";
 
-// The Host group form: a dropdown of the groups held but `all`, the host's own selected (the
-// blank for a host in no group, or only in `all`), and Move. `groups` is the
+// The Host group form: a dropdown of the groups held, the host's own selected (the
+// blank, "Unassigned", for a host in no group), and Move. `groups` is the
 // names the coordinator holds, or null with `groupsFailure` when it could not be listed.
 function hostGroupSection(ctx, nodeId, host, groups, groupsFailure) {
-  const current = typeof host.hostGroup === "string" && host.hostGroup !== ALL ? host.hostGroup : "";
-  const names = (groups || []).filter((name) => name !== ALL);
+  const current = typeof host.hostGroup === "string" && host.hostGroup !== "" ? host.hostGroup : "";
+  const names = (groups || []).slice();
   if (current !== "" && !names.includes(current)) {
     names.push(current);
   }
@@ -98,24 +95,24 @@ function hostGroupSection(ctx, nodeId, host, groups, groupsFailure) {
   return h("fieldset", { class: "card" },
     h("legend", {}, "Host group"),
     h("p", { class: "note" },
-      "Every host is in all. A host may be in one host group besides, which adds its packages to those of all; the blank is no group."),
+      "A host is in one host group or is Unassigned. A host is ordered the packages of its group, which always lists hostkeeper; an Unassigned host is ordered no package and keeps what it runs."),
     groupsFailure === null ? null : h("p", { class: "error", role: "alert" }, `Host groups: ${describeError(groupsFailure)}`),
     select("Host group", "host-group", form, "hostGroup",
-      [["", "No group (all alone)"], ...names.map((name) => [name, name])]),
+      [["", "Unassigned"], ...names.map((name) => [name, name])]),
     action(ctx, "Move", "move-host", async () => {
       const target = trimmed(form.hostGroup);
       if (target === current) {
-        return current === "" ? `${nodeId} is in no host group.` : `${nodeId} is already in host group ${current}.`;
+        return current === "" ? `${nodeId} is Unassigned.` : `${nodeId} is already in host group ${current}.`;
       }
       const question = target === ""
-        ? `Remove ${nodeId} from host group ${current}? It then runs the packages of all alone, and what ${current} lists and all does not is uninstalled.`
+        ? `Remove ${nodeId} from host group ${current}? It is then Unassigned: it is ordered no package and keeps what it runs.`
         : `Move ${nodeId} to host group ${target}? It is ordered that group's packages at its next heartbeat.`;
       if (!ctx.confirm(question)) {
         return "Not moved.";
       }
       const reply = await ctx.api.hostGroups.move({ nodeId, hostGroup: target, reason: DEFAULT_MOVE_REASON });
       ctx.refresh();
-      return `Moved ${nodeId} from ${reply.fromHostGroup || "no group"} to ${target === "" ? "no group" : target}.`;
+      return `Moved ${nodeId} from ${reply.fromHostGroup || "Unassigned"} to ${target === "" ? "Unassigned" : target}.`;
     }, { class: "primary" }));
 }
 
@@ -506,7 +503,7 @@ export async function render(ctx) {
   const trustAttention = certWord === "expired" || certWord === "soon"
     || (typeof host.lastRenewError === "string" && host.lastRenewError !== "")
     || ["stale", "missing", "unparseable"].includes(rootWord);
-  const group = typeof host.hostGroup === "string" && host.hostGroup !== ALL ? host.hostGroup : "";
+  const group = typeof host.hostGroup === "string" && host.hostGroup !== "" ? host.hostGroup : "";
   const version = services.length > 0 && typeof services[0].installedVersion === "string"
     ? `${services[0].service} ${services[0].installedVersion}` : "";
   const labelCount = Object.keys(host.labels || {}).length;
@@ -574,7 +571,7 @@ export async function render(ctx) {
             h("h2", {}, host.nodeId || nodeId),
             pill(stateWord, stateTone)),
           h("div", { class: "hb-meta" },
-            [["Role", host.role], ["Group", group || "no group"], ["Runs", version],
+            [["Role", host.role], ["Group", group || "Unassigned"], ["Runs", version],
               ["Last heartbeat", fmtUnix(host.lastHeartbeatUnix)],
               ["Labels", labelCount === 0 ? "" : `${labelCount}`]]
               .filter(([, v]) => typeof v === "string" && v !== "")
