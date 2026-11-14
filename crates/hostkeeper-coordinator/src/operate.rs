@@ -117,7 +117,7 @@ fn service<'a>(
 /// while it stood are acknowledged, one per host, so that a host that keeps reporting until it
 /// updates again does not raise the halt again, and the generation counts. Answers the halt that
 /// stood; none when there was none.
-fn clear_standing(marks: &mut ServiceOps) -> Option<Halt> {
+pub(crate) fn clear_standing(marks: &mut ServiceOps) -> Option<Halt> {
     let halt = marks.halt.take()?;
     let seen = std::mem::take(&mut marks.halt_seen);
     let reports = std::iter::once(HaltAck::from(halt.clone())).chain(seen);
@@ -131,7 +131,7 @@ fn clear_standing(marks: &mut ServiceOps) -> Option<Halt> {
 
 /// The `clear_halt` entry of the halt `halt` of `service` that `by` cleared, with `reason`, in
 /// `group`.
-fn cleared(
+pub(crate) fn cleared(
     by: &str,
     service: &str,
     group: Option<&crate::host_groups::GroupName>,

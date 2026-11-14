@@ -6,7 +6,7 @@
 //! nothing sleeps.
 
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
-use hostkeeper_wire::wire::{OrderId, Outcome, Phase, ServiceBeat, Token, UpdateResult};
+use hostkeeper_wire::wire::{Health, OrderId, Outcome, Phase, ServiceBeat, Token, UpdateResult};
 
 use crate::assign_support::{absent, install, order_to, why_of};
 use crate::audit_refusal_tests::full_disk;
@@ -53,6 +53,16 @@ fn failed_install(order_try: u64, reason: &str) -> UpdateResult {
 fn absent_with(last: Option<UpdateResult>) -> ServiceBeat {
     let mut one = absent(WEB, "2.0");
     one.last_update = last;
+    one
+}
+
+/// `web` as a host lists it after an install that failed and left the service installed, still at
+/// 1.0 and unhealthy, with `last` as its verdict: the halt of such a host stands until an
+/// operator clears it, where the halt of a host that lists the service absent clears itself.
+fn kept_with(last: UpdateResult) -> ServiceBeat {
+    let mut one = absent_with(Some(last));
+    one.health = Health::Unhealthy;
+    one.version = version("1.0");
     one
 }
 
@@ -134,12 +144,15 @@ fn host_view(rig: &Rig, node: &str) -> proto::HostService {
 }
 
 /// A rig where `d1` was ordered the install of `web` 2.0 at try 1 and failed it `unit_failed`
-/// with a halt, which halted `web`, and an operator cleared the halt.
+/// with a halt, which halted `web`, and an operator cleared the halt. The host reports the halt
+/// with the service still listed (unhealthy): a host that reports it absent has its halt cleared by
+/// the coordinator itself (`halt_absent_tests`), with no operator to clear it, so it is the
+/// failed report of a host that kept the service that an operator's clear leaves standing.
 async fn failed_and_cleared(test: &str) -> Rig {
     let rig = rig(test, "");
     set(&rig, WEB, "2.0", 7).await;
     assert_eq!(order_to(&rig, "d1", vec![]), Some(install_try(1)));
-    let failed = absent_with(Some(failed_install(1, "unit_failed")));
+    let failed = kept_with(failed_install(1, "unit_failed"));
     assert_eq!(order_to(&rig, "d1", vec![failed]), None);
     assert_eq!(why_of(&rig, WEB, "d1"), Some(Why::Gate(Gate::Halted)));
     operate(
@@ -228,7 +241,7 @@ async fn after_a_cleared_halt_and_an_inclusion_retry_orders_the_next_try() {
     updating.updating = Some(version("2.0"));
     assert_eq!(order_to(&rig, "d1", vec![updating]), None);
     assert_eq!(status_view(&rig, "d1").order, None);
-    let again = vec![absent_with(Some(failed_install(2, "unit_failed")))];
+    let again = vec![kept_with(failed_install(2, "unit_failed"))];
     assert_eq!(order_to(&rig, "d1", again.clone()), None);
     assert_eq!(why_of(&rig, WEB, "d1"), Some(Why::Gate(Gate::Halted)));
     let view = status_view(&rig, "d1");

@@ -730,7 +730,7 @@ impl Coordinator {
         };
         let announced = beat.services.clone().unwrap_or_default();
         self.tend_store(now);
-        let held = halt::note(&self.ops, &basis.services, legacy, &who, &beat, &node, now);
+        let noted = halt::note(&self.ops, &basis.services, legacy, &who, &beat, &node, now);
         let (platform, ops) = (beat.platform, self.ops.state());
         self.note_serving(&basis.services, &who.host_id, &node, &beat, &ops, now);
         self.note_running(&fleet, &who, &beat, &announced, legacy, turn == Turn::Order);
@@ -795,6 +795,7 @@ impl Coordinator {
                 _ => {}
             }
         }
+        fleet.set_aside_all(&noted.cleared, &who.host_id);
         fleet.note_node(who.host_id.clone(), node, self.ops.unix_now());
         if turn == Turn::Hold {
             return (ServiceReply::Nothing, None, None, Vec::new());
@@ -832,7 +833,7 @@ impl Coordinator {
         let asked = Asked {
             who: &who,
             legacy,
-            held: &held,
+            held: &noted.held,
             basis,
             orders,
             now,

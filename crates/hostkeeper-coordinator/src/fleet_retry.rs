@@ -133,6 +133,14 @@ impl Fleet {
         }
     }
 
+    /// Sets aside the failed report of each of `services` the host `id` last made
+    /// ([`Self::set_aside`]).
+    pub fn set_aside_all(&mut self, services: &[String], id: &HostId) {
+        for service in services {
+            self.set_aside(service, id);
+        }
+    }
+
     /// The report of `service` set aside for the host `id`, if one is.
     #[must_use]
     pub fn set_aside_of(&self, service: &str, id: &HostId) -> Option<&UpdateResult> {

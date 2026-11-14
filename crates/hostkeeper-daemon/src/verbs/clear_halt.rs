@@ -69,15 +69,7 @@ pub fn clear_halt(ctx: &Ctx, service: &ServiceName, generation: u64) -> Result<L
             ),
         ));
     }
-    // A runner of its own: the service's runner would stop a post-success watcher first.
-    let runner = StepRunner::new(
-        Arc::clone(&ctx.launcher),
-        Arc::clone(&ctx.clock),
-        ctx.store(service),
-    );
-    let cleared = runner
-        .clear_halt()
-        .map_err(|e| Refused::new(record_refusal(&e), e))?;
+    let cleared = clear_record(ctx, service)?;
     ctx.halts
         .raise(service, generation)
         .map_err(|e| Refused::new(Refusal::StoreFailed, e))?;
@@ -85,6 +77,20 @@ pub fn clear_halt(ctx: &Ctx, service: &ServiceName, generation: u64) -> Result<L
         generation,
         cleared,
     })
+}
+
+/// Turns the service's `Finished{Halt}` step record into the `halt_cleared` deferral; `false`
+/// when the record holds no halt. Written with a runner of its own: the service's runner would
+/// stop a post-success watcher first.
+pub(crate) fn clear_record(ctx: &Ctx, service: &ServiceName) -> Result<bool, Refused> {
+    let runner = StepRunner::new(
+        Arc::clone(&ctx.launcher),
+        Arc::clone(&ctx.clock),
+        ctx.store(service),
+    );
+    runner
+        .clear_halt()
+        .map_err(|e| Refused::new(record_refusal(&e), e))
 }
 
 /// The token of a step record that could not be cleared.

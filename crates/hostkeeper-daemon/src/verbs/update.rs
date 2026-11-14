@@ -36,7 +36,7 @@ use hostkeeper_hook::{Class, Phase};
 use hostkeeper_hook::{Params, Verdict};
 use hostkeeper_install::repository::{Backend, DRIFT_REPAIRED};
 use hostkeeper_proto::hostkeeper::release::v1::Target as Entry;
-use hostkeeper_steps::record::{Loaded, Record, RecordError};
+use hostkeeper_steps::record::{Loaded, Record, RecordError, State};
 use hostkeeper_steps::{Bounds, Finished, RunError, Staged, UpdateOrder};
 
 use crate::checks::{self, OrderKey, TryRule};
@@ -129,6 +129,10 @@ fn steps(
         .get(service)
         .map_err(|e| Reply::refused(Refusal::HaltUnreadable, e))?;
     let last = last_record(ctx, service)?;
+    let last = match forgets_halt(ctx, verb, order, last.as_deref())? {
+        true => last_record(ctx, service)?,
+        false => last,
+    };
     if let Some(answer) = answer(verb, order, last.as_deref())? {
         return Ok(answer);
     }
@@ -183,6 +187,59 @@ fn repaired(ctx: &Ctx, service: &ServiceName, reply: Reply) -> Reply {
         },
         other => other,
     }
+}
+
+/// Lifts the halt of an absent service from its step record: a `Finished{Halt}` record holds
+/// every other order of the service, but an `install` of a service that is absent (no release
+/// installed, not being uninstalled) has nothing left to protect: the halted
+/// order's own rollback took the package off the host, or it was removed by hand. The record is
+/// turned into the `halt_cleared` deferral as `clear_halt` does ([`super::clear_halt::clear_record`])
+/// and the order goes on to the try rules and runs. A resend of the halted order itself (the same
+/// package and try) is still answered from the record, and a service that has a release installed
+/// stays halted. `true` when the record was cleared.
+fn forgets_halt(
+    ctx: &Ctx,
+    verb: HookedVerb,
+    order: &Hooked,
+    last: Option<&Record>,
+) -> Result<bool, Reply> {
+    let Some(rec) = last else {
+        return Ok(false);
+    };
+    let halted = matches!(
+        rec.state,
+        State::Finished {
+            verdict: Verdict::Halt,
+            ..
+        }
+    );
+    let key = OrderKey {
+        verb,
+        version: order.version.clone(),
+        digest: order.digest.clone(),
+        order_try: order.order_try.get(),
+    };
+    let resend = checks::same_package(rec, &key) & (rec.order_try.unwrap_or(0) == key.order_try);
+    if !halted | (verb != HookedVerb::Install) | resend {
+        return Ok(false);
+    }
+    // Not `Ctx::lifecycle`: the service's own lock is held here, which that reads as an order
+    // under way.
+    let tombstoned = crate::uninstall::tombstoned(ctx, &order.service)
+        .map_err(|e| Reply::refused(Refusal::from(&e), e))?;
+    let running = installed::linked_version(&ctx.dirs.packages, &order.service, CURRENT);
+    if tombstoned | running.is_some() {
+        return Ok(false);
+    }
+    // The record was read as a halt under the service's lock, which this order holds: nothing
+    // else clears it first, so the clear always lifts it, and the record is read again.
+    super::clear_halt::clear_record(ctx, &order.service)
+        .map_err(|refused| Reply::refused(refused.refusal, refused.detail))?;
+    ctx.log(&format!(
+        "level=warn alert=halt_forgotten service={}: the step record held a halt, and the service is absent: the halt is lifted for the install of {}",
+        order.service, order.version
+    ));
+    Ok(true)
 }
 
 /// The try rules ([`checks::try_rule`]) for `order`, given the service's step record `last`:
