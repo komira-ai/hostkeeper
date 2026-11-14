@@ -69,8 +69,9 @@ impl Packages for NoStore {
 
 /// The root-owned directory the daemon's own directories are made in: a sealed version is
 /// trusted only below directories that root owns (`Staged::check`), which the rig's scratch
-/// directory under `target/` is not.
-pub const BASE: &str = "/run/hostkeeper-ci";
+/// directory under `target/` is not. Not under `/run`: that is a `noexec` tmpfs on some hosts
+/// (Ubuntu's default), where the steps cannot run the package's hook program from its tree.
+pub const BASE: &str = "/var/lib/hostkeeper-ci";
 
 /// What each step the daemon ran ended with, oldest first: the step's unit, its exit status and the
 /// kept end of its output. The launcher drops this unless it is given a log; a test that fails
