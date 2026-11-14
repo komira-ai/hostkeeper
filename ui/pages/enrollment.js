@@ -6,8 +6,8 @@
 // which sends back the key hash the list gave for the request, or Enrollment.Reject, after a confirm, which takes the
 // request out of the queue and refuses its key from then on. Claims authorise nothing: they help an operator
 // recognise a machine. An approval asks for one choice besides the host id: the host group, a
-// dropdown of the coordinator's host groups but the built-in `all` (which every host is in) and a
-// blank (the host is enrolled in no specific group, and runs the packages of all alone until it is
+// dropdown of the coordinator's host groups and a
+// blank, "Unassigned" (the host is enrolled in no group and is ordered no package until it is
 // put in one on the Host groups page). The record's group is chosen when
 // the coordinator holds it. There is no role, no services and no reason to type. A match against
 // one record (the Inventory page) fills in the host id and shows the record's state and window (a request that matches one record exactly while
@@ -187,13 +187,12 @@ export function contestedLine(request) {
     + "Find this machine's key hash on its console, and reject the requests that are not it.";
 }
 
-// The choices of the Host group control: blank, then each group of `groups` by name but `all`,
-// which every host is in already.
+// The choices of the Host group control: blank, then each group of `groups` by name.
 function groupChoices(groups) {
-  return [["", "No group"], ...groups.map((held) => {
+  return [["", "Unassigned"], ...groups.map((held) => {
     const name = (held["group"] || {}).name || "";
     return [name, name];
-  }).filter(([name]) => name !== "" && name !== "all")];
+  }).filter(([name]) => name !== "")];
 }
 
 // The placement control of an approval: the Sled slot the server stands on, optional (the first choice,
@@ -297,7 +296,7 @@ function pending(ctx, request, groups, lab) {
       select("Host group", "host-group", form, "hostGroup", choices),
       placementSection(request, form, lab),
       groups.failure === null ? null : h("p", { class: "flag warn wide" },
-        `Host groups cannot be listed (${describeError(groups.failure)}): the host can be approved with no group.`),
+        `Host groups cannot be listed (${describeError(groups.failure)}): the host can be approved as Unassigned.`),
       h("div", { class: "replace wide" },
         checkbox("Replace", "replace", form, "replace"),
         hint(REPLACE_HINT, true)),
@@ -328,7 +327,7 @@ function pending(ctx, request, groups, lab) {
           }
           ctx.refresh();
           const placed = body.hostGroup === ""
-            ? "with no host group (it runs the packages of all until it is put in one)"
+            ? "as Unassigned (it is ordered no package until it is put in a host group)"
             : `into host group ${body.hostGroup}`;
           const stands = spot === null ? "" : `, at ${lab.layout.sleds.find((x) => x.id === spot.sled).address}-S${spot.slot}`;
           return `Approved ${reply.hostId || named} ${placed}${stands}: the host gets its certificate at its next poll.`;
