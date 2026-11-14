@@ -4,7 +4,7 @@ use super::*;
 
 /// The SHA-256 of each shipped migration file, in hex. A shipped migration is never edited: a
 /// change is a migration of its own, so these only grow.
-const PINNED: [(i32, &str, &str); 17] = [
+const PINNED: [(i32, &str, &str); 18] = [
     (
         1,
         "state",
@@ -90,6 +90,11 @@ const PINNED: [(i32, &str, &str); 17] = [
         "lab_sleds",
         "719f9fd937596c6c701a9983a84eeb6105822f663b50edf29b654e427731c869",
     ),
+    (
+        18,
+        "remove_host_group_all",
+        "afe694d65c4829b59218b8ff6abbebc3921d0381fc77828cf1387ba9eae16851",
+    ),
 ];
 
 fn hex(bytes: &[u8]) -> String {
@@ -113,10 +118,10 @@ fn what(statement: &str) -> String {
 /// names are exactly [(1, "state"), (2, "first_serving"), (3, "generations"), (4, "releases"),
 /// (5, "mdm_devices"), (6, "host_running"), (7, "repositories"), (8, "host_groups"),
 /// (9, "service_repository"), (10, "accounts"), (11, "mdm"),
-/// (12, "mdm_setup"), (13, "host_group_all"), (14, "trusted_publishers"), (15, "lab_layout"), (16, "lab_devices"), (17, "lab_sleds")], each file's
+/// (12, "mdm_setup"), (13, "host_group_all"), (14, "trusted_publishers"), (15, "lab_layout"), (16, "lab_devices"), (17, "lab_sleds"), (18, "remove_host_group_all")], each file's
 /// SHA-256 is the pinned one, and every one passes the header rule, the lint and the numbering;
 /// the first three and `host_groups` say older releases must not run on them, and `releases`,
-/// `mdm_devices`, `host_running`, `repositories`, `service_repository`, `accounts`, `mdm`, `mdm_setup`, `host_group_all`, `trusted_publishers`, `lab_layout`, `lab_devices` and `lab_sleds` that
+/// `mdm_devices`, `host_running`, `repositories`, `service_repository`, `accounts`, `mdm`, `mdm_setup`, `host_group_all`, `trusted_publishers`, `lab_layout`, `lab_devices`, `lab_sleds` and `remove_host_group_all` that
 /// they may (an older release never reads any of those tables).
 ///
 /// Catches: an edit to a shipped migration (a database that ran the old text would differ from
@@ -143,7 +148,8 @@ fn the_shipped_migrations_are_unchanged() {
             (14, "trusted_publishers"),
             (15, "lab_layout"),
             (16, "lab_devices"),
-            (17, "lab_sleds")
+            (17, "lab_sleds"),
+            (18, "remove_host_group_all")
         ]
     );
     let hashes: Vec<(i32, &str, String)> = SHIPPED
@@ -178,6 +184,7 @@ fn the_shipped_migrations_are_unchanged() {
             (15, "lab_layout", OlderReleases::MayRun),
             (16, "lab_devices", OlderReleases::MayRun),
             (17, "lab_sleds", OlderReleases::MayRun),
+            (18, "remove_host_group_all", OlderReleases::MayRun),
         ]
     );
 }
@@ -243,6 +250,38 @@ fn the_migration_lint_refuses_a_drop_and_a_rename() {
     for sql in accepted {
         assert_eq!(lint(sql), None, "{sql}");
     }
+}
+
+/// Proves: a `DELETE` is accepted only in a migration with a line that starts `-- deletes-rows:`
+/// (a reason follows); with that line every other statement that takes something away is still
+/// refused, and a line that only mentions the words, or is not at the line's start, does not
+/// count.
+///
+/// Catches: a migration that deletes rows without saying so, and a deletes-rows line that lets a
+/// DROP or a TRUNCATE through.
+#[test]
+fn a_delete_needs_the_deletes_rows_line_and_it_lets_nothing_else_through() {
+    let said = "-- deletes-rows: the group all\n";
+    assert_eq!(lint(&format!("{said}DELETE FROM t WHERE a = 1;")), None);
+    assert_eq!(
+        lint(&format!("{said}DROP TABLE t;")),
+        Some("a DROP"),
+        "a DROP stays refused"
+    );
+    assert_eq!(
+        lint(&format!("{said}TRUNCATE t;")),
+        Some("a TRUNCATE"),
+        "a TRUNCATE stays refused"
+    );
+    assert_eq!(lint("DELETE FROM t;"), Some("a DELETE"));
+    assert_eq!(
+        lint("-- no deletes-rows: here\nDELETE FROM t;"),
+        Some("a DELETE")
+    );
+    assert_eq!(
+        lint(" -- deletes-rows: indented\nDELETE FROM t;"),
+        Some("a DELETE")
+    );
 }
 
 /// Proves: a first line that is not `-- older-releases: refuse` or `-- older-releases: may-run`

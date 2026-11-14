@@ -33,8 +33,8 @@ service Enrollment {
   rpc List(ListPendingRequest) returns (ListPendingResponse);
   // Approve a pending request: the host gets its certificate at its next `Poll`, with the host
   // id and host group the approval names. The group is optional: a host approved with none is
-  // enrolled in no specific group: it is in the built-in group `all` alone, and runs the packages
-  // `all` lists until `HostGroups.Move` puts it in one. The reason is optional too.
+  // enrolled in no group: it is ordered no package until `HostGroups.Move` puts it in one. The
+  // reason is optional too.
   rpc Approve(ApproveRequest) returns (ApproveResponse);
   // Reject a pending request: it leaves the queue, and its key is refused from then on (its
   // `Poll` answers `DENIED`, and posting it again changes nothing). A request already rejected
@@ -375,9 +375,8 @@ message ApproveRequest {
   string reason = 7;
   // The host group the host is in, which must exist (`unknown_host_group`; a coordinator that
   // does not hold host groups refuses any); empty for none (with `role` empty too, from a
-  // coordinator that holds host groups): the host is enrolled in no specific group
-  // (in `all` alone) until `HostGroups.Move`. `all`, which every host is in, is no group a request
-  // names (`unknown_host_group`). With a renewal or `replace`, the group of that host
+  // coordinator that holds host groups): the host is enrolled in no group until
+  // `HostGroups.Move`. With a renewal or `replace`, the group of that host
   // (`host_group_differs`); empty keeps it.
   string host_group = 8;
   // Where the server stands, an optional placement the approval makes in the same step
