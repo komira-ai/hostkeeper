@@ -76,6 +76,8 @@ and the small example in `crates/hostkeeper-hook/tests/support/mod.rs` show a co
 3. No run changes the staged release or the service's own data directory.
 4. After `cutover`, a `rollback` that says it was reversible leaves the world as it was before
    `prepare`, with nothing of the update left behind; `cleanup` after a rollback changes nothing.
+   (On a first install the harness's `rollback` runs with the package still installed: the daemon removes the
+   package only after the hook's `rollback` has ended, so a hook may stop and inspect its units there.)
 5. The hook is stopped at every kill point its fake reaches, and each step is run again after it
    finished; running on from there reaches the world an uninterrupted run reaches. The hook's
    record is compared as well as the world.

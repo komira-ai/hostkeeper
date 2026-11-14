@@ -4,10 +4,10 @@
 
 use std::sync::Arc;
 
-use hostkeeper_hook::Step;
+use hostkeeper_hook::{Outcome, Report, Step};
 
 use crate::launcher::{Bound, StepExit};
-use crate::runner::UpdateOrder;
+use crate::runner::{REASON_NO_PREVIOUS_RELEASE, UpdateOrder};
 
 /// Which way the daemon switches a service around a step of the hook.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,3 +54,35 @@ pub type Switch = Arc<dyn Fn(Toward, &UpdateOrder) -> Result<(), SwitchError> + 
 /// The code of a built-in step ([`UpdateOrder::builtin_steps`]): called with the step, the order
 /// and the step's bound instead of launching a command, and it gives the exit a hook would.
 pub type Builtin = Arc<dyn Fn(Step, &UpdateOrder, Bound) -> StepExit + Send + Sync>;
+
+/// The removal of a first install's package, after a run of `step` ended with `exit`. Only the hook's
+/// `rollback` of a first install is followed by it (any other step, and an update, pass through):
+/// the switch's `Back`, made after the hook so that the hook ran while the package and its units
+/// were still on the host. It is made when the hook succeeded or declined the install
+/// (`no_previous_release`); a hook that failed or deferred leaves the package in place, for its
+/// retry or for whoever looks at the halt. A removal that ended the step (a package manager that
+/// stayed busy) gives its exit in place of the hook's; one that failed is the `Err`, the step
+/// still pending and run again (the hook's `rollback` is idempotent, as is the removal).
+pub(crate) fn remove_after(
+    switch: Option<&Switch>,
+    order: &UpdateOrder,
+    step: Step,
+    exit: StepExit,
+) -> Result<StepExit, String> {
+    let Some(switch) = switch.filter(|_| (step == Step::Rollback) & order.previous.is_none())
+    else {
+        return Ok(exit);
+    };
+    let report = Report::read(exit.last_line.as_deref().unwrap_or(""));
+    let declined = report.reason.as_deref() == Some(REASON_NO_PREVIOUS_RELEASE);
+    match Outcome::from_exit(exit.code) {
+        Outcome::Success => {}
+        Outcome::Failure if declined => {}
+        _ => return Ok(exit),
+    }
+    match switch(Toward::Back, order) {
+        Ok(()) => Ok(exit),
+        Err(SwitchError::Ended(ended)) => Ok(ended),
+        Err(SwitchError::Failed(why)) => Err(why),
+    }
+}

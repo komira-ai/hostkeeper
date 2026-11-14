@@ -11,7 +11,9 @@ use std::sync::{Arc, Mutex};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
 use hostkeeper_steps::record::{RecordStore, State};
 use hostkeeper_steps::runner::REASON_NO_PREVIOUS_RELEASE;
-use hostkeeper_steps::{Finished, Loaded, RunError, StepRunner, Switch, Toward, UpdateOrder};
+use hostkeeper_steps::{
+    Finished, Loaded, RunError, StepExit, StepRunner, Switch, SwitchError, Toward, UpdateOrder,
+};
 use support::{FAIL, IRREVERSIBLE_OK, OK, PENDING, Reply, Rig};
 
 /// The last line of a `rollback` that declines a first install.
@@ -225,6 +227,192 @@ fn a_first_install_whose_rollback_declines_ends_failed_not_halted() {
     assert_eq!(
         rig.runner().run(&rig.order()).expect("runs").verdict,
         Verdict::Halt
+    );
+}
+
+/// The order of `rig` as a first install: no release to go back to.
+fn first_install(rig: &Rig) -> UpdateOrder {
+    let mut order = rig.order();
+    order.previous = None;
+    order.previous_version = None;
+    order
+}
+
+/// Proves the hook's `rollback` of a first install runs while the package is still on the host:
+/// after a failed `verify` the log reads `run rollback` and only then `switch Back`, once, and
+/// the order ends `Failed` as it did. An update keeps its switch back before the hook.
+///
+/// Catches: a first install whose package is removed before its hook's `rollback` runs, so that
+/// the hook cannot stop or inspect what the package installed.
+#[test]
+fn a_first_installs_package_is_removed_after_its_hook_rollback() {
+    let rig = Rig::new("switch-first-install");
+    let log = Lines::default();
+    let failing = Arc::new(AtomicBool::new(false));
+    let runner = switching(&rig, &log, &failing);
+    rig.fake.say(Step::Verify, &[FAIL]);
+    let ended = runner.run(&first_install(&rig)).expect("runs");
+    assert_eq!(
+        ended.verdict,
+        Verdict::Failed {
+            phase: Phase::GateRelease,
+            class: Class::Release
+        }
+    );
+    assert_eq!(
+        lines(&log),
+        [
+            "run prepare",
+            "switch Target 2.0.0",
+            "run cutover",
+            "run verify",
+            "run rollback",
+            "switch Back 2.0.0"
+        ]
+    );
+}
+
+/// Proves a first install whose hook `rollback` waits and is run again is removed once, after
+/// the run that ended it, not between the runs.
+///
+/// Catches: the package removed after the first, deferred run of `rollback`, under the hook's
+/// second run.
+#[test]
+fn a_first_installs_package_is_removed_once_after_a_retried_rollback() {
+    let rig = Rig::new("switch-first-install-retry");
+    let log = Lines::default();
+    let failing = Arc::new(AtomicBool::new(false));
+    let runner = switching(&rig, &log, &failing);
+    rig.fake.say(Step::Verify, &[FAIL]);
+    rig.fake.say(Step::Rollback, &[Reply::Exit(75, None), OK]);
+    runner.run(&first_install(&rig)).expect("runs");
+    let log = lines(&log);
+    assert_eq!(
+        log[log.len() - 3..],
+        ["run rollback", "run rollback", "switch Back 2.0.0"]
+    );
+}
+
+/// Proves a first install whose hook `rollback` fails (a halt) keeps its package: no switch back
+/// is made, the verdict is the halt the runner always gave.
+///
+/// Catches: a package removed from under a halted service, whose hook could then not be asked
+/// again.
+#[test]
+fn a_first_installs_package_stays_when_its_hook_rollback_halts() {
+    let rig = Rig::new("switch-first-install-halt");
+    let log = Lines::default();
+    let failing = Arc::new(AtomicBool::new(false));
+    let runner = switching(&rig, &log, &failing);
+    rig.fake.say(Step::Verify, &[FAIL]);
+    rig.fake.say(Step::Rollback, &[FAIL]);
+    let ended = runner.run(&first_install(&rig)).expect("runs");
+    assert_eq!(ended.verdict, Verdict::Halt);
+    assert_eq!(
+        lines(&log),
+        [
+            "run prepare",
+            "switch Target 2.0.0",
+            "run cutover",
+            "run verify",
+            "run rollback"
+        ]
+    );
+}
+
+/// Proves a removal that fails after the hook's `rollback` has ended stops the runner with
+/// `RunError::Switch`, and the next run, with the removal working, ends the rollback: the hook's
+/// `rollback` (idempotent) runs again and the package is removed after it.
+///
+/// Catches: a failed removal that loses the rollback, or one that is made before the hook.
+#[test]
+fn a_failed_removal_after_the_hook_rollback_is_tried_again_after_the_hook() {
+    let rig = Rig::new("switch-first-install-removal-fails");
+    let log = Lines::default();
+    let failing = Arc::new(AtomicBool::new(false));
+    let runner = switching(&rig, &log, &failing);
+    rig.fake.say(Step::Verify, &[FAIL]);
+    let order = first_install(&rig);
+    let failing_later = Arc::clone(&failing);
+    let tripped = AtomicBool::new(false);
+    let ran = Arc::clone(&log);
+    rig.fake.on_run(move |call| {
+        ran.lock()
+            .expect("the log")
+            .push(format!("run {}", call.invocation.step));
+        if call.invocation.step == Step::Rollback && !tripped.swap(true, Ordering::SeqCst) {
+            failing_later.store(true, Ordering::SeqCst);
+        }
+    });
+    let error = runner.run(&order).expect_err("the removal fails");
+    assert!(matches!(error, RunError::Switch(_)), "{error:?}");
+
+    failing.store(false, Ordering::SeqCst);
+    let ended = runner.run(&order).expect("resumes");
+    assert_eq!(
+        ended.verdict,
+        Verdict::Failed {
+            phase: Phase::GateRelease,
+            class: Class::Release
+        }
+    );
+    let log = lines(&log);
+    assert_eq!(
+        log[log.len() - 4..],
+        [
+            "run rollback",
+            "switch Back 2.0.0",
+            "run rollback",
+            "switch Back 2.0.0"
+        ]
+    );
+}
+
+/// Proves a removal that ends the rollback step itself (the switch's `Ended`, a package manager
+/// that stayed busy: exit 75) is the step's exit, in place of the hook's success: the rollback is
+/// run again, and the order ends as the runner's table says for that exit.
+///
+/// Catches: an `Ended` removal read as a rollback that succeeded.
+#[test]
+fn a_removal_that_ends_the_rollback_step_gives_its_exit() {
+    let rig = Rig::new("switch-first-install-removal-ended");
+    let log = Lines::default();
+    let (seen, calls) = (Arc::clone(&log), Arc::new(AtomicBool::new(false)));
+    let switch: Switch = Arc::new(move |toward: Toward, _: &UpdateOrder| {
+        seen.lock()
+            .expect("the log")
+            .push(format!("switch {toward:?}"));
+        match (
+            toward,
+            toward == Toward::Back && !calls.swap(true, Ordering::SeqCst),
+        ) {
+            (Toward::Back, true) => Err(SwitchError::Ended(StepExit {
+                code: Some(75),
+                last_line: None,
+            })),
+            _ => Ok(()),
+        }
+    });
+    rig.fake.say(Step::Verify, &[FAIL]);
+    let runner =
+        StepRunner::new(rig.fake.clone(), rig.clock.clone(), rig.store()).with_switch(switch);
+    let ended = runner.run(&first_install(&rig)).expect("runs");
+    assert_eq!(
+        ended.verdict,
+        Verdict::Failed {
+            phase: Phase::GateRelease,
+            class: Class::Release
+        }
+    );
+    let back = lines(&log).iter().filter(|l| *l == "switch Back").count();
+    assert_eq!(back, 2);
+    assert_eq!(
+        rig.fake
+            .steps()
+            .iter()
+            .filter(|s| **s == Step::Rollback)
+            .count(),
+        2
     );
 }
 

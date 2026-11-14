@@ -44,6 +44,7 @@ use crate::order_util::{
     PreviousHook, hook_of, longest_step_unit, path_str, same_update, wait_secs,
 };
 use crate::record::{HookSel, Loaded, Progress, Record, RecordError, RecordStore, SCHEMA, State};
+use crate::switch::remove_after;
 pub use crate::switch::{Builtin, Switch, SwitchError, Toward};
 
 /// The protocol version of this updater: an order's `min_updater_protocol` above it is
@@ -350,6 +351,9 @@ impl StepRunner {
     fn switch_for(&self, order: &UpdateOrder, step: Step) -> Result<Option<StepExit>, RunError> {
         let toward = match step {
             Step::Cutover => Toward::Target,
+            // A first install's package is removed after its hook's `rollback` has run
+            // ([`crate::switch::remove_after`]), not before.
+            Step::Rollback if order.previous.is_none() => return Ok(None),
             Step::Rollback => Toward::Back,
             _ => return Ok(None),
         };
@@ -745,7 +749,11 @@ impl StepRunner {
             return Err(RunError::Unstopped { unit, error });
         }
         match result {
-            Ok(exit) => Ok(Some(Ran::Exit(exit))),
+            Ok(exit) => {
+                let switch = self.switch.as_ref();
+                let exit = remove_after(switch, order, rec.step, exit).map_err(RunError::Switch)?;
+                Ok(Some(Ran::Exit(exit)))
+            }
             Err(LaunchError::NoStart(_)) => Ok(Some(Ran::NoStart)),
             Err(e) => Err(e.into()),
         }

@@ -86,7 +86,7 @@ runs nothing. A service with a hook program and no `uninstall` bound is refused 
 The previous version's directory keeps its verified artifact (a repository installer: the index and package it
 fetched), so a rollback never fetches, for every format:
 
-| Installer | Rollback, before the hook's `rollback` step |
+| Installer | Rollback of an update, before the hook's `rollback` step (a first install's removal comes after it, below the table) |
 |---|---|
 | `hostkeeper-archive`, `tarball` | Switch `current` back and relink, as today |
 | `apt` (and each later repository backend) | A downgrade by one version from the previous version's kept index and package, with no fetch (`apt-get install --no-download --allow-downgrades`, packages-repositories.md section 4.4), running the older package's scripts. A service that ships these packages keeps its scripts able to go back one version, as its hook must read the record one version back today |
@@ -94,6 +94,16 @@ fetched), so a rollback never fetches, for every format:
 | `oci-image` | The previous image is still loaded (`retire` keeps it while `previous` names it). Re-point the generated units at it and reload |
 
 A first install that fails has no previous version: `remove` takes it off the host, as `remove_all` does today.
+
+**The order of a first install's rollback: the hook first, then the package.** The hook's `rollback` runs while the
+package, its unit files and its loaded units are still on the host, so the hook can stop and inspect them; only after
+it has ended does the daemon do the package-level rollback (`apt-mark unhold`, `dpkg --purge`, the daemon reload, and
+the removal of `current`). The removal is made when the hook's `rollback` succeeded or declined the install
+(`no_previous_release`). A `rollback` that fails or defers leaves the package where it is: it is run again within its
+retries, and when it ends in a `halt` the package stays for whoever looks at the halt. A removal that fails ends the
+switch as before (`link_failed`, the step still pending, run again; `rollback` is idempotent, as `remove` is), and one
+that ends the step itself (a package manager that stayed busy) gives its exit in place of the hook's. An update's
+rollback is unchanged: the previous version is activated again before the hook's `rollback`, which restarts it.
 
 ### 6.5 Uninstall and closed-world removal
 
