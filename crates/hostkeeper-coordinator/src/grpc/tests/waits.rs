@@ -61,6 +61,7 @@ async fn world(name: &str) -> World {
     let rig = Rig::new(name);
     let store =
         DesiredStore::open(&rig.dir.path().join("desired.json"), Some(LEGACY)).expect("a store");
+    crate::testutil::seed_komira(&store);
     let (verifier, issuer) = static_verifier();
     let coordinator = Coordinator::new(store, verifier, OPERATOR.to_owned(), clock_of(&rig.clock))
         .with_allow_list(

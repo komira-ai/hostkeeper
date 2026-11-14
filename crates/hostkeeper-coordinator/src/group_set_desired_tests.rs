@@ -726,7 +726,7 @@ async fn the_refusals_of_a_release_hold_in_a_group() {
         "{refused}"
     );
     let plain = json!({"service": "web", "version": "2.0"});
-    // The built-in `komira` is always held: a channel it does not have is the unknown one.
+    // The registry holds `komira`: a channel it does not have is the unknown one.
     let entries = targets_of(vec![repository_entry("web", "komira-edge")]);
     let refused = set(plain, Some(entries)).await.expect_err("refused");
     assert!(matches!(refused, SetError::RepositoryUnknown), "{refused}");

@@ -117,6 +117,7 @@ pub(crate) fn start_on(fake: &Fake, clock: &Arc<AtomicU64>, extra: &str) -> Coor
 
 /// A rig running [`services_with`] `extra` on `fake`, its clock at 2000, past the quiet start.
 pub(crate) fn rig_on(test: &str, fake: &Fake, extra: &str) -> Rig {
+    fake.seed_komira();
     let mut rig = Rig::new(test);
     rig.coordinator = start_on(fake, &rig.clock, extra);
     rig.at(2_000);

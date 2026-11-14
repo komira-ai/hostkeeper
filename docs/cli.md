@@ -943,9 +943,7 @@ Through `--request` only: `repository` (hostkeeper.release.v1.Repository).
 `/hostkeeper.operator.v1.Repositories/Remove`
 
 Removes a repository no package comes from. The registry's generation grows
-by one. Writes the audit entry `repository_remove`. The built-in repository `komira` is
-removed by no `Remove`, unless an entry of its name was put over it: then the built-in is
-back.
+by one. Writes the audit entry `repository_remove`.
 
 | flag | value | meaning |
 |---|---|---|
@@ -959,7 +957,7 @@ back.
 Reads what the repository at a URL serves: its descriptor (`<base_uri>/hostkeeper-repository.json`)
 and the signing key it names, over HTTPS, and answers the platforms, the channels, the packages
 and the key's fingerprints, computed from the keyring, for the operator to confirm. Changes
-nothing (docs/deploy/package-repositories.md, "Structure of a repository").
+nothing (docs/deploy/package-repositories.md, "hostkeeper repository format, version 1").
 
 | flag | value | meaning |
 |---|---|---|

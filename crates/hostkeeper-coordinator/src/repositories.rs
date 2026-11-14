@@ -14,9 +14,8 @@
 //! the daemon judges a pushed set by. A registry that is read back is judged by them again, so a
 //! file or a row that breaks one is refused at start, naming the repository.
 //!
-//! - The built-in repository `komira` ([`crate::builtin`]) is answered by [`Registry::get`],
-//!   [`Registry::listed`] and [`Registry::entries_of`] while none of its name was put; it is in no
-//!   file and no row, and [`Registry::remove`] knows only what was put.
+//! - No repository is built in: a coordinator with no entry lists none, and every one, the
+//!   organisation's `komira` included, is added through `Repositories.Add`.
 //! - [`Registry::put`] and [`Registry::remove`] make the registry a change would leave, and
 //!   refuse a repository that clashes with another or past [`MAX_REPOSITORIES`].
 //! - [`Registry::private_channels`] is the channels the pick treats as private ([`crate::picks`]).
@@ -34,7 +33,6 @@ use hostkeeper_release::descriptor;
 use hostkeeper_release::registry::{self, MAX_REPOSITORIES};
 use serde_json::{Map, Value, json};
 
-use crate::builtin;
 use crate::desired::DesiredError;
 
 /// A repository as the registry keeps it.
@@ -204,31 +202,16 @@ impl Registry {
         })
     }
 
-    /// The repository named `name`: the one put, else the built-in `komira`
-    /// ([`crate::builtin`]) at generation 0.
+    /// The repository named `name`, if one was put.
     #[must_use]
     pub(crate) fn get(&self, name: &str) -> Option<&Kept> {
-        self.entries
-            .get(name)
-            .or_else(|| (name == builtin::NAME).then(builtin::komira))
+        self.entries.get(name)
     }
 
-    /// Whether `name` is the built-in repository and none was put over it.
-    #[must_use]
-    pub(crate) fn is_builtin(&self, name: &str) -> bool {
-        name == builtin::NAME && !self.entries.contains_key(name)
-    }
-
-    /// Every repository the registry answers for, by name: those put, and the built-in `komira`
-    /// unless one of its name was put.
+    /// Every repository the registry holds, by name.
     #[must_use]
     pub(crate) fn listed(&self) -> Vec<&Kept> {
-        let mut all: Vec<&Kept> = self.entries.values().collect();
-        if self.is_builtin(builtin::NAME) {
-            all.push(builtin::komira());
-        }
-        all.sort_by(|a, b| a.repository.name.cmp(&b.repository.name));
-        all
+        self.entries.values().collect()
     }
 
     /// The channels (`<name>-<suite>`) of every private repository of the registry.

@@ -1,5 +1,5 @@
 //! The coordinator's read of a repository's descriptor and key (docs/deploy/package-repositories.md,
-//! "Structure of a repository"), for `Repositories.Discover` and `Repositories.Add`: two GETs of
+//! "hostkeeper repository format, version 1"), for `Repositories.Discover` and `Repositories.Add`: two GETs of
 //! the repository's origin, `<base_uri>/hostkeeper-repository.json` and the keyring the descriptor
 //! names, over HTTPS to the roots the coordinator is built with, by the client private repositories
 //! are read with ([`crate::repository_origin`]): no redirect, a `Content-Length` and the

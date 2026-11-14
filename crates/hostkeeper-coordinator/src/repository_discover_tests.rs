@@ -142,7 +142,7 @@ async fn add(
 /// Proves: `Discover` answers what the descriptor says (name, description, channels), the
 /// platforms (the Linux one its apt format names and the Mac's), the macOS packages it maps, the
 /// fingerprint and user ids computed from the keyring it names, and the SHA-256 of the descriptor
-/// and of the keyring; it is not the pinned key; and it reads exactly the descriptor and the
+/// and of the keyring; no key is reported pinned; and it reads exactly the descriptor and the
 /// keyring, once each, with no credential.
 ///
 /// Catches: a fingerprint taken from the descriptor instead of the keyring, a platform list that
@@ -178,29 +178,6 @@ async fn discover_reports_platforms_channels_and_computed_fingerprints() {
     );
     // Discover changes nothing.
     assert_eq!((store.desired().repositories, store.audit().len()), before);
-}
-
-/// Proves: the key of the built-in `komira` is reported pinned, and a repository whose keyring
-/// is the pinned one (served at the built-in descriptor's own paths) is the only one that is.
-///
-/// Catches: a pinned note shown for a key that is not the pinned one, or never shown.
-#[tokio::test]
-async fn discover_marks_the_pinned_key() {
-    let ring = crate::builtin::komira().repository.keyring.clone();
-    let served = Served {
-        descriptor: Arc::new(Mutex::new(descriptor(crate::builtin::PINNED[0]))),
-        keyring: Arc::new(Mutex::new(ring)),
-    };
-    let (rig, _fake, _store) = rig_serving("discover-pinned", &served);
-    let found = discover(&rig, BASE).await.expect("discovered");
-    assert!(found.pinned);
-    assert_eq!(found.fingerprints, crate::builtin::PINNED);
-    assert_eq!(found.user_ids.len(), 1);
-    assert!(
-        found.user_ids[0].starts_with("komira-ai packages archive <"),
-        "{:?}",
-        found.user_ids
-    );
 }
 
 /// Proves: a descriptor that claims a fingerprint the keyring does not hold is refused
@@ -519,23 +496,19 @@ async fn add_refuses_when_what_it_reads_is_not_what_was_confirmed() {
         .expect("what was confirmed is taken");
 }
 
-/// Proves: `Add` of the name `komira` with a key other than the pinned one is refused `builtin`
-/// and changes nothing, while the pinned key is taken under that name (it is the override that
-/// serves the same key), and a name that is no repository name or a reason that is empty is
-/// `invalid_request`.
+/// Proves: the name `komira` is a name like any other for `Add` (nothing is built in under it and
+/// no key is pinned): it is taken with the key the repository serves, `Discover` never reports a
+/// key pinned, and a name that is no repository name or a reason that is empty is
+/// `invalid_request` and changes nothing.
 ///
-/// Catches: the built-in repository's name taken by another key through the form that asks only
-/// for a URL.
+/// Catches: a name or a key treated as special after the built-in repository was removed.
 #[tokio::test]
-async fn add_of_komira_with_another_key_is_refused_builtin() {
+async fn add_takes_komira_as_any_other_name() {
     let served = Served::of(1);
     let (rig, _fake, store) = rig_serving("add-komira", &served);
     let found = discover(&rig, BASE).await.expect("discovered");
+    assert!(!found.pinned);
     let before = (store.desired().repositories, store.audit().len());
-    assert_eq!(
-        add(&rig, add_of("komira", &found)).await.map(drop),
-        Err(Refusal::Builtin)
-    );
     for bad in [
         add_of("Bad Name", &found),
         proto::AddRepositoryRequest {
@@ -547,14 +520,12 @@ async fn add_of_komira_with_another_key_is_refused_builtin() {
     }
     assert_eq!((store.desired().repositories, store.audit().len()), before);
 
-    let ring = crate::builtin::komira().repository.keyring.clone();
-    *served.descriptor.lock().expect("lock") = descriptor(crate::builtin::PINNED[0]);
-    *served.keyring.lock().expect("lock") = ring;
-    let pinned = discover(&rig, BASE).await.expect("discovered");
-    let done = add(&rig, add_of("komira", &pinned))
+    let done = add(&rig, add_of("komira", &found))
         .await
-        .expect("the pinned key is taken");
-    assert!(!done.repository.expect("held").builtin);
+        .expect("taken under the name komira");
+    let held = done.repository.expect("held");
+    assert_eq!(held.repository.expect("entry").name, "komira");
+    assert!(!held.builtin);
 }
 
 /// Proves: `Add` goes through the code of `Put`: a channel that is another repository's is
@@ -589,7 +560,8 @@ async fn add_is_refused_as_put_is() {
 
     // The registry full.
     let (rig, _fake, _store) = rig_serving("add-capacity", &served);
-    for n in 0..16u8 {
+    // `komira` holds one of the 16 places.
+    for n in 0..15u8 {
         let name = format!("repo-{n}");
         let entry = crate::repositories_support::repository(
             &name,

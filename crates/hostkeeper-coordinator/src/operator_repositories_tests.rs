@@ -11,7 +11,7 @@ use hostkeeper_release::registry::keyring_sha256;
 use crate::marks_support::{operator, rig_on, start_on};
 use crate::operator::Caller;
 use crate::repositories_support::{fingerprint, keyring, komira, repository};
-use crate::store::{Fake, audit_failure, store_failure};
+use crate::store::{Backend, Fake, audit_failure, store_failure};
 use crate::testutil::Rig;
 
 const REASON: &str = "the first repository";
@@ -58,7 +58,7 @@ fn last_entry(rig: &Rig) -> (String, String, Option<String>) {
     )
 }
 
-/// Proves: `Put` adds `komira` at generation 1 and answers it with its keyring and the audit
+/// Proves: `Put` replaces `komira` at generation 1 and answers it with its keyring and the audit
 /// entry `repository_put` whose reason is the operator's, then the name, URI, suites and
 /// fingerprints; `Get` answers it with its keyring, `List` without it but with its SHA-256, the
 /// registry's generation and the services of the rollout file that name it; a second repository
@@ -70,16 +70,16 @@ fn last_entry(rig: &Rig) -> (String, String, Option<String>) {
 #[test]
 fn put_get_list_and_remove_round_trip_and_are_audited() {
     let rig = rig_on("repositories-round-trip", &Fake::new(), "");
-    // A fresh registry answers the built-in `komira` at generation 0, and lacks nothing.
+    // The registry the rig starts from holds `komira` at generation 0, as an `Add` of it leaves.
     let fresh = list(&rig);
     assert_eq!((fresh.generation, fresh.unregistered.len()), (0, 0));
-    let [builtin] = fresh.repositories.as_slice() else {
+    let [added] = fresh.repositories.as_slice() else {
         panic!("one repository");
     };
-    assert!(builtin.builtin && builtin.generation == 0);
-    assert_eq!(builtin.services, ["db", "web"]);
+    assert!(!added.builtin && added.generation == 0);
+    assert_eq!(added.services, ["db", "web"]);
     assert_eq!(
-        builtin.platforms,
+        added.platforms,
         ["linux-x86_64", "linux-arm64", "macos-arm64"]
     );
 
@@ -144,6 +144,48 @@ fn put_get_list_and_remove_round_trip_and_are_audited() {
     assert_eq!(listed.repositories.len(), 1);
 }
 
+/// Proves: a coordinator that was given no repository lists none, with no repository built in:
+/// the generation is 0, and `Get` and `Remove` of `komira` are `unknown_repository`.
+///
+/// Catches: a repository answered from the coordinator's code instead of the registry.
+#[test]
+fn a_coordinator_with_no_repository_lists_none() {
+    let fake = Fake::new();
+    let clock = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(2_000));
+    let (verifier, _) = hostkeeper_oidc::testkit::static_verifier();
+    let coordinator = crate::service::Coordinator::new(
+        crate::desired::DesiredStore::over(
+            std::sync::Arc::new(fake.clone()),
+            fake.load().expect("the fake loads").desired,
+        ),
+        verifier,
+        crate::testutil::OPERATOR.to_owned(),
+        crate::testutil::clock_of(&clock),
+    );
+    let listed = coordinator
+        .repositories_list(&operator(), &proto::ListRepositoriesRequest {})
+        .expect("listed");
+    assert_eq!(listed.generation, 0);
+    assert!(listed.repositories.is_empty());
+    assert!(listed.unregistered.is_empty());
+    assert_eq!(
+        coordinator
+            .repositories_get(&operator(), &get_of("komira"))
+            .map(drop),
+        Err(Refusal::UnknownRepository)
+    );
+    assert_eq!(
+        coordinator
+            .repositories_remove(&operator(), remove_of("komira"))
+            .map(drop),
+        Err(Refusal::UnknownRepository)
+    );
+    assert_eq!(
+        fake.desired().repositories,
+        crate::repositories::Registry::default()
+    );
+}
+
 /// Proves: a `Put` of a name the registry holds with another keyring and fingerprints replaces it
 /// (a key rotation): `Get` answers the new keyring and the generation of the put, the other
 /// repositories keep theirs, and the generation went up by one.
@@ -184,7 +226,7 @@ fn list_names_the_repositories_services_name_that_the_registry_lacks() {
         &Fake::new(),
         "repository = \"other\"",
     );
-    // `komira` is built in, so only the repository the registry does not hold is lacking.
+    // The registry holds `komira`, so only the repository it does not hold is lacking.
     assert_eq!(list(&rig).unregistered, ["other"]);
     put(
         &rig,
@@ -208,7 +250,7 @@ fn state_of(fake: &Fake) -> (crate::repositories::Registry, usize) {
 /// is no repository name; `keyring_invalid` for bytes that are no keyring, a fingerprint the
 /// keyring lacks, and a key none of whose fingerprints is listed; `unknown_repository` for `Get`
 /// and `Remove` of a name not held; `in_use` for `Remove` of the repository a service names;
-/// `builtin` for `Remove` of the built-in `komira`;
+/// `in_use` for `Remove` of `komira`, which the services name too;
 /// `conflict` for a channel that is another repository's; `capacity` for a seventeenth.
 ///
 /// Catches: a refusal that changes the registry or writes an audit entry, a keyring fault
@@ -380,7 +422,7 @@ fn every_refusal_changes_nothing_and_says_its_cause() {
                 .repositories_remove(&me, remove_of("komira"))
                 .map(drop)
         ),
-        Refusal::Builtin
+        Refusal::InUse
     );
     // `a-b` + `c` and `a` + `b-c` are one channel, `a-b-c`.
     let clashing = repository("a-b", "https://c.example.com/", &["c"], 6);
@@ -395,7 +437,8 @@ fn every_refusal_changes_nothing_and_says_its_cause() {
 fn a_seventeenth_repository_is_capacity_and_a_replacement_is_not() {
     let fake = Fake::new();
     let rig = rig_on("repositories-capacity", &fake, "");
-    for n in 0..16u8 {
+    // `komira` holds one of the 16 places.
+    for n in 0..15u8 {
         let name = format!("repo-{n}");
         put(
             &rig,

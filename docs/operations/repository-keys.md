@@ -16,16 +16,13 @@ names a key:
   registry; a `.pkg` of a private repository is fetched from the implicit store `coordinator`,
   over the Mac's mutual-TLS connection to the coordinator.
 
-The organisation's own repository, `komira`, is built into the coordinator: its keyring and the two fingerprints
-that are the root of trust of every host's apt for it (`CB09CF205649494A92DFC22C70D1F2A25906CB22`, the primary key,
-and `F767235D83B0410CFAF4779E8738AD1BE061EEDD`, its signing subkey) are in the coordinator's code
-(`crates/hostkeeper-coordinator/src/builtin.rs` and `builtin/komira-archive-keyring.gpg`), so a fresh
-coordinator needs no repository setup. Any other repository is added by its URL and the operator confirms the
-fingerprints the coordinator computes from its key
-([package-repositories.md](../deploy/package-repositories.md#how-the-key-is-confirmed)). Rotating the
-`komira` key is a coordinator release with the new keyring and pin, or, at once and without a release, a `Put` of
-an entry named `komira` with the new keyring (which replaces the built-in one; removing that entry brings the
-built-in one back). `Add` of the name `komira` with any other key is refused (`builtin`).
+No repository is built into the coordinator, the organisation's own `komira` included: every repository is added by
+its URL, and the operator confirms the fingerprints the coordinator computes from its key
+([package-repositories.md](../deploy/package-repositories.md#how-the-key-is-confirmed)). The fingerprints of `komira`
+(`CB09CF205649494A92DFC22C70D1F2A25906CB22`, the primary key, and `F767235D83B0410CFAF4779E8738AD1BE061EEDD`, its
+signing subkey) are the ones the operator compares when adding it. Rotating the `komira` key is a new keyring in the
+repository and its descriptor, then an `Add` of the name `komira` again, which replaces the entry once the operator
+confirms the new fingerprints (or a `Put` of the entry with the new keyring); no coordinator release is involved.
 
 So a key rotation is one change on the coordinator for every Linux host, ahead of the
 repository's own change, and a change of the coordinator's MDM files for managed Macs.

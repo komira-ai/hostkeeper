@@ -264,7 +264,7 @@ message Repository {
   // answered or stored.
   string credential_file = 9;
   // The repository descriptor the entry was added from (`<base_uri>/hostkeeper-repository.json`,
-  // docs/deploy/package-repositories.md, "Structure of a repository"), byte for byte, at most 64
+  // docs/deploy/package-repositories.md, "hostkeeper repository format, version 1"), byte for byte, at most 64
   // KiB. Empty for an entry put without one. Never sent to a host.
   bytes descriptor = 10;
   // The repository's base URL, `https://`: `uri` is `<base_uri>/<apt path>` for an entry added
