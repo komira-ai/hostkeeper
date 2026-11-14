@@ -292,7 +292,8 @@ pub(crate) fn layout(refusal: LayoutRefusal) -> Status {
         LayoutRefusal::AuditUnavailable => Code::Unavailable,
         LayoutRefusal::UnknownRow
         | LayoutRefusal::UnknownRack
-        | LayoutRefusal::UnknownPlacement => Code::NotFound,
+        | LayoutRefusal::UnknownPlacement
+        | LayoutRefusal::UnknownDevice => Code::NotFound,
         LayoutRefusal::NameTaken => Code::AlreadyExists,
         LayoutRefusal::InUse
         | LayoutRefusal::Overlap
