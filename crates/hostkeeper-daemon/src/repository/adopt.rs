@@ -97,13 +97,13 @@ impl Repository {
         })?;
         let mut sealed_for = entry.clone();
         sealed_for.package_version = Some(installed.version.clone());
-        if let Some(hook) = sealed_for
+        // An apt entry's manifest always names a hook (the order's checks refuse one without);
+        // the adopted version runs the built-in steps, so its command is empty.
+        sealed_for
             .manifest
-            .as_mut()
-            .and_then(|manifest| manifest.hook.as_mut())
-        {
-            hook.command.clear();
-        }
+            .iter_mut()
+            .filter_map(|manifest| manifest.hook.as_mut())
+            .for_each(|hook| hook.command.clear());
         // The installed version of the order's own package, asked of the index for its digest: the
         // order's pin names another version and is not read.
         let pinning = Order {
