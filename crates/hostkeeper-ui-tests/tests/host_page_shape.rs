@@ -9,11 +9,17 @@ use support::pages::{m, page_driver};
 
 fn layout() -> Value {
     json!({
-        "rows": [{"id": "row-1", "number": 1}],
-        "racks": [{"id": "rack-1", "row": "row-1", "number": 2, "heightU": 10}],
+        "rows": [{"id": "row-1", "number": 0}],
+        "racks": [{"id": "rack-1", "row": "row-1", "number": 1, "heightU": 10}],
+        "sleds": [
+            {"id": "sled-1", "rack": "rack-1", "u": 4, "heightU": 2, "slots": 1, "address": "C0-R0-R1-S1"},
+            {"id": "sled-2", "rack": "rack-1", "u": 1, "heightU": 1, "slots": 1, "address": "C0-R0-R1-S0"},
+        ],
         "placements": [
-            {"subject": {"kind": "LAYOUT_SUBJECT_KIND_HOST", "id": "web-2"}, "rack": "rack-1", "u": 4, "heightU": 2},
-            {"subject": {"kind": "LAYOUT_SUBJECT_KIND_HOST", "id": "web-3"}, "rack": "rack-1", "u": 1, "heightU": 1},
+            {"subject": {"kind": "LAYOUT_SUBJECT_KIND_HOST", "id": "web-2"}, "rack": "rack-1", "u": 4, "heightU": 2,
+             "sled": "sled-1", "address": "C0-R0-R1-S1-S0"},
+            {"subject": {"kind": "LAYOUT_SUBJECT_KIND_HOST", "id": "web-3"}, "rack": "rack-1", "u": 1, "heightU": 1,
+             "sled": "sled-2", "address": "C0-R0-R1-S0-S0"},
         ],
     })
 }
@@ -166,9 +172,10 @@ return { zone: last.attrs["class"], legend: text(last.children[0]), button: butt
 
 #[test]
 fn the_mini_elevation_lights_the_hosts_u_among_its_neighbours_or_says_unplaced() {
-    // Asserts: a placed host's elevation has the rack's 10 U, a dim block for the neighbour at U1
-    // and a lit block of 2 U at U4 (rows counted from the top), with the caption naming the rack
-    // and the U; a host in no rack gets an empty elevation captioned Unplaced.
+    // Asserts: a placed host's elevation has the rack's 10 U, a dim block for the neighbouring sled at
+    // U1 and a lit block of 2 U at U4 (rows counted from the top), with the caption naming the rack,
+    // the U and, under it, the host's address; a host on no sled gets an empty elevation captioned
+    // Unplaced.
     let mut ui =
         ui_with(json!({"nodeId": "web-2", "live": true, "lastHeartbeatUnix": "1800000000"}));
     let out = ui.run(&page_driver(
@@ -179,7 +186,8 @@ fn the_mini_elevation_lights_the_hosts_u_among_its_neighbours_or_says_unplaced()
 const rack = nodes(tree).find((n) => n.attrs["class"] === "mini-rack");
 const blocks = nodes(rack).map((n) => ({ c: n.attrs["class"], r: n.attrs.vars["--r"], s: n.attrs.vars["--s"] })).slice(1);
 const cap = text(nodes(tree).find((n) => n.attrs["class"] === "mini-cap"));
-return { units: rack.attrs.vars["--units"], blocks, cap };"#,
+const address = text(named(tree, "address")[0]);
+return { units: rack.attrs.vars["--units"], blocks, cap, address };"#,
     ));
     assert_eq!(
         out["out"],
@@ -189,7 +197,8 @@ return { units: rack.attrs.vars["--units"], blocks, cap };"#,
                 {"c": "mini-u", "r": 10.0, "s": 1.0},
                 {"c": "mini-u me", "r": 6.0, "s": 2.0},
             ],
-            "cap": "Row 1 / Rack 2 U4-5 of 10",
+            "cap": "Row 0 / Rack 1 U4-5 of 10",
+            "address": "C0-R0-R1-S1-S0",
         })
     );
 
@@ -205,6 +214,6 @@ return { rack: rack.attrs["class"], cap: text(nodes(tree).find((n) => n.attrs["c
     ));
     assert_eq!(
         out["out"],
-        json!({"rack": "mini-rack empty", "cap": "Unplaced in no rack"})
+        json!({"rack": "mini-rack empty", "cap": "Unplaced on no sled"})
     );
 }

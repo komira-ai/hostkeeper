@@ -17,7 +17,7 @@ use crate::store::{audit_failure, store_failure};
 
 /// A world whose coordinator keeps its layout in the world's store, so a failing store fails the
 /// layout's commits too.
-fn world(name: &str) -> World {
+pub(crate) fn world(name: &str) -> World {
     let mut world = World::new(name);
     world.rig.coordinator = coordinator_listed(
         &world.fake,
@@ -32,14 +32,14 @@ fn world(name: &str) -> World {
     world
 }
 
-fn host(id: &str) -> Option<proto::LayoutSubject> {
+pub(crate) fn host(id: &str) -> Option<proto::LayoutSubject> {
     Some(proto::LayoutSubject {
         kind: proto::LayoutSubjectKind::Host.into(),
         id: id.to_owned(),
     })
 }
 
-fn place(
+pub(crate) fn place(
     subject: Option<proto::LayoutSubject>,
     rack: &str,
     u: u32,
@@ -54,12 +54,12 @@ fn place(
     }
 }
 
-fn get(c: &Coordinator) -> proto::GetLayoutResponse {
+pub(crate) fn get(c: &Coordinator) -> proto::GetLayoutResponse {
     c.layout_get(&operator(), &proto::GetLayoutRequest {})
         .expect("get")
 }
 
-fn rack_of(row: &str, height_u: u32) -> proto::PutLayoutRackRequest {
+pub(crate) fn rack_of(row: &str, height_u: u32) -> proto::PutLayoutRackRequest {
     proto::PutLayoutRackRequest {
         row: row.to_owned(),
         height_u,
@@ -67,14 +67,14 @@ fn rack_of(row: &str, height_u: u32) -> proto::PutLayoutRackRequest {
     }
 }
 
-fn audit_actions(entries: &[AuditEntry]) -> Vec<(String, Option<String>)> {
+pub(crate) fn audit_actions(entries: &[AuditEntry]) -> Vec<(String, Option<String>)> {
     entries
         .iter()
         .map(|e| (e.action.clone(), e.subject.clone()))
         .collect()
 }
 
-fn unplace(id: &str) -> proto::UnplaceLayoutRequest {
+pub(crate) fn unplace(id: &str) -> proto::UnplaceLayoutRequest {
     proto::UnplaceLayoutRequest {
         subject: host(id),
         reason: String::new(),
@@ -88,7 +88,7 @@ fn remove_row(id: &str) -> proto::RemoveLayoutRowRequest {
     }
 }
 
-fn remove_rack(id: &str) -> proto::RemoveLayoutRackRequest {
+pub(crate) fn remove_rack(id: &str) -> proto::RemoveLayoutRackRequest {
     proto::RemoveLayoutRackRequest {
         id: id.to_owned(),
         reason: String::new(),
@@ -361,6 +361,10 @@ fn only_the_operator_reaches_the_layout() {
                 .err(),
             c.layout_remove_device(&caller, &proto::RemoveLayoutDeviceRequest::default())
                 .err(),
+            c.layout_put_sled(&caller, &proto::PutLayoutSledRequest::default())
+                .err(),
+            c.layout_remove_sled(&caller, &proto::RemoveLayoutSledRequest::default())
+                .err(),
         ];
         assert!(refused.iter().all(|r| *r == Some(wanted)), "{refused:?}");
     }
@@ -414,6 +418,7 @@ fn each_refusal_is_a_status_with_its_code_and_token() {
         (Refusal::UnknownRack, NotFound, "unknown_rack"),
         (Refusal::UnknownPlacement, NotFound, "unknown_placement"),
         (Refusal::UnknownDevice, NotFound, "unknown_device"),
+        (Refusal::UnknownSled, NotFound, "unknown_sled"),
         (Refusal::NameTaken, AlreadyExists, "name_taken"),
         (Refusal::InUse, FailedPrecondition, "in_use"),
         (Refusal::Overlap, FailedPrecondition, "overlap"),
@@ -455,6 +460,23 @@ fn each_error_of_the_layout_is_a_refusal() {
             Refusal::UnknownPlacement,
         ),
         (E::UnknownDevice("net.1".into()), Refusal::UnknownDevice),
+        (E::UnknownSled("sled-1".into()), Refusal::UnknownSled),
+        (
+            E::SledInUse {
+                sled: "sled-1".into(),
+                items: vec!["host:a".into()],
+            },
+            Refusal::InUse,
+        ),
+        (
+            E::SlotTaken {
+                sled: "sled-1".into(),
+                slot: 1,
+                first: "host:a".into(),
+                second: "host:b".into(),
+            },
+            Refusal::Overlap,
+        ),
     ] {
         assert_eq!(Refusal::from(error), wanted);
     }

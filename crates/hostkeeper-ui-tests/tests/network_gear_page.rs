@@ -10,20 +10,32 @@ use support::Ui;
 use support::pages::{bodies, m};
 
 /// A lab of one row, one rack of 27 U and the two switches of the first rack: `bmc-switch` (BMC
-/// network, console on `node-1`, `/dev/ttyUSB0`, a management MAC, a note) at U 27 and `data-switch`
-/// (data network, no console) at U 26, beside the server `node-1` at U 22 to 25.
+/// network, console on `node-1`, `/dev/ttyUSB0`, a management MAC, a note) on a 1 U sled at U 27
+/// (C0-R0-R0-S3-S0) and `data-switch` (data network, no console) on a 1 U sled at U 26
+/// (C0-R0-R0-S2-S0), beside the server `node-1` on a 4 U sled at U 22 to 25 (C0-R0-R0-S1-S0) and an
+/// empty sled of two slots, 1 U high, at U 10 (C0-R0-R0-S0, free slots S0-S0 and S0-S1).
 fn layout() -> Value {
     json!({
         "name": "Lab 1",
-        "rows": [{"id": "row-1", "number": 1}],
-        "racks": [{"id": "rack-1", "row": "row-1", "number": 1, "heightU": 27}],
+        "rows": [{"id": "row-1", "number": 0}],
+        "racks": [{"id": "rack-1", "row": "row-1", "number": 0, "heightU": 27}],
+        "sleds": [
+            {"id": "sled-1", "rack": "rack-1", "number": 3, "u": 27, "heightU": 1, "slots": 1,
+             "address": "C0-R0-R0-S3"},
+            {"id": "sled-2", "rack": "rack-1", "number": 2, "u": 26, "heightU": 1, "slots": 1,
+             "address": "C0-R0-R0-S2"},
+            {"id": "sled-3", "rack": "rack-1", "number": 1, "u": 22, "heightU": 4, "slots": 1,
+             "address": "C0-R0-R0-S1"},
+            {"id": "sled-4", "rack": "rack-1", "u": 10, "heightU": 1, "slots": 2,
+             "address": "C0-R0-R0-S0"},
+        ],
         "placements": [
             {"subject": {"kind": "LAYOUT_SUBJECT_KIND_INVENTORY", "id": "net.1"},
-             "rack": "rack-1", "u": 27, "heightU": 1},
+             "rack": "rack-1", "u": 27, "heightU": 1, "sled": "sled-1", "address": "C0-R0-R0-S3-S0"},
             {"subject": {"kind": "LAYOUT_SUBJECT_KIND_INVENTORY", "id": "net.2"},
-             "rack": "rack-1", "u": 26, "heightU": 1},
+             "rack": "rack-1", "u": 26, "heightU": 1, "sled": "sled-2", "address": "C0-R0-R0-S2-S0"},
             {"subject": {"kind": "LAYOUT_SUBJECT_KIND_INVENTORY", "id": "node-1"},
-             "rack": "rack-1", "u": 22, "heightU": 4},
+             "rack": "rack-1", "u": 22, "heightU": 4, "sled": "sled-3", "address": "C0-R0-R0-S1-S0"},
         ],
         "devices": [
             {"id": "net.1", "name": "bmc-switch", "role": "NETWORK_ROLE_BMC",
@@ -125,8 +137,8 @@ return {
     assert_eq!(
         o["titles"],
         json!([
-            "bmc-switch | BMC network | console ttyUSB0 on node-1",
-            "data-switch | Data network | console none"
+            "bmc-switch | BMC network | console ttyUSB0 on node-1 | C0-R0-R0-S3-S0",
+            "data-switch | Data network | console none | C0-R0-R0-S2-S0"
         ])
     );
     assert_eq!(o["words"], json!(["BMC bmc-switch", "DATA data-switch"]));
@@ -136,11 +148,17 @@ return {
     assert_eq!(
         o["network"],
         json!([
-            ["data-switch", "U26", "1U", "Data network", "none"],
+            [
+                "data-switch",
+                "C0-R0-R0-S2-S0",
+                "U26",
+                "Data network",
+                "none"
+            ],
             [
                 "bmc-switch",
+                "C0-R0-R0-S3-S0",
                 "U27",
-                "1U",
                 "BMC network",
                 "ttyUSB0 on node-1"
             ]
@@ -249,7 +267,7 @@ return { before, rows: rows(tree)[0], titles: nodes(tree).filter((n) => n.tag ==
     assert_eq!(out["out"]["before"], json!(["kind-server"]));
     assert_eq!(
         out["out"]["rows"],
-        json!(["Server name", "BMC MAC", "Data MAC", "Notes", ""])
+        json!(["Server name", "BMC MAC", "Data MAC", "Notes", "Address", ""])
     );
     assert_eq!(out["out"]["titles"], json!(["Inventory"]));
     assert_eq!(
@@ -261,17 +279,17 @@ return { before, rows: rows(tree)[0], titles: nodes(tree).filter((n) => n.tag ==
     );
     assert_eq!(
         bodies(&ui).len(),
-        1,
-        "the servers page asks for the records only"
+        2,
+        "the servers page asks for the records and the layout (for the addresses) only"
     );
 }
 
 #[test]
 fn the_switch_kind_lists_each_switch_with_its_fields_and_where_it_stands() {
     // Proves: the Switch kind is one table of the switches (Name, Network, Console, Management MAC,
-    // Notes, Where) with Open, Edit and Remove on each, and the form to add one under it; Open goes
-    // to the switch page and Edit to this page with the switch's id as `edit`, which fills the form
-    // and the placement choices with what is kept.
+    // Notes, Address, Where) with Open, Edit and Remove on each, and the form to add one under it; Open
+    // goes to the switch page and Edit to this page with the switch's id as `edit`, which fills the
+    // form and the Sled slot choice with what is kept.
     // Catches: a field of a switch that the table or the edit form leaves out.
     let mut ui = start();
     let out = run(
@@ -293,6 +311,7 @@ return { rows: rows(tree).slice(0, 3), pressed: nodes(tree).filter((n) => n.tag 
                 "Console",
                 "Management MAC",
                 "Notes",
+                "Address",
                 "Where",
                 ""
             ],
@@ -302,7 +321,8 @@ return { rows: rows(tree).slice(0, 3), pressed: nodes(tree).filter((n) => n.tag 
                 "ttyUSB0 on node-1",
                 "3c:ec:ef:aa:00:01",
                 "uplink",
-                "Row 1 / Rack 1, U27",
+                "C0-R0-R0-S3-S0",
+                "Row 0 / Rack 0, U27",
                 "Open Edit Remove"
             ],
             [
@@ -311,7 +331,8 @@ return { rows: rows(tree).slice(0, 3), pressed: nodes(tree).filter((n) => n.tag 
                 "none",
                 "-",
                 "-",
-                "Row 1 / Rack 1, U26",
+                "C0-R0-R0-S2-S0",
+                "Row 0 / Rack 0, U26",
                 "Open Edit Remove"
             ]
         ])
@@ -340,9 +361,8 @@ return {
   device: chosen(tree, "switch-console-device"),
   mac: named(tree, "switch-mac")[0].attrs.value,
   hosts: choices(tree, "switch-console-host"),
-  rack: chosen(tree, "place-rack"),
-  u: chosen(tree, "place-u"),
-  row: chosen(tree, "place-row"),
+  slot: chosen(tree, "switch-slot"),
+  slots: choices(tree, "switch-slot"),
 };"#,
     );
     assert_eq!(
@@ -350,7 +370,8 @@ return {
         json!({
             "h3": ["Edit bmc-switch"], "name": "bmc-switch", "role": "NETWORK_ROLE_BMC",
             "host": "node-1", "device": "/dev/ttyUSB0", "mac": "3c:ec:ef:aa:00:01",
-            "hosts": ["none", "node-1", "node-2"], "rack": "rack-1", "u": "27", "row": "row-1"
+            "hosts": ["none", "node-1", "node-2"], "slot": "sled-1:0",
+            "slots": ["Unplaced", "C0-R0-R0-S0-S0", "C0-R0-R0-S0-S1", "C0-R0-R0-S3-S0"]
         })
     );
 }
@@ -360,8 +381,8 @@ fn a_switch_is_added_and_placed_and_a_wrong_field_sends_nothing() {
     // Proves: Add with a name that is wrong, no device for a console host, and a MAC that is none
     // sends nothing and marks each field; with the fields right it sends PutDevice (the name
     // trimmed, the MAC in its one spelling, the console as chosen, the reason) and then Place under
-    // the inventory subject of the id the coordinator made, at the row, rack and U chosen, 1U high;
-    // with Unplaced left it sends no Place.
+    // the inventory subject of the id the coordinator made, on the sled slot chosen (no height, row,
+    // rack or U); with Unplaced left it sends no Place.
     // Catches: a request that carries a field as typed, a switch placed under a guessed id, or a
     // placement made for a switch the operator left unplaced.
     let mut ui = start();
@@ -389,11 +410,10 @@ choose(tree, "switch-role", "NETWORK_ROLE_DATA");
 choose(tree, "switch-console-device", "/dev/ttyS1");
 type(tree, "switch-mac", "AA-BB-CC-DD-EE-0F");
 type(tree, "switch-notes", "spare\nswitch");
-choose(tree, "place-row", "row-1");
-choose(tree, "place-u", "20");
+choose(tree, "switch-slot", "sled-4:1");
 await click(tree, "save-switch");
 type(tree, "switch-name", "plain");
-choose(tree, "place-row", "");
+choose(tree, "switch-slot", "");
 await click(tree, "save-switch");
 return { first };"#,
     );
@@ -434,7 +454,7 @@ return { first };"#,
         (
             m("Layout/Place"),
             json!({"subject": {"kind": "LAYOUT_SUBJECT_KIND_INVENTORY", "id": "net.3"},
-                   "rack": "rack-1", "heightU": 1, "u": 20, "reason": "placed spare"})
+                   "sled": "sled-4", "slot": 1, "reason": "placed spare"})
         )
     );
     assert_eq!(sent[2].0, m("Layout/PutDevice"));
@@ -470,7 +490,7 @@ fn saving_a_switch_keeps_or_moves_or_clears_its_place_and_a_refusal_is_told_in_w
         r#"
 await click(tree, "save-switch");
 await click(tree, "save-switch");
-choose(tree, "place-row", "");
+choose(tree, "switch-slot", "");
 await click(tree, "save-switch");
 await click(tree, "remove-switch", 1);
 await click(tree, "remove-switch", 1);
@@ -497,7 +517,7 @@ return null;"#,
         reports[0]
             .as_str()
             .expect("report")
-            .contains("It could not be placed: Another server already stands"),
+            .contains("It could not be placed: That place is taken"),
         "{reports:?}"
     );
     assert_eq!(reports[1], "Another switch already has that name.");
@@ -537,7 +557,7 @@ return { facts, crumbs, title, tag, mini };"#,
     let o = &out["out"];
     assert_eq!(o["title"], json!(["bmc-switch"]));
     assert_eq!(o["tag"], json!(["BMC network"]));
-    assert_eq!(o["crumbs"], json!(["Lab Row 1 Rack 1 bmc-switch"]));
+    assert_eq!(o["crumbs"], json!(["Lab Row 0 Rack 0 bmc-switch"]));
     assert_eq!(o["mini"], 1);
     assert_eq!(
         o["facts"],
@@ -545,7 +565,8 @@ return { facts, crumbs, title, tag, mini };"#,
             ["Network", "BMC network"],
             ["Console", "ttyUSB0 on node-1 open node-1"],
             ["Management MAC", "3c:ec:ef:aa:00:01"],
-            ["Where", "Row 1 / Rack 1, U27"],
+            ["Address", "C0-R0-R0-S3-S0"],
+            ["Where", "Row 0 / Rack 0, U27"],
             ["Notes", "uplink"]
         ])
     );
@@ -600,7 +621,7 @@ fn an_unplaced_switch_says_so_and_a_failed_read_is_told() {
     );
     assert_eq!(
         out["out"]["facts"],
-        json!(["Data network", "none", "-", "Unplaced", "-"])
+        json!(["Data network", "none", "-", "-", "Unplaced", "-"])
     );
     assert_eq!(out["out"]["crumbs"], json!(["Lab data-switch"]));
 

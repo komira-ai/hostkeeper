@@ -250,14 +250,16 @@ pub(crate) fn rich_accounts() -> Accounts {
         .expect("accounts")
 }
 
-/// A layout named `Lab`, with a row, two racks and two placements, one of them of an inventory entry.
+/// A layout named `Lab`, with a row, two racks, three subjects placed by rack and U (a host, an
+/// inventory entry and a switch: each on a one-slot sled of its own, `sled-1` to `sled-3`), and
+/// in the second rack a sled (`sled-4`) of two slots with two servers on it.
 pub(crate) fn rich_layout() -> Layout {
     let (next, row) = Layout::default()
         .with_name("Lab")
         .and_then(|named| named.with_next_row())
         .expect("a row");
     let (next, rack) = next.with_rack("", &row.id, 42).expect("a rack");
-    let (next, _) = next.with_rack("", &row.id, 24).expect("a second rack");
+    let (next, second) = next.with_rack("", &row.id, 24).expect("a second rack");
     let host = crate::layout::Subject {
         kind: crate::layout::Kind::Host,
         id: "node-1".into(),
@@ -293,6 +295,27 @@ pub(crate) fn rich_layout() -> Layout {
     let (next, _) = next
         .with_placement(crate::operator_layout::placement_of(switch, &rack.id, 3, 1))
         .expect("the device placed");
+    let (next, sled) = next
+        .with_sled("", &second.id, 5, 3, 4, "Studios")
+        .expect("a sled");
+    let on_sled = |kind, id: &str| crate::layout::Subject {
+        kind,
+        id: id.into(),
+    };
+    let (next, _) = next
+        .with_sled_placement(
+            &on_sled(crate::layout::Kind::Inventory, "rec-8"),
+            &sled.id,
+            Some(0),
+        )
+        .expect("a server on the sled");
+    let (next, _) = next
+        .with_sled_placement(
+            &on_sled(crate::layout::Kind::Host, "node-2"),
+            &sled.id,
+            Some(1),
+        )
+        .expect("a second server on the sled");
     next
 }
 

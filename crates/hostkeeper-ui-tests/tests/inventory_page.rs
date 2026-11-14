@@ -8,6 +8,14 @@ use serde_json::{Value, json};
 use support::Ui;
 use support::pages::{assert_shows, bodies, m, page_driver, shown};
 
+/// What the page sent, but its reads of the layout (which only give each server its address).
+fn sent(ui: &Ui) -> Vec<(String, Value)> {
+    bodies(ui)
+        .into_iter()
+        .filter(|(method, _)| *method != m("Layout/Get"))
+        .collect()
+}
+
 /// Two records that hold more than the page shows: a role, a host group, a serial, a platform, a
 /// window, who added it, and a use.
 fn records_reply() -> Value {
@@ -26,8 +34,8 @@ fn records_reply() -> Value {
 
 #[test]
 fn inventory_page_shows_exactly_four_fields_in_one_table() {
-    // Proves: a record a host is enrolled against says "enrolled" beside its name; one table with the headings Server name, BMC MAC, Data MAC and Notes (and an empty
-    // one for the buttons), a row per record with those four fields and Edit and Remove, a last
+    // Proves: a record a host is enrolled against says "enrolled" beside its name; one table with the headings Server name, BMC MAC, Data MAC and Notes, then Address (read only: "-"
+    // when the server stands on no sled) and an empty one for the buttons, a row per record with those four fields and Edit and Remove, a last
     // row to add a server with an input for each of the four fields, and nothing of a record's
     // other fields: not its role, host group, serial, platform, window, state, who added it, nor
     // whether it is enrolled.
@@ -50,17 +58,18 @@ return {
     assert_eq!(
         out["out"]["rows"],
         json!([
-            ["Server name", "BMC MAC", "Data MAC", "Notes", ""],
+            ["Server name", "BMC MAC", "Data MAC", "Notes", "Address", ""],
             [
                 "db-1 enrolled",
                 "0c:c4:7a:00:00:01",
                 "0c:c4:7a:00:00:02, 0c:c4:7a:00:00:03",
                 "rack 4 slot 2",
+                "-",
                 "Edit Remove"
             ],
-            ["mac-1", "-", "-", "-", "Edit Remove"],
-            ["web-1", "-", "0c:c4:7a:00:00:31", "-", "Edit Remove"],
-            ["", "", "", "", "Add"],
+            ["mac-1", "-", "-", "-", "-", "Edit Remove"],
+            ["web-1", "-", "0c:c4:7a:00:00:31", "-", "-", "Edit Remove"],
+            ["", "", "", "", "-", "Add"],
         ])
     );
     assert_eq!(
@@ -136,7 +145,7 @@ await click(tree, "add-record");
 "#,
     ));
     assert_eq!(
-        bodies(&ui),
+        sent(&ui),
         [
             (
                 m("Enrollment/ListRecords"),
@@ -239,7 +248,7 @@ return seen;
         ])
     );
     assert_eq!(
-        bodies(&ui),
+        sent(&ui),
         [
             (
                 m("Enrollment/ListRecords"),
@@ -325,7 +334,7 @@ return { shownRows, values, error };
         json!("bad is not a MAC: twelve hex digits, with or without : - . between them.")
     );
     assert_eq!(
-        bodies(&ui)[2],
+        sent(&ui)[2],
         (
             m("Enrollment/UpdateRecord"),
             json!({"hostId": "db-1", "dataMacs": ["0c:c4:7a:00:00:22"],
@@ -354,7 +363,7 @@ await click(tree, "save-record");
     ));
     assert_eq!(serial["seen"]["reports"], json!(["Saved mac-1."]));
     assert_eq!(
-        bodies(&ui)[4],
+        sent(&ui)[4],
         (
             m("Enrollment/UpdateRecord"),
             json!({"hostId": "mac-1", "dataMacs": [], "bmcMac": "", "notes": "a Mac"})
@@ -371,7 +380,7 @@ return text(named(tree, "edit-dataMac-error")[0]);
 "#,
     ));
     assert_eq!(plain["out"], json!("Give the data MAC."));
-    assert_eq!(bodies(&ui).len(), 6, "a refused save sends nothing");
+    assert_eq!(sent(&ui).len(), 6, "a refused save sends nothing");
 }
 
 #[test]
@@ -396,7 +405,7 @@ await click(tree, "remove-record", 0);
 "#,
     ));
     assert_eq!(
-        bodies(&ui)[1..],
+        sent(&ui)[1..],
         [
             (
                 m("Enrollment/RemoveRecord"),

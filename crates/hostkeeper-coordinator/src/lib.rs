@@ -433,6 +433,8 @@ mod one_live_update_release_tests;
 #[cfg(test)]
 mod one_live_update_tests;
 #[cfg(test)]
+mod operator_layout_sled_tests;
+#[cfg(test)]
 mod operator_layout_tests;
 #[cfg(test)]
 mod operator_mdm_devices_tests;

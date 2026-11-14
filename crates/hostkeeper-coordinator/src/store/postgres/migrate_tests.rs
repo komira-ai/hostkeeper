@@ -4,7 +4,7 @@ use super::*;
 
 /// The SHA-256 of each shipped migration file, in hex. A shipped migration is never edited: a
 /// change is a migration of its own, so these only grow.
-const PINNED: [(i32, &str, &str); 16] = [
+const PINNED: [(i32, &str, &str); 17] = [
     (
         1,
         "state",
@@ -85,6 +85,11 @@ const PINNED: [(i32, &str, &str); 16] = [
         "lab_devices",
         "5dc09c0a65064c2fa99076182870c43cffc07d94894b7cdaadf7385e2a07d3f9",
     ),
+    (
+        17,
+        "lab_sleds",
+        "719f9fd937596c6c701a9983a84eeb6105822f663b50edf29b654e427731c869",
+    ),
 ];
 
 fn hex(bytes: &[u8]) -> String {
@@ -108,10 +113,10 @@ fn what(statement: &str) -> String {
 /// names are exactly [(1, "state"), (2, "first_serving"), (3, "generations"), (4, "releases"),
 /// (5, "mdm_devices"), (6, "host_running"), (7, "repositories"), (8, "host_groups"),
 /// (9, "service_repository"), (10, "accounts"), (11, "mdm"),
-/// (12, "mdm_setup"), (13, "host_group_all"), (14, "trusted_publishers"), (15, "lab_layout"), (16, "lab_devices")], each file's
+/// (12, "mdm_setup"), (13, "host_group_all"), (14, "trusted_publishers"), (15, "lab_layout"), (16, "lab_devices"), (17, "lab_sleds")], each file's
 /// SHA-256 is the pinned one, and every one passes the header rule, the lint and the numbering;
 /// the first three and `host_groups` say older releases must not run on them, and `releases`,
-/// `mdm_devices`, `host_running`, `repositories`, `service_repository`, `accounts`, `mdm`, `mdm_setup`, `host_group_all`, `trusted_publishers`, `lab_layout` and `lab_devices` that
+/// `mdm_devices`, `host_running`, `repositories`, `service_repository`, `accounts`, `mdm`, `mdm_setup`, `host_group_all`, `trusted_publishers`, `lab_layout`, `lab_devices` and `lab_sleds` that
 /// they may (an older release never reads any of those tables).
 ///
 /// Catches: an edit to a shipped migration (a database that ran the old text would differ from
@@ -137,7 +142,8 @@ fn the_shipped_migrations_are_unchanged() {
             (13, "host_group_all"),
             (14, "trusted_publishers"),
             (15, "lab_layout"),
-            (16, "lab_devices")
+            (16, "lab_devices"),
+            (17, "lab_sleds")
         ]
     );
     let hashes: Vec<(i32, &str, String)> = SHIPPED
@@ -171,6 +177,7 @@ fn the_shipped_migrations_are_unchanged() {
             (14, "trusted_publishers", OlderReleases::MayRun),
             (15, "lab_layout", OlderReleases::MayRun),
             (16, "lab_devices", OlderReleases::MayRun),
+            (17, "lab_sleds", OlderReleases::MayRun),
         ]
     );
 }

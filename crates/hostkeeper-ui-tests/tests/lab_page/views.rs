@@ -216,7 +216,8 @@ return {
     let rows = out["rows"].as_array().unwrap();
     assert!(
         rows.iter().any(|r| r.as_str().unwrap().contains("web-1")
-            && r.as_str().unwrap().contains("Row 1 / Rack 1, U41")),
+            && r.as_str().unwrap().contains("C0-R0-R0-S1-S0")
+            && r.as_str().unwrap().contains("Row 0 / Rack 0, U41")),
         "{rows:?}"
     );
     assert!(
@@ -308,19 +309,19 @@ return {
     );
     assert_eq!(
         out["initial"],
-        json!(["Rack 1 of 2", true, null, "strip-frame at-start"])
+        json!(["Rack 0 of 2", true, null, "strip-frame at-start"])
     );
     assert_eq!(
         out["start"],
-        json!(["Rack 1 of 2", true, false, ["at-start", "strip-frame"]])
+        json!(["Rack 0 of 2", true, false, ["at-start", "strip-frame"]])
     );
     assert_eq!(
         out["middle"],
-        json!(["Rack 2 of 2", false, false, ["strip-frame"]])
+        json!(["Rack 1 of 2", false, false, ["strip-frame"]])
     );
     assert_eq!(
         out["end"],
-        json!(["Rack 2 of 2", false, true, ["at-end", "strip-frame"]])
+        json!(["Rack 1 of 2", false, true, ["at-end", "strip-frame"]])
     );
     assert_eq!(out["moves"], json!([300, -300]));
 }
