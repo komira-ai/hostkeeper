@@ -410,8 +410,8 @@ impl CoordinatorHandle {
     }
 
     /// The status of `service` in the host group the hosts enroll into: its entry of `services`
-    /// in `Releases.Status` with its hosts, their
-    /// versions and last verdicts, and its marks.
+    /// in `Releases.Status`: its hosts, their versions
+    /// and last verdicts, and its marks.
     pub fn status(&self, service: &str) -> Value {
         let reply = must("releases status", self.api.status(service));
         reply["services"]

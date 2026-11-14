@@ -211,7 +211,7 @@ or is denied, and the checks run in the order of the table.
 The coordinator makes no group of its own. A host is in exactly one group (its enrollment record's
 `host_group`) or is unassigned, and `all` is an ordinary group name with no special meaning: it
 can be put, removed and named like any other, and no host is in it unless an operator moved the host
-into it. Removed on 2026-11-14 ([design](../design/hostgroups.md)); before, a built-in group `all` held
+into it. Removed on 2026-11-14; before, a built-in group `all` held
 every host.
 
 - **Unassigned hosts are not ordered anything.** A host in no group gets no install, update or
@@ -233,6 +233,8 @@ every host.
   is unchanged. A host that was in none was in `all` alone and is now unassigned: it keeps running what
   it runs and is ordered nothing, `hostkeeper` included, until an operator moves it into a group. A group
   stored without `hostkeeper` is not changed by the migration, but its next `Put` is refused until it lists it.
+  Before upgrading, move every host that is in none into a group, and add `hostkeeper` to every group that lacks it
+  (with `Releases.SetDesired` for its version): a group without it gets no `hostkeeper` orders for its hosts.
 
 ## Enrolling a host into a group
 

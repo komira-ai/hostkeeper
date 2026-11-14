@@ -150,8 +150,9 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
 - **No built-in host group.** Migration `0013` once inserted a group `all` that every host was in;
   migration `0018` deletes it. `0018` deletes the group named `all` and every row keyed by it
   (`host_group_packages`, `group_desired`, `group_min_versions`, `group_services`, `group_rollouts`,
-  `group_rollout_done`, and the halts and marks keyed by a group), and sets `enrollment_hosts.host_group`
-  to `NULL` where it is `all`. After it `all` is an ordinary name. A host is in one group or is
+  `group_rollout_done`, and the halts and marks keyed by a group), and sets `enrollment_hosts.host_group`,
+  `enrollment_hosts.moving_from`, `enrollment_requests.approved_host_group` and `inventory.host_group`
+  to `NULL` where each is `all` (audit rows keep their history). After it `all` is an ordinary name. A host is in one group or is
   unassigned, and an unassigned host, which the `all` group used to give `hostkeeper`, is ordered no
   package until an operator moves it into a group ([hostgroups.md](hostgroups.md#there-is-no-built-in-group)); every
   group lists `hostkeeper`. `0018` says older releases may run on it: a release that holds `all` writes
