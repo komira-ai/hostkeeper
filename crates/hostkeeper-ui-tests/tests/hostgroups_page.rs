@@ -334,10 +334,10 @@ return text(named(last(), "install-order")[0]);
 }
 
 #[test]
-fn a_group_without_a_name_or_all_without_hostkeeper_or_with_a_bad_reason_is_not_put() {
-    // Proves: an empty name, a list of `all` without hostkeeper and a reason with a control
-    // character each report a sentence and send no Put; a specific group needs neither packages
-    // nor hostkeeper.
+fn a_group_without_a_name_or_without_hostkeeper_or_with_a_bad_reason_is_not_put() {
+    // Proves: an empty name, a list without hostkeeper (for any name, `all` included: it is
+    // an ordinary name) and a reason with a control character each report a sentence and send
+    // no Put.
     // Catches: a Put sent that the coordinator would refuse, or a bad reason sent.
     let mut ui = Ui::start();
     ui.reply(&m("HostGroups/List"), json!({}));
@@ -350,6 +350,7 @@ fn a_group_without_a_name_or_all_without_hostkeeper_or_with_a_bad_reason_is_not_
             r#"{PICK}
 await click(tree, "put-group");
 type(tree, "group-name", "all");
+pick(tree, "hostkeeper", false);
 pick(tree, "tierstore", true);
 await click(tree, "put-group");
 pick(tree, "hostkeeper", true);
@@ -363,7 +364,7 @@ return seen.reports;
         out["out"],
         json!([
             "Name the host group.",
-            "The packages of all must include hostkeeper.",
+            "Every host group must include hostkeeper.",
             "A reason has no control character (a tab or a line break, for example)."
         ])
     );
@@ -473,7 +474,7 @@ return null;
 #[test]
 fn the_form_offers_the_registered_packages_as_checkboxes_and_no_text_field() {
     // Proves: the form's packages are one checkbox for each package Services.List names, in its
-    // order, none ticked for a new group, and there is no field to type a package into.
+    // order, only hostkeeper ticked for a new group, and there is no field to type a package into.
     // Catches: a free-text packages field that takes a name nobody registered, or a picker that
     // offers more or fewer packages than the registry holds.
     let mut ui = Ui::start();
@@ -493,9 +494,9 @@ return {{ labels: labels(tree), ticked: named(tree, "pick-package").map((b) => b
     assert_eq!(
         out["out"],
         json!({"labels": ["hello", "hostkeeper", "kbf", "tierstore"],
-               "ticked": [false, false, false, false], "typed": 0})
+               "ticked": [false, true, false, false], "typed": 0})
     );
-    assert_shows(&out, &["None chosen."]);
+    assert_shows(&out, &["Installed in this order: hostkeeper."]);
 }
 
 #[test]
@@ -512,11 +513,16 @@ fn an_empty_registry_links_to_the_packages_page_and_a_refused_list_is_shown() {
         "hostgroups",
         "{}",
         "[]",
-        r#"
+        &format!(
+            r#"{PICK}
+const offered = [labels(tree), named(tree, "pick-package").map((b) => b.attrs.checked)];
 await click(tree, "open-packages");
-return null;
-"#,
+return offered;
+"#
+        ),
     ));
+    // hostkeeper is offered, ticked, even though nothing is registered, so a group can be saved.
+    assert_eq!(out["out"], json!([["hostkeeper"], [true]]));
     assert_shows(&out, &["No package is registered yet."]);
     assert_eq!(
         out["seen"]["navigations"],
@@ -605,7 +611,7 @@ return { before, after: controls(detail), links: nodes(detail).filter((n) => (n.
     );
 }
 
-/// The rows of a page whose list holds `all`, an empty group `spare` and `storage` with hosts, and
+/// The rows of a page whose list holds a group named `all`, an empty group `spare` and `storage` with hosts, and
 /// the delete buttons of its tree, by the group of their row.
 const DELETES: &str = r#"
 const last = () => seen.shown[seen.shown.length - 1];
@@ -614,9 +620,9 @@ const deletes = (t) => nodes(t).filter((n) => n.tag === "tr").map((row) => [text
 
 fn three_groups() -> Value {
     json!({"hostGroups": [
-        {"group": {"name": "all", "packages": ["hostkeeper"]}, "generation": "1", "hosts": 4},
         {"group": {"name": "spare"}, "generation": "2"},
         {"group": {"name": "storage", "packages": ["hostkeeper"]}, "generation": "3", "hosts": 2},
+        {"group": {"name": "all", "packages": ["hostkeeper"]}, "generation": "1", "hosts": 4},
     ]})
 }
 
@@ -629,11 +635,11 @@ fn remove_bodies(ui: &Ui) -> Vec<Value> {
 }
 
 #[test]
-fn every_group_but_all_has_a_danger_delete_button() {
-    // Proves: a Delete button in the danger style is on the row of each group except the
-    // built-in all.
+fn every_group_has_a_danger_delete_button_and_all_is_an_ordinary_name() {
+    // Proves: a Delete button in the danger style is on the row of each group, a group named
+    // `all` included (it is no longer built in).
     // Catches: no way to delete a group (the owner's "I added a group and can't delete it"), or
-    // a button on all, which the API refuses.
+    // a group named all still treated as special.
     let mut ui = Ui::start();
     ui.reply(&m("HostGroups/List"), three_groups());
     hosts_replies(&mut ui);
@@ -649,8 +655,8 @@ return {{ per_row: deletes(tree).filter((r) => r[0] !== "Group" && r[0] !== ""),
     ));
     assert_eq!(
         out["out"],
-        json!({"per_row": [["all", 0], ["spare", 1], ["storage", 1]],
-               "classes": ["danger", "danger"]})
+        json!({"per_row": [["spare", 1], ["storage", 1], ["all", 1]],
+               "classes": ["danger", "danger", "danger"]})
     );
 }
 
@@ -769,4 +775,26 @@ return null;
             json!({"hostGroup": "spare", "limit": 50})
         ]
     );
+}
+
+#[test]
+fn the_page_says_every_group_must_list_hostkeeper_and_has_no_all_special_case() {
+    // Proves: the page's notes say every host group must list hostkeeper and that a host in no
+    // group is Unassigned and ordered no package; a group named `all` is listed like any other,
+    // with no "built in" mark.
+    // Catches: the old text that every host is in all, or a built-in mark left on a row.
+    let mut ui = Ui::start();
+    ui.reply(&m("HostGroups/List"), three_groups());
+    hosts_replies(&mut ui);
+    let out = ui.run(&page_driver("hostgroups", "{}", "[]", ""));
+    assert_shows(
+        &out,
+        &[
+            "Every host group must list hostkeeper, so that no host of the group loses its agent.",
+            "A host is in one host group or is Unassigned; an Unassigned host is ordered no package.",
+        ],
+    );
+    let shown = out["seen"]["shown"].to_string();
+    assert!(!shown.contains("built in"), "{shown}");
+    assert!(!shown.contains("Every host is in all"), "{shown}");
 }

@@ -330,24 +330,12 @@ async fn every_refusal_of_every_call_is_its_status_on_both_wires() {
             token(invalid, "invalid_host_group"),
         ),
         (
-            Req::Put(put("all", &[], None)),
+            Req::Put(put("beta", &[], None)),
             token(precondition, "hostkeeper_not_listed"),
         ),
         (
-            Req::Put(put("all", &["svc"], None)),
+            Req::Put(put("beta", &["svc"], None)),
             token(precondition, "hostkeeper_not_listed"),
-        ),
-        (
-            Req::Put(put("all", &[SELF], None)),
-            token(precondition, "reserved_host_group"),
-        ),
-        (
-            Req::Remove(remove_of("all")),
-            token(precondition, "reserved_host_group"),
-        ),
-        (
-            Req::Move(move_of("d1", "all")),
-            token(precondition, "reserved_host_group"),
         ),
         (
             Req::Put(put("beta", &many, None)),

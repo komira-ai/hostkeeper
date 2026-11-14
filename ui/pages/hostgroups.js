@@ -1,13 +1,13 @@
 // Host groups: what each host group deploys. A table of every group (its packages, the keys of its
-// policy that are set, its generation, its host count and its desired versions), the built-in
-// group `all` that every host is in first and marked as built in; a group's detail
+// policy that are set, its generation, its host count and its desired versions); a group's detail
 // (each package's desired and minimum version and convergence, and its hosts a page at a time,
 // each a link to the Host page); a form that creates a group or changes one's ordered package list
 // (the packages are the services deployed to each of its hosts, chosen by ticking them in a list
 // of the registered packages, which the Packages page keeps, and installed in the order ticked;
-// no package is typed, and an empty list links to the Packages page; `all` lists `hostkeeper`,
-// which a specific group need not). A host is moved into a group on its own Host page, not here.
-// Each group but `all` has a Delete button (danger style, after a confirm) that sends
+// no package is typed, and an empty list links to the Packages page; every group must list
+// `hostkeeper`, so it is always offered, even before it is registered, a new group starts with it ticked, and a Save without it is refused here
+// as the coordinator refuses it). A host is moved into a group on its own Host page, not here.
+// Each group has a Delete button (danger style, after a confirm) that sends
 // HostGroups.Remove, which drops the group with its desired versions and marks. A group that
 // still has hosts is refused (`not_empty`): the page then names its hosts (HostGroups.Get) and
 // changes nothing; a group only a record or the Mac allowlist names is refused the same way, and
@@ -28,8 +28,8 @@ import {
 
 const HOSTS_PER_PAGE = 50;
 
-// The built-in group every host is in.
-const ALL = "all";
+// The package every host group must list: the agent itself.
+const AGENT = "hostkeeper";
 
 // The keys of a group's policy that are set, in words; "default" when none is.
 export function policySummary(policy) {
@@ -108,7 +108,7 @@ export async function render(ctx) {
   }
   const state = {
     picked: null,
-    edit: { name: "", packages: [], reason: "" },
+    edit: { name: "", packages: [AGENT], reason: "" },
   };
   const show = () => ctx.show(page());
   const held = (name) => groups.find((one) => bodyOf(one).name === name);
@@ -185,6 +185,9 @@ export async function render(ctx) {
   // are not, so that saving never drops one by accident.
   const choices = () => {
     const names = registered.slice();
+    if (!names.includes(AGENT)) {
+      names.unshift(AGENT);
+    }
     for (const name of state.edit.packages) {
       if (!names.includes(name)) {
         names.push(name);
@@ -209,17 +212,19 @@ export async function render(ctx) {
 
   const packagePicker = () => h("div", { class: "package-picker" },
     h("p", { class: "note" }, "Packages"),
-    choices().length > 0
-      ? h("ul", { class: "plain" }, choices().map(pick))
-      : h("p", { class: "note" }, "No package is registered yet. ",
-        action(ctx, "Add packages on the Packages page", "open-packages", () => ctx.navigate("packages", {}), { class: "linklike" })),
+    h("ul", { class: "plain" }, choices().map(pick)),
+    registered.length === 0
+      ? h("p", { class: "note" }, "No package is registered yet. ",
+        action(ctx, "Add packages on the Packages page", "open-packages", () => ctx.navigate("packages", {}), { class: "linklike" }))
+      : null,
     registeredFailure === null ? null : h("p", { class: "error", role: "alert" }, `Packages: ${describeError(registeredFailure)}`),
     h("p", { class: "note", name: "install-order" },
       state.edit.packages.length > 0 ? `Installed in this order: ${state.edit.packages.join(", ")}.` : "None chosen."));
 
   const editForm = () => h("fieldset", {},
     h("legend", {}, "Create or change a host group"),
-    h("p", { class: "note" }, "Tick the packages deployed to each host of the group; they are installed in the order ticked. A name that is held changes that group and keeps its policy. A group's own packages run after those of all."),
+    h("p", { class: "note" }, "Tick the packages deployed to each host of the group; they are installed in the order ticked. A name that is held changes that group and keeps its policy."),
+    h("p", { class: "note", name: "hostkeeper-required" }, "Every host group must list hostkeeper, so that no host of the group loses its agent. A host in no group is Unassigned: it is ordered no package until it is moved into a group."),
     field("Name", "group-name", state.edit, "name"),
     packagePicker(),
     field("Reason (optional)", "group-reason", state.edit, "reason", { maxlength: 256 }),
@@ -231,8 +236,8 @@ export async function render(ctx) {
         if (name === "") {
           return "Name the host group.";
         }
-        if (name === ALL && !packages.includes("hostkeeper")) {
-          return "The packages of all must include hostkeeper.";
+        if (!packages.includes(AGENT)) {
+          return "Every host group must include hostkeeper.";
         }
         const given = reasonOf(state.edit.reason, DEFAULT_PUT_REASON);
         if (given.problem) {
@@ -290,20 +295,19 @@ export async function render(ctx) {
     const { name } = group;
     return h("tr", {},
       h("td", {},
-        action(ctx, name, "open-group", () => fetchHosts(name, ""), { class: "linklike" }),
-        name === ALL ? " (built in: every host)" : null),
+        action(ctx, name, "open-group", () => fetchHosts(name, ""), { class: "linklike" })),
       h("td", {}, list(group, "packages").join(", ") || "-"),
       h("td", {}, policySummary(group.policy)),
       h("td", {}, one.generation || "-"),
       h("td", {}, String(one.hosts || 0)),
       h("td", {}, desiredLine(list(one, "packages"))),
       h("td", {}, action(ctx, "Edit", "edit-group", () => edit(name)),
-        name === ALL ? null : removeGroup(name)));
+        removeGroup(name)));
   });
 
   const page = () => h("section", { class: "page host-groups" },
     h("h2", {}, "Host groups"),
-    h("p", { class: "note" }, "A host group lists the services deployed to its hosts. Every host is in all, and may be in one host group besides."),
+    h("p", { class: "note" }, "A host group lists the services deployed to its hosts. A host is in one host group or is Unassigned; an Unassigned host is ordered no package. Every group must list hostkeeper."),
     failure !== null ? h("p", { class: "error", role: "alert" }, `Host groups: ${describeError(failure)}`) : null,
     failure === null && groups.length === 0 ? h("p", { class: "note" }, "No host group is held yet.") : null,
     groups.length > 0
