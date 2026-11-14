@@ -7,7 +7,7 @@
 // `list` (true) shows every server in one compact list instead of the floor plan.
 // Breadcrumbs: Lab > Row > Rack > Host.
 //
-// The layout is the coordinator's own small model (rows 1, 2, 3, racks numbered in their row and
+// The layout is the coordinator's own small model (rows 0, 1, 2, racks numbered in their row and
 // as many U high as they are made, placements of a server in a rack): `lab.js` reads it. A hostkeeper
 // runs one lab; the cluster has a name, shown on top and renamed in the edit mode. The edit mode
 // (`Edit layout`, `edit` in the page's params) adds the controls: add a row, add a rack (its height
@@ -400,7 +400,7 @@ function lab(app, data, state) {
         scrollLeft: el.scrollLeft, scrollWidth: el.scrollWidth, clientWidth: el.clientWidth,
         pitch: pitchOf(el), count: racks.length,
       });
-      frame.querySelector(".strip-pos").textContent = `Rack ${at.first} of ${racks.length}`;
+      frame.querySelector(".strip-pos").textContent = `Rack ${(racks[at.first - 1] || racks[0]).number} of ${racks.length}`;
       frame.querySelector("[name=strip-prev]").disabled = at.atStart;
       frame.querySelector("[name=strip-next]").disabled = at.atEnd;
       frame.classList.toggle("at-start", at.atStart);
@@ -409,7 +409,7 @@ function lab(app, data, state) {
     return h("div", { class: "strip-frame at-start" },
       h("div", { class: "strip-bar" },
         h("button", { type: "button", name: "strip-prev", class: "strip-arrow", "aria-label": "previous rack", disabled: true, on: { click: move(-1) } }, "\u2039"),
-        h("span", { class: "strip-pos", role: "status" }, `Rack 1 of ${racks.length}`),
+        h("span", { class: "strip-pos", role: "status" }, `Rack ${racks[0].number} of ${racks.length}`),
         h("button", { type: "button", name: "strip-next", class: "strip-arrow", "aria-label": "next rack", on: { click: move(1) } }, "\u203a"),
         h("span", { class: "strip-hint" }, "scroll, drag or use the arrow keys")),
       h("div", {
@@ -559,7 +559,7 @@ function lab(app, data, state) {
     if (layout.rows.length === 0) {
       return h("div", { class: "empty-lab" },
         h("p", { class: "empty" }, "No lab layout yet. Add a row, then the racks in it, and place the servers."),
-        change("Add a row", "add-row", () => app.api.layout.addRow({ reason: "add row" }), "Row 1 is added."));
+        change("Add a row", "add-row", () => app.api.layout.addRow({ reason: "add row" }), "A row is added."));
     }
     const bands = layout.rows.map((row) => {
       const racks = racksOf(layout, row.id);

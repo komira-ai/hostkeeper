@@ -76,7 +76,7 @@ The location of a server is not an inventory field: the inventory keeps its four
 model of its own, one lab only:
 
 - the cluster's name (1 to 32 characters of letters, digits, space, `.`, `_`, `-`);
-- rows `{id: row-<n>, number}` numbered 1, 2, 3, ... by the coordinator;
+- rows `{id: row-<n>, number}` numbered 0, 1, 2, ... by the coordinator;
 - racks `{id: rack-<n>, row, number, height_u}`, numbered within their row, 1 to 60 U high;
 - placements `{subject {kind HOST | INVENTORY, id}, rack, u, height_u}`: the subject occupies U `u` to `u + height_u - 1`, U 1 the bottom;
   at most one placement for a subject, none shares a U with another of its rack.

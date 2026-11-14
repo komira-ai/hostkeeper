@@ -44,7 +44,8 @@ const OPERATOR_TOKEN: &str = "operator-token-of-the-first-boot-tests-0123456789"
 
 /// The paths the daemon writes outside its flags, each refused at the start if the host already
 /// has it (so that a test never touches a host's real service directories) and removed when the
-/// guard is dropped, failed or not: the pki directory's parent `/etc/updater`, the self-update
+/// guard is dropped, failed or not: `/etc/hostkeeper` (the repository entries the coordinator pushes to every
+/// enrolled host, the built-in komira repository among them), the pki directory's parent `/etc/updater`, the self-update
 /// units it installs (`hostkeeper-fallback.service`, `hostkeeper.service.d/`), and the placement
 /// state `/var/lib/hostkeeper`; and, given to [`HostPaths::claim`], those an install test adds
 /// and the units it may leave running, which are stopped first; the packages the daemon installs
@@ -65,7 +66,8 @@ const PLACEMENT_DIR: &str = "/var/lib/hostkeeper";
 pub const PACKAGES_DIR: &str = "/var/lib/hostkeeper/packages";
 
 /// The daemon's own fixed paths.
-const DAEMON_PATHS: [&str; 4] = [
+const DAEMON_PATHS: [&str; 5] = [
+    "/etc/hostkeeper",
     "/etc/updater",
     "/etc/systemd/system/hostkeeper-fallback.service",
     "/etc/systemd/system/hostkeeper.service.d",
