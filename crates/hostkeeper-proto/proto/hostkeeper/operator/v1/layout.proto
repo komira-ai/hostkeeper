@@ -1,7 +1,7 @@
 // hostkeeper.operator.v1: the `Layout` service of the operator API and its refusals
 // (`LayoutRefusal`): the lab's layout, which the web page's Home draws as rows of racks with the
 // hosts in their slots. A hostkeeper runs one lab only, so the layout has one cluster name. It is
-// its own small model, not part of the inventory: rows (numbered 1, 2, 3, ...), racks (numbered
+// its own small model, not part of the inventory: rows (numbered 0, 1, 2, ...), racks (numbered
 // within their row, each with its height in U) and placements (a server in a rack: its lowest U
 // and its height in U). The rest of the package,
 // `Enrollment` and `EnrollmentRefusal` (enrollment.proto) and `Audit` and `AuditRefusal` among it,
@@ -41,13 +41,13 @@ service Layout {
   rpc Get(GetLayoutRequest) returns (GetLayoutResponse);
   // Names the cluster.
   rpc PutName(PutLayoutNameRequest) returns (PutLayoutNameResponse);
-  // Adds the next row: its number is one more than the highest row number held (1 for the first).
+  // Adds the next row: its number is one more than the highest row number held (0 for the first).
   rpc AddRow(AddLayoutRowRequest) returns (AddLayoutRowResponse);
   // Removes a row that holds no rack: refused `in_use` otherwise. A rack is removed only when it
   // holds no placement, so a row's servers are named by `Get` (the page names them).
   rpc RemoveRow(RemoveLayoutRowRequest) returns (RemoveLayoutRowResponse);
   // Adds a rack to a row (empty `id`): its number is one more than the highest rack number of
-  // that row. With an `id`, resizes that rack and, when `row` names another row, moves it there
+  // that row, 0 for the first. With an `id`, resizes that rack and, when `row` names another row, moves it there
   // (it takes that row's next number). A rack made shorter than a placement it holds is refused.
   rpc PutRack(PutLayoutRackRequest) returns (PutLayoutRackResponse);
   // Removes a rack that holds no placement.

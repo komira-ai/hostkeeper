@@ -112,6 +112,40 @@ const last = () => seen.shown[seen.shown.length - 1];
 }
 
 #[test]
+fn the_first_row_and_rack_are_number_0_and_the_strip_reads_the_rack_own_number() {
+    // Catches: a row or rack of number 0 (which the coordinator leaves out of the reply) shown as
+    // `NaN` or as 1, and a strip that counts racks from 1 in place of reading the number of the
+    // rack in view.
+    let mut ui = base();
+    for _ in 0..2 {
+        ui.reply(
+            &m("Layout/Get"),
+            json!({
+                "name": "Lab",
+                "rows": [{"id": "row-1"}, {"id": "row-2", "number": 1}],
+                "racks": [
+                    {"id": "rack-1", "row": "row-1", "heightU": 42},
+                    {"id": "rack-2", "row": "row-1", "number": 1, "heightU": 24},
+                ],
+            }),
+        );
+    }
+    let out = home(
+        &mut ui,
+        "{}",
+        r#"return named(tree, "open-row").map((n) => words(n).split(" ").slice(0, 2).join(" "));"#,
+    );
+    assert_eq!(out, json!(["Row 0", "Row 1"]));
+    reads(&ui);
+    let out = home(
+        &mut ui,
+        r#"{ row: "row-1" }"#,
+        r#"return [words(cls(tree, "strip-pos")[0]), cls(tree, "rack-no").map(words)];"#,
+    );
+    assert_eq!(out, json!(["Rack 0 of 2", ["Rack 0", "Rack 1"]]));
+}
+
+#[test]
 fn the_floor_plan_shows_each_row_with_its_racks_and_the_states() {
     // Catches: a floor plan that leaves out a row or a rack, counts a server of another rack, shows
     // a state with no count, or lists a placed server in the Unplaced tray.
@@ -383,7 +417,7 @@ return { first, title: words(nodes(tree).find((n) => n.tag === "h2")), reports: 
     );
     assert_eq!(out["title"], "Lab");
     assert_eq!(out["refreshes"], 1);
-    assert_eq!(out["reports"], json!(["Row 1 is added."]));
+    assert_eq!(out["reports"], json!(["A row is added."]));
     assert!(bodies(&ui).contains(&(m("Layout/AddRow"), json!({"reason": "add row"}))));
 }
 
