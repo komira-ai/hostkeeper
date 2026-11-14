@@ -28,16 +28,13 @@
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_install::repository::backend::Installed;
 use hostkeeper_install::repository::launcher::LauncherTools;
-use hostkeeper_install::repository::{Backend, Failure, InstallerLock, Reason, Records};
+use hostkeeper_install::repository::{Backend, Failure, InstallerLock, Order, Reason, Records};
 use hostkeeper_proto::hostkeeper::release::v1::Target;
 use hostkeeper_steps::Staged;
 
 use super::{DRIFT_QUERY_SECS, Native, Repository};
 use crate::executor::Reply;
 use crate::refusal::Refusal;
-
-/// The digest a placeholder entry carries until the index gives the pin of the adopted version.
-const NO_PIN: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
 /// The installed package an `install` order adopts, staged as a version of its service.
 pub(crate) struct Adoption {
@@ -76,8 +73,9 @@ impl Repository {
         let Some(installed) = found else {
             return Ok(None);
         };
+        let package = order.package.clone();
         let adopt = |version: Version, staged: Staged| Adoption {
-            package: order.package.clone(),
+            package: package.clone(),
             package_version: installed.version.clone(),
             version,
             staged,
@@ -92,14 +90,13 @@ impl Repository {
                     Reason::ManifestInvalid,
                     format!(
                         "the installed {} {} is no version of a service: {e}",
-                        order.package, installed.version
+                        package, installed.version
                     ),
                 ),
             )
         })?;
         let mut sealed_for = entry.clone();
         sealed_for.package_version = Some(installed.version.clone());
-        sealed_for.digest = NO_PIN.to_owned();
         if let Some(hook) = sealed_for
             .manifest
             .as_mut()
@@ -107,9 +104,14 @@ impl Repository {
         {
             hook.command.clear();
         }
-        let pinning = self
-            .order(backend, service, &adopted, &sealed_for)
-            .map_err(|failure| self.stage_failed(service, &failure))?;
+        // The installed version of the order's own package, asked of the index for its digest: the
+        // order's pin names another version and is not read.
+        let pinning = Order {
+            version: adopted.clone(),
+            package_version: installed.version.clone(),
+            pin: String::new(),
+            ..order
+        };
         sealed_for.digest = self
             .with(backend, service, |installer| installer.pin_of(&pinning))
             .map_err(|failure| self.stage_failed(service, &failure))?;
