@@ -214,6 +214,7 @@ mod proxy_apt;
 pub mod proxy_cache;
 mod proxy_cache_disk;
 pub mod proxy_origin;
+mod queue;
 pub mod reconcile;
 pub mod registry;
 pub(crate) mod releases;
@@ -466,6 +467,8 @@ mod plan_rollout_tests;
 mod plan_status_tests;
 #[cfg(test)]
 mod priority_tests;
+#[cfg(test)]
+mod queue_tests;
 #[cfg(test)]
 mod recorded_definition_tests;
 #[cfg(test)]

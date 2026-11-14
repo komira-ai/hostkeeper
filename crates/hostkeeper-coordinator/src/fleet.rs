@@ -222,6 +222,9 @@ pub struct Fleet {
     pub(crate) moves: crate::moving::Moves,
     /// The facts generations daemons reported over gRPC ([`crate::facts`]).
     pub(crate) facts: crate::facts::Reported,
+    /// Every package of every group and its desired state, as of the last take of the lock: the
+    /// rollouts one service waits for, across groups ([`crate::queue`]).
+    cluster: crate::queue::Cluster,
 }
 
 impl Fleet {
@@ -253,6 +256,7 @@ impl Fleet {
             picks: crate::picks::Picks::default(),
             moves: crate::moving::Moves::default(),
             facts: crate::facts::Reported::default(),
+            cluster: crate::queue::Cluster::default(),
         }
     }
 

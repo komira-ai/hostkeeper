@@ -108,15 +108,15 @@ one credential is the OIDC token GitHub issues to the job.
    entry with `host_groups` limits them); a refusal for any group writes nothing for any, and no
    group that lists it is `not_in_host_group`. Nothing changes on a refusal.
 9. **The update plan orders the hosts.** Each group's policy sets the plan of its hosts
-   ([below](#set-up-once-outside-ci)): `stages` (by default `[1, 10, 50, 100]`: the cumulative
+   ([below](#set-up-once-outside-ci)): `stages` (by default `[50, 100]`: the cumulative
    percent of the group's eligible hosts that run the version once each stage is done) and
    `canary` (a first stage of `count` hosts). The coordinator orders only the hosts of the first
    stage; the next stage starts
    when every host of the stage has reported the new version healthy for `bake_beats`
    heartbeats (a stage marked `advance` manual waits for an operator's `Rollouts.Advance`).
-   The hosts of a stage update in parallel, up to the policy's `max_updating` (by default 1).
-   Two groups never wait on each other, so the release rolls in every group at once, each by its
-   own policy; the caller chaining the groups one after the other (a canary group first) is a
+   The hosts of a stage update in parallel, up to the policy's `max_updating` (by default the whole stage).
+   Only one service rolls in the cluster at a time, so a release of another service waits for it
+   (`rollout_elsewhere`) and the services queue in the order their versions were set; the caller chaining the groups one after the other (a canary group first) is a
    later change, with the CI client's `host_group` input. A host whose update fails keeps its
    update slot until it is healthy, and its stage is not done until an operator resolves it, so
    the next stage is not ordered the version meanwhile

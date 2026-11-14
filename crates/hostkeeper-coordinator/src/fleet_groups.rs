@@ -184,14 +184,24 @@ impl Fleet {
             .filter(|id| self.in_group_of(def, id))
     }
 
-    /// How many services may have a live rollout at once for `def`: its group's policy says, else
-    /// the coordinator's.
+    /// How many services may have a live rollout at once for `def`: the coordinator's
+    /// `--live-rollouts`, which its group's policy can only lower.
     #[must_use]
     pub(crate) fn live_limit(&self, def: &ServiceDef) -> usize {
         def.scope
             .as_ref()
             .and_then(|scope| scope.live_rollouts)
-            .unwrap_or(self.live_rollouts)
+            .map_or(self.live_rollouts, |own| own.min(self.live_rollouts))
+    }
+
+    /// The packages of every group at the last take of the lock ([`crate::queue`]).
+    pub(crate) fn cluster(&self) -> &crate::queue::Cluster {
+        &self.cluster
+    }
+
+    /// Keeps `entries` as the cluster, at `now`.
+    pub(crate) fn set_cluster(&mut self, entries: Vec<crate::queue::Entry>, now: Duration) {
+        self.cluster = self.cluster.refreshed(entries, now);
     }
 
     /// [`Self::keep_verdicts_of`] for `def`: of a service made for a group, only the verdicts of

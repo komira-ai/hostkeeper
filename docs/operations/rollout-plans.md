@@ -25,21 +25,21 @@ them.
                            { "percent": 50 }, { "percent": 100 }] } } }
 ```
 
-- A policy with no `stages` has `[1, 10, 50, 100]`, every stage entered by itself (`auto`).
+- A policy with no `stages` has `[50, 100]` (a rollout file's service, which has no group, keeps `[1, 10, 50, 100]`), every stage entered by itself (`auto`). A canary goes before them as before.
 - The percents rise strictly and the last is 100; `Put` refuses any other list (`invalid_policy`).
   `advance` is auto or manual.
 - `canary` with a `count` of `n` is a first stage of `n` hosts, entered by itself, before the
   stages. A release failure among the canary hosts before they have baked still rolls the version
   back at once and raises the `failed_canary` alert.
 - A stage of percent `p` over `n` eligible hosts holds `max(1, ceil(p * n / 100))` hosts; stages
-  that come out the same size are one stage. Eight hosts with the default plan roll as 1, 4 and 8.
-  One host is one stage.
+  that come out the same size are one stage. Six hosts with the default plan roll as 3 and 6, eight
+  as 4 and 8. One host is one stage.
 
-The hosts of a stage update in parallel, as each heartbeats, up to the policy's `max_updating` (1
-if it names none; 0 holds the group), and never so that fewer live hosts of the group than its
+The hosts of a stage update in parallel, as each heartbeats, up to the policy's `max_updating` (the
+whole stage if it names none; 0 holds the group), and never so that fewer live hosts of the group than its
 `min_up` stay up. A stage is done when every host in it is up at the desired version and has baked
-(`bake_beats` healthy heartbeats); only then does the next stage start. A farm that wants one host
-at a time sets `max_updating` of 1 and `stages` of `[100]`. A group whose `min_up` equals its host
+(`bake_beats` healthy heartbeats); only then does the next stage start. A group that wants one host
+at a time sets `max_updating` of 1. A group whose `min_up` equals its host
 count never has a host ordered.
 
 A host is eligible for a plan when it is live, its group lists the package, it is neither
@@ -55,9 +55,9 @@ A package has one plan for each group that lists it, over that group's hosts alo
   ([hostgroups.md](hostgroups.md#policy)). The same policy applies to every package of the group.
 - The role of a host is the name of its group. `max_updating` and `min_up` are the group's, counted
   over the group's hosts, and so are the hosts a stage's percent is computed over. Two groups never
-  wait on each other.
-- `--live-rollouts` is the default of a group's `live_rollouts`, and counts the group's other
-  packages: `rollout_elsewhere` names those.
+  wait on each other for hosts, but they do wait for the cluster's one live rollout: see below.
+- `--live-rollouts` counts services over every group, and a group's `live_rollouts` can only lower
+  it: `rollout_elsewhere` names the services that hold the place.
 - The position of a plan, its pause and its done hosts, the halt, the last good version and a
   force are kept for each (group, package), in the ops file under `host_groups`. A version set in
   one group starts the plan of that group over, and no other.
@@ -191,8 +191,17 @@ every heartbeat that brings a verdict, so it can be reached in the middle of a s
 
 ## Across services: `--live-rollouts`
 
-`hostkeeper-coordinator serve --live-rollouts N` (default 1, 1 to 16) is how many packages of a group may
-have a live rollout at once. A rollout is live when one of its hosts runs an update (updating,
+`hostkeeper-coordinator serve --live-rollouts N` (default 1, 1 to 16) is how many services may
+have a live rollout at once in the whole cluster. A service is a package name: hostkeeper, and a
+package that several groups list, are each one service. A group's `live_rollouts` can only lower
+the number for its own packages, never raise it. The services that wait are queued in the order
+their desired versions were set, and the coordinator orders them in that order: a later-set service
+is held (`rollout_elsewhere`, the status names the services ahead as `QUEUED` and gives the
+plan's `queue_position`) even when the earlier one has no host updating at the moment. A service
+that nothing can order (halted, at a version marked bad, paused, held by a failed host, or whose
+hosts that have not started all defer) takes no place in the queue. The order is kept in memory;
+after a coordinator restart the services that were waiting queue by their group's last change,
+then by group and package name. A rollout that is live is never held by the others. A rollout is live when one of its hosts runs an update (updating,
 its promotion pending, or under an order) or bakes the desired version, or when its plan has
 started a host and still has one to order (a paused plan and one waiting for an Advance are live).
 A failed host does not make its service live: it still counts against its own group's
