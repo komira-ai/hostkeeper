@@ -115,4 +115,26 @@ impl Api for LayoutService {
             .map(Response::new)
             .map_err(refusal::layout)
     }
+
+    async fn put_device(
+        &self,
+        request: Request<proto::PutLayoutDeviceRequest>,
+    ) -> Result<Response<proto::PutLayoutDeviceResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .layout_put_device(&caller, request.get_ref())
+            .map(Response::new)
+            .map_err(refusal::layout)
+    }
+
+    async fn remove_device(
+        &self,
+        request: Request<proto::RemoveLayoutDeviceRequest>,
+    ) -> Result<Response<proto::RemoveLayoutDeviceResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .layout_remove_device(&caller, request.get_ref())
+            .map(Response::new)
+            .map_err(refusal::layout)
+    }
 }

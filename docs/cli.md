@@ -451,7 +451,7 @@ at its next heartbeat, at the next try (see `RetryRequest`). Audited `retry`.
 
 ### `layout`
 
-The service `Layout` of the package `hostkeeper.operator.v1`. The lab's layout. Every write is audited under the caller's name: `layout_name_put`, `layout_row_add`, `layout_row_remove`, `layout_rack_put`, `layout_rack_remove`, `layout_place` and `layout_unplace`. A write takes an optional reason; without one the audit says "layout edit".
+The service `Layout` of the package `hostkeeper.operator.v1`. The lab's layout. Every write is audited under the caller's name: `layout_name_put`, `layout_row_add`, `layout_row_remove`, `layout_rack_put`, `layout_rack_remove`, `layout_place`, `layout_unplace`, `layout_device_put` and `layout_device_remove`. A write takes an optional reason; without one the audit says "layout edit".
 
 #### `hkctl layout get`
 
@@ -547,6 +547,36 @@ Takes a server out of its rack: it is unplaced again.
 | `--reason` | STRING |  |
 
 Through `--request` only: `subject` (hostkeeper.operator.v1.LayoutSubject).
+
+#### `hkctl layout put-device`
+
+`/hostkeeper.operator.v1.Layout/PutDevice`
+
+Adds a network device (a switch) to the lab (empty `id`: its id is `net.<n>`, one more than
+the highest held), or replaces every field of the device `id`. A device is placed like an
+inventory entry: `Place` with the subject kind INVENTORY and the device's id.
+
+| flag | value | meaning |
+|---|---|---|
+| `--id` | STRING | Empty to add; else the device to replace. |
+| `--name` | STRING | Every field of the device but `id`. |
+| `--role` | VALUE | One of: bmc, data. |
+| `--console-host` | STRING |  |
+| `--console-device` | STRING |  |
+| `--management-mac` | STRING |  |
+| `--notes` | STRING |  |
+| `--reason` | STRING |  |
+
+#### `hkctl layout remove-device`
+
+`/hostkeeper.operator.v1.Layout/RemoveDevice`
+
+Removes a network device and its placement, if it has one.
+
+| flag | value | meaning |
+|---|---|---|
+| `--id` | STRING |  |
+| `--reason` | STRING |  |
 
 ### `mdm`
 

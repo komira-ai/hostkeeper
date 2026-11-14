@@ -58,6 +58,8 @@ export function createClient(call) {
       removeRack: (request) => call("hostkeeper.operator.v1.Layout/RemoveRack", request),
       place: (request) => call("hostkeeper.operator.v1.Layout/Place", request),
       unplace: (request) => call("hostkeeper.operator.v1.Layout/Unplace", request),
+      putDevice: (request) => call("hostkeeper.operator.v1.Layout/PutDevice", request),
+      removeDevice: (request) => call("hostkeeper.operator.v1.Layout/RemoveDevice", request),
     }),
     mdm: Object.freeze({
       listDevices: (request) => call("hostkeeper.operator.v1.Mdm/ListDevices", request),

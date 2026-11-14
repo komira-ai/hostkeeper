@@ -73,6 +73,7 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
                 racks: vec![rack.clone()],
                 placements: vec![placement()],
                 name: "Lab".to_owned(),
+                devices: Vec::new(),
             }),
         ),
         (

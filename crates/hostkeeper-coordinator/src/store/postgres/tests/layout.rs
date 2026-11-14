@@ -38,8 +38,9 @@ fn a_commit_writes_a_row_for_each_item_and_a_load_reads_them_back() {
     assert_eq!(names(&db, "lab_racks", "id"), ["rack-1", "rack-2"]);
     assert_eq!(
         names(&db, "lab_placements", "subject"),
-        ["host:node-1", "inventory:rec-7"]
+        ["host:node-1", "inventory:net.1", "inventory:rec-7"]
     );
+    assert_eq!(names(&db, "lab_devices", "id"), ["net.1"]);
     store.stop();
     let (store, loaded) = db.open("again").expect("the store opens again");
     assert_eq!(loaded.layout, held);
@@ -58,7 +59,10 @@ fn a_commit_writes_a_row_for_each_item_and_a_load_reads_them_back() {
             ..Commit::default()
         })
         .expect("committed");
-    assert_eq!(names(&db, "lab_placements", "subject"), ["inventory:rec-7"]);
+    assert_eq!(
+        names(&db, "lab_placements", "subject"),
+        ["inventory:net.1", "inventory:rec-7"]
+    );
     assert_eq!(
         db.rows("SELECT record #>> '{}' FROM lab_cluster"),
         [vec![Some("Renamed".to_owned())]]
@@ -93,6 +97,10 @@ fn a_load_refuses_rows_that_break_a_rule_and_the_tables_refuse_a_bad_key() {
     );
     assert!(
         db.run("INSERT INTO lab_placements (subject, record) VALUES ('vm:x', '{}')")
+            .is_err()
+    );
+    assert!(
+        db.run("INSERT INTO lab_devices (id, record) VALUES ('switch-1', '{}')")
             .is_err()
     );
 }

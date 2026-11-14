@@ -357,6 +357,10 @@ fn only_the_operator_reaches_the_layout() {
                 .err(),
             c.layout_unplace(&caller, &proto::UnplaceLayoutRequest::default())
                 .err(),
+            c.layout_put_device(&caller, &proto::PutLayoutDeviceRequest::default())
+                .err(),
+            c.layout_remove_device(&caller, &proto::RemoveLayoutDeviceRequest::default())
+                .err(),
         ];
         assert!(refused.iter().all(|r| *r == Some(wanted)), "{refused:?}");
     }
@@ -409,6 +413,7 @@ fn each_refusal_is_a_status_with_its_code_and_token() {
         (Refusal::UnknownRow, NotFound, "unknown_row"),
         (Refusal::UnknownRack, NotFound, "unknown_rack"),
         (Refusal::UnknownPlacement, NotFound, "unknown_placement"),
+        (Refusal::UnknownDevice, NotFound, "unknown_device"),
         (Refusal::NameTaken, AlreadyExists, "name_taken"),
         (Refusal::InUse, FailedPrecondition, "in_use"),
         (Refusal::Overlap, FailedPrecondition, "overlap"),
@@ -449,7 +454,198 @@ fn each_error_of_the_layout_is_a_refusal() {
             E::UnknownPlacement("host:a".into()),
             Refusal::UnknownPlacement,
         ),
+        (E::UnknownDevice("net.1".into()), Refusal::UnknownDevice),
     ] {
         assert_eq!(Refusal::from(error), wanted);
     }
+}
+
+fn switch(name: &str, role: proto::NetworkRole) -> proto::PutLayoutDeviceRequest {
+    proto::PutLayoutDeviceRequest {
+        name: name.to_owned(),
+        role: role.into(),
+        ..proto::PutLayoutDeviceRequest::default()
+    }
+}
+
+/// Proves: a network device is added, read back by `Get` (by name) with every field, replaced by its
+/// id, placed with `Place` under the inventory subject of its id, and removed together with its
+/// placement; each write answers the device and an audit entry named `layout_device_put` or
+/// `layout_device_remove` about `device` (an add) or the id, with the operator's reason or "layout edit".
+///
+/// Catches: a device the page cannot read back, a placement left behind by a removed device, or a
+/// write that is not audited.
+#[test]
+fn a_network_device_is_added_placed_replaced_and_removed_with_its_placement() {
+    let world = world("layout-devices");
+    let c = world.coordinator();
+    let op = operator();
+    c.layout_add_row(&op, &proto::AddLayoutRowRequest::default())
+        .expect("row");
+    c.layout_put_rack(&op, &rack_of("row-1", 24)).expect("rack");
+
+    let added = c
+        .layout_put_device(
+            &op,
+            &proto::PutLayoutDeviceRequest {
+                console_host: "node-3".into(),
+                console_device: "/dev/ttyUSB0".into(),
+                management_mac: "AA-BB-CC-DD-EE-FF".into(),
+                notes: "uplink 1".into(),
+                reason: "new switch".into(),
+                ..switch("bmc-switch", proto::NetworkRole::Bmc)
+            },
+        )
+        .expect("added");
+    let device = added.device.expect("the device");
+    assert_eq!(
+        (device.id.as_str(), device.name.as_str(), device.role()),
+        ("net.1", "bmc-switch", proto::NetworkRole::Bmc)
+    );
+    assert_eq!(
+        (
+            device.console_host.as_str(),
+            device.console_device.as_str(),
+            device.management_mac.as_str(),
+            device.notes.as_str()
+        ),
+        ("node-3", "/dev/ttyUSB0", "aa:bb:cc:dd:ee:ff", "uplink 1")
+    );
+    assert_eq!(
+        added.entry.expect("entry").reason.as_deref(),
+        Some("new switch")
+    );
+    let data = c
+        .layout_put_device(&op, &switch("data-switch", proto::NetworkRole::Data))
+        .expect("a second")
+        .device
+        .expect("the device");
+    assert_eq!(data.id, "net.2");
+    let names: Vec<String> = get(c).devices.iter().map(|d| d.name.clone()).collect();
+    assert_eq!(names, ["bmc-switch", "data-switch"]);
+
+    let subject = Some(proto::LayoutSubject {
+        kind: proto::LayoutSubjectKind::Inventory.into(),
+        id: "net.1".to_owned(),
+    });
+    c.layout_place(&op, &place(subject.clone(), "rack-1", 24, 1))
+        .expect("placed");
+    let replaced = c
+        .layout_put_device(
+            &op,
+            &proto::PutLayoutDeviceRequest {
+                id: "net.1".into(),
+                ..switch("core-bmc", proto::NetworkRole::Bmc)
+            },
+        )
+        .expect("replaced")
+        .device
+        .expect("the device");
+    assert_eq!(
+        (replaced.name.as_str(), replaced.console_host.as_str()),
+        ("core-bmc", "")
+    );
+    assert_eq!(
+        get(c).placements.len(),
+        1,
+        "a replaced device keeps its place"
+    );
+
+    let removed = c
+        .layout_remove_device(
+            &op,
+            &proto::RemoveLayoutDeviceRequest {
+                id: "net.1".into(),
+                reason: String::new(),
+            },
+        )
+        .expect("removed");
+    assert_eq!(
+        removed.entry.expect("entry").reason.as_deref(),
+        Some("layout edit")
+    );
+    let read = get(c);
+    assert_eq!((read.devices.len(), read.placements.len()), (1, 0));
+    assert_eq!(
+        audit_actions(&world.audit())[2..],
+        [
+            ("layout_device_put", "device"),
+            ("layout_device_put", "device"),
+            ("layout_place", "inventory:net.1"),
+            ("layout_device_put", "net.1"),
+            ("layout_device_remove", "net.1"),
+        ]
+        .map(|(a, s)| (a.to_owned(), Some(s.to_owned())))
+    );
+}
+
+/// Proves: a device with no role or a role this build does not know, a bad field, a taken name and
+/// an id the layout does not hold are `invalid_request`, `invalid_request`, `name_taken` and
+/// `unknown_device`, each changing nothing and writing no audit line; a reason with a control
+/// character is `invalid_request` before anything is judged.
+///
+/// Catches: a refused device that is half kept, or an audit line for a change that did not happen.
+#[test]
+fn a_refused_device_changes_nothing_and_writes_no_audit_line() {
+    let world = world("layout-devices-refused");
+    let c = world.coordinator();
+    let op = operator();
+    c.layout_put_device(&op, &switch("sw", proto::NetworkRole::Data))
+        .expect("added");
+    let lines = world.audit().len();
+    let put = |request: proto::PutLayoutDeviceRequest| c.layout_put_device(&op, &request);
+    assert_eq!(
+        put(proto::PutLayoutDeviceRequest {
+            name: "x".into(),
+            ..proto::PutLayoutDeviceRequest::default()
+        })
+        .expect_err("no role"),
+        Refusal::InvalidRequest
+    );
+    assert_eq!(
+        put(proto::PutLayoutDeviceRequest {
+            name: "x".into(),
+            role: 77,
+            ..proto::PutLayoutDeviceRequest::default()
+        })
+        .expect_err("an unknown role"),
+        Refusal::InvalidRequest
+    );
+    assert_eq!(
+        put(switch("", proto::NetworkRole::Bmc)).expect_err("no name"),
+        Refusal::InvalidRequest
+    );
+    assert_eq!(
+        put(switch("sw", proto::NetworkRole::Bmc)).expect_err("taken"),
+        Refusal::NameTaken
+    );
+    assert_eq!(
+        put(proto::PutLayoutDeviceRequest {
+            id: "net.9".into(),
+            ..switch("other", proto::NetworkRole::Bmc)
+        })
+        .expect_err("unknown"),
+        Refusal::UnknownDevice
+    );
+    assert_eq!(
+        put(proto::PutLayoutDeviceRequest {
+            reason: "a\u{7}".into(),
+            ..switch("other", proto::NetworkRole::Bmc)
+        })
+        .expect_err("a reason"),
+        Refusal::InvalidRequest
+    );
+    assert_eq!(
+        c.layout_remove_device(
+            &op,
+            &proto::RemoveLayoutDeviceRequest {
+                id: "net.9".into(),
+                reason: String::new(),
+            },
+        )
+        .expect_err("unknown"),
+        Refusal::UnknownDevice
+    );
+    assert_eq!(get(c).devices.len(), 1);
+    assert_eq!(world.audit().len(), lines);
 }

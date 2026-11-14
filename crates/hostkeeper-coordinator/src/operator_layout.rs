@@ -17,7 +17,7 @@ use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::LayoutRefusal as Refusal;
 
 use crate::audit_actions::about;
-use crate::layout::{Kind, Layout, LayoutError, Placement, Rack, Row, Subject};
+use crate::layout::{Device, Kind, Layout, LayoutError, Placement, Rack, Row, Segment, Subject};
 use crate::operator::{Caller, entry_proto, optional_reason};
 use crate::ops::{AuditEntry, Write};
 use crate::service::Coordinator;
@@ -39,6 +39,10 @@ pub const LAYOUT_RACK_REMOVE: &str = "layout_rack_remove";
 pub const LAYOUT_PLACE: &str = "layout_place";
 /// The audit action of `Unplace`.
 pub const LAYOUT_UNPLACE: &str = "layout_unplace";
+/// The audit action of a network device added or replaced.
+pub const LAYOUT_DEVICE_PUT: &str = "layout_device_put";
+/// The audit action of a network device removed.
+pub const LAYOUT_DEVICE_REMOVE: &str = "layout_device_remove";
 
 impl From<LayoutError> for Refusal {
     fn from(why: LayoutError) -> Self {
@@ -48,6 +52,7 @@ impl From<LayoutError> for Refusal {
             LayoutError::UnknownRow(_) => Self::UnknownRow,
             LayoutError::UnknownRack(_) => Self::UnknownRack,
             LayoutError::UnknownPlacement(_) => Self::UnknownPlacement,
+            LayoutError::UnknownDevice(_) => Self::UnknownDevice,
             LayoutError::InUse(_) => Self::InUse,
             LayoutError::Overlap { .. } => Self::Overlap,
             LayoutError::OutOfRack { .. } => Self::OutOfRack,
@@ -73,6 +78,22 @@ fn rack_proto(rack: &Rack) -> proto::LayoutRack {
         row: rack.row.clone(),
         number: rack.number,
         height_u: rack.height_u,
+    }
+}
+
+fn device_proto(device: &Device) -> proto::NetworkDevice {
+    proto::NetworkDevice {
+        id: device.id.clone(),
+        name: device.name.clone(),
+        role: match device.role {
+            Segment::Bmc => proto::NetworkRole::Bmc,
+            Segment::Data => proto::NetworkRole::Data,
+        }
+        .into(),
+        console_host: device.console_host.clone(),
+        console_device: device.console_device.clone(),
+        management_mac: device.management_mac.clone(),
+        notes: device.notes.clone(),
     }
 }
 
@@ -176,6 +197,7 @@ impl Coordinator {
                 .into_iter()
                 .map(placement_proto)
                 .collect(),
+            devices: layout.devices().into_iter().map(device_proto).collect(),
         })
     }
 
@@ -324,5 +346,62 @@ impl Coordinator {
             held.without_placement(&subject).map(|next| (next, ()))
         })?;
         Ok(proto::UnplaceLayoutResponse { entry: Some(entry) })
+    }
+
+    /// `Layout.PutDevice`: adds a network device, or replaces every field of one.
+    ///
+    /// # Errors
+    /// `unauthorized`, `forbidden`, `invalid_request`, `unknown_device`, `name_taken`, `capacity`,
+    /// `store_failed`, `audit_unavailable`.
+    pub fn layout_put_device(
+        &self,
+        caller: &Caller,
+        request: &proto::PutLayoutDeviceRequest,
+    ) -> Result<proto::PutLayoutDeviceResponse, Refusal> {
+        let by = caller.operator()?;
+        let about = if request.id.is_empty() {
+            "device"
+        } else {
+            &request.id
+        };
+        let entry = Self::layout_entry(by, LAYOUT_DEVICE_PUT, about, &request.reason)?;
+        let role = match proto::NetworkRole::try_from(request.role) {
+            Ok(proto::NetworkRole::Bmc) => Segment::Bmc,
+            Ok(proto::NetworkRole::Data) => Segment::Data,
+            _ => return Err(Refusal::InvalidRequest),
+        };
+        let device = Device {
+            id: String::new(),
+            name: request.name.clone(),
+            role,
+            console_host: request.console_host.clone(),
+            console_device: request.console_device.clone(),
+            management_mac: request.management_mac.clone(),
+            notes: request.notes.clone(),
+        };
+        let (device, entry) =
+            self.change_layout(entry, |held| held.with_device(&request.id, device.clone()))?;
+        Ok(proto::PutLayoutDeviceResponse {
+            device: Some(device_proto(&device)),
+            entry: Some(entry),
+        })
+    }
+
+    /// `Layout.RemoveDevice`: removes a network device and its placement.
+    ///
+    /// # Errors
+    /// `unauthorized`, `forbidden`, `invalid_request`, `unknown_device`, `store_failed`,
+    /// `audit_unavailable`.
+    pub fn layout_remove_device(
+        &self,
+        caller: &Caller,
+        request: &proto::RemoveLayoutDeviceRequest,
+    ) -> Result<proto::RemoveLayoutDeviceResponse, Refusal> {
+        let by = caller.operator()?;
+        let entry = Self::layout_entry(by, LAYOUT_DEVICE_REMOVE, &request.id, &request.reason)?;
+        let ((), entry) = self.change_layout(entry, |held| {
+            held.without_device(&request.id).map(|next| (next, ()))
+        })?;
+        Ok(proto::RemoveLayoutDeviceResponse { entry: Some(entry) })
     }
 }

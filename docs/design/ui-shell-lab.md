@@ -90,6 +90,8 @@ changes it). Postgres: migration `0015_lab_layout.sql` (`may-run`): `lab_cluster
 restore carry the file, `export` writes the layout file from the tables, `counts.sql` lists the tables. An older release never reads
 them; a coordinator that finds none starts with an empty layout.
 
+Network devices (switches) are part of this model too: `docs/design/network-gear.md`.
+
 ## 3. Operator API
 
 New service `Layout` (`layout.proto`), operator token only: `Get`, `PutName`, `AddRow`, `RemoveRow` (`in_use` while it has racks), `PutRack`
