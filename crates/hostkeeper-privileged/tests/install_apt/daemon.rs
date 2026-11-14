@@ -123,7 +123,14 @@ pub fn explain(scratch: &Scratch) -> String {
     }
     text.push_str("the daemon's state files:\n");
     dump(&scratch.path().join("state"), &mut text);
+    let hook = scratch
+        .path()
+        .join("packages/hkaptfix/0.7.0/tree/usr/bin/hkaptfix-hook")
+        .display()
+        .to_string();
     for (program, args) in [
+        ("namei", &["-l", hook.as_str()][..]),
+        ("findmnt", &["--target", hook.as_str()][..]),
         (
             "systemctl",
             &["status", "hkaptfix.service", "--no-pager"][..],
