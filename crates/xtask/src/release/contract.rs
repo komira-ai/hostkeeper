@@ -590,6 +590,15 @@ pub(crate) fn installer_name(version: &Version) -> String {
     )
 }
 
+/// The file name of the bootstrap pkg of `version`, the one-time install of a new Mac that Apple
+/// Business runs (docs/design/mac-bootstrap.md): `hostkeeper-bootstrap-<v>-macos-arm64.pkg`.
+pub(crate) fn bootstrap_installer_name(version: &Version) -> String {
+    format!(
+        "{PROGRAM}-bootstrap-{version}-{}{INSTALLER_SUFFIX}",
+        Platform::MacosArm64.name()
+    )
+}
+
 /// The file name of the command line of `version`, `hkctl-<v>`.
 pub(crate) fn hkctl_name(version: &Version) -> String {
     format!("{HKCTL}-{version}")
@@ -625,7 +634,8 @@ pub(crate) fn is_bundle(name: &str) -> bool {
 /// - `hostkeeper-coordinator-update-<v>-<p>.tar.gz`, the coordinator updater's binary, and
 ///   `hostkeeper-coordinator-update-<v>-<p>.cdx.json`, its SBOM;
 ///
-/// and on macOS `hostkeeper-<v>-macos-arm64.pkg`, the installer ([`installer_name`]);
+/// and on macOS `hostkeeper-<v>-macos-arm64.pkg`, the installer ([`installer_name`]), and
+/// `hostkeeper-bootstrap-<v>-macos-arm64.pkg`, the bootstrap pkg ([`bootstrap_installer_name`]);
 ///
 /// and the native packages of the services ([`Package::native_name`]): `hello_<v>_<deb>.deb` and
 /// the failing build's `hello_<v>-fail-ready_<deb>.deb` on each Linux platform,
@@ -678,6 +688,7 @@ pub(crate) fn asset_names(version: &Version, platforms: &[Platform]) -> Vec<Stri
         }
         if platform == Platform::MacosArm64 {
             attested.push(installer_name(version));
+            attested.push(bootstrap_installer_name(version));
         }
         names.extend(attested.iter().map(|a| bundle_of(a)));
         names.extend(attested);

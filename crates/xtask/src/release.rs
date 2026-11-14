@@ -33,6 +33,10 @@
 //! - `macos-pkg` and `check-macos-pkg` ([`macos_pkg`]): the installer pkg of a Mac's first
 //!   install, and the check of its payload read back from the built pkg; with `--service hello`,
 //!   hello's `.pkg` ([`native::pkg`]), with no script and its jobs disabled.
+//! - `macos-bootstrap-pkg` and `check-macos-bootstrap-pkg` ([`macos_bootstrap`]): the bootstrap pkg
+//!   that Apple Business installs on a new Mac (docs/design/mac-bootstrap.md): the bootstrap
+//!   program, its launchd plist and a postinstall that loads the job, and the check of the pkg
+//!   read back.
 //! - `compare-images` ([`compare_images`]): two OCI image tarballs are byte for byte equal.
 //! - `image-index`, `image-layout` ([`image_index`]): the coordinator's multi-platform image
 //!   index, made of the two image tarballs, and the OCI layout a registry push copies from.
@@ -77,6 +81,7 @@ mod hkctl;
 pub(crate) mod image_index;
 mod image_push;
 mod locate;
+mod macos_bootstrap;
 mod macos_pkg;
 mod mdm_fetch;
 pub(crate) mod native;
@@ -344,6 +349,39 @@ pub(crate) enum Verb {
         /// The directory the distribution pkg is written to.
         #[arg(long)]
         out: PathBuf,
+    },
+    /// Build the bootstrap pkg that Apple Business installs on a new Mac: `pkgbuild` builds a
+    /// component pkg of the bootstrap program and its launchd plist (`packaging/macos-bootstrap`)
+    /// and the one script, a postinstall that loads the job when launchd has not loaded it;
+    /// `productbuild` wraps the component as the unsigned distribution pkg
+    /// `hostkeeper-bootstrap-<version>-macos-arm64.pkg`.
+    MacosBootstrapPkg {
+        #[arg(long)]
+        version: Version,
+        /// The macos-arm64 bootstrap program, installed at
+        /// `/usr/local/lib/hostkeeper-bootstrap/hostkeeper-bootstrap`.
+        #[arg(long)]
+        binary: PathBuf,
+        /// A directory to lay the pkg's tree and its script out in, and to write the component
+        /// pkg to; it must not exist.
+        #[arg(long)]
+        stage: PathBuf,
+        /// The directory the distribution pkg is written to.
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Check a bootstrap pkg that `pkgutil --expand` expanded into a directory: a `Distribution`
+    /// that names the one component under the pkg's identifier and version, and the component,
+    /// whose one script is the committed postinstall and whose payload is exactly the program and
+    /// the plist with their modes, owners and bytes.
+    CheckMacosBootstrapPkg {
+        /// The directory `pkgutil --expand` wrote of the distribution pkg.
+        expanded: PathBuf,
+        #[arg(long)]
+        version: Version,
+        /// The bootstrap program the pkg must hold.
+        #[arg(long)]
+        binary: PathBuf,
     },
     /// Check a distribution pkg that `pkgutil --expand` expanded into a directory: a
     /// `Distribution` that names the one component under the pkg's identifier and version and
@@ -615,6 +653,11 @@ pub(crate) fn run<A: Adapters>(
                 },
             ),
         },
+        Verb::CheckMacosBootstrapPkg {
+            expanded,
+            version,
+            binary,
+        } => macos_bootstrap::check(&expanded, &version, &binary),
         Verb::Targets {
             service,
             fail_ready,
@@ -689,6 +732,20 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
                 },
             ),
         },
+        Verb::MacosBootstrapPkg {
+            version,
+            binary,
+            stage,
+            out,
+        } => macos_bootstrap::build(
+            ports.pkgbuild,
+            &macos_bootstrap::Request {
+                version,
+                binary,
+                stage,
+                out,
+            },
+        ),
         Verb::Deb {
             service,
             platform,
@@ -768,6 +825,7 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
         | Verb::NfpmStage { .. }
         | Verb::CheckLinuxPkg { .. }
         | Verb::CheckMacosPkg { .. }
+        | Verb::CheckMacosBootstrapPkg { .. }
         | Verb::Targets { .. } => run(verb, || Lent(*ports)),
     }
 }

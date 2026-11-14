@@ -30,7 +30,7 @@ pub fn scratch(name: &str) -> Scratch {
 /// The settings text of a manual install; `extra` is appended (more keys or tables).
 pub fn settings_text(extra: &str) -> String {
     format!(
-        "coordinator = \"https://coordinator.example:8443\"\nca_sha256 = \"{CA}\"\nrelease_channel = \"{BASE}\"\n{extra}"
+        "coordinator = \"https://coordinator.example\"\nca_sha256 = \"{CA}\"\nrelease_channel = \"{BASE}\"\n{extra}"
     )
 }
 

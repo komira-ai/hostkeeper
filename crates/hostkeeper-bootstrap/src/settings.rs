@@ -14,7 +14,7 @@
 //! try the next one: a managed file that is refused must not be hidden by a fallback.
 //!
 //! ```toml
-//! coordinator       = "https://coordinator.example:8443"   # required
+//! coordinator       = "https://coordinator.example"   # required
 //! ca_sha256         = "<64 hex digits>"                     # required
 //! release_channel   = "https://packages.komira.ai"
 //! team_id           = "U7RTX4XD3X"

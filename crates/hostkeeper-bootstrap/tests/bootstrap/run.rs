@@ -58,10 +58,7 @@ fn a_good_pkg_is_checked_then_configured_then_installed() {
     assert!(world.pauses().is_empty());
     let daemon = read(&paths.config_dir.join("hostkeeper.toml"));
     let config = DaemonConfig::parse(&daemon).expect("the daemon's loader reads it");
-    assert_eq!(
-        config.coordinator.as_str(),
-        "https://coordinator.example:8443"
-    );
+    assert_eq!(config.coordinator.as_str(), "https://coordinator.example");
     assert_eq!(config.ca_sha256.as_str(), CA);
     assert_eq!(mode(&paths.config_dir.join("hostkeeper.toml")), 0o600);
     let signers = read(&paths.config_dir.join("macos-pkg.toml"));

@@ -11,6 +11,8 @@ const INSTALLER: &str = "hostkeeper-1.2.3-macos-arm64.pkg";
 const BUNDLE: &str = "hostkeeper-1.2.3-macos-arm64.pkg.sigstore.json";
 const HELLO: &str = "hello-1.2.3-macos-arm64.pkg";
 const HELLO_BUNDLE: &str = "hello-1.2.3-macos-arm64.pkg.sigstore.json";
+const BOOT: &str = "hostkeeper-bootstrap-1.2.3-macos-arm64.pkg";
+const BOOT_BUNDLE: &str = "hostkeeper-bootstrap-1.2.3-macos-arm64.pkg.sigstore.json";
 
 /// A `curl` that serves files from memory, by URL, and records the command lines.
 #[derive(Default)]
@@ -34,6 +36,8 @@ impl FakeCurl {
         curl.serve(BUNDLE, b"bundle bytes");
         curl.serve(HELLO, b"hello bytes");
         curl.serve(HELLO_BUNDLE, b"hello bundle bytes");
+        curl.serve(BOOT, b"bootstrap bytes");
+        curl.serve(BOOT_BUNDLE, b"bootstrap bundle bytes");
         curl.serve(SUMS, directory_sums().as_bytes());
         curl
     }
@@ -56,6 +60,14 @@ fn directory_sums() -> String {
         sums::Line {
             sha256: Sha256::of(b"installer bytes"),
             name: INSTALLER.to_owned(),
+        },
+        sums::Line {
+            sha256: Sha256::of(b"bootstrap bytes"),
+            name: BOOT.to_owned(),
+        },
+        sums::Line {
+            sha256: Sha256::of(b"bootstrap bundle bytes"),
+            name: BOOT_BUNDLE.to_owned(),
         },
     ])
 }
@@ -103,6 +115,10 @@ impl Fixture {
                 sha256: Sha256::of(b"installer bytes"),
                 name: INSTALLER.to_owned(),
             },
+            sums::Line {
+                sha256: Sha256::of(b"bootstrap bytes"),
+                name: BOOT.to_owned(),
+            },
         ]);
         std::fs::write(&sums_path, release).expect("sums");
         let work = scratch.join("work");
@@ -134,15 +150,16 @@ fn each_installer_the_host_serves_is_the_one_the_release_lists() {
     assert_eq!(
         said,
         [format!(
-            "check-pkg: {HELLO} from {BASE} is {}; {INSTALLER} from {BASE} is {}, as the release's SHA256SUMS lists; their bundles and the directory's SHA256SUMS agree; these are the release's signed bytes",
+            "check-pkg: {HELLO} from {BASE} is {}; {INSTALLER} from {BASE} is {}; {BOOT} from {BASE} is {}, as the release's SHA256SUMS lists; their bundles and the directory's SHA256SUMS agree; these are the release's signed bytes",
             Sha256::of(b"hello bytes"),
-            Sha256::of(b"installer bytes")
+            Sha256::of(b"installer bytes"),
+            Sha256::of(b"bootstrap bytes")
         )]
     );
-    // Five downloads, over HTTPS only, each to the work directory: the directory's sums, then
+    // Seven downloads, over HTTPS only, each to the work directory: the directory's sums, then
     // each installer and its bundle.
     let calls = curl.calls.borrow();
-    assert_eq!(calls.len(), 5);
+    assert_eq!(calls.len(), 7);
     for call in calls.iter() {
         assert_eq!(
             call[..7],
@@ -166,6 +183,8 @@ fn each_installer_the_host_serves_is_the_one_the_release_lists() {
             format!("{BASE}{HELLO_BUNDLE}"),
             format!("{BASE}{INSTALLER}"),
             format!("{BASE}{BUNDLE}"),
+            format!("{BASE}{BOOT}"),
+            format!("{BASE}{BOOT_BUNDLE}"),
         ]
     );
 }
@@ -251,6 +270,8 @@ fn a_bundle_the_directory_sums_do_not_vouch_for_is_named() {
             format!("{BASE}SHA256SUMS does not list {HELLO_BUNDLE}"),
             format!("{BASE}SHA256SUMS does not list {INSTALLER}"),
             format!("{BASE}SHA256SUMS does not list {BUNDLE}"),
+            format!("{BASE}SHA256SUMS does not list {BOOT}"),
+            format!("{BASE}SHA256SUMS does not list {BOOT_BUNDLE}"),
         ]
     );
 }
@@ -272,7 +293,15 @@ fn a_directory_sums_file_that_is_malformed_is_refused() {
 
 #[test]
 fn a_file_the_host_does_not_serve_fails_with_what_curl_said() {
-    for missing in [INSTALLER, BUNDLE, HELLO, HELLO_BUNDLE, SUMS] {
+    for missing in [
+        INSTALLER,
+        BUNDLE,
+        HELLO,
+        HELLO_BUNDLE,
+        BOOT,
+        BOOT_BUNDLE,
+        SUMS,
+    ] {
         let f = Fixture::new("missing");
         let curl = FakeCurl::published();
         curl.served.borrow_mut().remove(&format!("{BASE}{missing}"));

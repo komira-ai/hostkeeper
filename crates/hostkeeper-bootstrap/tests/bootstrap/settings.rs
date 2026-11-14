@@ -49,11 +49,11 @@ fn farm_values_are_read_from_the_managed_preference_domain() {
     let dir = scratch("settings-managed");
     plist_file(
         &dir.path().join("managed.plist"),
-        farm_dict("https://managed.example:8443"),
+        farm_dict("https://managed.example"),
         0o600,
     );
     let settings = sources(dir.path()).load().expect("settings");
-    assert_eq!(settings.coordinator, "https://managed.example:8443");
+    assert_eq!(settings.coordinator, "https://managed.example");
     assert_eq!(settings.ca_sha256, CA);
     assert_eq!(settings.release_channel, DEFAULT_RELEASE_CHANNEL);
     assert_eq!(settings.team_id, DEFAULT_TEAM_ID);
@@ -66,7 +66,7 @@ fn farm_values_are_read_from_the_managed_preference_domain() {
 #[test]
 fn the_managed_domain_carries_tunables_as_dictionaries_and_arrays() {
     let dir = scratch("settings-tunables");
-    let mut dict = farm_dict("https://managed.example:8443");
+    let mut dict = farm_dict("https://managed.example");
     dict.insert("team_id".into(), "ABCDE12345".into());
     dict.insert("release_channel".into(), "https://mirror.example/".into());
     dict.insert(
@@ -102,7 +102,7 @@ fn the_fallback_file_is_read_when_there_are_no_managed_preferences() {
         "[bounds]\nwait_secs = 5\nretry_secs = 5\nfetch_timeout_secs = 9\nconnect_timeout_secs = 3\nmax_package_bytes = 99\ntool_timeout_secs = 4\ninstaller_timeout_secs = 8\n\n[trusted_signers]\norganisation = \"acme\"\nworkflow = \"w.yml\"\nrefs = [\"refs/heads/main\"]\nhosted_runner = false\n",
     );
     let settings = paths.sources.load().expect("settings");
-    assert_eq!(settings.coordinator, "https://coordinator.example:8443");
+    assert_eq!(settings.coordinator, "https://coordinator.example");
     assert_eq!(settings.bounds.max_package_bytes, 99);
     assert_eq!(settings.bounds.fetch_timeout_secs, 9);
     assert_eq!(settings.trusted_signers.organisation, "acme");
@@ -268,10 +268,7 @@ fn the_daemon_config_is_the_text_the_daemons_loader_accepts() {
     let settings: Settings = paths.sources.load().expect("settings");
     let text = settings.daemon_config();
     let config = hostkeeper_config::daemon::DaemonConfig::parse(&text).expect("a daemon config");
-    assert_eq!(
-        config.coordinator.as_str(),
-        "https://coordinator.example:8443"
-    );
+    assert_eq!(config.coordinator.as_str(), "https://coordinator.example");
     assert_eq!(config.ca_sha256.as_str(), CA);
     assert_eq!(config.trusted_signers.organisation, "komira-ai");
     assert!(text.starts_with("# Written by hostkeeper-bootstrap"));

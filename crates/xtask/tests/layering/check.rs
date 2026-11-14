@@ -102,7 +102,11 @@ pub type Layer = (
 /// (`hostkeeper-release`), and is read by no crate.
 pub const LAYERS: [Layer; 38] = [
     (BINARY, &[DAEMON], &[LAUNCHD]),
-    (BOOTSTRAP, &[CONFIG, INSTALL, LAUNCHD, PACKAGE, RELEASE], &[]),
+    (
+        BOOTSTRAP,
+        &[CONFIG, INSTALL, LAUNCHD, PACKAGE, RELEASE],
+        &[],
+    ),
     (CONFIG, &[], &[]),
     (
         COORDINATOR,

@@ -1,22 +1,25 @@
 //! The rules of the signing of the release's pkgs in `artifacts.yml` (docs/macos.md, "The
-//! installer's signature"), the installer and hello's `.pkg`, on top of [`super::release`]'s:
+//! installer's signature"), the installer, the bootstrap pkg and hello's `.pkg`, on top of
+//! [`super::release`]'s:
 //!
 //! - **An unsigned pkg is never a release file.** The build job `build-macos` writes the
-//!   installer with [`BUILD_PKG`] and hello's with [`BUILD_HELLO_PKG`] into `pkg/` (not `dist/`,
+//!   installer with [`BUILD_PKG`], the bootstrap pkg with [`BUILD_BOOTSTRAP_PKG`] and hello's
+//!   with [`BUILD_HELLO_PKG`] into `pkg/` (not `dist/`,
 //!   which its `assets-*` artifact uploads) and uploads them as [`UNSIGNED_ARTIFACT`].
 //! - **The key is held by one job that runs no repository code.** [`SIGN_JOB`] runs under
 //!   [`SIGN_IF`] (a push to main) in the environment [`SIGN_ENV`], on `macos-15`, needs exactly
 //!   `version` and `build-macos`, holds `contents: read` alone, and its steps are exactly
 //!   [`SIGN_STEPS`], in order: no checkout, no cargo. It imports the identity into a keychain of
 //!   the job (never the login keychain), signs each pkg with a trusted timestamp ([`SIGN`],
-//!   [`SIGN_HELLO`]), and then, under [`ALWAYS`], deletes the keychain and the PKCS#12 file
+//!   [`SIGN_HELLO`], [`SIGN_BOOTSTRAP`]), and then, under [`ALWAYS`], deletes the keychain and the PKCS#12 file
 //!   before it uploads the signed pkgs as [`SIGNED_ARTIFACT`].
 //! - **The secrets are named there alone.** No other job of the file, and nothing beside the
 //!   jobs, names a secret; that job names exactly [`SECRETS`], each only in the `env:` of a step.
 //! - **Each signed pkg is checked before it is published.** [`CHECK_JOB`] runs under [`SIGN_IF`]
 //!   after [`SIGN_JOB`], with `contents: read` alone, and runs [`CHECK_SIGNATURE`] and the
 //!   comparison [`SAME_FILES`] of the expanded signed and unsigned installer, then
-//!   [`CHECK_HELLO_SIGNATURE`] and [`SAME_HELLO_FILES`] for hello's, before the one upload of the
+//!   [`CHECK_HELLO_SIGNATURE`] and [`SAME_HELLO_FILES`] for hello's, and
+//!   [`CHECK_BOOTSTRAP_SIGNATURE`] and [`SAME_BOOTSTRAP_FILES`] for the bootstrap pkg's, before the one upload of the
 //!   files as [`PUBLISHED_ARTIFACT`], which no other job uploads.
 //! - **The sums wait for it.** `sums` needs [`CHECK_JOB`] under [`SUMS_IF`], so on a push to main
 //!   SHA256SUMS, the attestation and the release take the signed pkgs, and a run by hand, which
@@ -55,6 +58,9 @@ pub const BUILD_PKG: &str = "cargo xtask release macos-pkg --version \"$RELEASE_
 
 /// How `build-macos` builds hello's `.pkg`: into `pkg/`, beside the installer.
 pub const BUILD_HELLO_PKG: &str = "cargo xtask release macos-pkg --service hello --version \"$RELEASE_VERSION\" --binary target/release/hello --stage \"$RUNNER_TEMP/hello-pkg-root\" --out pkg";
+
+/// How `build-macos` builds the bootstrap pkg: into `pkg/`, beside the installer.
+pub const BUILD_BOOTSTRAP_PKG: &str = "cargo xtask release macos-bootstrap-pkg --version \"$RELEASE_VERSION\" --binary target/release/hostkeeper-bootstrap --stage \"$RUNNER_TEMP/bootstrap-pkg-root\" --out pkg";
 
 /// The artifact of the unsigned pkgs, from `build-macos`.
 pub const UNSIGNED_ARTIFACT: &str = "pkg-unsigned-macos-arm64";
@@ -112,7 +118,7 @@ const fn always(run: &'static str) -> Step {
 }
 
 /// The steps of [`SIGN_JOB`], exactly and in this order.
-pub const SIGN_STEPS: [Step; 14] = [
+pub const SIGN_STEPS: [Step; 15] = [
     Step::Download(UNSIGNED_ARTIFACT, "unsigned"),
     Step::Run {
         run: "base64 --decode -o \"$RUNNER_TEMP/installer.p12\" <<< \"$P12\"",
@@ -136,6 +142,7 @@ pub const SIGN_STEPS: [Step; 14] = [
     run("mkdir dist"),
     run(SIGN),
     run(SIGN_HELLO),
+    run(SIGN_BOOTSTRAP),
     always(DELETE_KEYCHAIN),
     always(DELETE_P12),
     Step::Upload(SIGNED_ARTIFACT, "dist/"),
@@ -148,6 +155,9 @@ pub const SIGN: &str = "productsign --sign \"$IDENTITY\" --keychain \"$RUNNER_TE
 /// The signing of hello's `.pkg`, as [`SIGN`] signs the installer.
 pub const SIGN_HELLO: &str = "productsign --sign \"$IDENTITY\" --keychain \"$RUNNER_TEMP/pkg-signing.keychain-db\" --timestamp \"unsigned/hello-$RELEASE_VERSION-macos-arm64.pkg\" \"dist/hello-$RELEASE_VERSION-macos-arm64.pkg\"";
 
+/// The signing of the bootstrap pkg, as [`SIGN`] signs the installer.
+pub const SIGN_BOOTSTRAP: &str = "productsign --sign \"$IDENTITY\" --keychain \"$RUNNER_TEMP/pkg-signing.keychain-db\" --timestamp \"unsigned/hostkeeper-bootstrap-$RELEASE_VERSION-macos-arm64.pkg\" \"dist/hostkeeper-bootstrap-$RELEASE_VERSION-macos-arm64.pkg\"";
+
 /// The deletion of the job's keychain.
 pub const DELETE_KEYCHAIN: &str =
     "security delete-keychain \"$RUNNER_TEMP/pkg-signing.keychain-db\"";
@@ -158,7 +168,7 @@ pub const DELETE_P12: &str = "rm -f \"$RUNNER_TEMP/installer.p12\"";
 /// The steps of [`CHECK_JOB`], exactly and in this order: the signature checked and the files
 /// compared before the one upload, and nothing between them that could put other bytes in
 /// `dist/`.
-pub const CHECK_STEPS: [Step; 13] = [
+pub const CHECK_STEPS: [Step; 17] = [
     Step::Checkout,
     run("rustup toolchain install"),
     Step::Download(UNSIGNED_ARTIFACT, "unsigned"),
@@ -171,6 +181,10 @@ pub const CHECK_STEPS: [Step; 13] = [
     run(EXPAND_HELLO_UNSIGNED),
     run(EXPAND_HELLO_SIGNED),
     run(SAME_HELLO_FILES),
+    run(CHECK_BOOTSTRAP_SIGNATURE),
+    run(EXPAND_BOOTSTRAP_UNSIGNED),
+    run(EXPAND_BOOTSTRAP_SIGNED),
+    run(SAME_BOOTSTRAP_FILES),
     Step::Upload(PUBLISHED_ARTIFACT, "dist/"),
 ];
 
@@ -199,6 +213,18 @@ pub const EXPAND_HELLO_SIGNED: &str = "pkgutil --expand \"dist/hello-$RELEASE_VE
 /// The comparison of hello's expanded unsigned and signed `.pkg`, in [`CHECK_JOB`].
 pub const SAME_HELLO_FILES: &str =
     "diff -r \"$RUNNER_TEMP/hello-unsigned-expanded\" \"$RUNNER_TEMP/hello-signed-expanded\"";
+
+/// The check of the signature of the bootstrap pkg, in [`CHECK_JOB`].
+pub const CHECK_BOOTSTRAP_SIGNATURE: &str = "cargo xtask release check-pkg-signature \"dist/hostkeeper-bootstrap-$RELEASE_VERSION-macos-arm64.pkg\" --identity \"$IDENTITY\"";
+
+/// The expansion of the bootstrap pkg, unsigned, in [`CHECK_JOB`].
+pub const EXPAND_BOOTSTRAP_UNSIGNED: &str = "pkgutil --expand \"unsigned/hostkeeper-bootstrap-$RELEASE_VERSION-macos-arm64.pkg\" \"$RUNNER_TEMP/bootstrap-unsigned-expanded\"";
+
+/// The expansion of the bootstrap pkg, signed, in [`CHECK_JOB`].
+pub const EXPAND_BOOTSTRAP_SIGNED: &str = "pkgutil --expand \"dist/hostkeeper-bootstrap-$RELEASE_VERSION-macos-arm64.pkg\" \"$RUNNER_TEMP/bootstrap-signed-expanded\"";
+
+/// The comparison of the expanded unsigned and signed bootstrap pkg, in [`CHECK_JOB`].
+pub const SAME_BOOTSTRAP_FILES: &str = "diff -r \"$RUNNER_TEMP/bootstrap-unsigned-expanded\" \"$RUNNER_TEMP/bootstrap-signed-expanded\"";
 
 /// One line per rule of this module that `doc`, artifacts.yml, breaks.
 pub fn problems(doc: &Node) -> Vec<String> {
@@ -240,6 +266,7 @@ fn build_problems(doc: &Node) -> Vec<String> {
     for (what, command) in [
         ("the unsigned pkg", BUILD_PKG),
         ("hello's unsigned pkg", BUILD_HELLO_PKG),
+        ("the bootstrap's unsigned pkg", BUILD_BOOTSTRAP_PKG),
     ] {
         if !build
             .iter()

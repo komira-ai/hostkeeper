@@ -170,3 +170,69 @@ fn check_pkg_signature_reads_the_named_pkg_through_the_pkg_port_against_the_iden
     ));
     assert_eq!(fakes.pkgbuild.signature_calls.borrow().len(), 1);
 }
+
+#[test]
+fn check_macos_bootstrap_pkg_reads_the_expanded_pkg_without_asking_for_adapters() {
+    // Catches: the expanded directory, `--version` or `--binary` not reaching the check, or the
+    // verb building the real adapters though it reads no port.
+    let d = scratch("release-check-macos-bootstrap-pkg-verb");
+    let absent = d.join("expanded");
+    let (out, connected) = connects(verb(&[
+        "check-macos-bootstrap-pkg",
+        text(&absent),
+        "--version",
+        "0.1.9",
+        "--binary",
+        text(&d.join("hostkeeper-bootstrap")),
+    ]));
+    assert!(
+        matches!(&out, Err(Error::Io { what, .. }) if what.starts_with("read ")),
+        "{out:?}"
+    );
+    assert!(!connected);
+}
+
+#[test]
+fn macos_bootstrap_pkg_builds_through_the_pkgbuild_and_productbuild_port_with_its_flags() {
+    // Catches: `--version`, `--binary`, `--stage` or `--out` not reaching the pkg builder, the
+    // script not handed to pkgbuild, the component not written to the stage or the product not
+    // to `--out`.
+    let d = scratch("release-macos-bootstrap-pkg-verb");
+    std::fs::write(d.join("hostkeeper-bootstrap"), b"bin").expect("write the binary");
+    let fakes = empty();
+    let stage = d.join("root");
+    let out = d.join("dist");
+    let build = verb(&[
+        "macos-bootstrap-pkg",
+        "--version",
+        "0.1.9",
+        "--binary",
+        text(&d.join("hostkeeper-bootstrap")),
+        "--stage",
+        text(&stage),
+        "--out",
+        text(&out),
+    ]);
+    let lines = run_with(build, &fakes.ports()).expect("build");
+    assert!(lines[0].starts_with("hostkeeper-bootstrap-0.1.9-macos-arm64.pkg: sha256 "));
+    let calls = fakes.pkgbuild.calls.borrow();
+    assert_eq!(
+        (
+            calls[0].root.as_path(),
+            calls[0].scripts.as_deref(),
+            calls[0].pkg.as_path(),
+            calls[0].identifier.as_str()
+        ),
+        (
+            stage.join("root").as_path(),
+            Some(stage.join("scripts").as_path()),
+            stage.join("hostkeeper-bootstrap.pkg").as_path(),
+            "dev.hostkeeper.bootstrap"
+        )
+    );
+    let products = fakes.pkgbuild.product_calls.borrow();
+    assert_eq!(
+        products[0].product,
+        out.join("hostkeeper-bootstrap-0.1.9-macos-arm64.pkg")
+    );
+}
