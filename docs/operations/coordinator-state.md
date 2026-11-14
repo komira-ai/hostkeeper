@@ -547,7 +547,7 @@ A coordinator before this release has neither service: it answers the paths `UNI
 
 The operator API has one service for the lab (`docs/design/ui-shell-lab.md`), `Layout`, which takes an operator only (a CI token is
 `forbidden`) and which `hkctl layout ...` (`docs/cli.md`) and the Home page call. A hostkeeper runs one lab: the layout has one
-cluster name, rows numbered 1, 2, 3, racks numbered within their row (each 1 to 60 U high, 42 by default) and placements. A
+cluster name, rows numbered 0, 1, 2, racks numbered within their row (each 1 to 60 U high, 42 by default) and placements. A
 placement puts a server in a rack from its lowest U, so many U high; U 1 is the bottom. It belongs to the physical server, which
 is its inventory entry when one matches the host (so a wipe and a new enrollment keep the place), else the host.
 

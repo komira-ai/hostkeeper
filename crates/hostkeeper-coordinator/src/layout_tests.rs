@@ -62,8 +62,37 @@ fn the_cluster_name_is_the_short_plain_kind() {
     assert_eq!(Layout::default().name(), "");
 }
 
+/// Proves: the first row added to an empty layout is number 0 and the first rack added to a row is
+/// number 0, the next of each one more; a stored layout that holds row 0 and rack 0 is read back
+/// whole, and a row removed leaves the others their numbers.
+///
+/// Catches: a first row shown as Row 1, or a stored number 0 refused as invalid.
+#[test]
+fn the_first_row_and_the_first_rack_of_a_row_are_number_0() {
+    let (held, first) = Layout::default().with_next_row().expect("a row");
+    assert_eq!((first.id.as_str(), first.number), ("row-1", 0));
+    let (held, rack) = held.with_rack("", "row-1", 10).expect("a rack");
+    assert_eq!((rack.id.as_str(), rack.number), ("rack-1", 0));
+    let (held, second) = held.with_next_row().expect("a row");
+    assert_eq!(second.number, 1);
+    let (held, other) = held.with_rack("", "row-2", 10).expect("a rack");
+    assert_eq!(other.number, 0);
+    let text = encode_file(&held).expect("encodes");
+    let path = layout_path(std::path::Path::new("/s/desired.json"));
+    assert_eq!(parse_file(&path, &text).expect("reads"), held);
+    let (held, _) = held
+        .without_rack("rack-1")
+        .and_then(|l| l.without_row("row-1"))
+        .and_then(|l| l.with_next_row())
+        .expect("row 1 removed and a row added");
+    assert_eq!(
+        held.rows().iter().map(|r| r.number).collect::<Vec<_>>(),
+        [1, 2]
+    );
+}
+
 /// Proves: a rack is 1 to 60 U high and stands in a row the layout holds; rows and racks are
-/// numbered by the coordinator from 1, racks within their row, and a new one takes one more than
+/// numbered by the coordinator from 0, racks within their row, and a new one takes one more than
 /// the highest held, so a removed rack's number is reused only when it was the highest.
 ///
 /// Catches: a rack of 0 U, one in a removed row, or two racks that share a number.
@@ -83,14 +112,14 @@ fn rows_and_racks_are_numbered_and_a_rack_has_a_height_and_a_row() {
         Err(LayoutError::UnknownRow(id)) if id == "row-9"
     ));
     let (held, second) = held.with_next_row().expect("a row");
-    assert_eq!((second.id.as_str(), second.number), ("row-2", 2));
+    assert_eq!((second.id.as_str(), second.number), ("row-2", 1));
     let (held, rack2) = held.with_rack("", "row-1", 4).expect("a rack");
-    assert_eq!((rack2.id.as_str(), rack2.number), ("rack-2", 2));
+    assert_eq!((rack2.id.as_str(), rack2.number), ("rack-2", 1));
     let (held, other) = held.with_rack("", "row-2", 4).expect("a rack of row 2");
-    assert_eq!((other.id.as_str(), other.number), ("rack-3", 1));
+    assert_eq!((other.id.as_str(), other.number), ("rack-3", 0));
     let held = held.without_rack("rack-2").expect("removed");
     let (_, again) = held.with_rack("", "row-1", 4).expect("a rack");
-    assert_eq!((again.id.as_str(), again.number), ("rack-4", 2));
+    assert_eq!((again.id.as_str(), again.number), ("rack-4", 1));
     assert!(matches!(
         held.with_rack("rack-7", "", 4),
         Err(LayoutError::UnknownRack(_))
@@ -112,11 +141,11 @@ fn a_rack_is_resized_and_moved_between_rows() {
     let (resized, rack) = held.with_rack("rack-1", "", 20).expect("resized");
     assert_eq!(
         (rack.id.as_str(), rack.number, rack.height_u),
-        ("rack-1", 1, 20)
+        ("rack-1", 0, 20)
     );
     assert_eq!(rack.row, "row-1");
     let (moved, rack) = held.with_rack("rack-1", "row-2", 10).expect("moved");
-    assert_eq!((rack.row.as_str(), rack.number), ("row-2", 2));
+    assert_eq!((rack.row.as_str(), rack.number), ("row-2", 1));
     assert!(moved.placement(&host("n1")).is_some());
     assert_eq!(resized.racks().len(), 2);
 }
@@ -383,13 +412,13 @@ fn the_lists_come_in_the_order_the_page_draws() {
     assert_eq!(
         order,
         [
+            ("row-1".to_owned(), 0),
             ("row-1".to_owned(), 1),
-            ("row-1".to_owned(), 2),
-            ("row-2".to_owned(), 1)
+            ("row-2".to_owned(), 0)
         ]
     );
     let numbers: Vec<_> = held.rows().iter().map(|r| r.number).collect();
-    assert_eq!(numbers, [1, 2]);
+    assert_eq!(numbers, [0, 1]);
     let (held, _) = held
         .with_placement(placement_of(host("high"), "rack-2", 5, 1))
         .expect("p");
@@ -402,7 +431,7 @@ fn the_lists_come_in_the_order_the_page_draws() {
         .map(|p| p.subject.id.clone())
         .collect();
     assert_eq!(ids, ["low", "high"]);
-    assert_eq!(held.row("row-1").map(|r| r.number), Some(1));
+    assert_eq!(held.row("row-1").map(|r| r.number), Some(0));
     assert_eq!(held.rack("rack-2").map(|r| r.height_u), Some(5));
 }
 
@@ -426,14 +455,12 @@ fn the_file_reads_back_the_layout_and_a_bad_file_is_refused_by_name() {
     for bad in [
         "not json",
         r#"{"name":"A<"}"#,
-        r#"{"rows":{"row-1":{"number":0}}}"#,
         r#"{"rows":{"row-1":{"number":1},"row-2":{"number":1}}}"#,
         r#"{"rows":{"row-x":{"number":1}}}"#,
         r#"{"rows":{"row-1234567890":{"number":1}}}"#,
         r#"{"racks":{"rack-1":{"row":"row-1","number":1,"height_u":5}}}"#,
         r#"{"rows":{"row-1":{"number":1}},"racks":{"rack-1":{"row":"row-1","number":1,"height_u":61}}}"#,
         r#"{"rows":{"row-1":{"number":1}},"racks":{"rack-x":{"row":"row-1","number":1,"height_u":5}}}"#,
-        r#"{"rows":{"row-1":{"number":1}},"racks":{"rack-1":{"row":"row-1","number":0,"height_u":5}}}"#,
         r#"{"rows":{"row-1":{"number":1}},"racks":{"rack-1":{"row":"row-1","number":1,"height_u":5},"rack-2":{"row":"row-1","number":1,"height_u":5}}}"#,
     ] {
         let refused = parse_file(&path, bad.as_bytes()).expect_err("refused");
