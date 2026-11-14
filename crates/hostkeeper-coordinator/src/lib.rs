@@ -353,6 +353,8 @@ mod group_set_desired_tests;
 #[cfg(test)]
 mod group_uninstall_tests;
 #[cfg(test)]
+mod halt_absent_tests;
+#[cfg(test)]
 mod halt_membership_tests;
 #[cfg(test)]
 mod halt_race_tests;

@@ -730,7 +730,7 @@ impl Coordinator {
         };
         let announced = beat.services.clone().unwrap_or_default();
         self.tend_store(now);
-        let held = halt::note(&self.ops, &basis.services, legacy, &who, &beat, &node, now);
+        let noted = halt::note(&self.ops, &basis.services, legacy, &who, &beat, &node, now);
         let (platform, ops) = (beat.platform, self.ops.state());
         self.note_serving(&basis.services, &who.host_id, &node, &beat, &ops, now);
         self.note_running(&fleet, &who, &beat, &announced, legacy, turn == Turn::Order);
@@ -795,6 +795,13 @@ impl Coordinator {
                 _ => {}
             }
         }
+        // A halt cleared because its host reports the service absent: the host's failed report of
+        // it is set aside, as `Hosts.Retry` does, so the gate's `failed_here` does not hold it
+        // from the install it is now ordered again.
+        for name in &noted.cleared {
+            fleet.set_aside(name, &who.host_id);
+        }
+        let held = noted.held;
         fleet.note_node(who.host_id.clone(), node, self.ops.unix_now());
         if turn == Turn::Hold {
             return (ServiceReply::Nothing, None, None, Vec::new());

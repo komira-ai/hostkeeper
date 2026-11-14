@@ -142,3 +142,7 @@ and maps its program onto the tree: for a `.deb` that installs `/usr/bin/tiersto
 onto the tree the same way. The
 extracted tree is the attested (or, for a repository package, signed) package's files, so a process left from another version still shows `version_mismatch`.
 For an `oci-image` unit, the running version is the image digest the runtime reports.
+
+### 6.7 A halted install whose package is gone
+
+A `Finished{Halt}` step record holds every order of its service until `clear_halt` (design/host-updates.md, 3.8). One order is let through: an `install` of a service with no release installed (no `current`) that is not being uninstalled. The halt protected a host state that is no longer there (a first install's `rollback` takes the package off the host, or an operator removed it), so the daemon turns the record into the `halt_cleared` deferral, as `clear_halt` does, logs `alert=halt_forgotten` and runs the install. The same order again (the same package and try) is still answered from the record with its halt. An `update`, a `force_rollback` and a service with a release installed stay halted. The coordinator's side, which clears its own halt when the halting host reports the service absent, is in design/host-updates.md, 3.8.

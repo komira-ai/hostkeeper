@@ -69,7 +69,7 @@ use std::time::Duration;
 
 use hostkeeper_wire::HostId;
 use hostkeeper_wire::version::Version;
-use hostkeeper_wire::wire::{Heartbeat, Outcome, Phase, Token, UpdateResult};
+use hostkeeper_wire::wire::{Health, Heartbeat, Outcome, Phase, Token, UpdateResult};
 
 use crate::decide::{Decision, Gate, decide_marked};
 use crate::desired::Desired;
@@ -77,6 +77,7 @@ use crate::fleet::{Fleet, Node};
 use crate::host_groups::GroupName;
 use crate::identity::Identity;
 use crate::membership::{self, Standing};
+use crate::operate::{clear_standing, cleared};
 use crate::ops::{AuditEntry, Halt, HaltAck, HaltOrigin, OpsError, OpsState, OpsStore, Write};
 use crate::services::{ServiceDef, Services};
 
@@ -127,6 +128,22 @@ fn reported(last: Option<&UpdateResult>, id: &HostId) -> Option<Halt> {
     })
 }
 
+/// The reason of the `clear_halt` the coordinator writes when the host that raised a halt reports
+/// the service absent.
+pub const ABSENT_REASON: &str =
+    "the host that raised it reports the service absent: nothing is left installed to protect";
+
+/// What [`note`] decided about a heartbeat.
+#[derive(Debug, Default)]
+pub(crate) struct Noted {
+    /// The services for which an acknowledgement should have ended and could not be written: the
+    /// host is ordered nothing of them in this reply.
+    pub held: Vec<String>,
+    /// The services whose halt the host's report of the service absent cleared: the caller sets
+    /// the host's failed report of each aside once the fleet has kept the heartbeat.
+    pub cleared: Vec<String>,
+}
+
 /// Why a halt report changed nothing.
 enum Unchanged {
     /// An operator cleared this report.
@@ -154,8 +171,8 @@ impl From<OpsError> for Unchanged {
 /// A service whose update the host is running is skipped: its `last_update` is the one before,
 /// not a report. Otherwise a `last_update` that is not the halt an operator cleared for the
 /// host ends that acknowledgement ([`end_ack`]), and one that is a halt is raised unless it is
-/// ignored. Answers the services for which an acknowledgement should have ended and could not
-/// be written: the host is ordered nothing of them in this reply.
+/// ignored. A service the host reports absent is first checked for a halt that host raised
+/// ([`clear_if_absent`]). Answers what it decided ([`Noted`]).
 pub(crate) fn note(
     ops: &OpsStore,
     services: &Services,
@@ -164,21 +181,27 @@ pub(crate) fn note(
     beat: &Heartbeat,
     node: &Node,
     now: Duration,
-) -> Vec<String> {
+) -> Noted {
     let state = ops.state();
     let listed = beat.services.as_deref().unwrap_or_default();
-    let top = legacy
-        .into_iter()
-        .map(|name| (name, beat.last_update.as_ref(), beat.updating.is_some()));
+    let top = legacy.into_iter().map(|name| {
+        (
+            name,
+            beat.last_update.as_ref(),
+            beat.updating.is_some(),
+            beat.health,
+        )
+    });
     let reports = top.chain(listed.iter().map(|one| {
         (
             one.name.as_str(),
             one.last_update.as_ref(),
             one.updating.is_some(),
+            one.health,
         )
     }));
-    let mut held = Vec::new();
-    for (service, last, updating) in reports {
+    let mut noted = Noted::default();
+    for (service, last, updating, health) in reports {
         let counted = services.get(service).filter(|def| {
             membership::standing(def, &who.host_id, node, &state, now) == Standing::Counted
         });
@@ -187,13 +210,52 @@ pub(crate) fn note(
         };
         let report = reported(last, &who.host_id);
         if !end_ack(ops, group, service, &who.host_id, report.as_ref()) {
-            held.push(service.to_owned());
+            noted.held.push(service.to_owned());
         }
         if let Some(halt) = report {
             raise(ops, group, service, halt);
         }
+        // After the report is raised, so a host that reports its halt and the service absent in
+        // one heartbeat is cleared by it; the clear acknowledges the report, so the host's next
+        // heartbeat, which repeats it, does not raise it again.
+        if health == Health::Absent && clear_if_absent(ops, group, service, &who.host_id) {
+            noted.cleared.push(service.to_owned());
+        }
     }
-    held
+    noted
+}
+
+/// Clears the halt of `service` when the host `id` raised it and reports the service absent, as
+/// an operator's clear does ([`clear_standing`]), written first so a clear that could not be
+/// written leaves the halt standing, and audited `clear_halt` by the coordinator
+/// ([`ABSENT_REASON`]). Decided under the writers' lock, on the state it changes: nothing changes
+/// for no halt, for a halt of another host or of an operator (it names no host), and for a halt
+/// another host reported too while it stood, which that host may still be running. Answers
+/// whether a halt was cleared.
+fn clear_if_absent(ops: &OpsStore, group: Option<&GroupName>, service: &str, id: &HostId) -> bool {
+    let node = id.to_string();
+    let changed = ops.decide_change(Write::BeforeMemory, |state| {
+        let halt = state.edit_marks_in(group, service, |marks| {
+            let ours = marks.halt.as_ref().is_some_and(|halt| halt.node_id == node)
+                && marks.halt_seen.iter().all(|seen| seen.node_id == node);
+            if ours { clear_standing(marks) } else { None }
+        });
+        halt.map(|halt| cleared(COORDINATOR, service, group, &halt, ABSENT_REASON))
+            .ok_or(Unchanged::NoAck)
+    });
+    match changed {
+        Ok(_) => true,
+        Err(Unchanged::Store(why)) => {
+            tracing::error!(
+                service,
+                node_id = %node,
+                %why,
+                "a halt of an absent service could not be cleared: it stands"
+            );
+            false
+        }
+        Err(_) => false,
+    }
 }
 
 /// Ends the acknowledgement the host `id` has for `service`, unless `report`, the halt the
