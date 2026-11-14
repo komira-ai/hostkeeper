@@ -26,8 +26,8 @@ import {
   h, action, allPages, describeError, enumLabel, errorView, field, fmtUnix, list, pill, table, trimmed,
 } from "../view.js";
 import {
-  DEFAULT_RACK_HEIGHT, RACK_HEIGHTS, SERVER_HEIGHTS, STATES, counts, crumbs, inRack, layoutOf, layoutProblem,
-  rackName, racksOf, rowName, serversOf, stripPosition, subjectOf, worstState,
+  DEFAULT_RACK_HEIGHT, RACK_HEIGHTS, SERVER_HEIGHTS, STATES, consoleWords, counts, crumbs, gearOf, inRack,
+  layoutOf, layoutProblem, rackName, racksOf, roleWords, rowName, serversOf, stripPosition, subjectOf, worstState,
 } from "../lab.js";
 
 // How far an arrow key scrolls the rack strip when the width of a rack is not known: one rack's
@@ -143,6 +143,10 @@ function standing(servers, racks) {
 // `state` what survives a redraw.
 function lab(app, data, state) {
   const { layout, servers } = data;
+  // The network devices (switches) stand in the racks beside the servers: they take U, are picked up
+  // and put down like a server, but have no state, host or group, so no count of servers has them.
+  const gear = gearOf(layout);
+  const all = servers.concat(gear);
   const edit = app.params.edit === true;
   // The edit mode puts servers only where a rack is in view: a row or a rack.
   const canPlace = edit && Boolean(app.params.row || app.params.rack);
@@ -181,7 +185,7 @@ function lab(app, data, state) {
   // The U of a rack as a column of slots: a server over its U, a blank panel over a run of free
   // U (in the edit mode, one button for each free U, to drop or put a server on).
   function elevation(rack, big) {
-    const here = inRack(servers, rack.id);
+    const here = inRack(all, rack.id);
     const parts = [];
     for (let u = rack.height; u >= 1; u -= 1) {
       parts.push(h("span", { class: u % 5 === 0 || u === 1 ? "u-num five" : "u-num", "aria-hidden": "true", vars: { "--r": rack.height - u + 1 } }, u));
@@ -202,12 +206,12 @@ function lab(app, data, state) {
       }
       run = 0;
     };
-    const dropOn = (u) => (state.picked === null ? undefined : put(servers.find((x) => x.key === state.picked), rack.id, u));
+    const dropOn = (u) => (state.picked === null ? undefined : put(all.find((x) => x.key === state.picked), rack.id, u));
     for (let u = rack.height; u >= 1; u -= 1) {
       const s = at.get(u);
       if (s !== undefined) {
         flush();
-        parts.push(serverPlate(s, rack));
+        parts.push(s.device === undefined ? serverPlate(s, rack) : gearPlate(s, rack));
       } else if (!covered.has(u)) {
         if (edit) {
           parts.push(h("button", {
@@ -280,9 +284,49 @@ function lab(app, data, state) {
     h("span", { class: "ear right", "aria-hidden": "true" }));
   }
 
+  // A network device's faceplate over its U: a flat plate with a strip of ports (two rows of them on
+  // a tall one), a tag for the network it carries, its name and a console jack when its console cable is set.
+  // No light and no state word: hostkeeper hears nothing from a switch. A click opens its page (the
+  // edit mode picks it up instead); hover says name, network and the console port.
+  function gearPlate(item, rack) {
+    const p = item.placement;
+    const picked = state.picked === item.key;
+    const device = item.device;
+    const ports = Array.from({ length: p.height >= 2 ? 24 : 12 }, () => h("span", { class: "port" }));
+    return h("button", {
+      type: "button",
+      class: `gear r-${device.role}${p.height >= 2 ? " tall" : ""}${picked ? " picked" : ""}`,
+      name: edit ? "pick-gear" : "open-gear",
+      title: `${device.name} | ${roleWords(device.role)} | console ${consoleWords(device)}`,
+      "aria-pressed": edit ? (picked ? "true" : "false") : undefined,
+      draggable: edit ? "true" : undefined,
+      vars: { "--r": rack.height - (p.u + p.height - 1) + 1, "--s": p.height },
+      on: {
+        click: () => {
+          if (!edit) {
+            app.navigate("switch", { id: device.id });
+            return;
+          }
+          state.picked = picked ? null : item.key;
+          state.height = String(p.height);
+          redraw();
+        },
+        dragstart: () => {
+          state.picked = item.key;
+        },
+      },
+    },
+    h("span", { class: "ear left", "aria-hidden": "true" }),
+    h("span", { class: "gear-tag" }, device.role === "bmc" ? "BMC" : "DATA"),
+    h("span", { class: "plate-name" }, device.name),
+    h("span", { class: "ports", "aria-hidden": "true" }, ports),
+    device.consoleHost === "" ? null : h("span", { class: "jack", "aria-hidden": "true", title: "console" }),
+    h("span", { class: "ear right", "aria-hidden": "true" }));
+  }
+
   // The head of a rack: its number, U in use and, in the edit mode, resize, move and remove.
   function rackHead(rack) {
-    const here = inRack(servers, rack.id);
+    const here = inRack(all, rack.id);
     const used = here.reduce((n, s) => n + s.placement.height, 0);
     const form = { height: String(rack.height), row: rack.row };
     // On the strip the rack's number opens the rack alone; on the rack's own page it is only a label.
@@ -314,7 +358,7 @@ function lab(app, data, state) {
         }), "Rack moved.")
         : null,
       action(app, "Remove", "remove-rack", async () => {
-        const names = standing(servers, [rack]);
+        const names = standing(all, [rack]);
         if (names.length > 0) {
           return `${rackName(layout, rack.id)} still holds ${names.join(", ")}: move them out first.`;
         }
@@ -408,23 +452,25 @@ function lab(app, data, state) {
       }, racks.map((rack) => rackColumn(rack, false))));
   }
 
-  // The servers not in a rack, quietly: a muted line with an outlined chip for each, a button to
-  // its host (the edit mode: to pick it up).
+  // The servers and switches not in a rack, quietly: a muted line with an outlined chip for each, a
+  // button to its host or switch page (the edit mode: to pick it up).
   function tray() {
-    const unplaced = servers.filter((s) => s.placement === null);
+    const unplaced = all.filter((s) => s.placement === null);
     return h("section", { class: "tray" },
       h("h3", {}, "Unplaced ", h("span", { class: "tray-count" }, `(${unplaced.length})`)),
       unplaced.length === 0
         ? h("p", { class: "note" }, "Every server stands in a rack.")
         : h("ul", { class: "chips" }, unplaced.map((s) => h("li", {},
           h("button", {
-            type: "button", class: `chip s-${s.state}${state.picked === s.key ? " picked" : ""}`,
-            name: canPlace ? "pick-unplaced" : "open-unplaced", title: tip(s),
+            type: "button", class: `chip s-${s.device === undefined ? s.state : "gear"}${state.picked === s.key ? " picked" : ""}`,
+            name: canPlace ? "pick-unplaced" : "open-unplaced", title: s.device === undefined ? tip(s) : `${s.name} | ${roleWords(s.device.role)}`,
             on: {
               click: () => {
                 if (canPlace) {
                   state.picked = state.picked === s.key ? null : s.key;
                   redraw();
+                } else if (s.device !== undefined) {
+                  app.navigate("switch", { id: s.id });
                 } else if (s.host !== null) {
                   app.navigate("host", { nodeId: s.host });
                 } else {
@@ -432,7 +478,8 @@ function lab(app, data, state) {
                 }
               },
             },
-          }, h("span", { class: "led", "aria-hidden": "true" }), s.name, h("span", { class: "plate-state" }, ` ${s.state}`))))),
+          }, s.device === undefined ? h("span", { class: "led", "aria-hidden": "true" }) : null, s.name,
+          h("span", { class: "plate-state" }, s.device === undefined ? ` ${s.state}` : ` ${roleWords(s.device.role)}`))))),
       canPlace && unplaced.length > 0
         ? h("div", { class: "buttons" },
           pick("tray-height", state, "height", SERVER_HEIGHTS.map((n) => [n, `${n}U`]), "Height of the one picked"),
@@ -442,7 +489,7 @@ function lab(app, data, state) {
 
   // The banner of a move in progress: which server, and what can be done with it.
   function moving() {
-    const server = servers.find((s) => s.key === state.picked);
+    const server = all.find((s) => s.key === state.picked);
     if (!canPlace || server === undefined) {
       return null;
     }
@@ -516,11 +563,12 @@ function lab(app, data, state) {
     }
     const bands = layout.rows.map((row) => {
       const racks = racksOf(layout, row.id);
-      const here = servers.filter((sv) => sv.placement !== null && racks.some((r) => r.id === sv.placement.rack));
+      const standingHere = (list2) => list2.filter((sv) => sv.placement !== null && racks.some((r) => r.id === sv.placement.rack));
+      const here = standingHere(servers);
       const total = here.length;
       const by = counts(here, false);
       const capacity = racks.reduce((n, r) => n + r.height, 0);
-      const used = here.reduce((n, sv) => n + sv.placement.height, 0);
+      const used = standingHere(all).reduce((n, sv) => n + sv.placement.height, 0);
       const open = h("button", {
         type: "button", class: `row-open s-${worstState(by)}`, name: "open-row",
         title: `${rowName(layout, row.id)}: ${racks.length} racks, ${total} servers`,
@@ -540,7 +588,7 @@ function lab(app, data, state) {
       return h("section", { class: "lab-row" }, open,
         edit
           ? action(app, "Remove row", "remove-row", async () => {
-            const names = standing(servers, racks);
+            const names = standing(all, racks);
             if (racks.length > 0) {
               return `${rowName(layout, row.id)} still holds ${racks.length} racks${names.length > 0 ? ` with ${names.join(", ")}` : ""}: remove the racks first.`;
             }
@@ -561,14 +609,14 @@ function lab(app, data, state) {
   // A rack's footprint in the floor plan: a small elevation (a block of its height for each server,
   // coloured by state, at its U), the rack's number above and its U in use below.
   function footprint(rack) {
-    const here = inRack(servers, rack.id);
+    const here = inRack(all, rack.id);
     const used = here.reduce((n, s) => n + s.placement.height, 0);
-    const by = counts(here, false);
+    const by = counts(here.filter((s) => s.device === undefined), false);
     const round = (n) => Math.round(n * 100) / 100;
     return h("span", { class: `foot s-${worstState(by)}`, title: `${rackName(layout, rack.id)}: ${used}/${rack.height} U` },
       h("span", { class: "foot-no" }, `${rack.number}`),
       h("span", { class: "mini", "aria-hidden": "true" }, here.map((s) => h("span", {
-        class: `seg s-${s.state}`,
+        class: `seg s-${s.device === undefined ? s.state : "gear"}`,
         vars: { "--b": round(((s.placement.u - 1) * 100) / rack.height), "--h": round((s.placement.height * 100) / rack.height) },
       }))),
       h("span", { class: "foot-use" }, `${used}/${rack.height}U`));
@@ -587,7 +635,8 @@ function lab(app, data, state) {
   function summary() {
     const placed = servers.filter((s) => s.placement !== null).length;
     return h("p", { class: "lab-sum" },
-      `${servers.length} servers: ${placed} placed in ${layout.racks.length} racks, ${servers.length - placed} unplaced`);
+      `${servers.length} servers: ${placed} placed in ${layout.racks.length} racks, ${servers.length - placed} unplaced`
+      + (gear.length === 0 ? "" : `; ${gear.length} ${gear.length === 1 ? "switch" : "switches"}`));
   }
 
   function view() {
@@ -604,6 +653,7 @@ function lab(app, data, state) {
     const title = layout.name === "" ? "Lab" : layout.name;
     if (rackAt !== undefined) {
       const here = inRack(servers, rackAt.id);
+      const network = inRack(gear, rackAt.id);
       return h("section", { class: "page lab" },
         head(`${rowName(layout, rowAt.id)} / Rack ${rackAt.number}`),
         moving(),
@@ -621,7 +671,18 @@ function lab(app, data, state) {
                 h("td", {}, `${s.placement.height}U`),
                 h("td", {}, pill(s.state, STATES.find(([x]) => x === s.state)[1])),
                 h("td", {}, s.group || "-"),
-                h("td", {}, s.version || "-")))))),
+                h("td", {}, s.version || "-"))))),
+          network.length === 0 ? null : h("div", { class: "rack-hosts" },
+            h("h3", {}, `Network (${network.length})`),
+            table(["Switch", "U", "Height", "Network", "Console"], network.map((s) => h("tr", {},
+              h("td", {}, h("button", {
+                type: "button", class: "linklike", name: "open-gear-row",
+                on: { click: () => app.navigate("switch", { id: s.id }) },
+              }, s.name)),
+              h("td", {}, `U${s.placement.u}`),
+              h("td", {}, `${s.placement.height}U`),
+              h("td", {}, roleWords(s.device.role)),
+              h("td", {}, consoleWords(s.device))))))),
         tray());
     }
     if (rowAt !== undefined) {

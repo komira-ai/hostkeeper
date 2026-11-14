@@ -193,6 +193,15 @@ const REQUESTS: &[(&str, &str)] = &[
         r#"{"row": "row-1", "heightU": 42, "reason": "add rack"}"#,
     ),
     (
+        "hostkeeper.operator.v1.Layout/PutDevice",
+        r#"{"name": "bmc-switch", "role": "NETWORK_ROLE_BMC", "consoleHost": "storage-1",
+            "consoleDevice": "/dev/ttyUSB0", "reason": "added"}"#,
+    ),
+    (
+        "hostkeeper.operator.v1.Layout/RemoveDevice",
+        r#"{"id": "net.1", "reason": "removed"}"#,
+    ),
+    (
         "hostkeeper.operator.v1.Layout/RemoveRack",
         r#"{"id": "rack-1", "reason": "remove"}"#,
     ),

@@ -599,7 +599,7 @@ const chosen = { node: "", tab: "overview" };
 // The rack the host stands in, drawn small: the rack's U as a column, the other servers as dim
 // blocks and this host's U lit, with its place in words under it; an empty dashed column and
 // "Unplaced" for a host in no rack. 'held' is the host's placement, 'rackAt' its rack.
-function miniRack(layout, held, rackAt) {
+export function miniRack(layout, held, rackAt) {
   if (held === undefined || rackAt === undefined) {
     return h("div", { class: "mini" },
       h("div", { class: "mini-rack empty", "aria-hidden": "true", vars: { "--units": 12 } }),
