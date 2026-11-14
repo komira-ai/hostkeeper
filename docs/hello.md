@@ -131,7 +131,7 @@ the canonical JSON of the proto: the group `farm`, the packages `hostkeeper` the
 (`hostkeeper` is listed by every group), and a policy of a lone canary, two baked beats, and
 automatic rollback once one failed host or 25 percent of the group's hosts have failed the release
 (`rollback_after_failed` with `percent` 25 and `min_hosts` 1); the stages are the default,
-1, 10, 50 and 100 percent. Put it:
+50 and 100 percent. Put it:
 
 ```sh
 hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
@@ -208,8 +208,7 @@ confirm.
 - `hkctl releases converge --service hello --host-group farm`: the group's convergence.
 - Rollout, section `hello`: `Desired` is `<v1>`. The canary host goes first, then the others by
   the stages of hello's update plan, each baked before the next; a stage's hosts update in
-  parallel up to the group's `max_updating` (1 unless the policy sets more), so one at a time by
-  default.
+  parallel up to the group's `max_updating` (the whole stage unless the policy sets a number).
   The plan shows "stage k of n" and why it waits. The role table counts `Updating`, then `At
   desired`. `State` ends `converged`.
 - Home: each host shows `hello <v1>, healthy`. Healthy is the daemon's own probe of
@@ -254,8 +253,8 @@ One failed host is enough for the rollback: the group's policy sets `rollback_af
 not rolled on to another group.
 
 **Another service is not held.** While the failing build is in flight on the canary, hello's
-update holds one of the group's live rollouts (the policy's `live_rollouts`, by default the
-coordinator's `--live-rollouts`), and another package's new version waits when none is free. Once the canary
+update holds one of the cluster's live rollouts (`--live-rollouts`, which a group's `live_rollouts`
+can only lower), and another package's new version waits when none is free. Once the canary
 reports the failure, the failing build's rollout stops there and hello is rolled back, and the
 live rollout is free (komira-ai/hostkeeper#259): the other package's hosts are ordered as usual.
 

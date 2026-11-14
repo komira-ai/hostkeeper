@@ -107,10 +107,11 @@ fn a_package_name_is_one_to_255_bytes_of_its_alphabet() {
     }
 }
 
-/// Proves: the default policy is the default of every key of section 3 (no stage, which is 1, 10,
-/// 50 and 100 percent; no canary; 0 bake beats; manual rollback; 25 percent and 2 hosts; 300, 2
-/// and 3600 seconds; `max_updating` 1; `min_up` 0; the coordinator's `live_rollouts`), it is
-/// written `{}`, and `{}` reads as it.
+/// Proves: the default policy is the default of every key of section 3 (no stage, which is 50 and
+/// 100 percent; no canary; 0 bake beats; manual rollback; 25 percent and 2 hosts; 300, 2 and 3600
+/// seconds; `max_updating` the whole stage; `min_up` 0; the coordinator's `live_rollouts`), it is
+/// written `{}`, and `{}` reads as it; an explicit `max_updating` of 1 is written, and the default
+/// is not.
 ///
 /// Catches: a default written into every group's file, or a key read with another default than
 /// the one the rollout file had.
@@ -143,7 +144,7 @@ fn the_default_policy_is_written_as_nothing_and_read_back_from_nothing() {
                 factor: 2,
                 max_secs: 3600
             },
-            1,
+            crate::desired::MAX_COUNT,
             0,
             None,
         )
@@ -152,12 +153,29 @@ fn the_default_policy_is_written_as_nothing_and_read_back_from_nothing() {
         serde_json::to_value(&policy).expect("serialises"),
         json!({})
     );
+    let capped = Policy {
+        max_updating: 1,
+        ..Policy::default()
+    };
+    assert_eq!(
+        serde_json::to_value(&capped).expect("serialises"),
+        json!({"max_updating": 1})
+    );
+    assert_eq!(
+        serde_json::from_value::<Policy>(json!({"max_updating": 1})).expect("reads"),
+        capped
+    );
     assert_eq!(
         serde_json::from_value::<Policy>(json!({})).expect("reads"),
         policy
     );
     assert_eq!(policy.check(), Ok(()));
-    assert_eq!(policy.plan().expect("a plan"), Plan::default());
+    let halves = [RawStage::Percent(50), RawStage::Percent(100)];
+    assert_eq!(
+        policy.plan().expect("a plan"),
+        Plan::read(Some(halves.into()), None).expect("50 and 100")
+    );
+    assert_ne!(policy.plan().expect("a plan"), Plan::default());
 }
 
 /// A policy with every key set away from its default.
