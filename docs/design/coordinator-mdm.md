@@ -22,8 +22,8 @@ the Macs and wiped hosts take their packages from the coordinator on the lab LAN
 
 A third direction (2026-11-14) puts this design's Mac path in question: the ABM token of `js-mdm` answers `401` and the owner cannot edit that
 entry, so Apple Business's built-in device management installs a tiny bootstrap pkg and hostkeeper's own enrollment does the rest. See
-[mac-bootstrap.md](mac-bootstrap.md), which proposes keeping this MDM code idle and off, and holds the tasks of section 11 that are not built until
-the owner decides.
+[mac-bootstrap.md](mac-bootstrap.md), which keeps this MDM code idle and off (the owner's default of 2026-11-14, not removed), and holds the tasks of
+section 11 that are not built until the owner decides. That design is built: the bootstrap pkg, its program and its release wiring.
 
 This document supersedes [hostkeeper-mdm.md](hostkeeper-mdm.md) in part. Section 1.4 says which parts. Section 4 of that document (the
 daemon's config profile), section 5 (the nonce) and section 7 (the pkg, its signature and its delivery by digest) stand. The gate, its

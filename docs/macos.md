@@ -318,6 +318,14 @@ hostkeeper binary, and the plists of its two slots are rendered by
 `hostkeeper_launchd::service_plist`. The artifacts workflow builds them on a GitHub-hosted Apple
 silicon runner, on each push to `main` and by hand, never on a pull request.
 
+The release also ships the bootstrap pkg, `hostkeeper-bootstrap-<v>-macos-arm64.pkg`, which Apple
+Business installs on a new Mac: the program `hostkeeper-bootstrap` at
+`/usr/local/lib/hostkeeper-bootstrap/`, its launchd plist and a postinstall that loads the job. It
+fetches hostkeeper's own pkg, checks it against its Team ID and installs it, and the daemon then
+enrolls ([design/mac-bootstrap.md](design/mac-bootstrap.md),
+[operations/mac-bootstrap.md](operations/mac-bootstrap.md)). It is built, signed and checked in the
+same jobs as the other pkgs.
+
 The pkg is the first install of a Mac. It installs exactly five files and one empty directory,
 and the directories that hold them (each 0755, as macOS has them already; `/usr/local/lib` and
 `/usr/local/lib/hostkeeper` are made so when they are not there), all owned by root and wheel:
@@ -474,7 +482,8 @@ The released pkg is signed with the Developer ID Installer identity
 `Developer ID Installer: Komira AI, Inc. (U7RTX4XD3X)`, because the MDM's
 `InstallEnterpriseApplication` installs only a signed pkg. hello's `.pkg`
 (`hello-<version>-macos-arm64.pkg`) is signed the same way, in the same jobs, because a host's
-`macos-pkg` installer stages only a signed pkg; each step below is done for both. It is not notarized: nothing Apple
+`macos-pkg` installer stages only a signed pkg, and so is the bootstrap pkg
+(`hostkeeper-bootstrap-<version>-macos-arm64.pkg`); each step below is done for all three. It is not notarized: nothing Apple
 states asks an MDM-installed pkg for notarization (design section 7.3), and the release adds it
 only if a Mac refuses the signed pkg without it. The signing is in `.github/workflows/artifacts.yml`,
 on a push to `main` only, in three jobs:
@@ -495,7 +504,8 @@ on a push to `main` only, in three jobs:
    Certification Authority` and `Apple Root CA`, naming every difference; it then expands the
    signed and the unsigned pkg and refuses any file that differs, so the signing changed nothing
    `check-macos-pkg` checked. Only then is each signed pkg the release file
-   `hostkeeper-<version>-macos-arm64.pkg` or `hello-<version>-macos-arm64.pkg`: `SHA256SUMS`,
+   `hostkeeper-<version>-macos-arm64.pkg`, `hostkeeper-bootstrap-<version>-macos-arm64.pkg` or
+   `hello-<version>-macos-arm64.pkg`: `SHA256SUMS`,
    the attestation and the release are of its bytes.
 
 A run by hand signs nothing: it builds and checks the unsigned pkgs and makes the sums without
