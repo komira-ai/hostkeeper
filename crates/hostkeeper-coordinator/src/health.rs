@@ -3,8 +3,9 @@
 //! coordinator's own machine (an orchestrator's HTTP probe, the machine's monitoring). The image
 //! has no shell and no client, so the probe runs outside the container, and there is no verb.
 //!
-//! It answers `GET /healthz` and `HEAD /healthz` only, and `404 not_found` to any other path or
-//! method. The answer is `200` with the body `ok` when every listener the flags name is bound
+//! It answers `GET` and `HEAD` of `/healthz` and of `/readyz` (the same answer on both: a
+//! probe of one coordinator's liveness and the edge's readiness check of it ask the one question,
+//! whether this coordinator takes traffic), and `404 not_found` to any other path or method. The answer is `200` with the body `ok` when every listener the flags name is bound
 //! and serving and the store takes writes, and `503` with one reason token otherwise:
 //! `draining` from the stop signal until the process exits, whatever else holds,
 //! `starting` until every listener is bound, `store_unreachable` while the link to the database
@@ -37,8 +38,13 @@ use crate::listen::{WriteDeadline, accept_each};
 use crate::service::Coordinator;
 use crate::store::Health;
 
-/// The one path the health listener answers.
+/// The path the health listener answers.
 pub(crate) const HEALTH_PATH: &str = "/healthz";
+
+/// The path of the readiness check, answered as [`HEALTH_PATH`] is: `200` only while this
+/// coordinator takes traffic, `503` while it starts, cannot reach its store or drains, so the edge
+/// that checks it sends a connection only to a coordinator that answers `200`.
+pub(crate) const READY_PATH: &str = "/readyz";
 
 /// What the health listener says of the coordinator.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -117,11 +123,18 @@ impl Serving {
 }
 
 /// Waits for `stop` (the stop signal), then says on `serving` that the coordinator is
-/// draining, whatever `stop` answered, and answers what it answered. The health listener says
-/// `draining` from then on, until the process exits.
-pub(crate) async fn drain_on<T>(stop: impl Future<Output = T>, serving: Serving) -> T {
+/// draining, whatever `stop` answered, waits for `delay` and answers what `stop` answered. The
+/// health listener says `draining` from the stop until the process exits, and the coordinator's
+/// listeners keep accepting while `delay` runs, so an edge that has not yet seen the `503` (or the
+/// new instance that replaces this one) still reaches a coordinator that answers.
+pub(crate) async fn drain_on<T>(
+    stop: impl Future<Output = T>,
+    serving: Serving,
+    delay: impl Future<Output = ()>,
+) -> T {
     let stopped = stop.await;
     serving.drain();
+    delay.await;
     stopped
 }
 
@@ -152,7 +165,8 @@ pub(crate) fn answer(
     method: &Method,
     path: &str,
 ) -> Response<Full<Bytes>> {
-    let asks = path == HEALTH_PATH && (method == Method::GET || method == Method::HEAD);
+    let asks = (path == HEALTH_PATH || path == READY_PATH)
+        && (method == Method::GET || method == Method::HEAD);
     let (status, body) = if asks {
         let verdict = verdict(coordinator, serving);
         (verdict.status(), verdict.token())

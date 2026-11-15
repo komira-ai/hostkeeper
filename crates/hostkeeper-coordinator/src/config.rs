@@ -220,13 +220,20 @@ pub struct Serve {
     #[command(flatten)]
     pub lan: listen::LanFlags,
     /// A health listener, plain HTTP with no TLS and no token, for a probe on this machine: it
-    /// answers `GET` and `HEAD` of `/healthz` only, `200 ok` while every listener is bound and
-    /// serving and the store takes writes, and `503` with one reason token otherwise
-    /// (`starting`, `not_writer`, `store_unreachable`). It takes a loopback address
+    /// answers `GET` and `HEAD` of `/healthz` and of `/readyz` only, `200 ok` while every listener
+    /// is bound and serving and the store takes writes, and `503` with one reason token otherwise
+    /// (`starting`, `store_unreachable`, `draining`). It takes a loopback address
     /// (127.0.0.0/8 or ::1): any other, a wildcard among them, is refused at start. Without it
     /// there is no health listener.
     #[arg(long)]
     pub health_listen: Option<SocketAddr>,
+    /// How long, from SIGTERM or SIGINT, the coordinator answers `503 draining` on its health
+    /// listener and keeps serving its other listeners before it stops: the time an edge needs to
+    /// see the answer, or to see the instance that replaces this one. 0 stops at once. A deploy
+    /// that updates the coordinator start-first sets it above the edge's check interval times its
+    /// unhealthy threshold, and its stop grace period above it.
+    #[arg(long, default_value_t = 0)]
+    pub drain_delay_secs: u64,
     /// The coordinator's certificate chain (PEM), issued by the farm CA with the role
     /// `coordinator`.
     #[arg(long)]
@@ -824,7 +831,11 @@ where
 {
     let parts = build(&flags, roots)?;
     let health = Serving::default();
-    let stop = health::drain_on(stop, health.clone());
+    let stop = health::drain_on(
+        stop,
+        health.clone(),
+        tokio::time::sleep(Duration::from_secs(flags.drain_delay_secs)),
+    );
     let serving = run_as(
         parts,
         bind,

@@ -72,6 +72,20 @@ fn a_health_address_that_is_not_loopback_is_refused_at_start_by_name() {
     }
 }
 
+/// Proves: `--drain-delay-secs` defaults to 0 (the coordinator stops at once on a signal, as it
+/// always did) and takes the number of seconds it is given.
+///
+/// Catches: a default that makes every stop wait, or a flag that is read as something else.
+#[test]
+fn the_drain_delay_is_none_unless_given() {
+    let files = Files::new("drain-delay-flag");
+    assert_eq!(flags_of(files.args()).drain_delay_secs, 0);
+    let mut args = files.args();
+    args.push("--drain-delay-secs".into());
+    args.push("15".into());
+    assert_eq!(flags_of(args).drain_delay_secs, 15);
+}
+
 /// What a `run` on an in-memory network did: the addresses it asked to bind, in order, and the
 /// ones it told `ready`; `held` is told each time a bind starts to wait for the gate.
 struct Running {

@@ -3,7 +3,7 @@
 The coordinator's container image is distroless: no shell and no client, so nothing inside the
 container can run a health check, and the image has no `HEALTHCHECK`. Health is a route instead:
 `serve --health-listen <address:port>` binds one more listener, and a probe on the same machine
-asks it `GET /healthz`. The design is [two-programs.md](../design/two-programs.md), section 2.7.
+asks it `GET /healthz`, or `GET /readyz`, which answers the same. The design is [two-programs.md](../design/two-programs.md), section 2.7.
 
 ## The flag
 
@@ -29,7 +29,7 @@ inside the container is the machine's own, and a probe on the machine reaches it
 
 | Request | Status | Body |
 |---|---|---|
-| `GET /healthz` (a query is ignored), serving | `200` | `ok` |
+| `GET /healthz` or `GET /readyz` (a query is ignored), serving | `200` | `ok` |
 | `GET /healthz`, a listener not yet bound | `503` | `starting` |
 | `GET /healthz`, the database's link lost | `503` | `store_unreachable` |
 | `GET /healthz`, from SIGTERM or SIGINT until the process exits, whatever else holds | `503` | `draining` |
@@ -52,8 +52,12 @@ reads memory only and writes no audit line.
 - `draining` is answered from the moment the coordinator takes SIGTERM or SIGINT until it exits,
   ahead of every other token: every answer made after the signal is `draining`, never `ok`, a
   probe that connected before the signal among them. It never turns back into `ok`. The
-  coordinator does not wait after the signal: it stops serving and exits at once, so this time is
-  short, and from then on a probe gets no answer, which a probe also reads as not healthy.
+  coordinator keeps serving its listeners for `--drain-delay-secs` after the signal (default 0: it
+  stops serving and exits at once), so that an edge that checks `/readyz` sees the `503` and an
+  instance that replaces this one is already taking connections; then it exits, and from then on a
+  probe gets no answer, which a probe also reads as not healthy. A deploy that updates the
+  coordinator start-first sets `--drain-delay-secs` above the edge's check interval times its
+  unhealthy threshold, and the service's stop grace period above `--drain-delay-secs`.
 
 The listener has the limits of the others: at most 1024 connections at once, ten seconds for a
 request head and for each write of an answer the probe does not read.
