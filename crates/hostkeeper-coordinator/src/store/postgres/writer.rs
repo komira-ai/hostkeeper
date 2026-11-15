@@ -364,12 +364,7 @@ impl Writer {
     /// one is waiting (section 4): a session that cannot be opened or locked leaves the store lost,
     /// for the next heartbeat to try again.
     pub(crate) fn revive(&mut self) {
-        let unknown = self
-            .link
-            .lock()
-            .unknown
-            .as_ref()
-            .map(|(id, _)| id.clone());
+        let unknown = self.link.lock().unknown.as_ref().map(|(id, _)| id.clone());
         match self.reopen(unknown.as_deref()) {
             Ok(Revived::Up(session, landed)) => {
                 let session = *session;
@@ -385,10 +380,7 @@ impl Writer {
                     shared.state = State::Up;
                 }
                 self.session = Some(session);
-                tracing::warn!(
-                    alert = "store_unreachable",
-                    "the database session is back"
-                );
+                tracing::warn!(alert = "store_unreachable", "the database session is back");
             }
             Ok(Revived::Held) => {
                 tracing::error!(

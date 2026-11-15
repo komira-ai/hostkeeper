@@ -374,7 +374,9 @@ fn a_commit_on_a_session_without_the_lock_fails() {
 fn coordinators_share_the_database_and_an_exclusive_taker_is_refused() {
     let db = TestDatabase::new();
     let (first, _) = db.open("first").expect("the store opens");
-    let (second, _) = db.open("second").expect("a second store opens beside the first");
+    let (second, _) = db
+        .open("second")
+        .expect("a second store opens beside the first");
     assert_eq!(second.epoch(), first.epoch().map(|epoch| epoch + 1));
     let mut client = db.client();
     let exclusive = "SELECT pg_try_advisory_lock($1)";
@@ -389,7 +391,10 @@ fn coordinators_share_the_database_and_an_exclusive_taker_is_refused() {
     assert!(!taken(&mut client), "one coordinator still holds the lock");
     second.stop();
     assert!(taken(&mut client), "the lock is free once both stopped");
-    let error = db.open("third").err().expect("an exclusive holder refuses it");
+    let error = db
+        .open("third")
+        .err()
+        .expect("an exclusive holder refuses it");
     assert!(matches!(error, DatabaseError::Locked));
     assert_eq!(
         error.to_string(),

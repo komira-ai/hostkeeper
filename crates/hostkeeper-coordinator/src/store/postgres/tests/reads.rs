@@ -14,15 +14,14 @@ fn seqs(page: &[crate::audit_file::Logged]) -> Vec<u64> {
 /// transaction counter does not move), and a commit with an audit line numbers it above the
 /// newest.
 ///
-/// Catches: an empty change that takes a transaction number, or a last number that does not move.
+/// Catches: an empty change that takes a transaction (a ledger row), or a last number that does not move.
 #[test]
 fn a_commit_with_nothing_in_it_writes_nothing() {
     let db = TestDatabase::new();
     let (store, _) = db.open("empty").expect("the store opens");
-    let commits =
-        |store: &crate::store::Postgres| store.on_writer(|w| w.commits()).expect("writer");
+    let commits = || db.rows("SELECT count(*) FROM tx_ledger")[0][0].clone();
     store.commit(&Commit::default()).expect("nothing to write");
-    assert_eq!(commits(&store), 0);
+    assert_eq!(commits().as_deref(), Some("0"));
     assert_eq!(store.last_seq(), 0);
     let held = lines(1, 3);
     store
@@ -31,7 +30,7 @@ fn a_commit_with_nothing_in_it_writes_nothing() {
             ..Commit::default()
         })
         .expect("the lines are kept");
-    assert_eq!(commits(&store), 1);
+    assert_eq!(commits().as_deref(), Some("1"));
     assert_eq!(store.last_seq(), 3);
 }
 

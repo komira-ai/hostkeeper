@@ -232,7 +232,10 @@ fn settled_behind_a_transaction_in_progress(commit: bool) -> bool {
         }
         std::thread::yield_now();
     }
-    assert!(seen, "the revival never waited for the transaction in progress");
+    assert!(
+        seen,
+        "the revival never waited for the transaction in progress"
+    );
     other
         .batch_execute(if commit { "COMMIT" } else { "ROLLBACK" })
         .expect("the transaction ends");
@@ -316,10 +319,10 @@ fn a_revival_that_cannot_be_made_is_tried_again() {
     ));
 
     // The ledger cannot be written, and a commit waits to be settled in it.
-    store
-        .inner
-        .link
-        .lose(Some(("00000000-0000-0000-0000-000000000001".to_owned(), None)));
+    store.inner.link.lose(Some((
+        "00000000-0000-0000-0000-000000000001".to_owned(),
+        None,
+    )));
     db.run("ALTER TABLE tx_ledger RENAME TO tx_ledger_away")
         .expect("the table is moved");
     store.revive();

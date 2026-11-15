@@ -219,6 +219,9 @@ impl Drop for TestDatabase {
 /// The coordinator's wall clock in the tests: a fixed second.
 pub(crate) const AT: u64 = 1_900_000_000;
 
+/// The id of a transaction of the ledger, for a landing a test makes by hand.
+pub(crate) const ID: &str = "00000000-0000-0000-0000-000000000001";
+
 /// The second CI's spent ids are judged by in the tests.
 pub(crate) const SPENT_NOW: u64 = 150;
 

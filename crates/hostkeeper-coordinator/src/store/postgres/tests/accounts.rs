@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use super::{SPENT_NOW, TestDatabase, off_runtime};
+use super::{ID, SPENT_NOW, TestDatabase, off_runtime};
 use crate::accounts::{AccountStore, Accounts, AccountsError};
 use crate::store::conformance_tests::rich_accounts;
 use crate::store::postgres::session::Session;
@@ -188,7 +188,7 @@ fn an_account_store_takes_a_landed_change_and_leaves_what_it_had_no_part_in() {
     let held = rich_accounts();
     let none = Accounts::default();
     let landed = |commit: &Commit<'_>, landed: bool| Landing {
-        number: 1,
+        id: ID.to_owned(),
         landed,
         change: Some(Owned::of(commit)),
     };
