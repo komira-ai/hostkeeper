@@ -88,7 +88,7 @@ fn the_contribution_lists_what_the_product_publishes_and_passes_the_coordinators
                 "macos-pkg": {
                     "path": "pkg",
                     "platforms": ["macos-arm64"],
-                    "packages": { "hello": { "dir": "hostkeeper" }, "hostkeeper": { "dir": "hostkeeper" } }
+                    "packages": { "hello": { "dir": "hostkeeper" }, "hostkeeper": { "dir": "hostkeeper" }, "hostkeeper-bootstrap": { "dir": "hostkeeper" } }
                 }
             }
         })
@@ -178,6 +178,7 @@ fn write_merges_into_what_another_product_wrote_and_removes_nothing() {
         json!({
             "hello": { "dir": "hostkeeper" },
             "hostkeeper": { "dir": "hostkeeper" },
+            "hostkeeper-bootstrap": { "dir": "hostkeeper" },
             "tierstore": { "dir": "tierstore" }
         })
     );

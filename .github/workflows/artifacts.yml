@@ -7,7 +7,8 @@
 # a tarball with its SBOM; for each Linux platform the deb of `pxe`, the boot server of network
 # install as a service package (docs/design/two-programs.md section 6.1), whose program is the
 # static build;
-# for macos-arm64 the installer pkg of a Mac's first install and hello's .pkg, each signed on a
+# for macos-arm64 the installer pkg of a Mac's first install, the bootstrap pkg that Apple Business
+# installs on a new Mac, and hello's .pkg, each signed on a
 # push to main with the Developer ID Installer identity (sign-pkg, then check-pkg); the
 # coordinator's image index over its two images
 # (`cargo xtask release image-index`), whose SHA-256 is the digest release.yml pushes the
@@ -30,7 +31,7 @@
 #   hostkeeper-coordinator-<version>.image.json
 #   hostkeeper-coordinator-update-<version>-<linux-platform>.tar.gz
 #   hostkeeper-coordinator-update-<version>-<linux-platform>.cdx.json
-#   hostkeeper-<version>-macos-arm64.pkg
+#   hostkeeper-<version>-macos-arm64.pkg   hostkeeper-bootstrap-<version>-macos-arm64.pkg
 #   hello_<version>_<deb-arch>.deb   hello-<version>-macos-arm64.pkg
 #   pxe_<version>_<deb-arch>.deb
 #   hello_<version>-fail-ready_<deb-arch>.deb       (the failing build's deb; its pkg is no asset)
@@ -537,6 +538,10 @@ jobs:
       # hello takes its version from the workspace, so it needs no RELEASE_COMMIT.
       - name: Build hello
         run: cargo build --locked --release -p hello --bin hello
+      # The bootstrap pkg's program (docs/design/mac-bootstrap.md): built on the macOS runner only,
+      # in the release pipeline, never in a pull request.
+      - name: Build the bootstrap
+        run: cargo build --locked --release -p hostkeeper-bootstrap --bin hostkeeper-bootstrap
       - name: hostkeeper says the version and the commit
         run: cargo xtask release check-binary target/release/hostkeeper "$RELEASE_VERSION" "$GITHUB_SHA"
       # The macOS unpack refuses a Mach-O without a valid code signature of its own bytes; the
@@ -546,6 +551,8 @@ jobs:
       # hello is a Mach-O in a macOS package too, so it is held to the same signature.
       - name: hello has a valid code signature
         run: codesign --verify --strict --verbose=2 target/release/hello
+      - name: The bootstrap has a valid code signature
+        run: codesign --verify --strict --verbose=2 target/release/hostkeeper-bootstrap
       - name: SBOM
         run: cargo cyclonedx --format json --spec-version 1.5 --describe binaries --target "$TARGET"
       - name: The SBOM step left Cargo.lock unchanged
@@ -625,6 +632,16 @@ jobs:
         run: cargo xtask release check-macos-pkg "$RUNNER_TEMP/hello-pkg-expanded" --service hello --version "$RELEASE_VERSION" --binary target/release/hello
       - name: hello's failing build's .pkg is exactly what its builder writes
         run: cargo xtask release check-macos-pkg "$RUNNER_TEMP/hello-fail-ready-pkg-expanded" --service hello --fail-ready --version "$RELEASE_VERSION" --binary target/release/hello
+      # The bootstrap pkg that Apple Business installs on a new Mac (docs/design/mac-bootstrap.md):
+      # the bootstrap program, its launchd plist and the postinstall that loads the job, nothing
+      # else, read back from the expanded product. It goes to pkg/, unsigned, beside the others:
+      # sign-pkg signs it and check-pkg publishes it, a release asset like the installer.
+      - name: The bootstrap pkg (component by pkgbuild with its postinstall, distribution by productbuild)
+        run: cargo xtask release macos-bootstrap-pkg --version "$RELEASE_VERSION" --binary target/release/hostkeeper-bootstrap --stage "$RUNNER_TEMP/bootstrap-pkg-root" --out pkg
+      - name: Expand the bootstrap pkg
+        run: pkgutil --expand "pkg/hostkeeper-bootstrap-$RELEASE_VERSION-$PLATFORM.pkg" "$RUNNER_TEMP/bootstrap-pkg-expanded"
+      - name: The bootstrap pkg is exactly what its builder writes
+        run: cargo xtask release check-macos-bootstrap-pkg "$RUNNER_TEMP/bootstrap-pkg-expanded" --version "$RELEASE_VERSION" --binary target/release/hostkeeper-bootstrap
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: assets-${{ env.PLATFORM }}
@@ -644,10 +661,10 @@ jobs:
           retention-days: 90
           if-no-files-found: error
 
-  # Push to main only: the installer pkg signed with the Developer ID Installer identity, for the
-  # MDM's InstallEnterpriseApplication, which installs only a signed pkg, and hello's .pkg with
-  # the same identity, for a host's macos-pkg installer, which stages only a signed pkg. Not
-  # notarized: a pkg an MDM or a host's installer installs needs no notarization. This job runs no repository code (no checkout, no
+  # Push to main only: the installer pkg and the bootstrap pkg signed with the Developer ID
+  # Installer identity, for Apple Business's device management, which installs only a signed pkg,
+  # and hello's .pkg with the same identity, for a host's macos-pkg installer, which stages only a
+  # signed pkg. Not notarized: a pkg device management or a host's installer installs needs no notarization. This job runs no repository code (no checkout, no
   # cargo), so no build script or dependency runs on the machine that holds the key: the
   # workflow lint holds it to the exact steps of SIGN_PKG_STEPS (crates/xtask/tests/workflows).
   # The identity (the PKCS#12 with its key and Apple's Developer ID G2 intermediate) goes into
@@ -700,6 +717,8 @@ jobs:
         run: productsign --sign "$IDENTITY" --keychain "$RUNNER_TEMP/pkg-signing.keychain-db" --timestamp "unsigned/hostkeeper-$RELEASE_VERSION-macos-arm64.pkg" "dist/hostkeeper-$RELEASE_VERSION-macos-arm64.pkg"
       - name: Sign hello's pkg, with a trusted timestamp
         run: productsign --sign "$IDENTITY" --keychain "$RUNNER_TEMP/pkg-signing.keychain-db" --timestamp "unsigned/hello-$RELEASE_VERSION-macos-arm64.pkg" "dist/hello-$RELEASE_VERSION-macos-arm64.pkg"
+      - name: Sign the bootstrap pkg, with a trusted timestamp
+        run: productsign --sign "$IDENTITY" --keychain "$RUNNER_TEMP/pkg-signing.keychain-db" --timestamp "unsigned/hostkeeper-bootstrap-$RELEASE_VERSION-macos-arm64.pkg" "dist/hostkeeper-bootstrap-$RELEASE_VERSION-macos-arm64.pkg"
       - name: Delete the keychain, whether the signing worked or not
         if: ${{ always() }}
         run: security delete-keychain "$RUNNER_TEMP/pkg-signing.keychain-db"
@@ -759,6 +778,14 @@ jobs:
         run: pkgutil --expand "dist/hello-$RELEASE_VERSION-macos-arm64.pkg" "$RUNNER_TEMP/hello-signed-expanded"
       - name: Signing changed no file of hello's pkg
         run: diff -r "$RUNNER_TEMP/hello-unsigned-expanded" "$RUNNER_TEMP/hello-signed-expanded"
+      - name: The bootstrap pkg's signature is the identity's, under Apple's chain, with a trusted timestamp
+        run: cargo xtask release check-pkg-signature "dist/hostkeeper-bootstrap-$RELEASE_VERSION-macos-arm64.pkg" --identity "$IDENTITY"
+      - name: Expand the bootstrap pkg, unsigned
+        run: pkgutil --expand "unsigned/hostkeeper-bootstrap-$RELEASE_VERSION-macos-arm64.pkg" "$RUNNER_TEMP/bootstrap-unsigned-expanded"
+      - name: Expand the bootstrap pkg, signed
+        run: pkgutil --expand "dist/hostkeeper-bootstrap-$RELEASE_VERSION-macos-arm64.pkg" "$RUNNER_TEMP/bootstrap-signed-expanded"
+      - name: Signing changed no file of the bootstrap pkg
+        run: diff -r "$RUNNER_TEMP/bootstrap-unsigned-expanded" "$RUNNER_TEMP/bootstrap-signed-expanded"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: assets-pkg-macos-arm64
@@ -1177,6 +1204,14 @@ jobs:
         env:
           BUNDLE: ${{ steps.pkg-macos-arm64.outputs.bundle-path }}
         run: cp "$BUNDLE" "dist/hostkeeper-${V}-macos-arm64.pkg.sigstore.json"
+      - id: bootstrap-pkg-macos-arm64
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/hostkeeper-bootstrap-${{ needs.version.outputs.version }}-macos-arm64.pkg
+      - name: Name the bundle of the bootstrap pkg for macos-arm64
+        env:
+          BUNDLE: ${{ steps.bootstrap-pkg-macos-arm64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hostkeeper-bootstrap-${V}-macos-arm64.pkg.sigstore.json"
       - id: image-index
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:

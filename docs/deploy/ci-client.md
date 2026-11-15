@@ -561,7 +561,7 @@ hosts out is put right by setting a new version with the right targets, or a ver
 with no targets, no package digest and no release index.
 
 This repository builds the targets of its own releases with `cargo xtask release targets
---service <hostkeeper|hello|mdm> [--fail-ready] --version <X.Y.Z> --dir <assets> --repo
+--service <hostkeeper|hello> [--fail-ready] --version <X.Y.Z> --dir <assets> --repo
 komira-ai/hostkeeper`,
 from the release's assets: its releases list native entries alone
 ([packages-native.md](../design/packages-native.md), section 10.5). For each Linux platform, the

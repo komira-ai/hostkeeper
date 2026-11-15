@@ -1,5 +1,5 @@
 /target
 # The profile an instrumented program writes to its working directory when it runs without the
-# environment cargo-llvm-cov sets: the fixture program of hostkeeper-mdm-step's run tests, which
-# `RealHost::run` starts with an empty environment.
+# environment cargo-llvm-cov sets: the fixture programs of tests that start a program with an empty
+# environment.
 *.profraw

@@ -224,7 +224,8 @@ fn the_installers_and_their_two_channels_are_named_from_the_product() {
         HOSTKEEPER.pkg_files("1.2.3"),
         [
             "hello-1.2.3-macos-arm64.pkg",
-            "hostkeeper-1.2.3-macos-arm64.pkg"
+            "hostkeeper-1.2.3-macos-arm64.pkg",
+            "hostkeeper-bootstrap-1.2.3-macos-arm64.pkg"
         ]
     );
     // What a Mac's store of the testing channel, rooted at pkg/, fetches an installer by.

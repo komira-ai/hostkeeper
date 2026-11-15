@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::Path;
 use std::process::Command;
 
+const BOOTSTRAP: &str = "hostkeeper-bootstrap";
 const HOOK: &str = "hostkeeper-hook";
 const INSTALL: &str = "hostkeeper-install";
 const CONFIG: &str = "hostkeeper-config";
@@ -79,9 +80,18 @@ pub type Layer = (
 /// macos-pkg installer's signers file at its start (`hostkeeper-install`), and the privileged
 /// tests run that installer's steps against the Mac's real tools; their programs that answer for
 /// the `macos-pkg` installer's tools and run the daemon's installer ports need `hostkeeper-install`
-/// as a normal dependency, and the program `hello-e2e` runs hello's hook and server (`hello`).
-pub const LAYERS: [Layer; 28] = [
+/// as a normal dependency, and the program `hello-e2e` runs hello's hook and server (`hello`). The Mac bootstrap
+/// (`hostkeeper-bootstrap`) reads the daemon's config loader (`hostkeeper-config`), the macos-pkg
+/// installer's tool port and signature reader (`hostkeeper-install`, with the paths of
+/// `hostkeeper-launchd`), the HTTPS transport (`hostkeeper-package`) and the repository descriptor
+/// (`hostkeeper-release`), and is read by no crate.
+pub const LAYERS: [Layer; 29] = [
     (BINARY, &[DAEMON], &[LAUNCHD]),
+    (
+        BOOTSTRAP,
+        &[CONFIG, INSTALL, LAUNCHD, PACKAGE, RELEASE],
+        &[],
+    ),
     (CONFIG, &[], &[]),
     (
         COORDINATOR,

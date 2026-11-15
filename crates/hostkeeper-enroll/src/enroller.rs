@@ -19,10 +19,9 @@
 //!
 //! A request is posted once per key (and `renewal_of`), and then polled: an unsigned poll gets a
 //! nonce, a poll signed by the request key gets the answer. On a Mac, a step that enrolls also
-//! reads the managed preferences its MDM writes the one-time nonce to (`managed.rs`). When they
+//! reads the managed preferences a one-time nonce may be left in (`managed.rs`; no MDM writes one now). When they
 //! hold a nonce for this step's request (their `request_id` is its id) that this enroller has not
-//! posted, the step posts `Enroll` again, the same request with `mac_nonce` set, before it polls
-//! (docs/design/hostkeeper-mdm.md, section 5.3). A nonce is posted once, whatever the answer; a
+//! posted, the step posts `Enroll` again, the same request with `mac_nonce` set, before it polls. A nonce is posted once, whatever the answer; a
 //! new nonce is posted once more. A file that is missing, untrusted, malformed or for another
 //! request posts nothing more and fails nothing: the request waits for an operator as before.
 //! Only the SHA-256 of a posted nonce is kept, and no line or error carries a byte of it. An issued certificate is checked (`verify.rs`) and stored as a new
@@ -72,7 +71,7 @@ pub struct Ports {
     pub wall: Box<dyn WallClock>,
     /// Paces the retries.
     pub clock: Box<dyn Clock>,
-    /// A Mac's managed preferences, where its MDM puts the enrollment nonce; `None` on a host
+    /// A Mac's managed preferences, where an enrollment nonce may be left; `None` on a host
     /// without them (Linux).
     pub managed: Option<Box<dyn ManagedPreferences>>,
 }

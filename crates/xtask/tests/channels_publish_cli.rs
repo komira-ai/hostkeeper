@@ -25,8 +25,10 @@ const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 const BUCKET: &str = "packages-bucket";
 const HOST: &str = "packages.example.com";
 const INSTALLER: &str = "hostkeeper-1.2.3-macos-arm64.pkg";
-/// hello's installer, the other one a release ships.
+/// hello's installer, another one a release ships.
 const HELLO_INSTALLER: &str = "hello-1.2.3-macos-arm64.pkg";
+/// The bootstrap pkg, the third installer a release ships.
+const BOOT_INSTALLER: &str = "hostkeeper-bootstrap-1.2.3-macos-arm64.pkg";
 /// The packages that are an rpm as well as a deb.
 const PACKAGES: [&str; 2] = ["hostkeeper", "hostkeeper-coordinator"];
 /// The services' native packages, debs alone, and the Debian architectures each is built for.
@@ -305,13 +307,13 @@ fn sign_rpm(next: &Path, suite: &str) {
     }
 }
 
-/// A release directory with the installers of `version` (hello's and hostkeeper's), the bundle of
+/// A release directory with the installers of `version` (hello's, hostkeeper's and the bootstrap's), the bundle of
 /// each and a `SHA256SUMS` that lists the installers.
 fn pkg_release(root: &Path, name: &str, version: &str) -> PathBuf {
     let dir = root.join(name);
     std::fs::create_dir_all(&dir).expect("create");
     let mut sums = String::new();
-    for product in ["hello", "hostkeeper"] {
+    for product in ["hello", "hostkeeper", "hostkeeper-bootstrap"] {
         let installer = format!("{product}-{version}-macos-arm64.pkg");
         let bytes = format!("{product} installer {version}").into_bytes();
         std::fs::write(dir.join(&installer), &bytes).expect("write");

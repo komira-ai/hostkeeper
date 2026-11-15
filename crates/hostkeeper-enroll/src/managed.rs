@@ -1,7 +1,8 @@
-//! The one-time nonce the MDM gives a Mac, read from the managed preferences of the domain
-//! `dev.hostkeeper.enrollment` (docs/design/hostkeeper-mdm.md, section 5.3).
+//! A one-time nonce left in the managed preferences of the domain `dev.hostkeeper.enrollment`.
+//! The coordinator's MDM that wrote it was removed (docs/design/coordinator-mdm.md) and the
+//! coordinator now ignores a nonce, so a Mac that has none posts none.
 //!
-//! The MDM's policy gate installs a profile whose one payload sets two keys of that domain:
+//! A profile whose one payload sets two keys of that domain:
 //! `nonce`, the 32 bytes as data, and `request_id`, the request's key hash as 64 lower-case hex
 //! digits. macOS writes the effective preferences of the domain to [`MANAGED_ENROLLMENT`], a
 //! property list, binary or XML, whose top-level dictionary holds the keys, as the daemon's start
@@ -25,7 +26,7 @@ use sha2::{Digest, Sha256};
 use crate::wire::RequestId;
 
 /// Where macOS writes the managed preferences of `dev.hostkeeper.enrollment`. Its path, owner
-/// and mode are to be checked on a device (docs/design/hostkeeper-mdm.md, task M16).
+/// and mode are to be checked on a device (not checked on a device).
 pub const MANAGED_ENROLLMENT: &str = "/Library/Managed Preferences/dev.hostkeeper.enrollment.plist";
 
 /// The length of a Mac nonce, in bytes.

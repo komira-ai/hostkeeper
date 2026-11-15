@@ -38,9 +38,9 @@
 //! ([`Coordinator::assign_host`], the one path by which `Services.Assign` of a host assigns
 //! too), after the approval is recorded: each service is one audit entry `assign`. An
 //! assignment that cannot be written is logged and leaves the approval standing; the operator
-//! assigns the services with `Services.Assign`. A Mac approved by its MDM nonce at its
-//! `Enroll` ([`Coordinator::enroll`]) has the services of its allowlist entry assigned the same
-//! way, by `mdm-nonce`. An approval by a record assigns none, nor does one by group.
+//! assigns the services with `Services.Assign`. A Mac's `Enroll` ([`Coordinator::enroll`]) carries no approval by a nonce
+//! any more (the nonce is ignored), so it waits for an operator or a record. An approval by a
+//! record assigns none, nor does one by group.
 
 use std::collections::BTreeMap;
 

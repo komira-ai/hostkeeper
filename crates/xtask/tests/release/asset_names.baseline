@@ -29,6 +29,8 @@ hostkeeper-<version>-macos-arm64.pkg
 hostkeeper-<version>-macos-arm64.pkg.sigstore.json
 hostkeeper-<version>-macos-arm64.tar.gz
 hostkeeper-<version>-macos-arm64.tar.gz.sigstore.json
+hostkeeper-bootstrap-<version>-macos-arm64.pkg
+hostkeeper-bootstrap-<version>-macos-arm64.pkg.sigstore.json
 hostkeeper-coordinator-<version>-linux-arm64.cdx.json
 hostkeeper-coordinator-<version>-linux-arm64.image.tar
 hostkeeper-coordinator-<version>-linux-arm64.image.tar.sigstore.json

@@ -53,6 +53,8 @@ fn the_first_upload_puts_each_installer_its_bundle_and_the_sums_once_each_and_no
             "application/json",
             "application/octet-stream",
             "application/json",
+            "application/octet-stream",
+            "application/json",
             "text/plain; charset=utf-8"
         ]
     );

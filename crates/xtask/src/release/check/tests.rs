@@ -56,12 +56,12 @@ fn a_good_directory_passes_with_two_verifier_calls_per_attested_asset() {
     assert_eq!(
         run(&verifier, &dir, &commit),
         Ok(vec![format!(
-            "release check: the 64 assets of v0.1.5 match SHA256SUMS, and 56 attestations of \
+            "release check: the 66 assets of v0.1.5 match SHA256SUMS, and 58 attestations of \
              commit {commit} verified online and from their bundles"
         )])
     );
     let calls = verifier.calls.borrow();
-    assert_eq!(calls.len(), 56);
+    assert_eq!(calls.len(), 58);
     for name in attested_names(&version()) {
         assert!(calls.contains(&format!("online {name}")), "{name}");
         assert!(
@@ -224,7 +224,7 @@ fn verify_fails_when_the_attested_commit_differs_from_the_pin() {
         ]
     );
     let everything = refused(run(&FakeVerifier::good(&other), &dir, &commit));
-    assert_eq!(everything.len(), 56);
+    assert_eq!(everything.len(), 58);
 }
 
 #[test]
@@ -285,7 +285,7 @@ fn a_verifier_error_is_listed_for_every_file() {
     let lines = refused(run(&fakes.verifier, &dir, &commit));
     let names = attested_names(&version());
     let first = &names[0];
-    assert_eq!(lines.len(), 56);
+    assert_eq!(lines.len(), 58);
     assert_eq!(
         lines[0],
         format!("{first} (online): verify: no attestation")
@@ -299,13 +299,13 @@ fn a_verifier_error_is_listed_for_every_file() {
 #[test]
 fn a_release_without_its_macos_assets_is_refused_naming_each() {
     // Catches: a release that ships the Linux platforms only, the macOS binary, package, SBOM,
-    // installer, hello's .pkg and their bundles missing, passing the check as a complete release.
+    // installer, the bootstrap pkg, hello's .pkg and their bundles missing, passing the check as a complete release.
     let (dir, commit) = assets("check-no-macos");
     let mac: Vec<String> = asset_names(&version(), &[Platform::MacosArm64])
         .into_iter()
         .filter(|n| n.contains("macos-arm64"))
         .collect();
-    assert_eq!(mac.len(), 7);
+    assert_eq!(mac.len(), 9);
     for name in &mac {
         std::fs::remove_file(dir.join(name)).expect("remove a macOS asset");
     }

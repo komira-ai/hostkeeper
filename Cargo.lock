@@ -1463,6 +1463,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "hostkeeper-bootstrap"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "hex",
+ "hostkeeper-config",
+ "hostkeeper-install",
+ "hostkeeper-launchd",
+ "hostkeeper-package",
+ "hostkeeper-release",
+ "hostkeeper-testkit",
+ "plist",
+ "rustls-native-certs",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror",
+ "toml",
+]
+
+[[package]]
 name = "hostkeeper-config"
 version = "0.1.0"
 dependencies = [

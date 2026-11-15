@@ -230,7 +230,7 @@ fn asset_names_are_the_documented_contract() {
     let v = version("7.8.9");
     let names = asset_names(&v, &Platform::RELEASED);
     assert_eq!(names, baseline_for(&v));
-    assert_eq!(names.len(), 64);
+    assert_eq!(names.len(), 66);
     assert_eq!(documented_names(DOC, &v), Ok(names.clone()));
     // The document changed alone: a name dropped, or one renamed.
     let image = "hostkeeper-coordinator-<version>-<linux-platform>.image.tar\n";
@@ -425,8 +425,8 @@ fn the_attested_and_summed_names_partition_the_assets() {
     let v = version("0.1.3");
     let attested = attested_names(&v);
     let summed = summed_names(&v);
-    assert_eq!(attested.len(), 28);
-    assert_eq!(summed.len(), 35);
+    assert_eq!(attested.len(), 29);
+    assert_eq!(summed.len(), 36);
     // The boot sets of network install are summed and attested, with a bundle of their own, and
     // so is the command line, one script for every platform.
     assert!(summed.contains(&NETBOOT.to_owned()) & attested.contains(&NETBOOT.to_owned()));
@@ -440,6 +440,7 @@ fn the_attested_and_summed_names_partition_the_assets() {
     }
     assert_eq!(Package::Pxe.native_name(&v, Platform::MacosArm64), None);
     assert!(attested.contains(&installer_name(&v)));
+    assert!(attested.contains(&bootstrap_installer_name(&v)));
     assert_eq!(bundle_of("a.deb"), "a.deb.sigstore.json");
 }
 
@@ -480,6 +481,8 @@ fn a_macos_platform_has_a_binary_a_package_an_installer_and_an_sbom_but_no_linux
             "hostkeeper-0.2.1-macos-arm64.pkg.sigstore.json",
             "hostkeeper-0.2.1-macos-arm64.tar.gz",
             "hostkeeper-0.2.1-macos-arm64.tar.gz.sigstore.json",
+            "hostkeeper-bootstrap-0.2.1-macos-arm64.pkg",
+            "hostkeeper-bootstrap-0.2.1-macos-arm64.pkg.sigstore.json",
             "netboot.json",
             "netboot.json.sigstore.json",
         ]
