@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- Grants hostkeeper's daemon Full Disk Access (PPPC), needed only if docs/design/ssh-through-coordinator.md
-     section 3 finds that Remote Login cannot be turned on without it. Unverified draft: replace the code
-     requirement with the output of `codesign -dr -` on the released /usr/local/bin/hostkeeper. -->
+     section 3 finds that Remote Login cannot be turned on without it. Unverified draft: replace the identifier
+     and code requirement with the output of `codesign -dr -` on the released hostkeeper binary. The program is
+     identified by its code-signing identifier plus Team ID, not by a path, because the daemon execs a versioned
+     binary that each update replaces. Needs a supervised Mac. -->
 <plist version="1.0">
 <dict>
   <key>PayloadType</key><string>Configuration</string>
@@ -10,6 +12,9 @@
   <key>PayloadIdentifier</key><string>dev.hostkeeper.fda</string>
   <key>PayloadUUID</key><string>6B1D7C0E-5A52-4E0B-9B64-2F1C0A7E4D11</string>
   <key>PayloadDisplayName</key><string>hostkeeper Full Disk Access</string>
+  <key>PayloadDescription</key><string>Lets the hostkeeper daemon turn on Remote Login.</string>
+  <key>PayloadOrganization</key><string>hostkeeper</string>
+  <key>PayloadRemovalDisallowed</key><false/>
   <key>PayloadScope</key><string>System</string>
   <key>PayloadContent</key>
   <array>
@@ -23,9 +28,9 @@
         <key>SystemPolicyAllFiles</key>
         <array>
           <dict>
-            <key>Identifier</key><string>/usr/local/bin/hostkeeper</string>
-            <key>IdentifierType</key><string>path</string>
-            <key>CodeRequirement</key><string>anchor apple generic and certificate leaf[subject.OU] = "U7RTX4XD3X"</string>
+            <key>Identifier</key><string>hostkeeper</string>
+            <key>IdentifierType</key><string>bundleID</string>
+            <key>CodeRequirement</key><string>identifier "hostkeeper" and anchor apple generic and certificate leaf[subject.OU] = "U7RTX4XD3X"</string>
             <key>Authorization</key><string>Allow</string>
             <key>Comment</key><string>hostkeeper daemon: turns on Remote Login</string>
           </dict>
