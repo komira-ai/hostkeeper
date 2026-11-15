@@ -6,7 +6,8 @@
 //! by addition.
 //!
 //! - **The start** ([`Postgres::open`]): open the writing session, take the coordinator's
-//!   advisory lock without waiting (another coordinator holding it refuses the start), run the
+//!   advisory lock shared without waiting (any number of coordinators hold it together; a session
+//!   holding it exclusively, a release before this one or an import, refuses the start), run the
 //!   migrations the database lacks, raise the epoch, and load everything. Nothing is read or
 //!   written before the lock is held. A database that is not up is a refusal, told from one that
 //!   refuses by SQLSTATE and I/O kind ([`DatabaseError`]).
@@ -19,8 +20,8 @@
 //!   only.
 //! - **A lost session**: every call is answered at once that it is lost ([`Health::Lost`]), and
 //!   each heartbeat asks for a revival ([`Backend::revive`]), which the writer's thread makes. A
-//!   commit of unknown outcome is settled at the revival by the lease's counter, and what it
-//!   turned out to be is taken by the stores ([`Landing`]). Another epoch found deposes the store.
+//!   commit of unknown outcome is settled at the revival by its row of `tx_ledger`, and what it
+//!   turned out to be is taken by the stores ([`Landing`]).
 
 mod accounts;
 mod at;
@@ -50,7 +51,7 @@ pub(crate) use records::PgRecords;
 
 use self::rows::{Stmt, Tables, Val, changes, laid_over};
 use self::session::{Fail, Session, Worker, describe, ends_session, not_up};
-use self::writer::{Link, State, Tx, WriteFail, Writer, try_lock};
+use self::writer::{Link, State, Tx, WriteFail, Writer, try_lock_shared};
 use super::{Backend, BackendError, Commit, Health, Loaded};
 use crate::accounts::Accounts;
 use crate::audit_file::{Actor, AuditLine, Detail, Logged, Query, UnixClock};
@@ -73,7 +74,8 @@ pub enum DatabaseError {
     /// The server is up and refused: a login, a database, a setting, any other answer.
     #[error("the database refused the coordinator: {0}")]
     Refused(String),
-    /// Another session holds the coordinator's lock of the database.
+    /// A session holds the coordinator's lock of the database exclusively: a release before
+    /// this one, an import or an export.
     #[error("another coordinator holds the lock of this database")]
     Locked,
     /// The migrations could not be brought up to date.
@@ -153,8 +155,8 @@ impl Owned {
 /// landed, and the change it was, for the stores to take into memory when it did (section 4.4).
 #[derive(Clone, Debug)]
 pub(crate) struct Landing {
-    /// The transaction's number.
-    pub(crate) number: u64,
+    /// The transaction's id (its row of `tx_ledger`).
+    pub(crate) id: String,
     /// Whether it landed.
     pub(crate) landed: bool,
     change: Option<Owned>,
@@ -431,7 +433,7 @@ impl Postgres {
                 .spawn(move || open_session(&config, statements, &holder, now_unix, spent_now))
                 .map_err(|e| DatabaseError::Refused(e.to_string()))?
         };
-        let (session, epoch, commits, loaded, last) = opening
+        let (session, epoch, loaded, last) = opening
             .join()
             .map_err(|_| DatabaseError::Load("the start of the store stopped".to_owned()))??;
         let link = Arc::new(Link::default());
@@ -439,7 +441,6 @@ impl Postgres {
             config.clone(),
             Arc::clone(&statements),
             session,
-            (epoch, commits),
             Arc::clone(&link),
         );
         let spawned = |e: io::Error| DatabaseError::Refused(e.to_string());
@@ -461,7 +462,7 @@ impl Postgres {
             epoch: u64::try_from(epoch).unwrap_or_default(),
             clock,
         };
-        tracing::info!(epoch, "the database's lock is held");
+        tracing::info!(epoch, "the database's lock is held, shared");
         Ok((
             Postgres {
                 inner: Arc::new(inner),
@@ -559,19 +560,19 @@ impl Postgres {
     }
 }
 
-/// Opens the writing session at start, on a thread of its own: the connect, the lock, the
-/// migrations, the epoch, the load. Answers the session, its epoch, the lease's count of
-/// transactions, the state, and the number of the newest audit row.
+/// Opens the writing session at start, on a thread of its own: the connect, the shared lock, the
+/// migrations, the epoch, the load. Answers the session, its epoch, the state, and the number of
+/// the newest audit row.
 fn open_session(
     config: &postgres::Config,
     statements: Arc<AtomicU64>,
     holder: &str,
     now_unix: i64,
     spent_now: u64,
-) -> Result<(Session, i64, i64, Loaded, u64), DatabaseError> {
+) -> Result<(Session, i64, Loaded, u64), DatabaseError> {
     let mut session = Session::connect(config, statements, false)?;
     let refused = |e: postgres::Error| DatabaseError::Refused(describe(&e));
-    if !try_lock(&mut session).map_err(refused)? {
+    if !try_lock_shared(&mut session).map_err(refused)? {
         return Err(DatabaseError::Locked);
     }
     let set =
@@ -584,12 +585,12 @@ fn open_session(
     session.batch("BEGIN").map_err(refused)?;
     let row = session
         .query_one(
-            "UPDATE lease SET epoch = epoch + 1, holder = $1, since_unix = $2 RETURNING epoch, commits",
+            "UPDATE lease SET epoch = epoch + 1, holder = $1, since_unix = $2 RETURNING epoch",
             &[&holder, &now_unix],
         )
         .map_err(refused)?;
     session.batch("COMMIT").map_err(refused)?;
-    let (epoch, commits): (i64, i64) = (row.get(0), row.get(1));
+    let epoch: i64 = row.get(0);
     let loaded =
         load_all(&mut session, spent_now).map_err(|e| DatabaseError::Load(e.to_string()))?;
     let last: Option<i64> = session
@@ -597,7 +598,7 @@ fn open_session(
         .map_err(refused)?
         .get(0);
     let last = last.and_then(|n| u64::try_from(n).ok()).unwrap_or(0);
-    Ok((session, epoch, commits, loaded, last))
+    Ok((session, epoch, loaded, last))
 }
 
 impl Backend for Postgres {
@@ -749,7 +750,6 @@ impl Backend for Postgres {
         match self.inner.link.state() {
             State::Up => Health::Up,
             State::Lost | State::Reviving => Health::Lost,
-            State::Deposed { found } => Health::Deposed { found },
         }
     }
 
@@ -767,12 +767,12 @@ impl Backend for Postgres {
             .map(|settled| {
                 tracing::warn!(
                     alert = "store_unreachable",
-                    number = settled.number,
+                    id = %settled.id,
                     landed = settled.landed,
                     "a commit whose session was lost while it was in flight is settled"
                 );
                 Landing {
-                    number: settled.number,
+                    id: settled.id,
                     landed: settled.landed,
                     change: settled.change,
                 }

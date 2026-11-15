@@ -51,7 +51,7 @@ pub(crate) struct Migration {
 }
 
 /// The migrations this binary ships, in order.
-pub(crate) const SHIPPED: [(i32, &str, &str); 18] = [
+pub(crate) const SHIPPED: [(i32, &str, &str); 19] = [
     (1, "state", include_str!("migrations/0001_state.sql")),
     (
         2,
@@ -126,6 +126,7 @@ pub(crate) const SHIPPED: [(i32, &str, &str); 18] = [
         "remove_host_group_all",
         include_str!("migrations/0018_remove_host_group_all.sql"),
     ),
+    (19, "tx_ledger", include_str!("migrations/0019_tx_ledger.sql")),
 ];
 
 /// Why a migration, or the set of them, is refused before it runs.
@@ -363,15 +364,34 @@ fn newer(rows: &[Applied], set: &[Migration]) -> Result<(), ApplyError> {
     }
 }
 
-/// Brings the database of `session`, which holds the lock, up to `set`: refuses a database that
-/// holds a migration `set` does not know and that says `refuse`, then runs each migration it
-/// lacks, in order, each in its own transaction with its `schema_version` row. Answers the
-/// numbers it ran.
+/// The key of the advisory lock that serializes the runners of several coordinators that start
+/// at once: not [`super::writer::LOCK_KEY`], which every coordinator holds together. It is taken
+/// for the length of [`apply`] only, so it is a mutex around a few moments of start, and elects
+/// nobody.
+pub(crate) const MIGRATE_KEY: i64 = 0x686b_6d69_6772;
+
+/// Brings the database of `session`, which holds the coordinator's lock, up to `set`: refuses a
+/// database that holds a migration `set` does not know and that says `refuse`, then runs each
+/// migration it lacks, in order, each in its own transaction with its `schema_version` row.
+/// Answers the numbers it ran. The runner holds [`MIGRATE_KEY`] while it works, so coordinators
+/// that start together run each migration once: the one that waits finds it applied and runs
+/// nothing. A wait is bounded by the session's lock timeout.
 ///
 /// # Errors
 /// [`ApplyError`]: a newer schema, a migration that failed (rolled back), or the bookkeeping
-/// could not be read.
+/// could not be read, or the runners' lock could not be had.
 pub(crate) fn apply(session: &mut Session, set: &[Migration]) -> Result<Vec<i32>, ApplyError> {
+    session
+        .execute("SELECT pg_advisory_lock($1)", &[&MIGRATE_KEY])
+        .map_err(|e| ApplyError::Database(describe(&e)))?;
+    let ran = apply_held(session, set);
+    // A session that cannot unlock is broken, and the server frees the lock as it ends it.
+    let _ = session.execute("SELECT pg_advisory_unlock($1)", &[&MIGRATE_KEY]);
+    ran
+}
+
+/// [`apply`] while the runners' lock is held.
+fn apply_held(session: &mut Session, set: &[Migration]) -> Result<Vec<i32>, ApplyError> {
     let database = |e: postgres::Error| ApplyError::Database(describe(&e));
     let rows = applied(session).map_err(database)?;
     newer(&rows, set)?;

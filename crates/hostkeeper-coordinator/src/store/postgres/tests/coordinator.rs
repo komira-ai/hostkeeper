@@ -7,7 +7,6 @@
 //! queued after it runs after it; a server session that must not be taken is one a test client
 //! holds. Nothing sleeps and no time is measured.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread::JoinHandle;
@@ -35,7 +34,7 @@ use crate::orders::Order;
 use crate::store::postgres::dsn::Timeouts;
 use crate::store::postgres::writer::{Fault, LOCK_KEY};
 use crate::store::{Backend, Health, Postgres, Shared};
-use crate::testutil::{Log, Rig};
+use crate::testutil::Rig;
 use crate::verdict_file::VerdictFile;
 
 /// The role of every host of these tests.
@@ -70,20 +69,7 @@ impl Holding {
         Holding { release, thread }
     }
 
-    /// Holds the coordinator's advisory lock, then raises the lease's epoch: what a second
-    /// coordinator that started on the database did, if it had not yet gone.
-    pub(super) fn another_led(database: &TestDatabase) -> Holding {
-        Holding::start(
-            database,
-            &format!(
-                "SELECT pg_advisory_lock({LOCK_KEY}); \
-                 UPDATE \"hostkeeper\".lease SET epoch = epoch + 1"
-            ),
-            &format!("SELECT pg_advisory_unlock({LOCK_KEY})"),
-        )
-    }
-
-    /// Holds only the advisory lock: the session a revival finds taken.
+    /// Holds the advisory lock exclusively: the session a revival finds taken.
     fn the_lock(database: &TestDatabase) -> Holding {
         Holding::start(
             database,
@@ -103,7 +89,6 @@ impl Holding {
 pub(super) struct Farm {
     pub(super) rig: Rig,
     pub(super) store: Postgres,
-    marker: PathBuf,
     enrollment: Option<Arc<Enrollment>>,
     pub(super) database: TestDatabase,
 }
@@ -182,7 +167,6 @@ impl Farm {
         Farm {
             rig,
             store,
-            marker,
             enrollment,
             database,
         }
@@ -275,14 +259,6 @@ pub(super) fn exclude(node: &str) -> proto::ExcludeRequest {
     }
 }
 
-fn pause() -> proto::PauseRequest {
-    proto::PauseRequest {
-        service: WEB.to_owned(),
-        reason: "look first".to_owned(),
-        host_group: String::new(),
-    }
-}
-
 fn abort(node: &str) -> proto::AbortRequest {
     proto::AbortRequest {
         service: WEB.to_owned(),
@@ -354,86 +330,6 @@ async fn a_lost_session_holds_orders_and_resumes_on_the_same_epoch() {
     );
     assert!(!farm.status_quiet());
     assert_eq!(ask(rig, "d1", DAEMON, daemon("1.0")), update(WEB, "2.0"));
-}
-
-/// Proves: a coordinator whose session was lost exits when another coordinator led the database
-/// meanwhile: the revival finds a different epoch (`Health::Deposed`), the next heartbeat deposes
-/// the stores, and `Coordinator::deposed` answers the epoch held and the epoch found.
-///
-/// Catches: a coordinator that goes on with a stale memory over a database another one led, or
-/// whose exit does not say which epochs it saw.
-#[tokio::test]
-async fn a_lost_session_exits_when_another_coordinator_led_meanwhile() {
-    let farm = Farm::plain("pg-lost-deposed").seeded().await;
-    let held = farm.store.epoch().expect("an epoch");
-    farm.database.end_sessions();
-    let another = Holding::another_led(&farm.database);
-    assert_eq!(
-        farm.rig.coordinator.exclude(&operator(), exclude("d1")),
-        Err(proto::HostsRefusal::StoreFailed)
-    );
-
-    another.release();
-    farm.revive();
-    assert_eq!(
-        farm.store.health(),
-        Health::Deposed { found: held + 1 },
-        "the revival found the other coordinator's epoch"
-    );
-    ask(&farm.rig, "d1", DAEMON, daemon("1.0"));
-    assert_eq!(farm.rig.coordinator.deposed().await, (held, held + 1));
-}
-
-/// Proves: the exit on a different epoch drops what stood in memory and says so: a pause raised
-/// while the session was lost is listed in the marker file with the epoch held; once deposed the
-/// marker is removed and the log names the audit number dropped, exactly.
-///
-/// Catches: a marker left to refuse the next start after the operator was told the changes are
-/// dropped, or a log that does not name which changes were lost.
-#[tokio::test]
-async fn the_different_epoch_exit_removes_the_marker_and_names_what_it_dropped() {
-    let farm = Farm::plain("pg-deposed-marker").seeded().await;
-    let log = Log::default();
-    let _guard = log.install();
-    let held = farm.store.epoch().expect("an epoch");
-    farm.database.end_sessions();
-    let another = Holding::another_led(&farm.database);
-
-    assert_eq!(
-        farm.rig
-            .coordinator
-            .rollout_pause(&operator(), pause())
-            .map(drop),
-        Err(proto::RolloutsRefusal::StoreFailed)
-    );
-    let number = farm
-        .rig
-        .coordinator
-        .ops()
-        .state()
-        .audit
-        .last()
-        .expect("the pause is audited")
-        .seq;
-    let listed: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&farm.marker).expect("the marker is written"))
-            .expect("the marker is JSON");
-    assert_eq!(
-        listed,
-        serde_json::json!({"unwritten": [number], "epoch": held})
-    );
-
-    another.release();
-    farm.revive();
-    assert_eq!(farm.store.health(), Health::Deposed { found: held + 1 });
-    ask(&farm.rig, "d1", DAEMON, daemon("1.0"));
-    assert!(!farm.marker.exists(), "the marker is removed");
-    let text = log.text();
-    assert!(
-        text.contains(&format!("dropped=[{number}]")),
-        "the log names the number dropped: {text}"
-    );
-    assert!(!farm.rig.coordinator.ops().halt_unwritten());
 }
 
 /// Proves: a commit whose session was lost after the server committed it is taken into memory

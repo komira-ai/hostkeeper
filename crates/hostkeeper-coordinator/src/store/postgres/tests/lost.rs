@@ -34,12 +34,12 @@ fn seqs(db: &TestDatabase) -> Vec<String> {
 
 /// Proves: after the store's sessions are ended every write is refused at once as lost (a commit,
 /// a spend, a load), the store says it is lost, a revival at the next heartbeat opens the session
-/// again on the same epoch, and writes go on, nothing written meanwhile.
+/// again, and writes go on, nothing written meanwhile; each commit made one row of the ledger.
 ///
 /// Catches: a write that waits on a dead session, a revival that is never asked for, and a store
 /// that comes back on another epoch.
 #[test]
-fn a_lost_session_is_revived_on_the_same_epoch() {
+fn a_lost_session_is_revived() {
     super::logging();
     let db = TestDatabase::new();
     let (store, _) = db.open("lost").expect("the store opens");
@@ -75,20 +75,16 @@ fn a_lost_session_is_revived_on_the_same_epoch() {
     assert_eq!(store.last_seq(), 4);
     assert!(store.take_landings().is_empty());
     assert!(super::logged("store_unreachable"));
-    assert!(super::logged(
-        "the database session is back, on the same epoch"
-    ));
+    assert!(super::logged("the database session is back"));
     assert_eq!(
-        store
-            .on_writer(|w| (w.epoch(), w.commits()))
-            .expect("the writer"),
-        (1, 2),
-        "the epoch and the transactions known committed"
+        db.rows("SELECT count(*) FROM tx_ledger"),
+        vec![vec![Some("2".to_owned())]],
+        "each commit that landed made a row of the ledger, the refused ones none"
     );
 }
 
 /// Proves: a commit whose `COMMIT` landed but whose answer was lost is refused to its caller, is
-/// unsettled until the revival, and is then settled as landed with its number and its audit lines,
+/// unsettled until the revival, and is then settled as landed with its id and its audit lines,
 /// taken once.
 ///
 /// Catches: a change that is in the database but is told to the caller as not made, and then
@@ -118,7 +114,14 @@ fn a_commit_that_landed_but_was_not_answered_is_settled_as_landed() {
     assert_eq!(store.health(), Health::Up);
     let landing = store.take_landings().pop().expect("the commit is settled");
     assert!(landing.landed);
-    assert_eq!(landing.number, 1);
+    assert_eq!(
+        db.rows(&format!(
+            "SELECT count(*) FROM tx_ledger WHERE id = '{}'",
+            landing.id
+        )),
+        vec![vec![Some("1".to_owned())]],
+        "the id is the row the transaction itself inserted, and settling made no second"
+    );
     assert_eq!(landing.lines().len(), 2);
     assert_eq!(seqs(&db), vec!["1", "2"]);
     assert_eq!(
@@ -141,82 +144,128 @@ fn a_commit_that_did_not_land_is_settled_as_not_landed() {
         "CREATE FUNCTION test_die() RETURNS trigger LANGUAGE plpgsql AS $$ \
          BEGIN PERFORM pg_terminate_backend(pg_backend_pid(), 60000); \
          RETURN NULL; END $$; \
-         CREATE CONSTRAINT TRIGGER test_die AFTER UPDATE ON lease DEFERRABLE INITIALLY DEFERRED \
+         CREATE CONSTRAINT TRIGGER test_die AFTER INSERT ON tx_ledger DEFERRABLE INITIALLY DEFERRED \
          FOR EACH ROW EXECUTE FUNCTION test_die()",
     )
     .expect("the trigger is set");
     assert!(line(&store, 1).is_err());
     assert!(store.unsettled());
-    db.run("DROP TRIGGER test_die ON lease; DROP FUNCTION test_die()")
+    db.run("DROP TRIGGER test_die ON tx_ledger; DROP FUNCTION test_die()")
         .expect("the trigger is dropped");
     store.revive();
     settle(&store);
     let landing = store.take_landings().pop().expect("the commit is settled");
     assert!(!landing.landed);
-    assert_eq!(landing.number, 1);
     assert!(landing.lines().is_empty());
     assert_eq!(seqs(&db), Vec::<String>::new());
-    // The number of the commit that did not land is taken by the next.
+    assert_eq!(
+        db.rows(&format!(
+            "SELECT count(*) FROM tx_ledger WHERE id = '{}'",
+            landing.id
+        )),
+        vec![vec![Some("1".to_owned())]],
+        "settling took the id, so the transaction can never land"
+    );
     line(&store, 2).expect("a commit once revived");
     assert_eq!(seqs(&db), vec!["2"]);
 }
 
-/// Proves: when another coordinator led the database while the session was lost, the revival
-/// finds another epoch and deposes the store with the epoch found; a deposed store refuses every
-/// write and does not revive.
+/// Proves: a coordinator that started while this one's session was lost, and so raised the epoch,
+/// does not stop it: the revival brings the session back and writes go on beside the other.
 ///
-/// Catches: a coordinator that goes on writing over the state of the one that took its place.
+/// Catches: a coordinator that exits when another starts, which makes a start-first update stop
+/// the instance that is still serving.
 #[test]
-fn a_store_whose_epoch_was_raised_meanwhile_is_deposed() {
+fn a_store_whose_epoch_was_raised_meanwhile_is_revived() {
     super::logging();
     let db = TestDatabase::new();
-    let (store, _) = db.open("deposed").expect("the store opens");
+    let (store, _) = db.open("first").expect("the store opens");
     let epoch = store.epoch().expect("an epoch");
     db.end_sessions();
     assert!(line(&store, 1).is_err());
-    let mut client = db.client();
-    client
-        .batch_execute(&format!(
-            "SELECT pg_advisory_lock({LOCK_KEY}); \
-             UPDATE \"hostkeeper\".lease SET epoch = epoch + 1; \
-             SELECT pg_advisory_unlock({LOCK_KEY})"
-        ))
-        .expect("another coordinator leads");
+    let (other, _) = db.open("other").expect("another coordinator starts");
+    assert_eq!(other.epoch(), Some(epoch + 1));
     store.revive();
     settle(&store);
-    assert_eq!(store.health(), Health::Deposed { found: epoch + 1 });
-    assert_eq!(line(&store, 2).expect_err("deposed").to_string(), LOST);
-    store.revive();
-    settle(&store);
-    assert_eq!(store.health(), Health::Deposed { found: epoch + 1 });
-    assert_eq!(seqs(&db), Vec::<String>::new());
+    assert_eq!(store.health(), Health::Up);
+    line(&store, 2).expect("a commit once revived");
+    line(&other, 3).expect("a commit of the other");
+    assert_eq!(seqs(&db), vec!["2", "3"]);
 }
 
-/// Proves: a commit that finds the lease's epoch no longer its own loses the session at once, and
-/// the revival deposes the store.
-///
-/// Catches: a commit made over a lease another coordinator holds.
-#[test]
-fn a_commit_that_finds_another_epoch_loses_the_session() {
+/// A commit of unknown outcome of `id`, settled at a revival while another session's transaction
+/// that inserted `id` is still in progress; that session then commits when `commit`, else rolls
+/// back. Answers whether the settle found it landed. The revival waits for the other transaction
+/// at the unique index, and the test ends it when it sees the revival wait, not after a time.
+fn settled_behind_a_transaction_in_progress(commit: bool) -> bool {
     super::logging();
     let db = TestDatabase::new();
-    let (store, _) = db.open("moved").expect("the store opens");
-    let epoch = store.epoch().expect("an epoch");
-    db.run("ALTER TABLE lease DISABLE TRIGGER lease_fenced; UPDATE lease SET epoch = epoch + 1")
-        .expect("the epoch is raised");
-    assert_eq!(
-        line(&store, 1).expect_err("the epoch moved").to_string(),
-        "database:database: the lease's epoch is no longer this coordinator's"
-    );
-    assert_eq!(store.health(), Health::Lost);
+    let (store, _) = db.open("behind").expect("the store opens");
+    let mut other = db.client();
+    let id: String = other
+        .query_one("SELECT gen_random_uuid()::text", &[])
+        .expect("an id")
+        .get(0);
+    other
+        .batch_execute(&format!(
+            "BEGIN; INSERT INTO hostkeeper.tx_ledger (id, at_unix) VALUES ('{id}', 1)"
+        ))
+        .expect("the transaction is in progress");
+    store.inner.link.lose(Some((id.clone(), None)));
     store.revive();
+    let name = db.name().to_owned();
+    let mut watcher = db.client();
+    let mut seen = false;
+    for _ in 0..200_000 {
+        let waiting: i64 = watcher
+            .query_one(
+                "SELECT count(*) FROM pg_stat_activity \
+                 WHERE datname = $1 AND wait_event_type = 'Lock' \
+                 AND query LIKE 'INSERT INTO tx_ledger%'",
+                &[&name],
+            )
+            .expect("the activity")
+            .get(0);
+        if waiting > 0 {
+            seen = true;
+            break;
+        }
+        std::thread::yield_now();
+    }
+    assert!(seen, "the revival never waited for the transaction in progress");
+    other
+        .batch_execute(if commit { "COMMIT" } else { "ROLLBACK" })
+        .expect("the transaction ends");
     settle(&store);
-    assert_eq!(store.health(), Health::Deposed { found: epoch + 1 });
+    assert_eq!(store.health(), Health::Up);
+    let landing = store.take_landings().pop().expect("the commit is settled");
+    assert_eq!(landing.id, id);
+    landing.landed
 }
 
-/// Proves: a revival that finds the lock held by another session, or the database unreachable,
-/// or refusing the session, leaves the store lost and tries again at the next heartbeat; once the
-/// cause is gone the store is up again.
+/// Proves: a commit of unknown outcome whose transaction is still in progress on another session
+/// when the revival looks is settled as landed once that transaction commits: the revival waits
+/// for it instead of reading the ledger before it is there.
+///
+/// Catches: a settle by a plain read of the ledger, which finds nothing while the first backend is
+/// still finishing its `COMMIT`, calls the commit lost, and lets a second coordinator redo it.
+#[test]
+fn a_settle_waits_for_the_transaction_in_progress_and_finds_it_landed() {
+    assert!(settled_behind_a_transaction_in_progress(true));
+}
+
+/// Proves: the same wait, with the other transaction rolled back, settles the commit as not
+/// landed.
+///
+/// Catches: a settle that calls a rolled-back transaction landed.
+#[test]
+fn a_settle_behind_a_transaction_that_rolls_back_finds_it_not_landed() {
+    assert!(!settled_behind_a_transaction_in_progress(false));
+}
+
+/// Proves: a revival that finds the lock held exclusively by another session, or the database
+/// unreachable, or refusing the session, or the ledger unwritable, leaves the store lost and tries
+/// again at the next heartbeat; once the cause is gone the store is up again.
 ///
 /// Catches: a store that gives up after one failed revival, or that comes up without the lock.
 #[test]
@@ -266,18 +315,25 @@ fn a_revival_that_cannot_be_made_is_tried_again() {
         "ALTER DATABASE \"{name}\" RESET synchronous_commit"
     ));
 
-    // The lease cannot be read.
-    db.run("ALTER TABLE lease RENAME TO lease_away")
+    // The ledger cannot be written, and a commit waits to be settled in it.
+    store
+        .inner
+        .link
+        .lose(Some(("00000000-0000-0000-0000-000000000001".to_owned(), None)));
+    db.run("ALTER TABLE tx_ledger RENAME TO tx_ledger_away")
         .expect("the table is moved");
     store.revive();
     settle(&store);
     assert_eq!(store.health(), Health::Lost);
-    db.run("ALTER TABLE lease_away RENAME TO lease")
+    assert!(store.unsettled(), "the commit stays to be settled");
+    db.run("ALTER TABLE tx_ledger_away RENAME TO tx_ledger")
         .expect("the table is back");
 
     store.revive();
     settle(&store);
     assert_eq!(store.health(), Health::Up);
+    let landing = store.take_landings().pop().expect("the commit is settled");
+    assert!(!landing.landed, "no transaction of that id ever began");
     line(&store, 2).expect("a commit once revived");
 }
 
@@ -426,13 +482,11 @@ fn the_reading_session_is_made_again_after_it_is_lost() {
 }
 
 /// Proves: a session lost while a refused statement is rolled back is lost, not refused: the
-/// caller is told it is lost and the store revives; and a writer that is deposed while it still
-/// holds a session stays deposed when that session finds the epoch moved.
+/// caller is told it is lost and the store revives.
 ///
-/// Catches: a refusal that keeps a session the server has already ended, and a deposed store that
-/// is turned back into a lost one.
+/// Catches: a refusal that keeps a session the server has already ended.
 #[test]
-fn a_session_lost_in_a_rollback_is_lost_and_a_deposed_store_stays_deposed() {
+fn a_session_lost_in_a_rollback_is_lost() {
     super::logging();
     let db = TestDatabase::new();
     let (store, _) = db.open("rollback").expect("the store opens");
@@ -457,24 +511,4 @@ fn a_session_lost_in_a_rollback_is_lost_and_a_deposed_store_stays_deposed() {
     store.revive();
     settle(&store);
     assert_eq!(store.health(), Health::Up);
-
-    // The epoch moves under a session that still holds the lock, which is then given up.
-    let epoch = store.epoch().expect("an epoch");
-    db.run("ALTER TABLE lease DISABLE TRIGGER lease_fenced; UPDATE lease SET epoch = epoch + 1")
-        .expect("the epoch is raised");
-    let answer = store
-        .on_writer(|w| {
-            w.session()
-                .expect("a session")
-                .query_one("SELECT pg_advisory_unlock($1)", &[&LOCK_KEY])
-                .expect("the lock is given up");
-            w.revive();
-            w.transact(None, |_| Ok(()))
-        })
-        .expect("the writer runs");
-    assert_eq!(
-        answer.expect_err("the epoch moved").why(),
-        "the lease's epoch is no longer this coordinator's"
-    );
-    assert_eq!(store.health(), Health::Deposed { found: epoch + 1 });
 }
