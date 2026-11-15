@@ -14,7 +14,8 @@
 //! **Where.** The release a self-update stages from must be a tree whose every directory, up to
 //! `/`, is root's and closed to group and others (`hostkeeper_steps::Staged::check`). The target
 //! directory is the runner's user's, so the host lives in a scratch directory under [`BASE`]
-//! (`/run`, root's tmpfs), removed when the test ends, with the unit under a unit name of the
+//! (on disk under `/var/lib`, not under `/run`: root's tmpfs there may be mounted `noexec`, where
+//! systemd cannot exec the daemon staged in it), removed when the test ends, with the unit under a unit name of the
 //! test's rig.
 //!
 //! **The units.**
