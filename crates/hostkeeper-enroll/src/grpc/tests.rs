@@ -288,7 +288,7 @@ fn the_real_enroller_posts_and_polls_a_coordinator_of_the_pinned_ca() {
         double.calls(),
         vec![
             Call {
-                seen: Seen::Enroll(pb::EnrollRequest {
+                seen: Seen::Enroll(Box::new(pb::EnrollRequest {
                     host_key_fingerprints: Vec::new(),
                     csr_der: key.csr_der().expect("a CSR"),
                     claims: Some(pb::Claims {
@@ -298,7 +298,7 @@ fn the_real_enroller_posts_and_polls_a_coordinator_of_the_pinned_ca() {
                     image: "image-1".to_owned(),
                     renewal_of: String::new(),
                     mac_nonce: Vec::new(),
-                }),
+                })),
                 client_certs: Vec::new(),
             },
             Call {
@@ -420,7 +420,7 @@ fn an_enroll_request_goes_field_for_field_and_its_answer_is_read() {
     assert_eq!(
         seen(&f.double),
         vec![
-            Seen::Enroll(pb::EnrollRequest {
+            Seen::Enroll(Box::new(pb::EnrollRequest {
                 host_key_fingerprints: Vec::new(),
                 csr_der: b"csr-1".to_vec(),
                 claims: Some(pb::Claims {
@@ -438,15 +438,15 @@ fn an_enroll_request_goes_field_for_field_and_its_answer_is_read() {
                 image: "image-1".to_owned(),
                 renewal_of: "web-1".to_owned(),
                 mac_nonce: vec![0x5a; MAC_NONCE_BYTES],
-            }),
-            Seen::Enroll(pb::EnrollRequest {
+            })),
+            Seen::Enroll(Box::new(pb::EnrollRequest {
                 host_key_fingerprints: Vec::new(),
                 csr_der: b"csr-2".to_vec(),
                 claims: Some(pb::Claims::default()),
                 image: String::new(),
                 renewal_of: String::new(),
                 mac_nonce: Vec::new(),
-            }),
+            })),
         ]
     );
 }

@@ -76,7 +76,7 @@ pub(super) fn pki() -> Pki {
 /// A request the service received.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Seen {
-    Enroll(pb::EnrollRequest),
+    Enroll(Box<pb::EnrollRequest>),
     Poll(pb::PollRequest),
     Renew(pb::RenewRequest),
 }
@@ -158,7 +158,7 @@ impl Coordinator for Double {
         &self,
         request: Request<pb::EnrollRequest>,
     ) -> Result<Response<pb::EnrollResponse>, Status> {
-        self.record(&request, Seen::Enroll(request.get_ref().clone()));
+        self.record(&request, Seen::Enroll(Box::new(request.get_ref().clone())));
         let scripted = self.0.enroll.lock().expect("script").pop_front();
         scripted
             .unwrap_or_else(|| {
