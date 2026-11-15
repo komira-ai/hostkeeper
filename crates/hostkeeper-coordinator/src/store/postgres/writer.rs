@@ -29,7 +29,8 @@ use super::session::{Fail, Params, Session, describe, ends_session};
 /// `lease_fenced` of `0001` names by its two halves.
 pub(crate) const LOCK_KEY: i64 = 0x686b_6370_6731;
 
-/// How long a row of `tx_ledger` is kept: far longer than a revival takes to settle a commit.
+/// How long a row of `tx_ledger` is kept. A revival that finds a commit older than this, and its
+/// row gone, refuses to answer that it did not land.
 const LEDGER_KEEP_SECS: i64 = 3600;
 
 /// The state of the writing session, as every caller sees it.
@@ -60,6 +61,10 @@ struct Shared {
     /// The transaction whose `COMMIT` was in flight when the session was lost, and its change:
     /// recorded in the same step as the loss, so no revival can settle it without its change.
     unknown: Option<(String, Option<Owned>)>,
+    /// When that transaction began, by the database's clock (its row's `at_unix`), when known: the
+    /// ledger purges rows older than [`LEDGER_KEEP_SECS`], so a missing row of an older one says
+    /// nothing.
+    unknown_begun: Option<i64>,
     /// What the revivals found, in their order, until they are taken.
     settled: Vec<Settled>,
 }
@@ -76,6 +81,7 @@ impl Default for Link {
             shared: Mutex::new(Shared {
                 state: State::Up,
                 unknown: None,
+                unknown_begun: None,
                 settled: Vec::new(),
             }),
         }
@@ -103,6 +109,11 @@ impl Link {
         if unknown.is_some() {
             shared.unknown = unknown;
         }
+    }
+
+    /// Records when the transaction of unknown outcome began (the database's clock, in seconds).
+    pub(crate) fn begun(&self, at_unix: i64) {
+        self.lock().unknown_begun = Some(at_unix);
     }
 
     /// Marks a lost session as being revived: true when it was lost, so the caller hands the
@@ -313,21 +324,21 @@ impl Writer {
             return Err(WriteFail::Lost("the database session is lost".to_owned()));
         };
         let begun = session.batch("BEGIN").and_then(|()| {
-            let id: String = session
-                .query_one(
-                    "INSERT INTO tx_ledger (at_unix) VALUES (extract(epoch FROM now())::bigint) \
-                     RETURNING id::text",
-                    &[],
-                )?
-                .get(0);
+            let row = session.query_one(
+                "INSERT INTO tx_ledger (at_unix) VALUES (extract(epoch FROM now())::bigint) \
+                 RETURNING id::text, at_unix",
+                &[],
+            )?;
+            let id: String = row.get(0);
+            let begun: i64 = row.get(1);
             session.execute(
                 "DELETE FROM tx_ledger WHERE at_unix < extract(epoch FROM now())::bigint - $1",
                 &[&LEDGER_KEEP_SECS],
             )?;
-            Ok(id)
+            Ok((id, begun))
         });
-        let id = match begun {
-            Ok(id) => id,
+        let (id, begun) = match begun {
+            Ok(begun) => begun,
             Err(e) => return Err(self.failed(&e)),
         };
         let mut tx = Tx {
@@ -353,6 +364,7 @@ impl Writer {
             Err(e) if ends_session(&e) => {
                 let why = describe(&e);
                 self.lose(&why, Some((id.clone(), change)));
+                self.link.begun(begun);
                 Err(WriteFail::Unknown { id, why })
             }
             // A deferred check refused the commit: the server rolled it back.
@@ -364,12 +376,19 @@ impl Writer {
     /// one is waiting (section 4): a session that cannot be opened or locked leaves the store lost,
     /// for the next heartbeat to try again.
     pub(crate) fn revive(&mut self) {
-        let unknown = self.link.lock().unknown.as_ref().map(|(id, _)| id.clone());
-        match self.reopen(unknown.as_deref()) {
+        let (unknown, begun) = {
+            let shared = self.link.lock();
+            (
+                shared.unknown.as_ref().map(|(id, _)| id.clone()),
+                shared.unknown_begun,
+            )
+        };
+        match self.reopen(unknown.as_deref(), begun) {
             Ok(Revived::Up(session, landed)) => {
                 let session = *session;
                 {
                     let mut shared = self.link.lock();
+                    shared.unknown_begun = None;
                     if let Some((id, change)) = shared.unknown.take() {
                         shared.settled.push(Settled {
                             id,
@@ -404,7 +423,7 @@ impl Writer {
     /// there is none to settle. The settle inserts the id again: no row inserted means the first
     /// insert committed (the insert waited for it while it was in progress), a row inserted means
     /// the transaction never committed and now cannot.
-    fn reopen(&mut self, unknown: Option<&str>) -> Result<Revived, String> {
+    fn reopen(&mut self, unknown: Option<&str>, begun: Option<i64>) -> Result<Revived, String> {
         let mut session = Session::connect(&self.config, Arc::clone(&self.statements), false)
             .map_err(|fail| match fail {
                 Fail::Pg(e) => describe(&e),
@@ -415,6 +434,25 @@ impl Writer {
         }
         let landed = match unknown {
             None => None,
+            Some(id) if too_old(&mut session, begun)? => {
+                // The ledger may have purged the row of a commit that landed, so a missing row
+                // proves nothing: only a row that is there is an answer.
+                let found: i64 = session
+                    .query_one(
+                        "SELECT count(*) FROM tx_ledger WHERE id = $1::text::uuid",
+                        &[&id],
+                    )
+                    .map_err(|e| describe(&e))?
+                    .get(0);
+                if found == 0 {
+                    return Err(format!(
+                        "the commit {id} began over {LEDGER_KEEP_SECS} seconds ago and its row \
+                         of the ledger is gone: whether it landed cannot be told; restart this \
+                         coordinator to read the database afresh"
+                    ));
+                }
+                Some(true)
+            }
             Some(id) => {
                 let inserted = session
                     .execute(
@@ -429,6 +467,19 @@ impl Writer {
         };
         Ok(Revived::Up(Box::new(session), landed))
     }
+}
+
+/// Whether a transaction that began at `begun` is as old as the ledger's retention, by the
+/// database's clock.
+fn too_old(session: &mut Session, begun: Option<i64>) -> Result<bool, String> {
+    let Some(begun) = begun else {
+        return Ok(false);
+    };
+    let now: i64 = session
+        .query_one("SELECT extract(epoch FROM now())::bigint", &[])
+        .map_err(|e| describe(&e))?
+        .get(0);
+    Ok(now - begun >= LEDGER_KEEP_SECS)
 }
 
 enum Revived {
