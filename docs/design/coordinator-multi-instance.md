@@ -84,7 +84,9 @@ reads. So the fleet moves into the database first (section 5), and the rest foll
    CONFLICT` whose `WHERE` names the state the decision saw, a compare-and-set on a version, a stage or a state column, with
    a unique index as the backstop, and the row count says who won); and a **claim by advancing a due time** for periodic work
    (section 9). An instance that dies at any statement leaves nothing that another must clear by a timeout: its transaction
-   committed or it did not, and the next heartbeat or tick, on any instance, continues from the rows.
+   committed or it did not, and the next heartbeat or tick, on any instance, continues from the rows. An instance that hangs
+   instead of dying is cut off by Postgres's own timeouts on its sessions (section 5.2, "Bounds on a hold"), which release its
+   locks; no instance's clock does it.
 4. **The database is the central dependency, and an instance that cannot use it decides nothing (fail closed).** When Postgres
    is unreachable, or a decision's transaction fails, the instance places no order, raises no halt, moves no plan, answers
    `/healthz` 503 and answers a heartbeat with "unavailable" so the host retries. There is no memory-first fallback and no
@@ -141,6 +143,30 @@ checked, section 13).
 **Instances.** Each instance has an `instance_id` (random at start) and upserts `instances(id, started_unix, seen_unix, release,
 listen)` every few seconds. It is for the status page and for the start rule of section 5; correctness never reads it.
 
+**Migrations (serialized, and short).** A shared fence excludes nobody, so it cannot serialize two instances that start at the
+same moment (a start-first update, or a third task scaled up by hand): both would read the migrations table, both would run
+migration `0020`, and one would fail on a duplicate object. The runner therefore takes a mutex of its own:
+
+- One transaction: `pg_advisory_xact_lock(MIGRATE_KEY)` first, a key of its own and not `LOCK_KEY`, then it reads the
+  migrations table and applies every missing migration, recording each in the same transaction, then `COMMIT`. A second
+  starter blocks on the lock (bounded by `--migrate-wait-secs`), then reads the table, finds everything applied and does
+  nothing. Postgres releases the lock at commit, rollback or the death of the backend, so a starter that dies mid-migration
+  leaves nothing to clear. This is a mutex around a few seconds of start-up, not a leader: it elects nobody, no decision
+  reads it, and it is gone when the transaction ends.
+- Lock order: the migration lock is taken and released **before** the shared fence lock, and the runner never takes the gate
+  or a `state_versions` row, so it joins no cycle (`lock_order_has_no_cycle` covers it).
+- A migration's DDL can need `ACCESS EXCLUSIVE` on a table the running instance uses (`fleet_orders`, `state_versions`).
+  Postgres queues every later statement on that table behind a waiting DDL, so an unbounded wait behind the old instance's open
+  gate transaction would stall its heartbeats for the whole overlap. Each migration transaction therefore sets `SET LOCAL
+  lock_timeout` to `--migrate-ddl-lock-timeout-ms` (default 3000): a DDL that cannot get its lock in that time rolls the whole
+  migration transaction back (nothing is half applied), and the runner retries after `--migrate-retry-secs` up to
+  `--migrate-attempts` times, then exits so the failure is visible. The stall is bounded by the lock timeout, not by the old
+  instance. The migration lint (the header rule that exists for `older-releases`) gains one rule so the retry is rare: a
+  migration on an existing table is `ADD COLUMN` with no default or a constant default (a catalog change, held for
+  milliseconds), never a rewrite or an index build on `fleet_orders`, `fleet_hosts`, `state_versions` or `rollout_gate`; a new
+  table needs no lock on a running table. This is the B20 shape: the config mistake is caught once, in the lint, not by a
+  runtime gate.
+
 ## 5. The fleet moves into Postgres
 
 ### 5.1 Tables (all new, additive; migration `0019`, `-- older-releases: may-run`)
@@ -174,8 +200,14 @@ that did not come back) would act on a partial fleet. The rule keys on the signa
   and no epoch are needed: an empty table is a gap too. The table holds tens to hundreds of rows (not measured, section 7), so the
   `max` is a scan of a few pages with no index on the updated column (M1 measures it; the fallback is one more row,
   `cluster_quiet.last_beat_unix`, written at most once per second).
-- Every deciding transaction reads `cluster_quiet` after it holds the gate and places **no order** while `until_unix` is in the future;
-  halts and holds still apply. It is evaluated in each deciding transaction, so an instance that started a moment ago and one that
+- Every deciding transaction reads `cluster_quiet` after it holds the gate and takes **no decision of its own** while
+  `until_unix` is in the future. What is held back is every step the fleet's state would drive: no order, no stage advance, no
+  halt raised on a threshold ("a host did not come back"), no version marked bad, no rollback to `last_good`. A partial fleet
+  must not halt and revert a healthy rollout, which is the harm the rule exists to prevent, so verdicts are gated as much as
+  orders. What still applies is what an *operator* did, because it only stops things: an operator's halt, hold, force or retire is a
+  row transaction (section 6) and is read by every decision. The clock of "did not come back" also restarts: a host's deadline
+  counts from the later of its order time and `until_unix`, so a host that was merely unreported during the gap has the whole
+  window after it to report (`effective_at = greatest(order.at_unix, cluster_quiet.until_unix)` passed to `halt.rs`). It is evaluated in each deciding transaction, so an instance that started a moment ago and one that
   has run for a week decide alike.
 - A deploy of one task changes neither the beats nor the gap, so a deploy no longer quiets the fleet: that is a gain over
   today. Two beats at once that both see the gap both write the same `greatest`: idempotent.
@@ -203,6 +235,8 @@ Two paths:
      transaction, under the gate, deletes the aged rows. Deleting a row without the gate only frees a slot, so a decision
      that reads the row a moment before the delete is conservative (one fewer order), never wrong;
   4. the gap rule above, the state-version vector (section 6), the host's deny row and the host's queued orders.
+  A cache is reloaded only by the rule of section 6 ("Invalidation": rows and version read in one snapshot, so a cache is
+  never labelled newer than its content).
   If all are as the instance's caches say, reply. No gate, one round trip. **This path never places an order, a halt or a plan
   step**, so a version vector read here, before an operator's commit, can only delay an order by one beat; it cannot let one
   through (the next paragraph is the path that can). A beat takes a host over from whichever instance heard the one before:
@@ -224,14 +258,16 @@ Two paths:
   ```
   BEGIN
     INSERT INTO tx_ledger(id, ...)                          -- first statement, section 4
-    SELECT 1 FROM rollout_gate WHERE id = 1 FOR UPDATE      -- the gate: one row, never updated, only locked
+    SELECT 1 FROM rollout_gate WHERE id = 1 FOR UPDATE SKIP LOCKED  -- a beat; no row back = the gate is busy, ROLLBACK, answer without a new order
+                                                            -- (an operator edit: plain FOR UPDATE with its own lock_timeout, section 6)
     one pipelined read of every input, after the lock is granted
     the pure decision; the writes it names, each conditional (section 5.3)
     UPDATE state_versions ... for the parts it wrote (section 6); audit counter row last
   COMMIT
   ```
 
-  `rollout_gate` is a table of one row (`id smallint primary key check (id = 1)`). Its row lock replaces the advisory
+  `rollout_gate` is a table of one row (`id smallint primary key check (id = 1)`; the row always exists, so no row back from
+  `SKIP LOCKED` means "locked"). Its row lock replaces the advisory
   transaction lock the first draft of this document used: the lock is released with the transaction, by Postgres, whatever
   happens to the instance, and it names no instance. After the lock is granted the transaction **re-reads every input of the
   decision from the rows, never from an instance's cache**: the fleet rows (`fleet_hosts`, `fleet_bakes`, `fleet_orders`,
@@ -247,16 +283,32 @@ Two paths:
   deny that commits after the decision's read cannot be seen by it, which is the same as today's order reaching a host a
   moment before its deny (the host is refused at its next beat).
 
-**What waits, and what fails.** The gate wait has a timeout (`--gate-wait-ms`, section 12). A heartbeat whose wait times out
-is answered with the orders already stored for the host and no new one: the next beat decides, so a busy gate delays an order
-by at most a beat and never refuses a host. An operator edit whose wait times out is refused as `store_failed`, nothing
+**What waits, and what fails.** A **beat never queues at the gate**: it asks with `FOR UPDATE SKIP LOCKED`, and when the gate
+is held (or an operator edit is queued for it) the beat is answered with the orders already stored for the host and no new one;
+the next beat decides. So a busy gate delays an order by at most a beat and never refuses a host, and no beat is ever ahead of an
+operator in the lock's queue. (A conditional lock request is also refused while a conflicting request is queued, which
+is what keeps a beat from overtaking a waiting operator; the test `beat_never_overtakes_a_queued_operator_edit` runs it against
+the service container instead of trusting this sentence.) An **operator edit** of a decision input queues at the gate with a plain
+`FOR UPDATE` under its own `SET LOCAL lock_timeout = --operator-gate-wait-ms` (default 30000, far longer than a hold). The only
+requests ahead of it are the one holder and earlier operator edits, so a halt raised at a stage start, while hundreds of hosts
+beat, waits for one decision, not for the beats. An edit whose wait still times out is refused as `store_failed`, nothing
 changed. A deadlock (`40P01`) or serialization failure (`40001`) rolls the transaction back and it is retried in a new
 transaction with the same ledger id, within `--ledger-retry-secs` (section 4); the global lock order below means a deadlock
 cannot come from this design and would be a bug, but the retry costs nothing.
 
+**Bounds on a hold.** Only a bounded hold keeps "no instance clears anything by a timeout" true for an instance that hangs
+rather than dies (a runtime pause, a blocked executor, a CPU-starved Argon2 burst between two statements). Postgres enforces the
+bound, on its own clock, on every pool session: `idle_in_transaction_session_timeout = --tx-idle-timeout-ms` (default 5000) and
+`statement_timeout = --statement-timeout-ms` (default 5000), set when the session is opened. A holder idle between statements is
+terminated by the server after the first, a running statement is cancelled after the second, and either rolls the transaction back
+and releases the gate and every row lock. The stalled process finds a dead session when it resumes (`Lost`, then `Reviving`,
+section 4), and its ledger-id retry lands nothing twice. The longest the gate can be held by an instance that has gone silent is
+therefore the idle timeout; every edit and decision waits at most that long for it. (`transaction_timeout` of newer Postgres
+would bound the whole transaction; it is not relied on, because the version of `lab-postgres` was not checked, section 13.)
+
 **Isolation.** No transaction of this design needs `SERIALIZABLE`. The deciding transaction would pay for it and gain nothing:
 it reads most of the fleet rows, and under serializable snapshot isolation every concurrent beat upsert would be a read-write
-conflict with it, so decisions would abort and retry under normal load, where the gate gives the same guarantee by queueing.
+conflict with it, so decisions would abort and retry under normal load, where the gate gives the same guarantee by exclusion.
 Everywhere else a decision is one conditional write whose `WHERE` is its precondition. `SERIALIZABLE` with a retry loop is the
 fallback for a future decision that cannot name its precondition; none does today.
 
@@ -264,7 +316,7 @@ fallback for a future decision that cannot name its precondition; none does toda
 which read every service's rows, and `--live-rollouts N` (at most 16) counts live services over every group. Only the live
 services step, so a lock per service would let at most N decisions run side by side, at the price of a second lock and a
 second order for the admission decision, which needs the cluster-wide row anyway. The deciding path runs only while something
-rolls, its transaction is a few statements, and the queue at the gate is as long as the hosts that beat at that moment, which
+rolls, its transaction is a few statements, and only operator edits queue at the gate (a beat that finds it busy is answered and decides at its next beat), which
 does not depend on how many instances there are: more instances spread the same decisions, they do not add any. A finer lock
 is an optimisation to add if section 7 shows the wait (B20: no speculative machinery).
 
@@ -314,16 +366,18 @@ from shared rows by polling the version vector.
 
 ### 5.3 Rollout steps without a leader
 
-Every step below is one transaction of the deciding path. The gate serializes the decisions; the conditional write is what
+Every step below is one transaction of the deciding path. Steps the fleet's state drives (an order, a stage advance, a halt on a
+threshold, a version marked bad, a rollback) run only when `cluster_quiet` is not in the future (section 5.1); a halt, hold, force or
+retire that an operator asks for is not gated by it. The gate serializes the decisions; the conditional write is what
 keeps the step correct even if two instances reached it with the same inputs, and what says which of them did it, so the
 audit line and the order are written once. "Any N" holds because nothing below names an instance.
 
 | Step | Transaction (after the gate, from fresh rows) | Racing instances are resolved by | Written once by |
 |---|---|---|---|
 | **Choose the next hosts of a stage** (an order for the beating host) | count live services, the stage's updating hosts, `max_updating` and `min_up` from `fleet_orders`, `fleet_hosts`, the plan rows; if the host may be ordered, `INSERT INTO fleet_orders` | the gate (the second decider reads the first's order and its slot); unique index on `fleet_orders(host_id)` (one update at a time on a host) as backstop; a beat that finds its own order row inside `ORDER_AGE` is answered with that order | the order row |
-| **Advance a stage** (50% to 100%, or the first stage) | the beat finds the stage done (every host up at the version and baked); `UPDATE plan SET stage = $n + 1 WHERE group = $g AND service = $s AND version = $v AND stage = $n` | compare-and-set on the stage number: zero rows means another beat advanced it, and this one re-decides from the new stage. `Rollouts.Advance` is the same update with the stage the operator saw; zero rows is `not_waiting` | the `rollout_advance` audit line, inserted only when the row count is 1 (name `coordinator`, or the operator's) |
-| **Halt** (the failure threshold, or an operator) | read the verdicts and the live hosts; `UPDATE halts SET ... generation = generation + 1 WHERE (group, service) AND NOT halted` | the gate for the operator's call (it takes the gate, section 6); the `WHERE NOT halted` for two deciders that both see the threshold crossed: one row, one generation (`halt-v1`), one audit line | the row count of the update |
-| **Roll back first, then delete** | in the transaction that marks a version bad: `desired` is set back to `last_good` with a new `set_seq`, the plan restarts. An uninstall (a package removed from a group, a `Move`) is decided from rows read after the gate, so it sees the rollback committed or waits behind it; and the rule order of `decide.rs` (halt and bad version before the uninstall rules) is unchanged | the gate: the rollback's transaction and the uninstall's cannot interleave, so no instance orders a delete of what another is rolling back | the rollback's own audit line, written with the desired change |
+| **Advance a stage** (50% to 100%, or the first stage) | outside the quiet window; the beat finds the stage done (every host up at the version and baked); `UPDATE plan SET stage = $n + 1 WHERE group = $g AND service = $s AND version = $v AND stage = $n` | compare-and-set on the stage number: zero rows means another beat advanced it, and this one re-decides from the new stage. `Rollouts.Advance` is the same update with the stage the operator saw; zero rows is `not_waiting` | the `rollout_advance` audit line, inserted only when the row count is 1 (name `coordinator`, or the operator's) |
+| **Halt** (the failure threshold, only outside the quiet window; or an operator, always) | read the verdicts and the live hosts; `UPDATE halts SET ... generation = generation + 1 WHERE (group, service) AND NOT halted` | the gate for the operator's call (it takes the gate, section 6); the `WHERE NOT halted` for two deciders that both see the threshold crossed: one row, one generation (`halt-v1`), one audit line | the row count of the update |
+| **Roll back first, then delete** | only outside the quiet window; in the transaction that marks a version bad: `desired` is set back to `last_good` with a new `set_seq`, the plan restarts. An uninstall (a package removed from a group, a `Move`) is decided from rows read after the gate, so it sees the rollback committed or waits behind it; and the rule order of `decide.rs` (halt and bad version before the uninstall rules) is unchanged | the gate: the rollback's transaction and the uninstall's cannot interleave, so no instance orders a delete of what another is rolling back | the rollback's own audit line, written with the desired change |
 | **One service at a time, FIFO** | the queue is not state: the head is derived in the transaction from `set_seq` of the desired rows and from the live count, `--live-rollouts` over every group (`live.rs`) | the gate, and `desired_seq`, a sequence taken in the transaction that sets a desired version | none needed: nothing is written until an order is |
 | **Cluster quiet** | the gap rule of section 5.1 | `greatest(until_unix, ...)`, idempotent | the row |
 | **Release polling, certificate issuance** | not coordinator loops (section 9) | not applicable | not applicable |
@@ -342,14 +396,18 @@ sequenceDiagram
     H1->>A: heartbeat
     H2->>B: heartbeat (same moment)
     A->>P: BEGIN; ledger; SELECT rollout_gate FOR UPDATE
-    B->>P: BEGIN; ledger; SELECT rollout_gate FOR UPDATE
+    B->>P: BEGIN; ledger; SELECT rollout_gate FOR UPDATE SKIP LOCKED
     P-->>A: lock granted
-    Note over P,B: B waits on the gate row (at most --gate-wait-ms)
+    Note over P,B: B asks FOR UPDATE SKIP LOCKED: no row back, the gate is busy
+    B->>P: ROLLBACK
+    B-->>H2: stored orders only, no new order (s2 decides at its next beat)
     A->>P: read every input; decide: s1 is the head, order h1
     A->>P: INSERT fleet_orders(h1, s1); audit; COMMIT
     P-->>A: committed (lock released)
     A-->>H1: order for s1
-    P-->>B: lock granted
+    Note over H2,B: 15 s later, the next beat of h2 reaches any instance
+    H2->>B: heartbeat
+    B->>P: BEGIN; ledger; gate FOR UPDATE SKIP LOCKED: granted
     B->>P: read every input (sees A's order: s1 is live)
     B->>B: decide: s2 waits, rollout_elsewhere
     B->>P: COMMIT (no writes)
@@ -363,11 +421,11 @@ sequenceDiagram
     participant P as Postgres
     Note over P: stage 1 of 2 is done and baked, stage 2 is auto
     A->>P: BEGIN; gate FOR UPDATE; read; stage 1 is done
-    B->>P: BEGIN; gate FOR UPDATE (waits)
+    B->>P: BEGIN; gate FOR UPDATE SKIP LOCKED: no row, busy; ROLLBACK
     A->>P: UPDATE plan SET stage = 2 WHERE stage = 1 -> 1 row
     A->>P: audit rollout_advance (coordinator); order h3; COMMIT
-    P-->>B: lock granted
-    B->>P: read; the plan is at stage 2, h4 is in it
+    Note over B: B answers h4 with no new order; at h4's next beat B decides again
+    B->>P: BEGIN; gate granted; read; the plan is at stage 2, h4 is in it
     B->>P: order h4 (no advance needed); COMMIT
     Note over A,B: if the gate were bypassed, B's update would match 0 rows: no second audit line, no second advance
 ```
@@ -378,14 +436,15 @@ sequenceDiagram
     participant B as Instance B (beat of h7)
     participant O as Operator
     participant P as Postgres
-    A->>P: BEGIN; gate FOR UPDATE; read verdicts: threshold crossed
-    B->>P: BEGIN; gate FOR UPDATE (waits)
+    A->>P: BEGIN; gate FOR UPDATE SKIP LOCKED: granted; quiet is not in the future; read verdicts: threshold crossed
+    B->>P: BEGIN; gate FOR UPDATE SKIP LOCKED: no row, busy; ROLLBACK
+    O->>P: Halt.Raise: BEGIN; gate FOR UPDATE (queues behind A; no beat can pass it)
     A->>P: version marked bad; halt row (generation + 1); desired = last_good, new set_seq; audit; COMMIT
-    P-->>B: lock granted
-    B->>P: read: halted, desired is last_good
+    P-->>O: lock granted after A commits; the operator's halt reads A's halt and is ordered after it
+    O->>P: write (already halted: no second generation); COMMIT
+    Note over B: h7 beats again; B decides after the operator
+    B->>P: BEGIN; gate granted; read: halted, desired is last_good
     B->>B: decide: no order for the bad version; h7 gets what last_good says
-    O->>P: Halt.Clear: BEGIN; gate FOR UPDATE (waits behind B)
-    P-->>O: lock granted after B commits; the clear is ordered after B's decision
 ```
 
 When the database is unreachable no step runs anywhere (principle 4):
@@ -400,7 +459,24 @@ sequenceDiagram
     P--xA: connection refused or timeout
     A-->>H: unavailable (no order, no halt, no plan step); /healthz 503
     Note over H: the host keeps what it runs and retries its heartbeat
-    Note over A,P: when Postgres answers again, the gap rule (section 5.1) quiets orders for --quiet-secs
+    Note over A,P: when Postgres answers again, the gap rule (section 5.1) quiets every decision of its own for --quiet-secs
+```
+
+The same gap seen by a deciding beat: the partial fleet raises no halt.
+
+```mermaid
+sequenceDiagram
+    participant H as Host h1 (first to beat after the gap)
+    participant A as Instance A
+    participant P as Postgres
+    Note over P: Postgres was away 60 s; fleet_hosts is stale (or truncated)
+    H->>A: heartbeat
+    A->>P: upsert; max(seen_unix) is older than DOWN_AFTER: cluster_quiet.until = now + quiet
+    A->>P: BEGIN; gate (SKIP LOCKED) granted; read cluster_quiet: in the future
+    A->>A: partial fleet: hosts 'not back' are not judged; no order, no advance, no halt, no rollback
+    A->>P: COMMIT (no writes)
+    A-->>H: stored orders only
+    Note over A,P: an operator's halt in this window is still taken and read by every decision (it only stops things)
 ```
 
 ## 6. Everything else: row transactions and cache versions
@@ -410,7 +486,8 @@ sequenceDiagram
 ```
 BEGIN
   INSERT INTO tx_ledger(id, ...)                              -- first statement, section 4
-  SELECT 1 FROM rollout_gate WHERE id = 1 FOR UPDATE          -- the gate, only for the parts a decision reads (desired, ops, layout, verdicts)
+  SELECT 1 FROM rollout_gate WHERE id = 1 FOR UPDATE          -- the gate, only for the parts a decision reads (desired, ops, layout, verdicts);
+                                                              -- queues, under SET LOCAL lock_timeout = --operator-gate-wait-ms
   SELECT version FROM state_versions WHERE part = $1 FOR UPDATE  -- the part's row lock; a fixed order when an edit spans parts
   reload the part from its rows                               -- fresh, under the lock
   apply the existing edit closure to the fresh copy
@@ -434,7 +511,19 @@ rare; measured in section 7). `if_generation` on `SetDesired` (migration `0003`)
 optimistic check.
 
 **Invalidation.** `state_versions(part pk, version bigint)` is read by the heartbeat's statement (section 5.2) and, for the UI
-and the API, by one `SELECT` per request; a changed version reloads that part, an unchanged one reads from memory. No
+and the API, by one `SELECT` per request; a changed version reloads that part, an unchanged one reads from memory.
+
+**Reload rule (a cache is never newer than its content).** A part's rows and its version are read in **one snapshot**, with
+the version read first: one statement (its CTEs share a snapshot) or one `REPEATABLE READ, READ ONLY` transaction that selects
+`state_versions.version` and then the part's rows, and the cache is labelled with *that* version. Every writer bumps the
+version in the transaction that writes the rows (a rule above), so a snapshot that holds version `v` holds exactly the rows
+of `v`, and a snapshot older than a commit holds neither the new rows nor the new version. The bad order is two reads: rows
+of `v`, then a commit of `v+1`, then a read of the version that labels the old rows `v+1`; every later beat would see the
+version equal and take the converged path, and a host behind the new desired version would not be ordered until some other
+edit bumped the part. With one snapshot that cache is next compared with `v+1` in the database, differs, and reloads. The
+converged path never decides, and a deciding transaction re-reads rows and so was never exposed; the rule closes the one place
+where staleness would otherwise have no bound. Test: `cache_is_never_labelled_newer_than_its_content` (a commit between the
+two reads, injected). No
 `LISTEN/NOTIFY`: it needs a dedicated connection and a poll fallback anyway (B20). The bound on staleness is zero for the
 decision (it reads rows, not caches), at most one beat for the converged path (which cannot order), and one request for the
 UI. Every transaction that writes rows of a part bumps its `state_versions` row, the deciding transaction included (the
@@ -479,14 +568,14 @@ host per minute for the real host count (not read in this work). The hold time o
 | Heartbeat, converged | 1 (upsert + versions + deny + queued) | the host's own `fleet_hosts` row, its bake and order rows | one statement | 0 |
 | Heartbeat, a cache is stale | 1 + 1 reload of the changed part | as above | as above | 0 |
 | Heartbeat, deciding (order, stage advance, halt, plan step) | 1 for the beat, then `BEGIN` + ledger + gate (1), one pipelined read of every input (1), writes + versions + audit + `COMMIT` (1): 4 | the gate row; the order and plan rows it writes; `state_versions('ops')` when it writes `ops` rows; the `audit_counter` row for the last statement | gate: grant to commit, about 2 round trips and one commit flush | 0 |
-| Heartbeat whose gate wait times out | 1 + the wait (`--gate-wait-ms`) | none held | none | 0 |
-| Operator edit of desired, ops, layout, verdicts (hold, halt raise/clear, force, retire) | `BEGIN`, ledger, gate, part row, reload part, write, version, audit, `COMMIT`: 3 to 4 (pipelined) | the gate row, the part's `state_versions` row, `audit_counter` | gate: waits for at most one deciding transaction, then held to commit | 1 write session |
+| Heartbeat that finds the gate busy | 1 + `BEGIN`/ledger/gate attempt/`ROLLBACK` (pipelined, 1) | none held (`SKIP LOCKED`) | none, never waits | 0 |
+| Operator edit of desired, ops, layout, verdicts (hold, halt raise/clear, force, retire) | `BEGIN`, ledger, gate, part row, reload part, write, version, audit, `COMMIT`: 3 to 4 (pipelined) | the gate row, the part's `state_versions` row, `audit_counter` | gate: waits for the one holder (at most `--tx-idle-timeout-ms`, normally milliseconds) and earlier operator edits, never for a beat; then held to commit | 1 write session |
 | Operator edit of accounts, enrollment (user, token) | as above without the gate | the part's `state_versions` row, `audit_counter` | to commit | 1 write session |
 | UI or API read | 1 (versions) + 1 reload only when changed | none | none | 0 |
 | UI login / request | 1 read of the session row, + 1 write at most every 30 s | the session row | one statement | 0 |
 | Enrollment approve / renew | 2 to 3 (`FOR UPDATE`, conditional update, audit) | the request or host row | to commit | 2 transactions |
 | Periodic job claim (section 9), per instance per tick | 1 | the due `periodic_jobs` rows (skip locked), usually none | one statement | 0 |
-| Instance start | migrations (idempotent), shared lock, load all parts | the shared advisory lock | the instance's life | same plus exclusive lock |
+| Instance start | migration lock + migrations (one transaction, idempotent, `lock_timeout` on DDL), shared lock, load all parts | the migration advisory lock (seconds, released at commit); the shared advisory lock | migration lock: the migration transaction; shared lock: the instance's life | same plus exclusive lock |
 
 The gate is held by one decision at a time, and what queues behind it is the hosts that beat at that moment and the operator
 edits, whatever the number of instances. If the heartbeat's converged path is more than a few hundred microseconds, the
@@ -613,10 +702,21 @@ Needed:
    `--health-listen` serves the same path on an address of the overlay `cp-hk`. 200 only when the store is `Up`, the
    listeners are bound and the task is not draining.
 2. **Update shape:** `replicas: 1`, `order: start-first`, `parallelism: 1`: one instance in steady state, two only while the
-   old one drains. The Docker healthcheck says when the new one is healthy (as now: 5 s
-   interval, `start_period` 120 s), `stop_grace_period` 60 s (the task answers 503 from SIGTERM, `health.rs` `draining`, so
-   the edge stops sending new connections before the old task ends). Long calls (`WaitConverged`) end at the drain and
-   callers retry, as they do at a deploy today.
+   old one drains. The Docker healthcheck says when the new one is healthy in its own container (as now: 5 s
+   interval, `start_period` 120 s), and Swarm then sends the old task SIGTERM. That is not the moment the *edge* can use the new
+   task: it learns of it through `STRICT_DNS` (1 s refresh) and then needs its own active check to pass `healthy_threshold`
+   times at `interval`. "At least one task answers 200" is a claim about tasks; what matters is that the edge has a healthy
+   upstream that accepts. So the old task gets a **drain delay**: from SIGTERM it answers `/healthz` 503 (so the edge stops
+   choosing it once it has the new one) but **keeps its listeners open and keeps serving new connections for
+   `--drain-delay-secs`**; only then does it stop accepting, finish in-flight calls and exit, all inside `stop_grace_period`.
+   Long calls (`WaitConverged`) end at the end of the delay and callers retry, as they do at a deploy today.
+   The deploy checks, once (B20), that `--drain-delay-secs > dns_refresh_rate + healthy_threshold x interval + one interval` of
+   the edge's new check and that `stop_grace_period > --drain-delay-secs + the longest in-flight call`. Proposed values: check
+   `interval` 2 s, `healthy_threshold` 2, `unhealthy_threshold` 2 (the edge's check does not exist yet; these are mine, to be
+   confirmed with the edge's owner), DNS 1 s, so the new task is usable in about 1 + 4 + 2 = 7 s, and `--drain-delay-secs` 15,
+   `stop_grace_period` 60. During the delay both tasks accept, so there is no instant when a host or an operator is refused or
+   the edge routes to nothing healthy (Envoy's panic mode never has to engage). The Mac listener (item 4) is the one port the
+   old task still holds through the delay, which is why it is open.
 3. **No stickiness.** An agent opens a new connection per heartbeat, so a host's beats alternate between instances. Source-IP
    affinity would not help: `min_up` and one-live-rollout are cluster-wide. The shared fleet (section 5) is what makes this
    correct. Beyond TCP keep-alive there is no stickiness, and a connection ends at a server-side maximum age
@@ -641,15 +741,19 @@ sequenceDiagram
     participant E as Edge health check
     participant P as Postgres
     S->>N: start (start-first)
-    N->>P: migrations (may-run), shared lock, load
+    N->>P: migration lock (xact advisory); migrations (may-run, lock_timeout on DDL); commit
+    N->>P: shared lock, load
     N-->>E: /healthz 503 starting
     N-->>E: /healthz 200
-    E->>N: begin sending connections
+    Note over S,N: Docker healthcheck of N passes
     S->>O: SIGTERM
-    O-->>E: /healthz 503 draining
-    E->>O: stop new connections
-    O->>O: finish in-flight, exit within stop_grace_period
-    Note over S,P: at every moment at least one task answers 200
+    O-->>E: /healthz 503 draining (listeners stay open and serving)
+    Note over E,N: STRICT_DNS (1 s) sees N; active check passes healthy_threshold times
+    E->>N: begin sending connections
+    E->>O: stop choosing O (503, unhealthy_threshold)
+    Note over O: --drain-delay-secs elapsed (greater than DNS + healthy_threshold x interval + one interval)
+    O->>O: stop accepting, finish in-flight, exit within stop_grace_period
+    Note over S,P: the edge has a healthy, accepting upstream at every moment
 ```
 
 ## 12. Configuration (every number is a key with a default)
@@ -663,7 +767,13 @@ sequenceDiagram
 | `--session-touch-secs` | 30 | write of `last_used_unix` at most this often |
 | `--beat-reorder-secs` | 30 | a beat older (by the host's `sent_unix`) than the stored one is dropped unless the stored row is older than this |
 | `--ledger-retry-secs` | 10 | how long an instance retries a transaction of unknown outcome, a deadlock or a serialization failure before it answers 503 |
-| `--gate-wait-ms` | 2000 | how long a transaction waits for the gate row: a heartbeat then answers with no new order, an operator edit is refused `store_failed` |
+| `--operator-gate-wait-ms` | 30000 | how long an operator edit waits for the gate row (a heartbeat never waits: `SKIP LOCKED`); then it is refused `store_failed` |
+| `--tx-idle-timeout-ms` | 5000 | `idle_in_transaction_session_timeout` of every pool session: the longest a silent instance holds the gate or a row lock |
+| `--statement-timeout-ms` | 5000 | `statement_timeout` of every pool session |
+| `--drain-delay-secs` | 15 | from SIGTERM, the old task answers 503 on `/healthz` but keeps accepting for this long; deploy-checked against the edge's DNS refresh and check interval x thresholds |
+| `--migrate-wait-secs` | 60 | how long a starter waits for the migration lock |
+| `--migrate-ddl-lock-timeout-ms` | 3000 | `lock_timeout` of a migration transaction: a DDL that cannot get its lock rolls the migration back |
+| `--migrate-retry-secs`, `--migrate-attempts` | 5, 6 | the wait between and number of attempts of a rolled-back migration before the instance exits |
 | `--job-tick-secs` | 5 | how often an instance claims due periodic jobs (section 9) |
 | `--job-every name=secs` (repeatable) | `alerts=15`, `request-expiry=15`, `prune=3600` | the period of each periodic job |
 | `--connection-max-age-secs` | 300 | a server-side maximum age of an agent connection, besides TCP keep-alive |
@@ -688,94 +798,23 @@ cheap).
 Not checked, because access was denied or needs a secret, and to be confirmed by the owner or engineering before the cutover:
 the files of the state volume (names and sizes are from the service's flags); the socket directory `/run/lab-postgres`;
 `max_connections` of `lab-postgres` and the role's connection limit (needs the DSN); live table contents (including the
-number of enrolled hosts, which sizes section 7); whether any registry row names a credential file.
+number of enrolled hosts, which sizes section 7); whether any registry row names a credential file; the version of
+`lab-postgres` (whether `transaction_timeout` exists); the edge's check interval and thresholds (no active check exists yet, the
+values of section 11 are proposed).
 
 ## 14. The model check, before code
 
-The protocol to check is the deciding transaction, the conditional writes and the periodic claim, not the SQL. Two tools, one
-idea each:
-
-- **A model of the protocol** (TLA+/PlusCal, `docs/design/models/` in the PR that builds M2; run by an `xtask` verb outside
-  the PR gate, since TLC needs Java and B9 allows only build and unit tests with coverage). The number of instances is a
-  parameter: it is run at 1, 2 and 3, and a symmetry argument (no step names an instance, and the instances are
-  interchangeable) is what carries the result to any N; the model has no leader, no lease and no election to include. State:
-  instances, hosts `h1`, `h2`, services `s1`, `s2`, the shared rows (`orders`, `halts`, the plan stage, `desired.set_seq`,
-  `cluster_quiet`, `periodic_jobs`, the gate), each instance's cache and version. Steps: a beat arrives on any instance at any
-  time, and beats of one host may be applied in either order; a deciding transaction takes the gate, then its reads and its
-  writes are separate steps inside the lock, so that a writer of an input that does not take the gate is *found* to break it;
-  an operator edit of a decision input (halt, hold, force, retire, desired, layout, verdict) is a transaction that takes the
-  gate or, in the negative variant, does not; a stage advance is the compare-and-set of section 5.3; a periodic tick claims a
-  job by the due-time update; an instance may crash after `COMMIT` and before the reply, or before `COMMIT`; a commit may be
-  of unknown outcome (the connection drops while the backend still finishes) and is retried with the same ledger id; the
-  database may become unreachable (the model has every instance take no step, which is the fail-closed rule), restart and
-  empty `fleet_hosts`, or the beats may stop for longer than `DOWN_AFTER`; the release before may run between two runs of the
-  new one; a desired version changes. Invariants: live rollouts never exceed `--live-rollouts`; updating hosts of a stage
-  never exceed `max_updating`; `min_up` holds; an order is never lost or duplicated for one `(host, service, target)` inside
-  `ORDER_AGE`, and a host never has two orders at once; a stage is advanced once per version and each advance has one audit
-  line; a halt raised twice is one halt generation and one audit line; a rollback is committed before any uninstall of that
-  package is ordered; a halt, hold, force or desired change whose transaction committed before the gate of an order's
-  transaction was granted is read by that decision (and is not read after: one lock order, no cycle); a transaction of
-  unknown outcome lands exactly once; the stored `running` of a host never moves to an older beat; no order is placed while
-  `cluster_quiet` is in the future, and it is set after every gap of `DOWN_AFTER` in the beats; the audit counter and
-  `set_seq` never reuse a number after the release before ran; queue order equals `set_seq` order on every instance; audit
-  numbers follow commit order; a periodic job's effect happens once per due period, however many instances claim it, and a
-  claimer that dies loses that run only. Liveness: a host behind its target gets an order if a slot is free, whatever the
-  number of instances and whichever of them hears the beat.
-- **An exhaustive state-space test in Rust** (the part CI runs, T11, T12): the pure decision functions over an in-memory
-  store with transactions at statement granularity, all interleavings of N instances (N = 1, 2 and 3) over a bounded script,
-  checking the same invariants. It is the test that the unlocked variants fail (T15: negative cases: an operator halt without
-  the gate; a decision that reads a cache; a lookup-settle; an unguarded beat upsert; a stage advance without its
-  compare-and-set and without the gate; a periodic claim that reads then writes; the quiet rule keyed on a missing sentinel)
-  and the locked one passes. The states are the reachable ones of a script of up to three instances, two hosts, two services
-  and four operator and failure events; the bound is kept small and stated in the test.
-
-Sanity run for this document, not the model: a throwaway explicit-state search of two instances each deciding one of two
-services with a limit of one live rollout (script in the author's scratch, not committed) finds the double order when "read
-the live count" and "insert the order" are two steps, and finds none when they are one step under the lock. Eight and five
-states. It was run on the first draft's lock and not rerun for the gate row, which has the same effect. The real models are M2.
+Moved to [coordinator-multi-instance-checks.md](coordinator-multi-instance-checks.md), section 14. In one paragraph: the concurrency
+protocol (the gate with `SKIP LOCKED` for beats, the conditional writes, the migration mutex, the one-snapshot cache reload, the
+quiet rule, the periodic claim, the drain delay) is modelled in TLA+/PlusCal at N = 1, 2 and 3 and as an exhaustive interleaving
+test in Rust, before any of the code (PR M2), with a negative variant for every missing lock or conditional write.
 
 ## 15. Compatibility (B8) and tests
 
-All changes are additive: tables `fleet_*`, `cluster_quiet`, `rollout_gate`, `periodic_jobs`, `instances`, `sessions`, `login_failures`, `alerts`,
-`state_versions`, `tx_ledger`, `audit_counter`, `fleet_bakes`, the sequence `desired_seq`, columns with defaults (`set_seq`,
-`set_for`, `facts_generation`). No column renumbered, renamed or re-meant; no proto change. The fence trigger is untouched.
-Migration `0019` says `older-releases: may-run` (the migration lint's header rule; `0019` adds only). Why that is safe, and
-no `refuse`: while any new instance runs it holds the shared lock, so the release before cannot start (exclusive lock refused);
-with none running the release before takes the exclusive lock and runs on its own tables, ignoring the new ones, which is
-the back-out. What it forgets is the fleet (it never had one stored), as at every start of today.
-
-Tests, named (each asserts the behaviour in its name; the PR bodies list them by name per P2):
-
-- `release_before_is_refused_while_a_shared_holder_runs` and `shared_holder_is_refused_while_release_before_runs`: the
-  exclusive and the shared `pg_try_advisory_lock` on one database; the old exclusive path against the new shared one.
-- `release_before_runs_on_the_migrated_database_after_new_tasks_stop`: the previous release's store opened on a database
-  written by the new release (the old release on new data); and `new_release_migrates_a_database_of_the_release_before`
-  (the new release on old data), both against the service container of the `test` job.
-- `exported_files_are_read_by_the_strict_readers_of_the_release_before` (exists, coordinator-storage.md section 12) stays green
-  with the new tables exported or ignored by the importer.
-- `n_instances_decide_one_rollout_at_a_time` (N = 1, 2, 3), `halt_before_commit_blocks_the_next_order`, `order_after_crash_is_returned_again`,
-  `queue_follows_set_seq_on_both_tasks`, `audit_numbers_follow_commit_order`: the Rust state-space test of section 14.
-  Added by the review of this document: `acknowledged_halt_is_not_outrun_by_an_order_of_the_other_task`,
-  `acknowledged_hold_and_desired_change_are_read_by_the_next_decision`, `unknown_outcome_commit_lands_once_by_retry`
-  (including the old backend still committing), `stale_beat_does_not_overwrite_a_newer_one`,
-  `bake_in_sql_matches_bake_after`, `order_slot_is_freed_when_the_applied_beat_reports_the_target`,
-  `no_order_after_a_gap_in_beats_until_quiet_ends` (clean database restart, outage over `DOWN_AFTER`, back-out then
-  new cutover), `lock_order_has_no_cycle`.
-  Added by the leaderless decision: `stage_advance_by_racing_instances_is_one_advance_and_one_audit_line`,
-  `halt_raised_by_two_instances_is_one_generation_and_one_audit_line`, `rollback_is_committed_before_the_uninstall_is_ordered`,
-  `one_host_never_has_two_orders` (the unique index, with the gate bypassed), `periodic_job_runs_once_per_period_with_n_claimers`,
-  `claimer_death_loses_one_run_only`, `database_unreachable_orders_nothing_and_answers_unavailable`,
-  `gate_wait_timeout_answers_the_beat_with_no_new_order`.
-- Return after a back-out (the old-release-on-new-data test extended with the new release again after it):
-  `new_release_again_continues_audit_numbers_after_the_release_before_ran` and
-  `set_seq_of_a_row_changed_by_the_release_before_is_restamped_in_queue_order`.
-- `denied_host_is_refused_by_the_other_task`, `one_request_is_approved_once`, `session_is_valid_on_the_other_task`,
-  `login_failures_count_across_tasks`, `expiry_audits_each_request_once`, `alert_is_logged_once`.
-- `lost_session_orders_nothing_until_revived_and_settles_by_ledger` (replaces the `lease.commits` settle test).
-- T5/T13: each test above has a failure case (the gate removed, the conditional write made unconditional).
-
-Coverage is judged per crate as always (T1); the pool, the ledger and the conditional writes are covered by the
-service-container tests (T17: no arm covered only by a different binary).
+Moved to [coordinator-multi-instance-checks.md](coordinator-multi-instance-checks.md), section 15. In one paragraph: every change
+is additive (new tables, a sequence, columns with defaults, flags; no proto change; the fence trigger untouched), migration `0019`
+is `may-run`, the release before is refused while a new instance runs and runs on the migrated database after they stop, and
+each behaviour has a named test with a failure case.
 
 ## 16. Cutover and back-out (reversible)
 
@@ -783,10 +822,12 @@ service-container tests (T17: no arm covered only by a different binary).
    start migrates and takes the shared lock. Operationally today's shape, with the new code. Soak.
 2. Move the CA key to the secret and config (section 10), and `server.pem` to a tmpfs; one reversible edge step each, bytes
    hashed before and after, never printed. Still one replica.
-3. Add the health check to the edge's clusters and the readiness flag; deploy (stop-first once, the last).
+3. Add the health check to the edge's clusters, the readiness flag and the drain delay (checked against the edge's values,
+   section 11); deploy (stop-first once, the last).
 4. Resolve the Mac listener (open question 1).
 5. `order: start-first`, `replicas: 1`: the first update that overlaps two instances. Watch: `instances` rows (two only during
-   the drain), no `alert=` twice, the heartbeat latency (M1's numbers), the gate wait.
+   the drain), no `alert=` twice, the heartbeat latency (M1's numbers), the operator edits' gate wait, no refused connection at the edge during the drain
+   delay, and that both tasks starting together apply each migration once.
 6. Soak through a real rollout of each plan kind (single 100%, 50% then 100%), with a halt raised mid-rollout, and update
    the coordinator itself while a rollout is live, so two instances decide through the overlap.
 
@@ -808,15 +849,15 @@ the farm): the back-out is a stopgap while a fix ships.
 
 | # | Item | After | Size |
 |---|---|---|---|
-| M1 | Measure on the NUC: round trip on the socket, the gate's hold and wait under a 50% stage, `fleet_hosts` write cost at the real host count, `max_connections`; a table in this document | none | S |
+| M1 | Measure on the NUC: round trip on the socket, the gate's hold and the operator edit's wait under a 50% stage, how often a beat finds the gate busy, DDL lock wait of a migration against a running instance, `fleet_hosts` write cost at the real host count, `max_connections`, the Postgres version; a table in this document | none | S |
 | M2 | The models of section 14 (spec and Rust state-space test at N = 1, 2, 3), failing on the unlocked variants | M1 | M |
-| M3 | Shared fence lock and pool: `pg_try_advisory_lock_shared`, the `tx_ledger` settle, no `lease.commits` write, no deposed exit, `instances`; `0019` part 1. Still one instance | M2 | L |
-| M4 | Row-transaction edits and `state_versions` invalidation for desired, ops, accounts, layout, verdicts, with the row-lock order of section 6; `rollout_gate`; `audit_counter` and its start-time re-seed; `facts_generation` | M3 | L |
+| M3 | Shared fence lock and pool: `pg_try_advisory_lock_shared`, the `tx_ledger` settle, no `lease.commits` write, no deposed exit, `instances`; the migration mutex, DDL `lock_timeout` and the migration lint rule; the session timeouts; `0019` part 1. Still one instance | M2 | L |
+| M4 | Row-transaction edits and `state_versions` invalidation for desired, ops, accounts, layout, verdicts, with the row-lock order of section 6 and the one-snapshot reload rule; `rollout_gate` with `SKIP LOCKED` for beats and the operator wait; `audit_counter` and its start-time re-seed; `facts_generation` | M3 | L |
 | M5 | Enrollment: conditional writes, `FOR UPDATE`, fresh deny read; spent-token cache | M3 | M |
 | M6 | The fleet in Postgres, without decisions: `fleet_*`, `cluster_quiet` and the gap rule, the ordered beat upsert, the in-SQL bake, the converged path | M4, M5 | M |
-| M7 | The deciding transaction and the steps of 5.3: gate, re-read of every input, `set_seq`/`set_for` and the start-time re-stamp, orders with the unique host index, compare-and-set stage advance, storage-first halts, rollback before delete, fail closed | M6 | L |
+| M7 | The deciding transaction and the steps of 5.3: gate, re-read of every input, `set_seq`/`set_for` and the start-time re-stamp, orders with the unique host index, compare-and-set stage advance, storage-first halts, rollback before delete, fail closed; the quiet rule gating verdicts and rollbacks as well as orders | M6 | L |
 | M8 | Sessions and login limiter; `periodic_jobs` and the claim; alerts, expiry, pruning and initial-admin made exactly-once | M3 | M |
-| M9 | `--health-listen`; docs (`coordinator-state.md`, `rollout-plans.md`, `holds-and-force.md`, `enrollment.md`) updated; this document's tags turned to Built | M7, M8 | S |
+| M9 | `--health-listen` and `--drain-delay-secs` (the old task keeps accepting while it answers 503); docs (`coordinator-state.md`, `rollout-plans.md`, `holds-and-force.md`, `enrollment.md`) updated; this document's tags turned to Built | M7, M8 | S |
 | M10 | Infrastructure (komira-internal, outside this repository): CA secret and config, tmpfs, edge health checks and Mac listener, `start-first` update at `replicas: 1`. The cutover of section 16 | M9 | M |
 | M11 | js-server's design and PRs in its repository, to the same leaderless rule | none | not sized |
 
@@ -858,8 +899,8 @@ the database), "The audit's numbers" (still gap-free, by a counter row, not by t
    separate one-replica service or the whole coordinator back to stop-first, which is a gap in every update for the Macs.
    Recommendation: (a), the edge already is the front door; (b) only if verified to keep the client certificate; not (c).
 2. **Is one row lock (the gate) still the right granularity?** Recommendation: yes. Only the live services step, the
-   one-service-at-a-time and FIFO rules read every service, the hold is a few statements, and the queue at the gate does not
-   grow with the number of instances (section 5.2). M1 measures the wait under a 50% stage; split by service (a row per
+   one-service-at-a-time and FIFO rules read every service, the hold is a few statements, and only operator edits queue at the gate, and
+   the load on it does not grow with the number of instances (section 5.2). M1 measures the wait under a 50% stage; split by service (a row per
    service taken after the gate) only if the wait shows in the heartbeat's latency.
 
 ## 20. Discussion: the review of this document
@@ -900,5 +941,27 @@ Findings of the first review and what was done, including where a finding was ta
    (f) the model runs at N = 1, 2, 3 (section 14); (g) the open questions are cut to the Mac listener and the gate's
    granularity. The earlier text had no election; the only lease in it was the old release's `lease` row, which stays written
    by the old release alone (section 4).
+
+7. **Migrations are not serialized** (major). Right: the shared lock excludes nobody, and a DDL waiting for `ACCESS EXCLUSIVE`
+   queues every later statement on the table behind it. Changed: a mutex of its own, an exclusive transaction advisory lock on
+   `MIGRATE_KEY` around the whole migration transaction, and a `lock_timeout` on DDL with a bounded retry (section 4). It is a
+   mutex held for seconds, not a leader. The migration lint gains a rule against rewrites of hot tables.
+8. **A cache can be labelled newer than its content** (major). Right as a hazard, and it would have been unbounded staleness for
+   the converged path. Changed: rows and version are read in one snapshot, version first, and the cache takes the version of that
+   snapshot (section 6). Not a defect as the finding itself notes: a deciding transaction re-reads rows.
+9. **The quiet rule suppressed only orders** (major). Right. Changed: in the quiet window no decision of its own is taken (no
+   order, stage advance, threshold halt, bad-version mark or rollback), and the deadline of "did not come back" counts from the
+   end of the window (sections 5.1, 5.3). An operator's halt, hold, force or retire is still applied: it only stops things, and
+   it is not driven by the fleet's state.
+10. **No healthy upstream in the start-first window** (major). Right: a task answering 200 is not an edge that has marked it healthy.
+    Changed: `--drain-delay-secs`, during which the old task answers 503 but keeps accepting, with a deploy check against the
+    edge's DNS refresh and check interval and thresholds (section 11). The edge's check values are proposed and not yet
+    agreed. The Mac listener stays open question 1: the old task holds that port through the delay.
+11. **The gate had no hold bound and halts no priority** (major). Right on both. Changed: Postgres's own
+    `idle_in_transaction_session_timeout` and `statement_timeout` on every pool session bound a hold by a hung instance; beats
+    use `SKIP LOCKED` and never queue, so an operator edit waits only for the holder and earlier operator edits, with its own
+    longer `lock_timeout` (section 5.2). The cost is that a beat that finds the gate busy decides one beat later (15 s); M1
+    measures how often. The finding's suggestion of a longer operator wait alone was not enough, since the FIFO queue would still
+    put the operator behind the beats.
 
 Not changed by the review and still open: what was not checked (section 13), and the measurements of M1.
