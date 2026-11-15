@@ -7,7 +7,7 @@ use tonic::Code;
 
 use super::support::{call, grpc_request, served};
 use crate::http::Surface;
-use crate::testutil::{OPERATOR, ci_token};
+use crate::testutil::OPERATOR;
 
 /// The path of each method of `Ssh`, `Tunnel` (which the command table leaves out) among them.
 const PATHS: [&str; 4] = [
@@ -37,27 +37,27 @@ async fn every_method_is_refused_not_configured_for_an_operator() {
     }
 }
 
-/// Proves: with no token `Ssh` answers `UNAUTHENTICATED` `unauthorized`, with CI's token
-/// `PERMISSION_DENIED` `forbidden`, and on the heartbeat listener `UNIMPLEMENTED` with no message:
-/// the service is the operator API's and is served on the private listener only.
+/// Proves: with no token or a token that is no one's `Ssh` answers `UNAUTHENTICATED`
+/// `unauthorized`, and on the heartbeat listener `UNIMPLEMENTED` with no message: the service is
+/// the operator API's and is served on the private listener only. (CI's token is refused every
+/// operator method but four, `credentials::every_operator_method_admits_exactly_its_credential`,
+/// which lists `Ssh` among them.)
 ///
-/// Catches: a method of `Ssh` that a host or CI could call, or one served on the heartbeat
-/// listener.
+/// Catches: a method of `Ssh` that a caller with no credential could call, or one served on the
+/// heartbeat listener.
 #[tokio::test]
 async fn ssh_takes_the_operators_credential_on_the_private_listener_only() {
     let served = served("grpc-ssh-credentials");
-    let ci = ci_token();
     for path in PATHS {
-        for (bearer, code, message) in [
-            (None, Code::Unauthenticated, "unauthorized"),
-            (Some(ci.as_str()), Code::PermissionDenied, "forbidden"),
-        ] {
+        for bearer in [None, Some("not-a-token")] {
             let request = grpc_request(path, (), bearer);
             let answer = call(&served.coordinator, Surface::Control, &None, request).await;
-            assert_eq!(answer, (code, message.to_owned(), None), "{path}");
+            let unauthorized = (Code::Unauthenticated, "unauthorized".to_owned(), None);
+            assert_eq!(answer, unauthorized, "{path}");
         }
         let request = grpc_request(path, (), Some(OPERATOR));
         let answer = call(&served.coordinator, Surface::Heartbeat, &None, request).await;
-        assert_eq!(answer, (Code::Unimplemented, String::new(), None), "{path}");
+        let unserved = (Code::Unimplemented, String::new(), None);
+        assert_eq!(answer, unserved, "{path}");
     }
 }

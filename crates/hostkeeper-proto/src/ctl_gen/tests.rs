@@ -330,12 +330,12 @@ fn only_the_named_streaming_rpc_is_left_out_of_the_table() {
 
     let other = text.replace(
         "rpc Revoke(M) returns (M);",
-        "rpc Watch(stream M) returns (M);",
+        "rpc Both(stream M) returns (stream M);",
     );
     let refused = generate(&pool(&other)).expect_err("another stream");
     assert_eq!(
         refused.to_string(),
-        "hostkeeper.operator.v1.Ssh.Watch: the command table holds unary calls only; this RPC streams"
+        "hostkeeper.operator.v1.Ssh.Both: the command table holds unary calls only; this RPC streams"
     );
 }
 

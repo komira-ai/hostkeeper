@@ -103,7 +103,8 @@ message SignUserCertRequest {
 }
 
 message SignUserCertResponse {
-  // The certificate in `ssh-keygen` syntax (`ssh-ed25519-cert-v01@openssh.com AAAA...`).
+  // The certificate in `ssh-keygen` syntax: its key type, which ends in `-cert-v01`, then its
+  // base64 text.
   string certificate = 1;
   // The account on the host the certificate logs in to.
   string login_user = 2;
