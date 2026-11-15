@@ -266,6 +266,44 @@ fn a_settle_behind_a_transaction_that_rolls_back_finds_it_not_landed() {
     assert!(!settled_behind_a_transaction_in_progress(false));
 }
 
+/// Proves: a commit of unknown outcome that began longer ago than the ledger keeps its rows, and
+/// whose row is gone, is not settled as not landed (the purge may have removed the row of a commit
+/// that landed): the store stays lost with the commit unsettled and no row is made for it; and the
+/// same old commit whose row is still there is settled as landed.
+///
+/// Catches: a settle that reads a purged row as "never landed", so a landed change is never taken
+/// into memory and its pending change is committed twice.
+#[test]
+fn a_commit_older_than_the_ledger_keeps_is_not_settled_as_not_landed() {
+    super::logging();
+    let db = TestDatabase::new();
+    let (store, _) = db.open("old").expect("the store opens");
+    let id = "00000000-0000-0000-0000-0000000000aa";
+    store.inner.link.lose(Some((id.to_owned(), None)));
+    store.inner.link.begun(1);
+    store.revive();
+    settle(&store);
+    assert_eq!(store.health(), Health::Lost);
+    assert!(store.unsettled(), "the commit stays unsettled");
+    assert!(store.take_landings().is_empty());
+    assert_eq!(
+        db.rows(&format!(
+            "SELECT count(*) FROM tx_ledger WHERE id = '{id}'"
+        )),
+        vec![vec![Some("0".to_owned())]],
+        "no row is made for a commit that may have landed"
+    );
+    db.run(&format!(
+        "INSERT INTO tx_ledger (id, at_unix) VALUES ('{id}', 1)"
+    ))
+    .expect("the row is there");
+    store.revive();
+    settle(&store);
+    assert_eq!(store.health(), Health::Up);
+    let landing = store.take_landings().pop().expect("the commit is settled");
+    assert!(landing.landed, "a row that is there is an answer");
+}
+
 /// Proves: a revival that finds the lock held exclusively by another session, or the database
 /// unreachable, or refusing the session, or the ledger unwritable, leaves the store lost and tries
 /// again at the next heartbeat; once the cause is gone the store is up again.
