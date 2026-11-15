@@ -345,7 +345,7 @@ pub(crate) const HOSTKEEPER: Product = Product {
             files: &["/usr/lib/pxe/pxe", "/usr/lib/systemd/system/pxe.service"],
         },
     ],
-    installers: &["hello", "hostkeeper"],
+    installers: &["hello", "hostkeeper", "hostkeeper-bootstrap"],
     stages: &[
         "testing-apt-write",
         "testing-apt-write-2",

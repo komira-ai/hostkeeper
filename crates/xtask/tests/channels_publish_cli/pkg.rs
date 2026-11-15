@@ -42,6 +42,8 @@ fn pkg_upload_puts_each_installer_its_bundle_and_the_sums_once_each_below_the_ve
         format!("{prefix}SHA256SUMS"),
         format!("{prefix}{HELLO_INSTALLER}"),
         format!("{prefix}{HELLO_INSTALLER}.sigstore.json"),
+        format!("{prefix}{BOOT_INSTALLER}"),
+        format!("{prefix}{BOOT_INSTALLER}.sigstore.json"),
     ];
     for key in &keys {
         assert!(said.contains(&format!("{key}: written\n")), "{said}");
@@ -57,16 +59,16 @@ fn pkg_upload_puts_each_installer_its_bundle_and_the_sums_once_each_below_the_ve
     );
     let none = ["--if-none-match".to_owned(), "*".to_owned()];
     let puts = fake.puts();
-    assert_eq!(puts.len(), 5);
+    assert_eq!(puts.len(), 7);
     assert!(
         puts.iter()
             .all(|(k, cond)| keys.contains(k) && cond == &none),
         "{puts:?}"
     );
     // The directory's sums go last, after every file they list.
-    assert_eq!(puts[4].0, keys[2]);
+    assert_eq!(puts[6].0, keys[2]);
     let sums = String::from_utf8(fake.object(&keys[2])).expect("utf8");
-    for name in [INSTALLER, HELLO_INSTALLER] {
+    for name in [INSTALLER, HELLO_INSTALLER, BOOT_INSTALLER] {
         assert!(
             sums.contains(&format!("  {name}\n"))
                 && sums.contains(&format!("  {name}.sigstore.json\n")),
@@ -86,12 +88,14 @@ fn pkg_upload_puts_each_installer_its_bundle_and_the_sums_once_each_below_the_ve
     let changed = pkg_release(&d, "changed", "1.2.3");
     std::fs::write(changed.join(INSTALLER), b"other installer").expect("write");
     let hello = std::fs::read(changed.join(HELLO_INSTALLER)).expect("read");
+    let boot = std::fs::read(changed.join(BOOT_INSTALLER)).expect("read");
     std::fs::write(
         changed.join("SHA256SUMS"),
         format!(
-            "{}  {HELLO_INSTALLER}\n{}  {INSTALLER}\n",
+            "{}  {HELLO_INSTALLER}\n{}  {INSTALLER}\n{}  {BOOT_INSTALLER}\n",
             sha256(&hello),
-            sha256(b"other installer")
+            sha256(b"other installer"),
+            sha256(&boot)
         ),
     )
     .expect("write");
@@ -159,6 +163,7 @@ fn pkg_promote_moves_stable_json_with_if_none_match_then_if_match_and_never_to_a
     assert_eq!(pointer["commit"], COMMIT);
     assert!(pointer["files"][INSTALLER]["sha256"].is_string());
     assert!(pointer["files"][HELLO_INSTALLER]["sha256"].is_string());
+    assert!(pointer["files"][BOOT_INSTALLER]["sha256"].is_string());
     let puts = fake.puts();
     assert_eq!(
         puts,
@@ -243,6 +248,8 @@ fn pkg_check_holds_the_files_the_public_host_serves_to_the_releases_sums() {
         format!("{INSTALLER}.sigstore.json"),
         HELLO_INSTALLER.to_owned(),
         format!("{HELLO_INSTALLER}.sigstore.json"),
+        BOOT_INSTALLER.to_owned(),
+        format!("{BOOT_INSTALLER}.sigstore.json"),
         "SHA256SUMS".to_owned(),
     ] {
         fake.serve(
@@ -257,7 +264,7 @@ fn pkg_check_holds_the_files_the_public_host_serves_to_the_releases_sums() {
         "{}",
         stdout(&o)
     );
-    for name in [INSTALLER, HELLO_INSTALLER] {
+    for name in [INSTALLER, HELLO_INSTALLER, BOOT_INSTALLER] {
         assert_eq!(
             std::fs::read(work.join(name)).expect("read"),
             std::fs::read(release.join(name)).expect("read")
@@ -389,7 +396,7 @@ fn pkg_verbs_with_flags_that_do_not_fit_are_status_2_and_a_release_without_the_i
     .expect("write");
     let o = pkg(&d, &fake, "upload", &theirs, "v1.2.3", &[]);
     assert_eq!(o.status.code(), Some(1));
-    for name in [INSTALLER, HELLO_INSTALLER] {
+    for name in [INSTALLER, HELLO_INSTALLER, BOOT_INSTALLER] {
         assert!(
             stderr(&o).contains(&format!("{name} is not a file")),
             "{}",

@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::Path;
 use std::process::Command;
 
+const BOOTSTRAP: &str = "hostkeeper-bootstrap";
 const HOOK: &str = "hostkeeper-hook";
 const INSTALL: &str = "hostkeeper-install";
 const CONFIG: &str = "hostkeeper-config";
@@ -94,9 +95,18 @@ pub type Layer = (
 /// of the config profile's `dev.hostkeeper.stores` and `dev.hostkeeper.macos-pkg` domains with
 /// the loaders the Mac's daemon reads them with (`hostkeeper-package`'s stores parser and
 /// `hostkeeper-install`'s signers parser), so a profile the daemon would refuse is refused when
-/// the coordinator starts; neither depends on the gate or the coordinator.
-pub const LAYERS: [Layer; 37] = [
+/// the coordinator starts; neither depends on the gate or the coordinator. The Mac bootstrap
+/// (`hostkeeper-bootstrap`) reads the daemon's config loader (`hostkeeper-config`), the macos-pkg
+/// installer's tool port and signature reader (`hostkeeper-install`, with the paths of
+/// `hostkeeper-launchd`), the HTTPS transport (`hostkeeper-package`) and the repository descriptor
+/// (`hostkeeper-release`), and is read by no crate.
+pub const LAYERS: [Layer; 38] = [
     (BINARY, &[DAEMON], &[LAUNCHD]),
+    (
+        BOOTSTRAP,
+        &[CONFIG, INSTALL, LAUNCHD, PACKAGE, RELEASE],
+        &[],
+    ),
     (CONFIG, &[], &[]),
     (
         COORDINATOR,

@@ -17,6 +17,8 @@ fn the_files_of_a_version_are_each_installer_and_its_bundle_held_to_the_release_
             "hello-1.2.3-macos-arm64.pkg.sigstore.json",
             "hostkeeper-1.2.3-macos-arm64.pkg",
             "hostkeeper-1.2.3-macos-arm64.pkg.sigstore.json",
+            "hostkeeper-bootstrap-1.2.3-macos-arm64.pkg",
+            "hostkeeper-bootstrap-1.2.3-macos-arm64.pkg.sigstore.json",
         ]
     );
     assert_eq!(listed, names());
@@ -31,8 +33,13 @@ fn the_files_of_a_version_are_each_installer_and_its_bundle_held_to_the_release_
     assert_eq!(
         sums_text(&entries),
         format!(
-            "{}  hello-1.2.3-macos-arm64.pkg\n{}  hello-1.2.3-macos-arm64.pkg.sigstore.json\n{}  hostkeeper-1.2.3-macos-arm64.pkg\n{}  hostkeeper-1.2.3-macos-arm64.pkg.sigstore.json\n",
-            entries[0].sha256, entries[1].sha256, entries[2].sha256, entries[3].sha256
+            "{}  hello-1.2.3-macos-arm64.pkg\n{}  hello-1.2.3-macos-arm64.pkg.sigstore.json\n{}  hostkeeper-1.2.3-macos-arm64.pkg\n{}  hostkeeper-1.2.3-macos-arm64.pkg.sigstore.json\n{}  hostkeeper-bootstrap-1.2.3-macos-arm64.pkg\n{}  hostkeeper-bootstrap-1.2.3-macos-arm64.pkg.sigstore.json\n",
+            entries[0].sha256,
+            entries[1].sha256,
+            entries[2].sha256,
+            entries[3].sha256,
+            entries[4].sha256,
+            entries[5].sha256
         )
     );
 }
@@ -76,7 +83,8 @@ fn a_file_that_is_not_what_the_release_sums_list_is_refused() {
         problems,
         [
             "SHA256SUMS does not list hello-1.2.3-macos-arm64.pkg",
-            "SHA256SUMS does not list hostkeeper-1.2.3-macos-arm64.pkg"
+            "SHA256SUMS does not list hostkeeper-1.2.3-macos-arm64.pkg",
+            "SHA256SUMS does not list hostkeeper-bootstrap-1.2.3-macos-arm64.pkg"
         ]
     );
 
@@ -194,15 +202,15 @@ fn the_verbs_run_through_the_port_and_name_the_programs_they_use() {
         &exec,
     )
     .expect("uploaded");
-    // Two installers and their bundles, then the directory's sums.
-    assert_eq!(said.len(), 5);
+    // Three installers and their bundles, then the directory's sums.
+    assert_eq!(said.len(), 7);
     assert!(
         exec.calls
             .borrow()
             .iter()
             .all(|(program, _)| program == "aws")
     );
-    assert_eq!(exec.calls.borrow().len(), 5);
+    assert_eq!(exec.calls.borrow().len(), 7);
 
     // The promotion reads the bucket back through the same port; the stand-in's answers are
     // not the files, so it refuses at the first one.
