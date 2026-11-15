@@ -213,7 +213,15 @@ fn a_power_source_that_differs_is_changed_for_all() {
     );
     assert_eq!(
         args(&changes),
-        Some(strings(&["-a", "sleep", "0", "disksleep", "0", "womp", "1"]))
+        Some(strings(&[
+            "-a",
+            "sleep",
+            "0",
+            "disksleep",
+            "0",
+            "womp",
+            "1"
+        ]))
     );
 }
 
