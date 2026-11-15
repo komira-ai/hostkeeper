@@ -5,7 +5,7 @@ use std::sync::Arc;
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 
 use super::AT;
-use super::coordinator::{Farm, exclude};
+use super::coordinator::Farm;
 use crate::marks_support::{DB, WEB, operator};
 use crate::ops::{AuditEntry, Write};
 use crate::testutil::Rig;

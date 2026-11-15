@@ -126,7 +126,11 @@ pub(crate) const SHIPPED: [(i32, &str, &str); 19] = [
         "remove_host_group_all",
         include_str!("migrations/0018_remove_host_group_all.sql"),
     ),
-    (19, "tx_ledger", include_str!("migrations/0019_tx_ledger.sql")),
+    (
+        19,
+        "tx_ledger",
+        include_str!("migrations/0019_tx_ledger.sql"),
+    ),
 ];
 
 /// Why a migration, or the set of them, is refused before it runs.
