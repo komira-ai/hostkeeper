@@ -420,6 +420,7 @@ fn an_enroll_request_goes_field_for_field_and_its_answer_is_read() {
         seen(&f.double),
         vec![
             Seen::Enroll(pb::EnrollRequest {
+                host_key_fingerprints: Vec::new(),
                 csr_der: b"csr-1".to_vec(),
                 claims: Some(pb::Claims {
                     machine_id: "machine-1".to_owned(),
@@ -438,6 +439,7 @@ fn an_enroll_request_goes_field_for_field_and_its_answer_is_read() {
                 mac_nonce: vec![0x5a; MAC_NONCE_BYTES],
             }),
             Seen::Enroll(pb::EnrollRequest {
+                host_key_fingerprints: Vec::new(),
                 csr_der: b"csr-2".to_vec(),
                 claims: Some(pb::Claims::default()),
                 image: String::new(),

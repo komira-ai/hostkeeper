@@ -62,6 +62,7 @@ pub(crate) fn heartbeat(beat: &Heartbeat) -> Result<pb::HeartbeatRequest, Unsend
         .map(service)
         .collect::<Result<Vec<pb::ServiceBeat>, Unsendable>>()?;
     Ok(pb::HeartbeatRequest {
+        ssh: None,
         installers: beat.installers.clone(),
         platform: platform(beat.platform).into(),
         agent: Some(pb::AgentInfo {
@@ -252,6 +253,8 @@ pub(crate) fn reply(response: pb::HeartbeatResponse) -> Mapped {
         acks,
         repositories,
         facts,
+        // Taken up when the daemon sets sshd up (docs/design/ssh-through-coordinator.md, C3).
+        ssh: _,
     } = response;
     let features = features
         .iter()

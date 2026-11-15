@@ -355,7 +355,10 @@ fn this_build_reads_what_the_release_before_wrote_with_the_ssh_fields_absent() {
 
     let beat = write(
         "hostkeeper.agent.v1.HeartbeatRequest",
-        &[("features", list("facts-v1")), ("facts_generation", Value::U64(3))],
+        &[
+            ("features", list("facts-v1")),
+            ("facts_generation", Value::U64(3)),
+        ],
     );
     let beat = agent::HeartbeatRequest::decode(beat.as_slice()).expect("decodes");
     assert_eq!(beat.features, ["facts-v1"]);

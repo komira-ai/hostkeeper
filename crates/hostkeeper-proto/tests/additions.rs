@@ -97,6 +97,7 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
         (
             "hostkeeper.agent.v1.EnrollRequest",
             round_trip(&EnrollRequest {
+                host_key_fingerprints: Vec::new(),
                 csr_der: vec![0x30, 0x82, 1, 2],
                 claims: Some(claims()),
                 image: "boot-1".to_owned(),
