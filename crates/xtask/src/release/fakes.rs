@@ -15,9 +15,8 @@ use super::contract::{
 use super::file_sha256;
 use super::image_index;
 use super::ports::{
-    Adapters, AdvisoryCheck, Attestation, BuildPkg, Download, Exec, GitHistory, GitHubRuns, Issue,
-    Job, PortError, Ports, Ran, Release, ReleaseStore, Run, RunVersion, Said, StoredAsset,
-    Verifier,
+    Adapters, AdvisoryCheck, Attestation, BuildPkg, Exec, GitHistory, GitHubRuns, Issue, Job,
+    PortError, Ports, Ran, Release, ReleaseStore, Run, RunVersion, Said, StoredAsset, Verifier,
 };
 use crate::testdir::TestDir;
 use std::path::PathBuf;
@@ -662,27 +661,6 @@ impl Exec for FakeExec {
     }
 }
 
-/// A [`Download`] that answers from a map of URL to bytes: a URL it holds is written to the
-/// file, any other fails. Each call is recorded as `(url, file)`.
-#[derive(Default)]
-pub(crate) struct FakeDownload {
-    pub(crate) served: BTreeMap<String, Vec<u8>>,
-    pub(crate) calls: RefCell<Vec<(String, PathBuf)>>,
-}
-
-impl Download for FakeDownload {
-    fn download(&self, url: &str, file: &Path) -> Result<(), PortError> {
-        self.calls
-            .borrow_mut()
-            .push((url.to_owned(), file.to_path_buf()));
-        let bytes = self
-            .served
-            .get(url)
-            .ok_or_else(|| PortError::new(format!("curl {url}"), "exit status 22"))?;
-        std::fs::write(file, bytes).map_err(|e| PortError::new("write", e.to_string()))
-    }
-}
-
 /// A registry whose answers are scripted, one per call in order: each `copy` takes the next of
 /// `copies` and each `served` the next of `served` (none left: the call fails). Each call is
 /// recorded as `copy <layout> <tag> <repository>` or `served <repository>@<digest>`.
@@ -740,7 +718,6 @@ pub(crate) struct Fakes {
     pub(crate) run_version: FakeRunVersion,
     pub(crate) pkgbuild: FakePkgbuild,
     pub(crate) advisories: FakeAdvisories,
-    pub(crate) download: FakeDownload,
     pub(crate) registry: FakeRegistry,
     pub(crate) wait: FakeWait,
 }
@@ -771,7 +748,6 @@ impl Fakes {
                     stderr: String::new(),
                 },
             },
-            download: FakeDownload::default(),
             registry: FakeRegistry::default(),
             wait: FakeWait::default(),
         }
@@ -788,7 +764,6 @@ impl Adapters for Fakes {
             run_version: &self.run_version,
             pkgbuild: &self.pkgbuild,
             advisories: &self.advisories,
-            download: &self.download,
             registry: &self.registry,
             wait: &self.wait,
         }

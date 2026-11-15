@@ -23,7 +23,6 @@ mod flags;
 mod gateway;
 mod host_groups;
 mod hosts_retry;
-mod mdm;
 mod oidc;
 mod older;
 mod rig;

@@ -758,7 +758,6 @@ return { absent, offered, kept, second: chosen(tree, "host-group", 1) };
             "Duplicate claim",
             "Renewal of web-3",
             "C02-X",
-            "Mac nonce presented yes",
             "Leave it off unless you mean that.",
             "Host group",
         ],

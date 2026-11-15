@@ -22,7 +22,6 @@ import * as switchPage from "./pages/switch.js";
 import * as audit from "./pages/audit.js";
 import * as users from "./pages/users.js";
 import * as tokens from "./pages/tokens.js";
-import * as mdm from "./pages/mdm.js";
 
 // The side menu: groups of pages, each `[name, title, module, glyph]`. The page's `name` is the
 // name of its button (`page-<name>`); `glyph` names its icon (`view.js`), which is all the collapsed
@@ -36,11 +35,10 @@ const GROUPS = [
   ]],
 ];
 // The pages of Settings, reached from the entry at the bottom of the menu and from the tabs above
-// each of them, each `[name, title, module]`. MDM is a setting, not a page of the daily work.
+// each of them, each `[name, title, module]`.
 const SETTINGS = [
   ["users", "Users", users],
   ["tokens", "API tokens", tokens],
-  ["mdm", "MDM", mdm],
   ["audit", "Audit", audit],
 ];
 // The pages that are reached by a link and not by the menu, each `[name, title, module, crumb]`:
@@ -89,12 +87,11 @@ export function redirected(name, params) {
 }
 
 // Starts the app in `root`. `doc` is the document, `fetch` the browser's fetch, `confirm` a
-// yes-or-no question to the operator (the browser's confirm), `now` the time in unix seconds and
-// `download` the saving of a file the page offers (`{name, mime, text}` or `{name, mime, base64}`)
+// yes-or-no question to the operator (the browser's confirm), `now` the time in unix seconds
 // and `every` (`(run, milliseconds)` to a function that stops it) the repeating of a call a page
 // asks for, each injected so tests can fake them; without `every` a page's repeat never runs.
 // Returns the frame's controls, which the browser does not need.
-export function startApp({ doc, root, fetch, confirm, now, download, every, prefs = NO_PREFS }) {
+export function startApp({ doc, root, fetch, confirm, now, every, prefs = NO_PREFS }) {
   // The operator's look, kept in memory: the theme (`prefs.apply(theme)` shows it) and whether the
   // side menu is collapsed to icons.
   let theme = "system";
@@ -334,7 +331,6 @@ export function startApp({ doc, root, fetch, confirm, now, download, every, pref
       params: at.params,
       confirm: (question) => confirm(question) === true,
       now: () => now(),
-      download: (file) => download(file),
       navigate,
       // Runs `run` every `seconds` while this rendering of the page is the latest; it stops itself
       // on the first tick after the operator has left, signed out or the page was drawn again, and

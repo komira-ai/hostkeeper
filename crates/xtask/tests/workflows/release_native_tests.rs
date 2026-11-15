@@ -1,5 +1,5 @@
 //! The attest job of the repository's own `artifacts.yml` on the services' native packages:
-//! hello's `.deb`s, its failing build's `.deb`s and its `.pkg`, mdm's `.deb` and pxe's `.deb`s are each attested, with
+//! hello's `.deb`s, its failing build's `.deb`s and its `.pkg` and pxe's `.deb`s are each attested, with
 //! their bundle copied beside them, and the release rules ([`super::release`]) refuse a copy of the file that drops either.
 //! Beside `release_tests.rs`, whose helpers it uses.
 
@@ -9,7 +9,7 @@ use super::with_in;
 
 #[test]
 fn attest_job_attests_the_services_native_packages_and_copies_each_bundle() {
-    // Catches: hello's, mdm's or pxe's native package listed as an asset (and published to the
+    // Catches: hello's or pxe's native package listed as an asset (and published to the
     // repository's testing channel, whose installer directory holds each bundle) while the
     // attest job does not sign it, signs it under another name, or copies another step's bundle
     // beside it.
@@ -38,12 +38,6 @@ fn attest_job_attests_the_services_native_packages_and_copies_each_bundle() {
             "Name the bundle of the failing build of hello's .deb for linux-arm64",
             "hello_${V}-fail-ready_arm64.deb",
             "hello_<version>-fail-ready_arm64.deb",
-        ),
-        (
-            "mdm-deb-linux-x86_64",
-            "Name the bundle of mdm's .deb for linux-x86_64",
-            "mdm_${V}_amd64.deb",
-            "mdm_<version>_amd64.deb",
         ),
         (
             "pxe-deb-linux-x86_64",

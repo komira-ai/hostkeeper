@@ -4,9 +4,7 @@
 use super::tests::{connects, empty, parse, text, verb};
 use super::*;
 use crate::release::fakes::scratch;
-use crate::release::native::{
-    HELLO_PKG_INPUTS, HOSTKEEPER_PKG_INPUTS, MDM_NO_PKG, PXE_NO_PKG, macos_inputs,
-};
+use crate::release::native::{HELLO_PKG_INPUTS, HOSTKEEPER_PKG_INPUTS, PXE_NO_PKG, macos_inputs};
 
 #[test]
 fn deb_takes_its_flags_and_dates_the_package_by_the_commit_in_git() {
@@ -38,7 +36,6 @@ fn deb_takes_its_flags_and_dates_the_package_by_the_commit_in_git() {
             service: Service::Hello,
             platform: Platform::LinuxArm64,
             fail_ready: true,
-            archives: None,
             ..
         }
     ));
@@ -55,7 +52,7 @@ fn deb_takes_its_flags_and_dates_the_package_by_the_commit_in_git() {
         let mut args = vec![
             "deb",
             "--service",
-            "mdm",
+            "pxe",
             "--platform",
             "linux-x86_64",
             "--version",
@@ -146,7 +143,7 @@ fn check_linux_pkg_takes_service_or_staged_but_not_both_and_reads_no_port() {
         "check-linux-pkg",
         text(&absent),
         "--service",
-        "mdm",
+        "pxe",
         "--staged",
         "s",
     ]));
@@ -161,7 +158,7 @@ fn check_linux_pkg_takes_service_or_staged_but_not_both_and_reads_no_port() {
 #[test]
 fn macos_pkg_and_its_check_take_hello_without_gh_and_refuse_every_other_mix() {
     // Catches: hello's pkg built or checked with hostkeeper's inputs, hostkeeper's without them
-    // or as a failing build, and a pkg of mdm.
+    // or as a failing build, and a pkg of pxe.
     let gh = Some(PathBuf::from("g"));
     let root = Some(PathBuf::from("r"));
     assert_eq!(macos_inputs(Service::Hello, true, None, None), Ok(None));
@@ -177,10 +174,6 @@ fn macos_pkg_and_its_check_take_hello_without_gh_and_refuse_every_other_mix() {
     assert_eq!(
         macos_inputs(Service::Hello, false, None, root.clone()),
         refused(HELLO_PKG_INPUTS)
-    );
-    assert_eq!(
-        macos_inputs(Service::Mdm, false, None, None),
-        refused(MDM_NO_PKG)
     );
     assert_eq!(
         macos_inputs(Service::Pxe, false, None, None),

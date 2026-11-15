@@ -629,7 +629,6 @@ fn a_plan_from_a_tip_whose_ci_is_pending_publishes_the_done_commits_oldest_first
             run_version: &fakes.run_version,
             pkgbuild: &fakes.pkgbuild,
             advisories: &fakes.advisories,
-            download: &fakes.download,
             registry: &fakes.registry,
             wait: &fakes.wait,
         };
@@ -663,8 +662,7 @@ impl Exec for StartsNothing {
 #[test]
 fn the_wired_adapters_route_each_port_to_its_program() {
     // Catches: a port of the real adapters wired to the wrong adapter (the runs, the store or
-    // the verifier answered by git, the history by gh, `--version` run through gh, or a
-    // download not run through curl).
+    // the verifier answered by git, the history by gh, or `--version` run through gh).
     let wired = Wired::new(StartsNothing);
     let ports = wired.ports();
     let c = nth_commit(7);
@@ -697,11 +695,6 @@ fn the_wired_adapters_route_each_port_to_its_program() {
     assert_eq!(
         ports.run_version.version_of(Path::new("bin/x")),
         Err(PortError::new("bin/x --version", why("bin/x")))
-    );
-    let url = "https://example.com/v1/a.zip";
-    assert_eq!(
-        ports.download.download(url, Path::new("d/a.zip")),
-        Err(PortError::new(format!("curl {url}"), why("curl")))
     );
     let digest = format!("sha256:{}", "ab".repeat(32));
     assert_eq!(

@@ -272,7 +272,6 @@ function pending(ctx, request, groups, lab) {
     ["Image", request.image || "-"],
     ["First seen", fmtUnix(request.firstSeenUnix)],
     request.renewalOf ? ["Renewal of", request.renewalOf] : null,
-    request.macNoncePresented === true ? ["Mac nonce presented", "yes"] : null,
     ...CLAIM_ROWS.filter(([key]) => !hardNames.has(key)).map(([key, name]) => [name, claimText(claims, key)]),
   ].filter((row) => row !== null && row[1] !== "");
   return h("section", { class: contested ? "service enroll-card contested" : "service enroll-card" },

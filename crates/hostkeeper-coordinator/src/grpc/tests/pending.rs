@@ -5,7 +5,7 @@ use hostkeeper_proto::ctl::{COMMANDS, Command};
 use tonic::Code;
 
 use super::support::{
-    CONVERGE, HEARTBEAT, SET_DESIRED, Served, call, decode, grpc_request, served,
+    CONVERGE, HEARTBEAT, RETIRED, SET_DESIRED, Served, call, decode, grpc_request, served,
     served_with_enrollment, updater,
 };
 use crate::grpc::PENDING;
@@ -32,7 +32,7 @@ fn credentials(path: &str) -> (Surface, Peer, Option<String>) {
 /// credentials it takes, and is not listed in `pending`.
 async fn unserved(served: &Served, commands: &[Command], pending: &[&str]) -> Vec<&'static str> {
     let mut found = Vec::new();
-    for command in commands {
+    for command in commands.iter().filter(|command| command.service != RETIRED) {
         let (surface, peer, bearer) = credentials(command.path);
         let request = grpc_request(command.path, (), bearer.as_deref());
         let (code, _, _) = call(&served.coordinator, surface, &peer, request).await;
@@ -79,6 +79,31 @@ async fn every_rpc_answers_something_other_than_unimplemented() {
     );
     let found = unserved(&served, COMMANDS, PENDING).await;
     assert_eq!(found, Vec::<&str>::new(), "RPCs with no handler");
+}
+
+/// Proves: every method of the retired `Mdm` service, which the proto still defines (a service
+/// that shipped is never taken away) but no coordinator serves, answers `UNIMPLEMENTED` with an
+/// empty message on the private listener, with the operator token and with none, and the table
+/// still lists its methods.
+///
+/// Catches: a coordinator that serves a method of `Mdm` again, or one that answers a caller
+/// without a credential differently from one with it.
+#[tokio::test]
+async fn every_method_of_the_retired_mdm_service_answers_unimplemented() {
+    let served = served("grpc-retired-mdm");
+    let methods: Vec<&str> = COMMANDS
+        .iter()
+        .filter(|command| command.service == RETIRED)
+        .map(|command| command.path)
+        .collect();
+    assert_eq!(methods.len(), 15, "the proto still defines its 15 methods");
+    for path in methods {
+        for bearer in [Some(OPERATOR), None] {
+            let request = grpc_request(path, (), bearer);
+            let answer = call(&served.coordinator, Surface::Control, &None, request).await;
+            assert_eq!(answer, (Code::Unimplemented, String::new(), None), "{path}");
+        }
+    }
 }
 
 /// Proves: a method of a service its listener does not serve answers `UNIMPLEMENTED` with an

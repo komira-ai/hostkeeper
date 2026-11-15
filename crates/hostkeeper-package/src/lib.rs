@@ -4,7 +4,7 @@
 //! The daemon uses [`stores`] (a Mac's start renders `stores.toml` from managed preferences),
 //! [`entry::fetch_pinned`] (a `macos-pkg` entry's artifact) and, at its start,
 //! [`remove_orphan_fetches`], for the staging files a fetch left. `hostkeeper-pxe` uses [`bundle`],
-//! [`net`], [`gh`] and [`ports`], and `hostkeeper-mdm-gate` uses [`stores`].
+//! [`net`], [`gh`] and [`ports`].
 //!
 //! - [`entry::fetch_pinned`] downloads the artifact an order's entry (a
 //!   `hostkeeper.release.v1.Target`) names, from the host's [`stores::Stores`] (the mirrors first,

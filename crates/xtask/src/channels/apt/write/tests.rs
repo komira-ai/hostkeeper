@@ -114,7 +114,6 @@ fn the_packages_go_first_then_the_by_hash_copies_then_the_index_with_in_release_
         "apt/pool/hostkeeper/hostkeeper-coordinator_1.2.3_arm64.deb".to_owned(),
         "apt/pool/hostkeeper/hostkeeper_1.2.3_amd64.deb".to_owned(),
         "apt/pool/hostkeeper/hostkeeper_1.2.3_arm64.deb".to_owned(),
-        "apt/pool/hostkeeper/mdm_1.2.3_amd64.deb".to_owned(),
         "apt/pool/hostkeeper/pxe_1.2.3_amd64.deb".to_owned(),
         "apt/pool/hostkeeper/pxe_1.2.3_arm64.deb".to_owned(),
         by_hash("main/binary-amd64/Packages", &packages),
@@ -142,8 +141,8 @@ fn the_packages_go_first_then_the_by_hash_copies_then_the_index_with_in_release_
     // Packages and by-hash copies are never overwritten; an index object that was read is replaced
     // only if it is still the version that was read, one that did not exist only if still absent.
     let puts = repo.aws.calls_of("put-object");
-    // Nine packages and four by-hash copies.
-    for call in &puts[..13] {
+    // Eight packages and four by-hash copies.
+    for call in &puts[..12] {
         assert_eq!(cond(call), ("--if-none-match".to_owned(), "*".to_owned()));
     }
     let etags = std::fs::read_to_string(repo.dir.join("next/etags.txt")).expect("etags");
@@ -155,18 +154,18 @@ fn the_packages_go_first_then_the_by_hash_copies_then_the_index_with_in_release_
             .to_owned()
     };
     assert_eq!(
-        cond(&puts[13]),
+        cond(&puts[12]),
         (
             "--if-match".to_owned(),
             read_etag("main/binary-amd64/Packages")
         )
     );
     assert_eq!(
-        cond(&puts[14]),
+        cond(&puts[13]),
         ("--if-none-match".to_owned(), "*".to_owned())
     );
     assert_eq!(
-        cond(&puts[19]),
+        cond(&puts[18]),
         ("--if-match".to_owned(), read_etag("InRelease"))
     );
     assert_eq!(read_etag("Release.gpg"), "-");

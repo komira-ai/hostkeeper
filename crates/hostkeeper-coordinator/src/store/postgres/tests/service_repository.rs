@@ -6,7 +6,7 @@ use hostkeeper_proto::hostkeeper::operator::v1::ServicesRefusal as Refusal;
 
 use super::TestDatabase;
 use super::coordinator::Farm;
-use super::devices::with_session;
+use super::with_session;
 use crate::marks_support::{WEB, operator};
 use crate::repositories_support::repository;
 use crate::store::postgres::migrate;

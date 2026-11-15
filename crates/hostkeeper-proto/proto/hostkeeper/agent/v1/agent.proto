@@ -634,7 +634,9 @@ message EnrollRequest {
   // The host id of a host whose certificate expired while it was offline, posting again with the
   // same key; empty for a first enrollment.
   string renewal_of = 4;
-  // The one-time nonce MDM gave a Mac (one hour, one use); empty on any other host.
+  // The one-time nonce MDM gave a Mac (one hour, one use); empty on any other host. No MDM gives
+  // one now: a daemon of a release before the MDM's removal may still send it, and the coordinator
+  // reads it and ignores it (nothing approves a request by it).
   bytes mac_nonce = 5 [(hostkeeper.secret) = true];
 }
 

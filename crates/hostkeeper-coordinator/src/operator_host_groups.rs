@@ -397,9 +397,7 @@ impl Coordinator {
                 .inventory
                 .iter()
                 .any(|record| record.group() == name.as_str())
-        }) || self
-            .enrollment()
-            .is_some_and(|enrollment| enrollment.mac_names_group(name.as_str()));
+        });
         let (staged, ()) = self.desired.stage_host_groups(|held| {
             if !held.0.contains_key(&name) {
                 return Err(Refusal::UnknownHostGroup);

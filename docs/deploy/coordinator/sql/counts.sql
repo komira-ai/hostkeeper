@@ -41,14 +41,13 @@ SELECT format('  %s: %s rows', name, rows) FROM (VALUES
   (34, 'enrollment_host_running', (SELECT count(*) FROM enrollment_host_running)),
   (35, 'enrollment_deny', (SELECT count(*) FROM enrollment_deny)),
   (36, 'mac_nonces', (SELECT count(*) FROM mac_nonces)),
-  (37, 'mdm_devices', (SELECT count(*) FROM mdm_devices)),
-  (38, 'users', (SELECT count(*) FROM users)),
-  (39, 'api_tokens', (SELECT count(*) FROM api_tokens)),
-  (40, 'lab_rows', (SELECT count(*) FROM lab_rows)),
-  (41, 'lab_racks', (SELECT count(*) FROM lab_racks)),
-  (42, 'lab_placements', (SELECT count(*) FROM lab_placements)),
-  (43, 'lab_cluster', (SELECT count(*) FROM lab_cluster)),
-  (44, 'lab_devices', (SELECT count(*) FROM lab_devices)),
-  (45, 'lab_sleds', (SELECT count(*) FROM lab_sleds)),
-  (46, 'lab_sled_items', (SELECT count(*) FROM lab_sled_items))
+  (37, 'users', (SELECT count(*) FROM users)),
+  (38, 'api_tokens', (SELECT count(*) FROM api_tokens)),
+  (39, 'lab_rows', (SELECT count(*) FROM lab_rows)),
+  (40, 'lab_racks', (SELECT count(*) FROM lab_racks)),
+  (41, 'lab_placements', (SELECT count(*) FROM lab_placements)),
+  (42, 'lab_cluster', (SELECT count(*) FROM lab_cluster)),
+  (43, 'lab_devices', (SELECT count(*) FROM lab_devices)),
+  (44, 'lab_sleds', (SELECT count(*) FROM lab_sleds)),
+  (45, 'lab_sled_items', (SELECT count(*) FROM lab_sled_items))
 ) AS counted (n, name, rows) ORDER BY n;

@@ -370,7 +370,7 @@ fn the_signature_check_missing_skipped_or_after_the_upload_is_refused() {
 #[test]
 fn the_recorded_sha256_of_the_pkg_is_of_the_signed_file() {
     // Catches: any way the bytes SHA256SUMS lists (and attest signs, and the release and the
-    // MDM gate's allowlist take) for hostkeeper-<version>-macos-arm64.pkg are not the signed
+    // inventory records take) for hostkeeper-<version>-macos-arm64.pkg are not the signed
     // pkg's: the unsigned pkg built into dist/ (so build-macos's assets-macos-arm64 carries
     // it), the check job publishing the unsigned download or another directory, another job
     // publishing a pkg, or the sums made before the check job published the signed one.

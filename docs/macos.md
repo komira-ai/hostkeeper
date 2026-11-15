@@ -395,8 +395,8 @@ both, each time it starts.
    at the config path, a link or a directory, is left as it is and refused
    (`<path> is there but is not a regular file; it is not replaced`), since the daemon
    reads its config only from a regular file and not through a link. Otherwise it reads the managed preferences file, which the
-   config profile of the MDM makes (see the farm's config profile in
-   [hostkeeper-mdm.md](design/hostkeeper-mdm.md) section 4). It accepts that file only when root
+   configuration the device management installs for the domain `dev.hostkeeper.config` makes (the bootstrap
+   path, `docs/design/mac-bootstrap.md` section 4). It accepts that file only when root
    owns it, no one else can write it and it is a regular file (checked on the open file, so a link
    is refused). The file is a property list, binary or XML, whose top level is a dictionary. The
    start renders it as TOML and has the daemon's config loader judge that text, so a missing key,
@@ -419,7 +419,7 @@ both, each time it starts.
    when the file would be larger than that loader reads; the file starts with a comment naming the
    domain. Unlike the config, the managed preferences are these files' source: a file that holds
    exactly the rendered text, root's with mode 0644, is left alone, and any other is replaced (a new file in the same directory, mode 0644, synced and renamed over it), so a
-   rotation the MDM pushes takes effect at the next start. A link or a directory at the file's
+   rotation the device management pushes takes effect at the next start. A link or a directory at the file's
    path is refused and left. Any refusal stops the start with exit status 3, naming the managed
    file and the reason.
 
@@ -428,10 +428,10 @@ file the loader refuses) stops the start with exit status 3, the message in
 `/var/log/hostkeeper/daemon.err.log`, and launchd starts the job again, which stops again. So a
 pkg installed on a Mac with neither a config nor the managed preferences installs, loads its job,
 and the daemon refuses each start, naming the missing file in `daemon.err.log`; the install does
-not fail. The MDM gate installs the managed preferences before the pkg, so this is a hand install
+not fail. The device management installs the managed preferences before the pkg, so this is a hand install
 done out of order.
 
-The manual path, for a Mac without an MDM: place `/etc/hostkeeper/hostkeeper.toml` first, then
+The manual path, for a Mac without device management: place `/etc/hostkeeper/hostkeeper.toml` first, then
 install the pkg. The daemon's start keeps that file, and the postinstall loads the job.
 
 `cargo xtask release macos-pkg` builds the component with `pkgbuild` from the binary, `gh` and the
@@ -471,11 +471,11 @@ pkg's plist.
 ### The installer's signature
 
 The released pkg is signed with the Developer ID Installer identity
-`Developer ID Installer: Komira AI, Inc. (U7RTX4XD3X)`, because the MDM's
-`InstallEnterpriseApplication` installs only a signed pkg. hello's `.pkg`
+`Developer ID Installer: Komira AI, Inc. (U7RTX4XD3X)`, because a pkg that device management installs
+must be signed. hello's `.pkg`
 (`hello-<version>-macos-arm64.pkg`) is signed the same way, in the same jobs, because a host's
 `macos-pkg` installer stages only a signed pkg; each step below is done for both. It is not notarized: nothing Apple
-states asks an MDM-installed pkg for notarization (design section 7.3), and the release adds it
+states asks a pkg that device management installs for notarization, and the release adds it
 only if a Mac refuses the signed pkg without it. The signing is in `.github/workflows/artifacts.yml`,
 on a push to `main` only, in three jobs:
 
@@ -507,8 +507,7 @@ secrets named in that job alone; the checks of both pkgs before the one upload o
 
 On a Mac, `pkgutil --check-signature hostkeeper-<version>-macos-arm64.pkg` (or
 `hello-<version>-macos-arm64.pkg`) shows the signature.
-The MDM gate takes the release's pkg as it is: its digest on the allowlist is the line of
-`SHA256SUMS`, the signed file's ([enrollment-coordinator.md](enrollment-coordinator.md)).
+The digest of the release's pkg is the line of `SHA256SUMS`, the signed file's.
 
 ### Boot id
 

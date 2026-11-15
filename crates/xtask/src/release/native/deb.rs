@@ -1,4 +1,4 @@
-//! `release deb`: the `.deb` of hello (and its failing build), of mdm or of pxe for one Linux platform,
+//! `release deb`: the `.deb` of hello (and its failing build) or of pxe for one Linux platform,
 //! written byte for byte the same for one commit and version, with no tool.
 //!
 //! The file is `<package>_<version>_<arch>.deb` (`amd64` for linux-x86_64, `arm64` for
@@ -16,15 +16,13 @@
 //!   package, its version and architecture, the maintainer, the installed size and the
 //!   description, and declares no dependency (the programs are built for the release runner's
 //!   glibc);
-//! - `data.tar.gz`, a gzip ustar of `./` and the files of [`super::hello`], [`super::mdm`] or
-//!   [`super::pxe`] by
+//! - `data.tar.gz`, a gzip ustar of `./` and the files of [`super::hello`] or [`super::pxe`] by
 //!   their paths from `/` (`usr/lib/hello/hello`), each directory above them listed first (mode
 //!   0755), every entry owned by root and group root
 //!   (uid and gid 0), dated the commit.
 //!
 //! Hostkeeper's own `.deb` is not this verb's: nfpm builds it from `packaging/linux/nfpm.yaml`,
-//! with the scripts a bootstrap package needs (packages-native.md section 10.4). mdm's is built
-//! for linux-x86_64 only, from `--archives`, the pinned archives `release mdm-fetch` downloaded.
+//! with the scripts a bootstrap package needs (packages-native.md section 10.4).
 //! pxe's holds its program and its unit, for both Linux platforms; the program must be a static
 //! ELF for the platform, the rule `release nfpm-stage` holds hostkeeper's own program to.
 
@@ -34,7 +32,7 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 
 use super::hello::{self, File};
-use super::{DIR_MODE, mdm, pxe};
+use super::{DIR_MODE, pxe};
 use crate::release::Error;
 use crate::release::contract::{Commit, Package, Platform, Service, Version};
 use crate::release::package::nfpm_stage::{Arch, check_static};
@@ -51,33 +49,19 @@ pub(crate) struct Request {
     pub(crate) binary: PathBuf,
     /// Hello's failing build: its units start the program with `--fail-ready`.
     pub(crate) fail_ready: bool,
-    /// The directory of mdm's pinned archives; none for hello and pxe.
-    pub(crate) archives: Option<PathBuf>,
     /// The directory the package is written to.
     pub(crate) out: PathBuf,
 }
 
 /// Why hostkeeper's `.deb` is not this verb's.
-pub(crate) const HOSTKEEPER_REFUSED: &str = "hostkeeper's .deb is built by nfpm from packaging/linux/nfpm.yaml, with its bootstrap scripts: release deb builds the .deb of hello, mdm or pxe";
+pub(crate) const HOSTKEEPER_REFUSED: &str = "hostkeeper's .deb is built by nfpm from packaging/linux/nfpm.yaml, with its bootstrap scripts: release deb builds the .deb of hello or pxe";
 
 /// Why a `.deb` is not built for macOS.
 const MACOS_REFUSED: &str =
     "a .deb is built for linux-x86_64 or linux-arm64; macOS takes the .pkg (release macos-pkg)";
 
-/// Why hello's and pxe's `.deb` take no `--archives`.
-const NO_ARCHIVES: &str =
-    "--archives is an option of mdm's .deb: only it carries pinned third-party tools";
-
-/// Why mdm's and pxe's `.deb` take no `--fail-ready`.
-const NO_FAIL_READY: &str =
-    "--fail-ready is an option of hello's .deb: mdm and pxe have no failing build";
-
-/// Why mdm's `.deb` needs `--archives`.
-const MDM_ARCHIVES: &str = "mdm's .deb carries the pinned tools of hostkeeper-mdm-core's pins.txt: pass --archives with the directory `release mdm-fetch` filled";
-
-/// Why mdm's `.deb` is built for linux-x86_64 alone.
-const MDM_PLATFORM: &str =
-    "mdm's .deb is built for linux-x86_64 only: the pinned tools are linux-amd64 builds";
+/// Why pxe's `.deb` takes no `--fail-ready`.
+const NO_FAIL_READY: &str = "--fail-ready is an option of hello's .deb: pxe has no failing build";
 
 /// Who the package's `control` names as its maintainer: the project, as nfpm.yaml does.
 const MAINTAINER: &str = "The hostkeeper project <https://github.com/komira-ai/hostkeeper>";
@@ -101,37 +85,24 @@ pub(crate) fn deb_name(package: &str, version: &str, arch: &str) -> String {
 
 /// Builds the `.deb` of `request`, dated by the commit's time in git; the lines to print.
 pub(crate) fn deb(git: &dyn GitHistory, request: &Request) -> Result<Vec<String>, Error> {
-    deb_with(
-        request,
-        || Ok(git.commit_time(&request.commit)?),
-        crate::release::mdm_fetch::built_in_pins,
-    )
+    deb_with(request, || Ok(git.commit_time(&request.commit)?))
 }
 
-/// [`deb`], with the package's times from `mtime` and mdm's pins from `pins` (each asked for only
-/// when needed).
+/// [`deb`], with the package's times from `mtime` (asked for only when needed).
 pub(crate) fn deb_with(
     request: &Request,
     mtime: impl FnOnce() -> Result<u64, Error>,
-    pins: impl FnOnce() -> Result<hostkeeper_mdm_core::pins::Pins, Error>,
 ) -> Result<Vec<String>, Error> {
     let refuse = |why: &str| Err(Error::Failed(why.to_owned()));
     let Some(arch) = arch(request.platform) else {
         return refuse(MACOS_REFUSED);
     };
-    let package = match (request.service, request.archives.as_deref()) {
-        (Service::Hostkeeper, _) => return refuse(HOSTKEEPER_REFUSED),
-        (Service::Hello | Service::Pxe, Some(_)) => return refuse(NO_ARCHIVES),
-        (Service::Pxe, None) if request.fail_ready => return refuse(NO_FAIL_READY),
-        (Service::Pxe, None) => Package::Pxe,
-        (Service::Hello, None) if request.fail_ready => Package::HelloFailReady,
-        (Service::Hello, None) => Package::Hello,
-        (Service::Mdm, _) if request.fail_ready => return refuse(NO_FAIL_READY),
-        (Service::Mdm, None) => return refuse(MDM_ARCHIVES),
-        (Service::Mdm, Some(_)) if request.platform != Platform::LinuxX86_64 => {
-            return refuse(MDM_PLATFORM);
-        }
-        (Service::Mdm, Some(_)) => Package::Mdm,
+    let package = match request.service {
+        Service::Hostkeeper => return refuse(HOSTKEEPER_REFUSED),
+        Service::Pxe if request.fail_ready => return refuse(NO_FAIL_READY),
+        Service::Pxe => Package::Pxe,
+        Service::Hello if request.fail_ready => Package::HelloFailReady,
+        Service::Hello => Package::Hello,
     };
     let binary = std::fs::read(&request.binary)
         .map_err(Error::io(format!("read {}", request.binary.display())))?;
@@ -142,10 +113,9 @@ pub(crate) fn deb_with(
         };
         check_static(&request.binary.display().to_string(), &binary, wanted)?;
     }
-    let files = match (package, request.archives.as_deref()) {
-        (Package::Pxe, _) => pxe::deb_files(binary),
-        (_, None) => hello::deb_files(binary, request.fail_ready),
-        (_, Some(dir)) => mdm::deb_files(binary, mdm::tools(&pins()?, dir)?),
+    let files = match package {
+        Package::Pxe => pxe::deb_files(binary),
+        _ => hello::deb_files(binary, request.fail_ready),
     };
     let name = request.service.name();
     let version = package.version_text(&request.version);
@@ -169,7 +139,6 @@ pub(crate) fn deb_with(
 /// The `Description` of the service's package: a summary line and its continuation.
 fn description(service: Service) -> String {
     match service {
-        Service::Mdm => "the MDM server stack hostkeeper deploys\n The servers that enroll the farm's Macs (NanoHUB, the SCEP server, NanoDEP, Caddy and\n lego) and the program mdm, their update hook and Apple-facing verbs. Installed and run\n by hostkeeper.".to_owned(),
         Service::Pxe => "pxe, the boot server of network install\n The program pxe and its unit: it serves the boot sets a bare machine installs from, and\n its update hook builds them. Installed and run by hostkeeper.".to_owned(),
         _ => "hello, the example service of hostkeeper\n An HTTP server on loopback with an update hook, deployed by hostkeeper to prove an\n install, an update and a rollback.".to_owned(),
     }

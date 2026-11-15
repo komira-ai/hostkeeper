@@ -44,8 +44,8 @@ canonical.com
 =mirror.us.leaseweb.net
 =mirror.leaseweb.com
 
-# The ACME directory of Let's Encrypt (acme-v02.api.letsencrypt.org), which the MDM kit's example
-# settings name for its TLS certificate (crates/hostkeeper-mdm-core/config.example).
+# The ACME directory of Let's Encrypt (acme-v02.api.letsencrypt.org), which the retired `Mdm` service's
+# `acme_contact` setting names in its proto comments (crates/hostkeeper-proto, mdm.proto).
 letsencrypt.org
 
 # The registry of the distroless base image of the coordinator's container image
@@ -151,14 +151,16 @@ fleetdm.com
 =ghcr.io
 =org.opencontainers.image.ref.name
 
-# The third-party service that signs push-certificate requests (docs/design/coordinator-mdm.md).
+# The third-party service that signed push-certificate requests, named in the retired `Mdm` service's
+# proto comments and its wire test (crates/hostkeeper-proto, mdm.proto).
 =mdmcert.download
 
-# The DNS provider API of the MDM name's certificate (hostkeeper-coordinator, src/mdm_acme/godaddy.rs):
-# the one host the coordinator sends the DNS credential to.
+# The DNS provider API of the MDM name's certificate, named in the retired `Mdm` service's proto
+# comments (crates/hostkeeper-proto, mdm.proto).
 =api.godaddy.com
 
-# Where an operator makes the GoDaddy API key the coordinator's DNS credential is (docs/operations/mdm-setup.md).
+# Where an operator made the GoDaddy API key the coordinator's DNS credential, named in the same
+# comments.
 =developer.godaddy.com
 
 # Not sites: property names of the web app's JavaScript (ui/lab.js, ui/pages/home.js, ui/pages/host.js,

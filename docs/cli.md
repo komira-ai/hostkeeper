@@ -613,7 +613,7 @@ Removes a sled that holds nothing: refused `in_use`, naming what stands on it, o
 
 ### `mdm`
 
-The service `Mdm` of the package `hostkeeper.operator.v1`. The devices of the MDM policy gate.
+The service `Mdm` of the package `hostkeeper.operator.v1`. No longer served: every method answers UNIMPLEMENTED, the coordinator's MDM having been removed (2026-11-14). The devices of the MDM policy gate, as it was.
 
 #### `hkctl mdm list-devices`
 

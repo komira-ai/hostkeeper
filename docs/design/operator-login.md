@@ -1,5 +1,7 @@
 # Operator login: a username and a password, a browser session, and tokens for automation
 
+> **Update 2026-11-14.** The MDM setup page and the `Mdm` service's session-only writes it names are gone. The MDM was removed from the coordinator and the repository (`docs/design/coordinator-mdm.md`, superseded); Macs enroll through the bootstrap package (`docs/design/mac-bootstrap.md`). Where this document describes the MDM, its kit, its policy gate or the `mdm` package, it describes what was removed; the rest stands.
+
 Status: the coordinator, the API and the UI are built by the pull requests of section 14 (L1 to L9); the deploy script's step
 (komira-ai/komira) is not. A **Designed** tag below on a coordinator, API or UI part is the tag the design was written with, and
 the pull request of section 14 that builds it is the record. The tags are those of

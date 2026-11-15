@@ -1,5 +1,7 @@
 # hostkeeper design
 
+> **Update 2026-11-14.** The Mac path of 5.9 (a nonce pushed by the MDM gate, and the allowlist) is gone: a Mac's request waits for an operator or an inventory record. The MDM was removed from the coordinator and the repository (`docs/design/coordinator-mdm.md`, superseded); Macs enroll through the bootstrap package (`docs/design/mac-bootstrap.md`). Where this document describes the MDM, its kit, its policy gate or the `mdm` package, it describes what was removed; the rest stands.
+
 Status: design, for the maintainers' comments. This is the single current design for hostkeeper and the entry point for every other hostkeeper document.
 
 hostkeeper is the generic host lifecycle system: it installs, updates, rolls back, health-observes and retires the services that run on a host. kbf, tierstore and jobscheduler hosts are installed and updated by it. It knows no service by name. Each service tells it what to do through a hook that ships in the service's own package.
@@ -182,7 +184,7 @@ A release is published before its image is pushed and before it is set as the de
 
 ### 4.6 The boot image and installers
 
-Linux: a network-installed Ubuntu 24.04 system ([network-install.md](network-install.md)) carries the daemon, its unit and `/etc/hostkeeper/hostkeeper.toml`; a host built from it needs nothing else to enroll. A deb and an rpm carry the daemon and unit for hosts not built from the image, the static build of [packages.md](packages.md) section 5.4 (`packaging/linux/nfpm.yaml`, built and checked by `.github/workflows/artifacts.yml`); whoever installs them places the config. macOS: a signed pkg whose daemon writes `hostkeeper.toml` at its start from the config profile the MDM installed first (section 5.9, [hostkeeper-mdm.md](hostkeeper-mdm.md) section 4). Both publish into the operator's shared package repositories. Network boot is served by the optional `pxe` service package, a `.deb` of its own that the daemon installs on the boot host when the service is assigned there (network-install.md section 3, two-programs.md section 6.1, **Built**). Designed.
+Linux: a network-installed Ubuntu 24.04 system ([network-install.md](network-install.md)) carries the daemon, its unit and `/etc/hostkeeper/hostkeeper.toml`; a host built from it needs nothing else to enroll. A deb and an rpm carry the daemon and unit for hosts not built from the image, the static build of [packages.md](packages.md) section 5.4 (`packaging/linux/nfpm.yaml`, built and checked by `.github/workflows/artifacts.yml`); whoever installs them places the config. macOS: a signed pkg whose daemon writes `hostkeeper.toml` at its start from the config profile the MDM installed first (section 5.9, hostkeeper-mdm.md (hostkeeper-mdm.md, removed) section 4). Both publish into the operator's shared package repositories. Network boot is served by the optional `pxe` service package, a `.deb` of its own that the daemon installs on the boot host when the service is assigned there (network-install.md section 3, two-programs.md section 6.1, **Built**). Designed.
 
 ### 4.7 The package
 
@@ -423,7 +425,7 @@ Designed (B8); replaces kbf's registration socket (`/run/updater/register.sock`)
 
 ![Mac path: MDM enrollment, package install by digest, per-device nonce, enrollment, auto-approval conditions, and the one launchd daemon](diagrams/mac-path.svg)
 
-The figure is the order of [hostkeeper-mdm.md](hostkeeper-mdm.md): the nonce is pushed after the daemon's request is pending, and bound to it.
+The figure is the order of hostkeeper-mdm.md (hostkeeper-mdm.md, removed): the nonce is pushed after the daemon's request is pending, and bound to it.
 
 The flow is the same; these differ (a Linux host under OpenRC, an Alpine host, in the last column; [two-programs.md](two-programs.md) section 4.6):
 
@@ -439,7 +441,7 @@ The flow is the same; these differ (a Linux host under OpenRC, an Alpine host, i
 | Package verification | attestation, archive shape | plus no quarantine attribute and a valid code signature | as Linux |
 | Self-update | the hand-over: the old binary execs the new one, three tries (no unit) | the same, under launchd `KeepAlive` (no timer job) | the same, under supervise-daemon's respawn of the packaged binary, which execs `current` |
 
-Mac enrollment auto-approval, designed: the gate installs a managed config profile (coordinator, CA hash, release channel and trusted signers; no secret), then the hostkeeper installer pkg by allowlisted digest; the pkg's postinstall loads the launchd job, whose daemon writes `hostkeeper.toml` from that profile at its start; once the daemon's request is pending the gate pushes a per-device one-time nonce, bound to that request, as a managed configuration profile; the daemon enrolls with the nonce; the coordinator auto-approves only if the nonce is valid, unexpired (one hour), unused, consumed in the same durable transaction as the approval, issued for the claimed serial and the request, the gate reports the device enrolled and supervised, and the serial is on the allowlist. **MDM is part of hostkeeper, decided:** the policy gate and installer kit are components of this repository with their own design document, [hostkeeper-mdm.md](hostkeeper-mdm.md); this document states only the interface the enrollment path needs. The MDM server itself is designed to run inside the coordinator: [coordinator-mdm.md](coordinator-mdm.md), which supersedes parts of hostkeeper-mdm.md. The MDM profile identifier is renamed to `com.komira.hostkeeper.mdm`, the farm's setting, before any Mac enrolls (a build gate on B18).
+Mac enrollment auto-approval, designed: the gate installs a managed config profile (coordinator, CA hash, release channel and trusted signers; no secret), then the hostkeeper installer pkg by allowlisted digest; the pkg's postinstall loads the launchd job, whose daemon writes `hostkeeper.toml` from that profile at its start; once the daemon's request is pending the gate pushes a per-device one-time nonce, bound to that request, as a managed configuration profile; the daemon enrolls with the nonce; the coordinator auto-approves only if the nonce is valid, unexpired (one hour), unused, consumed in the same durable transaction as the approval, issued for the claimed serial and the request, the gate reports the device enrolled and supervised, and the serial is on the allowlist. **MDM is part of hostkeeper, decided:** the policy gate and installer kit are components of this repository with their own design document, hostkeeper-mdm.md (hostkeeper-mdm.md, removed); this document states only the interface the enrollment path needs. The MDM server itself is designed to run inside the coordinator: [coordinator-mdm.md](coordinator-mdm.md), which supersedes parts of hostkeeper-mdm.md. The MDM profile identifier is renamed to `com.komira.hostkeeper.mdm`, the farm's setting, before any Mac enrolls (a build gate on B18).
 
 ### 5.10 The UI
 

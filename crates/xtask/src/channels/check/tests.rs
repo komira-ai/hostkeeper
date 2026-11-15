@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use super::*;
 use crate::channels::fixtures::FakeExec;
-use crate::channels::spec::HOSTKEEPER;
+use crate::channels::spec::{AMD64, HOSTKEEPER};
 use crate::testdir::TestDir;
 
 const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
@@ -21,8 +21,23 @@ fn hello() -> &'static Package {
     HOSTKEEPER.package("hello").expect("hello")
 }
 
-fn mdm() -> &'static Package {
-    HOSTKEEPER.package("mdm").expect("mdm")
+/// A package built for amd64 alone. No package of the product is now (the one that was, mdm's,
+/// is withdrawn), so the refusal of an architecture a package is not built for is held with this.
+fn amd64_only() -> &'static Package {
+    static ONLY: Package = Package {
+        name: "amd64-only",
+        arches: &[AMD64],
+        rpm: false,
+        postun_required: false,
+        binary: "/usr/lib/amd64-only/amd64-only",
+        stamp_commit: false,
+        units: &[],
+        user: None,
+        enabled_after_install: false,
+        prerequisites: &[],
+        files: &["/usr/lib/amd64-only/amd64-only"],
+    };
+    &ONLY
 }
 
 fn scratch(name: &str) -> TestDir {
@@ -486,7 +501,7 @@ fn a_package_is_one_of_the_products() {
     assert_eq!(
         package_flag("other-product").unwrap_err(),
         Error::Usage(
-            "--package \"other-product\" is none of [\"hostkeeper\", \"hostkeeper-coordinator\", \"hello\", \"mdm\", \"pxe\"]"
+            "--package \"other-product\" is none of [\"hostkeeper\", \"hostkeeper-coordinator\", \"hello\", \"pxe\"]"
                 .to_owned()
         )
     );
@@ -583,35 +598,25 @@ fn each_unit_of_hello_is_checked_and_an_enabled_second_slot_is_named() {
 
 #[test]
 fn an_architecture_the_package_is_not_built_for_is_a_usage_error_before_anything_runs() {
-    // Catches: an arm64 check of mdm, whose .deb is built for amd64 alone, installing nothing and
-    // failing as if the repository were wrong.
-    let dir = scratch("mdm-arm64");
-    let mut machine = Machine::new(&dir, mdm());
+    // Catches: an arm64 check of a package built for amd64 alone installing nothing and failing
+    // as if the repository were wrong.
+    let dir = scratch("amd64-only-arm64");
+    let mut machine = Machine::new(&dir, amd64_only());
     machine.arch = "arm64";
-    let mut r = apt(&dir, mdm());
+    let mut r = apt(&dir, amd64_only());
     r.arch = "arm64";
     assert_eq!(
         check_apt(&machine, &r).unwrap_err(),
-        Error::Usage("--arch \"arm64\": mdm is not built for it".to_owned())
+        Error::Usage("--arch \"arm64\": amd64-only is not built for it".to_owned())
     );
     assert!(machine.calls().is_empty());
-    // On amd64 mdm is checked, with the commit in its stamp.
-    let dir = scratch("mdm-amd64");
-    let machine = Machine::new(&dir, mdm());
-    let said = check_apt(&machine, &apt(&dir, mdm())).expect("checked");
-    assert_eq!(
-        said,
-        [
-            "check-apt: mdm 1.2.3 installed from the suite testing on amd64; it says \"mdm 1.2.3+0123456789ab\"; its 9 files are there; the service is not enabled and not running"
-        ]
-    );
 }
 
 #[test]
 fn the_install_check_matrix_is_every_package_on_each_of_its_architectures() {
     // Catches: a package the release publishes to `testing` that no install check installs
-    // (hello's or mdm's would be promoted to `stable` unchecked), or a check asked for an
-    // architecture its package is not built for (mdm on arm64, which the verb refuses).
+    // (hello's or pxe's would be promoted to `stable` unchecked), or a check asked for an
+    // architecture its package is not built for (which the verb refuses).
     const RELEASE_YML: &str = include_str!("../../../../../.github/workflows/release.yml");
     let job = RELEASE_YML
         .split("\n  check-apt:\n")

@@ -44,7 +44,6 @@ use tokio_rustls::TlsAcceptor;
 use crate::enrollment::Enrollment;
 use crate::grpc::route;
 use crate::http::{Peer, PeerAddr, Surface};
-use crate::mdm_server::ConnectionTried;
 use crate::service::Coordinator;
 use crate::tokens::OperatorTokens;
 use crate::wait::{ConnectionWaits, unless};
@@ -159,39 +158,6 @@ where
     .await
 }
 
-/// Serves the Macs' listener for `coordinator` for as long as the future is polled: each
-/// connection takes the TLS configuration of the MDM server as it is when the connection arrives
-/// (a certificate stored since is served from the next handshake on), and a connection that
-/// arrives while there is none is closed. Limits as [`serve`]. It never returns.
-pub(crate) async fn serve_mdm<A, F, S>(
-    accept: A,
-    coordinator: Arc<Coordinator>,
-    patience: Duration,
-    max_connections: usize,
-) -> Infallible
-where
-    A: FnMut() -> F + Send,
-    F: Future<Output = io::Result<S>> + Send,
-    S: AsyncRead + AsyncWrite + Remote + Unpin + Send + 'static,
-{
-    accept_each(
-        accept,
-        Arc::new(Semaphore::new(max_connections)),
-        move |stream| {
-            let config = coordinator
-                .mdm_server()
-                .and_then(|server| server.tls().config());
-            let coordinator = Arc::clone(&coordinator);
-            async move {
-                if let Some(config) = config {
-                    connection_with(stream, config, Surface::Mdm, coordinator, patience).await;
-                }
-            }
-        },
-    )
-    .await
-}
-
 /// Accepts the connections `accept` yields and serves each on a task of its own with
 /// `serve_one`, holding one of `slots` for each while it is served: with none free, clients
 /// queue in the kernel's backlog. A failed accept is logged and tried again after a pause. It
@@ -226,17 +192,10 @@ where
     }
 }
 
-/// What a connection hands each of its requests besides the request: its held waits, the commands
-/// tried on it ([`ConnectionTried`], read by the MDM listener's `/mdm` only), and the address it
-/// came from when it has one.
-fn carry<B>(
-    request: &mut hyper::Request<B>,
-    waits: &ConnectionWaits,
-    tried: &ConnectionTried,
-    remote: Option<SocketAddr>,
-) {
+/// What a connection hands each of its requests besides the request: its held waits and the
+/// address it came from when it has one.
+fn carry<B>(request: &mut hyper::Request<B>, waits: &ConnectionWaits, remote: Option<SocketAddr>) {
     request.extensions_mut().insert(waits.clone());
-    request.extensions_mut().insert(tried.clone());
     if let Some(from) = remote {
         request.extensions_mut().insert(PeerAddr(from));
     }
@@ -395,11 +354,10 @@ pub(crate) async fn connection_with<S>(
     let speaks_h2 = tls.get_ref().1.alpn_protocol() == Some(H2);
     let waits = ConnectionWaits::default();
     let held = waits.clone();
-    let tried = ConnectionTried::default();
     let service = service_fn(move |mut request: hyper::Request<Incoming>| {
         let coordinator = Arc::clone(&coordinator);
         let peer = peer.clone();
-        carry(&mut request, &held, &tried, remote);
+        carry(&mut request, &held, remote);
         async move { Ok::<_, Infallible>(route(&coordinator, surface, &peer, request, patience).await) }
     });
     let io = TokioIo::new(WriteDeadline::new(tls, patience));

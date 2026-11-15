@@ -4,6 +4,12 @@ The generic half of the host updater was built in [kbf](https://github.com/komir
 here. This file records what was imported, from where, under which names, what was left behind and
 what changed on the way. The tests that hold the import to it are named below.
 
+> **2026-11-14.** The MDM kit this file records as imported (the crates `hostkeeper-mdm`,
+> `-mdm-core` and `-mdm-step`, from the `mdm` tool of kbf) and the coordinator's MDM that followed it
+> (`hostkeeper-mdm-ade`, `-gate`, `-model`, `-push`, `-scep`, `-server`) were removed
+> (`docs/design/coordinator-mdm.md`, superseded). The sections below that name them are the history
+> of the import, kept as it was; the files and tests they name are in the history of the repository.
+
 ## Source
 
 - kbf tag: `v0.0.64`

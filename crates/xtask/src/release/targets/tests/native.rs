@@ -5,7 +5,7 @@ use super::*;
 
 #[test]
 fn the_program_a_package_installs_is_where_its_builder_writes_it() {
-    // Catches: a hook command naming a path the `.deb` does not install: hello's, mdm's and pxe's each
+    // Catches: a hook command naming a path the `.deb` does not install: hello's and pxe's each
     // hold an executable file at the program path, and hostkeeper names none.
     let installed = |files: Vec<native_hello::File>, program: &str| {
         files.iter().any(|f| f.path == program && f.mode == 0o755)
@@ -16,11 +16,6 @@ fn the_program_a_package_installs_is_where_its_builder_writes_it() {
         &hello
     ));
     assert_eq!(manifest::program(Package::HelloFailReady), Some(hello));
-    let mdm = manifest::program(Package::Mdm).expect("a program");
-    assert!(installed(
-        crate::release::native::mdm::deb_files(b"p".to_vec(), Vec::new()),
-        &mdm
-    ));
     let pxe = manifest::program(Package::Pxe).expect("a program");
     assert!(installed(
         crate::release::native::pxe::deb_files(b"p".to_vec()),

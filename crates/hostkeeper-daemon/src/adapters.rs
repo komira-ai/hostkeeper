@@ -307,9 +307,9 @@ pub fn host_claims(
     }
 }
 
-/// The managed preferences the enroller of a host of `kind` reads its MDM's enrollment nonce
-/// from: `mac` on macOS (the host's: [`ManagedFile::host`]), and none on Linux, under systemd or
-/// OpenRC, which has no MDM.
+/// The managed preferences the enroller of a host of `kind` reads a nonce an earlier release's MDM
+/// gave it from: `mac` on macOS (the host's: [`ManagedFile::host`]), and none on Linux, under systemd or
+/// OpenRC, which has no managed preferences.
 pub fn host_managed(kind: PlatformKind, mac: ManagedFile) -> Option<Box<dyn ManagedPreferences>> {
     match kind {
         PlatformKind::Linux | PlatformKind::Openrc => None,

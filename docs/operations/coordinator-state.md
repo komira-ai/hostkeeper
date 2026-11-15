@@ -44,10 +44,7 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   `--enrollment-dir`, `--audit-max-bytes` and `--audit-retained-segments`, each named
   (`--database-dsn-file and --ops-file are both given: ...`), and it requires `--halt-marker-file`.
   Enrollment is on when `--ca-key-file` is given (with `--server-cert-file` and `--server-name`, as
-  with the file store); the enrollment store is the database's. The MDM gate runs on either store:
-  its flags need enrollment as with the file store (`--ca-key-file`, and `--enrollment-dir` or
-  `--database-dsn-file`), and on the database its device records are the rows of the table
-  `mdm_devices`.
+  with the file store); the enrollment store is the database's.
 - **The start.** `serve` opens one session, takes the coordinator's advisory lock of the database
   without waiting, runs the migrations the database lacks (each in its own transaction, recorded in
   `schema_version`), raises the lease's epoch, and loads the state. Nothing is read or written
@@ -130,23 +127,19 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   starts on a database the release before migrated. `0014` says older releases may run on it (`may-run`): they never read
   the tables. The `Layout` service and the approval of an enrollment with a placement write these rows; `export` writes them
   to the layout file.
-- **MDM tables.** Migration `0011` adds the tables of the MDM server inside the coordinator
-  (`mdm_enrollments`, `mdm_identities`, `mdm_commands`, `abm_devices`, `abm_state`). Nothing writes
-  them yet. `0011` says older releases may run on it (the release before never reads these tables),
-  so going back one release needs no restore.
-- **MDM setup tables.** Migration `0012` adds `mdm_secrets` and `mdm_settings`
-  (`docs/design/coordinator-mdm.md`, section 4.9). A row of `mdm_secrets` is one version of one kind of
-  secret (the push key and certificate, the ABM key and token, the MDM CA key, the ACME account key,
-  the DNS credential, the TLS key and certificate): its `sealed` column is a random nonce, then the
-  ciphertext and its tag, AES-256-GCM under the key of `--mdm-secrets-key-file`, with the kind and the
-  version as the associated data, so a row copied into another kind or version does not open. The
-  database, a backup of it and the audit hold ciphertext, the SHA-256 fingerprint and the expiry, never
-  a value. The newest version of a kind is the one in use; a replaced one is kept for the
-  `secret_grace_days` setting (7) and deleted by the next upload. `mdm_settings` holds one row per
-  setting that was set; a setting with no row has its default. `0012` says older releases may run on it
-  (the release before never reads these tables). The file store keeps the same rows in the directory
-  `<state-file>.mdm-setup/` (`secrets.json`, `settings.json`), made by the first change and not by a
-  start; a file store's setup does not reach a database by any verb.
+- **The MDM's tables (unused).** Migrations `0005`, `0011` and `0012` made the tables of the
+  coordinator's MDM, which was removed (2026-11-14, `docs/design/coordinator-mdm.md`): `mdm_devices`
+  (`0005`), `mdm_enrollments`, `mdm_identities`, `mdm_commands`, `abm_devices` and `abm_state`
+  (`0011`), and `mdm_secrets` and `mdm_settings` (`0012`). No code reads or writes them now, and they
+  stay in place, with their migrations and their pinned SHA-256s, because a format changes by
+  addition only and a release before the removal finds them where it left them (each of the three
+  says older releases may run on it). A database that holds rows in them starts, serves and exports
+  as one that holds none; `export` does not count or write them. The rows are the old MDM's: the
+  sealed secrets among them (the push key, the ABM token, the MDM CA key, the DNS credential) are
+  ciphertext under a key file (`--mdm-secrets-key-file`) that no release reads now; delete the file
+  and the rows by hand when no older release is to run on the database again. A file store left the
+  directories `<state-file>.mdm/` and `<state-file>.mdm-setup/` beside its files, made by the MDM's
+  first change; nothing reads them either.
 - **No built-in host group.** Migration `0013` once inserted a group `all` that every host was in;
   migration `0018` deletes it. `0018` deletes the group named `all` and every row keyed by it
   (`host_group_packages`, `group_desired`, `group_min_versions`, `group_services`, `group_rollouts`,
@@ -161,65 +154,6 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   the database as it did. A shipped migration is never edited: `0013` stays as it is and its
   SHA-256 stays pinned. The file store drops the group `all` and what is keyed by it from the
   state file and the ops file when it reads them, and writes the `host_groups` key without it.
-- **The push certificate.** Its records are in `mdm_secrets`: `push_pending_key` (the key of the request
-  being made and its CSR, two PEM blocks), `push_encryption_key` (the key the reply of mdmcert.download is
-  encrypted to), and `push_key` and `push_cert` (the pair in use, the newest version of each; the key is
-  `BEGIN RSA PRIVATE KEY`, as NanoHUB keeps it, or PKCS#8). `Mdm.PutPushCertificate` stores the key and then the
-  certificate, so a failure between the two leaves the new key beside the old certificate; the push
-  identity is then the newest certificate with the newest held key that matches it, which is the key it
-  replaced (held for `secret_grace_days`), until the upload is made again. A renewal keeps the topic of the certificate in use, which every enrollment carries. The settings
-  `push_retry_s` (3600), `push_expiry_s` (86400), `push_priority` (10) and `push_timeout_s` (30) are those of the
-  push, and `push_alert_days` (60,14) raises the alert `push_cert_near_expiry` before the certificate expires. The
-  reply of mdmcert.download comes by email: the operator uploads the attachment (`Mdm.PutPushReply`).
-- **The certificate for the MDM name (CM17).** With `--mdm-listen` the coordinator orders and renews the
-  certificate of the MDM name itself, by ACME with DNS-01, and stores it as the next version of `tls_key`
-  and `tls_cert`; the listener serves it from the next handshake on. It starts once the setup holds the
-  name (`mdm_name`), the zone (`dns_zone`, for `mdm.internal.example.net` the zone `example.net`, never
-  worked out from the name) and a DNS credential (`dns_credential`, JSON that names the provider and the
-  kind: `{"provider":"godaddy","kind":"sso-key","key":"..","secret":".."}`, or `"kind":"bearer"` with a
-  `"token"`); until then it does nothing and reports nothing. The ACME account is made once per
-  directory and kept as `acme_account_key`. The challenge record is `_acme-challenge.<labels of the name
-  before the zone>` and is removed after every order, whether it succeeded or failed; GoDaddy replaces
-  all TXT records at a name on a write, so the provider code reads them and writes them back with the
-  new one, and removes only its own value. An uploaded certificate (`tls_key`, `tls_cert`) is used until
-  it is due. Settings, with their defaults: `acme_directory` (Let's Encrypt production; the staging
-  directory is a choice for a first try), `acme_contact` (none), `tls_renew_days` (30), `tls_check_s`
-  (300, the seconds between two looks at whether it is due), `tls_retry_s` (3600, the wait after a
-  failure), `dns_ttl_s` (600), `dns_poll_s` (15), `dns_timeout_s` (600, how long the record may take to
-  show at the provider), `dns_settle_s` (60, the wait between the provider showing it and the CA being
-  asked) and `acme_timeout_s` (300). The TTL, the time to show and the add and delete calls were not
-  measured against the live zone, hence the settings. A failing renewal raises the alert
-  `mdm_tls_renewal_failed`, and a provider that answers 401 or 403 raises `mdm_dns_credential_rejected`;
-  both stand until an attempt ends in a certificate. The coordinator needs outbound HTTPS to the ACME
-  directory and to `api.godaddy.com`. A credential is called 60 times a minute at most.
-- **The ABM sync.** The tables of the ABM sync (`abm_devices`, `abm_state`) are in the database from `0011_mdm`, and in the directory `<state-file>.mdm/` of a file store.
-- **The identity CA and the Macs' identities.** The CA that issues the Macs' identity certificates is made by the first `/enroll` or `/scep` that needs it and kept as one sealed secret of `mdm_secrets`, `mdm_ca_key` (a four-byte big-endian length of the certificate, the certificate in DER, the key in PKCS#8 DER; its expiry is the certificate's). It is not uploaded and not shown; losing it (a store restored without the key file, or a secret that no longer opens) makes every identity issued under it unusable, and a new CA is made only when none is held, so a secret that does not read is an error and is never replaced. The challenges and the identities issued under them are in the tables `mdm_identities` (the file `identities.json`), the challenge as its SHA-256 only. The settings `identity_days` (1095), `renew_alert_days` (90, the window of the alert `mdm_identity_near_expiry`), `challenge_ttl_s` (3600), `ca_days` (3650), `identity_org` (`hostkeeper`), `enroll_rate_per_min` (60) and `enroll_pending_max` (256) are those of enrollment. The requests that wait for an operator are in memory only.
-- **The package proxy's cache.** `--proxy-cache-dir` names a directory of the coordinator's own
-  (`docs/design/package-proxy.md`), made at start: `objects/<sha256 of origin and path>` holds a
-  committed file and `objects/<sha256>.meta` its sidecar (JSON: origin, path, validator, `Last-Modified`
-  when the origin gave one, fetch time, length), and `tmp/` the fills in progress. A fill is written to `tmp/` and renamed into place, the
-  sidecar first. No file is synced: at start every file of `tmp/`, a body whose length is not its
-  sidecar's and a sidecar with no body are deleted, and the objects past `proxy_cache_max_bytes`
-  (20 GiB by default) are evicted, the oldest fetch first. The directory is not exported or backed up
-  (it refills from the origins) and is not shared between coordinators. Without the flag there is no
-  cache, and the `/apt/<repo>/...` routes of the MDM listener answer `404`. With it, and the certificate of the
-  name stored, those routes serve the public repositories of the registry from the cache: a file under
-  `pool/` is kept until evicted, any other file is served for `proxy_index_ttl_s` (300) and then
-  revalidated with one conditional read of the origin. A repository is pointed at the proxy by its
-  `https://<mdm name>/apt/<repo>/` URL in a group's entry; the origin is the registry entry's own `uri`.
-  The route `GET /pkg/<sha256>.pkg` on the MDM listener also uses it: a pkg that an `installs` entry names with a `url`
-  and that is not in `--mdm-pkg-dir` is read from that `url`, kept as the object `pkg/<digest>.pkg`, and served from the file.
-- **The key of the MDM secrets.** `--mdm-secrets-key-file` names a file of 64 hex digits (the 256-bit
-  key): a regular file of the coordinator's user, mode 0600 or 0400, which is not followed through a
-  link. When it is not there and the store holds no sealed secret, the start makes it (mode 0600, never
-  over a file that is there). The start is refused, naming the flag and making nothing, when the store
-  holds a sealed secret and the file is not there or the flag is not given (a new key would orphan every
-  secret), when the key opens none of the secrets of a kind the store holds, and when the file is not a
-  key. The key is the only secret kept outside the store: back it up apart from the store, because a
-  backup of the database is only ciphertext and losing the key loses the MDM CA (every Mac enrolls
-  again), the push certificate and the ABM token, which are then uploaded again. Without the flag the
-  coordinator keeps no MDM secret: `Mdm.PutSecret` is refused `secrets_unavailable`, and the settings
-  still work.
 - **Bounded waits.** Each session connects within 5 seconds, a statement runs at most 5 seconds and
   waits for a lock at most 3, and the connection's keepalives drop a peer that is gone. A wait
   that runs out loses the session. The same bounds hold at start, for each statement of a
@@ -285,9 +219,8 @@ hostkeeper-coordinator export --database-dsn-file <file> --state-file <file> [--
 - The rows of `lab_cluster`, `lab_rows`, `lab_racks`, `lab_placements` and `lab_devices` are written as `<state-file>.layout` (mode 0600, JSON,
   the file the file store keeps), which a coordinator started on the files reads as the layout the database held; a database
   that holds none is exported with no such file. There is no import, as for the accounts.
-- The MDM tables (`mdm_*` and `abm_*`, the setup's sealed secrets and settings among them) are not
-  exported: a file store's MDM setup is its own directory, and no verb moves one store's MDM data to the
-  other. The sealed secrets of a database stay in it, and their key file is not copied.
+- The tables of the removed MDM (`mdm_*` and `abm_*`) are not exported: nothing reads them, and they
+  stay in the database.
 - It prints the files it wrote, the rows of every table, and the lines of the audit file.
 
 To go back from the database to the files: stop the coordinator on the database, `export
@@ -308,8 +241,6 @@ The rest of this page is the file store.
 | `<state-file>.verdicts` | Per service and host, the last release verdict the coordinator acknowledged, and the verdicts it counts toward an automatic rollback. | A host whose daemon stopped resending its verdict is no longer read as having failed it, so it can be ordered that version again; the count toward an automatic rollback starts again. |
 | `<state-file>.accounts` | The operator's users and API tokens (`docs/design/operator-login.md`, komira-ai/hostkeeper#300, sections 6, 7 and 9): per user, the Argon2id hash of the password, whether the user is enabled, whether it must change its password, the deadline of an initial or reset password, who made the user and when, and when it last signed in; per token, the SHA-256 of the token, who made it and when. Written whole, mode 0600, when a change of a user or a token is made, and only then. A coordinator before the users does not read it; a key this release does not know is skipped, and a value it cannot read stops the start, naming the file. The writers are `--initial-admin-file` (below), a password change at sign-in, and the `Users` and `ApiTokens` calls ("Users and API tokens", below), by the Users and API tokens pages of the web app and by `hkctl`. | No user and no API token made in the UI exists; the tokens of `--tokens-file` still work. |
 | `<state-file>.layout` | The lab's layout (`docs/design/ui-shell-lab.md`): the one cluster's name, its numbered rows, the numbered racks of each row with their height in U, and the placements of servers (an inventory entry, or a host no entry matches) in racks, each with its lowest U and its height in U. Written whole when a change of the layout commits, and only then; a file that is not there is an empty layout, and one that breaks a rule of it (a placement outside its rack, two on one U) stops the start, naming the file. Backed up and restored with the state file. | The Home page shows an empty lab and every server unplaced; rows, racks and placements are made again on the page. |
-| `<state-file>.mdm-setup/` | The MDM setup (`docs/design/coordinator-mdm.md`, section 4.9): `secrets.json`, each version of each secret as sealed bytes in hex with its fingerprint, expiry and times, and `settings.json`, the settings that were set. Written whole when a setup call changes it, and only then; a directory that is not there holds nothing. A field of a later release is kept and written back with its row. A file that does not read stops the start, naming it. `backup` and `restore` do not copy it in this release (nor the key file): copy it, stopped, with the key file kept apart from it. | No secret and no setting of the MDM setup: the secrets are uploaded again, and what was sealed under the key file can no longer be opened. |
-| `<state-file>.mdm/` | The MDM tables (`docs/design/coordinator-mdm.md`, sections 4.2, 5.2 and 9.1): one `<family>.json` file per table (`enrollments`, `identities`, `commands`, `abm_devices`, `abm_state`), each `{"schema": 1, "rows": [...]}`, replaced whole when a change touches it; the commands before the enrollments. With `--mdm-listen` the coordinator writes it: an enrollment when a Mac sends `Authenticate`, its push token when `TokenUpdate` comes, a command when the gate queues it, and its answer when the Mac gives it. A directory that is not there holds nothing; a file that does not read stops the start. `backup`, `restore`, `export` and the database import do not carry it in this release (as for `<state-file>.mdm-setup/`): copy it, stopped. With the database the same rows are in `mdm_enrollments`, `mdm_identities`, `mdm_commands`, `abm_devices` and `abm_state`. | No Mac is enrolled in the coordinator's tables and no command is queued: the Macs' next `Authenticate` or `TokenUpdate` is refused `401` until they enroll again (the issued identities are lost with the table), and the gate's records say what they said. |
 | `<state-file>.lock` | Nothing: the lock `serve` holds while it runs, so a second coordinator on the same files is refused. | Nothing. It is not backed up. |
 | `--ops-file` | What operators changed: exclusions, labels, halts and their clears, holds, assignments, minimum versions, the `repository` key of a service (the repository `Services.SetRepository` set; written only while set; a coordinator before it passes over it), the `trusted_publishers` key of a service (its trusted publishers, [ci-client.md](../deploy/ci-client.md#trusted-publishers); written only once an operator changed the package's list; a coordinator before it refuses the file then), uninstall intents, the host inventory (each record's host group among it), the marks of last good and bad versions, and the audit ring; and, under `host_groups`, each (host group, package)'s minimum version, last good version, halt with its reports and generation, force, and plan position, all in this file (none in the halts file). `host_groups`, and a record's or an entry's `host_group`, are written only when there are any, and a coordinator before groups refuses the file then. | All of it. |
 | `<ops-file>.audit` | Every change to the ops file, one JSON line each; a change of a host group says it in its `detail` as `host_group`, which a coordinator before groups passes over. | The audit history. |

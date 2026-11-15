@@ -439,7 +439,7 @@ pub fn image_of(own_version: HostkeeperVersion) -> String {
 /// The enroller of a host of `kind`: [`GrpcEnroll`] to `endpoint`, the pki directory at `pki`
 /// (its `current` generation is what a renewal presents), the claims of [`host_claims`] (on
 /// Linux the host's files and its BMC behind `/dev/ipmi0`, [`DevIpmi::host`]; on a Mac through
-/// the host's `ioreg`, [`HostIoreg::system`]), on a Mac the managed preferences its MDM writes
+/// the host's `ioreg`, [`HostIoreg::system`]), on a Mac the managed preferences its device management writes
 /// the enrollment nonce to ([`host_managed`]), the operating
 /// system's entropy, the wall clock for the certificates' validity alone, and the monotonic
 /// clock for the retries. Opening it takes the pki directory's lock and finishes what a crash
@@ -519,7 +519,7 @@ pub struct HostFiles {
     pub pki: PathBuf,
     /// The console's issue file and the agetty that redraws it; none on a Mac.
     pub console: Option<ConsoleFiles>,
-    /// The managed preferences a Mac's MDM installs, which the start writes the daemon config
+    /// The managed preferences a Mac's device management installs, which the start writes the daemon config
     /// from when that is not there ([`crate::mac_config::at_start`]); none on Linux.
     pub managed_config: Option<PathBuf>,
     /// The managed preferences of the domain `dev.hostkeeper.stores`, which the start renders as

@@ -52,7 +52,7 @@
 #          (cargo xtask release check, the released commit's own, which holds the files to
 #          exactly that commit's assets), and runs the downloaded linux-x86_64 binaries, which
 #          must print exactly `hostkeeper X.Y.Z+<12 hex>`, `hostkeeper-coordinator
-#          X.Y.Z+<12 hex>`, `hostkeeper-mdm X.Y.Z+<12 hex>` and `hostkeeper-coordinator-update
+#          X.Y.Z+<12 hex>` and `hostkeeper-coordinator-update
 #          X.Y.Z+<12 hex>` (cargo xtask release check-binary); the coordinator updater's only in
 #          a release whose build made its tarball, since a release of a commit from before it has
 #          none (crates/xtask/tests/workflows/release_assets.rs). These are the commands of
@@ -112,7 +112,7 @@
 #          image of the run, only for the newest release of the run (job `newest`; the older ones
 #          are passed over, the newer carries their changes). The release's deb and rpm packages
 #          of hostkeeper and hostkeeper-coordinator, and the native .debs of the services it
-#          releases (hello's and pxe's, and mdm's for amd64), go into the apt and rpm repositories at
+#          releases (hello's and pxe's), go into the apt and rpm repositories at
 #          packages.komira.ai, the suite `testing` first (testing-apt-*, testing-rpm-*: read the
 #          index, merge and sign it, write it, each in up to three attempts), and the macOS
 #          installers, hostkeeper's and hello's, into pkg/hostkeeper/<version>/
@@ -276,9 +276,6 @@ jobs:
       - run: tar -xzf "dist/hostkeeper-coordinator-$RELEASE_VERSION-linux-x86_64.tar.gz" -C "$RUNNER_TEMP/binary" hostkeeper-coordinator
       - name: hostkeeper-coordinator says the version and the commit it is released under
         run: cargo xtask release check-binary "$RUNNER_TEMP/binary/hostkeeper-coordinator" "$RELEASE_VERSION" "$COMMIT"
-      - run: tar -xzf "dist/hostkeeper-mdm-$RELEASE_VERSION-linux-x86_64.tar.gz" -C "$RUNNER_TEMP/binary" hostkeeper-mdm
-      - name: hostkeeper-mdm says the version and the commit it is released under
-        run: cargo xtask release check-binary "$RUNNER_TEMP/binary/hostkeeper-mdm" "$RELEASE_VERSION" "$COMMIT"
       - if: ${{ hashFiles(format('dist/hostkeeper-coordinator-update-{0}-linux-x86_64.tar.gz', env.RELEASE_VERSION)) != '' }}
         run: tar -xzf "dist/hostkeeper-coordinator-update-$RELEASE_VERSION-linux-x86_64.tar.gz" -C "$RUNNER_TEMP/binary" hostkeeper-coordinator-update
       - name: hostkeeper-coordinator-update says the version and the commit it is released under
@@ -2267,7 +2264,7 @@ jobs:
   #
   # macos-test    the tests of the crates the `hostkeeper` and `hello` binaries are built from
   #               (the code a Mac runs), as the runner's user, with no fail-fast so that a run
-  #               reports every failure. The rest of the workspace (the coordinator's MDM and
+  #               reports every failure. The rest of the workspace (the coordinator and the
   #               network-install servers, the release tooling) runs on Linux only and does not
   #               build for macOS; the workflow lint holds the crate list to the binaries' path
   #               dependencies.
@@ -2425,8 +2422,8 @@ jobs:
   # architecture, adds packages.komira.ai with the published keyring (deb822, Signed-By) and the
   # suite `testing`, installs the package at the version, and holds the installed system to what the
   # package promises (cargo xtask channels check-apt), for each package on each architecture it is
-  # built for: the daemon's and the coordinator's, and the services' native packages, hello's,
-  # pxe's and mdm's (amd64 alone). The xtask binary built on the runner is mounted into the container, which
+  # built for: the daemon's and the coordinator's, and the services' native packages, hello's
+  # and pxe's. The xtask binary built on the runner is mounted into the container, which
   # has nothing else of this repository.
   check-apt:
     needs: [plan, newest, testing-apt-write, testing-apt-write-2, testing-apt-write-3]
@@ -2434,11 +2431,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [hostkeeper, hostkeeper-coordinator, hello, mdm, pxe]
+        package: [hostkeeper, hostkeeper-coordinator, hello, pxe]
         arch: [amd64, arm64]
-        exclude:
-          - package: mdm
-            arch: arm64
         include:
           - arch: amd64
             runner: ubuntu-24.04

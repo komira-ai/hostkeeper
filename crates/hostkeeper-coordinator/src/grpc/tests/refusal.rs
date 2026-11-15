@@ -5,8 +5,8 @@ use std::fmt::Debug;
 
 use hostkeeper_proto::hostkeeper::operator::v1::{
     AlertsRefusal, ApiTokensRefusal, AuditRefusal, EnrollmentRefusal, HostGroupsRefusal,
-    HostsRefusal, MdmRefusal, ReleasesRefusal, RepositoriesRefusal, RolloutsRefusal,
-    ServicesRefusal, UsersRefusal,
+    HostsRefusal, ReleasesRefusal, RepositoriesRefusal, RolloutsRefusal, ServicesRefusal,
+    UsersRefusal,
 };
 use tonic::{Code, Status};
 
@@ -36,7 +36,7 @@ where
 }
 
 /// Proves that each value of `HostsRefusal`, `ReleasesRefusal`, `ServicesRefusal`,
-/// `EnrollmentRefusal`, `AuditRefusal`, `AlertsRefusal`, `RolloutsRefusal`, `MdmRefusal`, `RepositoriesRefusal`, `HostGroupsRefusal`, `UsersRefusal` and `ApiTokensRefusal` becomes the status
+/// `EnrollmentRefusal`, `AuditRefusal`, `AlertsRefusal`, `RolloutsRefusal`, `RepositoriesRefusal`, `HostGroupsRefusal`, `UsersRefusal` and `ApiTokensRefusal` becomes the status
 /// its proto comment names: the code of the comment and the
 /// value's name, without its prefix and in lower case, as the whole message; and that
 /// `UNSPECIFIED`, which no caller is refused with, is `INTERNAL`. A value the enum gains that
@@ -482,106 +482,6 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
             ),
         ],
         refusal::rollouts,
-    );
-
-    assert_table(
-        &[
-            (MdmRefusal::Unspecified, Internal, "unspecified"),
-            (MdmRefusal::Unauthorized, Unauthenticated, "unauthorized"),
-            (MdmRefusal::Forbidden, PermissionDenied, "forbidden"),
-            (
-                MdmRefusal::InvalidRequest,
-                InvalidArgument,
-                "invalid_request",
-            ),
-            (MdmRefusal::StoreFailed, Internal, "store_failed"),
-            (
-                MdmRefusal::AuditUnavailable,
-                Unavailable,
-                "audit_unavailable",
-            ),
-            (
-                MdmRefusal::SecretsUnavailable,
-                FailedPrecondition,
-                "secrets_unavailable",
-            ),
-            (MdmRefusal::NameLocked, FailedPrecondition, "name_locked"),
-            (
-                MdmRefusal::MdmcertUnavailable,
-                Unavailable,
-                "mdmcert_unavailable",
-            ),
-            (
-                MdmRefusal::NoPendingRequest,
-                FailedPrecondition,
-                "no_pending_request",
-            ),
-            (
-                MdmRefusal::ReplyUndecryptable,
-                InvalidArgument,
-                "reply_undecryptable",
-            ),
-            (
-                MdmRefusal::ReplyNotForRequest,
-                InvalidArgument,
-                "reply_not_for_request",
-            ),
-            (
-                MdmRefusal::CertificateInvalid,
-                InvalidArgument,
-                "certificate_invalid",
-            ),
-            (MdmRefusal::KeyInvalid, InvalidArgument, "key_invalid"),
-            (MdmRefusal::KeyMismatch, InvalidArgument, "key_mismatch"),
-            (
-                MdmRefusal::CertificateExpired,
-                InvalidArgument,
-                "certificate_expired",
-            ),
-            (MdmRefusal::TopicChanged, InvalidArgument, "topic_changed"),
-            (
-                MdmRefusal::AbmUnavailable,
-                FailedPrecondition,
-                "abm_unavailable",
-            ),
-            (
-                MdmRefusal::AbmKeyMissing,
-                FailedPrecondition,
-                "abm_key_missing",
-            ),
-            (
-                MdmRefusal::AbmTokenUnreadable,
-                InvalidArgument,
-                "abm_token_unreadable",
-            ),
-            (
-                MdmRefusal::AbmCredentialRefused,
-                FailedPrecondition,
-                "abm_credential_refused",
-            ),
-            (
-                MdmRefusal::AbmClockRefused,
-                FailedPrecondition,
-                "abm_clock_refused",
-            ),
-            (MdmRefusal::AbmUnreachable, Unavailable, "abm_unreachable"),
-            (
-                MdmRefusal::EnrollmentUnavailable,
-                FailedPrecondition,
-                "enrollment_unavailable",
-            ),
-            (
-                MdmRefusal::NoPendingEnrollment,
-                NotFound,
-                "no_pending_enrollment",
-            ),
-            (
-                MdmRefusal::SerialNotInAbm,
-                FailedPrecondition,
-                "serial_not_in_abm",
-            ),
-        ],
-        refusal::mdm,
     );
 
     assert_table(

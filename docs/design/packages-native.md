@@ -1,5 +1,7 @@
 # Native packages only: hostkeeper's own package format retired, hostkeeper included
 
+> **Update 2026-11-14.** The `mdm` package (A20, the MDM host's service) and its release assets are withdrawn. The MDM was removed from the coordinator and the repository (`docs/design/coordinator-mdm.md`, superseded); Macs enroll through the bootstrap package (`docs/design/mac-bootstrap.md`). Where this document describes the MDM, its kit, its policy gate or the `mdm` package, it describes what was removed; the rest stands.
+
 Status: the retirement of the format is ruled; the design below is for the maintainers' ruling. Nothing here is built. This is section 10 of
 [packages-repositories.md](packages-repositories.md), kept in a file of its own so that one stays under 1000 lines
 (rule R12). A bare "section 4.7" is that file's; "10.4" is this file's; packages.md's sections are named with it.
@@ -261,11 +263,7 @@ this against making the coordinator a hostkeeper service).
 
 ### 10.5 The release channel's end
 
-What replaces the channel for the lab LAN is the coordinator's package proxy, designed in [package-proxy.md](package-proxy.md) (**Designed**, nothing
-built): a caching pass-through at `https://<mdm name>/apt/<repo>/` and `/pkg/<sha256>.pkg`, which reads the public repository (or the pkg's
-origin) once and keeps it. It serves bytes only; apt, the daemon and the Mac verify them as before (10.3), so no trust moves to it. The
-steps below end the channel; package-proxy.md section 6 gives the order in which the tailnet-only download server is retired and hosts are
-pointed at the proxy, and it owns the repointing of `release_channel` and of repository entries.
+The coordinator's package proxy, designed to replace the channel on the lab LAN, was removed with the coordinator's MDM before it was deployed (docs/design/package-proxy.md, superseded): hosts and Macs read the public repository, and the steps below end the channel.
 
 The channel and its sync are interim, as ruled. The channel serves archives and nothing else, and it is needed until
 the last archive is ordered: a daemon before `target-v1` fetches through nothing else, and a `target-v1` daemon with no

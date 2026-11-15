@@ -425,9 +425,8 @@ fn apt_promote_lists_the_tested_release_in_stable_and_write_no_pool_puts_the_ind
     };
     let o = promote(&sums, "1.2.3");
     assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
-    // Nine debs: the daemon's, the coordinator's, hello's and pxe's for each architecture, mdm's
-    // for amd64.
-    assert_eq!(stdout(&o), "apt promote: added 9, dropped 0, listed 9\n");
+    // Eight debs: the daemon's, the coordinator's, hello's and pxe's for each architecture.
+    assert_eq!(stdout(&o), "apt promote: added 8, dropped 0, listed 8\n");
     let packages = std::fs::read_to_string(out.join("dists/stable/main/binary-arm64/Packages"))
         .expect("Packages");
     assert!(

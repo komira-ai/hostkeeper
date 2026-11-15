@@ -29,7 +29,7 @@ fn a_failed_aws_call_is_told_by_what_it_says() {
 fn the_package_files_of_a_version_are_every_package_for_each_of_its_architectures_and_must_all_be_there()
  {
     // Catches: an index or upload for one architecture or one package only, or for another
-    // version's files; an mdm asked for arm64, which it is not built for, or a pxe left out.
+    // version's files; or a pxe left out.
     let dir = scratch("package-files");
     release_files(&dir, "1.2.3");
     let files = package_files(&dir, "1.2.3", Suite::Testing).expect("files");
@@ -43,7 +43,6 @@ fn the_package_files_of_a_version_are_every_package_for_each_of_its_architecture
             "hostkeeper-coordinator_1.2.3_arm64.deb",
             "hostkeeper_1.2.3_amd64.deb",
             "hostkeeper_1.2.3_arm64.deb",
-            "mdm_1.2.3_amd64.deb",
             "pxe_1.2.3_amd64.deb",
             "pxe_1.2.3_arm64.deb"
         ]
@@ -65,7 +64,7 @@ fn the_package_files_of_a_version_are_every_package_for_each_of_its_architecture
         "{e}"
     );
     // A service's native package is as much part of the release as hostkeeper's own.
-    for missing in ["hello_1.2.3_arm64.deb", "mdm_1.2.3_amd64.deb"] {
+    for missing in ["hello_1.2.3_arm64.deb", "pxe_1.2.3_amd64.deb"] {
         release_files(&dir, "1.2.3");
         std::fs::remove_file(dir.join(missing)).expect("remove");
         let e = package_files(&dir, "1.2.3", Suite::Testing)

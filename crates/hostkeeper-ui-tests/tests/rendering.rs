@@ -269,7 +269,9 @@ fn the_host_page_shows_each_fact_beside_its_label() {
 #[test]
 fn the_enrollment_page_shows_every_claim_and_fact_beside_its_label() {
     // Catches: a claim (the UUIDs included), the image, the first-seen time or the renewal left
-    // out or shown under another label; a renewal or a nonce shown when there is none.
+    // out or shown under another label; a renewal shown when there is none; and a Mac nonce shown:
+    // the reply here still says one was presented, as a coordinator of an earlier release does, and
+    // the page says nothing of it.
     let mut ui = Ui::start();
     ui.reply(
         &m("Enrollment/List"),
@@ -290,7 +292,6 @@ fn the_enrollment_page_shows_every_claim_and_fact_beside_its_label() {
             ["Image", "debian-hk"],
             ["First seen", AT],
             ["Renewal of", "web-3"],
-            ["Mac nonce presented", "yes"],
             ["Machine id", "m-0001"],
             ["DMI serial", "SN-42"],
             ["Product UUID", "4c4c4544-0042"],

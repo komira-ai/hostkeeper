@@ -1,6 +1,6 @@
 //! The native packages of the services hostkeeper deploys (docs/design/packages-native.md
 //! sections 10.2 and 10.8, item A20): `hello` and its failing build as a `.deb` and a `.pkg`,
-//! and `mdm` and `pxe` as a `.deb`. What every service's native package holds, and what this
+//! and `pxe` as a `.deb`. What every service's native package holds, and what this
 //! module's builders and checks hold them to:
 //!
 //! - **The program the manifest names**: the entry's `hook.command` (`release targets`) is the
@@ -15,9 +15,9 @@
 //!   `/Library/Application Support/<service>/` and `/Library/LaunchDaemons/`, and its plists
 //!   carry `Disabled` true.
 //!
-//! [`deb`] is `release deb`, the `.deb` of hello, mdm or pxe, written here byte for byte (an `ar` of
+//! [`deb`] is `release deb`, the `.deb` of hello or pxe, written here byte for byte (an `ar` of
 //! `debian-binary`, `control.tar.gz` and `data.tar.gz`, every time the commit's); [`pkg`] is the
-//! service half of `release macos-pkg` and `release check-macos-pkg`; [`hello`], [`mdm`] and [`pxe`] say
+//! service half of `release macos-pkg` and `release check-macos-pkg`; [`hello`] and [`pxe`] say
 //! what each service's packages hold. `release check-linux-pkg --service` reads a built `.deb`
 //! back against what this builder writes (`package::linux_check::service`).
 
@@ -28,7 +28,6 @@ use crate::release::contract::Service;
 
 pub(crate) mod deb;
 pub(crate) mod hello;
-pub(crate) mod mdm;
 pub(crate) mod pkg;
 pub(crate) mod pxe;
 
@@ -46,7 +45,7 @@ pub(crate) const SYSTEMD_UNITS: &str = "/usr/lib/systemd/system";
 
 /// What `macos-pkg` and `check-macos-pkg` build or check for `service`: `Some` with `gh` and the
 /// trusted root for hostkeeper's pkg (both required, `--fail-ready` refused), `None` for hello's
-/// (both refused); mdm and pxe have no pkg.
+/// (both refused); pxe has no pkg.
 pub(crate) fn macos_inputs(
     service: Service,
     fail_ready: bool,
@@ -55,7 +54,6 @@ pub(crate) fn macos_inputs(
 ) -> Result<Option<(PathBuf, PathBuf)>, Error> {
     let refuse = |why: &str| Err(Error::Failed(why.to_owned()));
     match (service, gh, trusted_root) {
-        (Service::Mdm, ..) => refuse(MDM_NO_PKG),
         (Service::Pxe, ..) => refuse(PXE_NO_PKG),
         (Service::Hello, None, None) => Ok(None),
         (Service::Hello, ..) => refuse(HELLO_PKG_INPUTS),
@@ -66,10 +64,6 @@ pub(crate) fn macos_inputs(
         (Service::Hostkeeper, ..) => refuse(HOSTKEEPER_PKG_INPUTS),
     }
 }
-
-/// Why mdm has no pkg.
-pub(crate) const MDM_NO_PKG: &str =
-    "mdm has no pkg: it is built for linux-x86_64 only, as a .deb (release deb --service mdm)";
 
 /// Why pxe has no pkg.
 pub(crate) const PXE_NO_PKG: &str = "pxe has no pkg: it is built for linux-x86_64 and linux-arm64 as a .deb (release deb --service pxe)";

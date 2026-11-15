@@ -425,10 +425,10 @@ fn flags_out_of_their_form_are_usage_errors_before_anything_runs() {
 
 #[test]
 fn a_package_that_is_a_deb_alone_is_a_usage_error_before_anything_runs() {
-    // Catches: check-rpm of hello's or mdm's package, which has no rpm, installing nothing and
+    // Catches: check-rpm of hello's or pxe's package, which has no rpm, installing nothing and
     // failing as if the repository were wrong.
     let dir = scratch("deb_alone");
-    for name in ["hello", "mdm"] {
+    for name in ["hello", "pxe"] {
         let package = HOSTKEEPER.package(name).expect("a package");
         let machine = Machine::new(package);
         assert_eq!(

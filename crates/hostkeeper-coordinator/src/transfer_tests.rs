@@ -12,15 +12,12 @@ use hostkeeper_enrollment::enroll::records::FileRecords;
 use hostkeeper_enrollment::fs::RealFs;
 use hostkeeper_testkit::Scratch;
 
-use hostkeeper_mdm_gate::{DeviceStore as _, FileDeviceStore};
-
 use super::{Export, TransferError};
 use crate::accounts::accounts_path;
 use crate::audit_file::{self, AuditLine, AuditLog, DEFAULT_ROTATION, Detail, Rotation, UnixClock};
 use crate::backup::StatePaths;
 use crate::jti_file::jti_path;
 use crate::lock::{FileLock, lock_path};
-use crate::mdm::DEVICES_DIR;
 use crate::store::Backend;
 use crate::store::postgres::DatabaseError;
 use crate::store::postgres::tests::seed::seed;
@@ -118,7 +115,7 @@ pub(super) fn dsn_file(dir: &Path, database: &TestDatabase) -> PathBuf {
 /// desired file read as the state of `legacy` and CI's spent ids past at [`AT`] left out: the
 /// desired state, the operations state, the verdicts, the accounts and the spent ids; the whole audit history and
 /// the time of its oldest line when older ones were deleted; and, with its enrollment directory,
-/// the enrollment records and the MDM gate's device records in the order of their enrollment ids.
+/// the enrollment records.
 pub(super) fn stored(store: &Store, legacy: Option<&str>) -> Moved {
     let state = &store.paths.state_file;
     let ops = store.ops();
@@ -138,29 +135,16 @@ pub(super) fn stored(store: &Store, legacy: Option<&str>) -> Moved {
         .each(&mut |line| audit.push(line))
         .expect("the audit lines");
     let pruned_before = files.audit_pruned_before().expect("the oldest line");
-    let (records, mut devices) = match &store.paths.enrollment_dir {
+    let records = match &store.paths.enrollment_dir {
         Some(dir) => {
-            let devices = dir.join(DEVICES_DIR);
-            let held = if devices.is_dir() {
-                FileDeviceStore::open(Arc::new(RealFs), &devices)
-                    .and_then(|store| store.load())
-                    .expect("the device records")
-            } else {
-                Vec::new()
-            };
-            (
-                FileRecords::read_snapshot(Arc::new(RealFs), dir).expect("the enrollment store"),
-                held,
-            )
+            FileRecords::read_snapshot(Arc::new(RealFs), dir).expect("the enrollment store")
         }
         None => Default::default(),
     };
-    devices.sort_by(|a, b| a.enrollment_id.as_str().cmp(b.enrollment_id.as_str()));
     Moved {
         loaded,
         audit,
         records,
-        devices,
         pruned_before,
     }
 }

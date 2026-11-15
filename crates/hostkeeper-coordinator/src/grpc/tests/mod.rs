@@ -23,8 +23,6 @@ mod hosts;
 mod install;
 mod limits;
 mod listeners;
-mod mdm;
-mod mdm_setup;
 mod operator;
 mod operator_desired;
 mod pending;

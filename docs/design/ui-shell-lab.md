@@ -1,5 +1,7 @@
 # The coordinator's web UI: a new frame, and Home as the lab
 
+> **Update 2026-11-14.** The MDM tab of Settings is gone. The MDM was removed from the coordinator and the repository (`docs/design/coordinator-mdm.md`, superseded); Macs enroll through the bootstrap package (`docs/design/mac-bootstrap.md`). Where this document describes the MDM, its kit, its policy gate or the `mdm` package, it describes what was removed; the rest stands.
+
 Status: built on `ui-shell-lab-home` (komira-ai/hostkeeper). Owner direction of 2026-11-13: "this whole ui needs to look better ... a side
 menu is more modern ... use our komira colour palette"; the Fleet, Release, Rollout and Holds entries leave the menu; the
 "hostkeeper" wordmark goes Home; Home is an overhead view of the lab with rows, a click on a row shows its racks, a click on a host

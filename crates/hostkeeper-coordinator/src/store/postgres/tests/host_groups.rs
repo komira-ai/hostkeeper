@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use super::devices::with_session;
+use super::with_session;
 use super::{SPENT_NOW, TestDatabase};
 use crate::desired;
 use crate::host_groups::tests::web;

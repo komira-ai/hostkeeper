@@ -352,11 +352,6 @@ fn verify_a_release_commands_match_the_ones_the_verify_job_runs() {
             "step 6 expects",
         ),
         (
-            "`hostkeeper-mdm <X.Y.Z>+<first 12 hex digits of $PIN>`.\n",
-            "`hostkeeper-mdm <X.Y.Z>`.\n",
-            "step 6 expects",
-        ),
-        (
             "`hostkeeper-coordinator-update <X.Y.Z>+<first 12 hex digits of $PIN>`.\n",
             "`hostkeeper-coordinator-update <X.Y.Z>`.\n",
             "step 6 expects",
@@ -400,11 +395,6 @@ fn verify_a_release_commands_match_the_ones_the_verify_job_runs() {
             "\"$RUNNER_TEMP/binary/hostkeeper-coordinator\" \"$RELEASE_VERSION\" \"$COMMIT\"",
             "\"$RUNNER_TEMP/binary/hostkeeper-coordinator\" \"$RELEASE_VERSION\" \"$GITHUB_SHA\"",
             "does not check hostkeeper-coordinator",
-        ),
-        (
-            "\"$RUNNER_TEMP/binary/hostkeeper-mdm\" \"$RELEASE_VERSION\" \"$COMMIT\"",
-            "\"$RUNNER_TEMP/binary/hostkeeper-mdm\" \"$RELEASE_VERSION\" \"$GITHUB_SHA\"",
-            "does not check hostkeeper-mdm",
         ),
         (
             "\"$RUNNER_TEMP/binary/hostkeeper-coordinator-update\" \"$RELEASE_VERSION\" \"$COMMIT\"",
@@ -454,8 +444,8 @@ fn a_document_without_the_list_or_the_platforms_has_no_names() {
 #[test]
 fn the_platform_sentence_lists_the_released_platforms() {
     // Catches: a document that names a platform the release does not ship, or misses one, pairs
-    // a platform with another's deb or rpm architecture, still lists the withdrawn Arch package, or lists the coordinator, the MDM kit
-    // or the coordinator updater for macOS.
+    // a platform with another's deb or rpm architecture, still lists the withdrawn Arch package, or lists the coordinator
+    // or the coordinator updater for macOS, or lists the withdrawn MDM kit.
     fn values(list: &[&str]) -> Vec<String> {
         list.iter().map(|v| (*v).to_owned()).collect()
     }
@@ -479,8 +469,6 @@ fn the_platform_sentence_lists_the_released_platforms() {
         "hostkeeper_0.1.5_amd64.deb",
         "hostkeeper-0.1.5-1.aarch64.rpm",
         "hostkeeper-coordinator-0.1.5-linux-arm64.image.tar",
-        "hostkeeper-mdm-0.1.5-linux-x86_64.tar.gz",
-        "hostkeeper-mdm-0.1.5-linux-arm64.cdx.json",
         "hostkeeper-coordinator-update-0.1.5-linux-x86_64.tar.gz",
         "hostkeeper-coordinator-update-0.1.5-linux-arm64.cdx.json",
         "hostkeeper-0.1.5-macos-arm64.pkg",
@@ -495,7 +483,6 @@ fn the_platform_sentence_lists_the_released_platforms() {
         !names
             .iter()
             .any(|n| n.starts_with("hostkeeper-coordinator-0.1.5-macos")
-                | n.starts_with("hostkeeper-mdm-0.1.5-macos")
                 | n.starts_with("hostkeeper-coordinator-update-0.1.5-macos")),
         "{names:?}"
     );

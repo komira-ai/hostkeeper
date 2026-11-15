@@ -189,8 +189,8 @@ fn the_release_has_the_macos_stage_and_it_passes_every_rule() {
     let crates = mac_crates();
     assert!(crates.contains("hostkeeper-launchd") && crates.contains("hostkeeper-daemon"));
     assert!(
-        !crates.contains("hostkeeper-mdm-step"),
-        "the MDM server is not the Mac's"
+        !crates.contains("hostkeeper-coordinator"),
+        "the coordinator is not the Mac's"
     );
     assert!(
         !crates.contains("hostkeeper-ci"),
@@ -411,7 +411,7 @@ fn only_promote_pkg_waits_for_the_macos_stage() {
 #[test]
 fn macos_test_must_test_exactly_the_macs_crates() {
     // Catches: a crate of the Mac left out of the build or the run, a crate added that does not
-    // build for macOS (the MDM server), `--workspace` or `--exclude` in place of the list, a run
+    // build for macOS (the coordinator), `--workspace` or `--exclude` in place of the list, a run
     // that stops at the first failure, and a build or run step missing or doubled.
     let crates = mac_crates();
     let release = release();
@@ -426,7 +426,7 @@ fn macos_test_must_test_exactly_the_macs_crates() {
         ("--no-run -p hello ", "--no-run ", vec![want(build)]),
         (
             "--no-fail-fast -p hello ",
-            "--no-fail-fast -p hostkeeper-mdm-step -p hello ",
+            "--no-fail-fast -p hostkeeper-coordinator -p hello ",
             vec![want(run)],
         ),
         (
@@ -436,7 +436,7 @@ fn macos_test_must_test_exactly_the_macs_crates() {
         ),
         (
             "--no-fail-fast -p hello ",
-            "--no-fail-fast --exclude hostkeeper-mdm-step -p hello ",
+            "--no-fail-fast --exclude hostkeeper-coordinator -p hello ",
             vec![want(run)],
         ),
     ];

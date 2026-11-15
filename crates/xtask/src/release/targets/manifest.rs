@@ -3,7 +3,6 @@
 //! the release. The values are the ones the package has always carried; the test that holds the
 //! verb's whole answer for a release holds them too.
 
-use hostkeeper_mdm_core::package as mdm;
 use hostkeeper_proto::hostkeeper::release::v1::{Hook, Manifest, Param, StepBounds, param};
 
 use super::INSTALLER_BOUNDS;
@@ -45,7 +44,6 @@ pub(super) fn of(package: Package, version: &Version) -> Manifest {
     match package {
         Package::Hostkeeper => hostkeeper(version),
         Package::Hello | Package::HelloFailReady => hello_manifest(),
-        Package::Mdm => mdm_manifest(version),
         Package::Pxe => pxe_manifest(version),
     }
 }
@@ -56,7 +54,6 @@ pub(super) fn program(package: Package) -> Option<String> {
     match package {
         Package::Hostkeeper => None,
         Package::Hello | Package::HelloFailReady => Some(hello::DEB_PROGRAM.to_owned()),
-        Package::Mdm => Some(format!("{}/{}", mdm::DEB_BIN, mdm::SERVICE)),
         Package::Pxe => Some(pxe::DEB_PROGRAM.to_owned()),
     }
 }
@@ -163,45 +160,6 @@ fn hello_manifest() -> Manifest {
         .into_iter()
         .collect(),
         min_hostkeeper: HELLO_MIN_HOSTKEEPER.to_owned(),
-        installer_bounds: Some(INSTALLER_BOUNDS),
-        ..Manifest::default()
-    }
-}
-
-/// Mdm's: the hook bounds, run units, health URL and params of `hostkeeper_mdm_core::package`,
-/// and the floor hostkeeper's own release has, [`OLDEST_READER`], or the release's own version
-/// when that is older.
-fn mdm_manifest(version: &Version) -> Manifest {
-    let secs = |step: &str| {
-        mdm::TIMEOUTS
-            .iter()
-            .find(|(name, _)| *name == step)
-            .map_or(0, |(_, secs)| *secs)
-    };
-    Manifest {
-        package: Some(mdm::SERVICE.to_owned()),
-        hook: Some(Hook {
-            command: command(Package::Mdm),
-            timeout_secs: Some(StepBounds {
-                prepare: secs("prepare"),
-                cutover: secs("cutover"),
-                verify: secs("verify"),
-                rollback: secs("rollback"),
-                cleanup: secs("cleanup"),
-                uninstall: Some(secs("uninstall")),
-            }),
-            verify_deadline_secs: mdm::VERIFY_DEADLINE_SECS,
-            ..Hook::default()
-        }),
-        run: mdm::RUN.iter().map(|unit| (*unit).to_owned()).collect(),
-        health_url: Some(mdm::HEALTH_URL.to_owned()),
-        params: [
-            ("settings".to_owned(), text(mdm::SETTINGS_FILE)),
-            ("record_dir".to_owned(), text(mdm::RECORD_DIR)),
-        ]
-        .into_iter()
-        .collect(),
-        min_hostkeeper: (*version).min(OLDEST_READER).to_string(),
         installer_bounds: Some(INSTALLER_BOUNDS),
         ..Manifest::default()
     }
