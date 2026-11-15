@@ -287,9 +287,7 @@ fn a_commit_older_than_the_ledger_keeps_is_not_settled_as_not_landed() {
     assert!(store.unsettled(), "the commit stays unsettled");
     assert!(store.take_landings().is_empty());
     assert_eq!(
-        db.rows(&format!(
-            "SELECT count(*) FROM tx_ledger WHERE id = '{id}'"
-        )),
+        db.rows(&format!("SELECT count(*) FROM tx_ledger WHERE id = '{id}'")),
         vec![vec![Some("0".to_owned())]],
         "no row is made for a commit that may have landed"
     );
