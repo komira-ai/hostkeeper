@@ -95,10 +95,19 @@ Two consequences, both changes of code:
 
 - **`lease.commits` goes.** Every transaction today updates the one row `lease` (`writer.rs:318`), which would serialize all
   writers of all tasks on one row lock. Its job, settling a commit of unknown outcome after a lost session (`writer.rs:374`),
-  moves to a ledger: each transaction inserts `tx_ledger(id uuid primary key, at_unix)` with an id the task made before
-  `COMMIT`; after a reconnect, `SELECT 1 FROM tx_ledger WHERE id = $1` says whether it landed. Any task prunes rows older than
-  an hour in its reload tick (`DELETE ... WHERE at_unix < $1`, idempotent). The `lease` row is left as it is, written once
-  by the old release only.
+  moves to a ledger, and the settle is by **idempotent retry, not by lookup**. Why a lookup is unsound: today a new session can
+  settle only after the old backend is dead (it must take the exclusive lock, and the `lease` update is in the same
+  transaction); a shared lock excludes nobody, so a `SELECT` of the ledger can run while the old backend is still finishing
+  its `COMMIT`, find nothing, and conclude "did not land". The rule instead: every writing transaction inserts
+  `tx_ledger(id uuid primary key, at_unix)` as its **first** statement, with an id the task made before `BEGIN`. After a
+  lost session the task retries the same closure, in a new transaction, with the **same id**, again as the first statement.
+  A unique-index insert waits for an in-progress transaction that inserted the same key and then fails if it committed, so
+  the retry is decided by Postgres, not by timing: a unique violation means the first attempt landed (the retry rolls back
+  and the caller gets the first attempt's outcome, re-read from the rows it wrote, for an order the order row of that host);
+  success means it did not, and the retry's own writes are the only ones. A duplicate audit line, a double increment or a
+  second order cannot happen. The retry window is bounded (a few seconds, a config key, section 12), far inside the hour a
+  ledger row lives. Any task prunes rows older than an hour in its reload tick (`DELETE ... WHERE at_unix < $1`,
+  idempotent). The `lease` row is left as it is, written once by the old release only.
 - **"Deposed" goes.** Another task's epoch is normal now (`config.rs:798`, `ops.rs:551`). `Lost`/`Reviving` stay: a task whose
   session is gone orders nothing until it is revived (`writer.rs`), and answers 503 meanwhile.
 
@@ -116,22 +125,36 @@ listen)` every few seconds. It is for the status page and for the start rule of 
 
 | Table | Holds | Logged |
 |---|---|---|
-| `fleet_hosts(host_id pk, role, beat bytea, seen_unix, healthy_run int, running bytea, repo_report bytea, instance)` | the last heartbeat of each host (the proto, as received), the count of healthy beats in a row (today `Bake`), what it runs and its repository report (today `running.rs:43`, `repository_push.rs:119`) | unlogged, `fillfactor` 50, no index on updated columns (HOT) |
+| `fleet_hosts(host_id pk, role, beat bytea, seen_unix, sent_unix, running bytea, repo_report bytea, instance)` | the last heartbeat of each host (the proto, as received), the host's own `sent_unix` of it, what it runs and its repository report (today `running.rs:43`, `repository_push.rs:119`) | unlogged, `fillfactor` 50, no index on updated columns (HOT) |
+| `fleet_bakes(host_id, service, target, beats int, at_unix)` | the count of healthy beats in a row at one version, per service and host (today `Bake`, `bake.rs:33`) | unlogged |
 | `fleet_orders(host_id, service, target, uninstall_id, at_unix, try)` | an outstanding order that holds a slot (today `orders`, `ORDER_AGE` 120 s) | logged |
 | `fleet_tries`, `fleet_canaries`, `fleet_queued_orders(host_id, service, kind, order_id)`, `fleet_found`, `fleet_defers` | the other maps of `Fleet` (`fleet.rs:180-210`) | logged |
-| `cluster_quiet(id, until_unix)` and `fleet_epoch(n)` | the start rule below | logged |
-| `desired_seq` (sequence) and columns `set_seq` on `desired`/`group_desired` | the FIFO order of the queue (today `queue.rs:58`, per task) | logged |
+| `cluster_quiet(id, until_unix)` | the start rule below | logged |
+| `desired_seq` (sequence) and columns `set_seq`, `set_for` on `desired`/`group_desired` | the FIFO order of the queue (today `queue.rs:58`, per task), and the version the `set_seq` was taken for (section 16, back-out) | logged |
 
 `fleet_hosts` is unlogged because it is rebuilt by the next beat of each host within 15 s (`heartbeater.rs:124`); a database
 crash empties it. Orders, tries and canaries are decisions and stay logged. A row older than `DOWN_AFTER` (45 s) means down,
 as `is_live` says today. Whether unlogged pays for itself is measured before it is chosen (section 7).
 
 **The start rule becomes the cluster's.** Today a restarted task forgets its outstanding orders and waits `QUIET_START` for the
-hosts to report. With orders durable that wait is not needed for them; it is needed only when `fleet_hosts` is empty or stale
-(a database crash, or the first start). The rule: no order is placed while `cluster_quiet.until_unix` is in the future. Any
-task sets it to `now() + quiet` when it finds `fleet_epoch` not matching a sentinel row kept in the unlogged table (the
-sentinel vanishes when the table is truncated by a crash). A deploy of one task changes neither, so a deploy no longer
-quiets the fleet: that is a gain over today.
+hosts to report. With orders durable that wait is not needed for them; it is needed whenever the fleet table is **empty or
+stale as a whole**: a database crash (the unlogged table is truncated), a clean Postgres or NUC restart, any outage longer
+than `DOWN_AFTER`, the first start, and a back-out followed by a new cutover (the release before wrote no `fleet_hosts`
+rows, so the old ones are old). In all of them the rows still there carry an old `seen_unix`, so judging "down" by `seen_unix`
+alone would count most of the fleet as down while the first hosts beat, and `min_up`, the stages and the halt logic (a host
+that did not come back) would act on a partial fleet. The rule keys on the signal itself, a gap in the beats:
+
+- The heartbeat's one statement reads `max(seen_unix)` of `fleet_hosts` **as the statement's snapshot has it, before its own
+  upsert** (a data-modifying CTE does not see its own rows), and in the same statement, when that value is older than
+  `DOWN_AFTER` or the table is empty, sets `cluster_quiet.until_unix = greatest(until_unix, now() + quiet)`. No sentinel row
+  and no epoch are needed: an empty table is a gap too. The table holds tens to hundreds of rows (not measured, section 7), so the
+  `max` is a scan of a few pages with no index on the updated column (M1 measures it; the fallback is one more row,
+  `cluster_quiet.last_beat_unix`, written at most once per second).
+- Every deciding transaction reads `cluster_quiet` under the lock and places **no order** while `until_unix` is in the future;
+  halts and holds still apply. It is evaluated in each deciding transaction, so a task that started a moment ago and one that
+  has run for a week decide alike.
+- A deploy of one task changes neither the beats nor the gap, so a deploy no longer quiets the fleet: that is a gain over
+  today. Two beats at once that both see the gap both write the same `greatest`: idempotent.
 
 ### 5.2 The heartbeat, and where decisions run
 
@@ -141,13 +164,48 @@ mutex's maps.
 Two paths:
 
 - **Converged path** (the common one: the host runs what is wanted, nothing is queued for it, no rollout concerns it). One
-  statement: upsert the host's `fleet_hosts` row, and in the same statement read the state-version vector (section 6), the
-  host's deny row and the host's queued orders. If all are as the task's caches say, reply. No lock, one round trip.
+  statement, with these parts in one round trip:
+  1. the **ordered beat upsert** of the host's `fleet_hosts` row (below);
+  2. the host's `fleet_bakes` rows, advanced in SQL from the row's old values under its row lock, in the same statement and
+     only when the beat was applied: `beats` is `old.beats + 1` when the beat counts (health `Healthy`, not updating, no
+     promotion pending: a function of the beat alone) and the old row has the same `target` and a `at_unix` younger than
+     `DOWN_AFTER`, `1` when it counts and the old row does not match, and the row is deleted when it does not count. This is
+     `Bake::after` (`bake.rs:42`) written as a `CASE`; the Rust function stays as the reference and a test runs both on the
+     same beats (`bake_in_sql_matches_bake_after`). The health that matters is the one the agent sent in the beat, not a
+     decision against the desired state, so nothing in it needs the deciding path;
+  3. the **release of slots**: `DELETE FROM fleet_orders WHERE host_id = $h AND service = $s AND target = <version the
+     applied beat reports>` (the host reached the target; today `Fleet` drops the order on that beat), also only when the
+     beat was applied. A slot is also freed by age: `ORDER_AGE` is read as a filter by every reader, and the deciding
+     transaction, under `K_rollout`, deletes the aged rows. Deleting a row without the lock only frees a slot, so a decision
+     that reads the row a moment before the delete is conservative (one fewer order), never wrong;
+  4. the gap rule above, the state-version vector (section 6), the host's deny row and the host's queued orders.
+  If all are as the task's caches say, reply. No lock, one round trip. **This path never places an order, a halt or a plan
+  step**, so a version vector read here, before an operator's commit, can only delay an order by one beat; it cannot let one
+  through (the next paragraph is the path that can).
+- **Ordered beat upsert.** An agent dials a new connection per beat and tasks vary in latency, so beats of one host reach
+  Postgres out of order (beat n stalls on a pool wait in B, beat n+1 is written by A, then B writes n: `running` goes back
+  and the bake and orders are wrong). The upsert is `INSERT ... ON CONFLICT (host_id) DO UPDATE ... WHERE
+  excluded.sent_unix >= fleet_hosts.sent_unix OR fleet_hosts.seen_unix < now() - $reorder`, and the bake and slot statements
+  above run only when it updated or inserted a row (a `RETURNING` CTE). `sent_unix` is the host's own clock in the heartbeat
+  (`agent.proto:173`, optional, in seconds; beats are 15 s apart, so a tie means the same beat re-sent and applying it is
+  idempotent). The second arm is for a host whose clock stepped back: a beat lower than the stored one is dropped, unless the stored row is
+  itself older than `--beat-reorder-secs` (default 30, a config key, below `DOWN_AFTER`), after which the host is believed
+  again. An agent that predates the field sends none: its `sent_unix` is stored as 0, so its order is the arrival order, as
+  today (question 9). A dropped beat still gets its reply (the
+  decision of the current row).
 - **Deciding path** (an order, a halt, a plan step may follow). A transaction that takes the one global lock
-  `pg_advisory_xact_lock(K_rollout)`, reads the fleet rows and halts it decides from, runs the pure decision, inserts the order
-  rows (and audit, and halt) and commits. The lock is held for the read, the decision and the insert, and released by the
-  commit. `READ COMMITTED` is enough: the lock is taken before the reads, so every read sees every commit of every earlier
-  holder.
+  `pg_advisory_xact_lock(K_rollout)` and then **re-reads every input of the decision from the rows, never from a per-task
+  cache**: the fleet rows (`fleet_hosts`, `fleet_bakes`, `fleet_orders`, tries, canaries, queued orders), `cluster_quiet`, the
+  halts, holds, force and retire marks, the desired versions with their `set_seq`, the layout, the verdicts and the hosts'
+  deny rows (the parts `desired`, `ops`, `layout`, `verdicts` and the fleet; one pipelined batch). It runs the pure
+  decision, inserts the order rows, the audit and the plan progress and halts the decision itself raises (rows of `ops`),
+  bumps `state_versions` for `ops` when it wrote any, and commits. The caches of section 6 serve the converged path and the
+  UI only; they never feed a decision. `READ COMMITTED` is enough **because every writer of an input of a decision takes
+  `K_rollout` too** (section 6, the lock order): an operator's halt, hold, force, retire, desired change, layout or verdict
+  commit either completes before the decision's lock is granted, and then every read of the decision sees it, or it waits
+  for the decision's commit and is ordered after it. The deny row is the exception, read under `READ COMMITTED` without that
+  lock: a deny that commits after the decision's read cannot be seen by it, which is the same as today's order reaching a
+  host a moment before its deny (the host is refused at its next beat).
 
 One lock, not one per (group, package): the deciding path runs only while something rolls, its transaction is a few
 statements, and the one-live-rollout rule is cluster-wide anyway. A finer lock is an optimisation to add if section 7 shows
@@ -171,9 +229,9 @@ sequenceDiagram
     B->>P: upsert + read (1 statement)
     P-->>B: desired version changed, host is behind
     B->>P: BEGIN; pg_advisory_xact_lock(K_rollout)
-    B->>P: SELECT fleet rows, halts, plan of the group
+    B->>P: SELECT fleet rows, quiet, halts, holds, desired, layout, verdicts (no cache)
     B->>B: pure decision (stages, live, queue)
-    B->>P: INSERT fleet_orders, audit; COMMIT
+    B->>P: INSERT fleet_orders, plan/halt rows, state_versions(ops), audit; COMMIT
     B-->>H: reply with order
     Note over A,B: a task that crashes after COMMIT before the reply: the host beats again,<br/>the next task finds the order row inside ORDER_AGE and returns the same order
 ```
@@ -184,11 +242,13 @@ version, so the queue is a total order on every task. The existing tie-breaks (`
 locked transaction, so two tasks cannot each see "none live".
 
 **Halts are storage-first.** A halt is raised by the deciding transaction that sees the failure, or by an operator call (a
-row transaction, section 6). Every deciding transaction reads the halt rows after it holds the lock, so a halt is global from
-its commit and no later order of any task precedes it. The marker file and the `pending` retry queue (`halt.rs:15-22`,
+row transaction, section 6). An operator halt takes `K_rollout` (section 6), so it commits entirely before or entirely after a
+deciding transaction. Every deciding transaction reads the halt rows after it holds the lock, so a halt is global from its
+commit and no order whose transaction takes the lock after it is placed against it; an order that committed before the
+halt's lock was granted was placed before the halt was acknowledged. The marker file and the `pending` retry queue (`halt.rs:15-22`,
 `ops.rs:500-512`, `ops_pending.rs`) are not used with Postgres; the file store keeps them until C9. The guarantee memory-first
 gave ("a halt stops the service even with the database slow or down") is kept in the other way: with the database down no
-task orders (principle 4). With it slow, the halt waits behind the lock for milliseconds, and no order can pass it.
+task orders (principle 4). With it slow, the halt waits behind a deciding transaction for milliseconds, and no order can pass it.
 
 **Other heartbeat caches** (what each host runs, repository reports, facts heard, alerts' `seen`): columns of `fleet_hosts`
 or the `alerts` table (section 9), written by the same upsert only when they changed. Counters that are only diagnostics
@@ -201,6 +261,8 @@ from shared rows by polling the version vector.
 
 ```
 BEGIN
+  INSERT INTO tx_ledger(id, ...)          -- first statement, section 4
+  pg_advisory_xact_lock(K_rollout)       -- only for the parts a decision reads (desired, ops, layout, verdicts)
   pg_advisory_xact_lock(K_part)          -- one lock per part, in a fixed order when an edit spans parts
   reload the part from its rows          -- fresh, under the lock
   apply the existing edit closure to the fresh copy
@@ -212,14 +274,22 @@ COMMIT
 
 This is the `writing` mutex of today moved to Postgres, and the closure and the diff are the code that exists, so the call
 sites do not change. A part is the unit of lock, cache and version; the parts are `desired`, `ops`, `accounts`, `layout`,
-`verdicts`, `enrollment`. A flow across parts (force, retire) takes their locks in the fixed order of that list. A
+`verdicts`, `enrollment`. **The one lock order, global:** `K_rollout`, then the part locks in the order of that list, then the
+`audit_counter` row last (section 6, audit numbers). Every transaction that takes more than one of them takes them in this
+order and none takes a lock twice or in another order, so there is no cycle. An edit of `desired`, `ops`, `layout` or
+`verdicts` (set desired, hold, halt raise and clear, force, retire, layout, verdict) takes `K_rollout` first: those are the
+inputs of a decision (section 5.2), and this is what makes a halt acknowledged to an operator outrun-proof. An edit of
+`accounts` or `enrollment` does not (no decision reads them under the lock). A flow across parts (force, retire) takes their
+locks in the fixed order of that list. A
 reload per edit costs one part's rows (operator edits are rare; measured in section 7). `if_generation` on `SetDesired`
 (migration `0003`) is unchanged and still the caller's optimistic check.
 
 **Invalidation.** `state_versions(part pk, version bigint)` is read by the heartbeat's statement (section 5.2) and, for the UI
 and the API, by one `SELECT` per request; a changed version reloads that part, an unchanged one reads from memory. No
 `LISTEN/NOTIFY`: it needs a dedicated connection and a poll fallback anyway (B20). The bound on staleness is zero for the
-heartbeat path and one request for the UI.
+decision (it reads rows, not caches), at most one beat for the converged path (which cannot order), and one request for the
+UI. Every transaction that writes rows of a part bumps its `state_versions` row, the deciding transaction included (the
+`ops` rows it writes: halts, plan progress).
 
 **Enrollment.** `RecordsLock::in_process` (`records.rs`, `enroll/store.rs:124`) goes. Approve, reject, renew and expire become
 conditional writes in a transaction: `UPDATE enrollment_requests SET state='approved' WHERE request_id=$1 AND
@@ -235,7 +305,11 @@ that has seen 11 must not miss a 10 that commits later. A sequence does not give
 write before `COMMIT`: the row lock is held until the commit, so numbers follow commit order, and a rollback leaves no gap.
 Only transactions that write audit lines take it (operator edits, orders, halts, not the converged heartbeat). This keeps
 the decision of coordinator-storage.md section 14 ("no gaps"), which only needed its lock replaced. The column and primary key
-are unchanged; the release before reads `max(seq)` at start and continues from it. The facts generation of a host (today the
+are unchanged; the release before reads `max(seq)` at start and continues from it. **Return after a back-out:** the release
+before ignores `audit_counter` and writes `max(seq) + 1` on, so the counter is stale when the new release comes back. At
+start, after taking the shared lock (no writer of the release before can run then) and before serving, a task runs
+`UPDATE audit_counter SET next = greatest(next, (SELECT coalesce(max(seq), 0) + 1 FROM audit))`: idempotent, monotonic, and
+serialized with other tasks' audit writers by the row lock. The same start step re-stamps the queue (section 16). The facts generation of a host (today the
 audit number at open plus an in-memory raise, `facts.rs:100-115`) becomes a column `enrollment_hosts.facts_generation`
 (default 0) raised in the transaction that changes the host's labels or group, taking at least the audit number as the
 release before does, so every task answers the same number and a flip does not refetch facts.
@@ -254,8 +328,9 @@ minute for the real host count (not read in this work).
 |---|---|---|---|
 | Heartbeat, converged | 1 (upsert + versions + deny + queued) | row lock on the host's own row | 0 |
 | Heartbeat, a cache is stale | 1 + 1 reload of the changed part | as above | 0 |
-| Heartbeat, deciding (order, halt, plan step) | 1 + `BEGIN`, lock, read fleet+halts, insert order+audit, `COMMIT` as 3 to 4 pipelined | `K_rollout` held for the transaction; `audit_counter` row for the last statement | 0 |
-| Operator edit (desired, hold, halt clear, user) | `BEGIN`, lock, reload part, write, version, audit, `COMMIT`: 3 to 4 | the part's lock, `audit_counter` | 1 write session |
+| Heartbeat, deciding (order, halt, plan step) | 1 + `BEGIN`+lock, one pipelined read of every input, insert order+plan/halt rows+versions+audit, `COMMIT`: 4 to 5 | `K_rollout` held for the transaction; `audit_counter` row for the last statement | 0 |
+| Operator edit of desired, ops, layout, verdicts (hold, halt raise/clear, force, retire) | `BEGIN`, ledger, `K_rollout`, part lock, reload part, write, version, audit, `COMMIT`: 3 to 4 (pipelined) | `K_rollout` (waits for at most one deciding transaction), the part's lock, `audit_counter` | 1 write session |
+| Operator edit of accounts, enrollment (user, token) | as above without `K_rollout` | the part's lock, `audit_counter` | 1 write session |
 | UI or API read | 1 (versions) + 1 reload only when changed | none | 0 |
 | UI login / request | 1 read of the session row, + 1 write at most every 30 s | the session row | 0 |
 | Enrollment approve / renew | 2 to 3 (`FOR UPDATE`, conditional update, audit) | the request or host row | 2 transactions |
@@ -264,7 +339,7 @@ minute for the real host count (not read in this work).
 
 If the heartbeat's converged path is more than a few hundred microseconds, the fallbacks are in this order: the narrow row
 and `fillfactor` (done by design), a beat that changes nothing but `seen_unix` skips the write when the stored `seen_unix` is under a few seconds old (a config key), then a per-task read cache of `nodes` with a 1 to 2 s TTL
-(config key). A hot-row lock on `K_rollout` is measured, and only then a finer lock considered.
+(config key). A hot-row lock on `K_rollout` is measured (operators now queue on it too), and only then a finer lock considered.
 
 ## 8. Sessions and the login limiter
 
@@ -385,6 +460,8 @@ sequenceDiagram
 | `--health-listen` | none | readiness address on `cp-hk` |
 | `--cache-nodes-ttl-ms` | 1000 | per-task cache of read-only parts of the fleet, if section 7 needs it |
 | `--session-touch-secs` | 30 | write of `last_used_unix` at most this often |
+| `--beat-reorder-secs` | 30 | a beat older (by the host's `sent_unix`) than the stored one is dropped unless the stored row is older than this |
+| `--ledger-retry-secs` | 10 | how long a task retries a transaction of unknown outcome before it answers 503 |
 | existing: `--quiet-secs` (floor in `config.rs:512`), `--tls-reload-secs` | unchanged | the cluster's quiet rule uses `--quiet-secs` |
 
 The flags are additive; no flag is removed or renamed. `--halt-marker-file` is accepted and ignored with Postgres.
@@ -409,15 +486,27 @@ The protocol to check is the deciding transaction and the conditional writes, no
 - **A model of the protocol** (TLA+/PlusCal, `docs/design/models/` in the PR that builds M2; run by an `xtask` verb outside
   the PR gate, since TLC needs Java and B9 allows only build and unit tests with coverage). State: tasks A and B, hosts
   `h1`, `h2`, services `s1`, `s2`, the shared rows (`orders`, `halts`, `desired.set_seq`, `cluster_quiet`), each task's cache
-  and version. Steps: a beat arrives on either task at any time; a deciding transaction is one atomic step under `K_rollout`;
-  a task may crash after `COMMIT` and before the reply, or before `COMMIT`; an operator raises a halt on either task; a
-  desired version changes. Invariants: live rollouts never exceed `--live-rollouts`; updating hosts of a stage never exceed
+  and version. Steps: a beat arrives on either task at any time, and beats of one host may be applied in either order;
+  a deciding transaction is one atomic step under `K_rollout`, but its reads and its insert are separate steps inside the
+  lock so that an operator write that does not take the lock is *found* to break it; an operator edit of a decision input
+  (halt, hold, force, retire, desired, layout, verdict) is a transaction that takes `K_rollout` or, in the negative variant,
+  does not; a task may crash after `COMMIT` and before the reply, or before `COMMIT`; a commit may be of unknown outcome
+  (the connection drops while the backend still finishes) and is retried with the same ledger id; the database may restart
+  and empty `fleet_hosts`, or the beats may stop for longer than `DOWN_AFTER`; the release before may run between two
+  runs of the new one; a desired version changes. Invariants: live rollouts never exceed `--live-rollouts`; updating hosts of a stage never exceed
   `max_updating`; `min_up` holds; an order is never lost or duplicated for one `(host, service, target)` inside `ORDER_AGE`; a
-  halt committed before an order's `COMMIT` is read by that order's decision; queue order equals `set_seq` order on every
+  halt, hold, force or desired change whose transaction committed before the lock of an order's transaction was granted is
+  read by that decision (and is not read after: one lock order, no cycle); a transaction of unknown outcome lands exactly
+  once; the stored `running` of a host never moves to an older beat; no order is placed while `cluster_quiet` is in the
+  future, and it is set after every gap of `DOWN_AFTER` in the beats; the audit counter and `set_seq` never reuse a number
+  after the release before ran; queue order equals `set_seq` order on every
   task; audit numbers follow commit order. Liveness: a host behind its target gets an order if a slot is free.
 - **An exhaustive state-space test in Rust** (the part CI runs, T11, T12): the pure decision functions over an in-memory
   store with transactions at statement granularity, all interleavings of two tasks over a bounded script, checking the same
-  invariants. It is the test that the unlocked variant fails (T15: negative case) and the locked one passes.
+  invariants. It is the test that the unlocked variants fail (T15: negative cases: an operator halt without `K_rollout`; a decision that
+reads a cache; a lookup-settle; an unguarded beat upsert; the quiet rule keyed on a missing sentinel) and the locked one
+passes. The states are the reachable ones of a script of two tasks, two hosts, two services and four operator and
+failure events; the bound is kept small and stated in the test.
 
 Sanity run for this document, not the model: a throwaway explicit-state search of two tasks each deciding one of two services
 with a limit of one live rollout (script in the author's scratch, not committed) finds the double order when "read the live
@@ -427,8 +516,8 @@ The real models are M2.
 ## 15. Compatibility (B8) and tests
 
 All changes are additive: tables `fleet_*`, `cluster_quiet`, `instances`, `sessions`, `login_failures`, `alerts`,
-`state_versions`, `tx_ledger`, `audit_counter`, the sequence `desired_seq`, columns with defaults (`set_seq`,
-`facts_generation`). No column renumbered, renamed or re-meant; no proto change. The fence trigger is untouched.
+`state_versions`, `tx_ledger`, `audit_counter`, `fleet_bakes`, the sequence `desired_seq`, columns with defaults (`set_seq`,
+`set_for`, `facts_generation`). No column renumbered, renamed or re-meant; no proto change. The fence trigger is untouched.
 Migration `0019` says `older-releases: may-run` (the migration lint's header rule; `0019` adds only). Why that is safe, and
 no `refuse`: while any new task runs it holds the shared lock, so the release before cannot start (exclusive lock refused);
 with none running the release before takes the exclusive lock and runs on its own tables, ignoring the new ones, which is
@@ -445,6 +534,15 @@ Tests, named (each asserts the behaviour in its name; the PR bodies list them by
   with the new tables exported or ignored by the importer.
 - `two_tasks_decide_one_rollout_at_a_time`, `halt_before_commit_blocks_the_next_order`, `order_after_crash_is_returned_again`,
   `queue_follows_set_seq_on_both_tasks`, `audit_numbers_follow_commit_order`: the Rust state-space test of section 14.
+  Added by the review of this document: `acknowledged_halt_is_not_outrun_by_an_order_of_the_other_task`,
+  `acknowledged_hold_and_desired_change_are_read_by_the_next_decision`, `unknown_outcome_commit_lands_once_by_retry`
+  (including the old backend still committing), `stale_beat_does_not_overwrite_a_newer_one`,
+  `bake_in_sql_matches_bake_after`, `order_slot_is_freed_when_the_applied_beat_reports_the_target`,
+  `no_order_after_a_gap_in_beats_until_quiet_ends` (clean database restart, outage over `DOWN_AFTER`, back-out then
+  new cutover), `lock_order_has_no_cycle`.
+- Return after a back-out (the old-release-on-new-data test extended with the new release again after it):
+  `new_release_again_continues_audit_numbers_after_the_release_before_ran` and
+  `set_seq_of_a_row_changed_by_the_release_before_is_restamped_in_queue_order`.
 - `denied_host_is_refused_by_the_other_task`, `one_request_is_approved_once`, `session_is_valid_on_the_other_task`,
   `login_failures_count_across_tasks`, `expiry_audits_each_request_once`, `alert_is_logged_once`.
 - `lost_session_orders_nothing_until_revived_and_settles_by_ledger` (replaces the `lease.commits` settle test).
@@ -468,7 +566,14 @@ service-container tests (T17: no arm covered only by a different binary).
 **Back-out.** Replicas to 1 and `stop-first` is a service update, no downgrade (the same release). To go back to the release
 before: `docker service update --replicas 1 --update-order stop-first --image <release n>`; it takes the exclusive lock once
 the new tasks are stopped, runs its single-writer code on the same database (the audit counter and the sequences are ignored;
-its next audit number is `max(seq) + 1`), forgets the fleet and quiets 30 s. The CA secret and tmpfs steps are reverted by
+its next audit number is `max(seq) + 1`), forgets the fleet and quiets 30 s. **Coming back to the new release** after that:
+its start (under the shared lock, so no release before is running) runs the two re-seeds: `audit_counter.next =
+greatest(next, max(seq) + 1)` (section 6), and the queue's. The release before changes a desired version without touching
+`set_seq` or `set_for`, so a row whose `set_for` is not its current version, or whose `set_seq` is NULL, is *changed or
+unstamped*; those rows are given fresh numbers from `desired_seq` (first raised to `greatest(last, max(set_seq))`) in the
+order of the release before's own queue rule (`queue.rs:10-12` tie-breaks), under `K_rollout`. A NULL `set_seq` ranks before
+every stamped row for the few moments until this runs, so no task decides on it differently; and because `fleet_hosts` is stale
+by then, the gap rule of section 5.1 quiets the fleet. The CA secret and tmpfs steps are reverted by
 the reverse edge step; the volume's copy is why they are reversible. Fix forward is the normal course (the rollout policy of
 the farm): the back-out is a stopgap while a fix ships.
 
@@ -479,9 +584,9 @@ the farm): the back-out is a stopgap while a fix ships.
 | M1 | Measure on the NUC: round trip on the socket, `fleet_hosts` write cost at the real host count, `max_connections`; a table in this document | none | S |
 | M2 | The models of section 14 (spec and Rust state-space test), failing on the unlocked variant | M1 | M |
 | M3 | Shared lock and pool: `pg_try_advisory_lock_shared`, the `tx_ledger` settle, no `lease.commits` write, no deposed exit, `instances`; `0019` part 1. Still one task | M2 | L |
-| M4 | Row-transaction edits and `state_versions` invalidation for desired, ops, accounts, layout, verdicts; `audit_counter`; `facts_generation` | M3 | L |
+| M4 | Row-transaction edits and `state_versions` invalidation for desired, ops, accounts, layout, verdicts, with the lock order of section 6; `audit_counter` and its start-time re-seed; `facts_generation` | M3 | L |
 | M5 | Enrollment: conditional writes, `FOR UPDATE`, fresh deny read; spent-token cache | M3 | M |
-| M6 | The fleet in Postgres: `fleet_*`, `cluster_quiet`, `set_seq`, the deciding transaction, storage-first halts; the converged path | M4, M5 | L |
+| M6 | The fleet in Postgres: `fleet_*`, `cluster_quiet` and the gap rule, `set_seq`/`set_for` and the start-time re-stamp, the ordered beat upsert, the in-SQL bake, the deciding transaction that re-reads every input, storage-first halts; the converged path | M4, M5 | L |
 | M7 | Sessions and login limiter; alerts, expiry and initial-admin made exactly-once | M3 | M |
 | M8 | `--health-listen`; docs (`coordinator-state.md`, `rollout-plans.md`, `holds-and-force.md`, `enrollment.md`) updated; this document's tags turned to Built | M6, M7 | S |
 | M9 | Infrastructure (komira-internal, outside this repository): CA secret and config, tmpfs, edge health checks and Mac listener, `replicas: 2` start-first. The cutover of section 16 | M8 | M |
@@ -516,3 +621,37 @@ the database), "The audit's numbers" (still gap-free, by a counter row, not by t
 7. **Replica count.** Recommendation: 2 (one drains while the other serves), not 3: one node, one database.
 8. **Release rollback.** Recommendation: `may-run` migrations as designed, so the back-out is a service update; confirm the
    facts generation (section 6) never going backward on rollback is acceptable (the host refetches facts once if it does).
+9. **Beat order: the host's `sent_unix` or a new field?** Recommendation: `sent_unix` with the guard of section 5.2 now (no
+   proto change, and every current agent sends it). If an agent without it must be ordered too, add an optional `beat_seq`
+   to `HeartbeatRequest` (additive, B8) in a later release; not needed before.
+
+## 20. Discussion: the review of this document
+
+Findings of the first review and what was done, including where a finding was taken only in part.
+
+1. **A halt, hold or desired change can be outrun** (blocker). Right, and the cause was as stated: the deciding transaction
+   took `K_rollout`, operator edits took only their part lock, and the doc named only the fleet and the halts as read in
+   the transaction. Changed: the deciding transaction re-reads every input from the rows (section 5.2); the edits of the
+   parts a decision reads take `K_rollout` first, with one stated lock order (sections 5.2, 6); the deciding transaction bumps
+   `state_versions` for the `ops` rows it writes; the invariant and the negative variants are in section 14. One point of the
+   finding is taken in part: the converged path's cache validated by the earlier statement is *not* a defect, because that
+   path never orders; at worst it delays an order by one beat. The deny row is left out of the lock on purpose (section 5.2).
+2. **The ledger lookup is unsound with a shared lock** (major). Right: the old release's exclusive lock was what made the
+   lookup safe. Changed to retry by the same id as the first statement of the retried transaction, which Postgres decides by
+   the unique index (section 4), instead of a `pg_stat_activity` wait, which is racy by pid reuse and needs a privilege the
+   coordinator's role does not need otherwise.
+3. **The quiet rule keys on the wrong signal** (major). Right: the sentinel covered the crash only. Replaced by the gap rule
+   (section 5.1), which covers a crash, a clean restart, an outage over `DOWN_AFTER`, the first start and a back-out followed by a
+   cutover; the sentinel and `fleet_epoch` are gone. Not claimed: that the cost of the `max` is small at the real host count
+   (not read; M1 measures it).
+4. **The heartbeat upsert can be overwritten** (major). Right on the ordering and on the unstated owners of the bake and of the
+   slots. Changed: the guarded upsert and who frees a slot (section 5.2). **Not right** on one point: the bake *can* be computed
+   in SQL, because `Bake::after` reads only the beat (health, updating, promotion pending, version) and the previous row, not
+   the desired state; the health is the agent's word in the beat. It is a `CASE` in the same statement, with a test against the
+   Rust function. The finding's fix of a per-host beat sequence is offered as question 9 (an optional proto field) and
+   not taken first, because `sent_unix` is already sent and no proto change is needed.
+5. **Back-out then roll-forward breaks audit numbering** (major). Right. Changed: the start-time re-seed of `audit_counter`,
+   the `set_for` column to detect a row the release before changed, and the queue position of NULL rows (sections 6, 16), with
+   two tests (section 15).
+
+Not changed by the review and still open: what was not checked (section 13), and the measurements of M1.
