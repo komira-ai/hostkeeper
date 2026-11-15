@@ -1,0 +1,173 @@
+// hostkeeper.operator.v1: the `Ssh` service of the operator API and its refusals (`SshRefusal`):
+// short-lived OpenSSH user certificates for one host, the host keys pinned for it, the revocation
+// of certificates, and the byte stream the coordinator opens to a host's sshd
+// (docs/design/ssh-through-coordinator.md). The rest of the package, `Enrollment` and
+// `EnrollmentRefusal` (enrollment.proto) and `Audit` and `AuditRefusal` among it, is
+// operator.proto; this file is the same package and API, kept apart so that each file stays
+// short. What the daemon is told and reports of its sshd (`SshAccess`, `SshReport`) is in the
+// host API, agent.proto.
+//
+// Served by: the coordinator, on its control listener, as operator.proto says. `Tunnel` is gRPC
+// only: it is not in the JSON gateway and has no generated command line (the command table holds
+// unary calls only; `hkctl ssh-proxy` makes the call).
+//
+// Authentication: `Ssh` takes the operator's credential only; no CI token reaches it. A caller
+// may use a host only when the coordinator's operators file lists it for that host, its group or
+// its class: default deny.
+//
+// Refusals: a gRPC status whose message is exactly one token of `SshRefusal`, written as the
+// value's name without the prefix, in lower case; the status code is the one each value names. A
+// refused request changes nothing; a call that cannot write its audit line changes nothing either
+// (`audit_unavailable`).
+//
+// Units: as operator.proto says; times are unix seconds. A host id is the id an enrollment made.
+// A request is at most 8 KiB, and a `TunnelFrame` carries at most 16 KiB of `data`. A reason is
+// at most 200 printable ASCII characters. A fingerprint is `SHA256:` and the 43 base64 characters
+// OpenSSH prints.
+//
+// Extending: as operator.proto says: add fields, messages, enum values and RPCs; never renumber,
+// rename, retype or remove one, and never reuse a number.
+syntax = "proto3";
+
+package hostkeeper.operator.v1;
+
+// Access to the hosts' sshd through the coordinator. Each call is audited under the caller's
+// name; `SignUserCert` as `ssh_cert_signed`, `Revoke` as `ssh_revoke`, and `Tunnel` as
+// `ssh_tunnel_open` and `ssh_tunnel_close`.
+service Ssh {
+  // Signs an OpenSSH user certificate for the caller's public key, good for one host and for
+  // `--ssh-cert-ttl-s` seconds. Its principal is `hk-host-<host id>`, never a value of the
+  // request. No certificate is made when the audit entry cannot be written.
+  rpc SignUserCert(SignUserCertRequest) returns (SignUserCertResponse);
+  // The fingerprints of the sshd host keys pinned for a host at its enrollment. Changes nothing.
+  rpc HostKeys(HostKeysRequest) returns (HostKeysResponse);
+  // Revokes the certificates of an operator, or one certificate by serial. The serials reach the
+  // hosts in `SshAccess.revoked_serials`, and the operator's open tunnels close.
+  rpc Revoke(RevokeRequest) returns (RevokeResponse);
+  // A byte stream to port 22 of a live host. The first frame the client sends is `open`; the
+  // coordinator answers `opened` once the connection is made, and `data` frames then carry the
+  // ssh bytes both ways until either side sends `close`. gRPC only.
+  rpc Tunnel(stream TunnelFrame) returns (stream TunnelFrame);
+}
+
+// Why `Ssh` refused a request. The token is the value's name without the prefix, in lower case.
+enum SshRefusal {
+  SSH_REFUSAL_UNSPECIFIED = 0;
+  // UNAUTHENTICATED: no credential, or not an operator's.
+  SSH_REFUSAL_UNAUTHORIZED = 1;
+  // PERMISSION_DENIED: the bearer is a valid CI token, which `Ssh` does not take.
+  SSH_REFUSAL_FORBIDDEN = 2;
+  // PERMISSION_DENIED: the operators file does not list the caller for the host, or lists no one.
+  SSH_REFUSAL_NOT_PERMITTED = 3;
+  // INVALID_ARGUMENT: a field that breaks its rule (an empty host id, a request too large).
+  SSH_REFUSAL_INVALID_REQUEST = 4;
+  // INVALID_ARGUMENT: a reason that is not at most 200 printable ASCII characters.
+  SSH_REFUSAL_BAD_REASON = 5;
+  // INVALID_ARGUMENT: a public key that is not `ssh-ed25519`, `ecdsa-sha2-nistp256` or `rsa` of
+  // at least 3072 bits.
+  SSH_REFUSAL_BAD_KEY = 6;
+  // NOT_FOUND: a host id that is no enrolled, approved host's.
+  SSH_REFUSAL_UNKNOWN_HOST = 7;
+  // FAILED_PRECONDITION: the coordinator holds no SSH user CA, so nothing is signed or tunnelled.
+  SSH_REFUSAL_NOT_CONFIGURED = 8;
+  // FAILED_PRECONDITION: the host's last heartbeat is older than `--ssh-live-s`.
+  SSH_REFUSAL_HOST_NOT_LIVE = 9;
+  // FAILED_PRECONDITION: the coordinator holds no address for the host's last heartbeat.
+  SSH_REFUSAL_NO_ADDRESS = 10;
+  // FAILED_PRECONDITION: `Open` names a certificate serial that is not the caller's, is
+  // revoked, or has expired.
+  SSH_REFUSAL_BAD_SERIAL = 11;
+  // NOT_FOUND: `Revoke` names an operator or a serial that no certificate was made for.
+  SSH_REFUSAL_UNKNOWN_CERT = 12;
+  // RESOURCE_EXHAUSTED: the caller or the coordinator instance holds the most tunnels it may,
+  // or the caller already has a tunnel to the host.
+  SSH_REFUSAL_TOO_MANY_TUNNELS = 13;
+  // UNAVAILABLE: the instance is stopping and takes no new tunnel; asking again reaches another.
+  SSH_REFUSAL_DRAINING = 14;
+  // UNAVAILABLE: the connection to the host's port 22 could not be made in time.
+  SSH_REFUSAL_DIAL_FAILED = 15;
+  // INTERNAL: the change could not be written, or a certificate could not be made. Nothing
+  // changed, and asking again is safe.
+  SSH_REFUSAL_STORE_FAILED = 16;
+  // UNAVAILABLE: the audit entry could not be written. Nothing changed.
+  SSH_REFUSAL_AUDIT_UNAVAILABLE = 17;
+}
+
+message SignUserCertRequest {
+  // The caller's public key in `authorized_keys` syntax.
+  string public_key = 1;
+  // Why, at most 200 printable ASCII characters; stored and audited, never in the certificate.
+  string reason = 2;
+  // The host the certificate is for.
+  string host_id = 3;
+}
+
+message SignUserCertResponse {
+  // The certificate in `ssh-keygen` syntax (`ssh-ed25519-cert-v01@openssh.com AAAA...`).
+  string certificate = 1;
+  // The account on the host the certificate logs in to.
+  string login_user = 2;
+  // The last second the certificate is valid.
+  uint64 expires_unix = 3;
+  // The certificate's key id, `<operator name>/<serial>`.
+  string key_id = 4;
+}
+
+// One message of a tunnel, in either direction.
+message TunnelFrame {
+  oneof frame {
+    // Client to coordinator, first and once: which host, and the certificate the client will
+    // present.
+    Open open = 1;
+    // The ssh bytes, at most 16 KiB, in either direction.
+    bytes data = 2;
+    // Either side: the stream is over (or, from the client, its input is: `eof`).
+    Close close = 3;
+    // Coordinator to client, once, after the connection to the host is made.
+    Opened opened = 4;
+  }
+}
+
+message Open {
+  // The host to reach.
+  string host_id = 1;
+  // The serial of the certificate the client holds, checked against the certificates made for
+  // the caller.
+  uint64 cert_serial = 2;
+}
+
+message HostKeysRequest {
+  string host_id = 1;
+}
+
+message HostKeysResponse {
+  // The pinned fingerprints, empty when none is pinned.
+  repeated string fingerprints = 1;
+  // `pinned`, `no_pin` (the host was enrolled before pins) or `changed` (the host reports others
+  // than the pinned ones; the pinned set stays what is returned).
+  string state = 2;
+}
+
+message RevokeRequest {
+  // The operator whose certificates are revoked; empty when `serial` names one.
+  string operator = 1;
+  // The certificate serial revoked; 0 when `operator` names one.
+  uint64 serial = 2;
+}
+
+message RevokeResponse {
+  // How many certificates were newly revoked.
+  uint64 revoked = 1;
+}
+
+message Opened {
+  // The account the certificate logs in to on the host.
+  string login_user = 1;
+}
+
+message Close {
+  // Why, from a closed set: `eof`, `idle`, `max_session`, `token_revoked`, `revoked`,
+  // `not_permitted`, `host_closed`, `coordinator_stopping`, `instance_lost` and `error`. A
+  // reader counts any other as `error`.
+  string cause = 1;
+}

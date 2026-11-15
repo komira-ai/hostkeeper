@@ -731,6 +731,7 @@ fn wire_names_are_pinned() {
             "install-v1",
             "private-repository-v1",
             "repositories-v1",
+            "ssh-v1",
             "target-v1",
             "verdict-acks-v1"
         ]

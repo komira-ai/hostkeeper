@@ -9,7 +9,7 @@ use protox::file::{
     ChainFileResolver, File, FileResolver, GoogleFileResolver, IncludeFileResolver,
 };
 
-use super::{GenError, RESERVED_FLAGS, generate, kebab, value_prefix, words};
+use super::{GRPC_ONLY, GenError, RESERVED_FLAGS, generate, kebab, value_prefix, words};
 
 /// Fixture sources by name, in front of the real protos (for `hostkeeper/options.proto`) and the
 /// Google ones.
@@ -313,6 +313,29 @@ fn a_streaming_rpc_fails_the_build() {
     assert_eq!(
         refused.to_string(),
         "hostkeeper.fixture.v1.S.Both: the command table holds unary calls only; this RPC streams"
+    );
+}
+
+/// Catches the stream of the SSH tunnel breaking the build or getting a command line, and the
+/// exception growing: only the RPC `GRPC_ONLY` names is left out, its service's unary RPCs stay
+/// in the table, and a streaming RPC of the same service under another name still fails.
+#[test]
+fn only_the_named_streaming_rpc_is_left_out_of_the_table() {
+    assert_eq!(GRPC_ONLY, ["hostkeeper.operator.v1.Ssh.Tunnel"]);
+    let text = "syntax = \"proto3\";\npackage hostkeeper.operator.v1;\nmessage M {}\n\
+                service Ssh { rpc Tunnel(stream M) returns (stream M); rpc Revoke(M) returns (M); }\n";
+    let table = generate(&pool(text)).expect("the tunnel is left out");
+    assert!(table.contains("method: \"Revoke\""), "{table}");
+    assert!(!table.contains("Tunnel"), "{table}");
+
+    let other = text.replace(
+        "rpc Revoke(M) returns (M);",
+        "rpc Watch(stream M) returns (M);",
+    );
+    let refused = generate(&pool(&other)).expect_err("another stream");
+    assert_eq!(
+        refused.to_string(),
+        "hostkeeper.operator.v1.Ssh.Watch: the command table holds unary calls only; this RPC streams"
     );
 }
 
