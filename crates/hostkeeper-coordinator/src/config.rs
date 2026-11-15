@@ -115,6 +115,12 @@ mod listen;
 mod bound;
 pub use bound::{Bound, bind_tcp, start_line};
 
+/// The flags this release accepts and ignores: the MDM's, the Mac serial allowlist's and the
+/// package proxy's.
+#[path = "config_retired.rs"]
+mod retired;
+pub use retired::RetiredFlags;
+
 /// The start's state files, opened as one backend once the markers a stop left beside them are
 /// settled.
 #[path = "config_state.rs"]
@@ -287,6 +293,10 @@ pub struct Serve {
     /// to an operator whose unit still names it; it is not in the help.
     #[arg(long, hide = true)]
     pub rollout_file: Option<PathBuf>,
+    /// The flags of the MDM, the Mac serial allowlist and the package proxy: accepted and
+    /// ignored for one release, and not in the help.
+    #[command(flatten)]
+    pub retired: RetiredFlags,
     /// The service whose heartbeat is the top level of a heartbeat, which a desired-state body
     /// without `service` sets and an allow-list entry without `services` admits. It names the
     /// service of the single-state desired file. Without it only the `services` entries of a
@@ -494,6 +504,9 @@ pub fn build(flags: &Serve, roots: Roots) -> Result<Parts, StartError> {
 pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<Parts, StartError> {
     if flags.rollout_file.is_some() {
         return Err(StartError::RolloutFileRetired);
+    }
+    for name in flags.retired.given() {
+        tracing::warn!(flag = name, "retired, ignored");
     }
     listen::check_listen(flags)?;
     if flags.quiet_secs < QUIET_START.as_secs() {

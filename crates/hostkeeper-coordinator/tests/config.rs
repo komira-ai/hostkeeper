@@ -114,25 +114,28 @@ fn the_release_channel_flags_are_gone() {
     build_given(&flags_of(files.args())).expect("a start without the channel");
 }
 
-/// Catches: the MDM still a part of `serve`: the flags of the MDM listener, the gate, the ABM sync,
-/// the secrets key, the package proxy and the Mac serial allowlist are no flags of `serve` any
-/// more, so a start that passes one is a usage error (exit 2) and the usage names none of them,
-/// while the flags the Macs' daemons still use (`--lan-listen`, `--record-approve-for`) stay.
-#[test]
-fn the_mdm_flags_are_gone() {
-    let files = Files::new("config-no-mdm");
+/// Catches: a release that rejects the flags of the MDM, the Mac serial allowlist and the package
+/// proxy, which the service of the release before it still passes (the deploy over those
+/// arguments would fail): each of the nineteen is accepted with the value shape it had (a value,
+/// and none for `--mdm-listen-wildcard`), the usage names none of them, `given` lists exactly the
+/// ones passed, and a start that passes all of them runs until it is stopped and ends cleanly, as
+/// a start that passes none does, while the flags the Macs' daemons still use stay in the usage.
+/// A later release removes these flags.
+#[tokio::test]
+async fn the_retired_mdm_flags_are_accepted_and_ignored() {
+    let files = Files::new("config-retired-mdm");
     let text = Cli::try_parse_from(["hostkeeper-coordinator", "serve", "--help"])
         .expect_err("help")
         .to_string();
-    for gone in ["mdm", "proxy-cache-dir", "mac-serial-allowlist"] {
-        assert!(!text.contains(gone), "{gone} is in the usage: {text}");
+    for retired in ["mdm", "proxy-cache-dir", "mac-serial-allowlist"] {
+        assert!(!text.contains(retired), "{retired} is in the usage: {text}");
     }
     for kept in ["--lan-listen", "--record-approve-for", "--ca-key-file"] {
         assert!(text.contains(kept), "{kept} is not in the usage: {text}");
     }
-    for flag in [
+    assert!(flags_of(files.args()).retired.given().is_empty());
+    let valued = [
         "--mdm-listen",
-        "--mdm-listen-wildcard",
         "--mdm-command-timeout-s",
         "--mdm-queue-sweep-s",
         "--mdm-pkg-dir",
@@ -150,14 +153,29 @@ fn the_mdm_flags_are_gone() {
         "--mdm-secrets-key-file",
         "--mac-serial-allowlist",
         "--proxy-cache-dir",
-    ] {
+    ];
+    let mut all = files.args();
+    for flag in valued {
         let mut args = files.args();
         args.extend([OsString::from(flag), OsString::from("value")]);
-        let refused = Cli::try_parse_from(args.clone()).expect_err("an unknown flag");
-        assert_eq!(refused.kind(), ErrorKind::UnknownArgument, "{flag}");
-        assert_eq!(exit_code(args), ExitCode::from(2), "{flag}");
+        let given = flags_of(args).retired.given();
+        assert_eq!(given, [flag], "{flag}");
+        all.extend([OsString::from(flag), OsString::from("value")]);
     }
-    build_given(&flags_of(files.args())).expect("a start without the MDM");
+    let mut args = files.args();
+    args.push("--mdm-listen-wildcard".into());
+    assert_eq!(flags_of(args).retired.given(), ["--mdm-listen-wildcard"]);
+    all.push("--mdm-listen-wildcard".into());
+    assert_eq!(flags_of(all.clone()).retired.given().len(), 19);
+
+    let bind = |addr: SocketAddr| async move { Ok::<_, io::Error>((addr, never as Never)) };
+    let stop = async {
+        tokio::task::yield_now().await;
+        Ok(())
+    };
+    start(flags_of(all), roots(), bind, stop)
+        .await
+        .expect("a start that passes every retired flag runs and stops cleanly");
 }
 
 /// Catches: the certificate namespaces and the legacy service not being flags with the

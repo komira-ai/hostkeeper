@@ -17,7 +17,7 @@ What was removed, and what stays:
 |---|---|
 | the crates `hostkeeper-mdm`, `-mdm-core`, `-mdm-step` (the Linux MDM host kit and the `mdm` package) | Apple's own management takes the place of NanoHUB and NanoDEP |
 | `hostkeeper-mdm-ade`, `-mdm-scep`, `-mdm-push`, `-mdm-server`, `-mdm-gate`, `-mdm-model` | the coordinator's MDM server, its identity CA, push, wire types, policy gate and model checks |
-| the coordinator's `--mdm-*` flags, `--mac-serial-allowlist` and `--proxy-cache-dir`, the MDM listener, the ABM sync, the `Mdm` service | the flags are now unknown arguments (usage error, exit 2); a call of the `Mdm` service is `UNIMPLEMENTED` |
+| the coordinator's `--mdm-*` flags, `--mac-serial-allowlist` and `--proxy-cache-dir`, the MDM listener, the ABM sync, the `Mdm` service | the flags are accepted and ignored for one release (hidden from the help, one "retired, ignored" log line each at start), then a later release removes them and they are unknown arguments (usage error, exit 2); a call of the `Mdm` service is `UNIMPLEMENTED` |
 | the package proxy (`docs/design/package-proxy.md`) | it was served only on the MDM listener's public-CA certificate; it was not deployed |
 | the UI's MDM setup and devices pages, the `hkctl mdm` tests | the pages called the removed service |
 | the release assets `hostkeeper-mdm-<version>-<platform>.*` and `mdm_<version>_amd64.deb` | withdrawn (`docs/deploy/verify-a-release.md`) |
