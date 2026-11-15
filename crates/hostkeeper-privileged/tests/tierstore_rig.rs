@@ -208,3 +208,14 @@ impl Drop for Serving {
         drop(self.0.wait());
     }
 }
+
+/// Catches an end-to-end host made under `/run`: a hosted runner may mount it `noexec`, where
+/// systemd cannot exec the daemon staged there (`203/EXEC`) and, the unit having no start limit,
+/// retries for good, so the test's `systemctl start` never returns. The tree is on disk, named by
+/// the test's tag and process.
+#[test]
+fn the_end_to_end_tree_is_on_disk_not_under_run() {
+    let tree = e2e::host_root::tree_of("x1back", 4242);
+    assert_eq!(tree, Path::new("/var/lib/hk-e2e-x1back-4242"));
+    assert!(!tree.starts_with("/run"), "{}", tree.display());
+}
