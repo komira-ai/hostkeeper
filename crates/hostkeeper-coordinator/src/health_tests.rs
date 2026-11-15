@@ -64,11 +64,7 @@ async fn get(coordinator: &Coordinator, serving: &Serving) -> (StatusCode, Bytes
 }
 
 /// The status and the body of the answer to `GET` of `path`.
-async fn get_path(
-    coordinator: &Coordinator,
-    serving: &Serving,
-    path: &str,
-) -> (StatusCode, Bytes) {
+async fn get_path(coordinator: &Coordinator, serving: &Serving, path: &str) -> (StatusCode, Bytes) {
     let (status, body, _, _) = asked(coordinator, serving, &Method::GET, path).await;
     (status, body)
 }
@@ -294,13 +290,14 @@ async fn the_drain_waits_for_its_delay_and_says_draining_meanwhile() {
     let fake = Fake::new();
     let (rig, serving) = serving_on("health-drain-delay", &fake);
     let (delay_over, delay) = oneshot::channel::<()>();
-    let mut draining = std::pin::pin!(drain_on(
-        async { 7_u8 },
-        serving.clone(),
-        async move { delay.await.expect("sent") }
-    ));
+    let mut draining = std::pin::pin!(drain_on(async { 7_u8 }, serving.clone(), async move {
+        delay.await.expect("sent")
+    }));
     assert!(futures::poll!(draining.as_mut()).is_pending());
-    assert!(serving.is_draining(), "the delay runs after the drain is told");
+    assert!(
+        serving.is_draining(),
+        "the delay runs after the drain is told"
+    );
     assert_eq!(
         get(&rig.coordinator, &serving).await,
         (
@@ -310,7 +307,11 @@ async fn the_drain_waits_for_its_delay_and_says_draining_meanwhile() {
         "draining while the delay runs"
     );
     delay_over.send(()).expect("sent");
-    assert_eq!(draining.await, 7, "the stop's answer once the delay is over");
+    assert_eq!(
+        draining.await,
+        7,
+        "the stop's answer once the delay is over"
+    );
 }
 
 /// Proves: `/readyz` answers exactly as `/healthz` does in every state, status, body and headers:
