@@ -1480,6 +1480,8 @@ enum AlertKind {
   // reason; a host whose last heartbeat said nothing of its root raises none. Log token
   // `trusted_root`.
   ALERT_KIND_TRUSTED_ROOT = 11;
+  // The four kinds that follow (12 to 15) are the MDM's: no coordinator raises them since the
+  // MDM's removal, and they stay defined because a value that shipped is never taken away.
   // The MDM push certificate expires within the first of the `push_alert_days` it has reached
   // (60, then 14, by default), or has expired: renew it from the MDM setup. The alert is the same
   // until the next threshold, and then a new one: its `version` is the threshold in days (`60`,

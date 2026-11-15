@@ -365,7 +365,7 @@ hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <tok
 
 Each release carries `pxe_<version>_amd64.deb` and `pxe_<version>_arm64.deb` with their
 attestations, and publishes them to the `testing` suite of the project's apt repository, as it
-does hello's and mdm's. Nothing sets a desired version for `pxe`: you set it to the release whose
+does hello's. Nothing sets a desired version for `pxe`: you set it to the release whose
 boot files you install, `<version>` (the package of that version fetches the boot files of the
 same release). `cargo xtask release targets --service pxe`, run in a checkout of hostkeeper on a
 directory of the release's assets, writes the targets, as for hello

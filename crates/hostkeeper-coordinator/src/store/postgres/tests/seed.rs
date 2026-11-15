@@ -9,7 +9,6 @@ use crate::accounts::Accounts;
 use crate::desired;
 use crate::ops::OpsState;
 use crate::store::Commit;
-use crate::store::postgres::devices::UPSERT;
 use crate::store::postgres::rows::{Stmt, Val};
 use crate::store::postgres::session::Session;
 use crate::store::postgres::transfer::Moved;
@@ -18,7 +17,7 @@ use crate::verdict_file;
 
 /// The statements that write `moved` into the empty tables of a database: the desired state, the
 /// operations state, the verdicts and the accounts as a commit from nothing writes them, the whole audit history
-/// with its numbers, CI's spent ids, the enrollment records, the MDM gate's device records, and,
+/// with its numbers, CI's spent ids, the enrollment records, and,
 /// when `moved` says its oldest audit lines were pruned, the import record of a release before
 /// this one that says so.
 fn writes(moved: &Moved) -> Vec<Stmt> {
@@ -47,13 +46,6 @@ fn writes(moved: &Moved) -> Vec<Stmt> {
         });
     }
     out.extend(records::writes(&moved.records).expect("the records make rows"));
-    out.extend(moved.devices.iter().map(|record| Stmt {
-        sql: UPSERT.to_owned(),
-        params: vec![
-            Val::Text(record.enrollment_id.as_str().to_owned()),
-            Val::Bytes(hostkeeper_mdm_gate::encode_record(record)),
-        ],
-    }));
     if let Some(at) = moved.pruned_before {
         out.push(Stmt {
             sql: "INSERT INTO imports (id, at_unix, manifest, audit_pruned_before) \

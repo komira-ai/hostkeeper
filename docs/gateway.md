@@ -1,5 +1,7 @@
 # The HTTP/JSON gateway
 
+> **Update 2026-11-14.** The `Mdm` service is no longer served: its methods answer `UNIMPLEMENTED`. The MDM was removed from the coordinator and the repository (`docs/design/coordinator-mdm.md`, superseded); Macs enroll through the bootstrap package (`docs/design/mac-bootstrap.md`). Where this document describes the MDM, its kit, its policy gate or the `mdm` package, it describes what was removed; the rest stands.
+
 The coordinator's private listener serves the operator API twice: as gRPC, and as plain HTTP with
 JSON bodies, the gateway. `hkctl` (which has no other transport) and the operator web app
 ([docs/ui-serving.md](ui-serving.md)) call the gateway. Both ways reach the same handlers with
@@ -9,7 +11,7 @@ the same checks; the gateway adds no rule of its own. Every command and request 
 ## Route
 
 One route per unary method of the `hostkeeper.operator.v1` services (`Hosts`, `Releases`,
-`Services`, `Enrollment`, `Audit`, `Alerts`, `Rollouts`, `Mdm`, `Repositories`, `HostGroups`, `Users`,
+`Services`, `Enrollment`, `Audit`, `Alerts`, `Rollouts`, `Repositories`, `HostGroups`, `Users`,
 `ApiTokens`, `Layout`):
 
 ```
@@ -33,11 +35,7 @@ that fails one of those checks is `PERMISSION_DENIED` with the reason `csrf`, an
 who must still choose a new password is `PERMISSION_DENIED` `password_change_required`; a cookie
 that names no live session is no credential. A call with an `Authorization` header never has its
 cookie read, and the gRPC path never reads one. A method may be declared session-only: a bearer is
-refused it `PERMISSION_DENIED` `session_required`. The writes of the MDM setup are: `Mdm.PutSecret`,
-`Mdm.PutSetting`, `Mdm.PutName` and the three of the push certificate, `Mdm.CreatePushRequest`, `Mdm.PutPushReply` and
-`Mdm.PutPushCertificate` (`docs/design/coordinator-mdm.md`, sections 4.4 and 4.9), and `Mdm.Verify`, which sends a push and asks
-Apple about the ABM token (section 4.9), which an API token, the tokens file's or one
-made in the UI, never makes, while it may call `Mdm.ListDevices`, `Mdm.ListSecrets`, `Mdm.ListSettings` and `Mdm.Status`. `Users`, `ApiTokens` and `Layout` take an operator only (a token
+refused it `PERMISSION_DENIED` `session_required`. None is now: the writes of the MDM setup were, and the `Mdm` service is no longer served (a call of it is `UNIMPLEMENTED`). `Users`, `ApiTokens` and `Layout` take an operator only (a token
 of the tokens file, a stored API token, or a session), and a bearer is resolved against the tokens file and the store's tokens
 in one pass (`docs/operations/coordinator-state.md`, "Users and API tokens"). `Releases.SetDesired` takes CI's
 OIDC token or an operator token; `Releases.Converge`, `Releases.WaitConverged` and

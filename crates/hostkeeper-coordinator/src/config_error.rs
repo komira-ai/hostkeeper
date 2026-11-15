@@ -10,24 +10,16 @@ use hostkeeper_wire::identity::PrefixError;
 
 use crate::accounts::AccountsError;
 use crate::desired::StoreError;
-use crate::enrollment::{AllowlistError, SetupError};
+use crate::enrollment::SetupError;
 use crate::inventory::WindowAboveMax;
 use crate::jti_file::JtiError;
 use crate::layout::LayoutError;
-use crate::mdm::MdmError;
 use crate::ops::OpsError;
 use crate::origin_https::OriginTlsError;
 use crate::store::postgres::DatabaseError;
 use crate::tokens::TokensError;
 use crate::ui::UiDirError;
 use crate::verdict_file::VerdictsError;
-
-impl StartError {
-    /// The refusal of a setup store that could not be read.
-    pub(crate) fn mdm_setup_store(why: crate::mdm_setup::SetupFailure) -> Self {
-        Self::MdmSetupStore(why.to_string())
-    }
-}
 
 /// Why the coordinator did not start, for the operator.
 #[derive(Debug, thiserror::Error)]
@@ -46,26 +38,6 @@ pub enum StartError {
     /// None of the three is given.
     #[error("one of --tokens-file, --operator-token-file and --initial-admin-file is required")]
     NoTokenFlag,
-    /// The MDM secrets key of `--mdm-secrets-key-file` is refused, or the store holds sealed
-    /// secrets and none is given.
-    #[error(transparent)]
-    MdmSecretsKey(#[from] crate::mdm_secrets::KeyError),
-    /// The key of `--mdm-secrets-key-file` does not open the secret of these kinds in the store.
-    #[error(
-        "--mdm-secrets-key-file: the key does not open the sealed secrets of {0}: it is not the key they were sealed under"
-    )]
-    MdmSecretsUnopened(String),
-    /// The tables of the MDM setup could not be opened or read.
-    #[error("{0}")]
-    MdmSetupStore(String),
-    /// `--proxy-cache-dir` could not be made or read.
-    #[error("--proxy-cache-dir {}: {source}", path.display())]
-    ProxyCache {
-        /// The directory.
-        path: PathBuf,
-        /// What failed.
-        source: io::Error,
-    },
     /// The password hash parameters of the login flags are outside what Argon2id takes.
     #[error(transparent)]
     Password(#[from] crate::password::PasswordError),
@@ -95,11 +67,6 @@ pub enum StartError {
         /// Why it is refused.
         reason: &'static str,
     },
-    /// `--mdm-listen` is a wildcard address.
-    #[error(
-        "--mdm-listen: {0} is a wildcard address; the Macs' listener is reached by the name of the MDM server, which is the address of one interface of the LAN, so name that address, or give --mdm-listen-wildcard where the port is published on the host"
-    )]
-    MdmListen(SocketAddr),
     /// `--health-listen` is not a loopback address.
     #[error(
         "--health-listen: {0} is not a loopback address; the health listener answers with no token and no TLS, so name an address of 127.0.0.0/8 or ::1"
@@ -144,18 +111,6 @@ pub enum StartError {
     /// Enrollment did not start: its CA, its store or the server certificate.
     #[error(transparent)]
     Enrollment(#[from] SetupError),
-    /// The Mac serial allowlist is refused.
-    #[error(transparent)]
-    MacAllowlist(#[from] AllowlistError),
-    /// An entry of the Mac serial allowlist names services, which the coordinator refuses: it
-    /// places hosts by host group, and the entry's group decides what the Mac runs.
-    #[error(
-        "--mac-serial-allowlist: the entry of serial {0} names services; the coordinator places hosts by host group, and the Mac's group decides what it runs: name its host_group alone"
-    )]
-    MacServicesRetired(String),
-    /// An entry of the Mac serial allowlist names a host group the coordinator does not hold.
-    #[error("--mac-serial-allowlist names host group {0}, which the coordinator does not hold")]
-    MacHostGroup(String),
     /// `--ui-dir` does not name a directory.
     #[error("--ui-dir: {0}")]
     UiDir(#[from] UiDirError),
@@ -244,9 +199,6 @@ pub enum StartError {
     /// The TLS client for the repository origins could not be made.
     #[error("repository origins: {0}")]
     OriginTls(#[from] OriginTlsError),
-    /// The MDM policy gate did not start.
-    #[error(transparent)]
-    Mdm(#[from] MdmError),
     /// `--database-dsn-file` is given beside a flag of the file store.
     #[error(
         "--database-dsn-file and {0} are both given: {0} names a file of the file store, and the database holds what it held"

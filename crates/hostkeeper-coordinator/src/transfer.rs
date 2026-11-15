@@ -16,7 +16,6 @@ use std::path::{Path, PathBuf};
 
 use clap::Args;
 use hostkeeper_enrollment::enroll::StoreError as RecordsError;
-use hostkeeper_mdm_gate::encode_record;
 
 use crate::accounts::{self, accounts_path};
 use crate::audit_file::{self, UnixClock};
@@ -26,7 +25,6 @@ use crate::desired;
 use crate::jti_file::{self, jti_path};
 use crate::layout::{self, layout_path};
 use crate::lock::StateLock;
-use crate::mdm::DEVICES_DIR;
 use crate::ops_file;
 use crate::releases::{self, releases_path};
 use crate::repositories::{self, Registry, repositories_path};
@@ -70,10 +68,9 @@ pub(crate) enum TransferError {
     /// The database refused the export.
     #[error(transparent)]
     Database(#[from] DatabaseError),
-    /// The database holds the enrollment store or the MDM gate's device records, and no
-    /// `--enrollment-dir` says where they go.
+    /// The database holds the enrollment store, and no `--enrollment-dir` says where it goes.
     #[error(
-        "the database holds the enrollment store or the MDM gate's device records, and --enrollment-dir is not given: exporting without it would lose them"
+        "the database holds the enrollment store, and --enrollment-dir is not given: exporting without it would lose it"
     )]
     EnrollmentDirNeeded,
 }
@@ -159,7 +156,7 @@ fn render(
         };
         files.push((path, audit_file::history_text(&moved.audit)));
     }
-    if moved.records.is_empty() && moved.devices.is_empty() {
+    if moved.records.is_empty() {
         return Ok(files);
     }
     let Some(dir) = &paths.enrollment_dir else {
@@ -167,11 +164,6 @@ fn render(
     };
     for (path, bytes) in moved.records.files()? {
         files.push((dir.join(path), bytes));
-    }
-    // Each device record as `FileDeviceStore` writes it: `mdm-devices/<enrollment id>.pb`.
-    for record in &moved.devices {
-        let name = format!("{}.pb", record.enrollment_id);
-        files.push((dir.join(DEVICES_DIR).join(name), encode_record(record)));
     }
     Ok(files)
 }
@@ -233,10 +225,6 @@ mod repositories_tests;
 #[cfg(test)]
 #[path = "transfer_host_groups_tests.rs"]
 mod host_groups_tests;
-
-#[cfg(test)]
-#[path = "transfer_mdm_tests.rs"]
-mod mdm_tests;
 
 #[cfg(test)]
 #[path = "transfer_readers_tests.rs"]

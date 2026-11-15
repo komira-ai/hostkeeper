@@ -39,7 +39,7 @@
 //! package installed whole at the version it runs, no record of hostkeeper's installer and no
 //! version of hostkeeper in the packages directory, holds the package and records it as
 //! installed by `apt`. It is not drift, and nothing but hostkeeper replaces `/usr/bin/hostkeeper`
-//! from then on. A Mac adopts nothing: its bootstrap install (the `.pkg` its MDM or operator
+//! from then on. A Mac adopts nothing: its bootstrap install (the `.pkg` its bootstrap package or operator
 //! installed) has a receipt and no record, so the first update of hostkeeper through
 //! `macos-pkg` finds it as drift, installs over it and ends `Succeeded`, `drift_repaired`.
 

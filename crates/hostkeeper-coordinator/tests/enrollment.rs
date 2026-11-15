@@ -22,7 +22,6 @@ use hostkeeper_enrollment::names::{HostId, KeyHash, Role};
 use hostkeeper_oidc::Roots;
 use hostkeeper_oidc::testkit::{STATIC_ISSUER, config_text};
 use hostkeeper_proto::hostkeeper::agent::v1::{Claims, EnrollRequest, PollRequest, PollState};
-use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_testkit::Scratch;
 use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, PublicKeyData, SigningKey};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
@@ -182,44 +181,10 @@ fn new_request(machine_id: &str) -> EnrollRequest {
     }
 }
 
-/// An allowlist of one Mac serial, approved as `mac-<serial>` with role `build` and
-/// `service`.
-fn allowlist(service: &str) -> String {
-    format!(
-        "[[mac]]\nserial = \"C02XK1ABJG5J\"\nhost_id_prefix = \"mac-\"\nrole = \"build\"\n\
-         services = [\"{service}\"]\n"
-    )
-}
-
-/// Puts the host group `build` into the state files of `files`, through `HostGroups.Put` of a
-/// coordinator started over them, which is stopped again.
-async fn put_build_group(files: &Files) {
-    let first = start(files, &enrollment_flags(true)).expect("started");
-    let operator = first.coordinator.caller(Some(OPERATOR)).await;
-    first
-        .coordinator
-        .host_groups_put(
-            &operator,
-            proto::PutHostGroupRequest {
-                host_group: Some(proto::HostGroup {
-                    name: "build".to_owned(),
-                    packages: vec!["hostkeeper".to_owned()],
-                    policy: None,
-                }),
-                if_generation: None,
-                reason: "the Mac builders".to_owned(),
-            },
-        )
-        .expect("put");
-    // The state files' lock is the running coordinator's: the next start takes it after it.
-    drop(first);
-}
-
-/// Catches the pending cap or the Mac allowlist accepted without enrollment, a cap of 0, an
-/// allowlist that cannot be read or that names services letting the coordinator start, and the
-/// cap not reaching the enrollment it starts.
+/// Catches the pending cap accepted without enrollment or as 0, and the cap not reaching the
+/// enrollment it starts.
 #[tokio::test]
-async fn the_pending_cap_and_the_mac_allowlist_need_enrollment_and_valid_values() {
+async fn the_pending_cap_needs_enrollment_and_a_valid_value() {
     let files = Files::new("enrollment-cap-flags");
     let with = |extra: &[&'static str]| {
         let mut flags = enrollment_flags(true);
@@ -228,7 +193,6 @@ async fn the_pending_cap_and_the_mac_allowlist_need_enrollment_and_valid_values(
     };
     for refused in [
         vec!["--max-pending-enrollments", "5"],
-        vec!["--mac-serial-allowlist", "=mac.toml"],
         with(&["--max-pending-enrollments", "0"]),
     ] {
         let args = files.args(&refused);
@@ -238,31 +202,7 @@ async fn the_pending_cap_and_the_mac_allowlist_need_enrollment_and_valid_values(
             "{refused:?}"
         );
     }
-    match start(&files, &with(&["--mac-serial-allowlist", "=absent.toml"])) {
-        Err(StartError::MacAllowlist(why)) => {
-            assert!(why.to_string().contains("absent.toml"), "{why}");
-        }
-        Err(other) => panic!("refused otherwise: {other}"),
-        Ok(_) => panic!("started without its allowlist"),
-    }
-    files.put("mac.toml", &allowlist("nosuch"), 0o600);
-    match start(&files, &with(&["--mac-serial-allowlist", "=mac.toml"])) {
-        Err(StartError::MacServicesRetired(serial)) => assert_eq!(serial, "C02XK1ABJG5J"),
-        Err(other) => panic!("refused otherwise: {other}"),
-        Ok(_) => panic!("started with an entry naming services"),
-    }
-    put_build_group(&files).await;
-    files.put("mac.toml", &allowlist_of("host_group = \"build\""), 0o600);
-    let parts = start(
-        &files,
-        &with(&[
-            "--mac-serial-allowlist",
-            "=mac.toml",
-            "--max-pending-enrollments",
-            "1",
-        ]),
-    )
-    .expect("started");
+    let parts = start(&files, &with(&["--max-pending-enrollments", "1"])).expect("started");
     let enrollment = parts.coordinator.enrollment().expect("enrollment");
     enrollment
         .enroll(new_request("machine-1"))
@@ -271,60 +211,6 @@ async fn the_pending_cap_and_the_mac_allowlist_need_enrollment_and_valid_values(
         .enroll(new_request("machine-2"))
         .expect_err("the cap is 1");
     assert_eq!(full.token(), "pending_full");
-}
-
-/// An allowlist of one Mac serial, approved as `mac-<serial>`, whose entry's lines are `entry`.
-fn allowlist_of(entry: &str) -> String {
-    format!("[[mac]]\nserial = \"C02XK1ABJG5J\"\nhost_id_prefix = \"mac-\"\n{entry}\n")
-}
-
-/// Proves: `serve` started over state files that hold the host group `build` (put through
-/// `HostGroups.Put` by an earlier run) refuses a Mac allowlist whose entry names services
-/// (`MacServicesRetired`, naming the serial) and one whose entry names a group it does not hold
-/// (`MacHostGroup`, naming the group), each with its message; and starts, with enrollment, with
-/// an entry that names `build` by `host_group`, and with one that names it by `role`.
-///
-/// Catches: the start's allowlist check of a coordinator that holds groups not reached from the
-/// flags and the state files, so that a Mac entry the coordinator cannot place starts it.
-#[tokio::test]
-async fn a_coordinator_holding_groups_starts_only_with_an_allowlist_it_can_place() {
-    let files = Files::new("enrollment-mac-groups");
-    put_build_group(&files).await;
-    let with_allowlist = || {
-        let mut flags = enrollment_flags(false);
-        flags.extend_from_slice(&["--mac-serial-allowlist", "=mac.toml"]);
-        flags
-    };
-
-    files.put(
-        "mac.toml",
-        &allowlist_of("host_group = \"build\"\nservices = [\"kbf\"]"),
-        0o600,
-    );
-    match start(&files, &with_allowlist()) {
-        Err(why @ StartError::MacServicesRetired(_)) => assert_eq!(
-            why.to_string(),
-            "--mac-serial-allowlist: the entry of serial C02XK1ABJG5J names services; the \
-             coordinator places hosts by host group, and the Mac's group decides what it runs: name \
-             its host_group alone"
-        ),
-        Err(other) => panic!("refused otherwise: {other}"),
-        Ok(_) => panic!("started with an entry naming services"),
-    }
-    files.put("mac.toml", &allowlist_of("host_group = \"lab\""), 0o600);
-    match start(&files, &with_allowlist()) {
-        Err(why @ StartError::MacHostGroup(_)) => assert_eq!(
-            why.to_string(),
-            "--mac-serial-allowlist names host group lab, which the coordinator does not hold"
-        ),
-        Err(other) => panic!("refused otherwise: {other}"),
-        Ok(_) => panic!("started with an entry naming a group it does not hold"),
-    }
-    for entry in ["host_group = \"build\"", "role = \"build\""] {
-        files.put("mac.toml", &allowlist_of(entry), 0o600);
-        let parts = start(&files, &with_allowlist()).expect("started");
-        assert!(parts.coordinator.enrollment().is_some(), "{entry}");
-    }
 }
 
 /// Catches `--enrollment-request-ttl` accepted without enrollment, or with a value that is not

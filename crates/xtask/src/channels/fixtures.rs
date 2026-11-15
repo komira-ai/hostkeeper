@@ -1,6 +1,6 @@
 //! Test stand-ins shared by the tests of the channel verbs: an [`Exec`] that starts no process,
 //! and the packages of a release as `nfpm` writes them for the daemon's and the coordinator's
-//! packages and as `release deb` writes them for hello's and mdm's (no maintainer script).
+//! packages and as `release deb` writes them for hello's and pxe's (no maintainer script).
 
 use std::cell::RefCell;
 

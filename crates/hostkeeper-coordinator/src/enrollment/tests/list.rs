@@ -121,10 +121,8 @@ async fn list_reports_claims_key_hash_and_flags_without_secrets() {
             duplicate_claim: true,
             ..entry(&clone, enroll_request(&clone, "machine-1").claims, 1)
         },
-        PendingEnrollment {
-            mac_nonce_presented: true,
-            ..entry(&mac, mac_enroll.claims.clone(), 2)
-        },
+        // The nonce the Mac presented is ignored: no flag says it did.
+        entry(&mac, mac_enroll.claims.clone(), 2),
         third[0].clone(),
         third[1].clone(),
     ];

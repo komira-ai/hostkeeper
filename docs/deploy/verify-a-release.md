@@ -14,7 +14,7 @@ before it uses them.
 | Signer workflow | `komira-ai/hostkeeper/.github/workflows/artifacts.yml` |
 | Source ref | `refs/heads/main` |
 | Tag | `v<X.Y.Z>` |
-| `--version` output | `hostkeeper X.Y.Z+<first 12 hex digits of the commit>`; the coordinator's `hostkeeper-coordinator X.Y.Z+<first 12 hex digits of the commit>`; the MDM kit's `hostkeeper-mdm X.Y.Z+<first 12 hex digits of the commit>`; the coordinator updater's `hostkeeper-coordinator-update X.Y.Z+<first 12 hex digits of the commit>`; the command line's `hkctl X.Y.Z+<first 12 hex digits of the commit>`; `pxe X.Y.Z`, with no commit |
+| `--version` output | `hostkeeper X.Y.Z+<first 12 hex digits of the commit>`; the coordinator's `hostkeeper-coordinator X.Y.Z+<first 12 hex digits of the commit>`; the coordinator updater's `hostkeeper-coordinator-update X.Y.Z+<first 12 hex digits of the commit>`; the command line's `hkctl X.Y.Z+<first 12 hex digits of the commit>`; `pxe X.Y.Z`, with no commit |
 
 The workflow `artifacts.yml` builds the assets on a push to `refs/heads/main`, writes one
 `SHA256SUMS`, and signs build-provenance attestations (sigstore) for every summed asset, plus SBOM
@@ -28,8 +28,8 @@ tag. A `[trusted_signers]` entry in a daemon config must name `artifacts.yml` on
 
 `<version>` is X.Y.Z. `<platform>` is `linux-x86_64`, `linux-arm64` or `macos-arm64`;
 `<linux-platform>` is `linux-x86_64` or `linux-arm64`; `<deb-arch>` is `amd64` or `arm64`;
-`<rpm-arch>` is `x86_64` or `aarch64`. The debs, the rpms, the coordinator, the MDM kit's
-binary and the coordinator updater's are for the two Linux platforms; the installer pkg is for `macos-arm64`.
+`<rpm-arch>` is `x86_64` or `aarch64`. The debs, the rpms, the coordinator
+and the coordinator updater's binary are for the two Linux platforms; the installer pkg is for `macos-arm64`.
 
 | Asset | Content |
 |---|---|
@@ -38,7 +38,6 @@ binary and the coordinator updater's are for the two Linux platforms; the instal
 | `hello_<version>_<deb-arch>.deb` | hello's native package (docs/design/packages-native.md section 10.2): the program at `/usr/lib/hello/hello`, which the release entry's hook command names (`/usr/lib/hello/hello update-hook`), and the two slots' units `hello@a.service` and `hello@b.service` in `/usr/lib/systemd/system/`; it has no maintainer script and no dependency. The release publishes it to the `testing` suite of the project's apt repository ([package-repositories.md](package-repositories.md)) |
 | `hello_<version>-fail-ready_<deb-arch>.deb` | the `.deb` of hello's failing build, for the Linux platforms: the hello package above with the service version `<version>-fail-ready` and the units started with `--fail-ready`. Its file name carries the service version; the `Version` of its `control` is the Debian version `<version>~fail.ready`, which sorts below `<version>`, so apt never takes it for the release. The release publishes it to the `testing-fail` suite of the project's apt repository, which lists it alone. It has no `.pkg` |
 | `hello-<version>-macos-arm64.pkg` | hello's native package for macOS: one component with no script, the program (which the entry's hook command names, `/Library/Application Support/hello/bin/hello update-hook`) under `/Library/Application Support/hello/`, and the two slots' jobs `hello.a` and `hello.b` in `/Library/LaunchDaemons/`; signed by the Developer ID Installer identity `Developer ID Installer: Komira AI, Inc. (U7RTX4XD3X)` with a trusted timestamp, as the installer is, not notarized, attested. The release puts it in the `testing` directory of the installers, `pkg/hostkeeper/<version>/` |
-| `mdm_<version>_amd64.deb` | mdm's native package, for linux-x86_64 only: its program, the pinned servers in `/usr/lib/mdm/` (the entry's hook command is `/usr/lib/mdm/mdm update-hook`), and its units in `/usr/lib/systemd/system/` ([docs/operations/mdm-package.md](../operations/mdm-package.md)); it has no maintainer script. Published to the `testing` suite like hello's |
 | `pxe_<version>_<deb-arch>.deb` | the native package of the boot server of network install (docs/design/network-install.md), for the Linux platforms: its program at `/usr/lib/pxe/pxe`, which the entry's hook command names (`/usr/lib/pxe/pxe update-hook`), and its unit `pxe.service` in `/usr/lib/systemd/system/`; it has no maintainer script, no conffile and no dependency. Published to the `testing` suite like hello's. It has no `.pkg`, and no release sets it as any host's desired release: an operator runs `cargo xtask release targets --service pxe` and sets the desired targets ([docs/operations/network-install.md](../operations/network-install.md)) |
 | `hostkeeper_<version>_<deb-arch>.deb` | the deb package: the daemon, its unit, its tmpfiles rules, its config template, the pinned `gh` and Sigstore trusted root it checks packages with, and the link `/etc/issue.d/hostkeeper.issue` to the console's issue file the daemon writes while it waits for its enrollment. Also hostkeeper's native package on Linux: the release publishes it to the `testing` suite and its targets list it (docs/design/packages-native.md) |
 | `hostkeeper-<version>-1.<rpm-arch>.rpm` | the rpm package, with the same files and link |
@@ -48,8 +47,6 @@ binary and the coordinator updater's are for the two Linux platforms; the instal
 | `hostkeeper-coordinator-<version>.image.json` | the OCI image index of the two images above (linux/amd64, then linux/arm64), made of them by `cargo xtask release image-index`: its SHA-256 is the digest of the multi-platform image `ghcr.io/komira-ai/hostkeeper-coordinator@sha256:<digest>` |
 | `hostkeeper-coordinator_<version>_<deb-arch>.deb` | the coordinator's deb package: the static coordinator, its unit (as the user `hostkeeper-coordinator`, with the flags of `/etc/hostkeeper-coordinator/serve.toml`), its sysusers.d entry, its tmpfiles rules, the template of `serve.toml` and the operator web app ([coordinator/package.md](coordinator/package.md)) |
 | `hostkeeper-coordinator-<version>-1.<rpm-arch>.rpm` | the coordinator's rpm package, with the same files |
-| `hostkeeper-mdm-<version>-<linux-platform>.tar.gz` | the MDM kit's binary, `hostkeeper-mdm` (`crates/hostkeeper-mdm`), which sets up and migrates the MDM server stack on its Linux host |
-| `hostkeeper-mdm-<version>-<linux-platform>.cdx.json` | its CycloneDX SBOM |
 | `hostkeeper-coordinator-update-<version>-<linux-platform>.tar.gz` | the coordinator updater's binary, `hostkeeper-coordinator-update`, which the machine that runs the coordinator's container runs from a timer to roll the container forward to each attested release ([coordinator-update.md](coordinator-update.md)); in every release from v0.1.234 on, none before |
 | `hostkeeper-coordinator-update-<version>-<linux-platform>.cdx.json` | its CycloneDX SBOM |
 | `hostkeeper-<version>-macos-arm64.pkg` | the installer of a Mac's first install: `/usr/local/bin/hostkeeper` (0755), `/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist` (0644), the log directory `/var/log/hostkeeper` (0755) and its rotation `/etc/newsyslog.d/hostkeeper.conf` (0644), the pinned `gh` at `/usr/local/lib/hostkeeper/gh` (0755) and the Sigstore trusted root at `/usr/local/lib/hostkeeper/trusted_root.json` (0644), owned by root and wheel; a distribution pkg (`productbuild` around the component pkg); the component's one script, a `postinstall`, loads the daemon's job when launchd does not have it loaded and leaves a loaded one alone, so that an install the daemon itself runs never stops it (the plist's program is `/usr/local/bin/hostkeeper daemon`, which at each start points `/var/lib/updater/state/hostkeeper/bin/current` at itself when that starts nothing, writes `/etc/hostkeeper/hostkeeper.toml` from the MDM's managed preferences unless that file exists, and runs `current`); signed by the Developer ID Installer identity `Developer ID Installer: Komira AI, Inc. (U7RTX4XD3X)` with a trusted timestamp, not notarized, attested. Also hostkeeper's native package on macOS: the release puts it in the `testing` directory of the installers |
@@ -90,7 +87,7 @@ SHA-256 is that digest; each platform's manifest is the one of its `.image.tar`,
 digest. A tag can be moved; a digest cannot, so a deployment pins the digest.
 
 A release holds the assets of all three platforms; `cargo xtask release check` refuses one that
-lacks any of them,; the mdm package is built for one. Each pkg, the installer and hello's, carries an installer signature
+lacks any of them. Each pkg, the installer and hello's, carries an installer signature
 by the Developer ID Installer identity `Developer ID Installer: Komira AI, Inc. (U7RTX4XD3X)`,
 under Apple's Developer ID Certification Authority and Apple Root CA, with a trusted timestamp;
 the release signs it before it sums and attests it, so `SHA256SUMS` and the attestation name the
@@ -98,16 +95,20 @@ signed bytes. Verify it by its attestation, steps 3 and 4, like any other asset,
 also by its signature: `pkgutil --check-signature hostkeeper-<version>-macos-arm64.pkg` (or
 `hello-<version>-macos-arm64.pkg`) prints
 `Status: signed by a developer certificate issued by Apple for distribution`, a `Signed with a
-trusted timestamp on:` line and that chain of three. Neither pkg is notarized: an MDM installs
-the installer with `InstallEnterpriseApplication`, and a host's `macos-pkg` installer stages
+trusted timestamp on:` line and that chain of three. Neither pkg is notarized: the
+installer is installed by the bootstrap package of a Mac's device management
+(docs/operations/mac-bootstrap.md) or by `sudo installer -pkg`, and a host's `macos-pkg` installer stages
 hello's, and neither asks for notarization; a double click on a downloaded copy is refused by
-Gatekeeper, so install the installer by MDM or with `sudo installer -pkg`.
+Gatekeeper, so install the installer by the bootstrap package or with `sudo installer -pkg`.
 Names are added, never renamed, so a consumer ignores assets it does not know. A name is removed only when its asset is
 withdrawn: the Arch Linux package (`hostkeeper-<version>-1-<rpm-arch>.pkg.tar.zst`) is no longer
 built, by the maintainers' ruling that the Linux packages are deb and rpm; hostkeeper's own archive
 packages (`.tar.zst`, with their `.sha256` and attestation bundles) and the four release indexes
 (`index.json`, `hello-index.json`, `hello-fail-ready-index.json`, `mdm-index.json`) are no longer
-built, because every package is a native one.
+built, because every package is a native one. The MDM's assets are withdrawn as well:
+`hostkeeper-mdm-<version>-<linux-platform>.tar.gz`, its `.cdx.json` and bundle, and
+`mdm_<version>_amd64.deb` and its bundle; Macs enroll through the bootstrap package, and nothing
+fetches them.
 
 ### Every name
 
@@ -141,9 +142,6 @@ hostkeeper-coordinator_<version>_<deb-arch>.deb
 hostkeeper-coordinator_<version>_<deb-arch>.deb.sigstore.json
 hostkeeper-coordinator-<version>-1.<rpm-arch>.rpm
 hostkeeper-coordinator-<version>-1.<rpm-arch>.rpm.sigstore.json
-hostkeeper-mdm-<version>-<linux-platform>.tar.gz
-hostkeeper-mdm-<version>-<linux-platform>.tar.gz.sigstore.json
-hostkeeper-mdm-<version>-<linux-platform>.cdx.json
 hostkeeper-coordinator-update-<version>-<linux-platform>.tar.gz
 hostkeeper-coordinator-update-<version>-<linux-platform>.tar.gz.sigstore.json
 hostkeeper-coordinator-update-<version>-<linux-platform>.cdx.json
@@ -157,8 +155,6 @@ hello_<version>-fail-ready_<deb-arch>.deb
 hello_<version>-fail-ready_<deb-arch>.deb.sigstore.json
 hello-<version>-macos-arm64.pkg
 hello-<version>-macos-arm64.pkg.sigstore.json
-mdm_<version>_amd64.deb
-mdm_<version>_amd64.deb.sigstore.json
 pxe_<version>_<deb-arch>.deb
 pxe_<version>_<deb-arch>.deb.sigstore.json
 ```
@@ -311,8 +307,7 @@ Refuse when: the same as step 3, or the bundle is absent.
 ### 5. SBOM attestation (optional)
 
 The SBOM is attested as well. Verify the binary tarball (the daemon's, the coordinator's
-`hostkeeper-coordinator-<version>-<linux-platform>.tar.gz`, the MDM kit's
-`hostkeeper-mdm-<version>-<linux-platform>.tar.gz`, or the coordinator updater's
+`hostkeeper-coordinator-<version>-<linux-platform>.tar.gz`, or the coordinator updater's
 `hostkeeper-coordinator-update-<version>-<linux-platform>.tar.gz`) with the same identity flags as step 3 and
 with `--predicate-type` set to the CycloneDX predicate type that `attest-sbom` records:
 
@@ -342,10 +337,6 @@ Expected output, exactly: `hostkeeper <X.Y.Z>+<first 12 hex digits of $PIN>`.
 For the coordinator, unpack `hostkeeper-coordinator-<version>-<linux-platform>.tar.gz` and run
 `./hostkeeper-coordinator --version`; its output is, exactly,
 `hostkeeper-coordinator <X.Y.Z>+<first 12 hex digits of $PIN>`.
-
-For the MDM kit, unpack `hostkeeper-mdm-<version>-<linux-platform>.tar.gz` and run
-`./hostkeeper-mdm --version`; its output is, exactly,
-`hostkeeper-mdm <X.Y.Z>+<first 12 hex digits of $PIN>`.
 
 For the coordinator updater, unpack `hostkeeper-coordinator-update-<version>-<linux-platform>.tar.gz`
 and run `./hostkeeper-coordinator-update --version`; its output is, exactly,
@@ -380,7 +371,7 @@ Before anything is published, the `verify` job of `release.yml`, on the files of
   released. Step 4 runs without `--custom-trusted-root`: the runner fetches the trusted root
   itself. Each command gets `--format json` added, so that the attestations it verified are read
   back, and each must name this commit and the file's SHA-256;
-- runs step 6 on the linux-x86_64 binaries, the daemon's, the coordinator's, the MDM kit's and
+- runs step 6 on the linux-x86_64 binaries, the daemon's, the coordinator's and
   the coordinator updater's
   (`cargo xtask release check-binary`); `cargo xtask release check` holds `hkctl-<version>` to the
   expected output of step 6 too, by its one version line, without running it.
@@ -474,6 +465,5 @@ Do not use a release when any of these holds:
 - the build ran on a self-hosted runner;
 - the binary's `--version` differs from `hostkeeper <X.Y.Z>+<first 12 hex digits of $PIN>`
   (`hostkeeper-coordinator <X.Y.Z>+<first 12 hex digits of $PIN>` for the coordinator,
-  `hostkeeper-mdm <X.Y.Z>+<first 12 hex digits of $PIN>` for the MDM kit,
   `hostkeeper-coordinator-update <X.Y.Z>+<first 12 hex digits of $PIN>` for the coordinator
   updater).

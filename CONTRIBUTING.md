@@ -142,7 +142,7 @@ image and before the macOS installer is promoted to stable (the jobs `macos-test
 - `macos-test`: the tests of the crates the `hostkeeper` and `hello` binaries are built from (the
   code a Mac runs: the daemon, the launchd adapters, the step launcher, placement, the package
   check, the observer, the enrollment claims and what they use), as the runner's user. The rest of
-  the workspace (the coordinator's MDM and network-install servers, the release tooling) runs on
+  the workspace (the coordinator, the network-install servers and the release tooling) runs on
   Linux only and does not build for macOS; the workflow lint holds the list to those binaries'
   path dependencies, so a crate added to either joins it.
 - `macos-device`: the device tests as root under launchd (`privileged.yml` no longer has this job).

@@ -386,58 +386,19 @@ With a host group, that record is also the approval of the Mac, as a Linux recor
 ([The record is the approval](#the-record-is-the-approval)): a Mac request whose claimed serial
 equals the record's, with the record open and unused, is approved by the coordinator.
 
-The enrollment request can carry a one-time nonce from MDM (`mac_nonce`, one hour, one use),
-which lets the coordinator approve a Mac whose serial is in `--mac-serial-allowlist` without an
-operator ([enrollment-coordinator.md](../enrollment-coordinator.md)). The MDM puts the nonce in the
-managed preferences of the domain `dev.hostkeeper.enrollment`, which macOS writes to
-`/Library/Managed Preferences/dev.hostkeeper.enrollment.plist`: the key `nonce` (the bytes, as
-data) and the key `request_id` (the request's `key_sha256`). While a Mac is not enrolled, its daemon
-reads that file at every enrollment step, every 5 seconds. When the file's `request_id` is the
-daemon's own pending request and its nonce has not been posted by this run of the daemon, the
-daemon posts its request once more with `mac_nonce` set, then polls as before; `mac_nonce_presented`
-turns true on the request. Each nonce is posted once; a new nonce from the MDM is posted once more.
-The daemon reads the file only when root owns it and no one else can write it. A file that is
-missing, not root's, writable by others, not a property list, without a 32-byte `nonce` or a
-`request_id` of 64 lower-case hex digits, or for another request is ignored and logged nowhere:
-the request waits for an operator as any other, and the journal shows only `not enrolled; waiting
-for approval`. No line the daemon writes holds a byte of the nonce. To see what the daemon reads,
-as root: `plutil -p '/Library/Managed Preferences/dev.hostkeeper.enrollment.plist'` and `ls -l` on
-it.
+A Mac's request waits for an operator, or for the record above, as a Linux request does. There is no
+approval by a nonce: the coordinator's MDM, which gave a Mac a one-time nonce and approved it by an
+allowlist of serials, was removed (2026-11-14), and a Mac comes to the coordinator through the
+bootstrap package of its device management (`docs/operations/mac-bootstrap.md`), which installs
+the daemon and its config; the daemon then enrolls as any host does. The serial a Mac claims is its
+own claim: check the key hash below before approving, or open a record for the serial with a short
+window.
 
-The coordinator's MDM gate (`--mdm-api-url`, with `--mdm-profile-identifier` and
-`--mdm-daemon-config`) installs that profile once the Mac's request is pending, bound to it, and
-audits each push `mdm_nonce_pushed` by `mdm-gate`. A Mac with two pending requests that claim its
-serial and its platform UUID gets no nonce at all: deny the one that is not its daemon's, and the
-gate pushes a nonce to the other at its next look.
-
-With `--mdm-host` the gate also sends the Mac the pkg named `hostkeeper` in the MDM setting
-`installs` (seeded once from `--mdm-pkg-allowlist`'s newest pkg), before its daemon has posted, and again an hour after the Mac's last answer until a
-request from it appears; each send is audited `mdm_install_sent` by `mdm-gate` with its count, and
-`hkctl mdm list-devices` shows the count and the last send
-([enrollment-coordinator.md](../enrollment-coordinator.md)). A Mac whose count grows and that never
-posts did not install the pkg: read `/var/log/install.log` on the Mac.
-
-With `--mdm-baseline-file` the gate also sets up each Mac at enrollment (Screen Sharing, the
-profiles of the Mac's host group, the Mac's name and the other installs of the setting `installs`)
-and keeps it; `hkctl mdm list-devices` shows each Mac's
-`baseline_state`. A baseline failure never fails an enrollment
-([mdm-baseline.md](mdm-baseline.md)).
-
-A coordinator without those flags pushes no nonce: every Mac then waits for an operator, with
-`mac_nonce_presented` false, and is approved as a Linux request is. So does a Mac the gate does
-not see enrolled and supervised, or whose serial is not on `--mac-serial-allowlist`.
-
-With nonces, three things follow for an operator. A nonce approves
-only the request it was issued for: a second request presenting it (another key on the same Mac)
-stays pending and is audited `mac_auto_approve_declined` with `nonce_wrong_request`; deny it.
-A Mac approved by its nonce is put in the host group of its allowlist entry, and the approval is
-audited `enroll_approve` by `mdm-nonce` naming the group; the group decides what it runs. A Mac wiped and enrolled in MDM again
-takes its own host id over from its old key without an operator (`enroll_replace` by
-`mdm-nonce`); that does not apply to a denied host id, which stays `denied`, nor to a host id
-approved for a request that claimed another serial, which is `host_id_taken`: approve those by
-key hash with `--replace true` as below. A wiped Mac that was moved to another group than its
-allowlist entry names is refused `host_group_differs` and waits: approve it by hand in its
-group.
+A daemon of an earlier release still reads a nonce from the managed preferences of the domain
+`dev.hostkeeper.enrollment` and posts it with its request; the coordinator ignores it, so
+`mac_nonce_presented` is false and the request waits. The audit lines of the earlier release
+(`enroll_approve` and `enroll_replace` by `mdm-nonce`, `mdm_nonce_pushed` and `mdm_install_sent` by
+`mdm-gate`) stay in the audit file.
 
 ## Check the key hash
 

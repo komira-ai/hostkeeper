@@ -114,12 +114,10 @@
 /// `commit`.
 pub const BUILD_COMMIT: &str = stamp::BUILD_COMMIT;
 
-pub(crate) mod abm;
 pub mod accounts;
 pub mod acks;
 pub(crate) mod agent_service;
 pub mod alerts;
-mod alerts_mdm;
 pub mod assign;
 pub mod assignment;
 pub mod audit_actions;
@@ -129,7 +127,6 @@ pub mod bake;
 pub mod canary;
 pub mod clear_record;
 pub mod config;
-pub mod config_proxy;
 pub mod converge;
 pub mod decide;
 pub mod defer;
@@ -166,41 +163,14 @@ pub mod lock;
 pub mod login;
 pub(crate) mod login_routes;
 pub(crate) mod macos_resolve;
-pub mod mdm;
-pub(crate) mod mdm_acme;
-pub(crate) mod mdm_certs;
-pub(crate) mod mdm_enroll;
-pub(crate) mod mdm_lease;
-pub(crate) mod mdm_name;
-pub mod mdm_push;
-pub mod mdm_secrets;
-mod mdm_server;
-pub mod mdm_settings;
-pub mod mdm_setup;
-pub mod mdm_status;
-pub mod mdm_verify;
 pub mod membership;
 pub(crate) mod moving;
 pub mod operate;
 pub mod operator;
-pub(crate) mod operator_abm;
 pub mod operator_accounts;
 pub mod operator_enrollment;
 pub mod operator_host_groups;
 pub mod operator_layout;
-pub mod operator_mdm;
-mod operator_mdm_enroll;
-pub mod operator_mdm_push;
-#[cfg(test)]
-#[path = "operator_mdm_push_cert_tests.rs"]
-mod operator_mdm_push_cert_tests;
-#[cfg(test)]
-#[path = "operator_mdm_push_tests.rs"]
-mod operator_mdm_push_tests;
-pub mod operator_mdm_setup;
-#[cfg(test)]
-#[path = "operator_mdm_setup_tests.rs"]
-mod operator_mdm_setup_tests;
 pub mod operator_repositories;
 pub mod ops;
 pub(crate) mod ops_file;
@@ -209,11 +179,6 @@ pub mod orders;
 pub mod origin_https;
 pub mod password;
 pub(crate) mod picks;
-pub mod pkg_origin;
-mod proxy_apt;
-pub mod proxy_cache;
-mod proxy_cache_disk;
-pub mod proxy_origin;
 mod queue;
 pub mod reconcile;
 pub mod registry;
@@ -418,8 +383,6 @@ mod marks_support;
 #[cfg(test)]
 mod marks_tests;
 #[cfg(test)]
-pub(crate) mod mdm_pki_support;
-#[cfg(test)]
 mod membership_tests;
 #[cfg(test)]
 mod moving_facts_tests;
@@ -437,10 +400,6 @@ mod one_live_update_tests;
 mod operator_layout_sled_tests;
 #[cfg(test)]
 mod operator_layout_tests;
-#[cfg(test)]
-mod operator_mdm_devices_tests;
-#[cfg(test)]
-mod operator_mdm_name_tests;
 #[cfg(test)]
 mod operator_repositories_tests;
 #[cfg(test)]

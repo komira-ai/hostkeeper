@@ -196,7 +196,8 @@ message PendingEnrollment {
   // Another host presents the same machine id or key, or the request claims a MAC bound to an
   // enrolled host.
   bool duplicate_claim = 7;
-  // The request carried a Mac nonce (its value is never listed).
+  // The request carried a Mac nonce (its value is never listed). Always false from a coordinator
+  // that ignores the nonce, as every one since the MDM's removal does.
   bool mac_nonce_presented = 8;
   // How the request matches the host inventory. UNSPECIFIED from a coordinator that does not
   // match.

@@ -9,8 +9,7 @@
 //! announces `macos-pkg` (its signers file `/etc/hostkeeper/macos-pkg.toml` loaded, and
 //! `/usr/sbin/installer` and `/usr/sbin/pkgutil` present) takes it; a Mac that does not announce
 //! it is ordered nothing (the coordinator's pick gives it `installer_dropped` or
-//! `no_build_for_host`). mdm has no Mac build, and hello's failing build no `.pkg`, so neither
-//! has a macOS list.
+//! `no_build_for_host`). hello's failing build has no `.pkg`, so it has no macOS list.
 //!
 //! The native packages are the release's `.deb`s and `.pkg`s ([`Package::native_name`]), which
 //! the release publishes to the project's repository, suite `testing`, and to the installers'
@@ -30,10 +29,10 @@
 //!          location, no size, no attestation
 //! manifest compiled in ([`manifest`]): the package's hook with the command
 //!          `<path the .deb installs its program at> update-hook` (hello's /usr/lib/hello/hello,
-//!          its failing build's too; mdm's /usr/lib/mdm/mdm; hostkeeper's package has no
+//!          its failing build's too; hostkeeper's package has no
 //!          command, and its daemon runs built-in steps) and its bounds, its run units, health
-//!          URL, params and min_hostkeeper; `package` the package's name (`hostkeeper`, `hello`,
-//!          `mdm`; the failing build's is hello's); the installer's bounds ([`INSTALLER_BOUNDS`])
+//!          URL, params and min_hostkeeper; `package` the package's name (`hostkeeper`, `hello`;
+//!          the failing build's is hello's); the installer's bounds ([`INSTALLER_BOUNDS`])
 //! macOS    installer macos-pkg, location komira-testing hostkeeper/<release>/<service>-<release>-
 //!          macos-arm64.pkg (the Mac's store of the testing directory, rooted at pkg/), digest
 //!          and bytes the .pkg's; no attestation (the key and the pin bind the bytes,
@@ -74,7 +73,7 @@ mod files;
 mod manifest;
 
 /// The bounds of a native installer's own steps, in seconds: the fetch and the checks of
-/// `stage` (mdm's `.deb` carries its pinned servers), the package manager's install of
+/// `stage`, the package manager's install of
 /// `activate`, and the purge of `remove`.
 pub(crate) const INSTALLER_BOUNDS: InstallerBounds = InstallerBounds {
     stage_secs: 600,

@@ -14,7 +14,7 @@ use hyper::header::{AUTHORIZATION, HeaderValue};
 use tonic::Code;
 
 use super::support::{
-    CONVERGE, GET_RELEASE, HEARTBEAT, SET_DESIRED, Served, WAIT_CONVERGED, call, decode,
+    CONVERGE, GET_RELEASE, HEARTBEAT, RETIRED, SET_DESIRED, Served, WAIT_CONVERGED, call, decode,
     grpc_request, peer, served, served_built, served_unreachable, served_with_operator_token,
     updater,
 };
@@ -31,11 +31,11 @@ const STATUS: &str = "/hostkeeper.operator.v1.Releases/Status";
 const OTHER_SERVICE: &str = "[[service]]\nname = \"other\"\nroles = [\"daemon\"]\n";
 
 /// The path of each method of the operator API that has a handler: every one but those of
-/// [`PENDING`], which answer `UNIMPLEMENTED` before any credential is looked at (`pending.rs`).
+/// [`PENDING`] and of the retired service [`RETIRED`], which answer `UNIMPLEMENTED` before any credential is looked at (`pending.rs`).
 pub(super) fn operator_paths() -> Vec<&'static str> {
     COMMANDS
         .iter()
-        .filter(|command| command.package == "hostkeeper.operator.v1")
+        .filter(|command| command.package == "hostkeeper.operator.v1" && command.service != RETIRED)
         .map(|command| command.path)
         .filter(|path| !PENDING.contains(path))
         .collect()
@@ -271,7 +271,7 @@ async fn every_operator_method_admits_exactly_its_credential() {
     let paths = operator_paths();
     let services: BTreeSet<&str> = COMMANDS
         .iter()
-        .filter(|command| command.package == "hostkeeper.operator.v1")
+        .filter(|command| command.package == "hostkeeper.operator.v1" && command.service != RETIRED)
         .map(|command| command.service)
         .collect();
     assert_eq!(
@@ -284,7 +284,6 @@ async fn every_operator_method_admits_exactly_its_credential() {
             "HostGroups",
             "Hosts",
             "Layout",
-            "Mdm",
             "Releases",
             "Repositories",
             "Rollouts",

@@ -36,7 +36,7 @@ pub const DAEMON_CONFIG: &str = "/etc/hostkeeper/hostkeeper.toml";
 /// The managed preferences of the domain `dev.hostkeeper.config`, as macOS writes them from the
 /// config profile's `com.apple.ManagedClient.preferences` payload: the file a Mac's daemon builds
 /// [`DAEMON_CONFIG`] from. The path is Apple's convention for managed preferences
-/// (docs/design/hostkeeper-mdm.md, section 4), which the daemon's start reads
+/// (docs/design/mac-bootstrap.md, section 4), which the daemon's start reads
 /// (`hostkeeper_daemon::mac_config::at_start`).
 pub const MANAGED_CONFIG: &str = "/Library/Managed Preferences/dev.hostkeeper.config.plist";
 

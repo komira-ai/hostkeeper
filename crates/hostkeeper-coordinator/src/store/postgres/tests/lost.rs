@@ -318,7 +318,7 @@ fn a_refused_statement_keeps_the_session_and_writes_nothing() {
     assert_eq!(store.health(), Health::Up);
     let answer = store
         .write(|tx| {
-            tx.query("SELECT 1", &[])?;
+            tx.query_one("SELECT 1", &[])?;
             let row = tx.query_one("SELECT 7::int", &[])?;
             Ok(row.get::<_, i32>(0))
         })

@@ -31,8 +31,8 @@ use hostkeeper_proto::hostkeeper::agent::v1::{
 use hyper::body::Body;
 use prost::Message;
 
+use super::Enrollment;
 use super::refusal::{RpcError, rpc_error};
-use super::{Enrollment, MacAllowEntry, MacOutcome};
 use crate::http::{BoxError, Peer, read_body};
 use crate::ops::AuditEntry;
 use crate::reconcile::COORDINATOR;
@@ -139,9 +139,6 @@ pub struct Enrolled {
     pub response: EnrollResponse,
     /// The request's id: the SHA-256 of the CSR's key.
     pub request_id: KeyHash,
-    /// The allowlist entry the request was approved as by its Mac nonce, if it was: the
-    /// coordinator assigns its services ([`crate::service::Coordinator::enroll`]).
-    pub by_nonce: Option<MacAllowEntry>,
 }
 
 /// The refusal `refusal`, as an error.
@@ -150,9 +147,7 @@ fn refused(refusal: CoordinatorRefusal) -> RpcError {
 }
 
 impl Enrollment {
-    /// `Enroll` ([`Enrollment::enrolled`]), answered: the services of a Mac approved by its
-    /// nonce are not assigned here, but by the coordinator ([`crate::service::Coordinator::enroll`]),
-    /// which is what the gRPC service calls.
+    /// `Enroll` ([`Enrollment::enrolled`]), answered: what the gRPC service calls.
     ///
     /// # Errors
     /// As [`Enrollment::enrolled`].
@@ -164,11 +159,8 @@ impl Enrollment {
     /// here), pending until an operator approves it. The same key again is the same request.
     /// A new request while the pending queue is full is refused `pending_full`. A request that
     /// stays pending here waits for an operator, or for the inventory record it matches
-    /// ([`crate::service::Coordinator::enroll`] tries the records); a pending
-    /// request that carries a Mac nonce is approved by it when every condition of the Mac path
-    /// holds ([`Enrollment::mac_auto_approve`]), and the allowlist entry it was approved as is
-    /// returned with the answer; otherwise it stays pending. A new request (not a repost) is
-    /// told to the MDM gate ([`Enrollment::with_posted`]) once it is recorded.
+    /// ([`crate::service::Coordinator::enroll`] tries the records). A
+    /// `mac_nonce` in the request is read and ignored: nothing approves a request by it.
     ///
     /// # Errors
     /// `bad_csr`, `key_not_p256`, `renewal_not_allowed` (also for a `renewal_of` that is no
@@ -197,7 +189,7 @@ impl Enrollment {
                     },
                     image: request.image,
                     renewal_of,
-                    mac_nonce_presented: !request.mac_nonce.is_empty(),
+                    mac_nonce_presented: false,
                 },
                 self.clock.now_unix(),
             )
@@ -216,20 +208,10 @@ impl Enrollment {
                     posted.request_id, posted.round
                 ),
             ));
-            self.posted.iter().for_each(|told| told());
         }
-        let by_nonce = if !request.mac_nonce.is_empty() && posted.state.is_pending() {
-            match self.mac_auto_approve(&posted.request_id, &request.mac_nonce) {
-                MacOutcome::Approved(entry) => Some(entry),
-                MacOutcome::Declined(_) | MacOutcome::Refused(_) => None,
-            }
-        } else {
-            None
-        };
         // A request already approved, issued or denied is polled for where it stands. A post never
         // answers an expired request: the store starts it over.
         let state = match posted.state {
-            _ if by_nonce.is_some() => EnrollState::Unspecified,
             RequestState::Pending => EnrollState::Pending,
             RequestState::DuplicateClaim => EnrollState::DuplicateClaim,
             RequestState::Approved
@@ -243,7 +225,6 @@ impl Enrollment {
                 state: state as i32,
             },
             request_id: posted.request_id,
-            by_nonce,
         })
     }
 

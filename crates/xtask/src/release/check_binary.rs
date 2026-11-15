@@ -1,7 +1,6 @@
 //! `release check-binary <binary> <version> <commit>`: runs a built binary with `--version` and
 //! refuses it unless it prints exactly the stamp of that version and commit ([`stamp_of`]). The
-//! binary's file name says which shipped binary it is (one of [`STAMPED`]: the shipped binaries and
-//! `mdm`, the mdm package's program), and so the program
+//! binary's file name says which shipped binary it is (one of [`STAMPED`]: the shipped binaries), and so the program
 //! name the stamp starts with; any other file name is refused before anything runs. The binary
 //! is run through [`VersionOf`], the adapter of the [`RunVersion`] port.
 

@@ -12,8 +12,7 @@ description = "The CI steps of this repository (cargo xtask <verb>)."
 default-run = "xtask"
 
 [dependencies]
-# The DSSE payload of an attestation bundle (`release targets` reads its subjects); the HTTP
-# Basic credentials of `mdm-signing-test send`.
+# The DSSE payload of an attestation bundle (`release targets` reads its subjects).
 base64.workspace = true
 clap.workspace = true
 flate2.workspace = true
@@ -37,12 +36,6 @@ hostkeeper-steps = { path = "../hostkeeper-steps" }
 # (`release macos-pkg`), and the launchd plists of hello's `.pkg`, rendered with the renderer the
 # daemon's own plists use.
 hostkeeper-launchd = { path = "../hostkeeper-launchd" }
-# The mdm package (`release targets`, `release deb --service mdm`, `release mdm-fetch`): its
-# hook bounds, run units and params (the entry's manifest), its units (and their `.deb` text) and
-# the pins of the tools it carries from hostkeeper-mdm-core, and the tools taken out of their
-# archives by the kit's own archive reader in hostkeeper-mdm.
-hostkeeper-mdm = { path = "../hostkeeper-mdm" }
-hostkeeper-mdm-core = { path = "../hostkeeper-mdm-core" }
 # The xz decoder of `release check-linux-pkg`, which reads a tarball compressed with xz; pure
 # Rust.
 lzma-rs.workspace = true
@@ -58,17 +51,14 @@ rustls-native-certs.workspace = true
 rustix = { workspace = true, features = ["process"] }
 # The zstd decoder of `release check-linux-pkg` (a tarball).
 ruzstd.workspace = true
-# Reads back the launchd plist of the installer pkg (`release check-macos-pkg`); writes the
-# commands and the root's profile of `mdm-signing-test`.
+# Reads back the launchd plist of the installer pkg (`release check-macos-pkg`).
 plist.workspace = true
 # The entries of `release targets`, built as the generated messages, checked, and written as
 # their proto3 canonical JSON through the descriptors (`serde`), as the coordinator reads them.
 prost.workspace = true
 prost-reflect = { workspace = true, features = ["serde"] }
-# `kit.toml` and `results.toml` of `mdm-signing-test`, read and written by their types.
 serde.workspace = true
-# The JSON `gh` prints: workflow runs, issues, releases and verified attestations; NanoHUB's
-# answer to `mdm-signing-test send`.
+# The JSON `gh` prints: workflow runs, issues, releases and verified attestations.
 serde_json.workspace = true
 sha2.workspace = true
 tar.workspace = true

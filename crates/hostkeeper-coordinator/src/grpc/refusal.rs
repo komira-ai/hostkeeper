@@ -8,7 +8,7 @@
 
 use hostkeeper_proto::hostkeeper::operator::v1::{
     AlertsRefusal, ApiTokensRefusal, AuditRefusal, EnrollmentRefusal, HostGroupsRefusal,
-    HostsRefusal, LayoutRefusal, MdmRefusal, ReleasesRefusal, RepositoriesRefusal, RolloutsRefusal,
+    HostsRefusal, LayoutRefusal, ReleasesRefusal, RepositoriesRefusal, RolloutsRefusal,
     ServicesRefusal, UsersRefusal,
 };
 use tonic::{Code, Status};
@@ -174,38 +174,6 @@ pub(crate) fn rollouts(refusal: RolloutsRefusal) -> Status {
         RolloutsRefusal::AuditUnavailable => Code::Unavailable,
     };
     refused(code, refusal.as_str_name(), "ROLLOUTS_REFUSAL_")
-}
-
-/// The status of a refusal by `Mdm`.
-pub(crate) fn mdm(refusal: MdmRefusal) -> Status {
-    let code = match refusal {
-        MdmRefusal::Unspecified => Code::Internal,
-        MdmRefusal::Unauthorized => Code::Unauthenticated,
-        MdmRefusal::Forbidden => Code::PermissionDenied,
-        MdmRefusal::InvalidRequest => Code::InvalidArgument,
-        MdmRefusal::StoreFailed => Code::Internal,
-        MdmRefusal::AuditUnavailable => Code::Unavailable,
-        MdmRefusal::NoPendingEnrollment => Code::NotFound,
-        MdmRefusal::SecretsUnavailable
-        | MdmRefusal::NameLocked
-        | MdmRefusal::EnrollmentUnavailable
-        | MdmRefusal::SerialNotInAbm
-        | MdmRefusal::NoPendingRequest
-        | MdmRefusal::AbmUnavailable
-        | MdmRefusal::AbmKeyMissing
-        | MdmRefusal::AbmCredentialRefused
-        | MdmRefusal::AbmClockRefused => Code::FailedPrecondition,
-        MdmRefusal::MdmcertUnavailable | MdmRefusal::AbmUnreachable => Code::Unavailable,
-        MdmRefusal::ReplyUndecryptable
-        | MdmRefusal::ReplyNotForRequest
-        | MdmRefusal::CertificateInvalid
-        | MdmRefusal::KeyInvalid
-        | MdmRefusal::KeyMismatch
-        | MdmRefusal::CertificateExpired
-        | MdmRefusal::TopicChanged
-        | MdmRefusal::AbmTokenUnreadable => Code::InvalidArgument,
-    };
-    refused(code, refusal.as_str_name(), "MDM_REFUSAL_")
 }
 
 /// The status of a refusal by `Repositories`.

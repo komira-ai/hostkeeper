@@ -248,8 +248,8 @@ then unassigned, and ordered nothing, until `Move` ([enrollment.md](enrollment.m
   nothing, and its request waits for an operator.
 - `hkctl enrollment approve --host-group <group>`: the operator's approval. It names no
   `--services` (`services_retired`), and the group is optional (so is `--reason`).
-- A Mac approved by its MDM nonce goes into the `host_group` of its entry of
-  `--mac-serial-allowlist` ([enrollment-coordinator.md](../enrollment-coordinator.md#a-mac-approved-by-its-nonce)).
+- A Mac approved by an inventory record goes into the record's group; the MDM nonce and
+  `--mac-serial-allowlist` are gone ([coordinator-mdm.md](../design/coordinator-mdm.md)).
 
 `--role` is read as the group's name where `--host-group` is left out, so scripts that name roles
 keep working once the groups have the roles' names. The approval's audit entry names the group,

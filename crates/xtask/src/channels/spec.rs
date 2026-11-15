@@ -15,7 +15,7 @@
 //!
 //! A release of this repository publishes the daemon's and the coordinator's packages, and the
 //! native packages of the services it releases (docs/design/packages-native.md, item A21):
-//! hello's and pxe's `.deb` for both architectures and mdm's for amd64 alone (none has an rpm), and
+//! hello's and pxe's `.deb` for both architectures (none has an rpm), and
 //! beside hostkeeper's own installer hello's `.pkg`. The index, write and promote verbs take every
 //! package of the product in one pass ([`Product::deb_files`], [`Product::rpm_files`]), so a
 //! release is listed in the repository whole or not at all. Hello's failing build is not one of
@@ -59,8 +59,7 @@ pub(crate) const RPM_RELEASE: &str = "1";
 pub(crate) struct Package {
     /// The package name: the deb's `Package`, the rpm's name, and the start of both file names.
     pub(crate) name: &'static str,
-    /// The architectures the package is built for: mdm's `.deb` is built for amd64 alone (its
-    /// pinned tools are amd64 builds).
+    /// The architectures the package is built for.
     pub(crate) arches: &'static [Arch],
     /// Whether the package is also an rpm. The services' native packages are `.deb`s alone
     /// (docs/design/packages-native.md: `dnf` is later).
@@ -242,7 +241,7 @@ impl Product {
     }
 }
 
-/// hostkeeper: the daemon's package and the coordinator's, hello's, mdm's and pxe's native packages, and
+/// hostkeeper: the daemon's package and the coordinator's, hello's and pxe's native packages, and
 /// the installers of hostkeeper and of hello.
 pub(crate) const HOSTKEEPER: Product = Product {
     name: "hostkeeper",
@@ -309,29 +308,6 @@ pub(crate) const HOSTKEEPER: Product = Product {
             ],
         },
         Package {
-            name: "mdm",
-            arches: &[AMD64],
-            rpm: false,
-            postun_required: false,
-            binary: "/usr/lib/mdm/mdm",
-            stamp_commit: true,
-            units: &MDM_UNITS,
-            user: None,
-            enabled_after_install: false,
-            prerequisites: &[],
-            files: &[
-                "/usr/lib/mdm/mdm",
-                "/usr/lib/systemd/system/mdm-cert-renew.service",
-                "/usr/lib/systemd/system/mdm-cert.service",
-                "/usr/lib/systemd/system/mdm-cert.timer",
-                "/usr/lib/systemd/system/mdm-depserver.service",
-                "/usr/lib/systemd/system/mdm-depsyncer.service",
-                "/usr/lib/systemd/system/mdm-nanohub.service",
-                "/usr/lib/systemd/system/mdm-proxy.service",
-                "/usr/lib/systemd/system/mdm-scep.service",
-            ],
-        },
-        Package {
             name: "pxe",
             arches: &ARCHES,
             rpm: false,
@@ -368,18 +344,6 @@ pub(crate) const HOSTKEEPER: Product = Product {
         "check-pkg",
     ],
 };
-
-/// mdm's units, as its `.deb` installs them (`hostkeeper_mdm_core::package::UNITS`).
-const MDM_UNITS: [&str; 8] = [
-    "mdm-cert-renew.service",
-    "mdm-cert.service",
-    "mdm-cert.timer",
-    "mdm-depserver.service",
-    "mdm-depsyncer.service",
-    "mdm-nanohub.service",
-    "mdm-proxy.service",
-    "mdm-scep.service",
-];
 
 /// The architecture whose RPM name is `rpm`.
 pub(crate) fn arch_of_rpm(rpm: &str) -> Option<&'static Arch> {

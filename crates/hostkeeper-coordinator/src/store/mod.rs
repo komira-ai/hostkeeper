@@ -36,12 +36,6 @@ use crate::verdict_file::{self, VerdictsError};
 
 mod fake;
 mod files;
-#[allow(
-    dead_code,
-    reason = "the MDM tables land before the code that uses them (CM6; CM11a, CM12c and CM13 call them)"
-)]
-pub(crate) mod mdm;
-pub(crate) mod mdm_setup;
 pub(crate) mod postgres;
 
 pub(crate) use fake::Fake;

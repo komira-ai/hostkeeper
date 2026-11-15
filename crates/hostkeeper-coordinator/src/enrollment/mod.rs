@@ -29,12 +29,6 @@
 //!   writes ([`Enrollment::deny_host`]);
 //! - `expiry`: a request no operator approved within the request TTL expires
 //!   ([`Enrollment::expire_requests`], run by the reload tick), audited `request_expired`;
-//! - `mac_nonce` and `device_state`: the Mac path of design 5.9, a request approved by its MDM
-//!   nonce when the allowlist and the gate's [`DeviceState`] port agree;
-//! - `gate_port`: the enrollment as the gate's enrollment side asks it
-//!   ([`hostkeeper_mdm_gate::Enrollments`]): the allowlist, the waiting requests of a serial,
-//!   its last approval, a nonce bound to a request, and the audit of a push; a request posted
-//!   is told to the gate ([`Enrollment::with_posted`]).
 //!
 //! The heartbeat path asks [`Enrollment::identity_of`] who a certificate the CA issued names,
 //! [`Enrollment::admission`] whether its host is denied, retiring or neither,
@@ -45,12 +39,9 @@
 
 mod approve;
 mod by_record;
-mod device_state;
 mod expiry;
-mod gate_port;
 pub(crate) mod groups;
 mod list;
-mod mac_nonce;
 mod nonce;
 mod refusal;
 mod reject;
@@ -68,16 +59,8 @@ pub use hostkeeper_proto::hostkeeper::agent::v1::CoordinatorRefusal;
 pub(crate) use approve::UNGROUPED_ROLE;
 pub use approve::{ACTION_APPROVE, ACTION_REFUSED, ACTION_REPLACE, Approved, token_of};
 pub use by_record::{ACTION_AUTO_APPROVED, ByRecord, INVENTORY_APPROVER, Waits};
-#[cfg(test)]
-pub use device_state::FakeDeviceState;
-pub use device_state::{DeviceState, DeviceStateError, DeviceStatus, NoDeviceState};
 pub use expiry::DEFAULT_REQUEST_TTL_SECS;
-pub use gate_port::GATE_AUDITOR;
 pub use list::MAX_PENDING_PAGE;
-pub use mac_nonce::{
-    ACTION_DECLINED, AllowlistError, MAC_APPROVER, MAC_NONCE_BYTES, MacAllowEntry, MacAllowlist,
-    MacDecline, MacNonce, MacNonceError, MacOutcome, MacPolicy,
-};
 pub use nonce::{NONCE_BYTES, NONCES_PER_REQUEST, Nonces, Random, os_random};
 pub use refusal::{RpcError, refusal_of};
 pub use reject::ACTION_REJECT;
@@ -117,7 +100,7 @@ pub struct ServerCertificate {
 }
 
 /// The coordinator's enrollment: its store, its CA, its server certificate file, its wall
-/// clock, its poll nonces, the Mac path's policy, the request TTL, and the ops store it audits
+/// clock, its poll nonces, the request TTL, and the ops store it audits
 /// approvals in.
 pub struct Enrollment {
     store: EnrollmentStore,
@@ -127,10 +110,6 @@ pub struct Enrollment {
     server_state: Mutex<ServerCertificate>,
     clock: Arc<dyn UnixClock>,
     nonces: Nonces,
-    mac: MacPolicy,
-    /// A Mac is approved only when the gate says it enrolled through ADE (`device_not_via_dep`
-    /// otherwise); off by default.
-    mac_require_dep: bool,
     /// How long a request waits for an operator before it expires, in seconds.
     request_ttl_secs: u64,
     /// Set when a coordinator takes this enrollment ([`Enrollment::audit_to`]).
@@ -138,12 +117,7 @@ pub struct Enrollment {
     /// The desired state of the coordinator that took this enrollment, whose host groups an
     /// approval places its host in ([`Enrollment::place_by`]); `None` until one does.
     desired: Mutex<Option<Arc<DesiredStore>>>,
-    /// Called after each new request is recorded ([`Enrollment::with_posted`]).
-    posted: Option<Posted>,
 }
-
-/// What [`Enrollment::with_posted`] calls.
-pub type Posted = Arc<dyn Fn() + Send + Sync>;
 
 impl std::fmt::Debug for Enrollment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -182,12 +156,9 @@ impl Enrollment {
             }),
             clock,
             nonces: Nonces::new(random),
-            mac: MacPolicy::default(),
-            mac_require_dep: false,
             request_ttl_secs: DEFAULT_REQUEST_TTL_SECS,
             audit: Mutex::new(None),
             desired: Mutex::new(None),
-            posted: None,
         }
     }
 
@@ -217,15 +188,6 @@ impl Enrollment {
         self
     }
 
-    /// The same enrollment, calling `posted` after each new request is recorded (a repost of a
-    /// request is none): the MDM gate is told of it, so a Mac's nonce is pushed without waiting
-    /// for its tick.
-    #[must_use]
-    pub fn with_posted(mut self, posted: Posted) -> Self {
-        self.posted = Some(posted);
-        self
-    }
-
     /// The same enrollment, letting at most `max` requests wait for an operator
     /// (`--max-pending-enrollments`); a request over it is refused `pending_full`.
     #[must_use]
@@ -239,23 +201,6 @@ impl Enrollment {
     #[must_use]
     pub fn with_host_validity_secs(mut self, secs: u64) -> Self {
         self.store = self.store.with_host_validity_secs(secs);
-        self
-    }
-
-    /// The same enrollment, approving a Mac by its nonce as `mac` says. Without it no Mac is
-    /// ([`MacPolicy::default`]).
-    #[must_use]
-    pub fn with_mac(mut self, mac: MacPolicy) -> Self {
-        self.mac = mac;
-        self
-    }
-
-    /// The same enrollment, declining `device_not_via_dep` a Mac whose `SecurityInfo` did not say
-    /// `EnrolledViaDEP` true (also one that has not answered). Off by default, so an allowlisted
-    /// Mac enrolled by hand is approved as before.
-    #[must_use]
-    pub fn with_mac_require_dep(mut self, require: bool) -> Self {
-        self.mac_require_dep = require;
         self
     }
 

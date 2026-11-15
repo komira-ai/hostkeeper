@@ -1,7 +1,9 @@
 //! The Postgres store (`docs/design/coordinator-storage.md`, build item C3): the coordinator's
 //! state in the tables of migration `0001`, behind the same [`Backend`] as the files and the fake,
-//! the enrollment store's records behind its `Records` port ([`PgRecords`]), and the MDM gate's
-//! device records behind its `DeviceStore` ([`PgDevices`], migration `0005`).
+//! and the enrollment store's records behind its `Records` port ([`PgRecords`]). The tables of
+//! migrations `0005`, `0011` and `0012` (the MDM's) are no longer read or written by any code: they
+//! stay in place, unused, because a release before this one holds them and a format changes only
+//! by addition.
 //!
 //! - **The start** ([`Postgres::open`]): open the writing session, take the coordinator's
 //!   advisory lock without waiting (another coordinator holding it refuses the start), run the
@@ -22,17 +24,10 @@
 
 mod accounts;
 mod at;
-mod devices;
 mod dsn;
 mod generations;
 mod groups;
 mod layout;
-#[allow(
-    dead_code,
-    reason = "the MDM tables land before the code that uses them (CM6; CM11a, CM12c and CM13 call them)"
-)]
-pub(crate) mod mdm;
-pub(crate) mod mdm_setup;
 pub(crate) mod migrate;
 mod records;
 mod releases;
@@ -49,7 +44,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use hostkeeper_oidc::Clock;
 
-pub(crate) use devices::PgDevices;
 pub use dsn::DsnError;
 pub(crate) use dsn::{Dsn, TIMEOUTS, Timeouts};
 pub(crate) use records::PgRecords;

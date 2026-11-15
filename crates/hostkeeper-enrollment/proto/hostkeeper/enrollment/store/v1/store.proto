@@ -194,7 +194,9 @@ message SerialCounter {
   uint64 next = 2;
 }
 
-// A one-time Mac nonce the policy gate issued for one serial. Only its SHA-256 is kept.
+// A one-time Mac nonce the policy gate issued for one serial. Only its SHA-256 is kept. No
+// coordinator issues one since the MDM's removal; the message and the `mac-nonces/` directory stay,
+// so a store of an earlier release still reads.
 message MacNonce {
   uint32 schema = 1;
   bytes nonce_sha256 = 2;

@@ -10,7 +10,7 @@ const PLACEHOLDER: &str = "<version>";
 /// with why it left. A name leaves the list of `asset_names` only by being added here (and
 /// marked `withdrawn: ` in the baseline) in the same pull request: consumers fetch
 /// assets by name, so a name is withdrawn only when nothing fetches it.
-const WITHDRAWN: [(&str, &str); 38] = [
+const WITHDRAWN: [(&str, &str); 46] = [
     ("hostkeeper-<version>-1-aarch64.pkg.tar.zst", ARCH_WITHDRAWN),
     (
         "hostkeeper-<version>-1-aarch64.pkg.tar.zst.sigstore.json",
@@ -133,6 +133,29 @@ const WITHDRAWN: [(&str, &str); 38] = [
         ARCHIVE_WITHDRAWN,
     ),
     ("mdm-index.json", INDEX_WITHDRAWN),
+    (
+        "hostkeeper-mdm-<version>-linux-arm64.cdx.json",
+        MDM_WITHDRAWN,
+    ),
+    ("hostkeeper-mdm-<version>-linux-arm64.tar.gz", MDM_WITHDRAWN),
+    (
+        "hostkeeper-mdm-<version>-linux-arm64.tar.gz.sigstore.json",
+        MDM_WITHDRAWN,
+    ),
+    (
+        "hostkeeper-mdm-<version>-linux-x86_64.cdx.json",
+        MDM_WITHDRAWN,
+    ),
+    (
+        "hostkeeper-mdm-<version>-linux-x86_64.tar.gz",
+        MDM_WITHDRAWN,
+    ),
+    (
+        "hostkeeper-mdm-<version>-linux-x86_64.tar.gz.sigstore.json",
+        MDM_WITHDRAWN,
+    ),
+    ("mdm_<version>_amd64.deb", MDM_WITHDRAWN),
+    ("mdm_<version>_amd64.deb.sigstore.json", MDM_WITHDRAWN),
 ];
 
 /// Why the Arch Linux package and its bundle left the release.
@@ -143,6 +166,9 @@ const ARCHIVE_WITHDRAWN: &str = "hostkeeper's own archive package is withdrawn: 
 
 /// Why the release indexes left the release.
 const INDEX_WITHDRAWN: &str = "the release indexes are withdrawn with the archive packages they listed and the release channel that served them (docs/design/packages-native.md, item A28)";
+
+/// Why the MDM kit's binary and the mdm package left the release.
+const MDM_WITHDRAWN: &str = "the MDM is withdrawn: Macs enroll through Apple Business device management and the bootstrap package (docs/design/mac-bootstrap.md), and nothing fetches the MDM kit or its package";
 
 /// What marks a withdrawn name in the baseline.
 const WITHDRAWN_MARK: &str = "withdrawn: ";
@@ -204,7 +230,7 @@ fn asset_names_are_the_documented_contract() {
     let v = version("7.8.9");
     let names = asset_names(&v, &Platform::RELEASED);
     assert_eq!(names, baseline_for(&v));
-    assert_eq!(names.len(), 74);
+    assert_eq!(names.len(), 66);
     assert_eq!(documented_names(DOC, &v), Ok(names.clone()));
     // The document changed alone: a name dropped, or one renamed.
     let image = "hostkeeper-coordinator-<version>-<linux-platform>.image.tar\n";
@@ -262,9 +288,8 @@ fn asset_name_list_only_grows_but_for_the_withdrawn_names() {
 #[test]
 fn tag_and_version_string_formats_are_pinned() {
     // Catches: a tag that is not `v<X.Y.Z>`, a `--version` text other than
-    // `hostkeeper X.Y.Z+<12 hex>` (`hostkeeper-coordinator ...`, `hostkeeper-mdm ...`,
-    // `hostkeeper-coordinator-update ...` and `mdm ...`, the mdm package's program, for the other
-    // shipped binaries), a shipped binary dropped, or a change of the signer identity.
+    // `hostkeeper X.Y.Z+<12 hex>` (`hostkeeper-coordinator ...` and
+    // `hostkeeper-coordinator-update ...` for the other shipped binaries), a shipped binary dropped, or a change of the signer identity.
     let v = version("0.1.27");
     let c = commit("0123456789abcdef0123456789abcdef01234567");
     assert_eq!(v.tag(), "v0.1.27");
@@ -275,9 +300,7 @@ fn tag_and_version_string_formats_are_pinned() {
         [
             "hostkeeper 0.1.27+0123456789ab",
             "hostkeeper-coordinator 0.1.27+0123456789ab",
-            "hostkeeper-mdm 0.1.27+0123456789ab",
             "hostkeeper-coordinator-update 0.1.27+0123456789ab",
-            "mdm 0.1.27+0123456789ab",
         ]
     );
     assert_eq!(RELEASE_COMMIT, "RELEASE_COMMIT");
@@ -402,8 +425,8 @@ fn the_attested_and_summed_names_partition_the_assets() {
     let v = version("0.1.3");
     let attested = attested_names(&v);
     let summed = summed_names(&v);
-    assert_eq!(attested.len(), 32);
-    assert_eq!(summed.len(), 41);
+    assert_eq!(attested.len(), 29);
+    assert_eq!(summed.len(), 36);
     // The boot sets of network install are summed and attested, with a bundle of their own, and
     // so is the command line, one script for every platform.
     assert!(summed.contains(&NETBOOT.to_owned()) & attested.contains(&NETBOOT.to_owned()));
@@ -411,13 +434,6 @@ fn the_attested_and_summed_names_partition_the_assets() {
     assert!(summed.contains(&hkctl_name(&v)) & attested.contains(&hkctl_name(&v)));
     assert!(attested.iter().all(|a| summed.contains(a)));
     assert!(!summed.iter().any(|n| is_bundle(n) | (n == SUMS)));
-    // The mdm package is attested for linux-x86_64 and is no asset for any other platform.
-    assert!(attested.contains(&"mdm_0.1.3_amd64.deb".to_owned()));
-    assert!(summed.contains(&"mdm_0.1.3_amd64.deb".to_owned()));
-    for platform in [Platform::LinuxArm64, Platform::MacosArm64] {
-        let name = Package::Mdm.native_name(&v, platform);
-        assert_eq!(name, None);
-    }
     // The pxe package is attested for both Linux platforms and is no asset for macOS.
     for deb in ["pxe_0.1.3_amd64.deb", "pxe_0.1.3_arm64.deb"] {
         assert!(attested.contains(&deb.to_owned()) & summed.contains(&deb.to_owned()));
@@ -448,8 +464,8 @@ fn there_are_exactly_three_platforms_and_a_release_ships_all_three() {
 
 #[test]
 fn a_macos_platform_has_a_binary_a_package_an_installer_and_an_sbom_but_no_linux_assets() {
-    // Catches: a deb, an rpm, a coordinator, an MDM kit binary, an mdm package or an image named
-    // for macOS (the MDM kit and the mdm package are Linux-only), the archive packages or release
+    // Catches: a deb, an rpm, a coordinator or an image named
+    // for macOS, the archive packages or release
     // indexes back in the list, or its installer pkg or hello's `.pkg` missing or not attested.
     let v = version("0.2.1");
     assert_eq!(
@@ -474,10 +490,10 @@ fn a_macos_platform_has_a_binary_a_package_an_installer_and_an_sbom_but_no_linux
 }
 
 #[test]
-fn the_native_packages_are_hostkeepers_and_hellos_on_every_platform_and_mdms_on_linux_x86_64_each_attested()
+fn the_native_packages_are_hostkeepers_and_hellos_on_every_platform_and_pxes_on_linux_each_attested()
  {
     // Catches: a native package named other than the one `release deb`, `release macos-pkg` and
-    // nfpm write, one shipped for a platform its package is not built for (mdm on arm64 or
+    // nfpm write, one shipped for a platform its package is not built for (pxe on
     // macOS), hostkeeper's own native packages named other than the daemon's `.deb` and the
     // installer the release ships (its entry would pin a file the release does not have), hello's
     // failing build given a macOS `.pkg` (none is released) or a `.deb` named by its Debian
@@ -497,10 +513,6 @@ fn the_native_packages_are_hostkeepers_and_hellos_on_every_platform_and_mdms_on_
             Some("hello_0.2.1_arm64.deb".to_owned()),
             Some("hello-0.2.1-macos-arm64.pkg".to_owned()),
         ]
-    );
-    assert_eq!(
-        names(Package::Mdm),
-        [Some("mdm_0.2.1_amd64.deb".to_owned()), None, None]
     );
     assert_eq!(
         names(Package::Pxe),
@@ -541,7 +553,8 @@ fn the_native_packages_are_hostkeepers_and_hellos_on_every_platform_and_mdms_on_
         "hello-0.2.1-macos-arm64.pkg",
         "hello_0.2.1-fail-ready_amd64.deb",
         "hello_0.2.1-fail-ready_arm64.deb",
-        "mdm_0.2.1_amd64.deb",
+        "pxe_0.2.1_amd64.deb",
+        "pxe_0.2.1_arm64.deb",
     ] {
         assert!(attested.contains(&native.to_owned()), "{native}");
         assert!(summed_names(&v).contains(&native.to_owned()), "{native}");
@@ -550,43 +563,25 @@ fn the_native_packages_are_hostkeepers_and_hellos_on_every_platform_and_mdms_on_
 }
 
 #[test]
-fn a_linux_platform_ships_the_mdm_binary_attested_with_its_sbom() {
-    // Catches: the MDM kit's binary missing from a Linux platform, named other than
-    // `hostkeeper-mdm-<v>-<p>.tar.gz`, shipped without its bundle (so neither verified offline
-    // nor held to the signer), or without its SBOM, or an SBOM given a bundle of its own.
+fn no_platform_ships_an_mdm_asset() {
+    // Catches: the MDM kit's binary, its SBOM, its bundle or the mdm package's `.deb` back in the
+    // list of a release for any platform: they are withdrawn (WITHDRAWN) with the MDM.
     let v = version("0.2.1");
-    for platform in [Platform::LinuxX86_64, Platform::LinuxArm64] {
-        let p = platform.name();
+    for platform in Platform::RELEASED {
         let names = asset_names(&v, &[platform]);
-        let mdm: Vec<&str> = names
+        let mdm: Vec<&String> = names
             .iter()
-            .map(String::as_str)
-            .filter(|n| n.starts_with("hostkeeper-mdm-"))
+            .filter(|n| n.starts_with("hostkeeper-mdm-") | n.starts_with("mdm_"))
             .collect();
-        assert_eq!(
-            mdm,
-            [
-                format!("hostkeeper-mdm-0.2.1-{p}.cdx.json"),
-                format!("hostkeeper-mdm-0.2.1-{p}.tar.gz"),
-                format!("hostkeeper-mdm-0.2.1-{p}.tar.gz.sigstore.json"),
-            ],
-            "{p}"
-        );
-    }
-    let attested = attested_names(&v);
-    let summed = summed_names(&v);
-    for p in ["linux-x86_64", "linux-arm64"] {
-        let tarball = format!("hostkeeper-mdm-0.2.1-{p}.tar.gz");
-        let sbom = format!("hostkeeper-mdm-0.2.1-{p}.cdx.json");
-        assert!(attested.contains(&tarball), "{tarball} is attested");
-        assert!(!attested.contains(&sbom), "{sbom} has no bundle");
-        assert!(summed.contains(&tarball) & summed.contains(&sbom), "{p}");
+        assert!(mdm.is_empty(), "{}: {mdm:?}", platform.name());
     }
     assert!(
-        !attested
-            .iter()
-            .any(|n| n.starts_with("hostkeeper-mdm-0.2.1-macos")),
-        "{attested:?}"
+        withdrawn_for(&v).contains(&"hostkeeper-mdm-0.2.1-linux-x86_64.tar.gz".to_owned()),
+        "the kit's tarball is a withdrawn name"
+    );
+    assert!(
+        withdrawn_for(&v).contains(&"mdm_0.2.1_amd64.deb.sigstore.json".to_owned()),
+        "the mdm package's bundle is a withdrawn name"
     );
 }
 
@@ -663,7 +658,6 @@ fn the_services_and_packages_name_their_services_and_versions() {
     assert_eq!(Service::default(), Service::Hostkeeper);
     assert_eq!(Service::Hostkeeper.name(), "hostkeeper");
     assert_eq!(Service::Hello.name(), "hello");
-    assert_eq!(Service::Mdm.name(), "mdm");
     assert_eq!(Service::Pxe.name(), "pxe");
     assert_eq!(
         Package::ALL,
@@ -671,17 +665,16 @@ fn the_services_and_packages_name_their_services_and_versions() {
             Package::Hostkeeper,
             Package::Hello,
             Package::HelloFailReady,
-            Package::Mdm,
             Package::Pxe
         ]
     );
     assert_eq!(
         Package::ALL.map(|p| p.service().name()),
-        ["hostkeeper", "hello", "hello", "mdm", "pxe"]
+        ["hostkeeper", "hello", "hello", "pxe"]
     );
     assert_eq!(
         Package::ALL.map(|p| p.version_text(&v)),
-        ["1.2.3", "1.2.3", "1.2.3-fail-ready", "1.2.3", "1.2.3"]
+        ["1.2.3", "1.2.3", "1.2.3-fail-ready", "1.2.3"]
     );
 }
 
@@ -698,21 +691,16 @@ fn a_package_is_chosen_by_service_and_fail_ready_and_hostkeeper_has_no_failing_b
         Some(Package::HelloFailReady)
     );
     assert_eq!(Package::of(Service::Hostkeeper, true), None);
-    assert_eq!(Package::of(Service::Mdm, false), Some(Package::Mdm));
-    assert_eq!(Package::of(Service::Mdm, true), None);
     assert_eq!(Package::of(Service::Pxe, false), Some(Package::Pxe));
     assert_eq!(Package::of(Service::Pxe, true), None);
 }
 
 #[test]
-fn the_mdm_package_is_released_for_linux_x86_64_alone_and_the_others_for_every_platform() {
-    // Catches: an mdm package or index asked for on linux-arm64 or macOS, whose pinned tools are
-    // linux-amd64 builds (a release would then be refused for lacking it), or another package
-    // losing a platform.
+fn hostkeepers_and_hellos_packages_are_released_for_every_platform() {
+    // Catches: a package losing a platform, which a release would then be refused for lacking.
     for package in [Package::Hostkeeper, Package::Hello, Package::HelloFailReady] {
         assert_eq!(package.platforms(), Platform::RELEASED);
     }
-    assert_eq!(Package::Mdm.platforms(), [Platform::LinuxX86_64]);
 }
 
 #[test]
@@ -798,7 +786,6 @@ fn the_failing_builds_debian_version_sorts_below_the_release_and_the_others_are_
     let v = version("0.2.1");
     assert_eq!(Package::Hostkeeper.deb_version(&v), "0.2.1");
     assert_eq!(Package::Hello.deb_version(&v), "0.2.1");
-    assert_eq!(Package::Mdm.deb_version(&v), "0.2.1");
     assert_eq!(Package::Pxe.deb_version(&v), "0.2.1");
     assert_eq!(Package::HelloFailReady.deb_version(&v), "0.2.1~fail.ready");
     assert_eq!(FAIL_READY_DEB_SUFFIX, "~fail.ready");
@@ -817,7 +804,6 @@ fn only_the_failing_build_names_the_testing_fail_repository_entry() {
     // (its host would then take it from `testing`), or a release naming the failing suite.
     assert_eq!(Package::Hostkeeper.repository_entry(), "komira-testing");
     assert_eq!(Package::Hello.repository_entry(), "komira-testing");
-    assert_eq!(Package::Mdm.repository_entry(), "komira-testing");
     assert_eq!(Package::Pxe.repository_entry(), "komira-testing");
     assert_eq!(
         Package::HelloFailReady.repository_entry(),

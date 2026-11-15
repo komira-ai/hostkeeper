@@ -539,72 +539,6 @@ fn a_cert_inside_the_window_is_near_expiry_and_one_outside_is_not() {
     assert_eq!(cert_alerts(None), Vec::new());
 }
 
-/// The alerts of a push certificate that expires at `not_after`, at 1000, with the thresholds
-/// `days`.
-fn push_alerts(not_after: Option<u64>, days: &[u32]) -> Vec<Alert> {
-    let store = EnrollmentFacts {
-        push_cert_not_after: not_after,
-        push_alert_days: days.to_vec(),
-        ..EnrollmentFacts::default()
-    };
-    derive(
-        &fleet_of(&[], 0),
-        &OpsState::default(),
-        &Services::default(),
-        &store,
-        at(1_000),
-        &Thresholds::default(),
-    )
-}
-
-/// Proves: the push certificate raises one alert once its expiry is within the largest of the
-/// `push_alert_days` thresholds, its version is the smallest threshold reached (so that reaching
-/// 14 days is a new alert after 60), it is `expired` once the certificate has, and none for a
-/// certificate beyond every threshold, with no certificate held, or when no threshold is set and it
-/// has not expired.
-///
-/// Catches: a renewal missed because the reminder never came, and a reminder that says nothing new
-/// at 14 days.
-#[test]
-fn the_push_certificate_alerts_at_each_threshold_and_when_it_expired() {
-    let now = UNIX + 1_000;
-    let day = 86_400;
-    let version = |alerts: &[Alert]| {
-        alerts
-            .iter()
-            .map(|a| a.subject.version.clone())
-            .collect::<Vec<_>>()
-    };
-    assert_eq!(push_alerts(Some(now + 61 * day), &[60, 14]), Vec::new());
-    assert_eq!(
-        version(&push_alerts(Some(now + 60 * day - 1), &[60, 14])),
-        ["60"]
-    );
-    assert_eq!(
-        version(&push_alerts(Some(now + 30 * day), &[60, 14])),
-        ["60"]
-    );
-    assert_eq!(
-        version(&push_alerts(Some(now + 14 * day - 1), &[60, 14])),
-        ["14"]
-    );
-    assert_eq!(version(&push_alerts(Some(now + 1), &[60, 14])), ["14"]);
-    assert_eq!(version(&push_alerts(Some(now), &[60, 14])), ["expired"]);
-    assert_eq!(version(&push_alerts(Some(now - day), &[])), ["expired"]);
-    assert_eq!(push_alerts(Some(now + day), &[]), Vec::new());
-    assert_eq!(push_alerts(None, &[60, 14]), Vec::new());
-    let alerts = push_alerts(Some(now + 10 * day), &[60, 14]);
-    assert_eq!(alerts[0].subject.kind, Kind::PushCertNearExpiry);
-    assert_eq!(
-        alerts[0].message,
-        format!(
-            "the MDM push certificate expires at unix {}, in 864000 s: renew it from the MDM setup \
-             (a push certificate that expires stops every push to the Macs)",
-            now + 10 * day
-        )
-    );
-}
-
 /// Proves: alerts of several kinds come in the order of their kinds, then by service and host,
 /// whatever order the derivations found them in; each kind has its log token and severity.
 ///
@@ -654,9 +588,6 @@ fn alerts_come_by_kind_then_service_and_host() {
         Kind::CertNearExpiry,
         Kind::StoreUnreachable,
         Kind::TrustedRoot,
-        Kind::PushCertNearExpiry,
-        Kind::MdmTlsRenewalFailed,
-        Kind::MdmDnsCredentialRejected,
     ];
     assert_eq!(
         all.map(Kind::log_token),
@@ -672,14 +603,11 @@ fn alerts_come_by_kind_then_service_and_host() {
             "cert_near_expiry",
             "store_unreachable",
             "trusted_root",
-            "push_cert_near_expiry",
-            "mdm_tls_renewal_failed",
-            "mdm_dns_credential_rejected",
         ]
     );
     assert_eq!(
         all.map(|kind| kind.proto() as i32),
-        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
     );
     let critical: Vec<Kind> = all
         .into_iter()

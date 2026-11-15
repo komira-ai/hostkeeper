@@ -114,6 +114,52 @@ fn the_release_channel_flags_are_gone() {
     build_given(&flags_of(files.args())).expect("a start without the channel");
 }
 
+/// Catches: the MDM still a part of `serve`: the flags of the MDM listener, the gate, the ABM sync,
+/// the secrets key, the package proxy and the Mac serial allowlist are no flags of `serve` any
+/// more, so a start that passes one is a usage error (exit 2) and the usage names none of them,
+/// while the flags the Macs' daemons still use (`--lan-listen`, `--record-approve-for`) stay.
+#[test]
+fn the_mdm_flags_are_gone() {
+    let files = Files::new("config-no-mdm");
+    let text = Cli::try_parse_from(["hostkeeper-coordinator", "serve", "--help"])
+        .expect_err("help")
+        .to_string();
+    for gone in ["mdm", "proxy-cache-dir", "mac-serial-allowlist"] {
+        assert!(!text.contains(gone), "{gone} is in the usage: {text}");
+    }
+    for kept in ["--lan-listen", "--record-approve-for", "--ca-key-file"] {
+        assert!(text.contains(kept), "{kept} is not in the usage: {text}");
+    }
+    for flag in [
+        "--mdm-listen",
+        "--mdm-listen-wildcard",
+        "--mdm-command-timeout-s",
+        "--mdm-queue-sweep-s",
+        "--mdm-pkg-dir",
+        "--mdm-api-url",
+        "--mdm-api-key-file",
+        "--mdm-webhook-listen",
+        "--mdm-profile-identifier",
+        "--mdm-daemon-config",
+        "--mdm-stores",
+        "--mdm-macos-pkg",
+        "--mdm-pkg-allowlist",
+        "--mdm-host",
+        "--mdm-baseline-file",
+        "--mdm-baseline-check-s",
+        "--mdm-secrets-key-file",
+        "--mac-serial-allowlist",
+        "--proxy-cache-dir",
+    ] {
+        let mut args = files.args();
+        args.extend([OsString::from(flag), OsString::from("value")]);
+        let refused = Cli::try_parse_from(args.clone()).expect_err("an unknown flag");
+        assert_eq!(refused.kind(), ErrorKind::UnknownArgument, "{flag}");
+        assert_eq!(exit_code(args), ExitCode::from(2), "{flag}");
+    }
+    build_given(&flags_of(files.args())).expect("a start without the MDM");
+}
+
 /// Catches: the certificate namespaces and the legacy service not being flags with the
 /// defaults the project ships: without them the prefixes are `urn:hostkeeper:` ones and there
 /// is no legacy service; with them they are what was given.
@@ -423,7 +469,6 @@ async fn run_binds_both_listeners_and_reports_them() {
             heartbeat: "192.0.2.9:1".parse().expect("an address"),
             control: "192.0.2.9:2".parse().expect("an address"),
             lan: None,
-            mdm: None,
             health: None,
         })
     );

@@ -199,18 +199,6 @@ impl Tx<'_> {
         self.session.execute(sql, params)
     }
 
-    /// Runs a statement; its rows.
-    ///
-    /// # Errors
-    /// The client's error.
-    pub(crate) fn query(
-        &mut self,
-        sql: &str,
-        params: Params<'_>,
-    ) -> Result<Vec<postgres::Row>, postgres::Error> {
-        self.session.query(sql, params)
-    }
-
     /// Runs a statement that returns exactly one row.
     ///
     /// # Errors

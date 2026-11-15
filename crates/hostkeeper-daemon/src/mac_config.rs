@@ -1,5 +1,5 @@
-//! The daemon config of a Mac, written from the managed preferences its MDM installed
-//! (docs/design/hostkeeper-mdm.md, section 4). The start of a Mac's daemon writes it when the
+//! The daemon config of a Mac, written from the managed preferences its device management
+//! installed (the domain `dev.hostkeeper.config`; docs/design/mac-bootstrap.md, section 4). The start of a Mac's daemon writes it when the
 //! config is not there ([`at_start`]).
 //!
 //! 1. A config that is there as a regular file is kept: nothing is written and the managed

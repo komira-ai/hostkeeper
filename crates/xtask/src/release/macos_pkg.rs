@@ -45,17 +45,16 @@
 //! out, so an installer the daemon itself runs does not stop the daemon. It runs the installed binary at no point: the daemon's
 //! start does what the script once did (`hostkeeper_daemon::packaged` seeds the binary directory
 //! of hostkeeper's own update and execs `current`, `hostkeeper_daemon::mac_config::at_start`
-//! writes `/etc/hostkeeper/hostkeeper.toml` from the managed preferences the MDM installed). The
+//! writes `/etc/hostkeeper/hostkeeper.toml` from the managed preferences the device management installed). The
 //! pkg carries no config of its own.
 //!
 //! The file the verbs name is a distribution pkg ([`distribution`]): `pkgbuild` builds the
 //! component pkg that holds the payload and the script, and `productbuild` wraps it, as the one
-//! package of the product, in the file the MDM installs.
+//! package of the product, in the file the device management installs.
 //!
-//! The pkg is not signed. Which identity will sign it (a farm installer identity whose root the
-//! MDM installs, or Apple's Developer ID Installer) is decided by the device test of
-//! `docs/design/hostkeeper-mdm.md` section 7.2 (`cargo xtask mdm-signing-test`). It is attested like every other asset (build provenance by the artifacts
-//! workflow), and an MDM installs it by its digest (design section 5.9). The binary in it keeps
+//! The pkg is not signed here: the release signs it with the Developer ID Installer identity
+//! (`sign-pkg`, then `check-pkg`, in artifacts.yml). It is attested like every other asset (build
+//! provenance by the artifacts workflow), and an install names it by its digest. The binary in it keeps
 //! the ad-hoc code signature the linker gives it, which the macOS unpack check accepts.
 //!
 //! [`build`] lays the payload's tree and the scripts directory out in a new directory, runs

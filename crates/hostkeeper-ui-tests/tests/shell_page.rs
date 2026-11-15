@@ -100,7 +100,7 @@ return { first, home, tabs, current, crumb: domTexts(crumb).join("") };"#,
         ]
     );
     assert_eq!(names[0], "home", "the wordmark leads the menu");
-    for settings in ["page-users", "page-tokens", "page-mdm", "page-audit"] {
+    for settings in ["page-users", "page-tokens", "page-audit"] {
         assert!(
             !names.contains(&settings),
             "{settings} is in the menu, not under Settings"
@@ -108,7 +108,7 @@ return { first, home, tabs, current, crumb: domTexts(crumb).join("") };"#,
     }
     assert_eq!(
         out["tabs"],
-        json!(["page-users", "page-tokens", "page-mdm", "page-audit"]),
+        json!(["page-users", "page-tokens", "page-audit"]),
         "Settings opens with its tabs"
     );
     for foot in ["theme", "sign-out", "collapse"] {
@@ -318,12 +318,12 @@ fn the_settings_tabs_open_their_pages_and_the_theme_button_names_its_setting() {
         r#"
 await click("page-settings");
 const users = text().includes("Users");
-await click("page-mdm");
+await click("page-tokens");
 const current = elements(doc.root).filter((e) => e.attributes["aria-current"] === "page").map((e) => e.attributes["name"]);
 const theme = domNamed(doc.root, "theme").attributes["title"];
 return { users, current, theme };"#,
     );
     assert_eq!(out["users"], true);
-    assert_eq!(out["current"], json!(["page-settings", "page-mdm"]));
+    assert_eq!(out["current"], json!(["page-settings", "page-tokens"]));
     assert_eq!(out["theme"], "Theme: system. Click for the next.");
 }

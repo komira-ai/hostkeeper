@@ -4,8 +4,8 @@
 //! The contract is the coordinator's enrollment API (design section 5.7):
 //!
 //! - `Enroll` takes a PKCS#10 request for the host's key, the claims, the boot image, for a
-//!   host that was offline past expiry `renewal_of`, and on a Mac the one-time nonce its MDM gave
-//!   it; it answers the request id and a state.
+//!   host that was offline past expiry `renewal_of`, and on a Mac a one-time nonce it holds (the
+//!   coordinator ignores it); it answers the request id and a state.
 //! - The request id is the lower-case hex SHA-256 of the key's DER SubjectPublicKeyInfo.
 //! - A first `Poll` with an empty signature answers a coordinator nonce, 16 to 64 bytes, good for
 //!   one use. The second `Poll` carries that nonce and an ECDSA P-256/SHA-256 signature (DER) by
@@ -157,7 +157,7 @@ pub struct EnrollRequest {
     pub image: String,
     /// The host this request returns, for a host whose certificate expired while it was offline.
     pub renewal_of: Option<HostId>,
-    /// The one-time nonce a Mac's MDM gave it for this request (`managed.rs`); `None` on any
+    /// The one-time nonce a Mac holds for this request (`managed.rs`; the coordinator ignores it); `None` on any
     /// other post.
     pub mac_nonce: Option<MacNonce>,
 }

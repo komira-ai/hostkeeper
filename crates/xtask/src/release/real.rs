@@ -45,9 +45,8 @@ impl ExecSealed for SystemExec {
     }
 }
 
-/// The process runner of `mdm-signing-test build` (`openssl`, `pkgbuild`, `productbuild`,
-/// `security`, `productsign` and `pkgutil` from the `PATH`, or the path named), of the channel
-/// verbs, and of `hostkeeper-coordinator-update` (`curl`, and its offline `gh` sealed).
+/// The process runner of the channel verbs, and of `hostkeeper-coordinator-update` (`curl`, and
+/// its offline `gh` sealed).
 pub(crate) fn exec() -> impl Exec + ExecSealed {
     SystemExec
 }

@@ -50,7 +50,7 @@ What does not change: the daemon, the enrollment protocol, the host certificate,
 | Enroller: key made first, CA checked against `ca_sha256` before anything is sent, request posted once per key, signed poll, certificate checked and stored | `crates/hostkeeper-enroll` | the **daemon's** enrollment, unchanged; the bootstrap does not link it |
 | Mac claims: serial and platform UUID from `ioreg` | `crates/hostkeeper-enroll/src/claims.rs` (`MacClaims`) | the request's claims; a record matches a Mac by serial |
 | CA, request store, approval by operator or by inventory record, host groups | `crates/hostkeeper-enrollment`, [enrollment-coordinator.md](../enrollment-coordinator.md), [operations/enrollment.md](../operations/enrollment.md) | the approval flow, unchanged |
-| The Mac pkg: binary, launchd job, pinned `gh`, trusted root; a postinstall that loads the job; the start keeps an existing `/etc/hostkeeper/hostkeeper.toml` | `crates/xtask/src/release/macos_pkg.rs`, `crates/hostkeeper-launchd/src/postinstall.rs`, `crates/hostkeeper-daemon/src/mac_config.rs` | what the bootstrap installs; "the manual path" of [hostkeeper-mdm.md](hostkeeper-mdm.md) section 4 |
+| The Mac pkg: binary, launchd job, pinned `gh`, trusted root; a postinstall that loads the job; the start keeps an existing `/etc/hostkeeper/hostkeeper.toml` | `crates/xtask/src/release/macos_pkg.rs`, `crates/hostkeeper-launchd/src/postinstall.rs`, `crates/hostkeeper-daemon/src/mac_config.rs` | what the bootstrap installs; "the manual path" of hostkeeper-mdm.md section 4 (deleted; its text is in git history) |
 | The daemon config loader and its trust rule (`DaemonConfig::parse`, `read_trusted`) | `crates/hostkeeper-config` | the bootstrap reads its settings files as the daemon reads its config, and parses the config it writes with the daemon's own loader |
 | The tool port for `pkgutil` and `installer`, and the `pkgutil --check-signature` reader | `crates/hostkeeper-install` (`tools`, `macos_pkg/signature.rs`) | the bootstrap's tools behind a port with fakes, and its reading of the status and the leaf's fingerprint |
 | The HTTPS transport port (`Transport`, `UreqTransport`) | `crates/hostkeeper-package/src/net.rs` | the bootstrap's downloads |
@@ -98,7 +98,7 @@ Arrows 1 to 9 are new (the bootstrap); arrows 10 to 15 are `Enroller::run_once` 
 ## 4. What the bootstrap carries, and where its settings come from
 
 The pkg carries no config and no farm value: one release asset has one digest and one attestation for every farm
-([hostkeeper-mdm.md](hostkeeper-mdm.md) section 4, which this keeps), and the endpoint address must not be committed (rule S1).
+(hostkeeper-mdm.md section 4 (deleted; its text is in git history), which this keeps), and the endpoint address must not be committed (rule S1).
 The settings are read at each start by `crates/hostkeeper-bootstrap/src/settings.rs`, from the first of two sources that is there
 (**Q1, default, owner may change**):
 
@@ -111,7 +111,7 @@ error, never a reason to try the next one. The keys; **every number is a key wit
 
 | Key | Default | Why |
 |---|---|---|
-| `coordinator` (required) | none | the LAN listener the daemon dials (`--lan-listen`; the Macs are on the lab LAN only, [coordinator-mdm.md](coordinator-mdm.md) 4.7); farm-specific |
+| `coordinator` (required) | none | the LAN listener the daemon dials (`--lan-listen`; the Macs are on the lab LAN only, coordinator-mdm.md 4.7, removed); farm-specific |
 | `ca_sha256` (required) | none | the whole trust in the coordinator, for the daemon: it probes the TLS chain, takes its last certificate (the CA) and compares its SHA-256; farm-specific; the CA is made once |
 | `release_channel` | `https://packages.komira.ai` | the repository base URL; public |
 | `team_id` | `U7RTX4XD3X` (**Q8, default, owner may change**) | the Team ID of the Developer ID Installer identity that must have signed hostkeeper's pkg |
@@ -156,7 +156,7 @@ Unchanged code, as [operations/enrollment.md](../operations/enrollment.md) "The 
 serial is a claim the Mac makes about itself; anyone on the lab LAN who knows a serial can post a request that claims it. The record's window and its
 one use are the control, as for a Linux server's MAC. So the practice is: add the record when the Mac is about to be powered on, and read the key
 hash in the coordinator against the daemon's log line when it matters. The `default_group` and "every ABM Mac is eligible" of
-[coordinator-mdm.md](coordinator-mdm.md) 4.6 depend on ABM and are not carried over.
+coordinator-mdm.md 4.6 (removed) depend on ABM and are not carried over.
 
 **What installing first costs (Q7, default, owner may change).** The daemon enrolls, so the approval gates the daemon's heartbeat and its orders, not the
 download of its pkg. The pkg is public either way.
@@ -193,7 +193,7 @@ Mac (a host group's configuration pkg, [hostgroups.md](hostgroups.md) section 6.
 **What the release produces.** The hostkeeper pkg, hello's pkg and the bootstrap pkg are signed by `Developer ID Installer: Komira AI, Inc. (U7RTX4XD3X)`
 with a trusted timestamp (`artifacts.yml` `sign-pkg`, then `check-pkg`, on a push to `main` only), attested, and **not notarized**
 (`docs/macos.md` "The installer's signature", `docs/deploy/verify-a-release.md`). There is no Developer ID **Application** identity in the workflow:
-the binaries inside carry the linker's ad-hoc signature (`hostkeeper-mdm.md` section 2).
+the binaries inside carry the linker's ad-hoc signature (the deleted `hostkeeper-mdm.md` section 2).
 
 **Q2 (default, owner may change): no notarization work now; MB4 is deferred.** The bootstrap pkg is signed with the existing identity, built and uploaded
 beside the hostkeeper pkg with a versioned URL, and its SHA-256 is in the release's `SHA256SUMS` and in the `SHA256SUMS` of its version directory (section 8).
@@ -281,21 +281,18 @@ measurement, still to do).
 **Bootstrap to an installed daemon:** A + 5W + D + P + 2F + I, plus up to `retry_secs` for each failed attempt. Then the daemon's enrollment (its own cost, [hostkeeper-design.md](hostkeeper-design.md) section 5.7)
 and the operator's time when no record matches. `D` is the one term that grows with the release; the bootstrap itself is small. The numbers are design figures, not tests (T10).
 
-## 10. What happens to the coordinator's MDM code, ABM sync and push certificate
+## 10. What happened to the coordinator's MDM code, ABM sync and push certificate
 
-**Decision (Q9, default, owner may change): keep the code, idle and off; stop building the tasks that are not built; remove in a later, separate step.** The reasons:
-the code is a large built surface (the server, SCEP, APNs, the ABM client and the setup page: tasks CM5 to CM22c of
-[coordinator-mdm.md](coordinator-mdm.md) section 11), and removal is a multi-crate deletion with its own supersession check (B22). The owner's
-rule "fix only lock-in now, defer refactors" applies. Idle costs nothing: with no `--mdm-*` flag the listener and the gate do not run. Nothing of the MDM code is removed by the bootstrap's change.
+**Decision (Q9, changed by the owner on 2026-11-14): the MDM code is removed from the coordinator.** The owner said: "I think we can delete all the mdm inside of the coordinator."
+The removal is the change that deleted the nine `hostkeeper-mdm*` crates, the coordinator's `--mdm-*` flags, `--mac-serial-allowlist` and `--proxy-cache-dir`, the MDM listener, the ABM sync, push and SCEP code, the `Mdm` service implementation, the package proxy and the release assets of the `mdm` package, with its supersession check (B22) in its pull request. What it kept is additive-only (B8):
+the migrations and their tables (unused), `mdm.proto` (every call answers `UNIMPLEMENTED`), `EnrollRequest.mac_nonce` (read and ignored), the alert kinds 12 to 15, and the audit actors `mdm-nonce` and `mdm-gate`. [coordinator-mdm.md](coordinator-mdm.md) is now a short superseded note.
 
-| Part | Now | Later |
-|---|---|---|
-| `--mdm-listen`, `--mdm-api-url` and the rest | dropped from the NUC's unit (the owner's held script; not touched here) | the three NanoHUB flags go by CM14a/c as designed; the rest are removed with the code |
-| ABM token (`401`), ABM key pair | not uploaded to the new store, so the setup says *not configured* and, as I read 4.5, the sync does not start; the `401` is not chased. Nothing to do with `js-mdm` in Apple Business | removed with the setup page |
-| Push certificate | not uploaded; it is Apple's yearly renewal to forget. Nothing renews it | removed |
-| Not-yet-built CM tasks (CM9, CM12b, CM23, CM10 and the rest of the cutover) | on hold; not started | closed when the removal lands |
-| `--mac-serial-allowlist` | still read if given, but its nonce path needs the gate, so it approves nothing without it: it is a no-op | removed by its own deprecation (B8) |
-| The package proxy (PP1 to PP6) | it serves the Macs' pkgs through `--mdm-listen`; whether it should be a listener of its own is question 4 (out of scope now) | follows the answer |
+| Part | Now |
+|---|---|
+| `--mdm-listen`, `--mdm-api-url` and the rest | removed; a coordinator started with one exits with a usage error, so the deployment that starts it stops passing them first |
+| ABM token (`401`), ABM key pair, push certificate | no code reads them; nothing to renew; nothing to do with `js-mdm` in Apple Business |
+| `--mac-serial-allowlist` | removed; a Mac is approved by an operator's click or an inventory record by serial |
+| The package proxy (PP1 to PP6) | removed with the MDM listener (it was served only there and was never deployed); whether the Macs need a LAN pkg source is question 4 |
 
 **Migration, in order.**
 
@@ -330,7 +327,7 @@ Size: S under a day, M a few days. All of them land in the pull request that car
 | MB2 | `cargo xtask release macos-bootstrap-pkg` and its `check`: one component, the binary, the plist, a postinstall that loads the job, identifier `dev.hostkeeper.bootstrap` | S | **Built**: `crates/xtask/src/release/macos_bootstrap.rs`, `packaging/macos-bootstrap/` |
 | MB3 | `artifacts.yml`: the pkg joins `build-macos`, `sign-pkg` and `check-pkg`, is attested, and the release publishes it beside the hostkeeper pkg; the workflow lint gains the job lines with a negative case (T15) | S | **Built**: `.github/workflows/artifacts.yml`, `crates/xtask/tests/workflows/pkg_signing.rs`, `crates/xtask/src/release/contract.rs`, `crates/xtask/src/channels/spec.rs` |
 | MB4 | Notarization of the bootstrap alone, only if question 2 says so | M | **Deferred** (Q2 default: no notarization work now) |
-| MB5 | `docs/operations/mac-bootstrap.md`: the owner's Blueprint steps, the record, the approval, the logs; `docs/macos.md` and the table in [coordinator-mdm.md](coordinator-mdm.md) updated | S | **Built**: `docs/operations/mac-bootstrap.md` |
+| MB5 | `docs/operations/mac-bootstrap.md`: the owner's Blueprint steps, the record, the approval, the logs; `docs/macos.md` updated | S | **Built**: `docs/operations/mac-bootstrap.md` |
 | MB6 | Coordinator: approve a re-imaged Mac's request by the serial of an inventory record, additive | S | **Not planned** (Q6 default: an operator's click with `--replace true`) |
 
 ## 13. The nine questions, as settled on 2026-11-14
@@ -344,9 +341,9 @@ The owner gave the green light to implement and asked for these defaults. Each i
    uploaded beside the hostkeeper pkg under a versioned URL, its SHA-256 in `SHA256SUMS` (section 8). **Open:** whether notarization is required, whether Apple reinstalls the pkg when the pin changes or
    the receipt is missing, and whether the URL must answer `Content-Length` and `Range`; the repository does not hold Apple's text.
 3. **Is an inventory record or a click acceptable as the approval for every Mac?** (default) Yes: an operator's click in the UI, and an inventory record by serial works as today (section 5).
-4. **Where does the package proxy serve Macs from once the MDM listener is idle?** (default) Out of scope now; the MDM code stays idle (section 10).
+4. **Where does the package proxy serve Macs from once the MDM listener is idle?** (default) Out of scope now; the proxy was removed with the MDM listener (section 10).
 5. **How does `hostkeeper.toml` or `macos-pkg.toml` change on an enrolled Mac?** (default) Out of scope now; noted as later work (section 6).
 6. **Re-imaged Macs.** (default) An operator's click with `--replace true`; MB6 is not planned.
 7. **Install first, or enroll first?** (default) Install hostkeeper first and let its daemon enroll, the existing manual path, with no certificate hand-over. The bootstrap reads the farm values, fetches, checks and installs the signed pkg, writes the configs when absent, and exits (sections 1, 6 and 9).
 8. **The signer pin.** (default) The Team ID `U7RTX4XD3X`, as the default of the config key `team_id`, overridable; plus `pkgutil --check-signature`, plus the size and the SHA-256 of the repository's pointer (section 7).
-9. **Remove the MDM code now or later?** (default) Later; the code stays idle and is not removed (section 10).
+9. **Remove the MDM code now or later?** Now: the owner decided on 2026-11-14 to delete it (section 10).

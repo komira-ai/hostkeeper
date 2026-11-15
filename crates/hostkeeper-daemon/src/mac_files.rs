@@ -1,6 +1,6 @@
 //! The stores file and the macos-pkg signers file of a Mac, written from the managed preferences
-//! its MDM installed (docs/design/packages-repositories.md, section 4.7, and
-//! docs/design/hostkeeper-mdm.md, section 4). The start of a Mac's daemon does this for the
+//! its device management installed (docs/design/packages-repositories.md, section 4.7, and
+//! docs/design/mac-bootstrap.md, section 4). The start of a Mac's daemon does this for the
 //! domains `dev.hostkeeper.stores` ([`stores`]) and `dev.hostkeeper.macos-pkg` ([`macos_pkg`])
 //! after it has written the daemon config ([`crate::mac_config`]) and before it loads any of the
 //! three. Each domain is judged alone:

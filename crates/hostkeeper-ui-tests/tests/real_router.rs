@@ -65,19 +65,12 @@ const INVALID_REQUEST: &str = "invalid_request";
 /// The reason a bearer is given for a method only a signed-in person's session may call.
 const SESSION_REQUIRED: &str = "session_required";
 
-/// The methods of `ui/calls.json` that are session-only (`grpc::SESSION_ONLY`): the writes of the
-/// MDM setup. The app calls them with the person's session, which this file has none of, so a
+/// The methods of `ui/calls.json` that are session-only (`grpc::SESSION_ONLY`): none, now that the
+/// `Mdm` service whose credential writes were the ones is no longer served. A method that is one
+/// is named here: the app calls it with the person's session, which this file has none of, so a
 /// bearer is answered `PERMISSION_DENIED` `session_required` and that answer is the proof that the
 /// coordinator serves the method and keeps it from a token. Any other method answered so fails.
-const SESSION_ONLY_CALLS: &[&str] = &[
-    "hostkeeper.operator.v1.Mdm/GetAbmPublicKey",
-    "hostkeeper.operator.v1.Mdm/PutAbmToken",
-    "hostkeeper.operator.v1.Mdm/PutName",
-    "hostkeeper.operator.v1.Mdm/PutPushCertificate",
-    "hostkeeper.operator.v1.Mdm/Verify",
-    "hostkeeper.operator.v1.Mdm/PutSecret",
-    "hostkeeper.operator.v1.Mdm/PutSetting",
-];
+const SESSION_ONLY_CALLS: &[&str] = &[];
 
 /// One request for each method of `ui/calls.json`, as proto3 JSON, in the shape the page that
 /// calls the method sends it (`ui/pages/*.js`), with values the coordinator takes: a service, a
@@ -222,31 +215,6 @@ const REQUESTS: &[(&str, &str)] = &[
         r#"{"subject": {"kind": "LAYOUT_SUBJECT_KIND_INVENTORY", "id": "storage-1"},
             "reason": "retired"}"#,
     ),
-    ("hostkeeper.operator.v1.Mdm/GetAbmPublicKey", "{}"),
-    ("hostkeeper.operator.v1.Mdm/ListSecrets", "{}"),
-    ("hostkeeper.operator.v1.Mdm/ListSettings", "{}"),
-    (
-        "hostkeeper.operator.v1.Mdm/PutAbmToken",
-        r#"{"tokenJson": "e30="}"#,
-    ),
-    (
-        "hostkeeper.operator.v1.Mdm/PutName",
-        r#"{"name": "mdm.example.com"}"#,
-    ),
-    (
-        "hostkeeper.operator.v1.Mdm/PutPushCertificate",
-        r#"{"certificatePem": "MDBmZg=="}"#,
-    ),
-    (
-        "hostkeeper.operator.v1.Mdm/PutSecret",
-        r#"{"kind": "abm_key", "material": "MDBmZg=="}"#,
-    ),
-    (
-        "hostkeeper.operator.v1.Mdm/PutSetting",
-        r#"{"name": "dns_zone", "value": "example.com"}"#,
-    ),
-    ("hostkeeper.operator.v1.Mdm/Status", "{}"),
-    ("hostkeeper.operator.v1.Mdm/Verify", "{}"),
     (
         "hostkeeper.operator.v1.Releases/ClearHalt",
         r#"{"service": "kbf", "reason": "fixed"}"#,
@@ -797,35 +765,25 @@ async fn every_call_of_the_app_is_served_to_the_operators_token() {
     );
 }
 
-/// Catches: the session-only exemption passing more than it should. A bearer refused
-/// `session_required` is a pass for a method of `SESSION_ONLY_CALLS` and a failure, naming the
-/// refusal, for any other method; the same refusal of another reason, or another code, fails
-/// the session-only method too.
+/// Catches: the session-only exemption passing more than it should. With no method of the app
+/// session-only, a bearer refused `session_required` is a failure, naming the refusal, for every
+/// method, and so is any other refusal.
 #[test]
-fn a_session_required_refusal_passes_only_for_a_session_only_method() {
+fn a_session_required_refusal_passes_for_no_method_of_the_app() {
     let refused = |code, reason: &str| Answer {
         code,
         reason: reason.to_owned(),
     };
-    let session_only = "hostkeeper.operator.v1.Mdm/PutPushCertificate";
-    let other = "hostkeeper.operator.v1.Mdm/Status";
+    let method = "hostkeeper.operator.v1.Hosts/List";
     let transport = Transport::Gateway;
     assert_eq!(
         failure(
-            session_only,
-            transport,
-            &refused(Code::PermissionDenied, "session_required")
-        ),
-        None
-    );
-    assert_eq!(
-        failure(
-            other,
+            method,
             transport,
             &refused(Code::PermissionDenied, "session_required")
         ),
         Some(format!(
-            "{other} over the gateway: PERMISSION_DENIED: the app's credential is forbidden it \
+            "{method} over the gateway: PERMISSION_DENIED: the app's credential is forbidden it \
              (reason \"session_required\")"
         ))
     );
@@ -834,10 +792,7 @@ fn a_session_required_refusal_passes_only_for_a_session_only_method() {
         refused(Code::Unauthenticated, "unauthorized"),
         refused(Code::Unimplemented, ""),
     ] {
-        assert!(
-            failure(session_only, transport, &answer).is_some(),
-            "{answer:?}"
-        );
+        assert!(failure(method, transport, &answer).is_some(), "{answer:?}");
     }
     for method in SESSION_ONLY_CALLS {
         assert!(
