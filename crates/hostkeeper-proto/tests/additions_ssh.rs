@@ -14,7 +14,6 @@
 //! existing messages read the last release's own protos instead:
 //! `crates/hostkeeper-coordinator/tests/ssh_wire.rs`, with the `.proto` files of v0.1.221.
 
-use prost::Message as _;
 use prost_reflect::DescriptorPool;
 
 use hostkeeper_proto::hostkeeper::agent::v1 as agent;
