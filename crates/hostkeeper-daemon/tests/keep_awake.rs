@@ -203,8 +203,18 @@ fn a_setting_the_host_does_not_list_is_not_set() {
 #[test]
 fn a_power_source_that_differs_is_changed_for_all() {
     let changes = plan(NOTEBOOK);
-    assert_eq!(changes, vec![change("sleep", "1", 0)]);
-    assert_eq!(args(&changes), Some(strings(&["-a", "sleep", "0"])));
+    assert_eq!(
+        changes,
+        vec![
+            change("sleep", "1", 0),
+            change("disksleep", "10", 0),
+            change("womp", "0", 1),
+        ]
+    );
+    assert_eq!(
+        args(&changes),
+        Some(strings(&["-a", "sleep", "0", "disksleep", "0", "womp", "1"]))
+    );
 }
 
 /// A note after a value is not read as part of it, and a value that is not a number, or a key
@@ -358,8 +368,14 @@ fn a_set_that_fails_logs_an_error_and_no_change() {
 /// `pmset` of the machine the test runs on.
 #[test]
 fn the_host_start_runs_no_pmset_for_a_linux_host_or_with_the_key_off() {
-    assert_eq!(at_host_start(&config(true), PlatformKind::Linux), Vec::new());
-    assert_eq!(at_host_start(&config(false), PlatformKind::Macos), Vec::new());
+    assert_eq!(
+        at_host_start(&config(true), PlatformKind::Linux),
+        Vec::new()
+    );
+    assert_eq!(
+        at_host_start(&config(false), PlatformKind::Macos),
+        Vec::new()
+    );
     assert!(keep_awake::PMSET.starts_with("/usr/bin/"));
 }
 
@@ -377,7 +393,9 @@ fn a_pmset_killed_at_its_deadline_says_so() {
     assert_eq!(changes, Vec::new());
     assert_eq!(
         said,
-        vec![format!("level=error keep_awake: pmset -g custom did not run: {KILLED}")]
+        vec![format!(
+            "level=error keep_awake: pmset -g custom did not run: {KILLED}"
+        )]
     );
 
     let command = args(&plan(STUDIO_FACTORY)).expect("a command");

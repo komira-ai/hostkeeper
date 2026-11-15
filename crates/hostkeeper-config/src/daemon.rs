@@ -383,7 +383,9 @@ fn read(document: &toml::Table) -> Result<DaemonConfig, Problem> {
             .transpose()?,
         trusted_signers: signers(&top)?,
         bounds: bounds(&top)?,
-        keep_awake: top.get("keep_awake").map_or(Ok(true), |_| top.boolean("keep_awake"))?,
+        keep_awake: top
+            .get("keep_awake")
+            .map_or(Ok(true), |_| top.boolean("keep_awake"))?,
     })
 }
 
