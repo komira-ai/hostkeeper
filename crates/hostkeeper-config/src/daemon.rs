@@ -21,9 +21,13 @@
 //! force_start_secs         = 60
 //! ```
 //!
+//! `keep_awake` (a boolean, default `true`) is read by a Mac's daemon alone: it sets the host's
+//! power management so that the Mac never sleeps (`pmset`); `false` leaves the host's power
+//! settings as they are.
+//!
 //! Every table refuses a key it does not know, and the error names the key and its table. Every
-//! key is required except `release_channel` and those of `[bounds]`, which default to the values
-//! above; `release_channel` may be left out (it is read when present and checked as an `https://`
+//! key is required except `release_channel`, `keep_awake` and those of `[bounds]`, which default to
+//! the values above (`keep_awake` to `true`); `release_channel` may be left out (it is read when present and checked as an `https://`
 //! URL); a missing
 //! `[trusted_signers]` is refused, because there is no unsigned mode. There is no list of
 //! services and no per-service key: a host runs what the coordinator assigns it.
@@ -64,6 +68,7 @@ const TOP: &[(&str, Shape)] = &[
     ("coordinator", Shape::Value),
     ("ca_sha256", Shape::Value),
     ("release_channel", Shape::Value),
+    ("keep_awake", Shape::Value),
     ("trusted_signers", Shape::Table(SIGNERS)),
     ("bounds", Shape::Table(BOUNDS)),
 ];
@@ -282,6 +287,9 @@ pub struct DaemonConfig {
     /// The signer an earlier daemon checked packages against; the daemon reads it no more.
     pub trusted_signers: TrustedSigners,
     pub bounds: Bounds,
+    /// Whether a Mac's daemon keeps its host from sleeping (`keep_awake`, default `true`); no
+    /// other platform's daemon reads it.
+    pub keep_awake: bool,
 }
 
 fn https(fields: &Fields<'_>, key: &str) -> Result<HttpsUrl, Problem> {
@@ -375,6 +383,7 @@ fn read(document: &toml::Table) -> Result<DaemonConfig, Problem> {
             .transpose()?,
         trusted_signers: signers(&top)?,
         bounds: bounds(&top)?,
+        keep_awake: top.get("keep_awake").map_or(Ok(true), |_| top.boolean("keep_awake"))?,
     })
 }
 
