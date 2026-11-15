@@ -71,7 +71,7 @@
 # or of target/ is owned by root, and a test writes only its scratch directory under target/ (and,
 # for the failed end-to-end tests, what it keeps for the job's
 # artifact under target/privileged-artifacts/; but
-# the self-update tests, whose scratch directory is under /run/hostkeeper-ci, because the release
+# the self-update tests, whose scratch directory is under /var/lib/hostkeeper-ci (on disk: a runner may mount /run noexec), because the release
 # trees the daemon checks must have root's directories all the way up, and whose drop-in is in
 # /run/systemd/system; on the Mac, what the daemon's fixed paths name: the step jobs' directory
 # under /var/run, and the pki directory its enrollment loop opens, and for the package check's
