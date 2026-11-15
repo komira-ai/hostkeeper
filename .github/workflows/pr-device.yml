@@ -215,6 +215,9 @@ jobs:
           for f in $(find /run/hostkeeper-ci -path '*/bin/current' 2>/dev/null); do ls -lL "$f"; "$f" --help 2>&1 | head -3 || true; done
           for fd in $(find /proc/[0-9]*/fd -lname '/run/hostkeeper-ci/*' 2>/dev/null | head -50); do echo "$fd -> $(readlink "$fd")"; done
           dmesg 2>/dev/null | tail -30 || true
+          systemctl list-units --all --no-pager | grep -E 'hostkeeper|updater|activating|failed' || true
+          systemctl status hostkeeper.service --no-pager -l || true
+          journalctl --unit hostkeeper.service --no-pager | tail -80 || true
       - name: The journal of the test units
         if: failure()
         run: journalctl --unit 'hostkeeper-ci-*' --no-pager

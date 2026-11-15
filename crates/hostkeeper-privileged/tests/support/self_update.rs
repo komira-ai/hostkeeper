@@ -66,8 +66,11 @@ pub const REAL_UNIT: &str = include_str!("../../../../packaging/linux/units/host
 pub const BOOTSTRAP_UNIT: &str = include_str!("../../../../packaging/linux/hostkeeper.service");
 /// Where the bootstrap unit's `ExecStart=` has the packaged binary.
 const PACKAGED_BINARY: &str = "/usr/bin/hostkeeper";
-/// The root-owned directory the test hosts are made in.
-pub const BASE: &str = "/run/hostkeeper-ci";
+/// The root-owned directory the test hosts are made in: on disk, not under `/run`, which a
+/// hosted runner may mount `noexec`: systemd then cannot exec the daemon staged there
+/// (`status=203/EXEC`), and a `Type=notify` unit with no start limit is retried for good, so the
+/// test's `systemctl start` never returns.
+pub const BASE: &str = "/var/lib/hostkeeper-ci";
 /// The service of hostkeeper itself.
 pub const HK: &str = "hostkeeper";
 /// The version the host runs first.

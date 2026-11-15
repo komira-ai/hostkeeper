@@ -9,7 +9,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
 use hostkeeper_testkit::Scratch;
-use support::self_update::{BOOTSTRAP_UNIT, DAEMON, Paths, REAL_UNIT, refused_line, test_unit};
+use support::self_update::{
+    BASE, BOOTSTRAP_UNIT, DAEMON, Paths, REAL_UNIT, refused_line, test_unit,
+};
 
 fn scratch(name: &str) -> Scratch {
     Scratch::under(Path::new(env!("CARGO_TARGET_TMPDIR")), name).expect("scratch directory")
@@ -286,4 +288,15 @@ fn a_daemon_not_run_from_the_packaged_path_is_not_seeded() {
 fn a_real_unit_flag_the_test_does_not_place_stops_it() {
     let real = REAL_UNIT.replace("--notify-systemd", "--notify-systemd --new-flag /etc/x");
     test_unit(&real, &paths(), &[]);
+}
+
+/// Catches a test host made under `/run`: a hosted runner may mount it `noexec`, where systemd
+/// cannot exec the daemon staged there (`203/EXEC`) and, the unit having no start limit, retries
+/// for good, so the test's `systemctl start` never returns. The base is a directory on disk.
+#[test]
+fn the_test_hosts_are_made_on_disk_not_under_run() {
+    assert!(
+        !Path::new(BASE).starts_with("/run"),
+        "{BASE} is under /run, which may be mounted noexec"
+    );
 }
