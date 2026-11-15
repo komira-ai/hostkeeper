@@ -289,6 +289,7 @@ fn the_real_enroller_posts_and_polls_a_coordinator_of_the_pinned_ca() {
         vec![
             Call {
                 seen: Seen::Enroll(pb::EnrollRequest {
+                    host_key_fingerprints: Vec::new(),
                     csr_der: key.csr_der().expect("a CSR"),
                     claims: Some(pb::Claims {
                         machine_id: "machine-1".to_owned(),
