@@ -21,9 +21,9 @@
 // (`audit_unavailable`).
 //
 // Units: as operator.proto says; times are unix seconds. A host id is the id an enrollment made.
-// A request is at most 8 KiB, and a `TunnelFrame` carries at most 16 KiB of `data`. A reason is
-// at most 200 printable ASCII characters. A fingerprint is `SHA256:` and the 43 base64 characters
-// OpenSSH prints.
+// A request is at most 4 KiB, except a `TunnelFrame`, which carries at most 16 KiB of `data`. A
+// reason is at most 200 printable ASCII characters. A fingerprint is `SHA256:` and the 43 base64
+// characters OpenSSH prints.
 //
 // Extending: as operator.proto says: add fields, messages, enum values and RPCs; never renumber,
 // rename, retype or remove one, and never reuse a number.
@@ -137,6 +137,7 @@ message Open {
 }
 
 message HostKeysRequest {
+  // The host whose pinned fingerprints are read.
   string host_id = 1;
 }
 

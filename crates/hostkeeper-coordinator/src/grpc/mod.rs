@@ -51,6 +51,7 @@ use hostkeeper_proto::hostkeeper::operator::v1::releases_server::ReleasesServer;
 use hostkeeper_proto::hostkeeper::operator::v1::repositories_server::RepositoriesServer;
 use hostkeeper_proto::hostkeeper::operator::v1::rollouts_server::RolloutsServer;
 use hostkeeper_proto::hostkeeper::operator::v1::services_server::ServicesServer;
+use hostkeeper_proto::hostkeeper::operator::v1::ssh_server::SshServer;
 use hostkeeper_proto::hostkeeper::operator::v1::users_server::UsersServer;
 use hostkeeper_wire::wire::MAX_HEARTBEAT_BYTES;
 use http_body_util::{Either, Full};
@@ -70,6 +71,7 @@ use self::operator_accounts::{ApiTokensService, UsersService};
 use self::operator_host_groups::HostGroupsService;
 use self::operator_layout::LayoutService;
 use self::operator_repositories::RepositoriesService;
+use self::operator_ssh::SshService;
 use self::refusal::token_status;
 use crate::enrollment::MAX_MESSAGE_BYTES;
 use crate::http::{
@@ -90,6 +92,7 @@ mod operator_accounts;
 mod operator_host_groups;
 mod operator_layout;
 mod operator_repositories;
+mod operator_ssh;
 pub(crate) mod refusal;
 pub(crate) mod report;
 
@@ -135,6 +138,8 @@ const USERS: &str = "hostkeeper.operator.v1.Users";
 const API_TOKENS: &str = "hostkeeper.operator.v1.ApiTokens";
 /// The full name of the operator API's `Layout`.
 const LAYOUT: &str = "hostkeeper.operator.v1.Layout";
+/// The full name of the operator API's `Ssh`.
+const SSH: &str = "hostkeeper.operator.v1.Ssh";
 
 /// The path of `Coordinator.Heartbeat`, which needs a client certificate that names a host.
 const HEARTBEAT: &str = "/hostkeeper.agent.v1.Coordinator/Heartbeat";
@@ -294,7 +299,7 @@ pub(crate) async fn admit_via(
             Surface::Control,
             Some(
                 HOSTS | RELEASES | SERVICES | ENROLLMENT | AUDIT | ALERTS | ROLLOUTS | REPOSITORIES
-                | HOST_GROUPS | USERS | API_TOKENS | LAYOUT,
+                | HOST_GROUPS | USERS | API_TOKENS | LAYOUT | SSH,
             ),
         ) => Served::Operator,
         _ => return Err(Status::unimplemented("")),
@@ -510,6 +515,10 @@ where
         Some(LAYOUT) => {
             let server = LayoutServer::new(LayoutService::new(coordinator))
                 .max_decoding_message_size(MAX_OPERATOR_BYTES);
+            call(server, request).await
+        }
+        Some(SSH) => {
+            let server = SshServer::new(SshService).max_decoding_message_size(MAX_OPERATOR_BYTES);
             call(server, request).await
         }
         _ => Status::unimplemented("").into_http(),

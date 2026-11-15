@@ -1268,6 +1268,46 @@ heartbeat.
 
 Through `--request` only: `scope` (hostkeeper.operator.v1.HoldScope).
 
+### `ssh`
+
+The service `Ssh` of the package `hostkeeper.operator.v1`. Access to the hosts' sshd through the coordinator. Each call is audited under the caller's name; `SignUserCert` as `ssh_cert_signed`, `Revoke` as `ssh_revoke`, and `Tunnel` as `ssh_tunnel_open` and `ssh_tunnel_close`.
+
+#### `hkctl ssh sign-user-cert`
+
+`/hostkeeper.operator.v1.Ssh/SignUserCert`
+
+Signs an OpenSSH user certificate for the caller's public key, good for one host and for
+`--ssh-cert-ttl-s` seconds. Its principal is `hk-host-<host id>`, never a value of the
+request. No certificate is made when the audit entry cannot be written.
+
+| flag | value | meaning |
+|---|---|---|
+| `--public-key` | STRING | The caller's public key in `authorized_keys` syntax. |
+| `--reason` | STRING | Why, at most 200 printable ASCII characters; stored and audited, never in the certificate. |
+| `--host-id` | STRING | The host the certificate is for. |
+
+#### `hkctl ssh host-keys`
+
+`/hostkeeper.operator.v1.Ssh/HostKeys`
+
+The fingerprints of the sshd host keys pinned for a host at its enrollment. Changes nothing.
+
+| flag | value | meaning |
+|---|---|---|
+| `--host-id` | STRING | The host whose pinned fingerprints are read. |
+
+#### `hkctl ssh revoke`
+
+`/hostkeeper.operator.v1.Ssh/Revoke`
+
+Revokes the certificates of an operator, or one certificate by serial. The serials reach the
+hosts in `SshAccess.revoked_serials`, and the operator's open tunnels close.
+
+| flag | value | meaning |
+|---|---|---|
+| `--operator` | STRING | The operator whose certificates are revoked; empty when `serial` names one. |
+| `--serial` | UINT64 | The certificate serial revoked; 0 when `operator` names one. |
+
 ### `users`
 
 The service `Users` of the package `hostkeeper.operator.v1`. The people who sign in with a name and a password. A user is an operator, as a token is: there are no roles. Each mutating call is audited under the caller's name, with the user it concerned as the entry's subject: `user_create`, `user_disable`, `user_enable`, `user_delete` and `password_reset`.

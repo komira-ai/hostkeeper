@@ -34,6 +34,7 @@ mod repository_serve;
 mod rollouts;
 mod services_put;
 mod services_repository;
+mod ssh;
 mod sessions;
 mod support;
 mod targets;

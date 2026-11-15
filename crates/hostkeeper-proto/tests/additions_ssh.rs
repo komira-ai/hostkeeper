@@ -281,7 +281,7 @@ fn the_ssh_refusal_tokens_are_pinned() {
 fn an_older_reader_keeps_the_ssh_report_in_a_heartbeat() {
     let beat = agent::HeartbeatRequest {
         features: vec!["ssh-v1".to_owned()],
-        facts_generation: Some(4),
+        sent_unix: Some(4),
         ssh: Some(report()),
         ..Default::default()
     };
@@ -356,13 +356,13 @@ fn this_build_reads_what_the_release_before_wrote_with_the_ssh_fields_absent() {
     let beat = write(
         "hostkeeper.agent.v1.HeartbeatRequest",
         &[
-            ("features", list("facts-v1")),
-            ("facts_generation", Value::U64(3)),
+            ("features", list("heartbeat-v2")),
+            ("sent_unix", Value::U64(3)),
         ],
     );
     let beat = agent::HeartbeatRequest::decode(beat.as_slice()).expect("decodes");
-    assert_eq!(beat.features, ["facts-v1"]);
-    assert_eq!(beat.facts_generation, Some(3));
+    assert_eq!(beat.features, ["heartbeat-v2"]);
+    assert_eq!(beat.sent_unix, Some(3));
     assert_eq!(beat.ssh, None);
 
     let answer = write(
