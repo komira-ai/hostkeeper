@@ -30,12 +30,12 @@ impl Subject for OnPostgres {
         // transaction, the next, and no other.
         self.database
             .run(
-                "DROP TRIGGER IF EXISTS test_once ON lease; DROP SEQUENCE IF EXISTS test_once; \
+                "DROP TRIGGER IF EXISTS test_once ON tx_ledger; DROP SEQUENCE IF EXISTS test_once; \
                  CREATE SEQUENCE test_once; \
                  CREATE OR REPLACE FUNCTION test_once() RETURNS trigger LANGUAGE plpgsql AS $$ \
                  BEGIN IF nextval('test_once') = 1 THEN \
                  RAISE EXCEPTION 'the test refuses this commit'; END IF; RETURN NEW; END $$; \
-                 CREATE TRIGGER test_once BEFORE UPDATE ON lease FOR EACH ROW \
+                 CREATE TRIGGER test_once BEFORE INSERT ON tx_ledger FOR EACH ROW \
                  EXECUTE FUNCTION test_once()",
             )
             .expect("the refusal is set");

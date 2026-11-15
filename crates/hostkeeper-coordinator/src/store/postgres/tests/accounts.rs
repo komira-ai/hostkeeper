@@ -265,7 +265,7 @@ fn the_release_before_starts_on_a_database_with_0010_and_this_one_on_its() {
     store.stop();
     assert_eq!(
         older.rows("SELECT version FROM schema_version ORDER BY version"),
-        (1..=18)
+        (1..=19)
             .map(|n| vec![Some(n.to_string())])
             .collect::<Vec<_>>()
     );
@@ -288,7 +288,7 @@ fn an_account_store_over_postgres_commits_through_the_database() {
     db.run(
         "CREATE FUNCTION test_refuse() RETURNS trigger LANGUAGE plpgsql AS $$ \
          BEGIN RAISE EXCEPTION 'the test refuses this commit'; END $$; \
-         CREATE TRIGGER test_refuse BEFORE UPDATE ON lease FOR EACH ROW \
+         CREATE TRIGGER test_refuse BEFORE INSERT ON tx_ledger FOR EACH ROW \
          EXECUTE FUNCTION test_refuse()",
     )
     .expect("the refusal is set");
