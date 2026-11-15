@@ -289,6 +289,12 @@ jobs:
           systemctl list-jobs --no-pager
           systemctl list-units 'hostkeeper-ci-*' --all --no-pager
           ps -eo pid,ppid,stat,wchan:32,etime,args --forest
+          systemctl show 'hostkeeper-ci-*' --no-pager -p Id -p ActiveState -p SubState -p Result -p NRestarts -p ExecMainCode -p ExecMainStatus -p ExecStart || true
+          findmnt /run || true
+          ls -laR /run/hostkeeper-ci | head -150 || true
+          for f in $(find /run/hostkeeper-ci -path '*/bin/current' 2>/dev/null); do ls -lL "$f"; "$f" --help 2>&1 | head -3 || true; done
+          for fd in $(find /proc/[0-9]*/fd -lname '/run/hostkeeper-ci/*' 2>/dev/null | head -50); do echo "$fd -> $(readlink "$fd")"; done
+          dmesg 2>/dev/null | tail -30 || true
       - name: The journal of the test units
         if: failure()
         run: journalctl --unit 'hostkeeper-ci-*' --no-pager
