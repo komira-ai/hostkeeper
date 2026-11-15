@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Grants hostkeeper's daemon Full Disk Access (PPPC), needed only if docs/design/ssh-through-coordinator.md
+     section 3 finds that Remote Login cannot be turned on without it. Unverified draft: replace the code
+     requirement with the output of `codesign -dr -` on the released /usr/local/bin/hostkeeper. -->
+<plist version="1.0">
+<dict>
+  <key>PayloadType</key><string>Configuration</string>
+  <key>PayloadVersion</key><integer>1</integer>
+  <key>PayloadIdentifier</key><string>dev.hostkeeper.fda</string>
+  <key>PayloadUUID</key><string>6B1D7C0E-5A52-4E0B-9B64-2F1C0A7E4D11</string>
+  <key>PayloadDisplayName</key><string>hostkeeper Full Disk Access</string>
+  <key>PayloadScope</key><string>System</string>
+  <key>PayloadContent</key>
+  <array>
+    <dict>
+      <key>PayloadType</key><string>com.apple.TCC.configuration-profile-policy</string>
+      <key>PayloadVersion</key><integer>1</integer>
+      <key>PayloadIdentifier</key><string>dev.hostkeeper.fda.pppc</string>
+      <key>PayloadUUID</key><string>0C9A3E52-7D8B-4F6A-A1E3-93B5D2C8F047</string>
+      <key>Services</key>
+      <dict>
+        <key>SystemPolicyAllFiles</key>
+        <array>
+          <dict>
+            <key>Identifier</key><string>/usr/local/bin/hostkeeper</string>
+            <key>IdentifierType</key><string>path</string>
+            <key>CodeRequirement</key><string>anchor apple generic and certificate leaf[subject.OU] = "U7RTX4XD3X"</string>
+            <key>Authorization</key><string>Allow</string>
+            <key>Comment</key><string>hostkeeper daemon: turns on Remote Login</string>
+          </dict>
+        </array>
+      </dict>
+    </dict>
+  </array>
+</dict>
+</plist>
