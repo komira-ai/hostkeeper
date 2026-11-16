@@ -1,7 +1,6 @@
 //! The coordinator: the fleet the heartbeats build, the desired state, and who may change
 //! or read either. No sockets here; [`crate::http`] maps requests onto these calls.
 
-use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -16,7 +15,7 @@ use serde::Serialize;
 use crate::accounts::AccountStore;
 use crate::desired::{Desired, DesiredError, DesiredStore, StoreError};
 use crate::enrollment::Enrollment;
-use crate::fleet::{Fleet, Node, QUIET_START};
+use crate::fleet::{Fleet, QUIET_START};
 use crate::group_scope::Basis;
 use crate::halt;
 use crate::identity::Identity;
@@ -25,14 +24,14 @@ use crate::membership::{Standing, standing};
 use crate::ops::{AuditEntry, OperateError, OpsError, OpsStore};
 use crate::order_terms::Terms;
 use crate::orders::Order;
-use crate::reconcile::reconcile;
 use crate::services::{ServiceDef, Services};
 use crate::status::host_status;
 use crate::tokens::OperatorTokens;
 use crate::ui::UiDir;
 use crate::verdict_file::{self, VerdictFile};
 use enrollment_calls::Turn;
-use gate_orders::Asked;
+
+pub(crate) use rows_calls::RowRules;
 
 pub use crate::status::{AgentStatus, HostStatus, ServiceHostStatus, ServiceStatus, Status};
 
@@ -249,6 +248,10 @@ pub struct Coordinator {
     /// Which periodic jobs this coordinator runs, when coordinators share a database
     /// ([`crate::store::Claims`]); none: every job is this coordinator's.
     claims: Option<Arc<dyn crate::store::Claims>>,
+    /// The fleet's rows, when coordinators share a database: every decision of a heartbeat runs
+    /// under the rollout gate, on the fleet read from them ([`rows_calls`]); none: the fleet in
+    /// memory is the one coordinator's own.
+    rows: Option<rows_calls::Rows>,
     verifier: Arc<Verifier>,
     /// The trusted publishers the allow-list file stands for, per package
     /// ([`crate::trusted_publishers`]): a package's entries until the state holds its own.
@@ -283,6 +286,15 @@ pub struct Coordinator {
     /// test's progress event, so a race is made to happen rather than waited for.
     #[cfg(test)]
     set_waits: Mutex<Option<std::sync::mpsc::Sender<SetProgress>>>,
+    /// Run by a heartbeat over the fleet's rows after it stored its beat and before it asks for the
+    /// rollout gate: a test's way to let another coordinator decide in between, so that a decision
+    /// made from what was read before the gate is made to happen rather than waited for.
+    #[cfg(test)]
+    before_gate: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+    /// Run by a heartbeat inside the gate, after it read the rows: a test's way to let another
+    /// coordinator's beat find the gate held.
+    #[cfg(test)]
+    in_gate: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 /// What a test hears of CI's set of a desired state while it races another change.
@@ -325,6 +337,7 @@ impl Coordinator {
             initial_admin: None,
             login: None,
             claims: None,
+            rows: None,
             verifier,
             listed_publishers: std::collections::BTreeMap::new(),
             tokens: operator.into(),
@@ -343,6 +356,10 @@ impl Coordinator {
             repository_naming: Mutex::new(()),
             #[cfg(test)]
             set_waits: Mutex::new(None),
+            #[cfg(test)]
+            before_gate: Mutex::new(None),
+            #[cfg(test)]
+            in_gate: Mutex::new(None),
         }
     }
 
@@ -623,6 +640,7 @@ impl Coordinator {
         // host runs under that lock, so the group this heartbeat is decided over is never one
         // the host has been moved out of since it was read.
         let fleet = self.lock_fleet();
+        self.refresh_from_rows();
         let basis = self.basis_of(&who.host_id);
         let (reply, order, terms, acks) =
             self.reply_to(fleet, who, beat, orders, (turn, root), &basis);
@@ -675,24 +693,7 @@ impl Coordinator {
         let own = crate::agent_service::own_beat(&basis.services, &mut beat);
         let role = basis.role_of(&who);
         let legacy = self.legacy_for(&beat);
-        let announced = beat.services.clone().unwrap_or_default();
-        let node = Node {
-            role: role.clone(),
-            features: beat.agent_features.clone(),
-            agent: beat.agent.clone(),
-            platform: beat.platform,
-            seen: now,
-            announced: legacy
-                .map(|name| (name.to_owned(), beat.health))
-                .into_iter()
-                .chain(announced.iter().map(|one| (one.name.clone(), one.health)))
-                .collect(),
-            sent_unix: beat.sent_unix,
-            cert_not_after_unix: beat.cert_not_after_unix,
-            last_renew_error: beat.last_renew_error.clone(),
-            trusted_root,
-            skewed_beats: 0,
-        };
+        let node = rows_calls::node_of(&role, legacy, &beat, trusted_root, now);
         // `fleet` is the fleet's lock, taken by the caller before the basis was read: every
         // decision and order below is made under it, so a halt is never raised between another
         // heartbeat's decision to order and its order. The lock order is the fleet's, then the
@@ -726,119 +727,58 @@ impl Coordinator {
         let announced = beat.services.clone().unwrap_or_default();
         self.tend_store(now);
         let noted = halt::note(&self.ops, &basis.services, legacy, &who, &beat, &node, now);
-        let (platform, ops) = (beat.platform, self.ops.state());
+        let ops = self.ops.state();
         self.note_serving(&basis.services, &who.host_id, &node, &beat, &ops, now);
         self.note_running(&fleet, &who, &beat, &announced, legacy, turn == Turn::Order);
         let counted =
             |def: &ServiceDef| standing(def, &who.host_id, &node, &ops, now) == Standing::Counted;
-        for def in basis.services.defs() {
-            if standing(def, &who.host_id, &node, &ops, now) == Standing::Dropped {
-                fleet.forget_in(&def.name, &who.host_id);
-            }
-        }
         // A host a service does not count still says what it runs of it: kept as what it
         // occupies, so an update it was ordered before it left holds its slot until it ends.
         let dropped =
             |def: &ServiceDef| standing(def, &who.host_id, &node, &ops, now) == Standing::Dropped;
-        // A host ordered to uninstall a service it is no longer assigned says how the uninstall
-        // goes: kept as what it occupies, as a dropped host's word is.
-        let uninstalling = |def: &ServiceDef| {
-            ops.assignments
-                .get(&def.name)
-                .is_some_and(|entries| entries.uninstall.contains_key(who.host_id.as_str()))
-        };
         // Only a verdict the fleet takes in is stored and acknowledged.
         heard.retain(|(name, _)| match basis.services.get(name) {
             Some(def) => counted(def) || dropped(def),
             None => Some(name.as_str()) == legacy,
         });
-        if let Some(name) = legacy {
-            match basis.services.get(name) {
-                Some(def) if dropped(def) => {
-                    fleet.record_outside_in(name, who.host_id.clone(), &role, beat, now);
-                }
-                top if top.is_none_or(counted) => {
-                    fleet.record_named_in(name, who.host_id.clone(), &role, beat, now);
-                }
-                _ => {}
-            }
-        }
-        for one in announced.iter().chain(&own) {
-            match basis.services.get(&one.name) {
-                Some(def) if counted(def) => fleet.record_named_in(
-                    &one.name,
-                    who.host_id.clone(),
-                    &role,
-                    one.as_heartbeat(platform),
-                    now,
-                ),
-                // A host taken off the service while it ran an update of it says when that ends.
-                Some(def)
-                    if dropped(def)
-                        || uninstalling(def)
-                        || (fleet.get_in(&one.name, &who.host_id).is_none()
-                            && fleet.occupant(&one.name, &who.host_id).is_some()) =>
-                {
-                    fleet.record_outside_in(
-                        &one.name,
-                        who.host_id.clone(),
-                        &role,
-                        one.as_heartbeat(platform),
-                        now,
-                    );
-                }
-                _ => {}
-            }
-        }
+        let said = self
+            .rows
+            .is_some()
+            .then(|| rows_calls::Said::of(legacy, &beat, own.as_ref(), &node));
+        self.take_orders_of(&mut fleet, &who.host_id, now);
+        self.fold_beat(
+            &mut fleet,
+            basis,
+            &ops,
+            rows_calls::Hearing {
+                host: &who.host_id,
+                role: &role,
+                legacy,
+                node,
+                beat,
+                announced: &announced,
+                own: own.as_ref(),
+            },
+            now,
+        );
         fleet.set_aside_all(&noted.cleared, &who.host_id);
-        fleet.note_node(who.host_id.clone(), node, self.ops.unix_now());
         if turn == Turn::Hold {
             return (ServiceReply::Nothing, None, None, Vec::new());
         }
-        crate::intents::settle(&self.ops, &basis.services, &mut fleet, &who.host_id);
-        let mut names: Vec<&str> = legacy
-            .into_iter()
-            .chain(announced.iter().map(|one| one.name.as_str()))
-            .collect();
-        // Stable: services of one priority keep the order above.
-        names.sort_by_key(|name| Reverse(basis.services.get(name).map_or(0, |def| def.priority)));
-        // The hosts' words are in: record the last good versions and roll back what failed,
-        // before the orders below read the desired states.
-        for def in names.iter().filter_map(|name| basis.services.get(name)) {
-            // Only the verdicts about the desired version count, and not those an override
-            // acknowledged; the others are forgotten.
-            if let Some(want) = self.desired_in(basis, &def.name) {
-                let acked = self.ops.marks(&def.name).failure_acked;
-                fleet.keep_verdicts_in(def, &want.version, &acked);
-            }
-            reconcile(def, &self.ops, &self.desired, &mut fleet, now);
-        }
-        self.step_move(&mut fleet, basis, &who.host_id, now);
-        // The verdicts are durable before the answer acknowledges them, and before any order.
-        let acks = verdict_file::acknowledge(&self.verdicts, &fleet, &who.host_id, &heard, &names);
-        // The operator's orders go first, past the gate, to a transport that carries them.
-        if orders
-            && !fleet.store_lost
-            && let Some(order) = self.ops.read(|state| {
-                crate::orders::next(&mut fleet, state, &who.host_id, &basis.services, &names)
-            })
-        {
-            return (ServiceReply::Nothing, Some(order), None, acks);
-        }
-        let asked = Asked {
+        let tail = rows_calls::Tail {
             who: &who,
             legacy,
+            announced: &announced,
             held: &noted.held,
+            heard: &heard,
             basis,
             orders,
             now,
         };
-        let (reply, order, terms) = self.gate_order(&mut fleet, &asked, names).unwrap_or((
-            ServiceReply::Nothing,
-            None,
-            None,
-        ));
-        (reply, order, terms, acks)
+        match (&self.rows, said) {
+            (Some(rows), Some(said)) => self.decide_over_rows(rows, fleet, said, &tail),
+            _ => self.decide_tail(&mut fleet, &tail, &mut rows_calls::Unjudged),
+        }
     }
 
     /// The CI token in `bearer`, checked by the verifier: its issuer, audience, times and run
@@ -1035,5 +975,8 @@ mod enrollment_calls;
 mod gate_orders;
 #[path = "service_groups.rs"]
 mod group_calls;
+/// The heartbeat's decisions over the fleet's rows, when coordinators share a database.
+#[path = "service_rows.rs"]
+mod rows_calls;
 #[path = "service_store.rs"]
 mod store_calls;

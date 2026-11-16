@@ -364,6 +364,20 @@ pub fn reconcile(
     fleet: &mut Fleet,
     now: Duration,
 ) {
+    reconcile_asking(def, ops, store, fleet, now, &mut |_| true);
+}
+
+/// [`reconcile`], with each stage the plan is about to enter first asked of `enter`, which says
+/// whether the stage is still the one to enter (the fleet's rows say it, once another coordinator
+/// has entered it).
+pub(crate) fn reconcile_asking(
+    def: &ServiceDef,
+    ops: &OpsStore,
+    store: &DesiredStore,
+    fleet: &mut Fleet,
+    now: Duration,
+    enter: &mut dyn FnMut(&crate::rollouts::Step<'_>) -> bool,
+) {
     let Some(want) = store.of_def(def) else {
         return;
     };
@@ -379,5 +393,5 @@ pub fn reconcile(
     store
         .of_def(def)
         .into_iter()
-        .for_each(|want| crate::rollouts::advance(def, &want, ops, fleet, now));
+        .for_each(|want| crate::rollouts::advance_asking(def, &want, ops, fleet, now, enter));
 }

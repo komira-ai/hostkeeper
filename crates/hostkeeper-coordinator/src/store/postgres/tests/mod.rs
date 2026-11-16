@@ -248,6 +248,7 @@ mod connect;
 mod coordinator;
 mod fleet_rows;
 mod generations;
+mod heartbeat_rows;
 mod host_groups;
 mod layout;
 mod login_rows;

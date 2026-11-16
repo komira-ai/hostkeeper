@@ -26,7 +26,8 @@
 mod accounts;
 mod at;
 mod dsn;
-mod fleet_rows;
+pub(crate) mod fleet_rows;
+pub(crate) mod fleet_session;
 mod generations;
 mod groups;
 mod layout;
@@ -36,13 +37,14 @@ pub(crate) mod periodic;
 mod records;
 mod releases;
 mod repositories;
-mod rollout;
+pub(crate) mod rollout;
 pub(crate) mod rows;
 pub(crate) mod session;
 pub(crate) mod state;
 pub(crate) mod transfer;
 pub(crate) mod writer;
 
+use std::collections::BTreeSet;
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -51,6 +53,7 @@ use hostkeeper_oidc::Clock;
 
 pub use dsn::DsnError;
 pub(crate) use dsn::{Dsn, TIMEOUTS, Timeouts};
+pub(crate) use fleet_session::FleetRows;
 pub(crate) use records::PgRecords;
 
 use self::rows::{Stmt, Tables, Val, changes, laid_over};
@@ -238,6 +241,8 @@ impl Landing {
 }
 
 struct Inner {
+    /// How a session of the store connects, for the sessions the store's callers hold themselves.
+    config: postgres::Config,
     writer: Worker<Writer>,
     reader: Worker<Reader>,
     shared: Worker<Reader>,
@@ -363,6 +368,7 @@ fn statements(change: &Commit<'_>) -> Result<Vec<Stmt>, BackendError> {
     if let Some((before, after)) = change.desired {
         let (b, a) = (state::desired_rows(before)?, state::desired_rows(after)?);
         out.extend(changes(&state::DESIRED, &b, &a));
+        out.extend(queued(before, after));
     }
     if let Some((before, after)) = change.ops {
         let (b, a) = (state::ops_rows(before)?, state::ops_rows(after)?);
@@ -390,6 +396,45 @@ fn statements(change: &Commit<'_>) -> Result<Vec<Stmt>, BackendError> {
         out.push(audit_insert(line)?);
     }
     Ok(out)
+}
+
+/// The (service, version) pairs the state wants: a service's own, and a package's in each host
+/// group.
+fn wanted(held: &desired::Held) -> BTreeSet<(String, String)> {
+    let own = held
+        .desired
+        .iter()
+        .map(|(service, want)| (service.clone(), want.version.as_str().to_owned()));
+    let groups = held.host_groups.0.values().flat_map(|group| {
+        group
+            .desired
+            .iter()
+            .map(|(package, want)| (package.clone(), want.version.as_str().to_owned()))
+    });
+    own.chain(groups).collect()
+}
+
+/// The statements that put in the queue of rollouts each service that `after` wants a version of
+/// that `before` did not want (`docs/design/coordinator-multi-instance.md`, section 5.3): a
+/// service takes its place when its desired version is set, in the order the sets were
+/// committed, and keeps it while it rolls.
+fn queued(before: &desired::Held, after: &desired::Held) -> Vec<Stmt> {
+    let had = wanted(before);
+    let services: BTreeSet<String> = wanted(after)
+        .into_iter()
+        .filter(|pair| !had.contains(pair))
+        .map(|(service, _)| service)
+        .collect();
+    services
+        .into_iter()
+        .map(|service| Stmt {
+            sql: "INSERT INTO rollout_queue (service, asked_unix) \
+                  VALUES ($1, extract(epoch FROM now())::bigint) \
+                  ON CONFLICT (service) DO UPDATE SET asked_unix = excluded.asked_unix"
+                .to_owned(),
+            params: vec![Val::Text(service)],
+        })
+        .collect()
 }
 
 /// Runs `statements` in `tx`, in order.
@@ -452,6 +497,7 @@ impl Postgres {
         );
         let spawned = |e: io::Error| DatabaseError::Refused(e.to_string());
         let inner = Inner {
+            config: config.clone(),
             writer: Worker::spawn("hk-store-writer", writer).map_err(spawned)?,
             reader: Worker::spawn(
                 "hk-store-reader",

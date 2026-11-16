@@ -107,6 +107,18 @@ pub(super) fn start_on_postgres(
     loaded: crate::store::Loaded,
     marker: &std::path::Path,
 ) -> crate::service::Coordinator {
+    start_on_postgres_at(rig, store, loaded, marker, Arc::new(|| AT))
+}
+
+/// [`start_on_postgres`] with the wall clock of the ops store, which the fleet's rows read, as
+/// `unix` says.
+pub(super) fn start_on_postgres_at(
+    rig: &Rig,
+    store: &Postgres,
+    loaded: crate::store::Loaded,
+    marker: &std::path::Path,
+    unix: crate::audit_file::UnixClock,
+) -> crate::service::Coordinator {
     let list = format!(
         "{}services = [\"web\", \"db\"]\n",
         hostkeeper_oidc::testkit::config_text(hostkeeper_oidc::testkit::STATIC_ISSUER)
@@ -122,7 +134,7 @@ pub(super) fn start_on_postgres(
     .with_ops(
         OpsStore::over(Arc::clone(&backend), loaded.ops)
             .with_marker(marker.to_owned())
-            .with_unix(Arc::new(|| AT)),
+            .with_unix(unix),
     )
     .with_verdicts(VerdictFile::over(Arc::clone(&backend), loaded.verdicts))
     .with_accounts(crate::accounts::AccountStore::over(
