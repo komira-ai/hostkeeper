@@ -267,6 +267,7 @@ fn bare_beat() -> Heartbeat {
         installers: Vec::new(),
         repositories: None,
         facts_generation: None,
+        ssh: None,
     }
 }
 

@@ -60,6 +60,10 @@
 //!   with no hook program; [`mirror`] the files of a private repository, read from the coordinator into a local copy apt reads; [`repository_push`] the repository sets the coordinator pushes, written
 //!   as the host's repository configuration and taken into use without a restart.
 //! - [`facts_file`]: the host's facts file, written from the facts the coordinator sends.
+//! - [`ssh_setup`]: the host's sshd, set up to trust the coordinator's SSH user CA from the access
+//!   the coordinator sends (`ssh-v1`), with [`ssh_files`] (the files and the record's checks),
+//!   [`ssh_effective`] (what `sshd -T` says and the lockout rules judge of it) and [`ssh_host`] (the
+//!   host's port and its real adapter).
 //! - [`observer`]: what [`Daemon::status`] reports of a running service.
 //! - [`node`]: the host's enrollment and the heartbeat loop's link, as the loops last wrote them,
 //!   which [`Daemon::status`] reports besides the services.
@@ -126,7 +130,11 @@ pub mod rollback_floor;
 pub mod run_units;
 pub mod seed;
 pub mod selfupdate;
+pub mod ssh_effective;
+pub mod ssh_files;
+pub mod ssh_host;
 pub mod ssh_macos;
+pub mod ssh_setup;
 pub mod stamp;
 pub mod start;
 pub mod target;

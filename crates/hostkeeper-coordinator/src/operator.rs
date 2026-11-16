@@ -107,7 +107,8 @@ refusals!(
     HostGroupsRefusal,
     UsersRefusal,
     ApiTokensRefusal,
-    LayoutRefusal
+    LayoutRefusal,
+    SshRefusal
 );
 
 changing!(

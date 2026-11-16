@@ -176,6 +176,7 @@ fn first_beat() -> Heartbeat {
         installers: vec!["apt".to_owned()],
         repositories: None,
         facts_generation: None,
+        ssh: None,
     }
 }
 
@@ -204,6 +205,7 @@ fn without_executor(daemon: &Arc<Daemon>, links: &Links) -> Heartbeater {
             trusted_root: Arc::new(NoTrustedRoot),
             repositories: None,
             facts: None,
+            ssh: None,
         },
     )
 }

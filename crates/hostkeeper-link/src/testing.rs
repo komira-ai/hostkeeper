@@ -16,11 +16,12 @@ use hostkeeper_steps::{BootId, BootIdError, Clock};
 use crate::beat::{Health, Heartbeat, Liveness, Platform, Renewal, TrustedRootFacts};
 use crate::heartbeater::{DEFAULT_HEARTBEAT_SECS, Heartbeater, LoopConfig, Ports};
 use crate::host_facts::PushedFacts;
+use crate::host_ssh::{PushedSsh, SshReport};
 use crate::order::{Order, OrderRef, OrderResult, Outcome, Reply};
 use crate::ports::{
     CertSource, CertState, ClientIdentity, CoordinatorLink, Dispatch, FactsSink, HeldHalts, Job,
     LinkError, Log, Observation, OrderSink, RecordedService, RenewalSource, RepositorySink,
-    ServiceObserver, ServiceRecords, Sleeper, Tick, TrustedRootSource, UnixClock,
+    ServiceObserver, ServiceRecords, Sleeper, SshSink, Tick, TrustedRootSource, UnixClock,
 };
 use crate::repositories::{PushedSet, RepositoriesReport};
 
@@ -535,6 +536,45 @@ impl FactsSink for FakeFacts {
     }
 }
 
+/// The host's sshd setup, as a test sets it: it records every access it is given, with how many
+/// jobs the [`World`]'s dispatcher held at that moment, and reports what a test says.
+#[derive(Default)]
+pub struct FakeSsh {
+    report: Mutex<Option<SshReport>>,
+    applied: Mutex<Vec<(PushedSsh, usize)>>,
+    dispatch: Arc<ManualDispatch>,
+}
+
+impl FakeSsh {
+    /// A setup that counts the jobs of `dispatch` at each apply.
+    pub fn seeing(dispatch: Arc<ManualDispatch>) -> FakeSsh {
+        FakeSsh {
+            dispatch,
+            ..FakeSsh::default()
+        }
+    }
+
+    /// Sets what the setup reports.
+    pub fn set_report(&self, report: Option<SshReport>) {
+        *lock(&self.report) = report;
+    }
+
+    /// Every access the loop gave it, in order, each with the jobs the dispatcher held then.
+    pub fn applied(&self) -> Vec<(PushedSsh, usize)> {
+        lock(&self.applied).clone()
+    }
+}
+
+impl SshSink for FakeSsh {
+    fn report(&self) -> Option<SshReport> {
+        lock(&self.report).clone()
+    }
+
+    fn apply(&self, access: &PushedSsh) {
+        lock(&self.applied).push((access.clone(), self.dispatch.pending()));
+    }
+}
+
 /// The unix second the [`World`]'s clock starts at.
 pub const START_UNIX: u64 = 2_000_000_000;
 
@@ -563,6 +603,10 @@ pub struct World {
     /// only after [`World::keeping_facts`].
     pub facts: Arc<FakeFacts>,
     keeping_facts: bool,
+    /// The host's sshd setup, which counts the jobs of [`World::dispatch`]; the ports hold it
+    /// only after [`World::setting_ssh_up`].
+    pub ssh: Arc<FakeSsh>,
+    setting_ssh_up: bool,
     private: bool,
 }
 
@@ -584,6 +628,8 @@ impl World {
             orders: Arc::new(orders),
             facts: Arc::new(FakeFacts::seeing(Arc::clone(&dispatch))),
             keeping_facts: false,
+            ssh: Arc::new(FakeSsh::seeing(Arc::clone(&dispatch))),
+            setting_ssh_up: false,
             dispatch,
             halts: Arc::default(),
             renewal: Arc::default(),
@@ -607,6 +653,13 @@ impl World {
     /// announces `facts-v1`.
     pub fn keeping_facts(mut self) -> World {
         self.keeping_facts = true;
+        self
+    }
+
+    /// The world of a host that sets sshd up: its ports hold [`World::ssh`], and it announces
+    /// `ssh-v1`.
+    pub fn setting_ssh_up(mut self) -> World {
+        self.setting_ssh_up = true;
         self
     }
 
@@ -637,6 +690,9 @@ impl World {
             facts: self
                 .keeping_facts
                 .then(|| Arc::clone(&self.facts) as Arc<dyn FactsSink>),
+            ssh: self
+                .setting_ssh_up
+                .then(|| Arc::clone(&self.ssh) as Arc<dyn SshSink>),
         }
     }
 
