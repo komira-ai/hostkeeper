@@ -241,8 +241,9 @@ fn an_include_of_the_drop_in_directory_is_found_in_each_spelling() {
         "INCLUDE other.conf sshd_config.d/*.conf",
         "   Include\t/etc/ssh/sshd_config.d/*",
     ] {
+        // A blank line before the Include is skipped, not read as the end of the file.
         assert!(
-            includes_drop_in_dir(&format!("Port 22\n{line}\n")),
+            includes_drop_in_dir(&format!("Port 22\n\n{line}\n")),
             "{line}"
         );
     }
@@ -542,4 +543,15 @@ fn the_ids_of_a_listing_skip_lines_that_are_not_a_name_and_a_number() {
         parse_ids("a 1\n\nb\nc x\nd 2 3\ne 7\n"),
         [("a".to_owned(), 1), ("e".to_owned(), 7)]
     );
+}
+
+#[test]
+fn an_empty_name_is_not_an_account_name() {
+    assert!(!is_account_name(""));
+    assert!(is_account_name("a"));
+}
+
+#[test]
+fn the_hosts_checks_read_apples_sshd_config() {
+    assert_eq!(MacSsh::system().sshd_config, Path::new(SSHD_CONFIG));
 }
