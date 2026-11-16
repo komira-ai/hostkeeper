@@ -279,7 +279,8 @@ where
         } => {
             let (mut client, _, _, cert) =
                 prepare(global, env, &host_id, identity.as_deref(), &reason).await?;
-            crate::tunnel::proxy(&mut client, &host_id, cert.serial, input, output).await?;
+            crate::tunnel::proxy(&mut client, &host_id, cert.serial, Box::new(input), &mut output)
+                .await?;
             Ok(0)
         }
         Command::Revoke {

@@ -62,17 +62,13 @@ async fn open(client: &mut Client, host: &str, serial: u64) -> Result<Opened, Er
 /// the host closes (what `scp` and `rsync` need). Returns how the stream ended: `Ok` for the
 /// host's close or an end after `input` did, an error when the coordinator closed it for
 /// another reason.
-pub async fn proxy<R, W>(
+pub async fn proxy(
     client: &mut Client,
     host: &str,
     serial: u64,
-    mut input: R,
-    mut output: W,
-) -> Result<(), Error>
-where
-    R: AsyncRead + Unpin + Send + 'static,
-    W: AsyncWrite + Unpin,
-{
+    mut input: Box<dyn AsyncRead + Unpin + Send>,
+    output: &mut (dyn AsyncWrite + Unpin),
+) -> Result<(), Error> {
     let (sender, mut answers) = open(client, host, serial).await?;
     let upstream = tokio::spawn(async move {
         let mut buffer = vec![0_u8; FRAME];

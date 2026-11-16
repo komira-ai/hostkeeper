@@ -160,18 +160,21 @@ pub async fn pins(client: &mut Client, global: &Global, host: &str) -> Result<Pi
 /// approval pins a host. A `changed` host keeps its old pins, so a changed key fails in ssh; the
 /// caller says so.
 pub fn keep_pins(state: &State, host: &str, pins: &Pins) -> Result<(), Error> {
-    match pins.state.as_str() {
-        "pinned" | "changed" if !pins.fingerprints.is_empty() => {
-            state.store_pins(host, &pins.fingerprints)
-        }
-        "no_pin" => Err(Error::Unusable(format!(
+    let known = ["pinned", "changed"].contains(&pins.state.as_str());
+    let usable = known & !pins.fingerprints.is_empty();
+    if usable {
+        return state.store_pins(host, &pins.fingerprints);
+    }
+    if pins.state == "no_pin" {
+        return Err(Error::Unusable(format!(
             "no host key is pinned for {host}: an operator approves what the host reports \
              before this command connects (docs/operations/enrollment.md)"
-        ))),
-        other => Err(Error::Unusable(format!(
-            "the coordinator gave no usable pins for {host} (state {other:?})"
-        ))),
+        )));
     }
+    Err(Error::Unusable(format!(
+        "the coordinator gave no usable pins for {host} (state {:?})",
+        pins.state
+    )))
 }
 
 /// The known-hosts line ssh may trust: `host` and the key when `fingerprint` is among the pins
