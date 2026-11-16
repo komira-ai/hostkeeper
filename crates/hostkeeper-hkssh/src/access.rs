@@ -11,8 +11,9 @@ use crate::error::Error;
 use crate::programs::{Programs, normalize_public_key};
 use crate::state::{CertInfo, State};
 
-/// What every OpenSSH certificate's key type ends with (`ssh-ed25519-cert-v01@openssh.com`),
-/// spelled in pieces so that the hygiene lint does not read it as an e-mail address.
+/// What the key type of every OpenSSH certificate ends with: `-cert-v01`, an at sign and the
+/// domain of the OpenSSH project. Spelled in pieces so that the hygiene lint does not read it as
+/// an e-mail address.
 pub const CERT_KEY_TYPE_SUFFIX: &str = concat!("-cert-v01", "@", "openssh", ".com");
 
 /// A certificate with fewer seconds left than this is replaced, so that a connection that takes
