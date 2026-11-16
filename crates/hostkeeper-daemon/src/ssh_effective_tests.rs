@@ -115,6 +115,9 @@ fn the_allow_and_deny_lists_say_who_is_kept_out() {
     assert_eq!(allow_user.excluded("bob", &[]), None);
     assert_eq!(allow_user.excluded("admin", &[]), None);
     assert_eq!(allow_user.excluded("alicex", &[]), Some("allowusers"));
+    let one_more = Effective::parse("allowusers ab?\n");
+    assert_eq!(one_more.excluded("ab", &[]), Some("allowusers"));
+    assert_eq!(one_more.excluded("abc", &[]), None);
 
     let deny_group = Effective::parse("denygroups wheel\n");
     assert_eq!(
@@ -143,6 +146,11 @@ fn the_allow_and_deny_lists_say_who_is_kept_out() {
 fn a_certificate_login_needs_public_keys_alone_and_root_login_for_root() {
     let ok = |text: &str, user: &str| Effective::parse(text).cert_login(user, None);
     assert_eq!(ok(STOCK, "root"), Ok(()));
+    assert_eq!(
+        ok("pubkeyauthentication yes\npermitrootlogin yes\n", "root"),
+        Ok(()),
+        "no method list at all is no restriction"
+    );
     assert_eq!(
         ok(&STOCK.replace("yes\nauth", "no\nauth"), "root"),
         Err(Failing("pubkeyauthentication"))

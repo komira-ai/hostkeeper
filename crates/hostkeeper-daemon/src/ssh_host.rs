@@ -192,8 +192,9 @@ impl SystemHost {
         };
         let value = |key: &str| {
             text.lines()
-                .find_map(|line| line.strip_prefix(key)?.strip_prefix('='))
-                .unwrap_or("")
+                .filter_map(|line| line.split_once('='))
+                .find(|(name, _)| *name == key)
+                .map_or("", |(_, value)| value)
         };
         Ok(Props {
             loaded: value("LoadState") == "loaded",
@@ -272,9 +273,8 @@ impl SshHost for SystemHost {
             .map_err(|_| "the listen address is not an IP address".to_owned())?;
         let mut stream = TcpStream::connect_timeout(&SocketAddr::new(ip, address.1), BANNER_WAIT)
             .map_err(|e| format!("no connection: {e}"))?;
-        stream
-            .set_read_timeout(Some(BANNER_WAIT))
-            .map_err(|e| format!("no read timeout: {e}"))?;
+        // Fails only for a zero timeout, which `BANNER_WAIT` is not.
+        let _ = stream.set_read_timeout(Some(BANNER_WAIT));
         let mut head = [0_u8; 4];
         stream
             .read_exact(&mut head)
@@ -296,7 +296,7 @@ impl SshHost for SystemHost {
                 let name = fields.next().filter(|name| !name.is_empty())?;
                 let (home, shell) = (fields.nth(4)?, fields.next()?);
                 let keyed = fs::metadata(Path::new(home).join(".ssh/authorized_keys"))
-                    .is_ok_and(|meta| meta.is_file() && meta.len() > 0);
+                    .is_ok_and(|meta| meta.len() > 0);
                 let password = login_shell(shell) && usable_hash(shadow.as_deref(), name);
                 (keyed || password).then(|| Account {
                     name: name.to_owned(),
@@ -355,18 +355,21 @@ impl SystemHost {
         ca_keys: &[String],
         serials: &[u64],
     ) -> Result<Vec<u8>, String> {
-        let io = |what: &'static str| move |e: std::io::Error| format!("{what}: {e}");
-        fs::create_dir_all(work).map_err(io("the work directory"))?;
         let spec: String = serials
             .iter()
             .map(|serial| format!("serial: {serial}\n"))
             .collect();
         let spec_path = work.join("spec");
-        fs::write(&spec_path, spec).map_err(io("the revocation spec"))?;
+        let mut files = vec![(spec_path.clone(), spec)];
+        files.extend(ca_keys.iter().enumerate().map(|(at, key)| {
+            (work.join(format!("ca{at}.pub")), format!("{key}\n"))
+        }));
+        fs::create_dir_all(work)
+            .and_then(|()| files.iter().try_for_each(|(path, text)| fs::write(path, text)))
+            .map_err(|e| format!("the work directory: {e}"))?;
         let list = work.join("krl");
-        for (at, key) in ca_keys.iter().enumerate() {
+        for (at, _) in ca_keys.iter().enumerate() {
             let ca = work.join(format!("ca{at}.pub"));
-            fs::write(&ca, format!("{key}\n")).map_err(io("a CA key"))?;
             let (list_arg, ca_arg, spec_arg) = (
                 list.display().to_string(),
                 ca.display().to_string(),
@@ -385,7 +388,7 @@ impl SystemHost {
             ]);
             self.succeed(&self.tools.ssh_keygen, &args)?;
         }
-        fs::read(&list).map_err(io("the revocation list"))
+        fs::read(&list).map_err(|e| format!("the revocation list: {e}"))
     }
 }
 

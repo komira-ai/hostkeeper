@@ -417,6 +417,15 @@ fn a_drifted_file_is_put_right_at_the_same_generation() {
     let calls = rig.host.calls().len();
     rig.apply(&access(1));
     assert_eq!(rig.host.calls().len(), calls, "nothing drifted");
+
+    let mut serials = access(1);
+    serials.revoked_serials = vec![3, 9, 12];
+    rig.apply(&serials);
+    assert_eq!(
+        fs::read_to_string(rig.paths.revoked()).expect("revoked"),
+        "krl:3,9,12\n",
+        "other serials at the same generation are taken up too"
+    );
 }
 
 /// Proves every refusal before a change leaves the host untouched: no file, no start, no reload,

@@ -40,12 +40,19 @@ use crate::ssh_host::{SshHost, SshdUnit, UnitError};
 /// What the setup holds between heartbeats.
 #[derive(Default)]
 struct Held {
-    /// The generation of the last record taken up, whatever it came to.
-    generation: Option<u64>,
-    state: Option<(SshState, &'static str)>,
+    /// The last record taken up, whatever it came to.
+    taken: Option<Taken>,
     fingerprints: Vec<String>,
     /// The serials the revoked list holds, when it was written by this setup.
     serials: Option<Vec<u64>>,
+}
+
+/// A record taken up, and what came of it.
+#[derive(Clone, Copy)]
+struct Taken {
+    generation: u64,
+    state: SshState,
+    detail: &'static str,
 }
 
 /// The daemon's sshd setup.
@@ -269,12 +276,12 @@ impl SshSetup {
 
     /// Whether the files of the held record are what it asks for.
     fn drifted(&self, access: &PushedSsh, held: &Held) -> bool {
-        match (held.state, access.enabled) {
-            (Some((SshState::Applied, _)), true) => plan(access).is_ok_and(|plan| {
+        match (held.taken.map(|taken| taken.state), access.enabled) {
+            (Some(SshState::Applied), true) => plan(access).is_ok_and(|plan| {
                 let files = wanted(&self.paths, &plan, None);
                 !(current(&self.paths, &files) && held.serials.as_ref() == Some(&plan.serials))
             }),
-            (Some((SshState::Disabled, _)), false) => self.paths.drop_in().exists(),
+            (Some(SshState::Disabled), false) => self.paths.drop_in().exists(),
             _ => false,
         }
     }
@@ -283,19 +290,19 @@ impl SshSetup {
 impl SshSink for SshSetup {
     fn report(&self) -> Option<SshReport> {
         let held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
-        let generation = held.generation?;
-        let (state, detail) = held.state?;
+        let taken = held.taken?;
         Some(SshReport {
-            applied_generation: generation,
-            state: state.as_str().to_owned(),
+            applied_generation: taken.generation,
+            state: taken.state.as_str().to_owned(),
             host_key_fingerprints: held.fingerprints.clone(),
-            detail: detail.to_owned(),
+            detail: taken.detail.to_owned(),
         })
     }
 
     fn apply(&self, access: &PushedSsh) {
         let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
-        if held.generation == Some(access.generation) && !self.drifted(access, &held) {
+        let same = held.taken.is_some_and(|taken| taken.generation == access.generation);
+        if same && !self.drifted(access, &held) {
             return;
         }
         let outcome = if access.enabled {
@@ -305,8 +312,11 @@ impl SshSink for SshSetup {
             self.disable(&mut held).map(|()| (SshState::Disabled, ""))
         };
         let (state, detail) = outcome.unwrap_or_else(|refused| (refused.state, refused.detail));
-        held.generation = Some(access.generation);
-        held.state = Some((state, detail));
+        held.taken = Some(Taken {
+            generation: access.generation,
+            state,
+            detail,
+        });
         held.fingerprints = self.host.host_key_fingerprints();
         let note = if detail.is_empty() {
             String::new()
