@@ -519,6 +519,38 @@ On a Mac, `pkgutil --check-signature hostkeeper-<version>-macos-arm64.pkg` (or
 `hello-<version>-macos-arm64.pkg`) shows the signature.
 The digest of the release's pkg is the line of `SHA256SUMS`, the signed file's.
 
+### Remote Login for ssh through the coordinator
+
+`ssh_macos::MacSsh::prepare` is what a Mac must hold before the daemon sets up its sshd to trust
+the coordinator's SSH user CA (docs/design/ssh-through-coordinator.md, sections 3 and 4). It
+checks, in this order, and changes nothing until the last step:
+
+1. `/etc/ssh/sshd_config` has an `Include` of `/etc/ssh/sshd_config.d/*` before any `Match` line.
+   The daemon never edits the file, which Apple owns; without it the state is `no_include` and the
+   Mac stays untrusted.
+2. The login user: the one the coordinator names, else the single local administrator (user id of
+   501 or more, member of `admin`, not hidden), else `no_login_user`. A name that is not a plain
+   account name (letters, digits, `.`, `_`, `-`) is refused, since it becomes the name of a file.
+3. When the group `com.apple.access_ssh` exists, the login user is in it, or the group nests
+   `admin` and the login user is an administrator; otherwise `blocked_by_access_group`. The
+   daemon never edits a group.
+4. Remote Login is on. If `systemsetup -getremotelogin` says Off, the daemon runs
+   `systemsetup -setremotelogin on` and reads it back. The daemon never turns Remote Login off, so
+   reverting the access leaves sshd as it found it.
+
+macOS 13 and later refuse `systemsetup -setremotelogin` to a process without Full Disk Access
+(the tool says "requires Full Disk Access privileges"). The daemon then reports
+`needs_full_disk_access` and changes nothing, until the configuration profile
+`docs/deploy/mac/hostkeeper-full-disk-access.mobileconfig` is pushed to the Mac. The profile
+grants `SystemPolicyAllFiles` to the daemon alone (payload `com.apple.TCC.configuration-profile-policy`),
+identified by its code-signing identifier and a code requirement that pins the identifier and the
+Team ID `U7RTX4XD3X`, never a path, so an update that replaces the binary under
+`/var/lib/updater/state/hostkeeper/bin/` keeps the grant. The tool's text, the profile's key
+strings, whether the identifier is the one the released binary is signed with, and whether
+Apple Business's built-in device management accepts a custom profile are not measured here:
+they are the measurements of build item C0 and question Q3 of the design. The identifier in the file is a
+placeholder until `codesign -dr -` has been read on the released binary.
+
 ### Boot id
 
 The daemon's clock reads the boot id through a port, `hostkeeper_steps::BootIdSource`. On a Mac
