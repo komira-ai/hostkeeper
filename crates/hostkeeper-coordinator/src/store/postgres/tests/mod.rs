@@ -254,6 +254,7 @@ mod layout;
 mod login_rows;
 mod lost;
 mod operator_orders;
+mod rolling_update;
 mod periodic;
 mod reads;
 mod records;
