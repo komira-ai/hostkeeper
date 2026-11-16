@@ -447,7 +447,6 @@ fn a_mac_without_full_disk_access_reports_all_twenty_one_steps() {
         ProbeStep {
             exit_code: Some(0),
             stdout: "2026-11-16 04:57:12 -0800 Sleep Entering Sleep state due to 'Idle Sleep'\n\
-                     2026-11-16 05:13:40 -0800 DarkWake DarkWake from Deep Idle [CDNP]\n\
                      2026-11-16 07:02:10 -0800 Wake Wake from Deep Idle [CDNVA] : due to HID"
                 .to_owned(),
             ..next()
@@ -813,6 +812,90 @@ fn only_sleep_and_wake_events_of_the_power_log_are_kept() {
     ] {
         assert!(!is_sleep_wake(left), "{left}");
     }
+}
+
+/// A dark wake of a Mac that sleeps through a night, as `pmset -g log` writes it: the dark wake,
+/// the return to sleep and the wakes the system has scheduled.
+fn maintenance_wake(hour: u32, minute: u32) -> [String; 3] {
+    let at = format!("2026-11-16 {hour:02}:{minute:02}");
+    [
+        format!(
+            "{at}:01 -0600 DarkWake            \tDarkWake from Deep Idle [CDN] : due to \
+             NUB.SPMI0Sw3IRQ nub-spmi0.0x02 rtc/Maintenance Using AC (Charge:0%) 10 secs"
+        ),
+        format!(
+            "{at}:11 -0600 Sleep               \tEntering Sleep state due to 'Maintenance Sleep':\
+             TCPKeepAlive=active Using AC (Charge:0%) 601 secs"
+        ),
+        format!(
+            "{at}:13 -0600 Wake Requests       \t[*process=mDNSResponder request=Maintenance \
+             deltaSecs=3238 wakeAt=2026-11-16 07:57:09 info=\"DHCP lease renewal\"] \
+             [process=powerd request=CSPNEvaluation deltaSecs=3648 wakeAt=2026-11-16 08:03:59]"
+        ),
+    ]
+}
+
+/// Catches the line that says why a Mac went to sleep pushed out of the report by the dark wakes
+/// of the night after it, and a sleep or wake that starts or ends a system sleep left out with
+/// them: from a log of a sleep, ten hours of maintenance wakes (far more than the step's bound)
+/// and the wake by a keyboard, the step keeps the sleep, the wake and a later sleep by software,
+/// whole and in order, and is not cut; a `DarkWake`, a `Wake Requests` line and a sleep `due to
+/// 'Maintenance Sleep'` are each left out, and a `Wake` whose next word is not `Requests` is not.
+#[test]
+fn the_sleep_that_started_a_night_survives_its_maintenance_wakes() {
+    let dir = scratch("probe-night");
+    let places = places(dir.path(), refused());
+    let mut log = vec![
+        "Time stamp                Domain               Message".to_owned(),
+        "2026-11-15 22:57:12 -0600 Sleep               \tEntering Sleep state due to \
+         'Idle Sleep':TCPKeepAlive=active Using AC (Charge:0%)"
+            .to_owned(),
+    ];
+    for hour in 0..10 {
+        for minute in [0, 12, 24, 36, 48] {
+            log.extend(maintenance_wake(hour, minute));
+        }
+    }
+    log.extend([
+        "2026-11-16 09:14:11 -0600 Wake                \tWake from Deep Idle [CDNVA] : due to \
+         smc.sysState.Wake(0x70070000) USB2_wake SMC.OutboxNotEmpty nub-spmi-a2.0x0B/HID Activity \
+         Using AC (Charge:0%)"
+            .to_owned(),
+        "2026-11-16 09:20:00 -0600 Sleep               \tEntering Sleep state due to 'Software \
+         Sleep pid=1': Using AC (Charge:0%)"
+            .to_owned(),
+    ]);
+    let all: usize = log.iter().map(|line| line.len() + 1).sum();
+    assert!(
+        all > 3 * 3072,
+        "the night is {all} bytes, far over the step's bound"
+    );
+    let fakes = Fakes::new();
+    let lines: Vec<&str> = log.iter().map(String::as_str).collect();
+    fakes.pmset_log.answer(&lines, Ok(Some(0)));
+
+    let probe = run(&fakes.tools(), &places, &clock());
+
+    let step = probe
+        .steps
+        .iter()
+        .find(|step| step.name == "power_log_sleep_wake")
+        .expect("the sleep and wake step");
+    assert_eq!(
+        step,
+        &ProbeStep {
+            exit_code: Some(0),
+            stdout: "2026-11-15 22:57:12 -0600 Sleep Entering Sleep state due to 'Idle Sleep':\
+                     TCPKeepAlive=active Using AC (Charge:0%)\n\
+                     2026-11-16 09:14:11 -0600 Wake Wake from Deep Idle [CDNVA] : due to \
+                     smc.sysState.Wake(0x70070000) USB2_wake SMC.OutboxNotEmpty \
+                     nub-spmi-a2.0x0B/HID Activity Using AC (Charge:0%)\n\
+                     2026-11-16 09:20:00 -0600 Sleep Entering Sleep state due to 'Software Sleep \
+                     pid=1': Using AC (Charge:0%)"
+                .to_owned(),
+            ..command("power_log_sleep_wake", PMSET, &["-g", "log"])
+        }
+    );
 }
 
 /// Catches the oldest lines kept instead of the newest, the bound passed, the lines' order turned
