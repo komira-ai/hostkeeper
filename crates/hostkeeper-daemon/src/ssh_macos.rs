@@ -50,6 +50,8 @@ pub const INCLUDE_DIR: &str = "/etc/ssh/sshd_config.d";
 pub const ACCESS_SSH_GROUP: &str = "com.apple.access_ssh";
 /// The group id (GeneratedUID) of the `admin` group, which a group lists in `NestedGroups`.
 pub const ADMIN_GROUP_GUID: &str = "ABCDEFAB-CDEF-ABCD-EFAB-CDEF00000050";
+/// The directory node of the accounts; an account's record is `<node>/<name>`.
+pub const USERS_NODE: &str = "/Users";
 /// The first user id of a person's account; lower ones are the system's.
 pub const FIRST_USER_ID: u32 = 501;
 /// What `systemsetup` says when the caller lacks Full Disk Access.
@@ -175,7 +177,7 @@ impl<S: Launchctl, D: Launchctl> MacSsh<S, D> {
         if !is_account_name(requested) {
             return Err(no_account);
         }
-        let record = format!("/Users/{requested}");
+        let record = user_record(requested);
         let output = self.dscl(&[".", "-read", &record, "UniqueID"])?;
         if output.code == Some(0) && !values_of(&text_of(&output), "UniqueID").is_empty() {
             Ok(requested.to_owned())
@@ -186,7 +188,7 @@ impl<S: Launchctl, D: Launchctl> MacSsh<S, D> {
 
     fn single_administrator(&self) -> Result<String, Blocked> {
         let admins = self.admin_members()?;
-        let listing = self.dscl(&[".", "-list", "/Users", "UniqueID"])?;
+        let listing = self.dscl(&[".", "-list", USERS_NODE, "UniqueID"])?;
         let mut found: Vec<String> = Vec::new();
         for (name, id) in parse_ids(&text_of(&listing)) {
             if id >= FIRST_USER_ID
@@ -216,9 +218,12 @@ impl<S: Launchctl, D: Launchctl> MacSsh<S, D> {
     }
 
     fn is_hidden(&self, name: &str) -> Result<bool, Blocked> {
-        let record = format!("/Users/{name}");
+        let record = user_record(name);
         let output = self.dscl(&[".", "-read", &record, "IsHidden"])?;
-        Ok(values_of(&text_of(&output), "IsHidden").first().map(String::as_str) == Some("1"))
+        Ok(values_of(&text_of(&output), "IsHidden")
+            .first()
+            .map(String::as_str)
+            == Some("1"))
     }
 
     fn check_access_group(&self, login_user: &str) -> Result<(), Blocked> {
@@ -241,7 +246,10 @@ impl<S: Launchctl, D: Launchctl> MacSsh<S, D> {
             || (values_of(&text, "NestedGroups")
                 .iter()
                 .any(|guid| guid.eq_ignore_ascii_case(ADMIN_GROUP_GUID))
-                && self.admin_members()?.iter().any(|member| member == login_user));
+                && self
+                    .admin_members()?
+                    .iter()
+                    .any(|member| member == login_user));
         if admitted {
             Ok(())
         } else {
@@ -298,6 +306,11 @@ impl<S: Launchctl, D: Launchctl> MacSsh<S, D> {
             })
         }
     }
+}
+
+/// The directory record of the account `name`.
+fn user_record(name: &str) -> String {
+    format!("{USERS_NODE}/{name}")
 }
 
 /// The standard output and standard error of a tool, as one text.

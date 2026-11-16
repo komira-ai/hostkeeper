@@ -45,7 +45,7 @@ impl Mac {
             "GroupMembership: root alice\n",
         );
         mac.dscl_ok(
-            &[".", "-read", "/Users/alice", "IsHidden"],
+            &[".", "-read", &user_record("alice"), "IsHidden"],
             "No such key: IsHidden\n",
         );
         mac.dscl.always(
@@ -122,6 +122,14 @@ fn takes_the_setting(mac: &Mac) {
     );
 }
 
+/// Scripts a Mac whose Remote Login is already on, for a test about the checks before it.
+fn remote_login_already_on(mac: &Mac) {
+    mac.systemsetup.always(
+        &args(&["-getremotelogin"]),
+        Ok(LaunchctlOutput::success("Remote Login: On\n")),
+    );
+}
+
 #[test]
 fn a_stock_mac_gets_remote_login_turned_on_for_its_one_administrator() {
     let mac = Mac::new("ssh-mac-stock");
@@ -139,10 +147,7 @@ fn a_stock_mac_gets_remote_login_turned_on_for_its_one_administrator() {
 #[test]
 fn remote_login_already_on_is_not_touched() {
     let mac = Mac::new("ssh-mac-on");
-    mac.systemsetup.always(
-        &args(&["-getremotelogin"]),
-        Ok(LaunchctlOutput::success("Remote Login: On\n")),
-    );
+    remote_login_already_on(&mac);
     assert_eq!(
         mac.prepare("").map(|ready| ready.remote_login),
         Ok(RemoteLogin::AlreadyOn)
@@ -214,7 +219,7 @@ fn a_mac_that_turns_on_remote_login_reads_it_back_as_on() {
     let mac = Mac::new("ssh-mac-readback");
     takes_the_setting(&mac);
     assert_eq!(
-        mac.prepare("alice").map(|ready| ready.remote_login),
+        mac.prepare("").map(|ready| ready.remote_login),
         Ok(RemoteLogin::TurnedOn)
     );
     assert_eq!(
@@ -236,7 +241,10 @@ fn an_include_of_the_drop_in_directory_is_found_in_each_spelling() {
         "INCLUDE other.conf sshd_config.d/*.conf",
         "   Include\t/etc/ssh/sshd_config.d/*",
     ] {
-        assert!(includes_drop_in_dir(&format!("Port 22\n{line}\n")), "{line}");
+        assert!(
+            includes_drop_in_dir(&format!("Port 22\n{line}\n")),
+            "{line}"
+        );
     }
 }
 
@@ -274,8 +282,9 @@ fn an_unreadable_sshd_config_is_no_include() {
 #[test]
 fn a_named_login_user_that_exists_is_taken_without_looking_for_administrators() {
     let mac = Mac::new("ssh-mac-named");
+    remote_login_already_on(&mac);
     mac.dscl_ok(
-        &[".", "-read", "/Users/builder", "UniqueID"],
+        &[".", "-read", &user_record("builder"), "UniqueID"],
         "UniqueID: 502\n",
     );
     assert_eq!(
@@ -303,28 +312,37 @@ fn a_named_login_user_that_is_not_an_account_name_is_refused_unread() {
 fn a_named_login_user_the_directory_does_not_know_is_refused() {
     let mac = Mac::new("ssh-mac-unknown");
     mac.dscl.always(
-        &args(&[".", "-read", "/Users/ghost", "UniqueID"]),
+        &args(&[".", "-read", &user_record("ghost"), "UniqueID"]),
         Ok(LaunchctlOutput::exit(
             56,
             "<dscl_cl> DS Error: -14136 (eDSRecordNotFound)",
         )),
     );
-    assert_eq!(mac.prepare("ghost"), blocked(NO_LOGIN_USER, "not_an_account"));
+    assert_eq!(
+        mac.prepare("ghost"),
+        blocked(NO_LOGIN_USER, "not_an_account")
+    );
     assert!(!mac.changed_remote_login());
 }
 
 #[test]
 fn a_named_login_user_whose_record_has_no_id_is_refused() {
     let mac = Mac::new("ssh-mac-no-id");
-    mac.dscl_ok(&[".", "-read", "/Users/ghost", "UniqueID"], "No such key: UniqueID\n");
-    assert_eq!(mac.prepare("ghost"), blocked(NO_LOGIN_USER, "not_an_account"));
+    mac.dscl_ok(
+        &[".", "-read", &user_record("ghost"), "UniqueID"],
+        "No such key: UniqueID\n",
+    );
+    assert_eq!(
+        mac.prepare("ghost"),
+        blocked(NO_LOGIN_USER, "not_an_account")
+    );
 }
 
 #[test]
 fn dscl_that_cannot_run_is_unsupported() {
     let mac = Mac::new("ssh-mac-no-dscl");
     mac.dscl.always(
-        &args(&[".", "-read", "/Users/alice", "UniqueID"]),
+        &args(&[".", "-read", &user_record("alice"), "UniqueID"]),
         spawn_failure(),
     );
     assert_eq!(mac.prepare("alice"), blocked(UNSUPPORTED, "dscl"));
@@ -352,7 +370,10 @@ fn two_administrators_are_no_login_user() {
         &[".", "-read", "/Groups/admin", "GroupMembership"],
         "GroupMembership: root alice bob\n",
     );
-    mac.dscl_ok(&[".", "-read", "/Users/bob", "IsHidden"], "IsHidden: 0\n");
+    mac.dscl_ok(
+        &[".", "-read", &user_record("bob"), "IsHidden"],
+        "IsHidden: 0\n",
+    );
     assert_eq!(
         mac.prepare(""),
         blocked(NO_LOGIN_USER, "several_administrators")
@@ -362,6 +383,7 @@ fn two_administrators_are_no_login_user() {
 #[test]
 fn a_hidden_administrator_and_a_system_or_ordinary_account_are_not_candidates() {
     let mac = Mac::new("ssh-mac-hidden");
+    remote_login_already_on(&mac);
     mac.dscl_ok(
         &[".", "-list", "/Users", "UniqueID"],
         "daemon 1\nalice 501\nsvc 502\ncarol 503\nodd line here 9\nbroken x\n",
@@ -370,7 +392,10 @@ fn a_hidden_administrator_and_a_system_or_ordinary_account_are_not_candidates() 
         &[".", "-read", "/Groups/admin", "GroupMembership"],
         "GroupMembership: root daemon alice svc\n",
     );
-    mac.dscl_ok(&[".", "-read", "/Users/svc", "IsHidden"], "IsHidden: 1\n");
+    mac.dscl_ok(
+        &[".", "-read", &user_record("svc"), "IsHidden"],
+        "IsHidden: 1\n",
+    );
     assert_eq!(
         mac.prepare("").map(|ready| ready.login_user),
         Ok("alice".to_owned())
@@ -380,6 +405,7 @@ fn a_hidden_administrator_and_a_system_or_ordinary_account_are_not_candidates() 
 #[test]
 fn an_administrator_whose_name_is_not_a_plain_account_name_is_skipped() {
     let mac = Mac::new("ssh-mac-odd-name");
+    remote_login_already_on(&mac);
     mac.dscl_ok(
         &[".", "-list", "/Users", "UniqueID"],
         "alice 501\n../x 502\n",
@@ -394,7 +420,7 @@ fn an_administrator_whose_name_is_not_a_plain_account_name_is_skipped() {
 fn an_is_hidden_read_that_cannot_run_is_unsupported() {
     let mac = Mac::new("ssh-mac-hidden-fail");
     mac.dscl.always(
-        &args(&[".", "-read", "/Users/alice", "IsHidden"]),
+        &args(&[".", "-read", &user_record("alice"), "IsHidden"]),
         spawn_failure(),
     );
     assert_eq!(mac.prepare(""), blocked(UNSUPPORTED, "dscl"));
@@ -416,6 +442,7 @@ fn access_group(mac: &Mac, stdout: &str) {
 #[test]
 fn a_login_user_listed_in_the_access_group_is_admitted() {
     let mac = Mac::new("ssh-mac-group-member");
+    remote_login_already_on(&mac);
     access_group(&mac, "GroupMembership: bob alice\n");
     assert_eq!(
         mac.prepare("").map(|ready| ready.login_user),
@@ -447,6 +474,7 @@ fn a_group_with_no_members_blocks_the_login_user() {
 #[test]
 fn an_access_group_that_nests_admin_admits_an_administrator() {
     let mac = Mac::new("ssh-mac-group-nested");
+    remote_login_already_on(&mac);
     access_group(
         &mac,
         &format!("NestedGroups: {}\n", ADMIN_GROUP_GUID.to_lowercase()),
@@ -461,7 +489,7 @@ fn an_access_group_that_nests_admin_admits_an_administrator() {
 fn an_access_group_that_nests_admin_does_not_admit_a_user_outside_admin() {
     let mac = Mac::new("ssh-mac-group-nested-out");
     mac.dscl_ok(
-        &[".", "-read", "/Users/builder", "UniqueID"],
+        &[".", "-read", &user_record("builder"), "UniqueID"],
         "UniqueID: 502\n",
     );
     access_group(&mac, &format!("NestedGroups: {ADMIN_GROUP_GUID}\n"));
@@ -474,7 +502,7 @@ fn an_access_group_that_nests_admin_does_not_admit_a_user_outside_admin() {
 #[test]
 fn an_access_group_that_nests_another_group_does_not_admit_an_administrator() {
     let mac = Mac::new("ssh-mac-group-nested-other");
-    access_group(&mac, "NestedGroups: 11111111-2222-3333-4444-555555555555\n");
+    access_group(&mac, "NestedGroups: AAAAAAAA-2222-3333-4444-555555555555\n");
     assert_eq!(
         mac.prepare(""),
         blocked(BLOCKED_BY_ACCESS_GROUP, "com.apple.access_ssh")
@@ -500,7 +528,10 @@ fn an_access_group_read_that_fails_for_another_reason_is_unsupported() {
 #[test]
 fn values_wrap_onto_the_lines_below_their_key() {
     let text = "GroupMembership: a b\n c d\nOther: x\n e\nGroupMembership: z\n";
-    assert_eq!(values_of(text, "GroupMembership"), ["a", "b", "c", "d", "z"]);
+    assert_eq!(
+        values_of(text, "GroupMembership"),
+        ["a", "b", "c", "d", "z"]
+    );
     assert_eq!(values_of(text, "Other"), ["x", "e"]);
     assert!(values_of(text, "Missing").is_empty());
 }
