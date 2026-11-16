@@ -7,7 +7,7 @@ use std::cell::Cell;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use ring::signature::{ED25519, UnparsedPublicKey};
+use ring::signature::{ED25519, KeyPair as _, UnparsedPublicKey};
 
 use super::{
     BEGIN, CaKey, END, KeyError, MAGIC, MAX_CA_KEYS, Reader, Spec, UserKey, fingerprint,

@@ -4,7 +4,7 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 
 use super::{Init, KEY_FILE, OFFLINE_SERIALS, Sign, SshCaCommand, SshCaError, run};
 use crate::enrollment::{Random, os_random};
