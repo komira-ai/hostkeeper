@@ -291,15 +291,16 @@ fn count(db: &TestDatabase, sql: &str) -> String {
     db.rows(sql).remove(0).remove(0).expect("a count")
 }
 
-/// Proves: with two coordinators that both read the first stage of a plan baked, the one that
-/// enters the second writes it, with its one audit line, and the other, which reaches the same
-/// stage from the position it holds in memory (the plan at its first), finds the rows say it is
-/// entered and writes nothing, and still orders the host the second stage lets go.
+/// Proves: a coordinator that reads the plan at its first stage, and then, before its turn at the
+/// gate, finds the other coordinator has entered the second, does not enter it again: the rows say
+/// the plan stands at the second, so it does not try to write the stage or its audit line (a try
+/// is logged when it fails), and orders the host the second stage lets go.
 ///
-/// Catches: a stage entered twice, with two `rollout_advance` lines, by coordinators whose
-/// memories both say the plan is at its first stage.
+/// Catches: a stage entered twice, with two `rollout_advance` lines, by a coordinator whose
+/// memory says the plan is at its first stage while the rows say it is at the second.
 #[tokio::test]
-async fn a_stage_both_coordinators_reach_is_entered_once() {
+async fn a_stage_the_other_coordinator_entered_meanwhile_is_not_entered_again() {
+    super::logging();
     let (db, wall, a, b) = pair_with("stage", "stages = [50, 100]\nbake_beats = 1").await;
     a.beat("h1");
     a.beat("h2");
@@ -316,16 +317,31 @@ async fn a_stage_both_coordinators_reach_is_entered_once() {
         "h2 waits for the second"
     );
     a.beat_with("h1", daemon_running("1.0", true));
-    // h1 has taken the update and baked once: the first stage is done, and a enters the second.
-    a.beat_with("h1", web_at("2.0"));
     let advances = "SELECT count(*) FROM audit WHERE action = 'rollout_advance'";
-    assert_eq!(count(&db, advances), "1");
+    assert_eq!(count(&db, advances), "0");
+    let a = Arc::new(a);
+    let first = Arc::clone(&a);
+    let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let once = Arc::clone(&ran);
+    // b has read the plan at its first stage when a's beat bakes h1 and enters the second.
+    b.coordinator().pause_before_gate(Arc::new(move || {
+        if !once.swap(true, Ordering::SeqCst) {
+            first.beat_with("h1", web_at("2.0"));
+        }
+    }));
     assert_eq!(
-        count(&db, "SELECT entered FROM rollouts WHERE service = 'web'"),
-        "2"
+        b.beat("h2"),
+        update(WEB, "2.0"),
+        "the rows say the second stage is reached: h2 is ordered"
     );
-    // b, which has not seen the plan move, reaches the same stage and orders h2 under it.
-    assert_eq!(b.beat("h2"), update(WEB, "2.0"));
+    assert!(
+        ran.load(Ordering::SeqCst),
+        "a entered the stage before b's gate"
+    );
+    assert!(
+        !super::logged("the plan's next stage was not entered"),
+        "b did not try to write the stage a had entered"
+    );
     assert_eq!(
         count(&db, advances),
         "1",
@@ -335,6 +351,143 @@ async fn a_stage_both_coordinators_reach_is_entered_once() {
         count(&db, "SELECT entered FROM rollouts WHERE service = 'web'"),
         "2"
     );
+    assert_eq!(count(&db, "SELECT count(*) FROM fleet_orders"), "1");
+}
+
+/// Proves: a version set, and a hold made, through one coordinator after the other started are
+/// seen by the other at its next beat: with the services held it orders nothing, and with the holds
+/// released and 3.0 set it orders 3.0, not the 2.0 it loaded at start.
+///
+/// Catches: a coordinator that keeps deciding on the desired state and the operations state it
+/// loaded at start, ordering a version that was set back or past a hold another coordinator made.
+#[tokio::test]
+async fn a_hold_and_a_version_set_through_the_other_coordinator_are_seen_at_the_next_beat() {
+    let (db, _wall, a, b) = settled("seen", &["h1"]).await;
+    for service in [WEB, DB] {
+        crate::marks_support::hold(&a.rig, service, crate::marks_support::scope_fleet())
+            .expect("held");
+    }
+    assert_eq!(b.beat("h1"), ServiceReply::Nothing, "the hold is seen");
+    assert_eq!(orders(&db), vec![]);
+    for service in [WEB, DB] {
+        crate::marks_support::unhold(&a.rig, service, crate::marks_support::scope_fleet())
+            .expect("released");
+    }
+    set(&a.rig, WEB, "3.0", 3).await;
+    assert_eq!(
+        b.beat("h1"),
+        update(WEB, "3.0"),
+        "the version set through a is ordered by b"
+    );
+}
+
+/// Proves: a beat whose read of what the other coordinator committed fails, whether the audit
+/// cannot be asked or the states cannot be read, still answers, and the coordinator keeps the
+/// state it holds; the first beat after the rows are back takes in the other's change.
+///
+/// Catches: a read of the other coordinator's state that stops the beat when it fails, or that
+/// takes in a state it read only in part.
+#[tokio::test]
+async fn a_read_of_the_others_state_that_fails_leaves_memory_as_it_was() {
+    let (db, _wall, a, b) = settled("unread", &["h1", "h2", "h3"]).await;
+    let behind = b.coordinator().ops.newest_seq();
+    for service in [WEB, DB] {
+        crate::marks_support::hold(&a.rig, service, crate::marks_support::scope_fleet())
+            .expect("held");
+    }
+    let ahead = a.coordinator().ops.newest_seq();
+    assert!(ahead > behind, "a committed changes b has not read");
+    for (table, host) in [("audit", "h1"), ("holds", "h2")] {
+        db.run(&format!("ALTER TABLE {table} RENAME TO {table}_away"))
+            .expect("renamed");
+        b.beat(host);
+        db.run(&format!("ALTER TABLE {table}_away RENAME TO {table}"))
+            .expect("renamed back");
+        assert_eq!(b.coordinator().ops.newest_seq(), behind, "{table}");
+    }
+    assert_eq!(b.beat("h3"), ServiceReply::Nothing, "the holds are read");
+    assert_eq!(b.coordinator().ops.newest_seq(), ahead);
+}
+
+/// Proves: a beat that arrives while another decision is inside the gate, after it read the rows
+/// and before it wrote its order, is answered with no order and writes none; the decision inside
+/// then gives its order, and the beat's next try, with the gate free, gives the second.
+///
+/// Catches: a read and a write that are not one step: a coordinator that decides between
+/// another's read of the rows and its order, which the gate answers with busy.
+#[tokio::test]
+async fn a_beat_between_another_decisions_read_and_its_order_finds_the_gate_held() {
+    let (db, _wall, a, b) = settled("inside", &["h1", "h2"]).await;
+    let b = Arc::new(b);
+    let other = Arc::clone(&b);
+    let said = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let inside = Arc::clone(&said);
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let rows = Arc::clone(&seen);
+    let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let once = Arc::clone(&ran);
+    let name = db.name().to_owned();
+    a.coordinator().pause_in_gate(Arc::new(move || {
+        if !once.swap(true, Ordering::SeqCst) {
+            inside.lock().expect("replies").push(other.beat("h2"));
+            let name = name.clone();
+            let written: i64 = super::off_runtime(move || {
+                super::admin(Some(&name))
+                    .query_one("SELECT count(*) FROM hostkeeper.fleet_orders", &[])
+                    .expect("count")
+                    .get(0)
+            });
+            rows.lock().expect("orders").push(written);
+        }
+    }));
+    assert_eq!(a.beat("h1"), update(WEB, "2.0"));
+    assert!(ran.load(Ordering::SeqCst), "the beat came inside the gate");
+    assert_eq!(
+        *said.lock().expect("replies"),
+        vec![ServiceReply::Nothing],
+        "the gate is held"
+    );
+    assert_eq!(
+        *seen.lock().expect("orders"),
+        vec![0],
+        "the beat inside the gate wrote no order"
+    );
+    assert_eq!(orders(&db), vec![("h1".to_owned(), "web".to_owned())]);
+    assert_eq!(b.beat("h2"), update(WEB, "2.0"));
+}
+
+/// Proves: a decision whose read of the hosts succeeded and whose later read (the orders) failed
+/// takes none of those hosts in: once the rows are back, the coordinator reads them again, finds
+/// the two hosts of the other coordinator that are updating, and orders the third host nothing,
+/// where the role lets two update.
+///
+/// Catches: a coordinator that counts the hosts as read before the decision that read them has
+/// finished, never reads them again, and orders past the role's slots.
+#[tokio::test]
+async fn hosts_read_by_a_decision_that_failed_are_read_again() {
+    let (db, wall, a, b) = pair("lost-hosts").await;
+    for host in ["h1", "h2", "h3"] {
+        a.beat(host);
+    }
+    a.at(&wall, 31);
+    b.at(&wall, 31);
+    for host in ["h1", "h2"] {
+        assert_eq!(a.beat(host), update(WEB, "2.0"));
+        a.beat_with(host, daemon_running("1.0", true));
+    }
+    assert_eq!(orders(&db), vec![], "the orders ended: the hosts update");
+    // The beat's own statement does not read this column; the decision's read of the orders does.
+    db.run("ALTER TABLE fleet_orders RENAME COLUMN try TO try_away")
+        .expect("renamed");
+    assert_eq!(b.beat("h3"), ServiceReply::Nothing);
+    db.run("ALTER TABLE fleet_orders RENAME COLUMN try_away TO try")
+        .expect("renamed back");
+    assert_eq!(
+        b.beat("h3"),
+        ServiceReply::Nothing,
+        "the two updating hosts hold the role's slots"
+    );
+    assert_eq!(orders(&db), vec![]);
 }
 
 /// Proves: the rows being out of reach inside the decision (the table of the orders) orders

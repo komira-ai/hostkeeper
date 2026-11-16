@@ -413,6 +413,8 @@ mod ops_downgrade_tests;
 #[cfg(test)]
 mod ops_platform_tests;
 #[cfg(test)]
+mod ops_rows_tests;
+#[cfg(test)]
 mod ops_tests;
 #[cfg(test)]
 mod order_terms_tests;

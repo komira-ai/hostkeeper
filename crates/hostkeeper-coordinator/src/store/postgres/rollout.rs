@@ -4,8 +4,10 @@
 //! it was asked for, correct however many coordinators run them at once.
 //!
 //! **The gate.** Every decision runs in [`decide`]: one transaction that takes the row of
-//! `rollout_gate` `FOR UPDATE` first and reads what it decides from, after the lock is granted,
-//! from the rows and not from any copy. Two decisions never run side by side, so the second sees
+//! `rollout_gate` `FOR UPDATE` first and reads the fleet's rows it decides from (the hosts, the
+//! orders, the bakes, the quiet time) after the lock is granted, not from any copy. The desired
+//! and operations states are read before the gate ([`super::fleet_session::FleetRows::state_after`]),
+//! and what the gate checks again of them is the halts, the slots, the queue and the stage's position. Two decisions never run side by side, so the second sees
 //! the first's order and its slot. A beat asks for the gate with `SKIP LOCKED` ([`Wait::Beat`]): a
 //! busy gate answers it at once with no new order, and the host's next beat decides; a beat is
 //! never queued, and never passes an operator waiting for the gate. An operator's edit waits for

@@ -291,6 +291,10 @@ pub struct Coordinator {
     /// made from what was read before the gate is made to happen rather than waited for.
     #[cfg(test)]
     before_gate: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+    /// Run by a heartbeat inside the gate, after it read the rows: a test's way to let another
+    /// coordinator's beat find the gate held.
+    #[cfg(test)]
+    in_gate: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 /// What a test hears of CI's set of a desired state while it races another change.
@@ -354,6 +358,8 @@ impl Coordinator {
             set_waits: Mutex::new(None),
             #[cfg(test)]
             before_gate: Mutex::new(None),
+            #[cfg(test)]
+            in_gate: Mutex::new(None),
         }
     }
 
@@ -634,6 +640,7 @@ impl Coordinator {
         // host runs under that lock, so the group this heartbeat is decided over is never one
         // the host has been moved out of since it was read.
         let fleet = self.lock_fleet();
+        self.refresh_from_rows();
         let basis = self.basis_of(&who.host_id);
         let (reply, order, terms, acks) =
             self.reply_to(fleet, who, beat, orders, (turn, root), &basis);

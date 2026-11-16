@@ -63,10 +63,20 @@ storage trait (section 4.1).
 
 Over a database that coordinators share, the heartbeats, the outstanding orders, the bakes and the quiet start are the
 fleet's rows (migration `0020`) and the fleet in memory is a cache of them: each heartbeat is stored as its host's row,
-and every decision it makes (the order, the stage entered, the rollback) runs in one transaction that holds the rollout
-gate and reads the rows first (`service_rows.rs`). A heartbeat costs two transactions: its row (one statement) and its
+and every order it gives and every stage it enters runs in one transaction that holds the rollout gate and reads the
+fleet's rows first (`service_rows.rs`). A heartbeat costs two transactions: its row (one statement) and its
 decision (eight round trips with no order: begin, ledger, gate, the rows of the hosts changed since the last read, the
 orders, the bakes, the quiet time, commit; an order adds the five statements of its admission, a rolled service one).
+
+What the gate does not read is the desired state and the operations state (versions, `max_updating`, stages, pauses,
+marks, holds, assignments, the plan's position, the halts). Those stay in memory, and a coordinator takes in what
+another committed at the start of each heartbeat, before it reads them: one query asks whether the rows hold an audit
+line newer than the newest it has, and only then are both states read, in one snapshot, and replace memory (not while
+memory holds a change not yet committed). So an edit made through one coordinator reaches the others at their next
+heartbeat. It is not read under the gate: a change committed after that read, before the gate, is seen at the next
+beat. Under the gate the rows themselves refuse what the stale read could give: an order past the slots, the queue or
+`min_up` (`admit`), a service halted (`admit`), a stage entered where the plan no longer stands (`stage_is_at`). An
+operator's edit does not take the gate yet (`Wait::Operator` is unused).
 A coordinator that dies leaves its hosts' rows for the next to read; the deferrals and the tries stay in memory,
 rebuilt from the beats it reads.
 
@@ -997,7 +1007,7 @@ tests in its own pull request.
 | Question | Decision | Why |
 |---|---|---|
 | One database or one per store | One database, one schema. | The flows that cross stores (force, retire) can then commit together, and one lock covers everything. |
-| What decisions read | Memory, as today; the database is read at start, by lists and by the import. | A heartbeat costs no query, and the gate's code does not change. |
+| What decisions read | Memory, as today. Over a database coordinators share, the fleet's rows are read under the rollout gate by each decision, and the desired and operations states are read again at the start of a heartbeat when the rows hold a newer audit line (one query). | A heartbeat costs one cheap query more, and the gate's code does not change; the stale window of the two states is one heartbeat. |
 | How a change reaches the database | The state before and after, compared in memory; only changed rows are written. | The stores' call sites and edits stay as they are; a change costs what it changes. |
 | Typed columns or the records' encodings as blobs | Typed columns, with `jsonb` only for the values that are JSON today; the MDM gate's device records alone are their file's bytes (section 3.6). | The tables can be queried and constrained; each JSON value keeps its reader's strictness. The device record is the gate's own format, versioned by the gate's additive rule, and its reader is already as strict as a row must be. |
 | Generations and write ids | Columns added by C6 with the API that honours them; not in `0001`. | They are what the operator API already describes; adding them before anything maintains them would store numbers that mean nothing. |

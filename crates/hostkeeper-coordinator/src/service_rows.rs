@@ -11,6 +11,13 @@
 //! transaction has committed. The fleet in memory is a cache of the rows, refreshed under the
 //! gate before each decision, never the source of one.
 //!
+//! The desired state and the operations state are not read under the gate. They are memory, and
+//! each heartbeat first takes in what another coordinator committed
+//! ([`Coordinator::refresh_from_rows`]), so a version, a pause or a plan's position set through
+//! another coordinator is seen here at the next beat. A change committed between that read and
+//! the gate is seen at the beat after; the gate's own checks (the slots, the queue, a halt, the
+//! stage's position) refuse what that stale read could give.
+//!
 //! A beat that finds the gate held, or the rows out of reach, is answered with no order: the host
 //! asks again at its next beat. Coordinators over files have no rows and decide on the fleet
 //! they hold ([`Coordinator::decide_tail`] with nothing asked of the rows).
@@ -258,6 +265,28 @@ impl Coordinator {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hook);
     }
 
+    /// Has `hook` run by each heartbeat over the fleet's rows inside the gate, after it read the
+    /// rows and before it decides: the other coordinator's beat in it finds the gate held.
+    #[cfg(test)]
+    pub(crate) fn pause_in_gate(&self, hook: Arc<dyn Fn() + Send + Sync>) {
+        *self
+            .in_gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hook);
+    }
+
+    #[cfg(test)]
+    fn run_in_gate(&self) {
+        let hook = self
+            .in_gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+
     #[cfg(test)]
     fn run_before_gate(&self) {
         let hook = self
@@ -267,6 +296,33 @@ impl Coordinator {
             .clone();
         if let Some(hook) = hook {
             hook();
+        }
+    }
+
+    /// Takes into memory the desired state and the operations state another coordinator
+    /// committed, before a heartbeat reads them: an operator's edit, a halt, a stage entered or a
+    /// version set through that coordinator is then seen here at the next beat, and a plan
+    /// position read here is the one the rows hold. One query says whether the rows hold an
+    /// audit line newer than the newest this coordinator has; only then are the states read.
+    ///
+    /// Memory is not replaced while it holds a change not yet committed, or when it moved while
+    /// the rows were read: the next beat reads them again. The read is not under the gate, so a
+    /// change committed after it is seen at the next beat; what an order or a stage writes is
+    /// still asked of the rows under the gate ([`Gate::admit`], [`Gate::stage_is_at`]).
+    pub(super) fn refresh_from_rows(&self) {
+        let Some(rows) = &self.rows else {
+            return;
+        };
+        let known = self.ops.newest_seq();
+        match rows.rows.state_after(known) {
+            Ok(None) => {}
+            Ok(Some(fresh)) => {
+                self.desired
+                    .take_rows(fresh.desired, || self.ops.take_rows(fresh.ops, known));
+            }
+            Err(why) => {
+                tracing::warn!(%why, "the state other coordinators committed is not read from the rows");
+            }
         }
     }
 
@@ -538,6 +594,8 @@ impl Coordinator {
             fleet.sync_bakes(&snapshot.bakes, now, unix_now);
             fleet.sync_orders(&snapshot.orders, now, unix_now);
             fleet.sync_quiet(snapshot.quiet_until, now, unix_now);
+            #[cfg(test)]
+            self.run_in_gate();
             let mut judge = RowJudge {
                 gate,
                 rules: rows.rules,

@@ -24,6 +24,8 @@ use super::rollout::{
     self, Admission, Ask, Gated, Limits, Uninstalling, Wait, admit, place_uninstall, stage_is_at,
 };
 use super::session::{Session, describe, ends_session};
+use crate::desired;
+use crate::ops::OpsState;
 
 /// What a decision reads of the rows once it holds the gate.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -42,11 +44,16 @@ pub(crate) struct Snapshot {
 pub(crate) struct Gate<'a> {
     session: &'a mut Session,
     known: &'a Mutex<BTreeMap<String, (i64, String)>>,
+    /// The rows [`Self::snapshot`] read, which are taken in when the decision has committed.
+    read: &'a mut Vec<HostRow>,
 }
 
 impl Gate<'_> {
     /// The rows the decision rests on, read after the gate was granted; the rows of the hosts
-    /// are the ones this coordinator has not taken in yet, and they are taken in from now.
+    /// are the ones this coordinator has not taken in yet. They count as taken in only once the
+    /// decision that folded them into the cache has committed ([`FleetRows::gated`]): a read of
+    /// the orders, the bakes or the quiet time that fails, or a body that fails, leaves them to
+    /// be read again.
     ///
     /// # Errors
     /// The client's error.
@@ -59,17 +66,14 @@ impl Gate<'_> {
             .map(|(id, (at, who))| (id.clone(), *at, who.clone()))
             .collect();
         let hosts = changed_hosts(self.session, &known)?;
-        let mut kept = self.known.lock().unwrap_or_else(PoisonError::into_inner);
-        for row in &hosts {
-            kept.insert(row.host_id.clone(), (row.seen_unix, row.instance.clone()));
-        }
-        drop(kept);
-        Ok(Snapshot {
-            hosts,
+        let snapshot = Snapshot {
             orders: orders(self.session)?,
             bakes: bakes(self.session)?,
             quiet_until: fleet_rows::quiet_until(self.session)?,
-        })
+            hosts,
+        };
+        *self.read = snapshot.hosts.clone();
+        Ok(snapshot)
     }
 
     /// Decides whether `ask` gets an order, and writes it when it does ([`rollout::admit`]).
@@ -157,6 +161,13 @@ impl Postgres {
     }
 }
 
+/// The desired state and the operations state as the rows hold them, which another coordinator
+/// committed ([`FleetRows::state_after`]).
+pub(crate) struct Fresh {
+    pub(crate) desired: desired::Held,
+    pub(crate) ops: OpsState,
+}
+
 /// Why the rows could not be used: the text of what the session or the server said.
 pub(crate) type Unreachable = String;
 
@@ -225,6 +236,34 @@ impl FleetRows {
         })
     }
 
+    /// The desired state and the operations state of the rows, when the rows hold an audit line
+    /// newer than `known`, the newest number the caller holds: some other coordinator committed
+    /// a change the caller has not taken in. Both are read in one snapshot, so they agree with
+    /// each other. None when the rows hold nothing newer.
+    ///
+    /// # Errors
+    /// What the session or the server said, or why the rows do not read.
+    pub(crate) fn state_after(&self, known: u64) -> Result<Option<Fresh>, Unreachable> {
+        let known = i64::try_from(known).unwrap_or(i64::MAX);
+        self.on_session(|session, _| {
+            let newest: Option<i64> = session.query_one("SELECT max(seq) FROM audit", &[])?.get(0);
+            if newest.unwrap_or(0) <= known {
+                return Ok(Ok(None));
+            }
+            session.batch("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")?;
+            let loaded = super::load_all(session, 0);
+            session.batch("COMMIT")?;
+            Ok(loaded
+                .map(|loaded| {
+                    Some(Fresh {
+                        desired: loaded.desired,
+                        ops: loaded.ops,
+                    })
+                })
+                .map_err(|why| why.to_string()))
+        })?
+    }
+
     /// The orders the rows hold for the host `host_id`.
     ///
     /// # Errors
@@ -253,12 +292,21 @@ impl FleetRows {
         body: impl FnOnce(&mut Gate<'_>) -> Result<R, postgres::Error> + Send,
     ) -> Result<Gated<R>, Unreachable> {
         self.on_session(|session, known| {
-            rollout::decide(session, wait, |held| {
+            let mut read = Vec::new();
+            let decided = rollout::decide(session, wait, |held| {
                 body(&mut Gate {
                     session: held,
                     known,
+                    read: &mut read,
                 })
-            })
+            })?;
+            if matches!(decided, Gated::Decided(_)) {
+                let mut kept = known.lock().unwrap_or_else(PoisonError::into_inner);
+                for row in read {
+                    kept.insert(row.host_id, (row.seen_unix, row.instance));
+                }
+            }
+            Ok(decided)
         })
     }
 }
