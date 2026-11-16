@@ -164,14 +164,19 @@ the cause, the bytes each way and the seconds open. The causes: `eof` (the clien
 
 Each instance polls every `--ssh-revoke-poll-s` (default 10), so a revocation closes the tunnels it concerns
 within that and one poll's work. At the same poll it refreshes its tunnels' `last_seen` in the database, and
-closes the rows of other instances that have not been refreshed for three polls with `instance_lost`, which
-is how the tunnels of an instance that was killed leave the table. A poll that cannot read the book is logged
-and tried again; it closes nothing.
+closes the rows that have not been refreshed for three polls with `instance_lost`, which is how the tunnels
+of an instance that was killed leave the table. The poll refreshes the tunnels the instance holds and those
+it is opening (recorded, the host not dialled yet), so a row of its own that nothing holds any more (a close
+the book refused) is reaped the same way after three polls. A poll that cannot read the book is logged and
+tried again; it closes nothing. A poll that cannot read the operators file keeps the tunnels as they are and
+checks the file at the next poll.
 
 **Drain.** When the coordinator takes SIGTERM or SIGINT it stops taking tunnels (`draining`, which the client
 may retry once and reach another instance), keeps serving, and lets its tunnels run for up to `--ssh-drain-s`
 (default 600; 0 closes them at once); the health listener says `draining` meanwhile. Tunnels that are still
-open then are closed with `coordinator_stopping` and the process ends when their lines are written. A transfer
+open then are closed with `coordinator_stopping` and the process ends when their lines are written, or
+after 5 seconds more if the book does not take them (an error is logged and the rows are left to another
+instance's poll). A transfer
 longer than the drain is cut: `rsync` resumes, `scp` does not. **The stop grace period of the container must be
 at least `--ssh-drain-s`**, or the runtime kills the process in the middle of the drain and the tunnels left
 are closed as `instance_lost` by another instance's poll. `docs/deploy/coordinator/compose.yaml` sets
@@ -219,10 +224,6 @@ Any instance signs; the times of every row are the database's clock. These table
 - `ssh_tunnel`: one row per open tunnel (operator, host, certificate serial, instance, address, opened and
   last-seen times), deleted when the tunnel closes; a unique index makes it one open tunnel per operator per
   host over every instance. The audit keeps the history.
-
-To check the chain by hand, recompute each row's hash with the SHA-256 of `prev_hash`, then each of
-`at_unix` (decimal), `by_name`, `action`, `subject` (empty when null) and `detail`, each field preceded by its
-length as 8 big-endian bytes.
 
 ## Not in this change
 

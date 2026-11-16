@@ -1290,7 +1290,8 @@ request. No certificate is made when the audit entry cannot be written.
 
 `/hostkeeper.operator.v1.Ssh/HostKeys`
 
-The fingerprints of the sshd host keys pinned for a host at its enrollment. Changes nothing.
+The fingerprints of the sshd host keys pinned for a host: the set an operator pinned from
+what the host reported in its heartbeat, with `PinHostKeys`. Changes nothing.
 
 | flag | value | meaning |
 |---|---|---|

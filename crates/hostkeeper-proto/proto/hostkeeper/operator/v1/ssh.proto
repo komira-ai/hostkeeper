@@ -39,7 +39,8 @@ service Ssh {
   // `--ssh-cert-ttl-s` seconds. Its principal is `hk-host-<host id>`, never a value of the
   // request. No certificate is made when the audit entry cannot be written.
   rpc SignUserCert(SignUserCertRequest) returns (SignUserCertResponse);
-  // The fingerprints of the sshd host keys pinned for a host at its enrollment. Changes nothing.
+  // The fingerprints of the sshd host keys pinned for a host: the set an operator pinned from
+  // what the host reported in its heartbeat, with `PinHostKeys`. Changes nothing.
   rpc HostKeys(HostKeysRequest) returns (HostKeysResponse);
   // Pins, as a set, exactly the host keys the host's last heartbeat reported, for a host, and
   // answers as `HostKeys` does after. Refused with `not_reported` when `fingerprints` are not, as
