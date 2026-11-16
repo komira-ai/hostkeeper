@@ -6,7 +6,7 @@ use std::io::Write;
 use super::{HOSTKEEPER, check_service};
 use crate::release::Error;
 use crate::release::contract::Service;
-use crate::release::native::{deb, hello, mdm};
+use crate::release::native::{deb, hello};
 use crate::testdir::TestDir;
 
 fn scratch(name: &str) -> TestDir {
@@ -154,7 +154,7 @@ fn refused(name: &str, bytes: &[u8]) -> Vec<String> {
 }
 
 #[test]
-fn hellos_and_mdms_debs_as_release_deb_writes_them_pass() {
+fn hellos_deb_as_release_deb_writes_it_passes() {
     // Catches: a check that refuses the packages this repository builds.
     let (control, data) = hello_entries();
     check("good", &deb_of(&control, &data)).expect("the fixture passes");
@@ -163,30 +163,6 @@ fn hellos_and_mdms_debs_as_release_deb_writes_them_pass() {
     let bytes = deb::build("hello", "1.0.0-fail-ready", "arm64", "d", &files, 7).expect("built");
     std::fs::write(d.join("h.deb"), bytes).expect("write");
     check_service(&d.join("h.deb"), Service::Hello).expect("hello's passes");
-    let tools = [
-        "caddy",
-        "depserver",
-        "depsyncer",
-        "lego",
-        "nanohub",
-        "scepserver",
-    ]
-    .map(|name| (name.to_owned(), name.as_bytes().to_vec()))
-    .to_vec();
-    let files = mdm::deb_files(b"m".to_vec(), tools[1..].to_vec());
-    let bytes = deb::build("mdm", "1.0.0", "amd64", "d", &files, 7).expect("built");
-    std::fs::write(d.join("m-no-caddy.deb"), bytes).expect("write");
-    assert_eq!(
-        check_service(&d.join("m-no-caddy.deb"), Service::Mdm),
-        Err(Error::Refused(vec![format!(
-            "{}: /usr/lib/systemd/system/mdm-proxy.service: ExecStart= runs /usr/lib/mdm/caddy, which is not a file of the package",
-            d.join("m-no-caddy.deb").display()
-        )]))
-    );
-    let files = mdm::deb_files(b"m".to_vec(), tools);
-    let bytes = deb::build("mdm", "1.0.0", "amd64", "d", &files, 7).expect("built");
-    std::fs::write(d.join("m.deb"), bytes).expect("write");
-    check_service(&d.join("m.deb"), Service::Mdm).expect("mdm's passes, its eight units with it");
 }
 
 #[test]

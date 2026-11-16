@@ -14,8 +14,6 @@ pub struct Bound {
     pub control: SocketAddr,
     /// The LAN listener, when `--lan-listen` is given.
     pub lan: Option<SocketAddr>,
-    /// The listener of the Macs, when `--mdm-listen` is given.
-    pub mdm: Option<SocketAddr>,
     /// The health listener, when `--health-listen` is given.
     pub health: Option<SocketAddr>,
 }
@@ -36,22 +34,16 @@ pub async fn bind_tcp(
 }
 
 /// The line `serve` prints once its listeners are bound ([`start`]): the version, then where
-/// each listener is, `lan=` (with `--lan-listen` only) after `control=`, `mdm=` (with `--mdm-listen`
-/// only) after it, and `health=` (with `--health-listen` only) last.
+/// each listener is, `lan=` (with `--lan-listen` only) after `control=`, and `health=` (with `--health-listen` only) last.
 #[must_use]
 pub fn start_line(bound: &Bound) -> String {
     let lan = bound
         .lan
         .map_or_else(String::new, |lan| format!(" lan={lan}"));
-    let mdm = bound
-        .mdm
-        .map_or_else(String::new, |mdm| format!(" mdm={mdm}"));
     let health = bound
         .health
         .map_or_else(String::new, |health| format!(" health={health}"));
     let (heartbeat, control) = (bound.heartbeat, bound.control);
     let version = env!("CARGO_PKG_VERSION");
-    format!(
-        "hostkeeper-coordinator {version} heartbeat={heartbeat} control={control}{lan}{mdm}{health}"
-    )
+    format!("hostkeeper-coordinator {version} heartbeat={heartbeat} control={control}{lan}{health}")
 }

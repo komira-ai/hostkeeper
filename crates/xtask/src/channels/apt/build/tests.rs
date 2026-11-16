@@ -66,7 +66,7 @@ fn the_packages_join_a_shared_index_and_every_other_entry_and_architecture_stays
     let debs = scratch("build-shared-debs");
     release_files(&debs, "1.2.3");
     let said = build(&request(&dir, &debs)).expect("build");
-    assert_eq!(said, ["apt-index: added 9, dropped 0, listed 11"]);
+    assert_eq!(said, ["apt-index: added 8, dropped 0, listed 10"]);
     assert_eq!(
         packages(&dir, "amd64"),
         [
@@ -74,11 +74,10 @@ fn the_packages_join_a_shared_index_and_every_other_entry_and_architecture_stays
             ("hello".to_owned(), "1.2.3".to_owned()),
             ("hostkeeper".to_owned(), "1.2.3".to_owned()),
             ("hostkeeper-coordinator".to_owned(), "1.2.3".to_owned()),
-            ("mdm".to_owned(), "1.2.3".to_owned()),
             ("pxe".to_owned(), "1.2.3".to_owned())
         ]
     );
-    // mdm's .deb is built for amd64 alone: arm64 lists no mdm.
+    // Every package is built for both architectures: arm64 lists the same names.
     assert_eq!(
         packages(&dir, "arm64"),
         [
@@ -154,7 +153,6 @@ fn a_first_release_takes_its_origin_label_and_description_from_the_flags() {
             ("hello".to_owned(), "1.2.3".to_owned()),
             ("hostkeeper".to_owned(), "1.2.3".to_owned()),
             ("hostkeeper-coordinator".to_owned(), "1.2.3".to_owned()),
-            ("mdm".to_owned(), "1.2.3".to_owned()),
             ("pxe".to_owned(), "1.2.3".to_owned())
         ]
     );
@@ -178,7 +176,7 @@ fn a_re_run_of_the_same_release_lists_it_once() {
         }
     }
     let said = build(&request(&dir, &debs)).expect("second");
-    assert_eq!(said, ["apt-index: added 0, dropped 0, listed 9"]);
+    assert_eq!(said, ["apt-index: added 0, dropped 0, listed 8"]);
 }
 
 #[test]

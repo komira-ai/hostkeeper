@@ -8,9 +8,6 @@
 //!   file before a build.
 //! - `stamp` and `check-binary` ([`check_binary`]): the `--version` text of a shipped binary
 //!   ([`contract::stamp_of`]) and the check that a built binary prints exactly it.
-//! - `mdm-fetch` ([`mdm_fetch`]): the build-time fetch of the mdm `.deb`'s tools, each pinned archive of
-//!   its tools downloaded with `curl` over HTTPS and checked against its pin
-//!   (`crates/hostkeeper-mdm-core/pins.txt`), a mismatch kept as `<archive>.rejected`.
 //! - `nfpm-stage` ([`package::nfpm_stage`]): the pinned `gh` of one architecture, out of its
 //!   release archive checked against its pinned SHA-256, the Sigstore trusted root, and the
 //!   static `hostkeeper` of `--binaries`, checked and staged for the
@@ -19,9 +16,9 @@
 //!   read back, holds no ELF program with an interpreter or a needed library and declares no
 //!   dependency; with `--staged` it also installs the staged `gh`, trusted root and daemon at
 //!   the daemon's paths, with their modes, root's, and the console's issue link pointing at the
-//!   daemon's issue file; with `--service hello`, `--service mdm` or `--service pxe` it reads a
+//!   daemon's issue file; with `--service hello` or `--service pxe` it reads a
 //!   service's `.deb` against what this repository's builder writes instead.
-//! - `deb` ([`native::deb`]): the `.deb` of hello, of its failing build, of mdm or of pxe, with the
+//! - `deb` ([`native::deb`]): the `.deb` of hello, of its failing build or of pxe, with the
 //!   program at `/usr/lib/<service>/`, the units in `/usr/lib/systemd/system/` and no hook
 //!   wrapper (the manifest's `hook.command` names the program).
 //! - `netboot` ([`netboot`]): `netboot.json`, the boot sets of network install for the two Linux
@@ -33,6 +30,10 @@
 //! - `macos-pkg` and `check-macos-pkg` ([`macos_pkg`]): the installer pkg of a Mac's first
 //!   install, and the check of its payload read back from the built pkg; with `--service hello`,
 //!   hello's `.pkg` ([`native::pkg`]), with no script and its jobs disabled.
+//! - `macos-bootstrap-pkg` and `check-macos-bootstrap-pkg` ([`macos_bootstrap`]): the bootstrap pkg
+//!   that Apple Business installs on a new Mac (docs/design/mac-bootstrap.md): the bootstrap
+//!   program, its launchd plist and a postinstall that loads the job, and the check of the pkg
+//!   read back.
 //! - `compare-images` ([`compare_images`]): two OCI image tarballs are byte for byte equal.
 //! - `image-index`, `image-layout` ([`image_index`]): the coordinator's multi-platform image
 //!   index, made of the two image tarballs, and the OCI layout a registry push copies from.
@@ -57,7 +58,7 @@
 //!
 //! The names and formats a consumer relies on are in [`contract`]. The adapters that run `git`,
 //! `gh`, `pkgbuild`, `productbuild` and `curl` are in [`git`], [`github`], [`macos_pkg`] and
-//! [`mdm_fetch`], over the [`ports::Exec`]
+//! [`ports::Exec`]
 //! port; the only code that starts
 //! a process is `real::SystemExec`, built in [`real`] alone.
 
@@ -77,8 +78,8 @@ mod hkctl;
 pub(crate) mod image_index;
 mod image_push;
 mod locate;
+mod macos_bootstrap;
 mod macos_pkg;
-mod mdm_fetch;
 pub(crate) mod native;
 pub(crate) mod netboot;
 #[cfg(test)]
@@ -169,7 +170,7 @@ pub(crate) enum Verb {
     },
     /// Run a binary with `--version` and refuse it unless it prints exactly the stamp of this
     /// version and commit: `<file name> X.Y.Z+<12 hex>`, for a file named `hostkeeper`,
-    /// `hostkeeper-coordinator`, `hostkeeper-mdm` or `mdm` (the mdm package's program).
+    /// `hostkeeper-coordinator` or `hostkeeper-coordinator-update`.
     CheckBinary {
         /// The binary to run, under the name it ships with.
         binary: PathBuf,
@@ -177,15 +178,6 @@ pub(crate) enum Verb {
         version: Version,
         /// The commit, 40 lowercase hex digits.
         commit: Commit,
-    },
-    /// Download the pinned archives of the tools the mdm package carries into a directory, with
-    /// `curl` over HTTPS, and refuse any whose SHA-256 is not its pin (kept beside as
-    /// `<file>.rejected`). An archive already there with its pin's SHA-256 is kept, not
-    /// downloaded again.
-    MdmFetch {
-        /// The directory the archives go to, made if missing.
-        #[arg(long)]
-        dir: PathBuf,
     },
     /// Stage the pinned `gh`, the Sigstore trusted root and the static daemon for the deb
     /// and the rpm: `gh` out of its release archive, refused unless the archive
@@ -225,7 +217,7 @@ pub(crate) enum Verb {
     /// `/usr/lib/hostkeeper/trusted_root.json` (0644), all root:root, with the bytes of the files
     /// `nfpm-stage` wrote, and the console's issue link.
     ///
-    /// With `--service hello`, `mdm` or `pxe` (not with `--staged`), read a service's `.deb`
+    /// With `--service hello` or `pxe` (not with `--staged`), read a service's `.deb`
     /// (`release deb`) instead and refuse it unless its `Package` is the service, every entry is
     /// root's and writable by root alone and its units' programs are files of the package; it
     /// declares no dependency. These are checks of this repository's own build: nothing is
@@ -240,18 +232,17 @@ pub(crate) enum Verb {
         /// staged in.
         #[arg(long, conflicts_with_all = ["staged", "service"])]
         coordinator_staged: Option<PathBuf>,
-        /// The service whose `.deb` this is: hello, mdm or pxe.
+        /// The service whose `.deb` this is: hello or pxe.
         #[arg(long, value_enum, conflicts_with = "coordinator_staged")]
         service: Option<Service>,
     },
-    /// Build the `.deb` of hello (and of its failing build, `--fail-ready`), of mdm or of pxe for
+    /// Build the `.deb` of hello (and of its failing build, `--fail-ready`), or of pxe for
     /// one Linux platform: the program at `/usr/lib/<service>/` and the units in
-    /// `/usr/lib/systemd/system/` (docs/design/packages-native.md section 10.2). mdm's is built
-    /// for linux-x86_64 only, with the pinned tools out of `--archives`; pxe's holds its program and
-    /// unit. Writes
+    /// `/usr/lib/systemd/system/` (docs/design/packages-native.md section 10.2). pxe's holds its
+    /// program and unit. Writes
     /// `<service>_<version>_<arch>.deb` (the failing build's control: `X.Y.Z~fail.ready`).
     Deb {
-        /// The service: hello, mdm or pxe (hostkeeper's `.deb` is nfpm's).
+        /// The service: hello or pxe (hostkeeper's `.deb` is nfpm's).
         #[arg(long, value_enum)]
         service: Service,
         #[arg(long, value_enum)]
@@ -265,13 +256,9 @@ pub(crate) enum Verb {
         #[arg(long)]
         binary: PathBuf,
         /// Hello's failing build: version `<version>-fail-ready`, its units start the program
-        /// with `--fail-ready`. Refused for mdm and pxe.
+        /// with `--fail-ready`. Refused for pxe.
         #[arg(long)]
         fail_ready: bool,
-        /// The directory of the pinned archives of mdm's tools, as `release mdm-fetch` leaves
-        /// it. Required for mdm; refused for hello and pxe.
-        #[arg(long)]
-        archives: Option<PathBuf>,
         /// The directory the `.deb` is written to.
         #[arg(long)]
         out: PathBuf,
@@ -344,6 +331,39 @@ pub(crate) enum Verb {
         /// The directory the distribution pkg is written to.
         #[arg(long)]
         out: PathBuf,
+    },
+    /// Build the bootstrap pkg that Apple Business installs on a new Mac: `pkgbuild` builds a
+    /// component pkg of the bootstrap program and its launchd plist (`packaging/macos-bootstrap`)
+    /// and the one script, a postinstall that loads the job when launchd has not loaded it;
+    /// `productbuild` wraps the component as the unsigned distribution pkg
+    /// `hostkeeper-bootstrap-<version>-macos-arm64.pkg`.
+    MacosBootstrapPkg {
+        #[arg(long)]
+        version: Version,
+        /// The macos-arm64 bootstrap program, installed at
+        /// `/usr/local/lib/hostkeeper-bootstrap/hostkeeper-bootstrap`.
+        #[arg(long)]
+        binary: PathBuf,
+        /// A directory to lay the pkg's tree and its script out in, and to write the component
+        /// pkg to; it must not exist.
+        #[arg(long)]
+        stage: PathBuf,
+        /// The directory the distribution pkg is written to.
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Check a bootstrap pkg that `pkgutil --expand` expanded into a directory: a `Distribution`
+    /// that names the one component under the pkg's identifier and version, and the component,
+    /// whose one script is the committed postinstall and whose payload is exactly the program and
+    /// the plist with their modes, owners and bytes.
+    CheckMacosBootstrapPkg {
+        /// The directory `pkgutil --expand` wrote of the distribution pkg.
+        expanded: PathBuf,
+        #[arg(long)]
+        version: Version,
+        /// The bootstrap program the pkg must hold.
+        #[arg(long)]
+        binary: PathBuf,
     },
     /// Check a distribution pkg that `pkgutil --expand` expanded into a directory: a
     /// `Distribution` that names the one component under the pkg's identifier and version and
@@ -494,10 +514,10 @@ pub(crate) enum Verb {
     /// native package and its bundle check out and the entries pass the coordinator's checks.
     /// Prints `targets=<JSON>`.
     Targets {
-        /// The service: hostkeeper (the default), hello, mdm or pxe.
+        /// The service: hostkeeper (the default), hello or pxe.
         #[arg(long, value_enum, default_value_t)]
         service: Service,
-        /// The entries of hello's failing build, asked for only here. Refused for hostkeeper, mdm
+        /// The entries of hello's failing build, asked for only here. Refused for hostkeeper
         /// and pxe.
         #[arg(long)]
         fail_ready: bool,
@@ -615,6 +635,11 @@ pub(crate) fn run<A: Adapters>(
                 },
             ),
         },
+        Verb::CheckMacosBootstrapPkg {
+            expanded,
+            version,
+            binary,
+        } => macos_bootstrap::check(&expanded, &version, &binary),
         Verb::Targets {
             service,
             fail_ready,
@@ -651,7 +676,6 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
             version,
             commit,
         } => check_binary::check_binary(ports.run_version, &binary, &version, &commit),
-        Verb::MdmFetch { dir } => mdm_fetch::fetch(ports.download, &dir),
         Verb::CheckPkgSignature { pkg, identity } => {
             pkg_signature::check(ports.pkgbuild, &pkg, &identity)
         }
@@ -689,6 +713,20 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
                 },
             ),
         },
+        Verb::MacosBootstrapPkg {
+            version,
+            binary,
+            stage,
+            out,
+        } => macos_bootstrap::build(
+            ports.pkgbuild,
+            &macos_bootstrap::Request {
+                version,
+                binary,
+                stage,
+                out,
+            },
+        ),
         Verb::Deb {
             service,
             platform,
@@ -696,7 +734,6 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
             commit,
             binary,
             fail_ready,
-            archives,
             out,
         } => native::deb::deb(
             ports.git,
@@ -707,7 +744,6 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
                 commit,
                 binary,
                 fail_ready,
-                archives,
                 out,
             },
         ),
@@ -768,6 +804,7 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
         | Verb::NfpmStage { .. }
         | Verb::CheckLinuxPkg { .. }
         | Verb::CheckMacosPkg { .. }
+        | Verb::CheckMacosBootstrapPkg { .. }
         | Verb::Targets { .. } => run(verb, || Lent(*ports)),
     }
 }

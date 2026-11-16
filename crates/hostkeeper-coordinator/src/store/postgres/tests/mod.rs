@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex, Once, PoisonError};
 use postgres::{Client, NoTls};
 use tracing_subscriber::fmt::MakeWriter;
 
+use super::session::Session;
 use super::{Dsn, Postgres, TIMEOUTS, Timeouts};
 use crate::audit_file::UnixClock;
 use crate::store::Loaded;
@@ -226,16 +227,26 @@ pub(crate) fn unix() -> UnixClock {
     Arc::new(|| AT)
 }
 
+/// A session on `db` and `f` run with it on a thread of its own.
+pub(super) fn with_session<R: Send + 'static>(
+    db: &TestDatabase,
+    f: impl FnOnce(&mut Session) -> R + Send + 'static,
+) -> R {
+    let config = db.dsn().config(TIMEOUTS);
+    off_runtime(move || {
+        let mut session =
+            Session::connect(&config, Arc::new(AtomicU64::new(0)), false).expect("a session");
+        f(&mut session)
+    })
+}
+
 mod accounts;
 mod connect;
 mod coordinator;
-mod devices;
 mod generations;
 mod host_groups;
 mod layout;
 mod lost;
-mod mdm;
-mod mdm_setup;
 mod reads;
 mod records;
 mod records_errors;
@@ -250,6 +261,7 @@ mod serving;
 mod session;
 mod start;
 pub(crate) mod store;
+mod unused_mdm_tables;
 
 /// What the process logged since it started, as the tests' subscriber wrote it.
 static LOG: Mutex<Vec<u8>> = Mutex::new(Vec::new());

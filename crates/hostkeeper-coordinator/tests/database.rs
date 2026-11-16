@@ -416,3 +416,33 @@ fn a_serve_refuses_a_database_newer_than_this_release() {
     run(&database, &format!("{put}'may-run')"));
     drop(start(args));
 }
+
+/// Proves: a database whose MDM tables hold a sealed secret starts a `serve` that is given no key
+/// file, and one that is given the retired `--mdm-secrets-key-file` naming a file that is not
+/// there: the coordinator reads none of the MDM's rows, and leaves the secret as it was.
+///
+/// Catches: a start that refuses for want of the key the secrets were sealed under, which would
+/// keep the release without the MDM from replacing the one before it.
+#[test]
+fn a_database_that_holds_sealed_mdm_secrets_starts_without_their_key() {
+    let files = Files::new("database-sealed-secrets");
+    let database = Database::new();
+    let args = database_args(&files, &database);
+    drop(start(args.clone()));
+    run(
+        &database,
+        "INSERT INTO mdm_secrets (kind, version, sealed, fingerprint, created_unix) \
+         VALUES ('push_key', 1, decode(repeat('ab', 28), 'hex'), repeat('0', 64), 1)",
+    );
+    drop(start(args.clone()));
+    let mut keyed = args;
+    keyed.extend(flags(&[(
+        "--mdm-secrets-key-file",
+        &path(&files, "no-such.key"),
+    )]));
+    drop(start(keyed));
+    let held = in_schema(&database)
+        .query_one("SELECT count(*)::text FROM mdm_secrets", &[])
+        .expect("the count");
+    assert_eq!(held.get::<_, String>(0), "1");
+}

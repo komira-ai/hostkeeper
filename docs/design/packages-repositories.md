@@ -1,5 +1,7 @@
 # Packages from a package repository: the target names a package, a version and a repository
 
+> **Update 2026-11-14.** The MDM kit and the policy gate that placed `hostkeeper.toml`, `stores.toml` and `macos-pkg.toml` are gone; the daemon's managed-preference config is the bootstrap path's (`docs/design/mac-bootstrap.md` section 4). The MDM was removed from the coordinator and the repository (`docs/design/coordinator-mdm.md`, superseded); Macs enroll through the bootstrap package (`docs/design/mac-bootstrap.md`). Where this document describes the MDM, its kit, its policy gate or the `mdm` package, it describes what was removed; the rest stands.
+
 Status: design, for the maintainers' ruling. Build item A16 is **Built**: `Target.repository` and
 `Target.package_version` (`crates/hostkeeper-proto/proto/hostkeeper/release/v1/release.proto`), the checks of section
 2.2 and the installer set (`crates/hostkeeper-release/src/target.rs`, `installer.rs`, `grammar.rs`), and the
@@ -548,7 +550,16 @@ signature of a configured identity; a package hostkeeper did not install, or at 
 hostkeeper corrects, not `package_conflict`; a rollback installs the kept previous `.pkg`; and `remove` deletes every
 file the receipt lists, changed or not.
 
-**The entry.** CI sends, for `macos-arm64`:
+**The entry.** Hostkeeper's release workflow sends, for `macos-arm64`, the named-version form (below), so a Mac needs no
+`stores.toml`:
+
+```json
+{ "installer": "macos-pkg", "repository": "komira-testing", "packageVersion": "0.1.5",
+  "digest": "<64 hex of the .pkg>", "bytes": "...",
+  "manifest": { "package": "dev.hostkeeper.hostkeeper", ... } }
+```
+
+The explicit form, which a release of another project may still send, names the file by a location in a store:
 
 ```json
 { "installer": "macos-pkg",

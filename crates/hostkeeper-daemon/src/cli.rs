@@ -439,7 +439,7 @@ pub fn image_of(own_version: HostkeeperVersion) -> String {
 /// The enroller of a host of `kind`: [`GrpcEnroll`] to `endpoint`, the pki directory at `pki`
 /// (its `current` generation is what a renewal presents), the claims of [`host_claims`] (on
 /// Linux the host's files and its BMC behind `/dev/ipmi0`, [`DevIpmi::host`]; on a Mac through
-/// the host's `ioreg`, [`HostIoreg::system`]), on a Mac the managed preferences its MDM writes
+/// the host's `ioreg`, [`HostIoreg::system`]), on a Mac the managed preferences its device management writes
 /// the enrollment nonce to ([`host_managed`]), the operating
 /// system's entropy, the wall clock for the certificates' validity alone, and the monotonic
 /// clock for the retries. Opening it takes the pki directory's lock and finishes what a crash
@@ -476,7 +476,8 @@ pub fn host_enroller(
 /// ([`crate::mac_config::at_start`]), and the stores file and the signers file are rendered from
 /// their domains when those are there ([`crate::mac_files`]); the config is loaded, the platform's adapters are chosen
 /// ([`Adapters::for_platform`]), the ports are built ([`host_ports`]) and the start runs
-/// ([`start::startup_notifying`]).
+/// ([`start::startup_notifying`]). A Mac's start also keeps the Mac awake once the config is loaded
+/// ([`crate::keep_awake::at_host_start`]).
 pub fn start_with(
     settings: &Settings,
     files: &HostFiles,
@@ -498,6 +499,7 @@ pub fn start_with(
         crate::mac_files::macos_pkg(managed, target, settings.trusted_uid)?;
     }
     let config = start::load_config(settings)?;
+    crate::keep_awake::at_host_start(&config, platform.kind);
     crate::layout::ensure_state_dirs(settings)?;
     Adapters::for_platform(platform)
         .and_then(|adapters| host_ports(&config, settings, files, own_version, adapters))
@@ -519,7 +521,7 @@ pub struct HostFiles {
     pub pki: PathBuf,
     /// The console's issue file and the agetty that redraws it; none on a Mac.
     pub console: Option<ConsoleFiles>,
-    /// The managed preferences a Mac's MDM installs, which the start writes the daemon config
+    /// The managed preferences a Mac's device management installs, which the start writes the daemon config
     /// from when that is not there ([`crate::mac_config::at_start`]); none on Linux.
     pub managed_config: Option<PathBuf>,
     /// The managed preferences of the domain `dev.hostkeeper.stores`, which the start renders as

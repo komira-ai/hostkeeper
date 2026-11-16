@@ -7,17 +7,13 @@
 //! protobuf message, answers it with the handler the gRPC service calls, and turns the answer
 //! back. It presents the last certificate the coordinator issued as the client certificate of a
 //! `Renew`, as the TLS connection would. The coordinator's wall clock is the test's wall clock.
-//! A Mac is approved by the nonce the coordinator issued for its request, as the MDM's gate
-//! would hand it over, through the managed preferences.
+//! A Mac that presents a nonce through its managed preferences is not approved by it.
 
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
-use hostkeeper_coordinator::enrollment::{
-    DeviceState, DeviceStateError, DeviceStatus, Enrollment, MacAllowlist, MacPolicy, Random,
-    RpcError, Setup, StoreAt, setup,
-};
+use hostkeeper_coordinator::enrollment::{Enrollment, Random, RpcError, Setup, StoreAt, setup};
 use hostkeeper_enroll::{
     CoordinatorEnroll, EnrollAnswer, EnrollRequest, EnrollState, Enroller, Identity, Issued,
     Outcome, Poll, PollAnswer, Ports, Reason, RenewAnswer, RenewRequest, RequestId, Settings,
@@ -25,7 +21,6 @@ use hostkeeper_enroll::{
 };
 use hostkeeper_enrollment::ca::check_request;
 use hostkeeper_enrollment::fs::RealFs;
-use hostkeeper_enrollment::names::KeyHash;
 use hostkeeper_enrollment::validity::UnixClock;
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use hostkeeper_proto::hostkeeper::operator::v1::ApproveRequest;
@@ -351,39 +346,20 @@ fn a_daemon_enrolls_and_renews_with_the_coordinators_own_enrollment_and_ca() {
 /// The serial of the tests' Mac.
 const SERIAL: &str = "C02XK1ABJG5J";
 
-/// The gate of the tests: every device enrolled and supervised.
-struct Supervised;
-
-impl DeviceState for Supervised {
-    fn status(&self, _serial: &str) -> Result<DeviceStatus, DeviceStateError> {
-        Ok(DeviceStatus {
-            enrolled: true,
-            supervised: true,
-            enrolled_since_unix: None,
-            enrolled_via_dep: None,
-        })
-    }
-}
-
-/// Catches a Mac nonce the coordinator does not approve on: a Mac posts and waits; the
-/// coordinator issues a nonce for its pending request, which reaches the Mac through its
-/// managed preferences; the next step reposts with it, the coordinator's Mac path approves the
-/// request as its allowlist entry says, and the same step's poll brings that host's
-/// certificate, with no operator.
+/// Catches a coordinator that approves a Mac by a nonce, which none does since the MDM's
+/// removal: a Mac posts and waits; a nonce reaches it through its managed preferences (a daemon
+/// of this release still reads them), and the next step reposts with it; the coordinator reads the
+/// request and ignores the nonce, so the request is still pending, with no flag saying a nonce
+/// was presented, and the Mac still waits for an operator.
 #[test]
-fn a_mac_is_approved_by_its_nonce_with_the_coordinators_own_enrollment() {
+fn a_mac_that_presents_a_nonce_still_waits_for_an_operator_at_the_coordinators_own_enrollment() {
     let world = World::new("own-coordinator-mac");
     *world.claims.lock().expect("claims") = hostkeeper_enroll::Claims {
         mac_serial: Some(SERIAL.to_owned()),
         platform_uuid: Some("4C4C4544-0042-5A10-8048-B7C04F4E3332".to_owned()),
         ..hostkeeper_enroll::Claims::default()
     };
-    let allowlist =
-        format!("[[mac]]\nserial = \"{SERIAL}\"\nhost_id_prefix = \"mac-\"\nrole = \"{ROLE}\"\n");
-    let enrollment = Arc::new(started(&world).with_mac(MacPolicy {
-        device_state: Arc::new(Supervised),
-        allowlist: MacAllowlist::parse(&allowlist).expect("an allowlist"),
-    }));
+    let enrollment = Arc::new(started(&world));
     let mut enroller = enroller_of(&world, &enrollment);
     assert_eq!(enroller.run_once().expect("posted"), Outcome::Pending);
     assert_eq!(enroller.run_once().expect("polled"), Outcome::Pending);
@@ -394,23 +370,17 @@ fn a_mac_is_approved_by_its_nonce_with_the_coordinators_own_enrollment() {
         .expect("pending")
         .try_into()
         .expect("one");
-    assert!(!pending.mac_nonce_presented);
     let id = pending.request_id.to_hex();
-    let nonce = enrollment
-        .issue_mac_nonce(SERIAL, &KeyHash::from_hex(&id).expect("a key hash"))
-        .expect("a nonce");
-    world.set_managed(Managed::Bytes(nonce_plist(&id, nonce.as_bytes())));
+    world.set_managed(Managed::Bytes(nonce_plist(&id, &[7; 32])));
 
-    let Outcome::Enrolled(identity) = enroller.run_once().expect("enrolled") else {
-        panic!("not enrolled");
-    };
-    let host = format!("mac-{}", SERIAL.to_ascii_lowercase());
-    assert_eq!(identity.host_id.as_str(), host);
-    let der = stored(&identity).to_der().expect("DER");
-    let known = enrollment.identity_of(&der).expect("a known certificate");
-    assert_eq!(
-        (known.host_id.as_str(), known.role.as_str()),
-        (host.as_str(), ROLE)
-    );
-    assert_eq!(enroller.run_once().expect("idle"), Outcome::Idle);
+    assert_eq!(enroller.run_once().expect("reposted"), Outcome::Pending);
+    let [still] = enrollment
+        .store()
+        .pending()
+        .expect("pending")
+        .try_into()
+        .expect("the request is still pending");
+    assert_eq!(still.request_id.to_hex(), id);
+    assert!(!still.mac_nonce_presented, "the nonce is ignored");
+    assert_eq!(enroller.run_once().expect("polled again"), Outcome::Pending);
 }

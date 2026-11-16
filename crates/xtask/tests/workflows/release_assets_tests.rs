@@ -98,9 +98,9 @@ fn release_yml_runs_the_coordinator_updater_only_when_the_release_has_its_tarbal
     assert_eq!(
         release_problems(&with_in(&text, &unpacking, "      - run: tar -xzf")),
         vec![
-            unguarded("release.yml", "verify", 17, UPDATER),
+            unguarded("release.yml", "verify", 15, UPDATER),
             format!(
-                "release.yml: job verify step 18 runs $RUNNER_TEMP/binary/hostkeeper-coordinator-update under `if: {condition}`, not the `if:` of the step that unpacks it, `(none)`"
+                "release.yml: job verify step 16 runs $RUNNER_TEMP/binary/hostkeeper-coordinator-update under `if: {condition}`, not the `if:` of the step that unpacks it, `(none)`"
             ),
         ]
     );
@@ -111,7 +111,7 @@ fn release_yml_runs_the_coordinator_updater_only_when_the_release_has_its_tarbal
     );
     assert_eq!(
         release_problems(&both),
-        vec![unguarded("release.yml", "verify", 17, UPDATER)]
+        vec![unguarded("release.yml", "verify", 15, UPDATER)]
     );
 }
 

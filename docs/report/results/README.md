@@ -36,7 +36,7 @@ check --plan <file>` checks one, and the crate's documentation
 | `drift` | a hand-made change to what hostkeeper placed for hello, to the coordinator showing it (today: hello unhealthy, since `ServiceBeat.drift` is not built), and its repair by the next order | the one host hello is assigned to | 3 |
 | `coordinator-restart` | a restart of the coordinator on its Postgres store: the requests that fail, how long it does not answer, the longest gap between two heartbeats of a host, and the time until every host is back in `hosts list` | every host listed live | 3 |
 | `enrollment` | a new Linux host from its enrollment request to its first service serving, by the coordinator's stamps | one new host | 1 |
-| `enrollment-mac` | a Mac erased and enrolled through the MDM gate, from its MDM enrollment to its first service serving, by the coordinator's stamps | one Mac | 1 |
+| `enrollment-mac` | a Mac erased and enrolled, from its enrollment request to its first service serving (the plan polled the removed MDM service and cannot run now), by the coordinator's stamps | one Mac | 1 |
 
 No plan has been run yet. A run of a plan becomes a result in three steps:
 
@@ -83,7 +83,7 @@ below.
 | `restart-seen`, `answered`, `heartbeat`, `back` | a watch of a restart | the coordinator first seen gone; its first answer after failures; a host's heartbeat stamp changed; a host listed live again with a newer heartbeat |
 | `seen` | a watch of the audit | an entry of the actions the plan names |
 | `first-heartbeat`, `first-serving` | a watch of a new host | its first heartbeat and its first service serving, as the coordinator records them |
-| `enrolled` | a watch of the MDM gate | a Mac's MDM enrollment, new or renewed |
+| `enrolled` | a watch of the removed MDM service | a Mac's MDM enrollment (it can no longer be seen) |
 | `timed-out` | a watch | the condition did not hold within the plan's timeout |
 
 A time the analysis computes is the difference of two stamps of one clock: the coordinator's when

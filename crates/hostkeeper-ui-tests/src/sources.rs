@@ -63,7 +63,6 @@ ui_files![
     "pages/hostgroups.js",
     "pages/host.js",
     "pages/inventory.js",
-    "pages/mdm.js",
     "pages/package.js",
     "pages/packages.js",
     "pages/release.js",

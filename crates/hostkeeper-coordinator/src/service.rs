@@ -258,18 +258,6 @@ pub struct Coordinator {
     pub(crate) features: Vec<String>,
     /// Enrollment: the store, the CA and the poll nonces; `None` without `--enrollment-dir`.
     enrollment: Option<Arc<Enrollment>>,
-    /// The MDM policy gate; `None` without `--mdm-api-url`.
-    pub(crate) mdm: Option<Arc<crate::mdm::Mdm>>,
-    /// The MDM server of the Macs' listener (`--mdm-listen`); `None` without it.
-    pub(crate) mdm_server: Option<Arc<crate::mdm_server::MdmServer>>,
-    /// The MDM setup: the sealed secrets and the settings ([`crate::mdm_setup`]).
-    pub(crate) mdm_setup: Arc<crate::mdm_setup::MdmSetup>,
-    /// The ABM client ([`crate::abm`]); `None` in a coordinator built without an MDM store.
-    pub(crate) abm: Option<Arc<crate::abm::Abm>>,
-    /// The package proxy: its cache (`--proxy-cache-dir`) and its reads of public origins.
-    pub(crate) proxy: crate::proxy_origin::Proxy,
-    /// Where a push certificate's request is posted to mdmcert.download ([`crate::mdm_push`]).
-    pub(crate) mdmcert: Arc<dyn hostkeeper_mdm_push::mdmcert::MdmcertTransport>,
     ui: Option<UiDir>,
     /// The alerts the last observation found ([`crate::alerts`]).
     pub(crate) alerts: crate::alerts::Book,
@@ -288,8 +276,6 @@ pub struct Coordinator {
     /// its write, and by `Repositories.Remove` from its check that no service names the
     /// repository to its commit, so neither decides on what the other is changing.
     pub(crate) repository_naming: Mutex<()>,
-    /// Held by `Mdm.GetAbmPublicKey` from its read of the held pair to its write: one pair is made.
-    pub(crate) abm_pairing: tokio::sync::Mutex<()>,
     /// Told when CI's set of a desired state finds the fleet's lock held and waits for it: a
     /// test's progress event, so a race is made to happen rather than waited for.
     #[cfg(test)]
@@ -333,11 +319,6 @@ impl Coordinator {
             verdicts: VerdictFile::volatile(),
             accounts: AccountStore::volatile(),
             layout: LayoutStore::volatile(),
-            mdm_server: None,
-            mdm_setup: Arc::new(crate::mdm_setup::MdmSetup::volatile()),
-            abm: None,
-            proxy: crate::proxy_origin::Proxy::default(),
-            mdmcert: Arc::new(crate::mdm_push::NoMdmcert),
             initial_admin: None,
             login: None,
             verifier,
@@ -348,7 +329,6 @@ impl Coordinator {
             extras: Mutex::new(ExtrasDropped::default()),
             features: FEATURES.iter().map(|name| (*name).to_owned()).collect(),
             enrollment: None,
-            mdm: None,
             ui: None,
             alerts: crate::alerts::Book::default(),
             waits: crate::wait::Waits::default(),
@@ -357,7 +337,6 @@ impl Coordinator {
             repository_origin: None,
             discovery: crate::repository_discover::Limits::default(),
             repository_naming: Mutex::new(()),
-            abm_pairing: tokio::sync::Mutex::new(()),
             #[cfg(test)]
             set_waits: Mutex::new(None),
         }

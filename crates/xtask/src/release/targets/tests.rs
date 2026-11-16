@@ -44,8 +44,8 @@ fn bundle_listing(digest: &str) -> Vec<u8> {
 }
 
 /// Writes each native package of `package` into `dist` with a bundle listing its SHA-256: a
-/// `.deb` as `release deb` builds it (hello's files; hostkeeper's and mdm's with their program
-/// alone, as nfpm's staged files and mdm's pinned servers are not at hand), and in place of the
+/// `.deb` as `release deb` builds it (hello's and pxe's files; hostkeeper's with its program
+/// alone, as nfpm's staged files are not at hand), and in place of the
 /// `.pkg`, which only a Mac builds, bytes of its own.
 fn built(dist: &Path, package: Package) {
     let service = package.service().name();
@@ -68,7 +68,6 @@ fn built(dist: &Path, package: Package) {
                     Package::HelloFailReady => native_hello::deb_files(b"a program".to_vec(), true),
                     Package::Pxe => native_pxe::deb_files(b"a program".to_vec()),
                     Package::Hostkeeper => program("/usr/bin/hostkeeper"),
-                    _ => program("/usr/lib/mdm/mdm"),
                 };
                 let version = package.deb_version(&release());
                 native_deb::build(service, &version, arch, "a service", &files, 1_800_000_000)
@@ -113,14 +112,15 @@ fn hello_manifest(package: &str, run: [&str; 2], units: &str) -> Value {
     })
 }
 
-/// The `macos-pkg` entry the verb must write for the `.pkg` `name` of `dist` with `manifest`: in
-/// the store `komira-testing` at the installers' testing path, its digest and size, no
-/// attestation.
+/// The `macos-pkg` entry the verb must write for the `.pkg` `name` of `dist` with `manifest`: the
+/// named-version form, the repository `komira-testing` at the release's version, its digest and
+/// size, no location and no attestation.
 fn expected_pkg(dist: &Path, name: &str, manifest: Value) -> Value {
     let bytes = std::fs::metadata(dist.join(name)).expect("the .pkg").len();
     json!({
         "installer": "macos-pkg",
-        "locations": [{"store": "komira-testing", "locator": format!("hostkeeper/0.1.5/{name}")}],
+        "repository": "komira-testing",
+        "packageVersion": "0.1.5",
         "digest": file_sha256(&dist.join(name)).expect("hash"),
         "bytes": bytes.to_string(),
         "manifest": manifest,
@@ -245,9 +245,9 @@ fn hostkeeper_lists_its_deb_on_linux_and_its_installer_on_macos_alone() {
     // alone, and the channel that serves the archive ends) or without its native entry, no list
     // for macOS (a Mac whose daemon announces `macos-pkg` is then ordered nothing), a `.deb`
     // entry that is not a repository entry of the testing suite pinned by the daemon's `.deb`'s
-    // own SHA-256 at the release's version, an installer entry whose location is not where the
-    // installers' testing directory holds it, that carries an attestation, a repository or a
-    // package version, or names hello's identifier, a native manifest with another floor than
+    // own SHA-256 at the release's version, an installer entry that is not the named-version form (the
+    // repository `komira-testing` and the release's version, no location, so a Mac needs no store),
+    // that carries an attestation or a location, or names hello's identifier, a native manifest with another floor than
     // `OLDEST_READER`, a hook command (its daemon runs built-in steps), or no run unit on Linux.
     let (_root, dist) = dist("targets-hostkeeper");
     built(&dist, Package::Hostkeeper);
@@ -318,8 +318,9 @@ fn hostkeepers_native_entries_name_the_package_its_daemon_takes_as_its_own() {
 #[test]
 fn hello_lists_its_deb_on_linux_and_its_pkg_on_macos_alone() {
     // Catches: hello's list with its archive entry still in it or without its native entry, no
-    // list for macOS, a `.pkg` entry that is not a `macos-pkg` entry of the installers' testing
-    // directory pinned by the `.pkg`'s digest and size with hello's identifier, its launchd
+    // list for macOS, a `.pkg` entry that is not a `macos-pkg` entry in the named-version form (the
+    // repository `komira-testing`, the release's version, no location) pinned by the `.pkg`'s
+    // digest and size with hello's identifier, its launchd
     // labels and the program its `.pkg` installs, a `.deb` entry that is not a repository entry of the testing suite pinned
     // by the `.deb`'s own SHA-256 at the release's version, and a native manifest that is not
     // hello's (its hook bounds, run units, health URL, params and floor) with the hook command
@@ -340,8 +341,26 @@ fn hello_lists_its_deb_on_linux_and_its_pkg_on_macos_alone() {
 }
 
 #[test]
+fn a_mac_entry_names_the_channel_and_version_and_no_store() {
+    // Catches: a macOS entry that names the `.pkg` by a location in a store (a Mac with no
+    // `stores.toml` answers `no_store` and installs nothing), whose repository is not the
+    // channel the Linux entries name (the coordinator finds the `.pkg` through the registry
+    // entry of that channel), that has no package version or no size.
+    let (_root, dist) = dist("targets-mac-named");
+    built(&dist, Package::Hello);
+    let got = answered(&targets(&request(&dist, Package::Hello, None)).expect("the targets"));
+    let mac = &got["macos-arm64"]["entries"][0];
+    let linux = &got["linux-x86_64"]["entries"][0];
+    assert_eq!(mac["installer"], "macos-pkg");
+    assert_eq!(mac.get("locations"), None, "no store names the .pkg");
+    assert_eq!(mac["repository"], linux["repository"]);
+    assert_eq!(mac["packageVersion"], "0.1.5");
+    assert_ne!(mac["bytes"], "0", "the size of the .pkg");
+}
+
+#[test]
 fn the_line_of_each_package_is_the_bytes_the_release_writes() {
-    // Catches: any change of the JSON `release targets` writes for hostkeeper, hello, mdm or pxe at
+    // Catches: any change of the JSON `release targets` writes for hostkeeper, hello or pxe at
     // one version: a field, a bound, a unit, the floor, the hook command, a key's order or the
     // spelling of a number, whatever the manifest is built from. The lines are the ones the
     // archive's manifest gave, with the hook command naming the program each service's `.deb`
@@ -351,14 +370,11 @@ fn the_line_of_each_package_is_the_bytes_the_release_writes() {
         HOSTKEEPER_LINE
     );
     assert_eq!(line_of("targets-bytes-hello", Package::Hello), HELLO_LINE);
-    assert_eq!(line_of("targets-bytes-mdm", Package::Mdm), MDM_LINE);
     assert_eq!(line_of("targets-bytes-pxe", Package::Pxe), PXE_LINE);
 }
 
-const HOSTKEEPER_LINE: &str = r#"targets={"linux-arm64":{"entries":[{"digest":"c920ce476ae57d152131e881c4a0af050a3ee25ff0ae85ee20697be9c6fd38af","installer":"apt","manifest":{"hook":{"timeoutSecs":{"cleanup":"300","cutover":"300","prepare":"300","rollback":"300","verify":"300"},"verifyDeadlineSecs":"600"},"installerBounds":{"activateSecs":"300","removeSecs":"300","stageSecs":"600"},"minHostkeeper":"0.1.5","package":"hostkeeper","run":["hostkeeper.service"]},"packageVersion":"0.1.5","repository":"komira-testing"}]},"linux-x86_64":{"entries":[{"digest":"109ccc2b56ef785db77ac86d6cff2a0e7e57d1a9444228ef39af7b8bd08d1551","installer":"apt","manifest":{"hook":{"timeoutSecs":{"cleanup":"300","cutover":"300","prepare":"300","rollback":"300","verify":"300"},"verifyDeadlineSecs":"600"},"installerBounds":{"activateSecs":"300","removeSecs":"300","stageSecs":"600"},"minHostkeeper":"0.1.5","package":"hostkeeper","run":["hostkeeper.service"]},"packageVersion":"0.1.5","repository":"komira-testing"}]},"macos-arm64":{"entries":[{"bytes":"22","digest":"40c982ccbdfd22b12c63216ad9e09c2cf53d28bda2ac471c45efae3950331e31","installer":"macos-pkg","locations":[{"locator":"hostkeeper/0.1.5/hostkeeper-0.1.5-macos-arm64.pkg","store":"komira-testing"}],"manifest":{"hook":{"timeoutSecs":{"cleanup":"300","cutover":"300","prepare":"300","rollback":"300","verify":"300"},"verifyDeadlineSecs":"600"},"installerBounds":{"activateSecs":"300","removeSecs":"300","stageSecs":"600"},"minHostkeeper":"0.1.5","package":"dev.hostkeeper.hostkeeper"}}]}}"#;
-const HELLO_LINE: &str = r#"targets={"linux-arm64":{"entries":[{"digest":"3b1e27a59adf3654ac42e0a1ca31ba49f1691ac532e935c410fab31f01625cbc","installer":"apt","manifest":{"healthUrl":"http://127.0.0.1:9310/readyz","hook":{"command":["/usr/lib/hello/hello","update-hook"],"timeoutSecs":{"cleanup":"30","cutover":"60","prepare":"30","rollback":"60","uninstall":"60","verify":"30"},"verifyDeadlineSecs":"120"},"installerBounds":{"activateSecs":"300","removeSecs":"300","stageSecs":"600"},"minHostkeeper":"0.1.0","package":"hello","params":{"port":{"integer":"9310"},"record_dir":{"text":"/var/lib/updater/hooks/hello"},"units":{"text":"systemd"}},"run":["hello@a.service","hello@b.service"]},"packageVersion":"0.1.5","repository":"komira-testing"}]},"linux-x86_64":{"entries":[{"digest":"6ddf6fc1307c13d242c03a62b129a0bdf0e2338ecbb46ff3ce4905fcb513416d","installer":"apt","manifest":{"healthUrl":"http://127.0.0.1:9310/readyz","hook":{"command":["/usr/lib/hello/hello","update-hook"],"timeoutSecs":{"cleanup":"30","cutover":"60","prepare":"30","rollback":"60","uninstall":"60","verify":"30"},"verifyDeadlineSecs":"120"},"installerBounds":{"activateSecs":"300","removeSecs":"300","stageSecs":"600"},"minHostkeeper":"0.1.0","package":"hello","params":{"port":{"integer":"9310"},"record_dir":{"text":"/var/lib/updater/hooks/hello"},"units":{"text":"systemd"}},"run":["hello@a.service","hello@b.service"]},"packageVersion":"0.1.5","repository":"komira-testing"}]},"macos-arm64":{"entries":[{"bytes":"17","digest":"00315b0fd629b9b44612483c354b4c4175ecc94ca2237afd7ed01e5a3b4df761","installer":"macos-pkg","locations":[{"locator":"hostkeeper/0.1.5/hello-0.1.5-macos-arm64.pkg","store":"komira-testing"}],"manifest":{"healthUrl":"http://127.0.0.1:9310/readyz","hook":{"command":["/Library/Application Support/hello/bin/hello","update-hook"],"timeoutSecs":{"cleanup":"30","cutover":"60","prepare":"30","rollback":"60","uninstall":"60","verify":"30"},"verifyDeadlineSecs":"120"},"installerBounds":{"activateSecs":"300","removeSecs":"300","stageSecs":"600"},"minHostkeeper":"0.1.0","package":"dev.hostkeeper.hello","params":{"port":{"integer":"9310"},"record_dir":{"text":"/var/lib/updater/hooks/hello"},"units":{"text":"launchd"}},"run":["hello.a","hello.b"]}}]}}"#;
-const MDM_LINE: &str = r#"targets={"linux-x86_64":{"entries":[{"digest":"0c3015630430a4856eecca558013c9d74bd58e4234e67d7e834b21a759b1ae4d","installer":"apt","manifest":{"healthUrl":"http://127.0.0.1:9004/version","hook":{"command":["/usr/lib/mdm/mdm","update-hook"],"timeoutSecs":{"cleanup":"30","cutover":"120","prepare":"300","rollback":"120","uninstall":"120","verify":"60"},"verifyDeadlineSecs":"600"},"installerBounds":{"activateSecs":"300","removeSecs":"300","stageSecs":"600"},"minHostkeeper":"0.1.5","package":"mdm","params":{"record_dir":{"text":"/var/lib/updater/hooks/mdm"},"settings":{"text":"/etc/mdm/settings"}},"run":["mdm-scep.service","mdm-nanohub.service","mdm-depserver.service"]},"packageVersion":"0.1.5","repository":"komira-testing"}]}}"#;
-
+const HOSTKEEPER_LINE: &str = r#"targets={"linux-arm64":{"entries":[{"digest":"c920ce476ae57d152131e881c4a0af050a3ee25ff0ae85ee20697be9c6fd38af","installer":"apt","manifest":{"hook":{"timeoutSecs":{"cleanup":"300","cutover":"300","prepare":"300","rollback":"300","verify":"300"},"verifyDeadlineSecs":"600"},"installerBounds":{"activateSecs":"300","removeSecs":"300","stageSecs":"600"},"minHostkeeper":"0.1.5","package":"hostkeeper","run":["hostkeeper.service"]},"packageVersion":"0.1.5","repository":"komira-testing"}]},"linux-x86_64":{"entries":[{"digest":"109ccc2b56ef785db77ac86d6cff2a0e7e57d1a9444228ef39af7b8bd08d1551","installer":"apt","manifest":{"hook":{"timeoutSecs":{"cleanup":"300","cutover":"300","prepare":"300","rollback":"300","verify":"300"},"verifyDeadlineSecs":"600"},"installerBounds":{"activateSecs":"300","removeSecs":"300","stageSecs":"600"},"minHostkeeper":"0.1.5","package":"hostkeeper","run":["hostkeeper.service"]},"packageVersion":"0.1.5","repository":"komira-testing"}]},"macos-arm64":{"entries":[{"bytes":"22","digest":"40c982ccbdfd22b12c63216ad9e09c2cf53d28bda2ac471c45efae3950331e31","installer":"macos-pkg","manifest":{"hook":{"timeoutSecs":{"cleanup":"300","cutover":"300","prepare":"300","rollback":"300","verify":"300"},"verifyDeadlineSecs":"600"},"installerBounds":{"activateSecs":"300","removeSecs":"300","stageSecs":"600"},"minHostkeeper":"0.1.5","package":"dev.hostkeeper.hostkeeper"},"packageVersion":"0.1.5","repository":"komira-testing"}]}}"#;
+const HELLO_LINE: &str = r#"targets={"linux-arm64":{"entries":[{"digest":"3b1e27a59adf3654ac42e0a1ca31ba49f1691ac532e935c410fab31f01625cbc","installer":"apt","manifest":{"healthUrl":"http://127.0.0.1:9310/readyz","hook":{"command":["/usr/lib/hello/hello","update-hook"],"timeoutSecs":{"cleanup":"30","cutover":"60","prepare":"30","rollback":"60","uninstall":"60","verify":"30"},"verifyDeadlineSecs":"120"},"installerBounds":{"activateSecs":"300","removeSecs":"300","stageSecs":"600"},"minHostkeeper":"0.1.0","package":"hello","params":{"port":{"integer":"9310"},"record_dir":{"text":"/var/lib/updater/hooks/hello"},"units":{"text":"systemd"}},"run":["hello@a.service","hello@b.service"]},"packageVersion":"0.1.5","repository":"komira-testing"}]},"linux-x86_64":{"entries":[{"digest":"6ddf6fc1307c13d242c03a62b129a0bdf0e2338ecbb46ff3ce4905fcb513416d","installer":"apt","manifest":{"healthUrl":"http://127.0.0.1:9310/readyz","hook":{"command":["/usr/lib/hello/hello","update-hook"],"timeoutSecs":{"cleanup":"30","cutover":"60","prepare":"30","rollback":"60","uninstall":"60","verify":"30"},"verifyDeadlineSecs":"120"},"installerBounds":{"activateSecs":"300","removeSecs":"300","stageSecs":"600"},"minHostkeeper":"0.1.0","package":"hello","params":{"port":{"integer":"9310"},"record_dir":{"text":"/var/lib/updater/hooks/hello"},"units":{"text":"systemd"}},"run":["hello@a.service","hello@b.service"]},"packageVersion":"0.1.5","repository":"komira-testing"}]},"macos-arm64":{"entries":[{"bytes":"17","digest":"00315b0fd629b9b44612483c354b4c4175ecc94ca2237afd7ed01e5a3b4df761","installer":"macos-pkg","manifest":{"healthUrl":"http://127.0.0.1:9310/readyz","hook":{"command":["/Library/Application Support/hello/bin/hello","update-hook"],"timeoutSecs":{"cleanup":"30","cutover":"60","prepare":"30","rollback":"60","uninstall":"60","verify":"30"},"verifyDeadlineSecs":"120"},"installerBounds":{"activateSecs":"300","removeSecs":"300","stageSecs":"600"},"minHostkeeper":"0.1.0","package":"dev.hostkeeper.hello","params":{"port":{"integer":"9310"},"record_dir":{"text":"/var/lib/updater/hooks/hello"},"units":{"text":"launchd"}},"run":["hello.a","hello.b"]},"packageVersion":"0.1.5","repository":"komira-testing"}]}}"#;
 const PXE_LINE: &str = r#"targets={"linux-arm64":{"entries":[{"digest":"520b5970c38269777666028c042343fb45df25c74770276e7bc4bbbf582df5ab","installer":"apt","manifest":{"hook":{"command":["/usr/lib/pxe/pxe","update-hook"],"timeoutSecs":{"cleanup":"60","cutover":"120","rollback":"120","uninstall":"60","verify":"30"},"verifyDeadlineSecs":"300"},"installerBounds":{"activateSecs":"300","removeSecs":"300","stageSecs":"600"},"minHostkeeper":"0.1.5","package":"pxe","params":{"boot_dir":{"text":"/var/lib/pxe"},"release":{"text":"https://github.com/komira-ai/hostkeeper/releases/download/v0.1.5"},"settings":{"text":"/etc/pxe/pxe.toml"},"unit":{"text":"pxe.service"}},"run":["pxe.service"]},"packageVersion":"0.1.5","repository":"komira-testing"}]},"linux-x86_64":{"entries":[{"digest":"f04036a02d42b70eb88286e580bef46bb781e81ea326a9af6e1eaf51f84ee876","installer":"apt","manifest":{"hook":{"command":["/usr/lib/pxe/pxe","update-hook"],"timeoutSecs":{"cleanup":"60","cutover":"120","rollback":"120","uninstall":"60","verify":"30"},"verifyDeadlineSecs":"300"},"installerBounds":{"activateSecs":"300","removeSecs":"300","stageSecs":"600"},"minHostkeeper":"0.1.5","package":"pxe","params":{"boot_dir":{"text":"/var/lib/pxe"},"release":{"text":"https://github.com/komira-ai/hostkeeper/releases/download/v0.1.5"},"settings":{"text":"/etc/pxe/pxe.toml"},"unit":{"text":"pxe.service"}},"run":["pxe.service"]},"packageVersion":"0.1.5","repository":"komira-testing"}]}}"#;
 
 /// The `targets=` line the verb answers for `package` at the release 0.1.5, in a new `dist`
@@ -385,45 +401,6 @@ fn the_line_is_appended_to_the_output_file() {
         targets(&request(&dist, Package::Hello, Some(output.clone()))).expect("the targets");
     let written = std::fs::read_to_string(&output).expect("read the output file");
     assert_eq!(written, format!("before=1\n{}\n", lines[0]));
-}
-
-#[test]
-fn mdm_gets_its_one_platform_its_native_entry_alone_and_the_floor_of_hostkeepers_release() {
-    // Catches: a platform the package is not released for given an entry (mdm's .deb is amd64
-    // alone), mdm's list without its native entry, a native manifest that is not mdm's (its hook
-    // bounds, run units, health URL and params), or a floor other than the oldest reader of the
-    // release.
-    let (_root, dist) = dist("targets-mdm");
-    built(&dist, Package::Mdm);
-    let got = answered(&targets(&request(&dist, Package::Mdm, None)).expect("the targets"));
-    let deb = "mdm_0.1.5_amd64.deb";
-    let native = json!({
-        "installer": "apt",
-        "digest": file_sha256(&dist.join(deb)).expect("hash"),
-        "manifest": {
-            "package": "mdm",
-            "hook": {
-                "command": ["/usr/lib/mdm/mdm", "update-hook"],
-                "timeoutSecs": {
-                    "prepare": "300", "cutover": "120", "verify": "60", "rollback": "120",
-                    "cleanup": "30", "uninstall": "120",
-                },
-                "verifyDeadlineSecs": "600",
-            },
-            "run": ["mdm-scep.service", "mdm-nanohub.service", "mdm-depserver.service"],
-            "healthUrl": "http://127.0.0.1:9004/version",
-            "params": {
-                "record_dir": {"text": "/var/lib/updater/hooks/mdm"},
-                "settings": {"text": "/etc/mdm/settings"},
-            },
-            "minHostkeeper": "0.1.5",
-            "installerBounds": {"stageSecs": "600", "activateSecs": "300", "removeSecs": "300"},
-        },
-        "repository": "komira-testing",
-        "packageVersion": "0.1.5",
-    });
-    assert_eq!(got, json!({"linux-x86_64": alone(native)}));
-    read_back_as_the_coordinator("mdm", &got);
 }
 
 #[test]

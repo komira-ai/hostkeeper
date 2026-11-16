@@ -39,6 +39,9 @@ pub const PATIENCE: Duration = Duration::from_secs(30);
 
 /// The path of `Coordinator.Heartbeat`, which takes a host's certificate.
 pub const HEARTBEAT: &str = "/hostkeeper.agent.v1.Coordinator/Heartbeat";
+/// The service the proto still defines and no coordinator serves: its methods answer
+/// `UNIMPLEMENTED` ([`crate::grpc::admit`]).
+pub const RETIRED: &str = "Mdm";
 /// The path of `Releases.SetDesired`, which takes CI's token or the operator's.
 pub const SET_DESIRED: &str = "/hostkeeper.operator.v1.Releases/SetDesired";
 /// The path of `Releases.Converge`, which takes CI's token or the operator's.

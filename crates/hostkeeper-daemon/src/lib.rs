@@ -31,8 +31,10 @@
 //!   the packaged start, which execs `current` first): a
 //!   hand-over of hostkeeper's own update into another binary (docs/design/two-programs.md, 4.3)
 //!   execs that binary while its start count lasts, and is settled failed once it cannot.
-//! - [`mac_config`]: the daemon config written from the managed preferences the MDM installed,
+//! - [`mac_config`]: the daemon config written from the managed preferences the device management installed,
 //!   which the start of a Mac's daemon does when its config is not there.
+//! - [`keep_awake`]: a Mac's power settings, made at the start of its daemon so that the Mac never
+//!   sleeps (`pmset`), unless the daemon config's `keep_awake` is off.
 //! - [`adapters`]: the step launcher, service manager, unit directory, observer ports and package
 //!   check of the host's platform ([`adapters::Adapters::for_platform`]: systemd on Linux,
 //!   launchd on macOS), and the claims of its enrollment.
@@ -96,6 +98,7 @@ pub mod hook_log;
 pub mod installed;
 pub mod installers;
 pub mod ipmi;
+pub mod keep_awake;
 mod launchd_plist;
 pub mod layout;
 pub mod link_adapters;

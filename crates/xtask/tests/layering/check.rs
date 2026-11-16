@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::Path;
 use std::process::Command;
 
+const BOOTSTRAP: &str = "hostkeeper-bootstrap";
 const HOOK: &str = "hostkeeper-hook";
 const INSTALL: &str = "hostkeeper-install";
 const CONFIG: &str = "hostkeeper-config";
@@ -21,17 +22,9 @@ const OIDC: &str = "hostkeeper-oidc";
 const TLS: &str = "hostkeeper-tls";
 const COORDINATOR: &str = "hostkeeper-coordinator";
 const ENROLLMENT: &str = "hostkeeper-enrollment";
-const MDM_GATE: &str = "hostkeeper-mdm-gate";
 const OBSERVE: &str = "hostkeeper-observe";
 const LAUNCHD: &str = "hostkeeper-launchd";
 const OPENRC: &str = "hostkeeper-openrc";
-const MDM: &str = "hostkeeper-mdm";
-const MDM_ADE: &str = "hostkeeper-mdm-ade";
-const MDM_MODEL: &str = "hostkeeper-mdm-model";
-const MDM_PUSH: &str = "hostkeeper-mdm-push";
-const MDM_SCEP: &str = "hostkeeper-mdm-scep";
-const MDM_SERVER: &str = "hostkeeper-mdm-server";
-const MDM_STEP: &str = "hostkeeper-mdm-step";
 const MEASURE: &str = "hostkeeper-measure";
 const PXE: &str = "hostkeeper-pxe";
 const PXE_PACKETS: &str = "hostkeeper-pxe-packets";
@@ -40,7 +33,6 @@ const HKCTL: &str = "hostkeeper-hkctl";
 const DAEMON: &str = "hostkeeper-daemon";
 const ENROLL: &str = "hostkeeper-enroll";
 const LINK: &str = "hostkeeper-link";
-const MDM_CORE: &str = "hostkeeper-mdm-core";
 const PACKAGE: &str = "hostkeeper-package";
 const PLACED: &str = "hostkeeper-placed";
 const PRIVILEGED: &str = "hostkeeper-privileged";
@@ -83,28 +75,28 @@ pub type Layer = (
 /// network-install tests run `hostkeeper-pxe` (their program
 /// `hostkeeper-privileged-pxe`, which needs it as a normal dependency) and read a DHCP client's
 /// packet with its packet crate; `hostkeeper-pxe` loads the repository directory `--repositories`
-/// names with the daemon's own loader (`hostkeeper-install`) before any seed is made; the `mdm` package's certificate-unit test loads that package's
-/// units and drop-ins (`hostkeeper-mdm-core`) into the host's systemd. The binary's tests run
-/// the macOS pkg's postinstall (`hostkeeper-launchd`) against the binary. The daemon's tests render
-/// the MDM gate's config profile (`hostkeeper-mdm-gate`) to the files the macos-pkg installer reads. The daemon reads the
+/// names with the daemon's own loader (`hostkeeper-install`) before any seed is made; The binary's tests run
+/// the macOS pkg's postinstall (`hostkeeper-launchd`) against the binary. The daemon reads the
 /// macos-pkg installer's signers file at its start (`hostkeeper-install`), and the privileged
 /// tests run that installer's steps against the Mac's real tools; their programs that answer for
 /// the `macos-pkg` installer's tools and run the daemon's installer ports need `hostkeeper-install`
-/// as a normal dependency, and the program `hello-e2e` runs hello's hook and server (`hello`). The MDM gate checks the files
-/// of the config profile's `dev.hostkeeper.stores` and `dev.hostkeeper.macos-pkg` domains with
-/// the loaders the Mac's daemon reads them with (`hostkeeper-package`'s stores parser and
-/// `hostkeeper-install`'s signers parser), so a profile the daemon would refuse is refused when
-/// the coordinator starts; neither depends on the gate or the coordinator.
-pub const LAYERS: [Layer; 37] = [
+/// as a normal dependency, and the program `hello-e2e` runs hello's hook and server (`hello`). The Mac bootstrap
+/// (`hostkeeper-bootstrap`) reads the daemon's config loader (`hostkeeper-config`), the macos-pkg
+/// installer's tool port and signature reader (`hostkeeper-install`, with the paths of
+/// `hostkeeper-launchd`), the HTTPS transport (`hostkeeper-package`) and the repository descriptor
+/// (`hostkeeper-release`), and is read by no crate.
+pub const LAYERS: [Layer; 29] = [
     (BINARY, &[DAEMON], &[LAUNCHD]),
+    (
+        BOOTSTRAP,
+        &[CONFIG, INSTALL, LAUNCHD, PACKAGE, RELEASE],
+        &[],
+    ),
     (CONFIG, &[], &[]),
     (
         COORDINATOR,
-        &[
-            CONFIG, ENROLLMENT, MDM_ADE, MDM_GATE, MDM_PUSH, MDM_SCEP, MDM_SERVER, OIDC, PROTO,
-            RELEASE, TLS, WIRE,
-        ],
-        &[MDM_PUSH, OIDC],
+        &[CONFIG, ENROLLMENT, OIDC, PROTO, RELEASE, TLS, WIRE],
+        &[OIDC],
     ),
     (
         DAEMON,
@@ -112,7 +104,7 @@ pub const LAYERS: [Layer; 37] = [
             CONFIG, ENROLL, HOOK, INSTALL, LAUNCHD, LINK, OBSERVE, OPENRC, PACKAGE, PLACED, PROTO,
             RELEASE, STEPS,
         ],
-        &[COORDINATOR, HELLO, MDM_GATE, OIDC, TLS, WIRE],
+        &[COORDINATOR, HELLO, OIDC, TLS, WIRE],
     ),
     (ENROLL, &[CONFIG, PROTO, STEPS], &[COORDINATOR, ENROLLMENT]),
     (ENROLLMENT, &[], &[]),
@@ -126,15 +118,6 @@ pub const LAYERS: [Layer; 37] = [
         &[CONFIG, HOOK, PROTO, STEPS, WIRE],
         &[COORDINATOR, ENROLL, OIDC, TLS],
     ),
-    (MDM, &[HOOK, MDM_CORE, MDM_STEP], &[]),
-    (MDM_CORE, &[], &[]),
-    (MDM_GATE, &[CONFIG, ENROLLMENT, INSTALL, PACKAGE, WIRE], &[]),
-    (MDM_ADE, &[], &[]),
-    (MDM_MODEL, &[], &[]),
-    (MDM_PUSH, &[], &[]),
-    (MDM_SCEP, &[], &[]),
-    (MDM_SERVER, &[], &[]),
-    (MDM_STEP, &[], &[]),
     (MEASURE, &[], &[]),
     (OBSERVE, &[CONFIG, PROTO], &[HOOK, STEPS]),
     (OIDC, &[], &[]),
@@ -157,7 +140,7 @@ pub const LAYERS: [Layer; 37] = [
             PXE,
             STEPS,
         ],
-        &[ENROLL, MDM_CORE, OBSERVE, OIDC, PXE_PACKETS],
+        &[ENROLL, OBSERVE, OIDC, PXE_PACKETS],
     ),
     (PROTO, &[], &[]),
     (

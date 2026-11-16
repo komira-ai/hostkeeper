@@ -1,5 +1,7 @@
 # hostkeeper is two programs
 
+> **Update 2026-11-14.** The `mdm` package (6.2), the `hostkeeper-mdm` kit and its release assets (M1, M2) are gone. The MDM was removed from the coordinator and the repository (`docs/design/coordinator-mdm.md`, superseded); Macs enroll through the bootstrap package (`docs/design/mac-bootstrap.md`). Where this document describes the MDM, its kit, its policy gate or the `mdm` package, it describes what was removed; the rest stands.
+
 Status: design, for the maintainers' comments. Every statement about new code is **Designed** until its item lands;
 **Built** names code on `main` with a path, as in [hostkeeper-design.md](hostkeeper-design.md). Section 9 lists the
 build items, one pull request each.
@@ -17,7 +19,7 @@ section 4.1 and its admin socket; the self-update fallback unit and the protocol
 `hostkeeper ctl` and `hostkeeper ci` in [docs/ctl.md](../ctl.md) and [docs/deploy/ci-client.md](../deploy/ci-client.md);
 the "separate binary, run in the foreground" answer of [network-install.md](network-install.md) section 3 and the
 shipping of `hostkeeper-pxe` in the deb and the rpm in its sections 3 and 9; and the `hostkeeper-mdm` kit of
-[hostkeeper-mdm.md](hostkeeper-mdm.md) section 3 (its row "`hostkeeper-mdm` kit", and the daemon's postinstall verb in
+hostkeeper-mdm.md (hostkeeper-mdm.md, removed) section 3 (its row "`hostkeeper-mdm` kit", and the daemon's postinstall verb in
 the row after the gate), which section 6.2 makes a service package. It does not change
 [coordinator-storage.md](coordinator-storage.md); section 7 ties `backup` and `restore` to its items C5, C7 and C9.
 

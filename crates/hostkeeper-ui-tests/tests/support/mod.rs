@@ -40,7 +40,6 @@ use prost_reflect::{
 };
 use serde_json::{Value, json};
 
-pub mod mdm_setup;
 pub mod pages;
 
 /// The fake document, tree queries and page context the drivers share.

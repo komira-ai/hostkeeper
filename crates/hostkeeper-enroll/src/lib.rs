@@ -16,8 +16,8 @@
 //! - [`ClaimsSource`]: what the host says about itself ([`LinuxClaims`], with the BMC's MAC over
 //!   the [`Ipmi`] port; [`MacClaims`] over the [`Ioreg`] port; `claims.rs`);
 //! - [`Entropy`]: random bytes for the key ([`OsEntropy`], `key.rs`);
-//! - [`ManagedPreferences`]: on a Mac, the managed preferences its MDM writes the one-time
-//!   enrollment nonce to ([`ManagedFile`], `managed.rs`);
+//! - [`ManagedPreferences`]: on a Mac, the managed preferences a one-time
+//!   enrollment nonce may be left in ([`ManagedFile`], `managed.rs`);
 //! - [`WallClock`]: the wall clock, read only for certificate validity ([`SystemWallClock`],
 //!   `validity.rs`, the one file the wall-clock lint allows here);
 //! - `hostkeeper_steps::Clock`: the monotonic clock the retries sleep on.

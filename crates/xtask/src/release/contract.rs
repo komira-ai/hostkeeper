@@ -4,8 +4,8 @@
 //!
 //! - the version `X.Y.Z` ([`Version`]) and the tag `v<X.Y.Z>` ([`Version::tag`]);
 //! - the text a shipped binary prints for `--version`, `hostkeeper X.Y.Z+<12 hex>`
-//!   ([`stamp_string`]), `hostkeeper-coordinator X.Y.Z+<12 hex>`, `hostkeeper-mdm
-//!   X.Y.Z+<12 hex>` and `hostkeeper-coordinator-update X.Y.Z+<12 hex>` ([`stamp_of`]), and [`RELEASE_COMMIT`], the build-time input that carries
+//!   ([`stamp_string`]), `hostkeeper-coordinator X.Y.Z+<12 hex>` and
+//!   `hostkeeper-coordinator-update X.Y.Z+<12 hex>` ([`stamp_of`]), and [`RELEASE_COMMIT`], the build-time input that carries
 //!   the commit;
 //! - the identity that signs every attestation: [`SIGNER_WORKFLOW`] on [`SIGNER_REF`] of
 //!   [`REPO`], on a hosted runner;
@@ -16,11 +16,10 @@
 //! ([`Platform::RELEASED`]): one package per OS and CPU family. A release ships every one of them,
 //! and a release missing one is refused. macos-arm64 also ships the
 //! installer pkg of a Mac's first install ([`installer_name`]); the two Linux platforms also ship
-//! the coordinator ([`COORDINATOR`]), the MDM kit's binary ([`MDM`]) and the coordinator
-//! updater's ([`COORDINATOR_UPDATE`]). A release carries five
+//! the coordinator ([`COORDINATOR`]) and the coordinator
+//! updater's ([`COORDINATOR_UPDATE`]). A release carries four
 //! kinds of package ([`Package`]): hostkeeper's own, `hello`, the example service of
-//! `examples/hello`, hello's failing build, `mdm`, the MDM server stack, for linux-x86_64
-//! only ([`Package::platforms`]), and `pxe`, the boot server of network install, a `.deb` for the
+//! `examples/hello`, hello's failing build, and `pxe`, the boot server of network install, a `.deb` for the
 //! two Linux platforms; each is a native package ([`Package::native_name`]) and the
 //! failing build has none. It also carries `netboot.json` ([`NETBOOT`]), the boot sets of network install for the two Linux
 //! platforms, and `hkctl-<version>` ([`hkctl_name`]), the command line, one script for every
@@ -73,22 +72,11 @@ pub(crate) const HELLO: &str = "hello";
 /// The coordinator's asset stem, and the name of its binary.
 pub(crate) const COORDINATOR: &str = "hostkeeper-coordinator";
 
-/// The asset stem of the MDM kit's binary, and the name of that binary: the Linux host of the
-/// MDM server stack runs it (`crates/hostkeeper-mdm`). Released for the two Linux platforms only,
-/// as a tarball with its SBOM.
-pub(crate) const MDM: &str = "hostkeeper-mdm";
-
 /// The asset stem of the coordinator updater's binary, and the name of that binary: the machine
 /// that runs the coordinator's container runs it from a timer (docs/deploy/coordinator-update.md),
 /// installed from this asset, never built there. Released for the two Linux platforms only, as a
 /// tarball with its SBOM.
 pub(crate) const COORDINATOR_UPDATE: &str = "hostkeeper-coordinator-update";
-
-/// The name of the MDM server stack's service package (docs/design/two-programs.md section 6.2):
-/// its package name and its program `mdm`, which prints
-/// `mdm X.Y.Z+<12 hex>` for `--version`. Built for linux-x86_64 only: the pinned tools it carries
-/// are linux-amd64 builds.
-pub(crate) const MDM_SERVICE: &str = "mdm";
 
 /// The name of the boot server's service package (docs/design/two-programs.md section 6.1): its
 /// package name and its program `pxe`, which prints `pxe X.Y.Z` for `--version` (no commit
@@ -107,17 +95,11 @@ pub(crate) const HKCTL: &str = hostkeeper_hkctl::PROGRAM;
 
 /// The binaries a release ships, by file name: each prints `<name> X.Y.Z+<12 hex>` for
 /// `--version` ([`stamp_of`]).
-pub(crate) const PROGRAMS: [&str; 4] = [PROGRAM, COORDINATOR, MDM, COORDINATOR_UPDATE];
+pub(crate) const PROGRAMS: [&str; 3] = [PROGRAM, COORDINATOR, COORDINATOR_UPDATE];
 
 /// The binaries `release check-binary` holds to their stamp ([`stamp_of`]): the shipped binaries
-/// of [`PROGRAMS`] and `mdm`, the program the mdm package carries as `bin/mdm`.
-pub(crate) const STAMPED: [&str; 5] = [
-    PROGRAMS[0],
-    PROGRAMS[1],
-    PROGRAMS[2],
-    PROGRAMS[3],
-    MDM_SERVICE,
-];
+/// of [`PROGRAMS`].
+pub(crate) const STAMPED: [&str; 3] = PROGRAMS;
 
 /// The file listing the SHA-256 of every asset but itself and the bundles.
 pub(crate) const SUMS: &str = "SHA256SUMS";
@@ -360,8 +342,7 @@ pub(crate) fn stamp_string(version: &Version, commit: &Commit) -> String {
 }
 
 /// The text the shipped binary `program` (one of [`STAMPED`]) prints for `--version`:
-/// `<program> X.Y.Z+<12 hex>`. The coordinator's is `hostkeeper-coordinator X.Y.Z+<12 hex>`, the
-/// MDM kit's `hostkeeper-mdm X.Y.Z+<12 hex>`, the coordinator updater's
+/// `<program> X.Y.Z+<12 hex>`. The coordinator's is `hostkeeper-coordinator X.Y.Z+<12 hex>`, the coordinator updater's
 /// `hostkeeper-coordinator-update X.Y.Z+<12 hex>`.
 pub(crate) fn stamp_of(program: &str, version: &Version, commit: &Commit) -> String {
     format!("{program} {version}+{}", commit.short())
@@ -421,9 +402,6 @@ pub(crate) enum Service {
     /// The example service of `examples/hello`.
     #[value(name = "hello")]
     Hello,
-    /// The MDM server stack's service package.
-    #[value(name = "mdm")]
-    Mdm,
     /// The boot server of network install (`crates/hostkeeper-pxe`).
     #[value(name = "pxe")]
     Pxe,
@@ -435,7 +413,6 @@ impl Service {
         match self {
             Service::Hostkeeper => PROGRAM,
             Service::Hello => HELLO,
-            Service::Mdm => MDM_SERVICE,
             Service::Pxe => PXE_SERVICE,
         }
     }
@@ -462,40 +439,34 @@ pub(crate) const TESTING_FAIL_ENTRY: &str = "komira-testing-fail";
 
 /// One kind of package a release carries: each has a native package per platform it is built for
 /// ([`Package::platforms`]). The release carries hostkeeper's package, hello's and hello's failing
-/// build, the same package started with `--fail-ready`, whose `.deb` alone is released, mdm's and
+/// build, the same package started with `--fail-ready`, whose `.deb` alone is released, and
 /// pxe's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Package {
     Hostkeeper,
     Hello,
     HelloFailReady,
-    Mdm,
     Pxe,
 }
-
-/// The platforms of the mdm package.
-const MDM_PLATFORMS: [Platform; 1] = [Platform::LinuxX86_64];
 
 /// The platforms of the pxe package: both Linux platforms, no Mac.
 const PXE_PLATFORMS: [Platform; 2] = [Platform::LinuxX86_64, Platform::LinuxArm64];
 
 impl Package {
     /// Every package, hostkeeper's first.
-    pub(crate) const ALL: [Package; 5] = [
+    pub(crate) const ALL: [Package; 4] = [
         Package::Hostkeeper,
         Package::Hello,
         Package::HelloFailReady,
-        Package::Mdm,
         Package::Pxe,
     ];
 
     /// The platforms a release ships the package for, in [`Platform::RELEASED`] order: every one,
-    /// but linux-x86_64 alone for mdm, and the two Linux platforms for pxe.
+    /// but the two Linux platforms for pxe.
     pub(crate) fn platforms(self) -> &'static [Platform] {
         match self {
             Package::Hostkeeper | Package::Hello | Package::HelloFailReady => &Platform::RELEASED,
             Package::Pxe => &PXE_PLATFORMS,
-            Package::Mdm => &MDM_PLATFORMS,
         }
     }
 
@@ -506,9 +477,8 @@ impl Package {
             (Service::Hostkeeper, false) => Some(Package::Hostkeeper),
             (Service::Hello, false) => Some(Package::Hello),
             (Service::Hello, true) => Some(Package::HelloFailReady),
-            (Service::Mdm, false) => Some(Package::Mdm),
             (Service::Pxe, false) => Some(Package::Pxe),
-            (Service::Hostkeeper | Service::Mdm | Service::Pxe, true) => None,
+            (Service::Hostkeeper | Service::Pxe, true) => None,
         }
     }
 
@@ -517,7 +487,6 @@ impl Package {
         match self {
             Package::Hostkeeper => Service::Hostkeeper,
             Package::Hello | Package::HelloFailReady => Service::Hello,
-            Package::Mdm => Service::Mdm,
             Package::Pxe => Service::Pxe,
         }
     }
@@ -526,9 +495,7 @@ impl Package {
     /// release's own, or for the failing build the release's followed by [`FAIL_READY_SUFFIX`].
     pub(crate) fn version_text(self, version: &Version) -> String {
         match self {
-            Package::Hostkeeper | Package::Hello | Package::Mdm | Package::Pxe => {
-                version.to_string()
-            }
+            Package::Hostkeeper | Package::Hello | Package::Pxe => version.to_string(),
             Package::HelloFailReady => format!("{version}{FAIL_READY_SUFFIX}"),
         }
     }
@@ -538,9 +505,7 @@ impl Package {
     /// service version cannot carry, so its `.deb` is never taken for the release's.
     pub(crate) fn deb_version(self, version: &Version) -> String {
         match self {
-            Package::Hostkeeper | Package::Hello | Package::Mdm | Package::Pxe => {
-                version.to_string()
-            }
+            Package::Hostkeeper | Package::Hello | Package::Pxe => version.to_string(),
             Package::HelloFailReady => format!("{version}{FAIL_READY_DEB_SUFFIX}"),
         }
     }
@@ -549,7 +514,7 @@ impl Package {
     /// build, [`TESTING_ENTRY`] for every other.
     pub(crate) fn repository_entry(self) -> &'static str {
         match self {
-            Package::Hostkeeper | Package::Hello | Package::Mdm | Package::Pxe => TESTING_ENTRY,
+            Package::Hostkeeper | Package::Hello | Package::Pxe => TESTING_ENTRY,
             Package::HelloFailReady => TESTING_FAIL_ENTRY,
         }
     }
@@ -590,6 +555,15 @@ pub(crate) fn installer_name(version: &Version) -> String {
     )
 }
 
+/// The file name of the bootstrap pkg of `version`, the one-time install of a new Mac that Apple
+/// Business runs (docs/design/mac-bootstrap.md): `hostkeeper-bootstrap-<v>-macos-arm64.pkg`.
+pub(crate) fn bootstrap_installer_name(version: &Version) -> String {
+    format!(
+        "{PROGRAM}-bootstrap-{version}-{}{INSTALLER_SUFFIX}",
+        Platform::MacosArm64.name()
+    )
+}
+
 /// The file name of the command line of `version`, `hkctl-<v>`.
 pub(crate) fn hkctl_name(version: &Version) -> String {
     format!("{HKCTL}-{version}")
@@ -620,20 +594,19 @@ pub(crate) fn is_bundle(name: &str) -> bool {
 ///   coordinator's (attested);
 /// - `hostkeeper-coordinator-<v>-<p>.image.tar`, the coordinator's OCI image;
 /// - `hostkeeper-coordinator-<v>-<p>.cdx.json`, its SBOM;
-/// - `hostkeeper-mdm-<v>-<p>.tar.gz`, the MDM kit's binary, and `hostkeeper-mdm-<v>-<p>.cdx.json`,
-///   its SBOM;
 /// - `hostkeeper-coordinator-update-<v>-<p>.tar.gz`, the coordinator updater's binary, and
 ///   `hostkeeper-coordinator-update-<v>-<p>.cdx.json`, its SBOM;
 ///
-/// and on macOS `hostkeeper-<v>-macos-arm64.pkg`, the installer ([`installer_name`]);
+/// and on macOS `hostkeeper-<v>-macos-arm64.pkg`, the installer ([`installer_name`]), and
+/// `hostkeeper-bootstrap-<v>-macos-arm64.pkg`, the bootstrap pkg ([`bootstrap_installer_name`]);
 ///
 /// and the native packages of the services ([`Package::native_name`]): `hello_<v>_<deb>.deb` and
 /// the failing build's `hello_<v>-fail-ready_<deb>.deb` on each Linux platform,
-/// `hello-<v>-macos-arm64.pkg` on macOS, `mdm_<v>_amd64.deb` on linux-x86_64 and
+/// `hello-<v>-macos-arm64.pkg` on macOS and
 /// `pxe_<v>_<deb>.deb` on each Linux platform (attested);
 /// hostkeeper's own are its `.deb` and its installer above, each listed once;
 ///
-/// the bundle of each binary tarball (the four programs'), Linux package, installer, native
+/// the bundle of each binary tarball (the three programs'), Linux package, installer, native
 /// package and image; when both Linux platforms are given, once, the coordinator's image index
 /// `hostkeeper-coordinator-<v>.image.json` ([`super::image_index`]) and its bundle; and once,
 /// [`NETBOOT`] (the boot sets of network install) and its bundle, `hkctl-<v>` (the command line,
@@ -669,15 +642,14 @@ pub(crate) fn asset_names(version: &Version, platforms: &[Platform]) -> Vec<Stri
                 format!("{COORDINATOR}_{version}_{deb}.deb"),
                 format!("{COORDINATOR}-{version}-1.{rpm}.rpm"),
                 format!("{COORDINATOR}-{version}-{p}.image.tar"),
-                format!("{MDM}-{version}-{p}.tar.gz"),
                 format!("{COORDINATOR_UPDATE}-{version}-{p}.tar.gz"),
             ]);
             names.push(format!("{COORDINATOR}-{version}-{p}.cdx.json"));
-            names.push(format!("{MDM}-{version}-{p}.cdx.json"));
             names.push(format!("{COORDINATOR_UPDATE}-{version}-{p}.cdx.json"));
         }
         if platform == Platform::MacosArm64 {
             attested.push(installer_name(version));
+            attested.push(bootstrap_installer_name(version));
         }
         names.extend(attested.iter().map(|a| bundle_of(a)));
         names.extend(attested);

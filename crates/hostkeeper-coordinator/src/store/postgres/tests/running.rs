@@ -11,7 +11,7 @@ use hostkeeper_enrollment::enroll::{EnrollmentStore, HostRunning, RunningService
 use prost::Message as _;
 
 use super::coordinator::approved;
-use super::devices::with_session;
+use super::with_session;
 use super::{SPENT_NOW, TestDatabase};
 use crate::enrollment::tests::support::NOW;
 use crate::store::postgres::{PgRecords, load_all, migrate, records};

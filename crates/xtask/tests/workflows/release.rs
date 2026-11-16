@@ -27,8 +27,7 @@
 //!   [`VERSIONED_FILES`], and copies the bundle of each beside it
 //!   ([`package_problems`]), and attests the SBOM of each binary tarball ([`sbom_problem`]): a
 //!   host trusts only attested packages, so a release asset list that names a bundle needs the
-//!   steps that make it. Its build job makes the mdm package with the steps of [`MDM_STEPS`],
-//!   each under [`MDM_IF`] ([`mdm_problems`]), and the pxe package with [`PXE_BUILD`] and
+//!   steps that make it. Its build job makes the pxe package with [`PXE_BUILD`] and
 //!   [`PXE_RUNS`], under no `if:` ([`pxe_problems`]).
 //!
 //! Which job may hold which write scope, under which `if:`, is [`super::lint::WRITE_ALLOWED`].
@@ -103,10 +102,9 @@ pub const RELEASE_TRIGGERS: [&str; 3] = ["schedule", "workflow_dispatch", "workf
 pub const REQUIRED_WORKFLOWS: [&str; 3] = ["artifacts", "ci", "privileged"];
 
 /// The binaries a release ships, each of which the verify job of release.yml runs.
-pub const SHIPPED_BINARIES: [&str; 4] = [
+pub const SHIPPED_BINARIES: [&str; 3] = [
     "hostkeeper",
     "hostkeeper-coordinator",
-    "hostkeeper-mdm",
     "hostkeeper-coordinator-update",
 ];
 
@@ -149,20 +147,6 @@ pub const LINUX_ARCHES: [(&str, &str); 2] = [("amd64", "x86_64"), ("arm64", "aar
 /// (packaging/linux/nfpm.yaml) and the coordinator's (packaging/coordinator/nfpm.yaml).
 pub const LINUX_PACKAGE_PROGRAMS: [&str; 2] = ["hostkeeper", "hostkeeper-coordinator"];
 
-/// The `if:` of each step of the build job that makes the mdm package: the linux-x86_64 leg of
-/// its matrix, the one platform the package is built for.
-pub const MDM_IF: &str = "matrix.platform == 'linux-x86_64'";
-
-/// The steps of the build job that make the mdm package, in order, each under [`MDM_IF`]: its
-/// program built with the commit, its stamp checked, the pinned archives fetched and checked
-/// against their pins, and the `.deb` built from them.
-pub const MDM_STEPS: [&str; 4] = [
-    "cargo build --locked --release -p hostkeeper-mdm --bin mdm",
-    "cargo xtask release check-binary target/release/mdm \"$RELEASE_VERSION\" \"$GITHUB_SHA\"",
-    "cargo xtask release mdm-fetch --dir \"$RUNNER_TEMP/mdm-archives\"",
-    "cargo xtask release deb --service mdm --platform \"$PLATFORM\" --version \"$RELEASE_VERSION\" --commit \"$GITHUB_SHA\" --binary target/release/mdm --archives \"$RUNNER_TEMP/mdm-archives\" --out dist",
-];
-
 /// The runs of the build job that make hello's failing build's `.deb` into `dist/`, where the
 /// attest job and SHA256SUMS find it, and read it back there.
 pub const FAIL_READY_DEB_RUNS: [&str; 2] = [
@@ -184,13 +168,12 @@ pub const PXE_BUILD: &str = "cargo build --locked --release --target \"$MUSL_TAR
 
 /// The binary tarballs the release carries, each as its program (the stem of its file name,
 /// `<program>-<version>-<platform>.tar.gz`) and the platforms it ships for: hostkeeper's on
-/// every platform, the coordinator's, the MDM kit's and the coordinator updater's on the two
+/// every platform, the coordinator's and the coordinator updater's on the two
 /// Linux platforms. Each has a bundle and an attested SBOM
 /// (`<program>-<version>-<platform>.cdx.json`).
-pub const TARBALLS: [(&str, &[&str]); 4] = [
+pub const TARBALLS: [(&str, &[&str]); 3] = [
     ("hostkeeper", &PLATFORMS),
     ("hostkeeper-coordinator", &["linux-x86_64", "linux-arm64"]),
-    ("hostkeeper-mdm", &["linux-x86_64", "linux-arm64"]),
     (
         "hostkeeper-coordinator-update",
         &["linux-x86_64", "linux-arm64"],
@@ -205,16 +188,15 @@ pub const ATTESTED_FILES: [(&str, &str); 1] = [("dist/netboot.json", "netboot.js
 /// The native packages of the services the release ships (docs/design/packages-native.md, item
 /// A21), each as its name with `<version>` for the version: hello's `.deb` for each Linux
 /// architecture, its failing build's `.deb` for each (named by the service version,
-/// `<version>-fail-ready`) and its `.pkg`, mdm's `.deb` for amd64, pxe's `.deb` for each Linux
+/// `<version>-fail-ready`) and its `.pkg`, pxe's `.deb` for each Linux
 /// architecture, and hostkeeper's installer `.pkg`. Each has a bundle, which the installer channel publishes beside it.
-pub const NATIVE_FILES: [&str; 9] = [
+pub const NATIVE_FILES: [&str; 8] = [
     "hostkeeper-<version>-macos-arm64.pkg",
     "hello_<version>_amd64.deb",
     "hello_<version>_arm64.deb",
     "hello_<version>-fail-ready_amd64.deb",
     "hello_<version>-fail-ready_arm64.deb",
     "hello-<version>-macos-arm64.pkg",
-    "mdm_<version>_amd64.deb",
     "pxe_<version>_amd64.deb",
     "pxe_<version>_arm64.deb",
 ];
@@ -653,7 +635,6 @@ fn artifacts_problems(doc: &Node) -> Vec<String> {
         }
     }
     problems.extend(package_problems(attest));
-    problems.extend(mdm_problems(doc));
     problems.extend(fail_ready_deb_problems(doc));
     problems.extend(pxe_problems(doc));
     problems.extend(pkg_signing::problems(doc));
@@ -684,41 +665,6 @@ fn pxe_problems(doc: &Node) -> Vec<String> {
                 "artifacts.yml: job build runs `{want}` under an `if:`, so not on both Linux platforms"
             )),
             Some(_) => {}
-        }
-    }
-    problems
-}
-
-/// What is wrong with the making of the mdm package: a step of [`MDM_STEPS`] missing from the
-/// build job, out of order, or under another `if:` than [`MDM_IF`] (the program built without
-/// the commit, a package built from archives no step fetched, or a step on a platform the
-/// package is not built for).
-fn mdm_problems(doc: &Node) -> Vec<String> {
-    let mut problems = Vec::new();
-    let build = steps(job(doc, "build"));
-    let mut at = 0;
-    for want in MDM_STEPS {
-        let found = build[at..]
-            .iter()
-            .position(|s| text_of(Some(s), "run") == Some(want));
-        let Some(n) = found else {
-            problems.push(format!(
-                "artifacts.yml: job build does not run `{want}` (after the mdm steps before it)"
-            ));
-            continue;
-        };
-        let step = &build[at + n];
-        at += n + 1;
-        if text_of(Some(step), "if") != Some(MDM_IF) {
-            problems.push(format!(
-                "artifacts.yml: job build runs `{want}` without the exact `if: {MDM_IF}`"
-            ));
-        }
-        let stamped = text_of(entry(step, "env"), "RELEASE_COMMIT") == Some("${{ github.sha }}");
-        if want.starts_with("cargo build") && !stamped {
-            problems.push(format!(
-                "artifacts.yml: job build runs `{want}` without RELEASE_COMMIT: ${{{{ github.sha }}}}"
-            ));
         }
     }
     problems

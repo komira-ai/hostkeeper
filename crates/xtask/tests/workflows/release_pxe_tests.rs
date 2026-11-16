@@ -82,7 +82,7 @@ fn the_pxe_deb_built_from_the_gnu_binary_or_out_of_dist_is_refused() {
 #[test]
 fn a_pxe_run_under_an_if_is_refused() {
     // Proves: the pxe runs are for both Linux legs, so none may carry an `if:`.
-    // Catches: pxe's `.deb` limited to the linux-x86_64 leg (as mdm's is), so the release lacks
+    // Catches: pxe's `.deb` limited to the linux-x86_64 leg, so the release lacks
     // the arm64 file and every host of that architecture is ordered nothing.
     let text = artifacts_yml();
     for run in [PXE_RUNS[0], PXE_BUILD] {

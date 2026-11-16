@@ -23,9 +23,9 @@ fn file_names_are_the_ones_the_release_assets_have() {
 }
 
 #[test]
-fn a_release_is_nine_debs_and_four_rpms_sorted() {
-    // Catches: mdm's .deb asked for arm64 (it is built for amd64 alone), hello's, pxe's or mdm's
-    // asked as an rpm (none is one), pxe's .deb left for one architecture, and a service's .deb left out of the pass that lists the
+fn a_release_is_eight_debs_and_four_rpms_sorted() {
+    // Catches: hello's or pxe's asked as an rpm (neither is one), a withdrawn mdm package
+    // listed again, pxe's .deb left for one architecture, and a service's .deb left out of the pass that lists the
     // release whole.
     assert_eq!(
         HOSTKEEPER.deb_files("1.2.3"),
@@ -36,7 +36,6 @@ fn a_release_is_nine_debs_and_four_rpms_sorted() {
             "hostkeeper-coordinator_1.2.3_arm64.deb",
             "hostkeeper_1.2.3_amd64.deb",
             "hostkeeper_1.2.3_arm64.deb",
-            "mdm_1.2.3_amd64.deb",
             "pxe_1.2.3_amd64.deb",
             "pxe_1.2.3_arm64.deb",
         ]
@@ -208,25 +207,15 @@ fn pxes_package_is_the_files_of_its_deb_says_its_version_alone_and_enables_nothi
 }
 
 #[test]
-fn mdms_package_is_amd64_alone_with_the_units_of_its_deb_and_enables_nothing() {
-    // Catches: mdm's units out of step with the ones its .deb installs, an arm64 mdm asked of
-    // the repository, and the program at another path than the .deb's.
-    use hostkeeper_mdm_core::package::{DEB_BIN, SERVICE, UNITS};
-    let package = HOSTKEEPER.package("mdm").expect("mdm");
-    let mut built: Vec<&str> = UNITS.iter().map(|u| u.name).collect();
-    built.sort_unstable();
-    assert_eq!(package.units, built);
-    assert_eq!(package.arches, [AMD64]);
-    assert!(!package.rpm);
-    assert!(package.stamp_commit);
-    assert!(!package.enabled_after_install);
-    assert_eq!(package.binary, format!("{DEB_BIN}/{SERVICE}"));
+fn the_product_has_no_mdm_package() {
+    // Catches: the withdrawn mdm package listed again in the repository's product.
+    assert!(HOSTKEEPER.package("mdm").is_none());
     assert!(
-        package
-            .files
-            .contains(&format!("{DEB_BIN}/{SERVICE}").as_str())
+        HOSTKEEPER
+            .packages
+            .iter()
+            .all(|p| !p.name.starts_with("mdm"))
     );
-    assert_eq!(package.files.len(), 1 + UNITS.len());
 }
 
 #[test]
@@ -235,23 +224,9 @@ fn the_installers_and_their_two_channels_are_named_from_the_product() {
         HOSTKEEPER.pkg_files("1.2.3"),
         [
             "hello-1.2.3-macos-arm64.pkg",
-            "hostkeeper-1.2.3-macos-arm64.pkg"
+            "hostkeeper-1.2.3-macos-arm64.pkg",
+            "hostkeeper-bootstrap-1.2.3-macos-arm64.pkg"
         ]
-    );
-    // What a Mac's store of the testing channel, rooted at pkg/, fetches an installer by.
-    assert_eq!(
-        HOSTKEEPER.pkg_locator("1.2.3", "hello-1.2.3-macos-arm64.pkg"),
-        "hostkeeper/1.2.3/hello-1.2.3-macos-arm64.pkg"
-    );
-    assert_eq!(
-        format!(
-            "{PKG_ROOT}{}",
-            HOSTKEEPER.pkg_locator("1.2.3", "hello-1.2.3-macos-arm64.pkg")
-        ),
-        format!(
-            "{}hello-1.2.3-macos-arm64.pkg",
-            HOSTKEEPER.pkg_prefix("1.2.3")
-        )
     );
     assert_eq!(HOSTKEEPER.pkg_prefix("1.2.3"), "pkg/hostkeeper/1.2.3/");
     assert_eq!(HOSTKEEPER.pkg_stable_key(), "pkg/hostkeeper/stable.json");

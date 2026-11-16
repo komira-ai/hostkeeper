@@ -240,7 +240,7 @@ pub struct ApprovalRecord {
     /// issued for the serial the request claims and, when it names one, for this request; the
     /// approval consumes it.
     pub mac_nonce: Option<MacNonceHash>,
-    /// With a Mac nonce: when the MDM gate saw the Mac's current enrollment begin, unix
+    /// With a Mac nonce: when the Mac's current enrollment began, unix
     /// seconds. A host id held by the key of the same Mac's request approved before then is
     /// taken over ([`EnrollmentStore::approve_recorded`]). `None`: no host id is taken over.
     pub mac_enrolled_since_unix: Option<u64>,
@@ -349,7 +349,7 @@ pub struct Approval {
     /// The approval took the host id out of a deny row.
     pub cleared_deny: bool,
     /// The approval is recorded as replacing: `replace` was asked, or a Mac's request took its
-    /// own host id over from the key it held before a new MDM enrollment.
+    /// own host id over from the key it held before a new enrollment.
     pub replace: bool,
 }
 

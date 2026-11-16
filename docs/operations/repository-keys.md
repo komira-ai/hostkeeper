@@ -11,8 +11,9 @@ names a key:
   host does not hold them yet.
 - **A Mac** installs a service's signed `.pkg` with `macos-pkg`. It fetches the `.pkg` from a store
   of `/etc/hostkeeper/stores.toml`, and trusts a `.pkg` only when its leaf certificate is one of the
-  signers in `/etc/hostkeeper/macos-pkg.toml`. On a Mac with MDM the coordinator's gate carries
-  those files in the config profile, from files its operator gives it. A Mac never reads the
+  signers in `/etc/hostkeeper/macos-pkg.toml`. On a Mac under device management, the configuration the
+  device management installs carries those files (the domains `dev.hostkeeper.stores` and
+  `dev.hostkeeper.macos-pkg`), from files its operator gives it. A Mac never reads the
   registry; a `.pkg` of a private repository is fetched from the implicit store `coordinator`,
   over the Mac's mutual-TLS connection to the coordinator.
 
@@ -25,7 +26,7 @@ repository and its descriptor, then an `Add` of the name `komira` again, which r
 confirms the new fingerprints (or a `Put` of the entry with the new keyring); no coordinator release is involved.
 
 So a key rotation is one change on the coordinator for every Linux host, ahead of the
-repository's own change, and a change of the coordinator's MDM files for managed Macs.
+repository's own change, and a change of the device-management configuration for managed Macs.
 
 ## Where each host gets them
 
@@ -33,20 +34,14 @@ repository's own change, and a change of the coordinator's MDM files for managed
 |---|---|---|
 | Linux | `/etc/hostkeeper/repositories/` | the daemon, from the coordinator's registry (`hkctl repositories put`), at the first heartbeat after the registry holds every repository the host's services name; it adopts files already there when they are byte for byte the set, and replaces them otherwise |
 | Linux, before it reaches the coordinator | `/etc/hostkeeper/repositories/` | only for a host that must install from the repository first: `repositories = "<dir>"` in the boot server's `/etc/pxe/pxe.toml` ([network-install.md](network-install.md)) or the enrollment runbook's step ([enrollment.md](enrollment.md#bootstrap-a-linux-node)); the registry's set adopts or replaces them |
-| Mac with MDM | `stores.toml`, `macos-pkg.toml` | the coordinator's `--mdm-stores` and `--mdm-macos-pkg` files. The gate carries them in the config profile as `dev.hostkeeper.stores` and `dev.hostkeeper.macos-pkg`, and the daemon's start writes each file from them |
-| Mac without MDM | `stores.toml`, `macos-pkg.toml` | the operator, by hand, root:wheel 0644 |
-
-The coordinator checks each of its two MDM files with the daemon's own loaders when it starts, and
-refuses to start on a file that a Mac would refuse. A store that names a credential file is refused
-too: a profile carries no secret.
+| Mac under device management | `stores.toml`, `macos-pkg.toml` | the device-management configuration, as the managed preferences `dev.hostkeeper.stores` and `dev.hostkeeper.macos-pkg`; the daemon's start writes each file from them |
+| Mac without device management | `stores.toml`, `macos-pkg.toml` | the operator, by hand, root:wheel 0644 |
 
 On a Mac, the managed preferences are the source of the two files. A file that differs from them
 is replaced at the daemon's next start. A Mac without the two domains keeps the files its operator
-wrote. The gate sends the config profile again to an enrolled Mac on its allowlist once each time
-its settings change, approved Macs included. It counts a change as delivered when the Mac
-acknowledges the profile. A send that the Mac answers with an error is tried again after the gate's
-resend delay. `hostkeeper.toml` is still written only when it is absent, so a profile sent again
-never changes it.
+wrote. The coordinator carries none of this: it no longer sends a profile to a Mac, and checks no
+Mac file at its start (the checks of the removed MDM). Check a file with the Mac's own loader, by
+starting the daemon on it. `hostkeeper.toml` is written only when it is absent.
 
 ## Put the repository in the registry
 
@@ -136,12 +131,11 @@ SHA-256 is the signer that a Mac checks.
    signers = ["<64 hex, old leaf>", "<64 hex, new leaf>"]
    ```
 
-   - **Macs with MDM.** Write this to the coordinator's `--mdm-macos-pkg` file and restart the
-     coordinator. It refuses to start on a file that the Mac's loader would refuse. The gate then
-     sends the changed profile to each enrolled Mac on its allowlist, and each Mac's daemon writes
+   - **Macs under device management.** Put this in the configuration the device management installs
+     (the domain `dev.hostkeeper.macos-pkg`); each Mac's daemon writes
      `/etc/hostkeeper/macos-pkg.toml` at its next start. Restart it on each Mac to take it now:
      `launchctl kickstart -k system/dev.hostkeeper.hostkeeper`.
-   - **Macs without MDM.** Write the file as root, root:wheel 0644, and restart the daemon the
+   - **Macs without device management.** Write the file as root, root:wheel 0644, and restart the daemon the
      same way.
 3. **Check** each Mac: `/etc/hostkeeper/macos-pkg.toml` names both, and the daemon is running. A
    daemon that refused the file does not start, and its log names the rule that the file breaks.
@@ -153,8 +147,8 @@ A signers file names one to four signers. Keep two only during an overlap.
 
 ## Change a Mac's channel stores
 
-The stores work the same way as the signers: through the coordinator's `--mdm-stores` file on a
-Mac with MDM, or by hand on a Mac without it. The two channels are https stores under the
+The stores work the same way as the signers: through the device-management configuration (the domain
+`dev.hostkeeper.stores`) on a Mac under device management, or by hand on a Mac without it. The two channels are https stores under the
 names that a release's `macos-pkg` entries use as their locations:
 
 ```toml

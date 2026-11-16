@@ -1,9 +1,9 @@
-//! The eight services of `hostkeeper.operator.v1` over [`Coordinator`]: `Hosts`, `Releases`,
-//! `Services`, `Enrollment`, `Audit`, `Alerts`, `Rollouts` and `Mdm`.
+//! The seven services of `hostkeeper.operator.v1` over [`Coordinator`]: `Hosts`, `Releases`,
+//! `Services`, `Enrollment`, `Audit`, `Alerts`, `Rollouts`.
 //!
 //! An adapter has no rule of its own. A method that has a handler in the coordinator
 //! ([`crate::operator`], [`crate::hosts`], [`crate::force`], [`crate::assign`],
-//! [`crate::alerts`], [`crate::rollouts`], [`crate::operator_mdm`], [`crate::wait`],
+//! [`crate::alerts`], [`crate::rollouts`], [`crate::wait`],
 //! [`crate::retry`]) calls it with
 //! the caller the router admitted. A method the frozen JSON routes have (`Hosts.Include`,
 //! `Hosts.SetLabels`, `Releases.ClearHalt`, `Releases.SetDesired`, `Releases.Converge`,

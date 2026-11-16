@@ -308,6 +308,21 @@ start it (the plist's `RunAtLoad` and `KeepAlive` decide that), so the hook find
 loaded and starts the one it wants with `launchctl kickstart`. A job is stopped by its label: an
 uninstall boots out each `run` label, then removes every placed link.
 
+### The Mac never sleeps
+
+A build Mac that goes to sleep stops heartbeating (the coordinator logs that the host has not
+heartbeated, about every 16 minutes of DarkWake maintenance wakes). At each start the daemon
+(`crates/hostkeeper-daemon/src/keep_awake.rs`) reads `pmset -g custom` and makes what differs by one
+`pmset -a` command: `sleep`, `disksleep`, `standby`, `autopoweroff` and `powernap` are 0,
+`autorestart` is 1 (start again after a power loss) and `womp` is 1 (wake for network access).
+`displaysleep` is left as it is, and a key the Mac does not list is not set. Each change is logged
+once (`keep_awake: pmset sleep was 1, set to 0`); a Mac that is set already gets no command. The
+daemon runs as root, which is all `pmset` needs (no Full Disk Access). `keep_awake = false` in the
+daemon config (a boolean, default `true`, so no per-host config) turns it off. The settings are
+made at each start of the daemon, not watched in between; the heartbeat does not report them.
+A configuration profile is the other way to hold power settings on a managed Mac; the daemon is
+what ships, so a Mac needs nothing but hostkeeper.
+
 ### Release and installer pkg
 
 Every release ships macos-arm64 beside the two Linux platforms: the binary tarball
@@ -317,6 +332,14 @@ the example service of `examples/hello`: `hello` carries the same ad-hoc code si
 hostkeeper binary, and the plists of its two slots are rendered by
 `hostkeeper_launchd::service_plist`. The artifacts workflow builds them on a GitHub-hosted Apple
 silicon runner, on each push to `main` and by hand, never on a pull request.
+
+The release also ships the bootstrap pkg, `hostkeeper-bootstrap-<v>-macos-arm64.pkg`, which Apple
+Business installs on a new Mac: the program `hostkeeper-bootstrap` at
+`/usr/local/lib/hostkeeper-bootstrap/`, its launchd plist and a postinstall that loads the job. It
+fetches hostkeeper's own pkg, checks it against its Team ID and installs it, and the daemon then
+enrolls ([design/mac-bootstrap.md](design/mac-bootstrap.md),
+[operations/mac-bootstrap.md](operations/mac-bootstrap.md)). It is built, signed and checked in the
+same jobs as the other pkgs.
 
 The pkg is the first install of a Mac. It installs exactly five files and one empty directory,
 and the directories that hold them (each 0755, as macOS has them already; `/usr/local/lib` and
@@ -395,8 +418,8 @@ both, each time it starts.
    at the config path, a link or a directory, is left as it is and refused
    (`<path> is there but is not a regular file; it is not replaced`), since the daemon
    reads its config only from a regular file and not through a link. Otherwise it reads the managed preferences file, which the
-   config profile of the MDM makes (see the farm's config profile in
-   [hostkeeper-mdm.md](design/hostkeeper-mdm.md) section 4). It accepts that file only when root
+   configuration the device management installs for the domain `dev.hostkeeper.config` makes (the bootstrap
+   path, `docs/design/mac-bootstrap.md` section 4). It accepts that file only when root
    owns it, no one else can write it and it is a regular file (checked on the open file, so a link
    is refused). The file is a property list, binary or XML, whose top level is a dictionary. The
    start renders it as TOML and has the daemon's config loader judge that text, so a missing key,
@@ -419,7 +442,7 @@ both, each time it starts.
    when the file would be larger than that loader reads; the file starts with a comment naming the
    domain. Unlike the config, the managed preferences are these files' source: a file that holds
    exactly the rendered text, root's with mode 0644, is left alone, and any other is replaced (a new file in the same directory, mode 0644, synced and renamed over it), so a
-   rotation the MDM pushes takes effect at the next start. A link or a directory at the file's
+   rotation the device management pushes takes effect at the next start. A link or a directory at the file's
    path is refused and left. Any refusal stops the start with exit status 3, naming the managed
    file and the reason.
 
@@ -428,10 +451,10 @@ file the loader refuses) stops the start with exit status 3, the message in
 `/var/log/hostkeeper/daemon.err.log`, and launchd starts the job again, which stops again. So a
 pkg installed on a Mac with neither a config nor the managed preferences installs, loads its job,
 and the daemon refuses each start, naming the missing file in `daemon.err.log`; the install does
-not fail. The MDM gate installs the managed preferences before the pkg, so this is a hand install
+not fail. The device management installs the managed preferences before the pkg, so this is a hand install
 done out of order.
 
-The manual path, for a Mac without an MDM: place `/etc/hostkeeper/hostkeeper.toml` first, then
+The manual path, for a Mac without device management: place `/etc/hostkeeper/hostkeeper.toml` first, then
 install the pkg. The daemon's start keeps that file, and the postinstall loads the job.
 
 `cargo xtask release macos-pkg` builds the component with `pkgbuild` from the binary, `gh` and the
@@ -471,11 +494,12 @@ pkg's plist.
 ### The installer's signature
 
 The released pkg is signed with the Developer ID Installer identity
-`Developer ID Installer: Komira AI, Inc. (U7RTX4XD3X)`, because the MDM's
-`InstallEnterpriseApplication` installs only a signed pkg. hello's `.pkg`
+`Developer ID Installer: Komira AI, Inc. (U7RTX4XD3X)`, because a pkg that device management installs
+must be signed. hello's `.pkg`
 (`hello-<version>-macos-arm64.pkg`) is signed the same way, in the same jobs, because a host's
-`macos-pkg` installer stages only a signed pkg; each step below is done for both. It is not notarized: nothing Apple
-states asks an MDM-installed pkg for notarization (design section 7.3), and the release adds it
+`macos-pkg` installer stages only a signed pkg, and so is the bootstrap pkg
+(`hostkeeper-bootstrap-<version>-macos-arm64.pkg`); each step below is done for all three. It is not notarized: nothing Apple
+states asks a pkg that device management installs for notarization, and the release adds it
 only if a Mac refuses the signed pkg without it. The signing is in `.github/workflows/artifacts.yml`,
 on a push to `main` only, in three jobs:
 
@@ -495,7 +519,8 @@ on a push to `main` only, in three jobs:
    Certification Authority` and `Apple Root CA`, naming every difference; it then expands the
    signed and the unsigned pkg and refuses any file that differs, so the signing changed nothing
    `check-macos-pkg` checked. Only then is each signed pkg the release file
-   `hostkeeper-<version>-macos-arm64.pkg` or `hello-<version>-macos-arm64.pkg`: `SHA256SUMS`,
+   `hostkeeper-<version>-macos-arm64.pkg`, `hostkeeper-bootstrap-<version>-macos-arm64.pkg` or
+   `hello-<version>-macos-arm64.pkg`: `SHA256SUMS`,
    the attestation and the release are of its bytes.
 
 A run by hand signs nothing: it builds and checks the unsigned pkgs and makes the sums without
@@ -507,8 +532,7 @@ secrets named in that job alone; the checks of both pkgs before the one upload o
 
 On a Mac, `pkgutil --check-signature hostkeeper-<version>-macos-arm64.pkg` (or
 `hello-<version>-macos-arm64.pkg`) shows the signature.
-The MDM gate takes the release's pkg as it is: its digest on the allowlist is the line of
-`SHA256SUMS`, the signed file's ([enrollment-coordinator.md](enrollment-coordinator.md)).
+The digest of the release's pkg is the line of `SHA256SUMS`, the signed file's.
 
 ### Boot id
 

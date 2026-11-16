@@ -184,8 +184,8 @@ needed only by a host that must install from the repository before it reaches th
 ([network-install.md](network-install.md), step 3a); every other host gets the entries at its
 first heartbeat.
 
-A Mac takes the stores and the signers in place of the entries: through the coordinator's MDM
-files, or by hand ([repository-keys.md](repository-keys.md)). Its daemon reads them at its start
+A Mac takes the stores and the signers in place of the entries: through the device-management
+configuration, or by hand ([repository-keys.md](repository-keys.md)). Its daemon reads them at its start
 (`launchctl kickstart -k system/dev.hostkeeper.hostkeeper`), and the check is `announces` with
 `--arg installer macos-pkg`. No host of the farm is a Mac today.
 
@@ -224,18 +224,17 @@ that moved is ordered its native entry, if the release has one, and stays on its
 automatic rollback of a failed move does the same on one host. Once the next update of `hello`
 on a host has retired that archive version, the move there cannot be undone.
 
-## Stage 8: `mdm`, then `hostkeeper`
+## Stage 8: `hostkeeper`
 
 **Starts when** `hello` moved on every host: `service-not-native` with `--arg service hello`
 prints `0`.
 
-**The work.** `mdm`'s release lists its native entry first (A21), and then `hostkeeper`'s does
-(A23), and each moves as `hello` did. `hostkeeper` moves by its self-update: the new daemon
+**The work.** `hostkeeper`'s release lists its native entry (A23), and it moves as `hello` did (the `mdm` package this stage once moved first was withdrawn with the MDM). `hostkeeper` moves by its self-update: the new daemon
 confirms that it starts, then installs its own `.deb`, takes the archive's unit away from
-`/etc/systemd/system/` and reloads systemd, and is not restarted. Follow each with
-`service-not-native` and `--arg service mdm`, then `--arg service hostkeeper`.
+`/etc/systemd/system/` and reloads systemd, and is not restarted. Follow it with
+`service-not-native` and `--arg service hostkeeper`.
 
-**Holds when** both print `0`.
+**Holds when** it prints `0`.
 
 **Back out**: the same as stage 7, for each service, but `hostkeeper` is never forced (a force
 of it is refused `self_service`): set its lower version. A rollback of `hostkeeper` to a release

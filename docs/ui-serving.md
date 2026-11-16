@@ -41,7 +41,7 @@ Sign out ends the session on the coordinator.
 
 After sign-in the app opens on **Home**, the lab (`docs/design/ui-shell-lab.md`). The frame around every page is a side menu with
 the "hostkeeper" wordmark on top (a click goes Home), the pages (Host groups, Packages, Inventory and Enrollment) and, at the bottom, **Settings**
-(one page with the tabs Users, API tokens, MDM and Audit), the theme (the browser's own, light or dark; kept in memory only),
+(one page with the tabs Users, API tokens and Audit), the theme (the browser's own, light or dark; kept in memory only),
 Sign out and a button that collapses the menu to icons; on a narrow screen it is a drawer opened by the top bar's Menu button.
 The top bar says where you are and who is signed in. The menu's icons are small inline SVG drawings (`icon` in `ui/view.js`; no image or font is loaded). Banners come in three kinds: `error` (red), `warning` (amber) and `notice` (blue, for what is true and needs no action); an empty one shows nothing. The pages that moved keep their old route: `fleet` is Home, and Release, Rollout and Holds still open
 by their route and are not in the menu.
@@ -141,33 +141,6 @@ by their route and are not in the menu.
   group selected and, for a host in none, the blank "Unassigned" (a host in no group is ordered no package). Pages label a host with no group "Unassigned". Choosing another group
   and pressing **Move** calls `HostGroups.Move` after a confirmation, with the reason "moved in the
   console" (the form has no reason field); choosing the blank moves the host to no group. A refused List is shown inline and the rest of the page renders.
-- **MDM setup** (`MDM setup` in the page list; `docs/operations/mdm-setup.md`, `docs/design/coordinator-mdm.md` section 4.9).
-  A tab of Settings. One plain form and nothing else but a one-line status above it and a *Verify* button below it. The status line is `Mdm.Status`
-  in a line: `MDM: configured`, or `MDM: missing push certificate, ABM token` (a part that is there and wrong, such as an expired
-  certificate, is named after a semicolon), and `Name:` with the MDM name, read-only. Each field is one labelled input with a one-line
-  hint of where its file comes from and a *How do I get this?* link to the section of `docs/operations/mdm-setup.md` (as GitHub renders
-  it: the one address the app may link to, which `docLink` in `view.js` enforces) that says how to get it: the push certificate and
-  its private key (files, PEM); the Apple Business Manager token (a file: the `.p7m` from ABM, or an existing token as JSON, told by its
-  content); the Apple Business Manager private key and certificate (files, PEM, for taking over an existing ABM server); the GoDaddy API
-  key and secret (the secret in a password field); and the contact email for Let's Encrypt (prefilled with the stored `acme_contact`, else
-  with the signed-in user's name when that is an address). Only while no MDM name is set, one more field takes it (`Mdm.PutName`). A part the
-  coordinator holds is shown beside its field as `stored ✓ (expires YYYY-MM-DD)`, never its value (`Mdm.Status`, and `Mdm.ListSecrets` for the
-  ABM key and certificate). Next to the token field, only when no ABM key is stored, a link *Download the public certificate to upload to ABM*
-  (`Mdm.GetAbmPublicKey`, which makes the key pair at its first call) is for a new server entry in ABM.
-  One *Save* sends whatever fields are filled, in this order, and an empty file field keeps what is stored: the name; the push certificate
-  with its key in one `Mdm.PutPushCertificate` (the coordinator checks they are a pair; one without the other is refused on the page);
-  the ABM key with its certificate in one `Mdm.PutSecret` (kind `abm_key` with `with_certificate`; a certificate alone is kind `abm_cert`);
-  the token (`Mdm.PutAbmToken`: `token_json` when the file begins with `{` and is a JSON object, else `token_p7m`, which is not tried when the
-  ABM key just failed); the GoDaddy credential (`Mdm.PutSecret`, kind `dns_credential`, provider `godaddy`, the key and the secret) and, when the
-  setting `dns_zone` is empty, the zone worked out from the MDM name (its registrable domain: the last two labels, three under a suffix of
-  two labels such as `co` and a country code; `Mdm.PutSetting`); and the contact (`acme_contact`) when it was changed or is saved with the credential. A refusal is shown under
-  its own field, in words with the API's code and reason, and the other parts are still stored. The ACME directory (production Let's Encrypt
-  unless the setting says another), the DNS provider (GoDaddy) and the DNS zone are not on the page; they stay settings of the API.
-  A file is read when *Save* is pressed, sent and dropped, never typed, and the GoDaddy secret is emptied whatever the answer is; the page
-  shows no value of a secret. The writes need a signed-in user's session: a bearer is refused them. *Verify* (`Mdm.Verify`, with no Mac) lists what
-  each part found: the setup, whether the Macs' listener runs and serves a certificate that names the MDM name, and, with an ABM token held, whether
-  Apple accepts it. The push certificate request, the reply check, the name step beyond the first name, the TLS upload, the ACME settings and
-  the test push of earlier pages are not on the page; their calls are still served.
 - **Users** (`Users.List`; `Users.Create`, `Disable`, `Enable`, `ResetPassword` and `Delete` on a button): a table
   of the users with whether each is enabled, must change its password, who made it and when, its last sign-in and the
   second its temporary password stops working. Create takes a name; Create and Reset password show the temporary

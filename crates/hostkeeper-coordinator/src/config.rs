@@ -74,7 +74,7 @@ use crate::alerts::{
 use crate::audit_file::wall_clock;
 use crate::backup::{Backup, Report, Restore, backup, restore};
 use crate::desired::DesiredStore;
-use crate::enrollment::{MacAllowlist, MacPolicy, Setup, StoreAt, os_random, setup};
+use crate::enrollment::{Setup, StoreAt, os_random, setup};
 use crate::fleet::{CLOCK_SKEW_AFTER, QUIET_START};
 use crate::health::{self, Serving};
 use crate::host_groups::GroupName;
@@ -86,10 +86,7 @@ use crate::listen::{
     CLIENT_PATIENCE, Listener, MAX_CONNECTIONS, Remote, reload_every, serve, together,
 };
 use crate::lock::{FileLock, LockGuard, StateLock};
-use crate::mdm::{Devices, Mdm, MdmFlags};
-use crate::mdm_lease::Lease;
 use crate::ops::OpsStore;
-use crate::proxy_origin::Proxy;
 use crate::service::{Clock, Coordinator};
 use crate::store::Spent;
 use crate::transfer::{Export, export};
@@ -118,14 +115,11 @@ mod listen;
 mod bound;
 pub use bound::{Bound, bind_tcp, start_line};
 
-/// The start's wiring of the MDM listener.
-#[path = "config_mdm.rs"]
-mod mdm_listener;
-
-/// The start's check of the Mac serial allowlist against the host groups the store holds.
-#[path = "config_mac.rs"]
-mod mac;
-use mac::check_allowlist;
+/// The flags this release accepts and ignores: the MDM's, the Mac serial allowlist's and the
+/// package proxy's.
+#[path = "config_retired.rs"]
+mod retired;
+pub use retired::RetiredFlags;
 
 /// The start's state files, opened as one backend once the markers a stop left beside them are
 /// settled.
@@ -183,7 +177,7 @@ pub enum Command {
 
 /// The flags of `serve`.
 #[derive(Clone, Debug, Args)]
-// The store of the enrollment and the MDM gate's records: the directory or the database (which
+// The store of the enrollment's records: the directory or the database (which
 // refuses the directory beside it, naming it, at start).
 #[group(id = "records_store", args = ["enrollment_dir", "database_dsn_file"], multiple = true)]
 pub struct Serve {
@@ -299,6 +293,10 @@ pub struct Serve {
     /// to an operator whose unit still names it; it is not in the help.
     #[arg(long, hide = true)]
     pub rollout_file: Option<PathBuf>,
+    /// The flags of the MDM, the Mac serial allowlist and the package proxy: accepted and
+    /// ignored for one release, and not in the help.
+    #[command(flatten)]
+    pub retired: RetiredFlags,
     /// The service whose heartbeat is the top level of a heartbeat, which a desired-state body
     /// without `service` sets and an allow-list entry without `services` admits. It names the
     /// service of the single-state desired file. Without it only the `services` entries of a
@@ -377,28 +375,6 @@ pub struct Serve {
     /// at least one second. A longer window is refused `invalid_window`.
     #[arg(long, default_value = "7d", value_parser = record_window_secs)]
     pub record_approve_max: u64,
-    /// The Mac serial numbers a Mac may be approved for by its MDM nonce, with the host id
-    /// prefix and host group of each: a TOML file of `[[mac]]` entries (`serial`,
-    /// `host_id_prefix`, `host_group`; an entry written before groups names a `role`, read as
-    /// the group, and `services`, which a coordinator that holds a host group refuses at start).
-    /// Without it no Mac is approved by its nonce.
-    #[arg(long, requires = "ca_key_file")]
-    pub mac_serial_allowlist: Option<PathBuf>,
-    /// The MDM policy gate: NanoHUB's API, its key and the webhook listener.
-    #[command(flatten)]
-    pub mdm: MdmFlags,
-    /// The file that holds the key the MDM server's secrets (the push key, the ABM token and the
-    /// rest of the setup, `docs/design/coordinator-mdm.md` section 4.9) are sealed under in the
-    /// store: 64 hex digits, a regular file of the coordinator's user, mode 0600 or 0400. The
-    /// coordinator makes it (mode 0600) when it is not there and the store holds no sealed
-    /// secret. A file that is not there, or no flag, with sealed secrets in the store, and a key
-    /// that opens none of them, refuse the start: a new key would orphan every secret. Keep the
-    /// file apart from the store's backups. Without it `Mdm.PutSecret` is refused `secrets_unavailable`.
-    #[arg(long)]
-    pub mdm_secrets_key_file: Option<PathBuf>,
-    /// The package proxy's flags.
-    #[command(flatten)]
-    pub proxy: crate::config_proxy::ProxyFlags,
     /// A directory of static files (the operator web app) that the private listener serves
     /// under `/ui/`, to `GET` and `HEAD` only: `/ui/` is its `index.html`, and only files ending
     /// in .html, .css, .js, .json, .svg, .png or .ico of at most 4 MiB inside it are served.
@@ -492,8 +468,6 @@ pub struct Parts {
     /// Where to bind the LAN listener, when there is one. It serves the heartbeat listener's
     /// TLS and surface.
     pub lan_listen: Option<SocketAddr>,
-    /// Where to bind the listener of the Macs (`--mdm-listen`), when there is one.
-    pub mdm_listen: Option<SocketAddr>,
     /// Where to bind the health listener (`--health-listen`, a loopback address), when there
     /// is one.
     pub health_listen: Option<SocketAddr>,
@@ -510,17 +484,15 @@ pub struct Parts {
 /// # Errors
 /// [`StartError`]: a file is missing, unreadable or refused (the text names the flag or the
 /// file; the ops file must be one this build reads), `--ui-dir` is missing or not a directory,
-/// `--private-listen` (without `--private-listen-wildcard`), `--mdm-listen` (without `--mdm-listen-wildcard`) or `--lan-listen` (without `--lan-listen-wildcard`) or `--lan-address` is a wildcard
+/// `--private-listen` (without `--private-listen-wildcard`), `--lan-listen` (without `--lan-listen-wildcard`) or `--lan-address` is a wildcard
 /// address, a `--lan-name` is no DNS name, `--health-listen` is not a
 /// loopback address, `--quiet-secs` is below two
 /// heartbeat intervals,
 /// another coordinator holds the lock of the state files, a halt was being written when the
 /// coordinator stopped, both token flags or neither is given, an allow-list entry names no
 /// services with no legacy service set or names a host group by a name that is no group name,
-/// an entry of the Mac allowlist names services or a group the store does not hold,
 /// `--rollout-file` is given (it is not read: hosts are placed by the `HostGroups` calls), the two URI
-/// prefixes are refused, or the MDM gate's flags or device records are
-/// ([`crate::mdm::MdmError`]).
+/// prefixes are refused.
 pub fn build(flags: &Serve, roots: Roots) -> Result<Parts, StartError> {
     build_with(flags, roots, &FileLock)
 }
@@ -532,6 +504,9 @@ pub fn build(flags: &Serve, roots: Roots) -> Result<Parts, StartError> {
 pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<Parts, StartError> {
     if flags.rollout_file.is_some() {
         return Err(StartError::RolloutFileRetired);
+    }
+    for name in flags.retired.given() {
+        tracing::warn!(flag = name, "retired, ignored");
     }
     listen::check_listen(flags)?;
     if flags.quiet_secs < QUIET_START.as_secs() {
@@ -570,18 +545,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         marker,
         held,
         records,
-        devices,
-        setup: setup_store,
-        mdm: mdm_store,
     } = state::open_store(flags, legacy, lock, &oidc_clock)?;
-    let mdm_setup = Arc::new(state::mdm_setup(flags, setup_store)?);
-    let proxy = Proxy::start(
-        flags.proxy.proxy_cache_dir.as_deref(),
-        &mdm_setup,
-        roots.clone(),
-    )?;
-    let lease = Lease::of_store(Arc::clone(&backend));
-    let wiring = mdm_listener::wire(flags, &mdm_store, &mdm_setup, &lease);
     let verifier = Verifier::new(
         oidc.clone(),
         Arc::new(keys),
@@ -629,13 +593,6 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         );
     coordinator = state::with_initial_admin(coordinator, flags)?;
     coordinator = state::with_login(coordinator, flags)?;
-    coordinator = coordinator
-        .with_shared_mdm_setup(mdm_setup)
-        .with_mdmcert(Arc::new(
-            hostkeeper_mdm_push::mdmcert::HttpsTransport::production(),
-        ))
-        .with_proxy(proxy);
-    coordinator = coordinator.with_abm(state::abm(Arc::clone(&mdm_store), roots.clone())?);
     let store = match (&flags.enrollment_dir, records) {
         (Some(dir), _) => Some(StoreAt::Dir(dir)),
         (None, Some(records)) => Some(StoreAt::Records(records)),
@@ -644,13 +601,6 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
     };
     let heartbeat_tls = match (store, &flags.ca_key_file, &flags.server_cert_file) {
         (Some(store), Some(ca_key), Some(server_cert)) => {
-            let allowlist = flags
-                .mac_serial_allowlist
-                .as_deref()
-                .map(MacAllowlist::load)
-                .transpose()?
-                .unwrap_or_default();
-            check_allowlist(&allowlist, &coordinator)?;
             // The LAN listener's address, an IPv4 one written as IPv6 named as IPv4.
             let lan_ips: Vec<_> = flags.lan.named(flags.lan_listen).into_iter().collect();
             // The DNS names: those of --server-name and those of --lan-name.
@@ -660,27 +610,6 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
                 .map_or(DEFAULT_MAX_PENDING, |max| {
                     usize::try_from(max).unwrap_or(usize::MAX)
                 });
-            // The gate's device records are kept with the enrollment store: in its directory, or
-            // in the database, opened with it when the gate's flags are given.
-            let devices = match &store {
-                StoreAt::Dir(dir) => Some(Devices::Files(dir)),
-                StoreAt::Records(_) => devices.map(Devices::Store),
-            };
-            let mdm = match devices {
-                Some(devices) => {
-                    let queue = wiring.as_ref().map(mdm_listener::Wiring::queue);
-                    Mdm::open_with(
-                        &flags.mdm,
-                        devices,
-                        Arc::new(SystemClock),
-                        os_random(),
-                        coordinator.mdm_setup(),
-                        queue,
-                    )?
-                }
-                None => None,
-            };
-            Mdm::check_baseline_groups(mdm.as_ref(), &allowlist)?;
             let enrollment = setup(
                 Arc::new(RealFs),
                 &Setup {
@@ -697,19 +626,12 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
             .with_max_pending(max_pending)
             .with_request_ttl(flags.enrollment_request_ttl)
             .with_host_validity_secs(flags.host_cert_validity_secs)
-            .with_host_role_uri_prefix(coordinator.prefixes().host_role())
-            // The gate, when the coordinator runs it, says whether a Mac is enrolled and
-            // supervised; without it no device is known.
-            .with_mac(MacPolicy {
-                device_state: Mdm::device_state(mdm.as_ref()),
-                allowlist,
-            });
-            let enrollment = Mdm::wire(mdm.as_ref(), enrollment);
+            .with_host_role_uri_prefix(coordinator.prefixes().host_role());
             let client = ClientAuth {
                 optional: true,
                 extra_roots: vec![enrollment.ca_bundle().certificate_der().to_vec()],
             };
-            coordinator = coordinator.with_enrollment(enrollment).with_mdm(mdm);
+            coordinator = coordinator.with_enrollment(Arc::new(enrollment));
             let served = TlsFiles {
                 cert: server_cert.clone(),
                 key: server_cert.clone(),
@@ -720,9 +642,6 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         // clap requires --ca-key-file, --server-cert-file and --server-name together.
         _ => TlsSource::files("heartbeat", files(Some(flags.client_ca.clone())), interval)?,
     };
-    // The MDM name is --mdm-host's, once the gate that knows whether a Mac has enrolled is held.
-    coordinator.adopt_mdm_name(flags.mdm.mdm_host.as_deref())?;
-    let (coordinator, mdm_listen) = mdm_listener::attach(wiring, coordinator);
     Ok(Parts {
         coordinator: Arc::new(coordinator),
         heartbeat_tls,
@@ -730,7 +649,6 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         heartbeat_listen: flags.heartbeat_listen,
         control_listen: flags.private_listen,
         lan_listen: flags.lan_listen,
-        mdm_listen,
         health_listen: flags.health_listen,
         reload: interval,
         lock: held,
@@ -740,8 +658,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
 /// Binds the listeners with `bind` (which answers the address bound and the function that
 /// accepts connections): the health listener first when there is one, which from then on
 /// answers `starting` until the rest are bound; then the heartbeat listener, the private one,
-/// the LAN listener when there is one, and the MDM gate's webhook listener when the coordinator
-/// runs the gate; calls `ready` with their addresses, and serves until the future is dropped.
+/// the LAN listener when there is one; calls `ready` with their addresses, and serves until the future is dropped.
 /// The LAN listener serves the heartbeat listener's TLS and surface. It never returns `Ok`.
 ///
 /// # Errors
@@ -823,26 +740,10 @@ where
         Some(addr) => Some(bind(addr).await?),
         None => None,
     };
-    let webhook = match parts.coordinator.mdm() {
-        Some(mdm) => match mdm.webhook_listen {
-            Some(listen) => {
-                let (addr, accept) = bind(listen).await?;
-                tracing::info!(%addr, "serving the MDM webhook");
-                Either::Left(Mdm::serve(Arc::clone(&mdm.gate), accept))
-            }
-            None => Either::Right(Either::Left(Mdm::looks(Arc::clone(&mdm.gate)))),
-        },
-        None => Either::Right(Either::Right(std::future::pending())),
-    };
-    let macs = match parts.mdm_listen {
-        Some(addr) => Some(bind(addr).await?),
-        None => None,
-    };
     ready(Bound {
         heartbeat: heartbeat_addr,
         control: control_addr,
         lan: lan.as_ref().map(|(addr, _)| *addr),
-        mdm: macs.as_ref().map(|(addr, _)| *addr),
         health: None,
     });
     let lan = lan.map(|(_, accept)| Listener {
@@ -866,7 +767,6 @@ where
     let watching = Arc::clone(&coordinator);
     let observing = observe_every(Arc::clone(&coordinator), OBSERVE_EVERY);
     let adopting = watch_every(Arc::clone(&coordinator), parts.reload);
-    let syncing = crate::operator_abm::abm_sync_every(Arc::clone(&coordinator));
     // Without a LAN listener, a future that never finishes stands in for it.
     let serving_lan = match lan {
         Some(lan) => Either::Left(serve(
@@ -875,10 +775,6 @@ where
             CLIENT_PATIENCE,
             MAX_CONNECTIONS,
         )),
-        None => Either::Right(std::future::pending()),
-    };
-    let serving_macs = match macs {
-        Some((_, accept)) => Either::Left(mdm_listener::serve(accept, Arc::clone(&coordinator))),
         None => Either::Right(std::future::pending()),
     };
     let (for_heartbeat, for_control) = (Arc::clone(&coordinator), Arc::clone(&coordinator));
@@ -893,11 +789,8 @@ where
         parts.reload,
     );
     let all = together(
-        together(together(serving, serving_lan), serving_macs),
-        together(
-            reloading,
-            together(observing, together(webhook, together(adopting, syncing))),
-        ),
+        together(serving, serving_lan),
+        together(reloading, together(observing, adopting)),
     );
     // A store another coordinator led while this one's link was lost stops the serve: its memory
     // is stale (`docs/design/coordinator-storage.md`, section 5).

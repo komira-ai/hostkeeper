@@ -1,9 +1,11 @@
 # Coordinator storage: the state in Postgres
 
+> **Update 2026-11-14.** The MDM gate's device records and the MDM tables are no longer read or written; the tables stay in place, unused (`docs/operations/coordinator-state.md`). The MDM was removed from the coordinator and the repository (`docs/design/coordinator-mdm.md`, superseded); Macs enroll through the bootstrap package (`docs/design/mac-bootstrap.md`). Where this document describes the MDM, its kit, its policy gate or the `mdm` package, it describes what was removed; the rest stands.
+
 Status: design, for the maintainers' comments. It supersedes "plain files, no database" for the coordinator's state:
 [hostkeeper-design.md](hostkeeper-design.md) section 4.3 ("There is no database") and the coordinator's rows of its
 section 10, the halts-file storage of the plan position in [rollout-update-plans.md](rollout-update-plans.md) section 3,
-and the device-record file of [hostkeeper-mdm.md](hostkeeper-mdm.md) section 6.1. Where they disagree with this document
+and the device-record file of hostkeeper-mdm.md (hostkeeper-mdm.md, removed) section 6.1. Where they disagree with this document
 on where the coordinator keeps its state, this document wins. C1 to C4 and C6 are built: the storage trait and its
 fake (section 4.1), the enrollment crate's `Records` port, the Postgres store
 (`crates/hostkeeper-coordinator/src/store/postgres/`, with its migrations `0001` to `0011`, sections 3 to 8),

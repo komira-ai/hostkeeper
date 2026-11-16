@@ -38,9 +38,9 @@
 //! ([`Coordinator::assign_host`], the one path by which `Services.Assign` of a host assigns
 //! too), after the approval is recorded: each service is one audit entry `assign`. An
 //! assignment that cannot be written is logged and leaves the approval standing; the operator
-//! assigns the services with `Services.Assign`. A Mac approved by its MDM nonce at its
-//! `Enroll` ([`Coordinator::enroll`]) has the services of its allowlist entry assigned the same
-//! way, by `mdm-nonce`. An approval by a record assigns none, nor does one by group.
+//! assigns the services with `Services.Assign`. A Mac's `Enroll` ([`Coordinator::enroll`]) carries no approval by a nonce
+//! any more (the nonce is ignored), so it waits for an operator or a record. An approval by a
+//! record assigns none, nor does one by group.
 
 use std::collections::BTreeMap;
 
@@ -50,7 +50,7 @@ use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::EnrollmentRefusal;
 use hostkeeper_wire::{HostId, RoleName};
 
-use crate::enrollment::{ByRecord, Enrollment, MAC_APPROVER, RpcError};
+use crate::enrollment::{ByRecord, Enrollment, RpcError};
 use crate::host_groups::GroupName;
 use crate::inventory::show_match;
 use crate::layout::{Kind, Layout, LayoutError, Subject};
@@ -242,12 +242,10 @@ impl Coordinator {
     }
 
     /// `Enroll` of `hostkeeper.agent.v1.Coordinator` over `enrollment`, this coordinator's
-    /// ([`Enrollment::enrolled`]): when a Mac's request is approved by its nonce, the services
-    /// of its allowlist entry are assigned to its host by `mdm-nonce`, as an operator's
-    /// approval assigns the services it names (an approval by group names none). A request
-    /// still pending (a new one or a repost) is tried against the host inventory
-    /// ([`Enrollment::approve_by_record`]), under the fleet's lock; one it approves is answered
-    /// as one already approved (`UNSPECIFIED`: poll it), as a Mac's by its nonce.
+    /// ([`Enrollment::enrolled`]): a request still pending (a new one or a
+    /// repost) is tried against the host inventory ([`Enrollment::approve_by_record`]), under
+    /// the fleet's lock; one it approves is answered as one already approved (`UNSPECIFIED`:
+    /// poll it).
     ///
     /// # Errors
     /// As [`Enrollment::enrolled`].
@@ -259,23 +257,6 @@ impl Coordinator {
         let mut enrolled = enrollment.enrolled(request)?;
         if enrolled.response.state == EnrollState::Pending as i32 {
             self.approve_posted(enrollment, &enrolled.request_id, &mut enrolled.response);
-        }
-        if let Some(entry) = enrolled
-            .by_nonce
-            .as_ref()
-            .filter(|e| !e.services.is_empty())
-        {
-            let services: Vec<String> = entry
-                .services
-                .iter()
-                .map(|service| service.as_str().to_owned())
-                .collect();
-            self.assign_approved(
-                MAC_APPROVER,
-                entry.host_id.as_str(),
-                entry.role.as_str(),
-                &services,
-            );
         }
         Ok(enrolled.response)
     }

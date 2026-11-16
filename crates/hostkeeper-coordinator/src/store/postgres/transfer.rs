@@ -11,11 +11,10 @@ use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 use hostkeeper_enrollment::enroll::records::Snapshot;
-use hostkeeper_mdm_gate::DeviceRecord;
 
 use super::session::{Session, describe};
 use super::writer::try_lock;
-use super::{DatabaseError, Dsn, Timeouts, devices, load_all, logged_of, migrate, records};
+use super::{DatabaseError, Dsn, Timeouts, load_all, logged_of, migrate, records};
 use crate::audit_file::AuditLine;
 use crate::store::Loaded;
 
@@ -30,7 +29,7 @@ const MOVE_TIMEOUTS: Timeouts = Timeouts {
 
 /// Every table that holds state, in the order an export counts them; `imports` is the import's
 /// own record, and the bookkeeping (`schema_version`, `lease`, `enrollment_serial`) is not here.
-pub(crate) const STATE_TABLES: [&str; 46] = [
+pub(crate) const STATE_TABLES: [&str; 45] = [
     "desired",
     "desired_digests",
     "releases",
@@ -67,7 +66,6 @@ pub(crate) const STATE_TABLES: [&str; 46] = [
     "enrollment_host_running",
     "enrollment_deny",
     "mac_nonces",
-    "mdm_devices",
     "users",
     "api_tokens",
     "lab_rows",
@@ -92,8 +90,6 @@ pub(crate) struct Moved {
     pub(crate) audit: Vec<AuditLine>,
     /// The enrollment store's records.
     pub(crate) records: Snapshot,
-    /// The MDM gate's device records, in the order of their enrollment ids.
-    pub(crate) devices: Vec<DeviceRecord>,
     /// The time of the oldest audit line the files still held when older ones were deleted, as
     /// the import record of a database a release before this one filled from files says.
     pub(crate) pruned_before: Option<u64>,
@@ -147,7 +143,6 @@ fn read_moved(session: &mut Session, now: u64) -> Result<Moved, DatabaseError> {
     let records = records::read_all(session)
         .map_err(|e| refused(&e))?
         .map_err(|e| DatabaseError::Refused(e.to_string()))?;
-    let devices = devices::read_all(session).map_err(|e| DatabaseError::Load(e.to_string()))?;
     let pruned: Option<i64> = session
         .query_opt(
             "SELECT audit_pruned_before FROM imports ORDER BY id DESC LIMIT 1",
@@ -159,7 +154,6 @@ fn read_moved(session: &mut Session, now: u64) -> Result<Moved, DatabaseError> {
         loaded,
         audit,
         records,
-        devices,
         pruned_before: pruned.and_then(|n| u64::try_from(n).ok()),
     })
 }

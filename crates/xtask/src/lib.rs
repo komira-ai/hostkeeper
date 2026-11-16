@@ -8,10 +8,6 @@
 //!   `targets` that deploy them (`release`).
 //! - `advisories`: the security advisories against the dependencies in `Cargo.lock`, kept in
 //!   one GitHub issue that it opens, rewrites and closes (`advisories`).
-//! - `mdm-signing-test <verb>`: the device test of pkg signing of the MDM design (task M11): the
-//!   kit's pkgs, built on a Mac, and the sends of its steps to an enrolled Mac through NanoHUB,
-//!   with what each did (`mdm_signing_test`). Not a CI step: an operator runs it
-//!   (`docs/operations/pkg-signing-test.md`).
 //! - `netinstall-report`: the measurement of network install (item N11 of
 //!   `docs/design/network-install.md`): one machine's events from power-on to serving and the
 //!   intervals between them, from the times `hostkeeper-pxe` and the coordinator recorded
@@ -31,9 +27,6 @@
 //! - `netboot-iso`: the Ubuntu ISO of a network-install job, by its pin in
 //!   `packaging/netboot/pins.toml`, from the pinned URL or the mirrors given in turn
 //!   (`netboot_iso`).
-//! - `abm-takeover-token`: the one-off reader of the ABM takeover, which assembles the token JSON
-//!   `Mdm.PutAbmToken` takes from the files NanoDEP keeps its decrypted token in (`abm_takeover`).
-//!   Not a CI step: the operator runs it on the old MDM stack's machine.
 //! - `db-backup`: one dump of the coordinator's database into a directory of dumps, keeping the
 //!   newest of them (`db_backup`). Not a CI step: the backup timer of the compose deployment runs
 //!   it (`docs/deploy/coordinator/`).
@@ -51,14 +44,12 @@
 //! with the feature `test-support`, which only this crate's own tests turn on, it also exports
 //! `test_support`, what its integration tests need of its internals.
 
-mod abm_takeover;
 mod advisories;
 mod channels;
 mod coordinator_update;
 mod db_backup;
 mod debs;
 mod install;
-mod mdm_signing_test;
 mod mirrored;
 mod netboot_iso;
 mod netinstall_report;
@@ -92,8 +83,6 @@ enum Error {
     #[error(transparent)]
     Advisories(#[from] advisories::Error),
     #[error(transparent)]
-    SigningTest(#[from] mdm_signing_test::Error),
-    #[error(transparent)]
     NetinstallReport(#[from] netinstall_report::Error),
     #[error(transparent)]
     DbBackup(#[from] db_backup::Error),
@@ -106,8 +95,6 @@ enum Error {
     /// The roots of `--ca-bundle` could not be read.
     #[error(transparent)]
     CaBundle(#[from] release::ports::PortError),
-    #[error(transparent)]
-    AbmTakeover(#[from] abm_takeover::Error),
 }
 
 #[derive(Parser)]
@@ -149,12 +136,6 @@ enum Verb {
         /// The repository of the issue, `<owner>/<repo>` (on Actions, `github.repository`).
         #[arg(long)]
         repo: release::contract::Repo,
-    },
-    /// The device test of pkg signing (MDM design, task M11): build the kit on a Mac, send its
-    /// steps to an enrolled Mac through NanoHUB, record and report what each did.
-    MdmSigningTest {
-        #[command(subcommand)]
-        verb: mdm_signing_test::Verb,
     },
     /// The measurement of network install: one machine's events from power-on to serving and
     /// the intervals between them, with the person's wait apart from the machine's time, from
@@ -216,10 +197,6 @@ enum Verb {
         #[arg(long, default_value = coordinator_update::public::CA_BUNDLE)]
         ca_bundle: PathBuf,
     },
-    /// The one-off reader of the ABM takeover: assemble the JSON that `Mdm.PutAbmToken` takes
-    /// from the five files NanoDEP keeps its decrypted token in, into a file of mode 0600. Prints
-    /// the file's name and no value; sends nothing.
-    AbmTakeoverToken(abm_takeover::Flags),
 }
 
 fn run(cli: Cli) -> Result<Vec<String>, Error> {
@@ -242,11 +219,6 @@ fn run(cli: Cli) -> Result<Vec<String>, Error> {
             let ports = release::ports::Adapters::ports(&adapters);
             Ok(advisories::sync(ports.advisories, ports.runs, &repo)?)
         }
-        Verb::MdmSigningTest { verb } => Ok(mdm_signing_test::run(
-            verb,
-            &release::real::exec(),
-            mdm_signing_test::NanoHubHttp::new,
-        )?),
         Verb::NetinstallReport(flags) => Ok(netinstall_report::run(&flags)?),
         Verb::DbBackup(flags) => Ok(db_backup::run(&flags)?),
         Verb::Channels { verb } => Ok(channels::run(verb, &release::real::exec())?),
@@ -286,7 +258,6 @@ fn run(cli: Cli) -> Result<Vec<String>, Error> {
                 &std::thread::sleep,
             )?])
         }
-        Verb::AbmTakeoverToken(flags) => Ok(abm_takeover::run(&flags)?),
     }
 }
 
@@ -306,14 +277,12 @@ pub fn main() -> ExitCode {
                 Error::Install(_)
                 | Error::Release(_)
                 | Error::Advisories(_)
-                | Error::SigningTest(_)
                 | Error::NetinstallReport(_)
                 | Error::DbBackup(_)
                 | Error::Channels(_)
                 | Error::Debs(_)
                 | Error::NetbootIso(_)
-                | Error::CaBundle(_)
-                | Error::AbmTakeover(_) => ExitCode::FAILURE,
+                | Error::CaBundle(_) => ExitCode::FAILURE,
             }
         }
     }

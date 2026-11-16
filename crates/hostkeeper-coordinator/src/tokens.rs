@@ -35,7 +35,7 @@ use hostkeeper_wire::secret::{SecretError, read_secret};
 use serde::Deserialize;
 use subtle::ConstantTimeEq;
 
-use crate::enrollment::{GATE_AUDITOR, INVENTORY_APPROVER, MAC_APPROVER};
+use crate::enrollment::INVENTORY_APPROVER;
 use crate::ops::label;
 use crate::ops_file::digest;
 use crate::reconcile::{CI, COORDINATOR};
@@ -61,12 +61,18 @@ pub enum TokenNameError {
     #[error("a token name is 1 to 32 bytes of a-z, 0-9 and -")]
     Grammar,
     /// A name the audit uses for the coordinator's own changes, CI's, an automatic approval's
-    /// (a Mac's nonce or an inventory record), or the MDM gate's.
+    /// (an inventory record), or an MDM's of an earlier release.
     #[error(
         "a token may not be named {0}: the audit uses that name for changes that are not an operator's"
     )]
     Reserved(&'static str),
 }
+
+/// The audit actors of a Mac approved by its MDM nonce and of the MDM gate, which releases before
+/// the MDM's removal wrote. No coordinator writes them now, but their lines stay in the audit
+/// history, so no operator may take either name.
+const MDM_NONCE_ACTOR: &str = "mdm-nonce";
+const MDM_GATE_ACTOR: &str = "mdm-gate";
 
 impl FromStr for TokenName {
     type Err = TokenNameError;
@@ -78,9 +84,9 @@ impl FromStr for TokenName {
         if let Some(reserved) = [
             COORDINATOR,
             CI,
-            MAC_APPROVER,
+            MDM_NONCE_ACTOR,
             INVENTORY_APPROVER,
-            GATE_AUDITOR,
+            MDM_GATE_ACTOR,
         ]
         .into_iter()
         .find(|name| *name == text)

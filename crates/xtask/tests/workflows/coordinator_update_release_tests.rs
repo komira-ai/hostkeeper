@@ -39,7 +39,7 @@ fn attest_job_attests_the_coordinator_updaters_tarball_with_its_bundle_and_its_s
         let text = with_in(
             &workflow("artifacts.yml"),
             &format!("steps.{id}.outputs.bundle-path"),
-            &format!("steps.mdm-{platform}.outputs.bundle-path"),
+            &format!("steps.coordinator-{platform}.outputs.bundle-path"),
         );
         assert_refused(
             "artifacts.yml",
@@ -52,7 +52,7 @@ fn attest_job_attests_the_coordinator_updaters_tarball_with_its_bundle_and_its_s
             "          sbom-path: dist/{PROGRAM}-${{{{ needs.version.outputs.version }}}}-{platform}.cdx.json\n"
         );
         let other = format!(
-            "          sbom-path: dist/hostkeeper-mdm-${{{{ needs.version.outputs.version }}}}-{platform}.cdx.json\n"
+            "          sbom-path: dist/hostkeeper-coordinator-${{{{ needs.version.outputs.version }}}}-{platform}.cdx.json\n"
         );
         assert_refused(
             "artifacts.yml",

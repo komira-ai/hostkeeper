@@ -1,4 +1,4 @@
-//! `xtask channels check-apt --package hello|mdm` end to end: the verb is run as a process whose
+//! `xtask channels check-apt --package hello|pxe` end to end: the verb is run as a process whose
 //! `PATH` holds the test program `tests/bin/apt_fixture.rs` as `env`, so each program of the
 //! checked system (`dpkg`, `apt-get`, `curl`, `dpkg-query`, the installed binary) is answered from
 //! scratch files, and `--root` is a scratch directory. Its exit status, words, the files it wrote
@@ -117,17 +117,7 @@ const HELLO_FILES: [&str; 3] = [
     "/usr/lib/systemd/system/hello@b.service",
 ];
 
-const MDM_FILES: [&str; 9] = [
-    "/usr/lib/mdm/mdm",
-    "/usr/lib/systemd/system/mdm-cert-renew.service",
-    "/usr/lib/systemd/system/mdm-cert.service",
-    "/usr/lib/systemd/system/mdm-cert.timer",
-    "/usr/lib/systemd/system/mdm-depserver.service",
-    "/usr/lib/systemd/system/mdm-depsyncer.service",
-    "/usr/lib/systemd/system/mdm-nanohub.service",
-    "/usr/lib/systemd/system/mdm-proxy.service",
-    "/usr/lib/systemd/system/mdm-scep.service",
-];
+const PXE_FILES: [&str; 2] = ["/usr/lib/pxe/pxe", "/usr/lib/systemd/system/pxe.service"];
 
 /// The calls of a check that installs `package` and runs its `binary`, in order.
 fn install_calls(root: &Path, package: &str, binary: &str) -> Vec<String> {
@@ -170,34 +160,15 @@ fn check_apt_of_hello_on_arm64_installs_hello_from_testing_and_holds_it_to_its_v
 }
 
 #[test]
-fn check_apt_of_mdm_on_amd64_installs_mdm_from_testing_and_holds_it_to_its_version_and_commit() {
-    let m = Machine::new(
-        "mdm-amd64",
-        "amd64",
-        "1.2.3",
-        "mdm 1.2.3+0123456789ab",
-        &MDM_FILES,
-    );
-    let o = m.check_apt("mdm", "amd64");
+fn check_apt_of_pxe_on_amd64_installs_pxe_from_testing_and_holds_it_to_its_version_alone() {
+    let m = Machine::new("pxe-amd64", "amd64", "1.2.3", "pxe 1.2.3", &PXE_FILES);
+    let o = m.check_apt("pxe", "amd64");
     assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
     assert_eq!(
         stdout(&o),
-        "check-apt: mdm 1.2.3 installed from the suite testing on amd64; it says \"mdm 1.2.3+0123456789ab\"; its 9 files are there; the service is not enabled and not running\n"
+        "check-apt: pxe 1.2.3 installed from the suite testing on amd64; it says \"pxe 1.2.3\"; its 2 files are there; the service is not enabled and not running\n"
     );
-    assert_eq!(m.calls(), install_calls(&m.root, "mdm", "/usr/lib/mdm/mdm"));
-}
-
-#[test]
-fn check_apt_of_mdm_on_arm64_is_status_2_naming_the_architecture_before_any_program_runs() {
-    let m = Machine::new("mdm-arm64", "arm64", "1.2.3", "mdm 1.2.3+0123456789ab", &[]);
-    let o = m.check_apt("mdm", "arm64");
-    assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
-    assert_eq!(stdout(&o), "");
-    assert_eq!(
-        stderr(&o),
-        "xtask: --arch \"arm64\": mdm is not built for it\n"
-    );
-    assert_eq!(m.calls(), Vec::<String>::new());
+    assert_eq!(m.calls(), install_calls(&m.root, "pxe", "/usr/lib/pxe/pxe"));
 }
 
 #[test]
@@ -220,26 +191,26 @@ fn check_apt_of_hello_whose_binary_says_a_commit_is_status_1_naming_what_it_said
 }
 
 #[test]
-fn check_apt_of_mdm_with_a_file_missing_an_enabled_unit_and_another_version_is_status_1_naming_each()
+fn check_apt_of_pxe_with_a_file_missing_an_enabled_unit_and_another_version_is_status_1_naming_each()
  {
     let m = Machine::new(
-        "mdm-problems",
+        "pxe-problems",
         "amd64",
         "1.2.2",
-        "mdm 1.2.3+0123456789ab",
-        &MDM_FILES[1..],
+        "pxe 1.2.3",
+        &PXE_FILES[1..],
     );
     let wants = m.root.join("etc/systemd/system/multi-user.target.wants");
     std::fs::create_dir_all(&wants).expect("make the wants directory");
-    std::fs::write(wants.join("mdm-proxy.service"), b"").expect("enable a unit");
-    let o = m.check_apt("mdm", "amd64");
+    std::fs::write(wants.join("pxe.service"), b"").expect("enable a unit");
+    let o = m.check_apt("pxe", "amd64");
     assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
     assert_eq!(stdout(&o), "");
     assert_eq!(
         stderr(&o),
         format!(
-            "xtask: dpkg says mdm \"1.2.2\" is installed, not \"1.2.3\"\n/usr/lib/mdm/mdm is not installed\nthe service is enabled: {} exists, and the package enables nothing\n",
-            wants.join("mdm-proxy.service").display()
+            "xtask: dpkg says pxe \"1.2.2\" is installed, not \"1.2.3\"\n/usr/lib/pxe/pxe is not installed\nthe service is enabled: {} exists, and the package enables nothing\n",
+            wants.join("pxe.service").display()
         )
     );
 }

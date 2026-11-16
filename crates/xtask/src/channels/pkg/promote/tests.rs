@@ -45,6 +45,14 @@ fn the_first_promotion_reads_the_directory_back_and_then_writes_the_pointer_once
                 "get-object",
                 format!("{PREFIX}hostkeeper-1.2.3-macos-arm64.pkg.sigstore.json")
             ),
+            (
+                "get-object",
+                format!("{PREFIX}hostkeeper-bootstrap-1.2.3-macos-arm64.pkg")
+            ),
+            (
+                "get-object",
+                format!("{PREFIX}hostkeeper-bootstrap-1.2.3-macos-arm64.pkg.sigstore.json")
+            ),
             ("get-object", format!("{PREFIX}SHA256SUMS")),
             ("get-object", STABLE.to_owned()),
             ("put-object", STABLE.to_owned()),
@@ -75,9 +83,9 @@ fn the_first_promotion_reads_the_directory_back_and_then_writes_the_pointer_once
             "/pkg/hostkeeper/stable.json"
         ]]
     );
-    assert_eq!(said.len(), 7);
-    assert_eq!(said[5], format!("{STABLE}: now 1.2.3"));
-    assert_eq!(said[6], "/pkg/hostkeeper/stable.json: invalidated");
+    assert_eq!(said.len(), 9);
+    assert_eq!(said[7], format!("{STABLE}: now 1.2.3"));
+    assert_eq!(said[8], "/pkg/hostkeeper/stable.json: invalidated");
     assert!(said[0].starts_with(&format!("{PREFIX}hello-1.2.3-macos-arm64.pkg: sha256 ")));
     assert!(said[2].starts_with(&format!(
         "{PREFIX}hostkeeper-1.2.3-macos-arm64.pkg: sha256 "

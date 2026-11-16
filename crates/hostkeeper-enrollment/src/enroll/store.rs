@@ -478,7 +478,7 @@ impl EnrollmentStore {
     /// after it, and at the next [`Self::open`] should that write not land).
     ///
     /// An approval with a Mac nonce takes over a host id another key holds, as `replace` would,
-    /// when the Mac enrolled in MDM anew since that key was approved: `record` says when its
+    /// when the Mac enrolled anew since that key was approved: `record` says when its
     /// current enrollment began ([`ApprovalRecord::mac_enrolled_since_unix`]), that key's own
     /// request claimed the same Mac serial, and its approval was recorded before that time. It
     /// never takes a denied host id, and never lifts a `duplicate_claim`. The approval is
@@ -693,7 +693,7 @@ impl EnrollmentStore {
     }
 
     /// Whether the host id `holder` holds may go to a new key of the Mac of `serial`, whose
-    /// current MDM enrollment began at `since`: the holder's own request claimed `serial` (not
+    /// current enrollment began at `since`: the holder's own request claimed `serial` (not
     /// empty), and its approval was recorded (with a time) before `since`. A holder whose
     /// request is missing may not. The caller holds the lock.
     fn mac_rejoined(&self, holder: &HostRow, serial: &str, since: u64) -> Result<bool, StoreError> {

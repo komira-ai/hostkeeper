@@ -253,11 +253,11 @@ fn release_commands_never_call_the_network_in_tests() {
     let real_exec = format!("let e = {EXEC}();\n");
     assert_eq!(
         findings(&[
-            file("src/mdm_signing_test/tests.rs", &real_exec),
+            file("src/db_backup/tests.rs", &real_exec),
             file(LIB, &real_exec)
         ]),
         vec![format!(
-            "src/mdm_signing_test/tests.rs:1: names {EXEC}, which only {LIB} may call"
+            "src/db_backup/tests.rs:1: names {EXEC}, which only {LIB} may call"
         )]
     );
     let connect = format!("x();\nlet r = {CONNECT}();\n");

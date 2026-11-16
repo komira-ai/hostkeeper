@@ -1,6 +1,20 @@
-// hostkeeper.operator.v1: the `Mdm` service of the operator API and its refusals
-// (`MdmRefusal`): the devices the MDM policy gate knows (docs/design/hostkeeper-mdm.md section
-// 6.1). The gate is linked into the coordinator (`--mdm-api-url`); it keeps a record per MDM
+// hostkeeper.operator.v1: the `Mdm` service of the operator API and its refusals (no longer
+// served; read the next paragraph first).
+//
+// NO LONGER SERVED. The coordinator's MDM was removed (2026-11-14; docs/design/mac-bootstrap.md:
+// a Mac enrolls through the bootstrap package and the normal approval flow), and no coordinator
+// serves `Mdm` now: a call of any of its methods is answered `UNIMPLEMENTED`. The service and
+// every message and enum below stay defined, unchanged, because a service, method, field or
+// value that shipped is never taken away or re-meant (`hostkeeper-coordinator`'s `compat.rs`),
+// so that a release before the removal and one after it read each other's descriptors. A
+// method or message is not added to this file.
+//
+// What follows is the description of the service as it was served. The designs it cites,
+// docs/design/hostkeeper-mdm.md and docs/design/coordinator-mdm.md, were removed with the MDM and
+// are in the history of the repository.
+//
+// `MdmRefusal` is its refusals. The devices the MDM policy gate knew (docs/design/hostkeeper-mdm.md
+// section 6.1). The gate was linked into the coordinator (`--mdm-api-url`); it kept a record per MDM
 // enrollment from NanoHUB's webhook and from the answers of the devices to `DeviceInformation`
 // and `SecurityInfo`. The rest of the package, `Enrollment` and `EnrollmentRefusal`
 // (enrollment.proto) and `Audit` and `AuditRefusal` among it, is operator.proto; this file is the
@@ -40,7 +54,8 @@ syntax = "proto3";
 
 package hostkeeper.operator.v1;
 
-// The devices of the MDM policy gate.
+// No longer served: every method answers UNIMPLEMENTED, the coordinator's MDM having been removed
+// (2026-11-14). The devices of the MDM policy gate, as it was.
 service Mdm {
   // The devices the gate has a record of, by enrollment id, from the records alone: no device
   // is asked. A coordinator that runs no gate answers none, with `gate` false. Changes nothing.

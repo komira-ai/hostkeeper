@@ -304,56 +304,6 @@ return {
 }
 
 #[test]
-fn the_mdm_setup_page_is_in_the_frame_and_its_downloads_reach_the_browser() {
-    // Catches: the page missing from the frame's list, the frame not handing the browser's
-    // download to a page, and a file offered with other bytes or name than the page gave.
-    let mut ui = Ui::start();
-    ui.session("tok_a");
-    let held = json!({"configured": true, "sealing": true});
-    let settings = json!({"settings": []});
-    let secrets = json!({"secrets": [], "sealing": true});
-    ui.reply(&m("Mdm/Status"), held.clone());
-    ui.reply(&m("Mdm/ListSettings"), settings.clone());
-    ui.reply(&m("Mdm/ListSecrets"), secrets.clone());
-    ui.reply(
-        &m("Mdm/GetAbmPublicKey"),
-        json!({"certificatePem": "CERTPEM", "fingerprintSha256": "ab", "created": true}),
-    );
-    ui.reply(&m("Mdm/Status"), held);
-    ui.reply(&m("Mdm/ListSettings"), settings);
-    ui.reply(&m("Mdm/ListSecrets"), secrets);
-    ui.run(
-        r#"
-import { fakeDocument, domNamed, fire, settle } from "../test/kit.js";
-import { startApp } from "./app.js";
-export async function main() {
-  const doc = fakeDocument();
-  globalThis.doc = doc;
-  globalThis.saved = [];
-  startApp({ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000,
-             download: (file) => globalThis.saved.push(file) });
-  await settle();
-  fire(domNamed(doc.root, "page-settings"), "click", {});
-  fire(domNamed(doc.root, "page-mdm"), "click", {});
-  await settle();
-  fire(domNamed(doc.root, "download-abm-certificate"), "click", {});
-  await settle();
-}"#,
-    );
-    let out = ui.run(&steps(
-        r#"return { text: text(), saved: globalThis.saved };"#,
-    ));
-    assert!(
-        out["text"].as_str().expect("text").contains("MDM setup"),
-        "{out}"
-    );
-    assert_eq!(
-        out["saved"],
-        json!([{"name": "abm-server.crt", "mime": "text/plain", "text": "CERTPEM"}])
-    );
-}
-
-#[test]
 fn the_packages_page_is_in_the_page_list_and_the_host_groups_link_opens_it() {
     // Proves: "Packages" is a page of the frame that lists the registered packages; from the Host
     // groups page with no registered package, its link opens the Packages page, which calls

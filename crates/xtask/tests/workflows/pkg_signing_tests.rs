@@ -1,12 +1,14 @@
-//! The rules of the signing of the release's pkgs, the installer and hello's
+//! The rules of the signing of the release's pkgs, the installer, the bootstrap pkg and hello's
 //! ([`super::pkg_signing`]): the committed
 //! artifacts.yml passes, and each defect put into a copy of it is refused with its own line.
 
 use super::lint::lint;
 use super::pkg_signing::{
-    BUILD_HELLO_PKG, BUILD_PKG, CHECK_HELLO_SIGNATURE, CHECK_JOB, CHECK_SIGNATURE, CHECK_STEPS,
-    DELETE_KEYCHAIN, DELETE_P12, IDENTITY, PUBLISHED_ARTIFACT, SAME_FILES, SAME_HELLO_FILES, SIGN,
-    SIGN_ENV, SIGN_HELLO, SIGN_JOB, SIGN_STEPS, SIGNED_ARTIFACT, SUMS_IF, Step, UNSIGNED_ARTIFACT,
+    BUILD_BOOTSTRAP_PKG, BUILD_HELLO_PKG, BUILD_PKG, CHECK_BOOTSTRAP_SIGNATURE,
+    CHECK_HELLO_SIGNATURE, CHECK_JOB, CHECK_SIGNATURE, CHECK_STEPS, DELETE_KEYCHAIN, DELETE_P12,
+    IDENTITY, PUBLISHED_ARTIFACT, SAME_BOOTSTRAP_FILES, SAME_FILES, SAME_HELLO_FILES, SIGN,
+    SIGN_BOOTSTRAP, SIGN_ENV, SIGN_HELLO, SIGN_JOB, SIGN_STEPS, SIGNED_ARTIFACT, SUMS_IF, Step,
+    UNSIGNED_ARTIFACT,
 };
 use super::release::SIGN_IF;
 use super::{with_in, workflows};
@@ -67,10 +69,13 @@ fn the_committed_artifacts_yml_signs_checks_and_publishes_the_pkg() {
     for run in [
         BUILD_PKG,
         BUILD_HELLO_PKG,
+        BUILD_BOOTSTRAP_PKG,
         CHECK_SIGNATURE,
         SAME_FILES,
         CHECK_HELLO_SIGNATURE,
         SAME_HELLO_FILES,
+        CHECK_BOOTSTRAP_SIGNATURE,
+        SAME_BOOTSTRAP_FILES,
     ] {
         assert_eq!(text.matches(&run_line(run)).count(), 1, "{run}");
     }
@@ -87,13 +92,13 @@ fn the_keychain_cleanup_missing_or_not_run_on_failure_is_refused() {
         DELETE_KEYCHAIN_STEP,
         "      - name: Delete the keychain\n",
     );
-    assert_refused(&not_always, &step_problem(12));
+    assert_refused(&not_always, &step_problem(13));
     let p12_not_always = with_in(
         &text,
         DELETE_P12_STEP,
         "      - name: Delete the identity's file\n        if: ${{ success() }}\n",
     );
-    assert_refused(&p12_not_always, &step_problem(13));
+    assert_refused(&p12_not_always, &step_problem(14));
 
     let without = with_in(
         &text,
@@ -102,9 +107,9 @@ fn the_keychain_cleanup_missing_or_not_run_on_failure_is_refused() {
     );
     assert_refused(
         &without,
-        &format!("artifacts.yml: job {SIGN_JOB} has 13 steps, not the 14 of SIGN_STEPS"),
+        &format!("artifacts.yml: job {SIGN_JOB} has 14 steps, not the 15 of SIGN_STEPS"),
     );
-    assert_refused(&without, &step_problem(12));
+    assert_refused(&without, &step_problem(13));
 
     // The p12's deletion after the upload: the steps from 13 on are out of place.
     let p12 = format!("{DELETE_P12_STEP}{}", run_line(DELETE_P12));
@@ -112,8 +117,8 @@ fn the_keychain_cleanup_missing_or_not_run_on_failure_is_refused() {
         "      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1\n        with:\n          name: {SIGNED_ARTIFACT}\n          path: dist/\n          retention-days: 90\n          if-no-files-found: error\n"
     );
     let late = with_in(&text, &format!("{p12}{upload}"), &format!("{upload}{p12}"));
-    assert_refused(&late, &step_problem(13));
     assert_refused(&late, &step_problem(14));
+    assert_refused(&late, &step_problem(15));
 }
 
 #[test]
@@ -156,7 +161,7 @@ fn the_signing_job_running_repository_code_or_holding_more_is_refused() {
     );
     assert_refused(
         &checkout,
-        &format!("artifacts.yml: job {SIGN_JOB} has 15 steps, not the 14 of SIGN_STEPS"),
+        &format!("artifacts.yml: job {SIGN_JOB} has 16 steps, not the 15 of SIGN_STEPS"),
     );
     assert_refused(&checkout, &step_problem(2));
 
@@ -370,7 +375,7 @@ fn the_signature_check_missing_skipped_or_after_the_upload_is_refused() {
 #[test]
 fn the_recorded_sha256_of_the_pkg_is_of_the_signed_file() {
     // Catches: any way the bytes SHA256SUMS lists (and attest signs, and the release and the
-    // MDM gate's allowlist take) for hostkeeper-<version>-macos-arm64.pkg are not the signed
+    // inventory records take) for hostkeeper-<version>-macos-arm64.pkg are not the signed
     // pkg's: the unsigned pkg built into dist/ (so build-macos's assets-macos-arm64 carries
     // it), the check job publishing the unsigned download or another directory, another job
     // publishing a pkg, or the sums made before the check job published the signed one.
@@ -411,13 +416,13 @@ fn the_recorded_sha256_of_the_pkg_is_of_the_signed_file() {
         &published,
         &format!("          name: {PUBLISHED_ARTIFACT}\n          path: unsigned/\n"),
     );
-    assert_refused(&elsewhere, &check_step_problem(13));
+    assert_refused(&elsewhere, &check_step_problem(17));
     let unnamed = with_in(
         &text,
         &published,
         "          name: assets-macos-arm64-pkg\n          path: dist/\n",
     );
-    assert_refused(&unnamed, &check_step_problem(13));
+    assert_refused(&unnamed, &check_step_problem(17));
     // The unsigned pkg fetched over the checked one, under the same name, before the upload.
     let swapped = with_in(
         &text,
@@ -429,9 +434,9 @@ fn the_recorded_sha256_of_the_pkg_is_of_the_signed_file() {
     );
     assert_refused(
         &swapped,
-        &format!("artifacts.yml: job {CHECK_JOB} has 14 steps, not the 13 of CHECK_STEPS"),
+        &format!("artifacts.yml: job {CHECK_JOB} has 18 steps, not the 17 of CHECK_STEPS"),
     );
-    assert_refused(&swapped, &check_step_problem(13));
+    assert_refused(&swapped, &check_step_problem(17));
     // The signing job fed a pkg of another run.
     let other_run = with_in(
         &text,
@@ -514,7 +519,7 @@ fn a_signing_step_or_job_with_a_key_of_its_own_is_refused() {
         &cleanup,
         &format!("        timeout-minutes: 0\n{cleanup}"),
     );
-    assert_refused(&timed, &step_problem(12));
+    assert_refused(&timed, &step_problem(13));
     let header = format!("    environment: {SIGN_ENV}\n");
     let job_key = with_in(
         &text,
@@ -556,7 +561,7 @@ fn hellos_pkg_built_into_the_release_files_unsigned_or_unchecked_is_refused() {
     );
     assert_refused(
         &unsigned,
-        &format!("artifacts.yml: job {SIGN_JOB} has 13 steps, not the 14 of SIGN_STEPS"),
+        &format!("artifacts.yml: job {SIGN_JOB} has 14 steps, not the 15 of SIGN_STEPS"),
     );
     assert_refused(&unsigned, &step_problem(11));
     let untimed = with_in(
@@ -574,4 +579,57 @@ fn hellos_pkg_built_into_the_release_files_unsigned_or_unchecked_is_refused() {
     assert_eq!(found(&unchecked), [check_step_problem(9)]);
     let installer_twice = with_in(&text, &run_line(SAME_HELLO_FILES), &run_line(SAME_FILES));
     assert_eq!(found(&installer_twice), [check_step_problem(12)]);
+}
+
+#[test]
+fn the_bootstrap_pkg_built_into_the_release_files_unsigned_or_unchecked_is_refused() {
+    // Catches: the bootstrap pkg released as build-macos built it (into dist/, so its assets-*
+    // artifact carries the unsigned bytes), the signing job leaving it unsigned or signing it
+    // without a timestamp, or the check job publishing it without its signature checked or
+    // without comparing its own expansions (one that compares the installer's twice).
+    let text = artifacts_yml();
+    let into_dist = with_in(
+        &text,
+        &run_line(BUILD_BOOTSTRAP_PKG),
+        &run_line(&BUILD_BOOTSTRAP_PKG.replace("--out pkg", "--out dist")),
+    );
+    assert_eq!(
+        found(&into_dist),
+        [format!(
+            "artifacts.yml: job build-macos does not build the bootstrap's unsigned pkg into pkg/ (`{BUILD_BOOTSTRAP_PKG}`)"
+        )]
+    );
+
+    let unsigned = with_in(
+        &text,
+        &format!(
+            "      - name: Sign the bootstrap pkg, with a trusted timestamp\n{}",
+            run_line(SIGN_BOOTSTRAP)
+        ),
+        "",
+    );
+    assert_refused(
+        &unsigned,
+        &format!("artifacts.yml: job {SIGN_JOB} has 14 steps, not the 15 of SIGN_STEPS"),
+    );
+    assert_refused(&unsigned, &step_problem(12));
+    let untimed = with_in(
+        &text,
+        SIGN_BOOTSTRAP,
+        &SIGN_BOOTSTRAP.replace("--timestamp ", "--timestamp=none "),
+    );
+    assert_eq!(found(&untimed), [step_problem(12)]);
+
+    let unchecked = with_in(
+        &text,
+        &run_line(CHECK_BOOTSTRAP_SIGNATURE),
+        "        run: echo nothing\n",
+    );
+    assert_eq!(found(&unchecked), [check_step_problem(13)]);
+    let installer_twice = with_in(
+        &text,
+        &run_line(SAME_BOOTSTRAP_FILES),
+        &run_line(SAME_FILES),
+    );
+    assert_eq!(found(&installer_twice), [check_step_problem(16)]);
 }
