@@ -10,9 +10,10 @@ use crate::http::Surface;
 use crate::testutil::OPERATOR;
 
 /// The path of each method of `Ssh`, `Tunnel` (which the command table leaves out) among them.
-const PATHS: [&str; 4] = [
+const PATHS: [&str; 5] = [
     "/hostkeeper.operator.v1.Ssh/SignUserCert",
     "/hostkeeper.operator.v1.Ssh/HostKeys",
+    "/hostkeeper.operator.v1.Ssh/PinHostKeys",
     "/hostkeeper.operator.v1.Ssh/Revoke",
     "/hostkeeper.operator.v1.Ssh/Tunnel",
 ];
@@ -65,7 +66,7 @@ async fn ssh_takes_the_operators_credential_on_the_private_listener_only() {
 /// Proves: with the CA configured, `SignUserCert` and `Revoke` answer over gRPC and over the JSON
 /// gateway alike: a listed operator's key is signed (the key id `operator/<serial>`, a certificate
 /// line of the key's certificate type), a refusal is the status and token of its value, a
-/// revocation says how many certificates it revoked, and `HostKeys` and `Tunnel`, which are a
+/// revocation says how many certificates it revoked, and `HostKeys`, `PinHostKeys` and `Tunnel`, which are a
 /// later change, still say `not_configured`.
 ///
 /// Catches: a method that answers on one wire only, and a refusal that changes its token or its
@@ -159,7 +160,7 @@ async fn signing_and_revoking_answer_over_both_wires_and_refuse_by_token() {
         refused.err(),
         Some((Code::NotFound, "unknown_cert".to_owned()))
     );
-    for path in [PATHS[1], PATHS[3]] {
+    for path in [PATHS[1], PATHS[2], PATHS[4]] {
         let request = grpc_request(path, (), Some(OPERATOR));
         let answer = call(&coordinator, Surface::Control, &None, request).await;
         assert_eq!(

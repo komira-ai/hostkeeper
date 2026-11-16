@@ -57,6 +57,13 @@ impl Api for SshService {
         Err(not_configured())
     }
 
+    async fn pin_host_keys(
+        &self,
+        _request: Request<proto::PinHostKeysRequest>,
+    ) -> Result<Response<proto::HostKeysResponse>, Status> {
+        Err(not_configured())
+    }
+
     async fn revoke(
         &self,
         request: Request<proto::RevokeRequest>,
