@@ -330,8 +330,9 @@ Whether the daemon needs Full Disk Access to turn on Remote Login (sshd) is not 
 build Macs on 0.1.337: `systemsetup -setremotelogin on` is refused without Full Disk Access, and
 `launchctl enable` and `bootstrap` of sshd's job turn Remote Login on without it, so the SSH design
 uses `launchctl` and the daemon needs no Full Disk Access and no Developer ID Application
-signature (the design's section 3 has the table of results). At each start
-of a Mac's daemon, a thread of its own (`crates/hostkeeper-daemon/src/remote_login_probe.rs`) runs,
+signature (the design's section 3 has the table of results).
+
+At each start of a Mac's daemon, a thread of its own (`crates/hostkeeper-daemon/src/remote_login_probe.rs`) runs,
 as the daemon (root under launchd, with whatever privacy grants the daemon has), these steps in
 order and keeps the exit code, standard output and standard error of each, or why it could not be
 done:
