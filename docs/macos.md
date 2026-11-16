@@ -353,7 +353,7 @@ done:
 | `power_custom` | `pmset -g custom` |
 | `power_settings` | `pmset -g` |
 | `power_assertions` | `pmset -g assertions` |
-| `power_log_sleep_wake` | the newest `Sleep`, `Wake` and `DarkWake` lines of `pmset -g log`, read line by line as it is written |
+| `power_log_sleep_wake` | the newest `Sleep` and `Wake` lines of `pmset -g log` that start or end a system sleep, with their cause, read line by line as it is written; a sleeping Mac's maintenance wakes (`DarkWake`, `Wake Requests` and a sleep due to `'Maintenance Sleep'`) are left out |
 | `keep_awake_log` | the newest `keep_awake:` lines of `/var/log/hostkeeper/daemon.err.log`, what the daemon's power settings said at its starts |
 
 `remote_login_set_on`, `sshd_enable` and `sshd_bootstrap` may turn Remote Login on, and nothing
