@@ -15,6 +15,7 @@ use crate::beat::{Health, Heartbeat, Liveness, Oversize, Renewal, TrustedRootFac
 use crate::host_facts::PushedFacts;
 use crate::names::Reason;
 use crate::order::{Order, OrderRef, OrderResult, Reply};
+use crate::probe::RemoteLoginProbe;
 use crate::repositories::{PushedSet, RepositoriesReport};
 
 /// What a reply was refused for.
@@ -161,6 +162,12 @@ pub trait RenewalSource: Send + Sync {
 /// that keeps no root.
 pub trait TrustedRootSource: Send + Sync {
     fn trusted_root(&self) -> Option<TrustedRootFacts>;
+}
+
+/// The Remote Login probe a Mac's daemon ran at its start, read at every heartbeat: none until it
+/// is done.
+pub trait RemoteLoginProbeSource: Send + Sync {
+    fn remote_login_probe(&self) -> Option<RemoteLoginProbe>;
 }
 
 /// One installed service, as its step record says.
