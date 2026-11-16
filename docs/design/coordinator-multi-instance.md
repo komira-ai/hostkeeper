@@ -22,7 +22,7 @@ update overlaps; correctness is argued and tested for any N.
 
 ## 1. What changes, and what does not
 
-**Before (Built).** One Swarm task, `replicas: 1`, `order: stop-first` (`swarm/hostkeeper-coordinator.yml` of komira-internal).
+**Before (Built).** One Swarm task, `replicas: 1`, `order: stop-first`.
 The instance takes a Postgres session advisory lock at start (`store/postgres/writer.rs`, `LOCK_KEY`, `try_lock`) and a second
 instance that finds it held exits (`DatabaseError::Locked`). Everything the coordinator knows is in that process's memory: the
 desired state, the operations state, the accounts and the enrollment records (each loaded once at start and written back as a
@@ -46,7 +46,7 @@ the stop, the start and the 30 s quiet start of `QUIET_START`, and hosts retry t
 the proto, the hosts, the file store (still one process, still its file lock, until C9 of coordinator-storage.md deletes it),
 and the pure decision code (`stages.rs`, `live.rs`, `halt.rs`): the decision becomes a transaction around the same functions.
 
-**What it is not.** The Swarm has one node today (`controlplane-nuc`), and so does Postgres. Two instances give a deploy with
+**What it is not.** The Swarm has one node today, and so does Postgres. Two instances give a deploy with
 no gap and the loss of one instance without an outage; they do not survive the loss of the node or of the database, and the
 database is now the one thing every decision depends on. The same holds for the kbf frontend.
 
@@ -188,7 +188,7 @@ as `is_live` says today. Whether unlogged pays for itself is measured before it 
 
 **The start rule becomes the cluster's.** Today a restarted instance forgets its outstanding orders and waits `QUIET_START` for the
 hosts to report. With orders durable that wait is not needed for them; it is needed whenever the fleet table is **empty or
-stale as a whole**: a database crash (the unlogged table is truncated), a clean Postgres or NUC restart, any outage longer
+stale as a whole**: a database crash (the unlogged table is truncated), a clean Postgres restart, any outage longer
 than `DOWN_AFTER`, the first start, and a back-out followed by a new cutover (the release before wrote no `fleet_hosts`
 rows, so the old ones are old). In all of them the rows still there carry an old `seen_unix`, so judging "down" by `seen_unix`
 alone would count most of the fleet as down while the first hosts beat, and `min_up`, the stages and the halt logic (a host
@@ -223,7 +223,7 @@ Two paths:
   statement, with these parts in one round trip:
   1. the **ordered beat upsert** of the host's `fleet_hosts` row (below);
   2. the host's `fleet_bakes` rows, advanced in SQL from the row's old values under its row lock, in the same statement and
-     only when the beat was applied: `beats` is `old.beats + 1` when the beat counts (health `Healthy`, not updating, no
+     only when the beat was applied: `beats` is `old_beats + 1` when the beat counts (health `Healthy`, not updating, no
      promotion pending: a function of the beat alone) and the old row has the same `target` and a `at_unix` younger than
      `DOWN_AFTER`, `1` when it counts and the old row does not match, and the row is deleted when it does not count. This is
      `Bake::after` (`bake.rs:42`) written as a `CASE`; the Rust function stays as the reference and a test runs both on the
@@ -558,7 +558,7 @@ can only refuse earlier (`store/mod.rs:296`). No new table.
 ## 7. Latency budget
 
 Counts are round trips on the unix socket (`/run/lab-postgres`), the rows locked and how long they are held. **They are design
-counts (inferred from the flows above), not measurements.** The measurement is part of PR M1 (section 17) on the NUC: round-trip
+counts (inferred from the flows above), not measurements.** The measurement is part of PR M1 (section 17) on the deployment: round-trip
 time of the statements, the wait on the gate under a 50% stage of the fleet, WAL and vacuum of `fleet_hosts` at 4 upserts per
 host per minute for the real host count (not read in this work). The hold time of the gate is the span from its grant to
 `COMMIT`: the read batch, the write batch and one WAL flush; M1 states it in milliseconds.
@@ -624,9 +624,9 @@ config key) and claims what is due in one statement:
 ```
 WITH due AS (SELECT name FROM periodic_jobs WHERE next_run_unix <= extract(epoch FROM now())
              ORDER BY next_run_unix FOR UPDATE SKIP LOCKED)
-UPDATE periodic_jobs j SET next_run_unix = extract(epoch FROM now()) + $period, last_run_unix = extract(epoch FROM now()),
+UPDATE periodic_jobs SET next_run_unix = extract(epoch FROM now()) + $period, last_run_unix = extract(epoch FROM now()),
        last_instance = $me
-FROM due WHERE j.name = due.name RETURNING j.name
+WHERE name IN (SELECT name FROM due) RETURNING name
 ```
 
 `SKIP LOCKED` makes a second claimer skip a row the first holds, and a claimer that waits instead (a plain `UPDATE ... WHERE
@@ -728,7 +728,7 @@ Needed:
    survive; not verified); (c) a second one-task service for it, which is a singleton again. Recommendation (a), the edge
    already is the front door (open question 1).
 5. **Postgres placement.** The database is reached over the unix socket bind mount `/run/lab-postgres`, so every instance runs
-   on the NUC (the Swarm has one node; the constraint `cp.site == box` already holds).
+   on the one-node Swarm (the placement constraint already holds).
 6. **The first cutover is stop-first.** The release before holds the exclusive lock; a start-first instance would be refused. Every
    later update is start-first, which requires that every migration a release adds is `may-run` (the release before must run
    on the new schema), or that update is stop-first.
@@ -849,7 +849,7 @@ the farm): the back-out is a stopgap while a fix ships.
 
 | # | Item | After | Size |
 |---|---|---|---|
-| M1 | Measure on the NUC: round trip on the socket, the gate's hold and the operator edit's wait under a 50% stage, how often a beat finds the gate busy, DDL lock wait of a migration against a running instance, `fleet_hosts` write cost at the real host count, `max_connections`, the Postgres version; a table in this document | none | S |
+| M1 | Measure on the deployment: round trip on the socket, the gate's hold and the operator edit's wait under a 50% stage, how often a beat finds the gate busy, DDL lock wait of a migration against a running instance, `fleet_hosts` write cost at the real host count, `max_connections`, the Postgres version; a table in this document | none | S |
 | M2 | The models of section 14 (spec and Rust state-space test at N = 1, 2, 3), failing on the unlocked variants | M1 | M |
 | M3 | Shared fence lock and pool: `pg_try_advisory_lock_shared`, the `tx_ledger` settle, no `lease.commits` write, no deposed exit, `instances`; the migration mutex, DDL `lock_timeout` and the migration lint rule; the session timeouts; `0019` part 1. Still one instance | M2 | L |
 | M4 | Row-transaction edits and `state_versions` invalidation for desired, ops, accounts, layout, verdicts, with the row-lock order of section 6 and the one-snapshot reload rule; `rollout_gate` with `SKIP LOCKED` for beats and the operator wait; `audit_counter` and its start-time re-seed; `facts_generation` | M3 | L |
@@ -858,7 +858,7 @@ the farm): the back-out is a stopgap while a fix ships.
 | M7 | The deciding transaction and the steps of 5.3: gate, re-read of every input, `set_seq`/`set_for` and the start-time re-stamp, orders with the unique host index, compare-and-set stage advance, storage-first halts, rollback before delete, fail closed; the quiet rule gating verdicts and rollbacks as well as orders | M6 | L |
 | M8 | Sessions and login limiter; `periodic_jobs` and the claim; alerts, expiry, pruning and initial-admin made exactly-once | M3 | M |
 | M9 | `--health-listen` and `--drain-delay-secs` (the old task keeps accepting while it answers 503); docs (`coordinator-state.md`, `rollout-plans.md`, `holds-and-force.md`, `enrollment.md`) updated; this document's tags turned to Built | M7, M8 | S |
-| M10 | Infrastructure (komira-internal, outside this repository): CA secret and config, tmpfs, edge health checks and Mac listener, `start-first` update at `replicas: 1`. The cutover of section 16 | M9 | M |
+| M10 | Infrastructure (outside this repository): CA secret and config, tmpfs, edge health checks and Mac listener, `start-first` update at `replicas: 1`. The cutover of section 16 | M9 | M |
 | M11 | js-server's design and PRs in its repository, to the same leaderless rule | none | not sized |
 
 M3 to M8 are each safe at one instance (the same code with one replica); only M10 lets two overlap.
