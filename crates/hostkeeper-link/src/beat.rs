@@ -21,6 +21,7 @@ use hostkeeper_config::names::{ServiceName, Version};
 pub use hostkeeper_proto::MAX_SERVICES_PER_HEARTBEAT;
 use serde_json::{Map, Value, json};
 
+use crate::host_ssh::SshReport;
 use crate::order::{DeferredReport, OrderResult};
 use crate::ports::Drift;
 use crate::repositories::RepositoriesReport;
@@ -84,6 +85,11 @@ pub enum Feature {
     /// repository entry and a package of one. Announced by a daemon with a repository sink and
     /// by one the wiring says reads them another way (a Mac); not in [`ANNOUNCED`].
     PrivateRepositoryV1,
+    /// `ssh-v1`: the daemon sets sshd up from the SSH access the coordinator sends
+    /// ([`crate::PushedSsh`]) and reports what came of it ([`Heartbeat::ssh`]). Like `facts-v1`
+    /// it is announced only by a daemon with an SSH sink ([`crate::SshSink`]): the loop adds it
+    /// ([`SSH`]).
+    SshV1,
 }
 
 /// The features every heartbeat announces, in this order. Each names something the loop does:
@@ -111,6 +117,8 @@ pub const REPOSITORIES: Feature = Feature::RepositoriesV1;
 pub const FACTS: Feature = Feature::FactsV1;
 /// The feature a daemon that reads private repositories announces after [`REPOSITORIES`].
 pub const PRIVATE_REPOSITORY: Feature = Feature::PrivateRepositoryV1;
+/// The feature a daemon with an [`crate::SshSink`] announces after [`PRIVATE_REPOSITORY`].
+pub const SSH: Feature = Feature::SshV1;
 
 impl Feature {
     /// Its wire name.
@@ -130,6 +138,7 @@ impl Feature {
             Feature::RepositoriesV1 => "repositories-v1",
             Feature::FactsV1 => "facts-v1",
             Feature::PrivateRepositoryV1 => "private-repository-v1",
+            Feature::SshV1 => "ssh-v1",
         }
     }
 
@@ -137,7 +146,7 @@ impl Feature {
     pub fn parse(name: &str) -> Option<Feature> {
         ANNOUNCED
             .into_iter()
-            .chain([REPOSITORIES, FACTS, PRIVATE_REPOSITORY])
+            .chain([REPOSITORIES, FACTS, PRIVATE_REPOSITORY, SSH])
             .find(|feature| feature.as_str() == name)
     }
 }
@@ -372,6 +381,9 @@ pub struct Heartbeat {
     /// no facts file or has written none yet. Sent over gRPC only, and counted toward the bound
     /// on both.
     pub facts_generation: Option<u64>,
+    /// What the daemon's SSH setup came to; none from a daemon that has none. Sent over gRPC
+    /// only, and counted toward the bound on both.
+    pub ssh: Option<SshReport>,
 }
 
 impl Heartbeat {
@@ -424,6 +436,17 @@ impl Heartbeat {
         }
         if let Some(generation) = self.facts_generation {
             beat.insert("facts_generation".to_owned(), generation.into());
+        }
+        if let Some(report) = &self.ssh {
+            beat.insert(
+                "ssh".to_owned(),
+                json!({
+                    "applied_generation": report.applied_generation,
+                    "state": report.state,
+                    "host_key_fingerprints": report.host_key_fingerprints,
+                    "detail": report.detail,
+                }),
+            );
         }
         Value::Object(beat)
     }

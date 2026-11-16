@@ -9,13 +9,13 @@ pub const IANA_TEXT: &str = include_str!("iana-tlds.txt");
 
 /// The file extensions of the sources, manifests, locks, text, archives and objects of this kind
 /// of repository. Several are also top-level domains (`rs` is Serbia, `md` Moldova, `sh` Saint
-/// Helena, `py` Paraguay, `so` Somalia, `zip`, `mov` and `pid` generic): a dotted name that ends
+/// Helena, `py` Paraguay, `so` Somalia, `zip`, `mov`, `pid` and `pub` generic): a dotted name that ends
 /// in one is a file name when it has exactly two labels or sits in a path, and a host otherwise.
 #[rustfmt::skip]
 pub const FILE_SUFFIXES: &[&str] = &[
     "rs", "md", "sh", "toml", "yml", "yaml", "json", "lock", "txt", "py", "c", "h", "o", "a",
     "so", "cc", "pl", "ml", "mk", "pm", "sv", "ps", "in", "am", "ac", "ar", "la", "zip", "mov",
-    "pid",
+    "pid", "pub",
 ];
 
 /// Private-use suffixes that are not delegated top-level domains and so are not in the IANA

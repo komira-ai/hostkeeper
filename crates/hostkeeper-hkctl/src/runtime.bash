@@ -8,7 +8,9 @@
 #   diagnostic: a secret lives in an unexported shell variable and reaches curl through a pipe of
 #   a process substitution, filled by the printf builtin in a subshell that execs nothing; no
 #   here-document or here-string (bash may write one to a temporary file), no export;
-# - the only programs it starts are curl and find;
+# - the only programs it starts are curl and find, and for `ssh`, `ssh-proxy`, `ssh-revoke` and
+#   `ssh-status` (which are not gateway calls) hkssh, which it execs with the path of the token
+#   file and never the token;
 # - the one more call a refusal `invalid_request` makes, to the coordinator's
 #   `GET /v1/version?at_least=<this release>`, carries no token and no credential pipe.
 
@@ -881,6 +883,79 @@ _hk_run() {
 	_hk_call
 }
 
+# _hk_ssh_help: the help of the commands that run hkssh.
+_hk_ssh_help() {
+	printf '%s\n' 'hkctl ssh <host-id> [flags] [-- ssh args]
+    Gets a one-host SSH certificate from the coordinator, for the key of --identity, the ssh
+    agent'"'"'s first key, or a key kept in $HOME/.hostkeeper/ssh, and runs ssh to the host through
+    the coordinator'"'"'s tunnel. Flags of hkssh: --identity FILE, --reason TEXT.
+hkctl ssh-proxy <host-id>
+    The byte stream to the host'"'"'s port 22, for ssh'"'"'s ProxyCommand:
+    ProxyCommand hkctl --endpoint URL --ca-file PATH --token-file PATH ssh-proxy %h
+hkctl ssh-revoke --operator NAME | --serial N | --host <host-id>
+    Revokes certificates: an operator'"'"'s, one by serial, or the one held for a host.
+hkctl ssh-status <host-id>
+    The host keys pinned for the host, and the certificate held for it.
+
+These take the global flags --endpoint, --ca-file, --token-file and --timeout-secs, all but the
+last required, and run hkssh, which must be beside this script or on the PATH. The token is read
+by hkssh from the file; --token-stdin, --github-oidc-audience and --response-file are not taken.'
+}
+
+# _hk_ssh_main COMMAND ARGS...: COMMAND is `ssh`, `ssh-proxy`, `ssh-revoke` or `ssh-status`. The
+# global flags among ARGS (until a `--`) are taken here; the rest goes to hkssh, which this
+# execs: its stdin and stdout are the caller's, which is what ssh-proxy needs.
+_hk_ssh_main() {
+	local sub=$1 self dir hkssh rest
+	shift
+	rest=()
+	while (($#)); do
+		case $1 in
+		--)
+			break
+			;;
+		--help | -h)
+			_hk_ssh_help
+			exit 0
+			;;
+		esac
+		if _hk_global "$@"; then
+			shift "$_hk_took"
+		else
+			rest[${#rest[@]}]=$1
+			shift
+		fi
+	done
+	if ((_hk_token_stdin || _hk_audience_set || _hk_response_set)); then
+		_hk_usage "hkctl $sub takes --token-file only: --token-stdin, --github-oidc-audience and --response-file are not for it"
+	fi
+	if ((!_hk_endpoint_set || !_hk_ca_set || !_hk_token_file_set)); then
+		_hk_usage "hkctl $sub needs --endpoint, --ca-file and --token-file"
+	fi
+	if ! [[ $_hk_endpoint =~ $_hk_re_endpoint ]]; then
+		_hk_usage '--endpoint takes https://<host>[:<port>]'
+	fi
+	if [[ -z ${HOME-} ]]; then
+		_hk_fail "hkctl $sub keeps its key and certificates under \$HOME, which is not set"
+	fi
+	self=${BASH_SOURCE[0]}
+	case $self in
+	*/*) dir=${self%/*} ;;
+	*) dir=. ;;
+	esac
+	hkssh=hkssh
+	if [[ -x $dir/hkssh ]]; then
+		hkssh=$dir/hkssh
+	fi
+	case $sub in
+	ssh-proxy) sub=proxy ;;
+	ssh-revoke) sub=revoke ;;
+	ssh-status) sub=status ;;
+	esac
+	exec "$hkssh" --endpoint "${_hk_endpoint%/}" --ca-file "$_hk_ca" --token-file "$_hk_token_file" \
+		--state-dir "$HOME/.hostkeeper/ssh" --timeout-secs "$_hk_timeout" "$sub" "${rest[@]}" "$@"
+}
+
 # _hk_main ARGS...: hkctl [global flags] <service> <method> [flags].
 _hk_main() {
 	local service method
@@ -925,6 +1000,9 @@ _hk_main() {
 	fi
 	service=$1
 	shift
+	case $service in
+	ssh-proxy | ssh-revoke | ssh-status) _hk_ssh_main "$service" "$@" ;;
+	esac
 	if ! _hk_help_service "$service" >/dev/null; then
 		_hk_usage "no service $service; 'hkctl --help' lists them"
 	fi
@@ -950,6 +1028,10 @@ _hk_main() {
 	fi
 	method=$1
 	shift
+	if [[ $service == ssh ]] && ! _hk_dispatch "$service" "$method"; then
+		# Not a method of the service `ssh`: a host id.
+		_hk_ssh_main ssh "$method" "$@"
+	fi
 	if ! _hk_dispatch "$service" "$method"; then
 		_hk_usage "the service $service has no method $method; 'hkctl $service --help' lists them"
 	fi

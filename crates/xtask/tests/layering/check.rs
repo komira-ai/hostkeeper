@@ -30,6 +30,7 @@ const PXE: &str = "hostkeeper-pxe";
 const PXE_PACKETS: &str = "hostkeeper-pxe-packets";
 const PROTO: &str = "hostkeeper-proto";
 const HKCTL: &str = "hostkeeper-hkctl";
+const HKSSH: &str = "hostkeeper-hkssh";
 const DAEMON: &str = "hostkeeper-daemon";
 const ENROLL: &str = "hostkeeper-enroll";
 const LINK: &str = "hostkeeper-link";
@@ -85,7 +86,7 @@ pub type Layer = (
 /// installer's tool port and signature reader (`hostkeeper-install`, with the paths of
 /// `hostkeeper-launchd`), the HTTPS transport (`hostkeeper-package`) and the repository descriptor
 /// (`hostkeeper-release`), and is read by no crate.
-pub const LAYERS: [Layer; 29] = [
+pub const LAYERS: [Layer; 30] = [
     (BINARY, &[DAEMON], &[LAUNCHD]),
     (
         BOOTSTRAP,
@@ -110,6 +111,7 @@ pub const LAYERS: [Layer; 29] = [
     (ENROLLMENT, &[], &[]),
     (HELLO, &[], &[HOOK]),
     (HKCTL, &[PROTO], &[COORDINATOR, OIDC]),
+    (HKSSH, &[PROTO], &[]),
     (HOOK, &[], &[]),
     (INSTALL, &[CONFIG, LAUNCHD, PROTO, RELEASE, STEPS], &[]),
     (LAUNCHD, &[HOOK, OBSERVE, PLACED, STEPS], &[]),

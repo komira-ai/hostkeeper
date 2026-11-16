@@ -134,6 +134,17 @@ impl Rig {
         rig
     }
 
+    /// A copy of the fake as `hkssh`: first on PATH, or, with `beside_script`, in the directory
+    /// of the scripts, where the script looks first.
+    pub fn put_hkssh(&self, beside_script: bool) {
+        let dir = if beside_script {
+            self.path("")
+        } else {
+            self.bin()
+        };
+        std::fs::copy(FAKE, dir.join("hkssh")).expect("the fake copied");
+    }
+
     pub fn path(&self, name: &str) -> PathBuf {
         self.dir.path().join(name)
     }

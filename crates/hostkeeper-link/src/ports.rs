@@ -13,6 +13,7 @@ use hostkeeper_steps::Clock;
 
 use crate::beat::{Health, Heartbeat, Liveness, Oversize, Renewal, TrustedRootFacts};
 use crate::host_facts::PushedFacts;
+use crate::host_ssh::{PushedSsh, SshReport};
 use crate::names::Reason;
 use crate::order::{Order, OrderRef, OrderResult, Reply};
 use crate::repositories::{PushedSet, RepositoriesReport};
@@ -268,6 +269,17 @@ pub trait FactsSink: Send + Sync {
     /// file holds them now; false when it could not be written (the sink says why in its log),
     /// and the generation it reports is the one before.
     fn apply(&self, facts: &PushedFacts) -> bool;
+}
+
+/// The host's sshd setup, which the coordinator's SSH access replaces (`ssh-v1`). A daemon that
+/// has one announces the feature and reports what its last setup came to.
+pub trait SshSink: Send + Sync {
+    /// What the setup has come to, or none until it has been asked to do anything. Sent in
+    /// every heartbeat.
+    fn report(&self) -> Option<SshReport>;
+
+    /// Sets sshd up as `access` says. It says nothing back: the next report does.
+    fn apply(&self, access: &PushedSsh);
 }
 
 /// One job for a worker.

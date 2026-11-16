@@ -159,7 +159,9 @@ message HeartbeatRequest {
   // `target-v1`, which announces that it takes `target` in orders and lists `installers`, and
   // `repositories-v1`, which announces that it writes the repositories the coordinator sends and
   // reports them in `repositories`, and `facts-v1`, which asks for `HeartbeatResponse.facts`,
-  // writes them to the host's facts file and reports `facts_generation`):
+  // writes them to the host's facts file and reports `facts_generation`, and `ssh-v1`, which
+  // asks for `HeartbeatResponse.ssh`, sets up the host's sshd to trust the certificates it
+  // names and reports `ssh`):
   // at most 16, each 1 to 32 bytes of `[a-z0-9-]`, none twice. An agent
   // that lists every service it runs in `services` announces `heartbeat-v2`; without it the
   // coordinator counts the host as unmanaged for every service but the legacy one, rather than
@@ -202,6 +204,28 @@ message HeartbeatRequest {
   // (`HeartbeatResponse.facts`). Absent when it wrote none, and from an agent that does not
   // announce `facts-v1`.
   optional uint64 facts_generation = 12;
+  // What the daemon did with the host's sshd access (`HeartbeatResponse.ssh`). Sent by a daemon
+  // that announces `ssh-v1`, read only over gRPC; absent from one that predates it. A report
+  // that breaks a rule of `SshReport` is dropped and the coordinator keeps the last one it read.
+  optional SshReport ssh = 13;
+}
+
+// What a host's daemon did with the sshd access the coordinator sent (`SshAccess`).
+message SshReport {
+  // The `SshAccess.generation` the daemon last applied or refused; 0 when it has seen none.
+  uint64 applied_generation = 1;
+  // `applied`, `disabled`, `needs_full_disk_access`, `blocked_by_allow_list`, `sshd_missing`,
+  // `no_include`, `config_invalid`, `reload_failed`, `would_lock_out`, `no_login_user`,
+  // `cert_login_not_possible`, `shadowed_by_stock`, `blocked_by_access_group` or `unsupported`:
+  // a closed set, at most 32 bytes. A reader counts any other as `other`.
+  string state = 2;
+  // The fingerprints of the host's sshd host keys, `SHA256:` and 43 base64 characters each, at
+  // most 8. The coordinator compares them with the ones pinned at enrollment and never replaces
+  // the pin by them.
+  repeated string host_key_fingerprints = 3;
+  // The keyword or the class of account that made the state, at most 128 bytes; never a secret
+  // and never an account's name.
+  string detail = 4;
 }
 
 // What a host's daemon holds of the repositories the coordinator sends
@@ -470,6 +494,33 @@ message HeartbeatResponse {
   // (`HeartbeatRequest.facts_generation`), and the agent writes them before it acts on this
   // answer's order. Absent otherwise.
   HostFacts facts = 6;
+  // The sshd access the host's daemon sets up, sent to an agent that announced `ssh-v1` in every
+  // answer until a heartbeat reports its generation (`SshReport.applied_generation`). Absent:
+  // keep what it has, and for an agent that never received one, set up nothing.
+  optional SshAccess ssh = 7;
+}
+
+// How a host's sshd is set up to trust the coordinator's SSH user CA. The daemon only adds trust;
+// it never removes a way in that works (docs/design/ssh-through-coordinator.md, section 6).
+message SshAccess {
+  // Raised at any change of the rest.
+  uint64 generation = 1;
+  // Whether the daemon sets the access up; false: it reverts what it set up.
+  bool enabled = 2;
+  // The CA public keys sshd trusts, in `authorized_keys` syntax: one or two, of the host's class
+  // only.
+  repeated string ca_public_keys = 3;
+  // The account that takes certificates; empty: none, which the daemon reports as
+  // `no_login_user`.
+  string login_user = 4;
+  // The one principal a certificate must hold, `hk-host-<host id>`, computed by the coordinator
+  // for this host.
+  string principal = 5;
+  // `keep` or `off`: whether sshd keeps password logins as they are or turns them off.
+  string password_auth = 6;
+  // The serials of the revoked certificates, which the daemon writes to sshd's revoked-keys
+  // file.
+  repeated uint64 revoked_serials = 7;
 }
 
 // A host's own values, as the coordinator holds them, for the daemon's facts file. The daemon
@@ -638,6 +689,11 @@ message EnrollRequest {
   // one now: a daemon of a release before the MDM's removal may still send it, and the coordinator
   // reads it and ignores it (nothing approves a request by it).
   bytes mac_nonce = 5 [(hostkeeper.secret) = true];
+  // The fingerprints of the host's sshd host keys, `SHA256:` and 43 base64 characters each, at
+  // most 8; empty when the host runs no sshd yet, and from a daemon that predates it. The
+  // operator sees them with the request and approves them with the host: they become the pin
+  // `Ssh.HostKeys` returns.
+  repeated string host_key_fingerprints = 6;
 }
 
 // What a host says it is. Every claim is optional, by being empty. Claims help an operator

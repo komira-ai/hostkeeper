@@ -96,6 +96,11 @@ use crate::verdict_file::VerdictFile;
 #[path = "config_error.rs"]
 mod error;
 
+/// The flags of the SSH user CA and the start's use of them.
+#[path = "config_ssh.rs"]
+mod ssh;
+pub use ssh::{SigningKey, SshFlags, SshStartError};
+
 #[path = "config_file.rs"]
 mod config_file;
 
@@ -173,6 +178,8 @@ pub enum Command {
     /// Write the state the database of --database-dsn-file holds into files of the file store
     /// that hold no state, and the rows of each table.
     Export(Export),
+    /// Make the SSH user CA's key (`init`), or sign a certificate with it offline (`sign`).
+    SshCa(crate::ssh_ca::SshCa),
 }
 
 /// The flags of `serve`.
@@ -274,6 +281,9 @@ pub struct Serve {
     pub operator_token_file: Option<PathBuf>,
     #[command(flatten)]
     pub login: LoginFlags,
+    /// The SSH user CA and who may have a certificate.
+    #[command(flatten)]
+    pub ssh: SshFlags,
     /// The ops file: what operators changed (exclusions, labels) and the audit ring, written
     /// by the coordinator and read back at start; created by the first change. Default: the
     /// state file's name with `.ops` added. Its directory must be writable by the
@@ -545,6 +555,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         marker,
         held,
         records,
+        ledger,
     } = state::open_store(flags, legacy, lock, &oidc_clock)?;
     let verifier = Verifier::new(
         oidc.clone(),
@@ -593,6 +604,9 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         );
     coordinator = state::with_initial_admin(coordinator, flags)?;
     coordinator = state::with_login(coordinator, flags)?;
+    if let Some(signing) = ssh::signing(flags, ledger)? {
+        coordinator = coordinator.with_ssh(signing);
+    }
     let store = match (&flags.enrollment_dir, records) {
         (Some(dir), _) => Some(StoreAt::Dir(dir)),
         (None, Some(records)) => Some(StoreAt::Records(records)),
@@ -891,6 +905,11 @@ pub fn main(args: Vec<OsString>) -> ExitCode {
         Command::Backup(flags) => finish(backup(&flags, &FileLock)),
         Command::Restore(flags) => finish(restore(&flags, &FileLock)),
         Command::Export(flags) => finish(export(&flags, &FileLock, &wall_clock())),
+        Command::SshCa(ssh) => finish(crate::ssh_ca::run(
+            &ssh.command,
+            wall_clock()(),
+            &os_random(),
+        )),
     }
 }
 

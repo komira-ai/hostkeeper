@@ -534,6 +534,33 @@ On a Mac, `pkgutil --check-signature hostkeeper-<version>-macos-arm64.pkg` (or
 `hello-<version>-macos-arm64.pkg`) shows the signature.
 The digest of the release's pkg is the line of `SHA256SUMS`, the signed file's.
 
+### Remote Login for ssh through the coordinator
+
+`ssh_macos::MacSsh::prepare` is what a Mac must hold before the daemon sets up its sshd to trust
+the coordinator's SSH user CA (docs/design/ssh-through-coordinator.md, sections 3 and 4). It
+checks, in this order, and changes nothing until the last step:
+
+1. `/etc/ssh/sshd_config` has an `Include` of `/etc/ssh/sshd_config.d/*` before any `Match` line.
+   The daemon never edits the file, which Apple owns; without it the state is `no_include` and the
+   Mac stays untrusted.
+2. The login user: the one the coordinator names, else the single local administrator (user id of
+   501 or more, member of `admin`, not hidden), else `no_login_user`. A name that is not a plain
+   account name (letters, digits, `.`, `_`, `-`) is refused, since it becomes the name of a file.
+3. When the group `com.apple.access_ssh` exists, the login user is in it, or the group nests
+   `admin` and the login user is an administrator; otherwise `blocked_by_access_group`. The
+   daemon never edits a group.
+4. Remote Login is on. If `systemsetup -getremotelogin` says Off, the daemon runs
+   `systemsetup -setremotelogin on` and reads it back. The daemon never turns Remote Login off, so
+   reverting the access leaves sshd as it found it.
+
+macOS 13 and later refuse `systemsetup -setremotelogin` to a process without Full Disk Access
+(the tool says "requires Full Disk Access privileges"). The daemon then reports
+`needs_full_disk_access` and changes nothing, until the Full Disk Access configuration profile
+`docs/deploy/mac/hostkeeper-full-disk-access.mobileconfig` (added by the design's PR, komira-ai/hostkeeper#394,
+and corrected by #400, which names the program by its installed path) is pushed to the Mac. This
+change adds no second copy of that profile. The tool's text and whether the grant reaches `systemsetup`
+as a child of the daemon are not measured here: they are the measurements of build item C0 of the design.
+
 ### Boot id
 
 The daemon's clock reads the boot id through a port, `hostkeeper_steps::BootIdSource`. On a Mac

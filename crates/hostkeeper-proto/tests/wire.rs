@@ -450,6 +450,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 39] = [
             ("installers", 10),
             ("repositories", 11),
             ("facts_generation", 12),
+            ("ssh", 13),
         ],
     ),
     (
@@ -461,6 +462,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 39] = [
             ("acks", 4),
             ("repositories", 5),
             ("facts", 6),
+            ("ssh", 7),
         ],
     ),
     (
@@ -509,6 +511,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 39] = [
             ("image", 3),
             ("renewal_of", 4),
             ("mac_nonce", 5),
+            ("host_key_fingerprints", 6),
         ],
     ),
     (
@@ -731,6 +734,7 @@ fn wire_names_are_pinned() {
             "install-v1",
             "private-repository-v1",
             "repositories-v1",
+            "ssh-v1",
             "target-v1",
             "verdict-acks-v1"
         ]
