@@ -110,14 +110,37 @@ pub fn accept_tcp(
     }
 }
 
-/// Serves `listener` for `coordinator` for as long as the future is polled, for the listeners
-/// of `graceful` (the heartbeat, control and LAN ones of a coordinator that stops): each
+/// Serves `listener` for `coordinator` for as long as the future is polled, for a listener that
+/// is never told to stop. A client gets `patience` for its handshake, again for its request head,
+/// again for its request body and again for each write of a response that it does not read, and
+/// at most `max_connections` are served at once. It never returns.
+pub fn serve<A, F, S>(
+    listener: Listener<A>,
+    coordinator: Arc<Coordinator>,
+    patience: Duration,
+    max_connections: usize,
+) -> impl Future<Output = Infallible>
+where
+    A: FnMut() -> F + Send,
+    F: Future<Output = io::Result<S>> + Send,
+    S: AsyncRead + AsyncWrite + Remote + Unpin + Send + 'static,
+{
+    serve_until_stopped(
+        listener,
+        coordinator,
+        patience,
+        max_connections,
+        Graceful::default(),
+    )
+}
+
+/// [`serve`] for the listeners of `graceful` (the heartbeat, control and LAN ones of a coordinator that stops): each
 /// connection is counted as open on it while it is served, and is told to finish when it is told
 /// to stop ([`crate::graceful`]). A client gets `patience` for its handshake, again for its
 /// request head, again for its request body and again for each write of a response that it does
 /// not read, and at most `max_connections` are served at once. It never returns; the listener's
 /// accepting ends by [`crate::graceful::accept_until_stopped`] dropping it.
-pub(crate) fn serve<A, F, S>(
+pub(crate) fn serve_until_stopped<A, F, S>(
     listener: Listener<A>,
     coordinator: Arc<Coordinator>,
     patience: Duration,

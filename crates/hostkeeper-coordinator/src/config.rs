@@ -84,7 +84,7 @@ use crate::initial_admin::{LoginFlags, watch_every};
 use crate::inventory::RecordWindow;
 use crate::layout::LayoutStore;
 use crate::listen::{
-    CLIENT_PATIENCE, Listener, MAX_CONNECTIONS, Remote, reload_every, serve, together,
+    CLIENT_PATIENCE, Listener, MAX_CONNECTIONS, Remote, reload_every, serve_until_stopped, together,
 };
 use crate::lock::{FileLock, LockGuard, StateLock};
 use crate::ops::OpsStore;
@@ -239,7 +239,8 @@ pub struct Serve {
     /// is bounded by the limits they already have, not by this flag. A start-first update needs
     /// at least the edge's DNS refresh plus its healthy and unhealthy thresholds times its check
     /// interval (9 seconds at the edge's values), and the stop grace period above it and above
-    /// the longest a connection is kept (two client patiences, 20 seconds).
+    /// the longest a connection is kept (two client patiences, 20 seconds, or until a held
+    /// `Releases.WaitConverged` call ends and one patience after it).
     #[arg(long, default_value_t = 15)]
     pub drain_delay_secs: u64,
     /// The coordinator's certificate chain (PEM), issued by the farm CA with the role
@@ -806,7 +807,7 @@ where
     let adopting = watch_every(Arc::clone(&coordinator), parts.reload);
     // Without a LAN listener, a future that never finishes stands in for it.
     let serving_lan = match lan {
-        Some(lan) => Either::Left(serve(
+        Some(lan) => Either::Left(serve_until_stopped(
             lan,
             Arc::clone(&coordinator),
             CLIENT_PATIENCE,
@@ -817,14 +818,14 @@ where
     };
     let (for_heartbeat, for_control) = (Arc::clone(&coordinator), Arc::clone(&coordinator));
     let serving = together(
-        serve(
+        serve_until_stopped(
             heartbeat,
             for_heartbeat,
             CLIENT_PATIENCE,
             MAX_CONNECTIONS,
             graceful.clone(),
         ),
-        serve(
+        serve_until_stopped(
             control,
             for_control,
             CLIENT_PATIENCE,

@@ -142,7 +142,7 @@ fn route(round: u64, host: usize) -> Route {
         Route::A
     } else if round < OVERLAP_ENDS {
         let host = u64::try_from(host).expect("a small index");
-        if (round + host) % 2 == 0 {
+        if (round + host).is_multiple_of(2) {
             Route::A
         } else {
             Route::B
