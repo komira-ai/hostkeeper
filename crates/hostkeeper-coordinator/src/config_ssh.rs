@@ -8,23 +8,32 @@
 //! database holds the certificate table, the serial sequence and the audit.
 
 use std::collections::BTreeSet;
+use std::convert::Infallible;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use clap::{Args, ValueEnum};
+use futures::future::{Either, select};
 use hostkeeper_enrollment::names::HostId;
 use hostkeeper_wire::secret::{SecretError, read_secret};
 
-use super::Serve;
-use crate::enrollment::os_random;
+use super::{Serve, StartError};
+use crate::enrollment::{Random, os_random};
+use crate::service::Coordinator;
+use crate::ssh_book::Book;
 use crate::ssh_ca::MAX_TTL_SECS;
 use crate::ssh_cert::{CaKey, KeyError};
 use crate::ssh_ledger::Ledger;
 use crate::ssh_operators::{Operators, OperatorsError};
 use crate::ssh_sign::Signing;
+use crate::ssh_tunnel::{Limits, Tunnels, instance_id};
 
 /// The most bytes of a CA secret: two keys, with room.
 const MAX_SECRET_BYTES: u64 = 16 * 1024;
+
+/// The port of a host's sshd, which a tunnel dials: not a flag, every host runs it on 22.
+pub(crate) const SSHD_PORT: u16 = 22;
 
 /// Which key of the CA secret signs, while a rotation runs (section 5).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
@@ -81,6 +90,91 @@ pub struct SshFlags {
     /// administrator.
     #[arg(long, default_value = "", requires = "ssh_ca_secret_file")]
     pub ssh_login_user_macos: String,
+    /// How recent a host's last heartbeat must be for a tunnel to be opened to it, in seconds,
+    /// 10 to 3600. A host that has not been heard in that time is refused `host_not_live`.
+    #[arg(
+        long,
+        default_value_t = 120,
+        value_parser = clap::value_parser!(u64).range(10..=3600),
+        requires = "ssh_ca_secret_file"
+    )]
+    pub ssh_live_s: u64,
+    /// How long a tunnel may carry no byte either way before it is closed `idle`, in seconds,
+    /// 10 to 86400.
+    #[arg(
+        long,
+        default_value_t = 900,
+        value_parser = clap::value_parser!(u64).range(10..=86_400),
+        requires = "ssh_ca_secret_file"
+    )]
+    pub ssh_idle_s: u64,
+    /// How long a tunnel may stay open before it is closed `max_session`, in seconds, 60 to
+    /// 86400.
+    #[arg(
+        long,
+        default_value_t = 28_800,
+        value_parser = clap::value_parser!(u64).range(60..=86_400),
+        requires = "ssh_ca_secret_file"
+    )]
+    pub ssh_max_session_s: u64,
+    /// How long the connection to a host's sshd may take, in seconds, 1 to 60.
+    #[arg(
+        long,
+        default_value_t = 5,
+        value_parser = clap::value_parser!(u64).range(1..=60),
+        requires = "ssh_ca_secret_file"
+    )]
+    pub ssh_dial_timeout_s: u64,
+    /// The most tunnels this coordinator instance holds at once, 1 to 1024.
+    #[arg(
+        long,
+        default_value_t = 16,
+        value_parser = clap::value_parser!(u64).range(1..=1024),
+        requires = "ssh_ca_secret_file"
+    )]
+    pub ssh_max_tunnels: u64,
+    /// The most tunnels one operator holds at once over every instance, 1 to 64.
+    #[arg(
+        long,
+        default_value_t = 4,
+        value_parser = clap::value_parser!(u64).range(1..=64),
+        requires = "ssh_ca_secret_file"
+    )]
+    pub ssh_max_tunnels_per_operator: u64,
+    /// How often an instance looks for the tunnels that must close (a token or a certificate
+    /// revoked, an operators file that no longer permits them), in seconds, 1 to 300.
+    #[arg(
+        long,
+        default_value_t = 10,
+        value_parser = clap::value_parser!(u64).range(1..=300),
+        requires = "ssh_ca_secret_file"
+    )]
+    pub ssh_revoke_poll_s: u64,
+    /// How long a stopping instance waits for its tunnels to end on their own, in seconds, 0 to
+    /// 3600, before it closes them `coordinator_stopping`. The container's stop grace period must
+    /// be at least this long.
+    #[arg(
+        long,
+        default_value_t = 600,
+        value_parser = clap::value_parser!(u64).range(0..=3600),
+        requires = "ssh_ca_secret_file"
+    )]
+    pub ssh_drain_s: u64,
+}
+
+/// The limits of the tunnels `ssh` names, dialling `port`.
+fn limits(ssh: &SshFlags, port: u16) -> Limits {
+    Limits {
+        live_secs: ssh.ssh_live_s,
+        idle: Duration::from_secs(ssh.ssh_idle_s),
+        max_session: Duration::from_secs(ssh.ssh_max_session_s),
+        dial_timeout: Duration::from_secs(ssh.ssh_dial_timeout_s),
+        max_tunnels: usize::try_from(ssh.ssh_max_tunnels).unwrap_or(usize::MAX),
+        per_operator: ssh.ssh_max_tunnels_per_operator,
+        poll: Duration::from_secs(ssh.ssh_revoke_poll_s),
+        drain: Duration::from_secs(ssh.ssh_drain_s),
+        port,
+    }
 }
 
 /// Why the SSH flags are refused at start.
@@ -107,6 +201,9 @@ pub enum SshStartError {
     /// A login user that is empty (Linux) or not a plain account name.
     #[error("{0}: not an account name")]
     LoginUser(&'static str),
+    /// The random source gave no bytes for the id of this instance.
+    #[error("the random source gave no bytes for the id of this instance")]
+    InstanceId,
 }
 
 /// Whether `name` is the name of an account: 1 to 32 bytes of letters, digits, `_`, `-` and `.`,
@@ -190,6 +287,50 @@ pub(super) fn signing(
         ledger,
         random: os_random(),
     }))
+}
+
+/// `coordinator` signing and holding tunnels as `flags` say, over `ledger` and `book`, which the
+/// database gives: the coordinator itself without `--ssh-ca-secret-file`. The instance's id is
+/// made from `random`.
+///
+/// # Errors
+/// [`SshStartError`]: a flag is refused, or a file is, or `random` gave no bytes.
+pub(super) fn attach(
+    coordinator: Coordinator,
+    flags: &Serve,
+    ledger: Option<Arc<dyn Ledger>>,
+    book: Option<Arc<dyn Book>>,
+    random: &Random,
+) -> Result<Coordinator, SshStartError> {
+    // clap requires --ssh-ca-secret-file to come with the database, which gives both.
+    let (Some(signing), Some(book)) = (signing(flags, ledger)?, book) else {
+        return Ok(coordinator);
+    };
+    let instance = instance_id(random).ok_or(SshStartError::InstanceId)?;
+    let tunnels = Tunnels::new(book, instance, limits(&flags.ssh, SSHD_PORT));
+    Ok(coordinator.with_ssh(signing).with_tunnels(tunnels))
+}
+
+/// Drains the tunnels `coordinator` holds, if it holds any ([`Tunnels::drain`]), while `serving`
+/// goes on serving: the listeners stay up for the tunnels, and the health listener answers
+/// `draining`. Ends when they have ended, or with the error `serving` ends with.
+///
+/// # Errors
+/// [`StartError`]: `serving` ended.
+pub(super) async fn drained<S>(coordinator: &Coordinator, serving: S) -> Result<(), StartError>
+where
+    S: Future<Output = Result<Infallible, StartError>> + Unpin,
+{
+    let Some(tunnels) = coordinator.tunnels.as_ref() else {
+        return Ok(());
+    };
+    match select(Box::pin(tunnels.drain()), serving).await {
+        Either::Left(((), _)) => Ok(()),
+        Either::Right((served, _)) => {
+            let Err(why) = served;
+            Err(why)
+        }
+    }
 }
 
 #[cfg(test)]

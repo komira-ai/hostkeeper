@@ -285,7 +285,8 @@ pub(crate) fn ssh(refusal: SshRefusal) -> Status {
         SshRefusal::NotConfigured
         | SshRefusal::HostNotLive
         | SshRefusal::NoAddress
-        | SshRefusal::BadSerial => Code::FailedPrecondition,
+        | SshRefusal::BadSerial
+        | SshRefusal::NotReported => Code::FailedPrecondition,
         SshRefusal::TooManyTunnels => Code::ResourceExhausted,
         SshRefusal::Draining | SshRefusal::DialFailed | SshRefusal::AuditUnavailable => {
             Code::Unavailable

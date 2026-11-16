@@ -260,6 +260,7 @@ mod service_repository;
 mod serving;
 mod session;
 mod ssh;
+mod ssh_book;
 mod start;
 pub(crate) mod store;
 mod unused_mdm_tables;

@@ -150,7 +150,7 @@ const HEARTBEAT: &str = "/hostkeeper.agent.v1.Coordinator/Heartbeat";
 /// A server's TLS source over a certificate for `localhost` issued by a CA of its own, and the
 /// DER of that CA, for a client to trust. The source's own ALPN is `h2` only: the listener
 /// offers what it offers whatever that is.
-fn tls_material() -> (TlsSource, Vec<u8>) {
+pub(crate) fn tls_material() -> (TlsSource, Vec<u8>) {
     let mut authority = CertificateParams::new(Vec::<String>::new()).expect("CA params");
     authority.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
     authority.key_usages = vec![
@@ -177,7 +177,7 @@ fn tls_material() -> (TlsSource, Vec<u8>) {
 }
 
 /// A TLS client that trusts the CA `ca` and offers the application protocols `offered`.
-fn connector(ca: &[u8], offered: &[&[u8]]) -> TlsConnector {
+pub(crate) fn connector(ca: &[u8], offered: &[&[u8]]) -> TlsConnector {
     let mut roots = RootCertStore::empty();
     roots
         .add(CertificateDer::from(ca.to_vec()))

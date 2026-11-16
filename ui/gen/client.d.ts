@@ -120,6 +120,7 @@ export interface Client {
   readonly ssh: {
     signUserCert(request: hostkeeper_operator_v1.SignUserCertRequest): Promise<hostkeeper_operator_v1.SignUserCertResponse>;
     hostKeys(request: hostkeeper_operator_v1.HostKeysRequest): Promise<hostkeeper_operator_v1.HostKeysResponse>;
+    pinHostKeys(request: hostkeeper_operator_v1.PinHostKeysRequest): Promise<hostkeeper_operator_v1.HostKeysResponse>;
     revoke(request: hostkeeper_operator_v1.RevokeRequest): Promise<hostkeeper_operator_v1.RevokeResponse>;
   };
   readonly users: {
@@ -715,6 +716,7 @@ export namespace hostkeeper_operator_v1 {
     recordApproveUntilUnix?: string;
     recordHostGroup?: string;
   }
+  export interface PinHostKeysRequest { hostId?: string; fingerprints?: string[]; }
   export interface PlaceLayoutRequest { subject?: hostkeeper_operator_v1.LayoutSubject; rack?: string; heightU?: number; u?: number; reason?: string; sled?: string; slot?: number; }
   export interface PlaceLayoutResponse { placement?: hostkeeper_operator_v1.LayoutPlacement; entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface PlanHost { nodeId?: string; role?: string; state?: hostkeeper_operator_v1.PlanHostState; deferring?: boolean; }

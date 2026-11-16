@@ -1270,7 +1270,7 @@ Through `--request` only: `scope` (hostkeeper.operator.v1.HoldScope).
 
 ### `ssh`
 
-The service `Ssh` of the package `hostkeeper.operator.v1`. Access to the hosts' sshd through the coordinator. Each call is audited under the caller's name; `SignUserCert` as `ssh_cert_signed`, `Revoke` as `ssh_revoke`, and `Tunnel` as `ssh_tunnel_open` and `ssh_tunnel_close`.
+The service `Ssh` of the package `hostkeeper.operator.v1`. Access to the hosts' sshd through the coordinator. Each call is audited under the caller's name; `SignUserCert` as `ssh_cert_signed`, `Revoke` as `ssh_revoke`, `PinHostKeys` as `ssh_hostkey_pinned`, and `Tunnel` as `ssh_tunnel_open` and `ssh_tunnel_close`.
 
 #### `hkctl ssh sign-user-cert`
 
@@ -1290,11 +1290,26 @@ request. No certificate is made when the audit entry cannot be written.
 
 `/hostkeeper.operator.v1.Ssh/HostKeys`
 
-The fingerprints of the sshd host keys pinned for a host at its enrollment. Changes nothing.
+The fingerprints of the sshd host keys pinned for a host: the set an operator pinned from
+what the host reported in its heartbeat, with `PinHostKeys`. Changes nothing.
 
 | flag | value | meaning |
 |---|---|---|
 | `--host-id` | STRING | The host whose pinned fingerprints are read. |
+
+#### `hkctl ssh pin-host-keys`
+
+`/hostkeeper.operator.v1.Ssh/PinHostKeys`
+
+Pins, as a set, exactly the host keys the host's last heartbeat reported, for a host, and
+answers as `HostKeys` does after. Refused with `not_reported` when `fingerprints` are not, as
+a set, what that heartbeat reported. Audited as `ssh_hostkey_pinned`. The operators file must
+permit the caller the host, as for `SignUserCert`.
+
+| flag | value | meaning |
+|---|---|---|
+| `--host-id` | STRING | The host whose host keys are pinned. |
+| `--fingerprints` | STRING | The fingerprints to pin, at most 8, each `SHA256:` and 43 base64 characters; exactly the set the host's last heartbeat reported. Repeat the flag for more. |
 
 #### `hkctl ssh revoke`
 

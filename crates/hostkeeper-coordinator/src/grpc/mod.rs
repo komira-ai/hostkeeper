@@ -75,8 +75,8 @@ use self::operator_ssh::SshService;
 use self::refusal::token_status;
 use crate::enrollment::MAX_MESSAGE_BYTES;
 use crate::http::{
-    BoxError, MAX_HOST_GROUPS_PUT_BYTES, MAX_OPERATOR_BYTES, MAX_SET_DESIRED_BYTES, Peer, Surface,
-    bearer_in, beat_caller, error, handle,
+    BoxError, MAX_HOST_GROUPS_PUT_BYTES, MAX_OPERATOR_BYTES, MAX_SET_DESIRED_BYTES,
+    MAX_TUNNEL_FRAME_BYTES, Peer, Surface, bearer_in, beat_caller, error, handle,
 };
 use crate::identity::Identity;
 use crate::operator::Caller;
@@ -147,6 +147,8 @@ const HEARTBEAT: &str = "/hostkeeper.agent.v1.Coordinator/Heartbeat";
 const REPOSITORIES_PUT: &str = "/hostkeeper.operator.v1.Repositories/Put";
 /// The path of `HostGroups.Put`, which takes the operator's token and a body of up to 64 KiB.
 const HOST_GROUPS_PUT: &str = "/hostkeeper.operator.v1.HostGroups/Put";
+/// The path of `Ssh.Tunnel`, whose frames carry up to 16 KiB of data.
+const SSH_TUNNEL: &str = "/hostkeeper.operator.v1.Ssh/Tunnel";
 /// The path of `Releases.SetDesired`, which takes CI's token or the operator's.
 const SET_DESIRED: &str = "/hostkeeper.operator.v1.Releases/SetDesired";
 /// The path of `Releases.Converge`, which takes CI's token or the operator's: it changes nothing.
@@ -417,12 +419,15 @@ where
 
 /// The most bytes an operator's call of `path` reads: [`MAX_SET_DESIRED_BYTES`] for
 /// `SetDesired` and `Repositories.Put`, [`MAX_HOST_GROUPS_PUT_BYTES`] for `HostGroups.Put`,
-/// [`MAX_OPERATOR_BYTES`] for every other method.
+/// [`MAX_TUNNEL_FRAME_BYTES`] for each frame of `Ssh.Tunnel`, [`MAX_OPERATOR_BYTES`] for every
+/// other method.
 pub(crate) fn operator_limit(path: &str) -> usize {
     if path == SET_DESIRED || path == REPOSITORIES_PUT {
         MAX_SET_DESIRED_BYTES
     } else if path == HOST_GROUPS_PUT {
         MAX_HOST_GROUPS_PUT_BYTES
+    } else if path == SSH_TUNNEL {
+        MAX_TUNNEL_FRAME_BYTES
     } else {
         MAX_OPERATOR_BYTES
     }
@@ -431,8 +436,8 @@ pub(crate) fn operator_limit(path: &str) -> usize {
 /// Serves the gRPC call `request` with the tonic server of its service, in process, with
 /// `admitted` in its extensions for the adapter. The service's message limit applies to the
 /// request: 16 KiB for a heartbeat, 8 KiB for `Enroll`, `Poll` and `Renew`, 256 KiB for
-/// `SetDesired` and `Repositories.Put`, 64 KiB for `HostGroups.Put`
-/// ([`operator_limit`]), 4 KiB for every other operator's call. A path of a
+/// `SetDesired` and `Repositories.Put`, 64 KiB for `HostGroups.Put`, 16 KiB and 64 bytes for each
+/// frame of `Ssh.Tunnel` ([`operator_limit`]), 4 KiB for every other operator's call. A path of a
 /// service this coordinator does not serve is `UNIMPLEMENTED`.
 pub(crate) async fn serve_admitted<B>(
     coordinator: &Arc<Coordinator>,
@@ -519,7 +524,7 @@ where
         }
         Some(SSH) => {
             let server = SshServer::new(SshService::new(coordinator))
-                .max_decoding_message_size(MAX_OPERATOR_BYTES);
+                .max_decoding_message_size(operator_limit(path));
             call(server, request).await
         }
         _ => Status::unimplemented("").into_http(),

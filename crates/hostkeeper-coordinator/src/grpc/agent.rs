@@ -20,7 +20,7 @@ use super::Admitted;
 use super::beat_map;
 use super::refusal::token_status;
 use crate::enrollment::Enrollment;
-use crate::http::{BeatCaller, BeatRefused, beat};
+use crate::http::{BeatCaller, BeatRefused, PeerAddr, beat};
 use crate::orders::Order;
 use crate::service::Coordinator;
 use crate::trusted_root::TrustedRootSaid;
@@ -88,6 +88,20 @@ impl Api for AgentService {
             self.coordinator
                 .hear_repositories(&identity, request.get_ref());
             self.coordinator.hear_facts(&identity, request.get_ref());
+            // Where the host was heard from and the host keys it reports, for the tunnels.
+            let from = request
+                .extensions()
+                .get::<PeerAddr>()
+                .map(|peer| peer.0.ip());
+            let keys = request
+                .get_ref()
+                .ssh
+                .as_ref()
+                .map(|report| report.host_key_fingerprints.clone())
+                .unwrap_or_default();
+            self.coordinator
+                .hear_ssh(identity.host_id.as_str(), from, keys)
+                .await;
         }
         let host_id = identity.host_id.clone();
         let facts = (!retiring)

@@ -30,24 +30,35 @@ impl PgLedger {
 }
 
 /// A count or a time of the database as the unsigned number it is.
-fn unsigned(n: i64) -> u64 {
+pub(super) fn unsigned(n: i64) -> u64 {
     u64::try_from(n).unwrap_or_default()
 }
 
 /// A number of ours as the database's `bigint`.
-fn signed(n: u64) -> i64 {
+pub(super) fn signed(n: u64) -> i64 {
     i64::try_from(n).unwrap_or(i64::MAX)
 }
 
-/// Takes the chain's lock for the rest of the transaction, and reads the server's time.
-fn begin(tx: &mut Tx<'_>) -> Result<u64, postgres::Error> {
+/// Takes the chain's lock for the rest of the transaction.
+pub(super) fn lock(tx: &mut Tx<'_>) -> Result<(), postgres::Error> {
     tx.query_one("SELECT pg_advisory_xact_lock($1)", &[&CHAIN_KEY])?;
+    Ok(())
+}
+
+/// Reads the server's time, in seconds: the transaction's start.
+pub(super) fn clock(tx: &mut Tx<'_>) -> Result<u64, postgres::Error> {
     let now = tx.query_one("SELECT floor(extract(epoch FROM now()))::bigint", &[])?;
     Ok(unsigned(now.get(0)))
 }
 
+/// Takes the chain's lock for the rest of the transaction, and reads the server's time.
+pub(super) fn begin(tx: &mut Tx<'_>) -> Result<u64, postgres::Error> {
+    lock(tx)?;
+    clock(tx)
+}
+
 /// Appends `line` to the chain, after the newest row, which the caller's lock keeps from changing.
-fn append(tx: &mut Tx<'_>, line: &Line) -> Result<(), postgres::Error> {
+pub(super) fn append(tx: &mut Tx<'_>, line: &Line) -> Result<(), postgres::Error> {
     let prev: Vec<u8> = tx
         .query_one(
             "SELECT coalesce((SELECT hash FROM ssh_audit ORDER BY seq DESC LIMIT 1), $1::bytea)",
