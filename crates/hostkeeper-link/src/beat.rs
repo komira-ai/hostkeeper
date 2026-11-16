@@ -5,8 +5,8 @@
 //! limit of `hostkeeper-proto`, and is at most [`MAX_HEARTBEAT_BYTES`] as JSON with the wire's
 //! names ([`Heartbeat::encoded_len`]). [`fit`] keeps it: a heartbeat with more services is
 //! refused, never cut short; one with too many bytes loses its optional facts, a group at a
-//! time in the order of [`DROP_ORDER`] (the health detail, then the deferral detail, then the
-//! observer's detail), and is refused when that is not enough. The service, its version, its
+//! time in the order of [`DROP_ORDER`] (the Remote Login probe, then the health detail, then the
+//! deferral detail, then the observer's detail), and is refused when that is not enough. The service, its version, its
 //! health, the update running and the last verdict are never dropped, nor are the host's clock
 //! and certificate facts ([`Heartbeat::sent_unix`], [`Heartbeat::renewal`]), whose one text is
 //! at most [`hostkeeper_wire::wire::MAX_RENEW_ERROR`] bytes, nor its trusted root
@@ -15,7 +15,8 @@
 //! `trusted_root_reason`. The installers ([`Heartbeat::installers`]) are counted the same way, as
 //! `installers`; a service's `installer` ([`ServiceFacts::installer`]), the repositories report
 //! ([`Heartbeat::repositories`]) and the facts generation ([`Heartbeat::facts_generation`])
-//! likewise.
+//! likewise. A Mac's Remote Login probe ([`Heartbeat::remote_login_probe`]) is counted too, and is
+//! the first optional fact dropped.
 
 use hostkeeper_config::names::{ServiceName, Version};
 pub use hostkeeper_proto::MAX_SERVICES_PER_HEARTBEAT;
@@ -23,6 +24,7 @@ use serde_json::{Map, Value, json};
 
 use crate::order::{DeferredReport, OrderResult};
 use crate::ports::Drift;
+use crate::probe::RemoteLoginProbe;
 use crate::repositories::RepositoriesReport;
 
 /// The most bytes of a heartbeat: its JSON on the JSON route, its encoded message on the gRPC one.
@@ -372,6 +374,10 @@ pub struct Heartbeat {
     /// no facts file or has written none yet. Sent over gRPC only, and counted toward the bound
     /// on both.
     pub facts_generation: Option<u64>,
+    /// The Remote Login probe the daemon ran at its start; none from a daemon that runs none (any
+    /// but a Mac's) or has not finished it. Sent over gRPC only, counted toward the bound on both,
+    /// and the first optional fact [`fit`] drops.
+    pub remote_login_probe: Option<RemoteLoginProbe>,
 }
 
 impl Heartbeat {
@@ -425,6 +431,9 @@ impl Heartbeat {
         if let Some(generation) = self.facts_generation {
             beat.insert("facts_generation".to_owned(), generation.into());
         }
+        if let Some(probe) = &self.remote_login_probe {
+            beat.insert("remote_login_probe".to_owned(), probe.to_json());
+        }
         Value::Object(beat)
     }
 
@@ -434,8 +443,12 @@ impl Heartbeat {
     }
 
     fn drop_fact(&mut self, fact: OptionalFact) {
+        if fact == OptionalFact::RemoteLoginProbe {
+            self.remote_login_probe = None;
+        }
         for service in &mut self.services {
             match fact {
+                OptionalFact::RemoteLoginProbe => {}
                 OptionalFact::HealthDetail => service.health_detail = None,
                 OptionalFact::DeferralDetail => service.deferred = None,
                 OptionalFact::ObserverDetail => service.observed = None,
@@ -447,6 +460,8 @@ impl Heartbeat {
 /// A group of optional facts a heartbeat loses, every service's at once, to fit its bound.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OptionalFact {
+    /// [`Heartbeat::remote_login_probe`], the host's own.
+    RemoteLoginProbe,
     /// [`ServiceFacts::health_detail`].
     HealthDetail,
     /// [`ServiceFacts::deferred`].
@@ -456,7 +471,8 @@ pub enum OptionalFact {
 }
 
 /// The order in which [`fit`] drops the optional facts.
-pub const DROP_ORDER: [OptionalFact; 3] = [
+pub const DROP_ORDER: [OptionalFact; 4] = [
+    OptionalFact::RemoteLoginProbe,
     OptionalFact::HealthDetail,
     OptionalFact::DeferralDetail,
     OptionalFact::ObserverDetail,
@@ -480,7 +496,8 @@ pub struct Fitted {
 }
 
 /// `beat` within its bound: as it is, or without its optional facts, dropped a group at a time
-/// in the order of [`DROP_ORDER`] until it fits.
+/// in the order of [`DROP_ORDER`] until it fits. The probe's group is dropped, and listed, only
+/// when the heartbeat holds a probe.
 ///
 /// # Errors
 /// More services than [`MAX_SERVICES_PER_HEARTBEAT`], or more than [`MAX_HEARTBEAT_BYTES`] with
@@ -494,6 +511,10 @@ pub fn fit(mut beat: Heartbeat) -> Result<Fitted, Oversize> {
     for fact in DROP_ORDER {
         if beat.encoded_len() <= MAX_HEARTBEAT_BYTES {
             return Ok(Fitted { beat, dropped });
+        }
+        // A heartbeat without a probe has none to lose: the group is passed over, not listed.
+        if fact == OptionalFact::RemoteLoginProbe && beat.remote_login_probe.is_none() {
+            continue;
         }
         beat.drop_fact(fact);
         dropped.push(fact);

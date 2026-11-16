@@ -60,6 +60,16 @@ pub mod hostkeeper {
 /// says ("A heartbeat lists at most 16 services.").
 pub const MAX_SERVICES_PER_HEARTBEAT: usize = 16;
 
+/// The most steps of a `RemoteLoginProbe`, as `hostkeeper/agent/v1/agent.proto` says.
+pub const MAX_PROBE_STEPS: usize = 24;
+
+/// The most arguments of a `ProbeStep`, as `hostkeeper/agent/v1/agent.proto` says.
+pub const MAX_PROBE_ARGS: usize = 8;
+
+/// The most bytes of each text of a `ProbeStep` (an argument, its output, its error), as
+/// `hostkeeper/agent/v1/agent.proto` says.
+pub const MAX_PROBE_TEXT: usize = 1024;
+
 /// The `FileDescriptorSet` every file under `proto/hostkeeper` compiles to, with the files they
 /// import and their comments, encoded. Custom options (`(hostkeeper.secret)`) are kept in it.
 pub const FILE_DESCRIPTOR_SET: &[u8] =

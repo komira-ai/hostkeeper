@@ -30,6 +30,7 @@ fn beat() -> Heartbeat {
         installers: Vec::new(),
         repositories: None,
         facts_generation: None,
+        remote_login_probe: None,
     }
 }
 

@@ -176,6 +176,7 @@ fn first_beat() -> Heartbeat {
         installers: vec!["apt".to_owned()],
         repositories: None,
         facts_generation: None,
+        remote_login_probe: None,
     }
 }
 
@@ -204,6 +205,7 @@ fn without_executor(daemon: &Arc<Daemon>, links: &Links) -> Heartbeater {
             trusted_root: Arc::new(NoTrustedRoot),
             repositories: None,
             facts: None,
+            remote_login_probe: None,
         },
     )
 }
@@ -224,6 +226,7 @@ fn links_over(link: Arc<dyn CoordinatorLink>, dispatch: &Arc<ManualDispatch>) ->
         renewal: hostkeeper_enroll::RenewalState::default(),
         watchdog: Box::new(hostkeeper_daemon::NoWatchdog),
         console: None,
+        remote_login_probe: None,
     }
 }
 

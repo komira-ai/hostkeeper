@@ -323,6 +323,42 @@ made at each start of the daemon, not watched in between; the heartbeat does not
 A configuration profile is the other way to hold power settings on a managed Mac; the daemon is
 what ships, so a Mac needs nothing but hostkeeper.
 
+### The Remote Login probe
+
+Whether the daemon needs Full Disk Access to turn on Remote Login (sshd) is not stated by Apple
+(docs/design/ssh-through-coordinator.md, section 3). The daemon answers it itself: at each start
+of a Mac's daemon, a thread of its own (`crates/hostkeeper-daemon/src/remote_login_probe.rs`) runs,
+as the daemon (root under launchd, with whatever privacy grants the daemon has), these steps in
+order and keeps the exit code, standard output and standard error of each, or why it could not be
+done:
+
+| step | what it runs or reads |
+|---|---|
+| `remote_login_get_before` | `systemsetup -getremotelogin` |
+| `sshd_print_before` | `launchctl print system/com.openssh.sshd` |
+| `ssh_banner_before` | a connect to `127.0.0.1:22`, and the banner sshd writes |
+| `remote_login_set_on` | `systemsetup -setremotelogin on` |
+| `remote_login_get_after_set` | `systemsetup -getremotelogin` |
+| `sshd_enable` | `launchctl enable system/com.openssh.sshd` |
+| `sshd_bootstrap` | `launchctl bootstrap system /System/Library/LaunchDaemons/ssh.plist` |
+| `sshd_print_after` | `launchctl print system/com.openssh.sshd` |
+| `remote_login_get_after` | `systemsetup -getremotelogin` |
+| `ssh_banner_after` | the connect and banner again |
+| `sshd_config_include` | the `Include` lines of `/etc/ssh/sshd_config` |
+| `access_ssh_group` | `dscl . -read /Groups/com.apple.access_ssh` |
+| `tcc_db_open` | whether `/Library/Application Support/com.apple.TCC/TCC.db` opens for reading |
+| `tcc_full_disk_access` | `sqlite3 -readonly` on it: the rows of `kTCCServiceSystemPolicyAllFiles` |
+| `codesign_running` | `codesign -dvv` of the running binary (ad hoc or a Team ID) |
+| `codesign_installed_requirement` | `codesign -dr -` of `/usr/local/bin/hostkeeper` |
+
+`remote_login_set_on`, `sshd_enable` and `sshd_bootstrap` may turn Remote Login on, and nothing
+turns it off again; the steps before them show whether it was on already. Each text is cut to 1024
+bytes (`truncated` says so). Every gRPC heartbeat after the probe is done carries it
+(`HeartbeatRequest.remote_login_probe`); it is the first fact a heartbeat drops when it would not
+fit 16 KiB. The coordinator keeps the last one in memory and shows it in the host's heartbeat:
+`hkctl hosts get --node-id <host>` answers it as `host.heartbeat.remoteLoginProbe`. Nothing decides
+on it; a restart of the daemon (an update included) runs it again.
+
 ### Release and installer pkg
 
 Every release ships macos-arm64 beside the two Linux platforms: the binary tarball

@@ -377,6 +377,8 @@ async fn start_and_serve(
 /// - each loop and each order runs on a thread of its own ([`ThreadDispatch`]);
 /// - both loops log through the daemon's alert sink ([`DaemonLog`]);
 /// - the heartbeat loop tells `watchdog` after each heartbeat that it is alive;
+/// - on a Mac (`kind`), the Remote Login probe starts on a thread of its own, and every heartbeat
+///   after it is done reports it ([`crate::remote_login_probe::at_host_start`]);
 /// - when `files` names a console, the enrollment loop writes its issue file, naming the daemon
 ///   config's `coordinator`, and has the gettys redraw by running its agetty with `--reload` as
 ///   a child process, its output read to [`AGETTY_OUTPUT_CAP`] and bounded by
@@ -428,6 +430,7 @@ pub fn host_links(
         stop,
         watchdog,
         console,
+        remote_login_probe: crate::remote_login_probe::at_host_start(kind),
     }
 }
 
