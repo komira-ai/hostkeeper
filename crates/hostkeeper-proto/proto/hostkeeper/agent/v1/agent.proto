@@ -216,7 +216,8 @@ message HeartbeatRequest {
 // One run of the Remote Login probe of a Mac's daemon: the commands that tell whether the
 // daemon, with no Full Disk Access, can turn on Remote Login (`systemsetup`, or `launchctl` on
 // `com.openssh.sshd`), whether sshd answers afterwards, and what the daemon's own signature and
-// privacy state are.
+// privacy state are; and why a Mac may sleep (`pmset`, and what the daemon's own power settings
+// said at its starts).
 message RemoteLoginProbe {
   // The host's clock when the probe started, in seconds since the epoch.
   uint64 started_unix = 1;
@@ -225,13 +226,13 @@ message RemoteLoginProbe {
 }
 
 // One step of a probe: a command it ran, or a file or socket it read. Every text is at most
-// 1024 bytes, cut at a character boundary by the daemon (`truncated` says so).
+// 4096 bytes, cut at a character boundary by the daemon (`truncated` says so).
 message ProbeStep {
   // What the step is, 1 to 64 bytes of `[a-z0-9_]` (`remote_login_set_on`).
   string name = 1;
   // The program and its arguments as run, or for a step that runs nothing, what it read
   // (`connect 127.0.0.1:22`, `read /etc/ssh/sshd_config`). At most 8, each at most
-  // 1024 bytes.
+  // 4096 bytes.
   repeated string argv = 2;
   // The exit status of the program; absent when it ran nothing, could not be started, timed out
   // or was ended by a signal.
@@ -244,7 +245,7 @@ message ProbeStep {
   // Why the step could not be done (the program could not be started, it timed out, the file
   // or the socket could not be read); empty when it was done.
   string error = 6;
-  // Whether `stdout` or `stderr` was cut to 1024 bytes.
+  // Whether `stdout` or `stderr` was cut by the daemon.
   bool truncated = 7;
 }
 

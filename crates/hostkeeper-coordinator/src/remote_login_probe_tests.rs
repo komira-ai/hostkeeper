@@ -115,69 +115,69 @@ fn a_step_has_at_most_8_arguments() {
     assert!(!keeps_rules(&argv(9)));
 }
 
-/// Proves: an argument of exactly 1024 bytes keeps the rules and one of 1025 does not, whichever
+/// Proves: an argument of exactly 4096 bytes keeps the rules and one of 4097 does not, whichever
 /// argument of the step it is.
 ///
 /// Catches: argument text unbounded, a bound off by one, and only the first argument checked.
 #[test]
-fn an_argument_is_at_most_1024_bytes() {
+fn an_argument_is_at_most_4096_bytes() {
     let with = |len: usize| {
         probe_of(agent::ProbeStep {
             argv: vec!["x".to_owned(), "y".repeat(len)],
             ..step("a")
         })
     };
-    assert!(keeps_rules(&with(1024)));
-    assert!(!keeps_rules(&with(1025)));
+    assert!(keeps_rules(&with(4096)));
+    assert!(!keeps_rules(&with(4097)));
 }
 
-/// Proves: standard output of exactly 1024 bytes keeps the rules and one of 1025 does not.
+/// Proves: standard output of exactly 4096 bytes keeps the rules and one of 4097 does not.
 ///
 /// Catches: standard output unbounded, or a bound off by one.
 #[test]
-fn stdout_is_at_most_1024_bytes() {
+fn stdout_is_at_most_4096_bytes() {
     let with = |len: usize| {
         probe_of(agent::ProbeStep {
             stdout: "o".repeat(len),
             ..step("a")
         })
     };
-    assert!(keeps_rules(&with(1024)));
-    assert!(!keeps_rules(&with(1025)));
+    assert!(keeps_rules(&with(4096)));
+    assert!(!keeps_rules(&with(4097)));
 }
 
-/// Proves: standard error of exactly 1024 bytes keeps the rules and one of 1025 does not.
+/// Proves: standard error of exactly 4096 bytes keeps the rules and one of 4097 does not.
 ///
 /// Catches: standard error unbounded, or a bound off by one.
 #[test]
-fn stderr_is_at_most_1024_bytes() {
+fn stderr_is_at_most_4096_bytes() {
     let with = |len: usize| {
         probe_of(agent::ProbeStep {
             stderr: "e".repeat(len),
             ..step("a")
         })
     };
-    assert!(keeps_rules(&with(1024)));
-    assert!(!keeps_rules(&with(1025)));
+    assert!(keeps_rules(&with(4096)));
+    assert!(!keeps_rules(&with(4097)));
 }
 
-/// Proves: an error text of exactly 1024 bytes keeps the rules and one of 1025 does not.
+/// Proves: an error text of exactly 4096 bytes keeps the rules and one of 4097 does not.
 ///
 /// Catches: the error text unbounded, or a bound off by one.
 #[test]
-fn an_error_text_is_at_most_1024_bytes() {
+fn an_error_text_is_at_most_4096_bytes() {
     let with = |len: usize| {
         probe_of(agent::ProbeStep {
             error: "r".repeat(len),
             ..step("a")
         })
     };
-    assert!(keeps_rules(&with(1024)));
-    assert!(!keeps_rules(&with(1025)));
+    assert!(keeps_rules(&with(4096)));
+    assert!(!keeps_rules(&with(4097)));
 }
 
-/// Proves: the bounds on texts are in bytes: 513 two-byte characters (1026 bytes) break the
-/// rules, 512 (1024 bytes) keep them.
+/// Proves: the bounds on texts are in bytes: 2049 two-byte characters (4098 bytes) break the
+/// rules, 512 (4096 bytes) keep them.
 ///
 /// Catches: text counted in characters.
 #[test]
@@ -188,8 +188,8 @@ fn the_text_bound_counts_bytes_not_characters() {
             ..step("a")
         })
     };
-    assert!(keeps_rules(&with(512)));
-    assert!(!keeps_rules(&with(513)));
+    assert!(keeps_rules(&with(2048)));
+    assert!(!keeps_rules(&with(2049)));
 }
 
 /// Proves: `show` puts the host's kept probe, as it was kept, into the host's heartbeat, making

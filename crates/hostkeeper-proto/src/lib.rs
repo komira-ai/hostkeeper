@@ -68,7 +68,7 @@ pub const MAX_PROBE_ARGS: usize = 8;
 
 /// The most bytes of each text of a `ProbeStep` (an argument, its output, its error), as
 /// `hostkeeper/agent/v1/agent.proto` says.
-pub const MAX_PROBE_TEXT: usize = 1024;
+pub const MAX_PROBE_TEXT: usize = 4096;
 
 /// The `FileDescriptorSet` every file under `proto/hostkeeper` compiles to, with the files they
 /// import and their comments, encoded. Custom options (`(hostkeeper.secret)`) are kept in it.

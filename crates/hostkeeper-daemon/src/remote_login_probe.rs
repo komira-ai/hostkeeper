@@ -20,12 +20,19 @@
 //!    /Groups/com.apple.access_ssh`, whether the privacy database
 //!    (`/Library/Application Support/com.apple.TCC/TCC.db`) can be opened, its Full Disk Access
 //!    rows (`sqlite3 -readonly`), and the code signature of the running binary (`codesign -dvv`)
-//!    and the designated requirement of the installed one (`codesign -dr -`).
+//!    and the designated requirement of the installed one (`codesign -dr -`);
+//! 5. why a Mac may sleep: `pmset -g custom`, `pmset -g`, `pmset -g assertions`, the newest
+//!    `Sleep`, `Wake` and `DarkWake` lines of `pmset -g log` (read as it is written, never whole,
+//!    [`crate::line_process`]), and the newest `keep_awake:` lines of the daemon's own standard
+//!    error log ([`DAEMON_ERR_LOG`], what [`crate::keep_awake`] said at its starts).
 //!
 //! Steps 2 and 3 change the host: they may turn Remote Login on, and nothing turns it off again.
 //! The steps before them say what the host had, so the report shows whether the probe turned it
-//! on. Each text is cut to [`MAX_PROBE_TEXT`] bytes, so the probe stays well within a
-//! heartbeat's bound (and is the first fact dropped when it does not, [`hostkeeper_link::fit`]).
+//! on. A command's output and every other text is cut to [`STEP_TEXT`] bytes from its start; the
+//! two log steps keep their newest lines, to [`LOG_TEXT`] bytes. When the whole probe is still
+//! more than [`PROBE_BUDGET`] bytes as JSON, the steps of [`SHRINK_FIRST`] are cut further, in that
+//! order, so it stays within a heartbeat's bound (and is the first fact dropped when it does
+//! not, [`hostkeeper_link::fit`]).
 //! The probe runs on a thread of its own, so the daemon's start and its heartbeats do not wait
 //! for it; a heartbeat carries it once it is done. Any host but a Mac runs none.
 
@@ -39,8 +46,8 @@ use std::time::Duration;
 
 use hostkeeper_launchd::{Launchctl, LaunchctlProcess, PlatformKind};
 use hostkeeper_link::{ProbeStep, RemoteLoginProbe, RemoteLoginProbeSource, UnixClock};
-use hostkeeper_proto::MAX_PROBE_TEXT;
 
+use crate::line_process::{LineProcess, LineTool};
 use crate::unix_clock::SystemUnixClock;
 
 /// The tool that reads and sets Remote Login.
@@ -70,6 +77,27 @@ pub const STEP_DEADLINE: Duration = Duration::from_secs(20);
 pub const BANNER_DEADLINE: Duration = Duration::from_secs(5);
 /// The most bytes of the banner read.
 pub const BANNER_MAX: usize = 255;
+/// The most bytes of a command's output, of an argument and of an error text, cut from the start.
+pub const STEP_TEXT: usize = 1024;
+/// The most bytes of a log step: its newest lines.
+pub const LOG_TEXT: usize = 3072;
+/// How long `pmset -g log` may run before it is killed.
+pub const LOG_DEADLINE: Duration = Duration::from_secs(60);
+/// The daemon's standard error log, the `StandardErrorPath` of its launchd plist.
+pub const DAEMON_ERR_LOG: &str = "/var/log/hostkeeper/daemon.err.log";
+/// The most bytes of the whole probe as JSON before [`SHRINK_FIRST`] is cut further.
+pub const PROBE_BUDGET: usize = 10 * 1024;
+/// The steps cut further, in this order, when the probe is over [`PROBE_BUDGET`].
+pub const SHRINK_FIRST: [&str; 6] = [
+    "power_log_sleep_wake",
+    "power_assertions",
+    "keep_awake_log",
+    "sshd_print_after",
+    "sshd_print_before",
+    "codesign_running",
+];
+/// The `pmset -g log` events kept: the word after the line's time.
+pub const SLEEP_WAKE_EVENTS: [&str; 3] = ["Sleep", "Wake", "DarkWake"];
 
 /// The programs the probe runs, one port each.
 pub struct Tools {
@@ -78,6 +106,8 @@ pub struct Tools {
     pub dscl: Box<dyn Launchctl>,
     pub sqlite3: Box<dyn Launchctl>,
     pub codesign: Box<dyn Launchctl>,
+    pub pmset: Box<dyn Launchctl>,
+    pub pmset_log: Box<dyn LineTool>,
 }
 
 impl Tools {
@@ -92,6 +122,11 @@ impl Tools {
             dscl: tool(DSCL),
             sqlite3: tool(SQLITE3),
             codesign: tool(crate::mac::CODESIGN),
+            pmset: tool(crate::keep_awake::PMSET),
+            pmset_log: Box::new(LineProcess::new(
+                Path::new(crate::keep_awake::PMSET),
+                LOG_DEADLINE,
+            )),
         }
     }
 }
@@ -111,12 +146,14 @@ pub struct Places {
     pub running: PathBuf,
     /// The installed binary.
     pub installed: PathBuf,
+    /// The daemon's standard error log.
+    pub daemon_log: PathBuf,
 }
 
 impl Places {
     /// The host's: `127.0.0.1:22`, [`SSHD_CONFIG`], [`TCC_DB`], this process's own binary (an
     /// empty path, which `codesign` then refuses, when it cannot be known) and
-    /// [`INSTALLED_BINARY`].
+    /// [`INSTALLED_BINARY`] and [`DAEMON_ERR_LOG`].
     pub fn host() -> Places {
         Places {
             ssh: SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 22)),
@@ -125,6 +162,7 @@ impl Places {
             tcc_db: PathBuf::from(TCC_DB),
             running: std::env::current_exe().unwrap_or_default(),
             installed: PathBuf::from(INSTALLED_BINARY),
+            daemon_log: PathBuf::from(DAEMON_ERR_LOG),
         }
     }
 }
@@ -197,23 +235,155 @@ pub fn run(tools: &Tools, places: &Places, clock: &dyn UnixClock) -> RemoteLogin
             crate::mac::CODESIGN,
             &["-dr", "-", &installed],
         ),
+        pmset("power_custom", &*tools.pmset, &["-g", "custom"]),
+        pmset("power_settings", &*tools.pmset, &["-g"]),
+        pmset("power_assertions", &*tools.pmset, &["-g", "assertions"]),
+        sleep_wake_log("power_log_sleep_wake", &*tools.pmset_log),
+        keep_awake_log("keep_awake_log", &places.daemon_log),
     ];
-    RemoteLoginProbe {
+    within_budget(RemoteLoginProbe {
         started_unix,
         steps,
-    }
+    })
 }
 
-/// `text` cut to [`MAX_PROBE_TEXT`] bytes at a character boundary, and whether it was cut.
+/// The step `name` that runs `pmset` with `args`.
+fn pmset(name: &str, tool: &dyn Launchctl, args: &[&str]) -> ProbeStep {
+    command(name, tool, crate::keep_awake::PMSET, args)
+}
+
+/// Whether `line` of `pmset -g log` is a sleep or wake event: after its time
+/// (`2026-11-16 04:57:12 -0800`), the word is one of [`SLEEP_WAKE_EVENTS`].
+pub fn is_sleep_wake(line: &str) -> bool {
+    let bytes = line.as_bytes();
+    let timed = bytes.len() > 26 && bytes[4] == b'-' && bytes[10] == b' ' && bytes[19] == b' ';
+    timed
+        && line[26..]
+            .split_whitespace()
+            .next()
+            .is_some_and(|word| SLEEP_WAKE_EVENTS.contains(&word))
+}
+
+/// The newest of `lines` whose bytes, each with its line end, are at most `max` in all, oldest
+/// first, each with its runs of blanks made one space; and whether any was left out.
+pub fn newest(lines: &[String], max: usize) -> (String, bool) {
+    let mut kept: Vec<String> = Vec::new();
+    let mut total = 0;
+    for line in lines.iter().rev() {
+        let line = line.split_whitespace().collect::<Vec<_>>().join(" ");
+        if total + line.len() + 1 > max {
+            break;
+        }
+        total += line.len() + 1;
+        kept.push(line);
+    }
+    let left_out = kept.len() < lines.len();
+    kept.reverse();
+    (kept.join("\n"), left_out)
+}
+
+/// The step `name` that runs `pmset -g log` and keeps its newest sleep and wake lines
+/// ([`is_sleep_wake`], [`newest`]) to [`LOG_TEXT`] bytes.
+fn sleep_wake_log(name: &str, tool: &dyn LineTool) -> ProbeStep {
+    let args = vec!["-g".to_owned(), "log".to_owned()];
+    let mut step = step(
+        name,
+        vec![
+            crate::keep_awake::PMSET.to_owned(),
+            "-g".to_owned(),
+            "log".to_owned(),
+        ],
+    );
+    let mut lines = Vec::new();
+    match tool.run_lines(&args, &mut |line| {
+        if is_sleep_wake(line) {
+            lines.push(line.to_owned());
+        }
+    }) {
+        Ok(code) => {
+            step.exit_code = code;
+            (step.stdout, step.truncated) = newest(&lines, LOG_TEXT);
+        }
+        Err(error) => step.error = cut(&error).0,
+    }
+    step
+}
+
+/// The step `name` that reads the daemon's log at `path` and keeps its newest `keep_awake:` lines
+/// ([`newest`]) to [`STEP_TEXT`] bytes.
+fn keep_awake_log(name: &str, path: &Path) -> ProbeStep {
+    let mut step = step(
+        name,
+        vec!["read".to_owned(), path.to_string_lossy().into_owned()],
+    );
+    match std::fs::read(path) {
+        Ok(bytes) => {
+            let lines: Vec<String> = String::from_utf8_lossy(&bytes)
+                .lines()
+                .filter(|line| line.contains("keep_awake:"))
+                .map(str::to_owned)
+                .collect();
+            (step.stdout, step.truncated) = newest(&lines, STEP_TEXT);
+        }
+        Err(error) => step.error = cut(&error.to_string()).0,
+    }
+    step
+}
+
+/// `probe`, with the standard output of the steps of [`SHRINK_FIRST`] cut further, in that order,
+/// while it is more than [`PROBE_BUDGET`] bytes as JSON: a log step keeps its end (its newest
+/// lines), any other its start.
+pub fn within_budget(mut probe: RemoteLoginProbe) -> RemoteLoginProbe {
+    for name in SHRINK_FIRST {
+        let over = probe
+            .to_json()
+            .to_string()
+            .len()
+            .saturating_sub(PROBE_BUDGET);
+        if over == 0 {
+            break;
+        }
+        for step in probe.steps.iter_mut().filter(|step| step.name == name) {
+            let keep = step.stdout.len().saturating_sub(over);
+            let (text, cut_now) = if name.ends_with("_log") || name.contains("_log_") {
+                cut_tail(&step.stdout, keep)
+            } else {
+                cut_to(&step.stdout, keep)
+            };
+            step.stdout = text;
+            step.truncated |= cut_now;
+        }
+    }
+    probe
+}
+
+/// `text` cut to [`STEP_TEXT`] bytes at a character boundary, and whether it was cut.
 pub fn cut(text: &str) -> (String, bool) {
-    if text.len() <= MAX_PROBE_TEXT {
+    cut_to(text, STEP_TEXT)
+}
+
+/// `text` cut to its first `max` bytes at a character boundary, and whether it was cut.
+pub fn cut_to(text: &str, max: usize) -> (String, bool) {
+    if text.len() <= max {
         return (text.to_owned(), false);
     }
-    let mut end = MAX_PROBE_TEXT;
+    let mut end = max;
     while !text.is_char_boundary(end) {
         end -= 1;
     }
     (text[..end].to_owned(), true)
+}
+
+/// `text` cut to its last `max` bytes at a character boundary, and whether it was cut.
+pub fn cut_tail(text: &str, max: usize) -> (String, bool) {
+    if text.len() <= max {
+        return (text.to_owned(), false);
+    }
+    let mut start = text.len() - max;
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    (text[start..].to_owned(), true)
 }
 
 /// A step of nothing but `argv`.

@@ -350,10 +350,18 @@ done:
 | `tcc_full_disk_access` | `sqlite3 -readonly` on it: the rows of `kTCCServiceSystemPolicyAllFiles` |
 | `codesign_running` | `codesign -dvv` of the running binary (ad hoc or a Team ID) |
 | `codesign_installed_requirement` | `codesign -dr -` of `/usr/local/bin/hostkeeper` |
+| `power_custom` | `pmset -g custom` |
+| `power_settings` | `pmset -g` |
+| `power_assertions` | `pmset -g assertions` |
+| `power_log_sleep_wake` | the newest `Sleep`, `Wake` and `DarkWake` lines of `pmset -g log`, read line by line as it is written |
+| `keep_awake_log` | the newest `keep_awake:` lines of `/var/log/hostkeeper/daemon.err.log`, what the daemon's power settings said at its starts |
 
 `remote_login_set_on`, `sshd_enable` and `sshd_bootstrap` may turn Remote Login on, and nothing
-turns it off again; the steps before them show whether it was on already. Each text is cut to 1024
-bytes (`truncated` says so). Every gRPC heartbeat after the probe is done carries it
+turns it off again; the steps before them show whether it was on already. A command's output is
+cut to its first 1024 bytes and the two log steps keep their newest lines, to 3072 and 1024 bytes
+(`truncated` says so); when the whole probe is still over 10 KiB as JSON, the power log, then the
+assertions, the `keep_awake` lines, the two `launchctl print` and `codesign -dvv` are cut further,
+in that order. Every gRPC heartbeat after the probe is done carries it
 (`HeartbeatRequest.remote_login_probe`); it is the first fact a heartbeat drops when it would not
 fit 16 KiB. The coordinator keeps the last one in memory and shows it in the host's heartbeat:
 `hkctl hosts get --node-id <host>` answers it as `host.heartbeat.remoteLoginProbe`. Nothing decides

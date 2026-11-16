@@ -276,7 +276,7 @@ fn the_probe_fields_have_their_numbers_and_types() {
 }
 
 /// Catches: a bound of the crate that the schema's comments give differently (a daemon cutting to
-/// 1024 bytes where the schema says 512), as the service limit once differed from its header.
+/// 4096 bytes where the schema says 1024), as the service limit once differed from its header.
 #[test]
 fn the_probe_bounds_are_the_schemas() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -290,12 +290,11 @@ fn the_probe_bounds_are_the_schemas() {
         .join(" ");
     assert_eq!(hostkeeper_proto::MAX_PROBE_STEPS, 24);
     assert_eq!(hostkeeper_proto::MAX_PROBE_ARGS, 8);
-    assert_eq!(hostkeeper_proto::MAX_PROBE_TEXT, 1024);
+    assert_eq!(hostkeeper_proto::MAX_PROBE_TEXT, 4096);
     for sentence in [
         "Each step, in the order it ran: at most 24.",
-        "At most 8, each at most 1024 bytes.",
-        "Every text is at most 1024 bytes",
-        "cut to 1024 bytes.",
+        "At most 8, each at most 4096 bytes.",
+        "Every text is at most 4096 bytes",
     ] {
         assert!(comments.contains(sentence), "{sentence}");
     }
