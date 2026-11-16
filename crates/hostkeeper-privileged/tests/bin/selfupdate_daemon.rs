@@ -438,6 +438,7 @@ fn file_links(
         renewal: hostkeeper_daemon::links::RenewalState::default(),
         watchdog,
         console: None,
+        remote_login_probe: None,
         period,
         dispatch: Arc::new(ThreadDispatch),
         stop,

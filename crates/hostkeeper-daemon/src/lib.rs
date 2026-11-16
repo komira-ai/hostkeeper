@@ -33,6 +33,11 @@
 //!   execs that binary while its start count lasts, and is settled failed once it cannot.
 //! - [`mac_config`]: the daemon config written from the managed preferences the device management installed,
 //!   which the start of a Mac's daemon does when its config is not there.
+//! - [`keep_awake`]: a Mac's power settings, made at the start of its daemon so that the Mac never
+//!   sleeps (`pmset`), unless the daemon config's `keep_awake` is off.
+//! - [`remote_login_probe`]: a Mac's report of what its daemon can do of Remote Login without
+//!   Full Disk Access, and of why the Mac may sleep, run once at its start and sent in every
+//!   heartbeat after ([`line_process`] reads `pmset -g log` for it).
 //! - [`adapters`]: the step launcher, service manager, unit directory, observer ports and package
 //!   check of the host's platform ([`adapters::Adapters::for_platform`]: systemd on Linux,
 //!   launchd on macOS), and the claims of its enrollment.
@@ -96,8 +101,10 @@ pub mod hook_log;
 pub mod installed;
 pub mod installers;
 pub mod ipmi;
+pub mod keep_awake;
 mod launchd_plist;
 pub mod layout;
+pub mod line_process;
 pub mod link_adapters;
 pub mod links;
 pub mod locks;
@@ -116,6 +123,7 @@ pub mod place;
 pub mod prune;
 pub mod real_packages;
 pub mod refusal;
+pub mod remote_login_probe;
 pub mod repositories;
 pub mod repository;
 pub mod repository_push;

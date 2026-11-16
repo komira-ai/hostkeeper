@@ -377,6 +377,8 @@ async fn start_and_serve(
 /// - each loop and each order runs on a thread of its own ([`ThreadDispatch`]);
 /// - both loops log through the daemon's alert sink ([`DaemonLog`]);
 /// - the heartbeat loop tells `watchdog` after each heartbeat that it is alive;
+/// - on a Mac (`kind`), the Remote Login probe starts on a thread of its own, and every heartbeat
+///   after it is done reports it ([`crate::remote_login_probe::at_host_start`]);
 /// - when `files` names a console, the enrollment loop writes its issue file, naming the daemon
 ///   config's `coordinator`, and has the gettys redraw by running its agetty with `--reload` as
 ///   a child process, its output read to [`AGETTY_OUTPUT_CAP`] and bounded by
@@ -428,6 +430,7 @@ pub fn host_links(
         stop,
         watchdog,
         console,
+        remote_login_probe: crate::remote_login_probe::at_host_start(kind),
     }
 }
 
@@ -476,7 +479,8 @@ pub fn host_enroller(
 /// ([`crate::mac_config::at_start`]), and the stores file and the signers file are rendered from
 /// their domains when those are there ([`crate::mac_files`]); the config is loaded, the platform's adapters are chosen
 /// ([`Adapters::for_platform`]), the ports are built ([`host_ports`]) and the start runs
-/// ([`start::startup_notifying`]).
+/// ([`start::startup_notifying`]). A Mac's start also keeps the Mac awake once the config is loaded
+/// ([`crate::keep_awake::at_host_start`]).
 pub fn start_with(
     settings: &Settings,
     files: &HostFiles,
@@ -498,6 +502,7 @@ pub fn start_with(
         crate::mac_files::macos_pkg(managed, target, settings.trusted_uid)?;
     }
     let config = start::load_config(settings)?;
+    crate::keep_awake::at_host_start(&config, platform.kind);
     crate::layout::ensure_state_dirs(settings)?;
     Adapters::for_platform(platform)
         .and_then(|adapters| host_ports(&config, settings, files, own_version, adapters))

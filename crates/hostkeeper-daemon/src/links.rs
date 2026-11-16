@@ -51,8 +51,9 @@ use hostkeeper_config::names::Version;
 use hostkeeper_enroll::{Enroller, RETRY_SECS};
 use hostkeeper_link::{
     CertSource, ClientIdentity, CoordinatorLink, Dispatch, GrpcLinkError, GrpcMtlsLink, Heartbeat,
-    Heartbeater, JsonMtlsLink, LinkError, LoopConfig, NegotiatedLink, Platform, Ports, Reply,
-    RepositorySink, Sleeper, StopFlag, TcpDial, TcpTransport, Tick, UnixClock,
+    Heartbeater, JsonMtlsLink, LinkError, LoopConfig, NegotiatedLink, Platform, Ports,
+    RemoteLoginProbeSource, Reply, RepositorySink, Sleeper, StopFlag, TcpDial, TcpTransport, Tick,
+    UnixClock,
 };
 use hostkeeper_steps::Clock;
 
@@ -122,6 +123,9 @@ pub struct Links {
     /// The console's issue file, which the enrollment loop writes after each step and each
     /// failure to make its enroller; none on a host whose console shows none (a Mac).
     pub console: Option<ConsoleIssue>,
+    /// The Remote Login probe the daemon started ([`crate::remote_login_probe`]), which every
+    /// heartbeat reports once it is done; none on any host but a Mac.
+    pub remote_login_probe: Option<Arc<dyn RemoteLoginProbeSource>>,
 }
 
 impl Links {
@@ -204,6 +208,7 @@ impl Links {
                     PLATFORM,
                     Arc::clone(&self.log),
                 ))),
+                remote_login_probe: self.remote_login_probe.clone(),
             },
         )
     }

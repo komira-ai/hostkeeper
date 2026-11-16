@@ -308,6 +308,65 @@ start it (the plist's `RunAtLoad` and `KeepAlive` decide that), so the hook find
 loaded and starts the one it wants with `launchctl kickstart`. A job is stopped by its label: an
 uninstall boots out each `run` label, then removes every placed link.
 
+### The Mac never sleeps
+
+A build Mac that goes to sleep stops heartbeating (the coordinator logs that the host has not
+heartbeated, about every 16 minutes of DarkWake maintenance wakes). At each start the daemon
+(`crates/hostkeeper-daemon/src/keep_awake.rs`) reads `pmset -g custom` and makes what differs by one
+`pmset -a` command: `sleep`, `disksleep`, `standby`, `autopoweroff` and `powernap` are 0,
+`autorestart` is 1 (start again after a power loss) and `womp` is 1 (wake for network access).
+`displaysleep` is left as it is, and a key the Mac does not list is not set. Each change is logged
+once (`keep_awake: pmset sleep was 1, set to 0`); a Mac that is set already gets no command. The
+daemon runs as root, which is all `pmset` needs (no Full Disk Access). `keep_awake = false` in the
+daemon config (a boolean, default `true`, so no per-host config) turns it off. The settings are
+made at each start of the daemon, not watched in between; the heartbeat does not report them.
+A configuration profile is the other way to hold power settings on a managed Mac; the daemon is
+what ships, so a Mac needs nothing but hostkeeper.
+
+### The Remote Login probe
+
+Whether the daemon needs Full Disk Access to turn on Remote Login (sshd) is not stated by Apple
+(docs/design/ssh-through-coordinator.md, section 3). The daemon answers it itself: at each start
+of a Mac's daemon, a thread of its own (`crates/hostkeeper-daemon/src/remote_login_probe.rs`) runs,
+as the daemon (root under launchd, with whatever privacy grants the daemon has), these steps in
+order and keeps the exit code, standard output and standard error of each, or why it could not be
+done:
+
+| step | what it runs or reads |
+|---|---|
+| `remote_login_get_before` | `systemsetup -getremotelogin` |
+| `sshd_print_before` | `launchctl print system/com.openssh.sshd` |
+| `ssh_banner_before` | a connect to `127.0.0.1:22`, and the banner sshd writes |
+| `remote_login_set_on` | `systemsetup -setremotelogin on` |
+| `remote_login_get_after_set` | `systemsetup -getremotelogin` |
+| `sshd_enable` | `launchctl enable system/com.openssh.sshd` |
+| `sshd_bootstrap` | `launchctl bootstrap system /System/Library/LaunchDaemons/ssh.plist` |
+| `sshd_print_after` | `launchctl print system/com.openssh.sshd` |
+| `remote_login_get_after` | `systemsetup -getremotelogin` |
+| `ssh_banner_after` | the connect and banner again |
+| `sshd_config_include` | the `Include` lines of `/etc/ssh/sshd_config` |
+| `access_ssh_group` | `dscl . -read /Groups/com.apple.access_ssh` |
+| `tcc_db_open` | whether `/Library/Application Support/com.apple.TCC/TCC.db` opens for reading |
+| `tcc_full_disk_access` | `sqlite3 -readonly` on it: the rows of `kTCCServiceSystemPolicyAllFiles` |
+| `codesign_running` | `codesign -dvv` of the running binary (ad hoc or a Team ID) |
+| `codesign_installed_requirement` | `codesign -dr -` of `/usr/local/bin/hostkeeper` |
+| `power_custom` | `pmset -g custom` |
+| `power_settings` | `pmset -g` |
+| `power_assertions` | `pmset -g assertions` |
+| `power_log_sleep_wake` | the newest `Sleep` and `Wake` lines of `pmset -g log` that start or end a system sleep, with their cause, read line by line as it is written; a sleeping Mac's maintenance wakes (`DarkWake`, `Wake Requests` and a sleep due to `'Maintenance Sleep'`) are left out |
+| `keep_awake_log` | the newest `keep_awake:` lines of `/var/log/hostkeeper/daemon.err.log`, what the daemon's power settings said at its starts |
+
+`remote_login_set_on`, `sshd_enable` and `sshd_bootstrap` may turn Remote Login on, and nothing
+turns it off again; the steps before them show whether it was on already. A command's output is
+cut to its first 1024 bytes and the two log steps keep their newest lines, to 3072 and 1024 bytes
+(`truncated` says so); when the whole probe is still over 10 KiB as JSON, the power log, then the
+assertions, the `keep_awake` lines, the two `launchctl print` and `codesign -dvv` are cut further,
+in that order. Every gRPC heartbeat after the probe is done carries it
+(`HeartbeatRequest.remote_login_probe`); it is the first fact a heartbeat drops when it would not
+fit 16 KiB. The coordinator keeps the last one in memory and shows it in the host's heartbeat:
+`hkctl hosts get --node-id <host>` answers it as `host.heartbeat.remoteLoginProbe`. Nothing decides
+on it; a restart of the daemon (an update included) runs it again.
+
 ### Release and installer pkg
 
 Every release ships macos-arm64 beside the two Linux platforms: the binary tarball
