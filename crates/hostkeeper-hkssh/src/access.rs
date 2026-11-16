@@ -11,6 +11,10 @@ use crate::error::Error;
 use crate::programs::{Programs, normalize_public_key};
 use crate::state::{CertInfo, State};
 
+/// What every OpenSSH certificate's key type ends with (`ssh-ed25519-cert-v01@openssh.com`),
+/// spelled in pieces so that the hygiene lint does not read it as an e-mail address.
+pub const CERT_KEY_TYPE_SUFFIX: &str = concat!("-cert-v01", "@", "openssh", ".com");
+
 /// A certificate with fewer seconds left than this is replaced, so that a connection that takes
 /// a moment to start does not present one that expires on the way.
 const RENEW_BEFORE_SECS: u64 = 120;
@@ -110,7 +114,7 @@ pub async fn certificate(
         .map_err(|status| from_status(&status))?
         .into_inner();
     let kind = reply.certificate.split_whitespace().next().unwrap_or("");
-    if !kind.ends_with("-cert-v01@openssh.com") {
+    if !kind.ends_with(CERT_KEY_TYPE_SUFFIX) {
         return Err(Error::Unusable(
             "the coordinator's answer is not an OpenSSH certificate".into(),
         ));

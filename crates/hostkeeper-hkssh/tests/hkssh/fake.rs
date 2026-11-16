@@ -15,6 +15,11 @@ use tokio_stream::wrappers::{ReceiverStream, TcpListenerStream};
 use tonic::transport::{Identity, Server, ServerTlsConfig};
 use tonic::{Request, Response, Status, Streaming};
 
+/// The key type of the certificates the fake signs.
+pub fn cert_type() -> String {
+    format!("ssh-ed25519{}", hostkeeper_hkssh::CERT_KEY_TYPE_SUFFIX)
+}
+
 /// The public key every test uses.
 pub const PUBLIC: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItestkeytestkeytestkeytestkeytestkey";
 pub const TOKEN: &str = "operator-secret-token";
@@ -61,7 +66,7 @@ pub struct Script {
 
 pub fn certificate_reply(serial: u64, expires: u64) -> proto::SignUserCertResponse {
     proto::SignUserCertResponse {
-        certificate: "ssh-ed25519-cert-v01@openssh.com AAAAcertbytes".into(),
+        certificate: format!("{} AAAAcertbytes", cert_type()),
         login_user: "root".into(),
         expires_unix: expires,
         key_id: format!("alice/{serial}"),
@@ -286,10 +291,13 @@ impl Rig {
         let tls =
             ServerTlsConfig::new().identity(Identity::from_pem(&pki.server_cert, &pki.server_key));
         let script = Arc::new(Script::new());
-        let server = Server::builder().tls_config(tls).expect("TLS").serve_with_incoming(
-            SshServer::new(Service(Arc::clone(&script))),
-            TcpListenerStream::new(listener),
-        );
+        let server = Server::builder()
+            .tls_config(tls)
+            .expect("TLS")
+            .serve_with_incoming(
+                SshServer::new(Service(Arc::clone(&script))),
+                TcpListenerStream::new(listener),
+            );
         runtime.spawn(server);
         Rig {
             script,

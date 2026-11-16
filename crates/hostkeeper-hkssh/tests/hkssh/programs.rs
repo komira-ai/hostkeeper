@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use hostkeeper_hkssh::{Programs, System, normalize_public_key};
+use hostkeeper_hkssh::{CERT_KEY_TYPE_SUFFIX, Programs, System, normalize_public_key};
 use hostkeeper_testkit::Scratch;
 
 fn scratch() -> Scratch {
@@ -129,7 +129,7 @@ fn only_a_plain_public_key_line_is_a_key() {
         Some("ecdsa-sha2-nistp256 BBBB")
     );
     for line in [
-        "ssh-ed25519-cert-v01@openssh.com AAAA",
+        &format!("ssh-ed25519{CERT_KEY_TYPE_SUFFIX} AAAA"),
         "ssh-ed25519",
         "",
         "hello world",

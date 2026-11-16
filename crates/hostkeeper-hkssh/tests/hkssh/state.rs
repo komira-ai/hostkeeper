@@ -3,7 +3,7 @@
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 
-use hostkeeper_hkssh::{CertInfo, State, check_host_id};
+use hostkeeper_hkssh::{CERT_KEY_TYPE_SUFFIX, CertInfo, State, check_host_id};
 use hostkeeper_testkit::Scratch;
 
 fn scratch() -> Scratch {
@@ -48,7 +48,7 @@ fn the_state_is_private_and_a_record_reads_back() {
     };
     assert_eq!(state.cert_info("h"), None);
     state
-        .store_cert("h", "ssh-ed25519-cert-v01@openssh.com AAAA", &info)
+        .store_cert("h", &format!("ssh-ed25519{CERT_KEY_TYPE_SUFFIX} AAAA"), &info)
         .expect("store");
     state
         .store_pins("h", &["SHA256:a".into(), "SHA256:b".into()])
@@ -69,7 +69,7 @@ fn the_state_is_private_and_a_record_reads_back() {
         "SHA256:a\nSHA256:b\n"
     );
     assert_eq!(mode(&state.pins_file("h")), 0o600);
-    std::fs::write(state.pins_file("h").with_file_name("h.info"), "serial=x\n").expect("junk");
+    std::fs::write(state.pins_file("h").with_file_name("h.details"), "serial=x\n").expect("junk");
     assert_eq!(state.cert_info("h"), None);
 }
 

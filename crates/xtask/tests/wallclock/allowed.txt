@@ -16,6 +16,11 @@
 # A stamp of a record that nothing reads back to decide: system_now stamps each line of
 # hostkeeper-pxe serve's log, which the operator and the measurement of network install read.
 crates/hostkeeper-pxe/src/serve/log.rs
+# Certificate validity: hkssh reads the wall clock once per run, to decide whether the one-host
+# SSH certificate it holds has two more minutes to run or must be asked for again, and to say
+# whether a held certificate is valid or expired; the coordinator, not the clock, decides whether
+# a certificate is accepted, and no update decision of a host reads it.
+crates/hostkeeper-hkssh/src/lib.rs
 # The OIDC verifier: system_clock is the time a CI token's exp, nbf and iat are checked against,
 # and the age of the cached signing keys.
 crates/hostkeeper-oidc/src/lib.rs

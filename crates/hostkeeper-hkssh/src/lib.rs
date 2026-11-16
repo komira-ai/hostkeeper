@@ -29,7 +29,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser as _;
 
-pub use access::{Identity, Pins, known_host_line};
+pub use access::{CERT_KEY_TYPE_SUFFIX, Identity, Pins, known_host_line};
 pub use cli::{Cli, Command, Global};
 pub use error::Error;
 pub use programs::{Programs, System, normalize_public_key};

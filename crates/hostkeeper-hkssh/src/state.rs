@@ -93,7 +93,7 @@ impl State {
     }
 
     fn info_file(&self, host: &str) -> PathBuf {
-        self.dir.join("hosts").join(format!("{host}.info"))
+        self.dir.join("hosts").join(format!("{host}.details"))
     }
 
     /// The pinned fingerprints of `host`, one per line.

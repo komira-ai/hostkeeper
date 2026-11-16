@@ -112,7 +112,7 @@ fn how_the_stream_ends_decides_the_outcome() {
     ];
     for (mode, expected) in cases {
         let rig = Rig::start();
-        queue(&rig, &[mode.clone()]);
+        queue(&rig, std::slice::from_ref(&mode));
         let outcome = proxy(&rig, &Double::new(), NOW, b"");
         match expected {
             Ok(()) => assert_eq!(outcome.result.expect("a clean end"), 0, "{mode:?}"),
