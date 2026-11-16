@@ -238,7 +238,10 @@ fn a_private_key_file_is_refused_part_by_part() {
             f.secret.extend_from_slice(other.public);
         }),
     ));
-    cases.push(("header public key", broken(&|f| f.header_public = other.public)));
+    cases.push((
+        "header public key",
+        broken(&|f| f.header_public = other.public),
+    ));
     for (name, file) in cases {
         assert_eq!(
             CaKey::parse_secret(&file.pem()).err(),
