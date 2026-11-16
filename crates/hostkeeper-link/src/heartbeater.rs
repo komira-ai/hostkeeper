@@ -117,8 +117,8 @@ use crate::names::Reason;
 use crate::order::{Acknowledged, Order, OrderRef, OrderResult, Outcome, Reply, Verb};
 use crate::ports::{
     CertSource, CertState, CoordinatorLink, Dispatch, FactsSink, HeldHalts, LinkError, Log,
-    OrderSink, RecordedService, RenewalSource, RepositorySink, ServiceObserver, ServiceRecords,
-    Sleeper, Tick, TrustedRootSource, UnixClock,
+    OrderSink, RecordedService, RemoteLoginProbeSource, RenewalSource, RepositorySink,
+    ServiceObserver, ServiceRecords, Sleeper, Tick, TrustedRootSource, UnixClock,
 };
 
 /// The period when the daemon is given none: 15 seconds.
@@ -181,6 +181,9 @@ pub struct Ports {
     /// The host's facts file; none on a host that keeps none, which then announces no
     /// `facts-v1`, reports no generation and writes no facts.
     pub facts: Option<Arc<dyn FactsSink>>,
+    /// The Remote Login probe of a Mac's daemon; none on a host that runs none, which then sends
+    /// none.
+    pub remote_login_probe: Option<Arc<dyn RemoteLoginProbeSource>>,
 }
 
 /// What one heartbeat came to.
@@ -545,6 +548,11 @@ impl Heartbeater {
                 .map_or_else(|| self.config.installers.clone(), |sink| sink.installers()),
             repositories: self.ports.repositories.as_ref().map(|sink| sink.report()),
             facts_generation: self.ports.facts.as_ref().and_then(|sink| sink.generation()),
+            remote_login_probe: self
+                .ports
+                .remote_login_probe
+                .as_ref()
+                .and_then(|source| source.remote_login_probe()),
         })
     }
 

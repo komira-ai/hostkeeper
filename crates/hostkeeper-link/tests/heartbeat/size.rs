@@ -4,8 +4,8 @@ use crate::verdict;
 use hostkeeper_link::beat::{DROP_ORDER, MAX_SERVICES_PER_HEARTBEAT};
 use hostkeeper_link::{
     ANNOUNCED, BeatOutcome, DeferredReport, Fitted, Health, Heartbeat, LinkError, Liveness,
-    MAX_HEARTBEAT_BYTES, Observed, OptionalFact, Outcome, Oversize, Platform, Reason,
-    RecordedService, ServiceFacts, fit,
+    MAX_HEARTBEAT_BYTES, Observed, OptionalFact, Outcome, Oversize, Platform, ProbeStep, Reason,
+    RecordedService, RemoteLoginProbe, ServiceFacts, fit,
 };
 
 use crate::{Rig, recorded, service, update, version};
@@ -56,6 +56,7 @@ fn beat(services: Vec<ServiceFacts>) -> Heartbeat {
         installers: Vec::new(),
         repositories: None,
         facts_generation: None,
+        remote_login_probe: None,
     }
 }
 
@@ -69,6 +70,7 @@ fn heartbeat_over_16_kib_drops_optional_facts_first_in_order_and_refuses_if_stil
     assert_eq!(
         DROP_ORDER,
         [
+            OptionalFact::RemoteLoginProbe,
             OptionalFact::HealthDetail,
             OptionalFact::DeferralDetail,
             OptionalFact::ObserverDetail,
@@ -85,7 +87,7 @@ fn heartbeat_over_16_kib_drops_optional_facts_first_in_order_and_refuses_if_stil
         })
     );
 
-    // Over it by the health detail alone: only that is dropped.
+    // Over it by the health detail alone: only that is dropped (it holds no probe to drop).
     let whole = with_optional(required("x", 0), MAX_HEARTBEAT_BYTES);
     let mut kept = whole.clone();
     kept.health_detail = None;
@@ -107,7 +109,7 @@ fn heartbeat_over_16_kib_drops_optional_facts_first_in_order_and_refuses_if_stil
     // Required facts that fit only without the observer's detail: everything optional goes.
     let pad = MAX_HEARTBEAT_BYTES - base - observer / 2;
     let fitted = fit(beat(vec![with_optional(required("x", pad), 100)])).expect("it fits");
-    assert_eq!(fitted.dropped, DROP_ORDER.to_vec());
+    assert_eq!(fitted.dropped, DROP_ORDER[1..].to_vec(), "no probe to drop");
     assert_eq!(fitted.beat, beat(vec![required("x", pad)]));
     assert_eq!(
         fitted.beat.encoded_len(),
@@ -120,6 +122,67 @@ fn heartbeat_over_16_kib_drops_optional_facts_first_in_order_and_refuses_if_stil
         fit(beat(vec![with_optional(required("x", pad), 100)])),
         Err(Oversize::Bytes {
             len: MAX_HEARTBEAT_BYTES + 1
+        })
+    );
+}
+
+/// A probe of one step whose standard output is `len` bytes.
+fn probe(len: usize) -> RemoteLoginProbe {
+    RemoteLoginProbe {
+        started_unix: 1,
+        steps: vec![ProbeStep {
+            name: "remote_login_get_before".to_owned(),
+            argv: vec![
+                "/usr/sbin/systemsetup".to_owned(),
+                "-getremotelogin".to_owned(),
+            ],
+            exit_code: Some(0),
+            stdout: "o".repeat(len),
+            ..ProbeStep::default()
+        }],
+    }
+}
+
+/// Catches a Mac's Remote Login probe that costs a heartbeat its health detail, or the
+/// heartbeat itself: the probe is counted toward the bound, and is the first fact dropped, alone
+/// when that is enough.
+#[test]
+fn a_remote_login_probe_over_the_bound_is_dropped_first_and_alone() {
+    // Within the bound with the probe: nothing is dropped, and the probe is counted.
+    let mut small = beat(vec![with_optional(required("x", 0), 10)]);
+    let without = small.encoded_len();
+    small.remote_login_probe = Some(probe(10));
+    assert!(small.encoded_len() > without + 10);
+    assert_eq!(
+        fit(small.clone()),
+        Ok(Fitted {
+            beat: small,
+            dropped: Vec::new(),
+        })
+    );
+
+    // Over it by the probe: the probe goes, the health detail stays.
+    let mut whole = beat(vec![with_optional(required("x", 0), 10)]);
+    let kept = whole.clone();
+    whole.remote_login_probe = Some(probe(MAX_HEARTBEAT_BYTES));
+    assert_eq!(
+        fit(whole),
+        Ok(Fitted {
+            beat: kept,
+            dropped: vec![OptionalFact::RemoteLoginProbe],
+        })
+    );
+
+    // Over it by the probe and by the health detail: both go, the probe first.
+    let mut both = beat(vec![with_optional(required("x", 0), MAX_HEARTBEAT_BYTES)]);
+    both.remote_login_probe = Some(probe(MAX_HEARTBEAT_BYTES));
+    let mut kept = with_optional(required("x", 0), 0);
+    kept.health_detail = None;
+    assert_eq!(
+        fit(both),
+        Ok(Fitted {
+            beat: beat(vec![kept]),
+            dropped: vec![OptionalFact::RemoteLoginProbe, OptionalFact::HealthDetail],
         })
     );
 }

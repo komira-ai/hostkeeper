@@ -202,6 +202,51 @@ message HeartbeatRequest {
   // (`HeartbeatResponse.facts`). Absent when it wrote none, and from an agent that does not
   // announce `facts-v1`.
   optional uint64 facts_generation = 12;
+  // What a Mac's daemon saw when it ran the Remote Login probe once at its start: each command,
+  // in order, with its exit code and output, as run by the daemon itself (as root under
+  // launchd); its steps may turn Remote Login on. The coordinator keeps the last one it read, in
+  // memory, and shows it in the host's heartbeat (`hostkeeper.operator.v1.Host.heartbeat`);
+  // nothing decides on it. Sent in every heartbeat once the probe is done, read only over gRPC;
+  // absent from any other daemon, before the probe is done, from one that predates it, and when
+  // the heartbeat would exceed 16 KiB with it. A probe that breaks a rule of `RemoteLoginProbe`
+  // is dropped and the coordinator keeps the last one it read.
+  optional RemoteLoginProbe remote_login_probe = 14;
+}
+
+// One run of the Remote Login probe of a Mac's daemon: the commands that tell whether the
+// daemon, with no Full Disk Access, can turn on Remote Login (`systemsetup`, or `launchctl` on
+// `com.openssh.sshd`), whether sshd answers afterwards, and what the daemon's own signature and
+// privacy state are; and why a Mac may sleep (`pmset`, and what the daemon's own power settings
+// said at its starts).
+message RemoteLoginProbe {
+  // The host's clock when the probe started, in seconds since the epoch.
+  uint64 started_unix = 1;
+  // Each step, in the order it ran: at most 24.
+  repeated ProbeStep steps = 2;
+}
+
+// One step of a probe: a command it ran, or a file or socket it read. Every text is at most
+// 4096 bytes, cut at a character boundary by the daemon (`truncated` says so).
+message ProbeStep {
+  // What the step is, 1 to 64 bytes of `[a-z0-9_]` (`remote_login_set_on`).
+  string name = 1;
+  // The program and its arguments as run, or for a step that runs nothing, what it read
+  // (`connect 127.0.0.1:22`, `read /etc/ssh/sshd_config`). At most 8, each at most
+  // 4096 bytes.
+  repeated string argv = 2;
+  // The exit status of the program; absent when it ran nothing, could not be started, timed out
+  // or was ended by a signal.
+  optional int32 exit_code = 3;
+  // What it wrote to its standard output, as UTF-8 (a byte that is not is replaced); for a step
+  // that runs nothing, what it read.
+  string stdout = 4;
+  // What it wrote to its standard error, as UTF-8.
+  string stderr = 5;
+  // Why the step could not be done (the program could not be started, it timed out, the file
+  // or the socket could not be read); empty when it was done.
+  string error = 6;
+  // Whether `stdout` or `stderr` was cut by the daemon.
+  bool truncated = 7;
 }
 
 // What a host's daemon holds of the repositories the coordinator sends
