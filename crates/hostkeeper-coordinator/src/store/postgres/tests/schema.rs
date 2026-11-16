@@ -3,13 +3,14 @@
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+use std::time::Duration;
 
 use super::{TestDatabase, admin, off_runtime};
 use crate::store::conformance_tests::lines;
 use crate::store::postgres::migrate::{self, ApplyError, Migration, MigrationError, OlderReleases};
 use crate::store::postgres::session::Session;
 use crate::store::postgres::writer::{LOCK_KEY, Writer};
-use crate::store::postgres::{DatabaseError, TIMEOUTS};
+use crate::store::postgres::{DatabaseError, TIMEOUTS, Timeouts};
 use crate::store::{Backend, Commit};
 
 fn versions(db: &TestDatabase) -> Vec<Vec<Option<String>>> {
@@ -416,10 +417,20 @@ fn coordinators_share_the_database_and_an_exclusive_taker_is_refused() {
 ///
 /// Catches: two starters that both find `0022` missing, both run it, and one fails on the table
 /// it made, so a start-first update crash-loops its new task.
+///
+/// The sessions wait without a statement or lock timeout (0 turns each off), so a runner that
+/// waits for the runners' lock while another applies every migration of an empty database waits
+/// as long as that takes, however loaded the machine; that a wait is bounded by the lock timeout
+/// is [`a_runner_that_cannot_get_the_runners_lock_runs_nothing`]'s.
 #[test]
 fn starters_that_run_together_apply_each_migration_once() {
     let db = TestDatabase::new();
-    let config = db.dsn().config(TIMEOUTS);
+    let unbounded = Timeouts {
+        statement: Duration::ZERO,
+        lock: Duration::ZERO,
+        ..TIMEOUTS
+    };
+    let config = db.dsn().config(unbounded);
     let set = migrate::checked(&migrate::SHIPPED).expect("the shipped set");
     let runners: Vec<_> = (0..4)
         .map(|_| {
