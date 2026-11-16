@@ -476,7 +476,8 @@ pub fn host_enroller(
 /// ([`crate::mac_config::at_start`]), and the stores file and the signers file are rendered from
 /// their domains when those are there ([`crate::mac_files`]); the config is loaded, the platform's adapters are chosen
 /// ([`Adapters::for_platform`]), the ports are built ([`host_ports`]) and the start runs
-/// ([`start::startup_notifying`]).
+/// ([`start::startup_notifying`]). A Mac's start also keeps the Mac awake once the config is loaded
+/// ([`crate::keep_awake::at_host_start`]).
 pub fn start_with(
     settings: &Settings,
     files: &HostFiles,
@@ -498,6 +499,7 @@ pub fn start_with(
         crate::mac_files::macos_pkg(managed, target, settings.trusted_uid)?;
     }
     let config = start::load_config(settings)?;
+    crate::keep_awake::at_host_start(&config, platform.kind);
     crate::layout::ensure_state_dirs(settings)?;
     Adapters::for_platform(platform)
         .and_then(|adapters| host_ports(&config, settings, files, own_version, adapters))
