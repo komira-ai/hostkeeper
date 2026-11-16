@@ -31,6 +31,7 @@ use serde::{Deserialize, Serialize};
 use crate::desired::Desired;
 use crate::fleet::Fleet;
 use crate::holds::marks_of;
+use crate::host_groups::GroupName;
 use crate::live::{Live, Why, live_elsewhere};
 use crate::operator::{Caller, entry_proto, valid_reason};
 use crate::ops::{OpsError, OpsState, OpsStore, Write};
@@ -115,12 +116,38 @@ fn entered(service: &str, view: &View) -> String {
     )
 }
 
+/// Whether every host the fleet heard runs the desired version `want` of `def`, none is updating
+/// and none that is assigned the service is yet to install it: nothing is left to order.
+pub(crate) fn rolled(def: &ServiceDef, want: &Desired, fleet: &Fleet) -> bool {
+    let service = def.name.as_str();
+    fleet
+        .hosts_in(def)
+        .all(|(_, h)| h.beat.version == want.version && h.beat.updating.is_none())
+        && fleet
+            .nodes()
+            .all(|(id, node)| node.announced.contains_key(service) || !fleet.is_assigned(def, id))
+}
+
+/// A stage a plan is about to enter, which the fleet's rows are asked of before it is written
+/// ([`crate::service`]): the position the decider saw and the plan's first.
+pub(crate) struct Step<'a> {
+    /// The host group, for the plan of a package of one.
+    pub(crate) group: Option<&'a str>,
+    pub(crate) service: &'a str,
+    pub(crate) version: &'a str,
+    /// How many stages the plan had entered where the decider saw it.
+    pub(crate) from: usize,
+    /// How many a plan with no position kept has entered.
+    pub(crate) first: usize,
+}
+
 /// Writes, for the service `def` at its desired version `want`, the position its plan reaches by
 /// itself now (every stage it may enter, [`reach`]), after a heartbeat and under the fleet's
 /// lock: one write, with one audit entry by the coordinator. Nothing is written while the service
 /// is halted, its version is marked bad, the plan is paused or the coordinator is quiet, nor when
 /// the plan has no host left to order. A write that fails is logged, and the next heartbeat tries
 /// again; the decision reads the position the plan reaches either way ([`View::effective`]).
+#[cfg(test)]
 pub(crate) fn advance(
     def: &ServiceDef,
     want: &Desired,
@@ -128,16 +155,24 @@ pub(crate) fn advance(
     fleet: &mut Fleet,
     now: Duration,
 ) {
-    // Every host heard runs the version and none is to install it: nothing is left to order,
-    // and the plan is not built at all.
+    advance_asking(def, want, ops, fleet, now, &mut |_| true);
+}
+
+/// [`advance`], with the stage the plan is about to enter first asked of `enter`, which says
+/// whether the plan still stands where this decision read it.
+pub(crate) fn advance_asking(
+    def: &ServiceDef,
+    want: &Desired,
+    ops: &OpsStore,
+    fleet: &mut Fleet,
+    now: Duration,
+    enter: &mut dyn FnMut(&Step<'_>) -> bool,
+) {
     let service = def.name.as_str();
     let group = def.group();
-    let rolled = fleet
-        .hosts_in(def)
-        .all(|(_, h)| h.beat.version == want.version && h.beat.updating.is_none())
-        && fleet
-            .nodes()
-            .all(|(id, node)| node.announced.contains_key(service) || !fleet.is_assigned(def, id));
+    // Every host heard runs the version and none is to install it: nothing is left to order,
+    // and the plan is not built at all.
+    let rolled = rolled(def, want, fleet);
     let marks = ops.read(|state| state.marks_in(group, service));
     if rolled || marks.halt.is_some() || marks.bad.contains(&want.version) || fleet.is_quiet(now) {
         return;
@@ -147,12 +182,25 @@ pub(crate) fn advance(
     if view.paused.is_some() {
         return;
     }
+    let from = view.entered;
     // A plan with nothing left to order (every eligible host had rolled when the coordinator
     // heard it) enters its stages without a word: there is no position worth keeping.
     let Some(view) = reach(def, want, view, false, fleet, now).filter(|view| !view.finished())
     else {
         return;
     };
+    // With the fleet's rows, the plan enters this stage only where they still say it is at the one
+    // this decision read: another coordinator that entered it first wrote its audit line.
+    let step = Step {
+        group: group.map(GroupName::as_str),
+        service,
+        version: want.version.as_str(),
+        from,
+        first: first_entered(&def.plan),
+    };
+    if !enter(&step) {
+        return;
+    }
     let record = kept(&view);
     let mut audit = entry(
         COORDINATOR,

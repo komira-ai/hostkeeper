@@ -53,13 +53,22 @@ its certificate, the server certificate file, the Mac serial allowlist, the MDM 
 stay files, read as today.
 The fleet view (heartbeats, outstanding orders, bake, deferrals, tries, the quiet start) stays in memory and is rebuilt
 from heartbeats after a restart. Every decision reads memory, never the database: a heartbeat in the steady state costs
-no query. (Today it reads the enrollment store's host and deny files at every heartbeat; an in-memory copy of those rows
+no query (over a database that coordinators share it costs two transactions, below). (Today it reads the enrollment store's host and deny files at every heartbeat; an in-memory copy of those rows
 takes their place, section 4.4.) Every API answer, refusal and JSON route keeps its bytes, except `audit_unavailable`,
 which the Postgres store no longer returns for an operations change (section 4.4), a status that is quiet while the
 database is lost (section 5), the new alert `store_unreachable`, and C6, where an identical set raises the generation
 (section 3.2). The gate and the API code keep their shape: they change state through the same calls (`OpsStore::change`
 and its siblings, `DesiredStore::record`, `VerdictFile::record`, the enrollment store's methods), which now reach a
 storage trait (section 4.1).
+
+Over a database that coordinators share, the heartbeats, the outstanding orders, the bakes and the quiet start are the
+fleet's rows (migration `0020`) and the fleet in memory is a cache of them: each heartbeat is stored as its host's row,
+and every decision it makes (the order, the stage entered, the rollback) runs in one transaction that holds the rollout
+gate and reads the rows first (`service_rows.rs`). A heartbeat costs two transactions: its row (one statement) and its
+decision (eight round trips with no order: begin, ledger, gate, the rows of the hosts changed since the last read, the
+orders, the bakes, the quiet time, commit; an order adds the five statements of its admission, a rolled service one).
+A coordinator that dies leaves its hosts' rows for the next to read; the deferrals and the tries stay in memory,
+rebuilt from the beats it reads.
 
 ## 2. What is stored where
 

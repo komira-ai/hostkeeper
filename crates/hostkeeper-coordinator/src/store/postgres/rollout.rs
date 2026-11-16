@@ -20,22 +20,17 @@
 //! back): nothing waits behind a service that no longer asks.
 //!
 //! **The conditional writes.** What a decision writes is also conditional on what it read, so the
-//! step is made once even if two decisions ever reached it with the same inputs: a stage advance
-//! is a compare-and-set on the stage the decider saw ([`advance_stage`]), a halt is an insert that
-//! does nothing when the service is halted ([`raise_halt`]), and an order is an insert the primary
-//! key of the host refuses a second of.
+//! step is made once even if two decisions ever reached it with the same inputs: a stage is
+//! entered only where the plan still stands at the stage the decider saw ([`stage_is_at`], asked
+//! under the gate just before the write), a halt is an insert that does nothing when the service
+//! is halted ([`raise_halt`]), and an order is an insert the primary key of the host refuses a
+//! second of.
 //!
-//! Not here, and not built: the per-host plan of stages (`stages.rs`) and the rule order of
-//! `decide.rs` still run on the in-memory fleet, and nothing feeds these functions from them yet;
-//! the audit lines are written by the caller, in the transaction, when a function answers that it
-//! made the step.
-// The coordinator's heartbeat does not decide through these yet: its decisions run on the
-// in-memory fleet, and `tests/rollout.rs` runs every statement against a server, with two
-// sessions deciding at once. The step that feeds them the rows is the one that removes this.
-#![allow(
-    dead_code,
-    reason = "the decisions of the heartbeat still run on the in-memory fleet; no caller outside the tests feeds these functions yet"
-)]
+//! The heartbeat decides through these: the coordinator takes the gate for a beat
+//! ([`super::fleet_session::FleetRows::gated`]), reads the fleet's rows into its cache, runs the
+//! rules of `decide.rs` on that cache, and writes the order it gives here, in the same
+//! transaction. The audit lines are written by the caller, when a function answers that it made
+//! the step.
 
 use postgres::error::SqlState;
 
@@ -47,8 +42,14 @@ pub(crate) enum Wait {
     /// A heartbeat: `FOR UPDATE SKIP LOCKED`, never waits.
     Beat,
     /// An operator's edit of a decision's input: waits for the gate, for at most this many
-    /// milliseconds (`--operator-gate-wait-ms`); the wait that runs out is the database's error
-    /// ([`gate_timed_out`]).
+    /// milliseconds; the wait that runs out is the database's error ([`gate_timed_out`]).
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "an operator's edit does not take the gate yet: the edits still run on the coordinator's own ops state, which no other coordinator reads"
+        )
+    )]
     Operator { timeout_ms: i64 },
 }
 
@@ -63,6 +64,10 @@ pub(crate) enum Gated<R> {
 
 /// Whether `error` is the wait for the gate running out ([`Wait::Operator`]).
 #[must_use]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "no operator's edit waits for the gate yet")
+)]
 pub(crate) fn gate_timed_out(error: &postgres::Error) -> bool {
     error.code() == Some(&SqlState::LOCK_NOT_AVAILABLE)
 }
@@ -132,6 +137,8 @@ pub(crate) struct Ask<'a> {
     /// The version to order.
     pub(crate) target: &'a str,
     pub(crate) now: i64,
+    /// The try the order is given at (the host's step record numbers its orders by it).
+    pub(crate) order_try: i64,
 }
 
 /// The limits an order is judged by (the desired state's, and the configuration's).
@@ -281,40 +288,50 @@ pub(crate) fn admit(
     // The primary key on the host is the backstop: under the gate no order of the host can have
     // been written since it was read, and one that was fails the transaction.
     session.execute(
-        "INSERT INTO fleet_orders (host_id, service, role, target, at_unix) \
-         VALUES ($1, $2, $3, $4, $5)",
-        &[&ask.host_id, &ask.service, &ask.role, &ask.target, &ask.now],
+        "INSERT INTO fleet_orders (host_id, service, role, target, at_unix, try) \
+         VALUES ($1, $2, $3, $4, $5, $6)",
+        &[
+            &ask.host_id,
+            &ask.service,
+            &ask.role,
+            &ask.target,
+            &ask.now,
+            &ask.order_try,
+        ],
     )?;
     Ok(Admission::Placed)
 }
 
-/// Moves the plan of `service` (of the group `group`, when it has one) from the stage `from` to
-/// the next, if it is at `from` for `version`: true when this call moved it, false when another
-/// decider had (or the version changed), which re-decides from the plan as it is. The caller
-/// writes the audit line of the advance only when this answers true.
+/// Whether the plan of `service` (of the group `group`, when it has one) stands where a decider
+/// saw it: at the stage `from` for `version`, a plan with no position for that version being at
+/// `first`. A decision under the gate asks it before it writes the next stage (and its audit
+/// line), so that of two coordinators that reach the same stage the second finds it entered and
+/// writes nothing: the gate makes the ask and the write one step.
 ///
 /// # Errors
 /// The client's error.
-pub(crate) fn advance_stage(
+pub(crate) fn stage_is_at(
     session: &mut Session,
     group: Option<&str>,
     service: &str,
     version: &str,
     from: i64,
+    first: i64,
 ) -> Result<bool, postgres::Error> {
-    let moved = match group {
-        None => session.execute(
-            "UPDATE rollouts SET entered = entered + 1 \
-             WHERE service = $1 AND version = $2 AND entered = $3",
-            &[&service, &version, &from],
+    let row = match group {
+        None => session.query_opt(
+            "SELECT version, entered FROM rollouts WHERE service = $1",
+            &[&service],
         )?,
-        Some(group) => session.execute(
-            "UPDATE group_rollouts SET entered = entered + 1 \
-             WHERE host_group = $1 AND service = $2 AND version = $3 AND entered = $4",
-            &[&group, &service, &version, &from],
+        Some(group) => session.query_opt(
+            "SELECT version, entered FROM group_rollouts WHERE host_group = $1 AND service = $2",
+            &[&group, &service],
         )?,
     };
-    Ok(moved == 1)
+    let at = row
+        .filter(|row| row.get::<_, Option<String>>(0).as_deref() == Some(version))
+        .map_or(first, |row| row.get::<_, i64>(1));
+    Ok(at == from)
 }
 
 /// Halts `service` for a failure `node_id` reported, if it is not halted: true when this call
@@ -323,6 +340,13 @@ pub(crate) fn advance_stage(
 ///
 /// # Errors
 /// The client's error.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "a halt is still raised on the coordinator's own ops state, whose write the halts row carries; a coordinator that hears the failure after it reads the row's halt only at the gate (`admit`)"
+    )
+)]
 pub(crate) fn raise_halt(
     session: &mut Session,
     service: &str,
@@ -336,4 +360,65 @@ pub(crate) fn raise_halt(
          VALUES ($1, $2, $3, $4, $5) ON CONFLICT (service) DO NOTHING",
         &[&service, &node_id, &check_name, &target, &origin],
     )? == 1)
+}
+
+/// What [`place_uninstall`] answered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Uninstalling {
+    /// The order was written for the host.
+    Placed,
+    /// The host has this uninstall order already: the same order is sent again.
+    Existing,
+    /// The host holds another order.
+    HostBusy,
+}
+
+/// Writes the order of the host `ask.host_id` to uninstall `ask.service`, which the operator's
+/// `Unassign` named by `order_id` (`ask.target` is the version the host runs). The slot rules of
+/// an uninstall are the coordinator's own, judged on the rows it has just read; this keeps the
+/// host to one order, as the primary key of the host does for an update.
+///
+/// # Errors
+/// The client's error.
+pub(crate) fn place_uninstall(
+    session: &mut Session,
+    ask: &Ask<'_>,
+    order_id: &str,
+) -> Result<Uninstalling, postgres::Error> {
+    let placed = session.execute(
+        "INSERT INTO fleet_orders (host_id, service, role, target, uninstall_id, at_unix, try) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (host_id) DO NOTHING",
+        &[
+            &ask.host_id,
+            &ask.service,
+            &ask.role,
+            &ask.target,
+            &order_id,
+            &ask.now,
+            &ask.order_try,
+        ],
+    )?;
+    if placed == 1 {
+        return Ok(Uninstalling::Placed);
+    }
+    let same = session.query_opt(
+        "SELECT 1 FROM fleet_orders WHERE host_id = $1 AND service = $2 AND uninstall_id = $3",
+        &[&ask.host_id, &ask.service, &order_id],
+    )?;
+    Ok(if same.is_some() {
+        Uninstalling::Existing
+    } else {
+        Uninstalling::HostBusy
+    })
+}
+
+/// Takes `services` out of the queue: their rollouts are over. How many were there.
+///
+/// # Errors
+/// The client's error.
+pub(crate) fn finish(session: &mut Session, services: &[&str]) -> Result<u64, postgres::Error> {
+    session.execute(
+        "DELETE FROM rollout_queue WHERE service = ANY($1::text[])",
+        &[&services],
+    )
 }

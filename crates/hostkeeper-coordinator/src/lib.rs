@@ -287,6 +287,8 @@ mod first_heartbeat_tests;
 #[cfg(test)]
 mod first_serving_tests;
 #[cfg(test)]
+mod fleet_cache_tests;
+#[cfg(test)]
 mod fleet_retry_tests;
 #[cfg(test)]
 mod force_targets_tests;

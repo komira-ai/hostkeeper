@@ -410,6 +410,17 @@ pub struct Serve {
         value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..=16)
     )]
     pub live_rollouts: usize,
+    /// Over a database, how far behind the beat its row holds a host's next beat may be, in
+    /// seconds of the row's age, before the host is believed again: a host dials a new connection
+    /// for each beat, so two coordinators may store its beats out of order, and a host whose
+    /// clock stepped back is told from one whose beat is late.
+    #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..))]
+    pub beat_reorder_secs: u64,
+    /// Over a database, how long a service may go without a host asking for its update before it
+    /// leaves its place in the queue of rollouts, in seconds: a rollout that is over, a service
+    /// that is gone or a version that was set back frees the places behind it by itself.
+    #[arg(long, default_value_t = 3600, value_parser = clap::value_parser!(u64).range(1..))]
+    pub queue_idle_secs: u64,
     /// How long each of the two reads of `Repositories.Discover` and `Repositories.Add` (a
     /// repository's descriptor, then its keyring) may take, in seconds.
     #[arg(
@@ -602,6 +613,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
     coordinator = state::with_initial_admin(coordinator, flags)?;
     coordinator = state::with_login(coordinator, flags, database.as_ref())?;
     coordinator = state::with_claims(coordinator, flags, database.as_ref())?;
+    coordinator = state::with_rows(coordinator, flags, database.as_ref());
     let store = match (&flags.enrollment_dir, records) {
         (Some(dir), _) => Some(StoreAt::Dir(dir)),
         (None, Some(records)) => Some(StoreAt::Records(records)),
