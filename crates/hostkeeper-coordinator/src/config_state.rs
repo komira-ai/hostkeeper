@@ -35,6 +35,8 @@ use crate::lock::{LockError, LockGuard, StateLock, lock_path};
 use crate::login::Login;
 use crate::ops::{Marker, OpsState, unlanded};
 use crate::service::Coordinator;
+use crate::ssh_ledger::Ledger;
+use crate::store::postgres::ssh::PgLedger;
 use crate::store::postgres::{DatabaseError, Dsn, PgRecords, Postgres};
 use crate::store::{Backend, BackendError, Files, Loaded, Shared};
 use crate::tokens::OperatorTokens;
@@ -50,6 +52,8 @@ pub(super) struct Opened {
     pub(super) marker: PathBuf,
     pub(super) held: LockGuard,
     pub(super) records: Option<Arc<dyn Records>>,
+    /// The ledger of the SSH certificates, which only the database keeps.
+    pub(super) ledger: Option<Arc<dyn Ledger>>,
 }
 
 /// Opens the store `flags` name: the database of `--database-dsn-file`, or the files of
@@ -80,6 +84,7 @@ pub(super) fn open_store(
             marker: crate::ops_file::unfinished_path(&ops),
             held,
             records: None,
+            ledger: None,
         });
     };
     let file_flags = [
@@ -120,12 +125,14 @@ pub(super) fn open_store(
         )),
         None => None,
     };
+    let ledger: Option<Arc<dyn Ledger>> = Some(Arc::new(PgLedger::new(store.clone())));
     Ok(Opened {
         backend: Arc::new(store.clone()),
         loaded,
         marker: marker.clone(),
         held: LockGuard::new(store),
         records,
+        ledger,
     })
 }
 

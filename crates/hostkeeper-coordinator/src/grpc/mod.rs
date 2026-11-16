@@ -518,7 +518,7 @@ where
             call(server, request).await
         }
         Some(SSH) => {
-            let server = SshServer::new(SshService).max_decoding_message_size(MAX_OPERATOR_BYTES);
+            let server = SshServer::new(SshService::new(coordinator)).max_decoding_message_size(MAX_OPERATOR_BYTES);
             call(server, request).await
         }
         _ => Status::unimplemented("").into_http(),

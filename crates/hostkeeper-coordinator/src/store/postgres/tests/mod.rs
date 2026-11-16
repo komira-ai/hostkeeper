@@ -259,6 +259,7 @@ mod serve;
 mod service_repository;
 mod serving;
 mod session;
+mod ssh;
 mod start;
 pub(crate) mod store;
 mod unused_mdm_tables;

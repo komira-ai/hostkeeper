@@ -6,7 +6,7 @@ use std::fmt::Debug;
 use hostkeeper_proto::hostkeeper::operator::v1::{
     AlertsRefusal, ApiTokensRefusal, AuditRefusal, EnrollmentRefusal, HostGroupsRefusal,
     HostsRefusal, ReleasesRefusal, RepositoriesRefusal, RolloutsRefusal, ServicesRefusal,
-    UsersRefusal,
+    SshRefusal, UsersRefusal,
 };
 use tonic::{Code, Status};
 
@@ -677,6 +677,41 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
             ),
         ],
         refusal::api_tokens,
+    );
+}
+
+/// Proves that each value of `SshRefusal` becomes the status its proto comment names: the code of
+/// the comment and exactly the value's token.
+///
+/// Catches: a value added to the enum with no code, and a token that is not the value's name.
+#[test]
+fn every_ssh_refusal_value_has_the_code_and_token_its_proto_comment_names() {
+    use Code::{
+        FailedPrecondition, Internal, InvalidArgument, NotFound, PermissionDenied,
+        ResourceExhausted, Unauthenticated, Unavailable,
+    };
+    assert_table(
+        &[
+            (SshRefusal::Unspecified, Internal, "unspecified"),
+            (SshRefusal::Unauthorized, Unauthenticated, "unauthorized"),
+            (SshRefusal::Forbidden, PermissionDenied, "forbidden"),
+            (SshRefusal::NotPermitted, PermissionDenied, "not_permitted"),
+            (SshRefusal::InvalidRequest, InvalidArgument, "invalid_request"),
+            (SshRefusal::BadReason, InvalidArgument, "bad_reason"),
+            (SshRefusal::BadKey, InvalidArgument, "bad_key"),
+            (SshRefusal::UnknownHost, NotFound, "unknown_host"),
+            (SshRefusal::NotConfigured, FailedPrecondition, "not_configured"),
+            (SshRefusal::HostNotLive, FailedPrecondition, "host_not_live"),
+            (SshRefusal::NoAddress, FailedPrecondition, "no_address"),
+            (SshRefusal::BadSerial, FailedPrecondition, "bad_serial"),
+            (SshRefusal::UnknownCert, NotFound, "unknown_cert"),
+            (SshRefusal::TooManyTunnels, ResourceExhausted, "too_many_tunnels"),
+            (SshRefusal::Draining, Unavailable, "draining"),
+            (SshRefusal::DialFailed, Unavailable, "dial_failed"),
+            (SshRefusal::StoreFailed, Internal, "store_failed"),
+            (SshRefusal::AuditUnavailable, Unavailable, "audit_unavailable"),
+        ],
+        refusal::ssh,
     );
 }
 

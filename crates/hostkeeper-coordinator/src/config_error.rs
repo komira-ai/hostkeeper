@@ -209,6 +209,9 @@ pub enum StartError {
         "--ca-key-file needs --enrollment-dir, or --database-dsn-file, to keep the enrollment store"
     )]
     NoEnrollmentStore,
+    /// The SSH user CA's flags or files are refused.
+    #[error(transparent)]
+    Ssh(#[from] super::SshStartError),
     /// The database could not be opened, or holds what this build refuses.
     #[error(transparent)]
     Database(#[from] DatabaseError),
