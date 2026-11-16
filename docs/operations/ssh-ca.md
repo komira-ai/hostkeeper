@@ -4,7 +4,7 @@ What the coordinator does with `--ssh-ca-secret-file` set (build items C2 and C4
 [ssh-through-coordinator.md](../design/ssh-through-coordinator.md)): it signs short-lived OpenSSH user
 certificates for the operators the owner lists, one host each, revokes them, and carries an operator's ssh
 connection to a host's sshd through its private listener (the `Ssh/Tunnel` stream, below). The clients of the
-tunnel (`hkctl ssh` and `hkctl ssh-proxy`, C5), the daemon's sshd setup and its report of the host keys (C3,
+tunnel (the ssh commands of `hkctl` and its proxy, C5), the daemon's sshd setup and its report of the host keys (C3,
 C3m) and the heartbeat plumbing that tells hosts the CA's public key and the revoked serials (C6) are other
 changes. Until C6, an owner who wants a host to trust the CA adds its public key to that host's
 `TrustedUserCAKeys` by hand.
@@ -99,9 +99,9 @@ length as 8 big-endian bytes.
 `Ssh/Tunnel` is a gRPC stream on the private listener (the operator's credential, as every `Ssh` call): the
 first frame is `open{host_id, cert_serial}`, the answer's first frame is `opened{login_user}`, and from then
 `data` frames of at most 16 KiB carry the bytes of one TCP connection to the host's sshd, both ways, until a
-`close{cause}` ends it. `hkctl ssh <host>` signs a certificate, then runs `ssh` with `ProxyCommand` set to
-`hkctl ssh-proxy`, which speaks this stream with stdin and stdout as the bytes; any client that speaks the
-stream does the same.
+`close{cause}` ends it. The operator's client (build item C5) signs a certificate, then runs `ssh` with a
+`ProxyCommand` that speaks this stream with stdin and stdout as the bytes; any client that speaks the stream
+does the same.
 
 **What a tunnel is allowed.** The checks run in this order and a refusal is a status before any frame: the
 caller is an operator (not CI); the SSH CA and tunnels are configured (`not_configured`); the instance is not

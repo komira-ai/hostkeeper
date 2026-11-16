@@ -56,7 +56,8 @@ impl TestBook {
         }
     }
 
-    /// Makes the calls named `op` fail (`panic_open`: panic) until [`Self::mend`].
+    /// Makes the calls named `op` fail until [`Self::mend`]; `panic_<op>` (`open`, `close`,
+    /// `poll`, `heard`, `host_keys`, `pin`) makes them panic instead.
     pub(crate) fn fail(&self, op: &'static str) {
         self.failing
             .lock()
@@ -97,6 +98,7 @@ impl TestBook {
 
 impl Book for TestBook {
     fn heard(&self, host_id: &str, address: &str, reported: &[String]) -> Result<(), BookError> {
+        assert!(!self.down("panic_heard"), "the book panicked");
         if self.down("heard") {
             return Err(BookError("the book is down".to_owned()));
         }
@@ -104,6 +106,7 @@ impl Book for TestBook {
     }
 
     fn host_keys(&self, host_id: &str) -> Result<ssh_book::HostKeys, BookError> {
+        assert!(!self.down("panic_host_keys"), "the book panicked");
         if self.down("host_keys") {
             return Err(BookError("the book is down".to_owned()));
         }
@@ -111,6 +114,7 @@ impl Book for TestBook {
     }
 
     fn pin(&self, by: &str, host_id: &str, fingerprints: &[String]) -> Result<(), PinRefused> {
+        assert!(!self.down("panic_pin"), "the book panicked");
         if self.down("pin") {
             return Err(PinRefused::Unwritten("the book is down".to_owned()));
         }
@@ -126,6 +130,17 @@ impl Book for TestBook {
     }
 
     fn close(&self, closing: &Closing) -> Result<(), BookError> {
+        if self.down("panic_close") {
+            if let Some(told) = self
+                .closes
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .as_ref()
+            {
+                let _ = told.send(closing.clone());
+            }
+            panic!("the book panicked");
+        }
         let done = if self.down("close") {
             Err(BookError("the book is down".to_owned()))
         } else {
@@ -143,6 +158,7 @@ impl Book for TestBook {
     }
 
     fn poll(&self, instance: &str, ids: &[u64], stale_secs: u64) -> Result<Polled, BookError> {
+        assert!(!self.down("panic_poll"), "the book panicked");
         self.polls
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -715,4 +731,21 @@ async fn a_book_that_cannot_write_the_close_does_not_hold_the_tunnel() {
     assert_eq!(said, "host_closed");
     assert_eq!(rig.tunnels.count(), 0);
     assert_eq!(rig.book.inner.tunnel_ids(), vec![live.id]);
+}
+
+/// Proves: a book that panics in the close leaves the tunnel as it leaves one whose close failed:
+/// the client is told why it ended and the registry no longer lists it.
+///
+/// Catches: a relay that dies with the book's thread and leaves its tunnel in the registry for
+/// ever.
+#[tokio::test]
+async fn a_book_that_panics_in_the_close_does_not_hold_the_tunnel() {
+    let mut rig = Rig::new("tunnel-close-panics", |_| {}).await;
+    rig.book.fail("panic_close");
+    let mut live = rig.tunnel("operator", "node-07").await;
+    drop(live.host);
+    let (_, said) = until_close(&mut live.out).await;
+    assert_eq!(said, "host_closed");
+    assert_eq!(rig.closed(live.id).await, Cause::HostClosed);
+    assert_eq!(rig.tunnels.count(), 0);
 }

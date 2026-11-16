@@ -10,7 +10,7 @@ use std::net::IpAddr;
 
 use super::{MAX_PINNED, fingerprint_ok};
 use crate::operator::Caller;
-use crate::ssh_book::{Book, Cause, Opening, TUNNEL_CLOSE, TUNNEL_OPEN, close_detail};
+use crate::ssh_book::{Book, Cause, Closing, Opening, TUNNEL_CLOSE, TUNNEL_OPEN, close_detail};
 use crate::ssh_ledger::denied_detail;
 use crate::ssh_sign::tests::{Tune, world};
 use crate::ssh_tunnel::tests::{Client, INSTANCE, Rig, caller, data, open};
@@ -282,6 +282,62 @@ async fn a_host_that_cannot_be_dialled_is_refused_and_its_row_closed() {
     );
     assert_eq!(lines[1].3, close_detail(1, Cause::Error, Some((0, 0)), 0));
     assert_eq!(lines[3].3, close_detail(2, Cause::Error, Some((0, 0)), 0));
+}
+
+/// Proves: a book that cannot write (or panics in) the close of a row whose host could not be
+/// dialled does not change what the caller is told, `dial_failed`, and the slot is free again; the
+/// same for a caller that gives up midway.
+///
+/// Catches: a refusal that turns into another when the book is down, and a slot kept by a close
+/// that failed.
+#[tokio::test]
+async fn a_book_that_cannot_close_the_row_of_a_failed_open_changes_no_answer() {
+    let closed_port = {
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
+        closed.local_addr().expect("an address").port()
+    };
+    let rig = Rig::new("access-close-fails", |limits| {
+        limits.port = closed_port;
+        limits.max_tunnels = 1;
+    })
+    .await;
+    let serial = rig.cert("operator", "node-07");
+    for op in ["close", "panic_close"] {
+        rig.book.fail(op);
+        let answer = rig
+            .try_open(&caller("operator"), open("node-07", serial))
+            .await
+            .0;
+        assert_eq!(answer.err(), Some(Refusal::DialFailed), "{op}");
+        assert_eq!(rig.tunnels.count(), 0, "{op}");
+        rig.book.mend(op);
+        // The row is still there: the book could not close it. Close it as its reaper would.
+        for id in rig.book.inner.tunnel_ids() {
+            rig.book
+                .inner
+                .close(&Closing {
+                    id,
+                    cause: Cause::Error,
+                    bytes_up: 0,
+                    bytes_down: 0,
+                })
+                .expect("closed");
+        }
+    }
+
+    // A caller that gives up on a host that is dialled: the abandoned row is closed the same way.
+    let rig = Rig::new("access-abandoned-close-fails", |_| {}).await;
+    let serial = rig.cert("operator", "node-07");
+    let mut closes = rig.book.watch_closes();
+    rig.book.fail("close");
+    let (client, incoming) = Client::new();
+    client.send(open("node-07", serial)).await;
+    let operator = caller("operator");
+    let mut call = Box::pin(rig.coordinator.ssh_tunnel_open(&operator, incoming, None));
+    assert!(futures::poll!(call.as_mut()).is_pending());
+    drop(call);
+    let closing = closes.recv().await.expect("the close is asked for");
+    assert_eq!(closing.cause, Cause::Error);
 }
 
 /// Proves: a caller that gives up while the tunnel is being recorded and dialled (its call is
@@ -580,6 +636,12 @@ async fn a_heartbeat_tells_the_book_its_address_and_keys_and_a_failing_book_does
         .await;
     assert_eq!(rig.book.inner.seen("node-09"), None);
     rig.book.mend("heard");
+    rig.book.fail("panic_heard");
+    rig.coordinator
+        .hear_ssh("node-09", Some(from), Vec::new())
+        .await;
+    assert_eq!(rig.book.inner.seen("node-09"), None);
+    rig.book.mend("panic_heard");
     rig.coordinator
         .hear_ssh("node-09", Some(from), Vec::new())
         .await;

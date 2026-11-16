@@ -252,6 +252,67 @@ async fn host_keys_and_pin_host_keys_answer_over_both_wires_with_tunnels() {
     }
 }
 
+/// Proves: a book that panics while `HostKeys` or `PinHostKeys` runs is answered `INTERNAL`
+/// `store_failed`, the refusal of a change that could not be made, and the coordinator goes on
+/// answering.
+///
+/// Catches: a handler that panics with the book's thread, or that answers a call it did not finish
+/// as a success.
+#[tokio::test]
+async fn a_book_that_panics_is_a_store_failure_for_host_keys_and_pin() {
+    use hostkeeper_proto::hostkeeper::operator::v1 as proto;
+
+    use super::rollouts::{WIRES, rpc};
+    use crate::ssh_tunnel::tests::Rig;
+
+    let rig = Rig::new("grpc-ssh-panic", |_| {}).await;
+    let asked = proto::HostKeysRequest {
+        host_id: "node-07".to_owned(),
+    };
+    let pinned = proto::PinHostKeysRequest {
+        host_id: "node-07".to_owned(),
+        fingerprints: Vec::new(),
+    };
+    rig.book.fail("panic_host_keys");
+    let refused: Result<proto::HostKeysResponse, _> = rpc(
+        &rig.coordinator,
+        WIRES[0],
+        "/hostkeeper.operator.v1.Ssh/HostKeys",
+        Some(OPERATOR),
+        &asked,
+    )
+    .await;
+    assert_eq!(
+        refused.err(),
+        Some((Code::Internal, "store_failed".to_owned()))
+    );
+    rig.book.mend("panic_host_keys");
+    rig.book.fail("panic_pin");
+    let refused: Result<proto::HostKeysResponse, _> = rpc(
+        &rig.coordinator,
+        WIRES[0],
+        "/hostkeeper.operator.v1.Ssh/PinHostKeys",
+        Some(OPERATOR),
+        &pinned,
+    )
+    .await;
+    assert_eq!(
+        refused.err(),
+        Some((Code::Internal, "store_failed".to_owned()))
+    );
+    rig.book.mend("panic_pin");
+    let answered: proto::HostKeysResponse = rpc(
+        &rig.coordinator,
+        WIRES[0],
+        "/hostkeeper.operator.v1.Ssh/HostKeys",
+        Some(OPERATOR),
+        &asked,
+    )
+    .await
+    .expect("answered");
+    assert_eq!(answered.state, "no_pin");
+}
+
 /// The frames of the gRPC messages in `bytes`.
 fn frames_of(bytes: &[u8]) -> Vec<hostkeeper_proto::hostkeeper::operator::v1::TunnelFrame> {
     use prost::Message;

@@ -10,7 +10,7 @@ use hostkeeper_proto::hostkeeper::operator::v1::tunnel_frame::Frame;
 use tokio::net::TcpStream;
 
 use super::tests::{Client, INSTANCE, Rig, frame, limits, secs, until_close};
-use super::{NoSlot, Outgoing, Tunnels};
+use super::{Event, NoSlot, Outgoing, Tunnels};
 use crate::accounts::ApiToken;
 use crate::ssh_book::{Book, Cause, Opening, close_detail};
 use crate::ssh_ledger::{Ledger, Revocation};
@@ -255,6 +255,10 @@ async fn the_poll_stops_a_tunnel_whose_certificate_was_revoked_and_keeps_those_i
     rig.poll().await;
     assert_eq!(rig.tunnels.count(), 1);
     rig.book.mend("poll");
+    rig.book.fail("panic_poll");
+    rig.poll().await;
+    assert_eq!(rig.tunnels.count(), 1);
+    rig.book.mend("panic_poll");
     rig.poll().await;
     assert_eq!(rig.closed(live.id).await, Cause::Revoked);
     assert_eq!(until_close(&mut live.out).await.1, "revoked");
@@ -355,4 +359,18 @@ async fn a_host_that_cannot_be_dialled_gives_no_connection() {
     assert!(rig.tunnels.dial("not an address").await.is_none());
     let socket = rig.tunnels.dial("127.0.0.1").await.expect("connected");
     assert!(socket.nodelay().expect("the option"));
+}
+
+/// Proves: tunnels that nobody watches tell no event and do not fail for it.
+///
+/// Catches: an event hook that assumes a reader.
+#[tokio::test]
+async fn tunnels_with_no_watcher_tell_their_events_to_no_one() {
+    let rig = Rig::new("tunnel-no-watcher", |_| {}).await;
+    let unwatched = Tunnels::new(
+        Arc::clone(&rig.book) as Arc<dyn Book>,
+        "eeeeeeeeeeeeeeee".to_owned(),
+        limits(1),
+    );
+    unwatched.tell(Event::Opened(1));
 }
