@@ -201,7 +201,7 @@ pub(crate) fn changed_hosts(
         .query(
             "SELECT host_id, role, beat, seen_unix, instance FROM fleet_hosts f \
              WHERE NOT EXISTS (SELECT 1 FROM unnest($1::text[], $2::bigint[], $3::text[]) \
-               AS k(id, seen, who) WHERE k.id = f.host_id AND k.seen = f.seen_unix \
+               AS k(host_id, seen, who) WHERE k.host_id = f.host_id AND k.seen = f.seen_unix \
                AND k.who = f.instance) ORDER BY host_id",
             &[&ids, &seen, &instances],
         )?

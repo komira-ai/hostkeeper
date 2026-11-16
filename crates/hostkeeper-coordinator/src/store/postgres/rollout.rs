@@ -375,8 +375,8 @@ pub(crate) enum Uninstalling {
     HostBusy,
 }
 
-/// Writes the order of the host `ask.host_id` to uninstall `ask.service`, which the operator's
-/// `Unassign` named by `order_id` (`ask.target` is the version the host runs). The slot rules of
+/// Writes the order of the host of `ask` to uninstall its service, which the operator's
+/// `Unassign` named by `order_id` (the target of `ask` is the version the host runs). The slot rules of
 /// an uninstall are the coordinator's own, judged on the rows it has just read; this keeps the
 /// host to one order, as the primary key of the host does for an update.
 ///
