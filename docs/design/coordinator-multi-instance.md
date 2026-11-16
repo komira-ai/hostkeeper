@@ -10,7 +10,7 @@ active/standby pair; this document supersedes it (the supersession check is sect
 stands: the schema, the migrations, import/export, the backups.
 
 Direction (owner, 2026-11-15): the coordinator can run as several instances at once, with Postgres as the store. The same
-principle as the kbf frontend: a deploy never leaves zero serving instances, and no state lives only in one task's disk or
+principle as the existing frontend: a deploy never leaves zero serving instances, and no state lives only in one task's disk or
 memory unless it is a cache that can be rebuilt from the database.
 
 Decision (owner, 2026-11-15, second round, binding): **Postgres is the single source of truth, and any number of instances
@@ -48,7 +48,7 @@ and the pure decision code (`stages.rs`, `live.rs`, `halt.rs`): the decision bec
 
 **What it is not.** The Swarm has one node today, and so does Postgres. Two instances give a deploy with
 no gap and the loss of one instance without an outage; they do not survive the loss of the node or of the database, and the
-database is now the one thing every decision depends on. The same holds for the kbf frontend.
+database is now the one thing every decision depends on. The same holds for the existing frontend.
 
 ## 2. Why this is more than a flag: what two instances get wrong today
 
@@ -137,7 +137,7 @@ Two consequences, both changes of code:
 
 **Sessions.** The single writing thread becomes a small pool of sessions per instance (a config key, section 12), each holding the
 shared lock, so heartbeats of one task do not queue behind each other on one session. The pool plus one reader session is
-how many connections an instance needs; `max_connections` of `lab-postgres` must cover `instances x (pool + 1)` with room (not
+how many connections an instance needs; `max_connections` of the Postgres service must cover `instances x (pool + 1)` with room (not
 checked, section 13).
 
 **Instances.** Each instance has an `instance_id` (random at start) and upserts `instances(id, started_unix, seen_unix, release,
@@ -304,7 +304,7 @@ terminated by the server after the first, a running statement is cancelled after
 and releases the gate and every row lock. The stalled process finds a dead session when it resumes (`Lost`, then `Reviving`,
 section 4), and its ledger-id retry lands nothing twice. The longest the gate can be held by an instance that has gone silent is
 therefore the idle timeout; every edit and decision waits at most that long for it. (`transaction_timeout` of newer Postgres
-would bound the whole transaction; it is not relied on, because the version of `lab-postgres` was not checked, section 13.)
+would bound the whole transaction; it is not relied on, because the version of the Postgres service was not checked, section 13.)
 
 **Isolation.** No transaction of this design needs `SERIALIZABLE`. The deciding transaction would pay for it and gain nothing:
 it reads most of the fleet rows, and under serializable snapshot isolation every concurrent beat upsert would be a read-write
@@ -557,7 +557,7 @@ can only refuse earlier (`store/mod.rs:296`). No new table.
 
 ## 7. Latency budget
 
-Counts are round trips on the unix socket (`/run/lab-postgres`), the rows locked and how long they are held. **They are design
+Counts are round trips on the unix socket (the Postgres socket directory), the rows locked and how long they are held. **They are design
 counts (inferred from the flows above), not measurements.** The measurement is part of PR M1 (section 17) on the deployment: round-trip
 time of the statements, the wait on the gate under a 50% stage of the fleet, WAL and vacuum of `fleet_hosts` at 4 upserts per
 host per minute for the real host count (not read in this work). The hold time of the gate is the span from its grant to
@@ -697,7 +697,7 @@ coordinator sees the client certificate. So 8443 and 8445 already spread over ev
 
 Needed:
 
-1. **An active health check** on both clusters, as the kbf frontend's clusters have (`/readyz`, `close_connections_on_host_health_failure:
+1. **An active health check** on both clusters, as the existing frontend's clusters have (`/readyz`, `close_connections_on_host_health_failure:
    false`). The coordinator's `/healthz` is on `127.0.0.1:8446` inside the task (`health.rs`): a new additive flag
    `--health-listen` serves the same path on an address of the overlay `cp-hk`. 200 only when the store is `Up`, the
    listeners are bound and the task is not draining.
@@ -727,7 +727,7 @@ Needed:
    the certificate survives; (b) the ingress routing mesh on the service VIP (TCP, TLS untouched, so the certificate should
    survive; not verified); (c) a second one-task service for it, which is a singleton again. Recommendation (a), the edge
    already is the front door (open question 1).
-5. **Postgres placement.** The database is reached over the unix socket bind mount `/run/lab-postgres`, so every instance runs
+5. **Postgres placement.** The database is reached over the unix socket bind mount of the Postgres socket directory, so every instance runs
    on the one-node Swarm (the placement constraint already holds).
 6. **The first cutover is stop-first.** The release before holds the exclusive lock; a start-first instance would be refused. Every
    later update is start-first, which requires that every migration a release adds is `may-run` (the release before must run
@@ -783,8 +783,8 @@ The flags are additive; no flag is removed or renamed. `--halt-marker-file` is a
 
 ## 13. js-server, and what was not checked
 
-**js-server** (Swarm service `js-server_server`, one replica, stop-first, state in `--state-file
-/var/lib/js-lease-server/leases.toml` and a `--store` URL secret) is a different codebase and was only seen by its flags. The
+**js-server** (a Swarm service, one replica, stop-first, state in a `--state-file`
+on its volume and a `--store` URL secret) is a different codebase and was only seen by its flags. The
 owner's direction covers it, and so does the leaderless decision: Postgres the single source of truth, n schedulers that just
 work, no leader or lease of its own. It gets its own design in its repository, from this document's checklist: what is only in
 memory or on the instance's disk, what two instances decide together (here a lease in the name of its state file is the likely
@@ -796,10 +796,10 @@ losing one unflushed 5-minute usage buffer when an instance dies is accepted (wr
 cheap).
 
 Not checked, because access was denied or needs a secret, and to be confirmed by the owner or engineering before the cutover:
-the files of the state volume (names and sizes are from the service's flags); the socket directory `/run/lab-postgres`;
-`max_connections` of `lab-postgres` and the role's connection limit (needs the DSN); live table contents (including the
+the files of the state volume (names and sizes are from the service's flags); the Postgres socket directory;
+`max_connections` of the Postgres service and the role's connection limit (needs the DSN); live table contents (including the
 number of enrolled hosts, which sizes section 7); whether any registry row names a credential file; the version of
-`lab-postgres` (whether `transaction_timeout` exists); the edge's check interval and thresholds (no active check exists yet, the
+the Postgres service (whether `transaction_timeout` exists); the edge's check interval and thresholds (no active check exists yet, the
 values of section 11 are proposed).
 
 ## 14. The model check, before code
