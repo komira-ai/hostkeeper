@@ -19,8 +19,8 @@
 //!    when it is not.
 //! 4. **Remote Login**, the macOS switch for sshd, turned on with `systemsetup -setremotelogin on`
 //!    and read back with `-getremotelogin`. On macOS 13 and later the tool refuses unless the
-//!    calling process has Full Disk Access, which a configuration profile grants
-//!    (`docs/deploy/mac/hostkeeper-full-disk-access.mobileconfig`); that refusal is
+//!    calling process has Full Disk Access, which a configuration profile grants (the one in
+//!    `docs/deploy/mac/`, from the design's PR); that refusal is
 //!    [`NEEDS_FULL_DISK_ACCESS`], and nothing was changed. The daemon only turns Remote Login on:
 //!    it never turns it off, so a revert leaves sshd as it found it.
 //!

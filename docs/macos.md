@@ -540,16 +540,11 @@ checks, in this order, and changes nothing until the last step:
 
 macOS 13 and later refuse `systemsetup -setremotelogin` to a process without Full Disk Access
 (the tool says "requires Full Disk Access privileges"). The daemon then reports
-`needs_full_disk_access` and changes nothing, until the configuration profile
-`docs/deploy/mac/hostkeeper-full-disk-access.mobileconfig` is pushed to the Mac. The profile
-grants `SystemPolicyAllFiles` to the daemon alone (payload `com.apple.TCC.configuration-profile-policy`),
-identified by its code-signing identifier and a code requirement that pins the identifier and the
-Team ID `U7RTX4XD3X`, never a path, so an update that replaces the binary under
-`/var/lib/updater/state/hostkeeper/bin/` keeps the grant. The tool's text, the profile's key
-strings, whether the identifier is the one the released binary is signed with, and whether
-Apple Business's built-in device management accepts a custom profile are not measured here:
-they are the measurements of build item C0 and question Q3 of the design. The identifier in the file is a
-placeholder until `codesign -dr -` has been read on the released binary.
+`needs_full_disk_access` and changes nothing, until the Full Disk Access configuration profile
+`docs/deploy/mac/hostkeeper-full-disk-access.mobileconfig` (added by the design's PR, komira-ai/hostkeeper#394,
+and corrected by #400, which names the program by its installed path) is pushed to the Mac. This
+change adds no second copy of that profile. The tool's text and whether the grant reaches `systemsetup`
+as a child of the daemon are not measured here: they are the measurements of build item C0 of the design.
 
 ### Boot id
 
