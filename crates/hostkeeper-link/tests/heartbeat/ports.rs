@@ -139,6 +139,7 @@ fn the_loop_dials_only_the_coordinator_link_port() {
         "grpc.rs",
         "heartbeater.rs",
         "host_facts.rs",
+        "host_ssh.rs",
         "lib.rs",
         "mtls.rs",
         "names.rs",

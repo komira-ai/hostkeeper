@@ -53,6 +53,7 @@ fn beat(platform: Platform, services: Vec<ServiceFacts>) -> Heartbeat {
         installers: Vec::new(),
         repositories: None,
         facts_generation: None,
+        ssh: None,
     }
 }
 
