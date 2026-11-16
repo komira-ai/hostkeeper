@@ -360,6 +360,11 @@ fn an_operator_is_refused_what_the_file_does_not_list_and_the_refusal_is_a_line(
         ]
     );
     assert_eq!(world.ledger.certs().len(), 1);
+    // A refusal stands when its line cannot be written, and writes nothing.
+    let lines = world.ledger.audit().len();
+    world.ledger.refuse_next(1);
+    assert_eq!(ask("dave", "node-07"), Some(Refusal::NotPermitted));
+    assert_eq!(world.ledger.audit().len(), lines);
     std::fs::write(&world.operators, "not [ toml").expect("a broken file");
     assert_eq!(ask("operator", "node-07"), Some(Refusal::NotPermitted));
     std::fs::remove_file(&world.operators).expect("removed");

@@ -157,15 +157,16 @@ fn init_in(out: &Path, random: &Random) -> Result<Report, SshCaError> {
     let (key, pem) = CaKey::generate(COMMENT, &**random).map_err(|_| SshCaError::Random)?;
     let path = out.join(KEY_FILE);
     // `create_new`: a key that is there is never replaced.
+    let failed = |source| write(&path, source);
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o600)
         .open(&path)
-        .map_err(|e| write(&path, e))?;
+        .map_err(failed)?;
     file.write_all(pem.as_bytes())
         .and_then(|()| file.sync_all())
-        .map_err(|e| write(&path, e))?;
+        .map_err(failed)?;
     Ok(Report::of(vec![
         format!("wrote the private key {}", path.display()),
         format!("public key: {} {COMMENT}", key.public_line()),

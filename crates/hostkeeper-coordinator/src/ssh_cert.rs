@@ -203,7 +203,9 @@ impl UserKey {
     fn cert_type(&self) -> &'static str {
         match self {
             UserKey::Ed25519 { .. } => concat!("ssh-ed25519-cert-v01", "\u{40}", "openssh.com"),
-            UserKey::Ecdsa { .. } => concat!("ecdsa-sha2-nistp256-cert-v01", "\u{40}", "openssh.com"),
+            UserKey::Ecdsa { .. } => {
+                concat!("ecdsa-sha2-nistp256-cert-v01", "\u{40}", "openssh.com")
+            }
             UserKey::Rsa { .. } => concat!("ssh-rsa-cert-v01", "\u{40}", "openssh.com"),
         }
     }

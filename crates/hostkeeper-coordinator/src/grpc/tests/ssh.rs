@@ -103,9 +103,12 @@ async fn signing_and_revoking_answer_over_both_wires_and_refuse_by_token() {
         .expect("signed");
         assert_eq!(signed.key_id, format!("operator/{}", n + 1), "{wire:?}");
         assert!(
-            signed
-                .certificate
-                .starts_with(concat!("ssh-ed25519-cert-v01", "\u{40}", "openssh.com", " ")),
+            signed.certificate.starts_with(concat!(
+                "ssh-ed25519-cert-v01",
+                "\u{40}",
+                "openssh.com",
+                " "
+            )),
             "{wire:?}"
         );
         let bad: Result<proto::SignUserCertResponse, _> = rpc(

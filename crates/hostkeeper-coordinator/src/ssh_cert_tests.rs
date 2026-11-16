@@ -62,10 +62,13 @@ fn line_of(kind: &str, blob: &[u8]) -> String {
 struct File<'a> {
     cipher: &'a [u8],
     kdf: &'a [u8],
+    options: &'a [u8],
     keys: u32,
     check_two: u32,
     kind: &'a [u8],
     public: &'a [u8],
+    /// The public key the header names, which is `public` unless a test says otherwise.
+    header_public: &'a [u8],
     secret: Vec<u8>,
     padding: Vec<u8>,
     extra: &'a [u8],
@@ -85,10 +88,12 @@ impl File<'_> {
             File {
                 cipher: b"none",
                 kdf: b"none",
+                options: b"",
                 keys: 1,
                 check_two: 7,
                 kind: b"ssh-ed25519",
                 public,
+                header_public: public,
                 secret,
                 padding: Vec::new(),
                 extra: b"",
@@ -100,7 +105,7 @@ impl File<'_> {
     fn pem(&self) -> String {
         let mut blob = Vec::new();
         put_string(&mut blob, b"ssh-ed25519");
-        put_string(&mut blob, self.public);
+        put_string(&mut blob, self.header_public);
         let mut private = Vec::new();
         put_u32(&mut private, 7);
         put_u32(&mut private, self.check_two);
@@ -119,7 +124,7 @@ impl File<'_> {
         let mut file = MAGIC.to_vec();
         put_string(&mut file, self.cipher);
         put_string(&mut file, self.kdf);
-        put_string(&mut file, b"");
+        put_string(&mut file, self.options);
         put_u32(&mut file, self.keys);
         put_string(&mut file, &blob);
         put_string(&mut file, &private);
@@ -211,6 +216,7 @@ fn a_private_key_file_is_refused_part_by_part() {
     };
     cases.push(("cipher", broken(&|f| f.cipher = b"aes256-ctr")));
     cases.push(("kdf", broken(&|f| f.kdf = b"bcrypt")));
+    cases.push(("kdf options", broken(&|f| f.options = b"x")));
     cases.push(("two keys", broken(&|f| f.keys = 2)));
     cases.push(("checks", broken(&|f| f.check_two = 8)));
     cases.push(("type", broken(&|f| f.kind = b"ssh-rsa")));
@@ -221,6 +227,18 @@ fn a_private_key_file_is_refused_part_by_part() {
     cases.push(("after", broken(&|f| f.extra = b"x")));
     let (other, _) = File::of(9);
     cases.push(("another public key", broken(&|f| f.public = other.public)));
+    // A file whose halves agree with each other but not with the seed, and one whose header names
+    // another public key than the private part does.
+    cases.push((
+        "seed of another key",
+        broken(&|f| {
+            f.public = other.public;
+            f.header_public = other.public;
+            f.secret.truncate(32);
+            f.secret.extend_from_slice(other.public);
+        }),
+    ));
+    cases.push(("header public key", broken(&|f| f.header_public = other.public)));
     for (name, file) in cases {
         assert_eq!(
             CaKey::parse_secret(&file.pem()).err(),
@@ -474,9 +492,21 @@ fn spec<'a>(key: &'a UserKey, principal: &'a str) -> Spec<'a> {
 fn a_certificate_says_exactly_what_it_was_given_and_is_signed_by_the_ca() {
     let (ca, _) = generated(5);
     for (line, kind, fields) in [
-        (ED25519_KEY, concat!("ssh-ed25519-cert-v01", "\u{40}", "openssh.com"), 1),
-        (ECDSA_KEY, concat!("ecdsa-sha2-nistp256-cert-v01", "\u{40}", "openssh.com"), 2),
-        (RSA_KEY, concat!("ssh-rsa-cert-v01", "\u{40}", "openssh.com"), 2),
+        (
+            ED25519_KEY,
+            concat!("ssh-ed25519-cert-v01", "\u{40}", "openssh.com"),
+            1,
+        ),
+        (
+            ECDSA_KEY,
+            concat!("ecdsa-sha2-nistp256-cert-v01", "\u{40}", "openssh.com"),
+            2,
+        ),
+        (
+            RSA_KEY,
+            concat!("ssh-rsa-cert-v01", "\u{40}", "openssh.com"),
+            2,
+        ),
     ] {
         let user = UserKey::parse(line).expect("a key");
         let made = ca
