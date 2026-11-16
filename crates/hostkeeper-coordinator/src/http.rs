@@ -109,6 +109,10 @@ pub const MAX_SET_DESIRED_BYTES: usize = 256 * 1024;
 /// group lists up to 64 packages of up to 255 bytes and names a policy.
 pub const MAX_HOST_GROUPS_PUT_BYTES: usize = 64 * 1024;
 
+/// The most bytes of one frame of an `Ssh.Tunnel` stream read: 16 KiB of `data` and the 64 bytes
+/// its message adds. The stream is gRPC only.
+pub const MAX_TUNNEL_FRAME_BYTES: usize = 16 * 1024 + 64;
+
 /// The error code of a heartbeat from a host an operator denied (`COORDINATOR_REFUSAL_DENIED`).
 pub const DENIED: &str = "denied";
 
@@ -123,7 +127,8 @@ pub enum Surface {
 }
 
 /// The address a connection came from, put in the extensions of each request it carries by
-/// the listener, when its transport has one. Nothing reads it yet.
+/// the listener, when its transport has one. A heartbeat's is the address the coordinator
+/// dials the host at ([`crate::ssh_book`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PeerAddr(pub SocketAddr);
 

@@ -70,6 +70,14 @@ impl Memory {
         self.state().hosts.get(host_id).map(|host| host.seen_unix)
     }
 
+    /// The address `host_id` was last heard from.
+    pub(crate) fn address(&self, host_id: &str) -> Option<String> {
+        self.state()
+            .hosts
+            .get(host_id)
+            .map(|host| host.address.clone())
+    }
+
     /// Moves the last heartbeat of `host_id` back by `secs` (forward when `back` is false).
     pub(crate) fn shift_host(&self, host_id: &str, secs: u64, back: bool) {
         if let Some(host) = self.state().hosts.get_mut(host_id) {

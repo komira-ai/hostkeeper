@@ -198,19 +198,21 @@ pub(crate) mod service_put;
 pub(crate) mod service_repository;
 pub mod services;
 pub mod session;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the tunnel runtime that calls the book lands in the next change"
-    )
-)]
+pub(crate) mod ssh_access;
 pub(crate) mod ssh_book;
 pub mod ssh_ca;
 pub(crate) mod ssh_cert;
 pub(crate) mod ssh_ledger;
 pub mod ssh_operators;
 pub mod ssh_sign;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the start of the coordinator makes the tunnels and runs the poll and the drain in the next change"
+    )
+)]
+pub(crate) mod ssh_tunnel;
 pub mod stages;
 pub mod stamp;
 pub mod status;
