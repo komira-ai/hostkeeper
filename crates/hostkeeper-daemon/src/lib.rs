@@ -127,11 +127,11 @@ pub mod rollback_floor;
 pub mod run_units;
 pub mod seed;
 pub mod selfupdate;
-pub mod stamp;
 pub mod ssh_effective;
 pub mod ssh_files;
 pub mod ssh_host;
 pub mod ssh_setup;
+pub mod stamp;
 pub mod start;
 pub mod target;
 #[cfg(any(test, feature = "testing"))]
