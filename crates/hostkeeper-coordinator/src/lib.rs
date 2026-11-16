@@ -183,6 +183,7 @@ mod queue;
 pub mod reconcile;
 pub mod registry;
 pub(crate) mod releases;
+pub(crate) mod remote_login_probe;
 pub(crate) mod repositories;
 pub(crate) mod repository_credential;
 pub(crate) mod repository_discover;

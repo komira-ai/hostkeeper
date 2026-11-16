@@ -28,6 +28,7 @@ mod operator_desired;
 mod pending;
 mod readme_status;
 mod refusal;
+mod remote_login_probe;
 mod report;
 mod repositories;
 mod repository_serve;

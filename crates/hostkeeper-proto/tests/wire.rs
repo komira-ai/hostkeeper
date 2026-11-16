@@ -450,6 +450,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 39] = [
             ("installers", 10),
             ("repositories", 11),
             ("facts_generation", 12),
+            ("remote_login_probe", 14),
         ],
     ),
     (
