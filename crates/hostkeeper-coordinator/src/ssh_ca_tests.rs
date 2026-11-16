@@ -117,7 +117,7 @@ fn init_never_replaces_a_key_and_names_what_it_could_not_write() {
 fn signing(dir: &Path, host: &str, operator: &str) -> (Sign, CaKey) {
     let out = dir.join("ca");
     init(&out).expect("made");
-    let public = dir.join("alice.pub");
+    let public = dir.join("alice_key");
     fs::write(&public, format!("{ED25519_KEY}\n")).expect("a public key");
     let key = CaKey::parse_secret(&fs::read_to_string(out.join(KEY_FILE)).expect("a file"))
         .expect("a key")
@@ -200,14 +200,14 @@ fn sign_refuses_what_it_should_not_sign_with_the_reason() {
         Err(SshCaError::Operator)
     ));
     let mut bad = good.clone();
-    bad.public_key_file = dir.path().join("missing.pub");
+    bad.public_key_file = dir.path().join("missing_key");
     let error = sign(&bad, &os_random()).expect_err("missing");
     assert!(
         matches!(&error, SshCaError::Read { path, .. } if *path == bad.public_key_file),
         "{error}"
     );
     let mut bad = good.clone();
-    bad.public_key_file = dir.path().join("long.pub");
+    bad.public_key_file = dir.path().join("long_key");
     fs::write(&bad.public_key_file, "#".repeat(8 * 1024 + 1)).expect("a file");
     assert!(matches!(
         sign(&bad, &os_random()),

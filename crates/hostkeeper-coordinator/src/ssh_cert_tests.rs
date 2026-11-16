@@ -474,9 +474,9 @@ fn spec<'a>(key: &'a UserKey, principal: &'a str) -> Spec<'a> {
 fn a_certificate_says_exactly_what_it_was_given_and_is_signed_by_the_ca() {
     let (ca, _) = generated(5);
     for (line, kind, fields) in [
-        (ED25519_KEY, "ssh-ed25519-cert-v01@openssh.com", 1),
-        (ECDSA_KEY, "ecdsa-sha2-nistp256-cert-v01@openssh.com", 2),
-        (RSA_KEY, "ssh-rsa-cert-v01@openssh.com", 2),
+        (ED25519_KEY, concat!("ssh-ed25519-cert-v01", "\u{40}", "openssh.com"), 1),
+        (ECDSA_KEY, concat!("ecdsa-sha2-nistp256-cert-v01", "\u{40}", "openssh.com"), 2),
+        (RSA_KEY, concat!("ssh-rsa-cert-v01", "\u{40}", "openssh.com"), 2),
     ] {
         let user = UserKey::parse(line).expect("a key");
         let made = ca

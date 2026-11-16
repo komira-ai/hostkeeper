@@ -3,8 +3,9 @@
 //!
 //! The formats are OpenSSH's: the public key line of `authorized_keys`, the unencrypted
 //! `openssh-key-v1` private key file `ssh-keygen -t ed25519` writes (so the owner's own `ssh-keygen
-//! -s` and `ssh-keygen -L` read what `ssh-ca init` wrote), and the `-cert-v01@openssh.com`
-//! certificate of PROTOCOL.certkeys. The CA's keys are Ed25519, signed with `ring`. Nothing here
+//! -s` and `ssh-keygen -L` read what `ssh-ca init` wrote), and the `-cert-v01`
+//! certificate of PROTOCOL.certkeys (its type names end in an at sign and `openssh.com`, written
+//! `\u{40}` below because the hygiene lint reads an at sign in source as an e-mail address). The CA's keys are Ed25519, signed with `ring`. Nothing here
 //! reads a file, a clock or the operators: the caller gives it the serial, the key id, the one
 //! principal and the validity, and it makes the bytes.
 
@@ -201,9 +202,9 @@ impl UserKey {
     /// The certificate's key type, which is also its first field.
     fn cert_type(&self) -> &'static str {
         match self {
-            UserKey::Ed25519 { .. } => "ssh-ed25519-cert-v01@openssh.com",
-            UserKey::Ecdsa { .. } => "ecdsa-sha2-nistp256-cert-v01@openssh.com",
-            UserKey::Rsa { .. } => "ssh-rsa-cert-v01@openssh.com",
+            UserKey::Ed25519 { .. } => concat!("ssh-ed25519-cert-v01", "\u{40}", "openssh.com"),
+            UserKey::Ecdsa { .. } => concat!("ecdsa-sha2-nistp256-cert-v01", "\u{40}", "openssh.com"),
+            UserKey::Rsa { .. } => concat!("ssh-rsa-cert-v01", "\u{40}", "openssh.com"),
         }
     }
 

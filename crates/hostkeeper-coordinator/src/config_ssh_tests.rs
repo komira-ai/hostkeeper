@@ -306,7 +306,7 @@ fn signing_refuses_what_is_wrong_with_a_file_or_a_flag_at_start() {
         SshStartError::LoginUser("--ssh-login-user-linux")
     ));
     assert!(matches!(
-        refused(&["--ssh-login-user-macos", "-x"]),
+        refused(&["--ssh-login-user-macos=-x"]),
         SshStartError::LoginUser("--ssh-login-user-macos")
     ));
     let flags = serve(&[

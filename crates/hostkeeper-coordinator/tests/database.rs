@@ -357,7 +357,7 @@ fn a_serve_starts_on_a_database_at_the_schema_of_the_release_before() {
 
     drop(start(args.clone()));
     database.lock_is_free();
-    // The schema of 0.1.252: `0009` to `0018` taken back, the column, the tables and their
+    // The schema of 0.1.252: `0009` to `0019` taken back, the column, the tables and their
     // `schema_version` rows.
     run(
         &database,
@@ -366,6 +366,7 @@ fn a_serve_starts_on_a_database_at_the_schema_of_the_release_before() {
          DROP TABLE mdm_secrets, mdm_settings, mdm_commands, mdm_identities, mdm_enrollments, \
          abm_devices, abm_state; \
          DROP TABLE lab_cluster, lab_rows, lab_racks, lab_placements, lab_devices, lab_sleds, lab_sled_items; \
+         DROP TABLE ssh_revocation, ssh_cert, ssh_audit; DROP SEQUENCE ssh_cert_serial; \
          DELETE FROM schema_version WHERE version >= 9",
     );
     assert_eq!(schema_versions(&database), (1..=8).collect::<Vec<i32>>());
@@ -388,7 +389,7 @@ fn a_serve_starts_on_a_database_at_the_schema_of_the_release_before() {
 }
 
 /// Proves: a `serve` is refused on a database that holds a migration newer than this release's
-/// that says `refuse`, with the exact text of the database's refusal naming migration 19; a newer
+/// that says `refuse`, with the exact text of the database's refusal naming migration 20; a newer
 /// one that says `may-run` is taken.
 ///
 /// Catches: a coordinator that starts on, and writes to, a schema a newer release changed in a
@@ -402,17 +403,17 @@ fn a_serve_refuses_a_database_newer_than_this_release() {
     database.lock_is_free();
 
     let put = "INSERT INTO schema_version (version, name, older_releases) \
-               VALUES (19, 'from_the_future', ";
+               VALUES (20, 'from_the_future', ";
     run(&database, &format!("{put}'refuse')"));
     let why = refusal(args.clone());
     assert!(matches!(&why, StartError::Database(_)), "{why}");
     assert_eq!(
         why.to_string(),
-        "the database's schema is newer than this coordinator (migration 19, from_the_future)"
+        "the database's schema is newer than this coordinator (migration 20, from_the_future)"
     );
     database.lock_is_free();
 
-    run(&database, "DELETE FROM schema_version WHERE version = 19");
+    run(&database, "DELETE FROM schema_version WHERE version = 20");
     run(&database, &format!("{put}'may-run')"));
     drop(start(args));
 }

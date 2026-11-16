@@ -93,7 +93,7 @@ fn this_release_reads_the_rows_of_the_release_before_as_naming_no_group() {
     assert_eq!(
         db.rows("SELECT version FROM schema_version ORDER BY version")
             .len(),
-        18
+        19
     );
 }
 
@@ -371,7 +371,10 @@ fn migration_0018_removes_the_group_all_and_makes_every_group_list_hostkeeper() 
     .expect("the rows of 0017");
     with_session(&db, |session| {
         let all = migrate::checked(&migrate::SHIPPED).expect("this release's set");
-        assert_eq!(migrate::apply(session, &all).expect("0018 runs"), vec![18]);
+        assert_eq!(
+            migrate::apply(session, &all).expect("0018 and 0019 run"),
+            vec![18, 19]
+        );
     });
 
     for table in [
