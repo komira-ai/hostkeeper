@@ -117,6 +117,40 @@ fn a_release_channel_of_the_wrong_type_is_refused_by_name() {
     assert_eq!(invalid_key(refusal(&text)), "release_channel");
 }
 
+/// A config that leaves `keep_awake` out keeps a Mac awake: the key defaults to true, so a config
+/// written for an earlier release loads with the setting on.
+#[test]
+fn keep_awake_defaults_to_on() {
+    assert!(!EXAMPLE.contains("keep_awake"));
+    assert!(DaemonConfig::parse(EXAMPLE).unwrap().keep_awake);
+}
+
+/// `keep_awake = false` and `keep_awake = true` are read as written, and nothing else of the
+/// config changes with them.
+#[test]
+fn keep_awake_is_read_as_written() {
+    let off = format!("keep_awake = false\n{EXAMPLE}");
+    let on = format!("keep_awake = true\n{EXAMPLE}");
+    let off = DaemonConfig::parse(&off).expect("keep_awake = false loads");
+    let on = DaemonConfig::parse(&on).expect("keep_awake = true loads");
+    assert!(!off.keep_awake);
+    assert!(on.keep_awake);
+    assert_eq!(
+        DaemonConfig {
+            keep_awake: true,
+            ..off
+        },
+        on
+    );
+}
+
+/// A `keep_awake` that is not a boolean is refused by its name.
+#[test]
+fn a_keep_awake_of_the_wrong_type_is_refused_by_name() {
+    let text = format!("keep_awake = \"no\"\n{EXAMPLE}");
+    assert_eq!(invalid_key(refusal(&text)), "keep_awake");
+}
+
 /// Catches a renamed key or a changed default: the example parses and every field is its value.
 #[test]
 fn design_example_loads_with_every_value() {
