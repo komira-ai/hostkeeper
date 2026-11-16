@@ -81,23 +81,30 @@ impl SshSetup {
     }
 
     /// The auth settings of every account with keys but the login user, by name.
-    fn others(&self, accounts: &[crate::ssh_host::Account], login: &str) -> Result<BTreeMap<String, Settings>, Refused> {
+    fn others(
+        &self,
+        accounts: &[crate::ssh_host::Account],
+        login: &str,
+    ) -> Result<BTreeMap<String, Settings>, Refused> {
         let mut recorded = BTreeMap::new();
         for account in accounts.iter().filter(|a| a.keyed && a.name != login) {
-            recorded.insert(account.name.clone(), self.effective(&account.name)?.auth_settings());
+            recorded.insert(
+                account.name.clone(),
+                self.effective(&account.name)?.auth_settings(),
+            );
         }
         Ok(recorded)
     }
 
     /// What rule 3 requires of the effective configuration after the change.
-    fn verify(
-        &self,
-        plan: &Plan,
-        before: &BTreeMap<String, Settings>,
-    ) -> Result<(), Refused> {
+    fn verify(&self, plan: &Plan, before: &BTreeMap<String, Settings>) -> Result<(), Refused> {
         let login = self.effective(&plan.login_user)?;
         let principals = self.paths.principals_template();
-        let expanded = self.paths.principals(&plan.login_user).display().to_string();
+        let expanded = self
+            .paths
+            .principals(&plan.login_user)
+            .display()
+            .to_string();
         let (ca, revoked) = (
             self.paths.ca_keys().display().to_string(),
             self.paths.revoked().display().to_string(),
@@ -171,15 +178,16 @@ impl SshSetup {
         self.host
             .start(&unit)
             .map_err(|_| Refused::new(SshState::ReloadFailed, "start"))?;
-        let revoked = if held.serials.as_ref() == Some(&plan.serials) && self.paths.revoked().is_file() {
-            None
-        } else {
-            let made = self
-                .host
-                .revocations(&plan.ca_keys, &plan.serials)
-                .map_err(|_| Refused::new(SshState::ConfigInvalid, "revocations"))?;
-            Some(made)
-        };
+        let revoked =
+            if held.serials.as_ref() == Some(&plan.serials) && self.paths.revoked().is_file() {
+                None
+            } else {
+                let made = self
+                    .host
+                    .revocations(&plan.ca_keys, &plan.serials)
+                    .map_err(|_| Refused::new(SshState::ConfigInvalid, "revocations"))?;
+                Some(made)
+            };
         let files = wanted(&self.paths, &plan, revoked);
         self.check_candidate(&plan)?;
         let snapshot = Snapshot::of(&self.paths);
@@ -230,7 +238,9 @@ impl SshSetup {
             self.log.line(&format!("error: ssh: {why}"));
         }
         if let Err(why) = self.host.reload(unit) {
-            self.log.line(&format!("error: ssh: sshd is not reloaded after the files were put back: {why}"));
+            self.log.line(&format!(
+                "error: ssh: sshd is not reloaded after the files were put back: {why}"
+            ));
         }
     }
 
@@ -238,8 +248,8 @@ impl SshSetup {
     fn disable(&self, held: &mut Held) -> Result<(), Refused> {
         let unit = self.host.unit().ok();
         let snapshot = Snapshot::of(&self.paths);
-        let changed = uninstall(&self.paths)
-            .map_err(|_| Refused::new(SshState::ConfigInvalid, "write"))?;
+        let changed =
+            uninstall(&self.paths).map_err(|_| Refused::new(SshState::ConfigInvalid, "write"))?;
         held.serials = None;
         let (true, Some(unit)) = (changed, unit) else {
             return Ok(());
@@ -289,7 +299,8 @@ impl SshSink for SshSetup {
             return;
         }
         let outcome = if access.enabled {
-            self.enable(access, &mut held).map(|()| (SshState::Applied, ""))
+            self.enable(access, &mut held)
+                .map(|()| (SshState::Applied, ""))
         } else {
             self.disable(&mut held).map(|()| (SshState::Disabled, ""))
         };

@@ -102,7 +102,12 @@ impl Effective {
     pub fn auth_settings(&self) -> BTreeMap<&'static str, Vec<Vec<String>>> {
         AUTH_KEYWORDS
             .iter()
-            .map(|&keyword| (keyword, self.lines.get(keyword).cloned().unwrap_or_default()))
+            .map(|&keyword| {
+                (
+                    keyword,
+                    self.lines.get(keyword).cloned().unwrap_or_default(),
+                )
+            })
             .collect()
     }
 

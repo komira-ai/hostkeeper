@@ -415,6 +415,7 @@ impl CoordinatorLink for GrpcInProcess {
                 .collect(),
             repositories: None,
             facts: None,
+            ssh: None,
         })
     }
 }

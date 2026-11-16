@@ -20,7 +20,9 @@ struct Runner {
 }
 
 impl Runner {
-    fn new(answer: impl Fn(&[String]) -> Result<CommandOutput, RunError> + Send + Sync + 'static) -> Arc<Runner> {
+    fn new(
+        answer: impl Fn(&[String]) -> Result<CommandOutput, RunError> + Send + Sync + 'static,
+    ) -> Arc<Runner> {
         Arc::new(Runner {
             calls: Mutex::new(Vec::new()),
             answer: Box::new(answer),
@@ -34,8 +36,15 @@ impl Runner {
             .expect("the calls")
             .iter()
             .map(|argv| {
-                let program = Path::new(&argv[0]).file_name().expect("a program").to_string_lossy().into_owned();
-                std::iter::once(program).chain(argv[1..].iter().cloned()).collect::<Vec<_>>().join(" ")
+                let program = Path::new(&argv[0])
+                    .file_name()
+                    .expect("a program")
+                    .to_string_lossy()
+                    .into_owned();
+                std::iter::once(program)
+                    .chain(argv[1..].iter().cloned())
+                    .collect::<Vec<_>>()
+                    .join(" ")
             })
             .collect()
     }
@@ -82,20 +91,24 @@ fn host(runner: &Arc<Runner>, etc: &Path) -> SystemHost {
 
 /// What `systemctl show` prints of a unit: its load state, active state and unit file state.
 fn shown(load: &str, active: &str, file: &str) -> Result<CommandOutput, RunError> {
-    ok(&format!("LoadState={load}\nActiveState={active}\nUnitFileState={file}\n"))
+    ok(&format!(
+        "LoadState={load}\nActiveState={active}\nUnitFileState={file}\n"
+    ))
 }
 
 /// A manager whose units are `(name, load, active, file)`; any other unit is not found.
-fn manager(units: &'static [(&'static str, &'static str, &'static str, &'static str)]) -> Arc<Runner> {
+fn manager(
+    units: &'static [(&'static str, &'static str, &'static str, &'static str)],
+) -> Arc<Runner> {
     Runner::new(move |argv| {
         if argv[1] != "show" {
             return ok("");
         }
         let name = &argv[4];
-        units
-            .iter()
-            .find(|unit| unit.0 == name)
-            .map_or_else(|| shown("not-found", "inactive", ""), |u| shown(u.1, u.2, u.3))
+        units.iter().find(|unit| unit.0 == name).map_or_else(
+            || shown("not-found", "inactive", ""),
+            |u| shown(u.1, u.2, u.3),
+        )
     })
 }
 
@@ -142,13 +155,25 @@ fn the_first_loaded_service_is_the_unit() {
 #[test]
 fn a_missing_masked_or_unaskable_unit_is_told_apart() {
     let none = manager(&[]);
-    assert_eq!(host(&none, Path::new("/nowhere")).unit(), Err(UnitError::Missing));
+    assert_eq!(
+        host(&none, Path::new("/nowhere")).unit(),
+        Err(UnitError::Missing)
+    );
     let masked = manager(&[("ssh.service", "masked", "inactive", "masked")]);
-    assert_eq!(host(&masked, Path::new("/nowhere")).unit(), Err(UnitError::Masked));
+    assert_eq!(
+        host(&masked, Path::new("/nowhere")).unit(),
+        Err(UnitError::Masked)
+    );
     let failing = Runner::new(|_| out(Some(1), ""));
-    assert_eq!(host(&failing, Path::new("/nowhere")).unit(), Err(UnitError::NoManager));
+    assert_eq!(
+        host(&failing, Path::new("/nowhere")).unit(),
+        Err(UnitError::NoManager)
+    );
     let absent = Runner::new(|_| Err(RunError::Empty));
-    assert_eq!(host(&absent, Path::new("/nowhere")).unit(), Err(UnitError::NoManager));
+    assert_eq!(
+        host(&absent, Path::new("/nowhere")).unit(),
+        Err(UnitError::NoManager)
+    );
     let late = Runner::new(|argv| {
         if argv[4] == "ssh.socket" {
             shown("loaded", "inactive", "disabled")
@@ -156,7 +181,10 @@ fn a_missing_masked_or_unaskable_unit_is_told_apart() {
             out(Some(1), "")
         }
     });
-    assert_eq!(host(&late, Path::new("/nowhere")).unit(), Err(UnitError::NoManager));
+    assert_eq!(
+        host(&late, Path::new("/nowhere")).unit(),
+        Err(UnitError::NoManager)
+    );
 }
 
 /// Proves starting a disabled, stopped service enables it and starts it, in that order; an
@@ -165,7 +193,9 @@ fn a_missing_masked_or_unaskable_unit_is_told_apart() {
 fn start_enables_and_starts_and_stops_nothing() {
     let down = manager(&[("ssh.service", "loaded", "inactive", "disabled")]);
     let unit = SshdUnit::Service("ssh.service".to_owned());
-    host(&down, Path::new("/nowhere")).start(&unit).expect("started");
+    host(&down, Path::new("/nowhere"))
+        .start(&unit)
+        .expect("started");
     assert_eq!(
         down.lines(),
         [
@@ -178,7 +208,9 @@ fn start_enables_and_starts_and_stops_nothing() {
     host(&up, Path::new("/nowhere")).start(&unit).expect("left");
     assert_eq!(up.lines().len(), 1);
     let socket = manager(&[]);
-    host(&socket, Path::new("/nowhere")).start(&SshdUnit::Socket).expect("left");
+    host(&socket, Path::new("/nowhere"))
+        .start(&SshdUnit::Socket)
+        .expect("left");
     assert!(socket.lines().is_empty());
     let all = down.lines().concat() + &up.lines().concat();
     assert!(!all.contains("stop") && !all.contains("restart") && !all.contains("disable"));
@@ -194,7 +226,13 @@ fn a_start_that_fails_says_what_failed() {
         host(&blind, Path::new("/nowhere")).start(&unit),
         Err("systemctl failed".to_owned())
     );
-    let no_enable = Runner::new(|argv| if argv[1] == "show" { shown("loaded", "inactive", "disabled") } else { out(Some(1), "") });
+    let no_enable = Runner::new(|argv| {
+        if argv[1] == "show" {
+            shown("loaded", "inactive", "disabled")
+        } else {
+            out(Some(1), "")
+        }
+    });
     assert_eq!(
         host(&no_enable, Path::new("/nowhere")).start(&unit),
         Err("systemctl ended with exit 1".to_owned())
@@ -207,7 +245,13 @@ fn a_start_that_fails_says_what_failed() {
         host(&no_start, Path::new("/nowhere")).start(&unit),
         Err("systemctl ended with a signal".to_owned())
     );
-    let unrunnable = Runner::new(|argv| if argv[1] == "show" { shown("loaded", "inactive", "enabled") } else { Err(RunError::Empty) });
+    let unrunnable = Runner::new(|argv| {
+        if argv[1] == "show" {
+            shown("loaded", "inactive", "enabled")
+        } else {
+            Err(RunError::Empty)
+        }
+    });
     assert_eq!(
         host(&unrunnable, Path::new("/nowhere")).start(&unit),
         Err("systemctl could not be run".to_owned())
@@ -220,8 +264,12 @@ fn a_start_that_fails_says_what_failed() {
 fn a_reload_is_a_reload() {
     let runner = Runner::new(|_| ok(""));
     let unit = SshdUnit::Service("sshd.service".to_owned());
-    host(&runner, Path::new("/nowhere")).reload(&unit).expect("reloaded");
-    host(&runner, Path::new("/nowhere")).reload(&SshdUnit::Socket).expect("none");
+    host(&runner, Path::new("/nowhere"))
+        .reload(&unit)
+        .expect("reloaded");
+    host(&runner, Path::new("/nowhere"))
+        .reload(&SshdUnit::Socket)
+        .expect("none");
     assert_eq!(runner.lines(), ["systemctl reload sshd.service"]);
     let failing = Runner::new(|_| out(Some(1), ""));
     assert!(host(&failing, Path::new("/nowhere")).reload(&unit).is_err());
@@ -231,8 +279,13 @@ fn a_reload_is_a_reload() {
 #[test]
 fn the_candidate_is_checked_with_sshd_t() {
     let runner = Runner::new(|_| ok(""));
-    host(&runner, Path::new("/nowhere")).check_config(Path::new("/etc/ssh/hostkeeper/candidate.conf")).expect("valid");
-    assert_eq!(runner.lines(), ["sshd -t -f /etc/ssh/hostkeeper/candidate.conf"]);
+    host(&runner, Path::new("/nowhere"))
+        .check_config(Path::new("/etc/ssh/hostkeeper/candidate.conf"))
+        .expect("valid");
+    assert_eq!(
+        runner.lines(),
+        ["sshd -t -f /etc/ssh/hostkeeper/candidate.conf"]
+    );
     let bad = Runner::new(|_| out(Some(255), ""));
     assert_eq!(
         host(&bad, Path::new("/nowhere")).check_config(Path::new("/c")),
@@ -253,11 +306,19 @@ fn the_effective_configuration_and_groups_are_read_from_sshd_and_id() {
         }
     });
     let host = host(&runner, Path::new("/nowhere"));
-    assert_eq!(host.effective("root").expect("read").first("pubkeyauthentication"), Some("yes"));
+    assert_eq!(
+        host.effective("root")
+            .expect("read")
+            .first("pubkeyauthentication"),
+        Some("yes")
+    );
     assert_eq!(host.groups("root"), ["root", "wheel", "ops"]);
     assert_eq!(
         runner.lines(),
-        ["sshd -T -C user=root,host=localhost,addr=127.0.0.1", "id -Gn root"]
+        [
+            "sshd -T -C user=root,host=localhost,addr=127.0.0.1",
+            "id -Gn root"
+        ]
     );
     let failing = Runner::new(|_| out(Some(1), ""));
     let host = super::SystemHost::new(failing, Tools::linux());
@@ -281,7 +342,8 @@ fn the_banner_check_reads_ssh_from_the_listening_address() {
         (port, server)
     };
     let (port, server) = serve(b"SSH-2.0-OpenSSH_9.6\r\n");
-    host.banner(&("127.0.0.1".to_owned(), port)).expect("a banner");
+    host.banner(&("127.0.0.1".to_owned(), port))
+        .expect("a banner");
     server.join().expect("served");
     let (port, server) = serve(b"HTTP/1.1 400\r\n");
     assert_eq!(
@@ -290,12 +352,20 @@ fn the_banner_check_reads_ssh_from_the_listening_address() {
     );
     server.join().expect("served");
     let (port, server) = serve(b"");
-    assert!(host.banner(&("127.0.0.1".to_owned(), port)).expect_err("no banner").starts_with("no banner"));
+    assert!(
+        host.banner(&("127.0.0.1".to_owned(), port))
+            .expect_err("no banner")
+            .starts_with("no banner")
+    );
     server.join().expect("served");
     let closed = TcpListener::bind("127.0.0.1:0").expect("a listener");
     let port = closed.local_addr().expect("an address").port();
     drop(closed);
-    assert!(host.banner(&("127.0.0.1".to_owned(), port)).expect_err("refused").starts_with("no connection"));
+    assert!(
+        host.banner(&("127.0.0.1".to_owned(), port))
+            .expect_err("refused")
+            .starts_with("no connection")
+    );
     assert_eq!(
         host.banner(&("localhost".to_owned(), 22)),
         Err("the listen address is not an IP address".to_owned())
@@ -315,7 +385,10 @@ fn the_accounts_with_a_key_path_or_a_password_path_are_listed() {
     let dir = scratch("ssh-accounts");
     let etc = dir.path();
     let home = |name: &str| etc.join("home").join(name);
-    write(&home("keyed").join(".ssh/authorized_keys"), "ssh-ed25519 AAAA\n");
+    write(
+        &home("keyed").join(".ssh/authorized_keys"),
+        "ssh-ed25519 AAAA\n",
+    );
     write(&home("empty").join(".ssh/authorized_keys"), "");
     write(
         &etc.join("passwd"),
@@ -343,8 +416,18 @@ fn the_accounts_with_a_key_path_or_a_password_path_are_listed() {
     );
     let runner = Runner::new(|_| ok(""));
     let accounts = host(&runner, etc).accounts();
-    let held: Vec<(&str, bool, bool)> = accounts.iter().map(|a| (a.name.as_str(), a.keyed, a.password)).collect();
-    assert_eq!(held, [("root", false, true), ("keyed", true, false), ("pw", false, true)]);
+    let held: Vec<(&str, bool, bool)> = accounts
+        .iter()
+        .map(|a| (a.name.as_str(), a.keyed, a.password))
+        .collect();
+    assert_eq!(
+        held,
+        [
+            ("root", false, true),
+            ("keyed", true, false),
+            ("pw", false, true)
+        ]
+    );
 }
 
 /// Proves that when the shadow file cannot be read an account with a login shell is taken to have
@@ -352,7 +435,10 @@ fn the_accounts_with_a_key_path_or_a_password_path_are_listed() {
 #[test]
 fn an_unreadable_shadow_file_is_taken_for_passwords() {
     let dir = scratch("ssh-accounts-blind");
-    write(&dir.path().join("passwd"), "pw:x:1002:1002::/nonexistent:/bin/bash\nsvc:x:5:5::/nonexistent:/sbin/nologin\n");
+    write(
+        &dir.path().join("passwd"),
+        "pw:x:1002:1002::/nonexistent:/bin/bash\nsvc:x:5:5::/nonexistent:/sbin/nologin\n",
+    );
     let runner = Runner::new(|_| ok(""));
     let accounts = host(&runner, dir.path()).accounts();
     assert_eq!(accounts.len(), 1);
@@ -368,7 +454,14 @@ fn an_unreadable_shadow_file_is_taken_for_passwords() {
 fn the_host_key_fingerprints_are_read_with_ssh_keygen() {
     let dir = scratch("ssh-fingerprints");
     let ssh = dir.path().join("ssh");
-    for name in ["ssh_host_rsa_key.pub", "ssh_host_ed25519_key.pub", "ssh_host_ecdsa_key.pub", "ssh_host_dsa_key.pub", "ssh_host_ed25519_key", "moduli"] {
+    for name in [
+        "ssh_host_rsa_key.pub",
+        "ssh_host_ed25519_key.pub",
+        "ssh_host_ecdsa_key.pub",
+        "ssh_host_dsa_key.pub",
+        "ssh_host_ed25519_key",
+        "moduli",
+    ] {
         write(&ssh.join(name), "x");
     }
     let runner = Runner::new(|argv| {
@@ -383,9 +476,16 @@ fn the_host_key_fingerprints_are_read_with_ssh_keygen() {
             out(Some(1), "")
         }
     });
-    assert_eq!(host(&runner, dir.path()).host_key_fingerprints(), ["SHA256:eee", "SHA256:rrr"]);
+    assert_eq!(
+        host(&runner, dir.path()).host_key_fingerprints(),
+        ["SHA256:eee", "SHA256:rrr"]
+    );
     let none = scratch("ssh-fingerprints-none");
-    assert!(host(&runner, none.path()).host_key_fingerprints().is_empty());
+    assert!(
+        host(&runner, none.path())
+            .host_key_fingerprints()
+            .is_empty()
+    );
 }
 
 /// A process port that plays `ssh-keygen -k`: it writes the list the `-f` argument names and keeps
@@ -414,10 +514,16 @@ fn revoked_serials_are_made_into_a_list_with_ssh_keygen() {
     let dir = scratch("ssh-krl");
     let runner = keygen(None);
     let host = host(&runner, dir.path());
-    assert_eq!(host.revocations(&["ssh-ed25519 AAAA".to_owned()], &[]), Ok(Vec::new()));
+    assert_eq!(
+        host.revocations(&["ssh-ed25519 AAAA".to_owned()], &[]),
+        Ok(Vec::new())
+    );
     assert!(runner.lines().is_empty());
     let made = host
-        .revocations(&["ssh-ed25519 AAAA".to_owned(), "ssh-ed25519 BBBB".to_owned()], &[3, 9])
+        .revocations(
+            &["ssh-ed25519 AAAA".to_owned(), "ssh-ed25519 BBBB".to_owned()],
+            &[3, 9],
+        )
         .expect("a list");
     assert_eq!(
         String::from_utf8(made).expect("text"),
@@ -425,7 +531,11 @@ fn revoked_serials_are_made_into_a_list_with_ssh_keygen() {
     );
     let lines = runner.lines();
     assert_eq!(lines.len(), 2);
-    assert!(lines[0].starts_with("ssh-keygen -k -f ") && !lines[0].contains(" -u "), "{}", lines[0]);
+    assert!(
+        lines[0].starts_with("ssh-keygen -k -f ") && !lines[0].contains(" -u "),
+        "{}",
+        lines[0]
+    );
     assert!(lines[1].starts_with("ssh-keygen -k -u -f "), "{}", lines[1]);
     assert!(!dir.path().join("krl-work").exists());
 }
@@ -444,11 +554,21 @@ fn a_list_that_cannot_be_made_is_an_error() {
     assert!(!dir.path().join("krl-work").exists());
 
     let silent = Runner::new(|_| ok(""));
-    assert!(host(&silent, dir.path()).revocations(&ca, &[1]).expect_err("no list").starts_with("the revocation list"));
+    assert!(
+        host(&silent, dir.path())
+            .revocations(&ca, &[1])
+            .expect_err("no list")
+            .starts_with("the revocation list")
+    );
 
     let blocked = scratch("ssh-krl-blocked");
     fs::write(blocked.path().join("krl-work"), "a file").expect("a file");
-    assert!(host(&silent, blocked.path()).revocations(&ca, &[1]).expect_err("no directory").starts_with("the work directory"));
+    assert!(
+        host(&silent, blocked.path())
+            .revocations(&ca, &[1])
+            .expect_err("no directory")
+            .starts_with("the work directory")
+    );
 }
 
 /// Proves the real host's places are those of a Linux host.

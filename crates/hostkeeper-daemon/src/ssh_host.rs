@@ -249,7 +249,8 @@ impl SshHost for SystemHost {
 
     fn check_config(&self, candidate: &Path) -> Result<(), String> {
         let path = candidate.display().to_string();
-        self.succeed(&self.tools.sshd, &["-t", "-f", path.as_str()]).map(drop)
+        self.succeed(&self.tools.sshd, &["-t", "-f", path.as_str()])
+            .map(drop)
     }
 
     fn effective(&self, user: &str) -> Result<Effective, String> {
@@ -348,10 +349,18 @@ impl SshHost for SystemHost {
 
 impl SystemHost {
     /// The binary list of `serials` revoked under each of `ca_keys`, built in `work`.
-    fn build_list(&self, work: &Path, ca_keys: &[String], serials: &[u64]) -> Result<Vec<u8>, String> {
+    fn build_list(
+        &self,
+        work: &Path,
+        ca_keys: &[String],
+        serials: &[u64],
+    ) -> Result<Vec<u8>, String> {
         let io = |what: &'static str| move |e: std::io::Error| format!("{what}: {e}");
         fs::create_dir_all(work).map_err(io("the work directory"))?;
-        let spec: String = serials.iter().map(|serial| format!("serial: {serial}\n")).collect();
+        let spec: String = serials
+            .iter()
+            .map(|serial| format!("serial: {serial}\n"))
+            .collect();
         let spec_path = work.join("spec");
         fs::write(&spec_path, spec).map_err(io("the revocation spec"))?;
         let list = work.join("krl");
@@ -367,7 +376,13 @@ impl SystemHost {
             if at > 0 {
                 args.push("-u");
             }
-            args.extend(["-f", list_arg.as_str(), "-s", ca_arg.as_str(), spec_arg.as_str()]);
+            args.extend([
+                "-f",
+                list_arg.as_str(),
+                "-s",
+                ca_arg.as_str(),
+                spec_arg.as_str(),
+            ]);
             self.succeed(&self.tools.ssh_keygen, &args)?;
         }
         fs::read(&list).map_err(io("the revocation list"))

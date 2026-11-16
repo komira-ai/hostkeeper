@@ -57,9 +57,13 @@ fn the_parse_keeps_each_keywords_words_in_order() {
 fn the_auth_settings_name_every_keyword_of_the_rule() {
     let settings = Effective::parse(STOCK).auth_settings();
     assert_eq!(settings.len(), AUTH_KEYWORDS.len());
-    assert_eq!(settings["pubkeyauthentication"], vec![vec!["yes".to_owned()]]);
+    assert_eq!(
+        settings["pubkeyauthentication"],
+        vec![vec!["yes".to_owned()]]
+    );
     assert!(settings["allowusers"].is_empty());
-    let changed = Effective::parse(&STOCK.replace("passwordauthentication yes", "passwordauthentication no"));
+    let changed =
+        Effective::parse(&STOCK.replace("passwordauthentication yes", "passwordauthentication no"));
     assert_ne!(changed.auth_settings(), settings);
 }
 
@@ -72,14 +76,26 @@ fn the_listening_address_is_one_a_connection_reaches() {
     assert_eq!(at(""), ("127.0.0.1".to_owned(), 22));
     assert_eq!(at("port 2222\n"), ("127.0.0.1".to_owned(), 2222));
     assert_eq!(at("port x\n"), ("127.0.0.1".to_owned(), 22));
-    assert_eq!(at("port 22\nlistenaddress 0.0.0.0:2200\n"), ("127.0.0.1".to_owned(), 2200));
-    assert_eq!(at("port 2222\nlistenaddress 10.1.2.3\n"), ("10.1.2.3".to_owned(), 2222));
+    assert_eq!(
+        at("port 22\nlistenaddress 0.0.0.0:2200\n"),
+        ("127.0.0.1".to_owned(), 2200)
+    );
+    assert_eq!(
+        at("port 2222\nlistenaddress 10.1.2.3\n"),
+        ("10.1.2.3".to_owned(), 2222)
+    );
     assert_eq!(at("listenaddress [::]:22\n"), ("::1".to_owned(), 22));
-    assert_eq!(at("listenaddress [fe80::1]:2200\n"), ("fe80::1".to_owned(), 2200));
+    assert_eq!(
+        at("listenaddress [fe80::1]:2200\n"),
+        ("fe80::1".to_owned(), 2200)
+    );
     assert_eq!(at("listenaddress [fe80::1]\n"), ("fe80::1".to_owned(), 22));
     assert_eq!(at("listenaddress [fe80::1\n"), ("fe80::1".to_owned(), 22));
     assert_eq!(at("listenaddress fe80::1\n"), ("fe80::1".to_owned(), 22));
-    assert_eq!(at("listenaddress 10.0.0.9:x\n"), ("10.0.0.9".to_owned(), 22));
+    assert_eq!(
+        at("listenaddress 10.0.0.9:x\n"),
+        ("10.0.0.9".to_owned(), 22)
+    );
     assert_eq!(at("listenaddress :22\n"), ("127.0.0.1".to_owned(), 22));
 }
 
@@ -101,13 +117,22 @@ fn the_allow_and_deny_lists_say_who_is_kept_out() {
     assert_eq!(allow_user.excluded("alicex", &[]), Some("allowusers"));
 
     let deny_group = Effective::parse("denygroups wheel\n");
-    assert_eq!(deny_group.excluded("root", &groups(&["staff", "wheel"])), Some("denygroups"));
+    assert_eq!(
+        deny_group.excluded("root", &groups(&["staff", "wheel"])),
+        Some("denygroups")
+    );
     assert_eq!(deny_group.excluded("root", &groups(&["staff"])), None);
 
     let allow_group = Effective::parse("allowgroups ops\n");
-    assert_eq!(allow_group.excluded("root", &groups(&["staff"])), Some("allowgroups"));
+    assert_eq!(
+        allow_group.excluded("root", &groups(&["staff"])),
+        Some("allowgroups")
+    );
     assert_eq!(allow_group.excluded("root", &[]), Some("allowgroups"));
-    assert_eq!(allow_group.excluded("root", &groups(&["staff", "ops"])), None);
+    assert_eq!(
+        allow_group.excluded("root", &groups(&["staff", "ops"])),
+        None
+    );
 }
 
 /// Proves a certificate alone logs a user in under the stock settings, and each setting that
@@ -118,17 +143,37 @@ fn the_allow_and_deny_lists_say_who_is_kept_out() {
 fn a_certificate_login_needs_public_keys_alone_and_root_login_for_root() {
     let ok = |text: &str, user: &str| Effective::parse(text).cert_login(user, None);
     assert_eq!(ok(STOCK, "root"), Ok(()));
-    assert_eq!(ok(&STOCK.replace("yes\nauth", "no\nauth"), "root"), Err(Failing("pubkeyauthentication")));
-    assert_eq!(ok("port 22\n", "root"), Err(Failing("pubkeyauthentication")));
-    let methods = |value: &str| STOCK.replace("authenticationmethods any", &format!("authenticationmethods {value}"));
-    assert_eq!(ok(&methods("publickey,password"), "root"), Err(Failing("authenticationmethods")));
+    assert_eq!(
+        ok(&STOCK.replace("yes\nauth", "no\nauth"), "root"),
+        Err(Failing("pubkeyauthentication"))
+    );
+    assert_eq!(
+        ok("port 22\n", "root"),
+        Err(Failing("pubkeyauthentication"))
+    );
+    let methods = |value: &str| {
+        STOCK.replace(
+            "authenticationmethods any",
+            &format!("authenticationmethods {value}"),
+        )
+    };
+    assert_eq!(
+        ok(&methods("publickey,password"), "root"),
+        Err(Failing("authenticationmethods"))
+    );
     assert_eq!(ok(&methods("publickey,password publickey"), "root"), Ok(()));
-    assert_eq!(ok(&methods("password"), "root"), Err(Failing("authenticationmethods")));
+    assert_eq!(
+        ok(&methods("password"), "root"),
+        Err(Failing("authenticationmethods"))
+    );
     let root = |value: &str| STOCK.replace("prohibit-password", value);
     assert_eq!(ok(&root("yes"), "root"), Ok(()));
     assert_eq!(ok(&root("without-password"), "root"), Ok(()));
     assert_eq!(ok(&root("no"), "root"), Err(Failing("permitrootlogin")));
-    assert_eq!(ok(&root("forced-commands-only"), "root"), Err(Failing("permitrootlogin")));
+    assert_eq!(
+        ok(&root("forced-commands-only"), "root"),
+        Err(Failing("permitrootlogin"))
+    );
     assert_eq!(ok(&root("no"), "deploy"), Ok(()));
 }
 
@@ -149,7 +194,8 @@ fn the_trust_files_are_ours_only_when_each_keyword_carries_our_path() {
         Effective::parse(STOCK).cert_login("root", Some(&ours)),
         Err(Failing("trustedusercakeys"))
     );
-    let other_ca = STOCK.to_owned() + "trustedusercakeys /etc/ssh/other.pub\nauthorizedprincipalsfile /etc/ssh/hostkeeper/principals.%u\nrevokedkeys /etc/ssh/hostkeeper/revoked\n";
+    let other_ca = STOCK.to_owned()
+        + "trustedusercakeys /etc/ssh/other.pub\nauthorizedprincipalsfile /etc/ssh/hostkeeper/principals.%u\nrevokedkeys /etc/ssh/hostkeeper/revoked\n";
     assert_eq!(
         Effective::parse(&other_ca).cert_login("root", Some(&ours)),
         Err(Failing("trustedusercakeys"))
@@ -169,10 +215,18 @@ fn the_trust_files_are_ours_only_when_each_keyword_carries_our_path() {
 /// Proves only the three trust keywords are read as shadowed.
 #[test]
 fn only_the_trust_keywords_are_shadowed() {
-    for keyword in ["trustedusercakeys", "authorizedprincipalsfile", "revokedkeys"] {
+    for keyword in [
+        "trustedusercakeys",
+        "authorizedprincipalsfile",
+        "revokedkeys",
+    ] {
         assert!(Failing(keyword).is_shadowed(), "{keyword}");
     }
-    for keyword in ["pubkeyauthentication", "authenticationmethods", "permitrootlogin"] {
+    for keyword in [
+        "pubkeyauthentication",
+        "authenticationmethods",
+        "permitrootlogin",
+    ] {
         assert!(!Failing(keyword).is_shadowed(), "{keyword}");
     }
 }

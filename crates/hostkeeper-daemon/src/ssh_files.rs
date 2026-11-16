@@ -227,7 +227,10 @@ pub fn render_drop_in(paths: &SshPaths, passwords_off: bool) -> Vec<u8> {
 /// The bytes of the CA keys file.
 #[must_use]
 pub fn render_ca_keys(keys: &[String]) -> Vec<u8> {
-    keys.iter().map(|key| format!("{key}\n")).collect::<String>().into_bytes()
+    keys.iter()
+        .map(|key| format!("{key}\n"))
+        .collect::<String>()
+        .into_bytes()
 }
 
 /// The files a plan wants, by path.
@@ -375,7 +378,12 @@ pub fn install(paths: &SshPaths, wanted: &Wanted, owner: u32) -> Result<bool, St
 /// # Errors
 /// The first path that could not be removed.
 pub fn uninstall(paths: &SshPaths) -> Result<bool, String> {
-    let mut every = vec![paths.drop_in(), paths.ca_keys(), paths.revoked(), paths.candidate()];
+    let mut every = vec![
+        paths.drop_in(),
+        paths.ca_keys(),
+        paths.revoked(),
+        paths.candidate(),
+    ];
     every.extend(other_principals(paths, None));
     let mut changed = false;
     for path in every {

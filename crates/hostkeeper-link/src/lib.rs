@@ -91,7 +91,7 @@ pub use pki::PkiCertSource;
 pub use ports::{
     CertSource, CertState, ClientIdentity, ClockSleeper, CoordinatorLink, Dispatch, Drift,
     FactsSink, HeldHalts, Job, LinkError, Log, Observation, OrderSink, RecordedService,
-    RenewalSource, ReplyFault, RepositorySink, ServiceObserver, ServiceRecords, Sleeper, SshSink, StopFlag,
-    ThreadDispatch, Tick, TrustFault, TrustedRootSource, UnixClock, Unsendable,
+    RenewalSource, ReplyFault, RepositorySink, ServiceObserver, ServiceRecords, Sleeper, SshSink,
+    StopFlag, ThreadDispatch, Tick, TrustFault, TrustedRootSource, UnixClock, Unsendable,
 };
 pub use repositories::{MAX_REFUSAL_REASON, PushedSet, RepositoriesReport, RepositoryRefusal};

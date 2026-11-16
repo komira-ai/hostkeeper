@@ -54,7 +54,8 @@ fn a_good_record_is_a_plan() {
     off.password_auth = "anything else".to_owned();
     assert!(!super::plan(&off).expect("a plan").passwords_off);
     let mut two = access();
-    two.ca_public_keys.push("ecdsa-sha2-nistp256 AAAAE2VjZHNh".to_owned());
+    two.ca_public_keys
+        .push("ecdsa-sha2-nistp256 AAAAE2VjZHNh".to_owned());
     assert_eq!(super::plan(&two).expect("a plan").ca_keys.len(), 2);
 }
 
@@ -80,7 +81,15 @@ fn a_record_that_cannot_be_written_safely_is_refused_with_its_field() {
             "{user:?}"
         );
     }
-    for principal in ["", "hk-host-", "root", "hk-host-a b", "hk-host-a\nb", "hk-host--x", "hk-host-../x"] {
+    for principal in [
+        "",
+        "hk-host-",
+        "root",
+        "hk-host-a b",
+        "hk-host-a\nb",
+        "hk-host--x",
+        "hk-host-../x",
+    ] {
         assert_eq!(
             refused(&|a| a.principal = principal.to_owned()),
             Refused::new(SshState::ConfigInvalid, "principal"),
@@ -89,14 +98,26 @@ fn a_record_that_cannot_be_written_safely_is_refused_with_its_field() {
     }
     let keys = Refused::new(SshState::ConfigInvalid, "ca_public_keys");
     assert_eq!(refused(&|a| a.ca_public_keys.clear()), keys);
-    assert_eq!(refused(&|a| a.ca_public_keys = vec![ED.to_owned(); 3]), keys);
-    assert_eq!(refused(&|a| a.ca_public_keys = vec!["ssh-dss AAAA".to_owned()]), keys);
+    assert_eq!(
+        refused(&|a| a.ca_public_keys = vec![ED.to_owned(); 3]),
+        keys
+    );
+    assert_eq!(
+        refused(&|a| a.ca_public_keys = vec!["ssh-dss AAAA".to_owned()]),
+        keys
+    );
     assert_eq!(
         refused(&|a| a.ca_public_keys = vec![format!("command=\"x\" {ED}")]),
         keys
     );
-    assert_eq!(refused(&|a| a.ca_public_keys = vec!["ssh-ed25519 AA;AA".to_owned()]), keys);
-    assert_eq!(refused(&|a| a.ca_public_keys = vec!["ssh-ed25519".to_owned()]), keys);
+    assert_eq!(
+        refused(&|a| a.ca_public_keys = vec!["ssh-ed25519 AA;AA".to_owned()]),
+        keys
+    );
+    assert_eq!(
+        refused(&|a| a.ca_public_keys = vec!["ssh-ed25519".to_owned()]),
+        keys
+    );
     assert_eq!(refused(&|a| a.ca_public_keys = vec![String::new()]), keys);
 }
 
@@ -118,7 +139,10 @@ fn the_drop_in_sets_the_three_trust_keywords_and_passwords_only_on_request() {
         )
     );
     let off = String::from_utf8(render_drop_in(&paths, true)).expect("text");
-    assert_eq!(off, keep + "PasswordAuthentication no\nKbdInteractiveAuthentication no\n");
+    assert_eq!(
+        off,
+        keep + "PasswordAuthentication no\nKbdInteractiveAuthentication no\n"
+    );
     assert!(!off.contains("Match"));
     assert_eq!(
         String::from_utf8(render_ca_keys(&["a b".to_owned(), "c d".to_owned()])).expect("text"),
@@ -132,17 +156,35 @@ fn the_drop_in_sets_the_three_trust_keywords_and_passwords_only_on_request() {
 #[test]
 fn the_wanted_files_and_the_names_of_the_states() {
     let paths = SshPaths::linux();
-    assert_eq!(paths.drop_in(), Path::new("/etc/ssh/sshd_config.d/10-hostkeeper.conf"));
-    assert_eq!(paths.ca_keys(), Path::new("/etc/ssh/hostkeeper/user_ca.pub"));
+    assert_eq!(
+        paths.drop_in(),
+        Path::new("/etc/ssh/sshd_config.d/10-hostkeeper.conf")
+    );
+    assert_eq!(
+        paths.ca_keys(),
+        Path::new("/etc/ssh/hostkeeper/user_ca.pub")
+    );
     assert_eq!(paths.revoked(), Path::new("/etc/ssh/hostkeeper/revoked"));
-    assert_eq!(paths.principals("root"), Path::new("/etc/ssh/hostkeeper/principals.root"));
-    assert_eq!(paths.candidate(), Path::new("/etc/ssh/hostkeeper/candidate.conf"));
-    assert_eq!(paths.principals_template(), "/etc/ssh/hostkeeper/principals.%u");
+    assert_eq!(
+        paths.principals("root"),
+        Path::new("/etc/ssh/hostkeeper/principals.root")
+    );
+    assert_eq!(
+        paths.candidate(),
+        Path::new("/etc/ssh/hostkeeper/candidate.conf")
+    );
+    assert_eq!(
+        paths.principals_template(),
+        "/etc/ssh/hostkeeper/principals.%u"
+    );
 
     let plan = plan(&access()).expect("a plan");
     let without = wanted(&paths, &plan, None);
     assert_eq!(without.files.len(), 3);
-    assert_eq!(without.files[2], (paths.principals("root"), b"hk-host-web-04\n".to_vec()));
+    assert_eq!(
+        without.files[2],
+        (paths.principals("root"), b"hk-host-web-04\n".to_vec())
+    );
     let with = wanted(&paths, &plan, Some(b"list".to_vec()));
     assert_eq!(with.files[3], (paths.revoked(), b"list".to_vec()));
 
@@ -196,7 +238,10 @@ fn install_writes_the_files_once() {
     assert!(install(&paths, &files, me()).expect("installed"));
     for (path, bytes) in &files.files {
         assert_eq!(&fs::read(path).expect("a file"), bytes);
-        assert_eq!(fs::metadata(path).expect("metadata").permissions().mode() & 0o7777, 0o644);
+        assert_eq!(
+            fs::metadata(path).expect("metadata").permissions().mode() & 0o7777,
+            0o644
+        );
     }
     assert!(!install(&paths, &files, me()).expect("installed"));
     let without_list = wanted(&paths, &plan(&access()).expect("a plan"), None);
@@ -220,7 +265,10 @@ fn install_removes_the_principals_of_other_accounts() {
     assert!(install(&paths, &files, me()).expect("installed"));
     assert!(!paths.principals("alice").exists());
     assert!(paths.principals("root").exists());
-    assert!(paths.own_dir.join("notes").exists(), "only principals.* files are removed");
+    assert!(
+        paths.own_dir.join("notes").exists(),
+        "only principals.* files are removed"
+    );
     assert!(!install(&paths, &files, me()).expect("installed"));
 }
 
@@ -236,7 +284,8 @@ fn an_install_that_fails_names_the_path() {
 
     let other = scratch("ssh-install-stale");
     let (paths, files) = installed(&other);
-    fs::create_dir_all(paths.principals("alice").join("inside")).expect("a directory named like a file");
+    fs::create_dir_all(paths.principals("alice").join("inside"))
+        .expect("a directory named like a file");
     let why = install(&paths, &files, me()).expect_err("not removed");
     assert!(why.contains("principals.alice"), "{why}");
 
@@ -261,9 +310,15 @@ fn a_snapshot_puts_the_files_back() {
     fs::remove_file(paths.principals("alice")).expect("a removal");
     fs::write(paths.principals("bob"), "hk-host-new\n").expect("a new file");
     snapshot.restore(me(), &paths).expect("restored");
-    assert_eq!(fs::read(paths.ca_keys()).expect("a file"), render_ca_keys(&plan(&access()).expect("a plan").ca_keys));
+    assert_eq!(
+        fs::read(paths.ca_keys()).expect("a file"),
+        render_ca_keys(&plan(&access()).expect("a plan").ca_keys)
+    );
     assert_eq!(fs::read(paths.revoked()).expect("a file"), b"list");
-    assert_eq!(fs::read(paths.principals("alice")).expect("a file"), b"hk-host-old\n");
+    assert_eq!(
+        fs::read(paths.principals("alice")).expect("a file"),
+        b"hk-host-old\n"
+    );
     assert!(!paths.principals("bob").exists());
 
     let empty = scratch("ssh-snapshot-empty");
@@ -271,7 +326,11 @@ fn a_snapshot_puts_the_files_back() {
     let snapshot = Snapshot::of(&paths);
     install(&paths, &installed(&empty).1, me()).expect("installed");
     snapshot.restore(me(), &paths).expect("restored");
-    assert!(!paths.drop_in().exists() && !paths.ca_keys().exists() && !paths.principals("root").exists());
+    assert!(
+        !paths.drop_in().exists()
+            && !paths.ca_keys().exists()
+            && !paths.principals("root").exists()
+    );
 }
 
 /// Proves a file that cannot be put back, and a run's file that cannot be removed, are named in
@@ -288,7 +347,10 @@ fn a_restore_that_fails_names_the_paths_and_restores_the_rest() {
     fs::create_dir_all(paths.principals("bob").join("inside")).expect("a directory the run made");
     let why = snapshot.restore(me(), &paths).expect_err("not restored");
     assert!(why.starts_with("not restored: "), "{why}");
-    assert!(why.contains("user_ca.pub") && why.contains("principals.bob"), "{why}");
+    assert!(
+        why.contains("user_ca.pub") && why.contains("principals.bob"),
+        "{why}"
+    );
     assert!(paths.drop_in().is_file(), "the others are put back");
 }
 
@@ -310,7 +372,10 @@ fn uninstall_removes_every_file_of_the_setup() {
     install(&paths, &files, me()).expect("installed");
     fs::write(paths.own_dir.join("notes"), "mine").expect("an unrelated file");
     assert!(uninstall(&paths).expect("removed"));
-    assert!(paths.own_dir.join("notes").exists(), "a directory with a file of someone else's stays");
+    assert!(
+        paths.own_dir.join("notes").exists(),
+        "a directory with a file of someone else's stays"
+    );
 }
 
 /// Proves an uninstall that cannot remove a path says which.

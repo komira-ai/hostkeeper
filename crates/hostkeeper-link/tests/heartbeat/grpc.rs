@@ -226,6 +226,7 @@ fn expected_reply() -> Reply {
         acknowledged: Vec::new(),
         repositories: None,
         facts: None,
+        ssh: None,
     }
 }
 

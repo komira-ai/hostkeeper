@@ -3,9 +3,7 @@
 //! nothing the order of the same reply does.
 
 use hostkeeper_link::testing::World;
-use hostkeeper_link::{
-    ANNOUNCED, Feature, PASSWORD_KEEP, PushedSsh, Reply, SSH, SshReport,
-};
+use hostkeeper_link::{ANNOUNCED, Feature, PASSWORD_KEEP, PushedSsh, Reply, SSH, SshReport};
 
 use crate::{Rig, recorded, reply, update};
 
