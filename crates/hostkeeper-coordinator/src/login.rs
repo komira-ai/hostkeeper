@@ -24,7 +24,9 @@ use crate::enrollment::Random;
 use crate::password::{
     HashSlots, PasswordError, PasswordSettings, Passwords, PolicyError, StoredHash, Verdict,
 };
-use crate::session::{LimiterSettings, LoginLimiter, SessionSettings, SessionView, Sessions};
+use crate::session::{
+    LimiterSettings, LoginLimiter, LoginRows, SessionSettings, SessionView, Sessions,
+};
 
 /// The name of the session cookie. The `__Host-` prefix makes a browser refuse the cookie unless
 /// it came over a secure connection with `Path=/` and no `Domain`.
@@ -114,6 +116,15 @@ impl Login {
             #[cfg(test)]
             checked: std::sync::Mutex::new(None),
         })
+    }
+
+    /// The sign-in with its sessions and failure counts in `rows`, shared with every coordinator
+    /// that is given the same rows, instead of in this one's memory.
+    #[must_use]
+    pub(crate) fn with_rows(mut self, rows: Arc<dyn LoginRows>) -> Self {
+        self.sessions = self.sessions.over(Arc::clone(&rows));
+        self.limiter = self.limiter.over(rows);
+        self
     }
 
     /// From now on, `hook` runs each time a password has been hashed and what it decides is about

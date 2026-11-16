@@ -246,6 +246,9 @@ pub struct Coordinator {
     /// The sessions, the limiter and the passwords of the sign-in ([`crate::login`]); none: the
     /// sign-in routes are not served and no cookie is read.
     login: Option<crate::login::Login>,
+    /// Which periodic jobs this coordinator runs, when coordinators share a database
+    /// ([`crate::store::Claims`]); none: every job is this coordinator's.
+    claims: Option<Arc<dyn crate::store::Claims>>,
     verifier: Arc<Verifier>,
     /// The trusted publishers the allow-list file stands for, per package
     /// ([`crate::trusted_publishers`]): a package's entries until the state holds its own.
@@ -321,6 +324,7 @@ impl Coordinator {
             layout: LayoutStore::volatile(),
             initial_admin: None,
             login: None,
+            claims: None,
             verifier,
             listed_publishers: std::collections::BTreeMap::new(),
             tokens: operator.into(),
@@ -340,6 +344,18 @@ impl Coordinator {
             #[cfg(test)]
             set_waits: Mutex::new(None),
         }
+    }
+
+    /// The same coordinator whose periodic jobs are the ones `claims` says are its own.
+    #[must_use]
+    pub(crate) fn with_claims(mut self, claims: Arc<dyn crate::store::Claims>) -> Self {
+        self.claims = Some(claims);
+        self
+    }
+
+    /// Which periodic jobs this coordinator runs, when it shares a database.
+    pub(crate) fn claims(&self) -> Option<Arc<dyn crate::store::Claims>> {
+        self.claims.clone()
     }
 
     /// The same coordinator over `services` instead of none.

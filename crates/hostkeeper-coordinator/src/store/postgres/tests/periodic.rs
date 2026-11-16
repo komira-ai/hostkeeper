@@ -51,7 +51,8 @@ fn of_several_coordinators_one_claims_a_due_job_for_the_period() {
                     let start = &start;
                     scope.spawn(move || {
                         start.wait();
-                        claim(session, now, &format!("i{who}")).expect("claims")
+                        claim(session, now, &format!("i{who}"), &["alerts", "prune"])
+                            .expect("claims")
                     })
                 })
                 .collect();
@@ -64,7 +65,7 @@ fn of_several_coordinators_one_claims_a_due_job_for_the_period() {
         assert_eq!(winners.len(), 1, "round {round}: {claimed:?}");
         assert_eq!(winners[0], &vec!["alerts".to_owned()]);
         assert_eq!(
-            claim(&mut setup, now + 14, "late").expect("claims"),
+            claim(&mut setup, now + 14, "late", &["alerts", "prune"]).expect("claims"),
             Vec::<String>::new(),
             "not due again inside the period"
         );
@@ -91,12 +92,18 @@ fn jobs_due_together_are_claimed_together_and_a_seed_keeps_the_due_time() {
     let s = &mut sessions[0];
     seed(s, "a", 10, 100).expect("seeded");
     seed(s, "b", 20, 100).expect("seeded");
-    let mut got = claim(s, 100, "i0").expect("claims");
+    let mut got = claim(s, 100, "i0", &["a", "b"]).expect("claims");
     got.sort();
     assert_eq!(got, vec!["a".to_owned(), "b".to_owned()]);
     seed(s, "a", 30, 0).expect("seeded again");
-    assert_eq!(claim(s, 105, "i0").expect("claims"), Vec::<String>::new());
-    assert_eq!(claim(s, 110, "i0").expect("claims"), vec!["a".to_owned()]);
+    assert_eq!(
+        claim(s, 105, "i0", &["a", "b"]).expect("claims"),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        claim(s, 110, "i0", &["a", "b"]).expect("claims"),
+        vec!["a".to_owned()]
+    );
     assert_eq!(
         db.rows("SELECT name, next_run_unix FROM periodic_jobs ORDER BY name"),
         vec![
@@ -104,4 +111,49 @@ fn jobs_due_together_are_claimed_together_and_a_seed_keeps_the_due_time() {
             vec![Some("b".into()), Some("120".into())]
         ]
     );
+}
+
+/// Proves: the coordinators that find the periodic job `expire_requests` due through [`PgClaims`]
+/// (the claims the coordinator's tick is given) are told yes once between them for the period,
+/// whichever of them asks first, and not again in the period; a job that was never seeded is
+/// nobody's; a coordinator whose rows cannot be reached is told no.
+///
+/// Catches: coordinators that each run the job every tick, and a claim that is lost when the
+/// coordinator that took it does not ask again.
+#[test]
+fn coordinators_over_one_database_are_told_yes_once_a_period() {
+    use crate::store::Claims;
+    use crate::store::postgres::periodic::PgClaims;
+
+    let db = TestDatabase::new();
+    let (first, second) = {
+        let (a, b) = (db.dsn(), db.dsn());
+        super::off_runtime(move || {
+            (
+                TestDatabase::open_dsn(&a, "first").expect("opens").0,
+                TestDatabase::open_dsn(&b, "second").expect("opens").0,
+            )
+        })
+    };
+    let jobs = [("expire_requests", 3600)];
+    let past = 1;
+    let one = PgClaims::start(first.clone(), "one", &jobs, past).expect("seeded");
+    let two = PgClaims::start(second, "two", &jobs, past).expect("seeded");
+    let barrier = Barrier::new(2);
+    let told: Vec<bool> = std::thread::scope(|scope| {
+        let ask = |claims: Arc<PgClaims>| {
+            let barrier = &barrier;
+            scope.spawn(move || {
+                barrier.wait();
+                claims.claimed("expire_requests")
+            })
+        };
+        let (a, b) = (ask(Arc::clone(&one)), ask(Arc::clone(&two)));
+        vec![a.join().expect("asked"), b.join().expect("asked")]
+    });
+    assert_eq!(told.iter().filter(|yes| **yes).count(), 1, "{told:?}");
+    assert!(!one.claimed("expire_requests") && !two.claimed("expire_requests"));
+    assert!(!one.claimed("never_seeded"));
+    first.stop();
+    assert!(!one.claimed("expire_requests"), "a claim not made is no");
 }

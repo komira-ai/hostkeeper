@@ -552,6 +552,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         marker,
         held,
         records,
+        database,
     } = state::open_store(flags, legacy, lock, &oidc_clock)?;
     let verifier = Verifier::new(
         oidc.clone(),
@@ -599,7 +600,8 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
             flags.repository_descriptor_max_bytes,
         );
     coordinator = state::with_initial_admin(coordinator, flags)?;
-    coordinator = state::with_login(coordinator, flags)?;
+    coordinator = state::with_login(coordinator, flags, database.as_ref())?;
+    coordinator = state::with_claims(coordinator, flags, database.as_ref())?;
     let store = match (&flags.enrollment_dir, records) {
         (Some(dir), _) => Some(StoreAt::Dir(dir)),
         (None, Some(records)) => Some(StoreAt::Records(records)),
@@ -792,6 +794,7 @@ where
         vec![parts.heartbeat_tls, parts.control_tls],
         tokens,
         parts.reload,
+        coordinator.claims(),
     );
     let all = together(
         together(serving, serving_lan),

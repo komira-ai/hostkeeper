@@ -30,9 +30,9 @@ mod fleet_rows;
 mod generations;
 mod groups;
 mod layout;
-mod login_rows;
+pub(crate) mod login_rows;
 pub(crate) mod migrate;
-mod periodic;
+pub(crate) mod periodic;
 mod records;
 mod releases;
 mod repositories;
@@ -100,11 +100,14 @@ impl From<Fail> for DatabaseError {
     }
 }
 
-/// The read-only session, made when a read first needs it and again after it is lost.
+/// A session made when a call first needs it and again after it is lost: the read-only one of
+/// the reads, and the one of the shared rows (the sessions of the login and the counts of its
+/// limiter), which may write and holds no lock of the store's.
 struct Reader {
     config: postgres::Config,
     statements: Arc<AtomicU64>,
     session: Option<Session>,
+    read_only: bool,
 }
 
 impl Reader {
@@ -114,12 +117,11 @@ impl Reader {
     ) -> Result<R, String> {
         let session = match self.session.take() {
             Some(session) => session,
-            None => Session::connect(&self.config, Arc::clone(&self.statements), true).map_err(
-                |fail| match fail {
+            None => Session::connect(&self.config, Arc::clone(&self.statements), self.read_only)
+                .map_err(|fail| match fail {
                     Fail::Pg(e) => describe(&e),
                     Fail::Refused(why) => why,
-                },
-            )?,
+                })?,
         };
         let session = self.session.insert(session);
         read(session).map_err(|e| {
@@ -238,6 +240,7 @@ impl Landing {
 struct Inner {
     writer: Worker<Writer>,
     reader: Worker<Reader>,
+    shared: Worker<Reader>,
     link: Arc<Link>,
     #[cfg(test)]
     statements: Arc<AtomicU64>,
@@ -453,9 +456,20 @@ impl Postgres {
             reader: Worker::spawn(
                 "hk-store-reader",
                 Reader {
+                    config: config.clone(),
+                    statements: Arc::clone(&statements),
+                    session: None,
+                    read_only: true,
+                },
+            )
+            .map_err(spawned)?,
+            shared: Worker::spawn(
+                "hk-store-shared",
+                Reader {
                     config,
                     statements: Arc::clone(&statements),
                     session: None,
+                    read_only: false,
                 },
             )
             .map_err(spawned)?,
@@ -522,6 +536,22 @@ impl Postgres {
             .unwrap_or_else(|| Err("the reading session stopped".to_owned()))
     }
 
+    /// Runs `body` on the session of the shared rows, which writes: what the rows that every
+    /// coordinator reads and writes as ordinary transactions go through. The session is made when
+    /// first needed and again after it is lost.
+    ///
+    /// # Errors
+    /// What the session or the server said.
+    pub(crate) fn shared<R: Send + 'static>(
+        &self,
+        body: impl FnOnce(&mut Session) -> Result<R, postgres::Error> + Send + 'static,
+    ) -> Result<R, String> {
+        self.inner
+            .shared
+            .call(move |rows| rows.run(body))
+            .unwrap_or_else(|| Err("the shared rows' session stopped".to_owned()))
+    }
+
     /// Whether the writing session is up with no commit's outcome unknown: when what the tables
     /// hold is what this coordinator committed.
     pub(crate) fn settled_up(&self) -> bool {
@@ -555,6 +585,7 @@ impl Postgres {
     pub(crate) fn stop(&self) {
         self.inner.writer.stop();
         self.inner.reader.stop();
+        self.inner.shared.stop();
     }
 
     fn reserve(&self, lines: &[AuditLine]) {

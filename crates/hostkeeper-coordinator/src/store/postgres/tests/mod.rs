@@ -266,6 +266,7 @@ mod serve;
 mod service_repository;
 mod serving;
 mod session;
+mod shared_login;
 mod start;
 pub(crate) mod store;
 mod unused_mdm_tables;

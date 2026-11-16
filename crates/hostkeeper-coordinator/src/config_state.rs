@@ -31,10 +31,13 @@ use crate::enrollment::os_random;
 use crate::initial_admin::InitialAdmin;
 use crate::jti_file::jti_path;
 use crate::layout::layout_path;
+use crate::listen::EXPIRE_REQUESTS;
 use crate::lock::{LockError, LockGuard, StateLock, lock_path};
 use crate::login::Login;
 use crate::ops::{Marker, OpsState, unlanded};
 use crate::service::Coordinator;
+use crate::store::postgres::login_rows::PgLoginRows;
+use crate::store::postgres::periodic::PgClaims;
 use crate::store::postgres::{DatabaseError, Dsn, PgRecords, Postgres};
 use crate::store::{Backend, BackendError, Files, Loaded, Shared};
 use crate::tokens::OperatorTokens;
@@ -50,6 +53,9 @@ pub(super) struct Opened {
     pub(super) marker: PathBuf,
     pub(super) held: LockGuard,
     pub(super) records: Option<Arc<dyn Records>>,
+    /// The database store, when the state is in one: the sign-in keeps its sessions and counts
+    /// in its rows.
+    pub(super) database: Option<Postgres>,
 }
 
 /// Opens the store `flags` name: the database of `--database-dsn-file`, or the files of
@@ -80,6 +86,7 @@ pub(super) fn open_store(
             marker: crate::ops_file::unfinished_path(&ops),
             held,
             records: None,
+            database: None,
         });
     };
     let file_flags = [
@@ -124,8 +131,9 @@ pub(super) fn open_store(
         backend: Arc::new(store.clone()),
         loaded,
         marker: marker.clone(),
-        held: LockGuard::new(store),
+        held: LockGuard::new(store.clone()),
         records,
+        database: Some(store),
     })
 }
 
@@ -362,20 +370,57 @@ pub(super) fn with_initial_admin(
 }
 
 /// `coordinator` serving the sign-in routes, over the settings of the login flags, judged by the
-/// system's clock and drawing session ids from the system's random bytes.
+/// system's clock and drawing session ids from the system's random bytes; over a database, the
+/// sessions and the failure counts are its rows, shared by every coordinator on it.
 ///
 /// # Errors
 /// [`StartError::Password`]: the password hash parameters are outside what Argon2id takes.
 pub(super) fn with_login(
     coordinator: Coordinator,
     flags: &Serve,
+    database: Option<&Postgres>,
 ) -> Result<Coordinator, StartError> {
-    let login = Login::new(
-        flags.login.login_settings(),
-        Arc::new(SystemClock),
-        os_random(),
-    )?;
+    let settings = flags.login.login_settings();
+    let login = Login::new(settings, Arc::new(SystemClock), os_random())?;
+    let login = match database {
+        Some(store) => login.with_rows(PgLoginRows::new(
+            store.clone(),
+            settings.sessions,
+            settings.limiter,
+        )),
+        None => login,
+    };
     Ok(coordinator.with_login(login))
+}
+
+/// `coordinator` running the periodic jobs that coordinators over one database share only when it
+/// claims them there; over files, every job is its own.
+///
+/// # Errors
+/// [`StartError::Database`]: the jobs could not be written to the database.
+pub(super) fn with_claims(
+    coordinator: Coordinator,
+    flags: &Serve,
+    database: Option<&Postgres>,
+) -> Result<Coordinator, StartError> {
+    let Some(store) = database else {
+        return Ok(coordinator);
+    };
+    let holder = flags
+        .server_names
+        .first()
+        .map_or("coordinator", String::as_str);
+    // A job is due a second before the tick that claims it comes round again, so a tick that
+    // runs a hair early still finds its own job due.
+    let period = i64::try_from(flags.tls_reload_secs.saturating_sub(1).max(1)).unwrap_or(i64::MAX);
+    let claims = PgClaims::start(
+        store.clone(),
+        holder,
+        &[(EXPIRE_REQUESTS, period)],
+        i64::try_from(wall_clock()()).unwrap_or(i64::MAX),
+    )
+    .map_err(|why| StartError::Database(DatabaseError::Load(why)))?;
+    Ok(coordinator.with_claims(claims))
 }
 
 /// The thresholds of the alerts `flags` name: `--alert-silent-host-secs` and

@@ -45,6 +45,7 @@ use crate::enrollment::Enrollment;
 use crate::grpc::route;
 use crate::http::{Peer, PeerAddr, Surface};
 use crate::service::Coordinator;
+use crate::store::Claims;
 use crate::tokens::OperatorTokens;
 use crate::wait::{ConnectionWaits, unless};
 
@@ -394,23 +395,27 @@ pub(crate) async fn connection_with<S>(
     }
 }
 
+/// The periodic job that expires the enrollment requests that waited past their TTL.
+pub(crate) const EXPIRE_REQUESTS: &str = "expire_requests";
+
 /// Looks at everything that is re-read while the coordinator runs, every `interval`, for as long
 /// as the future is polled: with `enrollment`, its server certificate file, made again when it
 /// is due or names other names than the flags ([`Enrollment::renew_server`]), and its requests, expired once they waited longer than
 /// the request TTL ([`Enrollment::expire_requests`]); then the TLS files of `sources` and the
 /// tokens file of `tokens`. It never returns.
-pub async fn reload_every(
+pub(crate) async fn reload_every(
     enrollment: Option<Arc<Enrollment>>,
     sources: Vec<TlsSource>,
     tokens: OperatorTokens,
     interval: Duration,
+    claims: Option<Arc<dyn Claims>>,
 ) -> Infallible {
     let mut ticks = tokio::time::interval(interval);
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     ticks.tick().await;
     loop {
         ticks.tick().await;
-        reload_all(enrollment.as_ref(), &sources, &tokens).await;
+        reload_all(enrollment.as_ref(), &sources, &tokens, claims.as_ref()).await;
     }
 }
 
@@ -421,13 +426,20 @@ pub(crate) async fn reload_all(
     enrollment: Option<&Arc<Enrollment>>,
     sources: &[TlsSource],
     tokens: &OperatorTokens,
+    claims: Option<&Arc<dyn Claims>>,
 ) {
     if let Some(enrollment) = enrollment {
         let enrollment = Arc::clone(enrollment);
+        let claims = claims.map(Arc::clone);
         // File reads, a key, a serial from the store and file writes: off the runtime's threads.
         let _ = tokio::task::spawn_blocking(move || {
+            // The server certificate is the file of this coordinator's own volume, renewed by
+            // each. The requests are rows every coordinator shares: with claims, one expires
+            // them for the period.
             enrollment.renew_server();
-            enrollment.expire_requests();
+            if claims.is_none_or(|claims| claims.claimed(EXPIRE_REQUESTS)) {
+                enrollment.expire_requests();
+            }
         })
         .await;
     }

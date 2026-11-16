@@ -120,6 +120,13 @@ pub(crate) trait Backend: Send + Sync {
     }
 }
 
+/// Which periodic job this coordinator runs now: of the coordinators over one database that find a
+/// job due, one is told yes for the period.
+pub(crate) trait Claims: Send + Sync {
+    /// Whether this coordinator runs `job` now. A claim that could not be made is no.
+    fn claimed(&self, job: &str) -> bool;
+}
+
 /// Whether a backend takes writes (`docs/design/coordinator-storage.md`, section 5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Health {

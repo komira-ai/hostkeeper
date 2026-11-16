@@ -10,7 +10,8 @@ use hostkeeper_enrollment::validity::UnixClock;
 use crate::enrollment::Random;
 use crate::password::HashSlots;
 use crate::session::{
-    Failure, LimiterSettings, LoginLimiter, Refusal, SessionError, SessionSettings, Sessions,
+    Failure, LimiterSettings, LoginLimiter, LoginRows, Refusal, SessionError, SessionSettings,
+    Sessions, StoredSession,
 };
 
 const START: u64 = 1_800_000_000;
@@ -641,4 +642,82 @@ fn clearing_must_change_of_an_unknown_or_ended_or_expired_session_finds_none() {
     let (idle, _) = sessions.create("admin", true, None).unwrap();
     set(&clock, START + 100);
     assert!(sessions.clear_must_change(idle.as_str()).is_none());
+}
+
+/// Rows that cannot be reached: every call fails with the same reason.
+struct Unreachable;
+
+const WHY: &str = "the database is down";
+
+impl LoginRows for Unreachable {
+    fn create(&self, _: &[u8; 32], _: &StoredSession, _: u64) -> Result<(), String> {
+        Err(WHY.to_owned())
+    }
+    fn lookup(&self, _: &[u8; 32], _: u64) -> Result<Option<StoredSession>, String> {
+        Err(WHY.to_owned())
+    }
+    fn clear_must_change(&self, _: &[u8; 32], _: u64) -> Result<Option<StoredSession>, String> {
+        Err(WHY.to_owned())
+    }
+    fn end(&self, _: &[u8; 32]) -> Result<bool, String> {
+        Err(WHY.to_owned())
+    }
+    fn end_user(&self, _: &str, _: Option<&[u8; 32]>) -> Result<usize, String> {
+        Err(WHY.to_owned())
+    }
+    fn held(&self) -> Result<usize, String> {
+        Err(WHY.to_owned())
+    }
+    fn is_locked(&self, _: &str, _: u64) -> Result<bool, String> {
+        Err(WHY.to_owned())
+    }
+    fn failed(&self, _: &str, _: u64) -> Result<Failure, String> {
+        Err(WHY.to_owned())
+    }
+    fn succeeded(&self, _: &str) -> Result<(), String> {
+        Err(WHY.to_owned())
+    }
+    fn tracked(&self) -> Result<usize, String> {
+        Err(WHY.to_owned())
+    }
+}
+
+/// Proves: sessions whose rows cannot be reached fail closed and say why: no session is made (the
+/// error names the reason), none is found, cleared or ended, nobody is counted as signed in.
+///
+/// Catches: a table that falls back to its own memory when the database is down, which makes
+/// sessions that no other coordinator knows and that outlive the database's end of them.
+#[test]
+fn sessions_over_unreachable_rows_fail_closed() {
+    let sessions = sessions(SessionSettings::default(), &clock()).over(Arc::new(Unreachable));
+    assert_eq!(
+        sessions.create("admin", false, None).unwrap_err(),
+        SessionError::Unavailable(WHY.to_owned())
+    );
+    assert_eq!(
+        SessionError::Unavailable(WHY.to_owned()).to_string(),
+        "the session rows are unavailable: the database is down"
+    );
+    assert_eq!(sessions.lookup("id"), None);
+    assert_eq!(sessions.clear_must_change("id"), None);
+    assert!(!sessions.end("id"));
+    assert_eq!(sessions.end_user("admin", Some("id")), 0);
+    assert_eq!(sessions.len(), 0);
+    assert!(sessions.is_empty());
+}
+
+/// Proves: a limiter whose rows cannot be reached tells every name locked, counts a failure as a
+/// counted one (no audit line for a failure it could not count), and holds no count.
+///
+/// Catches: a limiter that lets a guesser through while the database is down.
+#[test]
+fn a_limiter_over_unreachable_rows_locks_every_name() {
+    let slots = HashSlots::new(NonZeroUsize::MIN);
+    let limiter =
+        LoginLimiter::new(LimiterSettings::default(), clock(), slots).over(Arc::new(Unreachable));
+    assert!(limiter.is_locked("admin"));
+    assert!(matches!(limiter.admit("admin"), Err(Refusal::Locked)));
+    assert_eq!(limiter.failed("admin"), Failure::Counted);
+    limiter.succeeded("admin");
+    assert_eq!(limiter.tracked(), 0);
 }

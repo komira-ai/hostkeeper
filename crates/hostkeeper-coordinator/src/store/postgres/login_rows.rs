@@ -9,15 +9,11 @@
 //! its own, taken first: the lock is Postgres's and goes with the transaction, so a coordinator
 //! that dies in the middle holds nothing, and these two paths are rare (a login, a failed login).
 //! Time is the `now` the caller passes, the injected clock of the in-memory table.
-// The login routes do not use these yet; `tests/login_rows.rs` runs every statement against a
-// server, and against the in-memory table's answers, until they do.
-#![allow(
-    dead_code,
-    reason = "the login routes read and write sessions and counts through these functions in the next pull request of the stack"
-)]
+use std::sync::Arc;
 
+use super::Postgres;
 use super::session::Session;
-use crate::session::Failure;
+use crate::session::{Failure, LimiterSettings, LoginRows, SessionSettings, StoredSession};
 
 /// The key of the advisory lock that serialises the making of sessions.
 const SESSIONS_LOCK: i64 = 0x686b_7365_7373;
@@ -316,4 +312,122 @@ pub(crate) fn tracked(session: &mut Session) -> Result<i64, postgres::Error> {
     Ok(session
         .query_one("SELECT count(*) FROM login_failures", &[])?
         .get(0))
+}
+
+/// Seconds as the column holds them: a value past what it holds is the most it holds.
+fn secs(value: u64) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
+}
+
+fn stored(live: Live) -> StoredSession {
+    StoredSession {
+        username: live.username,
+        csrf: live.csrf,
+        must_change: live.must_change,
+        must_change_until: live.must_change_until.and_then(|t| u64::try_from(t).ok()),
+    }
+}
+
+fn count(rows: i64) -> usize {
+    usize::try_from(rows).unwrap_or_default()
+}
+
+/// The sessions and the failure counts of the login in the database's rows, run on the store's
+/// session of shared rows: what [`crate::session::Sessions::over`] and
+/// [`crate::session::LoginLimiter::over`] are given by a coordinator over Postgres.
+pub(crate) struct PgLoginRows {
+    store: Postgres,
+    sessions: SessionRules,
+    limiter: LimiterRules,
+}
+
+impl PgLoginRows {
+    /// The rows of `store`, under the deadlines and counts of `sessions` and `limiter`.
+    pub(crate) fn new(
+        store: Postgres,
+        sessions: SessionSettings,
+        limiter: LimiterSettings,
+    ) -> Arc<PgLoginRows> {
+        Arc::new(PgLoginRows {
+            store,
+            sessions: SessionRules {
+                idle_secs: secs(sessions.idle_secs),
+                max_secs: secs(sessions.max_secs),
+                max_count: secs(sessions.max_count.max(1) as u64),
+            },
+            limiter: LimiterRules {
+                max_failures: i64::from(limiter.max_failures.max(1)),
+                lockout_secs: secs(limiter.lockout_secs),
+                max_tracked: secs(limiter.max_tracked.max(1) as u64),
+            },
+        })
+    }
+}
+
+impl LoginRows for PgLoginRows {
+    fn create(&self, id: &[u8; 32], new: &StoredSession, now: u64) -> Result<(), String> {
+        let rules = self.sessions;
+        let (id, new) = (id.to_vec(), new.clone());
+        self.store.shared(move |s| {
+            let until = new.must_change_until.map(secs);
+            let row = NewSession {
+                id_sha256: &id,
+                username: &new.username,
+                csrf: &new.csrf,
+                must_change: new.must_change,
+                must_change_until: until,
+            };
+            create(s, &rules, &row, secs(now))
+        })
+    }
+
+    fn lookup(&self, id: &[u8; 32], now: u64) -> Result<Option<StoredSession>, String> {
+        let (rules, id) = (self.sessions, id.to_vec());
+        self.store
+            .shared(move |s| lookup(s, &rules, &id, secs(now)))
+            .map(|live| live.map(stored))
+    }
+
+    fn clear_must_change(&self, id: &[u8; 32], now: u64) -> Result<Option<StoredSession>, String> {
+        let (rules, id) = (self.sessions, id.to_vec());
+        self.store
+            .shared(move |s| clear_must_change(s, &rules, &id, secs(now)))
+            .map(|live| live.map(stored))
+    }
+
+    fn end(&self, id: &[u8; 32]) -> Result<bool, String> {
+        let id = id.to_vec();
+        self.store.shared(move |s| end(s, &id))
+    }
+
+    fn end_user(&self, username: &str, keep: Option<&[u8; 32]>) -> Result<usize, String> {
+        let (username, keep) = (username.to_owned(), keep.map(|k| k.to_vec()));
+        self.store
+            .shared(move |s| end_user(s, &username, keep.as_deref()))
+            .map(|ended| usize::try_from(ended).unwrap_or_default())
+    }
+
+    fn held(&self) -> Result<usize, String> {
+        self.store.shared(held).map(count)
+    }
+
+    fn is_locked(&self, name: &str, now: u64) -> Result<bool, String> {
+        let name = name.to_owned();
+        self.store.shared(move |s| is_locked(s, &name, secs(now)))
+    }
+
+    fn failed(&self, name: &str, now: u64) -> Result<Failure, String> {
+        let (rules, name) = (self.limiter, name.to_owned());
+        self.store
+            .shared(move |s| failed(s, &rules, &name, secs(now)))
+    }
+
+    fn succeeded(&self, name: &str) -> Result<(), String> {
+        let name = name.to_owned();
+        self.store.shared(move |s| succeeded(s, &name))
+    }
+
+    fn tracked(&self) -> Result<usize, String> {
+        self.store.shared(tracked).map(count)
+    }
 }

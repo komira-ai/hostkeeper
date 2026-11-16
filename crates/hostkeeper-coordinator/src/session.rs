@@ -20,6 +20,12 @@
 //! from growing with every name a guesser tries; the table also holds at most
 //! `--login-max-tracked` names. Names are the canonical user key, which the caller makes.
 //!
+//! Both keep their rows in memory unless [`LoginRows`] is given ([`Sessions::over`],
+//! [`LoginLimiter::over`]): a coordinator over a database keeps them there, so that a cookie made
+//! by one coordinator is answered by any other, a failed login counts once however many
+//! coordinators hear it, and a deploy signs nobody out. When the rows cannot be reached the
+//! answers fail closed: no session is made or found, and a name is told locked.
+//!
 //! The flags that give these their settings are wired by the change that adds the login route.
 
 use std::collections::BTreeMap;
@@ -87,6 +93,45 @@ pub enum SessionError {
     /// The operating system gave no random bytes.
     #[error("no random bytes for a session id")]
     NoRandom,
+    /// The rows that hold sessions could not be written.
+    #[error("the session rows are unavailable: {0}")]
+    Unavailable(String),
+}
+
+/// A session as its row holds it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct StoredSession {
+    pub(crate) username: String,
+    pub(crate) csrf: String,
+    pub(crate) must_change: bool,
+    pub(crate) must_change_until: Option<u64>,
+}
+
+/// Where the sessions and the failure counts of the login are kept when coordinators share them:
+/// the rows of the database, one coordinator's answer as good as another's. Every call names the
+/// time it is made at (the injected clock's), and fails with the reason the rows could not be
+/// reached.
+pub(crate) trait LoginRows: Send + Sync {
+    /// Makes a session, dropping the expired ones and, past the cap, the least recently used.
+    fn create(&self, id: &[u8; 32], new: &StoredSession, now: u64) -> Result<(), String>;
+    /// The live session of `id`, its idle deadline pushed out.
+    fn lookup(&self, id: &[u8; 32], now: u64) -> Result<Option<StoredSession>, String>;
+    /// Clears the session's `must_change`; the session as it is now.
+    fn clear_must_change(&self, id: &[u8; 32], now: u64) -> Result<Option<StoredSession>, String>;
+    /// Ends the session of `id`; whether there was one.
+    fn end(&self, id: &[u8; 32]) -> Result<bool, String>;
+    /// Ends the sessions of `username` but `keep`; how many ended.
+    fn end_user(&self, username: &str, keep: Option<&[u8; 32]>) -> Result<usize, String>;
+    /// How many sessions are held.
+    fn held(&self) -> Result<usize, String>;
+    /// Whether `name` is locked.
+    fn is_locked(&self, name: &str, now: u64) -> Result<bool, String>;
+    /// Counts a failed login of `name`.
+    fn failed(&self, name: &str, now: u64) -> Result<Failure, String>;
+    /// Clears the count and the lock of `name`.
+    fn succeeded(&self, name: &str) -> Result<(), String>;
+    /// How many names hold a count.
+    fn tracked(&self) -> Result<usize, String>;
 }
 
 /// A session id: the value of the cookie. It is shown to the browser once and is not in any
@@ -161,6 +206,7 @@ pub struct Sessions {
     settings: SessionSettings,
     serial: AtomicU64,
     table: Mutex<BTreeMap<[u8; 32], Entry>>,
+    rows: Option<Arc<dyn LoginRows>>,
 }
 
 impl fmt::Debug for Sessions {
@@ -188,7 +234,23 @@ impl Sessions {
             },
             serial: AtomicU64::new(0),
             table: Mutex::new(BTreeMap::new()),
+            rows: None,
         }
+    }
+
+    /// The table with its sessions in `rows` instead of in memory.
+    #[must_use]
+    pub(crate) fn over(mut self, rows: Arc<dyn LoginRows>) -> Self {
+        self.rows = Some(rows);
+        self
+    }
+
+    /// What `answer` is when the rows could not be reached: `fallback`, the reason logged.
+    fn unreachable<R>(what: &str, answer: Result<R, String>, fallback: R) -> R {
+        answer.unwrap_or_else(|why| {
+            tracing::error!(%why, what, "the session rows could not be reached");
+            fallback
+        })
     }
 
     fn table(&self) -> MutexGuard<'_, BTreeMap<[u8; 32], Entry>> {
@@ -230,6 +292,17 @@ impl Sessions {
             must_change_until,
             csrf,
         };
+        if let Some(rows) = &self.rows {
+            let stored = StoredSession {
+                username: view.username.clone(),
+                csrf: view.csrf.clone(),
+                must_change,
+                must_change_until,
+            };
+            rows.create(&id_hash(&id), &stored, now)
+                .map_err(SessionError::Unavailable)?;
+            return Ok((SessionId(id), view));
+        }
         let mut table = self.table();
         table.retain(|_, entry| !self.expired(entry, now));
         if table.len() >= self.settings.max_count {
@@ -266,6 +339,9 @@ impl Sessions {
     pub fn lookup(&self, id: &str) -> Option<SessionView> {
         let now = self.clock.now_unix();
         let key = id_hash(id);
+        if let Some(rows) = &self.rows {
+            return Self::unreachable("lookup", rows.lookup(&key, now), None).map(view_of);
+        }
         let mut table = self.table();
         let entry = table.get_mut(&key)?;
         if self.expired(entry, now) {
@@ -280,6 +356,10 @@ impl Sessions {
     /// password. The session's view as it is now; None for an unknown, ended or expired one.
     pub fn clear_must_change(&self, id: &str) -> Option<SessionView> {
         let now = self.clock.now_unix();
+        if let Some(rows) = &self.rows {
+            let cleared = rows.clear_must_change(&id_hash(id), now);
+            return Self::unreachable("clear_must_change", cleared, None).map(view_of);
+        }
         let mut table = self.table();
         let entry = table.get_mut(&id_hash(id))?;
         if self.expired(entry, now) {
@@ -292,6 +372,9 @@ impl Sessions {
 
     /// Ends the session of a cookie value; whether there was one.
     pub fn end(&self, id: &str) -> bool {
+        if let Some(rows) = &self.rows {
+            return Self::unreachable("end", rows.end(&id_hash(id)), false);
+        }
         self.table().remove(&id_hash(id)).is_some()
     }
 
@@ -300,6 +383,10 @@ impl Sessions {
     /// this way.
     pub fn end_user(&self, username: &str, keep: Option<&str>) -> usize {
         let kept = keep.map(id_hash);
+        if let Some(rows) = &self.rows {
+            let ended = rows.end_user(username, kept.as_ref());
+            return Self::unreachable("end_user", ended, 0);
+        }
         let mut table = self.table();
         let before = table.len();
         table.retain(|key, entry| entry.view.username != username || Some(*key) == kept);
@@ -309,13 +396,25 @@ impl Sessions {
     /// How many sessions are held, expired ones not yet forgotten included.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.table().len()
+        match &self.rows {
+            Some(rows) => Self::unreachable("len", rows.held(), 0),
+            None => self.table().len(),
+        }
     }
 
     /// Whether no session is held.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.table().is_empty()
+        self.len() == 0
+    }
+}
+
+fn view_of(stored: StoredSession) -> SessionView {
+    SessionView {
+        username: stored.username,
+        must_change: stored.must_change,
+        must_change_until: stored.must_change_until,
+        csrf: stored.csrf,
     }
 }
 
@@ -355,6 +454,7 @@ pub struct LoginLimiter {
     settings: LimiterSettings,
     slots: HashSlots,
     counts: Mutex<BTreeMap<String, Count>>,
+    rows: Option<Arc<dyn LoginRows>>,
 }
 
 impl fmt::Debug for LoginLimiter {
@@ -378,7 +478,15 @@ impl LoginLimiter {
             },
             slots,
             counts: Mutex::new(BTreeMap::new()),
+            rows: None,
         }
+    }
+
+    /// The limiter with its counts in `rows` instead of in memory.
+    #[must_use]
+    pub(crate) fn over(mut self, rows: Arc<dyn LoginRows>) -> Self {
+        self.rows = Some(rows);
+        self
     }
 
     fn counts(&self) -> MutexGuard<'_, BTreeMap<String, Count>> {
@@ -396,6 +504,10 @@ impl LoginLimiter {
     #[must_use]
     pub fn is_locked(&self, username: &str) -> bool {
         let now = self.clock.now_unix();
+        if let Some(rows) = &self.rows {
+            // Counts that cannot be read are no reason to let a guesser in: the name is locked.
+            return Sessions::unreachable("is_locked", rows.is_locked(username, now), true);
+        }
         self.counts()
             .get(username)
             .is_some_and(|count| Self::locked(count, now))
@@ -422,6 +534,9 @@ impl LoginLimiter {
     /// already running) is counted as a failure and does not move the lock.
     pub fn failed(&self, username: &str) -> Failure {
         let now = self.clock.now_unix();
+        if let Some(rows) = &self.rows {
+            return Sessions::unreachable("failed", rows.failed(username, now), Failure::Counted);
+        }
         let lockout = self.settings.lockout_secs;
         let mut counts = self.counts();
         counts.retain(|_, count| {
@@ -464,12 +579,19 @@ impl LoginLimiter {
 
     /// A successful login of `username` clears its count and its lock.
     pub fn succeeded(&self, username: &str) {
+        if let Some(rows) = &self.rows {
+            Sessions::unreachable("succeeded", rows.succeeded(username), ());
+            return;
+        }
         self.counts().remove(username);
     }
 
     /// How many names hold a count, for a test to see that old ones are forgotten.
     #[must_use]
     pub fn tracked(&self) -> usize {
+        if let Some(rows) = &self.rows {
+            return Sessions::unreachable("tracked", rows.tracked(), 0);
+        }
         self.counts().len()
     }
 }

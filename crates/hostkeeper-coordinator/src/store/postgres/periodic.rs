@@ -7,14 +7,12 @@
 //! has no holder and no expiry. A coordinator that dies after claiming loses that run, and the
 //! job is due again one period later for any coordinator, so the jobs it names are level-triggered
 //! and idempotent, and the claim only saves work.
-// The coordinator's loops do not claim through these yet; `tests/periodic.rs` runs the statements
-// against a server until they do.
-#![allow(
-    dead_code,
-    reason = "the coordinator's periodic loops claim through these functions in the next pull request of the stack"
-)]
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use super::Postgres;
 use super::session::Session;
+use crate::store::Claims;
 
 /// Makes sure the job `name` exists and runs every `period_secs`; a job new to the table is
 /// first due at `first_unix`. A changed period takes effect at the job's next claim.
@@ -35,8 +33,8 @@ pub(crate) fn seed(
     Ok(())
 }
 
-/// Claims every job that is due at `now` and that no other claimer holds, for `instance`: the
-/// names of the jobs this coordinator runs now.
+/// Claims the jobs of `names` that are due at `now` and that no other claimer holds, for
+/// `instance`: the names of the jobs this coordinator runs now.
 ///
 /// # Errors
 /// The client's error.
@@ -44,16 +42,66 @@ pub(crate) fn claim(
     session: &mut Session,
     now: i64,
     instance: &str,
+    names: &[&str],
 ) -> Result<Vec<String>, postgres::Error> {
     Ok(session
         .query(
-            "WITH due AS (SELECT name FROM periodic_jobs WHERE next_run_unix <= $1 \
+            "WITH due AS (SELECT name FROM periodic_jobs WHERE next_run_unix <= $1 AND name = ANY($3) \
              ORDER BY next_run_unix, name FOR UPDATE SKIP LOCKED) \
              UPDATE periodic_jobs j SET next_run_unix = $1 + j.period_secs, last_run_unix = $1, \
              last_instance = $2 FROM due WHERE j.\"name\" = due.\"name\" RETURNING j.\"name\"",
-            &[&now, &instance],
+            &[&now, &instance, &names],
         )?
         .iter()
         .map(|row| row.get(0))
         .collect())
+}
+
+/// The periodic jobs of a coordinator over a database: each runs once a period on whichever
+/// coordinator ticks first after it is due.
+pub(crate) struct PgClaims {
+    store: Postgres,
+    instance: String,
+}
+
+impl PgClaims {
+    /// Makes sure each of `jobs` (a name and its period in seconds) exists, due `first_unix`
+    /// when new to the table, and claims for `instance`.
+    ///
+    /// # Errors
+    /// What the session or the server said.
+    pub(crate) fn start(
+        store: Postgres,
+        instance: &str,
+        jobs: &[(&str, i64)],
+        first_unix: i64,
+    ) -> Result<Arc<PgClaims>, String> {
+        let jobs: Vec<(String, i64)> = jobs.iter().map(|(n, p)| ((*n).to_owned(), *p)).collect();
+        store.shared(move |session| {
+            jobs.iter()
+                .try_for_each(|(name, period)| seed(session, name, *period, first_unix))
+        })?;
+        Ok(Arc::new(PgClaims {
+            store,
+            instance: instance.to_owned(),
+        }))
+    }
+}
+
+impl Claims for PgClaims {
+    fn claimed(&self, job: &str) -> bool {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
+        let (instance, job) = (self.instance.clone(), job.to_owned());
+        let claimed = self.store.shared(move |session| {
+            claim(session, now, &instance, &[job.as_str()]).map(|names| !names.is_empty())
+        });
+        claimed.unwrap_or_else(|why| {
+            // The job is due again for the next claimer, and a look it skips is made up by the
+            // next one.
+            tracing::warn!(%why, "a periodic job could not be claimed");
+            false
+        })
+    }
 }
