@@ -28,9 +28,9 @@ fn rules() -> RowRules {
 }
 
 /// One coordinator on the database, its clock at 2000 (past the quiet start).
-struct Node {
-    rig: Rig,
-    store: Postgres,
+pub(super) struct Node {
+    pub(super) rig: Rig,
+    pub(super) store: Postgres,
 }
 
 /// The seconds a test has let pass since the coordinators started, which both read as wall clock
@@ -91,33 +91,40 @@ impl Node {
     }
 
     /// Lets the time of both clocks be `elapsed` seconds past the start.
-    fn at(&self, wall: &AtomicU64, elapsed: u64) {
+    pub(super) fn at(&self, wall: &AtomicU64, elapsed: u64) {
         wall.store(AT + elapsed, Ordering::SeqCst);
         self.rig.at(START + elapsed);
     }
 
-    fn coordinator(&self) -> &Coordinator {
+    pub(super) fn coordinator(&self) -> &Coordinator {
         &self.rig.coordinator
     }
 
     /// The reply to the beat of the host `host`, which runs 1.0 of both services.
-    fn beat(&self, host: &str) -> ServiceReply {
+    pub(super) fn beat(&self, host: &str) -> ServiceReply {
         self.beat_with(host, daemon("1.0"))
     }
 
     /// The reply to the beat `beat` of the host `host`.
-    fn beat_with(&self, host: &str, beat: hostkeeper_wire::wire::Heartbeat) -> ServiceReply {
+    pub(super) fn beat_with(
+        &self,
+        host: &str,
+        beat: hostkeeper_wire::wire::Heartbeat,
+    ) -> ServiceReply {
         ask(&self.rig, host, DAEMON, beat)
     }
 }
 
 /// Two coordinators on a database in which `web` and `db` are desired at 2.0 (1.0 before).
-async fn pair(test: &str) -> (TestDatabase, Arc<AtomicU64>, Node, Node) {
+pub(super) async fn pair(test: &str) -> (TestDatabase, Arc<AtomicU64>, Node, Node) {
     pair_with(test, "stages = [100]").await
 }
 
 /// [`pair`] over `web` defined with the extra lines `extra`.
-async fn pair_with(test: &str, extra: &str) -> (TestDatabase, Arc<AtomicU64>, Node, Node) {
+pub(super) async fn pair_with(
+    test: &str,
+    extra: &str,
+) -> (TestDatabase, Arc<AtomicU64>, Node, Node) {
     let db = TestDatabase::new();
     let wall = Arc::new(AtomicU64::new(AT));
     let first = Node::start(&db, &format!("{test}-a"), &wall, extra);
@@ -206,7 +213,10 @@ fn daemon_running(web: &str, updating: bool) -> hostkeeper_wire::wire::Heartbeat
 }
 
 /// A coordinator of a pair that has heard `hosts` and is past the quiet time.
-async fn settled(test: &str, hosts: &[&str]) -> (TestDatabase, Arc<AtomicU64>, Node, Node) {
+pub(super) async fn settled(
+    test: &str,
+    hosts: &[&str],
+) -> (TestDatabase, Arc<AtomicU64>, Node, Node) {
     let (db, wall, a, b) = pair(test).await;
     for host in hosts {
         a.beat(host);

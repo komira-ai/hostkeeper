@@ -253,6 +253,7 @@ mod host_groups;
 mod layout;
 mod login_rows;
 mod lost;
+mod operator_orders;
 mod periodic;
 mod reads;
 mod records;

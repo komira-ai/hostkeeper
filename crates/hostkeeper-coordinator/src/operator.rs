@@ -30,6 +30,7 @@ use crate::operate::reason;
 use crate::ops::{AuditEntry, Exclusion, FailureAck, OpsError, Write, label};
 use crate::reconcile::{CI, COORDINATOR, is_release_failure_beat};
 use crate::service::Coordinator;
+use crate::store::postgres::fleet_rows::OperatorKind;
 use crate::tokens::TokenName;
 
 /// The most entries one `Audit.List` answers: a `limit` of 0, or above it, is this.
@@ -383,6 +384,11 @@ impl Coordinator {
     /// `Hosts.Abort`: queues an `abort` of the service for the host's next heartbeat
     /// ([`crate::orders`]). It takes no slot, is sent once, and only to a daemon that announced
     /// [`crate::orders::ABORT_FEATURE`]; asking again while one is queued queues nothing more.
+    /// Over a database the order is a row, so whichever coordinator hears the host's next
+    /// heartbeat sends it ([`Coordinator::queue_operator_order`]); when the row cannot be written
+    /// the order waits in this coordinator's memory and its next decision under the rollout gate
+    /// writes it. Over files it is queued in memory only, and a restart of the coordinator forgets
+    /// it.
     ///
     /// # Errors
     /// `unauthorized`, `forbidden`, `invalid_request` (the node id or the reason),
@@ -411,7 +417,9 @@ impl Coordinator {
         let mut audit = entry(by, "abort", &def.name, why);
         audit.node_id = Some(id.to_string());
         let done = self.ops.escape(audit);
-        fleet.queue_abort(id, def.name.clone(), format!("abort-{}", done.seq));
+        let order_id = format!("abort-{}", done.seq);
+        fleet.queue_abort(id.clone(), def.name.clone(), order_id.clone());
+        self.queue_operator_order(&id, OperatorKind::Abort, &def.name, &order_id);
         Ok(proto::AbortResponse {
             queued: true,
             entry: Some(entry_proto(&done)),
