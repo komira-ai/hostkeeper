@@ -10,13 +10,14 @@
 //! as the statement saw it is empty or stale as a whole, sets the quiet time that holds every
 //! decision back ([`quiet_until`]) until the fleet has been heard again.
 //!
-//! Nothing here decides: a decision is made under the gate (the next module of the stack). These functions take a session
-//! and run one statement each, so they run on any session of a pool.
-// The coordinator's heartbeat does not call these yet: the pull request that moves its fleet here
-// does, and the tests in `tests/fleet_rows.rs` run every statement against a server until then.
+//! Nothing here decides: a decision is made under the gate ([`super::rollout`]). These functions take a
+//! session and run one statement each, so they run on any session of a pool.
+// The coordinator's heartbeat does not call these: its fleet is still the in-memory `Fleet`, and
+// the tests in `tests/fleet_rows.rs` run every statement against a server. Moving the fleet here
+// is the step that removes this.
 #![allow(
     dead_code,
-    reason = "the heartbeat of the coordinator takes its fleet from these rows in the next pull request of the stack"
+    reason = "the heartbeat of the coordinator still keeps its fleet in memory; nothing outside the tests calls these functions yet"
 )]
 
 use super::session::Session;

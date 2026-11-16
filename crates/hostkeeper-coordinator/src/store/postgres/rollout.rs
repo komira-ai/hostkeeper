@@ -12,20 +12,29 @@
 //! it, up to a time it names ([`Wait::Operator`]). The lock is Postgres's, released with the
 //! transaction, so a coordinator that dies or is cut off holds nothing.
 //!
+//! **The queue.** A service that needs a rollout and has no order out takes a place in
+//! `rollout_queue` when a host of it asks, and every ask of it, rolling or waiting, says it is
+//! still asking. A place counts for nothing, and is dropped, when its service is halted (it takes
+//! its place again, behind, when it asks after the halt clears) and when its service has not asked
+//! for [`Limits::queue_idle`] seconds (its rollout is over, its hosts are gone, its version was set
+//! back): nothing waits behind a service that no longer asks.
+//!
 //! **The conditional writes.** What a decision writes is also conditional on what it read, so the
 //! step is made once even if two decisions ever reached it with the same inputs: a stage advance
 //! is a compare-and-set on the stage the decider saw ([`advance_stage`]), a halt is an insert that
 //! does nothing when the service is halted ([`raise_halt`]), and an order is an insert the primary
 //! key of the host refuses a second of.
 //!
-//! Not here: the per-host plan of stages (`stages.rs`) and the rule order of `decide.rs` are the
-//! pure code that feeds these functions in the next pull request; the audit lines are written by
-//! the caller, in the transaction, when a function answers that it made the step.
-// The coordinator's heartbeat does not call these yet; `tests/rollout.rs` runs every statement
-// against a server, with two sessions deciding at once, until it does.
+//! Not here, and not built: the per-host plan of stages (`stages.rs`) and the rule order of
+//! `decide.rs` still run on the in-memory fleet, and nothing feeds these functions from them yet;
+//! the audit lines are written by the caller, in the transaction, when a function answers that it
+//! made the step.
+// The coordinator's heartbeat does not decide through these yet: its decisions run on the
+// in-memory fleet, and `tests/rollout.rs` runs every statement against a server, with two
+// sessions deciding at once. The step that feeds them the rows is the one that removes this.
 #![allow(
     dead_code,
-    reason = "the heartbeat of the coordinator decides through these functions in the next pull request of the stack"
+    reason = "the decisions of the heartbeat still run on the in-memory fleet; no caller outside the tests feeds these functions yet"
 )]
 
 use postgres::error::SqlState;
@@ -138,6 +147,9 @@ pub(crate) struct Limits {
     pub(crate) order_age: i64,
     /// How long a host may be silent before it is not up (`DOWN_AFTER`).
     pub(crate) down_after: i64,
+    /// How long a service may go without asking before it leaves its place in the queue: a
+    /// rollout that is over, or a service that is gone, frees the places behind it by itself.
+    pub(crate) queue_idle: i64,
 }
 
 /// What [`admit`] answered.
@@ -164,10 +176,31 @@ pub(crate) enum Admission {
     Behind,
 }
 
+/// What a decision reads of the rows, in one statement, so that one snapshot answers it all: a
+/// beat of a host (`fleet_beat`) lands between two statements of a decision, never inside one.
+const READ: &str = "\
+SELECT \
+  (SELECT service FROM fleet_orders WHERE host_id = $1), \
+  (SELECT target FROM fleet_orders WHERE host_id = $1), \
+  (SELECT uninstall_id IS NULL FROM fleet_orders WHERE host_id = $1), \
+  (SELECT until_unix FROM cluster_quiet WHERE id = 1), \
+  EXISTS (SELECT 1 FROM halts WHERE service = $2), \
+  (SELECT count(*) FROM fleet_orders WHERE service = $2 AND role = $3), \
+  (SELECT count(*) FROM fleet_hosts f WHERE f.role = $3 AND f.up AND f.host_id <> $1 \
+     AND f.seen_unix > $4::bigint - $5::bigint \
+     AND NOT EXISTS (SELECT 1 FROM fleet_orders o WHERE o.host_id = f.host_id)), \
+  EXISTS (SELECT 1 FROM fleet_orders WHERE service = $2), \
+  (SELECT count(DISTINCT service) FROM fleet_orders), \
+  (SELECT count(*) FROM rollout_queue q \
+     WHERE q.seq < coalesce((SELECT seq FROM rollout_queue WHERE service = $2), 9223372036854775807) \
+     AND NOT EXISTS (SELECT 1 FROM fleet_orders o WHERE o.service = q.service) \
+     AND NOT EXISTS (SELECT 1 FROM halts h WHERE h.service = q.service))";
+
 /// Decides whether `ask` gets an order, and writes it when it does. Runs inside [`decide`], with
-/// the gate held, from the rows as they are now: the aged orders are dropped, then the host's
-/// own order, the quiet time, the halt, the role's slots and `min_up`, and, for a service with no
-/// order out, its place in the queue.
+/// the gate held, from the rows as they are now: the aged orders and the idle places of the
+/// queue are dropped, then one statement reads what the decision rests on, and the host's own
+/// order, the quiet time, the halt, the role's slots and `min_up`, and, for a service with no
+/// order out, its place in the queue are judged in that order.
 ///
 /// # Errors
 /// The client's error.
@@ -180,12 +213,26 @@ pub(crate) fn admit(
         "DELETE FROM fleet_orders WHERE at_unix <= $1::bigint - $2::bigint",
         &[&ask.now, &limits.order_age],
     )?;
-    if let Some(order) = session.query_opt(
-        "SELECT service, target, uninstall_id IS NULL FROM fleet_orders WHERE host_id = $1",
-        &[&ask.host_id],
-    )? {
-        let (service, target, update): (String, String, bool) =
-            (order.get(0), order.get(1), order.get(2));
+    session.execute(
+        "DELETE FROM rollout_queue WHERE asked_unix <= $1::bigint - $2::bigint",
+        &[&ask.now, &limits.queue_idle],
+    )?;
+    let row = session.query_one(
+        READ,
+        &[
+            &ask.host_id,
+            &ask.service,
+            &ask.role,
+            &ask.now,
+            &limits.down_after,
+        ],
+    )?;
+    let own: Option<(String, String, bool)> = row
+        .get::<_, Option<String>>(0)
+        .zip(row.get::<_, Option<String>>(1))
+        .zip(row.get::<_, Option<bool>>(2))
+        .map(|((service, target), update)| (service, target, update));
+    if let Some((service, target, update)) = own {
         return Ok(
             if update && service == ask.service && target == ask.target {
                 Admission::Existing
@@ -194,40 +241,42 @@ pub(crate) fn admit(
             },
         );
     }
-    let quiet: i64 = session
-        .query_one("SELECT until_unix FROM cluster_quiet WHERE id = 1", &[])?
-        .get(0);
-    if quiet > ask.now {
+    if row.get::<_, i64>(3) > ask.now {
         return Ok(Admission::Quiet);
     }
-    if session
-        .query_opt("SELECT 1 FROM halts WHERE service = $1", &[&ask.service])?
-        .is_some()
-    {
+    if row.get::<_, bool>(4) {
         return Ok(Admission::Halted);
     }
-    let taken: i64 = session
-        .query_one(
-            "SELECT count(*) FROM fleet_orders WHERE service = $1 AND role = $2",
-            &[&ask.service, &ask.role],
-        )?
-        .get(0);
-    if taken >= limits.max_updating {
+    if row.get::<_, i64>(5) >= limits.max_updating {
         return Ok(Admission::Full);
     }
-    let staying: i64 = session
-        .query_one(
-            "SELECT count(*) FROM fleet_hosts f WHERE f.role = $1 AND f.up AND f.host_id <> $2 \
-             AND f.seen_unix > $3::bigint - $4::bigint \
-             AND NOT EXISTS (SELECT 1 FROM fleet_orders o WHERE o.host_id = f.host_id)",
-            &[&ask.role, &ask.host_id, &ask.now, &limits.down_after],
-        )?
-        .get(0);
-    if staying < limits.min_up {
+    if row.get::<_, i64>(6) < limits.min_up {
         return Ok(Admission::Short);
     }
-    if let Some(refused) = queue_refuses(session, ask.service, limits)? {
-        return Ok(refused);
+    let rolling: bool = row.get(7);
+    if rolling {
+        // It goes on, and a service that goes on is asking: its place is not idle.
+        session.execute(
+            "UPDATE rollout_queue SET asked_unix = $2 WHERE service = $1",
+            &[&ask.service, &ask.now],
+        )?;
+    } else {
+        // A service with no order out takes its place in the queue, or keeps it, and says it is
+        // still asking; it rolls when fewer than `live_rollouts` services are rolling and the
+        // services asked before it that are not rolling fill no more than the free places.
+        session.execute(
+            "INSERT INTO rollout_queue (service, asked_unix) VALUES ($1, $2) \
+             ON CONFLICT (service) DO UPDATE SET asked_unix = excluded.asked_unix",
+            &[&ask.service, &ask.now],
+        )?;
+        let live: i64 = row.get(8);
+        if live >= limits.live_rollouts {
+            return Ok(Admission::Elsewhere);
+        }
+        let ahead: i64 = row.get(9);
+        if ahead >= limits.live_rollouts - live {
+            return Ok(Admission::Behind);
+        }
     }
     // The primary key on the host is the backstop: under the gate no order of the host can have
     // been written since it was read, and one that was fails the transaction.
@@ -237,71 +286,6 @@ pub(crate) fn admit(
         &[&ask.host_id, &ask.service, &ask.role, &ask.target, &ask.now],
     )?;
     Ok(Admission::Placed)
-}
-
-/// Why the queue refuses an order for `service`, if it does: a service that has an order out is
-/// rolling and goes on; any other takes its place in the queue (kept when it is already there)
-/// and rolls when fewer than `live_rollouts` services are rolling and the services asked before
-/// it that are not rolling fill no more than the free places.
-fn queue_refuses(
-    session: &mut Session,
-    service: &str,
-    limits: &Limits,
-) -> Result<Option<Admission>, postgres::Error> {
-    let rolling: bool = session
-        .query_one(
-            "SELECT EXISTS (SELECT 1 FROM fleet_orders WHERE service = $1)",
-            &[&service],
-        )?
-        .get(0);
-    if rolling {
-        return Ok(None);
-    }
-    session.execute(
-        "INSERT INTO rollout_queue (service) VALUES ($1) ON CONFLICT (service) DO NOTHING",
-        &[&service],
-    )?;
-    let live: i64 = session
-        .query_one("SELECT count(DISTINCT service) FROM fleet_orders", &[])?
-        .get(0);
-    if live >= limits.live_rollouts {
-        return Ok(Some(Admission::Elsewhere));
-    }
-    let ahead: i64 = session
-        .query_one(
-            "SELECT count(*) FROM rollout_queue q WHERE q.seq < \
-             (SELECT seq FROM rollout_queue WHERE service = $1) \
-             AND NOT EXISTS (SELECT 1 FROM fleet_orders o WHERE o.service = q.service)",
-            &[&service],
-        )?
-        .get(0);
-    Ok((ahead >= limits.live_rollouts - live).then_some(Admission::Behind))
-}
-
-/// Puts `service` in the queue if it is not there; its place (the number from `desired_seq`)
-/// either way. Called in the transaction that sets the desired version that needs a rollout.
-///
-/// # Errors
-/// The client's error.
-pub(crate) fn enqueue(session: &mut Session, service: &str) -> Result<i64, postgres::Error> {
-    session.execute(
-        "INSERT INTO rollout_queue (service) VALUES ($1) ON CONFLICT (service) DO NOTHING",
-        &[&service],
-    )?;
-    Ok(session
-        .query_one(
-            "SELECT seq FROM rollout_queue WHERE service = $1",
-            &[&service],
-        )?
-        .get(0))
-}
-
-/// Takes `service` out of the queue: its rollout is over. True when it was there.
-///
-/// # Errors
-/// The client's error.
-pub(crate) fn finish(session: &mut Session, service: &str) -> Result<bool, postgres::Error> {
-    Ok(session.execute("DELETE FROM rollout_queue WHERE service = $1", &[&service])? == 1)
 }
 
 /// Moves the plan of `service` (of the group `group`, when it has one) from the stage `from` to

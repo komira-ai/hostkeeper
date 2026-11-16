@@ -10,8 +10,7 @@ use std::sync::{Arc, Barrier};
 
 use super::TestDatabase;
 use crate::store::postgres::rollout::{
-    Admission, Ask, Gated, Limits, Wait, admit, advance_stage, decide, enqueue, finish,
-    gate_timed_out, raise_halt,
+    Admission, Ask, Gated, Limits, Wait, admit, advance_stage, decide, gate_timed_out, raise_halt,
 };
 use crate::store::postgres::session::Session;
 use crate::store::postgres::{Postgres, TIMEOUTS};
@@ -24,6 +23,7 @@ const LIMITS: Limits = Limits {
     live_rollouts: 1,
     order_age: 120,
     down_after: 45,
+    queue_idle: 3600,
 };
 
 /// A database with its schema and, beside one store that holds it open, a session for each of
@@ -335,6 +335,26 @@ fn an_order_is_refused_or_kept_by_the_rows() {
     assert_eq!(answer(s, &at("u2"), &many), Admission::Placed);
 }
 
+/// Puts `service` in the queue as of `NOW`, keeping its place when it has one; its place.
+fn enqueue(session: &mut Session, service: &str) -> Result<i64, postgres::Error> {
+    session.execute(
+        "INSERT INTO rollout_queue (service, asked_unix) VALUES ($1, $2) \
+         ON CONFLICT (service) DO UPDATE SET asked_unix = excluded.asked_unix",
+        &[&service, &NOW],
+    )?;
+    Ok(session
+        .query_one(
+            "SELECT seq FROM rollout_queue WHERE service = $1",
+            &[&service],
+        )?
+        .get(0))
+}
+
+/// Takes `service` out of the queue: its rollout is over. True when it was there.
+fn finish(session: &mut Session, service: &str) -> Result<bool, postgres::Error> {
+    Ok(session.execute("DELETE FROM rollout_queue WHERE service = $1", &[&service])? == 1)
+}
+
 fn raise_halt_in(db: &TestDatabase, service: &str) {
     db.run(&format!(
         "INSERT INTO halts (service, node_id, check_name, target, origin) \
@@ -537,5 +557,74 @@ fn a_halt_is_raised_once() {
             Some("health".into()),
             Some("updater".into())
         ]]
+    );
+}
+
+/// Proves: a service at the head of the queue that cannot roll does not hold the others back. A
+/// halted head is passed over while it is halted and takes the head again, with its place kept,
+/// once the halt clears; a head that stopped asking for `queue_idle` seconds (its rollout over,
+/// its hosts gone) leaves the queue, and the service behind it rolls; a head that goes on asking
+/// keeps its place however long its rollout runs.
+///
+/// Catches: a queue that makes every later service wait for ever behind a halted, finished or
+/// abandoned service, with `live_rollouts` 1.
+#[test]
+fn a_service_that_cannot_roll_does_not_hold_the_queue() {
+    let (db, _store, mut sessions) = rig(1);
+    let s = &mut sessions[0];
+
+    // s1 asks first, rolls, is over and is then halted; s2 asks after it.
+    assert_eq!(answer(s, &ask("h1", "s1"), &LIMITS), Admission::Placed);
+    db.run("DELETE FROM fleet_orders").expect("h1 reported");
+    raise_halt_in(&db, "s1");
+    assert_eq!(
+        answer(s, &ask("h2", "s2"), &LIMITS),
+        Admission::Placed,
+        "a halted service holds no place"
+    );
+    assert_eq!(
+        db.rows("SELECT service FROM rollout_queue ORDER BY seq"),
+        vec![vec![Some("s1".to_owned())], vec![Some("s2".to_owned())]],
+        "a halted service keeps its row, and so its turn"
+    );
+    // The halt clears: s1 is the head again, and s2 waits behind it.
+    db.run("DELETE FROM halts; DELETE FROM fleet_orders")
+        .expect("the halt cleared, h2 reported");
+    assert_eq!(answer(s, &ask("h2", "s2"), &LIMITS), Admission::Behind);
+
+    // Idle: s1 and s2 asked at NOW and ask no more. An hour later s4 rolls at once, and the
+    // queue holds s4 alone.
+    let at = |seconds, host, service| Ask {
+        now: NOW + seconds,
+        ..ask(host, service)
+    };
+    assert_eq!(answer(s, &at(3600, "h4", "s4"), &LIMITS), Admission::Placed);
+    assert_eq!(
+        db.rows("SELECT service FROM rollout_queue ORDER BY seq"),
+        vec![vec![Some("s4".to_owned())]]
+    );
+
+    // A service that goes on asking keeps its place, and its idle time counts from its last ask.
+    assert_eq!(answer(s, &at(6600, "h5", "s4"), &LIMITS), Admission::Placed);
+    assert_eq!(
+        count(
+            &db,
+            "SELECT asked_unix FROM rollout_queue WHERE service = 's4'"
+        ),
+        (NOW + 6600).to_string()
+    );
+    assert_eq!(
+        answer(s, &at(6600, "h6", "s5"), &LIMITS),
+        Admission::Elsewhere
+    );
+    assert_eq!(
+        answer(s, &at(6600 + 3599, "h6", "s5"), &LIMITS),
+        Admission::Behind,
+        "s4 asked 3599 seconds ago: it still holds its place"
+    );
+    assert_eq!(
+        answer(s, &at(6600 + 3600, "h6", "s5"), &LIMITS),
+        Admission::Placed,
+        "and an hour after its last ask it does not"
     );
 }
