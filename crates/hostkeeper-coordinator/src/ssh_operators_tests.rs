@@ -77,7 +77,10 @@ fn a_file_with_a_mistake_in_it_is_refused_with_the_reason() {
         refused("[[operator]]\nname = \"a\"\nhosts = \"x\"\n"),
         OperatorsError::Parse(_)
     ));
-    assert!(matches!(refused("[[operator]]\nhosts = []\n"), OperatorsError::Parse(_)));
+    assert!(matches!(
+        refused("[[operator]]\nhosts = []\n"),
+        OperatorsError::Parse(_)
+    ));
     for name in ["Alice", "", &"a".repeat(33), "coordinator"] {
         assert_eq!(
             refused(&format!("[[operator]]\nname = {name:?}\n")),
@@ -88,7 +91,11 @@ fn a_file_with_a_mistake_in_it_is_refused_with_the_reason() {
         refused("[[operator]]\nname = \"a\"\n[[operator]]\nname = \"a\"\n"),
         OperatorsError::Duplicate("a".to_owned())
     );
-    assert!(refused("[[operator]]\nname = \"a\"\nhost = 1\n").to_string().contains("does not parse"));
+    assert!(
+        refused("[[operator]]\nname = \"a\"\nhost = 1\n")
+            .to_string()
+            .contains("does not parse")
+    );
 }
 
 /// Proves: the file is read from its path, and a file that is missing, is a directory or is over
@@ -104,12 +111,22 @@ fn the_file_is_read_from_its_path_and_a_bad_path_is_refused_naming_it() {
     assert!(Operators::read(&path).expect("read").lists("alice"));
     let missing = dir.path().join("missing.toml");
     let error = Operators::read(&missing).expect_err("missing");
-    assert!(matches!(&error, OperatorsError::Read { path, .. } if *path == missing), "{error}");
-    assert!(error.to_string().starts_with(&missing.display().to_string()));
+    assert!(
+        matches!(&error, OperatorsError::Read { path, .. } if *path == missing),
+        "{error}"
+    );
+    assert!(
+        error
+            .to_string()
+            .starts_with(&missing.display().to_string())
+    );
     let big = dir.path().join("big.toml");
     std::fs::write(&big, "#".repeat(256 * 1024 + 1)).expect("written");
     let error = Operators::read(&big).expect_err("too big");
-    assert!(error.to_string().contains("longer than 262144 bytes"), "{error}");
+    assert!(
+        error.to_string().contains("longer than 262144 bytes"),
+        "{error}"
+    );
     let unreadable = Operators::read(dir.path()).expect_err("a directory");
     assert!(matches!(unreadable, OperatorsError::Read { .. }));
 }

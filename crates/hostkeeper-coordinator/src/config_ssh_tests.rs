@@ -101,22 +101,66 @@ fn the_ssh_flags_require_each_other_and_the_ttl_has_bounds() {
         "--ssh-login-user-linux",
         "--ssh-login-user-macos",
     ] {
-        let value = if flag == "--ssh-signing-key" { "next" } else if flag == "--ssh-cert-ttl-s" { "60" } else { "x" };
-        assert!(refused(&[flag, value]).contains("--ssh-ca-secret-file"), "{flag}");
+        let value = if flag == "--ssh-signing-key" {
+            "next"
+        } else if flag == "--ssh-cert-ttl-s" {
+            "60"
+        } else {
+            "x"
+        };
+        assert!(
+            refused(&[flag, value]).contains("--ssh-ca-secret-file"),
+            "{flag}"
+        );
     }
     for ttl in ["59", "28801", "x"] {
         assert!(
-            serve(&["--ssh-ca-secret-file", "s", "--ssh-operators-file", "o", "--ssh-cert-ttl-s", ttl]).is_err(),
+            serve(&[
+                "--ssh-ca-secret-file",
+                "s",
+                "--ssh-operators-file",
+                "o",
+                "--ssh-cert-ttl-s",
+                ttl
+            ])
+            .is_err(),
             "{ttl}"
         );
     }
     for ttl in ["60", "28800"] {
-        assert!(serve(&["--ssh-ca-secret-file", "s", "--ssh-operators-file", "o", "--ssh-cert-ttl-s", ttl]).is_ok());
+        assert!(
+            serve(&[
+                "--ssh-ca-secret-file",
+                "s",
+                "--ssh-operators-file",
+                "o",
+                "--ssh-cert-ttl-s",
+                ttl
+            ])
+            .is_ok()
+        );
     }
     let file_store = Cli::try_parse_from([
-        "hostkeeper-coordinator", "serve", "--heartbeat-listen", "127.0.0.1:1", "--private-listen",
-        "127.0.0.1:2", "--tls-cert", "c", "--tls-key", "k", "--client-ca", "ca", "--oidc-config", "o",
-        "--state-file", "s", "--ssh-ca-secret-file", "s", "--ssh-operators-file", "o",
+        "hostkeeper-coordinator",
+        "serve",
+        "--heartbeat-listen",
+        "127.0.0.1:1",
+        "--private-listen",
+        "127.0.0.1:2",
+        "--tls-cert",
+        "c",
+        "--tls-key",
+        "k",
+        "--client-ca",
+        "ca",
+        "--oidc-config",
+        "o",
+        "--state-file",
+        "s",
+        "--ssh-ca-secret-file",
+        "s",
+        "--ssh-operators-file",
+        "o",
     ])
     .expect_err("the certificates are kept in the database")
     .to_string();
@@ -137,21 +181,57 @@ fn signing_is_made_from_the_files_and_flags() {
     let cp = secret(dir.path(), "cp", &key_file(3));
     let operators = secret(dir.path(), "operators.toml", OPERATORS);
     let flags = serve(&[
-        "--ssh-ca-secret-file", &both, "--ssh-operators-file", &operators,
-        "--ssh-cp-ca-secret-file", &cp, "--ssh-control-plane-host", "nuc",
-        "--ssh-control-plane-host", "nuc-2", "--ssh-signing-key", "next",
-        "--ssh-cert-ttl-s", "900", "--ssh-login-user-linux", "ops", "--ssh-login-user-macos", "admin",
+        "--ssh-ca-secret-file",
+        &both,
+        "--ssh-operators-file",
+        &operators,
+        "--ssh-cp-ca-secret-file",
+        &cp,
+        "--ssh-control-plane-host",
+        "nuc",
+        "--ssh-control-plane-host",
+        "nuc-2",
+        "--ssh-signing-key",
+        "next",
+        "--ssh-cert-ttl-s",
+        "900",
+        "--ssh-login-user-linux",
+        "ops",
+        "--ssh-login-user-macos",
+        "admin",
     ])
     .expect("flags");
     let made = signing(&flags, ledger()).expect("made").expect("on");
     assert_eq!(made.fleet.len(), 2);
     assert_eq!(made.signing, 1);
     assert!(made.control_plane.is_some());
-    assert_eq!(made.control_plane_hosts.iter().map(String::as_str).collect::<Vec<_>>(), ["nuc", "nuc-2"]);
-    assert_eq!((made.ttl_secs, made.login_linux.as_str(), made.login_macos.as_str()), (900, "ops", "admin"));
+    assert_eq!(
+        made.control_plane_hosts
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ["nuc", "nuc-2"]
+    );
+    assert_eq!(
+        (
+            made.ttl_secs,
+            made.login_linux.as_str(),
+            made.login_macos.as_str()
+        ),
+        (900, "ops", "admin")
+    );
     assert_eq!(made.operators, Path::new(&operators));
-    assert_eq!(made.fleet[0].public_line(), CaKey::parse_secret(&one).expect("a key")[0].public_line());
-    let plain = serve(&["--ssh-ca-secret-file", &both, "--ssh-operators-file", &operators]).expect("flags");
+    assert_eq!(
+        made.fleet[0].public_line(),
+        CaKey::parse_secret(&one).expect("a key")[0].public_line()
+    );
+    let plain = serve(&[
+        "--ssh-ca-secret-file",
+        &both,
+        "--ssh-operators-file",
+        &operators,
+    ])
+    .expect("flags");
     let made = signing(&plain, ledger()).expect("made").expect("on");
     assert_eq!((made.signing, made.control_plane.is_none()), (0, true));
     assert!(format!("{made:?}").starts_with("Signing"));
@@ -169,7 +249,11 @@ fn signing_is_made_from_the_files_and_flags() {
 fn signing_refuses_what_is_wrong_with_a_file_or_a_flag_at_start() {
     let dir = scratch("ssh-config-refused");
     let one = secret(dir.path(), "one", &key_file(1));
-    let two = secret(dir.path(), "two", &format!("{}{}", key_file(1), key_file(2)));
+    let two = secret(
+        dir.path(),
+        "two",
+        &format!("{}{}", key_file(1), key_file(2)),
+    );
     let operators = secret(dir.path(), "operators.toml", OPERATORS);
     let junk = secret(dir.path(), "junk", "not keys");
     let broken = secret(dir.path(), "broken.toml", "not [ toml");
@@ -177,26 +261,70 @@ fn signing_refuses_what_is_wrong_with_a_file_or_a_flag_at_start() {
     fs::write(&open, key_file(1)).expect("a file");
     fs::set_permissions(&open, fs::Permissions::from_mode(0o644)).expect("mode");
     let open = open.display().to_string();
-    let base = ["--ssh-ca-secret-file", &one, "--ssh-operators-file", &operators];
+    let base = [
+        "--ssh-ca-secret-file",
+        &one,
+        "--ssh-operators-file",
+        &operators,
+    ];
     let refused = |extra: &[&str]| {
         let flags = serve(&[&base[..], extra].concat()).expect("flags");
         signing(&flags, ledger()).expect_err("refused")
     };
-    let mut on_open = serve(&["--ssh-ca-secret-file", &open, "--ssh-operators-file", &operators]).expect("flags");
-    assert!(matches!(signing(&on_open, ledger()), Err(SshStartError::Secret(_))));
+    let mut on_open = serve(&[
+        "--ssh-ca-secret-file",
+        &open,
+        "--ssh-operators-file",
+        &operators,
+    ])
+    .expect("flags");
+    assert!(matches!(
+        signing(&on_open, ledger()),
+        Err(SshStartError::Secret(_))
+    ));
     on_open.ssh.ssh_ca_secret_file = Some(junk.into());
     assert!(matches!(
         signing(&on_open, ledger()),
-        Err(SshStartError::Key { flag: "--ssh-ca-secret-file", why: KeyError::BadPrivateKey })
+        Err(SshStartError::Key {
+            flag: "--ssh-ca-secret-file",
+            why: KeyError::BadPrivateKey
+        })
     ));
-    assert!(matches!(refused(&["--ssh-signing-key", "next"]), SshStartError::NoNextKey));
-    assert!(matches!(refused(&["--ssh-cp-ca-secret-file", &two]), SshStartError::ControlPlaneKeys(2)));
-    assert!(matches!(refused(&["--ssh-control-plane-host", "Nuc"]), SshStartError::HostId(h) if h == "Nuc"));
-    assert!(matches!(refused(&["--ssh-login-user-linux", ""]), SshStartError::LoginUser("--ssh-login-user-linux")));
-    assert!(matches!(refused(&["--ssh-login-user-macos", "-x"]), SshStartError::LoginUser("--ssh-login-user-macos")));
-    let flags = serve(&["--ssh-ca-secret-file", &one, "--ssh-operators-file", &broken]).expect("flags");
-    assert!(matches!(signing(&flags, ledger()), Err(SshStartError::Operators(_))));
-    assert!(refused(&["--ssh-login-user-linux", "a b"]).to_string().contains("not an account name"));
+    assert!(matches!(
+        refused(&["--ssh-signing-key", "next"]),
+        SshStartError::NoNextKey
+    ));
+    assert!(matches!(
+        refused(&["--ssh-cp-ca-secret-file", &two]),
+        SshStartError::ControlPlaneKeys(2)
+    ));
+    assert!(
+        matches!(refused(&["--ssh-control-plane-host", "Nuc"]), SshStartError::HostId(h) if h == "Nuc")
+    );
+    assert!(matches!(
+        refused(&["--ssh-login-user-linux", ""]),
+        SshStartError::LoginUser("--ssh-login-user-linux")
+    ));
+    assert!(matches!(
+        refused(&["--ssh-login-user-macos", "-x"]),
+        SshStartError::LoginUser("--ssh-login-user-macos")
+    ));
+    let flags = serve(&[
+        "--ssh-ca-secret-file",
+        &one,
+        "--ssh-operators-file",
+        &broken,
+    ])
+    .expect("flags");
+    assert!(matches!(
+        signing(&flags, ledger()),
+        Err(SshStartError::Operators(_))
+    ));
+    assert!(
+        refused(&["--ssh-login-user-linux", "a b"])
+            .to_string()
+            .contains("not an account name")
+    );
 }
 
 /// Proves: an account name is 1 to 32 bytes of letters, digits, `_`, `-` and `.` that does not

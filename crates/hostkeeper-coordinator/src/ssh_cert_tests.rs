@@ -14,7 +14,8 @@ use super::{
     put_string, put_u32,
 };
 
-pub(crate) const ED25519_KEY: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINSW0c5QIg73t2MjzpzH78ySOEX8uwvfmJPtDPnxtDK9 fx";
+pub(crate) const ED25519_KEY: &str =
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINSW0c5QIg73t2MjzpzH78ySOEX8uwvfmJPtDPnxtDK9 fx";
 const ED25519_PRINT: &str = "SHA256:wWOa+A9yA/9AqP2DOM1BhmqWuCcmVoGXJQBSRvYZro4";
 const ECDSA_KEY: &str = "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBL5xFNrCOU3xadLpn+rcsiSFdIwLq9gwD6Xcnbh00YJ8JKEqKjmhzlyOjsgzpQKGWTD3JkAclFZp+wkZG0N9KWk= fx";
 const ECDSA_PRINT: &str = "SHA256:LeHLf0qk1jbaVdPf+THHQp8D44fOeY4lBWqZUHwZfEk";
@@ -75,7 +76,9 @@ impl File<'_> {
     fn of(seed: u8) -> (File<'static>, CaKey) {
         let (key, pem) = generated(seed);
         let public = key.pair.public_key().as_ref().to_vec();
-        let secret: Vec<u8> = (seed..seed.wrapping_add(32)).chain(public.clone()).collect();
+        let secret: Vec<u8> = (seed..seed.wrapping_add(32))
+            .chain(public.clone())
+            .collect();
         assert!(pem.contains(BEGIN));
         let public: &'static [u8] = Box::leak(public.into_boxed_slice());
         (
@@ -137,7 +140,9 @@ fn a_made_key_is_a_private_key_file_that_reads_back_as_the_same_key() {
     let (key, pem) = generated(1);
     assert!(pem.starts_with(&format!("{BEGIN}\n")) && pem.ends_with(&format!("{END}\n")));
     let body: Vec<&str> = pem.lines().filter(|l| !l.starts_with("-----")).collect();
-    assert!(body.iter().all(|l| l.len() <= 70) && body[..body.len() - 1].iter().all(|l| l.len() == 70));
+    assert!(
+        body.iter().all(|l| l.len() <= 70) && body[..body.len() - 1].iter().all(|l| l.len() == 70)
+    );
     let file = STANDARD.decode(body.concat()).expect("base64");
     assert!(file.starts_with(MAGIC));
     let read = CaKey::parse_secret(&pem).expect("reads back");
@@ -178,7 +183,11 @@ fn a_ca_secret_is_one_key_or_two_in_order_and_nothing_else() {
         ("no end", one.replace(END, "")),
         ("not base64", format!("{BEGIN}\n!!!\n{END}\n")),
     ] {
-        assert_eq!(CaKey::parse_secret(&text).err(), Some(KeyError::BadPrivateKey), "{name}");
+        assert_eq!(
+            CaKey::parse_secret(&text).err(),
+            Some(KeyError::BadPrivateKey),
+            "{name}"
+        );
     }
 }
 
@@ -222,8 +231,14 @@ fn a_private_key_file_is_refused_part_by_part() {
     let mut magic = MAGIC.to_vec();
     magic[0] = b'x';
     let wrong = format!("{BEGIN}\n{}\n{END}\n", STANDARD.encode(magic));
-    assert_eq!(CaKey::parse_secret(&wrong).err(), Some(KeyError::BadPrivateKey));
-    assert_eq!(CaKey::from_seed(&[0; 31]).err(), Some(KeyError::BadPrivateKey));
+    assert_eq!(
+        CaKey::parse_secret(&wrong).err(),
+        Some(KeyError::BadPrivateKey)
+    );
+    assert_eq!(
+        CaKey::from_seed(&[0; 31]).err(),
+        Some(KeyError::BadPrivateKey)
+    );
 }
 
 /// Proves: a key that cannot be made without random bytes is refused `Crypto`, whichever of the
@@ -239,7 +254,10 @@ fn a_key_is_not_made_without_random_bytes() {
         buffer.fill(1);
         !fails
     };
-    assert_eq!(CaKey::generate("c", &second_fails).err(), Some(KeyError::Crypto));
+    assert_eq!(
+        CaKey::generate("c", &second_fails).err(),
+        Some(KeyError::Crypto)
+    );
 }
 
 /// Proves: the public key lines `ssh-keygen` writes for Ed25519, ECDSA P-256 and RSA 3072 read, with
@@ -258,9 +276,18 @@ fn the_keys_ssh_keygen_makes_read_with_its_fingerprints() {
         let bare = line.rsplit_once(' ').expect("a comment").0;
         assert_eq!(UserKey::parse(bare).expect("a key"), parsed);
     }
-    assert!(matches!(UserKey::parse(ED25519_KEY).unwrap().key, UserKey::Ed25519 { .. }));
-    assert!(matches!(UserKey::parse(ECDSA_KEY).unwrap().key, UserKey::Ecdsa { .. }));
-    assert!(matches!(UserKey::parse(RSA_KEY).unwrap().key, UserKey::Rsa { .. }));
+    assert!(matches!(
+        UserKey::parse(ED25519_KEY).unwrap().key,
+        UserKey::Ed25519 { .. }
+    ));
+    assert!(matches!(
+        UserKey::parse(ECDSA_KEY).unwrap().key,
+        UserKey::Ecdsa { .. }
+    ));
+    assert!(matches!(
+        UserKey::parse(RSA_KEY).unwrap().key,
+        UserKey::Rsa { .. }
+    ));
 }
 
 /// Proves: a public key the CA does not sign is `BadPublicKey`: a curve other than P-256, an RSA
@@ -331,7 +358,11 @@ fn a_public_key_the_ca_does_not_sign_is_refused() {
         ("long", format!("{ED25519_KEY} {}", "c".repeat(4096))),
     ];
     for (name, line) in cases {
-        assert_eq!(UserKey::parse(&line).err(), Some(KeyError::BadPublicKey), "{name}");
+        assert_eq!(
+            UserKey::parse(&line).err(),
+            Some(KeyError::BadPublicKey),
+            "{name}"
+        );
     }
 }
 
@@ -450,7 +481,9 @@ fn a_certificate_says_exactly_what_it_was_given_and_is_signed_by_the_ca() {
         (RSA_KEY, "ssh-rsa-cert-v01@openssh.com", 2),
     ] {
         let user = UserKey::parse(line).expect("a key");
-        let made = ca.sign_user(&spec(&user.key, "hk-host-node-07"), &counting(200)).expect("signed");
+        let made = ca
+            .sign_user(&spec(&user.key, "hk-host-node-07"), &counting(200))
+            .expect("signed");
         let cert = read_cert(&made, fields);
         assert_eq!(cert.kind, kind);
         assert!(made.starts_with(&format!("{kind} ")));
@@ -459,7 +492,10 @@ fn a_certificate_says_exactly_what_it_was_given_and_is_signed_by_the_ca() {
         assert_eq!(cert.cert_type, 1);
         assert_eq!(cert.key_id, "alice/16");
         assert_eq!(cert.principals, ["hk-host-node-07"]);
-        assert_eq!((cert.valid_after, cert.valid_before), (1_799_999_940, 1_800_003_601));
+        assert_eq!(
+            (cert.valid_after, cert.valid_before),
+            (1_799_999_940, 1_800_003_601)
+        );
         assert!(cert.critical.is_empty() && cert.reserved.is_empty());
         assert_eq!(cert.extensions, [("permit-pty".to_owned(), Vec::new())]);
         let user_blob = blob_of(line);
@@ -476,7 +512,11 @@ fn a_certificate_says_exactly_what_it_was_given_and_is_signed_by_the_ca() {
             .expect("the CA's signature verifies");
         let mut wrong = cert.signed.clone();
         wrong[40] ^= 1;
-        assert!(UnparsedPublicKey::new(&ED25519, ca.pair.public_key().as_ref()).verify(&wrong, &raw).is_err());
+        assert!(
+            UnparsedPublicKey::new(&ED25519, ca.pair.public_key().as_ref())
+                .verify(&wrong, &raw)
+                .is_err()
+        );
     }
 }
 
@@ -488,9 +528,18 @@ fn a_certificate_says_exactly_what_it_was_given_and_is_signed_by_the_ca() {
 fn a_certificate_has_a_fresh_nonce_and_needs_random_bytes() {
     let (ca, _) = generated(5);
     let user = UserKey::parse(ED25519_KEY).expect("a key");
-    assert_eq!(ca.sign_user(&spec(&user.key, "p"), &nothing).err(), Some(KeyError::Crypto));
-    let a = read_cert(&ca.sign_user(&spec(&user.key, "p"), &counting(1)).unwrap(), 1);
-    let b = read_cert(&ca.sign_user(&spec(&user.key, "p"), &counting(2)).unwrap(), 1);
+    assert_eq!(
+        ca.sign_user(&spec(&user.key, "p"), &nothing).err(),
+        Some(KeyError::Crypto)
+    );
+    let a = read_cert(
+        &ca.sign_user(&spec(&user.key, "p"), &counting(1)).unwrap(),
+        1,
+    );
+    let b = read_cert(
+        &ca.sign_user(&spec(&user.key, "p"), &counting(2)).unwrap(),
+        1,
+    );
     assert_ne!(a.nonce, b.nonce);
     assert_eq!((a.serial, a.key_id), (b.serial, b.key_id));
 }

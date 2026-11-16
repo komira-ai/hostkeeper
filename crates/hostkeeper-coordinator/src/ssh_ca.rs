@@ -176,8 +176,7 @@ fn init_in(out: &Path, random: &Random) -> Result<Report, SshCaError> {
 /// `sign`: the certificate line.
 fn sign_with(sign: &Sign, now: u64, random: &Random) -> Result<Report, SshCaError> {
     let secret = read_secret(&sign.ca_key_file, "--ca-key-file", MAX_SECRET_BYTES)?;
-    let keys =
-        CaKey::parse_secret(&String::from_utf8_lossy(&secret)).map_err(SshCaError::CaKey)?;
+    let keys = CaKey::parse_secret(&String::from_utf8_lossy(&secret)).map_err(SshCaError::CaKey)?;
     let host = HostId::parse(&sign.host_id).map_err(|_| SshCaError::HostId)?;
     if sign.operator.parse::<TokenName>().is_err() {
         return Err(SshCaError::Operator);

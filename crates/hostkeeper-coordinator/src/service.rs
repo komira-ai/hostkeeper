@@ -14,7 +14,7 @@ use hostkeeper_wire::wire::{Answer, Heartbeat, ORDER_FEATURE, ServiceReply, Verd
 use serde::Serialize;
 
 use crate::accounts::AccountStore;
-use crate::desired::{Desired, DesiredError, DesiredStore, StoreError};
+use crate::desired::{Desired, DesiredStore};
 use crate::enrollment::Enrollment;
 use crate::fleet::{Fleet, Node, QUIET_START};
 use crate::group_scope::Basis;
@@ -22,7 +22,7 @@ use crate::halt;
 use crate::identity::Identity;
 use crate::layout::LayoutStore;
 use crate::membership::{Standing, standing};
-use crate::ops::{AuditEntry, OperateError, OpsError, OpsStore};
+use crate::ops::{AuditEntry, OperateError, OpsStore};
 use crate::order_terms::Terms;
 use crate::orders::Order;
 use crate::reconcile::reconcile;

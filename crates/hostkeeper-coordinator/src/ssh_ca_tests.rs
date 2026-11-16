@@ -19,8 +19,14 @@ fn mode(path: &Path) -> u32 {
 }
 
 fn init(out: &Path) -> Result<String, SshCaError> {
-    run(&SshCaCommand::Init(Init { out: out.to_owned() }), NOW, &os_random())
-        .map(|report| report.to_string())
+    run(
+        &SshCaCommand::Init(Init {
+            out: out.to_owned(),
+        }),
+        NOW,
+        &os_random(),
+    )
+    .map(|report| report.to_string())
 }
 
 fn never() -> Random {
@@ -55,8 +61,17 @@ fn init_writes_the_private_key_to_a_file_and_prints_only_the_public_key() {
     let keys = CaKey::parse_secret(&text).expect("a key");
     let lines: Vec<&str> = report.lines().collect();
     assert_eq!(lines.len(), 3);
-    assert_eq!(lines[0], format!("wrote the private key {}", file.display()));
-    assert_eq!(lines[1], format!("public key: {} hostkeeper-ssh-user-ca", keys[0].public_line()));
+    assert_eq!(
+        lines[0],
+        format!("wrote the private key {}", file.display())
+    );
+    assert_eq!(
+        lines[1],
+        format!(
+            "public key: {} hostkeeper-ssh-user-ca",
+            keys[0].public_line()
+        )
+    );
     assert_eq!(lines[2], format!("fingerprint: {}", keys[0].fingerprint()));
     let secret_body: String = text.lines().filter(|l| !l.starts_with("-----")).collect();
     assert!(!report.contains(&secret_body[..40]));
@@ -74,14 +89,26 @@ fn init_never_replaces_a_key_and_names_what_it_could_not_write() {
     init(&out).expect("made");
     let before = fs::read(out.join(KEY_FILE)).expect("the key file");
     let again = init(&out).expect_err("refused");
-    assert!(matches!(&again, SshCaError::Write { path, .. } if *path == out.join(KEY_FILE)), "{again}");
+    assert!(
+        matches!(&again, SshCaError::Write { path, .. } if *path == out.join(KEY_FILE)),
+        "{again}"
+    );
     assert_eq!(fs::read(out.join(KEY_FILE)).expect("the key file"), before);
     let file = dir.path().join("a-file");
     fs::write(&file, "x").expect("a file");
     let blocked = init(&file.join("ca")).expect_err("refused");
-    assert!(matches!(&blocked, SshCaError::Write { path, .. } if *path == file.join("ca")), "{blocked}");
+    assert!(
+        matches!(&blocked, SshCaError::Write { path, .. } if *path == file.join("ca")),
+        "{blocked}"
+    );
     let silent = dir.path().join("silent");
-    let refused = run(&SshCaCommand::Init(Init { out: silent.clone() }), NOW, &never());
+    let refused = run(
+        &SshCaCommand::Init(Init {
+            out: silent.clone(),
+        }),
+        NOW,
+        &never(),
+    );
     assert!(matches!(refused, Err(SshCaError::Random)));
     assert!(!silent.join(KEY_FILE).exists());
 }
@@ -129,8 +156,8 @@ fn sign_prints_the_certificate_the_ca_file_signs_for_the_one_host() {
     assert_eq!((cert.valid_after, cert.valid_before), (NOW - 60, NOW + 601));
     assert_eq!(cert.ca.len(), key.blob().len());
     assert_eq!(cert.ca, key.blob());
-    use ring::signature::{ED25519, UnparsedPublicKey};
     use ring::signature::KeyPair as _;
+    use ring::signature::{ED25519, UnparsedPublicKey};
     UnparsedPublicKey::new(&ED25519, key.pair.public_key().as_ref())
         .verify(&cert.signed, &cert.raw_signature)
         .expect("signed by the file's key");
@@ -150,29 +177,47 @@ fn sign_refuses_what_it_should_not_sign_with_the_reason() {
     let sign = |flags: &Sign, random: &Random| run(&SshCaCommand::Sign(flags.clone()), NOW, random);
     let mut open = good.clone();
     fs::set_permissions(&good.ca_key_file, fs::Permissions::from_mode(0o644)).expect("mode");
-    assert!(matches!(sign(&open, &os_random()), Err(SshCaError::Secret(_))));
+    assert!(matches!(
+        sign(&open, &os_random()),
+        Err(SshCaError::Secret(_))
+    ));
     fs::set_permissions(&good.ca_key_file, fs::Permissions::from_mode(0o600)).expect("mode");
     let junk = dir.path().join("junk");
     fs::write(&junk, "not a key").expect("a file");
     fs::set_permissions(&junk, fs::Permissions::from_mode(0o600)).expect("mode");
     open.ca_key_file = junk;
-    assert!(matches!(sign(&open, &os_random()), Err(SshCaError::CaKey(KeyError::BadPrivateKey))));
+    assert!(matches!(
+        sign(&open, &os_random()),
+        Err(SshCaError::CaKey(KeyError::BadPrivateKey))
+    ));
     let mut bad = good.clone();
     bad.host_id = "Node_7".to_owned();
     assert!(matches!(sign(&bad, &os_random()), Err(SshCaError::HostId)));
     let mut bad = good.clone();
     bad.operator = "Carol".to_owned();
-    assert!(matches!(sign(&bad, &os_random()), Err(SshCaError::Operator)));
+    assert!(matches!(
+        sign(&bad, &os_random()),
+        Err(SshCaError::Operator)
+    ));
     let mut bad = good.clone();
     bad.public_key_file = dir.path().join("missing.pub");
     let error = sign(&bad, &os_random()).expect_err("missing");
-    assert!(matches!(&error, SshCaError::Read { path, .. } if *path == bad.public_key_file), "{error}");
+    assert!(
+        matches!(&error, SshCaError::Read { path, .. } if *path == bad.public_key_file),
+        "{error}"
+    );
     let mut bad = good.clone();
     bad.public_key_file = dir.path().join("long.pub");
     fs::write(&bad.public_key_file, "#".repeat(8 * 1024 + 1)).expect("a file");
-    assert!(matches!(sign(&bad, &os_random()), Err(SshCaError::Read { .. })));
+    assert!(matches!(
+        sign(&bad, &os_random()),
+        Err(SshCaError::Read { .. })
+    ));
     fs::write(&bad.public_key_file, "ssh-ed25519 AAAA\n").expect("a file");
-    assert!(matches!(sign(&bad, &os_random()), Err(SshCaError::PublicKey(KeyError::BadPublicKey))));
+    assert!(matches!(
+        sign(&bad, &os_random()),
+        Err(SshCaError::PublicKey(KeyError::BadPublicKey))
+    ));
     assert!(matches!(sign(&good, &never()), Err(SshCaError::Random)));
     assert!(matches!(sign(&good, &draws(1)), Err(SshCaError::Random)));
     assert!(sign(&good, &draws(2)).is_ok());

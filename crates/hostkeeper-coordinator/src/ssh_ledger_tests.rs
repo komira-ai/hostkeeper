@@ -41,7 +41,12 @@ fn issue<'a>(operator: &'a str, host: &'a str, ttl_secs: u64) -> Issue<'a> {
 /// fields that run together (`ab`+`c` and `a`+`bc` hashing alike).
 #[test]
 fn the_chain_hash_is_pinned_by_values_made_outside_the_code() {
-    let first = line(Some("node-07"), "alice", "ssh_cert_signed", "{\"serial\":1}");
+    let first = line(
+        Some("node-07"),
+        "alice",
+        "ssh_cert_signed",
+        "{\"serial\":1}",
+    );
     let one = chain_hash(&GENESIS, &first);
     assert_eq!(
         hex(&one),
@@ -52,8 +57,19 @@ fn the_chain_hash_is_pinned_by_values_made_outside_the_code() {
         hex(&chain_hash(&GENESIS, &denied)),
         "5436f17bb4968df2302685fd928e9f248893817c948ce43db108a4150dbc2f3c"
     );
-    assert_eq!(chain_hash(&GENESIS, &denied), chain_hash(&GENESIS, &line(Some(""), "alice", "ssh_denied", "{\"why\":\"x\"}")));
-    let mut second = line(Some("alice"), "bob", "ssh_revoke", "{\"revoked\":1,\"operator\":\"alice\"}");
+    assert_eq!(
+        chain_hash(&GENESIS, &denied),
+        chain_hash(
+            &GENESIS,
+            &line(Some(""), "alice", "ssh_denied", "{\"why\":\"x\"}")
+        )
+    );
+    let mut second = line(
+        Some("alice"),
+        "bob",
+        "ssh_revoke",
+        "{\"revoked\":1,\"operator\":\"alice\"}",
+    );
     second.at_unix = AT + 1;
     assert_eq!(
         hex(&chain_hash(&one, &second)),
@@ -76,11 +92,20 @@ fn the_details_are_json_objects_with_the_reason_escaped() {
         signed_detail(7, &issue("alice", "node-07", 60), AT + 60),
         "{\"serial\":7,\"key_fingerprint\":\"SHA256:abc\",\"expires_unix\":1800000060,\"reason\":\"a \\\"quoted\\\" reason\"}"
     );
-    assert_eq!(revoke_detail(Revocation::Operator("alice"), 2), "{\"operator\":\"alice\",\"revoked\":2}");
-    assert_eq!(revoke_detail(Revocation::Serial(9), 0), "{\"serial\":9,\"revoked\":0}");
+    assert_eq!(
+        revoke_detail(Revocation::Operator("alice"), 2),
+        "{\"operator\":\"alice\",\"revoked\":2}"
+    );
+    assert_eq!(
+        revoke_detail(Revocation::Serial(9), 0),
+        "{\"serial\":9,\"revoked\":0}"
+    );
     assert_eq!(revoke_subject(Revocation::Operator("alice")), "alice");
     assert_eq!(revoke_subject(Revocation::Serial(9)), "9");
-    assert_eq!(denied_detail("not_permitted"), "{\"why\":\"not_permitted\"}");
+    assert_eq!(
+        denied_detail("not_permitted"),
+        "{\"why\":\"not_permitted\"}"
+    );
 }
 
 /// Proves: the memory ledger numbers certificates 1, 2, 3, stamps each with its clock, records
@@ -91,7 +116,9 @@ fn the_details_are_json_objects_with_the_reason_escaped() {
 #[test]
 fn the_memory_ledger_records_a_certificate_with_its_line_and_chains_the_lines() {
     let ledger = Memory::at(AT);
-    let first = ledger.issue(&issue("alice", "node-07", 3600)).expect("issued");
+    let first = ledger
+        .issue(&issue("alice", "node-07", 3600))
+        .expect("issued");
     ledger.set_clock(AT + 5);
     let second = ledger.issue(&issue("bob", "node-08", 60)).expect("issued");
     assert_eq!((first.serial, first.issued_unix), (1, AT));
@@ -99,7 +126,10 @@ fn the_memory_ledger_records_a_certificate_with_its_line_and_chains_the_lines() 
     let certs = ledger.certs();
     assert_eq!(certs[&2].operator, "bob");
     assert_eq!(certs[&2].host_id, "node-08");
-    assert_eq!((certs[&2].issued_unix, certs[&2].expires_unix), (AT + 5, AT + 65));
+    assert_eq!(
+        (certs[&2].issued_unix, certs[&2].expires_unix),
+        (AT + 5, AT + 65)
+    );
     assert_eq!(certs[&1].fingerprint, "SHA256:abc");
     assert_eq!(certs[&1].reason, "a \"quoted\" reason");
     let audit = ledger.audit();
@@ -120,9 +150,15 @@ fn the_memory_ledger_records_a_certificate_with_its_line_and_chains_the_lines() 
 #[test]
 fn the_memory_ledger_revokes_what_is_not_expired_or_revoked_and_counts_it() {
     let ledger = Memory::at(AT);
-    ledger.issue(&issue("alice", "node-07", 3600)).expect("issued");
-    ledger.issue(&issue("alice", "node-08", 10)).expect("issued");
-    ledger.issue(&issue("bob", "node-07", 3600)).expect("issued");
+    ledger
+        .issue(&issue("alice", "node-07", 3600))
+        .expect("issued");
+    ledger
+        .issue(&issue("alice", "node-08", 10))
+        .expect("issued");
+    ledger
+        .issue(&issue("bob", "node-07", 3600))
+        .expect("issued");
     ledger.set_clock(AT + 20);
     assert_eq!(ledger.revoke("carol", Revocation::Operator("alice")), Ok(1));
     assert_eq!(ledger.revoke("carol", Revocation::Operator("alice")), Ok(0));
@@ -131,8 +167,14 @@ fn the_memory_ledger_revokes_what_is_not_expired_or_revoked_and_counts_it() {
     assert_eq!(ledger.revoked().keys().copied().collect::<Vec<_>>(), [1, 3]);
     assert_eq!(ledger.revoked()[&1], "carol");
     let lines = ledger.audit().len();
-    assert_eq!(ledger.revoke("carol", Revocation::Serial(99)), Err(LedgerError::UnknownCert));
-    assert_eq!(ledger.revoke("carol", Revocation::Operator("dave")), Err(LedgerError::UnknownCert));
+    assert_eq!(
+        ledger.revoke("carol", Revocation::Serial(99)),
+        Err(LedgerError::UnknownCert)
+    );
+    assert_eq!(
+        ledger.revoke("carol", Revocation::Operator("dave")),
+        Err(LedgerError::UnknownCert)
+    );
     assert_eq!(ledger.audit().len(), lines);
     let last = ledger.audit().pop().expect("a line");
     assert_eq!((last.line.action, last.line.by.as_str()), (REVOKE, "carol"));
@@ -146,14 +188,28 @@ fn the_memory_ledger_revokes_what_is_not_expired_or_revoked_and_counts_it() {
 #[test]
 fn a_refused_call_is_a_line_and_a_ledger_that_cannot_write_records_nothing() {
     let ledger = Memory::at(AT);
-    ledger.denied("bob", "node-07", "not_permitted").expect("written");
+    ledger
+        .denied("bob", "node-07", "not_permitted")
+        .expect("written");
     let line = &ledger.audit()[0].line;
-    assert_eq!((line.action, line.by.as_str(), line.subject.as_deref()), (DENIED, "bob", Some("node-07")));
+    assert_eq!(
+        (line.action, line.by.as_str(), line.subject.as_deref()),
+        (DENIED, "bob", Some("node-07"))
+    );
     assert_eq!(line.detail, "{\"why\":\"not_permitted\"}");
     ledger.refuse_next(3);
-    assert!(matches!(ledger.issue(&issue("a", "h", 1)), Err(LedgerError::Unwritten(_))));
-    assert!(matches!(ledger.revoke("a", Revocation::Serial(1)), Err(LedgerError::Unwritten(_))));
-    assert!(matches!(ledger.denied("a", "h", "x"), Err(LedgerError::Unwritten(_))));
+    assert!(matches!(
+        ledger.issue(&issue("a", "h", 1)),
+        Err(LedgerError::Unwritten(_))
+    ));
+    assert!(matches!(
+        ledger.revoke("a", Revocation::Serial(1)),
+        Err(LedgerError::Unwritten(_))
+    ));
+    assert!(matches!(
+        ledger.denied("a", "h", "x"),
+        Err(LedgerError::Unwritten(_))
+    ));
     assert!(ledger.certs().is_empty());
     assert_eq!(ledger.audit().len(), 1);
     assert_eq!(ledger.issue(&issue("a", "h", 1)).map(|i| i.serial), Ok(1));

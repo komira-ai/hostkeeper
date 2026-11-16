@@ -99,7 +99,7 @@ pub enum SshStartError {
     #[error("--ssh-signing-key next: --ssh-ca-secret-file holds one key")]
     NoNextKey,
     /// A `--ssh-control-plane-host` that is not a host id.
-    #[error("--ssh-control-plane-host {0:?}: not a host id ({})", HostId::GRAMMAR)]
+    #[error("--ssh-control-plane-host {0:?}: not a host id ({grammar})", grammar = HostId::GRAMMAR)]
     HostId(String),
     /// The operators file is refused.
     #[error("--ssh-operators-file: {0}")]

@@ -47,7 +47,10 @@ struct Watched {
 
 impl Ledger for Watched {
     fn issue(&self, issue: &Issue<'_>) -> Result<Issued, LedgerError> {
-        self.steps.lock().unwrap_or_else(PoisonError::into_inner).push("issue");
+        self.steps
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push("issue");
         self.inner.issue(issue)
     }
 
@@ -87,7 +90,11 @@ pub(crate) fn world(name: &str, file: Option<&str>, tune: Tune) -> World {
     let records = Arc::new(MemoryRecords::new());
     let enrollment = EnrollmentRig::over_records(&format!("{name}-enrollment"), records.clone());
     let rig = Rig::new(name);
-    let coordinator = coordinator_on(&Fake::new(), &rig.clock, Some(Arc::clone(&enrollment.enrollment)));
+    let coordinator = coordinator_on(
+        &Fake::new(),
+        &rig.clock,
+        Some(Arc::clone(&enrollment.enrollment)),
+    );
     for host in ["node-07", "node-08", "nuc"] {
         enroll_host(&enrollment.enrollment, host);
     }
@@ -107,7 +114,10 @@ pub(crate) fn world(name: &str, file: Option<&str>, tune: Tune) -> World {
     let watched = Arc::clone(&steps);
     let fails = tune.random_fails;
     let random: Random = Box::new(move |buffer| {
-        watched.lock().unwrap_or_else(PoisonError::into_inner).push("sign");
+        watched
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push("sign");
         buffer.fill(7);
         !fails
     });
@@ -177,7 +187,10 @@ fn the_operator_the_file_lists_gets_a_certificate_for_one_host_that_the_ca_signe
     let world = world("ssh-sign-ok", Some(OPERATORS), Tune::default());
     let answer = world
         .coordinator
-        .ssh_sign_user_cert(&operator(), &request("node-07", ED25519_KEY, "look at a log"))
+        .ssh_sign_user_cert(
+            &operator(),
+            &request("node-07", ED25519_KEY, "look at a log"),
+        )
         .expect("signed");
     assert_eq!(answer.key_id, "operator/1");
     assert_eq!(answer.login_user, "root");
@@ -186,20 +199,31 @@ fn the_operator_the_file_lists_gets_a_certificate_for_one_host_that_the_ca_signe
     assert_eq!(cert.serial, 1);
     assert_eq!(cert.key_id, "operator/1");
     assert_eq!(cert.principals, ["hk-host-node-07"]);
-    assert_eq!((cert.valid_after, cert.valid_before), (NOW - 60, NOW + 3601));
+    assert_eq!(
+        (cert.valid_after, cert.valid_before),
+        (NOW - 60, NOW + 3601)
+    );
     assert_eq!(cert.extensions, [("permit-pty".to_owned(), Vec::new())]);
     assert!(cert.critical.is_empty());
     let ca = &world.fleet[0];
     let blob = ca.split(' ').nth(1).expect("a blob");
     use base64::Engine as _;
-    let blob = base64::engine::general_purpose::STANDARD.decode(blob).expect("base64");
+    let blob = base64::engine::general_purpose::STANDARD
+        .decode(blob)
+        .expect("base64");
     assert_eq!(cert.ca, blob);
     UnparsedPublicKey::new(&ED25519, &blob[blob.len() - 32..])
         .verify(&cert.signed, &cert.raw_signature)
         .expect("signed by the current key");
     let row = &world.ledger.certs()[&1];
-    assert_eq!((row.operator.as_str(), row.host_id.as_str()), ("operator", "node-07"));
-    assert_eq!(row.fingerprint, UserKey::parse(ED25519_KEY).expect("a key").fingerprint);
+    assert_eq!(
+        (row.operator.as_str(), row.host_id.as_str()),
+        ("operator", "node-07")
+    );
+    assert_eq!(
+        row.fingerprint,
+        UserKey::parse(ED25519_KEY).expect("a key").fingerprint
+    );
     assert_eq!(row.reason, "look at a log");
     assert_eq!(principal("node-07"), "hk-host-node-07");
 }
@@ -216,7 +240,11 @@ fn the_ledger_writes_before_the_key_signs() {
         .coordinator
         .ssh_sign_user_cert(&operator(), &request("node-07", ED25519_KEY, ""))
         .expect("signed");
-    let steps = world.steps.lock().unwrap_or_else(PoisonError::into_inner).clone();
+    let steps = world
+        .steps
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
     assert_eq!(steps, ["issue", "sign"]);
 }
 
@@ -234,11 +262,16 @@ fn no_certificate_is_made_when_the_ledger_cannot_write() {
         .ssh_sign_user_cert(&operator(), &request("node-07", ED25519_KEY, ""));
     assert_eq!(refused.err(), Some(Refusal::AuditUnavailable));
     assert!(world.ledger.certs().is_empty());
-    assert_eq!(*world.steps.lock().unwrap_or_else(PoisonError::into_inner), ["issue"]);
-    assert!(world
-        .coordinator
-        .ssh_sign_user_cert(&operator(), &request("node-07", ED25519_KEY, ""))
-        .is_ok());
+    assert_eq!(
+        *world.steps.lock().unwrap_or_else(PoisonError::into_inner),
+        ["issue"]
+    );
+    assert!(
+        world
+            .coordinator
+            .ssh_sign_user_cert(&operator(), &request("node-07", ED25519_KEY, ""))
+            .is_ok()
+    );
 }
 
 /// Proves: the signing key that is not the first of the secret signs when `signing` says so (a
@@ -249,7 +282,14 @@ fn no_certificate_is_made_when_the_ledger_cannot_write() {
 /// Catches: a fleet key that signs for the control plane, so a stolen coordinator is root there.
 #[test]
 fn the_key_that_signs_is_the_rotations_and_the_hosts_class() {
-    let next = world("ssh-sign-next", Some(OPERATORS), Tune { signing: 1, ..Tune::default() });
+    let next = world(
+        "ssh-sign-next",
+        Some(OPERATORS),
+        Tune {
+            signing: 1,
+            ..Tune::default()
+        },
+    );
     let answer = next
         .coordinator
         .ssh_sign_user_cert(&operator(), &request("node-07", ED25519_KEY, ""))
@@ -272,7 +312,10 @@ fn the_key_that_signs_is_the_rotations_and_the_hosts_class() {
     let bare = world(
         "ssh-sign-plane-bare",
         Some(OPERATORS),
-        Tune { no_control_plane_key: true, ..Tune::default() },
+        Tune {
+            no_control_plane_key: true,
+            ..Tune::default()
+        },
     );
     let refused = bare
         .coordinator
@@ -302,11 +345,19 @@ fn an_operator_is_refused_what_the_file_does_not_list_and_the_refusal_is_a_line(
     assert_eq!(ask("operator", "nuc"), Some(Refusal::NotPermitted));
     assert_eq!(ask("bob", "node-08"), None);
     let line = |who: &str, host: &str| {
-        (who.to_owned(), Some(host.to_owned()), "{\"why\":\"not_permitted\"}".to_owned())
+        (
+            who.to_owned(),
+            Some(host.to_owned()),
+            "{\"why\":\"not_permitted\"}".to_owned(),
+        )
     };
     assert_eq!(
         denied(&world),
-        [line("dave", "node-07"), line("bob", "node-07"), line("operator", "nuc")]
+        [
+            line("dave", "node-07"),
+            line("bob", "node-07"),
+            line("operator", "nuc")
+        ]
     );
     assert_eq!(world.ledger.certs().len(), 1);
     std::fs::write(&world.operators, "not [ toml").expect("a broken file");
@@ -334,8 +385,11 @@ fn removing_an_operator_from_the_file_takes_effect_at_the_next_call() {
             .err()
     };
     assert_eq!(ask(), None);
-    std::fs::write(&world.operators, "[[operator]]\nname = \"bob\"\nhosts = [\"node-08\"]\n")
-        .expect("rewritten");
+    std::fs::write(
+        &world.operators,
+        "[[operator]]\nname = \"bob\"\nhosts = [\"node-08\"]\n",
+    )
+    .expect("rewritten");
     assert_eq!(ask(), Some(Refusal::NotPermitted));
 }
 
@@ -356,15 +410,33 @@ fn a_request_with_a_fault_is_refused_by_its_token_before_anything_is_written() {
             .ssh_sign_user_cert(&operator(), &request(host, key, reason))
             .err()
     };
-    assert_eq!(ask("Node_7", ED25519_KEY, ""), Some(Refusal::InvalidRequest));
+    assert_eq!(
+        ask("Node_7", ED25519_KEY, ""),
+        Some(Refusal::InvalidRequest)
+    );
     assert_eq!(ask("", ED25519_KEY, ""), Some(Refusal::InvalidRequest));
     assert_eq!(ask("node-99", ED25519_KEY, ""), Some(Refusal::UnknownHost));
-    assert_eq!(ask("node-07", ED25519_KEY, &"x".repeat(201)), Some(Refusal::BadReason));
-    assert_eq!(ask("node-07", ED25519_KEY, "a\nb"), Some(Refusal::BadReason));
-    assert_eq!(ask("node-07", ED25519_KEY, "caf\u{e9}"), Some(Refusal::BadReason));
-    assert_eq!(ask("node-07", "ssh-ed25519 AAAA", ""), Some(Refusal::BadKey));
+    assert_eq!(
+        ask("node-07", ED25519_KEY, &"x".repeat(201)),
+        Some(Refusal::BadReason)
+    );
+    assert_eq!(
+        ask("node-07", ED25519_KEY, "a\nb"),
+        Some(Refusal::BadReason)
+    );
+    assert_eq!(
+        ask("node-07", ED25519_KEY, "caf\u{e9}"),
+        Some(Refusal::BadReason)
+    );
+    assert_eq!(
+        ask("node-07", "ssh-ed25519 AAAA", ""),
+        Some(Refusal::BadKey)
+    );
     assert_eq!(ask("node-07", ED25519_KEY, &"x".repeat(200)), None);
-    let tokens: Vec<String> = denied(&world).into_iter().map(|(_, _, detail)| detail).collect();
+    let tokens: Vec<String> = denied(&world)
+        .into_iter()
+        .map(|(_, _, detail)| detail)
+        .collect();
     assert_eq!(
         tokens,
         [
@@ -388,14 +460,45 @@ fn a_request_with_a_fault_is_refused_by_its_token_before_anything_is_written() {
 fn only_an_operator_is_heard_and_a_coordinator_with_no_ca_is_not_configured() {
     let world = world("ssh-sign-callers", Some(OPERATORS), Tune::default());
     let good = request("node-07", ED25519_KEY, "");
-    assert_eq!(world.coordinator.ssh_sign_user_cert(&Caller::Anonymous, &good).err(), Some(Refusal::Unauthorized));
-    assert_eq!(world.coordinator.ssh_sign_user_cert(&Caller::Ci, &good).err(), Some(Refusal::Forbidden));
-    let revoke = proto::RevokeRequest { operator: "operator".to_owned(), serial: 0 };
-    assert_eq!(world.coordinator.ssh_revoke(&Caller::Anonymous, &revoke).err(), Some(Refusal::Unauthorized));
-    assert_eq!(world.coordinator.ssh_revoke(&Caller::Ci, &revoke).err(), Some(Refusal::Forbidden));
+    assert_eq!(
+        world
+            .coordinator
+            .ssh_sign_user_cert(&Caller::Anonymous, &good)
+            .err(),
+        Some(Refusal::Unauthorized)
+    );
+    assert_eq!(
+        world
+            .coordinator
+            .ssh_sign_user_cert(&Caller::Ci, &good)
+            .err(),
+        Some(Refusal::Forbidden)
+    );
+    let revoke = proto::RevokeRequest {
+        operator: "operator".to_owned(),
+        serial: 0,
+    };
+    assert_eq!(
+        world
+            .coordinator
+            .ssh_revoke(&Caller::Anonymous, &revoke)
+            .err(),
+        Some(Refusal::Unauthorized)
+    );
+    assert_eq!(
+        world.coordinator.ssh_revoke(&Caller::Ci, &revoke).err(),
+        Some(Refusal::Forbidden)
+    );
     let bare = coordinator_on(&Fake::new(), &Rig::new("ssh-sign-bare").clock, None);
-    assert_eq!(bare.ssh_sign_user_cert(&operator(), &proto::SignUserCertRequest::default()).err(), Some(Refusal::NotConfigured));
-    assert_eq!(bare.ssh_revoke(&operator(), &revoke).err(), Some(Refusal::NotConfigured));
+    assert_eq!(
+        bare.ssh_sign_user_cert(&operator(), &proto::SignUserCertRequest::default())
+            .err(),
+        Some(Refusal::NotConfigured)
+    );
+    assert_eq!(
+        bare.ssh_revoke(&operator(), &revoke).err(),
+        Some(Refusal::NotConfigured)
+    );
 }
 
 /// Proves: a Mac's certificate names the Macs' login account and a Linux host's the Linux one; a
@@ -408,7 +511,11 @@ fn only_an_operator_is_heard_and_a_coordinator_with_no_ca_is_not_configured() {
 #[test]
 fn the_login_user_follows_the_host_and_faults_of_the_store_and_the_key_are_store_failed() {
     let world = world("ssh-sign-faults2", Some(OPERATORS), Tune::default());
-    let mut host = world.coordinator.enrolled_host("node-07").expect("read").expect("enrolled");
+    let mut host = world
+        .coordinator
+        .enrolled_host("node-07")
+        .expect("read")
+        .expect("enrolled");
     let ssh = world.coordinator.ssh.as_ref().expect("signing");
     assert_eq!(ssh.login_for(&host), "root");
     host.claims.mac_serial = "C02ABC".to_owned();
@@ -419,7 +526,14 @@ fn the_login_user_follows_the_host_and_faults_of_the_store_and_the_key_are_store
         .ssh_sign_user_cert(&operator(), &request("node-07", ED25519_KEY, ""));
     assert_eq!(refused.err(), Some(Refusal::StoreFailed));
     assert!(world.ledger.certs().is_empty());
-    let silent = self::world("ssh-sign-norandom", Some(OPERATORS), Tune { random_fails: true, ..Tune::default() });
+    let silent = self::world(
+        "ssh-sign-norandom",
+        Some(OPERATORS),
+        Tune {
+            random_fails: true,
+            ..Tune::default()
+        },
+    );
     let refused = silent
         .coordinator
         .ssh_sign_user_cert(&operator(), &request("node-07", ED25519_KEY, ""));
@@ -447,7 +561,10 @@ fn revoking_takes_one_operator_or_one_serial_and_only_from_a_listed_operator() {
     let revoke = |by: &str, name: &str, serial: u64| {
         world.coordinator.ssh_revoke(
             &named(by),
-            &proto::RevokeRequest { operator: name.to_owned(), serial },
+            &proto::RevokeRequest {
+                operator: name.to_owned(),
+                serial,
+            },
         )
     };
     assert_eq!(revoke("bob", "", 1).map(|r| r.revoked), Ok(1));
@@ -456,10 +573,24 @@ fn revoking_takes_one_operator_or_one_serial_and_only_from_a_listed_operator() {
     assert_eq!(revoke("bob", "", 9).err(), Some(Refusal::UnknownCert));
     assert_eq!(revoke("bob", "nobody", 0).err(), Some(Refusal::UnknownCert));
     for (name, serial) in [("operator", 1), ("", 0), ("Operator", 0)] {
-        assert_eq!(revoke("bob", name, serial).err(), Some(Refusal::InvalidRequest), "{name} {serial}");
+        assert_eq!(
+            revoke("bob", name, serial).err(),
+            Some(Refusal::InvalidRequest),
+            "{name} {serial}"
+        );
     }
-    assert_eq!(revoke("dave", "operator", 0).err(), Some(Refusal::NotPermitted));
-    assert!(denied(&world).iter().any(|(by, _, why)| by == "dave" && why.contains("not_permitted")));
+    assert_eq!(
+        revoke("dave", "operator", 0).err(),
+        Some(Refusal::NotPermitted)
+    );
+    assert!(
+        denied(&world)
+            .iter()
+            .any(|(by, _, why)| by == "dave" && why.contains("not_permitted"))
+    );
     world.ledger.refuse_next(1);
-    assert_eq!(revoke("bob", "operator", 0).err(), Some(Refusal::AuditUnavailable));
+    assert_eq!(
+        revoke("bob", "operator", 0).err(),
+        Some(Refusal::AuditUnavailable)
+    );
 }

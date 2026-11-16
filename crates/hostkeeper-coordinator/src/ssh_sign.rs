@@ -117,7 +117,10 @@ impl Signing {
 
     /// Writes the line of a refusal; the refusal stands whether or not the line could be written.
     fn refused(&self, by: &str, host_id: &str, why: Refusal) {
-        let token = why.as_str_name().trim_start_matches("SSH_REFUSAL_").to_ascii_lowercase();
+        let token = why
+            .as_str_name()
+            .trim_start_matches("SSH_REFUSAL_")
+            .to_ascii_lowercase();
         if let Err(error) = self.ledger.denied(by, host_id, &token) {
             tracing::warn!(%error, "the line of a refused SSH call could not be written");
         }

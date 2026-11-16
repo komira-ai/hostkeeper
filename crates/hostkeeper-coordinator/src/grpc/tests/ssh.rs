@@ -92,35 +92,77 @@ async fn signing_and_revoking_answer_over_both_wires_and_refuse_by_token() {
         host_id: host.to_owned(),
     };
     for (n, wire) in WIRES.into_iter().enumerate() {
-        let signed: proto::SignUserCertResponse =
-            rpc(&coordinator, wire, SIGN, Some(OPERATOR), &ask("node-07", ED25519_KEY))
-                .await
-                .expect("signed");
+        let signed: proto::SignUserCertResponse = rpc(
+            &coordinator,
+            wire,
+            SIGN,
+            Some(OPERATOR),
+            &ask("node-07", ED25519_KEY),
+        )
+        .await
+        .expect("signed");
         assert_eq!(signed.key_id, format!("operator/{}", n + 1), "{wire:?}");
         assert!(
-            signed.certificate.starts_with("ssh-ed25519-cert-v01@openssh.com "),
+            signed
+                .certificate
+                .starts_with("ssh-ed25519-cert-v01@openssh.com "),
             "{wire:?}"
         );
-        let bad: Result<proto::SignUserCertResponse, _> =
-            rpc(&coordinator, wire, SIGN, Some(OPERATOR), &ask("node-07", "nope")).await;
-        assert_eq!(bad.err(), Some((Code::InvalidArgument, "bad_key".to_owned())), "{wire:?}");
-        let unknown: Result<proto::SignUserCertResponse, _> =
-            rpc(&coordinator, wire, SIGN, Some(OPERATOR), &ask("node-99", ED25519_KEY)).await;
-        assert_eq!(unknown.err(), Some((Code::NotFound, "unknown_host".to_owned())), "{wire:?}");
+        let bad: Result<proto::SignUserCertResponse, _> = rpc(
+            &coordinator,
+            wire,
+            SIGN,
+            Some(OPERATOR),
+            &ask("node-07", "nope"),
+        )
+        .await;
+        assert_eq!(
+            bad.err(),
+            Some((Code::InvalidArgument, "bad_key".to_owned())),
+            "{wire:?}"
+        );
+        let unknown: Result<proto::SignUserCertResponse, _> = rpc(
+            &coordinator,
+            wire,
+            SIGN,
+            Some(OPERATOR),
+            &ask("node-99", ED25519_KEY),
+        )
+        .await;
+        assert_eq!(
+            unknown.err(),
+            Some((Code::NotFound, "unknown_host".to_owned())),
+            "{wire:?}"
+        );
     }
-    let by_name = proto::RevokeRequest { operator: "operator".to_owned(), serial: 0 };
+    let by_name = proto::RevokeRequest {
+        operator: "operator".to_owned(),
+        serial: 0,
+    };
     for (wire, revoked) in WIRES.into_iter().zip([2, 0]) {
         let answer: proto::RevokeResponse =
-            rpc(&coordinator, wire, REVOKE, Some(OPERATOR), &by_name).await.expect("revoked");
+            rpc(&coordinator, wire, REVOKE, Some(OPERATOR), &by_name)
+                .await
+                .expect("revoked");
         assert_eq!(answer.revoked, revoked, "{wire:?}");
     }
-    let none = proto::RevokeRequest { operator: "nobody".to_owned(), serial: 0 };
+    let none = proto::RevokeRequest {
+        operator: "nobody".to_owned(),
+        serial: 0,
+    };
     let refused: Result<proto::RevokeResponse, _> =
         rpc(&coordinator, WIRES[0], REVOKE, Some(OPERATOR), &none).await;
-    assert_eq!(refused.err(), Some((Code::NotFound, "unknown_cert".to_owned())));
+    assert_eq!(
+        refused.err(),
+        Some((Code::NotFound, "unknown_cert".to_owned()))
+    );
     for path in [PATHS[1], PATHS[3]] {
         let request = grpc_request(path, (), Some(OPERATOR));
         let answer = call(&coordinator, Surface::Control, &None, request).await;
-        assert_eq!(answer, (Code::FailedPrecondition, "not_configured".to_owned(), None), "{path}");
+        assert_eq!(
+            answer,
+            (Code::FailedPrecondition, "not_configured".to_owned(), None),
+            "{path}"
+        );
     }
 }

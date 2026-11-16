@@ -87,10 +87,17 @@ fn put_string(out: &mut Vec<u8>, bytes: &[u8]) {
 /// The key of an operator, as the certificate carries it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum UserKey {
-    Ed25519 { public: Vec<u8> },
-    Ecdsa { point: Vec<u8> },
+    Ed25519 {
+        public: Vec<u8>,
+    },
+    Ecdsa {
+        point: Vec<u8>,
+    },
     /// The two integers as their wire bytes with the sign's zero byte taken off.
-    Rsa { exponent: Vec<u8>, modulus: Vec<u8> },
+    Rsa {
+        exponent: Vec<u8>,
+        modulus: Vec<u8>,
+    },
 }
 
 /// A public key line read: the key and its fingerprint, `SHA256:` and the 43 characters

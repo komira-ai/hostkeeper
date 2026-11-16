@@ -78,8 +78,12 @@ fn a_signing_is_a_certificate_row_and_an_audit_row_at_the_servers_time() {
     let db = TestDatabase::new();
     let (store, _) = db.open("coordinator").expect("the store opens");
     let ledger = PgLedger::new(store.clone());
-    let first = ledger.issue(&issue("alice", "node-07", 3600)).expect("signed");
-    let second = ledger.issue(&issue("alice", "node-08", 60)).expect("signed");
+    let first = ledger
+        .issue(&issue("alice", "node-07", 3600))
+        .expect("signed");
+    let second = ledger
+        .issue(&issue("alice", "node-08", 60))
+        .expect("signed");
     assert_eq!((first.serial, second.serial), (1, 2));
     assert!(second.issued_unix >= first.issued_unix);
     let certs = db.rows(
@@ -134,8 +138,12 @@ fn the_audit_rows_are_a_hash_chain_across_every_kind_of_line() {
     let db = TestDatabase::new();
     let (store, _) = db.open("coordinator").expect("the store opens");
     let ledger = PgLedger::new(store.clone());
-    ledger.issue(&issue("alice", "node-07", 3600)).expect("signed");
-    ledger.denied("bob", "node-07", "not_permitted").expect("written");
+    ledger
+        .issue(&issue("alice", "node-07", 3600))
+        .expect("signed");
+    ledger
+        .denied("bob", "node-07", "not_permitted")
+        .expect("written");
     ledger
         .revoke("alice", Revocation::Operator("alice"))
         .expect("revoked");
@@ -147,12 +155,20 @@ fn the_audit_rows_are_a_hash_chain_across_every_kind_of_line() {
     let mut prev = GENESIS.to_vec();
     for row in &rows {
         assert_eq!(row.prev_hash, prev, "row {}", row.seq);
-        assert_eq!(row.hash, chain_hash(&prev, &row.line).to_vec(), "row {}", row.seq);
+        assert_eq!(
+            row.hash,
+            chain_hash(&prev, &row.line).to_vec(),
+            "row {}",
+            row.seq
+        );
         prev = row.hash.clone();
     }
     assert_eq!(rows[1].line.detail, "{\"why\":\"not_permitted\"}");
     assert_eq!(rows[2].line.subject.as_deref(), Some("alice"));
-    assert_eq!(rows[2].line.detail, "{\"operator\":\"alice\",\"revoked\":1}");
+    assert_eq!(
+        rows[2].line.detail,
+        "{\"operator\":\"alice\",\"revoked\":1}"
+    );
 }
 
 /// Proves: when the audit row cannot be written the certificate row is not there either: the
@@ -164,12 +180,19 @@ fn a_certificate_whose_audit_row_cannot_be_written_is_not_recorded() {
     let db = TestDatabase::new();
     let (store, _) = db.open("coordinator").expect("the store opens");
     let ledger = PgLedger::new(store.clone());
-    db.run("ALTER TABLE ssh_audit RENAME TO ssh_audit_away").expect("renamed");
+    db.run("ALTER TABLE ssh_audit RENAME TO ssh_audit_away")
+        .expect("renamed");
     let refused = ledger.issue(&issue("alice", "node-07", 3600));
-    assert!(matches!(refused, Err(LedgerError::Unwritten(_))), "{refused:?}");
+    assert!(
+        matches!(refused, Err(LedgerError::Unwritten(_))),
+        "{refused:?}"
+    );
     assert_eq!(count(&db, "ssh_cert"), 0);
-    db.run("ALTER TABLE ssh_audit_away RENAME TO ssh_audit").expect("renamed back");
-    let again = ledger.issue(&issue("alice", "node-07", 3600)).expect("signed");
+    db.run("ALTER TABLE ssh_audit_away RENAME TO ssh_audit")
+        .expect("renamed back");
+    let again = ledger
+        .issue(&issue("alice", "node-07", 3600))
+        .expect("signed");
     assert_eq!(count(&db, "ssh_cert"), 1);
     assert!(again.serial >= 1);
 }
@@ -186,18 +209,31 @@ fn a_revocation_counts_the_certificates_it_newly_revokes() {
     let db = TestDatabase::new();
     let (store, _) = db.open("coordinator").expect("the store opens");
     let ledger = PgLedger::new(store.clone());
-    let a = ledger.issue(&issue("alice", "node-07", 3600)).expect("signed");
-    let b = ledger.issue(&issue("alice", "node-08", 3600)).expect("signed");
+    let a = ledger
+        .issue(&issue("alice", "node-07", 3600))
+        .expect("signed");
+    let b = ledger
+        .issue(&issue("alice", "node-08", 3600))
+        .expect("signed");
     let expired = ledger.issue(&issue("alice", "node-09", 0)).expect("signed");
-    let other = ledger.issue(&issue("bob", "node-07", 3600)).expect("signed");
+    let other = ledger
+        .issue(&issue("bob", "node-07", 3600))
+        .expect("signed");
     assert_eq!(ledger.revoke("carol", Revocation::Serial(a.serial)), Ok(1));
     assert_eq!(ledger.revoke("carol", Revocation::Operator("alice")), Ok(1));
     assert_eq!(ledger.revoke("carol", Revocation::Operator("alice")), Ok(0));
-    assert_eq!(ledger.revoke("carol", Revocation::Serial(expired.serial)), Ok(0));
+    assert_eq!(
+        ledger.revoke("carol", Revocation::Serial(expired.serial)),
+        Ok(0)
+    );
     let revoked = db.rows("SELECT serial, by_name FROM ssh_revocation ORDER BY serial");
     let row = |serial: u64| vec![Some(serial.to_string()), Some("carol".to_owned())];
     assert_eq!(revoked, vec![row(a.serial), row(b.serial)]);
-    assert!(revoked.iter().all(|r| r[0] != Some(other.serial.to_string())));
+    assert!(
+        revoked
+            .iter()
+            .all(|r| r[0] != Some(other.serial.to_string()))
+    );
     let before = audit(&db).len();
     assert_eq!(
         ledger.revoke("carol", Revocation::Serial(999)),
@@ -220,7 +256,9 @@ fn a_write_the_database_refuses_is_unwritten_and_changes_nothing() {
     let db = TestDatabase::new();
     let (store, _) = db.open("coordinator").expect("the store opens");
     let ledger = PgLedger::new(store.clone());
-    let signed = ledger.issue(&issue("alice", "node-07", 3600)).expect("signed");
+    let signed = ledger
+        .issue(&issue("alice", "node-07", 3600))
+        .expect("signed");
     db.run("DROP TABLE ssh_audit").expect("dropped");
     assert!(matches!(
         ledger.denied("bob", "node-07", "not_permitted"),

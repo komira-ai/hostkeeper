@@ -45,13 +45,7 @@ pub(crate) fn chain_hash(prev: &[u8], line: &Line) -> [u8; 32] {
     digest.update(prev);
     let at = line.at_unix.to_string();
     let subject = line.subject.as_deref().unwrap_or_default();
-    for field in [
-        at.as_str(),
-        &line.by,
-        line.action,
-        subject,
-        &line.detail,
-    ] {
+    for field in [at.as_str(), &line.by, line.action, subject, &line.detail] {
         digest.update((field.len() as u64).to_be_bytes());
         digest.update(field.as_bytes());
     }
@@ -193,8 +187,8 @@ mod memory {
     use std::sync::{Arc, Mutex, PoisonError};
 
     use super::{
-        CERT_SIGNED, DENIED, GENESIS, Issue, Issued, Ledger, LedgerError, Line, REVOKE,
-        Revocation, chain_hash, denied_detail, revoke_detail, revoke_subject, signed_detail,
+        CERT_SIGNED, DENIED, GENESIS, Issue, Issued, Ledger, LedgerError, Line, REVOKE, Revocation,
+        chain_hash, denied_detail, revoke_detail, revoke_subject, signed_detail,
     };
 
     /// A certificate's row.
