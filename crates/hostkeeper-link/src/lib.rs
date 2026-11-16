@@ -59,6 +59,7 @@ pub mod negotiated;
 pub mod order;
 pub mod pki;
 pub mod ports;
+pub mod probe;
 mod proto_map;
 pub mod repositories;
 #[cfg(feature = "testing")]
@@ -89,7 +90,9 @@ pub use pki::PkiCertSource;
 pub use ports::{
     CertSource, CertState, ClientIdentity, ClockSleeper, CoordinatorLink, Dispatch, Drift,
     FactsSink, HeldHalts, Job, LinkError, Log, Observation, OrderSink, RecordedService,
-    RenewalSource, ReplyFault, RepositorySink, ServiceObserver, ServiceRecords, Sleeper, StopFlag,
-    ThreadDispatch, Tick, TrustFault, TrustedRootSource, UnixClock, Unsendable,
+    RemoteLoginProbeSource, RenewalSource, ReplyFault, RepositorySink, ServiceObserver,
+    ServiceRecords, Sleeper, StopFlag, ThreadDispatch, Tick, TrustFault, TrustedRootSource,
+    UnixClock, Unsendable,
 };
+pub use probe::{ProbeStep, RemoteLoginProbe};
 pub use repositories::{MAX_REFUSAL_REASON, PushedSet, RepositoriesReport, RepositoryRefusal};

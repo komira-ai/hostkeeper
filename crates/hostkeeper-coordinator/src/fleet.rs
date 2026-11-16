@@ -222,6 +222,8 @@ pub struct Fleet {
     pub(crate) moves: crate::moving::Moves,
     /// The facts generations daemons reported over gRPC ([`crate::facts`]).
     pub(crate) facts: crate::facts::Reported,
+    /// The Remote Login probes daemons reported over gRPC ([`crate::remote_login_probe`]).
+    pub(crate) remote_login_probes: crate::remote_login_probe::Probes,
     /// Every package of every group and its desired state, as of the last take of the lock: the
     /// rollouts one service waits for, across groups ([`crate::queue`]).
     cluster: crate::queue::Cluster,
@@ -256,6 +258,7 @@ impl Fleet {
             picks: crate::picks::Picks::default(),
             moves: crate::moving::Moves::default(),
             facts: crate::facts::Reported::default(),
+            remote_login_probes: crate::remote_login_probe::Probes::default(),
             cluster: crate::queue::Cluster::default(),
         }
     }
@@ -488,6 +491,7 @@ impl Fleet {
         self.found.forget_host(id);
         self.nodes.remove(id);
         self.picks.forget(id);
+        self.remote_login_probes.forget(id);
         true
     }
 

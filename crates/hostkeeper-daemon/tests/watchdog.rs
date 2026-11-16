@@ -122,6 +122,7 @@ fn links(
         renewal: hostkeeper_enroll::RenewalState::default(),
         watchdog,
         console: None,
+        remote_login_probe: None,
     };
     (links, jobs)
 }

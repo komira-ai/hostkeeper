@@ -157,10 +157,13 @@ export namespace hostkeeper_agent_v1 {
     installers?: string[];
     repositories?: hostkeeper_agent_v1.RepositoriesReport;
     factsGeneration?: string;
+    remoteLoginProbe?: hostkeeper_agent_v1.RemoteLoginProbe;
   }
   export type Outcome = "OUTCOME_UNSPECIFIED" | "OUTCOME_SUCCEEDED" | "OUTCOME_FAILED";
   export interface PinReport { commit?: string; }
   export type Platform = "PLATFORM_UNSPECIFIED" | "PLATFORM_LINUX_X86_64" | "PLATFORM_LINUX_ARM64" | "PLATFORM_DARWIN_ARM64";
+  export interface ProbeStep { name?: string; argv?: string[]; exitCode?: number; stdout?: string; stderr?: string; error?: string; truncated?: boolean; }
+  export interface RemoteLoginProbe { startedUnix?: string; steps?: hostkeeper_agent_v1.ProbeStep[]; }
   export interface RepositoriesReport { generation?: string; digest?: string; refused?: hostkeeper_agent_v1.RepositoryRefusal; }
   export interface RepositoryRefusal { generation?: string; digest?: string; reason?: string; }
   export interface ServiceBeat {

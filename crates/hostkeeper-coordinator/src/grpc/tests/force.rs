@@ -39,6 +39,7 @@ fn daemon_beat(features: &[&str]) -> proto::HeartbeatRequest {
         trusted_root_age_secs: None,
         trusted_root_reason: 0,
         facts_generation: None,
+        remote_login_probe: None,
     }
 }
 
