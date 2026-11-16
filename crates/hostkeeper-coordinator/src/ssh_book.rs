@@ -319,4 +319,4 @@ mod memory;
 
 #[cfg(test)]
 #[path = "ssh_book_tests.rs"]
-mod tests;
+pub(crate) mod tests;

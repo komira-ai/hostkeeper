@@ -198,6 +198,14 @@ pub(crate) mod service_put;
 pub(crate) mod service_repository;
 pub mod services;
 pub mod session;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the tunnel runtime that calls the book lands in the next change"
+    )
+)]
+pub(crate) mod ssh_book;
 pub mod ssh_ca;
 pub(crate) mod ssh_cert;
 pub(crate) mod ssh_ledger;

@@ -266,6 +266,28 @@ mod memory {
                 .clone()
         }
 
+        /// Appends `line` to the chain as one write: refused as any write is, and then nothing
+        /// is appended.
+        ///
+        /// # Errors
+        /// [`LedgerError::Unwritten`] while writes are refused.
+        pub(crate) fn append_line(&self, line: Line) -> Result<(), LedgerError> {
+            self.append_lines(vec![line])
+        }
+
+        /// Appends `lines` to the chain as one write.
+        ///
+        /// # Errors
+        /// [`LedgerError::Unwritten`] while writes are refused.
+        pub(crate) fn append_lines(&self, lines: Vec<Line>) -> Result<(), LedgerError> {
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            state.write()?;
+            for line in lines {
+                state.append(line);
+            }
+            Ok(())
+        }
+
         /// The audit rows in order.
         pub(crate) fn audit(&self) -> Vec<Row> {
             self.state
@@ -275,7 +297,8 @@ mod memory {
                 .clone()
         }
 
-        fn now(&self) -> u64 {
+        /// What the clock reads.
+        pub(crate) fn now(&self) -> u64 {
             *self.clock.lock().unwrap_or_else(PoisonError::into_inner)
         }
     }

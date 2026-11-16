@@ -35,6 +35,14 @@ mod repositories;
 pub(crate) mod rows;
 pub(crate) mod session;
 pub(crate) mod ssh;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the tunnel runtime that calls the book lands in the next change"
+    )
+)]
+pub(crate) mod ssh_book;
 pub(crate) mod state;
 pub(crate) mod transfer;
 pub(crate) mod writer;
