@@ -8,10 +8,10 @@
 //! job is due again one period later for any coordinator, so the jobs it names are level-triggered
 //! and idempotent, and the claim only saves work.
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::Postgres;
 use super::session::Session;
+use crate::audit_file::UnixClock;
 use crate::store::Claims;
 
 /// Makes sure the job `name` exists and runs every `period_secs`; a job new to the table is
@@ -62,11 +62,12 @@ pub(crate) fn claim(
 pub(crate) struct PgClaims {
     store: Postgres,
     instance: String,
+    unix: UnixClock,
 }
 
 impl PgClaims {
     /// Makes sure each of `jobs` (a name and its period in seconds) exists, due `first_unix`
-    /// when new to the table, and claims for `instance`.
+    /// when new to the table, and claims for `instance`, at the time `unix` reads.
     ///
     /// # Errors
     /// What the session or the server said.
@@ -74,8 +75,9 @@ impl PgClaims {
         store: Postgres,
         instance: &str,
         jobs: &[(&str, i64)],
-        first_unix: i64,
+        unix: UnixClock,
     ) -> Result<Arc<PgClaims>, String> {
+        let first_unix = i64::try_from(unix()).unwrap_or(i64::MAX);
         let jobs: Vec<(String, i64)> = jobs.iter().map(|(n, p)| ((*n).to_owned(), *p)).collect();
         store.shared(move |session| {
             jobs.iter()
@@ -84,15 +86,14 @@ impl PgClaims {
         Ok(Arc::new(PgClaims {
             store,
             instance: instance.to_owned(),
+            unix,
         }))
     }
 }
 
 impl Claims for PgClaims {
     fn claimed(&self, job: &str) -> bool {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
+        let now = i64::try_from((self.unix)()).unwrap_or(i64::MAX);
         let (instance, job) = (self.instance.clone(), job.to_owned());
         let claimed = self.store.shared(move |session| {
             claim(session, now, &instance, &[job.as_str()]).map(|names| !names.is_empty())

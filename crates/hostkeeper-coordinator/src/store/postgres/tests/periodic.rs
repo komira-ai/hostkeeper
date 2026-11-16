@@ -122,6 +122,7 @@ fn jobs_due_together_are_claimed_together_and_a_seed_keeps_the_due_time() {
 /// coordinator that took it does not ask again.
 #[test]
 fn coordinators_over_one_database_are_told_yes_once_a_period() {
+    use crate::audit_file::wall_clock;
     use crate::store::Claims;
     use crate::store::postgres::periodic::PgClaims;
 
@@ -136,9 +137,8 @@ fn coordinators_over_one_database_are_told_yes_once_a_period() {
         })
     };
     let jobs = [("expire_requests", 3600)];
-    let past = 1;
-    let one = PgClaims::start(first.clone(), "one", &jobs, past).expect("seeded");
-    let two = PgClaims::start(second, "two", &jobs, past).expect("seeded");
+    let one = PgClaims::start(first.clone(), "one", &jobs, wall_clock()).expect("seeded");
+    let two = PgClaims::start(second, "two", &jobs, wall_clock()).expect("seeded");
     let barrier = Barrier::new(2);
     let told: Vec<bool> = std::thread::scope(|scope| {
         let ask = |claims: Arc<PgClaims>| {

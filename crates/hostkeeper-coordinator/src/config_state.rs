@@ -417,7 +417,7 @@ pub(super) fn with_claims(
         store.clone(),
         holder,
         &[(EXPIRE_REQUESTS, period)],
-        i64::try_from(wall_clock()()).unwrap_or(i64::MAX),
+        wall_clock(),
     )
     .map_err(|why| StartError::Database(DatabaseError::Load(why)))?;
     Ok(coordinator.with_claims(claims))
