@@ -14,7 +14,8 @@
 //! **Where.** The release a self-update stages from must be a tree whose every directory, up to
 //! `/`, is root's and closed to group and others (`hostkeeper_steps::Staged::check`). The target
 //! directory is the runner's user's, so the host lives in a scratch directory under [`BASE`]
-//! (`/run`, root's tmpfs), removed when the test ends, with the unit under a unit name of the
+//! (on disk under `/var/lib`, not under `/run`: root's tmpfs there may be mounted `noexec`, where
+//! systemd cannot exec the daemon staged in it), removed when the test ends, with the unit under a unit name of the
 //! test's rig.
 //!
 //! **The units.**
@@ -66,8 +67,11 @@ pub const REAL_UNIT: &str = include_str!("../../../../packaging/linux/units/host
 pub const BOOTSTRAP_UNIT: &str = include_str!("../../../../packaging/linux/hostkeeper.service");
 /// Where the bootstrap unit's `ExecStart=` has the packaged binary.
 const PACKAGED_BINARY: &str = "/usr/bin/hostkeeper";
-/// The root-owned directory the test hosts are made in.
-pub const BASE: &str = "/run/hostkeeper-ci";
+/// The root-owned directory the test hosts are made in: on disk, not under `/run`, which a
+/// hosted runner may mount `noexec`: systemd then cannot exec the daemon staged there
+/// (`status=203/EXEC`), and a `Type=notify` unit with no start limit is retried for good, so the
+/// test's `systemctl start` never returns.
+pub const BASE: &str = "/var/lib/hostkeeper-ci";
 /// The service of hostkeeper itself.
 pub const HK: &str = "hostkeeper";
 /// The version the host runs first.
