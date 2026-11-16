@@ -166,8 +166,12 @@ fn a_certificate_is_kept_until_it_is_near_expiry_or_the_key_changes() {
         .expect("second");
     assert_eq!(rig.seen(|s| s.signs.len()), 1);
 
-    std::fs::remove_file(rig.state_dir().join("hosts").join(format!("{HOST}-cert.pub")))
-        .expect("the certificate file");
+    std::fs::remove_file(
+        rig.state_dir()
+            .join("hosts")
+            .join(format!("{HOST}-cert.pub")),
+    )
+    .expect("the certificate file");
     proxy(&rig, &double, NOW, b"").result.expect("file gone");
     assert_eq!(
         rig.seen(|s| s.signs.len()),

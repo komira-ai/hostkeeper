@@ -44,7 +44,10 @@ fn forwarded(global: &Global, identity: Option<&Path>) -> Vec<String> {
         ("--state-dir", global.state_dir.as_deref().map(show)),
         ("--timeout-secs", Some(global.timeout_secs.to_string())),
         ("--keepalive-secs", Some(global.keepalive_secs.to_string())),
-        ("--ssh-keygen-program", Some(show(&global.ssh_keygen_program))),
+        (
+            "--ssh-keygen-program",
+            Some(show(&global.ssh_keygen_program)),
+        ),
         ("--ssh-add-program", Some(show(&global.ssh_add_program))),
         (
             "--ssh-agent-socket",
