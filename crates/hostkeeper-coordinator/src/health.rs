@@ -19,6 +19,12 @@
 //! `503 starting` before. A database that does not answer, or a stop in progress, must not have
 //! the orchestrator kill a coordinator that is doing what it should.
 //!
+//! The health listener is the one listener the stop does not close: after `--drain-delay-secs` the
+//! heartbeat, control and LAN listeners stop accepting and the coordinator waits for the
+//! connections they hold ([`crate::graceful`]), and this listener answers `/healthz` `200` and
+//! `/readyz` `503 draining` meanwhile, until the process exits. Its own connections are not
+//! waited for.
+//!
 //! The listener has the limits of the others ([`crate::listen`]): at most
 //! [`crate::listen::MAX_CONNECTIONS`] connections at once, the patience for a request head and
 //! for each write of an answer the peer does not read. A connection answers one request and is
@@ -40,6 +46,7 @@ use hyper_util::rt::{TokioIo, TokioTimer};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Semaphore;
 
+use crate::graceful::Graceful;
 use crate::listen::{WriteDeadline, accept_each};
 use crate::service::Coordinator;
 use crate::store::Health;
@@ -132,7 +139,8 @@ impl Serving {
 /// draining, whatever `stop` answered, waits for `delay` and answers what `stop` answered. The
 /// health listener says `draining` from the stop until the process exits, and the coordinator's
 /// listeners keep accepting while `delay` runs, so an edge that has not yet seen the `503` (or the
-/// new instance that replaces this one) still reaches a coordinator that answers.
+/// new instance that replaces this one) still reaches a coordinator that answers. What follows,
+/// the listeners' stop and the wait for their connections, is [`crate::graceful::Graceful::wind_down`].
 pub(crate) async fn drain_on<T>(
     stop: impl Future<Output = T>,
     serving: Serving,
@@ -253,10 +261,13 @@ where
     F: Future<Output = io::Result<S>> + Send,
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
+    // Its connections are counted on a `Graceful` of its own that nothing stops: the health
+    // listener answers until the process exits, and the stop does not wait for its connections.
     accept_each(
         accept,
         Arc::new(Semaphore::new(max_connections)),
-        move |stream| connection(stream, Arc::clone(&coordinator), serving.clone(), patience),
+        Graceful::default(),
+        move |stream, _| connection(stream, Arc::clone(&coordinator), serving.clone(), patience),
     )
 }
 
