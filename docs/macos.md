@@ -308,6 +308,21 @@ start it (the plist's `RunAtLoad` and `KeepAlive` decide that), so the hook find
 loaded and starts the one it wants with `launchctl kickstart`. A job is stopped by its label: an
 uninstall boots out each `run` label, then removes every placed link.
 
+### The Mac never sleeps
+
+A build Mac that goes to sleep stops heartbeating (the coordinator logs that the host has not
+heartbeated, about every 16 minutes of DarkWake maintenance wakes). At each start the daemon
+(`crates/hostkeeper-daemon/src/keep_awake.rs`) reads `pmset -g custom` and makes what differs by one
+`pmset -a` command: `sleep`, `disksleep`, `standby`, `autopoweroff` and `powernap` are 0,
+`autorestart` is 1 (start again after a power loss) and `womp` is 1 (wake for network access).
+`displaysleep` is left as it is, and a key the Mac does not list is not set. Each change is logged
+once (`keep_awake: pmset sleep was 1, set to 0`); a Mac that is set already gets no command. The
+daemon runs as root, which is all `pmset` needs (no Full Disk Access). `keep_awake = false` in the
+daemon config (a boolean, default `true`, so no per-host config) turns it off. The settings are
+made at each start of the daemon, not watched in between; the heartbeat does not report them.
+A configuration profile is the other way to hold power settings on a managed Mac; the daemon is
+what ships, so a Mac needs nothing but hostkeeper.
+
 ### Release and installer pkg
 
 Every release ships macos-arm64 beside the two Linux platforms: the binary tarball
