@@ -41,6 +41,9 @@
 //! - [`ipmi`]: the BMC a Linux host's enrollment claims ask for its MAC, over `/dev/ipmi0`.
 //! - [`mac`]: the real adapters of a Mac's package check (`getxattr`, `codesign`) and claims
 //!   (`ioreg`), over the process port of the launchd adapters.
+//! - [`ssh_macos`]: the Mac's side of the sshd setup that trusts the coordinator's SSH user CA:
+//!   the `Include` of `sshd_config`, the login user, the `com.apple.access_ssh` group and
+//!   Remote Login (docs/design/ssh-through-coordinator.md, section 3).
 //! - [`prune`]: after a confirmed switch (an update that ends `Succeeded`, a force that moved
 //!   `current`), the service's version directories but `current` and `previous` are deleted,
 //!   under the lock the order already holds.
@@ -133,6 +136,7 @@ pub mod selfupdate;
 pub mod ssh_effective;
 pub mod ssh_files;
 pub mod ssh_host;
+pub mod ssh_macos;
 pub mod ssh_setup;
 pub mod stamp;
 pub mod start;
