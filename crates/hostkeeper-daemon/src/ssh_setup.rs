@@ -301,7 +301,9 @@ impl SshSink for SshSetup {
 
     fn apply(&self, access: &PushedSsh) {
         let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
-        let same = held.taken.is_some_and(|taken| taken.generation == access.generation);
+        let same = held
+            .taken
+            .is_some_and(|taken| taken.generation == access.generation);
         if same && !self.drifted(access, &held) {
             return;
         }

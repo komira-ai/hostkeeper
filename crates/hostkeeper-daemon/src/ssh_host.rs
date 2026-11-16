@@ -361,11 +361,18 @@ impl SystemHost {
             .collect();
         let spec_path = work.join("spec");
         let mut files = vec![(spec_path.clone(), spec)];
-        files.extend(ca_keys.iter().enumerate().map(|(at, key)| {
-            (work.join(format!("ca{at}.pub")), format!("{key}\n"))
-        }));
+        files.extend(
+            ca_keys
+                .iter()
+                .enumerate()
+                .map(|(at, key)| (work.join(format!("ca{at}.pub")), format!("{key}\n"))),
+        );
         fs::create_dir_all(work)
-            .and_then(|()| files.iter().try_for_each(|(path, text)| fs::write(path, text)))
+            .and_then(|()| {
+                files
+                    .iter()
+                    .try_for_each(|(path, text)| fs::write(path, text))
+            })
             .map_err(|e| format!("the work directory: {e}"))?;
         let list = work.join("krl");
         for (at, _) in ca_keys.iter().enumerate() {
