@@ -38,7 +38,7 @@ OpenRC support stays, as built, but no `apk` backend is planned: no host we run 
 | Host | Installer | Entry |
 |---|---|---|
 | Debian, Ubuntu and their derivatives | `apt` (A7) | A repository entry: `repository`, `package_version`, the required `digest` pin, the manifest (section 2) |
-| macOS | `macos-pkg` (A9) | An artifact entry: `locations` naming the testing or stable store of section 4.7, `digest`, `bytes`, the manifest; no attestation (10.3) |
+| macOS | `macos-pkg` (A9) | The named-version form of section 4.7 of packages-repositories.md: `repository` (the channel, as the apt entry's), `package_version`, `digest`, `bytes`, the manifest; no location, no attestation (10.3) |
 | An RPM-family host | `dnf` (A8, later, section 6) | As `apt` |
 | Any other host, Alpine included | None | |
 
@@ -62,7 +62,7 @@ section 3.4).
                     "installer_bounds": {...}, "min_hostkeeper": "0.1.200" } } ] },
   "linux-arm64":  { "entries": [ { "installer": "apt", ... } ] },
   "macos-arm64":  { "entries": [
-    { "installer": "macos-pkg", "locations": [ { "store": "komira-stable", "locator": "tierstore/1.6.0/tierstore-1.6.0.pkg" } ],
+    { "installer": "macos-pkg", "repository": "komira-stable", "package_version": "1.6.0",
       "digest": "<64 hex>", "bytes": "...", "manifest": { "package": "dev.tierstore.server", "run": ["tierstore"], ... } } ] }
 }
 ```

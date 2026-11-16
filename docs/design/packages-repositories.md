@@ -550,7 +550,16 @@ signature of a configured identity; a package hostkeeper did not install, or at 
 hostkeeper corrects, not `package_conflict`; a rollback installs the kept previous `.pkg`; and `remove` deletes every
 file the receipt lists, changed or not.
 
-**The entry.** CI sends, for `macos-arm64`:
+**The entry.** Hostkeeper's release workflow sends, for `macos-arm64`, the named-version form (below), so a Mac needs no
+`stores.toml`:
+
+```json
+{ "installer": "macos-pkg", "repository": "komira-testing", "packageVersion": "0.1.5",
+  "digest": "<64 hex of the .pkg>", "bytes": "...",
+  "manifest": { "package": "dev.hostkeeper.hostkeeper", ... } }
+```
+
+The explicit form, which a release of another project may still send, names the file by a location in a store:
 
 ```json
 { "installer": "macos-pkg",
