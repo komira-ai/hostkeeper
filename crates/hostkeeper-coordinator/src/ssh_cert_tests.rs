@@ -381,8 +381,7 @@ pub(crate) struct Cert {
     pub(crate) extensions: Vec<(String, Vec<u8>)>,
     pub(crate) reserved: Vec<u8>,
     pub(crate) ca: Vec<u8>,
-    pub(crate) signature: Vec<u8>,
-    /// The 64 bytes of the Ed25519 signature inside `signature`.
+    /// The 64 bytes of the Ed25519 signature the certificate ends with.
     pub(crate) raw_signature: Vec<u8>,
     pub(crate) signed: Vec<u8>,
 }
@@ -446,7 +445,6 @@ pub(crate) fn read_cert(line: &str, key_fields: usize) -> Cert {
         extensions,
         reserved,
         ca,
-        signature,
         raw_signature,
         signed: bytes[..before].to_vec(),
     }
