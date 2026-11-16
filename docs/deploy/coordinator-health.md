@@ -3,7 +3,10 @@
 The coordinator's container image is distroless: no shell and no client, so nothing inside the
 container can run a health check, and the image has no `HEALTHCHECK`. Health is a route instead:
 `serve --health-listen <address:port>` binds one more listener, and a probe on the same machine
-asks it `GET /healthz`, or `GET /readyz`, which answers the same. The design is [two-programs.md](../design/two-programs.md), section 2.7.
+asks it `GET /healthz` (is the process alive: what the orchestrator checks) or `GET /readyz` (does it
+take traffic: what the edge checks). The design is [two-programs.md](../design/two-programs.md),
+section 2.7; the contract of the two is the service update contract (one instance, two during a
+start-first update, Postgres decides).
 
 ## The flag
 
@@ -30,11 +33,17 @@ inside the container is the machine's own, and a probe on the machine reaches it
 | Request | Status | Body |
 |---|---|---|
 | `GET /healthz` or `GET /readyz` (a query is ignored), serving | `200` | `ok` |
-| `GET /healthz`, a listener not yet bound | `503` | `starting` |
-| `GET /healthz`, the database's link lost | `503` | `store_unreachable` |
-| `GET /healthz`, from SIGTERM or SIGINT until the process exits, whatever else holds | `503` | `draining` |
-| `HEAD /healthz` | as `GET` | none |
+| `GET /healthz` or `GET /readyz`, a listener not yet bound | `503` | `starting` |
+| `GET /readyz`, the database's link lost | `503` | `store_unreachable` |
+| `GET /readyz`, from SIGTERM or SIGINT until the process exits, whatever else holds | `503` | `draining` |
+| `GET /healthz`, the database's link lost, or from SIGTERM or SIGINT until the process exits | `200` | `ok` |
+| `HEAD` of either | as `GET` | none |
 | any other path, or any other method (`POST` among them) | `404` | `not_found` |
+
+`/healthz` says the process is alive: it is `ok` from the moment every listener is bound, whatever
+the database does and while the coordinator drains, so that an orchestrator that checks it never
+kills a coordinator for a database that does not answer or for a stop in progress. `/readyz` says
+the coordinator takes traffic, and is the one an edge checks.
 
 `200 ok` means every listener the flags name is bound and serving and the store takes writes: with
 the Postgres store (`--database-dsn-file`), this coordinator holds the database's lock, shared
@@ -49,15 +58,15 @@ reads memory only and writes no audit line.
 - `store_unreachable` stands while the session with the database is lost. The coordinator keeps
   answering heartbeats meanwhile and orders nothing; the `store_unreachable` alert of
   `Alerts.List` says the same.
-- `draining` is answered from the moment the coordinator takes SIGTERM or SIGINT until it exits,
-  ahead of every other token: every answer made after the signal is `draining`, never `ok`, a
-  probe that connected before the signal among them. It never turns back into `ok`. The
-  coordinator keeps serving its listeners for `--drain-delay-secs` after the signal (default 0: it
-  stops serving and exits at once), so that an edge that checks `/readyz` sees the `503` and an
-  instance that replaces this one is already taking connections; then it exits, and from then on a
-  probe gets no answer, which a probe also reads as not healthy. A deploy that updates the
-  coordinator start-first sets `--drain-delay-secs` above the edge's check interval times its
-  unhealthy threshold, and the service's stop grace period above `--drain-delay-secs`.
+- `draining` is answered by `/readyz` from the moment the coordinator takes SIGTERM or SIGINT until
+  it exits, ahead of every other token: every answer of `/readyz` made after the signal is
+  `draining`, never `ok`, a probe that connected before the signal among them. It never turns back
+  into `ok`. The coordinator keeps serving its listeners for `--drain-delay-secs` after the signal
+  (default 15; 0 stops serving and exits at once), so that an edge that checks `/readyz` sees the
+  `503` and an instance that replaces this one is already taking connections; then it exits, and
+  from then on a probe gets no answer. A start-first update needs `--drain-delay-secs` at least the
+  edge's DNS refresh plus its healthy and unhealthy thresholds times its check interval (9 seconds
+  at the edge's values, so 15 has 6 of margin), and the service's stop grace period above it.
 
 The listener has the limits of the others: at most 1024 connections at once, ten seconds for a
 request head and for each write of an answer the probe does not read.
@@ -70,6 +79,9 @@ not, for example:
 ```sh
 curl --fail --silent --show-error --max-time 5 http://127.0.0.1:9100/healthz
 ```
+
+Swarm's own check is `/healthz` (a coordinator whose database does not answer is alive: it is told
+to take no traffic by `/readyz`, not killed); the edge's active check is `/readyz`.
 
 In the compose deployment, compose runs a `healthcheck` inside the container, where there is no
 client, so the compose file has none for the coordinator: the probe is the machine's own

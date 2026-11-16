@@ -72,18 +72,22 @@ fn a_health_address_that_is_not_loopback_is_refused_at_start_by_name() {
     }
 }
 
-/// Proves: `--drain-delay-secs` defaults to 0 (the coordinator stops at once on a signal, as it
-/// always did) and takes the number of seconds it is given.
+/// Proves: `--drain-delay-secs` defaults to 15 (the drain delay of the service update contract,
+/// above the 9 seconds an edge needs to see the new instance healthy and the old one out) and takes
+/// the number of seconds it is given, 0 included (the coordinator stops at once on a signal).
 ///
-/// Catches: a default that makes every stop wait, or a flag that is read as something else.
+/// Catches: a default that makes a start-first update cut connections an edge still sends to the
+/// old instance, or a flag that is read as something else.
 #[test]
-fn the_drain_delay_is_none_unless_given() {
+fn the_drain_delay_is_fifteen_seconds_unless_given() {
     let files = Files::new("drain-delay-flag");
-    assert_eq!(flags_of(files.args()).drain_delay_secs, 0);
-    let mut args = files.args();
-    args.push("--drain-delay-secs".into());
-    args.push("15".into());
-    assert_eq!(flags_of(args).drain_delay_secs, 15);
+    assert_eq!(flags_of(files.args()).drain_delay_secs, 15);
+    for given in ["0", "20"] {
+        let mut args = files.args();
+        args.push("--drain-delay-secs".into());
+        args.push(given.into());
+        assert_eq!(flags_of(args).drain_delay_secs.to_string(), given);
+    }
 }
 
 /// What a `run` on an in-memory network did: the addresses it asked to bind, in order, and the
@@ -292,7 +296,7 @@ async fn there_is_no_health_listener_without_the_flag() {
     );
 }
 
-/// Proves: through `start`, a probe of the health listener is answered `200 ok` while it serves;
+/// Proves: through `start`, a readiness probe of the health listener is answered `200 ok` while it serves;
 /// once the stop resolves, `start` returns `Ok`, and a probe that connected before the stop and
 /// whose request is answered after it is told `503 draining`, not `ok`. (Its connection's task
 /// outlives `start` in the test's runtime; it stands for an answer made while the process exits.)
@@ -303,7 +307,8 @@ async fn there_is_no_health_listener_without_the_flag() {
 async fn an_answer_made_after_the_stop_through_start_is_draining() {
     let files = Files::new("health-stop");
     let health: SocketAddr = HEALTH.parse().expect("an address");
-    let head = "GET /healthz HTTP/1.1\r\nhost: localhost\r\n\r\n";
+    // Liveness before the stop, readiness after: only readiness says draining.
+    let head = "GET /readyz HTTP/1.1\r\nhost: localhost\r\n\r\n";
     // Two probes wait for the health listener's accepts: one sent whole, one written as `start`
     // reads it (a pipe of 1 byte).
     let (mut before, first) = tokio::io::duplex(4096);
@@ -327,7 +332,10 @@ async fn an_answer_made_after_the_stop_through_start_is_draining() {
         async move { Ok::<_, io::Error>((addr, accepting(receive))) }
     };
     let (stop, stopped) = oneshot::channel::<()>();
-    let args = with_health(&files, HEALTH);
+    let mut args = with_health(&files, HEALTH);
+    // The test is about the answer after the stop, not the wait the default puts before the exit.
+    args.push("--drain-delay-secs".into());
+    args.push("0".into());
     let running = tokio::spawn(start(flags_of(args), roots(), bind, async move {
         stopped.await.expect("sent");
         Ok(())
