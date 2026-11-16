@@ -137,13 +137,12 @@ pub struct Plan {
 }
 
 /// The key types a CA public key may have.
-const KEY_TYPES: [&str; 6] = [
+const KEY_TYPES: [&str; 5] = [
     "ssh-ed25519",
     "ecdsa-sha2-nistp256",
     "ecdsa-sha2-nistp384",
     "ecdsa-sha2-nistp521",
     "ssh-rsa",
-    "sk-ssh-ed25519@openssh.com",
 ];
 
 /// The most CA keys a record carries: the one in use and the next, during a rotation.

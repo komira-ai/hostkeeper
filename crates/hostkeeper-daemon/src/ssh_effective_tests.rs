@@ -81,8 +81,8 @@ fn the_listening_address_is_one_a_connection_reaches() {
         ("127.0.0.1".to_owned(), 2200)
     );
     assert_eq!(
-        at("port 2222\nlistenaddress 10.1.2.3\n"),
-        ("10.1.2.3".to_owned(), 2222)
+        at("port 2222\nlistenaddress 192.0.2.3\n"),
+        ("192.0.2.3".to_owned(), 2222)
     );
     assert_eq!(at("listenaddress [::]:22\n"), ("::1".to_owned(), 22));
     assert_eq!(
@@ -93,8 +93,8 @@ fn the_listening_address_is_one_a_connection_reaches() {
     assert_eq!(at("listenaddress [fe80::1\n"), ("fe80::1".to_owned(), 22));
     assert_eq!(at("listenaddress fe80::1\n"), ("fe80::1".to_owned(), 22));
     assert_eq!(
-        at("listenaddress 10.0.0.9:x\n"),
-        ("10.0.0.9".to_owned(), 22)
+        at("listenaddress 192.0.2.9:x\n"),
+        ("192.0.2.9".to_owned(), 22)
     );
     assert_eq!(at("listenaddress :22\n"), ("127.0.0.1".to_owned(), 22));
 }
