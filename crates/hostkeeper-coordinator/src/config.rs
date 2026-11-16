@@ -240,12 +240,13 @@ pub struct Serve {
     /// there is no health listener.
     #[arg(long)]
     pub health_listen: Option<SocketAddr>,
-    /// How long, from SIGTERM or SIGINT, the coordinator answers `503 draining` on its health
-    /// listener and keeps serving its other listeners before it stops: the time an edge needs to
-    /// see the answer, or to see the instance that replaces this one. 0 stops at once. A deploy
-    /// that updates the coordinator start-first sets it above the edge's check interval times its
-    /// unhealthy threshold, and its stop grace period above it.
-    #[arg(long, default_value_t = 0)]
+    /// How long, from SIGTERM or SIGINT, the coordinator answers `503 draining` on `/readyz` and
+    /// keeps serving its other listeners before it stops: the time an edge needs to see the
+    /// answer, or to see the instance that replaces this one. 0 stops at once. A start-first
+    /// update needs at least the edge's DNS refresh plus its healthy and unhealthy thresholds
+    /// times its check interval (9 seconds at the edge's values), and the stop grace period above
+    /// it.
+    #[arg(long, default_value_t = 15)]
     pub drain_delay_secs: u64,
     /// The coordinator's certificate chain (PEM), issued by the farm CA with the role
     /// `coordinator`.
