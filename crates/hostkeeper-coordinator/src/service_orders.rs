@@ -6,9 +6,12 @@
 use std::cmp::Reverse;
 use std::time::Duration;
 
+use hostkeeper_wire::HostId;
+use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::ServiceReply;
 
 use super::Coordinator;
+use super::rows_calls::{Judge, Placing};
 use crate::acks::release_ack;
 use crate::decide::Decision;
 use crate::fleet::Fleet;
@@ -48,6 +51,7 @@ impl Coordinator {
         fleet: &mut Fleet,
         asked: &'a Asked<'a>,
         mut names: Vec<&'a str>,
+        judge: &mut dyn Judge,
     ) -> Option<(ServiceReply, Option<Order>, Option<Terms>)> {
         let id = &asked.who.host_id;
         let now = asked.now;
@@ -84,8 +88,14 @@ impl Coordinator {
                         continue;
                     };
                     let terms = order_terms::terms(name, &version, &picked.package, order_try);
+                    if !judge.give(&placing(
+                        name, fleet, id, &version, order_try, None, &desired,
+                    )) {
+                        continue;
+                    }
                     // The host's ack goes from the file before the order exists.
                     if !release_ack(&self.ops, name, id) {
+                        judge.take_back();
                         continue;
                     }
                     fleet.order(name, id.clone(), version.clone(), now);
@@ -105,11 +115,17 @@ impl Coordinator {
                     digest,
                     index_digest,
                 } if asked.orders => {
-                    if !release_ack(&self.ops, name, id) {
-                        continue;
-                    }
                     let order_id = install_order_id(&digest);
                     let order_try = fleet.order_try(name, id, &version, false, now);
+                    if !judge.give(&placing(
+                        name, fleet, id, &version, order_try, None, &desired,
+                    )) {
+                        continue;
+                    }
+                    if !release_ack(&self.ops, name, id) {
+                        judge.take_back();
+                        continue;
+                    }
                     let target = picks::order_of(fleet, name, &version, id).map(|p| p.target);
                     fleet.order(name, id.clone(), version.clone(), now);
                     fleet.name_order(name, id, &version, order_id.clone());
@@ -125,6 +141,17 @@ impl Coordinator {
                 }
                 Decision::Uninstall { order_id, running } if asked.orders => {
                     let order_try = fleet.order_try(name, id, &running, true, now);
+                    if !judge.give(&placing(
+                        name,
+                        fleet,
+                        id,
+                        &running,
+                        order_try,
+                        Some(&order_id),
+                        &desired,
+                    )) {
+                        continue;
+                    }
                     fleet.order_uninstall(name, id.clone(), running, order_id.clone(), now);
                     Order::Uninstall {
                         service: name.to_owned(),
@@ -137,5 +164,29 @@ impl Coordinator {
             return Some((ServiceReply::Nothing, Some(order), None));
         }
         None
+    }
+}
+
+/// The order of the host `id` for `name` at `target`, as the rows are asked to admit it.
+fn placing<'a>(
+    name: &'a str,
+    fleet: &'a Fleet,
+    id: &HostId,
+    target: &'a Version,
+    order_try: u64,
+    uninstall: Option<&'a str>,
+    desired: &std::collections::BTreeMap<String, crate::desired::Desired>,
+) -> Placing<'a> {
+    let role = fleet.role_in(name, id);
+    Placing {
+        service: name,
+        role,
+        target,
+        order_try,
+        uninstall,
+        max_updating: desired
+            .get(name)
+            .map_or(1, |want| want.max_updating.max_updating_of(role)),
+        live_rollouts: fleet.live_rollouts(),
     }
 }

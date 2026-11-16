@@ -262,6 +262,34 @@ impl OpsStore {
         self.backend.health()
     }
 
+    /// The number of the newest audit entry memory holds: 0 when it holds none.
+    pub(crate) fn newest_seq(&self) -> u64 {
+        self.read(|state| state.audit.last().map_or(0, |entry| entry.seq))
+    }
+
+    /// Takes `fresh`, the state the rows hold, in place of memory: what another coordinator
+    /// committed since memory last matched the rows. Done only when memory has nothing the rows
+    /// lack (no change pending) and has not moved since its newest audit number was `known`;
+    /// answers whether it was done. The entries the rows hold past `known` raise the hosts'
+    /// generations as the commits of this coordinator do.
+    pub(crate) fn take_rows(&self, fresh: OpsState, known: u64) -> bool {
+        let _writer = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
+        let pending = self.pending_lock();
+        if pending.base.is_some() || !pending.lines.is_empty() || self.newest_seq() != known {
+            return false;
+        }
+        drop(pending);
+        let newer: Vec<_> = fresh
+            .audit
+            .iter()
+            .filter(|entry| entry.seq > known)
+            .cloned()
+            .collect();
+        self.generations.raise(&newer);
+        *self.lock() = fresh;
+        true
+    }
+
     /// Takes the change of a commit of unknown outcome that `landing` found landed into memory
     /// and into the state as last committed, each with what memory changed since laid over it
     /// row by row; its audit lines are no longer pending. A commit that did not land leaves both

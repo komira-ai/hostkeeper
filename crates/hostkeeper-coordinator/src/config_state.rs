@@ -35,7 +35,7 @@ use crate::listen::EXPIRE_REQUESTS;
 use crate::lock::{LockError, LockGuard, StateLock, lock_path};
 use crate::login::Login;
 use crate::ops::{Marker, OpsState, unlanded};
-use crate::service::Coordinator;
+use crate::service::{Coordinator, RowRules};
 use crate::store::postgres::login_rows::PgLoginRows;
 use crate::store::postgres::periodic::PgClaims;
 use crate::store::postgres::{DatabaseError, Dsn, PgRecords, Postgres};
@@ -421,6 +421,29 @@ pub(super) fn with_claims(
     )
     .map_err(|why| StartError::Database(DatabaseError::Load(why)))?;
     Ok(coordinator.with_claims(claims))
+}
+
+/// `coordinator` deciding its heartbeats over the fleet's rows of the database, which every
+/// coordinator on it reads under the rollout gate; over files, the fleet is its own.
+pub(crate) fn with_rows(
+    coordinator: Coordinator,
+    flags: &Serve,
+    database: Option<&Postgres>,
+) -> Coordinator {
+    let Some(store) = database else {
+        return coordinator;
+    };
+    let holder = flags
+        .server_names
+        .first()
+        .map_or("coordinator", String::as_str);
+    coordinator.with_rows(
+        store.fleet_rows(holder),
+        RowRules {
+            beat_reorder: Duration::from_secs(flags.beat_reorder_secs),
+            queue_idle: Duration::from_secs(flags.queue_idle_secs),
+        },
+    )
 }
 
 /// The thresholds of the alerts `flags` name: `--alert-silent-host-secs` and
