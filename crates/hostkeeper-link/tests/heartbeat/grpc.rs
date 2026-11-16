@@ -187,6 +187,7 @@ fn beat(services: Vec<ServiceFacts>) -> Heartbeat {
         installers: Vec::new(),
         repositories: None,
         facts_generation: None,
+        remote_login_probe: None,
     }
 }
 

@@ -146,6 +146,7 @@ fn the_loop_dials_only_the_coordinator_link_port() {
         "order.rs",
         "pki.rs",
         "ports.rs",
+        "probe.rs",
         "proto_map.rs",
         "proto_map_facts_tests.rs",
         "proto_map_tests.rs",
