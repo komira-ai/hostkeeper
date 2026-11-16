@@ -295,9 +295,9 @@ impl Book for PgBook {
                 )?;
                 let revoked = tx
                     .query(
-                        "SELECT t.id FROM ssh_tunnel t \
-                         JOIN ssh_revocation r ON r.serial = t.cert_serial \
-                         WHERE t.instance = $1 AND t.id = ANY($2::bigint[]) ORDER BY t.id",
+                        "SELECT id FROM ssh_tunnel \
+                         WHERE instance = $1 AND id = ANY($2::bigint[]) \
+                         AND cert_serial IN (SELECT serial FROM ssh_revocation) ORDER BY id",
                         &[&instance, &own],
                     )?
                     .iter()
