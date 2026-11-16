@@ -356,13 +356,6 @@ impl Coordinator {
     /// The same coordinator holding SSH tunnels as `tunnels` says. Given with [`Self::with_ssh`]:
     /// the tunnels check the operators file and the host the signing reads.
     #[must_use]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the start of the coordinator gives it the tunnels in the next change"
-        )
-    )]
     pub(crate) fn with_tunnels(mut self, tunnels: crate::ssh_tunnel::Tunnels) -> Self {
         self.tunnels = Some(Arc::new(tunnels));
         self

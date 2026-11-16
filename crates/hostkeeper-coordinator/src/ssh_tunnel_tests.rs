@@ -395,7 +395,7 @@ pub(crate) fn data(bytes: &[u8]) -> proto::TunnelFrame {
     }
 }
 
-fn close(cause: &str) -> proto::TunnelFrame {
+pub(crate) fn close(cause: &str) -> proto::TunnelFrame {
     proto::TunnelFrame {
         frame: Some(Frame::Close(proto::Close {
             cause: cause.to_owned(),

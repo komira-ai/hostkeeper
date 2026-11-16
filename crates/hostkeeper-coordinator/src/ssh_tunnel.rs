@@ -796,3 +796,7 @@ pub(crate) mod tests;
 #[cfg(test)]
 #[path = "ssh_tunnel_poll_tests.rs"]
 mod poll_tests;
+
+#[cfg(test)]
+#[path = "ssh_tunnel_serve_tests.rs"]
+mod serve_tests;

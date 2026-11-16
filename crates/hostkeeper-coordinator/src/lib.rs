@@ -205,13 +205,6 @@ pub(crate) mod ssh_cert;
 pub(crate) mod ssh_ledger;
 pub mod ssh_operators;
 pub mod ssh_sign;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the start of the coordinator makes the tunnels and runs the poll and the drain in the next change"
-    )
-)]
 pub(crate) mod ssh_tunnel;
 pub mod stages;
 pub mod stamp;
