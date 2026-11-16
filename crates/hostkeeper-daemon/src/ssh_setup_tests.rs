@@ -559,7 +559,7 @@ fn a_refusal_before_a_change_touches_nothing() {
         let mut record = access(5);
         {
             let mut fake = rig.host.lock();
-            change(&mut record, &mut *fake);
+            change(&mut record, &mut fake);
         }
         let report = rig.apply(&record);
         assert_eq!(
