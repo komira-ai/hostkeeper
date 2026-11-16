@@ -13,6 +13,10 @@
 //! Nothing here decides: a decision is made under the gate ([`super::rollout`]). These functions take a
 //! session and run one statement each, so they run on any session of a pool. A decision reads the
 //! rows it decides on with [`changed_hosts`], [`orders`] and [`bakes`], after it holds the gate.
+//!
+//! The orders an operator queued for a host (`abort`, `clear_record`) are rows too, of migration
+//! `0023`: [`queue_operator_order`], [`operator_orders_of`] and [`take_operator_order`]. They are
+//! not part of a decision's snapshot: the decision of a host's beat reads that host's own.
 use super::session::{Params, Session};
 
 /// The clock and the rules of one beat, as the configuration keys carry them (section 12).
@@ -295,5 +299,104 @@ pub(crate) fn end_orders(
     session.execute(
         "DELETE FROM fleet_orders WHERE host_id = $1 AND service = ANY($2::text[])",
         &[&host_id, &services],
+    )
+}
+
+/// The kind of an order an operator queued, as its row names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum OperatorKind {
+    /// An `abort` (`Hosts.Abort`).
+    Abort,
+    /// A `clear_record` (`Hosts.ClearRecord`).
+    ClearRecord,
+}
+
+impl OperatorKind {
+    /// The name the row's `kind` column holds: the names sort as the orders are sent, aborts
+    /// before clear-records.
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Abort => "abort",
+            Self::ClearRecord => "clear_record",
+        }
+    }
+}
+
+/// A row of an order an operator queued for a host, not yet sent: the kind, the service and the
+/// order id (the host is the one asked for).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct OperatorOrderRow {
+    pub(crate) kind: OperatorKind,
+    pub(crate) service: String,
+    pub(crate) order_id: String,
+}
+
+/// Queues the order `order_id` of `kind` for `host_id` and `service`, unless one waits for them
+/// already: answers the order id that stands, which is the first one queued, so asking twice
+/// queues one order. One statement: the answer is the row's own, whichever session queued it.
+///
+/// # Errors
+/// The client's error.
+pub(crate) fn queue_operator_order(
+    session: &mut Session,
+    host_id: &str,
+    kind: OperatorKind,
+    service: &str,
+    order_id: &str,
+) -> Result<String, postgres::Error> {
+    // A conflict rewrites the stored id with itself, so the statement answers the row that
+    // stands even when another session queued, or sent, it a moment ago.
+    Ok(session
+        .query_one(
+            "INSERT INTO fleet_operator_orders AS o (host_id, kind, service, order_id) \
+             VALUES ($1, $2, $3, $4) \
+             ON CONFLICT (host_id, kind, service) DO UPDATE SET order_id = o.order_id \
+             RETURNING order_id",
+            &[&host_id, &kind.name(), &service, &order_id],
+        )?
+        .get(0))
+}
+
+/// The orders an operator queued for `host_id`, aborts before clear-records and each by service
+/// name in byte order: the order [`crate::orders::next`] sends them in.
+///
+/// # Errors
+/// The client's error.
+pub(crate) fn operator_orders_of(
+    session: &mut Session,
+    host_id: &str,
+) -> Result<Vec<OperatorOrderRow>, postgres::Error> {
+    Ok(session
+        .query(
+            "SELECT kind, service, order_id FROM fleet_operator_orders WHERE host_id = $1 \
+             ORDER BY kind COLLATE \"C\", service COLLATE \"C\"",
+            &[&host_id],
+        )?
+        .iter()
+        .map(|row| OperatorOrderRow {
+            kind: match row.get::<_, &str>(0) {
+                "abort" => OperatorKind::Abort,
+                _ => OperatorKind::ClearRecord,
+            },
+            service: row.get(1),
+            order_id: row.get(2),
+        })
+        .collect())
+}
+
+/// Deletes the order of `kind` queued for `host_id` and `service`, which has just been sent:
+/// answers how many rows were deleted.
+///
+/// # Errors
+/// The client's error.
+pub(crate) fn take_operator_order(
+    session: &mut Session,
+    host_id: &str,
+    kind: OperatorKind,
+    service: &str,
+) -> Result<u64, postgres::Error> {
+    session.execute(
+        "DELETE FROM fleet_operator_orders WHERE host_id = $1 AND kind = $2 AND service = $3",
+        &[&host_id, &kind.name(), &service],
     )
 }

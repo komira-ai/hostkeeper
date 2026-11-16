@@ -76,6 +76,7 @@ use crate::backup::{Backup, Report, Restore, backup, restore};
 use crate::desired::DesiredStore;
 use crate::enrollment::{Setup, StoreAt, os_random, setup};
 use crate::fleet::{CLOCK_SKEW_AFTER, QUIET_START};
+use crate::graceful::{Graceful, accept_until_stopped};
 use crate::health::{self, Serving};
 use crate::host_groups::GroupName;
 use crate::http::Surface;
@@ -83,7 +84,7 @@ use crate::initial_admin::{LoginFlags, watch_every};
 use crate::inventory::RecordWindow;
 use crate::layout::LayoutStore;
 use crate::listen::{
-    CLIENT_PATIENCE, Listener, MAX_CONNECTIONS, Remote, reload_every, serve, together,
+    CLIENT_PATIENCE, Listener, MAX_CONNECTIONS, Remote, reload_every, serve_until_stopped, together,
 };
 use crate::lock::{FileLock, LockGuard, StateLock};
 use crate::ops::OpsStore;
@@ -230,10 +231,16 @@ pub struct Serve {
     pub health_listen: Option<SocketAddr>,
     /// How long, from SIGTERM or SIGINT, the coordinator answers `503 draining` on `/readyz` and
     /// keeps serving its other listeners before it stops: the time an edge needs to see the
-    /// answer, or to see the instance that replaces this one. 0 stops at once. A start-first
-    /// update needs at least the edge's DNS refresh plus its healthy and unhealthy thresholds
-    /// times its check interval (9 seconds at the edge's values), and the stop grace period above
-    /// it.
+    /// answer, or to see the instance that replaces this one. 0 stops at once. Then the
+    /// heartbeat, private and LAN listeners accept no more connections, each open connection is
+    /// told to finish (an HTTP/2 one to go away, an HTTP/1.1 one to close after the request in
+    /// flight) and the coordinator exits once none is open, so a call whose decision was taken
+    /// is answered; the health listener answers until it exits. The wait for the connections
+    /// is bounded by the limits they already have, not by this flag. A start-first update needs
+    /// at least the edge's DNS refresh plus its healthy and unhealthy thresholds times its check
+    /// interval (9 seconds at the edge's values), and the stop grace period above it and above
+    /// the longest a connection is kept (two client patiences, 20 seconds, or until a held
+    /// `Releases.WaitConverged` call ends and one patience after it).
     #[arg(long, default_value_t = 15)]
     pub drain_delay_secs: u64,
     /// The coordinator's certificate chain (PEM), issued by the farm CA with the role
@@ -698,15 +705,17 @@ where
     Next: Future<Output = io::Result<Stream>> + Send,
     Stream: AsyncRead + AsyncWrite + Remote + Unpin + Send + 'static,
 {
-    run_as(parts, bind, ready, Serving::default()).await
+    run_as(parts, bind, ready, Serving::default(), Graceful::default()).await
 }
 
-/// [`run`], its health listener saying what `serving` holds ([`start`] drains it).
+/// [`run`], its health listener saying what `serving` holds ([`start`] drains it), and its
+/// heartbeat, control and LAN listeners stopping together when `graceful` is told to stop.
 async fn run_as<Bind, Binding, Accept, Next, Stream>(
     parts: Parts,
     bind: Bind,
     ready: impl FnOnce(Bound),
     serving: Serving,
+    graceful: Graceful,
 ) -> Result<Infallible, StartError>
 where
     Bind: Fn(SocketAddr) -> Binding,
@@ -730,10 +739,15 @@ where
         }
         None => (None, Either::Right(std::future::pending())),
     };
-    let rest = run_listeners(parts, bind, |bound| {
-        ready(Bound { health, ..bound });
-        serving.set();
-    });
+    let rest = run_listeners(
+        parts,
+        bind,
+        |bound| {
+            ready(Bound { health, ..bound });
+            serving.set();
+        },
+        graceful,
+    );
     match select(pin!(probing), pin!(rest)).await {
         Either::Left((never, _)) => match never {},
         Either::Right((ended, _)) => ended,
@@ -741,11 +755,14 @@ where
 }
 
 /// [`run`] past the health listener: binds the other listeners, calls `ready` with their
-/// addresses (`health` none), and serves them until the future is dropped.
+/// addresses (`health` none), and serves them until the future is dropped. When `graceful` is
+/// told to stop, the three listeners stop accepting and drop their sockets; the periodic jobs
+/// go on, and so does every connection already accepted, on its own task.
 async fn run_listeners<Bind, Binding, Accept, Next, Stream>(
     parts: Parts,
     bind: Bind,
     ready: impl FnOnce(Bound),
+    graceful: Graceful,
 ) -> Result<Infallible, StartError>
 where
     Bind: Fn(SocketAddr) -> Binding,
@@ -790,19 +807,33 @@ where
     let adopting = watch_every(Arc::clone(&coordinator), parts.reload);
     // Without a LAN listener, a future that never finishes stands in for it.
     let serving_lan = match lan {
-        Some(lan) => Either::Left(serve(
+        Some(lan) => Either::Left(serve_until_stopped(
             lan,
             Arc::clone(&coordinator),
             CLIENT_PATIENCE,
             MAX_CONNECTIONS,
+            graceful.clone(),
         )),
         None => Either::Right(std::future::pending()),
     };
     let (for_heartbeat, for_control) = (Arc::clone(&coordinator), Arc::clone(&coordinator));
     let serving = together(
-        serve(heartbeat, for_heartbeat, CLIENT_PATIENCE, MAX_CONNECTIONS),
-        serve(control, for_control, CLIENT_PATIENCE, MAX_CONNECTIONS),
+        serve_until_stopped(
+            heartbeat,
+            for_heartbeat,
+            CLIENT_PATIENCE,
+            MAX_CONNECTIONS,
+            graceful.clone(),
+        ),
+        serve_until_stopped(
+            control,
+            for_control,
+            CLIENT_PATIENCE,
+            MAX_CONNECTIONS,
+            graceful.clone(),
+        ),
     );
+    let accepting = accept_until_stopped(&graceful, together(serving, serving_lan));
     let reloading = reload_every(
         enrollment,
         vec![parts.heartbeat_tls, parts.control_tls],
@@ -811,7 +842,7 @@ where
         coordinator.claims(),
     );
     let all = together(
-        together(serving, serving_lan),
+        accepting,
         together(reloading, together(observing, adopting)),
     );
     // On the heap: the futures together are too large for a stack of a test's thread.
@@ -828,7 +859,12 @@ async fn signalled() -> io::Result<()> {
 }
 
 /// Runs the coordinator, its sockets bound by `bind` and the issuer's keys fetched trusting
-/// `roots`, until `stop` resolves, which drains the health listener ([`health::drain_on`]).
+/// `roots`, until `stop` resolves and it has stopped gracefully. From `stop` the health
+/// listener answers `503 draining` on `/readyz`, and `--drain-delay-secs` later (the other
+/// listeners serve on meanwhile) the heartbeat, control and LAN listeners stop accepting and
+/// every connection they accepted is told to finish ([`crate::graceful`]); it returns once none
+/// is open. The health listener answers until it returns. A connection ends by the limits it
+/// has already, so no new timeout bounds the wait.
 ///
 /// # Errors
 /// [`StartError`]: the start is refused ([`build`]), an address cannot be bound, or `stop`
@@ -848,16 +884,20 @@ where
 {
     let parts = build(&flags, roots)?;
     let health = Serving::default();
-    let stop = health::drain_on(
-        stop,
-        health.clone(),
-        tokio::time::sleep(Duration::from_secs(flags.drain_delay_secs)),
-    );
+    let graceful = Graceful::default();
+    let (draining, winding) = (health.clone(), graceful.clone());
+    let delay = Duration::from_secs(flags.drain_delay_secs);
+    let stop = async move {
+        let stopped = health::drain_on(stop, draining, tokio::time::sleep(delay)).await;
+        winding.wind_down().await;
+        stopped
+    };
     let serving = run_as(
         parts,
         bind,
         |bound| println!("{}", start_line(&bound)),
         health,
+        graceful,
     );
     match select(pin!(stop), pin!(serving)).await {
         Either::Left((stopped, _)) => stopped.map_err(StartError::from),

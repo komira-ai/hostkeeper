@@ -975,6 +975,9 @@ mod enrollment_calls;
 mod gate_orders;
 #[path = "service_groups.rs"]
 mod group_calls;
+/// The operator's queued orders, `abort` and `clear_record`, as rows.
+#[path = "service_operator.rs"]
+mod operator_rows;
 /// The heartbeat's decisions over the fleet's rows, when coordinators share a database.
 #[path = "service_rows.rs"]
 mod rows_calls;

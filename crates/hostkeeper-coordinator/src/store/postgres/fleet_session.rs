@@ -18,7 +18,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use super::Postgres;
 use super::fleet_rows::{
-    self, BakeRow, HostBeat, HostRow, OrderRow, Timing, bakes, changed_hosts, end_orders, orders,
+    self, BakeRow, HostBeat, HostRow, OperatorKind, OperatorOrderRow, OrderRow, Timing, bakes,
+    changed_hosts, end_orders, operator_orders_of, orders, queue_operator_order,
+    take_operator_order,
 };
 use super::rollout::{
     self, Admission, Ask, Gated, Limits, Uninstalling, Wait, admit, place_uninstall, stage_is_at,
@@ -118,6 +120,46 @@ impl Gate<'_> {
     /// The client's error.
     pub(crate) fn take_back(&mut self, host_id: &str) -> Result<(), postgres::Error> {
         end_orders_of(self.session, host_id)
+    }
+
+    /// Queues the operator's order `order_id` of `kind` for `host_id` and `service` in this
+    /// transaction, unless one waits already; answers the order id that stands.
+    ///
+    /// # Errors
+    /// The client's error.
+    pub(crate) fn queue_operator_order(
+        &mut self,
+        host_id: &str,
+        kind: OperatorKind,
+        service: &str,
+        order_id: &str,
+    ) -> Result<String, postgres::Error> {
+        queue_operator_order(self.session, host_id, kind, service, order_id)
+    }
+
+    /// The orders the operator queued for `host_id`, in the order they are sent.
+    ///
+    /// # Errors
+    /// The client's error.
+    pub(crate) fn operator_orders_of(
+        &mut self,
+        host_id: &str,
+    ) -> Result<Vec<OperatorOrderRow>, postgres::Error> {
+        operator_orders_of(self.session, host_id)
+    }
+
+    /// Deletes the order of `kind` queued for `host_id` and `service`, which the answer of this
+    /// transaction sends.
+    ///
+    /// # Errors
+    /// The client's error.
+    pub(crate) fn take_operator_order(
+        &mut self,
+        host_id: &str,
+        kind: OperatorKind,
+        service: &str,
+    ) -> Result<(), postgres::Error> {
+        take_operator_order(self.session, host_id, kind, service).map(|_| ())
     }
 
     /// Writes the uninstall order `order_id` for the host of `ask` ([`rollout::place_uninstall`]).
@@ -276,6 +318,35 @@ impl FleetRows {
     /// What the session or the server said.
     pub(crate) fn end_orders(&self, host_id: &str, services: &[&str]) -> Result<(), Unreachable> {
         self.on_session(|session, _| end_orders(session, host_id, services).map(|_| ()))
+    }
+
+    /// Queues the operator's order `order_id` of `kind` for `host_id` and `service`, unless one
+    /// waits already: the order id that stands, the first one queued, whichever coordinator
+    /// queued it.
+    ///
+    /// # Errors
+    /// What the session or the server said.
+    pub(crate) fn queue_operator_order(
+        &self,
+        host_id: &str,
+        kind: OperatorKind,
+        service: &str,
+        order_id: &str,
+    ) -> Result<String, Unreachable> {
+        self.on_session(|session, _| {
+            queue_operator_order(session, host_id, kind, service, order_id)
+        })
+    }
+
+    /// The orders the operator queued for `host_id`, in the order they are sent.
+    ///
+    /// # Errors
+    /// What the session or the server said.
+    pub(crate) fn operator_orders_of(
+        &self,
+        host_id: &str,
+    ) -> Result<Vec<OperatorOrderRow>, Unreachable> {
+        self.on_session(|session, _| operator_orders_of(session, host_id))
     }
 
     /// Runs `body` in one transaction that holds the gate ([`rollout::decide`]): the answer of

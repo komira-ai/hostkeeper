@@ -299,7 +299,8 @@ async fn there_is_no_health_listener_without_the_flag() {
 /// Proves: through `start`, a readiness probe of the health listener is answered `200 ok` while it serves;
 /// once the stop resolves, `start` returns `Ok`, and a probe that connected before the stop and
 /// whose request is answered after it is told `503 draining`, not `ok`. (Its connection's task
-/// outlives `start` in the test's runtime; it stands for an answer made while the process exits.)
+/// outlives `start` in the test's runtime, which does not wait for the health listener's
+/// connections; it stands for an answer made while the process exits.)
 ///
 /// Catches: a `start` that does not drain on the stop signal, so an answer made between the
 /// signal and the exit reads the coordinator as healthy.

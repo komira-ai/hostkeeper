@@ -62,11 +62,24 @@ reads memory only and writes no audit line.
   it exits, ahead of every other token: every answer of `/readyz` made after the signal is
   `draining`, never `ok`, a probe that connected before the signal among them. It never turns back
   into `ok`. The coordinator keeps serving its listeners for `--drain-delay-secs` after the signal
-  (default 15; 0 stops serving and exits at once), so that an edge that checks `/readyz` sees the
-  `503` and an instance that replaces this one is already taking connections; then it exits, and
-  from then on a probe gets no answer. A start-first update needs `--drain-delay-secs` at least the
-  edge's DNS refresh plus its healthy and unhealthy thresholds times its check interval (9 seconds
-  at the edge's values, so 15 has 6 of margin), and the service's stop grace period above it.
+  (default 15; 0 stops accepting at once), so that an edge that checks `/readyz` sees the
+  `503` and an instance that replaces this one is already taking connections. Then the heartbeat,
+  private and LAN listeners stop accepting connections, each connection they hold is told to
+  finish (an HTTP/2 connection to go away, so it takes no new call; an HTTP/1.1 connection to close
+  after the request in flight), and the coordinator exits once none is open, so a call whose
+  decision was taken, a heartbeat that was told an order among them, is answered first. The
+  journal has one line when the wait begins and one when it ends, each with the number of
+  connections waited for. The health listener keeps answering, `200` on `/healthz` and `503 draining`
+  on `/readyz`, until the process exits, and from then on a probe gets no answer. The wait adds no
+  timeout: a connection ends by the limits it has already (ten seconds for a handshake, a request
+  head and each write the peer does not read, and an HTTP/2 connection is closed ten seconds after
+  it is told to go away), so the wait is about twenty seconds at most, longer only for a connection
+  that holds a `Releases.WaitConverged` call, which is kept until the call ends (at most 30
+  minutes) and ten seconds more. A start-first update needs `--drain-delay-secs` at least the edge's
+  DNS refresh plus its healthy and unhealthy thresholds times its check interval (9 seconds at the
+  edge's values, so 15 has 6 of margin), and the service's stop grace period above the drain delay
+  plus the wait (15 plus about 20 seconds by default, for a coordinator that holds no
+  `WaitConverged` call).
 
 The listener has the limits of the others: at most 1024 connections at once, ten seconds for a
 request head and for each write of an answer the probe does not read.

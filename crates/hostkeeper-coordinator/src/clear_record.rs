@@ -9,9 +9,13 @@
 //! `store_failed` or `audit_unavailable` orders nothing either. The order then waits in
 //! [`Queue`] for the host's next heartbeat on a transport that carries typed orders
 //! ([`crate::orders::next`]), takes no update slot and is sent once, as an `abort` is. Asking
-//! again while it waits answers the same order id and writes nothing. Like the other orders it
-//! is kept in memory only: a restart of the coordinator forgets an order not yet sent, and the
-//! operator asks again.
+//! again while it waits answers the same order id and writes nothing, whichever coordinator
+//! queued it. Over a database the order is a row of `fleet_operator_orders`, so the coordinator
+//! that hears the host's next heartbeat sends it and deletes the row in the transaction that
+//! decides the answer ([`crate::service`]'s `operator_rows`); one whose row could not be written
+//! waits in the memory of the coordinator that took the call, which writes it at its next
+//! decision. Over files, like the other orders, it is kept in memory only: a restart of the
+//! coordinator forgets an order not yet sent, and the operator asks again.
 //!
 //! What the daemon does with it is the daemon's (design section 3.2). Its verdict, the
 //! service's `last_update` under the order's id, is acknowledged as any order's
@@ -30,6 +34,7 @@ use hostkeeper_wire::wire::{Heartbeat, UpdateResult};
 use crate::operator::Caller;
 use crate::ops::{AuditEntry, Write};
 use crate::service::Coordinator;
+use crate::store::postgres::fleet_rows::OperatorKind;
 use crate::verdict_file::Heard;
 
 /// The feature a daemon announces to be sent a `clear_record`.
@@ -58,8 +63,10 @@ pub(crate) fn is_verdict(report: &UpdateResult) -> bool {
     })
 }
 
-/// The `clear_record` orders an operator queued, per host and service, each with its order id:
-/// sent once, at the host's next heartbeat that can carry it. And the verdict of the last one
+/// The `clear_record` orders an operator queued in this coordinator's memory, per host and
+/// service, each with its order id: sent once, at the host's next heartbeat that can carry it.
+/// Over a database a heartbeat's decision makes a host's orders here the rows' before it sends
+/// one. And the verdict of the last one
 /// each host reported, per service, which `Hosts.Get` shows until the host reports a verdict of
 /// another order of the service.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -166,10 +173,8 @@ impl Coordinator {
         if !fleet.announced(&id, FEATURE) {
             return Err(proto::HostsRefusal::DaemonTooOld);
         }
-        if let Some(order_id) = fleet.clear_records.queued(&id, &def.name) {
-            return Ok(proto::ClearRecordResponse {
-                order_id: order_id.to_owned(),
-            });
+        if let Some(order_id) = self.queued_clear_record(&fleet, &id, &def.name) {
+            return Ok(proto::ClearRecordResponse { order_id });
         }
         let mut audit = AuditEntry::new(by, ACTION);
         audit.service = Some(def.name.clone());
@@ -180,7 +185,11 @@ impl Coordinator {
         let order_id = order_id(done.seq);
         fleet
             .clear_records
-            .queue(id, def.name.clone(), order_id.clone());
+            .queue(id.clone(), def.name.clone(), order_id.clone());
+        // Over a database the answer is the order that stands in the rows: another coordinator
+        // may have queued one since the check above.
+        let order_id =
+            self.queue_operator_order(&id, OperatorKind::ClearRecord, &def.name, &order_id);
         Ok(proto::ClearRecordResponse { order_id })
     }
 }
