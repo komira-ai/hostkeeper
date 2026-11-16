@@ -246,6 +246,7 @@ pub(super) fn with_session<R: Send + 'static>(
 mod accounts;
 mod connect;
 mod coordinator;
+mod fleet_rows;
 mod generations;
 mod host_groups;
 mod layout;
