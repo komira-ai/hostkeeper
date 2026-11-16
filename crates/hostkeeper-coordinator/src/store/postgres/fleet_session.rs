@@ -184,27 +184,10 @@ impl FleetRows {
     ) -> Result<R, Unreachable> {
         let run = || {
             let mut held = self.session.lock().unwrap_or_else(PoisonError::into_inner);
-            let mut session = match held.take() {
-                Some(session) => session,
-                None => Session::connect(&self.config, Arc::new(AtomicU64::new(0)), false)
-                    .map_err(|fail| match fail {
-                        super::session::Fail::Pg(e) => describe(&e),
-                        super::session::Fail::Refused(why) => why,
-                    })?,
-            };
+            let mut session = self.session_from(&mut held)?;
             let done = body(&mut session, &self.known);
-            match done {
-                Ok(answer) => {
-                    *held = Some(session);
-                    Ok(answer)
-                }
-                Err(e) => {
-                    if !ends_session(&e) {
-                        *held = Some(session);
-                    }
-                    Err(describe(&e))
-                }
-            }
+            keep_unless_ended(&mut held, session, done.as_ref().err());
+            done.map_err(|e| describe(&e))
         };
         std::thread::scope(|scope| {
             scope
@@ -212,6 +195,21 @@ impl FleetRows {
                 .join()
                 .unwrap_or_else(|_| Err("the session of the fleet's rows stopped".to_owned()))
         })
+    }
+
+    /// The session `held` holds, or a new one when it holds none.
+    fn session_from(&self, held: &mut Option<Session>) -> Result<Session, Unreachable> {
+        match held.take() {
+            Some(session) => Ok(session),
+            None => {
+                Session::connect(&self.config, Arc::new(AtomicU64::new(0)), false).map_err(|fail| {
+                    match fail {
+                        super::session::Fail::Pg(e) => describe(&e),
+                        super::session::Fail::Refused(why) => why,
+                    }
+                })
+            }
+        }
     }
 
     /// Stores `beat` as the host's last, if it is not older than the one stored; true when it was
@@ -311,6 +309,17 @@ impl FleetRows {
     }
 }
 
+/// Puts `session` back in `held` for the next call, unless `failed` is an error that ended it.
+fn keep_unless_ended(
+    held: &mut Option<Session>,
+    session: Session,
+    failed: Option<&postgres::Error>,
+) {
+    if failed.is_none_or(|e| !ends_session(e)) {
+        *held = Some(session);
+    }
+}
+
 impl Drop for FleetRows {
     fn drop(&mut self) {
         // A client closes by running on its own runtime, which it may not do on a thread of the
@@ -322,12 +331,12 @@ impl Drop for FleetRows {
             .take();
         if let Some(session) = session {
             // A thread that cannot be made leaves the session to close where it is.
-            let closing = std::thread::Builder::new()
+            let _closing = std::thread::Builder::new()
                 .name("hk-fleet-rows-close".to_owned())
-                .spawn(move || drop(session));
-            if let Err(why) = closing {
-                tracing::warn!(%why, "the fleet's session could not be closed on a thread of its own");
-            }
+                .spawn(move || drop(session))
+                .inspect_err(|why| {
+                    tracing::warn!(%why, "the fleet's session could not be closed on a thread of its own");
+                });
         }
     }
 }

@@ -23,7 +23,7 @@ impl DesiredStore {
     /// commit to after its memory, so no such change is half done here, and it takes the
     /// operations state in the same step (the lock order is this store's, then the ops store's,
     /// as in a change that writes both). Answers whether memory was replaced.
-    pub(crate) fn take_rows(&self, fresh: Held, also: impl FnOnce() -> bool) -> bool {
+    pub(crate) fn take_rows(&self, fresh: Held, also: Box<dyn FnOnce() -> bool + '_>) -> bool {
         let _writer = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
         if !also() {
             return false;

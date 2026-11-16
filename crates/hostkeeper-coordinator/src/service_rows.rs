@@ -317,8 +317,10 @@ impl Coordinator {
         match rows.rows.state_after(known) {
             Ok(None) => {}
             Ok(Some(fresh)) => {
-                self.desired
-                    .take_rows(fresh.desired, || self.ops.take_rows(fresh.ops, known));
+                self.desired.take_rows(
+                    fresh.desired,
+                    Box::new(|| self.ops.take_rows(fresh.ops, known)),
+                );
             }
             Err(why) => {
                 tracing::warn!(%why, "the state other coordinators committed is not read from the rows");

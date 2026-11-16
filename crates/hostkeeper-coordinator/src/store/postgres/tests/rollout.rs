@@ -10,7 +10,8 @@ use std::sync::{Arc, Barrier};
 
 use super::TestDatabase;
 use crate::store::postgres::rollout::{
-    Admission, Ask, Gated, Limits, Wait, admit, decide, gate_timed_out, raise_halt, stage_is_at,
+    Admission, Ask, Gated, Limits, Uninstalling, Wait, admit, decide, gate_timed_out,
+    place_uninstall, raise_halt, stage_is_at,
 };
 use crate::store::postgres::session::Session;
 use crate::store::postgres::{Postgres, TIMEOUTS};
@@ -604,5 +605,70 @@ fn a_service_that_cannot_roll_does_not_hold_the_queue() {
         answer(s, &at(6600 + 3600, "h6", "s5"), &LIMITS),
         Admission::Placed,
         "and an hour after its last ask it does not"
+    );
+}
+
+/// Proves: an uninstall order is written for a host that holds no order; asked again with the
+/// same order id it is the host's order already and is sent again; any other order of the host
+/// (another uninstall of the service, an uninstall of another service, an update) keeps it from
+/// being written, and nothing more is written.
+///
+/// Catches: a second order for a host, which a host would run beside the first, or an uninstall
+/// sent again that is refused as if the host were busy.
+#[test]
+fn an_uninstall_is_placed_once_and_never_beside_another_order() {
+    let (db, _store, mut sessions) = rig(1);
+    let s = &mut sessions[0];
+    let uninstall = |host| Ask {
+        target: "1.0",
+        ..ask(host, "s1")
+    };
+    let place =
+        |s: &mut Session, ask: &Ask<'_>, order_id: &str| match decide(s, Wait::Beat, |held| {
+            place_uninstall(held, ask, order_id)
+        })
+        .expect("the decision runs")
+        {
+            Gated::Decided(placed) => placed,
+            Gated::Busy => panic!("nothing else holds the gate"),
+        };
+    assert_eq!(
+        place(s, &uninstall("h1"), "uninstall-1"),
+        Uninstalling::Placed
+    );
+    assert_eq!(
+        place(s, &uninstall("h1"), "uninstall-1"),
+        Uninstalling::Existing
+    );
+    assert_eq!(
+        place(s, &uninstall("h1"), "uninstall-2"),
+        Uninstalling::HostBusy
+    );
+    let other = Ask {
+        target: "1.0",
+        ..ask("h1", "s2")
+    };
+    assert_eq!(place(s, &other, "uninstall-1"), Uninstalling::HostBusy);
+    assert_eq!(answer(s, &ask("h2", "s1"), &LIMITS), Admission::Placed);
+    assert_eq!(
+        place(s, &uninstall("h2"), "uninstall-3"),
+        Uninstalling::HostBusy
+    );
+    assert_eq!(
+        db.rows("SELECT host_id, service, target, uninstall_id FROM fleet_orders ORDER BY host_id"),
+        vec![
+            vec![
+                Some("h1".into()),
+                Some("s1".into()),
+                Some("1.0".into()),
+                Some("uninstall-1".into())
+            ],
+            vec![
+                Some("h2".into()),
+                Some("s1".into()),
+                Some("2.0".into()),
+                None
+            ],
+        ]
     );
 }

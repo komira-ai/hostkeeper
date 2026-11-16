@@ -329,3 +329,54 @@ fn a_gap_in_the_beats_sets_the_quiet_time() {
         "the quiet time never goes back"
     );
 }
+
+/// The hosts a decision of `rows` reads under the gate, as (host, time heard, instance).
+fn read_under_gate(rows: &crate::store::postgres::FleetRows) -> Vec<(String, i64, String)> {
+    use crate::store::postgres::rollout::{Gated, Wait};
+    match rows
+        .gated(Wait::Beat, |gate| gate.snapshot())
+        .expect("the gate is taken")
+    {
+        Gated::Decided(snapshot) => snapshot
+            .hosts
+            .into_iter()
+            .map(|row| (row.host_id, row.seen_unix, row.instance))
+            .collect(),
+        Gated::Busy => panic!("nothing else holds the gate"),
+    }
+}
+
+/// Proves: through a coordinator's session (`FleetRows`), a beat older than the one another
+/// coordinator stored is not stored, and the newer row is the one the next decision reads, once:
+/// the decision after it does not read it again; a
+/// session the server ended fails the call it was ended under, and the next call makes a new one
+/// and is stored.
+///
+/// Catches: a coordinator that keeps using a session the server ended (every later beat fails),
+/// or that takes a beat it did not store as the row it holds.
+#[test]
+fn the_fleet_session_drops_a_stale_beat_and_is_made_again_once_ended() {
+    let (db, store, _session) = rig();
+    let a = store.fleet_rows("a");
+    let b = store.fleet_rows("b");
+    assert_eq!(a.beat(&host_beat(100, &[]), &timing(1000)), Ok(true));
+    assert_eq!(b.beat(&host_beat(200, &[]), &timing(1001)), Ok(true));
+    assert_eq!(
+        a.beat(&host_beat(150, &[]), &timing(1002)),
+        Ok(false),
+        "the beat the other coordinator stored is newer"
+    );
+    assert_eq!(
+        read_under_gate(&a),
+        vec![("h1".to_owned(), 1001, "b".to_owned())]
+    );
+    assert_eq!(read_under_gate(&a), vec![], "taken in once");
+
+    db.end_sessions();
+    assert!(
+        a.beat(&host_beat(300, &[]), &timing(1003)).is_err(),
+        "the call the session ended under fails"
+    );
+    assert_eq!(a.beat(&host_beat(300, &[]), &timing(1004)), Ok(true));
+    assert_eq!(stored(&db)[1], Some("1004".into()));
+}

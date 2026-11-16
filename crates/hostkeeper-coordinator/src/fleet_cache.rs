@@ -33,7 +33,7 @@ impl Fleet {
     /// hold is as they say it, and one older than [`ORDER_AGE`] counts for nothing (the rows
     /// drop it when the next order is asked for).
     pub(crate) fn sync_orders(&mut self, rows: &[OrderRow], now: Duration, unix_now: i64) {
-        self.take_orders(rows, now, unix_now, |_| true);
+        self.take_orders(rows, now, unix_now, &|_| true);
     }
 
     /// [`Self::sync_orders`] for the orders of the host `id` alone: what the rows hold of it before
@@ -46,7 +46,7 @@ impl Fleet {
         now: Duration,
         unix_now: i64,
     ) {
-        self.take_orders(rows, now, unix_now, |host| host == id);
+        self.take_orders(rows, now, unix_now, &|host| host == id);
     }
 
     fn take_orders(
@@ -54,7 +54,7 @@ impl Fleet {
         rows: &[OrderRow],
         now: Duration,
         unix_now: i64,
-        of: impl Fn(&HostId) -> bool,
+        of: &dyn Fn(&HostId) -> bool,
     ) {
         let wanted: BTreeMap<(HostId, String), Order> = rows
             .iter()
@@ -71,16 +71,15 @@ impl Fleet {
                 Some(((id, row.service.clone()), order))
             })
             .collect();
-        let gone: Vec<(HostId, String)> = self
+        let gone: Vec<((HostId, String), Order)> = self
             .orders
-            .keys()
-            .filter(|key| of(&key.0) && !wanted.contains_key(*key))
-            .cloned()
+            .iter()
+            .filter(|(key, _)| of(&key.0) && !wanted.contains_key(*key))
+            .map(|(key, order)| (key.clone(), order.clone()))
             .collect();
-        for key in gone {
-            if let Some(order) = self.orders.remove(&key) {
-                self.no_longer_outstanding(key, &order);
-            }
+        for (key, order) in gone {
+            self.orders.remove(&key);
+            self.no_longer_outstanding(key, &order);
         }
         for (key, order) in wanted {
             if let Some(replaced) = self.orders.insert(key.clone(), order) {

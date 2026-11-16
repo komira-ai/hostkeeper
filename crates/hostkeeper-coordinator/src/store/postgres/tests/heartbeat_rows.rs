@@ -534,3 +534,72 @@ async fn an_absent_copy_of_the_version_does_not_end_the_order() {
         "0"
     );
 }
+
+/// Proves: an install the fleet in memory would order is refused by the rows: `db` has a halt
+/// row written straight into the rows, which the fleet in memory does not hold, so the host that runs `web`
+/// at 2.0 and lacks `db` is ordered nothing and no order row is written; with the halt row gone
+/// its next beat is ordered the install.
+///
+/// Catches: an install ordered from memory past a halt the rows hold.
+#[tokio::test]
+async fn an_install_the_rows_refuse_is_not_ordered() {
+    use crate::assign_support::{order_to, why_of};
+    use crate::marks_support::runs;
+
+    let (db, _wall, a, _b) = settled("install-halted", &["h3"]).await;
+    db.run(
+        "INSERT INTO halts (service, node_id, check_name, target, origin) \
+         VALUES ('db', 'h9', 'health', '2.0', 'updater')",
+    )
+    .expect("a halt row");
+    assert_eq!(order_to(&a.rig, "h3", vec![runs(WEB, "2.0")]), None);
+    assert_eq!(
+        why_of(&a.rig, DB, "h3"),
+        None,
+        "the fleet in memory would order the install"
+    );
+    assert_eq!(orders(&db), vec![]);
+    db.run("DELETE FROM halts").expect("the halt row gone");
+    assert!(matches!(
+        order_to(&a.rig, "h3", vec![runs(WEB, "2.0")]),
+        Some(crate::orders::Order::Install { .. })
+    ));
+    assert_eq!(orders(&db), vec![("h3".to_owned(), "db".to_owned())]);
+}
+
+/// Proves: an uninstall whose order row cannot be written orders nothing and leaves no row; with
+/// the rows writable again the host's next beat is ordered the uninstall, and its row names it.
+///
+/// Catches: an uninstall given to a host when the rows that keep other coordinators from ordering
+/// the same host did not take it.
+#[tokio::test]
+async fn an_uninstall_the_rows_do_not_take_is_not_ordered() {
+    use crate::assign_support::{order_to, unassign};
+    use crate::marks_support::runs;
+
+    let (db, wall, a, b) = settled("uninstall-rows", &["h1"]).await;
+    let both = || vec![runs(WEB, "1.0"), runs(DB, "2.0")];
+    unassign(&a.rig, WEB, "", "daemon", true).expect("taken off the daemons");
+    a.at(&wall, 32);
+    b.at(&wall, 32);
+    db.run(
+        "ALTER TABLE fleet_orders ADD CONSTRAINT no_uninstall \
+         CHECK (uninstall_id IS NULL) NOT VALID",
+    )
+    .expect("uninstalls refused");
+    assert_eq!(order_to(&a.rig, "h1", both()), None);
+    assert_eq!(orders(&db), vec![]);
+    db.run("ALTER TABLE fleet_orders DROP CONSTRAINT no_uninstall")
+        .expect("uninstalls taken");
+    assert!(matches!(
+        order_to(&a.rig, "h1", both()),
+        Some(crate::orders::Order::Uninstall { .. })
+    ));
+    assert_eq!(
+        count(
+            &db,
+            "SELECT uninstall_id FROM fleet_orders WHERE host_id = 'h1'"
+        ),
+        "uninstall-1"
+    );
+}

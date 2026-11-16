@@ -111,11 +111,40 @@ fn the_desired_state_of_the_rows_is_taken_in_with_the_operations_state_or_not_at
     fresh
         .desired
         .insert(LEGACY.to_owned(), desired("2.0", 0, 0));
-    assert!(!store.take_rows(fresh.clone(), || false));
+    assert!(!store.take_rows(fresh.clone(), Box::new(|| false)));
     assert!(store.get(LEGACY).is_none());
-    assert!(store.take_rows(fresh, || true));
+    assert!(store.take_rows(fresh, Box::new(|| true)));
     assert_eq!(
         store.get(LEGACY).expect("a state").version.to_string(),
         "2.0"
     );
+}
+
+/// Proves: memory whose change was committed but whose audit line was not (the line waits to be
+/// written) is left as it is: the rows hold the change without the line, and taking them in
+/// would drop the line that waits.
+///
+/// Catches: a refresh from the rows that loses an audit line still waiting to be written,
+/// because the state it belongs to is committed.
+#[test]
+fn memory_with_an_audit_line_not_yet_written_is_left_as_it_is() {
+    let (fake, store) = seeded();
+    fake.refuse(|commit| (!commit.audit.is_empty()).then(crate::store::audit_failure));
+    let _ = store.change(
+        Write::Halt,
+        AuditEntry::new("coordinator", "halt"),
+        |state| {
+            state
+                .services
+                .insert("halted".to_owned(), ServiceOps::default());
+        },
+    );
+    assert!(
+        fake.ops().services.contains_key("halted"),
+        "the state is committed without its line"
+    );
+    assert!(store.halt_unwritten(), "the line waits");
+    let fresh = fake.ops();
+    assert!(!store.take_rows(fresh, store.newest_seq()));
+    assert!(store.halt_unwritten(), "the line still waits");
 }
