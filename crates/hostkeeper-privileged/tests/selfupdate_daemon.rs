@@ -299,7 +299,8 @@ fn mount_options_of(mountinfo: &str, path: &Path) -> Option<String> {
             let mut fields = line.split(' ');
             let point = fields.nth(4)?;
             let options = fields.next()?;
-            path.starts_with(point).then(|| (point.len(), options.to_string()))
+            path.starts_with(point)
+                .then(|| (point.len(), options.to_string()))
         })
         .max_by_key(|(len, _)| *len)
         .map(|(_, options)| options)
@@ -326,11 +327,17 @@ fn the_test_hosts_mount_lookup_takes_the_longest_mount_point() {
     let table = "1 0 8:1 / / rw,relatime - ext4 /dev/sda1 rw\n\
                  2 1 0:5 / /run rw,nosuid,noexec - tmpfs tmpfs rw\n\
                  3 2 0:6 / /run/x ro - tmpfs tmpfs rw\n";
-    assert_eq!(mount_options_of(table, Path::new("/var/lib/a")).as_deref(), Some("rw,relatime"));
+    assert_eq!(
+        mount_options_of(table, Path::new("/var/lib/a")).as_deref(),
+        Some("rw,relatime")
+    );
     assert_eq!(
         mount_options_of(table, Path::new("/run/hk")).as_deref(),
         Some("rw,nosuid,noexec")
     );
-    assert_eq!(mount_options_of(table, Path::new("/run/x/y")).as_deref(), Some("ro"));
+    assert_eq!(
+        mount_options_of(table, Path::new("/run/x/y")).as_deref(),
+        Some("ro")
+    );
     assert_eq!(mount_options_of("", Path::new("/run")), None);
 }
