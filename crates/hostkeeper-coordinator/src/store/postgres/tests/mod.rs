@@ -256,6 +256,7 @@ mod records;
 mod records_errors;
 mod releases;
 mod repositories;
+mod rollout;
 mod running;
 mod schema;
 pub(crate) mod seed;
