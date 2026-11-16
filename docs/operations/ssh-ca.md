@@ -167,9 +167,14 @@ within that and one poll's work. At the same poll it refreshes its tunnels' `las
 closes the rows that have not been refreshed for three polls with `instance_lost`, which is how the tunnels
 of an instance that was killed leave the table. The poll refreshes the tunnels the instance holds and those
 it is opening (recorded, the host not dialled yet), so a row of its own that nothing holds any more (a close
-the book refused) is reaped the same way after three polls. A poll that cannot read the book is logged and
-tried again; it closes nothing. A poll that cannot read the operators file keeps the tunnels as they are and
-checks the file at the next poll.
+the book refused) is reaped the same way after three polls. Each check of a poll stands alone, and one
+that cannot read its source skips only itself for that poll:
+- the token check (`token_revoked`) always runs;
+- the operators file check (`not_permitted`) is skipped when the file cannot be read, and the file is read
+  again at the next poll;
+- the book's part (`revoked`, `instance_lost`, the refresh and the reaping) is skipped when the book cannot
+  be read or written; the failure is logged, and a check that already ran in that poll may still have
+  stopped a tunnel.
 
 **Drain.** When the coordinator takes SIGTERM or SIGINT it stops taking tunnels (`draining`, which the client
 may retry once and reach another instance), keeps serving, and lets its tunnels run for up to `--ssh-drain-s`
