@@ -51,7 +51,7 @@ pub const ACCESS_SSH_GROUP: &str = "com.apple.access_ssh";
 /// The group id (GeneratedUID) of the `admin` group, which a group lists in `NestedGroups`.
 pub const ADMIN_GROUP_GUID: &str = "ABCDEFAB-CDEF-ABCD-EFAB-CDEF00000050";
 /// The directory node of the accounts; an account's record is `<node>/<name>`.
-pub const USERS_NODE: &str = "/Users";
+const USERS_NODE: &str = "/Users";
 /// The first user id of a person's account; lower ones are the system's.
 pub const FIRST_USER_ID: u32 = 501;
 /// What `systemsetup` says when the caller lacks Full Disk Access.
