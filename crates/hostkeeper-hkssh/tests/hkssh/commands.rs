@@ -2,7 +2,7 @@
 
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 
-use crate::fake::{Double, HOST, cert_type, NOW, PIN, PUBLIC, Rig, TOKEN, invoke};
+use crate::fake::{Double, HOST, NOW, PIN, PUBLIC, Rig, TOKEN, cert_type, invoke};
 
 fn ssh(rig: &Rig, double: &Double, extra: &[&str]) -> crate::fake::Outcome {
     let mut rest = vec!["ssh", HOST];
@@ -86,7 +86,7 @@ fn ssh_runs_ssh_with_the_certificate_the_proxy_and_the_pins() {
     assert_eq!(
         std::fs::read_to_string(state.join("hosts").join(format!("{HOST}-cert.pub")))
             .expect("cert"),
-        &format!("{} AAAAcertbytes\n", cert_type())
+        format!("{} AAAAcertbytes\n", cert_type())
     );
     assert_eq!(rig.seen(|s| s.signs[0].reason.clone()), "hkctl ssh");
     assert_eq!(rig.seen(|s| s.signs[0].public_key.clone()), PUBLIC);
