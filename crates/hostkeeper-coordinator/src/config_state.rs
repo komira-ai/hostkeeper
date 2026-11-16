@@ -425,7 +425,7 @@ pub(super) fn with_claims(
 
 /// `coordinator` deciding its heartbeats over the fleet's rows of the database, which every
 /// coordinator on it reads under the rollout gate; over files, the fleet is its own.
-pub(super) fn with_rows(
+pub(crate) fn with_rows(
     coordinator: Coordinator,
     flags: &Serve,
     database: Option<&Postgres>,

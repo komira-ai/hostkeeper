@@ -39,6 +39,40 @@ const START: u64 = 2_000;
 
 impl Node {
     fn start(db: &TestDatabase, name: &str, wall: &Arc<AtomicU64>, extra: &str) -> Node {
+        Self::start_with(db, name, wall, extra, |coordinator, store| {
+            coordinator.with_rows(store.fleet_rows(name), rules())
+        })
+    }
+
+    /// A coordinator over the rows as `serve` makes it from the flags `flags`
+    /// (`config::with_rows`).
+    fn start_from_flags(
+        db: &TestDatabase,
+        name: &str,
+        wall: &Arc<AtomicU64>,
+        flags: &[&str],
+    ) -> Node {
+        let crate::config::Command::Serve(flags) =
+            <crate::config::Cli as clap::Parser>::try_parse_from(
+                crate::audit_rotation_tests::serve_args(flags),
+            )
+            .expect("the flags")
+            .command
+        else {
+            panic!("serve's flags");
+        };
+        Self::start_with(db, name, wall, "stages = [100]", |coordinator, store| {
+            crate::config::with_rows(coordinator, &flags, Some(store))
+        })
+    }
+
+    fn start_with(
+        db: &TestDatabase,
+        name: &str,
+        wall: &Arc<AtomicU64>,
+        extra: &str,
+        rows: impl FnOnce(Coordinator, &Postgres) -> Coordinator,
+    ) -> Node {
         let (store, loaded) = db.open(name).expect("the store opens");
         let mut rig = Rig::new(name);
         let marker = rig.dir.path().join("halt.marker");
@@ -50,8 +84,8 @@ impl Node {
             &marker,
             Arc::new(move || wall.load(Ordering::SeqCst)),
         )
-        .with_services(services_with(extra))
-        .with_rows(store.fleet_rows(name), rules());
+        .with_services(services_with(extra));
+        rig.coordinator = rows(rig.coordinator, &store);
         rig.at(START);
         Node { rig, store }
     }
@@ -602,4 +636,81 @@ async fn an_uninstall_the_rows_do_not_take_is_not_ordered() {
         ),
         "uninstall-1"
     );
+}
+
+/// A coordinator made from `serve`'s flags `flags` on a database in which `web` and `db` are
+/// desired at 2.0 (1.0 before).
+async fn from_flags(test: &str, flags: &[&str]) -> (TestDatabase, Arc<AtomicU64>, Node) {
+    let db = TestDatabase::new();
+    let wall = Arc::new(AtomicU64::new(AT));
+    let node = Node::start_from_flags(&db, test, &wall, flags);
+    for service in [WEB, DB] {
+        set(&node.rig, service, "1.0", 1).await;
+        set(&node.rig, service, "2.0", 2).await;
+    }
+    (db, wall, node)
+}
+
+/// A heartbeat of a host that runs both services at 2.0, sent at `sent_unix` by its own clock.
+fn current_sent_at(sent_unix: u64) -> hostkeeper_wire::wire::Heartbeat {
+    let mut beat = daemon("2.0");
+    beat.agent_features = daemon("1.0").agent_features;
+    beat.sent_unix = Some(sent_unix);
+    beat
+}
+
+/// Proves: `--beat-reorder-secs 5`, given to `serve`, is the window of the rows' beat: a beat
+/// older by the host's clock than the stored one is dropped while the stored row is 2 seconds
+/// old, and believed once it is 9 seconds old (the default of 30 would still drop it).
+///
+/// Catches: the flag not reaching the rows (`config::with_rows`), so a host whose clock stepped
+/// back is ignored for the default time whatever the operator set.
+#[tokio::test]
+async fn the_beat_reorder_flag_sets_how_long_a_late_beat_is_dropped() {
+    let (db, wall, a) = from_flags("reorder-flag", &["--beat-reorder-secs", "5"]).await;
+    let sent =
+        |db: &TestDatabase| count(db, "SELECT sent_unix FROM fleet_hosts WHERE host_id = 'h2'");
+    a.at(&wall, 31);
+    a.beat_with("h2", current_sent_at(1000));
+    assert_eq!(sent(&db), "1000");
+    a.at(&wall, 33);
+    a.beat_with("h2", current_sent_at(900));
+    assert_eq!(sent(&db), "1000", "a late beat within 5 seconds is dropped");
+    a.at(&wall, 40);
+    a.beat_with("h2", current_sent_at(900));
+    assert_eq!(sent(&db), "900", "past 5 seconds the host is believed");
+}
+
+/// Proves: `--queue-idle-secs 100`, given to `serve`, is how long a service keeps its place in
+/// the queue without asking: a service that is gone (no host asks for it), asked before `db`,
+/// holds `db` back while its place is less than 100 seconds idle, and `db` is ordered once the
+/// place is 101 seconds idle (the default of 3600 would still hold it).
+///
+/// Catches: the flag not reaching the rows' admission (`config::with_rows`), so a service that is
+/// gone holds the services behind it for the default hour whatever the operator set.
+#[tokio::test]
+async fn the_queue_idle_flag_sets_how_long_an_idle_place_holds_the_queue() {
+    let (db, wall, a) = from_flags("queue-flag", &["--queue-idle-secs", "100"]).await;
+    db.run(&format!(
+        "INSERT INTO rollout_queue (service, seq, asked_unix) VALUES ('gone', 0, {})",
+        AT + 31
+    ))
+    .expect("a place asked at 31");
+    // The first beat of the fleet is in the quiet time; the host runs `web` at 2.0 and `db` at
+    // 1.0, so the fleet in memory orders `db`, and the queue holds it back.
+    a.at(&wall, 31);
+    assert_eq!(a.beat_with("h1", web_at("2.0")), ServiceReply::Nothing);
+    for elapsed in [70, 110] {
+        a.at(&wall, elapsed);
+        assert_eq!(
+            a.beat_with("h1", web_at("2.0")),
+            ServiceReply::Nothing,
+            "at {elapsed}: the place was asked {} seconds ago",
+            elapsed - 31
+        );
+    }
+    assert_eq!(orders(&db), vec![]);
+    a.at(&wall, 132);
+    assert_eq!(a.beat_with("h1", web_at("2.0")), update(DB, "2.0"));
+    assert_eq!(orders(&db), vec![("h1".to_owned(), "db".to_owned())]);
 }

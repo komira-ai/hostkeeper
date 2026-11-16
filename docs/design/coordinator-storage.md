@@ -74,8 +74,9 @@ another committed at the start of each heartbeat, before it reads them: one quer
 line newer than the newest it has, and only then are both states read, in one snapshot, and replace memory (not while
 memory holds a change not yet committed). So an edit made through one coordinator reaches the others at their next
 heartbeat. It is not read under the gate: a change committed after that read, before the gate, is seen at the next
-beat. Under the gate the rows themselves refuse what the stale read could give: an order past the slots, the queue or
-`min_up` (`admit`), a service halted (`admit`), a stage entered where the plan no longer stands (`stage_is_at`). An
+beat. Under the gate the rows themselves refuse what the stale read could give: an order past the slots or the queue
+(`admit`), a service halted (`admit`), a stage entered where the plan no longer stands (`stage_is_at`). `min_up` is not
+asked of the rows (admission is given 0): it stays the fleet's own rule, judged on the cache the gate has just refreshed. An
 operator's edit does not take the gate yet (`Wait::Operator` is unused).
 A coordinator that dies leaves its hosts' rows for the next to read; the deferrals and the tries stay in memory,
 rebuilt from the beats it reads.

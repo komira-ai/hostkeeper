@@ -129,7 +129,8 @@ pub(crate) use state::alert_thresholds;
 
 #[cfg(test)]
 pub(crate) use state::{
-    refuse_unfinished_halt, refuse_unfinished_migrate, refuse_unfinished_restore, settle_unfinished,
+    refuse_unfinished_halt, refuse_unfinished_migrate, refuse_unfinished_restore,
+    settle_unfinished, with_rows,
 };
 
 /// How long the verifier waits before it fetches the issuer's keys again for an unknown `kid`.
