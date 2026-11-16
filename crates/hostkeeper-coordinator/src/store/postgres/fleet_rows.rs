@@ -84,13 +84,13 @@ svc AS (SELECT service, target, counts FROM unnest($13::text[], $14::text[], $15
 bake_up AS (INSERT INTO fleet_bakes AS b (host_id, service, target, beats, at_unix) \
   SELECT $1, service, target, 1, $3 FROM svc WHERE counts AND EXISTS (SELECT 1 FROM written) \
   ON CONFLICT (host_id, service) DO UPDATE SET \
-    beats = CASE WHEN b.target = excluded.target AND b.at_unix > $3::bigint - $4::bigint \
-                 THEN least(b.beats, 4294967294) + 1 ELSE 1 END, \
-    target = excluded.target, at_unix = excluded.at_unix RETURNING 1), \
+    beats = CASE WHEN b.\"target\" = excluded.\"target\" AND b.at_unix > $3::bigint - $4::bigint \
+                 THEN least(b.\"beats\", 4294967294) + 1 ELSE 1 END, \
+    target = excluded.\"target\", at_unix = excluded.at_unix RETURNING 1), \
 bake_end AS (DELETE FROM fleet_bakes b USING svc WHERE b.host_id = $1 AND b.service = svc.service \
   AND NOT svc.counts AND EXISTS (SELECT 1 FROM written) RETURNING 1), \
 settled AS (DELETE FROM fleet_orders o USING svc WHERE o.host_id = $1 AND o.service = svc.service \
-  AND o.target = svc.target AND o.uninstall_id IS NULL AND EXISTS (SELECT 1 FROM written) \
+  AND o.\"target\" = svc.\"target\" AND o.uninstall_id IS NULL AND EXISTS (SELECT 1 FROM written) \
   RETURNING 1) \
 SELECT EXISTS (SELECT 1 FROM written)";
 
