@@ -33,12 +33,13 @@
 //!          command, and its daemon runs built-in steps) and its bounds, its run units, health
 //!          URL, params and min_hostkeeper; `package` the package's name (`hostkeeper`, `hello`;
 //!          the failing build's is hello's); the installer's bounds ([`INSTALLER_BOUNDS`])
-//! macOS    installer macos-pkg, location komira-testing hostkeeper/<release>/<service>-<release>-
-//!          macos-arm64.pkg (the Mac's store of the testing directory, rooted at pkg/), digest
-//!          and bytes the .pkg's; no attestation (the key and the pin bind the bytes,
-//!          packages-native.md section 10.3), no repository, no package version; the manifest
-//!          the Linux one with the .pkg's identifier, launchd labels and program
-//!          ([`manifest::of_pkg`])
+//! macOS    installer macos-pkg in the named-version form (packages-repositories.md section
+//!          4.7): repository komira-testing (as the apt entry's), package_version the release's,
+//!          digest and bytes the .pkg's; no location (the coordinator finds the .pkg in the
+//!          repository and the Mac fetches it from the coordinator, so a Mac needs no
+//!          stores.toml), no attestation (the key and the pin bind the bytes,
+//!          packages-native.md section 10.3); the manifest the Linux one with the .pkg's
+//!          identifier, launchd labels and program ([`manifest::of_pkg`])
 //! ```
 //!
 //! Each native package must be a regular file whose bundle lists its SHA-256, and a `.deb`'s
@@ -58,16 +59,15 @@ use std::sync::LazyLock;
 
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_config::platform::Platform as IndexPlatform;
-use hostkeeper_proto::hostkeeper::release::v1::{InstallerBounds, Location, Target, TargetList};
+use hostkeeper_proto::hostkeeper::release::v1::{InstallerBounds, Target, TargetList};
 use hostkeeper_release::{Installer, manifest as release_manifest, target};
 use prost_reflect::{DescriptorPool, DynamicMessage, MessageDescriptor};
 use serde_json::{Map, Value};
 
 use self::files::{MAX_BUNDLE_BYTES, bundle_problem, read_capped, regular_file};
-use super::contract::{Package, Platform, TESTING_ENTRY, Version, bundle_of};
+use super::contract::{Package, Platform, Version, bundle_of};
 use super::{Error, answer, file_sha256};
 use crate::channels::apt::{control, deb};
-use crate::channels::spec;
 
 mod files;
 mod manifest;
@@ -189,17 +189,18 @@ fn native_of(
             installer,
             Target {
                 installer: installer.as_str().to_owned(),
-                locations: vec![Location {
-                    store: TESTING_ENTRY.to_owned(),
-                    locator: spec::HOSTKEEPER.pkg_locator(&request.version.to_string(), name),
-                }],
+                // The named-version form (packages-repositories.md section 4.7): the channel
+                // and the version, no location; the coordinator finds the `.pkg` in the
+                // repository and the Mac fetches it from the coordinator, so a Mac needs no
+                // store of its own.
+                locations: Vec::new(),
                 digest,
                 bytes,
                 // The key and the pin bind the bytes: a `macos-pkg` entry carries no attestation.
                 attestation: None,
                 manifest: Some(manifest::of_pkg(package, &request.version)),
-                repository: None,
-                package_version: None,
+                repository: Some(package.repository_entry().to_owned()),
+                package_version: Some(request.version.to_string()),
             },
         )));
     }
