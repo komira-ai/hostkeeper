@@ -59,33 +59,19 @@ impl Book for PgBook {
         let (host, address, reported) = (host_id.to_owned(), address.to_owned(), reported.to_vec());
         self.store
             .write(move |tx| {
-                let now = clock(tx)?;
                 let before = tx
                     .query_opt(
                         "SELECT address, reported FROM ssh_host WHERE host_id = $1 FOR UPDATE",
                         &[&host],
                     )?
                     .map(|row| (row.get::<_, String>(0), row.get::<_, Vec<String>>(1)));
-                tx.execute(
-                    "INSERT INTO ssh_host (host_id, address, seen_unix, reported) \
-                     VALUES ($1, $2, $3, $4) \
-                     ON CONFLICT (host_id) DO UPDATE SET address = EXCLUDED.address, \
-                       seen_unix = GREATEST(ssh_host.seen_unix, EXCLUDED.seen_unix), \
-                       reported = CASE WHEN cardinality(EXCLUDED.reported) = 0 \
-                                  THEN ssh_host.reported ELSE EXCLUDED.reported END",
-                    &[&host, &address, &signed(now), &reported],
-                )?;
+                // The lines to write, as (action, detail): their time is read after the chain
+                // lock, so that line times follow the chain's order.
                 let mut lines = Vec::new();
                 if let Some((was, _)) = &before
                     && *was != address
                 {
-                    lines.push(Line {
-                        at_unix: now,
-                        by: COORDINATOR.to_owned(),
-                        action: ADDRESS_CHANGED,
-                        subject: Some(host.clone()),
-                        detail: address_detail(was, &address),
-                    });
+                    lines.push((ADDRESS_CHANGED, address_detail(was, &address)));
                 }
                 if !reported.is_empty() {
                     let pinned: Option<Vec<String>> = tx
@@ -99,20 +85,33 @@ impl Book for PgBook {
                         && !same_set(&pinned, &reported)
                         && !same_set(was.unwrap_or_default(), &reported)
                     {
-                        lines.push(Line {
-                            at_unix: now,
-                            by: COORDINATOR.to_owned(),
-                            action: HOSTKEY_CHANGED,
-                            subject: Some(host.clone()),
-                            detail: keys_detail(&pinned, &reported),
-                        });
+                        lines.push((HOSTKEY_CHANGED, keys_detail(&pinned, &reported)));
                     }
                 }
                 if !lines.is_empty() {
                     lock(tx)?;
-                    for line in &lines {
-                        append(tx, line)?;
-                    }
+                }
+                let now = clock(tx)?;
+                tx.execute(
+                    "INSERT INTO ssh_host (host_id, address, seen_unix, reported) \
+                     VALUES ($1, $2, $3, $4) \
+                     ON CONFLICT (host_id) DO UPDATE SET address = EXCLUDED.address, \
+                       seen_unix = GREATEST(ssh_host.seen_unix, EXCLUDED.seen_unix), \
+                       reported = CASE WHEN cardinality(EXCLUDED.reported) = 0 \
+                                  THEN ssh_host.reported ELSE EXCLUDED.reported END",
+                    &[&host, &address, &signed(now), &reported],
+                )?;
+                for (action, detail) in lines {
+                    append(
+                        tx,
+                        &Line {
+                            at_unix: now,
+                            by: COORDINATOR.to_owned(),
+                            action,
+                            subject: Some(host.clone()),
+                            detail,
+                        },
+                    )?;
                 }
                 Ok(())
             })
@@ -305,9 +304,10 @@ impl Book for PgBook {
                     .map(|row| unsigned(row.get(0)))
                     .collect();
                 let mut lost = tx.query(
-                    "DELETE FROM ssh_tunnel WHERE instance <> $1 AND last_seen_unix < $2 \
+                    "DELETE FROM ssh_tunnel WHERE NOT (id = ANY($1::bigint[])) \
+                     AND last_seen_unix < $2 \
                      RETURNING id, operator, host_id, opened_unix",
-                    &[&instance, &signed(now.saturating_sub(stale_secs))],
+                    &[&own, &signed(now.saturating_sub(stale_secs))],
                 )?;
                 lost.sort_by_key(|row| row.get::<_, i64>(0));
                 for row in &lost {
