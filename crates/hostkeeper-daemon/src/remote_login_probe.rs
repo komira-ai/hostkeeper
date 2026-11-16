@@ -1,5 +1,5 @@
 //! The Remote Login probe: once at its start, a Mac's daemon runs, as itself (root under launchd,
-//! with no Full Disk Access unless a profile granted it), the commands that tell whether it can
+//! with whatever privacy grants it has, none on a stock Mac), the commands that tell whether it can
 //! turn on Remote Login, and reports what each said in every heartbeat after
 //! (`HeartbeatRequest.remote_login_probe`), where `hkctl hosts get` shows it. It decides nothing:
 //! it is how the question "does the daemon need Full Disk Access to turn on sshd?"
@@ -70,7 +70,7 @@ pub const TCC_DB: &str = "/Library/Application Support/com.apple.TCC/TCC.db";
 /// The query of the privacy database's Full Disk Access rows.
 pub const FULL_DISK_ACCESS_QUERY: &str = "SELECT client, client_type, auth_value, auth_reason \
      FROM access WHERE service = 'kTCCServiceSystemPolicyAllFiles'";
-/// The installed binary, the path a Full Disk Access profile names.
+/// The installed binary, the one path launchd runs that no update replaces.
 pub const INSTALLED_BINARY: &str = "/usr/local/bin/hostkeeper";
 /// How long one command of the probe may run before it is killed.
 pub const STEP_DEADLINE: Duration = Duration::from_secs(20);
