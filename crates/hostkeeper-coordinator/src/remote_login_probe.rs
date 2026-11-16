@@ -9,7 +9,9 @@
 //! and logged as a dropped fact, and the one read before is kept; a heartbeat with none leaves
 //! the one kept as it is (a daemon sends none until its probe is done). Nothing decides on it.
 //! After a restart the coordinator holds none until the host's next heartbeat, which carries it
-//! again.
+//! again. Over a database that coordinators share, the probe is not in the host's row of
+//! `fleet_hosts` (which stores the heartbeat's JSON form): each coordinator shows the probe of the
+//! hosts whose heartbeats it heard, and none for a host until one of its heartbeats reaches it.
 
 use std::collections::BTreeMap;
 use std::sync::PoisonError;
