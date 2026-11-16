@@ -4,9 +4,10 @@
 //! the host of the self-update tests.
 //!
 //! A wait of this module ([`wait_until`], [`wait_for_file`]) polls a state systemd or the fixture
-//! reaches (a file written, a unit active) and sleeps between looks; it never bounds the time it
-//! waits and nothing asserts how long it took. A test that hangs is ended by the job's
-//! `timeout-minutes` in privileged.yml (in net-install.yml for the network-install tests).
+//! reaches (a file written, a unit active) and sleeps between looks; it looks at most [`LOOKS`]
+//! times and then fails the test naming the wait, so that a state that never comes ends the test
+//! with a failure (and the workflow's journal steps run) instead of a job cancelled at its
+//! `timeout-minutes`; the bound counts looks, and nothing asserts how long a wait took.
 //!
 //! The first-boot tests' harness is in submodules: [`spawn`] (a child process killed when dropped,
 //! and [`spawn::poll`], a wait of a bounded number of looks that fails with the last state it
@@ -144,11 +145,29 @@ pub fn start_serve(rig: &Rig, unit: &str) {
     run_ok(SYSTEMD_RUN, &rig.serve_command(unit));
 }
 
-/// Waits until `done` holds, looking every [`POLL`].
-pub fn wait_until(mut done: impl FnMut() -> bool) {
-    while !done() {
-        std::thread::sleep(POLL);
+/// How many looks a wait of this module makes before it fails the test.
+pub const LOOKS: u32 = 6000;
+
+/// Waits until `done` holds, looking every [`POLL`], at most [`LOOKS`] times.
+///
+/// # Panics
+/// `done` never held in [`LOOKS`] looks.
+pub fn wait_until(done: impl FnMut() -> bool) {
+    wait_looks(LOOKS, POLL, done);
+}
+
+/// Looks with `done` until it holds, at most `looks` times with `pause` between two looks.
+///
+/// # Panics
+/// `done` never held in `looks` looks.
+pub fn wait_looks(looks: u32, pause: Duration, mut done: impl FnMut() -> bool) {
+    for _ in 0..looks {
+        if done() {
+            return;
+        }
+        std::thread::sleep(pause);
     }
+    panic!("a wait for a state of systemd or the fixture: not reached in {looks} looks");
 }
 
 /// Waits until the file at `path` exists: the fixture writes its pid file once it runs. When
@@ -227,4 +246,38 @@ impl Clock for FakeClock {
     }
 
     fn sleep_secs(&self, _secs: u64) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A wait whose state never comes fails the test, naming the bound, after exactly that many
+    /// looks, instead of looking for good.
+    #[test]
+    #[should_panic(expected = "not reached in 3 looks")]
+    fn a_wait_for_a_state_that_never_comes_fails_after_its_looks() {
+        let mut looked = 0;
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            wait_looks(3, Duration::ZERO, || {
+                looked += 1;
+                false
+            });
+        }));
+        assert_eq!(looked, 3);
+        if let Err(panic) = outcome {
+            std::panic::resume_unwind(panic);
+        }
+    }
+
+    /// A wait returns at the look the state holds at and looks no more.
+    #[test]
+    fn a_wait_returns_at_the_look_the_state_holds_at() {
+        let mut looked = 0;
+        wait_looks(10, Duration::ZERO, || {
+            looked += 1;
+            looked == 4
+        });
+        assert_eq!(looked, 4);
+    }
 }
