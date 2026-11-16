@@ -176,6 +176,7 @@ fn first_beat() -> Heartbeat {
         installers: vec!["apt".to_owned()],
         repositories: None,
         facts_generation: None,
+        ssh: None,
     }
 }
 

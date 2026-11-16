@@ -341,6 +341,7 @@ fn a_reply_from_the_real_coordinator_maps_to_the_loops_reply() {
         installers: Vec::new(),
         repositories: None,
         facts_generation: None,
+        ssh: None,
     };
     assert_eq!(
         json.heartbeat(&farm.host.identity(), &beat),
