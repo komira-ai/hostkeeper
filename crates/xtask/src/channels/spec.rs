@@ -164,13 +164,6 @@ impl Product {
         files
     }
 
-    /// The path of the installer `file` of `version` below [`PKG_ROOT`]: what a Mac's store of
-    /// the `testing` channel, rooted there, fetches it by (`hostkeeper/<version>/<file>`).
-    pub(crate) fn pkg_locator(&self, version: &str, file: &str) -> String {
-        let prefix = self.pkg_prefix(version);
-        format!("{}{file}", prefix.strip_prefix(PKG_ROOT).unwrap_or(&prefix))
-    }
-
     /// The key prefix of the installer's version, `pkg/<product>/<version>/`: the `testing`
     /// channel of the installer.
     pub(crate) fn pkg_prefix(&self, version: &str) -> String {

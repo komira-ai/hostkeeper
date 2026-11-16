@@ -132,8 +132,9 @@ fn fail_ready_name(release: &str, platform: Platform) -> String {
 
 /// The targets `release targets` must write for `files` (from [`native_files`] of `service`) of
 /// the release `release`: per platform, the native entry alone (an `apt` entry of the repository
-/// `komira-testing` pinned by the `.deb`'s SHA-256, or on macOS a `macos-pkg` entry of the store
-/// `komira-testing` at the installers' testing path, pinned by the `.pkg`'s SHA-256 and size),
+/// `komira-testing` pinned by the `.deb`'s SHA-256, or on macOS a `macos-pkg` entry in the named-version
+/// form, the repository `komira-testing` at the release's version, pinned by the `.pkg`'s SHA-256
+/// and size, with no location),
 /// its manifest the package's own. As [`sorted`] JSON text.
 pub fn targets(service: &str, release: &str, files: &BTreeMap<String, Vec<u8>>) -> String {
     lists(&Platform::ALL, |platform| {
@@ -143,7 +144,8 @@ pub fn targets(service: &str, release: &str, files: &BTreeMap<String, Vec<u8>>) 
         match platform {
             Platform::MacosArm64 => json!({
                 "installer": "macos-pkg",
-                "locations": [{"store": "komira-testing", "locator": format!("hostkeeper/{release}/{name}")}],
+                "repository": "komira-testing",
+                "packageVersion": release,
                 "digest": sha256(bytes),
                 "bytes": bytes.len().to_string(),
                 "manifest": manifest,
