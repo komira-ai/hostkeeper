@@ -50,7 +50,7 @@ pub(crate) fn claim(
             "WITH due AS (SELECT name FROM periodic_jobs WHERE next_run_unix <= $1 \
              ORDER BY next_run_unix, name FOR UPDATE SKIP LOCKED) \
              UPDATE periodic_jobs j SET next_run_unix = $1 + j.period_secs, last_run_unix = $1, \
-             last_instance = $2 FROM due WHERE j.name = due.name RETURNING j.name",
+             last_instance = $2 FROM due WHERE j.\"name\" = due.\"name\" RETURNING j.\"name\"",
             &[&now, &instance],
         )?
         .iter()
