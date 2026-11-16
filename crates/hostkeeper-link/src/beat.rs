@@ -6,10 +6,11 @@
 //! names ([`Heartbeat::encoded_len`]). [`fit`] keeps it: a heartbeat with more services is
 //! refused, never cut short; one with too many bytes loses its optional facts, a group at a
 //! time in the order of [`DROP_ORDER`] (the Remote Login probe, then the health detail, then the
-//! deferral detail, then the observer's detail), and is refused when that is not enough. The service, its version, its
-//! health, the update running and the last verdict are never dropped, nor are the host's clock
-//! and certificate facts ([`Heartbeat::sent_unix`], [`Heartbeat::renewal`]), whose one text is
-//! at most [`hostkeeper_wire::wire::MAX_RENEW_ERROR`] bytes, nor its trusted root
+//! deferral detail, then the observer's detail), and is refused when that is not enough. The
+//! service, its version, its health, the update running and the last verdict are never
+//! dropped, nor are the host's clock and certificate facts ([`Heartbeat::sent_unix`],
+//! [`Heartbeat::renewal`]), whose one text is at most
+//! [`hostkeeper_wire::wire::MAX_RENEW_ERROR`] bytes, nor its trusted root
 //! ([`Heartbeat::trusted_root`]). The trusted root goes out on the gRPC route only (the JSON
 //! route is frozen), but counts toward the bound on both, as `trusted_root_age_secs` and
 //! `trusted_root_reason`. The installers ([`Heartbeat::installers`]) are counted the same way, as

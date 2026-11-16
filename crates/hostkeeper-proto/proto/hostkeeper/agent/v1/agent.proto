@@ -204,12 +204,12 @@ message HeartbeatRequest {
   optional uint64 facts_generation = 12;
   // What a Mac's daemon saw when it ran the Remote Login probe once at its start: each command,
   // in order, with its exit code and output, as run by the daemon itself (as root under
-  // launchd). Report-only: the coordinator keeps the last one it read, in memory, and shows it in
-  // the host's heartbeat (`hostkeeper.operator.v1.Host.heartbeat`); nothing decides on it. Sent
-  // in every heartbeat once the probe is done, read only over gRPC; absent from any other daemon,
-  // before the probe is done, from one that predates it, and when the heartbeat would exceed
-  // 16 KiB with it. A probe that breaks a rule of `RemoteLoginProbe` is dropped and the
-  // coordinator keeps the last one it read.
+  // launchd); its steps may turn Remote Login on. The coordinator keeps the last one it read, in
+  // memory, and shows it in the host's heartbeat (`hostkeeper.operator.v1.Host.heartbeat`);
+  // nothing decides on it. Sent in every heartbeat once the probe is done, read only over gRPC;
+  // absent from any other daemon, before the probe is done, from one that predates it, and when
+  // the heartbeat would exceed 16 KiB with it. A probe that breaks a rule of `RemoteLoginProbe`
+  // is dropped and the coordinator keeps the last one it read.
   optional RemoteLoginProbe remote_login_probe = 14;
 }
 

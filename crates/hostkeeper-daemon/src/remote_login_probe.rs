@@ -220,7 +220,7 @@ pub fn cut(text: &str) -> (String, bool) {
 fn step(name: &str, argv: Vec<String>) -> ProbeStep {
     ProbeStep {
         name: name.to_owned(),
-        argv,
+        argv: argv.iter().map(|arg| cut(arg).0).collect(),
         ..ProbeStep::default()
     }
 }
@@ -258,7 +258,7 @@ fn banner(name: &str, ssh: SocketAddr, deadline: Duration) -> ProbeStep {
     });
     match read {
         Ok(text) => step.stdout = text,
-        Err(error) => step.error = error.to_string(),
+        Err(error) => step.error = cut(&error.to_string()).0,
     }
     step
 }
@@ -282,7 +282,7 @@ fn include_lines(name: &str, path: &Path) -> ProbeStep {
                 .collect();
             (step.stdout, step.truncated) = cut(&lines.join("\n"));
         }
-        Err(error) => step.error = error.to_string(),
+        Err(error) => step.error = cut(&error.to_string()).0,
     }
     step
 }
@@ -295,7 +295,7 @@ fn opens(name: &str, path: &Path) -> ProbeStep {
     );
     match File::open(path) {
         Ok(_) => step.stdout = "readable".to_owned(),
-        Err(error) => step.error = error.to_string(),
+        Err(error) => step.error = cut(&error.to_string()).0,
     }
     step
 }
