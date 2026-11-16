@@ -29,7 +29,7 @@ use crate::operator::Caller;
 use crate::service::Coordinator;
 use crate::ssh_cert::{CaKey, Spec, UserKey};
 use crate::ssh_ledger::{Issue, Ledger, LedgerError, Revocation};
-use crate::ssh_operators::{Class, Operators, Target};
+use crate::ssh_operators::{Class, Operators, OperatorsError, Target};
 use crate::tokens::TokenName;
 
 /// How long before the ledger's time a certificate is already valid, for the clock of the host.
@@ -106,10 +106,18 @@ impl Signing {
         }
     }
 
+    /// The operators file as it is now, or why it cannot be read.
+    ///
+    /// # Errors
+    /// [`OperatorsError`] when the file cannot be read or parsed.
+    pub(crate) fn read_operators(&self) -> Result<Operators, OperatorsError> {
+        Operators::read(&self.operators)
+    }
+
     /// The operators file as it is now; a file that cannot be read lists no one, so nothing is
     /// signed until it can be (default deny).
     pub(crate) fn operators(&self) -> Operators {
-        Operators::read(&self.operators).unwrap_or_else(|why| {
+        self.read_operators().unwrap_or_else(|why| {
             tracing::error!(%why, "the operators file cannot be read: no one is permitted");
             Operators::default()
         })

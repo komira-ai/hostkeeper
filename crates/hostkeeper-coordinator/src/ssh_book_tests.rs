@@ -327,7 +327,7 @@ pub(crate) fn a_poll_reports_the_revoked_and_the_gone_and_refreshes_its_own(worl
 /// in the order of the tunnels' ids; counts them; and the instance that held them then finds
 /// them gone.
 ///
-/// Catches: a reaper that closes a tunnel it holds itself or one that is fresh, a line without
+/// Catches: a reaper that closes a tunnel that is fresh, a line without
 /// the operator's name, and a reaped tunnel the owner is not told is gone.
 pub(crate) fn a_poll_reaps_the_stale_tunnels_of_other_instances(world: &dyn World) {
     for host in [HOST, "node-08"] {
@@ -374,6 +374,52 @@ pub(crate) fn a_poll_reaps_the_stale_tunnels_of_other_instances(world: &dyn Worl
             reaped: 0
         })
     );
+}
+
+/// Proves: a poll closes, as `instance_lost` with one line by the tunnel's operator, a row of
+/// its own instance that went stale and is not among the ids it holds (the row of a close that
+/// could not be written), and counts it; it reports nothing gone, and leaves a row of its own
+/// that is stale and among its ids, which it refreshes.
+///
+/// Catches: a reaper that skips the polling instance's own rows, which would keep the operator
+/// from the host until the instance stopped, and one that reaps a row the instance holds.
+pub(crate) fn a_poll_reaps_its_own_stale_row_that_it_does_not_hold_and_keeps_the_ones_it_does(
+    world: &dyn World,
+) {
+    for host in [HOST, "node-08"] {
+        hear(world, host, "192.0.2.7", &[]);
+    }
+    let held = open_ok(world, "alice", HOST);
+    let forgotten = open_ok(world, "bob", "node-08");
+    world.age_tunnel(held.id, 400);
+    world.age_tunnel(forgotten.id, 400);
+    assert_eq!(
+        world.book().poll("inst-a", &[held.id], 120),
+        Ok(Polled {
+            revoked: vec![],
+            gone: vec![],
+            reaped: 1
+        })
+    );
+    assert_eq!(world.tunnel_ids(), vec![held.id]);
+    let lines = book_lines(world);
+    let line = &lines[lines.len() - 1];
+    let (head, seconds) = split_seconds(&line.3);
+    assert_eq!(
+        (line.0.as_str(), line.1.as_str(), line.2.as_deref()),
+        ("bob", TUNNEL_CLOSE, Some("node-08"))
+    );
+    assert_eq!(
+        head,
+        format!("{{\"tunnel\":{},\"cause\":\"instance_lost\"", forgotten.id)
+    );
+    assert!(seconds >= 400, "{seconds}");
+    assert_eq!(
+        world.book().poll("inst-a", &[held.id], 120),
+        Ok(Polled::default()),
+        "the row held was refreshed by the first poll"
+    );
+    assert_eq!(world.tunnel_ids(), vec![held.id]);
 }
 
 /// Proves: a heartbeat writes `ssh_address_changed` (by the coordinator, for the host, the
@@ -718,6 +764,7 @@ mod shared {
         a_close_removes_the_tunnel_and_writes_its_line_once,
         a_poll_reports_the_revoked_and_the_gone_and_refreshes_its_own,
         a_poll_reaps_the_stale_tunnels_of_other_instances,
+        a_poll_reaps_its_own_stale_row_that_it_does_not_hold_and_keeps_the_ones_it_does,
         a_heartbeat_from_another_address_writes_one_line,
         a_changed_host_key_writes_one_line_per_change_and_only_with_a_pin,
         an_empty_report_keeps_the_reported_set_and_two_changes_write_two_lines,

@@ -44,6 +44,8 @@ pub(crate) struct TestBook {
     failing: Mutex<BTreeSet<&'static str>>,
     closes: Mutex<Option<mpsc::UnboundedSender<Closing>>>,
     polls: Mutex<Vec<(String, Vec<u64>, u64)>>,
+    /// While a test holds the sender, `open` and `close` wait here (see [`Self::hold`]).
+    gate: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
 }
 
 impl TestBook {
@@ -53,6 +55,24 @@ impl TestBook {
             failing: Mutex::new(BTreeSet::new()),
             closes: Mutex::new(None),
             polls: Mutex::new(Vec::new()),
+            gate: Mutex::new(None),
+        }
+    }
+
+    /// Makes the calls of `open` and `close` that come next wait until the sender given back is
+    /// dropped: a book that is slow, for as long as the test says.
+    pub(crate) fn hold(&self) -> std::sync::mpsc::Sender<()> {
+        let (hold, gate) = std::sync::mpsc::channel();
+        *self.gate.lock().unwrap_or_else(PoisonError::into_inner) = Some(gate);
+        hold
+    }
+
+    /// Waits at the gate, if a test holds it.
+    fn wait_at_gate(&self) {
+        let gate = self.gate.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(gate) = gate.as_ref() {
+            // It returns when the sender is dropped: nothing is ever sent.
+            let _ = gate.recv();
         }
     }
 
@@ -122,6 +142,7 @@ impl Book for TestBook {
     }
 
     fn open(&self, opening: &Opening) -> Result<Opened, OpenRefused> {
+        self.wait_at_gate();
         assert!(!self.down("panic_open"), "the book panicked");
         if self.down("open") {
             return Err(OpenRefused::Unwritten("the book is down".to_owned()));
@@ -130,6 +151,7 @@ impl Book for TestBook {
     }
 
     fn close(&self, closing: &Closing) -> Result<(), BookError> {
+        self.wait_at_gate();
         if self.down("panic_close") {
             if let Some(told) = self
                 .closes

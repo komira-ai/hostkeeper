@@ -238,12 +238,17 @@ impl Coordinator {
             per_operator: tunnels.limits.per_operator,
         };
         // A task of its own: a caller that gives up while the book writes or the host is dialled
-        // does not leave a tunnel recorded without a relay.
-        let job = tokio::spawn(Arc::clone(tunnels).open_and_dial(opening));
+        // does not leave a tunnel recorded without a relay, and the slot is the task's until it is
+        // done, so it is not given back before the row is closed.
+        let job = tokio::spawn(Arc::clone(tunnels).open_and_dial(opening, slot));
         let dialed = job
             .await
             .unwrap_or_else(|why| Err(Failed::Open(OpenRefused::Unwritten(why.to_string()))));
-        let Dialed { recorded, host } = match dialed {
+        let Dialed {
+            recorded,
+            host,
+            slot,
+        } = match dialed {
             Ok(dialed) => dialed,
             Err(failed) => {
                 let (why, audit) = match failed {

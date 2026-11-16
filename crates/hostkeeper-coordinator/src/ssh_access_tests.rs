@@ -13,6 +13,7 @@ use crate::operator::Caller;
 use crate::ssh_book::{Book, Cause, Closing, Opening, TUNNEL_CLOSE, TUNNEL_OPEN, close_detail};
 use crate::ssh_ledger::denied_detail;
 use crate::ssh_sign::tests::{Tune, world};
+use crate::ssh_tunnel::NoSlot;
 use crate::ssh_tunnel::tests::{Client, INSTANCE, Rig, caller, data, open};
 
 const FP_A: &str = "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
@@ -363,6 +364,35 @@ async fn a_caller_that_gives_up_midway_leaves_no_row_behind() {
     assert_eq!(rig.tunnels.count(), 0);
     let slot = rig.tunnels.reserve().expect("the slot is free");
     drop(slot);
+}
+
+/// Proves: a caller that gives up while the book is slow to record the tunnel does not free the
+/// slot: it stays counted (a next tunnel is refused `Full`) until the job has closed the row,
+/// and is free after.
+///
+/// Catches: a slot held by the caller's future instead of the job, which lets a caller that
+/// cancels over and over run more jobs than the instance's limit.
+#[tokio::test]
+async fn a_caller_that_gives_up_keeps_its_slot_until_the_job_is_done() {
+    let rig = Rig::new("access-cancelled-slot", |limits| limits.max_tunnels = 1).await;
+    let mut closes = rig.book.watch_closes();
+    let serial = rig.cert("operator", "node-07");
+    let (client, incoming) = Client::new();
+    client.send(open("node-07", serial)).await;
+    let hold = rig.book.hold();
+    let operator = caller("operator");
+    let mut call = Box::pin(rig.coordinator.ssh_tunnel_open(&operator, incoming, None));
+    assert!(futures::poll!(call.as_mut()).is_pending());
+    drop(call);
+    assert_eq!(rig.tunnels.slots(), 1);
+    assert_eq!(rig.tunnels.reserve().err(), Some(NoSlot::Full));
+    drop(hold);
+    let closing = closes.recv().await.expect("the row is closed");
+    assert_eq!((closing.id, closing.cause), (1, Cause::Error));
+    while rig.tunnels.slots() > 0 {
+        tokio::task::yield_now().await;
+    }
+    drop(rig.tunnels.reserve().expect("the slot is free"));
 }
 
 /// Proves: an opened tunnel answers `opened` with the login user of the host (the Linux

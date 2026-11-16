@@ -145,6 +145,7 @@ on_postgres!(
     a_close_removes_the_tunnel_and_writes_its_line_once,
     a_poll_reports_the_revoked_and_the_gone_and_refreshes_its_own,
     a_poll_reaps_the_stale_tunnels_of_other_instances,
+    a_poll_reaps_its_own_stale_row_that_it_does_not_hold_and_keeps_the_ones_it_does,
     a_heartbeat_from_another_address_writes_one_line,
     a_changed_host_key_writes_one_line_per_change_and_only_with_a_pin,
     an_empty_report_keeps_the_reported_set_and_two_changes_write_two_lines,

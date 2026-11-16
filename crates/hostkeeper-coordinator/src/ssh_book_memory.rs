@@ -302,9 +302,8 @@ impl Book for Memory {
         let lost: Vec<u64> = state
             .tunnels
             .iter()
-            .filter(|(_, tunnel)| {
-                tunnel.instance != instance
-                    && tunnel.last_seen_unix < now.saturating_sub(stale_secs)
+            .filter(|(id, tunnel)| {
+                !ids.contains(id) && tunnel.last_seen_unix < now.saturating_sub(stale_secs)
             })
             .map(|(id, _)| *id)
             .collect();

@@ -7,10 +7,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use hostkeeper_proto::hostkeeper::operator::v1::tunnel_frame::Frame;
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
-use super::tests::{Client, INSTANCE, Rig, frame, limits, secs, until_close};
-use super::{Event, NoSlot, Outgoing, Tunnels};
+use super::tests::{Client, INSTANCE, Rig, caller, frame, limits, open, secs, until_close};
+use super::{CLOSE_GRACE, Event, NoSlot, Outgoing, Tunnels};
 use crate::accounts::ApiToken;
 use crate::ssh_book::{Book, Cause, Opening, close_detail};
 use crate::ssh_ledger::{Ledger, Revocation};
@@ -155,8 +156,7 @@ async fn until_close_after_opened(out: &mut Outgoing) -> String {
 
 /// Proves: the poll stops a tunnel `token_revoked` when its operator has no token (a token of the
 /// tokens file, or an API token, keeps it), `not_permitted` when the operators file no longer
-/// lists the operator, no longer permits the host, cannot be read or lists a host that is no
-/// longer enrolled, and `revoked` when its certificate was revoked; a tunnel of an operator whose
+/// lists the operator, no longer permits the host or lists a host that is no longer enrolled, and `revoked` when its certificate was revoked; a tunnel of an operator whose
 /// file entry and token stand is left; and it asks the book with this instance's own ids and
 /// three times the poll period as the stale time.
 ///
@@ -210,13 +210,12 @@ async fn the_poll_stops_the_tunnels_that_are_no_longer_allowed() {
     assert_eq!(rig.closed(kept.id).await, Cause::NotPermitted);
     assert_eq!(until_close(&mut kept.out).await.1, "not_permitted");
 
-    // The entry is gone, the file unreadable, or the host denied.
-    for how in 0..3 {
+    // The entry is gone, or the host denied.
+    for how in 0..2 {
         std::fs::write(&rig.operators, OPERATORS).expect("the operators file as it was");
         let mut live = rig.tunnel("operator", "node-07").await;
         match how {
             0 => std::fs::write(&rig.operators, "").expect("an empty file"),
-            1 => std::fs::remove_file(&rig.operators).expect("the file is removed"),
             _ => {
                 let host = hostkeeper_enrollment::names::HostId::parse("node-07").expect("an id");
                 assert!(
@@ -233,6 +232,170 @@ async fn the_poll_stops_the_tunnels_that_are_no_longer_allowed() {
         assert_eq!(rig.closed(live.id).await, Cause::NotPermitted, "{how}");
         assert_eq!(until_close(&mut live.out).await.1, "not_permitted");
     }
+}
+
+/// Proves: a poll that cannot read the operators file keeps the tunnels (a host that is still
+/// enrolled and an operator who still has a token), and the next poll that can read a file that
+/// no longer lists the operator stops them `not_permitted`.
+///
+/// Catches: a file that is missing for a moment (a rename of the file that replaces it) that
+/// stops every tunnel of the instance.
+#[tokio::test]
+async fn a_poll_that_cannot_read_the_operators_file_keeps_the_tunnels() {
+    let mut rig = Rig::new("tunnel-poll-unreadable", |_| {}).await;
+    let mut live = rig.tunnel("operator", "node-07").await;
+    std::fs::remove_file(&rig.operators).expect("the file is removed");
+    rig.poll().await;
+    // The relay still carries bytes: a stopped one would answer its `close` first.
+    live.host.write_all(b"x").await.expect("the host writes");
+    assert_eq!(frame(&mut live.out).await, Frame::Data(b"x".to_vec()));
+    assert_eq!(rig.tunnels.count(), 1);
+
+    std::fs::write(&rig.operators, "").expect("a file that lists no one");
+    rig.poll().await;
+    assert_eq!(rig.closed(live.id).await, Cause::NotPermitted);
+}
+
+/// Proves: the poll gives the book the ids of the tunnels held and of the row of a tunnel that
+/// is being opened (recorded, not registered), once each also when it registers, and not the
+/// row of one whose caller gave up.
+///
+/// Catches: a row of a tunnel being opened that the poll does not refresh, which another
+/// instance's reaper could close while the host is dialled, and an id that stays after the row
+/// is closed.
+#[tokio::test]
+async fn the_poll_passes_the_row_of_a_tunnel_being_opened_with_the_tunnels_held() {
+    let mut rig = Rig::new("tunnel-poll-pending", |_| {}).await;
+    let live = rig.tunnel("operator", "node-07").await;
+    let opening = |serial| Opening {
+        operator: "operator".to_owned(),
+        host_id: "node-08".to_owned(),
+        serial,
+        instance: INSTANCE.to_owned(),
+        live_secs: 120,
+        per_operator: 4,
+    };
+    let serial = rig.cert("operator", "node-08");
+    let slot = rig.tunnels.reserve().expect("a slot");
+    let dialed = Arc::clone(&rig.tunnels)
+        .open_and_dial(opening(serial), slot)
+        .await
+        .expect("recorded and dialled");
+    let pending = dialed.recorded.opened.id;
+    rig.poll().await;
+    let expected = (INSTANCE.to_owned(), vec![live.id, pending], 30);
+    assert_eq!(rig.book.polls().last(), Some(&expected));
+
+    let opened = dialed.recorded.keep();
+    let (_client, incoming) = Client::new();
+    let _out = rig.tunnels.start(
+        dialed.slot,
+        &opened,
+        ("operator", "node-08"),
+        "root",
+        (dialed.host, incoming),
+        None,
+    );
+    rig.poll().await;
+    assert_eq!(rig.book.polls().last(), Some(&expected));
+
+    // A row whose caller gave up is closed and is not passed again.
+    let again = rig.cert("operator", "node-08");
+    rig.book
+        .inner
+        .close(&super::closing_of(pending, Cause::Eof))
+        .expect("closed");
+    let slot = rig.tunnels.reserve().expect("a slot");
+    let dialed = Arc::clone(&rig.tunnels)
+        .open_and_dial(opening(again), slot)
+        .await
+        .expect("recorded and dialled");
+    let second = dialed.recorded.opened.id;
+    drop(dialed);
+    rig.poll().await;
+    let passed = rig.book.polls().last().cloned().expect("a poll").1;
+    assert!(!passed.contains(&second), "{passed:?}");
+}
+
+/// Proves: the row of a tunnel whose host could not be dialled and whose close the book refused
+/// is no longer passed to the poll, so the poll's reaper closes it (`instance_lost`) once it
+/// went stale; the same for the row of a relay whose close the book refused.
+///
+/// Catches: a row left by a failed close that nothing reaps, which keeps the operator from the
+/// host until the instance stops.
+#[tokio::test]
+async fn a_row_whose_close_failed_is_reaped_by_the_poll_of_its_own_instance() {
+    let closed_port = {
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
+        closed.local_addr().expect("an address").port()
+    };
+    let rig = Rig::new("tunnel-poll-own-stale", |limits| limits.port = closed_port).await;
+    rig.book.fail("close");
+    let serial = rig.cert("operator", "node-07");
+    let answer = rig
+        .try_open(&caller("operator"), open("node-07", serial))
+        .await
+        .0;
+    assert!(answer.is_err());
+    assert!(rig.tunnels.registry().recorded.is_empty());
+    let left = rig.book.inner.tunnel_ids();
+    assert_eq!(left.len(), 1);
+    rig.book.inner.age_tunnel(left[0], 1000);
+    rig.poll().await;
+    assert_eq!(rig.book.inner.tunnel_ids(), Vec::<u64>::new());
+    assert_eq!(
+        rig.tunnel_lines().last().map(|line| line.3.clone()),
+        Some(close_detail(left[0], Cause::InstanceLost, None, 1000))
+    );
+
+    // A relay whose close was refused.
+    let mut other = Rig::new("tunnel-poll-own-stale-relay", |_| {}).await;
+    other.book.fail("close");
+    let mut live = other.tunnel("operator", "node-07").await;
+    drop(live.host);
+    assert_eq!(until_close(&mut live.out).await.1, "host_closed");
+    assert_eq!(other.book.inner.tunnel_ids(), vec![live.id]);
+    other.book.inner.age_tunnel(live.id, 1000);
+    other.poll().await;
+    assert_eq!(other.book.inner.tunnel_ids(), Vec::<u64>::new());
+}
+
+/// Proves: a drain whose stopped tunnels cannot be closed in the book (a close that does not
+/// return) gives up waiting for the closes after a grace and returns; the close is written when
+/// the book answers.
+///
+/// Catches: a stop that never ends because the book is slow, so that the runtime kills the
+/// process and every row is left for the reaper.
+#[tokio::test(start_paused = true)]
+async fn the_drain_returns_when_the_book_does_not_take_the_closes() {
+    let mut rig = Rig::new("tunnel-drain-hung", |limits| {
+        limits.drain = secs(5);
+        limits.idle = secs(100_000);
+        limits.max_session = secs(100_000);
+    })
+    .await;
+    let live = rig.tunnel("operator", "node-07").await;
+    let hold = rig.book.hold();
+    let tunnels = Arc::clone(&rig.tunnels);
+    let draining = tokio::spawn(async move { tunnels.drain().await });
+    // A book call in flight keeps the clock from moving by itself: the test moves it.
+    while !rig.tunnels.draining() {
+        tokio::task::yield_now().await;
+    }
+    tokio::time::advance(secs(6)).await;
+    while !rig.tunnels.registry().stopping {
+        tokio::task::yield_now().await;
+    }
+    tokio::time::advance(CLOSE_GRACE + secs(1)).await;
+    draining.await.expect("the drain ends");
+    assert_eq!(
+        rig.tunnels.count(),
+        1,
+        "the close is still waiting at the book"
+    );
+    drop(hold);
+    assert_eq!(rig.closed(live.id).await, Cause::CoordinatorStopping);
+    assert_eq!(rig.tunnels.count(), 0);
 }
 
 /// Proves: the poll stops a tunnel `revoked` when the book says its certificate was revoked, and

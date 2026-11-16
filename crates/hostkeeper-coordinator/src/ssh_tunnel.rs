@@ -18,7 +18,7 @@
 //! the drain (`coordinator_stopping`). Whatever ends it, the client is sent `close{cause}` and
 //! the book is told the bytes each way, so the audit holds the cause.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::future::Future;
 use std::io;
@@ -51,6 +51,9 @@ pub(crate) const MAX_FRAME: usize = 16 * 1024;
 /// The frames the queue towards the client holds: the most the coordinator reads from the host
 /// ahead of a client that reads nothing.
 pub(crate) const QUEUE: usize = 4;
+
+/// How long the drain waits for the closes of the tunnels it stopped to be written in the book.
+pub(crate) const CLOSE_GRACE: Duration = Duration::from_secs(5);
 
 /// What the client sends: the frames of its stream.
 pub(crate) type Incoming = BoxStream<'static, Result<proto::TunnelFrame, Status>>;
@@ -128,6 +131,9 @@ struct Registry {
     entries: BTreeMap<u64, Entry>,
     /// Slots taken by a tunnel that is being opened and is not registered yet.
     pending: usize,
+    /// The ids of the rows the book holds for tunnels that are not registered yet: from the
+    /// book's `open` until [`Slot::register`] or the close of the row. The poll refreshes them.
+    recorded: BTreeSet<u64>,
     /// Set by the drain: no tunnel is opened any more.
     draining: bool,
     /// Set when the drain gave up waiting: a tunnel that registers now is stopped at once.
@@ -153,7 +159,7 @@ pub(crate) enum NoSlot {
 /// dropped before [`Recorded::keep`], so that a caller that gives up while the host is dialled
 /// leaves no row behind (which would keep the operator from the host until the instance stops).
 pub(crate) struct Recorded {
-    book: Arc<dyn Book>,
+    tunnels: Arc<Tunnels>,
     opened: Opened,
     armed: bool,
 }
@@ -162,13 +168,15 @@ impl Recorded {
     /// Closes the row now, as `cause`, and waits for the book.
     async fn close(mut self, cause: Cause) {
         self.armed = false;
-        let book = Arc::clone(&self.book);
+        let book = Arc::clone(&self.tunnels.book);
         let closing = closing_of(self.opened.id, cause);
         match tokio::task::spawn_blocking(move || book.close(&closing)).await {
             Ok(Ok(())) => {}
             Ok(Err(why)) => tracing::error!(%why, "the close of an unused tunnel was not written"),
             Err(why) => tracing::error!(%why, "the close of an unused tunnel failed"),
         }
+        // Closed or not: a row left is no longer refreshed, and the poll's reaper takes it.
+        self.tunnels.unrecord(self.opened.id);
     }
 
     /// The tunnel is held by a relay, which closes it: gives what the book recorded.
@@ -181,7 +189,8 @@ impl Recorded {
 impl Drop for Recorded {
     fn drop(&mut self) {
         if self.armed {
-            let book = Arc::clone(&self.book);
+            self.tunnels.unrecord(self.opened.id);
+            let book = Arc::clone(&self.tunnels.book);
             let closing = closing_of(self.opened.id, Cause::Error);
             drop(tokio::task::spawn_blocking(move || {
                 if let Err(why) = book.close(&closing) {
@@ -202,10 +211,13 @@ fn closing_of(id: u64, cause: Cause) -> Closing {
     }
 }
 
-/// A tunnel recorded in the book and connected to its host.
+/// A tunnel recorded in the book and connected to its host, with the slot it takes: the slot
+/// stays counted until whoever holds this lets go of it, so a caller that gave up does not free
+/// the slot before the row is closed.
 pub(crate) struct Dialed {
     pub(crate) recorded: Recorded,
     pub(crate) host: TcpStream,
+    pub(crate) slot: Slot,
 }
 
 /// Why a tunnel was not opened and connected.
@@ -289,13 +301,22 @@ impl Tunnels {
         self.registry().draining
     }
 
-    /// The ids of the tunnels held, with their operators and hosts.
-    fn held(&self) -> Vec<(u64, String, String)> {
-        self.registry()
+    /// The tunnels held, with their operators and hosts, and the ids of the rows of those being
+    /// opened.
+    fn held(&self) -> (Vec<(u64, String, String)>, Vec<u64>) {
+        let registry = self.registry();
+        let held = registry
             .entries
             .iter()
             .map(|(id, entry)| (*id, entry.operator.clone(), entry.host_id.clone()))
-            .collect()
+            .collect();
+        (held, registry.recorded.iter().copied().collect())
+    }
+
+    /// How many slots are taken by tunnels being opened.
+    #[cfg(test)]
+    pub(crate) fn slots(&self) -> usize {
+        self.registry().pending
     }
 
     /// How many tunnels are registered.
@@ -329,6 +350,11 @@ impl Tunnels {
         if let Some(entry) = self.registry().entries.get(&id) {
             entry.stop(cause);
         }
+    }
+
+    /// The row `id` is no longer one of a tunnel being opened.
+    fn unrecord(&self, id: u64) {
+        self.registry().recorded.remove(&id);
     }
 
     /// Takes tunnel `id` out of the registry.
@@ -387,19 +413,31 @@ impl Tunnels {
     /// Records the tunnel in the book and connects to the host it names. Run as a task of its own
     /// by the call that opens a tunnel, so that a caller that gives up midway does not leave a
     /// row in the book without a tunnel: [`Recorded`] closes it.
-    pub(crate) async fn open_and_dial(self: Arc<Self>, opening: Opening) -> Result<Dialed, Failed> {
+    ///
+    /// The job owns `slot` until it is done: it comes back in [`Dialed`], and is given back when
+    /// the job fails or its result is dropped.
+    pub(crate) async fn open_and_dial(
+        self: Arc<Self>,
+        opening: Opening,
+        slot: Slot,
+    ) -> Result<Dialed, Failed> {
         let book = Arc::clone(&self.book);
         let recording = tokio::task::spawn_blocking(move || book.open(&opening))
             .await
             .unwrap_or_else(|why| Err(OpenRefused::Unwritten(why.to_string())));
         let opened = recording.map_err(Failed::Open)?;
+        self.registry().recorded.insert(opened.id);
         let recorded = Recorded {
-            book: Arc::clone(&self.book),
+            tunnels: Arc::clone(&self),
             opened,
             armed: true,
         };
         match self.dial(&recorded.opened.address).await {
-            Some(host) => Ok(Dialed { recorded, host }),
+            Some(host) => Ok(Dialed {
+                recorded,
+                host,
+                slot,
+            }),
             None => {
                 recorded.close(Cause::Error).await;
                 Err(Failed::Dial)
@@ -455,21 +493,31 @@ impl Tunnels {
     /// the tokens file nor among the API tokens), with `not_permitted` when the operators file no
     /// longer lists and permits the operator the host or the host is no longer enrolled, with
     /// `revoked` when the book says its certificate was revoked, and with `instance_lost` when
-    /// the book no longer holds it (another instance's reaper closed it).
+    /// the book no longer holds it (another instance's reaper closed it). An operators file that
+    /// cannot be read stops none for `not_permitted`. The poll passes the book the ids of the
+    /// tunnels held and of those being opened (recorded, not registered), so the book refreshes
+    /// them and reaps every other row that went stale, this instance's own included.
     pub(crate) async fn poll_once(&self, coordinator: &Coordinator) {
         let Some(ssh) = coordinator.ssh.as_ref() else {
             return;
         };
-        let held = self.held();
-        let operators = ssh.operators();
+        let (held, recorded) = self.held();
+        // A file that cannot be read keeps the tunnels, as a host that cannot be read does: the
+        // next poll reads it again.
+        let operators = ssh.read_operators().inspect_err(|why| {
+            tracing::warn!(%why, "the operators file could not be read: its tunnels are kept");
+        });
         for (id, operator, host_id) in &held {
             if !has_token(coordinator, operator) {
                 self.stop(*id, Cause::TokenRevoked);
-            } else if !permitted(coordinator, ssh, &operators, operator, host_id) {
+            } else if let Ok(operators) = &operators
+                && !permitted(coordinator, ssh, operators, operator, host_id)
+            {
                 self.stop(*id, Cause::NotPermitted);
             }
         }
-        let ids: Vec<u64> = held.iter().map(|(id, _, _)| *id).collect();
+        // The tunnels held and those being opened: the book refreshes both and reaps the rest.
+        let ids: Vec<u64> = held.iter().map(|(id, _, _)| *id).chain(recorded).collect();
         let stale = self.limits.poll.as_secs().saturating_mul(3);
         let book = Arc::clone(&self.book);
         let instance = self.instance.clone();
@@ -506,12 +554,16 @@ impl Tunnels {
 
     /// Stops taking tunnels, waits until the tunnels held end on their own or `drain` passes,
     /// then stops the rest with `coordinator_stopping` and waits for them to be closed in the
-    /// book.
+    /// book, for [`CLOSE_GRACE`] at most.
     pub(crate) async fn drain(&self) {
         self.registry().draining = true;
         if timeout(self.limits.drain, self.emptied()).await.is_err() {
             self.stop_all();
-            self.emptied().await;
+            if timeout(CLOSE_GRACE, self.emptied()).await.is_err() {
+                tracing::error!(
+                    "the tunnels did not close in the book in time: the stop goes on and the rows are left to another instance's poll"
+                );
+            }
         }
     }
 
@@ -582,6 +634,7 @@ impl Slot {
     ) -> watch::Receiver<Option<Cause>> {
         let mut registry = self.tunnels.registry();
         registry.pending -= 1;
+        registry.recorded.remove(&id);
         let first = registry.stopping.then_some(Cause::CoordinatorStopping);
         let (stop, signal) = watch::channel(first);
         registry.entries.insert(

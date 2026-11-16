@@ -230,10 +230,11 @@ pub(crate) trait Book: Send + Sync {
     /// [`BookError`].
     fn close(&self, closing: &Closing) -> Result<(), BookError>;
 
-    /// The poll of `instance`, holding the tunnels `ids`, in one write: refreshes their last-seen
-    /// time; finds those whose certificate was revoked and those the book no longer holds; and
-    /// closes, as `instance_lost`, every tunnel of another instance not refreshed for
-    /// `stale_secs`.
+    /// The poll of `instance`, holding the tunnels `ids` (the registered ones and those being
+    /// opened), in one write: refreshes their last-seen time; finds those whose certificate was
+    /// revoked and those the book no longer holds; and closes, as `instance_lost`, every tunnel
+    /// not in `ids`, whichever instance's, that was not refreshed for `stale_secs` (a row of this
+    /// instance that nothing holds any more is reaped too).
     ///
     /// # Errors
     /// [`BookError`].
