@@ -29,10 +29,7 @@ pub enum Error {
     Transport(String),
     /// A program (`ssh`, `ssh-keygen`, `ssh-add`) that did not run or did not do its part.
     #[error("{program}: {reason}")]
-    Program {
-        program: String,
-        reason: String,
-    },
+    Program { program: String, reason: String },
     /// The coordinator's answer cannot be used (a host with no pin, a certificate that is not
     /// one).
     #[error("{0}")]

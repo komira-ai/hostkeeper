@@ -1,6 +1,5 @@
 //! The commands: what each asks of the coordinator and of the machine, in order.
 
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use hostkeeper_proto::hostkeeper::operator::v1::RevokeRequest;
@@ -80,8 +79,16 @@ async fn prepare(
     let state = state_of(global)?;
     let mut client = client::connect(global)?;
     let identity = access::identity(&state, env.programs, requested)?;
-    let cert =
-        access::certificate(&mut client, global, &state, &identity, host, reason, env.now).await?;
+    let cert = access::certificate(
+        &mut client,
+        global,
+        &state,
+        &identity,
+        host,
+        reason,
+        env.now,
+    )
+    .await?;
     Ok((client, state, identity, cert))
 }
 
@@ -151,7 +158,10 @@ async fn revoke(
     output: &mut (impl AsyncWrite + Unpin),
 ) -> Result<i32, Error> {
     let request = match (operator, serial, host) {
-        (Some(operator), _, _) => RevokeRequest { operator, serial: 0 },
+        (Some(operator), _, _) => RevokeRequest {
+            operator,
+            serial: 0,
+        },
         (None, Some(serial), _) => RevokeRequest {
             operator: String::new(),
             serial,
@@ -195,7 +205,11 @@ async fn status(
     }
     match state.cert_info(host) {
         Some(held) => {
-            let validity = if held.expires >= env.now { "valid" } else { "expired" };
+            let validity = if held.expires >= env.now {
+                "valid"
+            } else {
+                "expired"
+            };
             text.push_str(&format!(
                 "certificate: serial {} for {}, expires {} ({validity})\n",
                 held.serial, held.login_user, held.expires
@@ -251,7 +265,18 @@ where
             identity,
             reason,
             ssh_args,
-        } => ssh(global, env, &host_id, identity.as_deref(), &reason, &ssh_args, diag).await,
+        } => {
+            ssh(
+                global,
+                env,
+                &host_id,
+                identity.as_deref(),
+                &reason,
+                &ssh_args,
+                diag,
+            )
+            .await
+        }
         Command::Proxy {
             host_id,
             identity,

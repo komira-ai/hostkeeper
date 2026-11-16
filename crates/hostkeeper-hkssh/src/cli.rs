@@ -7,7 +7,11 @@ use clap::{Args, Parser, Subcommand};
 
 /// `hkssh [flags] <command>`.
 #[derive(Debug, Parser)]
-#[command(name = "hkssh", version, about = "SSH to a host through the coordinator")]
+#[command(
+    name = "hkssh",
+    version,
+    about = "SSH to a host through the coordinator"
+)]
 pub struct Cli {
     #[command(flatten)]
     pub global: Global,

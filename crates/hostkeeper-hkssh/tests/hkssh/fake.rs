@@ -110,7 +110,12 @@ impl Ssh for Service {
         request: Request<proto::SignUserCertRequest>,
     ) -> Result<Response<proto::SignUserCertResponse>, Status> {
         note(&self.0, &request);
-        self.0.seen.lock().expect("seen").signs.push(request.into_inner());
+        self.0
+            .seen
+            .lock()
+            .expect("seen")
+            .signs
+            .push(request.into_inner());
         self.0.sign.lock().expect("sign").clone().map(Response::new)
     }
 
@@ -133,8 +138,18 @@ impl Ssh for Service {
         request: Request<proto::RevokeRequest>,
     ) -> Result<Response<proto::RevokeResponse>, Status> {
         note(&self.0, &request);
-        self.0.seen.lock().expect("seen").revokes.push(request.into_inner());
-        self.0.revoke.lock().expect("revoke").clone().map(Response::new)
+        self.0
+            .seen
+            .lock()
+            .expect("seen")
+            .revokes
+            .push(request.into_inner());
+        self.0
+            .revoke
+            .lock()
+            .expect("revoke")
+            .clone()
+            .map(Response::new)
     }
 
     type TunnelStream = Answers;
@@ -166,7 +181,11 @@ impl Ssh for Service {
         let (out, answers) = mpsc::channel(8);
         let script = Arc::clone(&self.0);
         tokio::spawn(async move {
-            let opened = |u: &str| frame(Frame::Opened(proto::Opened { login_user: u.into() }));
+            let opened = |u: &str| {
+                frame(Frame::Opened(proto::Opened {
+                    login_user: u.into(),
+                }))
+            };
             match mode {
                 Tunnel::NotOpened => {
                     let _ = out.send(Ok(frame(Frame::Data(b"x".to_vec())))).await;
@@ -174,7 +193,9 @@ impl Ssh for Service {
                 Tunnel::EmptyAnswer => {}
                 Tunnel::CloseAfterOpen(cause) => {
                     let _ = out.send(Ok(opened("root"))).await;
-                    let close = Frame::Close(proto::Close { cause: cause.into() });
+                    let close = Frame::Close(proto::Close {
+                        cause: cause.into(),
+                    });
                     let _ = out.send(Ok(frame(close))).await;
                 }
                 Tunnel::EndAfterOpen => {
@@ -265,11 +286,10 @@ impl Rig {
         let tls =
             ServerTlsConfig::new().identity(Identity::from_pem(&pki.server_cert, &pki.server_key));
         let script = Arc::new(Script::new());
-        let server = Server::builder()
-            .tls_config(tls)
-            .expect("TLS")
-            .add_service(SshServer::new(Service(Arc::clone(&script))))
-            .serve_with_incoming(TcpListenerStream::new(listener));
+        let server = Server::builder().tls_config(tls).expect("TLS").serve_with_incoming(
+            SshServer::new(Service(Arc::clone(&script))),
+            TcpListenerStream::new(listener),
+        );
         runtime.spawn(server);
         Rig {
             script,
@@ -336,7 +356,10 @@ impl Double {
 
 impl Programs for Double {
     fn generate_key(&self, private: &Path) -> Result<(), Error> {
-        self.generated.lock().expect("generated").push(private.to_owned());
+        self.generated
+            .lock()
+            .expect("generated")
+            .push(private.to_owned());
         std::fs::write(private, "private").expect("the private key");
         let mut public = private.as_os_str().to_owned();
         public.push(".pub");

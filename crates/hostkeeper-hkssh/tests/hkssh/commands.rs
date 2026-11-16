@@ -17,7 +17,10 @@ fn ssh(rig: &Rig, double: &Double, extra: &[&str]) -> crate::fake::Outcome {
 #[test]
 fn ssh_runs_ssh_with_the_certificate_the_proxy_and_the_pins() {
     let rig = Rig::start();
-    let double = Double { ssh_code: 7, ..Double::new() };
+    let double = Double {
+        ssh_code: 7,
+        ..Double::new()
+    };
     let outcome = ssh(&rig, &double, &["--", "uname", "-a"]);
     assert_eq!(outcome.result.expect("ssh ran"), 7);
     let calls = double.ssh_calls.lock().expect("calls").clone();
@@ -42,25 +45,47 @@ fn ssh_runs_ssh_with_the_certificate_the_proxy_and_the_pins() {
     }
     assert_eq!(
         option("CertificateFile"),
-        state.join("hosts").join(format!("{HOST}-cert.pub")).display().to_string()
+        state
+            .join("hosts")
+            .join(format!("{HOST}-cert.pub"))
+            .display()
+            .to_string()
     );
     let proxy = option("ProxyCommand");
-    assert!(proxy.starts_with(&format!("'/opt/hkssh' proxy '{HOST}' '--endpoint' 'https://localhost:")), "{proxy}");
+    assert!(
+        proxy.starts_with(&format!(
+            "'/opt/hkssh' proxy '{HOST}' '--endpoint' 'https://localhost:"
+        )),
+        "{proxy}"
+    );
     assert!(proxy.contains(&format!("'--state-dir' '{}'", state.display())));
     assert!(proxy.contains("'--timeout-secs' '30' '--keepalive-secs' '30'"));
     assert_eq!(
         option("KnownHostsCommand"),
-        format!("'/opt/hkssh' known-host '{}' %H %t %K %f", state.join("hosts").join(format!("{HOST}.pins")).display())
+        format!(
+            "'/opt/hkssh' known-host '{}' %H %t %K %f",
+            state.join("hosts").join(format!("{HOST}.pins")).display()
+        )
     );
     let tail = &args[args.len() - 3..];
-    assert_eq!(tail, [format!("root@{HOST}"), "uname".to_owned(), "-a".to_owned()]);
+    assert_eq!(
+        tail,
+        [format!("root@{HOST}"), "uname".to_owned(), "-a".to_owned()]
+    );
     assert!(args.iter().all(|a| !a.contains(TOKEN)));
     let identity = args.iter().position(|a| a == "-i").expect("-i");
-    assert_eq!(args[identity + 1], state.join("id_ed25519").display().to_string());
-    // The pins file and the certificate are where the options say.
-    assert_eq!(std::fs::read_to_string(state.join("hosts").join(format!("{HOST}.pins"))).expect("pins"), format!("{PIN}\n"));
     assert_eq!(
-        std::fs::read_to_string(state.join("hosts").join(format!("{HOST}-cert.pub"))).expect("cert"),
+        args[identity + 1],
+        state.join("id_ed25519").display().to_string()
+    );
+    // The pins file and the certificate are where the options say.
+    assert_eq!(
+        std::fs::read_to_string(state.join("hosts").join(format!("{HOST}.pins"))).expect("pins"),
+        format!("{PIN}\n")
+    );
+    assert_eq!(
+        std::fs::read_to_string(state.join("hosts").join(format!("{HOST}-cert.pub")))
+            .expect("cert"),
         "ssh-ed25519-cert-v01@openssh.com AAAAcertbytes\n"
     );
     assert_eq!(rig.seen(|s| s.signs[0].reason.clone()), "hkctl ssh");
@@ -78,7 +103,12 @@ fn ssh_needs_a_pin_and_says_when_the_keys_changed() {
     });
     let double = Double::new();
     let error = ssh(&rig, &double, &[]).result.expect_err("no pin");
-    assert!(error.to_string().starts_with(&format!("no host key is pinned for {HOST}")), "{error}");
+    assert!(
+        error
+            .to_string()
+            .starts_with(&format!("no host key is pinned for {HOST}")),
+        "{error}"
+    );
     assert_eq!(rig.seen(|s| s.signs.len()), 0);
     assert!(double.ssh_calls.lock().expect("calls").is_empty());
 
@@ -90,14 +120,21 @@ fn ssh_needs_a_pin_and_says_when_the_keys_changed() {
     assert_eq!(outcome.result.expect("connected"), 0);
     assert_eq!(
         outcome.diag,
-        format!("hkssh: the host keys of {HOST} differ from the pinned ones; connecting with the pinned set\n")
+        format!(
+            "hkssh: the host keys of {HOST} differ from the pinned ones; connecting with the pinned set\n"
+        )
     );
 
     for (state, fingerprints) in [("pinned", vec![]), ("surprise", vec![PIN.to_owned()])] {
-        *rig.script.keys.lock().expect("keys") =
-            Ok(proto::HostKeysResponse { fingerprints, state: state.into() });
+        *rig.script.keys.lock().expect("keys") = Ok(proto::HostKeysResponse {
+            fingerprints,
+            state: state.into(),
+        });
         let error = ssh(&rig, &double, &[]).result.expect_err(state);
-        assert_eq!(error.to_string(), format!("the coordinator gave no usable pins for {HOST} (state {state:?})"));
+        assert_eq!(
+            error.to_string(),
+            format!("the coordinator gave no usable pins for {HOST} (state {state:?})")
+        );
     }
 }
 
@@ -110,28 +147,45 @@ fn the_key_is_the_identity_then_the_agent_then_the_state_key() {
     let private = rig.dir().join("mine");
     std::fs::write(rig.dir().join("mine.pub"), format!("{PUBLIC} comment\n")).expect("pub");
     let double = Double::new();
-    let outcome = ssh(&rig, &double, &["--identity", private.to_str().expect("utf-8")]);
+    let outcome = ssh(
+        &rig,
+        &double,
+        &["--identity", private.to_str().expect("utf-8")],
+    );
     assert_eq!(outcome.result.expect("ran"), 0);
     let args = double.ssh_calls.lock().expect("calls")[0].clone();
     let at = args.iter().position(|a| a == "-i").expect("-i");
     assert_eq!(args[at + 1], private.display().to_string());
-    assert!(args.iter().any(|a| a.starts_with("ProxyCommand=") && a.contains(&format!("'--identity' '{}'", private.display()))));
+    assert!(args.iter().any(|a| a.starts_with("ProxyCommand=")
+        && a.contains(&format!("'--identity' '{}'", private.display()))));
     assert!(double.generated.lock().expect("generated").is_empty());
 
     let rig = Rig::start();
-    let double = Double { agent: Some("ssh-ed25519 AAAAagent".into()), ..Double::new() };
+    let double = Double {
+        agent: Some("ssh-ed25519 AAAAagent".into()),
+        ..Double::new()
+    };
     ssh(&rig, &double, &[]).result.expect("ran");
     let args = double.ssh_calls.lock().expect("calls")[0].clone();
     let at = args.iter().position(|a| a == "-i").expect("-i");
-    assert_eq!(args[at + 1], rig.state_dir().join("agent.pub").display().to_string());
-    assert_eq!(std::fs::read_to_string(rig.state_dir().join("agent.pub")).expect("agent.pub"), "ssh-ed25519 AAAAagent\n");
+    assert_eq!(
+        args[at + 1],
+        rig.state_dir().join("agent.pub").display().to_string()
+    );
+    assert_eq!(
+        std::fs::read_to_string(rig.state_dir().join("agent.pub")).expect("agent.pub"),
+        "ssh-ed25519 AAAAagent\n"
+    );
     assert!(double.generated.lock().expect("generated").is_empty());
 
     let rig = Rig::start();
     let double = Double::new();
     ssh(&rig, &double, &[]).result.expect("made");
     ssh(&rig, &double, &[]).result.expect("reused");
-    assert_eq!(*double.generated.lock().expect("generated"), vec![rig.state_dir().join("id_ed25519")]);
+    assert_eq!(
+        *double.generated.lock().expect("generated"),
+        vec![rig.state_dir().join("id_ed25519")]
+    );
 }
 
 /// Proves: an identity whose `.pub` is missing, or holds no key, is an error that names the
@@ -140,11 +194,31 @@ fn the_key_is_the_identity_then_the_agent_then_the_state_key() {
 fn an_identity_without_a_public_key_is_refused() {
     let rig = Rig::start();
     let private = rig.dir().join("none");
-    let error = ssh(&rig, &Double::new(), &["--identity", private.to_str().expect("utf-8")]).result.expect_err("missing");
-    assert!(error.to_string().starts_with("cannot read a public key from"), "{error}");
+    let error = ssh(
+        &rig,
+        &Double::new(),
+        &["--identity", private.to_str().expect("utf-8")],
+    )
+    .result
+    .expect_err("missing");
+    assert!(
+        error
+            .to_string()
+            .starts_with("cannot read a public key from"),
+        "{error}"
+    );
     std::fs::write(rig.dir().join("none.pub"), "not a key\n").expect("pub");
-    let error = ssh(&rig, &Double::new(), &["--identity", private.to_str().expect("utf-8")]).result.expect_err("junk");
-    assert!(error.to_string().ends_with("holds no public key"), "{error}");
+    let error = ssh(
+        &rig,
+        &Double::new(),
+        &["--identity", private.to_str().expect("utf-8")],
+    )
+    .result
+    .expect_err("junk");
+    assert!(
+        error.to_string().ends_with("holds no public key"),
+        "{error}"
+    );
     assert_eq!(rig.seen(|s| s.signs.len()), 0);
 }
 
@@ -161,16 +235,43 @@ fn revoke_names_an_operator_a_serial_or_the_certificate_held_for_a_host() {
         invoke(&rig.args(&all), &double, NOW, Vec::new())
     };
     let outcome = revoke(&["--operator", "alice"]);
-    assert_eq!((outcome.result.expect("ok"), outcome.text()), (0, "revoked: 1\n".to_owned()));
+    let text = outcome.text();
+    assert_eq!(
+        (outcome.result.expect("ok"), text),
+        (0, "revoked: 1\n".to_owned())
+    );
     revoke(&["--serial", "9"]).result.expect("ok");
     let error = revoke(&["--host", HOST]).result.expect_err("none held");
-    assert_eq!(error.to_string(), format!("no certificate is held for {HOST}"));
-    ssh(&rig, &double, &[]).result.expect("a certificate is made");
+    assert_eq!(
+        error.to_string(),
+        format!("no certificate is held for {HOST}")
+    );
+    ssh(&rig, &double, &[])
+        .result
+        .expect("a certificate is made");
     revoke(&["--host", HOST]).result.expect("ok");
-    let sent = rig.seen(|s| s.revokes.iter().map(|r| (r.operator.clone(), r.serial)).collect::<Vec<_>>());
-    assert_eq!(sent, [("alice".to_owned(), 0), (String::new(), 9), (String::new(), 41)]);
+    let sent = rig.seen(|s| {
+        s.revokes
+            .iter()
+            .map(|r| (r.operator.clone(), r.serial))
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        sent,
+        [
+            ("alice".to_owned(), 0),
+            (String::new(), 9),
+            (String::new(), 41)
+        ]
+    );
     *rig.script.revoke.lock().expect("revoke") = Err(tonic::Status::not_found("unknown_cert"));
-    assert_eq!(revoke(&["--serial", "1"]).result.expect_err("refused").to_string(), "refused: unknown_cert");
+    assert_eq!(
+        revoke(&["--serial", "1"])
+            .result
+            .expect_err("refused")
+            .to_string(),
+        "refused: unknown_cert"
+    );
     let error = revoke(&["--host", "../x"]).result.expect_err("bad id");
     assert_eq!(error.exit_code(), 2);
 }
@@ -182,13 +283,20 @@ fn status_prints_the_pins_and_the_certificate_held() {
     let rig = Rig::start();
     let double = Double::new();
     let status = |now: u64| invoke(&rig.args(&["status", HOST]), &double, now, Vec::new()).text();
-    assert_eq!(status(NOW), format!("host: {HOST}\nhost keys: pinned\nfingerprint: {PIN}\ncertificate: none held\n"));
-    ssh(&rig, &double, &[]).result.expect("a certificate is made");
+    assert_eq!(
+        status(NOW),
+        format!("host: {HOST}\nhost keys: pinned\nfingerprint: {PIN}\ncertificate: none held\n")
+    );
+    ssh(&rig, &double, &[])
+        .result
+        .expect("a certificate is made");
     let held = format!("certificate: serial 41 for root, expires {} ", NOW + 3600);
     assert!(status(NOW).ends_with(&format!("{held}(valid)\n")));
     assert!(status(NOW + 3601).ends_with(&format!("{held}(expired)\n")));
     *rig.script.keys.lock().expect("keys") = Err(tonic::Status::not_found("unknown_host"));
-    let error = invoke(&rig.args(&["status", HOST]), &double, NOW, Vec::new()).result.expect_err("refused");
+    let error = invoke(&rig.args(&["status", HOST]), &double, NOW, Vec::new())
+        .result
+        .expect_err("refused");
     assert_eq!(error.to_string(), "refused: unknown_host");
 }
 
@@ -203,13 +311,27 @@ fn known_host_vouches_only_for_a_pinned_fingerprint() {
     let run = |rest: &[&str]| {
         let mut all = vec!["known-host", pins.to_str().expect("utf-8")];
         all.extend_from_slice(rest);
-        invoke(&["hkssh".to_owned()].into_iter().chain(all.into_iter().map(String::from)).collect::<Vec<_>>(), &Double::new(), NOW, Vec::new())
+        let line: Vec<String> = ["hkssh"].into_iter().chain(all).map(String::from).collect();
+        invoke(&line, &Double::new(), NOW, Vec::new())
     };
     let outcome = run(&[HOST, "ssh-ed25519", "AAAAkey", PIN]);
-    assert_eq!((outcome.result.expect("ok"), outcome.text()), (0, format!("{HOST} ssh-ed25519 AAAAkey\n")));
-    for rest in [vec![HOST, "ssh-ed25519", "AAAAkey", "SHA256:unpinned"], vec![HOST], vec![]] {
+    let text = outcome.text();
+    assert_eq!(
+        (outcome.result.expect("ok"), text),
+        (0, format!("{HOST} ssh-ed25519 AAAAkey\n"))
+    );
+    let others = [
+        vec![HOST, "ssh-ed25519", "AAAAkey", "SHA256:unpinned"],
+        vec![HOST],
+        vec![],
+    ];
+    for rest in others {
         let outcome = run(&rest);
-        assert_eq!((outcome.result.expect("ok"), outcome.stdout), (0, Vec::new()), "{rest:?}");
+        assert_eq!(
+            (outcome.result.expect("ok"), outcome.stdout),
+            (0, Vec::new()),
+            "{rest:?}"
+        );
     }
     std::fs::remove_file(&pins).expect("remove");
     assert!(run(&[HOST, "ssh-ed25519", "AAAAkey", PIN]).stdout.is_empty());

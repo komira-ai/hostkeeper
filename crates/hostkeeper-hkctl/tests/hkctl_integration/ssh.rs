@@ -47,10 +47,19 @@ fn each_command_execs_hkssh_with_the_flags_it_took() {
     let (rig, home) = rig("ssh-exec");
     let globals = rig.globals(4443);
     let cases: [(&[&str], &[&str]); 5] = [
-        (&["ssh", "host-7", "--", "uname", "-a"], &["ssh", "host-7", "--", "uname", "-a"]),
-        (&["ssh", "host-7", "--identity", "/k/id", "--reason", "fix"], &["ssh", "host-7", "--identity", "/k/id", "--reason", "fix"]),
+        (
+            &["ssh", "host-7", "--", "uname", "-a"],
+            &["ssh", "host-7", "--", "uname", "-a"],
+        ),
+        (
+            &["ssh", "host-7", "--identity", "/k/id", "--reason", "fix"],
+            &["ssh", "host-7", "--identity", "/k/id", "--reason", "fix"],
+        ),
         (&["ssh-proxy", "host-7"], &["proxy", "host-7"]),
-        (&["ssh-revoke", "--serial", "5"], &["revoke", "--serial", "5"]),
+        (
+            &["ssh-revoke", "--serial", "5"],
+            &["revoke", "--serial", "5"],
+        ),
         (&["ssh-status", "host-7"], &["status", "host-7"]),
     ];
     for (words, expected) in cases {
@@ -64,7 +73,10 @@ fn each_command_execs_hkssh_with_the_flags_it_took() {
         let mut want = leading(&rig, &home);
         want.extend(args(expected));
         assert_eq!(calls[0].argv, want, "{words:?}");
-        assert!(rig.calls().iter().all(|c| c.program == "hkssh"), "{words:?}");
+        assert!(
+            rig.calls().iter().all(|c| c.program == "hkssh"),
+            "{words:?}"
+        );
         for call in rig.calls() {
             assert!(call.argv.iter().all(|a| !a.contains(TOKEN)));
             assert!(call.environ.iter().all(|e| !e.contains(TOKEN)));
@@ -90,7 +102,10 @@ fn the_methods_of_the_service_ssh_stay_gateway_calls() {
     let mut line = rig.globals(4443);
     line.extend(args(&["ssh", "revoke", "--serial", "5"]));
     let ran = rig.run(Script::Real, &line, b"", &[("HOME", &home)]);
-    assert_eq!((ran.code, ran.stdout.as_str()), (0, "{\"revoked\":\"1\"}\n"));
+    assert_eq!(
+        (ran.code, ran.stdout.as_str()),
+        (0, "{\"revoked\":\"1\"}\n")
+    );
     assert!(hkssh(&rig).is_empty());
     assert_eq!(rig.curls().len(), 1);
 }
@@ -107,30 +122,48 @@ fn the_commands_refuse_what_hkssh_cannot_take() {
         line.extend(args(extra));
         line
     };
-    for flag in ["--token-stdin", "--response-file=/x", "--github-oidc-audience=a"] {
+    for flag in [
+        "--token-stdin",
+        "--response-file=/x",
+        "--github-oidc-audience=a",
+    ] {
         let mut line = rig.globals(4443);
         line.truncate(4);
         line.extend(args(&[flag, "ssh-status", "h"]));
         let ran = run(&line, &[("HOME", &home)]);
         assert_eq!(ran.code, 2, "{flag}: {}", ran.stderr);
-        assert!(ran.stderr.contains("takes --token-file only"), "{}", ran.stderr);
+        assert!(
+            ran.stderr.contains("takes --token-file only"),
+            "{}",
+            ran.stderr
+        );
     }
     let ran = run(&args(&["ssh-status", "h"]), &[("HOME", &home)]);
     assert_eq!(
         (ran.code, ran.stderr.as_str()),
-        (2, "hkctl: hkctl ssh-status needs --endpoint, --ca-file and --token-file\n")
+        (
+            2,
+            "hkctl: hkctl ssh-status needs --endpoint, --ca-file and --token-file\n"
+        )
     );
     let mut line = with(&["ssh-status", "h"]);
     line[1] = "http://127.0.0.1:4443".to_owned();
     let ran = run(&line, &[("HOME", &home)]);
-    assert_eq!((ran.code, ran.stderr.as_str()), (2, "hkctl: --endpoint takes https://<host>[:<port>]\n"));
+    assert_eq!(
+        (ran.code, ran.stderr.as_str()),
+        (2, "hkctl: --endpoint takes https://<host>[:<port>]\n")
+    );
     let ran = run(&with(&["ssh-status", "h"]), &[]);
     assert_eq!(ran.code, 1);
     assert!(ran.stderr.contains("which is not set"), "{}", ran.stderr);
     assert!(hkssh(&rig).is_empty());
     let ran = run(&args(&["ssh-proxy", "--help"]), &[]);
     assert_eq!(ran.code, 0);
-    assert!(ran.stdout.contains("hkctl ssh-proxy <host-id>"), "{}", ran.stdout);
+    assert!(
+        ran.stdout.contains("hkctl ssh-proxy <host-id>"),
+        "{}",
+        ran.stdout
+    );
 }
 
 /// Proves: the hkssh beside the script is the one that runs when there is one, before the one on

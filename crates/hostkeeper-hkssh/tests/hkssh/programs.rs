@@ -30,13 +30,26 @@ fn a_key_is_made_by_ssh_keygen_and_a_failure_names_the_program() {
     let real = system("ssh-keygen", "ssh-add", "ssh");
     real.generate_key(&key).expect("a key");
     let public = std::fs::read_to_string(scratch.path().join("id.pub")).expect("the public key");
-    assert!(normalize_public_key(&public).expect("a key").starts_with("ssh-ed25519 "));
-    let error = real.generate_key(&key).expect_err("not over an existing key");
+    assert!(
+        normalize_public_key(&public)
+            .expect("a key")
+            .starts_with("ssh-ed25519 ")
+    );
+    let error = real
+        .generate_key(&key)
+        .expect_err("not over an existing key");
     assert_eq!(error.to_string().split(':').next(), Some("ssh-keygen"));
-    let error = system("false", "ssh-add", "ssh").generate_key(&key).expect_err("fails");
+    let error = system("false", "ssh-add", "ssh")
+        .generate_key(&key)
+        .expect_err("fails");
     assert!(error.to_string().starts_with("false: exited"), "{error}");
-    let error = system("/nonexistent/keygen", "x", "x").generate_key(&key).expect_err("absent");
-    assert!(error.to_string().starts_with("/nonexistent/keygen: "), "{error}");
+    let error = system("/nonexistent/keygen", "x", "x")
+        .generate_key(&key)
+        .expect_err("absent");
+    assert!(
+        error.to_string().starts_with("/nonexistent/keygen: "),
+        "{error}"
+    );
 }
 
 /// Proves: ssh's exit code is returned (0 and 1 here, from `true` and `false`), and a program
@@ -46,8 +59,13 @@ fn ssh_is_run_and_its_exit_code_returned() {
     let args = [];
     assert_eq!(system("k", "a", "true").run_ssh(&args).expect("ran"), 0);
     assert_eq!(system("k", "a", "false").run_ssh(&args).expect("ran"), 1);
-    let error = system("k", "a", "/nonexistent/ssh").run_ssh(&args).expect_err("absent");
-    assert!(error.to_string().starts_with("/nonexistent/ssh: "), "{error}");
+    let error = system("k", "a", "/nonexistent/ssh")
+        .run_ssh(&args)
+        .expect_err("absent");
+    assert!(
+        error.to_string().starts_with("/nonexistent/ssh: "),
+        "{error}"
+    );
 }
 
 fn agent(scratch: &Scratch) -> (PathBuf, String) {
@@ -91,16 +109,32 @@ fn the_agents_first_key_is_read_with_ssh_add() {
     assert!(killed.success());
     assert_eq!(real.agent_key(), None, "an agent that is gone");
     assert_eq!(system("k", "/nonexistent/add", "s").agent_key(), None);
-    assert_eq!(system("k", "true", "s").agent_key(), None, "success with no key");
+    assert_eq!(
+        system("k", "true", "s").agent_key(),
+        None,
+        "success with no key"
+    );
 }
 
 /// Proves: only a line of a plain public key is a key: `<type> <base64>` of a line with a
 /// comment, nothing for a certificate line, a short line, or text that is not a key.
 #[test]
 fn only_a_plain_public_key_line_is_a_key() {
-    assert_eq!(normalize_public_key("ssh-ed25519 AAAA me@host").as_deref(), Some("ssh-ed25519 AAAA"));
-    assert_eq!(normalize_public_key("ecdsa-sha2-nistp256 BBBB").as_deref(), Some("ecdsa-sha2-nistp256 BBBB"));
-    for line in ["ssh-ed25519-cert-v01@openssh.com AAAA", "ssh-ed25519", "", "hello world", "The agent has no identities."] {
+    assert_eq!(
+        normalize_public_key("ssh-ed25519 AAAA me@host").as_deref(),
+        Some("ssh-ed25519 AAAA")
+    );
+    assert_eq!(
+        normalize_public_key("ecdsa-sha2-nistp256 BBBB").as_deref(),
+        Some("ecdsa-sha2-nistp256 BBBB")
+    );
+    for line in [
+        "ssh-ed25519-cert-v01@openssh.com AAAA",
+        "ssh-ed25519",
+        "",
+        "hello world",
+        "The agent has no identities.",
+    ] {
         assert_eq!(normalize_public_key(line), None, "{line:?}");
     }
 }

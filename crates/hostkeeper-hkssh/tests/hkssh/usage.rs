@@ -33,7 +33,10 @@ fn a_missing_flag_is_a_usage_error_naming_it() {
     let rig = Rig::start();
     for flag in ["--endpoint", "--ca-file", "--token-file", "--state-dir"] {
         let error = status(&flags(&rig, flag)[..]).expect_err(flag);
-        assert_eq!((error.to_string(), error.exit_code()), (format!("this command needs {flag}"), 2));
+        assert_eq!(
+            (error.to_string(), error.exit_code()),
+            (format!("this command needs {flag}"), 2)
+        );
     }
 }
 
@@ -42,16 +45,33 @@ fn a_missing_flag_is_a_usage_error_naming_it() {
 #[test]
 fn an_endpoint_is_https_host_and_port_only() {
     let rig = Rig::start();
-    for bad in ["http://localhost:1", "https://u@localhost", "https://localhost/p", "https://localhost/", "https://localhost?q=1", "localhost", "https://"] {
+    for bad in [
+        "http://localhost:1",
+        "https://u@localhost",
+        "https://localhost/p",
+        "https://localhost/",
+        "https://localhost?q=1",
+        "localhost",
+        "https://",
+    ] {
         let mut args = flags(&rig, "--endpoint");
         args.extend(["--endpoint".to_owned(), bad.to_owned()]);
         let error = status(&args).expect_err(bad);
-        assert_eq!((error.to_string(), error.exit_code()), ("--endpoint takes https://<host>[:<port>]".to_owned(), 2), "{bad}");
+        assert_eq!(
+            (error.to_string(), error.exit_code()),
+            ("--endpoint takes https://<host>[:<port>]".to_owned(), 2),
+            "{bad}"
+        );
     }
     let mut args = flags(&rig, "--endpoint");
     args.extend(["--endpoint".to_owned(), "https://[::1]:1".to_owned()]);
     let error = status(&args).expect_err("nothing listens");
-    assert!(error.to_string().starts_with("no answer from the coordinator"), "{error}");
+    assert!(
+        error
+            .to_string()
+            .starts_with("no answer from the coordinator"),
+        "{error}"
+    );
 }
 
 /// Proves: the token file is refused when group or others can read it, when it is missing, empty,
@@ -62,18 +82,34 @@ fn a_token_file_must_be_private_and_a_visible_word() {
     let token = rig.dir().join("token");
     std::fs::set_permissions(&token, std::fs::Permissions::from_mode(0o640)).expect("mode");
     let error = status(&rig.args(&[])).expect_err("readable");
-    assert!(error.to_string().ends_with("may be read by its group or others; make it 0600"), "{error}");
-    for (content, label) in [("\n", "empty"), ("two words\n", "a space"), ("t\u{f6}ken\n", "non-ASCII")] {
+    assert!(
+        error
+            .to_string()
+            .ends_with("may be read by its group or others; make it 0600"),
+        "{error}"
+    );
+    for (content, label) in [
+        ("\n", "empty"),
+        ("two words\n", "a space"),
+        ("t\u{f6}ken\n", "non-ASCII"),
+    ] {
         write_private(&token, content);
         let error = status(&rig.args(&[])).expect_err(label);
-        assert_eq!(error.to_string(), "the token is empty or holds a character that is not visible ASCII", "{label}");
+        assert_eq!(
+            error.to_string(),
+            "the token is empty or holds a character that is not visible ASCII",
+            "{label}"
+        );
     }
     write_private(&token, "no-newline");
     // A token that is fine goes on to the call, which the fake answers.
     assert_eq!(status(&rig.args(&[])).expect("answered"), 0);
     std::fs::remove_file(&token).expect("remove");
     let error = status(&rig.args(&[])).expect_err("missing");
-    assert!(error.to_string().starts_with("cannot read the token from"), "{error}");
+    assert!(
+        error.to_string().starts_with("cannot read the token from"),
+        "{error}"
+    );
 }
 
 /// Proves: a CA file that is missing is an error naming it; a CA that did not sign the
@@ -85,7 +121,12 @@ fn a_wrong_ca_or_no_listener_is_no_answer() {
     let ca = rig.dir().join("ca.pem");
     std::fs::write(&ca, pki().ca_pem).expect("another CA");
     let error = status(&rig.args(&[])).expect_err("untrusted");
-    assert!(error.to_string().starts_with("no answer from the coordinator"), "{error}");
+    assert!(
+        error
+            .to_string()
+            .starts_with("no answer from the coordinator"),
+        "{error}"
+    );
     assert_eq!(rig.seen(|s| s.authorizations.len()), 0);
     std::fs::write(&ca, "not a certificate").expect("junk");
     let error = status(&rig.args(&[])).expect_err("junk");
@@ -97,7 +138,10 @@ fn a_wrong_ca_or_no_listener_is_no_answer() {
     );
     std::fs::remove_file(&ca).expect("remove");
     let error = status(&rig.args(&[])).expect_err("missing");
-    assert!(error.to_string().starts_with("cannot read the CA from"), "{error}");
+    assert!(
+        error.to_string().starts_with("cannot read the CA from"),
+        "{error}"
+    );
 }
 
 /// Proves: `revoke` needs exactly one of an operator, a serial and a host, and a host id is a
@@ -137,12 +181,25 @@ fn the_binary_exits_with_the_codes_it_promises() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("--operator"));
     let out = hkssh(&["status", "host-1"]);
     assert_eq!(out.status.code(), Some(2));
-    assert_eq!(String::from_utf8_lossy(&out.stderr), "hkssh: this command needs --state-dir\n");
+    assert_eq!(
+        String::from_utf8_lossy(&out.stderr),
+        "hkssh: this command needs --state-dir\n"
+    );
     let rig = Rig::start();
     let pins = rig.dir().join("pins");
     std::fs::write(&pins, "SHA256:abc\n").expect("pins");
-    let out = hkssh(&["known-host", pins.to_str().expect("utf-8"), "h", "ssh-ed25519", "AAAA", "SHA256:abc"]);
-    assert_eq!((out.status.code(), out.stdout), (Some(0), b"h ssh-ed25519 AAAA\n".to_vec()));
+    let out = hkssh(&[
+        "known-host",
+        pins.to_str().expect("utf-8"),
+        "h",
+        "ssh-ed25519",
+        "AAAA",
+        "SHA256:abc",
+    ]);
+    assert_eq!(
+        (out.status.code(), out.stdout),
+        (Some(0), b"h ssh-ed25519 AAAA\n".to_vec())
+    );
     let args = rig.args(&["status", "host-1"]);
     let out = hkssh(&args[1..].iter().map(String::as_str).collect::<Vec<_>>());
     assert_eq!(out.status.code(), Some(0));
@@ -151,5 +208,7 @@ fn the_binary_exits_with_the_codes_it_promises() {
     down[2] = "https://localhost:1".to_owned();
     let out = hkssh(&down[1..].iter().map(String::as_str).collect::<Vec<_>>());
     assert_eq!(out.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&out.stderr).starts_with("hkssh: no answer from the coordinator"));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).starts_with("hkssh: no answer from the coordinator")
+    );
 }

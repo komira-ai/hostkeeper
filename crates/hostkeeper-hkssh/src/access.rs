@@ -171,7 +171,13 @@ pub fn keep_pins(state: &State, host: &str, pins: &Pins) -> Result<(), Error> {
 
 /// The known-hosts line ssh may trust: `host` and the key when `fingerprint` is among the pins
 /// in `pins_text`, else nothing.
-pub fn known_host_line(pins_text: &str, host: &str, kind: &str, key: &str, fingerprint: &str) -> Option<String> {
+pub fn known_host_line(
+    pins_text: &str,
+    host: &str,
+    kind: &str,
+    key: &str,
+    fingerprint: &str,
+) -> Option<String> {
     pins_text
         .lines()
         .any(|pin| pin == fingerprint)
