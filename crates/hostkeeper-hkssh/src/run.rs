@@ -36,35 +36,27 @@ fn state_of(global: &Global) -> Result<State, Error> {
 
 /// The flags of `global` that are set, as arguments of a later run of this program.
 fn forwarded(global: &Global, identity: Option<&Path>) -> Vec<String> {
-    let mut args = Vec::new();
-    let mut put = |flag: &str, value: String| {
-        args.push(flag.to_owned());
-        args.push(value);
-    };
     let show = |path: &Path| path.to_string_lossy().into_owned();
-    if let Some(endpoint) = &global.endpoint {
-        put("--endpoint", endpoint.clone());
-    }
-    if let Some(path) = &global.ca_file {
-        put("--ca-file", show(path));
-    }
-    if let Some(path) = &global.token_file {
-        put("--token-file", show(path));
-    }
-    if let Some(path) = &global.state_dir {
-        put("--state-dir", show(path));
-    }
-    put("--timeout-secs", global.timeout_secs.to_string());
-    put("--keepalive-secs", global.keepalive_secs.to_string());
-    put("--ssh-keygen-program", show(&global.ssh_keygen_program));
-    put("--ssh-add-program", show(&global.ssh_add_program));
-    if let Some(path) = &global.ssh_agent_socket {
-        put("--ssh-agent-socket", show(path));
-    }
-    if let Some(path) = identity {
-        put("--identity", show(path));
-    }
-    args
+    let flags = [
+        ("--endpoint", global.endpoint.clone()),
+        ("--ca-file", global.ca_file.as_deref().map(show)),
+        ("--token-file", global.token_file.as_deref().map(show)),
+        ("--state-dir", global.state_dir.as_deref().map(show)),
+        ("--timeout-secs", Some(global.timeout_secs.to_string())),
+        ("--keepalive-secs", Some(global.keepalive_secs.to_string())),
+        ("--ssh-keygen-program", Some(show(&global.ssh_keygen_program))),
+        ("--ssh-add-program", Some(show(&global.ssh_add_program))),
+        (
+            "--ssh-agent-socket",
+            global.ssh_agent_socket.as_deref().map(show),
+        ),
+        ("--identity", identity.map(show)),
+    ];
+    flags
+        .into_iter()
+        .flat_map(|(flag, value)| value.map(|value| [flag.to_owned(), value]))
+        .flatten()
+        .collect()
 }
 
 /// A client, the state directory, the key and a valid certificate for `host`.

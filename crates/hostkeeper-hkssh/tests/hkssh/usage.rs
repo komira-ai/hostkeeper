@@ -136,6 +136,19 @@ fn a_wrong_ca_or_no_listener_is_no_answer() {
             || said.starts_with("--ca-file is not a CA certificate"),
         "{said}"
     );
+    std::fs::write(
+        &ca,
+        "-----BEGIN CERTIFICATE-----\n%%%%\n-----END CERTIFICATE-----\n",
+    )
+    .expect("malformed");
+    let error = status(&rig.args(&[])).expect_err("malformed");
+    assert!(
+        error
+            .to_string()
+            .starts_with("--ca-file is not a CA certificate"),
+        "{error}"
+    );
+    assert_eq!(error.exit_code(), 2);
     std::fs::remove_file(&ca).expect("remove");
     let error = status(&rig.args(&[])).expect_err("missing");
     assert!(

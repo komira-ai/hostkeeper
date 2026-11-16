@@ -2,7 +2,9 @@
 
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 
-use crate::fake::{Double, HOST, NOW, PIN, PUBLIC, Rig, TOKEN, cert_type, invoke};
+use crate::fake::{
+    Closed, Double, HOST, NOW, PIN, PUBLIC, Rig, TOKEN, cert_type, invoke, invoke_into,
+};
 
 fn ssh(rig: &Rig, double: &Double, extra: &[&str]) -> crate::fake::Outcome {
     let mut rest = vec!["ssh", HOST];
@@ -339,4 +341,22 @@ fn known_host_vouches_only_for_a_pinned_fingerprint() {
             .stdout
             .is_empty()
     );
+}
+
+/// Proves: text that cannot be written to standard output is an error that says so, for the
+/// commands that print (`status` and `revoke`), not a success.
+#[test]
+fn an_output_that_cannot_be_written_is_an_error() {
+    let rig = Rig::start();
+    let double = Double::new();
+    for rest in [vec!["status", HOST], vec!["revoke", "--serial", "3"]] {
+        let (result, _) = invoke_into(&rig.args(&rest), &double, NOW, Vec::new(), Closed);
+        let error = result.expect_err("closed");
+        assert!(
+            error
+                .to_string()
+                .starts_with("cannot write standard output"),
+            "{error}"
+        );
+    }
 }

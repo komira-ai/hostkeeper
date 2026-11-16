@@ -85,7 +85,9 @@ where
             } else {
                 frame(tunnel_frame::Frame::Data(buffer[..read].to_vec()))
             };
-            if sender.send(next).await.is_err() || read == 0 {
+            // A stream that has gone away ends the relay from the other half, which aborts this.
+            let _ = sender.send(next).await;
+            if read == 0 {
                 break;
             }
         }
@@ -98,9 +100,8 @@ where
             Ok(Some(TunnelFrame {
                 frame: Some(tunnel_frame::Frame::Data(bytes)),
             })) => {
-                let written = output.write_all(&bytes).await;
-                let flushed = output.flush().await;
-                if written.is_err() || flushed.is_err() {
+                let delivered = output.write_all(&bytes).await.and(output.flush().await);
+                if delivered.is_err() {
                     break Ok(());
                 }
             }

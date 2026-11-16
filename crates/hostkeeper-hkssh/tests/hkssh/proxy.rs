@@ -1,6 +1,8 @@
 //! `hkssh proxy`: the byte stream between ssh and the coordinator's tunnel.
 
-use crate::fake::{Double, HOST, NOW, Rig, TOKEN, Tunnel, certificate_reply, invoke};
+use crate::fake::{
+    Closed, Double, HOST, NOW, Rig, TOKEN, Tunnel, certificate_reply, invoke, invoke_into,
+};
 
 fn proxy(rig: &Rig, double: &Double, now: u64, input: &[u8]) -> crate::fake::Outcome {
     invoke(&rig.args(&["proxy", HOST]), double, now, input.to_vec())
@@ -164,11 +166,20 @@ fn a_certificate_is_kept_until_it_is_near_expiry_or_the_key_changes() {
         .expect("second");
     assert_eq!(rig.seen(|s| s.signs.len()), 1);
 
+    std::fs::remove_file(rig.state_dir().join("hosts").join(format!("{HOST}-cert.pub")))
+        .expect("the certificate file");
+    proxy(&rig, &double, NOW, b"").result.expect("file gone");
+    assert_eq!(
+        rig.seen(|s| s.signs.len()),
+        2,
+        "a held record without its file is not enough"
+    );
+
     *rig.script.sign.lock().expect("sign") = Ok(certificate_reply(42, NOW + 10_000));
     proxy(&rig, &double, NOW + 3600 - 60, b"")
         .result
         .expect("near expiry");
-    assert_eq!(rig.seen(|s| s.signs.len()), 2);
+    assert_eq!(rig.seen(|s| s.signs.len()), 3);
     assert_eq!(
         rig.seen(|s| s.opens.last().map(|o| o.cert_serial)),
         Some(42)
@@ -181,9 +192,9 @@ fn a_certificate_is_kept_until_it_is_near_expiry_or_the_key_changes() {
     proxy(&rig, &other, NOW + 3600 - 60, b"")
         .result
         .expect("another key");
-    assert_eq!(rig.seen(|s| s.signs.len()), 3);
+    assert_eq!(rig.seen(|s| s.signs.len()), 4);
     assert_eq!(
-        rig.seen(|s| s.signs[2].public_key.clone()),
+        rig.seen(|s| s.signs[3].public_key.clone()),
         "ssh-ed25519 AAAAagentkey"
     );
     assert_eq!(rig.seen(|s| s.signs[0].reason.clone()), "hkctl ssh-proxy");
@@ -227,57 +238,35 @@ fn a_refused_signing_ends_the_proxy() {
     assert_eq!(rig.seen(|s| s.opens.len()), 0);
 }
 
-/// An output that refuses every write, as a closed pipe does.
-struct Closed;
-
-impl tokio::io::AsyncWrite for Closed {
-    fn poll_write(
-        self: std::pin::Pin<&mut Self>,
-        _: &mut std::task::Context<'_>,
-        _: &[u8],
-    ) -> std::task::Poll<std::io::Result<usize>> {
-        std::task::Poll::Ready(Err(std::io::ErrorKind::BrokenPipe.into()))
-    }
-
-    fn poll_flush(
-        self: std::pin::Pin<&mut Self>,
-        _: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<std::io::Result<()>> {
-        std::task::Poll::Ready(Ok(()))
-    }
-
-    fn poll_shutdown(
-        self: std::pin::Pin<&mut Self>,
-        _: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<std::io::Result<()>> {
-        std::task::Poll::Ready(Ok(()))
-    }
-}
-
 /// Proves: when ssh has gone away (its end of the pipe is closed), the proxy ends cleanly at the
 /// first byte it cannot hand on, instead of reading on.
 #[test]
 fn a_proxy_ends_when_its_output_is_closed() {
-    use clap::Parser as _;
     let rig = Rig::start();
-    let cli = hostkeeper_hkssh::Cli::try_parse_from(rig.args(&["proxy", HOST])).expect("parses");
-    let double = Double::new();
-    let env = hostkeeper_hkssh::Env {
-        programs: &double,
-        now: NOW,
-        exe: "/opt/hkssh".into(),
-    };
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("a runtime");
-    let mut diag = Vec::new();
-    let result = runtime.block_on(hostkeeper_hkssh::run(
-        cli,
-        &env,
-        std::io::Cursor::new(b"hello".to_vec()),
+    let (result, _) = invoke_into(
+        &rig.args(&["proxy", HOST]),
+        &Double::new(),
+        NOW,
+        b"hello".to_vec(),
         Closed,
-        &mut diag,
-    ));
+    );
     assert_eq!(result.expect("a clean end"), 0);
+}
+
+/// Proves: a stream that fails before the coordinator says `opened` is that failure, as its
+/// refusal when it is a token and as no answer when it is not (or says nothing).
+#[test]
+fn a_stream_that_fails_before_opened_is_that_failure() {
+    let cases = [
+        ("token_revoked", "refused: token_revoked"),
+        ("", "no answer from the coordinator: Unavailable: "),
+    ];
+    for (message, expected) in cases {
+        let rig = Rig::start();
+        queue(&rig, &[Tunnel::FailBeforeOpened(message)]);
+        let error = proxy(&rig, &Double::new(), NOW, b"")
+            .result
+            .expect_err(message);
+        assert_eq!(error.to_string(), expected);
+    }
 }

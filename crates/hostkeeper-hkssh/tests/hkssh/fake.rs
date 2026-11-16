@@ -43,6 +43,8 @@ pub enum Tunnel {
     FailAfterOpen(&'static str),
     /// The stream ends before anything is answered.
     EmptyAnswer,
+    /// The stream fails with this status message before anything is answered.
+    FailBeforeOpened(&'static str),
 }
 
 /// What the fake saw.
@@ -196,6 +198,9 @@ impl Ssh for Service {
                     let _ = out.send(Ok(frame(Frame::Data(b"x".to_vec())))).await;
                 }
                 Tunnel::EmptyAnswer => {}
+                Tunnel::FailBeforeOpened(message) => {
+                    let _ = out.send(Err(Status::unavailable(message))).await;
+                }
                 Tunnel::CloseAfterOpen(cause) => {
                     let _ = out.send(Ok(opened("root"))).await;
                     let close = Frame::Close(proto::Close {
@@ -398,8 +403,42 @@ impl Outcome {
     }
 }
 
-/// Runs `args` (a whole command line, program name first) with `input` as stdin.
-pub fn invoke(args: &[String], programs: &Double, now: u64, input: Vec<u8>) -> Outcome {
+/// An output that refuses every write, as a closed pipe does.
+pub struct Closed;
+
+impl tokio::io::AsyncWrite for Closed {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+        _: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::task::Poll::Ready(Err(std::io::ErrorKind::BrokenPipe.into()))
+    }
+
+    fn poll_flush(
+        self: Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(
+        self: Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+}
+
+/// Runs `args` (a whole command line, program name first) with `input` as stdin and `output`
+/// as stdout; the result and what went to the diagnostics.
+pub fn invoke_into<W: tokio::io::AsyncWrite + Unpin>(
+    args: &[String],
+    programs: &Double,
+    now: u64,
+    input: Vec<u8>,
+    output: W,
+) -> (Result<i32, Error>, String) {
     use clap::Parser as _;
     let cli = Cli::try_parse_from(args).expect("a command line that parses");
     let env = Env {
@@ -411,18 +450,24 @@ pub fn invoke(args: &[String], programs: &Double, now: u64, input: Vec<u8>) -> O
         .enable_all()
         .build()
         .expect("a runtime");
-    let mut stdout = Vec::new();
     let mut diag = Vec::new();
     let result = runtime.block_on(run(
         cli,
         &env,
         std::io::Cursor::new(input),
-        &mut stdout,
+        output,
         &mut diag,
     ));
+    (result, String::from_utf8(diag).expect("text"))
+}
+
+/// Runs `args` with `input` as stdin, collecting stdout.
+pub fn invoke(args: &[String], programs: &Double, now: u64, input: Vec<u8>) -> Outcome {
+    let mut stdout = Vec::new();
+    let (result, diag) = invoke_into(args, programs, now, input, &mut stdout);
     Outcome {
         result,
         stdout,
-        diag: String::from_utf8(diag).expect("text"),
+        diag,
     }
 }
