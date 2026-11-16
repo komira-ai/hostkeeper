@@ -43,6 +43,7 @@ use crate::host_facts::PushedFacts;
 use crate::names::{OrderId, PackageDigest};
 use crate::order::{DeferredReport, Entry, Order, OrderResult, Outcome, Reply, Target, Verb};
 use crate::ports::{Drift, Unsendable};
+use crate::probe::RemoteLoginProbe;
 use crate::repositories::{PushedSet, RepositoriesReport};
 use crate::wire_map::acknowledged;
 
@@ -86,7 +87,28 @@ pub(crate) fn heartbeat(beat: &Heartbeat) -> Result<pb::HeartbeatRequest, Unsend
             })
             .into(),
         facts_generation: beat.facts_generation,
+        remote_login_probe: beat.remote_login_probe.as_ref().map(remote_login_probe),
     })
+}
+
+/// The Remote Login probe as `remote_login_probe`.
+fn remote_login_probe(probe: &RemoteLoginProbe) -> pb::RemoteLoginProbe {
+    pb::RemoteLoginProbe {
+        started_unix: probe.started_unix,
+        steps: probe
+            .steps
+            .iter()
+            .map(|step| pb::ProbeStep {
+                name: step.name.clone(),
+                argv: step.argv.clone(),
+                exit_code: step.exit_code,
+                stdout: step.stdout.clone(),
+                stderr: step.stderr.clone(),
+                error: step.error.clone(),
+                truncated: step.truncated,
+            })
+            .collect(),
+    }
 }
 
 /// The repositories report as `repositories`.

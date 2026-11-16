@@ -19,9 +19,10 @@ use crate::host_facts::PushedFacts;
 use crate::order::{Order, OrderRef, OrderResult, Outcome, Reply};
 use crate::ports::{
     CertSource, CertState, ClientIdentity, CoordinatorLink, Dispatch, FactsSink, HeldHalts, Job,
-    LinkError, Log, Observation, OrderSink, RecordedService, RenewalSource, RepositorySink,
-    ServiceObserver, ServiceRecords, Sleeper, Tick, TrustedRootSource, UnixClock,
+    LinkError, Log, Observation, OrderSink, RecordedService, RemoteLoginProbeSource, RenewalSource,
+    RepositorySink, ServiceObserver, ServiceRecords, Sleeper, Tick, TrustedRootSource, UnixClock,
 };
+use crate::probe::RemoteLoginProbe;
 use crate::repositories::{PushedSet, RepositoriesReport};
 
 /// A lock that a panicking test thread did not spoil: what it holds is still the fake's state.
@@ -444,6 +445,24 @@ impl TrustedRootSource for FakeTrustedRoot {
     }
 }
 
+/// A Mac's Remote Login probe, as a test sets it: none until [`FakeProbe::set`].
+#[derive(Default)]
+pub struct FakeProbe {
+    probe: Mutex<Option<RemoteLoginProbe>>,
+}
+
+impl FakeProbe {
+    pub fn set(&self, probe: Option<RemoteLoginProbe>) {
+        *lock(&self.probe) = probe;
+    }
+}
+
+impl RemoteLoginProbeSource for FakeProbe {
+    fn remote_login_probe(&self) -> Option<RemoteLoginProbe> {
+        lock(&self.probe).clone()
+    }
+}
+
 /// The host's repository configuration, as a test sets it: it holds the report a test gives it,
 /// records every set it is given, and lists the installers a test gives it.
 #[derive(Default)]
@@ -564,6 +583,9 @@ pub struct World {
     pub facts: Arc<FakeFacts>,
     keeping_facts: bool,
     private: bool,
+    /// A Mac's Remote Login probe; the ports hold it only after [`World::probing`].
+    pub probe: Arc<FakeProbe>,
+    probing: bool,
 }
 
 impl Default for World {
@@ -593,6 +615,8 @@ impl World {
             repositories: Arc::default(),
             managing: false,
             private: false,
+            probe: Arc::default(),
+            probing: false,
         }
     }
 
@@ -600,6 +624,12 @@ impl World {
     /// [`World::repositories`], and it announces `repositories-v1`.
     pub fn managing_repositories(mut self) -> World {
         self.managing = true;
+        self
+    }
+
+    /// The world of a Mac that runs the Remote Login probe: its ports hold [`World::probe`].
+    pub fn probing(mut self) -> World {
+        self.probing = true;
         self
     }
 
@@ -637,6 +667,9 @@ impl World {
             facts: self
                 .keeping_facts
                 .then(|| Arc::clone(&self.facts) as Arc<dyn FactsSink>),
+            remote_login_probe: self
+                .probing
+                .then(|| Arc::clone(&self.probe) as Arc<dyn RemoteLoginProbeSource>),
         }
     }
 
