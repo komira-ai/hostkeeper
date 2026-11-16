@@ -24,7 +24,7 @@
 //! 5. why a Mac may sleep: `pmset -g custom`, `pmset -g`, `pmset -g assertions`, the newest
 //!    `Sleep` and `Wake` lines of `pmset -g log` that start or end a system sleep (read as it is
 //!    written, never whole, [`crate::line_process`]; the lines of a sleeping Mac's maintenance
-//!    wakes are left out, [`is_maintenance`]), and the newest `keep_awake:` lines of the daemon's
+//!    wakes are left out), and the newest `keep_awake:` lines of the daemon's
 //!    own standard error log ([`DAEMON_ERR_LOG`], what [`crate::keep_awake`] said at its starts).
 //!
 //! Steps 2 and 3 change the host: they may turn Remote Login on, and nothing turns it off again.
@@ -98,7 +98,7 @@ pub const SHRINK_FIRST: [&str; 6] = [
     "codesign_running",
 ];
 /// The `pmset -g log` events: the word after the line's time. A line of one is kept unless it is
-/// a maintenance wake's ([`is_maintenance`]).
+/// a maintenance wake's (a `DarkWake`, `Wake Requests` or a sleep due to `'Maintenance Sleep'`).
 pub const SLEEP_WAKE_EVENTS: [&str; 3] = ["Sleep", "Wake", "DarkWake"];
 
 /// The programs the probe runs, one port each.
@@ -266,16 +266,16 @@ pub fn is_sleep_wake(line: &str) -> bool {
             .is_some_and(|word| SLEEP_WAKE_EVENTS.contains(&word))
 }
 
-/// Whether `line`, a sleep or wake event ([`is_sleep_wake`]), belongs to a maintenance wake of a
+/// Whether `event`, the text after the time of a sleep or wake line ([`is_sleep_wake`]), belongs to a maintenance wake of a
 /// Mac that is asleep, and not to the start or the end of its sleep: a `DarkWake`, a `Wake
 /// Requests` line (the wakes the system has scheduled) and a sleep `due to 'Maintenance Sleep'`
 /// (the return to sleep after a dark wake). A sleeping Mac writes these every few minutes, so
 /// over a night they would push the line that says why it went to sleep out of [`LOG_TEXT`].
-fn is_maintenance(line: &str) -> bool {
-    let mut words = line.get(26..).unwrap_or_default().split_whitespace();
+fn is_maintenance(event: &str) -> bool {
+    let mut words = event.split_whitespace();
     match (words.next(), words.next()) {
         (Some("DarkWake"), _) | (Some("Wake"), Some("Requests")) => true,
-        (Some("Sleep"), _) => line.contains("due to 'Maintenance Sleep'"),
+        (Some("Sleep"), _) => event.contains("due to 'Maintenance Sleep'"),
         _ => false,
     }
 }
@@ -312,7 +312,7 @@ fn sleep_wake_log(name: &str, tool: &dyn LineTool) -> ProbeStep {
     );
     let mut lines = Vec::new();
     match tool.run_lines(&args, &mut |line| {
-        if is_sleep_wake(line) && !is_maintenance(line) {
+        if is_sleep_wake(line) && !is_maintenance(&line[26..]) {
             lines.push(line.to_owned());
         }
     }) {

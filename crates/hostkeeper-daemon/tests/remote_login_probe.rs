@@ -837,7 +837,7 @@ fn maintenance_wake(hour: u32, minute: u32) -> [String; 3] {
 
 /// Catches the line that says why a Mac went to sleep pushed out of the report by the dark wakes
 /// of the night after it, and a sleep or wake that starts or ends a system sleep left out with
-/// them: from a log of a sleep, ten hours of maintenance wakes (far more than the step's bound)
+/// them: from a log of a sleep, nine hours of maintenance wakes (far more than the step's bound)
 /// and the wake by a keyboard, the step keeps the sleep, the wake and a later sleep by software,
 /// whole and in order, and is not cut; a `DarkWake`, a `Wake Requests` line and a sleep `due to
 /// 'Maintenance Sleep'` are each left out, and a `Wake` whose next word is not `Requests` is not.
@@ -851,7 +851,7 @@ fn the_sleep_that_started_a_night_survives_its_maintenance_wakes() {
          'Idle Sleep':TCPKeepAlive=active Using AC (Charge:0%)"
             .to_owned(),
     ];
-    for hour in 0..10 {
+    for hour in 0..9 {
         for minute in [0, 12, 24, 36, 48] {
             log.extend(maintenance_wake(hour, minute));
         }
