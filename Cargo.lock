@@ -1659,6 +1659,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "hostkeeper-hkssh"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "hostkeeper-proto",
+ "hostkeeper-testkit",
+ "rcgen",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+]
+
+[[package]]
 name = "hostkeeper-hook"
 version = "0.1.0"
 dependencies = [
