@@ -806,6 +806,8 @@ fn only_sleep_and_wake_events_of_the_power_log_are_kept() {
         "2026-11-16 05:14:01 -0800 Assertions          \tPID 1 Created",
         "2026-11-16 05:14:01 -0800 Sleeping            \tnot an event",
         "2026-11-16 05:14:01 -0800 ",
+        "2026-11-16T05:14:01 -0800 Sleep               \tno blank after the date",
+        "2026-11-16 05:14:01X-0800 Sleep               \tno blank after the time",
         "Sleep Entering Sleep state",
         "",
     ] {

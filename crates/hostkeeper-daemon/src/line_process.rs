@@ -71,7 +71,8 @@ impl LineTool for LineProcess {
             }
             late
         });
-        if let Some(stdout) = stdout {
+        // Piped, so there is one: the stream it holds is read to its end.
+        stdout.into_iter().for_each(|stdout| {
             let mut reader = BufReader::new(stdout);
             let mut bytes = Vec::new();
             while reader.read_until(b'\n', &mut bytes).unwrap_or(0) > 0 {
@@ -79,7 +80,7 @@ impl LineTool for LineProcess {
                 line(text.trim_end_matches(['\n', '\r']));
                 bytes.clear();
             }
-        }
+        });
         let _ = done.send(());
         let killed = watchdog.join().unwrap_or(false);
         let status = lock(&child).wait().map_err(|e| e.to_string())?;
