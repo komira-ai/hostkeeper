@@ -90,6 +90,7 @@ fn heartbeat_lists_installed_services_from_records_and_observer() {
         installers: Vec::new(),
         repositories: None,
         facts_generation: None,
+        remote_login_probe: None,
     };
     assert_eq!(rig.world.link.beats(), vec![expected]);
 

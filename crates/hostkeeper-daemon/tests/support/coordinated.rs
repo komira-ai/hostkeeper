@@ -397,6 +397,7 @@ impl Host {
             renewal: hostkeeper_enroll::RenewalState::default(),
             watchdog: Box::new(hostkeeper_daemon::NoWatchdog),
             console: None,
+            remote_login_probe: None,
         };
         Host {
             heartbeater: links.heartbeater(&daemon),
