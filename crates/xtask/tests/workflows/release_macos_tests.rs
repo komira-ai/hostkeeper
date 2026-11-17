@@ -363,7 +363,7 @@ fn only_promote_pkg_waits_for_the_macos_stage() {
     // stage job (so a Mac that is red or a macOS runner that never comes would hold the apt and
     // rpm promotions, the coordinator or the desired version), and promote-pkg that stops waiting
     // for the stage or runs when it did not succeed.
-    let check = "    needs: [plan, newest, testing-apt-write, testing-apt-write-2, testing-apt-write-3, testing-rpm-write, testing-rpm-write-2, testing-rpm-write-3, testing-pkg-upload, check-apt, check-rpm, check-pkg]\n";
+    let check = "    needs: [plan, newest, publish, image, testing-apt-write, testing-apt-write-2, testing-apt-write-3, testing-rpm-write, testing-rpm-write-2, testing-rpm-write-3, testing-pkg-upload, check-apt, check-rpm, check-pkg]\n";
     let waiting = check.replace("check-pkg]", "check-pkg, macos-test]");
     assert_eq!(
         stage(&release_with(check, &waiting)),

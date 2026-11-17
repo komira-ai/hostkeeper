@@ -611,8 +611,9 @@ jobs:
   #         It waits for verify alone, not for publish and image: the channels and the Mac's
   #         beta stage read the files verify checked, never the GitHub release, so they run beside
   #         publish instead of after it. What needs the published release waits for it itself:
-  #         cp-deploy-digest (the deploy downloads the image from the release) and targets (and
-  #         through it no-downgrade and set-desired).
+  #         cp-deploy-digest (the deploy downloads the image from the release), targets (and
+  #         through it no-downgrade and set-desired) and promote-check (so no release is made
+  #         stable before it is published and its image pushed).
 
   newest:
     needs: [plan, verify]
@@ -2551,7 +2552,7 @@ jobs:
   # from there. Re-running the failed jobs of a run resumes: every write is write-once or idempotent
   # and this job reads the results again.
   promote-check:
-    needs: [plan, newest, testing-apt-write, testing-apt-write-2, testing-apt-write-3, testing-rpm-write, testing-rpm-write-2, testing-rpm-write-3, testing-pkg-upload, check-apt, check-rpm, check-pkg]
+    needs: [plan, newest, publish, image, testing-apt-write, testing-apt-write-2, testing-apt-write-3, testing-rpm-write, testing-rpm-write-2, testing-rpm-write-3, testing-pkg-upload, check-apt, check-rpm, check-pkg]
     if: ${{ !cancelled() && !failure() && needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15

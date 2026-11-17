@@ -2,7 +2,7 @@
 //! network-install jobs: its triggers, paths and concurrency, its two jobs and their runner, the
 //! test targets of each, the dpkg step that installs QEMU and the firmware from the job's own
 //! pinned set, and the step that fetches the ISO by the pin of `packaging/netboot/pins.toml`;
-//! and that `privileged.yml`, which a release waits for, has
+//! and that `privileged.yml`, which runs after every merge, has
 //! none of these jobs. Each rule is shown to refuse its defect by putting it into the committed
 //! workflow and reading the exact problems it reports.
 
