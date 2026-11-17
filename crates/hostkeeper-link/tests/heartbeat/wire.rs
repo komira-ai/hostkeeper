@@ -68,6 +68,7 @@ fn beat(platform: Platform, agent: &str, services: Vec<ServiceFacts>) -> Heartbe
         repositories: None,
         facts_generation: None,
         remote_login_probe: None,
+        operator_keys: None,
     }
 }
 

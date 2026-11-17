@@ -66,6 +66,7 @@ pub fn idle_links() -> Links {
         watchdog: Box::new(hostkeeper_daemon::NoWatchdog),
         console: None,
         remote_login_probe: None,
+        operator_keys: None,
         period: DEFAULT_HEARTBEAT_SECS,
         dispatch: Arc::new(ManualDispatch::default()),
         stop: StopFlag::default(),

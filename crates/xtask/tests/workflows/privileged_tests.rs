@@ -571,6 +571,7 @@ fn the_committed_privileged_yml_passes_and_holds_the_one_sudo() {
             "install_apt".to_owned(),
             "linux_packages".to_owned(),
             "observer".to_owned(),
+            "operator_keys_root".to_owned(),
             "self_update".to_owned(),
             "self_update_across_releases".to_owned(),
             "tierstore_shaped".to_owned(),

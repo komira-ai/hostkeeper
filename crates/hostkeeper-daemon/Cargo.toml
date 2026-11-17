@@ -59,6 +59,9 @@ hostkeeper-proto = { path = "../hostkeeper-proto" }
 # The receipt check of an order's entry and the grammars of its locations (packages.md section 4.4).
 hostkeeper-release = { path = "../hostkeeper-release" }
 hostkeeper-steps = { path = "../hostkeeper-steps" }
+# The rules of the operator keys the coordinator sends: a public key line, a set, its digest
+# (`authorized_keys`, `operator_keys`).
+hostkeeper-wire = { path = "../hostkeeper-wire" }
 # The SHA-256 digests as hex (`mirror`); the tests' fixture digests too.
 hex.workspace = true
 # `O_NOFOLLOW` for the lock file.
@@ -96,7 +99,6 @@ base64.workspace = true
 bytes.workspace = true
 hostkeeper-coordinator = { path = "../hostkeeper-coordinator" }
 hostkeeper-oidc = { path = "../hostkeeper-oidc", features = ["testkit"] }
-hostkeeper-wire = { path = "../hostkeeper-wire" }
 # The public key of the enrollment request's CSR, whose SHA-256 is the request id the fake
 # coordinator of tests/bmc_claim.rs answers with.
 x509-cert.workspace = true

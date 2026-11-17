@@ -191,11 +191,12 @@ impl Coordinator {
         })
     }
 
-    /// The group the enrollment record of the host `who` holds; else the role it holds; `who`'s
+    /// The group the enrollment record of the host `who` holds (which picks its facts and its
+    /// operator keys); else the role it holds; `who`'s
     /// own role when the coordinator has no enrollment or the store holds no record of the host
     /// (a certificate of the farm's CA). `None` when the store cannot be read: the next beat
     /// tries again.
-    fn approved_group(&self, who: &Identity) -> Option<String> {
+    pub(crate) fn approved_group(&self, who: &Identity) -> Option<String> {
         let own = || Some(who.role.to_string());
         // A wire host id is always an enrollment host id; the parse is only a conversion.
         let enrolled = hostkeeper_enrollment::names::HostId::parse(who.host_id.as_str()).ok();
@@ -217,7 +218,7 @@ impl Coordinator {
             Ok(Some(group)) => Some(group),
             Ok(None) => own(),
             Err(why) => {
-                tracing::warn!(host = %who.host_id, %why, "the host's group cannot be read; its facts wait for the next heartbeat");
+                tracing::warn!(host = %who.host_id, %why, "the host's group cannot be read; its facts and operator keys wait for the next heartbeat");
                 None
             }
         }

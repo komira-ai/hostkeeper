@@ -14,6 +14,7 @@ use hostkeeper_steps::Clock;
 use crate::beat::{Health, Heartbeat, Liveness, Oversize, Renewal, TrustedRootFacts};
 use crate::host_facts::PushedFacts;
 use crate::names::Reason;
+use crate::operator_keys::{KeysReport, PushedKeys};
 use crate::order::{Order, OrderRef, OrderResult, Reply};
 use crate::probe::RemoteLoginProbe;
 use crate::repositories::{PushedSet, RepositoriesReport};
@@ -275,6 +276,19 @@ pub trait FactsSink: Send + Sync {
     /// file holds them now; false when it could not be written (the sink says why in its log),
     /// and the generation it reports is the one before.
     fn apply(&self, facts: &PushedFacts) -> bool;
+}
+
+/// The managed block of the host's login account's `authorized_keys`, which the coordinator's
+/// operator keys replace (`operator-keys-v1`). A daemon that has one announces the feature and
+/// reports what it holds.
+pub trait OperatorKeysSink: Send + Sync {
+    /// What the managed block holds, the last set refused and the last failure: sent in every
+    /// heartbeat.
+    fn report(&self) -> KeysReport;
+
+    /// Puts `keys` in force when they pass the sink's checks, or keeps what is in force. It says
+    /// nothing back: the next report does.
+    fn apply(&self, keys: &PushedKeys);
 }
 
 /// One job for a worker.

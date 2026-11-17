@@ -12,7 +12,8 @@
 //! the boot pass does. The heartbeat loop works on the daemon through the four adapters of
 //! [`crate::link_adapters`] ([`Links::heartbeater`]). On a Linux host it also gives the repository
 //! sets the coordinator pushes to [`crate::repository_push::RepositoryPush`]; on every host it
-//! gives the host's facts the coordinator sends to the facts file ([`FactsFile`]).
+//! gives the host's facts the coordinator sends to the facts file ([`FactsFile`]) and the operator keys
+//! it sends to the host's [`Links::operator_keys`].
 //!
 //! The watchdog: after each heartbeat, whatever it came to, the heartbeat loop tells the service
 //! manager it is alive ([`Links::watchdog`], `WATCHDOG=1` under systemd), and nothing else sends
@@ -51,9 +52,9 @@ use hostkeeper_config::names::Version;
 use hostkeeper_enroll::{Enroller, RETRY_SECS};
 use hostkeeper_link::{
     CertSource, ClientIdentity, CoordinatorLink, Dispatch, GrpcLinkError, GrpcMtlsLink, Heartbeat,
-    Heartbeater, JsonMtlsLink, LinkError, LoopConfig, NegotiatedLink, Platform, Ports,
-    RemoteLoginProbeSource, Reply, RepositorySink, Sleeper, StopFlag, TcpDial, TcpTransport, Tick,
-    UnixClock,
+    Heartbeater, JsonMtlsLink, LinkError, LoopConfig, NegotiatedLink, OperatorKeysSink, Platform,
+    Ports, RemoteLoginProbeSource, Reply, RepositorySink, Sleeper, StopFlag, TcpDial, TcpTransport,
+    Tick, UnixClock,
 };
 use hostkeeper_steps::Clock;
 
@@ -126,6 +127,10 @@ pub struct Links {
     /// The Remote Login probe the daemon started ([`crate::remote_login_probe`]), which every
     /// heartbeat reports once it is done; none on any host but a Mac.
     pub remote_login_probe: Option<Arc<dyn RemoteLoginProbeSource>>,
+    /// The host's operator keys ([`crate::operator_keys`]): the managed block of its login
+    /// account's `authorized_keys`, which every heartbeat reports and a set the coordinator sends
+    /// replaces. A daemon that has one announces `operator-keys-v1`.
+    pub operator_keys: Option<Arc<dyn OperatorKeysSink>>,
 }
 
 impl Links {
@@ -209,6 +214,7 @@ impl Links {
                     Arc::clone(&self.log),
                 ))),
                 remote_login_probe: self.remote_login_probe.clone(),
+                operator_keys: self.operator_keys.clone(),
             },
         )
     }

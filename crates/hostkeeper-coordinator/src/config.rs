@@ -86,6 +86,7 @@ use crate::listen::{
     CLIENT_PATIENCE, Listener, MAX_CONNECTIONS, Remote, reload_every, serve, together,
 };
 use crate::lock::{FileLock, LockGuard, StateLock};
+use crate::operator_keys::OperatorKeys;
 use crate::ops::OpsStore;
 use crate::service::{Clock, Coordinator};
 use crate::store::Spent;
@@ -268,6 +269,14 @@ pub struct Serve {
     /// beside `--operator-token-file`; one of the two or `--initial-admin-file` is required.
     #[arg(long)]
     pub tokens_file: Option<PathBuf>,
+    /// The operator's SSH public keys for each host group: a TOML file with a
+    /// `[host-groups.<name>]` table holding `keys = [...]` for each group that has keys. The
+    /// daemon of each host in the group writes them into its login account's `authorized_keys`;
+    /// a host in a group the file does not list is sent none. Public keys only, no secret: any
+    /// regular file of at most 256 KiB. It is read again every `--tls-reload-secs`. Default: no
+    /// host is sent keys.
+    #[arg(long)]
+    pub operator_keys_file: Option<PathBuf>,
     /// A file holding one operator token, mode 0600, owned by the coordinator's user: the one
     /// token, named `operator`. Read once, at start. Not beside `--tokens-file`.
     #[arg(long)]
@@ -519,6 +528,10 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
     let record_window = RecordWindow::new(flags.record_approve_for, flags.record_approve_max)?;
 
     let tokens = state::operator_tokens(flags)?;
+    let operator_keys = match &flags.operator_keys_file {
+        Some(path) => OperatorKeys::from_file(path)?,
+        None => OperatorKeys::default(),
+    };
     let oidc = AllowList::from_file(&flags.oidc_config)?;
     let prefixes = SanPrefixes::new(&flags.role_uri_prefix, &flags.host_role_uri_prefix)?;
     let legacy = flags.legacy_service.as_deref();
@@ -583,6 +596,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         .with_accounts(accounts)
         .with_layout(layout)
         .with_ui(ui)
+        .with_operator_keys(operator_keys)
         .with_alert_thresholds(alert_thresholds(flags))
         .with_repository_origin(crate::repository_origin::RepositoryOrigin::new(
             roots.clone(),
@@ -761,6 +775,7 @@ where
         surface: Surface::Control,
     };
     let tokens = parts.coordinator.tokens().clone();
+    let operator_keys = parts.coordinator.operator_keys().clone();
     let enrollment = parts.coordinator.enrollment().cloned();
     let coordinator = parts.coordinator;
     let observing = observe_every(Arc::clone(&coordinator), OBSERVE_EVERY);
@@ -784,6 +799,7 @@ where
         enrollment,
         vec![parts.heartbeat_tls, parts.control_tls],
         tokens,
+        operator_keys,
         parts.reload,
     );
     let all = together(

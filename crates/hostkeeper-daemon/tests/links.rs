@@ -92,6 +92,7 @@ fn links_with(
         watchdog: Box::new(NoWatchdog),
         console: None,
         remote_login_probe: None,
+        operator_keys: None,
     }
 }
 

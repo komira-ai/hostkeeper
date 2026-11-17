@@ -38,7 +38,9 @@
 //! the loop calls only while the coordinator advertises [`Feature::RepositoriesV1`]. Its host
 //! facts ([`PushedFacts`]) go to the daemon's [`FactsSink`], which writes the host's facts file,
 //! only while the coordinator advertises [`Feature::FactsV1`], and before the order of the same
-//! reply.
+//! reply. Its operator keys ([`PushedKeys`]) go to the daemon's [`OperatorKeysSink`], which writes
+//! the managed block of the login account's `authorized_keys`, only while the coordinator
+//! advertises [`Feature::OperatorKeysV1`].
 //!
 //! [`GrpcMtlsLink`] ([`grpc`]) is the same call over gRPC (`Coordinator.Heartbeat` of
 //! `hostkeeper.agent.v1`) and HTTP/2 on the same mutual TLS, reaching the coordinator through a
@@ -56,6 +58,7 @@ pub mod host_facts;
 pub mod mtls;
 pub mod names;
 pub mod negotiated;
+pub mod operator_keys;
 pub mod order;
 pub mod pki;
 pub mod ports;
@@ -83,16 +86,17 @@ pub use host_facts::PushedFacts;
 pub use mtls::{Conn, EndpointError, HEAD_MAX, JsonMtlsLink, REPLY_MAX, Transport};
 pub use names::{OrderId, PackageDigest, Reason, WordError};
 pub use negotiated::NegotiatedLink;
+pub use operator_keys::{KeysRefusal, KeysReport, MAX_KEYS_REASON, PushedKeys};
 pub use order::{
     Acknowledged, DeferredReport, Entry, Order, OrderRef, OrderResult, Outcome, Reply, Target, Verb,
 };
 pub use pki::PkiCertSource;
 pub use ports::{
     CertSource, CertState, ClientIdentity, ClockSleeper, CoordinatorLink, Dispatch, Drift,
-    FactsSink, HeldHalts, Job, LinkError, Log, Observation, OrderSink, RecordedService,
-    RemoteLoginProbeSource, RenewalSource, ReplyFault, RepositorySink, ServiceObserver,
-    ServiceRecords, Sleeper, StopFlag, ThreadDispatch, Tick, TrustFault, TrustedRootSource,
-    UnixClock, Unsendable,
+    FactsSink, HeldHalts, Job, LinkError, Log, Observation, OperatorKeysSink, OrderSink,
+    RecordedService, RemoteLoginProbeSource, RenewalSource, ReplyFault, RepositorySink,
+    ServiceObserver, ServiceRecords, Sleeper, StopFlag, ThreadDispatch, Tick, TrustFault,
+    TrustedRootSource, UnixClock, Unsendable,
 };
 pub use probe::{ProbeStep, RemoteLoginProbe};
 pub use repositories::{MAX_REFUSAL_REASON, PushedSet, RepositoriesReport, RepositoryRefusal};

@@ -21,6 +21,7 @@ mod halts;
 mod host_facts;
 mod kbf;
 mod link;
+mod operator_keys;
 mod orders;
 mod pki;
 mod ports;

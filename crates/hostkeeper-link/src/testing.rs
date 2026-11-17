@@ -16,11 +16,13 @@ use hostkeeper_steps::{BootId, BootIdError, Clock};
 use crate::beat::{Health, Heartbeat, Liveness, Platform, Renewal, TrustedRootFacts};
 use crate::heartbeater::{DEFAULT_HEARTBEAT_SECS, Heartbeater, LoopConfig, Ports};
 use crate::host_facts::PushedFacts;
+use crate::operator_keys::{KeysReport, PushedKeys};
 use crate::order::{Order, OrderRef, OrderResult, Outcome, Reply};
 use crate::ports::{
     CertSource, CertState, ClientIdentity, CoordinatorLink, Dispatch, FactsSink, HeldHalts, Job,
-    LinkError, Log, Observation, OrderSink, RecordedService, RemoteLoginProbeSource, RenewalSource,
-    RepositorySink, ServiceObserver, ServiceRecords, Sleeper, Tick, TrustedRootSource, UnixClock,
+    LinkError, Log, Observation, OperatorKeysSink, OrderSink, RecordedService,
+    RemoteLoginProbeSource, RenewalSource, RepositorySink, ServiceObserver, ServiceRecords,
+    Sleeper, Tick, TrustedRootSource, UnixClock,
 };
 use crate::probe::RemoteLoginProbe;
 use crate::repositories::{PushedSet, RepositoriesReport};
@@ -554,6 +556,36 @@ impl FactsSink for FakeFacts {
     }
 }
 
+/// The managed block of the login account's `authorized_keys`, as a test sets it: it records
+/// every set it is given and reports what a test sets.
+#[derive(Default)]
+pub struct FakeOperatorKeys {
+    report: Mutex<KeysReport>,
+    applied: Mutex<Vec<PushedKeys>>,
+}
+
+impl FakeOperatorKeys {
+    /// Sets what every later report says.
+    pub fn set_report(&self, report: KeysReport) {
+        *lock(&self.report) = report;
+    }
+
+    /// Every set the loop gave it, in order.
+    pub fn applied(&self) -> Vec<PushedKeys> {
+        lock(&self.applied).clone()
+    }
+}
+
+impl OperatorKeysSink for FakeOperatorKeys {
+    fn report(&self) -> KeysReport {
+        lock(&self.report).clone()
+    }
+
+    fn apply(&self, keys: &PushedKeys) {
+        lock(&self.applied).push(keys.clone());
+    }
+}
+
 /// The unix second the [`World`]'s clock starts at.
 pub const START_UNIX: u64 = 2_000_000_000;
 
@@ -586,6 +618,10 @@ pub struct World {
     /// A Mac's Remote Login probe; the ports hold it only after [`World::probing`].
     pub probe: Arc<FakeProbe>,
     probing: bool,
+    /// The managed block of operator keys; the ports hold it only after
+    /// [`World::keeping_operator_keys`].
+    pub operator_keys: Arc<FakeOperatorKeys>,
+    keeping_operator_keys: bool,
 }
 
 impl Default for World {
@@ -617,6 +653,8 @@ impl World {
             private: false,
             probe: Arc::default(),
             probing: false,
+            operator_keys: Arc::default(),
+            keeping_operator_keys: false,
         }
     }
 
@@ -637,6 +675,13 @@ impl World {
     /// announces `facts-v1`.
     pub fn keeping_facts(mut self) -> World {
         self.keeping_facts = true;
+        self
+    }
+
+    /// The world of a host that keeps operator keys: its ports hold [`World::operator_keys`], and
+    /// it announces `operator-keys-v1`.
+    pub fn keeping_operator_keys(mut self) -> World {
+        self.keeping_operator_keys = true;
         self
     }
 
@@ -670,6 +715,9 @@ impl World {
             remote_login_probe: self
                 .probing
                 .then(|| Arc::clone(&self.probe) as Arc<dyn RemoteLoginProbeSource>),
+            operator_keys: self
+                .keeping_operator_keys
+                .then(|| Arc::clone(&self.operator_keys) as Arc<dyn OperatorKeysSink>),
         }
     }
 

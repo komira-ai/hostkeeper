@@ -177,6 +177,7 @@ fn first_beat() -> Heartbeat {
         repositories: None,
         facts_generation: None,
         remote_login_probe: None,
+        operator_keys: None,
     }
 }
 
@@ -206,6 +207,7 @@ fn without_executor(daemon: &Arc<Daemon>, links: &Links) -> Heartbeater {
             repositories: None,
             facts: None,
             remote_login_probe: None,
+            operator_keys: None,
         },
     )
 }
@@ -227,6 +229,7 @@ fn links_over(link: Arc<dyn CoordinatorLink>, dispatch: &Arc<ManualDispatch>) ->
         watchdog: Box::new(hostkeeper_daemon::NoWatchdog),
         console: None,
         remote_login_probe: None,
+        operator_keys: None,
     }
 }
 

@@ -14,6 +14,7 @@ use crate::enrollment::SetupError;
 use crate::inventory::WindowAboveMax;
 use crate::jti_file::JtiError;
 use crate::layout::LayoutError;
+use crate::operator_keys::OperatorKeysError;
 use crate::ops::OpsError;
 use crate::origin_https::OriginTlsError;
 use crate::store::postgres::DatabaseError;
@@ -30,6 +31,9 @@ pub enum StartError {
     /// The tokens file is refused.
     #[error(transparent)]
     Tokens(#[from] TokensError),
+    /// The operator keys file is refused.
+    #[error(transparent)]
+    OperatorKeys(#[from] OperatorKeysError),
     /// `--tokens-file` and `--operator-token-file` are both given.
     #[error(
         "--tokens-file and --operator-token-file are both given: name the operator's tokens one way"

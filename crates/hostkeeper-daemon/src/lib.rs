@@ -62,6 +62,11 @@
 //!   with no hook program; [`mirror`] the files of a private repository, read from the coordinator into a local copy apt reads; [`repository_push`] the repository sets the coordinator pushes, written
 //!   as the host's repository configuration and taken into use without a restart.
 //! - [`facts_file`]: the host's facts file, written from the facts the coordinator sends.
+//! - [`operator_keys`]: the operator keys the coordinator sends (`operator-keys-v1`), put in the
+//!   managed block of the login account's `authorized_keys` ([`authorized_keys`], the block and the
+//!   file) and reported by digest in every heartbeat; [`login_account`] finds the account (root on
+//!   Linux, a Mac's one local administrator) and, on a Mac, [`mac_ssh`] makes sure Remote Login is
+//!   on and the account may use ssh.
 //! - [`observer`]: what [`Daemon::status`] reports of a running service.
 //! - [`node`]: the host's enrollment and the heartbeat loop's link, as the loops last wrote them,
 //!   which [`Daemon::status`] reports besides the services.
@@ -85,6 +90,7 @@
 
 pub mod adapters;
 pub mod archive_versions;
+pub mod authorized_keys;
 pub mod boot;
 pub mod builtin;
 pub mod checks;
@@ -102,20 +108,25 @@ pub mod installed;
 pub mod installers;
 pub mod ipmi;
 pub mod keep_awake;
+#[cfg(test)]
+mod key_fixture_tests;
 mod launchd_plist;
 pub mod layout;
 pub mod line_process;
 pub mod link_adapters;
 pub mod links;
 pub mod locks;
+pub mod login_account;
 pub mod mac;
 pub mod mac_config;
 pub mod mac_files;
+pub mod mac_ssh;
 pub mod macos_pkg;
 pub mod mirror;
 pub mod node;
 pub mod notify;
 pub mod observer;
+pub mod operator_keys;
 pub mod own_package;
 pub mod packaged;
 pub mod packages;

@@ -41,6 +41,7 @@ use hostkeeper_wire::wire::{is_drift_version, is_service_name};
 use crate::beat::{AGENT_NAME, Feature, Health, Heartbeat, Platform, RootReason, ServiceFacts};
 use crate::host_facts::PushedFacts;
 use crate::names::{OrderId, PackageDigest};
+use crate::operator_keys::{KeysReport, PushedKeys};
 use crate::order::{DeferredReport, Entry, Order, OrderResult, Outcome, Reply, Target, Verb};
 use crate::ports::{Drift, Unsendable};
 use crate::probe::RemoteLoginProbe;
@@ -88,6 +89,7 @@ pub(crate) fn heartbeat(beat: &Heartbeat) -> Result<pb::HeartbeatRequest, Unsend
             .into(),
         facts_generation: beat.facts_generation,
         remote_login_probe: beat.remote_login_probe.as_ref().map(remote_login_probe),
+        operator_keys: beat.operator_keys.as_ref().map(keys_report),
     })
 }
 
@@ -124,6 +126,21 @@ fn repositories_report(report: &RepositoriesReport) -> pb::RepositoriesReport {
                 digest: refusal.digest.clone(),
                 reason: refusal.reason.clone(),
             }),
+    }
+}
+
+/// The report of the operator keys as `operator_keys`.
+fn keys_report(report: &KeysReport) -> pb::OperatorKeysReport {
+    pb::OperatorKeysReport {
+        digest: report.digest.clone(),
+        refused: report
+            .refused
+            .as_ref()
+            .map(|refusal| pb::OperatorKeysRefusal {
+                digest: refusal.digest.clone(),
+                reason: refusal.reason.clone(),
+            }),
+        failed: report.failed.clone(),
     }
 }
 
@@ -274,6 +291,7 @@ pub(crate) fn reply(response: pb::HeartbeatResponse) -> Mapped {
         acks,
         repositories,
         facts,
+        operator_keys,
     } = response;
     let features = features
         .iter()
@@ -313,6 +331,10 @@ pub(crate) fn reply(response: pb::HeartbeatResponse) -> Mapped {
                 host_id: facts.host_id,
                 host_group: facts.host_group,
                 labels: facts.labels.into_iter().collect(),
+            }),
+            operator_keys: operator_keys.map(|set| PushedKeys {
+                digest: set.digest,
+                keys: set.keys,
             }),
         },
         dropped,
@@ -445,3 +467,7 @@ mod tests;
 #[cfg(test)]
 #[path = "proto_map_facts_tests.rs"]
 mod facts_tests;
+
+#[cfg(test)]
+#[path = "proto_map_keys_tests.rs"]
+mod keys_tests;

@@ -127,11 +127,12 @@ fn padded(mut message: Vec<u8>, total: usize) -> Vec<u8> {
     if need == 0 {
         return message;
     }
-    // One byte of tag (field 15, length-delimited), the length, and as many bytes as it says.
+    // Two bytes of tag (field 16, length-delimited: past the last field a heartbeat defines), the
+    // length, and as many bytes as it says.
     let length = (0..need)
-        .find(|n| 1 + varint(*n).len() + n == need)
+        .find(|n| 2 + varint(*n).len() + n == need)
         .expect("a padding of that size");
-    message.push(0x7A);
+    message.extend([0x82, 0x01]);
     message.extend(varint(length));
     message.resize(total, 0);
     message

@@ -34,6 +34,8 @@ use tonic::{Code, Status};
 
 use super::{CLIENT_PATIENCE, Remote, WriteDeadline, carry, connection, reload_all};
 use crate::http::{PeerAddr, STATUS_PATH, Surface};
+use crate::operator_keys::OperatorKeys;
+use crate::operator_keys::tests::{file, group, key};
 use crate::service::Coordinator;
 use crate::testutil::{OPERATOR, Rig, ci_token, scratch};
 use crate::tokens::OperatorTokens;
@@ -134,9 +136,28 @@ async fn one_look_of_the_tick_reads_the_tokens_file_again() {
     let tokens = OperatorTokens::from_file(&path).expect("tokens");
     assert!(tokens.name_of(first).is_some());
     tokens_file(&path, second);
-    reload_all(None, &[], &tokens).await;
+    reload_all(None, &[], &tokens, &OperatorKeys::default()).await;
     assert_eq!(tokens.name_of(first), None);
     assert!(tokens.name_of(second).is_some());
+}
+
+/// Proves that one look of the tick reads the operator keys file again: after `reload_all` a
+/// group's keys replaced in the file are the ones listed, with no TLS source and no tokens in
+/// play.
+///
+/// Catches: the tick that looks at the TLS files and the tokens leaving the operator keys file
+/// alone, so that a change of the keys reaches no host until the coordinator restarts.
+#[tokio::test]
+async fn one_look_of_the_tick_reads_the_operator_keys_file_again() {
+    let dir = scratch("listen-tick-operator-keys");
+    let first = vec![key(1, "ops laptop")];
+    let path = file(dir.path(), &group("build", &first));
+    let keys = OperatorKeys::from_file(&path).expect("keys");
+    assert_eq!(keys.set_of("build").expect("a set").keys, first);
+    let second = vec![key(2, "ops laptop")];
+    file(dir.path(), &group("build", &second));
+    reload_all(None, &[], &OperatorTokens::none(), &keys).await;
+    assert_eq!(keys.set_of("build").expect("a set").keys, second);
 }
 
 // ---- the protocol a connection speaks -----------------------------------------------------

@@ -81,6 +81,9 @@
 //!   [`operator_repositories`]), kept beside the desired state, and `repository_push`: the
 //!   set of it each Linux host is sent in the answer to a heartbeat over gRPC, and what its
 //!   daemon reported of it;
+//! - [`operator_keys`]: the operator's SSH public keys of each host group, read from
+//!   `--operator-keys-file` and re-read while the coordinator runs, the set each host is sent in
+//!   the answer to a heartbeat over gRPC, and what its daemon reported of it;
 //! - [`status`]: what an operator reads, and the convergence of a service;
 //! - [`alerts`]: the conditions that need a person, derived from what the coordinator holds,
 //!   answered by `Alerts.List` and logged with an `alert=` field;
@@ -170,6 +173,7 @@ pub mod operator;
 pub mod operator_accounts;
 pub mod operator_enrollment;
 pub mod operator_host_groups;
+pub mod operator_keys;
 pub mod operator_layout;
 pub mod operator_repositories;
 pub mod ops;

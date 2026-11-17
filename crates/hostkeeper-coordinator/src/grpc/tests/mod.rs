@@ -25,6 +25,7 @@ mod limits;
 mod listeners;
 mod operator;
 mod operator_desired;
+mod operator_keys;
 mod pending;
 mod readme_status;
 mod refusal;

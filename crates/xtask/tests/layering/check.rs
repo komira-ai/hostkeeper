@@ -102,9 +102,9 @@ pub const LAYERS: [Layer; 29] = [
         DAEMON,
         &[
             CONFIG, ENROLL, HOOK, INSTALL, LAUNCHD, LINK, OBSERVE, OPENRC, PACKAGE, PLACED, PROTO,
-            RELEASE, STEPS,
+            RELEASE, STEPS, WIRE,
         ],
-        &[COORDINATOR, HELLO, OIDC, TLS, WIRE],
+        &[COORDINATOR, HELLO, OIDC, TLS],
     ),
     (ENROLL, &[CONFIG, PROTO, STEPS], &[COORDINATOR, ENROLLMENT]),
     (ENROLLMENT, &[], &[]),

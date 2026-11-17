@@ -343,6 +343,7 @@ impl CoordinatorLink for InProcess {
                 .collect(),
             repositories: None,
             facts: None,
+            operator_keys: None,
         })
     }
 }
@@ -398,6 +399,7 @@ impl Host {
             watchdog: Box::new(hostkeeper_daemon::NoWatchdog),
             console: None,
             remote_login_probe: None,
+            operator_keys: None,
         };
         Host {
             heartbeater: links.heartbeater(&daemon),

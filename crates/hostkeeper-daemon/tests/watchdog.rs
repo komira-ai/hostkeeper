@@ -123,6 +123,7 @@ fn links(
         watchdog,
         console: None,
         remote_login_probe: None,
+        operator_keys: None,
     };
     (links, jobs)
 }
