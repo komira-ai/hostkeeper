@@ -345,7 +345,7 @@ fn services_have_repository(database: &Database) -> bool {
 
 /// Proves: a `serve` with no `--rollout-file` starts on a database at the schema of the release
 /// before (0.1.252: migrations `0001` to `0008`, no `repository` column on `services`): it runs
-/// `0009` to `0020`, so `schema_version` holds 1 to 20 and the column is there, and an operator's change is
+/// `0009` to `0022`, so `schema_version` holds 1 to 22 and the column is there, and an operator's change is
 /// held by the audit table.
 ///
 /// Catches: a release that cannot start on the database the release before left, or that starts
@@ -374,13 +374,14 @@ fn a_serve_starts_on_a_database_at_the_schema_of_the_release_before() {
          DROP TABLE tx_ledger; \
          DROP TABLE rollout_gate, fleet_hosts, fleet_bakes, fleet_orders, cluster_quiet, rollout_queue; \
          DROP SEQUENCE desired_seq; \
+         DROP TABLE sessions, login_failures, periodic_jobs; \
          DELETE FROM schema_version WHERE version >= 9",
     );
     assert_eq!(schema_versions(&database), (1..=8).collect::<Vec<i32>>());
     assert!(!services_have_repository(&database));
 
     let parts = start(args);
-    assert_eq!(schema_versions(&database), (1..=20).collect::<Vec<i32>>());
+    assert_eq!(schema_versions(&database), (1..=22).collect::<Vec<i32>>());
     assert!(services_have_repository(&database));
     let done = parts
         .coordinator
@@ -396,7 +397,7 @@ fn a_serve_starts_on_a_database_at_the_schema_of_the_release_before() {
 }
 
 /// Proves: a `serve` is refused on a database that holds a migration newer than this release's
-/// that says `refuse`, with the exact text of the database's refusal naming migration 21; a newer
+/// that says `refuse`, with the exact text of the database's refusal naming migration 23; a newer
 /// one that says `may-run` is taken.
 ///
 /// Catches: a coordinator that starts on, and writes to, a schema a newer release changed in a
@@ -410,17 +411,17 @@ fn a_serve_refuses_a_database_newer_than_this_release() {
     database.lock_is_free();
 
     let put = "INSERT INTO schema_version (version, name, older_releases) \
-               VALUES (21, 'from_the_future', ";
+               VALUES (23, 'from_the_future', ";
     run(&database, &format!("{put}'refuse')"));
     let why = refusal(args.clone());
     assert!(matches!(&why, StartError::Database(_)), "{why}");
     assert_eq!(
         why.to_string(),
-        "the database's schema is newer than this coordinator (migration 21, from_the_future)"
+        "the database's schema is newer than this coordinator (migration 23, from_the_future)"
     );
     database.lock_is_free();
 
-    run(&database, "DELETE FROM schema_version WHERE version = 21");
+    run(&database, "DELETE FROM schema_version WHERE version = 23");
     run(&database, &format!("{put}'may-run')"));
     drop(start(args));
 }

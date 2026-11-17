@@ -26,21 +26,25 @@
 mod accounts;
 mod at;
 mod dsn;
-mod fleet_rows;
+pub(crate) mod fleet_rows;
+pub(crate) mod fleet_session;
 mod generations;
 mod groups;
 mod layout;
+pub(crate) mod login_rows;
 pub(crate) mod migrate;
+pub(crate) mod periodic;
 mod records;
 mod releases;
 mod repositories;
-mod rollout;
+pub(crate) mod rollout;
 pub(crate) mod rows;
 pub(crate) mod session;
 pub(crate) mod state;
 pub(crate) mod transfer;
 pub(crate) mod writer;
 
+use std::collections::BTreeSet;
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -49,6 +53,7 @@ use hostkeeper_oidc::Clock;
 
 pub use dsn::DsnError;
 pub(crate) use dsn::{Dsn, TIMEOUTS, Timeouts};
+pub(crate) use fleet_session::FleetRows;
 pub(crate) use records::PgRecords;
 
 use self::rows::{Stmt, Tables, Val, changes, laid_over};
@@ -98,11 +103,14 @@ impl From<Fail> for DatabaseError {
     }
 }
 
-/// The read-only session, made when a read first needs it and again after it is lost.
+/// A session made when a call first needs it and again after it is lost: the read-only one of
+/// the reads, and the one of the shared rows (the sessions of the login and the counts of its
+/// limiter), which may write and holds no lock of the store's.
 struct Reader {
     config: postgres::Config,
     statements: Arc<AtomicU64>,
     session: Option<Session>,
+    read_only: bool,
 }
 
 impl Reader {
@@ -112,12 +120,11 @@ impl Reader {
     ) -> Result<R, String> {
         let session = match self.session.take() {
             Some(session) => session,
-            None => Session::connect(&self.config, Arc::clone(&self.statements), true).map_err(
-                |fail| match fail {
+            None => Session::connect(&self.config, Arc::clone(&self.statements), self.read_only)
+                .map_err(|fail| match fail {
                     Fail::Pg(e) => describe(&e),
                     Fail::Refused(why) => why,
-                },
-            )?,
+                })?,
         };
         let session = self.session.insert(session);
         read(session).map_err(|e| {
@@ -234,8 +241,11 @@ impl Landing {
 }
 
 struct Inner {
+    /// How a session of the store connects, for the sessions the store's callers hold themselves.
+    config: postgres::Config,
     writer: Worker<Writer>,
     reader: Worker<Reader>,
+    shared: Worker<Reader>,
     link: Arc<Link>,
     #[cfg(test)]
     statements: Arc<AtomicU64>,
@@ -358,6 +368,7 @@ fn statements(change: &Commit<'_>) -> Result<Vec<Stmt>, BackendError> {
     if let Some((before, after)) = change.desired {
         let (b, a) = (state::desired_rows(before)?, state::desired_rows(after)?);
         out.extend(changes(&state::DESIRED, &b, &a));
+        out.extend(queued(before, after));
     }
     if let Some((before, after)) = change.ops {
         let (b, a) = (state::ops_rows(before)?, state::ops_rows(after)?);
@@ -385,6 +396,45 @@ fn statements(change: &Commit<'_>) -> Result<Vec<Stmt>, BackendError> {
         out.push(audit_insert(line)?);
     }
     Ok(out)
+}
+
+/// The (service, version) pairs the state wants: a service's own, and a package's in each host
+/// group.
+fn wanted(held: &desired::Held) -> BTreeSet<(String, String)> {
+    let own = held
+        .desired
+        .iter()
+        .map(|(service, want)| (service.clone(), want.version.as_str().to_owned()));
+    let groups = held.host_groups.0.values().flat_map(|group| {
+        group
+            .desired
+            .iter()
+            .map(|(package, want)| (package.clone(), want.version.as_str().to_owned()))
+    });
+    own.chain(groups).collect()
+}
+
+/// The statements that put in the queue of rollouts each service that `after` wants a version of
+/// that `before` did not want (`docs/design/coordinator-multi-instance.md`, section 5.3): a
+/// service takes its place when its desired version is set, in the order the sets were
+/// committed, and keeps it while it rolls.
+fn queued(before: &desired::Held, after: &desired::Held) -> Vec<Stmt> {
+    let had = wanted(before);
+    let services: BTreeSet<String> = wanted(after)
+        .into_iter()
+        .filter(|pair| !had.contains(pair))
+        .map(|(service, _)| service)
+        .collect();
+    services
+        .into_iter()
+        .map(|service| Stmt {
+            sql: "INSERT INTO rollout_queue (service, asked_unix) \
+                  VALUES ($1, extract(epoch FROM now())::bigint) \
+                  ON CONFLICT (service) DO UPDATE SET asked_unix = excluded.asked_unix"
+                .to_owned(),
+            params: vec![Val::Text(service)],
+        })
+        .collect()
 }
 
 /// Runs `statements` in `tx`, in order.
@@ -447,13 +497,25 @@ impl Postgres {
         );
         let spawned = |e: io::Error| DatabaseError::Refused(e.to_string());
         let inner = Inner {
+            config: config.clone(),
             writer: Worker::spawn("hk-store-writer", writer).map_err(spawned)?,
             reader: Worker::spawn(
                 "hk-store-reader",
                 Reader {
+                    config: config.clone(),
+                    statements: Arc::clone(&statements),
+                    session: None,
+                    read_only: true,
+                },
+            )
+            .map_err(spawned)?,
+            shared: Worker::spawn(
+                "hk-store-shared",
+                Reader {
                     config,
                     statements: Arc::clone(&statements),
                     session: None,
+                    read_only: false,
                 },
             )
             .map_err(spawned)?,
@@ -520,6 +582,22 @@ impl Postgres {
             .unwrap_or_else(|| Err("the reading session stopped".to_owned()))
     }
 
+    /// Runs `body` on the session of the shared rows, which writes: what the rows that every
+    /// coordinator reads and writes as ordinary transactions go through. The session is made when
+    /// first needed and again after it is lost.
+    ///
+    /// # Errors
+    /// What the session or the server said.
+    pub(crate) fn shared<R: Send + 'static>(
+        &self,
+        body: impl FnOnce(&mut Session) -> Result<R, postgres::Error> + Send + 'static,
+    ) -> Result<R, String> {
+        self.inner
+            .shared
+            .call(move |rows| rows.run(body))
+            .unwrap_or_else(|| Err("the shared rows' session stopped".to_owned()))
+    }
+
     /// Whether the writing session is up with no commit's outcome unknown: when what the tables
     /// hold is what this coordinator committed.
     pub(crate) fn settled_up(&self) -> bool {
@@ -553,6 +631,7 @@ impl Postgres {
     pub(crate) fn stop(&self) {
         self.inner.writer.stop();
         self.inner.reader.stop();
+        self.inner.shared.stop();
     }
 
     fn reserve(&self, lines: &[AuditLine]) {

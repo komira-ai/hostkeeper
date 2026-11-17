@@ -19,10 +19,11 @@ use super::support::{
     enroll_request, requested, signed_poll,
 };
 use crate::enrollment::{DEFAULT_REQUEST_TTL_SECS, os_random};
-use crate::listen::reload_all;
+use crate::listen::{EXPIRE_REQUESTS, reload_all};
 use crate::operator::Caller;
 use crate::ops::OpsState;
 use crate::rollback_tests::unwritable;
+use crate::store::Claims;
 use crate::testutil::{Log, OPERATOR};
 use crate::tokens::OperatorTokens;
 
@@ -35,8 +36,67 @@ async fn tick(enrollment: &Rig) {
         Some(&enrollment.enrollment),
         &[],
         &OperatorTokens::single(OPERATOR),
+        None,
     )
     .await;
+}
+
+/// A claim that is not this coordinator's, or is, and records the job it was asked for.
+struct Claim(bool, std::sync::Mutex<Vec<String>>);
+
+impl Claims for Claim {
+    fn claimed(&self, job: &str) -> bool {
+        self.1
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(job.to_owned());
+        self.0
+    }
+}
+
+/// Proves: with periodic jobs claimed, the tick expires the requests past their TTL only when it
+/// holds the claim of `expire_requests`: a tick that is not given the job asks for exactly that
+/// job and expires nothing (the coordinator that holds it does), and the next tick that is given
+/// it expires the request once.
+///
+/// Catches: every coordinator of a database sweeping the same requests each tick, which writes the
+/// same audit entry as many times as there are coordinators.
+#[tokio::test]
+async fn a_tick_expires_requests_only_when_it_holds_the_claim() {
+    let enrollment = Rig::new("expiry-claim");
+    let rig = coordinator_over("expiry-claim-coordinator", &enrollment).await;
+    let key = HostKey::new();
+    enrollment
+        .enrollment
+        .enroll(enroll_request(&key, "machine-1"))
+        .expect("requested");
+    let before = audit_of(&rig.coordinator).len();
+    enrollment.clock.set(NOW + TTL + 1);
+    let tick_with = |held: bool| {
+        let claim = Arc::new(Claim(held, std::sync::Mutex::default()));
+        let shared: Arc<dyn Claims> = claim.clone();
+        let enrollment = &enrollment;
+        async move {
+            reload_all(
+                Some(&enrollment.enrollment),
+                &[],
+                &OperatorTokens::single(OPERATOR),
+                Some(&shared),
+            )
+            .await;
+            claim.1.lock().expect("the record").clone()
+        }
+    };
+    assert_eq!(tick_with(false).await, [EXPIRE_REQUESTS]);
+    assert_eq!(audit_after(&rig.coordinator, before), []);
+    assert_eq!(tick_with(true).await, [EXPIRE_REQUESTS]);
+    assert_eq!(audit_after(&rig.coordinator, before), [expired(&key, TTL)]);
+    assert_eq!(tick_with(true).await, [EXPIRE_REQUESTS]);
+    assert_eq!(
+        audit_after(&rig.coordinator, before),
+        [expired(&key, TTL)],
+        "once"
+    );
 }
 
 /// The coordinator's `request_expired` entry of `key`'s request, round 0, under `ttl`.

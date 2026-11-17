@@ -10,16 +10,10 @@
 //! as the statement saw it is empty or stale as a whole, sets the quiet time that holds every
 //! decision back ([`quiet_until`]) until the fleet has been heard again.
 //!
-//! Nothing here decides: a decision is made under the gate (the next module of the stack). These functions take a session
-//! and run one statement each, so they run on any session of a pool.
-// The coordinator's heartbeat does not call these yet: the pull request that moves its fleet here
-// does, and the tests in `tests/fleet_rows.rs` run every statement against a server until then.
-#![allow(
-    dead_code,
-    reason = "the heartbeat of the coordinator takes its fleet from these rows in the next pull request of the stack"
-)]
-
-use super::session::Session;
+//! Nothing here decides: a decision is made under the gate ([`super::rollout`]). These functions take a
+//! session and run one statement each, so they run on any session of a pool. A decision reads the
+//! rows it decides on with [`changed_hosts`], [`orders`] and [`bakes`], after it holds the gate.
+use super::session::{Params, Session};
 
 /// The clock and the rules of one beat, as the configuration keys carry them (section 12).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -146,6 +140,7 @@ pub(crate) fn quiet_until(session: &mut Session) -> Result<i64, postgres::Error>
 ///
 /// # Errors
 /// The client's error.
+#[cfg(test)]
 pub(crate) fn bake(
     session: &mut Session,
     host_id: &str,
@@ -157,4 +152,148 @@ pub(crate) fn bake(
             &[&host_id, &service],
         )?
         .map(|row| (row.get(0), row.get(1), row.get(2))))
+}
+
+/// A host's row: what its last heartbeat said, as the coordinator that heard it stored it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct HostRow {
+    pub(crate) host_id: String,
+    pub(crate) role: String,
+    pub(crate) beat: Vec<u8>,
+    pub(crate) seen_unix: i64,
+    pub(crate) instance: String,
+}
+
+/// A row of an order not yet reported done.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct OrderRow {
+    pub(crate) host_id: String,
+    pub(crate) service: String,
+    pub(crate) target: String,
+    pub(crate) uninstall_id: Option<String>,
+    pub(crate) at_unix: i64,
+    pub(crate) order_try: i64,
+}
+
+/// A row of the healthy beats in a row of a host at one version of a service.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct BakeRow {
+    pub(crate) host_id: String,
+    pub(crate) service: String,
+    pub(crate) target: String,
+    pub(crate) beats: i64,
+    pub(crate) at_unix: i64,
+}
+
+/// The rows of hosts that are not the ones `known` names: a host `known` holds at the same time
+/// of its beat and from the same instance is the row the reader has already taken in.
+///
+/// # Errors
+/// The client's error.
+pub(crate) fn changed_hosts(
+    session: &mut Session,
+    known: &[(String, i64, String)],
+) -> Result<Vec<HostRow>, postgres::Error> {
+    let ids: Vec<&str> = known.iter().map(|(id, _, _)| id.as_str()).collect();
+    let seen: Vec<i64> = known.iter().map(|(_, at, _)| *at).collect();
+    let instances: Vec<&str> = known.iter().map(|(_, _, who)| who.as_str()).collect();
+    Ok(session
+        .query(
+            "SELECT host_id, role, beat, seen_unix, instance FROM fleet_hosts f \
+             WHERE NOT EXISTS (SELECT 1 FROM unnest($1::text[], $2::bigint[], $3::text[]) \
+               AS k(host_id, seen, who) WHERE k.host_id = f.host_id AND k.seen = f.seen_unix \
+               AND k.who = f.instance) ORDER BY host_id",
+            &[&ids, &seen, &instances],
+        )?
+        .iter()
+        .map(|row| HostRow {
+            host_id: row.get(0),
+            role: row.get(1),
+            beat: row.get(2),
+            seen_unix: row.get(3),
+            instance: row.get(4),
+        })
+        .collect())
+}
+
+/// Every order not yet reported done, by host.
+///
+/// # Errors
+/// The client's error.
+pub(crate) fn orders(session: &mut Session) -> Result<Vec<OrderRow>, postgres::Error> {
+    orders_where(session, "ORDER BY host_id", &[])
+}
+
+/// The order of `host_id` not yet reported done, if it has one.
+///
+/// # Errors
+/// The client's error.
+pub(crate) fn orders_of(
+    session: &mut Session,
+    host_id: &str,
+) -> Result<Vec<OrderRow>, postgres::Error> {
+    orders_where(session, "WHERE host_id = $1", &[&host_id])
+}
+
+fn orders_where(
+    session: &mut Session,
+    clause: &str,
+    params: Params<'_>,
+) -> Result<Vec<OrderRow>, postgres::Error> {
+    Ok(session
+        .query(
+            &format!(
+                "SELECT host_id, service, target, uninstall_id, at_unix, try FROM fleet_orders {clause}"
+            ),
+            params,
+        )?
+        .iter()
+        .map(|row| OrderRow {
+            host_id: row.get(0),
+            service: row.get(1),
+            target: row.get(2),
+            uninstall_id: row.get(3),
+            at_unix: row.get(4),
+            order_try: row.get(5),
+        })
+        .collect())
+}
+
+/// Every bake, by host and service.
+///
+/// # Errors
+/// The client's error.
+pub(crate) fn bakes(session: &mut Session) -> Result<Vec<BakeRow>, postgres::Error> {
+    Ok(session
+        .query(
+            "SELECT host_id, service, target, beats, at_unix FROM fleet_bakes \
+             ORDER BY host_id, service",
+            &[],
+        )?
+        .iter()
+        .map(|row| BakeRow {
+            host_id: row.get(0),
+            service: row.get(1),
+            target: row.get(2),
+            beats: row.get(3),
+            at_unix: row.get(4),
+        })
+        .collect())
+}
+
+/// Ends the orders of `host_id` for the services `services`, which the coordinator that heard
+/// the host's beat saw end (the host updates, declined, failed or finished the order): the rows
+/// that a beat's own statement does not settle.
+///
+/// # Errors
+/// The client's error.
+pub(crate) fn end_orders(
+    session: &mut Session,
+    host_id: &str,
+    services: &[&str],
+) -> Result<u64, postgres::Error> {
+    session.execute(
+        "DELETE FROM fleet_orders WHERE host_id = $1 AND service = ANY($2::text[])",
+        &[&host_id, &services],
+    )
 }

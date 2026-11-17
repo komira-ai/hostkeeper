@@ -164,6 +164,8 @@ impl Node {
 #[path = "fleet_groups.rs"]
 mod groups;
 pub use groups::Marks;
+#[path = "fleet_cache.rs"]
+mod cache;
 #[path = "fleet_retry.rs"]
 pub mod retry;
 
@@ -227,6 +229,10 @@ pub struct Fleet {
     /// Every package of every group and its desired state, as of the last take of the lock: the
     /// rollouts one service waits for, across groups ([`crate::queue`]).
     cluster: crate::queue::Cluster,
+    /// The orders [`Self::note`] ended since they were last taken ([`Self::take_ended_orders`]).
+    ended: Vec<(HostId, String)>,
+    /// When the fleet's rows are to be judged again, for a fleet read from them ([`Self::sync_quiet`]).
+    quiet_until: Option<Duration>,
 }
 
 impl Fleet {
@@ -260,6 +266,8 @@ impl Fleet {
             facts: crate::facts::Reported::default(),
             remote_login_probes: crate::remote_login_probe::Probes::default(),
             cluster: crate::queue::Cluster::default(),
+            ended: Vec::new(),
+            quiet_until: None,
         }
     }
 
@@ -316,7 +324,11 @@ impl Fleet {
     /// [`Self::new`] after the coordinator's start), or while the store's link is lost.
     #[must_use]
     pub fn is_quiet(&self, now: Duration) -> bool {
-        self.store_lost || now < self.started.saturating_add(self.quiet)
+        self.store_lost
+            || now
+                < self
+                    .quiet_until
+                    .unwrap_or(self.started.saturating_add(self.quiet))
     }
 
     /// The try of the next order of `service` for the host `id`: one past the highest try any
@@ -602,6 +614,7 @@ impl Fleet {
                         "the host refused the order for its try; it is ordered again past it"
                     );
                 }
+                self.ended.push(key.clone());
                 self.no_longer_outstanding(key.clone(), &order);
             }
         }

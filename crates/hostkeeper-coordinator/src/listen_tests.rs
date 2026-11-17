@@ -134,7 +134,7 @@ async fn one_look_of_the_tick_reads_the_tokens_file_again() {
     let tokens = OperatorTokens::from_file(&path).expect("tokens");
     assert!(tokens.name_of(first).is_some());
     tokens_file(&path, second);
-    reload_all(None, &[], &tokens).await;
+    reload_all(None, &[], &tokens, None).await;
     assert_eq!(tokens.name_of(first), None);
     assert!(tokens.name_of(second).is_some());
 }

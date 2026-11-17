@@ -431,7 +431,7 @@ fn reading_after_a_number_answers_across_files_from_the_oldest_kept() {
 }
 
 /// The flags of `serve` with the paths and addresses it requires, and `extra`.
-fn serve_args(extra: &[&str]) -> Vec<String> {
+pub(crate) fn serve_args(extra: &[&str]) -> Vec<String> {
     let mut args: Vec<String> = [
         "hostkeeper-coordinator",
         "serve",
