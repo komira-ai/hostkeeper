@@ -18,6 +18,12 @@
 //! the gate is seen at the beat after; the gate's own checks (the slots, the queue, a halt, the
 //! stage's position) refuse what that stale read could give.
 //!
+//! The orders an operator queued (`abort`, `clear_record`) are rows too (`fleet_operator_orders`,
+//! [`super::operator_rows`]): the same transaction first writes those this coordinator could not
+//! write when it took the call, then makes the beating host's queues in memory its rows, and
+//! deletes the row of an `abort` or `clear_record` the answer sends, so each is sent once by
+//! whichever coordinator hears the host.
+//!
 //! A beat that finds the gate held, or the rows out of reach, is answered with no order: the host
 //! asks again at its next beat. Coordinators over files have no rows and decide on the fleet
 //! they hold ([`Coordinator::decide_tail`] with nothing asked of the rows).
@@ -34,6 +40,7 @@ use serde::{Deserialize, Serialize};
 
 use super::Coordinator;
 use super::gate_orders::Asked;
+use super::operator_rows::{Unwritten, end_sent};
 use crate::fleet::{DOWN_AFTER, Fleet, Node, ORDER_AGE};
 use crate::group_scope::Basis;
 use crate::identity::Identity;
@@ -67,6 +74,9 @@ pub(crate) struct RowRules {
 pub(crate) struct Rows {
     pub(crate) rows: Arc<FleetRows>,
     pub(crate) rules: RowRules,
+    /// The orders the operator queued through this coordinator that the rows have not taken yet
+    /// ([`super::operator_rows`]).
+    pub(super) unwritten: Unwritten,
 }
 
 /// What a beat says, as its row keeps it: the beat as the fleet took it in, and what the node
@@ -251,7 +261,11 @@ impl Coordinator {
     /// The coordinator over `rows`, read under the rollout gate by every heartbeat.
     #[must_use]
     pub(crate) fn with_rows(mut self, rows: Arc<FleetRows>, rules: RowRules) -> Self {
-        self.rows = Some(Rows { rows, rules });
+        self.rows = Some(Rows {
+            rows,
+            rules,
+            unwritten: Unwritten::default(),
+        });
         self
     }
 
@@ -584,6 +598,7 @@ impl Coordinator {
         self.run_before_gate();
         let fleet: &mut Fleet = &mut fleet;
         let unix_now = i64::try_from(self.ops.unix_now()).unwrap_or(i64::MAX);
+        let pending = rows.unwritten.pending();
         let gated = rows.rows.gated(Wait::Beat, |gate| {
             let snapshot = gate.snapshot()?;
             let now = tail.now;
@@ -596,6 +611,9 @@ impl Coordinator {
             fleet.sync_bakes(&snapshot.bakes, now, unix_now);
             fleet.sync_orders(&snapshot.orders, now, unix_now);
             fleet.sync_quiet(snapshot.quiet_until, now, unix_now);
+            // The operator's orders are the rows': what this coordinator could not write before
+            // is written first, and then the host's queues are made the rows'.
+            pending.write_and_take_in(gate, fleet, &tail.who.host_id)?;
             #[cfg(test)]
             self.run_in_gate();
             let mut judge = RowJudge {
@@ -609,6 +627,8 @@ impl Coordinator {
             if let Some(e) = judge.failed.take() {
                 return Err(e);
             }
+            // An abort or a clear-record the answer sends is gone from the rows with it.
+            end_sent(gate, &tail.who.host_id, answer.1.as_ref())?;
             // A service every host runs has no rollout left: it leaves the queue.
             let done: Vec<&str> = tail
                 .legacy
@@ -627,7 +647,10 @@ impl Coordinator {
             Ok(answer)
         });
         match gated {
-            Ok(Gated::Decided(answer)) => answer,
+            Ok(Gated::Decided(answer)) => {
+                rows.unwritten.forget(&pending);
+                answer
+            }
             Ok(Gated::Busy) => nothing,
             Err(why) => {
                 tracing::error!(%why, "a decision over the fleet's rows failed: nothing is ordered");

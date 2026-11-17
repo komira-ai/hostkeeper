@@ -136,6 +136,7 @@ pub(crate) mod facts;
 mod features;
 pub mod fleet;
 pub mod force;
+pub(crate) mod graceful;
 pub(crate) mod group_converge;
 mod group_halt;
 pub(crate) mod group_reach;

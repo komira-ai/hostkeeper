@@ -15,7 +15,10 @@
 //! abort, a clear-record and a force take no update slot; an install and an uninstall take it as
 //! an update does.
 //!
-//! An abort and a clear-record are each sent once: taken from the queue when answered. A force's order goes
+//! An abort and a clear-record are each sent once: taken from the queue when answered. The queue is
+//! the coordinator's memory over files, and over a database the rows of `fleet_operator_orders`,
+//! which a heartbeat's decision reads into memory under the rollout gate and deletes the row of an
+//! order it sends in its transaction (`service_operator.rs`). A force's order goes
 //! to each host the force orders at every heartbeat until the host runs the version, is running
 //! the force (it reports updating to the version) or reported a verdict of the force's order id;
 //! so a lost answer is sent again, and a host that reported the force failed is not ordered

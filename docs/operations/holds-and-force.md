@@ -116,7 +116,12 @@ the JSON heartbeat route; any other waits for the next heartbeat over gRPC.
   one alert that names them all.
 - `Hosts.Abort` queues an `abort` of a service for the host's next heartbeat. It takes no slot,
   is sent once, and only to a daemon that announced the `abort-v1` feature; an abort asked
-  again while one is queued queues nothing more.
+  again while one is queued queues nothing more. Over a database the queued abort is a row
+  (`fleet_operator_orders`), so it is sent by whichever coordinator hears the host's next
+  heartbeat, once, and a restart of a coordinator does not forget it. When the row cannot be
+  written (the database is out of reach) the abort is still queued and answered; it waits in the
+  memory of the coordinator that took the call, which writes it at the next heartbeat it decides.
+  Over files it is kept in memory only.
 - `Hosts.ClearRecord` orders a host to set aside its step record of a service when that record
   does not read (`clear_record`), at the host's next heartbeat. It takes no slot and is sent once.
   It is accepted only for a host whose daemon announced the `clear-record-v1` feature in its last
@@ -124,8 +129,11 @@ the JSON heartbeat route; any other waits for the next heartbeat over gRPC.
   id, `clear-record-<n>`, where `n` is the number of its `record_cleared` audit entry; asked again
   while the order waits, it answers the same id and audits nothing. A call whose audit line
   cannot be written is refused `store_failed` or `audit_unavailable`, and nothing is ordered.
-  The order is kept in memory only: a restart of the coordinator before the host's next heartbeat
-  forgets it, and the operator asks again. The host renames the record to
+  Over a database the order is a row (`fleet_operator_orders`) and is sent once by whichever
+  coordinator hears the host's next heartbeat; asked again through another coordinator while it
+  waits, it answers the same id and audits nothing. Over files it is kept in memory only: a
+  restart of the coordinator before the host's next heartbeat forgets it, and the operator asks
+  again. The host renames the record to
   `step-record.json.corrupt` only when it does not read, and reports the order's verdict as the
   service's last update, at the version the service runs: `succeeded` with the reason
   `record_cleared`, or failed with `record_reads` (the record reads, is absent, or is of a newer

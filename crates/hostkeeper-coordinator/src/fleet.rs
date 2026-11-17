@@ -21,7 +21,7 @@
 //! The operator's holds, the hosts a standing force orders and where each service's update plan
 //! stands are kept here as a copy of the ops store's ([`Marks`]), refreshed under the fleet's
 //! lock, so the decisions read them with the beats; the `abort` and `clear_record` orders an
-//! operator queued are kept in memory only, like the other orders.
+//! operator queued are kept in memory over files, and in the rows over a database.
 
 use std::collections::BTreeMap;
 use std::time::Duration;

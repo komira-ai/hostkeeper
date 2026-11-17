@@ -3,15 +3,27 @@
 //! coordinator's own machine (an orchestrator's HTTP probe, the machine's monitoring). The image
 //! has no shell and no client, so the probe runs outside the container, and there is no verb.
 //!
-//! It answers `GET` and `HEAD` of `/healthz` and of `/readyz` (the same answer on both: a
-//! probe of one coordinator's liveness and the edge's readiness check of it ask the one question,
-//! whether this coordinator takes traffic), and `404 not_found` to any other path or method. The answer is `200` with the body `ok` when every listener the flags name is bound
-//! and serving and the store takes writes, and `503` with one reason token otherwise:
-//! `draining` from the stop signal until the process exits, whatever else holds,
-//! `starting` until every listener is bound, `store_unreachable` while the link to the database
-//! is lost. A `HEAD` is answered
-//! the status and the body's length, with no body. The body is the token and nothing else: no version, no host, no
-//! count. An answer reads memory only and writes no audit line.
+//! It answers `GET` and `HEAD` of `/healthz` and of `/readyz`, and `404 not_found` to any other
+//! path or method; a `HEAD` is answered the status and the body's length, with no body. The body
+//! is the token and nothing else: no version, no host, no count. An answer reads memory only and
+//! writes no audit line (`docs/design/service-update-contract.md`, section 2).
+//!
+//! `/readyz` is whether this coordinator takes traffic, which the edge checks: `200 ok` when every
+//! listener the flags name is bound and serving and the store takes writes, and `503` with one
+//! reason token otherwise: `draining` from the stop signal until the process exits, whatever else
+//! holds, `starting` until every listener is bound, `store_unreachable` while the link to the
+//! database is lost.
+//!
+//! `/healthz` is whether the process is alive, which the orchestrator checks: `200 ok` from the
+//! moment every listener is bound, whatever the database does and while the coordinator drains, and
+//! `503 starting` before. A database that does not answer, or a stop in progress, must not have
+//! the orchestrator kill a coordinator that is doing what it should.
+//!
+//! The health listener is the one listener the stop does not close: after `--drain-delay-secs` the
+//! heartbeat, control and LAN listeners stop accepting and the coordinator waits for the
+//! connections they hold ([`crate::graceful`]), and this listener answers `/healthz` `200` and
+//! `/readyz` `503 draining` meanwhile, until the process exits. Its own connections are not
+//! waited for.
 //!
 //! The listener has the limits of the others ([`crate::listen`]): at most
 //! [`crate::listen::MAX_CONNECTIONS`] connections at once, the patience for a request head and
@@ -34,16 +46,17 @@ use hyper_util::rt::{TokioIo, TokioTimer};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Semaphore;
 
+use crate::graceful::Graceful;
 use crate::listen::{WriteDeadline, accept_each};
 use crate::service::Coordinator;
 use crate::store::Health;
 
-/// The path the health listener answers.
+/// The path of the liveness check: `200` once every listener is bound, whatever else holds.
 pub(crate) const HEALTH_PATH: &str = "/healthz";
 
-/// The path of the readiness check, answered as [`HEALTH_PATH`] is: `200` only while this
-/// coordinator takes traffic, `503` while it starts, cannot reach its store or drains, so the edge
-/// that checks it sends a connection only to a coordinator that answers `200`.
+/// The path of the readiness check: `200` only while this coordinator takes traffic, `503` while
+/// it starts, cannot reach its store or drains, so the edge that checks it sends a connection only
+/// to a coordinator that answers `200`.
 pub(crate) const READY_PATH: &str = "/readyz";
 
 /// What the health listener says of the coordinator.
@@ -126,7 +139,8 @@ impl Serving {
 /// draining, whatever `stop` answered, waits for `delay` and answers what `stop` answered. The
 /// health listener says `draining` from the stop until the process exits, and the coordinator's
 /// listeners keep accepting while `delay` runs, so an edge that has not yet seen the `503` (or the
-/// new instance that replaces this one) still reaches a coordinator that answers.
+/// new instance that replaces this one) still reaches a coordinator that answers. What follows,
+/// the listeners' stop and the wait for their connections, is [`crate::graceful::Graceful::wind_down`].
 pub(crate) async fn drain_on<T>(
     stop: impl Future<Output = T>,
     serving: Serving,
@@ -138,7 +152,18 @@ pub(crate) async fn drain_on<T>(
     stopped
 }
 
-/// What the health listener says of `coordinator`, `serving` or not: [`Verdict::Draining`]
+/// What the liveness check says of the process: [`Verdict::Starting`] until every listener is
+/// bound, and [`Verdict::Ok`] after, whatever the store and a drain say.
+#[must_use]
+pub(crate) fn liveness(serving: &Serving) -> Verdict {
+    if serving.is_set() {
+        Verdict::Ok
+    } else {
+        Verdict::Starting
+    }
+}
+
+/// What the readiness check says of `coordinator`, `serving` or not: [`Verdict::Draining`]
 /// first, then [`Verdict::Starting`], then the store's health, from memory.
 #[must_use]
 pub(crate) fn verdict(coordinator: &Coordinator, serving: &Serving) -> Verdict {
@@ -168,7 +193,11 @@ pub(crate) fn answer(
     let asks = (path == HEALTH_PATH || path == READY_PATH)
         && (method == Method::GET || method == Method::HEAD);
     let (status, body) = if asks {
-        let verdict = verdict(coordinator, serving);
+        let verdict = if path == HEALTH_PATH {
+            liveness(serving)
+        } else {
+            verdict(coordinator, serving)
+        };
         (verdict.status(), verdict.token())
     } else {
         (StatusCode::NOT_FOUND, "not_found")
@@ -232,10 +261,13 @@ where
     F: Future<Output = io::Result<S>> + Send,
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
+    // Its connections are counted on a `Graceful` of its own that nothing stops: the health
+    // listener answers until the process exits, and the stop does not wait for its connections.
     accept_each(
         accept,
         Arc::new(Semaphore::new(max_connections)),
-        move |stream| connection(stream, Arc::clone(&coordinator), serving.clone(), patience),
+        Graceful::default(),
+        move |stream, _| connection(stream, Arc::clone(&coordinator), serving.clone(), patience),
     )
 }
 
