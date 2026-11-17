@@ -51,10 +51,10 @@ impl Subject for OnPostgres {
         let sql = if on {
             "CREATE FUNCTION test_refuse() RETURNS trigger LANGUAGE plpgsql AS $$ \
              BEGIN RAISE EXCEPTION 'the test refuses this commit'; END $$; \
-             CREATE TRIGGER test_refuse BEFORE UPDATE ON lease FOR EACH ROW \
+             CREATE TRIGGER test_refuse BEFORE INSERT ON tx_ledger FOR EACH ROW \
              EXECUTE FUNCTION test_refuse()"
         } else {
-            "DROP TRIGGER test_refuse ON lease; DROP FUNCTION test_refuse()"
+            "DROP TRIGGER test_refuse ON tx_ledger; DROP FUNCTION test_refuse()"
         };
         self.database.run(sql).expect("the refusal is set");
     }

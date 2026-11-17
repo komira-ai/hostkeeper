@@ -7,8 +7,7 @@
 //! fleet view. Each heartbeat asks the backend to make the link again, on its own thread and never
 //! under the fleet's lock ([`crate::store::Backend::revive`]). Once it is back, a commit whose
 //! outcome was not known is settled and, when it landed, taken into memory; then what is pending
-//! is committed. When another coordinator led the database meanwhile, the pending changes are
-//! dropped knowingly and the coordinator stops.
+//! is committed.
 
 #[cfg(test)]
 use std::sync::PoisonError;
@@ -111,7 +110,7 @@ impl Coordinator {
     }
 
     /// Tends the store's link at a heartbeat at the coordinator's time `now`: asks a lost link to
-    /// be made again, takes a settled commit into memory, deposes a store another coordinator led,
+    /// be made again, takes a settled commit into memory,
     /// and, while the link is up, commits what is pending (every memory-first change whose commit
     /// failed is committed again at every heartbeat until it lands).
     pub(crate) fn tend_store(&self, now: Duration) {
@@ -130,22 +129,13 @@ impl Coordinator {
             }
             tracing::warn!(
                 alert = "store_unreachable",
-                number = landing.number,
+                id = %landing.id,
                 landed = landing.landed,
                 "the commit whose outcome was not known is settled: memory takes it when it landed"
             );
         }
-        match health {
-            Health::Up => self.ops.retry_unwritten(now),
-            Health::Lost => {}
-            Health::Deposed { found } => self.ops.depose(found),
+        if health == Health::Up {
+            self.ops.retry_unwritten(now);
         }
-    }
-
-    /// Waits until the store is deposed: another coordinator led its database while this one's
-    /// link was lost. Answers the epoch this coordinator held and the one found.
-    pub async fn deposed(&self) -> (u64, u64) {
-        let found = self.ops.deposed().await;
-        (self.ops.backend().epoch().unwrap_or_default(), found)
     }
 }

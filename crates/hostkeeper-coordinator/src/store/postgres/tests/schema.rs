@@ -3,13 +3,14 @@
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+use std::time::Duration;
 
 use super::{TestDatabase, admin, off_runtime};
 use crate::store::conformance_tests::lines;
 use crate::store::postgres::migrate::{self, ApplyError, Migration, MigrationError, OlderReleases};
 use crate::store::postgres::session::Session;
 use crate::store::postgres::writer::{LOCK_KEY, Writer};
-use crate::store::postgres::{DatabaseError, TIMEOUTS};
+use crate::store::postgres::{DatabaseError, TIMEOUTS, Timeouts};
 use crate::store::{Backend, Commit};
 
 fn versions(db: &TestDatabase) -> Vec<Vec<Option<String>>> {
@@ -37,6 +38,7 @@ fn shipped_rows() -> Vec<Vec<Option<String>>> {
         row("16", "lab_devices", "may-run"),
         row("17", "lab_sleds", "may-run"),
         row("18", "remove_host_group_all", "may-run"),
+        row("19", "tx_ledger", "may-run"),
     ]
 }
 
@@ -97,7 +99,7 @@ fn a_migration_that_fails_is_rolled_back_whole_and_stops_the_start() {
     let db = TestDatabase::new();
     let shipped = migrate::checked(&migrate::SHIPPED).expect("the shipped set");
     let failing = Migration {
-        version: 19,
+        version: 20,
         name: "half",
         older: OlderReleases::Refuse,
         sql: "CREATE TABLE half (x int); SELECT 1/0;",
@@ -110,14 +112,14 @@ fn a_migration_that_fails_is_rolled_back_whole_and_stops_the_start() {
     assert!(matches!(
         error,
         ApplyError::Failed {
-            version: 19,
+            version: 20,
             name: "half",
             ..
         }
     ));
     assert_eq!(
         error.to_string(),
-        "migration 19 (half) failed and was rolled back: ERROR: division by zero (SQLSTATE 22012)"
+        "migration 20 (half) failed and was rolled back: ERROR: division by zero (SQLSTATE 22012)"
     );
     assert_eq!(
         db.rows("SELECT to_regclass('hostkeeper.half')::text"),
@@ -127,7 +129,7 @@ fn a_migration_that_fails_is_rolled_back_whole_and_stops_the_start() {
 
     // A migration that works is run, once, and its number answered.
     let good = Migration {
-        version: 19,
+        version: 20,
         name: "later",
         older: OlderReleases::MayRun,
         sql: "CREATE TABLE later (x int)",
@@ -138,10 +140,10 @@ fn a_migration_that_fails_is_rolled_back_whole_and_stops_the_start() {
         let ran = migrate::apply(session, &set).expect("the set applies");
         (ran, migrate::apply(session, &set).expect("and again"))
     });
-    assert_eq!((ran, again), (vec![19], Vec::<i32>::new()));
+    assert_eq!((ran, again), (vec![20], Vec::<i32>::new()));
     assert_eq!(
         versions(&db),
-        [shipped_rows(), vec![row("19", "later", "may-run")]].concat()
+        [shipped_rows(), vec![row("20", "later", "may-run")]].concat()
     );
 }
 
@@ -185,16 +187,16 @@ fn a_migration_marked_refuse_stops_an_older_release_and_may_run_does_not() {
     let (store, _) = db.open("first").expect("the store opens");
     store.stop();
     db.run(
-        "INSERT INTO schema_version (version, name, older_releases) VALUES (19, 'later', 'refuse')",
+        "INSERT INTO schema_version (version, name, older_releases) VALUES (20, 'later', 'refuse')",
     )
     .expect("a later migration is recorded");
     let error = db.open("older").err().expect("an older release is refused");
     assert!(matches!(error, DatabaseError::Schema(_)));
     assert_eq!(
         error.to_string(),
-        "the database's schema is newer than this coordinator (migration 19, later)"
+        "the database's schema is newer than this coordinator (migration 20, later)"
     );
-    db.run("UPDATE schema_version SET older_releases = 'may-run' WHERE version = 19")
+    db.run("UPDATE schema_version SET older_releases = 'may-run' WHERE version = 20")
         .expect("the rule is changed");
     let (store, _) = db.open("older").expect("an older release may run");
     store.stop();
@@ -362,33 +364,116 @@ fn a_commit_on_a_session_without_the_lock_fails() {
     );
 }
 
-/// Proves: a second coordinator on a database whose lock is held is refused with the one text
-/// for it, without raising the epoch; once the first lets go a third gets the lock and the epoch
-/// one past the first's.
+/// Proves: any number of coordinators hold the database's lock together, each raising the epoch
+/// by one; a session that asks for the lock exclusively (the release before this one, an import)
+/// is refused while any of them runs, and takes it once the last has stopped; and a coordinator
+/// is refused, with the one text for it, while a session holds the lock exclusively.
 ///
-/// Catches: two coordinators leading one database, and an epoch raised by a refused start.
+/// Catches: a second coordinator that cannot start beside the first (which makes a start-first
+/// update impossible), and a release before this one that starts beside a coordinator of this one.
 #[test]
-fn a_second_coordinator_on_the_database_is_refused() {
+fn coordinators_share_the_database_and_an_exclusive_taker_is_refused() {
     let db = TestDatabase::new();
     let (first, _) = db.open("first").expect("the store opens");
-    let error = db.open("second").err().expect("the second is refused");
+    let (second, _) = db
+        .open("second")
+        .expect("a second store opens beside the first");
+    assert_eq!(second.epoch(), first.epoch().map(|epoch| epoch + 1));
+    let mut client = db.client();
+    let exclusive = "SELECT pg_try_advisory_lock($1)";
+    let taken = |client: &mut postgres::Client| -> bool {
+        client
+            .query_one(exclusive, &[&LOCK_KEY])
+            .expect("a try")
+            .get(0)
+    };
+    assert!(!taken(&mut client), "two coordinators hold the lock");
+    first.stop();
+    assert!(!taken(&mut client), "one coordinator still holds the lock");
+    second.stop();
+    assert!(taken(&mut client), "the lock is free once both stopped");
+    let error = db
+        .open("third")
+        .err()
+        .expect("an exclusive holder refuses it");
     assert!(matches!(error, DatabaseError::Locked));
     assert_eq!(
         error.to_string(),
         "another coordinator holds the lock of this database"
     );
-    let epoch = first.epoch().expect("an epoch");
-    first.stop();
-    let (third, _) = db.open("third").expect("the third opens");
-    assert_eq!(third.epoch(), Some(epoch + 1));
     assert_eq!(
-        db.rows("SELECT epoch, holder FROM lease"),
-        vec![vec![
-            Some((epoch + 1).to_string()),
-            Some("third".to_owned())
-        ]]
+        db.rows("SELECT epoch FROM lease"),
+        vec![vec![Some("2".to_owned())]],
+        "a refused start does not raise the epoch"
     );
-    third.stop();
+}
+
+/// Proves: coordinators that start together on an empty database run each migration once between
+/// them: every start succeeds, the numbers the runners ran together are 1 to 19 with none twice,
+/// and `schema_version` holds each once.
+///
+/// Catches: two starters that both find `0019` missing, both run it, and one fails on the table
+/// it made, so a start-first update crash-loops its new task.
+///
+/// The sessions wait without a statement or lock timeout (0 turns each off), so a runner that
+/// waits for the runners' lock while another applies every migration of an empty database waits
+/// as long as that takes, however loaded the machine; that a wait is bounded by the lock timeout
+/// is [`a_runner_that_cannot_get_the_runners_lock_runs_nothing`]'s.
+#[test]
+fn starters_that_run_together_apply_each_migration_once() {
+    let db = TestDatabase::new();
+    let unbounded = Timeouts {
+        statement: Duration::ZERO,
+        lock: Duration::ZERO,
+        ..TIMEOUTS
+    };
+    let config = db.dsn().config(unbounded);
+    let set = migrate::checked(&migrate::SHIPPED).expect("the shipped set");
+    let runners: Vec<_> = (0..4)
+        .map(|_| {
+            let (config, set) = (config.clone(), set.clone());
+            std::thread::spawn(move || {
+                let mut session = Session::connect(&config, Arc::new(AtomicU64::new(0)), false)
+                    .expect("a session");
+                migrate::apply(&mut session, &set).expect("the runner applies")
+            })
+        })
+        .collect();
+    let mut ran: Vec<i32> = runners
+        .into_iter()
+        .flat_map(|runner| runner.join().expect("the runner ends"))
+        .collect();
+    ran.sort_unstable();
+    assert_eq!(ran, (1..=19).collect::<Vec<i32>>());
+    assert_eq!(versions(&db), shipped_rows());
+}
+
+/// Proves: a runner that cannot get the runners' lock within the session's lock timeout fails
+/// with the bookkeeping's text and runs nothing, and the next runner, once the lock is free, runs
+/// everything.
+///
+/// Catches: a runner that waits for ever behind a starter that hangs, or that migrates without
+/// the lock.
+#[test]
+fn a_runner_that_cannot_get_the_runners_lock_runs_nothing() {
+    let db = TestDatabase::new();
+    let mut holder = db.client();
+    holder
+        .execute("SELECT pg_advisory_lock($1)", &[&migrate::MIGRATE_KEY])
+        .expect("the runners' lock is taken");
+    let set = migrate::checked(&migrate::SHIPPED).expect("the shipped set");
+    let waiting = set.clone();
+    let error = with_session(&db, move |session| {
+        migrate::apply(session, &waiting).expect_err("the lock is not to be had")
+    });
+    assert!(matches!(error, ApplyError::Database(_)), "{error}");
+    holder
+        .execute("SELECT pg_advisory_unlock($1)", &[&migrate::MIGRATE_KEY])
+        .expect("the lock is given");
+    let ran = with_session(&db, move |session| {
+        migrate::apply(session, &set).expect("the set applies")
+    });
+    assert_eq!(ran, (1..=19).collect::<Vec<i32>>());
 }
 
 /// How many times the tests below end a store and take its lock at once.

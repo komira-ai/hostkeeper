@@ -128,12 +128,6 @@ pub(crate) enum Health {
     /// Its link is lost: every write is refused at once until it is made again. The coordinator
     /// orders nothing meanwhile.
     Lost,
-    /// Another coordinator led the store while the link was lost, at epoch `found`: this one's
-    /// memory is stale, and it exits.
-    Deposed {
-        /// The epoch found.
-        found: u64,
-    },
 }
 
 /// The state before and after one change, and its audit lines.

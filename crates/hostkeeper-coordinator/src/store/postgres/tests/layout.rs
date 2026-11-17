@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use super::TestDatabase;
+use super::{ID, TestDatabase};
 use crate::layout::{Layout, LayoutStore};
 use crate::store::conformance_tests::rich_layout;
 use crate::store::postgres::{Landing, Owned};
@@ -224,7 +224,7 @@ fn a_layout_store_takes_a_landed_change_and_leaves_what_it_had_no_part_in() {
     let held = rich_layout();
     let none = Layout::default();
     let landed = |commit: &Commit<'_>, landed: bool| Landing {
-        number: 1,
+        id: ID.to_owned(),
         landed,
         change: Some(Owned::of(commit)),
     };
