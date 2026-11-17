@@ -551,3 +551,43 @@ fn a_session_lost_in_a_rollback_is_lost() {
     settle(&store);
     assert_eq!(store.health(), Health::Up);
 }
+
+/// Proves: an ordinary commit deletes the ledger's rows that began more than
+/// `LEDGER_KEEP_SECS` (an hour) before it, both one long gone and one a minute past the hour,
+/// and keeps a row a minute old and its own: the ledger holds exactly those two after it.
+///
+/// Catches: a purge that never runs, so the ledger grows with every commit, and one that deletes
+/// rows still inside the hour, so a recent commit of unknown outcome is settled as not landed.
+#[test]
+fn a_commit_deletes_the_ledger_rows_older_than_an_hour_and_keeps_the_rest() {
+    super::logging();
+    let db = TestDatabase::new();
+    let (store, _) = db.open("purge").expect("the store opens");
+    let long_gone = "00000000-0000-0000-0000-0000000000b1";
+    let past_the_hour = "00000000-0000-0000-0000-0000000000b2";
+    let recent = "00000000-0000-0000-0000-0000000000b3";
+    db.run(&format!(
+        "DELETE FROM tx_ledger; \
+         INSERT INTO tx_ledger (id, at_unix) VALUES \
+         ('{long_gone}', 1), \
+         ('{past_the_hour}', extract(epoch FROM now())::bigint - 3660), \
+         ('{recent}', extract(epoch FROM now())::bigint - 60)"
+    ))
+    .expect("the ledger holds only the seeded rows");
+
+    line(&store, 1).expect("an ordinary commit");
+
+    let ids: Vec<Option<String>> = db
+        .rows("SELECT id::text FROM tx_ledger ORDER BY at_unix, id")
+        .into_iter()
+        .flatten()
+        .collect();
+    assert_eq!(ids.len(), 2, "the recent row and the commit's own: {ids:?}");
+    assert_eq!(ids[0].as_deref(), Some(recent), "the recent row is kept");
+    assert!(
+        ids[1]
+            .as_deref()
+            .is_some_and(|id| ![long_gone, past_the_hour, recent].contains(&id)),
+        "the other row is the commit's own: {ids:?}"
+    );
+}
