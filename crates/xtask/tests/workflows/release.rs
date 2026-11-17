@@ -5,7 +5,7 @@
 //!   [`RELEASE_EXEMPT`] lists it with a reason ([`publish_problems`], run over every workflow of
 //!   the repository).
 //! - `release.yml` ([`release_problems`]) starts only by [`RELEASE_TRIGGERS`] (a `workflow_run`
-//!   of exactly `ci`, `privileged` and `artifacts`, completed, on main), has exactly the jobs
+//!   of exactly `ci` and `artifacts`, completed, on main), has exactly the jobs
 //!   of [`RELEASE_JOBS`]: `plan`, `verify` and `publish` under their exact `if:`, the jobs of
 //!   hostkeeper's own deploy, held to [`desired::problems`], and the two jobs of the coordinator's
 //!   deploy to the control plane, held to [`cp_deploy::problems`]; plans with the one step of
@@ -98,8 +98,10 @@ pub const RELEASE_JOBS: [&str; 12] = [
 /// The triggers release.yml may have.
 pub const RELEASE_TRIGGERS: [&str; 3] = ["schedule", "workflow_dispatch", "workflow_run"];
 
-/// The workflows whose completion starts release.yml, sorted: the three a release requires.
-pub const REQUIRED_WORKFLOWS: [&str; 3] = ["artifacts", "ci", "privileged"];
+/// The workflows whose completion starts release.yml, sorted: the two a release requires, the
+/// unit tests and the build. The privileged tests are not among them: no release waits for them
+/// (a red run of them opens a RELEASE-RED issue, release-red.yml).
+pub const REQUIRED_WORKFLOWS: [&str; 2] = ["artifacts", "ci"];
 
 /// The binaries a release ships, each of which the verify job of release.yml runs.
 pub const SHIPPED_BINARIES: [&str; 3] = [

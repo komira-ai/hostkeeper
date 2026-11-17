@@ -10,10 +10,10 @@ use std::path::Path;
 use serde_json::Value;
 
 use super::contract::{Commit, MAIN, Repo, Signer};
-use super::git::stdout_of;
+use super::git::{stdout_of, stdout_of_ran};
 use super::ports::{
-    Attestation, Exec, GitHubRuns, Issue, Job, PortError, Release, ReleaseStore, Run, StoredAsset,
-    Verifier,
+    Ask, Attestation, Exec, GitHubRuns, Issue, Job, PortError, Release, ReleaseStore, Run,
+    StoredAsset, Verifier,
 };
 
 /// What `gh api` prints on stderr for a path GitHub does not have.
@@ -358,10 +358,50 @@ impl<E: Exec> Verifier for Gh<E> {
         bundle: Option<&Path>,
         commit: &Commit,
     ) -> Result<Vec<Attestation>, PortError> {
-        let args = verify_args(signer, file, bundle, &[], commit)?;
-        let words: Vec<&str> = args.iter().map(String::as_str).collect();
-        let (value, what) = self.json(&words)?;
-        attestations_of(&value, &what)
+        let ask = Ask {
+            signer,
+            file,
+            bundle,
+            commit,
+        };
+        let mut answers = self.verify_each(&[ask]);
+        answers.pop().unwrap_or_else(|| Ok(Vec::new()))
+    }
+
+    /// The commands of [`Verifier::verify`], one per ask, run through
+    /// [`Exec::spawn_each`] (side by side, by the process runner); each answer read as `verify`
+    /// reads it. The first runs alone: it fetches and caches the Sigstore trusted root, which
+    /// the others then read instead of each writing the cache at the same time.
+    fn verify_each(&self, asks: &[Ask<'_>]) -> Vec<Result<Vec<Attestation>, PortError>> {
+        let prepared: Vec<Result<Vec<String>, PortError>> = asks
+            .iter()
+            .map(|a| verify_args(a.signer, a.file, a.bundle, &[], a.commit))
+            .collect();
+        let runs: Vec<(String, Vec<String>)> = prepared
+            .iter()
+            .filter_map(|args| args.as_ref().ok())
+            .map(|args| ("gh".to_owned(), args.clone()))
+            .collect();
+        let (first, rest) = runs.split_at(runs.len().min(1));
+        let mut ran = self
+            .exec
+            .spawn_each(first)
+            .into_iter()
+            .chain(self.exec.spawn_each(rest));
+        prepared
+            .into_iter()
+            .map(|args| {
+                let args = args?;
+                let what = format!("gh {}", args.join(" "));
+                let answer = ran
+                    .next()
+                    .unwrap_or_else(|| Err(std::io::Error::other("no answer")));
+                let out = stdout_of_ran(what.clone(), answer)?;
+                let value: Value = serde_json::from_slice(&out)
+                    .map_err(|e| PortError::new(what.clone(), format!("not JSON: {e}")))?;
+                attestations_of(&value, &what)
+            })
+            .collect()
     }
 }
 

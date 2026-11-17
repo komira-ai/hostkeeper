@@ -1,0 +1,61 @@
+# release-red: the alert of a red run on main of a suite that holds no release. A release waits
+# for the unit tests (ci.yml) and the build (artifacts.yml) alone; the privileged tests
+# (privileged.yml) run beside it, and the Mac's beta stage, the install checks of the package
+# channels and the promotion to stable run in release.yml after the deploy. When a run of
+# release.yml or privileged.yml on main completes, this workflow reads it back and keeps one
+# issue per workflow (`cargo xtask release red`, crates/xtask/src/release/red.rs):
+#
+#   failure, timed_out, startup_failure  open the issue `RELEASE-RED: hostkeeper <workflow>: ...`,
+#                                        or bring the open one up to date: the run, its commit,
+#                                        the jobs that failed, and (for a release run) whether
+#                                        the deploy went out
+#   success                              close it, once the run's commit has the red commit in
+#                                        its history (and, for a release run, it released
+#                                        something)
+#   cancelled, skipped                   nothing
+#
+# It runs no code from any pull request: `workflow_run` runs this file as it is on main, and the
+# checkout is main's, with its whole history (a success closes the issue only for a commit after
+# the red one). It has no concurrency group, so no run of it is replaced and every completed run
+# is seen. Its job holds `issues: write` for the issue, `actions: read` for the run and its jobs,
+# and `contents: read` for the checkout; the workflow lint holds it to that shape
+# (crates/xtask/tests/workflows/release_red.rs).
+name: release-red
+
+on:
+  workflow_run:
+    workflows: [release, privileged]
+    types: [completed]
+    branches: [main]
+
+permissions: {}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  red:
+    if: ${{ github.ref == 'refs/heads/main' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: rustup toolchain install
+      # xtask is compiled before any step holds the token.
+      - name: Compile xtask
+        run: cargo xtask --help
+      - name: Open, update or close the RELEASE-RED issue of the run that completed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW: ${{ github.event.workflow_run.path }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          COMMIT: ${{ github.event.workflow_run.head_sha }}
+        run: cargo xtask release red --repo "$GITHUB_REPOSITORY" --workflow "$WORKFLOW" --run-id "$RUN_ID" --commit "$COMMIT"

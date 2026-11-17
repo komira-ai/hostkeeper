@@ -299,11 +299,11 @@ fn a_deploy_that_does_not_wait_for_the_newest_release_and_its_digest_is_refused(
     assert_eq!(
         release_problems(&in_job(
             DIGEST_JOB,
-            "    needs: [plan, newest]\n",
-            "    needs: [plan, publish]\n"
+            "    needs: [plan, newest, publish, image]\n",
+            "    needs: [plan, newest]\n"
         )),
         [
-            "release.yml: job cp-deploy-digest needs [\"plan\", \"publish\"], not [\"newest\", \"plan\"]",
+            "release.yml: job cp-deploy-digest needs [\"newest\", \"plan\"], not [\"image\", \"newest\", \"plan\", \"publish\"]",
         ]
     );
 }

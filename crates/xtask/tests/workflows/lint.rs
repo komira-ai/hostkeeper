@@ -100,8 +100,9 @@ use super::one_command;
 use super::packages;
 use super::pinned_cache;
 use super::pr_device;
-use super::release::{self, PLAN_IF, RELEASE_IF, SIGN_IF};
+use super::release::{self, RELEASE_IF, SIGN_IF};
 use super::release_macos;
+use super::release_red;
 use super::release_ref;
 use super::set_desired;
 use super::xtask_calls;
@@ -121,8 +122,6 @@ pub struct Allowed {
 /// - `artifacts.yml` / `attest`: `id-token` and `attestations`, to sign, on a push to main. It
 ///   is the one job that can sign: the signer identity every consumer checks is that file.
 /// - `release.yml` / `publish`: `contents`, to create the release and its tag.
-/// - `release.yml` / `plan`: `issues`, to open or update the one issue that tracks a release
-///   held by a failed privileged run.
 /// - `release.yml` / `image`: `packages`, to push the coordinator's image, the checked bytes of
 ///   the release, to this repository's package in the registry.
 /// - `release.yml` / `coordinator`: `id-token`, for the tailnet join alone (it checks out
@@ -135,6 +134,9 @@ pub struct Allowed {
 ///   [`cp_deploy`] holds the rest of its shape.
 /// - `advisories.yml` / `advisories`: `issues`, to open, rewrite or close the one issue that
 ///   lists the security advisories against the dependencies, on a run of main.
+/// - `release-red.yml` / `red`: `issues`, to open, update or close the `RELEASE-RED` issue of a
+///   completed run of `release.yml` or `privileged.yml` on main ([`release_red::RED_IF`]);
+///   [`release_red`] holds the rest of its shape.
 pub const WRITE_ALLOWED: &[Allowed] = &[
     Allowed {
         file: "artifacts.yml",
@@ -153,12 +155,6 @@ pub const WRITE_ALLOWED: &[Allowed] = &[
         job: "publish",
         scope: "contents",
         condition: RELEASE_IF,
-    },
-    Allowed {
-        file: "release.yml",
-        job: "plan",
-        scope: "issues",
-        condition: PLAN_IF,
     },
     Allowed {
         file: "release.yml",
@@ -184,6 +180,12 @@ pub const WRITE_ALLOWED: &[Allowed] = &[
         scope: "issues",
         condition: advisories::ISSUE_IF,
     },
+    Allowed {
+        file: release_red::FILE,
+        job: release_red::JOB,
+        scope: "issues",
+        condition: release_red::RED_IF,
+    },
 ];
 
 /// The jobs that may hold `id-token: write`, by workflow file and job. The scope writes nothing
@@ -194,7 +196,7 @@ pub const ID_TOKEN_ALLOWED: &[(&str, &str)] = &[(set_desired::FILE, set_desired:
 
 /// The workflow of the privileged tests, after a merge to main and by hand: with
 /// [`net_install::FILE`], one of the two workflows that may run a job as root (`sudo`, a
-/// privileged container) but on a pull request, and the one a release waits for. On a pull
+/// privileged container) but on a pull request; no release waits for it. On a pull
 /// request, the copies of its jobs in [`pr_device::FILE`] may.
 pub const PRIVILEGED_WORKFLOW: &str = "privileged.yml";
 

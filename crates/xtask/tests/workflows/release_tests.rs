@@ -5,8 +5,7 @@
 
 use super::lint::{WRITE_ALLOWED, lint};
 use super::release::{
-    PLAN_IF, PLAN_RUN, PUBLISH_GROUP, RELEASE_EXEMPT, RELEASE_GROUP, RELEASE_IF, SIGN_IF,
-    publish_problems,
+    PLAN_RUN, PUBLISH_GROUP, RELEASE_EXEMPT, RELEASE_GROUP, RELEASE_IF, SIGN_IF, publish_problems,
 };
 use super::{CLEAN, push_only, with, with_in, workflows};
 
@@ -223,11 +222,11 @@ fn publish_job_alone_holds_contents_write() {
         &text,
         "job verify: `contents: write` is not allowed in release.yml",
     );
-    let plan = "      actions: read\n      issues: write\n";
+    let plan = "      contents: read\n      actions: read\n    outputs:\n      release:";
     let text = with_in(
         &workflow("release.yml"),
         plan,
-        &format!("{plan}      contents: write\n"),
+        &plan.replace("    outputs:", "      contents: write\n    outputs:"),
     );
     assert_refused(
         "release.yml",
@@ -245,11 +244,11 @@ fn publish_job_alone_holds_contents_write() {
         &text,
         "job attest: `contents: write` is not allowed in artifacts.yml",
     );
-    let publish = format!("    needs: [plan, verify]\n    if: {RELEASE_IF}\n");
+    let publish = format!("  publish:\n    needs: [plan, verify]\n    if: {RELEASE_IF}\n");
     let text = with_in(
         &workflow("release.yml"),
         &publish,
-        "    needs: [plan, verify]\n    if: ${{ always() }}\n",
+        "  publish:\n    needs: [plan, verify]\n    if: ${{ always() }}\n",
     );
     assert_refused(
         "release.yml",
@@ -261,16 +260,16 @@ fn publish_job_alone_holds_contents_write() {
         &text,
         &format!("release.yml: job publish needs the exact `if: {RELEASE_IF}`"),
     );
-    // The plan opens the issue of a held release under its own exact condition.
+    // The plan writes nothing: an issue write is no longer allowed it under any condition.
     let text = with_in(
         &workflow("release.yml"),
-        &format!("    if: {PLAN_IF}\n"),
-        &format!("    if: {}\n", PLAN_IF.replacen("&&", "||", 1)),
+        plan,
+        &plan.replace("    outputs:", "      issues: write\n    outputs:"),
     );
     assert_refused(
         "release.yml",
         &text,
-        &format!("job plan: `issues: write` needs the exact `if: {PLAN_IF}`"),
+        "job plan: `issues: write` is not allowed in release.yml",
     );
 }
 
@@ -418,18 +417,29 @@ fn a_workflow_that_publishes_outside_the_release_group_is_refused() {
 }
 
 #[test]
-fn release_workflow_run_names_exactly_the_three_required_workflows() {
-    // Catches: a release that no longer waits for one of ci, privileged and artifacts (a red
-    // privileged run would no longer hold it), or that starts for a run on another branch.
+fn release_workflow_run_names_exactly_the_two_required_workflows() {
+    // Catches: a release that no longer starts on the completion of the unit tests or the
+    // build, one that starts on (and so reads as waiting for) a slow suite such as the
+    // privileged tests, or one that starts for a run on another branch.
     let text = with_in(
         &release_yml(),
-        "workflows: [ci, privileged, artifacts]",
         "workflows: [ci, artifacts]",
+        "workflows: [ci]",
     );
     assert_refused(
         "release.yml",
         &text,
-        "release.yml: workflow_run.workflows is [\"artifacts\", \"ci\"], not [\"artifacts\", \"ci\", \"privileged\"]",
+        "release.yml: workflow_run.workflows is [\"ci\"], not [\"artifacts\", \"ci\"]",
+    );
+    let text = with_in(
+        &release_yml(),
+        "workflows: [ci, artifacts]",
+        "workflows: [ci, privileged, artifacts]",
+    );
+    assert_refused(
+        "release.yml",
+        &text,
+        "release.yml: workflow_run.workflows is [\"artifacts\", \"ci\", \"privileged\"], not [\"artifacts\", \"ci\"]",
     );
     let text = with_in(
         &release_yml(),
@@ -559,8 +569,8 @@ fn release_workflow_keeps_its_jobs_and_checks_the_binary() {
     // no longer running the binary it is about to release.
     let text = with_in(
         &workflow("release.yml"),
-        "    needs: [plan, verify]\n",
-        "    needs: [plan]\n",
+        "  publish:\n    needs: [plan, verify]\n",
+        "  publish:\n    needs: [plan]\n",
     );
     assert_refused(
         "release.yml",

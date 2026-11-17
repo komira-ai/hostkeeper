@@ -311,9 +311,12 @@ fn plain(name: &str, needs: &[&str], condition: String, verbs: &[&str]) -> Row {
 
 /// Every job of the package channels, with `newest`.
 pub fn rows() -> Vec<Row> {
+    // `newest` waits for every verify alone: the channels read the files verify checked, never
+    // the GitHub release, so they run beside publish and image (the deploy jobs that need the
+    // published release wait for it themselves).
     let mut rows = vec![plain(
         NEWEST_JOB,
-        &["image", "plan", "publish"],
+        &["plan", "verify"],
         format!("${{{{ {P} }}}}"),
         &[],
     )];

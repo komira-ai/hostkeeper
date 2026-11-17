@@ -11,7 +11,9 @@
 //!    ([`super::image_index`]): its SHA-256 is the digest of the image a registry serves;
 //! 5. each attested asset verifies twice, online and from its bundle, and every attestation
 //!    returned names this repository's signer workflow and ref, the pinned commit, and the
-//!    SHA-256 of the file.
+//!    SHA-256 of the file. Every verification is asked for at once ([`Verifier::verify_each`]),
+//!    so the process runner runs them side by side; the problems are listed in the order of the
+//!    assets all the same.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -22,7 +24,7 @@ use super::contract::{
 };
 use super::hkctl;
 use super::image_index;
-use super::ports::{Attestation, PortError, Verifier};
+use super::ports::{Ask, Attestation, PortError, Verifier};
 use super::{Error, file_sha256};
 
 /// Checks the assets in `dir` against `version`, `commit` and `verifier`. Every problem is in
@@ -41,9 +43,8 @@ pub(crate) fn check(
     check_hkctl(dir, (version, commit), &present, &mut problems)?;
     check_image_index(dir, version, &present, &mut problems);
     let attested = attested_names(version);
-    for name in attested.iter().filter(|n| present.contains(*n)) {
-        check_attestations(verifier, dir, name, commit, &mut problems)?;
-    }
+    let names: Vec<&String> = attested.iter().filter(|n| present.contains(*n)).collect();
+    check_attestations(verifier, dir, &names, commit, &mut problems)?;
     if !problems.is_empty() {
         return Err(Error::Refused(problems));
     }
@@ -185,25 +186,49 @@ fn check_hkctl(
     Ok(())
 }
 
-/// Step 5 for one attested asset: verified online, then from its bundle.
+/// Step 5 for the attested assets `names`: each verified online, then from its bundle, all
+/// asked for at once; the problems in the order of `names`, the online form first.
 fn check_attestations(
     verifier: &dyn Verifier,
     dir: &Path,
-    name: &str,
+    names: &[&String],
     commit: &Commit,
     problems: &mut Vec<String>,
 ) -> Result<(), Error> {
-    let file = dir.join(name);
-    let bundle = dir.join(bundle_of(name));
     let signer = Signer::hostkeeper();
-    let digest = file_sha256(&file)?;
-    let forms = [("online", None), ("offline", Some(bundle.as_path()))];
-    for (form, bundle) in forms {
-        let label = format!("{name} ({form})");
+    let paths: Vec<(String, std::path::PathBuf, std::path::PathBuf)> = names
+        .iter()
+        .map(|name| ((*name).clone(), dir.join(name), dir.join(bundle_of(name))))
+        .collect();
+    let mut digests = Vec::with_capacity(paths.len());
+    let mut asks = Vec::with_capacity(2 * paths.len());
+    let mut labels = Vec::with_capacity(2 * paths.len());
+    for (name, file, bundle) in &paths {
+        let digest = file_sha256(file)?;
+        for (form, bundle) in [("online", None), ("offline", Some(bundle.as_path()))] {
+            asks.push(Ask {
+                signer: &signer,
+                file,
+                bundle,
+                commit,
+            });
+            labels.push((format!("{name} ({form})"), digests.len()));
+        }
+        digests.push(digest);
+    }
+    let answers = verifier.verify_each(&asks);
+    if answers.len() != asks.len() {
+        problems.push(format!(
+            "the verifier answered {} of the {} verifications asked for",
+            answers.len(),
+            asks.len()
+        ));
+    }
+    for ((label, digest), answer) in labels.iter().zip(answers) {
         judge(
-            &label,
-            verifier.verify(&signer, &file, bundle, commit),
-            &digest,
+            label,
+            answer,
+            &digests[*digest],
             (&signer, commit),
             problems,
         );

@@ -769,14 +769,12 @@ fn a_repository_is_two_parts_of_letters_digits_dash_underscore_and_dot() {
 }
 
 #[test]
-fn a_release_waits_for_ci_privileged_and_artifacts_only() {
-    // Catches: a workflow added to the runs a release waits for, such as net-install.yml, whose
-    // emulated install takes hours (it runs on its own triggers and holds no release), or one of
-    // the three dropped, so that a red privileged or artifacts run no longer holds a release.
-    assert_eq!(
-        REQUIRED_WORKFLOWS,
-        ["ci.yml", "privileged.yml", "artifacts.yml"]
-    );
+fn a_release_waits_for_ci_and_artifacts_only() {
+    // Catches: a slow suite added to the runs a release waits for, such as privileged.yml (the
+    // device tests as root) or net-install.yml (an emulated install that takes hours), which run
+    // beside the release and hold none, or one of the two dropped, so that a red unit test or
+    // build no longer holds a release.
+    assert_eq!(REQUIRED_WORKFLOWS, ["ci.yml", "artifacts.yml"]);
 }
 
 #[test]
@@ -811,4 +809,47 @@ fn only_the_failing_build_names_the_testing_fail_repository_entry() {
     );
     assert_eq!(TESTING_ENTRY, "komira-testing");
     assert_eq!(TESTING_FAIL_ENTRY, "komira-testing-fail");
+}
+
+/// The `needs` of each job of `release.yml`, as the file lists them (every job's `needs` is one
+/// flow sequence on its line).
+fn release_needs() -> std::collections::BTreeMap<String, Vec<String>> {
+    let text = include_str!("../../../../../.github/workflows/release.yml");
+    let jobs = text.split_once("\njobs:\n").expect("a jobs map").1;
+    let mut needs = std::collections::BTreeMap::new();
+    let mut job: Option<String> = None;
+    for line in jobs.lines() {
+        let header = line.strip_prefix("  ").and_then(|l| l.strip_suffix(':'));
+        if let Some(name) = header.filter(|n| !n.starts_with([' ', '#'])) {
+            needs.insert(name.to_owned(), Vec::new());
+            job = Some(name.to_owned());
+        }
+        if let (Some(job), Some(list)) = (&job, line.strip_prefix("    needs: [")) {
+            let list = list.strip_suffix(']').expect("needs on one line");
+            needs.insert(
+                job.clone(),
+                list.split(", ").map(str::to_owned).collect::<Vec<String>>(),
+            );
+        }
+    }
+    needs
+}
+
+#[test]
+fn the_deploy_jobs_are_set_desired_and_every_job_it_waits_for() {
+    // Catches: a job the deploy waits for left out of DEPLOY_JOBS (a failure of it would not
+    // release the release again), or a job after the deploy (the Mac's beta stage, an install
+    // check, the promotion to stable) listed, so that its failure deploys the release again.
+    let needs = release_needs();
+    assert!(needs.contains_key("macos-test") && needs.contains_key("stable-apt-write"));
+    let mut deploy = std::collections::BTreeSet::new();
+    let mut next = vec!["set-desired".to_owned()];
+    while let Some(job) = next.pop() {
+        if deploy.insert(job.clone()) {
+            next.extend(needs[&job].iter().cloned());
+        }
+    }
+    let listed: std::collections::BTreeSet<String> =
+        DEPLOY_JOBS.iter().map(|j| (*j).to_owned()).collect();
+    assert_eq!(listed, deploy);
 }

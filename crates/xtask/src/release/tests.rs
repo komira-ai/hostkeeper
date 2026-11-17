@@ -396,10 +396,8 @@ fn lent_ports_answer_for_the_verb_that_reads_them() {
     assert_eq!(
         run(locate, || Lent(fakes.ports())),
         Ok(vec![
-            format!(
-                "{COMMIT} is on main; ci.yml run 1000, privileged.yml run 1001 and artifacts.yml run 1002 succeeded"
-            ),
-            "run-id=1002".to_owned(),
+            format!("{COMMIT} is on main; ci.yml run 1000 and artifacts.yml run 1001 succeeded"),
+            "run-id=1001".to_owned(),
         ])
     );
 }
@@ -580,7 +578,6 @@ fn a_plan_from_a_tip_whose_ci_is_pending_publishes_the_done_commits_oldest_first
     });
     green(&fakes, &a);
     green(&fakes, &b);
-    fakes.runs.push("privileged.yml", &tip, "success");
     fakes.runs.push("artifacts.yml", &tip, "success");
     fakes.runs.add("ci.yml", &tip, "push", "main", None);
 
