@@ -6,7 +6,7 @@
 //! the command line and whose `why` is the operating system's text or git's trimmed stderr.
 
 use super::contract::Commit;
-use super::ports::{Exec, GitHistory, PortError};
+use super::ports::{Exec, GitHistory, PortError, Ran};
 
 /// `program` and `args` as one command line text.
 pub(crate) fn command_line(program: &str, args: &[String]) -> String {
@@ -22,10 +22,13 @@ pub(crate) fn stdout_of(
     program: &str,
     args: &[String],
 ) -> Result<Vec<u8>, PortError> {
-    let line = command_line(program, args);
-    let ran = exec
-        .spawn(program, args)
-        .map_err(|e| PortError::new(line.clone(), e.to_string()))?;
+    stdout_of_ran(command_line(program, args), exec.spawn(program, args))
+}
+
+/// What the run of the command line `line` printed on stdout, given how it ran (see
+/// [`stdout_of`]).
+pub(crate) fn stdout_of_ran(line: String, ran: std::io::Result<Ran>) -> Result<Vec<u8>, PortError> {
+    let ran = ran.map_err(|e| PortError::new(line.clone(), e.to_string()))?;
     if ran.success {
         Ok(ran.stdout)
     } else {

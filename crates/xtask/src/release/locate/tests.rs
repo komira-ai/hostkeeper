@@ -33,22 +33,40 @@ fn a_commit_not_on_main_is_refused_whatever_its_runs_say() {
 }
 
 #[test]
-fn a_commit_with_three_successful_runs_is_located_by_its_artifacts_run() {
+fn a_commit_with_two_successful_runs_is_located_by_its_artifacts_run() {
     // Catches: the printed run id being that of another workflow than the artifacts run.
     let commit = nth_commit(1);
     let fakes = fakes_on_main(&commit);
     let ci = fakes.runs.push("ci.yml", &commit, "success");
-    let privileged = fakes.runs.push("privileged.yml", &commit, "success");
     let artifacts = fakes.runs.push("artifacts.yml", &commit, "success");
     assert_eq!(
         locate_of(&fakes, &commit, None),
         Ok(vec![
             format!(
-                "{commit} is on main; ci.yml run {ci}, privileged.yml run {privileged} and artifacts.yml run {artifacts} succeeded"
+                "{commit} is on main; ci.yml run {ci} and artifacts.yml run {artifacts} succeeded"
             ),
             format!("run-id={artifacts}"),
         ])
     );
+}
+
+#[test]
+fn a_red_pending_or_missing_privileged_run_does_not_refuse_a_commit() {
+    // Catches: the privileged tests holding a release again, whatever state their run is in.
+    for privileged in [Some("failure"), None, Some("cancelled")] {
+        let commit = nth_commit(1);
+        let fakes = fakes_on_main(&commit);
+        fakes.runs.push("ci.yml", &commit, "success");
+        let artifacts = fakes.runs.push("artifacts.yml", &commit, "success");
+        match privileged {
+            Some(conclusion) => fakes.runs.push("privileged.yml", &commit, conclusion),
+            None => fakes
+                .runs
+                .add("privileged.yml", &commit, "push", "main", None),
+        };
+        let lines = locate_of(&fakes, &commit, None).expect("located");
+        assert_eq!(lines.last(), Some(&format!("run-id={artifacts}")));
+    }
 }
 
 #[test]
@@ -57,7 +75,6 @@ fn the_run_id_is_appended_to_the_output_file() {
     let commit = nth_commit(1);
     let fakes = fakes_on_main(&commit);
     fakes.runs.push("ci.yml", &commit, "success");
-    fakes.runs.push("privileged.yml", &commit, "success");
     let artifacts = fakes.runs.push("artifacts.yml", &commit, "success");
     let dir = scratch("locate-output");
     let file = dir.join("out");
@@ -79,11 +96,7 @@ fn every_workflow_without_a_run_is_a_line_of_the_refusal() {
     };
     assert_eq!(
         locate_of(&fakes, &commit, None),
-        Err(Error::Refused(vec![
-            line("ci.yml"),
-            line("privileged.yml"),
-            line("artifacts.yml"),
-        ]))
+        Err(Error::Refused(vec![line("ci.yml"), line("artifacts.yml")]))
     );
 }
 
@@ -93,8 +106,7 @@ fn a_pending_a_failed_and_a_cancelled_run_are_each_refused_in_words() {
     let commit = nth_commit(1);
     let fakes = fakes_on_main(&commit);
     let ci = fakes.runs.add("ci.yml", &commit, "push", "main", None);
-    let privileged = fakes.runs.push("privileged.yml", &commit, "failure");
-    let artifacts = fakes.runs.push("artifacts.yml", &commit, "cancelled");
+    let artifacts = fakes.runs.push("artifacts.yml", &commit, "failure");
     assert_eq!(
         locate_of(&fakes, &commit, None),
         Err(Error::Refused(vec![
@@ -102,12 +114,19 @@ fn a_pending_a_failed_and_a_cancelled_run_are_each_refused_in_words() {
                 "no successful push run of ci.yml on main for {commit}: run {ci} has not completed"
             ),
             format!(
-                "no successful push run of privileged.yml on main for {commit}: run {privileged} failed"
-            ),
-            format!(
-                "no successful push run of artifacts.yml on main for {commit}: run {artifacts} ended cancelled"
+                "no successful push run of artifacts.yml on main for {commit}: run {artifacts} failed"
             ),
         ]))
+    );
+    let other = nth_commit(2);
+    let fakes = fakes_on_main(&other);
+    fakes.runs.push("ci.yml", &other, "success");
+    let cancelled = fakes.runs.push("artifacts.yml", &other, "cancelled");
+    assert_eq!(
+        locate_of(&fakes, &other, None),
+        Err(Error::Refused(vec![format!(
+            "no successful push run of artifacts.yml on main for {other}: run {cancelled} ended cancelled"
+        )]))
     );
 }
 
@@ -123,7 +142,6 @@ fn a_pull_request_run_does_not_locate_a_commit() {
         "feature",
         Some("success"),
     );
-    fakes.runs.push("privileged.yml", &commit, "success");
     fakes.runs.push("artifacts.yml", &commit, "success");
     assert_eq!(
         locate_of(&fakes, &commit, None),

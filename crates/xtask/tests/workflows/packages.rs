@@ -1,5 +1,6 @@
 //! The rules of the package-channel jobs of `release.yml` (docs/deploy/package-repositories.md):
-//! the jobs after `publish` and `image` that put the release's deb and rpm packages into the apt and
+//! the jobs behind `newest` (which waits for `verify` alone, so they run beside `publish` and
+//! `image`; `promote-check` waits for both) that put the release's deb and rpm packages into the apt and
 //! rpm repositories and its macOS installer into the pool directory, `testing` first, check them
 //! from there, and make the same bytes `stable` once [`STAGES`] all passed.
 //!
@@ -311,9 +312,12 @@ fn plain(name: &str, needs: &[&str], condition: String, verbs: &[&str]) -> Row {
 
 /// Every job of the package channels, with `newest`.
 pub fn rows() -> Vec<Row> {
+    // `newest` waits for every verify alone: the channels read the files verify checked, never
+    // the GitHub release, so they run beside publish and image (the deploy jobs that need the
+    // published release wait for it themselves).
     let mut rows = vec![plain(
         NEWEST_JOB,
-        &["image", "plan", "publish"],
+        &["plan", "verify"],
         format!("${{{{ {P} }}}}"),
         &[],
     )];
@@ -396,7 +400,10 @@ pub fn rows() -> Vec<Row> {
     descriptor.permissions = vec![("contents", "read"), ("id-token", "write")];
     descriptor.gated = true;
     rows.push(descriptor);
-    let mut needs = vec!["newest", "plan"];
+    // `promote-check` waits for publish and image too: `newest` no longer does, and a release is
+    // made stable only once it is published and its image pushed (a failure of either holds
+    // every promotion, through `!failure()`).
+    let mut needs = vec!["image", "newest", "plan", "publish"];
     needs.extend(STAGES);
     rows.push(plain(
         "promote-check",

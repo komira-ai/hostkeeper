@@ -8,7 +8,8 @@
 //! no secret and no macOS job on a pull request, in `pr_device_tests.rs`; those of the Mac's
 //! tests, the macOS stage of `release.yml` (no macOS job runs for a pull request), in
 //! `release_macos_tests.rs`; those of `advisories.yml`, the advisory
-//! monitor, in `advisories.rs`.
+//! monitor, in `advisories.rs`; those of `release-red.yml`, the alert of a red run of a suite that
+//! holds no release, in `release_red.rs`.
 
 mod advisories;
 mod callers;
@@ -65,6 +66,7 @@ mod release_macos;
 mod release_macos_tests;
 mod release_native_tests;
 mod release_pxe_tests;
+mod release_red;
 mod release_ref;
 mod release_ref_tests;
 mod release_tests;

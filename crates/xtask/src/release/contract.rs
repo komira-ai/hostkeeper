@@ -48,16 +48,51 @@ pub(crate) const ARTIFACTS_WORKFLOW: &str = "artifacts.yml";
 /// The workflow file that lints and tests.
 pub(crate) const CI_WORKFLOW: &str = "ci.yml";
 
-/// The workflow file that runs the privileged tests (real systemd, root).
+/// The workflow file that runs the privileged tests (real systemd, root). No release waits for
+/// it: a red run of it on [`MAIN`] opens a `RELEASE-RED` issue (`release red`).
 pub(crate) const PRIVILEGED_WORKFLOW: &str = "privileged.yml";
 
 /// The workflow file that releases (`release.yml`), whose runs `release plan` reads to resume a
-/// release whose run did not succeed.
+/// release whose deploy did not succeed.
 pub(crate) const RELEASE_WORKFLOW: &str = "release.yml";
 
-/// The three workflows a commit needs a successful push run of on [`MAIN`] to be released.
-pub(crate) const REQUIRED_WORKFLOWS: [&str; 3] =
-    [CI_WORKFLOW, PRIVILEGED_WORKFLOW, ARTIFACTS_WORKFLOW];
+/// The two workflows a commit needs a successful push run of on [`MAIN`] to be released: the
+/// unit tests and the build. The slower suites (the privileged tests, the Mac's beta stage, the
+/// package channels' install checks) run beside or after the deploy and hold no release.
+pub(crate) const REQUIRED_WORKFLOWS: [&str; 2] = [CI_WORKFLOW, ARTIFACTS_WORKFLOW];
+
+/// The jobs of `release.yml` that deploy a release: the files checked and published, the
+/// coordinator's image pushed and deployed, the package channels the hosts install from, and the
+/// desired version set. A release run counts as failed for `release plan` (which releases it
+/// again) only when one of these did not succeed; a failure of any other job of the run (the
+/// Mac's beta stage, the install checks, the promotion to stable) is reported by `release red`
+/// and releases nothing again. A job is named here by the name before its matrix values
+/// (`publish (0.1.2, v0.1.2, <commit>)`) or its called workflow's job (`cp-deploy / deploy`).
+/// They are exactly `set-desired` and every job it waits for, at any depth (a test reads
+/// `release.yml` and holds the two the same).
+pub(crate) const DEPLOY_JOBS: [&str; 21] = [
+    "plan",
+    "verify",
+    "publish",
+    "image",
+    "targets",
+    "newest",
+    "cp-deploy-digest",
+    "cp-deploy",
+    "coordinator",
+    "testing-apt-read",
+    "testing-apt-index",
+    "testing-apt-write",
+    "testing-apt-read-2",
+    "testing-apt-index-2",
+    "testing-apt-write-2",
+    "testing-apt-read-3",
+    "testing-apt-index-3",
+    "testing-apt-write-3",
+    "testing-pkg-upload",
+    "no-downgrade",
+    "set-desired",
+];
 
 /// The name of the build-time input that carries the full commit into a shipped binary, which
 /// prints its first [`SHORT_COMMIT`] digits in [`stamp_string`]. The release notes name it.

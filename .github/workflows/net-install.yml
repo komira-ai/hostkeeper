@@ -6,7 +6,7 @@
 # seed fetch; net-install then makes the report of the measurement of the guest's first install
 # (cargo xtask netinstall-report) and keeps it as the artifact net-install-report.
 #
-# It is no part of a release: release.yml waits for ci, privileged and artifacts only, and an
+# It is no part of a release: release.yml waits for ci and artifacts only, and an
 # emulated install takes hours (the arm64 job's bound is 330 minutes), so it runs on its own:
 #
 # - on a push to main that changes the network-install code: the boot server's crates

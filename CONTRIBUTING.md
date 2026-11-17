@@ -96,8 +96,10 @@ Everything a pull request runs proves hostkeeper against fakes of the host.
 `.github/workflows/privileged.yml` is the one place where the adapters behind those fakes meet the
 real thing: it runs the tests of `crates/hostkeeper-privileged` as root against the systemd of a
 GitHub-hosted `ubuntu-24.04` runner. It runs after a merge to `main` and by hand
-(`workflow_dispatch`), never on a pull request. A release waits for a successful run of it on its
-commit. A red run on `main` is a defect: fix it forward in a new pull request.
+(`workflow_dispatch`), never on a pull request. No release waits for it: a release waits for the
+unit tests (`ci.yml`) and the build (`artifacts.yml`) alone. A red run on `main` is a defect: it
+opens the issue `RELEASE-RED: hostkeeper privileged: ...` (`release-red.yml`), and you fix it
+forward in a new pull request; the next green run closes the issue.
 
 Network install end to end (below) runs as root too, in `.github/workflows/net-install.yml`, on its
 own triggers, and no release waits for it: an emulated install takes hours. It runs on a push to

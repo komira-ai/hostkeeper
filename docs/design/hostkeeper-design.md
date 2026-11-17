@@ -178,9 +178,9 @@ Designed. Certificate issuance is a module of the coordinator, not a second proc
 
 A release job in a service's repository downloads the hostkeeper release, verifies its provenance (checksums, attestation, signer workflow, attested source commit equal to the pin), and only then requests an OIDC token and runs `hostkeeper ctl releases set-desired --service X --version V`, then polls convergence.
 
-hostkeeper's own release planner holds releases from a commit whose privileged run on `main` failed: that commit is never released, a later commit whose ci, privileged and artifacts runs all succeeded is released and lifts the hold, and a ci success alone never lifts it.
+hostkeeper's own release planner waits for the unit tests (ci) and the build (artifacts) of a commit and for nothing else: the privileged tests run beside the release, and the Mac's beta stage, the install checks and the promotion to stable run after its deploy. A red run of the privileged tests, or of a release run, opens an issue titled `RELEASE-RED: hostkeeper ...` (`release-red.yml`), which the next green run of that workflow on a later commit closes; no release is held.
 
-A release is published before its image is pushed and before it is set as the desired version, so a release run can publish a release and then fail. When the planner releases no newer commit, it plans the newest published release again if the latest release run that published it did not succeed; every job after the plan is idempotent for a release already published, and after three such runs in a row that did not succeed the planner leaves the release and says so.
+A release is published before its image is pushed and before it is set as the desired version, so a release run can publish a release and then fail. When the planner releases no newer commit, it plans the newest published release again if a deploy job (set-desired and every job it waits for) of the latest release run that published it did not succeed; every job after the plan is idempotent for a release already published, and after three such runs in a row that did not succeed the planner leaves the release and says so.
 
 ### 4.6 The boot image and installers
 

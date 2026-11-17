@@ -2,7 +2,7 @@
 //! network-install jobs: its triggers, paths and concurrency, its two jobs and their runner, the
 //! test targets of each, the dpkg step that installs QEMU and the firmware from the job's own
 //! pinned set, and the step that fetches the ISO by the pin of `packaging/netboot/pins.toml`;
-//! and that `privileged.yml`, which a release waits for, has
+//! and that `privileged.yml`, which runs after every merge, has
 //! none of these jobs. Each rule is shown to refuse its defect by putting it into the committed
 //! workflow and reading the exact problems it reports.
 
@@ -288,8 +288,8 @@ fn job_section(text: &str, job: &str) -> String {
 
 #[test]
 fn a_network_install_job_back_in_privileged_yml_is_refused() {
-    // Catches: the network-install jobs moved back into privileged.yml, whose successful run each
-    // release waits for: a release would wait hours on an emulated install again. Each job is
+    // Catches: the network-install jobs moved back into privileged.yml, which runs after every
+    // merge: each merge would hold a runner for hours on an emulated install again. Each job is
     // refused as no job of that file by the shape check; and net-install.yml's workflow is not
     // among those release.yml waits for (release_tests.rs holds this list to release.yml's
     // `workflow_run.workflows`; the release verbs' own list is held in src/release/tests.rs).
@@ -306,7 +306,7 @@ fn a_network_install_job_back_in_privileged_yml_is_refused() {
     let doc = yaml::load(&net).expect("net-install.yml parses");
     let name = entry(&doc, "name").and_then(Node::as_str);
     assert_eq!(name, Some("net-install"));
-    assert_eq!(REQUIRED_WORKFLOWS, ["artifacts", "ci", "privileged"]);
+    assert_eq!(REQUIRED_WORKFLOWS, ["artifacts", "ci"]);
 }
 
 #[test]

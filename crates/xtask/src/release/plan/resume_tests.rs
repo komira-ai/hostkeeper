@@ -1,6 +1,6 @@
 //! The plan's resume of the newest published release: released again when the latest release
-//! run that released it completed other than successfully; left when that run succeeded, is
-//! still going, or no run released it; never when a newer commit is released; and a GitHub that
+//! run that released it completed with a deploy job that did not succeed; left when that run
+//! deployed it (whatever its other jobs did), is still going, or no run released it; never when a newer commit is released; and a GitHub that
 //! cannot list a run's jobs fails the plan. Each by its full lines.
 
 use super::*;
@@ -109,7 +109,6 @@ fn a_release_whose_release_run_failed_is_released_again_while_the_next_commit_wa
     let failed = release_run(&fakes, &r, "main", Some("failure"), &released(&r));
     let this_run = release_run(&fakes, &a, "main", None, &[]);
     assert!(plan_only < failed && failed < this_run);
-    fakes.runs.push("privileged.yml", &a, "success");
     fakes.runs.push("artifacts.yml", &a, "success");
     let ci = fakes.runs.add("ci.yml", &a, "push", "main", None);
     assert_eq!(
@@ -135,7 +134,7 @@ fn a_release_whose_release_run_succeeded_is_left() {
     assert_eq!(
         plan(&fakes.ports(), &request(&r)),
         Ok(nothing_but(Some(format!(
-            "v0.1.1 of {r}: its release run {ok} succeeded"
+            "v0.1.1 of {r}: its release run {ok} deployed it"
         ))))
     );
 }
@@ -151,7 +150,7 @@ fn the_latest_release_run_of_the_release_decides() {
     assert_eq!(
         plan(&fakes.ports(), &request(&r)),
         Ok(nothing_but(Some(format!(
-            "v0.1.1 of {r}: its release run {ok} succeeded"
+            "v0.1.1 of {r}: its release run {ok} deployed it"
         ))))
     );
     let cancelled = release_run(&fakes, &r, "main", Some("cancelled"), &released(&r));
@@ -166,6 +165,91 @@ fn the_latest_release_run_of_the_release_decides() {
             again_matrix(&r),
         ])
     );
+}
+
+#[test]
+fn a_run_that_deployed_and_failed_after_the_deploy_is_left_and_a_failed_deploy_job_is_not() {
+    // Catches: a red Mac beta stage, install check or promotion (jobs after the deploy) making
+    // the plan release and deploy the same release again, or a red deploy job behind a red run
+    // taken for a deploy that went out.
+    let (h, r) = released_root();
+    let fakes = fakes_over(h, &r);
+    let ended = |names: &[(&str, &str)]| -> Vec<Job> {
+        names
+            .iter()
+            .map(|(name, conclusion)| Job {
+                name: (*name).to_owned(),
+                conclusion: Some((*conclusion).to_owned()),
+            })
+            .collect()
+    };
+    let publish = publish_job(&r);
+    let after = fakes
+        .runs
+        .add("release.yml", &r, "workflow_run", "main", Some("failure"));
+    fakes.runs.jobs.borrow_mut().insert(
+        after,
+        ended(&[
+            ("plan", "success"),
+            (&publish, "success"),
+            ("cp-deploy / deploy hostkeeper-coordinator", "success"),
+            ("testing-apt-read-2", "skipped"),
+            ("set-desired / set-desired", "success"),
+            ("macos-test", "failure"),
+            ("check-apt (hostkeeper, arm64)", "failure"),
+            ("stable-apt-write", "cancelled"),
+        ]),
+    );
+    assert_eq!(
+        plan(&fakes.ports(), &request(&r)),
+        Ok(nothing_but(Some(format!(
+            "v0.1.1 of {r}: its release run {after} deployed it"
+        ))))
+    );
+    for (deploy, conclusion) in [
+        ("testing-apt-write-3", "failure"),
+        ("cp-deploy / deploy hostkeeper-coordinator", "cancelled"),
+        ("coordinator", "timed_out"),
+    ] {
+        let (h, r) = released_root();
+        let fakes = fakes_over(h, &r);
+        let red = fakes
+            .runs
+            .add("release.yml", &r, "workflow_run", "main", Some("failure"));
+        fakes.runs.jobs.borrow_mut().insert(
+            red,
+            ended(&[
+                (&publish, "success"),
+                ("macos-test", "success"),
+                (deploy, conclusion),
+            ]),
+        );
+        let lines = plan(&fakes.ports(), &request(&r)).expect("a plan");
+        assert_eq!(
+            lines.last(),
+            Some(&again_matrix(&r)),
+            "{deploy} {conclusion}"
+        );
+        assert!(
+            lines[0].starts_with(&format!(
+                "release v0.1.1 of {r} again: its release run {red} ended failure"
+            )),
+            "{deploy}: {lines:?}"
+        );
+    }
+}
+
+#[test]
+fn a_listed_job_is_judged_by_the_name_of_its_job_in_the_workflow() {
+    // Catches: a matrix job or a called workflow's job not matched to its deploy job, so that
+    // its failure is missed, or a job whose name only begins like a deploy job's matched.
+    assert_eq!(base_name("publish (0.1.1, v0.1.1, abc)"), "publish");
+    assert_eq!(base_name("set-desired / set-desired"), "set-desired");
+    assert_eq!(base_name("cp-deploy / deploy (a, b)"), "cp-deploy");
+    assert_eq!(base_name("check-apt (hostkeeper, amd64)"), "check-apt");
+    assert_eq!(base_name("coordinator"), "coordinator");
+    assert!(!DEPLOY_JOBS.contains(&base_name("testing-apt-read-4")));
+    assert!(!DEPLOY_JOBS.contains(&base_name("testing-rpm-write")));
 }
 
 #[test]

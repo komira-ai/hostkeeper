@@ -396,10 +396,8 @@ fn lent_ports_answer_for_the_verb_that_reads_them() {
     assert_eq!(
         run(locate, || Lent(fakes.ports())),
         Ok(vec![
-            format!(
-                "{COMMIT} is on main; ci.yml run 1000, privileged.yml run 1001 and artifacts.yml run 1002 succeeded"
-            ),
-            "run-id=1002".to_owned(),
+            format!("{COMMIT} is on main; ci.yml run 1000 and artifacts.yml run 1001 succeeded"),
+            "run-id=1001".to_owned(),
         ])
     );
 }
@@ -580,7 +578,6 @@ fn a_plan_from_a_tip_whose_ci_is_pending_publishes_the_done_commits_oldest_first
     });
     green(&fakes, &a);
     green(&fakes, &b);
-    fakes.runs.push("privileged.yml", &tip, "success");
     fakes.runs.push("artifacts.yml", &tip, "success");
     fakes.runs.add("ci.yml", &tip, "push", "main", None);
 
@@ -724,4 +721,86 @@ fn the_verbs_that_built_archives_indexes_and_the_release_channel_are_not_taken()
             "{verb}"
         );
     }
+}
+
+#[test]
+fn the_red_verb_reads_its_four_flags_and_opens_the_issue_of_the_run_they_name() {
+    // Catches: `release red` dispatched to another verb, a flag forwarded into the wrong field
+    // (the run id, the workflow given by its path, the commit), or a flag the workflow passes
+    // that the command line does not accept; and a call missing a flag running at all.
+    let fakes = empty();
+    let commit: Commit = COMMIT.parse().expect("commit");
+    let id = fakes.runs.add(
+        "release.yml",
+        &commit,
+        "workflow_run",
+        "main",
+        Some("failure"),
+    );
+    fakes.runs.jobs.borrow_mut().insert(
+        id,
+        vec![crate::release::ports::Job {
+            name: "macos-test".to_owned(),
+            conclusion: Some("failure".to_owned()),
+        }],
+    );
+    let id_text = id.to_string();
+    let args = [
+        "red",
+        "--repo",
+        REPO,
+        "--workflow",
+        ".github/workflows/release.yml",
+        "--run-id",
+        id_text.as_str(),
+        "--commit",
+        COMMIT,
+    ];
+    let title = "RELEASE-RED: hostkeeper release: a job of the release run failed";
+    assert_eq!(
+        run_with(verb(&args), &fakes.ports()),
+        Ok(vec![format!(
+            "release.yml run {id} of {COMMIT} is red: issue #1, {title}"
+        )])
+    );
+    let issues = fakes.runs.issues();
+    assert_eq!(issues.len(), 1);
+    assert_eq!(issues[0].title, title);
+    assert_eq!(
+        issues[0].body,
+        format!(
+            "RELEASE-RED: hostkeeper release.yml run {id} ended failure on {COMMIT}.\n\n\
+             https://github.com/{REPO}/actions/runs/{id}\n\n\
+             The jobs that failed:\n- macos-test\n\n\
+             The deploy went out: no job of the deploy failed. The failed jobs run beside or \
+             after it (the Mac's beta stage, the install checks, the promotion to stable) and \
+             hold no release; fix forward.\n\n\
+             The next run of release.yml on main that succeeds closes this issue.\n\n\
+             Red commit: {COMMIT}\n"
+        )
+    );
+    for flag in ["--repo", "--workflow", "--run-id", "--commit"] {
+        let at = args.iter().position(|a| *a == flag).expect("the flag");
+        let without: Vec<&str> = args
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != at && *i != at + 1)
+            .map(|(_, a)| *a)
+            .collect();
+        assert!(parse(&without).is_err(), "{flag} is required");
+    }
+    assert!(
+        parse(&[
+            "red",
+            "--repo",
+            REPO,
+            "--workflow",
+            "release.yml",
+            "--run-id",
+            "x",
+            "--commit",
+            COMMIT
+        ])
+        .is_err()
+    );
 }

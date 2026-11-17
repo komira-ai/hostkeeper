@@ -541,8 +541,8 @@ pub fn net_install_targets() -> BTreeMap<&'static str, BTreeSet<String>> {
 
 #[test]
 fn the_committed_privileged_yml_passes_and_holds_the_one_sudo() {
-    // Catches: privileged.yml missing, failing a rule, named otherwise than the release waits for,
-    // with a second step as root or its build moved under root, leaving out a privileged test
+    // Catches: privileged.yml missing, failing a rule, named otherwise than release-red.yml
+    // reports on, a release waiting for it again, with a second step as root or its build moved under root, leaving out a privileged test
     // file (or naming one that is not, or one of another job), the first-boot job missing, a
     // network-install job back in it (the release would wait hours on an emulated install), and a
     // job that runs as root in any other workflow but net-install.yml.
@@ -561,8 +561,8 @@ fn the_committed_privileged_yml_passes_and_holds_the_one_sudo() {
     let name = entry(&doc, "name").and_then(Node::as_str);
     assert_eq!(name, Some("privileged"));
     assert!(
-        REQUIRED_WORKFLOWS.contains(&"privileged"),
-        "a release waits for it"
+        !REQUIRED_WORKFLOWS.contains(&"privileged"),
+        "no release waits for it"
     );
     let targets = committed_targets();
     assert_eq!(
@@ -590,7 +590,7 @@ fn the_committed_privileged_yml_passes_and_holds_the_one_sudo() {
         shape_problems(PRIVILEGED_WORKFLOW, text, &targets),
         Vec::<String>::new()
     );
-    // The jobs a release waits for are this file's three: no network-install job is among them.
+    // The jobs of this file are its three: no network-install job is among them.
     let jobs: Vec<&str> = entry(&doc, "jobs")
         .map_or(&[][..], entries)
         .iter()

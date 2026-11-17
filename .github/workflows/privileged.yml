@@ -48,8 +48,9 @@
 # crates/hostkeeper-privileged/previous-release.toml, and gives it no write scope; it refuses root
 # in every other workflow but net-install.yml, and macOS and linux-arm64 in every workflow that
 # runs for a pull request. pr-device.yml's jobs privileged and openrc-device are copies of this
-# file's, step for step, and run on a pull request. A release waits for a successful push run of
-# this workflow on its commit (release.yml); pr-device.yml is no part of a release.
+# file's, step for step, and run on a pull request. No release waits for this workflow: a red run
+# of it on main opens the issue `RELEASE-RED: hostkeeper privileged: ...` (release-red.yml), and
+# releases go on; pr-device.yml is no part of a release.
 #
 # In the job privileged, linux_packages.rs also installs the deb and the rpm,
 # which the job builds from the static programs (musl) into target/linux-packages, in a
@@ -112,7 +113,7 @@ on:
 permissions: {}
 
 # A group per commit, never cancelled: a run of one commit never replaces or cancels the run of
-# another (a release needs a successful run on each commit), and a second run of the same commit
+# another (each commit's run is reported, red or green), and a second run of the same commit
 # (a re-run, a dispatch) waits for the first.
 concurrency:
   group: privileged-${{ github.sha }}

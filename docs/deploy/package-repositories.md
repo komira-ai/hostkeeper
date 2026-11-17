@@ -533,7 +533,10 @@ not in the package, at `cutover` and at every daemon start.
 
 All of these run for the newest release of a run only: when one run releases several versions, the
 package channels take the last, since a repository serves the newest version and it carries the
-changes of the older ones. Each job is a green no-op until the settings below exist.
+changes of the older ones. They start once every `verify` of the run passed (job `newest`), beside
+`publish` and the image push: they read the files `verify` checked, never the GitHub release. A
+failure of a check, `promote-check` or a stable job opens the release's `RELEASE-RED` issue
+([github-actions.md](github-actions.md#when-it-fails)) and holds no deploy. Each job is a green no-op until the settings below exist.
 
 1. **Testing.** Every job that signs or puts the release's files first checks them against the
    release's `SHA256SUMS` and checks each asset's attestation by this repository's workflow at the
