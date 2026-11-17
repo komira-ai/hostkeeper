@@ -1,21 +1,22 @@
 //! The Remote Login probe: once at its start, a Mac's daemon runs, as itself (root under launchd,
-//! with no Full Disk Access unless a profile granted it), the commands that tell whether it can
+//! with whatever privacy grants it has, none on a stock Mac), the commands that tell whether it can
 //! turn on Remote Login, and reports what each said in every heartbeat after
 //! (`HeartbeatRequest.remote_login_probe`), where `hkctl hosts get` shows it. It decides nothing:
-//! it is how the question "does the daemon need Full Disk Access to turn on sshd?"
-//! (docs/design/ssh-through-coordinator.md, section 3) is answered from the Macs themselves.
+//! it answered, from the Macs themselves, whether the daemon needs Full Disk Access to turn on
+//! sshd (docs/design/ssh-through-coordinator.md, section 3, has the results), and it keeps
+//! reporting the same steps at each start.
 //!
 //! The steps run in this order ([`run`]); each records the exact exit code, standard output and
 //! standard error of its command, or why it could not be done:
 //!
 //! 1. `systemsetup -getremotelogin`, `launchctl print system/com.openssh.sshd` and a connect to
 //!    `127.0.0.1:22` that reads the SSH banner: the state before the probe changes anything;
-//! 2. `systemsetup -setremotelogin on`, then `systemsetup -getremotelogin`: the supported switch,
-//!    which is reported to need Full Disk Access;
+//! 2. `systemsetup -setremotelogin on`, then `systemsetup -getremotelogin`: the switch that the
+//!    build Macs refuse without Full Disk Access;
 //! 3. `launchctl enable system/com.openssh.sshd`, `launchctl bootstrap system
 //!    /System/Library/LaunchDaemons/ssh.plist`, `launchctl print system/com.openssh.sshd`,
-//!    `systemsetup -getremotelogin` and the banner again: the way that is not reported to need
-//!    it, and whether System Settings' view agrees after it;
+//!    `systemsetup -getremotelogin` and the banner again: the way that turns Remote Login on
+//!    without it, and whether `systemsetup -getremotelogin` agrees after it;
 //! 4. the `Include` lines of `/etc/ssh/sshd_config`, `dscl . -read
 //!    /Groups/com.apple.access_ssh`, whether the privacy database
 //!    (`/Library/Application Support/com.apple.TCC/TCC.db`) can be opened, its Full Disk Access
@@ -70,7 +71,7 @@ pub const TCC_DB: &str = "/Library/Application Support/com.apple.TCC/TCC.db";
 /// The query of the privacy database's Full Disk Access rows.
 pub const FULL_DISK_ACCESS_QUERY: &str = "SELECT client, client_type, auth_value, auth_reason \
      FROM access WHERE service = 'kTCCServiceSystemPolicyAllFiles'";
-/// The installed binary, the path a Full Disk Access profile names.
+/// The installed binary, the one path launchd runs that no update replaces.
 pub const INSTALLED_BINARY: &str = "/usr/local/bin/hostkeeper";
 /// How long one command of the probe may run before it is killed.
 pub const STEP_DEADLINE: Duration = Duration::from_secs(20);
