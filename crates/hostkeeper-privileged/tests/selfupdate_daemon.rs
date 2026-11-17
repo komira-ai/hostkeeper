@@ -9,7 +9,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
 use hostkeeper_testkit::Scratch;
-use support::self_update::{BOOTSTRAP_UNIT, DAEMON, Paths, REAL_UNIT, refused_line, test_unit};
+use support::self_update::{
+    BASE, BOOTSTRAP_UNIT, DAEMON, Paths, REAL_UNIT, refused_line, test_unit,
+};
 
 fn scratch(name: &str) -> Scratch {
     Scratch::under(Path::new(env!("CARGO_TARGET_TMPDIR")), name).expect("scratch directory")
@@ -286,4 +288,56 @@ fn a_daemon_not_run_from_the_packaged_path_is_not_seeded() {
 fn a_real_unit_flag_the_test_does_not_place_stops_it() {
     let real = REAL_UNIT.replace("--notify-systemd", "--notify-systemd --new-flag /etc/x");
     test_unit(&real, &paths(), &[]);
+}
+
+/// The mount options of the mount that holds `path`: the options of the longest mount point of
+/// `mountinfo` that is a prefix of `path`.
+fn mount_options_of(mountinfo: &str, path: &Path) -> Option<String> {
+    mountinfo
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split(' ');
+            let point = fields.nth(4)?;
+            let options = fields.next()?;
+            path.starts_with(point)
+                .then(|| (point.len(), options.to_string()))
+        })
+        .max_by_key(|(len, _)| *len)
+        .map(|(_, options)| options)
+}
+
+/// Catches a test host made where systemd cannot exec the daemon staged in it: a hosted runner may
+/// mount `/run` `noexec` (`203/EXEC`), and the unit having no start limit, it is retried for good,
+/// so the test's `systemctl start` never returns. The mount that holds it is not `noexec`.
+#[test]
+fn the_test_hosts_mount_allows_exec() {
+    let mountinfo = fs::read_to_string("/proc/self/mountinfo").expect("read the mount table");
+    let path = PathBuf::from(BASE);
+    let options = mount_options_of(&mountinfo, &path).expect("a mount holds the path");
+    assert!(
+        !options.split(',').any(|o| o == "noexec"),
+        "the mount of {} is noexec: {options}",
+        path.display()
+    );
+}
+
+/// The mount table lookup takes the longest mount point, and shows `noexec` in its options.
+#[test]
+fn the_test_hosts_mount_lookup_takes_the_longest_mount_point() {
+    let table = "1 0 8:1 / / rw,relatime - ext4 /dev/sda1 rw\n\
+                 2 1 0:5 / /run rw,nosuid,noexec - tmpfs tmpfs rw\n\
+                 3 2 0:6 / /run/x ro - tmpfs tmpfs rw\n";
+    assert_eq!(
+        mount_options_of(table, Path::new("/var/lib/a")).as_deref(),
+        Some("rw,relatime")
+    );
+    assert_eq!(
+        mount_options_of(table, Path::new("/run/hk")).as_deref(),
+        Some("rw,nosuid,noexec")
+    );
+    assert_eq!(
+        mount_options_of(table, Path::new("/run/x/y")).as_deref(),
+        Some("ro")
+    );
+    assert_eq!(mount_options_of("", Path::new("/run")), None);
 }

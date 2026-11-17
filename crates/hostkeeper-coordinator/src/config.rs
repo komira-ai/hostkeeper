@@ -662,7 +662,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
 /// The LAN listener serves the heartbeat listener's TLS and surface. It never returns `Ok`.
 ///
 /// # Errors
-/// An address cannot be bound; the store is deposed ([`StartError::Deposed`]).
+/// An address cannot be bound.
 pub async fn run<Bind, Binding, Accept, Next, Stream>(
     parts: Parts,
     bind: Bind,
@@ -718,8 +718,7 @@ where
 }
 
 /// [`run`] past the health listener: binds the other listeners, calls `ready` with their
-/// addresses (`health` none), and serves them until the future is dropped or the store is
-/// deposed.
+/// addresses (`health` none), and serves them until the future is dropped.
 async fn run_listeners<Bind, Binding, Accept, Next, Stream>(
     parts: Parts,
     bind: Bind,
@@ -764,7 +763,6 @@ where
     let tokens = parts.coordinator.tokens().clone();
     let enrollment = parts.coordinator.enrollment().cloned();
     let coordinator = parts.coordinator;
-    let watching = Arc::clone(&coordinator);
     let observing = observe_every(Arc::clone(&coordinator), OBSERVE_EVERY);
     let adopting = watch_every(Arc::clone(&coordinator), parts.reload);
     // Without a LAN listener, a future that never finishes stands in for it.
@@ -792,13 +790,8 @@ where
         together(serving, serving_lan),
         together(reloading, together(observing, adopting)),
     );
-    // A store another coordinator led while this one's link was lost stops the serve: its memory
-    // is stale (`docs/design/coordinator-storage.md`, section 5).
     // On the heap: the futures together are too large for a stack of a test's thread.
-    match select(Box::pin(all), pin!(watching.deposed())).await {
-        Either::Left((never, _)) => match never {},
-        Either::Right(((epoch, found), _)) => Err(StartError::Deposed { epoch, found }),
-    }
+    match Box::pin(all).await {}
 }
 
 /// Resolves on SIGTERM or SIGINT.

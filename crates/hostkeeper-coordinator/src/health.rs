@@ -7,9 +7,8 @@
 //! method. The answer is `200` with the body `ok` when every listener the flags name is bound
 //! and serving and the store takes writes, and `503` with one reason token otherwise:
 //! `draining` from the stop signal until the process exits, whatever else holds,
-//! `starting` until every listener is bound, `not_writer` once another coordinator led the
-//! database this one's link to it was lost from (this one holds the single-writer lock no more,
-//! and stops), `store_unreachable` while the link to the database is lost. A `HEAD` is answered
+//! `starting` until every listener is bound, `store_unreachable` while the link to the database
+//! is lost. A `HEAD` is answered
 //! the status and the body's length, with no body. The body is the token and nothing else: no version, no host, no
 //! count. An answer reads memory only and writes no audit line.
 //!
@@ -48,9 +47,6 @@ pub(crate) enum Verdict {
     Ok,
     /// Not every listener the flags name is bound yet: `503 starting`.
     Starting,
-    /// Another coordinator led the database while this one's link was lost: this one holds the
-    /// single-writer lock no more, and stops. `503 not_writer`.
-    NotWriter,
     /// The link to the database is lost. `503 store_unreachable`.
     StoreUnreachable,
     /// The coordinator was told to stop and is on its way out: a load balancer sends it no new
@@ -65,7 +61,6 @@ impl Verdict {
         match self {
             Self::Ok => "ok",
             Self::Starting => "starting",
-            Self::NotWriter => "not_writer",
             Self::StoreUnreachable => "store_unreachable",
             Self::Draining => "draining",
         }
@@ -76,7 +71,7 @@ impl Verdict {
     pub(crate) fn status(self) -> StatusCode {
         match self {
             Self::Ok => StatusCode::OK,
-            Self::Starting | Self::NotWriter | Self::StoreUnreachable | Self::Draining => {
+            Self::Starting | Self::StoreUnreachable | Self::Draining => {
                 StatusCode::SERVICE_UNAVAILABLE
             }
         }
@@ -143,7 +138,6 @@ pub(crate) fn verdict(coordinator: &Coordinator, serving: &Serving) -> Verdict {
     match coordinator.ops.health() {
         Health::Up => Verdict::Ok,
         Health::Lost => Verdict::StoreUnreachable,
-        Health::Deposed { .. } => Verdict::NotWriter,
     }
 }
 

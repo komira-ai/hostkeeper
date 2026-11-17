@@ -136,13 +136,13 @@ fn start(args: Vec<OsString>) -> Parts {
 }
 
 /// Proves: a `serve` with the database's connection string in a file of mode 0600 starts on a
-/// database that has nothing in it: it makes the schema, takes the coordinator's lock (a second
-/// start on the same database is refused while the first runs, and is not once it has stopped),
+/// database that has nothing in it: it makes the schema, takes the coordinator's lock (shared: a second
+/// start on the same database goes on beside the first, while an exclusive taker is refused until both have stopped),
 /// and a change an operator makes is held by the audit table.
 ///
-/// Catches: a start that does not reach the database, one that leaves it unlocked so a second
-/// coordinator could write beside the first, or an operator's change that never reaches the
-/// table.
+/// Catches: a start that does not reach the database, one that leaves it unlocked so that the
+/// release before this one could write beside it, one that refuses a second coordinator, or an
+/// operator's change that never reaches the table.
 #[test]
 fn a_serve_starts_on_the_database_and_holds_its_lock() {
     let files = Files::new("database-start");
@@ -150,11 +150,11 @@ fn a_serve_starts_on_the_database_and_holds_its_lock() {
     let args = database_args(&files, &database);
 
     let parts = start(args.clone());
-    let why = refusal(args.clone());
     assert!(
-        matches!(&why, StartError::Database(_)),
-        "a second coordinator is refused: {why}"
+        database.lock_is_held(),
+        "the coordinator holds the lock: an exclusive taker is refused"
     );
+    let second = start(args.clone());
     let done = parts
         .coordinator
         .operate(
@@ -168,6 +168,11 @@ fn a_serve_starts_on_the_database_and_holds_its_lock() {
     );
 
     drop(parts);
+    assert!(
+        database.lock_is_held(),
+        "the second coordinator still holds the lock"
+    );
+    drop(second);
     database.lock_is_free();
     let again = start(args);
     drop(again);
@@ -340,7 +345,7 @@ fn services_have_repository(database: &Database) -> bool {
 
 /// Proves: a `serve` with no `--rollout-file` starts on a database at the schema of the release
 /// before (0.1.252: migrations `0001` to `0008`, no `repository` column on `services`): it runs
-/// `0009` to `0018`, so `schema_version` holds 1 to 18 and the column is there, and an operator's change is
+/// `0009` to `0019`, so `schema_version` holds 1 to 19 and the column is there, and an operator's change is
 /// held by the audit table.
 ///
 /// Catches: a release that cannot start on the database the release before left, or that starts
@@ -366,13 +371,14 @@ fn a_serve_starts_on_a_database_at_the_schema_of_the_release_before() {
          DROP TABLE mdm_secrets, mdm_settings, mdm_commands, mdm_identities, mdm_enrollments, \
          abm_devices, abm_state; \
          DROP TABLE lab_cluster, lab_rows, lab_racks, lab_placements, lab_devices, lab_sleds, lab_sled_items; \
+         DROP TABLE tx_ledger; \
          DELETE FROM schema_version WHERE version >= 9",
     );
     assert_eq!(schema_versions(&database), (1..=8).collect::<Vec<i32>>());
     assert!(!services_have_repository(&database));
 
     let parts = start(args);
-    assert_eq!(schema_versions(&database), (1..=18).collect::<Vec<i32>>());
+    assert_eq!(schema_versions(&database), (1..=19).collect::<Vec<i32>>());
     assert!(services_have_repository(&database));
     let done = parts
         .coordinator
@@ -388,7 +394,7 @@ fn a_serve_starts_on_a_database_at_the_schema_of_the_release_before() {
 }
 
 /// Proves: a `serve` is refused on a database that holds a migration newer than this release's
-/// that says `refuse`, with the exact text of the database's refusal naming migration 19; a newer
+/// that says `refuse`, with the exact text of the database's refusal naming migration 20; a newer
 /// one that says `may-run` is taken.
 ///
 /// Catches: a coordinator that starts on, and writes to, a schema a newer release changed in a
@@ -402,17 +408,17 @@ fn a_serve_refuses_a_database_newer_than_this_release() {
     database.lock_is_free();
 
     let put = "INSERT INTO schema_version (version, name, older_releases) \
-               VALUES (19, 'from_the_future', ";
+               VALUES (20, 'from_the_future', ";
     run(&database, &format!("{put}'refuse')"));
     let why = refusal(args.clone());
     assert!(matches!(&why, StartError::Database(_)), "{why}");
     assert_eq!(
         why.to_string(),
-        "the database's schema is newer than this coordinator (migration 19, from_the_future)"
+        "the database's schema is newer than this coordinator (migration 20, from_the_future)"
     );
     database.lock_is_free();
 
-    run(&database, "DELETE FROM schema_version WHERE version = 19");
+    run(&database, "DELETE FROM schema_version WHERE version = 20");
     run(&database, &format!("{put}'may-run')"));
     drop(start(args));
 }

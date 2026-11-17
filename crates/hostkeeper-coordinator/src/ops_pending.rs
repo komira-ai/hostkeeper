@@ -280,32 +280,4 @@ impl OpsStore {
         drop(pending);
         *self.lock() = taken;
     }
-
-    /// Drops what is pending, because another coordinator led the database while this one's
-    /// link was lost (at epoch `found`) and its state now governs: each change dropped is logged
-    /// by its audit number, the marker is removed (they are dropped knowingly), and the
-    /// coordinator is told to stop ([`OpsStore::deposed`]).
-    pub(crate) fn depose(&self, found: u64) {
-        let mut pending = self.pending_lock();
-        let dropped: Vec<u64> = pending.lines.iter().map(|line| line.seq).collect();
-        tracing::error!(
-            alert = "store_unreachable",
-            found,
-            ?dropped,
-            "another coordinator led the database while this one's session was lost: the changes numbered here are dropped, and the coordinator stops"
-        );
-        pending.base = None;
-        pending.lines.clear();
-        pending.marked = true;
-        self.unmark(&mut pending);
-        drop(pending);
-        let _ = self.deposed_by.set(found);
-        self.deposed.notify_one();
-    }
-
-    /// Waits until the store is deposed ([`OpsStore::depose`]); the epoch found.
-    pub(crate) async fn deposed(&self) -> u64 {
-        self.deposed.notified().await;
-        self.deposed_by.get().copied().unwrap_or_default()
-    }
 }

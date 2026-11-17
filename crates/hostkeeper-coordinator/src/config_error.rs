@@ -212,15 +212,4 @@ pub enum StartError {
     /// The database could not be opened, or holds what this build refuses.
     #[error(transparent)]
     Database(#[from] DatabaseError),
-    /// The database's session was lost and, once it was back, another coordinator had led the
-    /// database meanwhile: this coordinator's memory is stale, and it stops.
-    #[error(
-        "another coordinator led the database while this one's session was lost (epoch {found}, this one's {epoch}): this coordinator stops, and its supervisor starts it again on the database as that one left it"
-    )]
-    Deposed {
-        /// The epoch this coordinator held.
-        epoch: u64,
-        /// The epoch it found.
-        found: u64,
-    },
 }

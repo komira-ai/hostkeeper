@@ -96,12 +96,11 @@ async fn a_serving_coordinator_on_a_store_that_takes_writes_is_200_ok() {
 }
 
 /// Proves: `503` with exactly one reason token as the body: `starting` before every listener is
-/// bound, `store_unreachable` while the store's link is lost, `not_writer` once the store is
-/// deposed; `starting` wins over either store state, a `HEAD` is answered as a `GET`, and
-/// a link made again is `200 ok` again.
+/// bound, `store_unreachable` while the store's link is lost; `starting` wins over the store's
+/// state, a `HEAD` is answered as a `GET`, and a link made again is `200 ok` again.
 ///
-/// Catches: a coordinator that cannot write (link lost) or that another coordinator replaced
-/// as the writer read as healthy; a reason token other than the three, or with more beside it;
+/// Catches: a coordinator that cannot write (link lost) read as healthy; a reason token other
+/// than these, or with more beside it;
 /// a start read as a store failure; a recovery the probe never sees.
 #[tokio::test]
 async fn each_state_that_is_not_serving_is_503_with_its_one_reason_token() {
@@ -124,19 +123,8 @@ async fn each_state_that_is_not_serving_is_503_with_its_one_reason_token() {
         unavailable("starting"),
         "starting first"
     );
-    fake.set_health(Health::Deposed { found: 7 });
-    assert_eq!(
-        get(&rig.coordinator, &serving).await,
-        unavailable("starting"),
-        "starting first"
-    );
 
     serving.set();
-    assert_eq!(
-        get(&rig.coordinator, &serving).await,
-        unavailable("not_writer")
-    );
-    fake.set_health(Health::Lost);
     assert_eq!(
         get(&rig.coordinator, &serving).await,
         unavailable("store_unreachable")
@@ -155,7 +143,7 @@ async fn each_state_that_is_not_serving_is_503_with_its_one_reason_token() {
     );
 }
 
-/// Proves: every verdict's status and token: `200 ok`, and `503` for `starting`, `not_writer`,
+/// Proves: every verdict's status and token: `200 ok`, and `503` for `starting`,
 /// `store_unreachable` and `draining`.
 ///
 /// Catches: a reason that answers `200`, or two verdicts that share a token.
@@ -167,11 +155,6 @@ fn each_verdict_has_its_status_and_token() {
             Verdict::Starting,
             StatusCode::SERVICE_UNAVAILABLE,
             "starting",
-        ),
-        (
-            Verdict::NotWriter,
-            StatusCode::SERVICE_UNAVAILABLE,
-            "not_writer",
         ),
         (
             Verdict::StoreUnreachable,
@@ -191,7 +174,7 @@ fn each_verdict_has_its_status_and_token() {
 
 /// Proves: once drained, `GET /healthz` is `503` with the body `draining` exactly, whatever
 /// else holds: a coordinator still starting, one serving on a store that takes writes, one whose
-/// store's link is lost and one deposed; a `HEAD` is answered as a `GET`; neither a link made
+/// store's link is lost; a `HEAD` is answered as a `GET`; neither a link made
 /// again nor a [`Serving::set`] after the drain (a start that finishes its binds late) brings
 /// back `200 ok`; the answer changes nothing the fake holds. Other paths stay `404 not_found`.
 ///
@@ -229,7 +212,6 @@ async fn a_drained_coordinator_is_503_draining_whatever_else_holds() {
     assert_eq!(get(&rig.coordinator, &serving).await, draining, "serving");
     for (health, what) in [
         (Health::Lost, "the link lost"),
-        (Health::Deposed { found: 7 }, "deposed"),
         (Health::Up, "the link made again"),
     ] {
         fake.set_health(health);
