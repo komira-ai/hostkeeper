@@ -20,7 +20,9 @@ use crate::{halt, verdict_file};
 /// report of a gRPC heartbeat is read and the host is sent its set ([`crate::repository_push`]).
 /// `facts-v1`: the `facts_generation` of a gRPC heartbeat is read, and the host is sent its facts
 /// (host id, host group, labels) in every answer until it reports their generation
-/// ([`crate::facts`]).
+/// ([`crate::facts`]). `operator-keys-v1`: the `operator_keys` report of a gRPC heartbeat is read,
+/// and the host is sent the operator keys of its host group until it reports their digest
+/// ([`crate::operator_keys`]).
 pub const FEATURES: &[&str] = &[
     "deferred-v1",
     halt::FEATURE,
@@ -32,4 +34,29 @@ pub const FEATURES: &[&str] = &[
     crate::picks::TARGET_FEATURE,
     crate::repository_push::FEATURE,
     crate::facts::FEATURE,
+    crate::operator_keys::FEATURE,
 ];
+
+/// The fields of the answer to a heartbeat that go only to an agent that announced a feature,
+/// each with the feature: the one place that says which. An older agent reads the answer
+/// strictly and refuses a field it does not know, so a field listed here is left out of the
+/// answer to an agent that did not announce its feature, and to every agent while this
+/// coordinator does not advertise it ([`FEATURES`]). A field not listed is sent to every agent.
+pub const GATED_FIELDS: &[(&str, &str)] = &[
+    ("halts", halt::FEATURE),
+    ("order_id", ORDER_FEATURE),
+    ("order_try", ORDER_FEATURE),
+    ("package_digest", ORDER_FEATURE),
+    ("acks", verdict_file::FEATURE),
+];
+
+/// Whether the answer field `field` goes to an agent whose announced features this coordinator
+/// also advertises are `agreed` (none for an agent that announced none): yes for a field
+/// [`GATED_FIELDS`] does not list, and for one it lists only when its feature is agreed.
+#[must_use]
+pub fn sends(field: &str, agreed: Option<&[String]>) -> bool {
+    GATED_FIELDS
+        .iter()
+        .find(|(name, _)| *name == field)
+        .is_none_or(|(_, feature)| agreed.is_some_and(|names| names.iter().any(|n| n == feature)))
+}

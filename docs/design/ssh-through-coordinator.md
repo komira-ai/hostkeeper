@@ -1,6 +1,6 @@
 # SSH through the coordinator
 
-Status: design, for the owner's comments. Nothing here is built except the C0 probe (`crates/hostkeeper-daemon/src/remote_login_probe.rs`). It carries out the owner's direction of 2026-11-15: "we want hostkeeper to do this automatically. For all the hosts. That way we can remote ssh through the coordinator if necessary."
+Status: design, for the owner's comments. Nothing here is built except the C0 probe (`crates/hostkeeper-daemon/src/remote_login_probe.rs`). The operator keys (`docs/design/operator-keys.md`, built) are a separate, simpler path: the coordinator's public keys in a managed block of each host's `authorized_keys`, with the macOS Remote Login step of section 3. It carries out the owner's direction of 2026-11-15: "we want hostkeeper to do this automatically. For all the hosts. That way we can remote ssh through the coordinator if necessary."
 
 Tags: **Built** is code on `main` with a path. **Designed** is this document. **Verified** is read from the cited OpenSSH page (man.openbsd.org/sshd_config, fetched 2026-11-15). **Measured** is what the C0 probe (`crates/hostkeeper-daemon/src/remote_login_probe.rs`, `docs/macos.md` "The Remote Login probe") reported from the three Macs of the build group on hostkeeper 0.1.337, as root under launchd with no Full Disk Access (section 3). **Unverified** is a claim about macOS that Apple's pages, fetched the same day, do not state and C0 did not measure. The repository is public: no address or host name of the lab appears here.
 
@@ -129,7 +129,7 @@ The certificate: type user, serial, key id `<operator name>/<serial>` (built fro
 
 The daemon adds trust and removes none. Eight rules, each with a test (C3 and C4):
 
-1. **Existing paths are untouched.** `authorized_keys`, host keys, `Port`, `ListenAddress`, `AllowUsers`, `AllowGroups`, `DenyUsers`, `DenyGroups`, `PermitRootLogin`, `PubkeyAuthentication` and `AuthenticationMethods` are never written by hostkeeper, and neither is any file outside the three named in section 3 (plus the `principals.*` and `revoked` files).
+1. **Existing paths are untouched.** `authorized_keys` (but for the managed block of the operator keys, `docs/design/operator-keys.md`, which is not this design's and which it leaves as it finds it), host keys, `Port`, `ListenAddress`, `AllowUsers`, `AllowGroups`, `DenyUsers`, `DenyGroups`, `PermitRootLogin`, `PubkeyAuthentication` and `AuthenticationMethods` are never written by hostkeeper, and neither is any file outside the three named in section 3 (plus the `principals.*` and `revoked` files).
 2. **Validate before install.** Candidate files are checked with `sshd -t` (with the candidate in place of the live one); on failure nothing is installed and the heartbeat says `config_invalid`.
 3. **Prove the cert path before saying applied.** Before any change the daemon records, with `sshd -T -C user=<u>,host=<h>,addr=<a>`, the auth-relevant effective settings (`pubkeyauthentication`, `authenticationmethods`, `permitrootlogin`, `allowusers`, `allowgroups`, `denyusers`, `denygroups`, `passwordauthentication`, `kbdinteractiveauthentication`, `usepam`) for the login user and for every account whose home has a non-empty `authorized_keys`. After the change, and before reporting, it requires:
    - for the login user: `pubkeyauthentication yes`; `authenticationmethods` any or containing an alternative that is `publickey` alone (so `publickey,password` fails: a certificate alone would not log in); not excluded by the Allow or Deny lists; `permitrootlogin` not `no` when the login user is `root`, and not `forced-commands-only`; and the effective CA, principals file and revoked file being ours (section 3);
@@ -204,7 +204,7 @@ message SshReport {
   repeated string host_key_fingerprints = 3;   // SHA256:... of sshd's host keys; compared with the pin, never replaces it
   string detail = 4;           // the failing keyword, account class or step (`remote_login`) of the state; no secret, no account name
 }
-message HeartbeatResponse { ... SshAccess ssh = 7; }
+message HeartbeatResponse { ... SshAccess ssh = <next free>; }   // 7 is operator_keys (docs/design/operator-keys.md)
 message SshAccess {
   uint64 generation = 1;       // raised at any change of the rest
   bool enabled = 2;
@@ -286,6 +286,6 @@ Tests that matter most (named in each PR): a certificate signed by C2 is accepte
 - **Q2. Who may open a tunnel?** Settled by the review: default deny. The operators file is required and scopes each operator to classes, groups or hosts. Question: the operator list and scopes you want at the start. Per-operator host-side principals are not used (they need a per-host file); the operator is the key id and the audit.
 - **Q3. Settled by C0: no profile.** The question was whether Apple Business's device management would push a Full Disk Access profile; the `launchctl` way needs none (sections 3 and 4).
 - **Q4. Turn passwords off?** Recommendation: leave `--ssh-password-auth keep` now; set `off` per rule 5 after every node has shown a key-based login in the heartbeat state. Not available on Macs.
-- **Q5. May the daemon add the Mac login user to `com.apple.access_ssh` when that group exists and the user is not in it?** Without it, those Macs report `blocked_by_access_group`. Recommendation: yes, that one user, one group, nothing else, reverted with the feature.
+- **Q5. May the daemon add the Mac login user to `com.apple.access_ssh` when that group exists and the user is not in it?** Without it, those Macs report `blocked_by_access_group`. Recommendation: yes, that one user, one group, nothing else, reverted with the feature. The operator keys (`docs/design/operator-keys.md` section 4) already do this for the one administrator account they write the keys of.
 - **Q6. Does the coordinator hold the private key of the control-plane CA?** Recommendation: no. You sign for the NUC offline with `ssh-ca sign`; a coordinator compromise is then not root on the machine that holds the control plane. Cost: no tunnel-assisted certificate for the NUC without you.
 - **Q7. If the heartbeat path hides the host's address (a proxy in front of the heartbeat listener), do we add PROXY protocol on it?** Recommendation: yes, in C4, if the deployed path needs it; the coordinator does not dial an address it cannot trust.

@@ -17,12 +17,15 @@
 //! `installers`; a service's `installer` ([`ServiceFacts::installer`]), the repositories report
 //! ([`Heartbeat::repositories`]) and the facts generation ([`Heartbeat::facts_generation`])
 //! likewise. A Mac's Remote Login probe ([`Heartbeat::remote_login_probe`]) is counted too, and is
-//! the first optional fact dropped.
+//! the first optional fact dropped. The operator keys report ([`Heartbeat::operator_keys`], as
+//! `operator_keys`: a digest and two texts of at most [`crate::MAX_KEYS_REASON`] bytes each) is
+//! counted and never dropped: it is not in [`DROP_ORDER`].
 
 use hostkeeper_config::names::{ServiceName, Version};
 pub use hostkeeper_proto::MAX_SERVICES_PER_HEARTBEAT;
 use serde_json::{Map, Value, json};
 
+use crate::operator_keys::KeysReport;
 use crate::order::{DeferredReport, OrderResult};
 use crate::ports::Drift;
 use crate::probe::RemoteLoginProbe;
@@ -87,6 +90,12 @@ pub enum Feature {
     /// repository entry and a package of one. Announced by a daemon with a repository sink and
     /// by one the wiring says reads them another way (a Mac); not in [`ANNOUNCED`].
     PrivateRepositoryV1,
+    /// `operator-keys-v1`: the daemon writes the operator keys the coordinator sends
+    /// ([`crate::PushedKeys`]) to the managed block of its login account's `authorized_keys`
+    /// and reports what it holds ([`crate::KeysReport`]). Like `facts-v1` it is announced only
+    /// by a daemon with a sink for them ([`crate::OperatorKeysSink`]): the loop adds it
+    /// ([`OPERATOR_KEYS`]).
+    OperatorKeysV1,
 }
 
 /// The features every heartbeat announces, in this order. Each names something the loop does:
@@ -114,6 +123,8 @@ pub const REPOSITORIES: Feature = Feature::RepositoriesV1;
 pub const FACTS: Feature = Feature::FactsV1;
 /// The feature a daemon that reads private repositories announces after [`REPOSITORIES`].
 pub const PRIVATE_REPOSITORY: Feature = Feature::PrivateRepositoryV1;
+/// The feature a daemon with a [`crate::OperatorKeysSink`] announces last.
+pub const OPERATOR_KEYS: Feature = Feature::OperatorKeysV1;
 
 impl Feature {
     /// Its wire name.
@@ -133,6 +144,7 @@ impl Feature {
             Feature::RepositoriesV1 => "repositories-v1",
             Feature::FactsV1 => "facts-v1",
             Feature::PrivateRepositoryV1 => "private-repository-v1",
+            Feature::OperatorKeysV1 => "operator-keys-v1",
         }
     }
 
@@ -140,7 +152,7 @@ impl Feature {
     pub fn parse(name: &str) -> Option<Feature> {
         ANNOUNCED
             .into_iter()
-            .chain([REPOSITORIES, FACTS, PRIVATE_REPOSITORY])
+            .chain([REPOSITORIES, FACTS, PRIVATE_REPOSITORY, OPERATOR_KEYS])
             .find(|feature| feature.as_str() == name)
     }
 }
@@ -379,6 +391,9 @@ pub struct Heartbeat {
     /// but a Mac's) or has not finished it. Sent over gRPC only, counted toward the bound on both,
     /// and the first optional fact [`fit`] drops.
     pub remote_login_probe: Option<RemoteLoginProbe>,
+    /// What the managed block of the login account's `authorized_keys` holds; none from a daemon
+    /// that keeps no operator keys. Sent over gRPC only, and counted toward the bound on both.
+    pub operator_keys: Option<KeysReport>,
 }
 
 impl Heartbeat {
@@ -434,6 +449,16 @@ impl Heartbeat {
         }
         if let Some(probe) = &self.remote_login_probe {
             beat.insert("remote_login_probe".to_owned(), probe.to_json());
+        }
+        if let Some(report) = &self.operator_keys {
+            let refused = report
+                .refused
+                .as_ref()
+                .map(|refusal| json!({ "digest": refusal.digest, "reason": refusal.reason }));
+            beat.insert(
+                "operator_keys".to_owned(),
+                json!({ "digest": report.digest, "refused": refused, "failed": report.failed }),
+            );
         }
         Value::Object(beat)
     }

@@ -58,6 +58,26 @@ place the files the flags name:
   Postgres, the connection string of `database-dsn-file` (mode 0400 is also accepted). The
   coordinator refuses these files when they are readable by others.
 - **Root's, readable by the group:** the certificate, `client-ca.pem`, and `oidc.toml`. There is no rollout file: `serve` refuses `--rollout-file`.
+- **Root's, readable by the group, public keys only:** the optional `operator-keys-file`, the
+  operator's SSH public keys for each host group. Each host's daemon writes the keys of its group
+  into the managed block of its login account's `authorized_keys`, at its first heartbeat after
+  approval and after every change of the file. It holds no secret and no user name or password, so
+  any regular file of at most 256 KiB is read. The coordinator reads it again on the reload tick
+  (`tls-reload-secs`), so a change reaches the hosts with no restart; a file that is refused on that
+  look leaves the keys in use. A host in a group the file does not list is sent no key, which takes
+  the keys away from a group that is removed from it. Its shape is one table for each group that
+  has keys, `keys = []` for a group that has none:
+
+  ```toml
+  [host-groups."build"]
+  keys = ["ssh-ed25519 AAAA... ops laptop", "ssh-ed25519 AAAA... ci"]
+  [host-groups."mac-build"]
+  keys = []
+  ```
+
+  Each name is a host group name; a group holds at most 64 keys, each one line `<type> <base64>
+  [comment]` of at most 4096 bytes, none twice. A key that breaks a rule refuses the start, naming
+  the group and the key's place, never its text.
 - **Writable by the coordinator:** the state files and the CA's key, under
   `/var/lib/hostkeeper-coordinator`.
 

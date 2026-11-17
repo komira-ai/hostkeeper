@@ -143,6 +143,13 @@ pub(super) async fn farm_enrolled(name: &str, enrollment: &Arc<Enrollment>) -> F
 }
 
 impl Farm {
+    /// The same farm over the operator keys `keys`.
+    pub(super) fn with_operator_keys(mut self, keys: crate::operator_keys::OperatorKeys) -> Self {
+        let coordinator = Arc::try_unwrap(self.coordinator).expect("the farm's one holder");
+        self.coordinator = Arc::new(coordinator.with_operator_keys(keys));
+        self
+    }
+
     /// The operator clears the halt of `service`.
     fn clear_halt(&self, service: &str) {
         let body =
@@ -447,6 +454,7 @@ pub(super) fn proto_message(services: &[Svc]) -> proto::HeartbeatRequest {
         trusted_root_reason: 0,
         facts_generation: None,
         remote_login_probe: None,
+        operator_keys: None,
     }
 }
 

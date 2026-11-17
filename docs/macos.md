@@ -372,6 +372,21 @@ fit 16 KiB. The coordinator keeps the last one in memory and shows it in the hos
 `hkctl hosts get --node-id <host>` answers it as `host.heartbeat.remoteLoginProbe`. Nothing decides
 on it; a restart of the daemon (an update included) runs it again.
 
+### Operator SSH keys and Remote Login
+
+A Mac's daemon announces `operator-keys-v1` like every other host's
+([design/operator-keys.md](design/operator-keys.md)). When the coordinator sends the keys of the
+Mac's host group, the daemon (`crates/hostkeeper-daemon/src/operator_keys.rs`) finds the one local
+administrator account with `dscl` (uid 501 or more, a member of `admin`, not hidden), writes the
+keys into the managed block of that account's `~/.ssh/authorized_keys` (mode 0600, owned by the
+account), and, when the set is not empty, makes sure the account can log in: Remote Login by
+`launchctl enable` and `bootstrap` of `system/com.openssh.sshd` when `launchctl print` does not find
+it loaded (never `systemsetup`, which needs Full Disk Access, and never a step that turns it off),
+then `dseditgroup -o edit -a <account> -t user com.apple.access_ssh` when that group exists and the
+account is not in it. A Mac with no administrator account, or with several, is refused and left as
+it is; the report in the heartbeat says so. Nothing here needs Full Disk Access, a privacy profile
+or a password.
+
 ### Release and installer pkg
 
 Every release ships macos-arm64 beside the two Linux platforms: the binary tarball

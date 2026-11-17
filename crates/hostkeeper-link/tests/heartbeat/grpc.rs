@@ -188,6 +188,7 @@ fn beat(services: Vec<ServiceFacts>) -> Heartbeat {
         repositories: None,
         facts_generation: None,
         remote_login_probe: None,
+        operator_keys: None,
     }
 }
 
@@ -226,6 +227,7 @@ fn expected_reply() -> Reply {
         acknowledged: Vec::new(),
         repositories: None,
         facts: None,
+        operator_keys: None,
     }
 }
 

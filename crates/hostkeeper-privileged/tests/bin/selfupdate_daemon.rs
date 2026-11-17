@@ -439,6 +439,7 @@ fn file_links(
         watchdog,
         console: None,
         remote_login_probe: None,
+        operator_keys: None,
         period,
         dispatch: Arc::new(ThreadDispatch),
         stop,

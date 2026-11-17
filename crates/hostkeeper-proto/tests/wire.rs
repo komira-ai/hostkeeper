@@ -5,7 +5,7 @@
 //! `optional` field tells absent from zero. The release before is this crate's descriptor set
 //! with the newest fields taken out, read with `prost-reflect`.
 //!
-//! Also the names on the wire, pinned: the feature strings, the order's verbs and their numbers,
+//! Also the names on the wire, pinned (the feature strings in `features.rs`): the order's verbs and their numbers,
 //! every refusal token, the RPCs of the coordinator's services, the fields of the enrollment,
 //! abort, audit and force-report messages, and the kbf JSON keys and the fields that carry them.
 
@@ -316,27 +316,6 @@ fn tokens(pool: &DescriptorPool, name: &str, prefix: &str) -> Vec<String> {
         .collect()
 }
 
-/// The feature names `agent.proto` gives (`deferred-v1`), in the order it first names them.
-fn feature_names() -> Vec<String> {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("proto/hostkeeper/agent/v1/agent.proto");
-    let text = std::fs::read_to_string(path).expect("read the file");
-    let mut out: Vec<String> = Vec::new();
-    for quoted in text.split('`').skip(1).step_by(2) {
-        let feature = quoted.rsplit_once("-v").is_some_and(|(name, n)| {
-            !name.is_empty()
-                && name.bytes().all(|b| b.is_ascii_lowercase() || b == b'-')
-                && !n.is_empty()
-                && n.bytes().all(|b| b.is_ascii_digit())
-        });
-        if feature && !out.iter().any(|f| f == quoted) {
-            out.push(quoted.to_owned());
-        }
-    }
-    out.sort();
-    out
-}
-
 /// Each RPC of a service, as `Name(Request) Response`, in the file's order.
 fn rpcs(pool: &DescriptorPool, service: &str) -> Vec<String> {
     pool.get_service_by_name(service)
@@ -451,6 +430,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 39] = [
             ("repositories", 11),
             ("facts_generation", 12),
             ("remote_login_probe", 14),
+            ("operator_keys", 15),
         ],
     ),
     (
@@ -462,6 +442,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 39] = [
             ("acks", 4),
             ("repositories", 5),
             ("facts", 6),
+            ("operator_keys", 7),
         ],
     ),
     (
@@ -713,30 +694,12 @@ const FIELDS: [(&str, &[(&str, u32)]); 39] = [
 ];
 
 /// Catches: a name on the wire renamed or renumbered without this test changing with it: the
-/// features daemons announce, the order's verbs, every refusal token, the enrollment and poll
+/// order's verbs, every refusal token, the enrollment and poll
 /// states, the coordinator's RPCs with their messages, the fields of the enrollment, abort,
 /// clear-record, audit and force-report messages, and the kbf JSON keys and the fields that carry them.
 /// Callers branch on each, and the daemon and the coordinator are built against them apart.
 #[test]
 fn wire_names_are_pinned() {
-    assert_eq!(
-        feature_names(),
-        [
-            "abort-v1",
-            "clear-record-v1",
-            "deferred-v1",
-            "facts-v1",
-            "forced-v1",
-            "halt-v1",
-            "heartbeat-v2",
-            "install-v1",
-            "private-repository-v1",
-            "repositories-v1",
-            "target-v1",
-            "verdict-acks-v1"
-        ]
-    );
-
     let pool = DescriptorPool::decode(hostkeeper_proto::FILE_DESCRIPTOR_SET).expect("decodes");
     let order = pool
         .get_message_by_name("hostkeeper.agent.v1.Order")

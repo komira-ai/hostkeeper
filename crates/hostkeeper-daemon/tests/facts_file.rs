@@ -76,6 +76,7 @@ fn host_probing(
         watchdog: Box::new(hostkeeper_daemon::NoWatchdog),
         console: None,
         remote_login_probe: probe,
+        operator_keys: None,
     };
     (links.heartbeater(&daemon), link, dispatch)
 }

@@ -43,6 +43,7 @@ fn response_of(answer: Answer, order: Option<Order>) -> proto::HeartbeatResponse
         acks: crate::verdict_file::to_proto(&answer.acks),
         repositories: None,
         facts: None,
+        operator_keys: None,
     }
 }
 
@@ -89,18 +90,26 @@ impl Api for AgentService {
             self.coordinator.hear_facts(&identity, request.get_ref());
             self.coordinator
                 .hear_remote_login_probe(&identity, request.get_ref());
+            self.coordinator
+                .hear_operator_keys(&identity, request.get_ref());
         }
         let host_id = identity.host_id.clone();
         let facts = (!retiring)
             .then(|| self.coordinator.host_facts(&identity, request.get_ref()))
             .flatten();
-        let caller = BeatCaller { identity, retiring };
+        let caller = BeatCaller {
+            identity: identity.clone(),
+            retiring,
+        };
         let (answer, order) = beat(&self.coordinator, caller, &bytes, root).map_err(beat_status)?;
-        // The set is made once the heartbeat is taken: the host's announced features are the
-        // ones this heartbeat said.
+        // The sets are made once the heartbeat is taken (a retiring host's is refused, so it is
+        // sent none): the host's announced features are the ones this heartbeat said.
         let mut response = response_of(answer, order);
         response.repositories = self.coordinator.repository_set(&host_id);
         response.facts = facts;
+        response.operator_keys = self
+            .coordinator
+            .operator_keys_for(&identity, request.get_ref());
         Ok(Response::new(response))
     }
 

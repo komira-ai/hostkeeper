@@ -95,7 +95,9 @@ the hook contract and the step record.
 Every command of `hkctl`, with its flags and exit codes, is in [docs/cli.md](docs/cli.md), which a
 test of `hostkeeper-hkctl` regenerates from the protos and compares, so it cannot drift from them.
 Enrolling a node, from its inventory record to its first heartbeat, with every refusal on the way,
-is [docs/operations/enrollment.md](docs/operations/enrollment.md). Installing a new Linux machine
+is [docs/operations/enrollment.md](docs/operations/enrollment.md). Putting the operators' SSH public keys
+on every host, Linux and Mac, from one coordinator file is
+[docs/operations/operator-keys.md](docs/operations/operator-keys.md). Installing a new Linux machine
 from the farm LAN with `pxe`, and the router and board checks before the first one, is
 [docs/operations/network-install.md](docs/operations/network-install.md); its settings files
 are parsed with that program's own parser. A test (`crates/xtask/tests/enrollment_doc.rs`)

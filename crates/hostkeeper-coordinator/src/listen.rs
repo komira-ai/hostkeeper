@@ -44,6 +44,7 @@ use tokio_rustls::TlsAcceptor;
 use crate::enrollment::Enrollment;
 use crate::grpc::route;
 use crate::http::{Peer, PeerAddr, Surface};
+use crate::operator_keys::OperatorKeys;
 use crate::service::Coordinator;
 use crate::tokens::OperatorTokens;
 use crate::wait::{ConnectionWaits, unless};
@@ -397,12 +398,13 @@ pub(crate) async fn connection_with<S>(
 /// Looks at everything that is re-read while the coordinator runs, every `interval`, for as long
 /// as the future is polled: with `enrollment`, its server certificate file, made again when it
 /// is due or names other names than the flags ([`Enrollment::renew_server`]), and its requests, expired once they waited longer than
-/// the request TTL ([`Enrollment::expire_requests`]); then the TLS files of `sources` and the
-/// tokens file of `tokens`. It never returns.
+/// the request TTL ([`Enrollment::expire_requests`]); then the TLS files of `sources`, the
+/// tokens file of `tokens` and the operator keys file of `operator_keys`. It never returns.
 pub async fn reload_every(
     enrollment: Option<Arc<Enrollment>>,
     sources: Vec<TlsSource>,
     tokens: OperatorTokens,
+    operator_keys: OperatorKeys,
     interval: Duration,
 ) -> Infallible {
     let mut ticks = tokio::time::interval(interval);
@@ -410,17 +412,19 @@ pub async fn reload_every(
     ticks.tick().await;
     loop {
         ticks.tick().await;
-        reload_all(enrollment.as_ref(), &sources, &tokens).await;
+        reload_all(enrollment.as_ref(), &sources, &tokens, &operator_keys).await;
     }
 }
 
 /// One look of the tick: the server certificate of `enrollment` is renewed when it is due and
 /// its requests older than the request TTL expire, then each TLS source reloads (so a renewed
-/// file is served from this look on), then the tokens file is read again.
+/// file is served from this look on), then the tokens file and the operator keys file are read
+/// again.
 pub(crate) async fn reload_all(
     enrollment: Option<&Arc<Enrollment>>,
     sources: &[TlsSource],
     tokens: &OperatorTokens,
+    operator_keys: &OperatorKeys,
 ) {
     if let Some(enrollment) = enrollment {
         let enrollment = Arc::clone(enrollment);
@@ -438,6 +442,8 @@ pub(crate) async fn reload_all(
     }
     let tokens = tokens.clone();
     let _ = tokio::task::spawn_blocking(move || tokens.reload()).await;
+    let operator_keys = operator_keys.clone();
+    let _ = tokio::task::spawn_blocking(move || operator_keys.reload()).await;
 }
 
 #[cfg(test)]

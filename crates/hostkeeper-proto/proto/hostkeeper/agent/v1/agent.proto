@@ -158,8 +158,10 @@ message HeartbeatRequest {
   // takes the `ClearRecord` verb, `verdict-acks-v1`, which asks for `HeartbeatResponse.acks`,
   // `target-v1`, which announces that it takes `target` in orders and lists `installers`, and
   // `repositories-v1`, which announces that it writes the repositories the coordinator sends and
-  // reports them in `repositories`, and `facts-v1`, which asks for `HeartbeatResponse.facts`,
-  // writes them to the host's facts file and reports `facts_generation`):
+  // reports them in `repositories`, `facts-v1`, which asks for `HeartbeatResponse.facts`,
+  // writes them to the host's facts file and reports `facts_generation`, and `operator-keys-v1`,
+  // which asks for `HeartbeatResponse.operator_keys`, writes them to the managed block of the
+  // host's login account's `authorized_keys` and reports `operator_keys`):
   // at most 16, each 1 to 32 bytes of `[a-z0-9-]`, none twice. An agent
   // that lists every service it runs in `services` announces `heartbeat-v2`; without it the
   // coordinator counts the host as unmanaged for every service but the legacy one, rather than
@@ -211,6 +213,44 @@ message HeartbeatRequest {
   // the heartbeat would exceed 16 KiB with it. A probe that breaks a rule of `RemoteLoginProbe`
   // is dropped and the coordinator keeps the last one it read.
   optional RemoteLoginProbe remote_login_probe = 14;
+  // What the daemon holds of the operator keys the coordinator sends
+  // (`HeartbeatResponse.operator_keys`). Sent in every heartbeat by a daemon that announces
+  // `operator-keys-v1`, read only over gRPC; absent from one that predates it. A report that
+  // breaks a rule of `OperatorKeysReport` is dropped and the coordinator keeps the last one it
+  // read.
+  optional OperatorKeysReport operator_keys = 15;
+}
+
+// What a host's daemon holds of the operator keys: the managed block of its login account's
+// `authorized_keys` (root on Linux; on a Mac the one local administrator account). The report
+// names no account.
+message OperatorKeysReport {
+  // The `digest` of the set in force: the keys the managed block holds as the daemon read it for
+  // this heartbeat, in a file of the login account's ownership and mode `0600`, after the last
+  // set it was sent was put in force whole (on a Mac, Remote Login on and the account allowed
+  // SSH). 64 lower-case hex characters; empty while the daemon holds no set it was sent since
+  // it started, or when the file no longer holds that block, so that the coordinator sends the
+  // set again.
+  string digest = 1;
+  // The last set the daemon refused, while that set is the last one it was sent: the daemon
+  // keeps what is in force and does not try a refused set again until it is sent another or
+  // starts again. Absent when it refused none.
+  optional OperatorKeysRefusal refused = 2;
+  // Why the last try to put the set in force failed (a file that could not be written, Remote
+  // Login that did not start), as the daemon words it: at most 256 bytes (a reader cuts a
+  // longer one at a character boundary). The daemon tries again when it is sent the set again.
+  // Empty when the last try did not fail.
+  string failed = 3;
+}
+
+// A set of operator keys a daemon refused, and why.
+message OperatorKeysRefusal {
+  // The refused set's `digest`, 64 lower-case hex characters.
+  string digest = 1;
+  // Why, as the daemon words it: 1 to 256 bytes (a reader cuts a longer one at a character
+  // boundary), for example the place of a key that breaks a rule (never its text), or that the
+  // Mac has no single local administrator account.
+  string reason = 2;
 }
 
 // One run of the Remote Login probe of a Mac's daemon: the commands that tell whether the
@@ -515,6 +555,26 @@ message HeartbeatResponse {
   // (`HeartbeatRequest.facts_generation`), and the agent writes them before it acts on this
   // answer's order. Absent otherwise.
   HostFacts facts = 6;
+  // The operator keys of the host's group, whole: sent to an agent that announced
+  // `operator-keys-v1` when the coordinator was given an operator keys file and the host's
+  // report (`HeartbeatRequest.operator_keys`) holds neither this set's digest in force nor
+  // refused. A host in no group, or in a group the file does not list, is sent the empty set.
+  // The daemon replaces the managed block of its login account's `authorized_keys` with these
+  // keys and only these, and keeps every line outside the block; the empty set takes the block
+  // away. Absent: keep what it has.
+  optional OperatorKeys operator_keys = 7;
+}
+
+// The operator keys of a host group, as the coordinator's operator keys file holds them.
+message OperatorKeys {
+  // The SHA-256 of the keys, each followed by one newline, in order, as 64 lower-case hex
+  // characters, by the rule of the crate `hostkeeper-wire` (`operator_keys::digest`), which
+  // daemon and coordinator share.
+  string digest = 1;
+  // The keys, 0 to 64, each one line in the `authorized_keys` form `<type> <base64> [comment]`
+  // with single spaces and no options, at most 4096 bytes, none twice
+  // (`operator_keys::check_set`). A public key is not a secret.
+  repeated string keys = 2;
 }
 
 // A host's own values, as the coordinator holds them, for the daemon's facts file. The daemon
