@@ -26,6 +26,7 @@
 mod accounts;
 mod at;
 mod dsn;
+mod fleet_rows;
 mod generations;
 mod groups;
 mod layout;
