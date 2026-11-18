@@ -10,8 +10,11 @@
 //! key, a replace, a rejoin) writes that record anew without it, so a new key needs a new approval.
 //!
 //! The assurance is not stored. It is read from the approval of the request whose id is the
-//! host's key hash: [`INVENTORY_APPROVER`] is `auto`, anything else `operator`; a host whose
-//! request or approval is not found is `auto`, so a missing record never allows more.
+//! host's key hash: `operator` only when it names an approver that is not empty and not
+//! [`INVENTORY_APPROVER`]; an inventory approver, an empty one (an approval made with no record
+//! of who approved, as releases before the record wrote them), and a host whose request or
+//! approval is not found are `auto`, so a missing record never allows more. The operator's
+//! `Enrollment.Approve` always records the name of the operator's token.
 
 use super::StoreError;
 use super::records::pb;
@@ -27,7 +30,8 @@ pub const INVENTORY_APPROVER: &str = "inventory";
 pub enum Assurance {
     /// An operator approved the key by hand.
     Operator,
-    /// The coordinator approved the key by an inventory record, or the approval is not found.
+    /// The coordinator approved the key by an inventory record, or the approval names no approver
+    /// or is not found.
     Auto,
 }
 
@@ -54,6 +58,16 @@ pub struct HostIdentityState {
     pub approval: Option<IdentityApproval>,
     /// Whether the host is denied (retiring or retired).
     pub denied: bool,
+}
+
+impl HostIdentityState {
+    /// Whether the coordinator may sign certificates for the host's services: it is not denied,
+    /// and its assurance is `operator` or its current key is approved for identity. The one
+    /// place this is decided: `HostIdentity.Get` and the issue of a certificate both ask it.
+    #[must_use]
+    pub fn allowed(&self) -> bool {
+        !self.denied && (self.assurance == Assurance::Operator || self.approval.is_some())
+    }
 }
 
 /// What [`EnrollmentStore::approve_identity`] did.
@@ -154,9 +168,9 @@ impl EnrollmentStore {
     /// # Errors
     /// [`StoreError`] when a record cannot be read.
     pub fn identity_allowed(&self, host: &HostId) -> Result<bool, StoreError> {
-        Ok(self.identity_state(host)?.is_some_and(|state| {
-            !state.denied && (state.assurance == Assurance::Operator || state.approval.is_some())
-        }))
+        Ok(self
+            .identity_state(host)?
+            .is_some_and(|state| state.allowed()))
     }
 
     /// The hosts with a deny row that is retiring or retired, sorted: not those whose deny row
@@ -176,15 +190,17 @@ impl EnrollmentStore {
     }
 
     /// How `host`'s key `key` was approved: [`Assurance::Auto`] when the approval of the request
-    /// of that key names [`INVENTORY_APPROVER`], and when there is no such request or approval;
-    /// [`Assurance::Operator`] otherwise.
+    /// of that key names [`INVENTORY_APPROVER`] or no approver, and when there is no such request
+    /// or approval; [`Assurance::Operator`] for any other approver.
     fn assurance_of(&self, key: &KeyHash) -> Result<Assurance, StoreError> {
         let approver = self
             .load_request(key)?
             .and_then(|row| row.pb.approved)
             .map(|approval| approval.approver);
         Ok(match approver {
-            Some(approver) if approver != INVENTORY_APPROVER => Assurance::Operator,
+            Some(approver) if !approver.is_empty() && approver != INVENTORY_APPROVER => {
+                Assurance::Operator
+            }
             _ => Assurance::Auto,
         })
     }

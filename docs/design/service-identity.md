@@ -70,7 +70,9 @@ The coordinator signs only when all of these hold, checked in this order:
      (`enrollment.auto_approved`). Allowed only after an operator approved this host's key for
      identity with `HostIdentity.Approve` (UI: the host page's "Approve identity"), naming the
      SHA-256 of the key the host holds now. A new key (a replace, a re-enrollment) needs a new
-     approval; a host whose approval is not found counts as auto.
+     approval; a host whose approval is not found, or names no approver (an approval written by a release
+     that did not record who approved), counts as auto: only an approver that is not empty and
+     not `inventory` makes a host `operator`.
 
 Each issuance takes a serial from the same counter as host certificates, and writes one audit
 entry, `service_identity_issued`, naming the host, the service and the serial. A refusal changes
@@ -103,9 +105,11 @@ nothing.
   the reason is reported.
 - **When.** The daemon checks every service once a minute: a service with no certificate, one
   past half its life, or one that expired is asked for. A refusal is retried after 5 minutes.
-- **Reported.** Every heartbeat of a daemon that announces `service-identity-v1` carries, per
+- **Reported.** Every gRPC heartbeat of a daemon that keeps service identities carries, per
   service with `identity`, the installed certificate's `notAfter` and the last error
-  (`HeartbeatRequest.service_identities`); `Hosts.Get` shows it in the host's heartbeat.
+  (`HeartbeatRequest.service_identities`, read whatever features the heartbeat announces: a
+  heartbeat's list of features holds at most 16 names, which a Linux daemon already fills, so no
+  feature is announced for it, and a daemon that predates the field leaves it empty); `Hosts.Get` shows it in the host's heartbeat.
 - **Stopping.** The coordinator refuses a host that is retired, a service that is unassigned or
   being uninstalled, and an auto host without approval: the daemon keeps what it holds, which
   expires within 8 hours, and keeps asking. Uninstalling a service removes its identity

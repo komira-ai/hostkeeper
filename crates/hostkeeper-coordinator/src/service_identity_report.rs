@@ -2,8 +2,9 @@
 //! (`HeartbeatRequest.service_identities`), kept in memory with the fleet and shown in the host's
 //! heartbeat by `Hosts.List` and `Hosts.Get` ([`show`]). Nothing decides on it.
 //!
-//! The list is read only from a heartbeat over gRPC whose daemon announced
-//! [`crate::service_identity::FEATURE`]; any other heartbeat leaves what is kept as it is. A list
+//! The list is read from every heartbeat over gRPC, whatever features it announces (a daemon that
+//! predates it never sets it, so it is empty); a heartbeat over the legacy path leaves what is kept
+//! as it is. A list
 //! is good when it names at most [`MAX_SERVICES`] services, each a service name, none twice; each
 //! `last_error` is cut to [`MAX_ERROR`] bytes at a character boundary. A list that breaks a rule is
 //! counted and logged as a dropped fact ([`FACT`]), and the one read before is kept. A good list
@@ -23,7 +24,6 @@ use crate::fleet::Fleet;
 use crate::identity::Identity;
 use crate::repository_push::cut;
 use crate::service::Coordinator;
-use crate::service_identity::FEATURE;
 
 /// The name a list that breaks a rule is counted under.
 pub(crate) const FACT: &str = "service_identities";
@@ -68,17 +68,14 @@ fn kept(said: &[agent::ServiceIdentityReport]) -> Option<Vec<agent::ServiceIdent
 }
 
 impl Coordinator {
-    /// Notes the list a heartbeat over gRPC from `who` carries, when its daemon announced
-    /// [`FEATURE`]: kept when it is good, else counted and logged as a dropped fact, the one read
-    /// before kept.
+    /// Notes the list a heartbeat over gRPC from `who` carries: kept when it is good, else counted
+    /// and logged as a dropped fact, the one read before kept. An empty list (also the one of a
+    /// daemon that predates the field) clears what was kept.
     pub(crate) fn hear_service_identities(
         &self,
         who: &Identity,
         request: &agent::HeartbeatRequest,
     ) {
-        if !request.features.iter().any(|name| name == FEATURE) {
-            return;
-        }
         let Some(list) = kept(&request.service_identities) else {
             self.note_extras_dropped(who, "the service identities list breaks a rule", &[FACT]);
             return;

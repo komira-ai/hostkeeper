@@ -635,8 +635,9 @@ it runs on (`docs/design/service-identity.md`). The coordinator signs only when 
 lists the service, no uninstall of it is ordered on the host, the entry it would order the host
 at the service's desired version says `identity`, and the host's key is approved for it:
 
-- A host you approved by hand (`enrollment approve`) is approved for it: its assurance is
-  `operator`.
+- A host you approved by hand (`enrollment approve`, which records your token's name as the
+  approver) is approved for it: its assurance is `operator`. An approval that names no approver
+  (written by a release that did not record one) counts as `auto`.
 - A host the coordinator approved itself, by an inventory record (audited
   `enrollment.auto_approved`), has the assurance `auto` and gets no certificate (`identity_not_approved`)
   until you approve its current key for identity. A new key (a replace, a re-enrollment) needs a new
@@ -659,7 +660,9 @@ host is not retired), the approval with who made it and when, and whether the ho
 `denied` for a retired host. It is audited `identity_approve` under your token's name, with the
 host as the entry's node and `key <SHA-256>` and your reason as its reason; the entry is written
 before the approval, so a call whose entry cannot be written is `audit_unavailable` and changes
-nothing. Approving a key approved already, or a host whose assurance is `operator`, changes nothing
+nothing. No lock is held across the two writes, so an entry can record an approval that did not
+take effect: if the host's key changed or the host was retired between them, the approval is
+refused `key_mismatch` or `denied` after the entry was written. Approving a key approved already, or a host whose assurance is `operator`, changes nothing
 and writes no entry. Only an operator's token calls these; a CI token is `forbidden`.
 
 Every certificate the coordinator signs is audited `service_identity_issued` under `coordinator`,

@@ -4,7 +4,7 @@
 //! exactly the profile [`Ca::issue_service`](crate::ca::Ca::issue_service) writes: one common
 //! name `service:<name>`, the URI subjectAltName `urn:hostkeeper:service:<name>` of the same
 //! name, one DNS subjectAltName that is a host id and no other name, an extended key usage of
-//! `clientAuth` alone, not a CA, and a P-256 key. It is never a host certificate:
+//! `clientAuth` alone, a key usage of `digitalSignature` alone, not a CA, and a P-256 key. It is never a host certificate:
 //! [`CaBundle::host_certificate`] reads only the subject `host:<id>`, and this reads only
 //! `service:<name>`. Its validity is returned, not judged: the caller holds the clock.
 
@@ -55,6 +55,9 @@ pub enum ServiceCertificateError {
     /// The extended key usage is absent or unreadable, or is more than `clientAuth`.
     #[error("the extended key usage is not clientAuth alone")]
     ExtendedKeyUsage,
+    /// The key usage is absent or unreadable, or is more or less than `digitalSignature`.
+    #[error("the key usage is not digitalSignature alone")]
+    KeyUsage,
     /// The basic constraints say the certificate is a CA.
     #[error("the certificate is a CA")]
     IsCa,
@@ -94,6 +97,7 @@ impl CaBundle {
         let service = service_of(&certificate)?;
         let host_id = host_of(&certificate, &service)?;
         client_auth_only(&certificate)?;
+        digital_signature_only(&certificate)?;
         if certificate
             .basic_constraints()
             .ok()
@@ -160,6 +164,23 @@ fn host_of(
     match (uris, hosts.as_slice()) {
         (1, [host]) => HostId::parse(host).map_err(|_| ServiceCertificateError::AltNames),
         _ => Err(ServiceCertificateError::AltNames),
+    }
+}
+
+/// Whether the key usage is present and is `digitalSignature` and nothing else.
+fn digital_signature_only(
+    certificate: &X509Certificate<'_>,
+) -> Result<(), ServiceCertificateError> {
+    let usage = certificate
+        .key_usage()
+        .ok()
+        .flatten()
+        .ok_or(ServiceCertificateError::KeyUsage)?
+        .value;
+    if usage.flags == 1 {
+        Ok(())
+    } else {
+        Err(ServiceCertificateError::KeyUsage)
     }
 }
 

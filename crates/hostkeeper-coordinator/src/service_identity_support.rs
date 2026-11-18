@@ -53,6 +53,9 @@ pub(crate) struct Held {
     pub(crate) cert: Vec<u8>,
 }
 
+/// The approver of a host an operator approved by hand, in these tests.
+const OPERATOR_APPROVER: &str = "operator";
+
 impl Held {
     /// The certificate as a connection presents it.
     pub(crate) fn peer(&self) -> Option<Arc<[u8]>> {
@@ -209,8 +212,8 @@ impl Fix {
         self.enrolled(host, None, None, false)
     }
 
-    /// The host `host` enrolled with its own key and approved by `approver` (an operator's
-    /// plain approval when none), taking the id over when `replace`, in `group` with its move
+    /// The host `host` enrolled with its own key and approved by `approver` (an operator
+    /// named [`OPERATOR_APPROVER`] when none), taking the id over when `replace`, in `group` with its move
     /// over, and heard once.
     fn enrolled(
         &self,
@@ -245,22 +248,21 @@ impl Fix {
             replace,
             host_group: None,
         };
-        match approver {
-            None => enrollment.store().approve(&hash, &hash, &decision),
-            Some(approver) => enrollment.store().approve_recorded(
+        enrollment
+            .store()
+            .approve_recorded(
                 &hash,
                 &hash,
                 &decision,
                 &ApprovalRecord {
-                    approver: approver.to_owned(),
+                    approver: approver.unwrap_or(OPERATOR_APPROVER).to_owned(),
                     approved_unix: crate::enrollment::tests::support::NOW,
                     reason: "matched".to_owned(),
                     mac_nonce: None,
                     mac_enrolled_since_unix: None,
                 },
-            ),
-        }
-        .expect("approved");
+            )
+            .expect("approved");
         let issued = signed_poll(enrollment, &key, &key).expect("polled");
         assert_eq!(issued.state, PollState::Issued as i32);
         if let Some(group) = group {

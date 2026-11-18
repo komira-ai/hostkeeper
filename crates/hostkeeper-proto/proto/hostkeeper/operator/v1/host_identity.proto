@@ -72,7 +72,7 @@ enum HostAssurance {
   // An operator approved its current key by hand.
   HOST_ASSURANCE_OPERATOR = 1;
   // The coordinator approved its current key itself, by an inventory record; also a host whose
-  // approval the coordinator no longer finds.
+  // approval names no approver or the coordinator no longer finds.
   HOST_ASSURANCE_AUTO = 2;
 }
 

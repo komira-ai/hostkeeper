@@ -240,8 +240,7 @@ impl Enrollment {
             node_id: host.to_string(),
             assurance: assurance_of(&state) as i32,
             key_sha256: state.key_hash.to_hex(),
-            allowed: !state.denied
-                && (state.assurance == Assurance::Operator || state.approval.is_some()),
+            allowed: state.allowed(),
             approval: state.approval.as_ref().map(approval_info),
             denied: state.denied,
         })
@@ -251,6 +250,12 @@ impl Enrollment {
     /// host's current key is approved for service identity, audited `identity_approve` before it is
     /// written. The answer is the approval in force; none for a host an operator approved by hand,
     /// which needs none, and then nothing is written or audited, as for a key approved already.
+    ///
+    /// The audit entry is written first and no lock is held across it and the approval, so a call
+    /// that cannot audit changes nothing, but an entry can record an approval that did not take
+    /// effect: when the host's key changed (a new approval of the host) or the host was denied
+    /// between the two writes, the approval is refused `key_mismatch` or `denied` after the entry
+    /// was written. Two calls racing for one key both write an entry and one approval stays.
     ///
     /// # Errors
     /// `invalid_request` (the node id, the key hash or the reason), `unknown_host`,

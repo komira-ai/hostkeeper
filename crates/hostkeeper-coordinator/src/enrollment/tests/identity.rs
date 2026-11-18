@@ -5,14 +5,14 @@
 use std::sync::Arc;
 
 use hostkeeper_enrollment::enroll::{
-    IdentityApproval, IdentityApproved, IdentityError, StoreError,
+    ApprovalRecord, Decision, IdentityApproval, IdentityApproved, IdentityError, StoreError,
 };
 use hostkeeper_enrollment::fs::FaultFs;
-use hostkeeper_enrollment::names::{HostId, KeyHash};
+use hostkeeper_enrollment::names::{HostId, KeyHash, Role};
 use hostkeeper_proto::hostkeeper::agent::v1::CoordinatorRefusal;
 use hostkeeper_proto::hostkeeper::operator::v1::HostIdentityRefusal;
 
-use super::support::{HostKey, Rig, enrolled};
+use super::support::{HostKey, NOW, Rig, enroll_request, host_id, signed_poll};
 use crate::enrollment::identity::{approval_of, identity_refusal};
 use crate::enrollment::{RpcError, os_random};
 use crate::ops::OpsStore;
@@ -28,8 +28,45 @@ fn rig(name: &str, fs: &Arc<FaultFs>, audited: bool) -> (Rig, Arc<OpsStore>, Vec
     if audited {
         rig.enrollment.audit_to(ops.clone());
     }
-    let certificate = enrolled(&rig.enrollment, &HostKey::new(), "machine-1", "s1");
+    let certificate = by_operator(&rig.enrollment, &HostKey::new(), "machine-1", "s1");
     (rig, ops, certificate)
+}
+
+/// The certificate of the host `host`, whose request of `key` an operator approved by name (a
+/// plain approval names nobody, so it would not be an operator's).
+fn by_operator(
+    enrollment: &crate::enrollment::Enrollment,
+    key: &HostKey,
+    machine: &str,
+    host: &str,
+) -> Vec<u8> {
+    enrollment
+        .enroll(enroll_request(key, machine))
+        .expect("enrolled");
+    enrollment
+        .store()
+        .approve_recorded(
+            &key.key_hash(),
+            &key.key_hash(),
+            &Decision {
+                host_id: host_id(host),
+                role: Role::parse("storage").expect("a role"),
+                services: Vec::new(),
+                replace: false,
+                host_group: None,
+            },
+            &ApprovalRecord {
+                approver: "operator".to_owned(),
+                approved_unix: NOW,
+                reason: "checked".to_owned(),
+                mac_nonce: None,
+                mac_enrolled_since_unix: None,
+            },
+        )
+        .expect("approved");
+    signed_poll(enrollment, key, key)
+        .expect("polled")
+        .certificate_der
 }
 
 /// How many entries `service_identity_issued` the audit holds.
@@ -111,7 +148,7 @@ fn an_enrollment_with_no_audit_store_issues_nothing() {
 fn a_store_that_fails_while_the_deny_list_is_read_never_answers_a_short_list() {
     let fs = Arc::new(FaultFs::new());
     let (rig, _, certificate) = rig("identity-deny-fault", &fs, true);
-    enrolled(&rig.enrollment, &HostKey::new(), "machine-2", "s2");
+    by_operator(&rig.enrollment, &HostKey::new(), "machine-2", "s2");
     let denied = HostId::parse("s2").expect("a host id");
     rig.enrollment.store().deny(&denied).expect("denied");
     let mut failures = Vec::new();

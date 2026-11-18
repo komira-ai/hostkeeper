@@ -486,14 +486,19 @@ fn shown(fix: &Fix, host: &str) -> Vec<agent::ServiceIdentityReport> {
         .unwrap_or_default()
 }
 
-/// Proves: `service-identity-v1` is acted on: the coordinator advertises it, a daemon that announces
-/// it has the list it reports kept and shown in its host's heartbeat, and a daemon that does not
-/// has none read, though it carries one.
+/// Proves: the list a heartbeat carries is kept and shown in its host's heartbeat whatever features
+/// the heartbeat announces (none is announced for it), and a heartbeat with no list shows none.
+/// The coordinator advertises no feature for it.
 ///
-/// Catches: a feature advertised for behaviour that is not there, and a list read from a daemon that
-/// did not announce it.
-pub(crate) async fn service_identity_v1_is_acted_on() {
-    assert!(crate::service::FEATURES.contains(&crate::service_identity::FEATURE));
+/// Catches: a list read only when a feature is announced (the daemon announces none, as the list
+/// of features is full), and a feature advertised for it.
+#[tokio::test]
+async fn a_heartbeat_with_reports_shows_them_whatever_features_it_announces() {
+    assert!(
+        !crate::service::FEATURES
+            .iter()
+            .any(|name| name.contains("service-identity"))
+    );
     let fix = Fix::new("identity-feature").await;
     fix.operator_host("node-01");
     fix.operator_host("node-02");
@@ -502,24 +507,20 @@ pub(crate) async fn service_identity_v1_is_acted_on() {
         not_after_unix: Some(NOW + 28_800),
         last_error: None,
     }];
-    let heartbeat = |features: &[&str]| agent::HeartbeatRequest {
-        features: features.iter().map(|name| (*name).to_owned()).collect(),
-        service_identities: list.clone(),
-        ..agent::HeartbeatRequest::default()
-    };
-    let hear = |host: &str, features: &[&str]| {
+    let heartbeat =
+        |features: &[&str], list: &[agent::ServiceIdentityReport]| agent::HeartbeatRequest {
+            features: features.iter().map(|name| (*name).to_owned()).collect(),
+            service_identities: list.to_vec(),
+            ..agent::HeartbeatRequest::default()
+        };
+    let hear = |host: &str, features: &[&str], list: &[agent::ServiceIdentityReport]| {
         fix.coordinator()
-            .hear_service_identities(&who(host, "storage"), &heartbeat(features));
+            .hear_service_identities(&who(host, "storage"), &heartbeat(features, list));
     };
-    hear("node-01", &[crate::service_identity::FEATURE]);
-    hear("node-02", &[]);
+    hear("node-01", &[], &list);
+    hear("node-02", &["deferred-v1"], &[]);
     assert_eq!(shown(&fix, "node-01"), list);
     assert_eq!(shown(&fix, "node-02"), []);
-}
-
-#[tokio::test]
-async fn service_identity_v1_is_advertised_and_read_from_the_daemons_that_announce_it() {
-    service_identity_v1_is_acted_on().await;
 }
 
 /// Proves: a host the coordinator has not heard since it started is refused `service_not_assigned`

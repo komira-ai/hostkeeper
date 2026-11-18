@@ -194,10 +194,8 @@ message HeartbeatRequest {
   // which asks for `HeartbeatResponse.operator_keys`, writes them to the managed block of the
   // host's login account's `authorized_keys` and reports `operator_keys`, and
   // `prerequisites-v1`, which asks for `HeartbeatResponse.prerequisites`, makes sure of them on
-  // the host and reports `prerequisites`, and `service-identity-v1`, which announces that it keeps
-  // the certificates of its services with an identity and reports them in `service_identities`):
-  // at most 16, each 1 to 32 bytes of `[a-z0-9-]`, none twice. An agent
-  // that lists every service it runs in `services` announces `heartbeat-v2`; without it the
+  // the host and reports `prerequisites`): at most 16, each 1 to 32 bytes of `[a-z0-9-]`, none
+  // twice. An agent that lists every service it runs in `services` announces `heartbeat-v2`; without it the
   // coordinator counts the host as unmanaged for every service but the legacy one, rather than
   // as missing them.
   repeated string features = 3;
@@ -261,7 +259,8 @@ message HeartbeatRequest {
   optional PrerequisitesReport prerequisites = 16;
   // The certificate the daemon holds for each installed service whose entry says `identity`, one
   // entry each, at most 16, by service name, none twice. Sent in every heartbeat by a daemon that
-  // announces `service-identity-v1`, read only over gRPC; empty from one that predates it. A list
+  // keeps them, announced by no feature (the list of features is full), read from every gRPC
+  // heartbeat; empty from a daemon that predates it. A list
   // that breaks a rule is dropped and the coordinator keeps the last one it read, in memory, and
   // shows it in `hostkeeper.operator.v1.Host.heartbeat`; nothing decides on it.
   repeated ServiceIdentityReport service_identities = 17;

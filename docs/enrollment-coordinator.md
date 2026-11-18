@@ -221,12 +221,12 @@ info level with the host and the service.
 of this CA that is valid now (`notBefore <= now < notAfter` by the coordinator's clock), of a host
 that is not denied; the deny rows are read as they are, so a retire is listed at once.
 
-The heartbeat's `service_identities` is read only over gRPC from a daemon that announced
-`service-identity-v1` (a feature the coordinator advertises): at most 16 services, each a service
-name, none twice, each `last_error` cut to 256 bytes at a character boundary. The last good list is
+The heartbeat's `service_identities` is read from every heartbeat over gRPC, whatever features it
+announces (no feature is announced for it: the list of features, at most 16, is full; a daemon
+that predates the field leaves it empty): at most 16 services, each a service name, none twice, each `last_error` cut to 256 bytes at a character boundary. The last good list is
 kept in memory and shown by `Hosts.Get` and `Hosts.List` in the host's heartbeat; a list that
 breaks a rule is counted as a dropped fact `service_identities` and the last one is kept; an empty
-list from a daemon that announces the feature clears it.
+list clears it.
 
 ## Request expiry
 

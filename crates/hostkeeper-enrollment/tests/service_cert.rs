@@ -517,6 +517,49 @@ fn an_extended_key_usage_other_than_client_auth_alone_is_refused() {
     }
 }
 
+/// Proves: the key usage must be `digitalSignature` alone: absent, another usage in its place, or
+/// `digitalSignature` with another usage is refused, and the refusal reads as its sentence.
+///
+/// Catches: a certificate with no stated key usage, or one that may also sign certificates,
+/// read as a service's.
+#[test]
+fn a_key_usage_other_than_digital_signature_alone_is_refused() {
+    let test = TestCa::new("service-key-usage");
+    let cases: [(&str, Vec<KeyUsagePurpose>); 4] = [
+        ("absent", vec![]),
+        ("key encipherment", vec![KeyUsagePurpose::KeyEncipherment]),
+        (
+            "with certificate signing",
+            vec![
+                KeyUsagePurpose::DigitalSignature,
+                KeyUsagePurpose::KeyCertSign,
+            ],
+        ),
+        (
+            "with key agreement",
+            vec![
+                KeyUsagePurpose::DigitalSignature,
+                KeyUsagePurpose::KeyAgreement,
+            ],
+        ),
+    ];
+    for (what, usages) in cases {
+        let mut params = good();
+        params.key_usages = usages;
+        let host = HostKey::new();
+        let der = forge(&test, &host.pair, params);
+        assert_eq!(
+            test.ca.bundle().service_certificate(&der),
+            Err(ServiceCertificateError::KeyUsage),
+            "{what}"
+        );
+    }
+    assert_eq!(
+        ServiceCertificateError::KeyUsage.to_string(),
+        "the key usage is not digitalSignature alone"
+    );
+}
+
 /// Proves: a certificate whose basic constraints say CA, constrained or not, is refused; one
 /// with `CA:FALSE` or with no basic constraints reads.
 ///

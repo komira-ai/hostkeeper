@@ -17,8 +17,8 @@
 //! whose daemon has not been heard since the coordinator started is picked nothing and is refused
 //! `service_not_assigned` until its next heartbeat, which the daemon's retry waits for.
 //!
-//! The daemon announces [`FEATURE`] and reports in every heartbeat over gRPC the certificate it
-//! holds of each service with an identity ([`crate::service_identity_report`]).
+//! The daemon announces no feature (the list of features is full) and reports in every heartbeat
+//! over gRPC the certificate it holds of each service with an identity ([`crate::service_identity_report`]).
 
 use std::sync::Arc;
 
@@ -31,10 +31,6 @@ use crate::enrollment::{Enrollment, RpcError};
 use crate::identity::Identity;
 use crate::picks::{Pick, pick};
 use crate::service::Coordinator;
-
-/// The feature a daemon announces to say it keeps the certificates of its services with an
-/// identity and reports them; the coordinator advertises it ([`crate::features::FEATURES`]).
-pub const FEATURE: &str = "service-identity-v1";
 
 impl Coordinator {
     /// `Coordinator.IssueServiceCertificate` for the holder of the client certificate `peer`.

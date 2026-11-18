@@ -1,6 +1,6 @@
 //! Service identity through the router as the listeners serve it: `IssueServiceCertificate` and
-//! `ListDeny` over gRPC on the heartbeat listener, `GET /v1/deny`, what a heartbeat that announces
-//! `service-identity-v1` shows in `Hosts.Get`, a service certificate refused wherever a host's is
+//! `ListDeny` over gRPC on the heartbeat listener, `GET /v1/deny`, what a heartbeat that carries reports
+//! shows in `Hosts.Get`, a service certificate refused wherever a host's is
 //! needed, and `HostIdentity` over gRPC and the JSON gateway on the private one.
 
 use std::sync::Arc;
@@ -24,7 +24,6 @@ use crate::enrollment::tests::support::{
 };
 use crate::grpc::gateway::pool;
 use crate::http::{Peer, Surface};
-use crate::service_identity::FEATURE;
 use crate::service_identity_support::{Fix, Held, SERVICE, Wired, csr_of, request_for};
 use crate::testutil::{OPERATOR, ci_token};
 
@@ -473,12 +472,9 @@ fn report(
     }
 }
 
-/// A heartbeat of the farm's daemon that carries `list`, announcing the feature when `announce`.
-fn carrying(list: Vec<agent::ServiceIdentityReport>, announce: bool) -> agent::HeartbeatRequest {
+/// A heartbeat of the farm's daemon that carries `list` and announces no feature for it.
+fn carrying(list: Vec<agent::ServiceIdentityReport>) -> agent::HeartbeatRequest {
     let mut message = proto_message(&[svc("hostkeeper", "1.0")]);
-    if announce {
-        message.features.push(FEATURE.to_owned());
-    }
     message.service_identities = list;
     message
 }
@@ -504,16 +500,15 @@ fn dropped(w: &Wired) -> Option<u64> {
     status.extras_dropped.get("service_identities").copied()
 }
 
-/// Proves: the list a gRPC heartbeat of a daemon that announced `service-identity-v1` carries is
-/// what `Hosts.Get` shows in the host's heartbeat, with each `last_error` cut to 256 bytes at a
-/// character boundary; a later list replaces it; a later heartbeat of a daemon that does not
-/// announce the feature, though it carries a list, changes nothing; and an empty list from a
-/// daemon that announces it clears what was shown. Nothing is counted as dropped.
+/// Proves: the list a gRPC heartbeat carries (it announces no feature for it) is what `Hosts.Get`
+/// shows in the host's heartbeat, with each `last_error` cut to 256 bytes at a character boundary;
+/// a later list replaces it; and an empty list (what a daemon that predates the field sends)
+/// clears what was shown. Nothing is counted as dropped.
 ///
-/// Catches: a list read from a daemon that cannot have sent it, an error text kept whole, and a
+/// Catches: a list that needs a feature no daemon announces, an error text kept whole, and a
 /// service that stays shown after the daemon no longer has it.
 #[tokio::test]
-async fn hosts_show_the_last_list_a_daemon_that_announced_the_feature_reported() {
+async fn hosts_show_the_last_list_a_heartbeat_reported() {
     let (h, w) = hosts("grpc-sid-shown").await;
     let peer = h.ok.peer();
     let send = |message: agent::HeartbeatRequest| {
@@ -530,13 +525,10 @@ async fn hosts_show_the_last_list_a_daemon_that_announced_the_feature_reported()
 
     // 100 characters of three bytes: 300 bytes, cut to 255 (85 characters) at a boundary.
     let long = "\u{20ac}".repeat(100);
-    send(carrying(
-        vec![
-            report("js-agent", Some(1_800_000_000), None),
-            report("tierstore", None, Some(&long)),
-        ],
-        true,
-    ))
+    send(carrying(vec![
+        report("js-agent", Some(1_800_000_000), None),
+        report("tierstore", None, Some(&long)),
+    ]))
     .await;
     assert_eq!(
         shown(&w, "node-01").await,
@@ -546,18 +538,16 @@ async fn hosts_show_the_last_list_a_daemon_that_announced_the_feature_reported()
         ]
     );
 
-    send(carrying(
-        vec![report("js-agent", Some(1_800_028_800), None)],
-        true,
-    ))
+    send(carrying(vec![report(
+        "js-agent",
+        Some(1_800_028_800),
+        None,
+    )]))
     .await;
     let second = [report("js-agent", Some(1_800_028_800), None)];
     assert_eq!(shown(&w, "node-01").await, second);
 
-    send(carrying(vec![report("other", Some(1), None)], false)).await;
-    assert_eq!(shown(&w, "node-01").await, second);
-
-    send(carrying(Vec::new(), true)).await;
+    send(carrying(Vec::new())).await;
     assert_eq!(shown(&w, "node-01").await, []);
     assert_eq!(dropped(&w), None);
 }
@@ -576,7 +566,7 @@ async fn a_list_that_breaks_a_rule_is_dropped_and_the_last_one_kept() {
         let w = &w;
         let peer = peer.clone();
         async move {
-            let answer = beat(&w.coordinator, &peer, &carrying(list, true)).await;
+            let answer = beat(&w.coordinator, &peer, &carrying(list)).await;
             assert_eq!(answer.token(), (Code::Ok, ""));
         }
     };
@@ -608,21 +598,6 @@ async fn a_list_that_breaks_a_rule_is_dropped_and_the_last_one_kept() {
 
     send(named(&["js-agent".to_owned()])).await;
     assert_eq!(shown(&w, "node-01").await.len(), 1);
-}
-
-/// Proves: a daemon that does not announce the feature and sends a bad list is not counted as
-/// sending a bad fact: the field is not read from it at all.
-///
-/// Catches: a list read from a daemon that predates the feature.
-#[tokio::test]
-async fn a_daemon_that_did_not_announce_the_feature_is_not_read() {
-    let (h, w) = hosts("grpc-sid-unannounced").await;
-    let names: Vec<String> = (0..20).map(|n| format!("svc-{n}")).collect();
-    let list = names.iter().map(|name| report(name, None, None)).collect();
-    let answer = beat(&w.coordinator, &h.ok.peer(), &carrying(list, false)).await;
-    assert_eq!(answer.token(), (Code::Ok, ""));
-    assert_eq!(dropped(&w), None);
-    assert_eq!(shown(&w, "node-01").await, []);
 }
 
 /// Proves: `HostIdentity` over gRPC refuses no credential `unauthorized` and a CI token

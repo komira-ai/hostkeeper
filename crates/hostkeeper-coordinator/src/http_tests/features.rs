@@ -264,9 +264,6 @@ async fn advertised_features_equal_the_handled_set() {
         } else if *name == crate::prerequisites::FEATURE {
             // The host prerequisites of a host go only in the answer over gRPC.
             crate::prerequisites::tests::prerequisites_v1_is_acted_on();
-        } else if *name == crate::service_identity::FEATURE {
-            // The services' identities a daemon reports are read over gRPC only.
-            crate::service_identity_tests::service_identity_v1_is_acted_on().await;
         } else if let Some(extra) = uses.get(name) {
             let without = typed_text(&rig, "d1", "daemon", &beat("1.0", &announce)).await;
             let with_it = beat("1.0", &format!("{announce}{extra}"));
@@ -288,7 +285,6 @@ async fn advertised_features_equal_the_handled_set() {
     handled.push(crate::facts::FEATURE);
     handled.push(crate::operator_keys::FEATURE);
     handled.push(crate::prerequisites::FEATURE);
-    handled.push(crate::service_identity::FEATURE);
     handled.sort_unstable();
     proven.sort_unstable();
     assert_eq!(proven, handled);

@@ -84,16 +84,22 @@ fn approval(key: &HostKey, approver: &str, at: u64) -> IdentityApproval {
     }
 }
 
-/// Proves: the assurance of a host is `auto` when the approval of its key names the inventory
-/// approver, and `operator` for an operator's name and for an approval recorded with no approver;
-/// a host id never approved has no state.
+/// Proves: the assurance of a host is `operator` only when the approval of its key names an
+/// approver that is not empty and not the inventory approver; an inventory approval, an approval
+/// recorded with an empty approver and an approval made with no record at all are `auto` and are
+/// not allowed identity until an operator approves the key; a host id never approved has no state.
 ///
-/// Catches: a host approved by an inventory record counted as approved by hand, which would let
-/// any machine an inventory record matched get service certificates.
+/// Catches: a host approved by an inventory record, or by an approval that names nobody, counted
+/// as approved by hand, which would let any machine so approved get service certificates.
 #[test]
-fn the_assurance_is_auto_for_an_inventory_approval_and_operator_for_any_other() {
+fn the_assurance_is_operator_only_for_a_named_approver_other_than_the_inventory() {
     for (label, store, _, _dir) in stores("identity-assurance") {
-        let (auto, by_hand, plain) = (HostKey::new(), HostKey::new(), HostKey::new());
+        let (auto, by_hand, plain, nameless) = (
+            HostKey::new(),
+            HostKey::new(),
+            HostKey::new(),
+            HostKey::new(),
+        );
         enroll(
             &store,
             &auto,
@@ -104,6 +110,7 @@ fn the_assurance_is_auto_for_an_inventory_approval_and_operator_for_any_other() 
         );
         enroll(&store, &by_hand, "m-2", "hand-1", Some("ops"), false);
         enroll(&store, &plain, "m-3", "plain-1", None, false);
+        enroll(&store, &nameless, "m-4", "nameless-1", Some(""), false);
         let state = |host: &str| store.identity_state(&host_id(host)).expect("read");
         assert_eq!(
             state("auto-1"),
@@ -120,11 +127,18 @@ fn the_assurance_is_auto_for_an_inventory_approval_and_operator_for_any_other() 
             Some(Assurance::Operator),
             "{label}"
         );
-        assert_eq!(
-            state("plain-1").map(|s| s.assurance),
-            Some(Assurance::Operator),
-            "{label}"
-        );
+        for host in ["plain-1", "nameless-1"] {
+            assert_eq!(
+                state(host).map(|s| s.assurance),
+                Some(Assurance::Auto),
+                "{label} {host}"
+            );
+            assert!(
+                !store.identity_allowed(&host_id(host)).expect("read"),
+                "{label} {host}"
+            );
+        }
+        assert!(store.identity_allowed(&host_id("hand-1")).expect("read"));
         assert_eq!(state("nobody-1"), None, "{label}");
         assert_eq!(INVENTORY_APPROVER, "inventory");
     }

@@ -24,9 +24,12 @@ use crate::{halt, verdict_file};
 /// and the host is sent the operator keys of its host group until it reports their digest
 /// ([`crate::operator_keys`]). `prerequisites-v1`: the `prerequisites` report of a gRPC heartbeat
 /// is read, and the host is sent the host prerequisites of its host group until it reports their
-/// digest ([`crate::prerequisites`]). `service-identity-v1`: the `service_identities` report of a
-/// gRPC heartbeat is read, and the host may ask for a service certificate
-/// ([`crate::service_identity`]).
+/// digest ([`crate::prerequisites`]).
+///
+/// No feature is advertised for service identity: a heartbeat's list of features holds at most 16
+/// names (every coordinator released enforces it) and this one is full, so the `service_identities`
+/// report of every gRPC heartbeat is read whatever the features it announces
+/// ([`crate::service_identity_report`]).
 pub const FEATURES: &[&str] = &[
     "deferred-v1",
     halt::FEATURE,
@@ -40,7 +43,6 @@ pub const FEATURES: &[&str] = &[
     crate::facts::FEATURE,
     crate::operator_keys::FEATURE,
     crate::prerequisites::FEATURE,
-    crate::service_identity::FEATURE,
 ];
 
 /// The fields of the answer to a heartbeat that go only to an agent that announced a feature,

@@ -139,7 +139,7 @@ fn an_older_coordinator_keeps_a_heartbeats_identity_reports() {
         .expect("HeartbeatRequest");
     let beat = agent::HeartbeatRequest {
         platform: agent::Platform::LinuxX8664.into(),
-        features: vec!["service-identity-v1".to_owned()],
+        features: vec!["prerequisites-v1".to_owned()],
         service_identities: vec![
             agent::ServiceIdentityReport {
                 service: "js-agent".to_owned(),
@@ -168,7 +168,7 @@ fn an_older_coordinator_keeps_a_heartbeats_identity_reports() {
     assert_eq!(
         read.get_field_by_name("features").as_deref(),
         Some(&Value::List(vec![Value::String(
-            "service-identity-v1".to_owned()
+            "prerequisites-v1".to_owned()
         )]))
     );
     assert_eq!(read.encode_to_vec(), bytes, "written back byte for byte");
