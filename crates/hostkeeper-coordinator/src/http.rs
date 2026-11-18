@@ -25,7 +25,9 @@
 //!   ([`Coordinator::login`]) also answers `POST /v1/login`, `POST /v1/logout`, `GET /v1/session`
 //!   and `POST /v1/password` ([`crate::login_routes`]), which a browser signs in and out and
 //!   changes its password with; the heartbeat surface never serves those either, and an
-//!   operator's bearer never reads or sets the cookie they use. `GET /v1/version[?at_least=<X.Y.Z>]`
+//!   operator's bearer never reads or sets the cookie they use. With a sign-in it also answers
+//!   `GET /v1/ssh/terminal?host=<host id>`, the WebSocket upgrade of the UI's Remote SSH
+//!   ([`crate::ssh_terminal_route`]), which takes a session and no bearer. `GET /v1/version[?at_least=<X.Y.Z>]`
 //!   answers which release this coordinator is, with no token read ([`crate::version_route`]):
 //!   CI waits on it before it sets a release a coordinator older than the release would refuse.
 //!
@@ -211,6 +213,16 @@ where
         && let Some(rest) = path.strip_prefix(crate::ui::PREFIX)
     {
         return ui.answer(&method, rest).await;
+    }
+    if surface == Surface::Control
+        && path == crate::ssh_terminal_route::PATH
+        && let Some(login) = coordinator.login()
+    {
+        return if method == Method::GET {
+            crate::ssh_terminal_route::answer(coordinator, login, request, patience)
+        } else {
+            error(StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed")
+        };
     }
     if surface == Surface::Control
         && crate::login_routes::is_route(&path)

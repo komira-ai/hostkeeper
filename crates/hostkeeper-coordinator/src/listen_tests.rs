@@ -37,6 +37,7 @@ use crate::http::{PeerAddr, STATUS_PATH, Surface};
 use crate::operator_keys::OperatorKeys;
 use crate::operator_keys::tests::{file, group, key};
 use crate::service::Coordinator;
+use crate::ssh_terminal_route::Shared;
 use crate::testutil::{OPERATOR, Rig, ci_token, scratch};
 use crate::tokens::OperatorTokens;
 use crate::wait::ConnectionWaits;
@@ -583,21 +584,31 @@ async fn a_tcp_stream_names_its_peer_and_a_pipe_names_none() {
 }
 
 /// Proves: a request carries the address of its connection as [`PeerAddr`], and a connection
-/// with no address leaves the request without one; the held waits ride on it either way.
+/// with no address leaves the request without one; the held waits and the coordinator (the one
+/// the terminal of an upgrade outlives the request with) ride on it either way.
 ///
-/// Catches: an address dropped on the way to the request, or invented for a transport with none.
+/// Catches: an address dropped on the way to the request, or invented for a transport with none,
+/// and a request that reaches the router with no coordinator of its own to hand a terminal.
 #[test]
 fn a_request_carries_the_address_of_its_connection_when_it_has_one() {
     let from: std::net::SocketAddr = "192.0.2.7:4433".parse().expect("an address");
     let waits = ConnectionWaits::default();
+    let (coordinator, _dir) = coordinator("listen-carry");
     let mut named = Request::new(());
-    carry(&mut named, &waits, Some(from));
+    carry(&mut named, &waits, Some(from), &coordinator);
     assert_eq!(named.extensions().get::<PeerAddr>(), Some(&PeerAddr(from)));
     assert!(named.extensions().get::<ConnectionWaits>().is_some());
+    assert!(
+        named
+            .extensions()
+            .get::<Shared>()
+            .is_some_and(|shared| Arc::ptr_eq(&shared.0, &coordinator))
+    );
     let mut nameless = Request::new(());
-    carry(&mut nameless, &waits, None);
+    carry(&mut nameless, &waits, None, &coordinator);
     assert_eq!(nameless.extensions().get::<PeerAddr>(), None);
     assert!(nameless.extensions().get::<ConnectionWaits>().is_some());
+    assert!(nameless.extensions().get::<Shared>().is_some());
 }
 
 /// A pipe that says it came from `from`, to drive [`connection`] with a transport that has an

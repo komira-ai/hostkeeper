@@ -5,6 +5,7 @@
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -21,6 +22,8 @@ use tonic::Status;
 use super::{Event, Incoming, Limits, MAX_FRAME, Outgoing, QUEUE, Tunnels, instance_id};
 use crate::enrollment::Random;
 use crate::enrollment::tests::support::Rig as EnrollmentRig;
+use crate::login::Login;
+use crate::login_support::{Seconds, counting, settings};
 use crate::operator::Caller;
 use crate::service::Coordinator;
 use crate::ssh_book::{
@@ -201,6 +204,8 @@ pub(crate) struct Rig {
     pub(crate) ledger: Arc<ssh_ledger::Memory>,
     pub(crate) operators: PathBuf,
     pub(crate) records: Arc<MemoryRecords>,
+    /// The clock of the coordinator and its sign-in, in seconds.
+    pub(crate) clock: Arc<AtomicU64>,
     pub(crate) events: mpsc::UnboundedReceiver<Event>,
     /// Events read while waiting for another one.
     unmatched: Vec<Event>,
@@ -227,7 +232,12 @@ pub(crate) fn limits(port: u16) -> Limits {
 impl Rig {
     /// A rig named `name` whose limits `tune` changes.
     pub(crate) async fn new(name: &str, tune: impl FnOnce(&mut Limits)) -> Rig {
-        let world = world(name, Some(OPERATORS), Tune::default());
+        Rig::tuned(name, Tune::default(), tune).await
+    }
+
+    /// [`Rig::new`] with the signing changed as `signing` says.
+    pub(crate) async fn tuned(name: &str, signing: Tune, tune: impl FnOnce(&mut Limits)) -> Rig {
+        let world = world(name, Some(OPERATORS), signing);
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("a listener on a port of loopback");
@@ -242,7 +252,14 @@ impl Rig {
             limits,
         );
         let events = tunnels.watch();
-        let coordinator = Arc::new(world.coordinator.with_tunnels(tunnels));
+        let clock = Arc::clone(&world._rig.clock);
+        let login = Login::new(
+            settings(),
+            Arc::new(Seconds(Arc::clone(&clock))),
+            counting(),
+        )
+        .expect("a sign-in");
+        let coordinator = Arc::new(world.coordinator.with_tunnels(tunnels).with_login(login));
         let tunnels = Arc::clone(coordinator.tunnels.as_ref().expect("the tunnels"));
         for host in HOSTS {
             book.inner
@@ -256,6 +273,7 @@ impl Rig {
             ledger: world.ledger,
             operators: world.operators,
             records: world.records,
+            clock,
             events,
             unmatched: Vec::new(),
             listener,

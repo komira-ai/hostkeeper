@@ -134,13 +134,18 @@ impl Signing {
     }
 }
 
+/// The token a refusal goes by in the audit and in a UI terminal's last message: its name in lower
+/// case without the enum's prefix (`not_permitted`, `unknown_host`).
+pub(crate) fn refusal_token(why: Refusal) -> String {
+    why.as_str_name()
+        .trim_start_matches("SSH_REFUSAL_")
+        .to_ascii_lowercase()
+}
+
 /// Writes the line of a refusal to `ledger`, whose token is the refusal's name in lower case; the
 /// refusal stands whether or not the line could be written.
 pub(crate) fn deny(ledger: &dyn Ledger, by: &str, host_id: &str, why: Refusal) {
-    let token = why
-        .as_str_name()
-        .trim_start_matches("SSH_REFUSAL_")
-        .to_ascii_lowercase();
+    let token = refusal_token(why);
     if let Err(error) = ledger.denied(by, host_id, &token) {
         tracing::warn!(%error, "the line of a refused SSH call could not be written");
     }

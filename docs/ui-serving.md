@@ -35,7 +35,8 @@ browser keeps the session in a cookie the page cannot read; the page keeps only 
 token, in memory, and sends it in the `X-HK-CSRF` header of each API call. Reloading the page asks
 the coordinator for the session again, so a reload does not sign you out. A first sign-in, or a
 sign-in with a temporary password an admin set, shows only the form for choosing a new password.
-Sign out ends the session on the coordinator.
+Sign out ends the session on the coordinator. The host page's Remote SSH terminal speaks to the coordinator over one WebSocket to the same origin
+(`/v1/ssh/terminal`, `docs/operations/ssh-ca.md`), which `default-src 'self'` allows.
 
 ## The frame and the lab
 

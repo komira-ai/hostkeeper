@@ -31,7 +31,7 @@ use crate::service::Coordinator;
 use crate::ssh_book::{HostKeys, OpenRefused, Opening, PinRefused};
 use crate::ssh_operators::Target;
 use crate::ssh_sign::{Signing, class_of, deny};
-use crate::ssh_tunnel::{Dialed, Failed, Incoming, NoSlot, Outgoing, Tunnels};
+use crate::ssh_tunnel::{Credential, Dialed, Failed, Incoming, NoSlot, Outgoing, Tunnels};
 use crate::wait::ConnectionHold;
 
 /// The most fingerprints a pin holds.
@@ -209,6 +209,23 @@ impl Coordinator {
         frames: impl Stream<Item = Result<proto::TunnelFrame, Status>> + Send + 'static,
         hold: Option<ConnectionHold>,
     ) -> Result<Outgoing, Refusal> {
+        self.ssh_tunnel_open_as(caller, Credential::Token, frames, hold)
+            .await
+    }
+
+    /// [`Self::ssh_tunnel_open`] for a caller that acts under `credential`, which the poll holds
+    /// the tunnel to: a token for `Ssh.Tunnel`, the session of a UI terminal for
+    /// [`crate::ssh_terminal`].
+    ///
+    /// # Errors
+    /// [`Refusal`]: as [`Self::ssh_tunnel_open`].
+    pub(crate) async fn ssh_tunnel_open_as(
+        &self,
+        caller: &Caller,
+        credential: Credential,
+        frames: impl Stream<Item = Result<proto::TunnelFrame, Status>> + Send + 'static,
+        hold: Option<ConnectionHold>,
+    ) -> Result<Outgoing, Refusal> {
         let operator = caller.operator().map_err(Refusal::from)?;
         let (ssh, tunnels) = self.ssh_tunnels().ok_or(Refusal::NotConfigured)?;
         if tunnels.draining() {
@@ -274,7 +291,7 @@ impl Coordinator {
         Ok(tunnels.start(
             slot,
             &opened,
-            (operator, &reached.host_id),
+            (operator, &reached.host_id, credential),
             ssh.login_for(&reached.host),
             (host, frames),
             hold,

@@ -425,6 +425,8 @@ carries an `Authorization` header never has its cookie read, and a gRPC call nev
 (`docs/gateway.md`) a call with the cookie and no `Authorization` header is made as the signed-in user, under the same checks.
 A session that must change its password may call `/v1/password`, `/v1/logout` and `/v1/session` and nothing else.
 
+A session also opens the UI's Remote SSH terminal, `GET /v1/ssh/terminal?host=<host id>` (a WebSocket upgrade, private listener only; `docs/operations/ssh-ca.md`, "Remote SSH from the UI"): the terminal's tunnels live as long as the session does, and what is typed in the terminal counts as use of it.
+
 Sessions are kept in memory: a restart signs everyone out. They end 30 minutes after their last use, or 12 hours after the
 login. The flags, each with its default from the start:
 

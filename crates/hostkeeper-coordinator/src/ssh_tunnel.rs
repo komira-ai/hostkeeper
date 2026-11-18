@@ -14,7 +14,8 @@
 //! `close` from the client ends its input only (the write half of the host's socket is shut
 //! down, as `ssh` does at the end of an `scp`) and the host's answer is still relayed until the
 //! host closes; a host that closes ends the tunnel (`host_closed`), as do the timers (`idle`,
-//! `max_session`), the poll (`token_revoked`, `not_permitted`, `revoked`, `instance_lost`) and
+//! `max_session`), the poll (`token_revoked`, which is an operator token that is gone or, for the tunnel
+//! of a UI terminal, a login session that ended; `not_permitted`, `revoked`, `instance_lost`) and
 //! the drain (`coordinator_stopping`). Whatever ends it, the client is sent `close{cause}` and
 //! the book is told the bytes each way, so the audit holds the cause.
 
@@ -40,6 +41,7 @@ use tonic::Status;
 
 use crate::enrollment::Random;
 use crate::service::Coordinator;
+use crate::session::SessionKey;
 use crate::ssh_book::{Book, Cause, Closing, OpenRefused, Opened, Opening};
 use crate::ssh_operators::{Operators, Target};
 use crate::ssh_sign::{Signing, class_of};
@@ -105,10 +107,22 @@ pub(crate) enum Event {
     Closed(u64, Cause),
 }
 
+/// What the operator of a tunnel is acting under, which the poll holds the tunnel to: the tunnel
+/// ends `token_revoked` when this is gone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Credential {
+    /// An operator token (`hkssh`): the operator must still have one.
+    Token,
+    /// A signed-in session (the UI's terminal, `crate::ssh_terminal`): the session must still be
+    /// live. The operator may hold no token at all.
+    Session(SessionKey),
+}
+
 /// A tunnel of this instance: who holds it and the way to stop it.
 struct Entry {
     operator: String,
     host_id: String,
+    credential: Credential,
     stop: watch::Sender<Option<Cause>>,
 }
 
@@ -229,6 +243,14 @@ pub(crate) enum Failed {
     Dial,
 }
 
+/// A tunnel the registry holds, as the poll reads it.
+struct Held {
+    id: u64,
+    operator: String,
+    host_id: String,
+    credential: Credential,
+}
+
 /// The tunnels of one coordinator instance.
 pub(crate) struct Tunnels {
     pub(crate) book: Arc<dyn Book>,
@@ -303,12 +325,17 @@ impl Tunnels {
 
     /// The tunnels held, with their operators and hosts, and the ids of the rows of those being
     /// opened.
-    fn held(&self) -> (Vec<(u64, String, String)>, Vec<u64>) {
+    fn held(&self) -> (Vec<Held>, Vec<u64>) {
         let registry = self.registry();
         let held = registry
             .entries
             .iter()
-            .map(|(id, entry)| (*id, entry.operator.clone(), entry.host_id.clone()))
+            .map(|(id, entry)| Held {
+                id: *id,
+                operator: entry.operator.clone(),
+                host_id: entry.host_id.clone(),
+                credential: entry.credential,
+            })
             .collect();
         (held, registry.recorded.iter().copied().collect())
     }
@@ -445,19 +472,20 @@ impl Tunnels {
         }
     }
 
-    /// Registers the tunnel `opened` in `slot`, queues its `opened` frame and starts the relay
+    /// Registers the tunnel `opened` in `slot` for `who` (operator, host, and the credential the
+    /// poll holds the tunnel to), queues its `opened` frame and starts the relay
     /// between `client` and `host`. `hold` keeps the client's connection for as long as the relay
     /// runs.
     pub(crate) fn start(
         self: &Arc<Self>,
         slot: Slot,
         opened: &Opened,
-        who: (&str, &str),
+        who: (&str, &str, Credential),
         login_user: &str,
         streams: (TcpStream, Incoming),
         hold: Option<ConnectionHold>,
     ) -> Outgoing {
-        let (operator, host_id) = who;
+        let (operator, host_id, credential) = who;
         let (host, client) = streams;
         let (out, queued) = mpsc::channel(QUEUE);
         // The queue is empty and holds `QUEUE` frames: the first cannot be refused.
@@ -466,7 +494,7 @@ impl Tunnels {
                 login_user: login_user.to_owned(),
             })),
         });
-        let stop = slot.register(opened.id, operator, host_id);
+        let stop = slot.register(opened.id, (operator, host_id), credential);
         #[cfg(test)]
         self.tell(Event::Opened(opened.id));
         tokio::spawn(relay(
@@ -489,8 +517,10 @@ impl Tunnels {
     /// One turn of the poll: stops the tunnels that must not go on, and writes the book's view
     /// of this instance (its last-seen time, the reaping of lost instances).
     ///
-    /// A tunnel stops with `token_revoked` when its operator has no token any more (neither in
-    /// the tokens file nor among the API tokens), with `not_permitted` when the operators file no
+    /// A tunnel stops with `token_revoked` when its credential is gone: its operator has no token
+    /// any more (neither in the tokens file nor among the API tokens), or, for the tunnel of a
+    /// UI terminal, the session it runs under no longer lives (signed out, expired, its user
+    /// removed or disabled); with `not_permitted` when the operators file no
     /// longer lists and permits the operator the host or the host is no longer enrolled, with
     /// `revoked` when the book says its certificate was revoked, and with `instance_lost` when
     /// the book no longer holds it (another instance's reaper closed it). An operators file that
@@ -507,8 +537,14 @@ impl Tunnels {
         let operators = ssh.read_operators().inspect_err(|why| {
             tracing::warn!(%why, "the operators file could not be read: its tunnels are kept");
         });
-        for (id, operator, host_id) in &held {
-            if !has_token(coordinator, operator) {
+        for tunnel in &held {
+            let Held {
+                id,
+                operator,
+                host_id,
+                credential,
+            } = tunnel;
+            if !credential_holds(coordinator, operator, *credential) {
                 self.stop(*id, Cause::TokenRevoked);
             } else if let Ok(operators) = &operators
                 && !permitted(coordinator, ssh, operators, operator, host_id)
@@ -517,7 +553,11 @@ impl Tunnels {
             }
         }
         // The tunnels held and those being opened: the book refreshes both and reaps the rest.
-        let ids: Vec<u64> = held.iter().map(|(id, _, _)| *id).chain(recorded).collect();
+        let ids: Vec<u64> = held
+            .iter()
+            .map(|tunnel| tunnel.id)
+            .chain(recorded)
+            .collect();
         let stale = self.limits.poll.as_secs().saturating_mul(3);
         let book = Arc::clone(&self.book);
         let instance = self.instance.clone();
@@ -578,6 +618,17 @@ impl Tunnels {
     }
 }
 
+/// Whether the credential a tunnel of `operator` runs under is still good: for a token, that the
+/// operator has one; for a session, that the session lives (asked without using it).
+fn credential_holds(coordinator: &Coordinator, operator: &str, credential: Credential) -> bool {
+    match credential {
+        Credential::Token => has_token(coordinator, operator),
+        Credential::Session(key) => coordinator
+            .login()
+            .is_some_and(|login| login.sessions.is_live(&key)),
+    }
+}
+
 /// Whether the operator `name` has a token: one of the tokens file, or an API token.
 fn has_token(coordinator: &Coordinator, name: &str) -> bool {
     coordinator.tokens().has_name(name)
@@ -629,9 +680,10 @@ impl Slot {
     fn register(
         mut self,
         id: u64,
-        operator: &str,
-        host_id: &str,
+        who: (&str, &str),
+        credential: Credential,
     ) -> watch::Receiver<Option<Cause>> {
+        let (operator, host_id) = who;
         let mut registry = self.tunnels.registry();
         registry.pending -= 1;
         registry.recorded.remove(&id);
@@ -642,6 +694,7 @@ impl Slot {
             Entry {
                 operator: operator.to_owned(),
                 host_id: host_id.to_owned(),
+                credential,
                 stop,
             },
         );

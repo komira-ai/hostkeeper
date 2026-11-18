@@ -156,3 +156,5 @@ Only the HTTP status 200 is a success.
   call the gateway.
 - No gRPC-web, no streaming and no reflection. A gRPC call is HTTP/2 with `Content-Type:
   application/grpc` and does not go through the gateway.
+  The UI's Remote SSH terminal (`GET /v1/ssh/terminal`, a WebSocket) is a route of its own on the
+  private listener, not a gateway call: see `docs/operations/ssh-ca.md`.

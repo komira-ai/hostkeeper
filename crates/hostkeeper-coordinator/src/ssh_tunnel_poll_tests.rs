@@ -11,7 +11,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
 use super::tests::{Client, INSTANCE, Rig, caller, frame, limits, open, secs, until_close};
-use super::{CLOSE_GRACE, Event, NoSlot, Outgoing, Tunnels};
+use super::{CLOSE_GRACE, Credential, Event, NoSlot, Outgoing, Tunnels};
 use crate::accounts::ApiToken;
 use crate::ssh_book::{Book, Cause, Opening, close_detail};
 use crate::ssh_ledger::{Ledger, Revocation};
@@ -136,7 +136,7 @@ async fn a_tunnel_being_opened_when_the_drain_gives_up_is_stopped_when_it_regist
     let mut out = rig.tunnels.start(
         slot,
         &opened,
-        ("operator", "node-07"),
+        ("operator", "node-07", Credential::Token),
         "root",
         (host, incoming),
         None,
@@ -291,7 +291,7 @@ async fn the_poll_passes_the_row_of_a_tunnel_being_opened_with_the_tunnels_held(
     let _out = rig.tunnels.start(
         dialed.slot,
         &opened,
-        ("operator", "node-08"),
+        ("operator", "node-08", Credential::Token),
         "root",
         (dialed.host, incoming),
         None,

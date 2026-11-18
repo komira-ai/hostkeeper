@@ -14,7 +14,8 @@
 //! that negotiates `h2` speaks HTTP/2 (gRPC, and the JSON routes over HTTP/2), any other speaks
 //! HTTP/1.1 (the JSON routes). Either has a limit on its handshake, its request body and on any
 //! single write of a response that its peer does not read; an HTTP/1.1 connection has a limit on
-//! its request head; an HTTP/2 connection has a limit on its streams, pings its peer, takes new
+//! its request head, and serves a WebSocket upgrade (the UI's terminal, [`crate::ssh_terminal_route`]; HTTP/2 does not: no
+//! extended CONNECT); an HTTP/2 connection has a limit on its streams, pings its peer, takes new
 //! calls for one patience only and is closed one patience after that, or, when it holds a
 //! `Releases.WaitConverged` call then, one patience after the last such call ends
 //! ([`crate::wait`]); a listener has a limit on its connections.
@@ -46,6 +47,7 @@ use crate::grpc::route;
 use crate::http::{Peer, PeerAddr, Surface};
 use crate::operator_keys::OperatorKeys;
 use crate::service::Coordinator;
+use crate::ssh_terminal_route::Shared;
 use crate::tokens::OperatorTokens;
 use crate::wait::{ConnectionWaits, unless};
 
@@ -193,10 +195,19 @@ where
     }
 }
 
-/// What a connection hands each of its requests besides the request: its held waits and the
-/// address it came from when it has one.
-fn carry<B>(request: &mut hyper::Request<B>, waits: &ConnectionWaits, remote: Option<SocketAddr>) {
+/// What a connection hands each of its requests besides the request: its held waits, the
+/// coordinator (which the upgrade of a UI terminal outlives the request with) and the address it
+/// came from when it has one.
+fn carry<B>(
+    request: &mut hyper::Request<B>,
+    waits: &ConnectionWaits,
+    remote: Option<SocketAddr>,
+    coordinator: &Arc<Coordinator>,
+) {
     request.extensions_mut().insert(waits.clone());
+    request
+        .extensions_mut()
+        .insert(Shared(Arc::clone(coordinator)));
     if let Some(from) = remote {
         request.extensions_mut().insert(PeerAddr(from));
     }
@@ -358,7 +369,7 @@ pub(crate) async fn connection_with<S>(
     let service = service_fn(move |mut request: hyper::Request<Incoming>| {
         let coordinator = Arc::clone(&coordinator);
         let peer = peer.clone();
-        carry(&mut request, &held, remote);
+        carry(&mut request, &held, remote, &coordinator);
         async move { Ok::<_, Infallible>(route(&coordinator, surface, &peer, request, patience).await) }
     });
     let io = TokioIo::new(WriteDeadline::new(tls, patience));
@@ -388,6 +399,7 @@ pub(crate) async fn connection_with<S>(
             .timer(TokioTimer::new())
             .header_read_timeout(patience)
             .serve_connection(io, service)
+            .with_upgrades()
             .await
     };
     if let Err(why) = served {

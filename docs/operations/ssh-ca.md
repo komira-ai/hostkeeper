@@ -161,6 +161,8 @@ the cause, the bytes each way and the seconds open. The causes: `eof` (the clien
 `coordinator_stopping`, and the four the poll gives:
 
 - `token_revoked`: the operator no longer has a token (neither in `--tokens-file` nor among the API tokens);
+  for a tunnel of the UI's terminal (below), the login session it runs under no longer lives (signed out,
+  past its idle or absolute deadline, or its user removed or disabled), whatever tokens the operator holds;
 - `not_permitted`: the operators file no longer lists the operator, no longer permits the host, or the host is
   no longer enrolled;
 - `revoked`: the certificate the tunnel was opened with was revoked (`Ssh/Revoke`);
@@ -193,6 +195,69 @@ are closed as `instance_lost` by another instance's poll. `docs/deploy/coordinat
 spec is kept outside this repository needs the same by hand: `--stop-grace-period 11m` on `docker service
 create` or `update`, or `stop_grace_period` in its stack file, and a larger value whenever `--ssh-drain-s` is
 raised.
+
+## Remote SSH from the UI
+
+On a host's page an operator signed in to the coordinator's UI opens a terminal on the host through the same
+certificate, tunnel, audit and revocation as `hkctl ssh` (`docs/design/ssh-through-coordinator.md`, section
+13). The route is `GET /v1/ssh/terminal?host=<host id>` on the private listener, an HTTP/1.1 upgrade to
+WebSocket (RFC 6455); the heartbeat and LAN listeners never serve it, and nor does a coordinator with no sign-in.
+There is no flag and no new setting: the SSH CA, the operators file, the tunnel limits and the pinned host keys
+are those above.
+
+**Before the upgrade**, in this order, the first check that fails answers as a plain HTTP error
+(`{"error":"<code>"}`) and nothing else happens:
+
+| Answer | Code | When |
+|---|---|---|
+| 403 | `forbidden` | the request has an `Authorization` header (a bearer is not taken on this route, and the cookie beside it is not read), or the session's user name is no operator's name |
+| 401 | `sign_in_required` | no cookie of a live session |
+| 403 | `csrf` | `Origin` is missing or is not `https://<the host asked>`, or `Sec-Fetch-Site` is present and not `same-origin` |
+| 403 | `password_change_required` | the session's user must choose a new password first |
+| 400 | `bad_request` | not an HTTP/1.1 WebSocket opening (`Upgrade: websocket`, `Connection: Upgrade`, `Sec-WebSocket-Version: 13`, a 16-byte `Sec-WebSocket-Key`), or no `host` in the query |
+| 404 | `not_configured` | the coordinator holds no SSH CA or no tunnels |
+
+Then `101 Switching Protocols`. The session is the credential, and the operator is the session's user, as in every
+UI call; a CI token never reaches the route. A browser cannot set a header on a WebSocket, so the CSRF token is
+the first message.
+
+**After the upgrade**, messages are JSON in text messages and bytes in binary ones:
+
+| Direction | Message |
+|---|---|
+| browser, first | text `{"csrf": "<token>", "cols": 1..500, "rows": 1..200}`, within 10 seconds (the listener's patience) |
+| browser | binary: keystrokes, at most 16 KiB each |
+| browser | text `{"type": "resize", "cols": n, "rows": n}` |
+| coordinator | text `{"type": "status", "step": "signing" \| "connecting" \| "opened", "login_user": "<name>"}` (`login_user` on `opened` only) |
+| coordinator | binary: the host's output (standard output and standard error), at most 16 KiB each |
+| coordinator | text, last `{"type": "closed", "cause": "<token>"}`, then a WebSocket close frame |
+
+The steps are `hkctl ssh`'s: the first message must carry the session's CSRF token and a size in range (else
+`bad_request`); the host keys pinned for the host are read as `Ssh/HostKeys` reads them (a refusal is told by its
+token: `not_permitted`, `unknown_host`, `invalid_request`, ..., and an unpinned host is `no_pin`: pin it first
+with `hkctl ssh pin-host-keys`); then a key of the terminal's own is made from the coordinator's random source, in
+memory, for this terminal only, and its certificate is signed and audited as `Ssh/SignUserCert` does (the reason is
+`coordinator UI terminal`); the tunnel is opened as `Ssh/Tunnel` opens it, with every check and refusal listed under
+Tunnels (a refusal is told by its token: `too_many_tunnels`, `host_not_live`, ...), under the credential of the login
+session; the SSH client of the coordinator then speaks to the host's sshd over the tunnel, which must present a host
+key whose `SHA256:` fingerprint is in the pinned set (else `host_key_mismatch`, and the certificate is never shown),
+logs in as the login user with the certificate (else `auth_refused`) and asks for a pty (`xterm-256color`, the size of
+the first message) and a shell (else `shell_refused`). The key is never written, logged or sent, and is dropped when the
+terminal ends.
+
+**Ending.** The last message names the cause: a refusal's token as above, `exit` (the shell ended), `bad_request` (the
+browser sent what it may not: a message that is no resize, a size out of range, a binary message over 16 KiB), or a
+cause of the tunnel (see Closing): `idle`, `max_session`, `host_closed`, `revoked`, `not_permitted`,
+`coordinator_stopping`, `token_revoked` (the session ended), `error`. A browser that closes the socket gets no
+message; the SSH session and the tunnel end, and the audit holds `ssh_tunnel_close` as for any tunnel. What a
+person types in the terminal counts as use of the session, so it does not idle out under a terminal in use; the poll
+asks whether the session lives without counting as use.
+
+**What a proxy in front of the private listener must do.** Pass a WebSocket upgrade on `/v1/ssh/terminal` (the
+`Upgrade` and `Connection` headers, HTTP/1.1 to the coordinator), keep the `Host` header and the browser's
+`Origin` as they are (the coordinator compares them), and allow a connection idle for `--ssh-idle-s` and open for
+`--ssh-max-session-s`, as for the `Ssh/Tunnel` route. The coordinator does not serve extended CONNECT, so a
+proxy must not turn the upgrade into an HTTP/2 stream.
 
 ## Flags of the tunnel
 

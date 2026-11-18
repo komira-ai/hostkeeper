@@ -555,7 +555,7 @@ async fn the_static_handler_needs_no_token_and_reads_none() {
 /// four): every method over the committed paths and the probe paths, asked on the private surface
 /// of a coordinator that serves a directory and has a sign-in, is answered exactly on the routes
 /// of `private_routes.txt`; without `--ui-dir` it is those routes less `/ui/*`; without a sign-in
-/// it is those less the four sign-in routes; and the heartbeat surface answers `POST
+/// it is those less the four sign-in routes and the terminal's; and the heartbeat surface answers `POST
 /// /v1/heartbeat` alone.
 #[tokio::test]
 async fn the_private_route_set_is_the_committed_one() {
@@ -583,6 +583,7 @@ async fn the_private_route_set_is_the_committed_one() {
         .iter()
         .filter(|route| !route.contains("/v1/login") && !route.contains("/v1/logout"))
         .filter(|route| !route.contains("/v1/password") && !route.contains("/v1/session"))
+        .filter(|route| !route.contains("/v1/ssh/terminal"))
         .cloned()
         .collect();
     assert_eq!(

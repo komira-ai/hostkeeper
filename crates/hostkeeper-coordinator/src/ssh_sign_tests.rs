@@ -88,6 +88,9 @@ pub(crate) struct Tune {
     pub(crate) signing: usize,
     pub(crate) no_control_plane_key: bool,
     pub(crate) random_fails: bool,
+    /// The time the ledger reads, when it is not [`NOW`]: a test whose certificate a real SSH
+    /// server checks against the system's time needs one that holds it.
+    pub(crate) ledger_now: Option<u64>,
 }
 
 pub(crate) fn world(name: &str, file: Option<&str>, tune: Tune) -> World {
@@ -113,7 +116,7 @@ pub(crate) fn world(name: &str, file: Option<&str>, tune: Tune) -> World {
         fleet.iter().map(CaKey::public_line).collect(),
         cp.public_line(),
     );
-    let ledger = Arc::new(Memory::at(NOW));
+    let ledger = Arc::new(Memory::at(tune.ledger_now.unwrap_or(NOW)));
     let steps = Arc::new(Mutex::new(Vec::new()));
     let watched = Arc::clone(&steps);
     let fails = tune.random_fails;
