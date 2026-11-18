@@ -29,7 +29,7 @@ use crate::operator::Caller;
 use crate::service::Coordinator;
 use crate::ssh_cert::{CaKey, Spec, UserKey};
 use crate::ssh_ledger::{Issue, Ledger, LedgerError, Revocation};
-use crate::ssh_operators::{Class, Operators, Target};
+use crate::ssh_operators::{Class, Operators, OperatorsError, Target};
 use crate::tokens::TokenName;
 
 /// How long before the ledger's time a certificate is already valid, for the clock of the host.
@@ -75,7 +75,7 @@ fn reason_ok(reason: &str) -> bool {
 }
 
 /// The class of the host `id`.
-fn class_of(ssh: &Signing, id: &str) -> Class {
+pub(crate) fn class_of(ssh: &Signing, id: &str) -> Class {
     if ssh.control_plane_hosts.contains(id) {
         Class::ControlPlane
     } else {
@@ -98,7 +98,7 @@ impl Signing {
     }
 
     /// The account a host takes the certificate for: the Macs' when the host is a Mac.
-    fn login_for(&self, host: &EnrolledHost) -> &str {
+    pub(crate) fn login_for(&self, host: &EnrolledHost) -> &str {
         if host.claims.mac_serial.is_empty() {
             &self.login_linux
         } else {
@@ -106,24 +106,38 @@ impl Signing {
         }
     }
 
+    /// The operators file as it is now, or why it cannot be read.
+    ///
+    /// # Errors
+    /// [`OperatorsError`] when the file cannot be read or parsed.
+    pub(crate) fn read_operators(&self) -> Result<Operators, OperatorsError> {
+        Operators::read(&self.operators)
+    }
+
     /// The operators file as it is now; a file that cannot be read lists no one, so nothing is
     /// signed until it can be (default deny).
-    fn operators(&self) -> Operators {
-        Operators::read(&self.operators).unwrap_or_else(|why| {
+    pub(crate) fn operators(&self) -> Operators {
+        self.read_operators().unwrap_or_else(|why| {
             tracing::error!(%why, "the operators file cannot be read: no one is permitted");
             Operators::default()
         })
     }
 
     /// Writes the line of a refusal; the refusal stands whether or not the line could be written.
-    fn refused(&self, by: &str, host_id: &str, why: Refusal) {
-        let token = why
-            .as_str_name()
-            .trim_start_matches("SSH_REFUSAL_")
-            .to_ascii_lowercase();
-        if let Err(error) = self.ledger.denied(by, host_id, &token) {
-            tracing::warn!(%error, "the line of a refused SSH call could not be written");
-        }
+    pub(crate) fn refused(&self, by: &str, host_id: &str, why: Refusal) {
+        deny(&*self.ledger, by, host_id, why);
+    }
+}
+
+/// Writes the line of a refusal to `ledger`, whose token is the refusal's name in lower case; the
+/// refusal stands whether or not the line could be written.
+pub(crate) fn deny(ledger: &dyn Ledger, by: &str, host_id: &str, why: Refusal) {
+    let token = why
+        .as_str_name()
+        .trim_start_matches("SSH_REFUSAL_")
+        .to_ascii_lowercase();
+    if let Err(error) = ledger.denied(by, host_id, &token) {
+        tracing::warn!(%error, "the line of a refused SSH call could not be written");
     }
 }
 

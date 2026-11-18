@@ -483,7 +483,9 @@ fn dts(commands: &[Command], types: &BTreeMap<String, Type>) -> String {
     }
     let packages: BTreeSet<&str> = types.values().map(Type::package).collect();
     for package in packages {
-        let _ = writeln!(out, "\nexport namespace {} {{", namespace(package));
+        // No blank line between the namespaces: the file stays under the 1000 lines every
+        // file of ui/ is held to.
+        let _ = writeln!(out, "export namespace {} {{", namespace(package));
         members(&mut out, "  ", package, &scopes);
         out.push_str("}\n");
     }

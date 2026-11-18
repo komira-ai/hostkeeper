@@ -8,12 +8,18 @@ use std::sync::Arc;
 
 use clap::Parser as _;
 
-use super::{SigningKey, SshStartError, account, signing};
-use crate::config::{Cli, Command, Serve};
-use crate::enrollment::os_random;
+use super::{
+    SSHD_PORT, SigningKey, SshFlags, SshStartError, account, attach, drained, limits, signing,
+};
+use crate::config::{Cli, Command, Serve, StartError};
+use crate::enrollment::{Random, os_random};
+use crate::host_groups_support::coordinator_on;
+use crate::ssh_book::{self, Book};
 use crate::ssh_cert::{CaKey, KeyError};
 use crate::ssh_ledger::{Ledger, Memory};
-use crate::testutil::scratch;
+use crate::ssh_tunnel::tests::Rig as TunnelRig;
+use crate::store::Fake;
+use crate::testutil::{Rig, scratch};
 
 /// The flags of `serve` on the database, with `extra` after them.
 fn serve(extra: &[&str]) -> Result<Serve, clap::Error> {
@@ -339,4 +345,207 @@ fn an_account_name_is_a_plain_one() {
     for bad in ["", "-x", "a b", "a/b", "a;b", &"a".repeat(33)] {
         assert!(!account(bad), "{bad}");
     }
+}
+
+/// The files of a CA and an operators file in `dir`, as the flags name them.
+fn ca_flags(dir: &Path) -> [String; 4] {
+    [
+        "--ssh-ca-secret-file".to_owned(),
+        secret(dir, "ca", &key_file(1)),
+        "--ssh-operators-file".to_owned(),
+        secret(dir, "operators.toml", OPERATORS),
+    ]
+}
+
+fn serve_with(base: &[String], extra: &[&str]) -> Result<Serve, clap::Error> {
+    let all: Vec<&str> = base
+        .iter()
+        .map(String::as_str)
+        .chain(extra.iter().copied())
+        .collect();
+    serve(&all)
+}
+
+/// The values of the eight tunnel flags, in the order of [`TUNNEL_FLAGS`].
+fn tunnel_values(ssh: &SshFlags) -> [u64; 8] {
+    [
+        ssh.ssh_live_s,
+        ssh.ssh_idle_s,
+        ssh.ssh_max_session_s,
+        ssh.ssh_dial_timeout_s,
+        ssh.ssh_max_tunnels,
+        ssh.ssh_max_tunnels_per_operator,
+        ssh.ssh_revoke_poll_s,
+        ssh.ssh_drain_s,
+    ]
+}
+
+/// Each tunnel flag with its default and its range, as the design's section 10 gives them.
+const TUNNEL_FLAGS: [(&str, u64, u64, u64); 8] = [
+    ("--ssh-live-s", 120, 10, 3600),
+    ("--ssh-idle-s", 900, 10, 86_400),
+    ("--ssh-max-session-s", 28_800, 60, 86_400),
+    ("--ssh-dial-timeout-s", 5, 1, 60),
+    ("--ssh-max-tunnels", 16, 1, 1024),
+    ("--ssh-max-tunnels-per-operator", 4, 1, 64),
+    ("--ssh-revoke-poll-s", 10, 1, 300),
+    ("--ssh-drain-s", 600, 0, 3600),
+];
+
+/// Proves: each of the eight tunnel flags has its default, takes the two ends of its range and
+/// refuses a value outside it or one that is not a number, and each needs `--ssh-ca-secret-file`.
+///
+/// Catches: a default that is not the design's, a range that lets a zero timer or a day-long dial
+/// through, and a tunnel flag taken on a coordinator that has no CA.
+#[test]
+fn the_tunnel_flags_have_defaults_and_ranges_and_need_the_ca() {
+    let dir = scratch("ssh-config-tunnel-flags");
+    let base = ca_flags(dir.path());
+    let plain = serve_with(&base, &[]).expect("flags");
+    assert_eq!(
+        tunnel_values(&plain.ssh),
+        TUNNEL_FLAGS.map(|(_, default, _, _)| default)
+    );
+    for (n, (flag, _, min, max)) in TUNNEL_FLAGS.into_iter().enumerate() {
+        for (value, ok) in [(min, true), (max, true), (max + 1, false)] {
+            let flags = serve_with(&base, &[flag, &value.to_string()]);
+            assert_eq!(flags.is_ok(), ok, "{flag} {value}");
+            if let Ok(flags) = flags {
+                assert_eq!(tunnel_values(&flags.ssh)[n], value, "{flag}");
+            }
+        }
+        if min > 0 {
+            assert!(
+                serve_with(&base, &[flag, &(min - 1).to_string()]).is_err(),
+                "{flag} below its range"
+            );
+        }
+        assert!(serve_with(&base, &[flag, "x"]).is_err(), "{flag} x");
+        let alone = serve(&[flag, &min.to_string()]).expect_err("needs the CA");
+        assert!(
+            alone.to_string().contains("--ssh-ca-secret-file"),
+            "{flag}: {alone}"
+        );
+    }
+}
+
+/// Proves: the limits of the tunnels are the flags' values (seconds as durations), and the port
+/// dialled is the one given, which the start makes 22.
+///
+/// Catches: a flag that is read and dropped, two flags swapped, and a start that dials a port
+/// other than the host's sshd.
+#[test]
+fn the_limits_of_the_tunnels_are_the_flags_values() {
+    let dir = scratch("ssh-config-limits");
+    let base = ca_flags(dir.path());
+    let flags = serve_with(
+        &base,
+        &[
+            "--ssh-live-s",
+            "11",
+            "--ssh-idle-s",
+            "12",
+            "--ssh-max-session-s",
+            "61",
+            "--ssh-dial-timeout-s",
+            "4",
+            "--ssh-max-tunnels",
+            "7",
+            "--ssh-max-tunnels-per-operator",
+            "3",
+            "--ssh-revoke-poll-s",
+            "9",
+            "--ssh-drain-s",
+            "0",
+        ],
+    )
+    .expect("flags");
+    let made = limits(&flags.ssh, SSHD_PORT);
+    assert_eq!(made.live_secs, 11);
+    assert_eq!(made.idle, std::time::Duration::from_secs(12));
+    assert_eq!(made.max_session, std::time::Duration::from_secs(61));
+    assert_eq!(made.dial_timeout, std::time::Duration::from_secs(4));
+    assert_eq!(made.max_tunnels, 7);
+    assert_eq!(made.per_operator, 3);
+    assert_eq!(made.poll, std::time::Duration::from_secs(9));
+    assert_eq!(made.drain, std::time::Duration::ZERO);
+    assert_eq!(made.port, 22);
+}
+
+fn book() -> Option<Arc<dyn Book>> {
+    Some(Arc::new(ssh_book::Memory::over(Arc::new(Memory::at(1)))))
+}
+
+/// A random source that fills each buffer with `byte`.
+fn filling(byte: u8) -> Random {
+    Box::new(move |buffer| {
+        buffer.fill(byte);
+        true
+    })
+}
+
+/// Proves: with the CA flags, `attach` gives the coordinator its signing and its tunnels, the
+/// instance's id the 16 hex characters of the random source; with no CA flag it gives it neither;
+/// a random source that has no bytes refuses the start.
+///
+/// Catches: a start that signs and cannot tunnel (or the reverse), a tunnel runtime made on a
+/// coordinator that has no CA, and an instance id that is empty or the same on every instance.
+#[test]
+fn attach_gives_the_coordinator_its_tunnels_exactly_when_it_signs() {
+    let dir = scratch("ssh-config-attach");
+    let rig = Rig::new("ssh-config-attach-rig");
+    let bare = || coordinator_on(&Fake::new(), &rig.clock, None);
+    let on = serve_with(&ca_flags(dir.path()), &[]).expect("flags");
+    let attached = attach(bare(), &on, ledger(), book(), &filling(0xab)).expect("attached");
+    assert!(attached.ssh.is_some());
+    let tunnels = attached.tunnels.expect("tunnels");
+    assert_eq!(tunnels.instance(), "abababababababab");
+    assert!(!tunnels.draining());
+
+    let off = serve(&[]).expect("flags");
+    let attached = attach(bare(), &off, ledger(), book(), &filling(1)).expect("attached");
+    assert!(attached.ssh.is_none() && attached.tunnels.is_none());
+
+    let none: Random = Box::new(|_| false);
+    assert!(matches!(
+        attach(bare(), &on, ledger(), book(), &none),
+        Err(SshStartError::InstanceId)
+    ));
+    assert_eq!(
+        SshStartError::InstanceId.to_string(),
+        "the random source gave no bytes for the id of this instance"
+    );
+    let bookless = attach(bare(), &on, ledger(), None, &filling(1)).expect("attached");
+    assert!(bookless.ssh.is_none() && bookless.tunnels.is_none());
+}
+
+fn serving_ends() -> std::future::Ready<Result<std::convert::Infallible, StartError>> {
+    std::future::ready(Err(StartError::from(std::io::Error::other("deposed"))))
+}
+
+/// Proves: the drain of a stop ends at once for a coordinator without tunnels and for one whose
+/// tunnels are all closed, leaving the instance draining, and waits for a tunnel that is still
+/// held; the serving future is polled while it waits, and its end is the result.
+///
+/// Catches: a stop that waits on tunnels that are not there, one that stops serving while
+/// tunnels drain, and one that swallows why the serving ended.
+#[tokio::test]
+async fn the_drain_of_a_stop_waits_for_tunnels_while_serving_goes_on() {
+    let rig = Rig::new("ssh-config-drained-none");
+    let bare = coordinator_on(&Fake::new(), &rig.clock, None);
+    drained(&bare, std::future::pending())
+        .await
+        .expect("nothing to drain");
+
+    let tunnels = TunnelRig::new("ssh-config-drained", |_| {}).await;
+    let slot = tunnels.tunnels.reserve().expect("a slot");
+    let ended = drained(&tunnels.coordinator, serving_ends()).await;
+    let why = ended.expect_err("the serving ended while a tunnel was held");
+    assert!(why.to_string().contains("deposed"), "{why}");
+    assert!(tunnels.tunnels.draining());
+
+    drop(slot);
+    drained(&tunnels.coordinator, std::future::pending())
+        .await
+        .expect("no tunnel is held: the drain is over");
 }

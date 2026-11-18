@@ -89,6 +89,7 @@ use crate::lock::{FileLock, LockGuard, StateLock};
 use crate::operator_keys::OperatorKeys;
 use crate::ops::OpsStore;
 use crate::service::{Clock, Coordinator};
+use crate::ssh_tunnel::run_poll;
 use crate::store::Spent;
 use crate::transfer::{Export, export};
 use crate::ui::UiDir;
@@ -569,6 +570,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         held,
         records,
         ledger,
+        book,
     } = state::open_store(flags, legacy, lock, &oidc_clock)?;
     let verifier = Verifier::new(
         oidc.clone(),
@@ -618,9 +620,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         );
     coordinator = state::with_initial_admin(coordinator, flags)?;
     coordinator = state::with_login(coordinator, flags)?;
-    if let Some(signing) = ssh::signing(flags, ledger)? {
-        coordinator = coordinator.with_ssh(signing);
-    }
+    coordinator = ssh::attach(coordinator, flags, ledger, book, &os_random())?;
     let store = match (&flags.enrollment_dir, records) {
         (Some(dir), _) => Some(StoreAt::Dir(dir)),
         (None, Some(records)) => Some(StoreAt::Records(records)),
@@ -794,6 +794,8 @@ where
     let coordinator = parts.coordinator;
     let observing = observe_every(Arc::clone(&coordinator), OBSERVE_EVERY);
     let adopting = watch_every(Arc::clone(&coordinator), parts.reload);
+    // The tunnels' poll, which closes the ones that must close; it waits for ever without tunnels.
+    let polling = run_poll(Arc::clone(&coordinator));
     // Without a LAN listener, a future that never finishes stands in for it.
     let serving_lan = match lan {
         Some(lan) => Either::Left(serve(
@@ -818,7 +820,7 @@ where
     );
     let all = together(
         together(serving, serving_lan),
-        together(reloading, together(observing, adopting)),
+        together(reloading, together(observing, together(adopting, polling))),
     );
     // On the heap: the futures together are too large for a stack of a test's thread.
     match Box::pin(all).await {}
@@ -853,6 +855,7 @@ where
     Stream: AsyncRead + AsyncWrite + Remote + Unpin + Send + 'static,
 {
     let parts = build(&flags, roots)?;
+    let coordinator = Arc::clone(&parts.coordinator);
     let health = Serving::default();
     let stop = health::drain_on(stop, health.clone());
     let serving = run_as(
@@ -862,7 +865,10 @@ where
         health,
     );
     match select(pin!(stop), pin!(serving)).await {
-        Either::Left((stopped, _)) => stopped.map_err(StartError::from),
+        // The tunnels end on their own, or are closed after --ssh-drain-s, while the listeners
+        // go on serving (the health listener says `draining`).
+        Either::Left((Ok(()), serving)) => ssh::drained(&coordinator, serving).await,
+        Either::Left((Err(why), _)) => Err(StartError::from(why)),
         Either::Right((served, _)) => {
             let Err(why) = served;
             Err(why)

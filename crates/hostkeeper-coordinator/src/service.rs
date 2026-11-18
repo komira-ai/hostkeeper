@@ -111,6 +111,8 @@ pub struct Coordinator {
     layout: LayoutStore,
     /// The SSH user CA and what signs with it ([`crate::ssh_sign`]); none: nothing is signed.
     pub(crate) ssh: Option<crate::ssh_sign::Signing>,
+    /// The tunnels this instance holds ([`crate::ssh_tunnel`]); present exactly when `ssh` is.
+    pub(crate) tunnels: Option<Arc<crate::ssh_tunnel::Tunnels>>,
     /// The initial-admin file of `--initial-admin-file` ([`crate::initial_admin`]).
     pub(crate) initial_admin: Option<crate::initial_admin::InitialAdmin>,
     /// The sessions, the limiter and the passwords of the sign-in ([`crate::login`]); none: the
@@ -192,6 +194,7 @@ impl Coordinator {
             accounts: AccountStore::volatile(),
             layout: LayoutStore::volatile(),
             ssh: None,
+            tunnels: None,
             initial_admin: None,
             login: None,
             verifier,
@@ -326,6 +329,14 @@ impl Coordinator {
     #[must_use]
     pub fn with_ssh(mut self, ssh: crate::ssh_sign::Signing) -> Self {
         self.ssh = Some(ssh);
+        self
+    }
+
+    /// The same coordinator holding SSH tunnels as `tunnels` says. Given with [`Self::with_ssh`]:
+    /// the tunnels check the operators file and the host the signing reads.
+    #[must_use]
+    pub(crate) fn with_tunnels(mut self, tunnels: crate::ssh_tunnel::Tunnels) -> Self {
+        self.tunnels = Some(Arc::new(tunnels));
         self
     }
 

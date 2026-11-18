@@ -23,8 +23,8 @@ use crate::ssh_ledger::{Issue, Issued, Ledger, LedgerError, Memory, Revocation};
 use crate::store::Fake;
 use crate::testutil::Rig;
 
-const NOW: u64 = 1_800_000_000;
-const OPERATORS: &str = r#"
+pub(crate) const NOW: u64 = 1_800_000_000;
+pub(crate) const OPERATORS: &str = r#"
 [[operator]]
 name = "operator"
 classes = ["fleet"]
@@ -69,13 +69,13 @@ pub(crate) struct World {
     pub(crate) coordinator: Coordinator,
     pub(crate) ledger: Arc<Memory>,
     steps: Arc<Mutex<Vec<&'static str>>>,
-    records: Arc<MemoryRecords>,
+    pub(crate) records: Arc<MemoryRecords>,
     /// The keys of the fleet secret, as they were made, and the control-plane key's public half.
     fleet: Vec<String>,
     control_plane: String,
-    operators: std::path::PathBuf,
-    _enrollment: EnrollmentRig,
-    _rig: Rig,
+    pub(crate) operators: std::path::PathBuf,
+    pub(crate) _enrollment: EnrollmentRig,
+    pub(crate) _rig: Rig,
 }
 
 /// What a test changes in the signing before it starts.

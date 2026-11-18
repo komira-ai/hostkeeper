@@ -205,7 +205,6 @@ export interface Client {
 }
 
 export declare function createClient(call: Call): Client;
-
 export namespace hostkeeper_operator_v1 {
   export interface Empty {
   }
@@ -262,7 +261,6 @@ export namespace hostkeeper_operator_v1 {
     | "LONG_ENUM_NAME_FOR_WRAPPING_PAST_THE_WIDTH_SECOND";
   export interface Tree { children?: hostkeeper_operator_v1.Tree[]; }
 }
-
 export namespace hostkeeper_other_v1 {
   export interface Far { x?: string; }
 }

@@ -448,4 +448,4 @@ pub(crate) async fn reload_all(
 
 #[cfg(test)]
 #[path = "listen_tests.rs"]
-mod tests;
+pub(crate) mod tests;

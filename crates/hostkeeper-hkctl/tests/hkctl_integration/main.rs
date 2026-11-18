@@ -13,6 +13,8 @@
 //!   token file others can read refused;
 //! - `mdm`: the `Mdm` setup and push-certificate calls, against the fake curl and the real gateway, and the `session_required` refusal;
 //! - `oidc`: `--github-oidc-audience` against a fake token endpoint;
+//! - `ssh_methods`: `ssh pin-host-keys` with a repeated `--fingerprints`, its `not_reported` refusal, and
+//!   `ssh host-keys`;
 //! - `older`: the probe of the coordinator's version after a refusal `invalid_request`;
 //! - `ssh`: `ssh`, `ssh-proxy`, `ssh-revoke` and `ssh-status`, which exec `hkssh` with the flags
 //!   the script took and the path of the token file, and the methods of the service `ssh`, which
@@ -32,4 +34,5 @@ mod rig;
 mod secrets;
 mod services_repository;
 mod ssh;
+mod ssh_methods;
 mod surface;

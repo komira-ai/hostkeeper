@@ -32,15 +32,21 @@ syntax = "proto3";
 package hostkeeper.operator.v1;
 
 // Access to the hosts' sshd through the coordinator. Each call is audited under the caller's
-// name; `SignUserCert` as `ssh_cert_signed`, `Revoke` as `ssh_revoke`, and `Tunnel` as
+// name; `SignUserCert` as `ssh_cert_signed`, `Revoke` as `ssh_revoke`, `PinHostKeys` as `ssh_hostkey_pinned`, and `Tunnel` as
 // `ssh_tunnel_open` and `ssh_tunnel_close`.
 service Ssh {
   // Signs an OpenSSH user certificate for the caller's public key, good for one host and for
   // `--ssh-cert-ttl-s` seconds. Its principal is `hk-host-<host id>`, never a value of the
   // request. No certificate is made when the audit entry cannot be written.
   rpc SignUserCert(SignUserCertRequest) returns (SignUserCertResponse);
-  // The fingerprints of the sshd host keys pinned for a host at its enrollment. Changes nothing.
+  // The fingerprints of the sshd host keys pinned for a host: the set an operator pinned from
+  // what the host reported in its heartbeat, with `PinHostKeys`. Changes nothing.
   rpc HostKeys(HostKeysRequest) returns (HostKeysResponse);
+  // Pins, as a set, exactly the host keys the host's last heartbeat reported, for a host, and
+  // answers as `HostKeys` does after. Refused with `not_reported` when `fingerprints` are not, as
+  // a set, what that heartbeat reported. Audited as `ssh_hostkey_pinned`. The operators file must
+  // permit the caller the host, as for `SignUserCert`.
+  rpc PinHostKeys(PinHostKeysRequest) returns (HostKeysResponse);
   // Revokes the certificates of an operator, or one certificate by serial. The serials reach the
   // hosts in `SshAccess.revoked_serials`, and the operator's open tunnels close.
   rpc Revoke(RevokeRequest) returns (RevokeResponse);
@@ -91,6 +97,9 @@ enum SshRefusal {
   SSH_REFUSAL_STORE_FAILED = 16;
   // UNAVAILABLE: the audit entry could not be written. Nothing changed.
   SSH_REFUSAL_AUDIT_UNAVAILABLE = 17;
+  // FAILED_PRECONDITION: `PinHostKeys` names fingerprints that are not the set the host's last
+  // heartbeat reported.
+  SSH_REFUSAL_NOT_REPORTED = 18;
 }
 
 message SignUserCertRequest {
@@ -140,6 +149,14 @@ message Open {
 message HostKeysRequest {
   // The host whose pinned fingerprints are read.
   string host_id = 1;
+}
+
+message PinHostKeysRequest {
+  // The host whose host keys are pinned.
+  string host_id = 1;
+  // The fingerprints to pin, at most 8, each `SHA256:` and 43 base64 characters; exactly the set
+  // the host's last heartbeat reported.
+  repeated string fingerprints = 2;
 }
 
 message HostKeysResponse {

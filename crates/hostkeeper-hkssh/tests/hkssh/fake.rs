@@ -159,6 +159,15 @@ impl Ssh for Service {
             .map(Response::new)
     }
 
+    /// hkssh never pins: `hkctl ssh pin-host-keys` is a gateway call of the script.
+    async fn pin_host_keys(
+        &self,
+        request: Request<proto::PinHostKeysRequest>,
+    ) -> Result<Response<proto::HostKeysResponse>, Status> {
+        note(&self.0, &request);
+        Err(Status::unimplemented("hkssh does not pin"))
+    }
+
     type TunnelStream = Answers;
 
     async fn tunnel(

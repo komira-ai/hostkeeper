@@ -1,7 +1,7 @@
 //! The fields SSH through the coordinator adds to existing messages of the host API
 //! (docs/design/ssh-through-coordinator.md, section 9) against the release before, v0.1.221, read
 //! with that release's own `.proto` files (`tests/fixtures/v0.1.221/proto`, copied unchanged from
-//! the tag) and not this crate's: `HeartbeatRequest.ssh` (13), `HeartbeatResponse.ssh` (7) and
+//! the tag) and not this crate's: `HeartbeatRequest.ssh` (13), `HeartbeatResponse.ssh` (8) and
 //! `EnrollRequest.host_key_fingerprints` (6). Rule B8 asks for both directions: the release before
 //! keeps what it does not know and writes it back byte for byte, and this build reads what that
 //! release wrote with each new field absent.
@@ -77,7 +77,7 @@ fn v0_1_221_keeps_the_ssh_report_of_a_heartbeat() {
     assert_eq!(written, bytes);
 }
 
-/// Proves: an answer with `ssh` (7) is read by v0.1.221 with the access as its one unknown field
+/// Proves: an answer with `ssh` (8) is read by v0.1.221 with the access as its one unknown field
 /// and written back byte for byte.
 ///
 /// Catches: a new answer field that an agent of v0.1.221 drops or rejects.
@@ -102,7 +102,7 @@ fn v0_1_221_keeps_the_ssh_access_of_an_answer() {
         answer
     );
     let (kept, written) = old_reads("hostkeeper.agent.v1.HeartbeatResponse", &bytes);
-    assert_eq!(kept, [7]);
+    assert_eq!(kept, [8]);
     assert_eq!(written, bytes);
 }
 

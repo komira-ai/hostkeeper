@@ -726,6 +726,7 @@ fn every_ssh_refusal_value_has_the_code_and_token_its_proto_comment_names() {
                 Unavailable,
                 "audit_unavailable",
             ),
+            (SshRefusal::NotReported, FailedPrecondition, "not_reported"),
         ],
         refusal::ssh,
     );

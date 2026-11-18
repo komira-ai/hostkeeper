@@ -106,6 +106,12 @@ fn the_ssh_service_and_the_two_host_messages_are_new_since_the_release_before() 
                 false
             ),
             rpc("HostKeys", "HostKeysRequest", "HostKeysResponse", false),
+            rpc(
+                "PinHostKeys",
+                "PinHostKeysRequest",
+                "HostKeysResponse",
+                false
+            ),
             rpc("Revoke", "RevokeRequest", "RevokeResponse", false),
             rpc("Tunnel", "TunnelFrame", "TunnelFrame", true),
         ]
@@ -176,6 +182,10 @@ fn the_ssh_messages_keep_their_numbers_and_round_trip() {
         n(&[("fingerprints", 1), ("state", 2)])
     );
     assert_eq!(
+        numbers("hostkeeper.operator.v1.PinHostKeysRequest"),
+        n(&[("host_id", 1), ("fingerprints", 2)])
+    );
+    assert_eq!(
         numbers("hostkeeper.operator.v1.RevokeRequest"),
         n(&[("operator", 1), ("serial", 2)])
     );
@@ -195,6 +205,10 @@ fn the_ssh_messages_keep_their_numbers_and_round_trip() {
     });
     round_trip(&op::HostKeysRequest {
         host_id: "h1".to_owned(),
+    });
+    round_trip(&op::PinHostKeysRequest {
+        host_id: "h1".to_owned(),
+        fingerprints: vec![format!("SHA256:{}", "A".repeat(43))],
     });
     round_trip(&op::HostKeysResponse {
         fingerprints: vec!["SHA256:x".to_owned()],
@@ -259,10 +273,11 @@ fn the_ssh_refusal_tokens_are_pinned() {
             "dial_failed",
             "store_failed",
             "audit_unavailable",
+            "not_reported",
         ]
     );
     assert_eq!(
         refusal.values().map(|v| v.number()).collect::<Vec<_>>(),
-        (0..=17).collect::<Vec<i32>>()
+        (0..=18).collect::<Vec<i32>>()
     );
 }

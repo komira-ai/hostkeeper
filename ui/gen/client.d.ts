@@ -120,6 +120,7 @@ export interface Client {
   readonly ssh: {
     signUserCert(request: hostkeeper_operator_v1.SignUserCertRequest): Promise<hostkeeper_operator_v1.SignUserCertResponse>;
     hostKeys(request: hostkeeper_operator_v1.HostKeysRequest): Promise<hostkeeper_operator_v1.HostKeysResponse>;
+    pinHostKeys(request: hostkeeper_operator_v1.PinHostKeysRequest): Promise<hostkeeper_operator_v1.HostKeysResponse>;
     revoke(request: hostkeeper_operator_v1.RevokeRequest): Promise<hostkeeper_operator_v1.RevokeResponse>;
   };
   readonly users: {
@@ -133,7 +134,6 @@ export interface Client {
 }
 
 export declare function createClient(call: Call): Client;
-
 export namespace hostkeeper_agent_v1 {
   export interface AgentInfo { name?: string; version?: string; }
   export interface Claims { machineId?: string; dmiSerial?: string; productUuid?: string; addresses?: string[]; macSerial?: string; platformUuid?: string; bmcMac?: string; }
@@ -208,7 +208,6 @@ export namespace hostkeeper_agent_v1 {
     logTail?: string[];
   }
 }
-
 export namespace hostkeeper_operator_v1 {
   export interface AbortRequest { nodeId?: string; service?: string; reason?: string; }
   export interface AbortResponse { queued?: boolean; entry?: hostkeeper_operator_v1.AuditEntry; }
@@ -721,6 +720,7 @@ export namespace hostkeeper_operator_v1 {
     recordApproveUntilUnix?: string;
     recordHostGroup?: string;
   }
+  export interface PinHostKeysRequest { hostId?: string; fingerprints?: string[]; }
   export interface PlaceLayoutRequest { subject?: hostkeeper_operator_v1.LayoutSubject; rack?: string; heightU?: number; u?: number; reason?: string; sled?: string; slot?: number; }
   export interface PlaceLayoutResponse { placement?: hostkeeper_operator_v1.LayoutPlacement; entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface PlanHost { nodeId?: string; role?: string; state?: hostkeeper_operator_v1.PlanHostState; deferring?: boolean; }
@@ -948,7 +948,6 @@ export namespace hostkeeper_operator_v1 {
   }
   export interface WriteRecord { generation?: string; replaced?: hostkeeper_operator_v1.Replaced; writeId?: string; }
 }
-
 export namespace hostkeeper_release_v1 {
   export interface Blob { digest?: string; bytes?: string; locations?: hostkeeper_release_v1.Location[]; }
   export interface Container { unit?: string; args?: string[]; ports?: hostkeeper_release_v1.Port[]; volumes?: hostkeeper_release_v1.Volume[]; }
