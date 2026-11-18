@@ -196,8 +196,7 @@ pub use crate::features::{FEATURES, GATED_FIELDS, sends};
 /// How long a host's warn about one dropped fact is silent after it was logged.
 const EXTRAS_LOG_EVERY: Duration = Duration::from_secs(3600);
 
-/// The dropped optional facts: a count per fact name, and when each host's fact was last
-/// logged.
+/// The dropped optional facts: a count per fact name, and when each host's fact was last logged.
 #[derive(Default)]
 struct ExtrasDropped {
     counts: BTreeMap<&'static str, u64>,
@@ -247,6 +246,7 @@ pub struct Coordinator {
     pub(crate) prerequisites: crate::prerequisites::HostPrerequisites,
     /// What each host heard runs ([`crate::running`]).
     pub(crate) running: crate::running::Kept,
+    pub(crate) console: crate::console::Console,
     /// Reads private repositories' origins ([`crate::repository_serve`]); none: those reads are 502.
     pub(crate) repository_origin: Option<crate::repository_origin::RepositoryOrigin>,
     /// How long `Repositories.Discover` and `Add` may take to read a descriptor and its keyring,
@@ -316,6 +316,7 @@ impl Coordinator {
             operator_keys: crate::operator_keys::OperatorKeys::default(),
             prerequisites: crate::prerequisites::HostPrerequisites::default(),
             running: crate::running::Kept::default(),
+            console: crate::console::Console::default(),
             repository_origin: None,
             discovery: crate::repository_discover::Limits::default(),
             repository_naming: Mutex::new(()),
@@ -422,8 +423,7 @@ impl Coordinator {
         self
     }
 
-    /// The same coordinator over the lab layout of `layout` instead of a store that keeps
-    /// nothing.
+    /// The same coordinator over the lab layout of `layout` instead of a store that keeps nothing.
     #[must_use]
     pub fn with_layout(mut self, layout: LayoutStore) -> Self {
         self.layout = layout;

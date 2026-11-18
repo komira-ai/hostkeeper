@@ -41,6 +41,7 @@ use tokio::sync::Semaphore;
 use tokio::time::{Instant, Sleep};
 use tokio_rustls::TlsAcceptor;
 
+use crate::console::ConsoleFiles;
 use crate::enrollment::Enrollment;
 use crate::grpc::route;
 use crate::http::{Peer, PeerAddr, Surface};
@@ -400,14 +401,15 @@ pub(crate) async fn connection_with<S>(
 /// as the future is polled: with `enrollment`, its server certificate file, made again when it
 /// is due or names other names than the flags ([`Enrollment::renew_server`]), and its requests, expired once they waited longer than
 /// the request TTL ([`Enrollment::expire_requests`]); then the TLS files of `sources`, the
-/// tokens file of `tokens`, the operator keys file of `operator_keys` and the host prerequisites
-/// file of `prerequisites`. It never returns.
+/// tokens file of `tokens`, the operator keys file of `operator_keys`, the host prerequisites
+/// file of `prerequisites` and the console's files of `console`. It never returns.
 pub async fn reload_every(
     enrollment: Option<Arc<Enrollment>>,
     sources: Vec<TlsSource>,
     tokens: OperatorTokens,
     operator_keys: OperatorKeys,
     prerequisites: HostPrerequisites,
+    console: ConsoleFiles,
     interval: Duration,
 ) -> Infallible {
     let mut ticks = tokio::time::interval(interval);
@@ -421,6 +423,7 @@ pub async fn reload_every(
             &tokens,
             &operator_keys,
             &prerequisites,
+            &console,
         )
         .await;
     }
@@ -428,14 +431,15 @@ pub async fn reload_every(
 
 /// One look of the tick: the server certificate of `enrollment` is renewed when it is due and
 /// its requests older than the request TTL expire, then each TLS source reloads (so a renewed
-/// file is served from this look on), then the tokens file, the operator keys file and the host
-/// prerequisites file are read again.
+/// file is served from this look on), then the tokens file, the operator keys file, the host
+/// prerequisites file and the console's files are read again.
 pub(crate) async fn reload_all(
     enrollment: Option<&Arc<Enrollment>>,
     sources: &[TlsSource],
     tokens: &OperatorTokens,
     operator_keys: &OperatorKeys,
     prerequisites: &HostPrerequisites,
+    console: &ConsoleFiles,
 ) {
     if let Some(enrollment) = enrollment {
         let enrollment = Arc::clone(enrollment);
@@ -457,6 +461,8 @@ pub(crate) async fn reload_all(
     let _ = tokio::task::spawn_blocking(move || operator_keys.reload()).await;
     let prerequisites = prerequisites.clone();
     let _ = tokio::task::spawn_blocking(move || prerequisites.reload()).await;
+    let console = console.clone();
+    let _ = tokio::task::spawn_blocking(move || console.reload()).await;
 }
 
 #[cfg(test)]

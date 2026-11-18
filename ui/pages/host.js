@@ -12,10 +12,14 @@
 // the "Host group" dropdown offers, and HostGroups.Move, after a confirm, moves the host into the
 // group chosen, or into none when the blank is chosen; a host in no group is Unassigned and is ordered no package. Retire is offered when Hosts.Get fails too,
 // for an enrolled host the coordinator has not heard from since it started (a dead one).
+// The "Power and boot" tab makes no call when the page is drawn; on a button, after a confirm,
+// Console.Power (status, on, soft shutdown, off, cycle or reset of the host's BMC) or
+// Console.SetBootDevice (disk, network or BIOS setup, for the next boot or every boot), each with
+// a required reason and with no refresh: the host's state changes slowly.
 //
 // The page is a status header (name, status LED and word, role, group, what it runs, the last
 // heartbeat, and a small elevation of the rack it stands in), then tabs (Overview, Services,
-// Certificate, Labels, Placement, Host group; every panel is in the page, the stylesheet shows the
+// Certificate, Labels, Placement, Host group, Power and boot; every panel is in the page, the stylesheet shows the
 // chosen one, and the choice is kept across a refresh of the same host), then the danger zone,
 // which holds Retire. The status says "degraded" for a live host whose service is unhealthy or whose
 // last update failed; the lab's state alone would call it healthy.
@@ -320,6 +324,95 @@ function serviceSection(ctx, nodeId, view) {
         })))));
 }
 
+// The power buttons: the proto's action, the button's name and label, the words of what was sent,
+// and what the confirm says. `cuts` buttons stop the host's running system and are shown as danger.
+const POWER_BUTTONS = [
+  ["POWER_ACTION_STATUS", "power-status", "Status", "status", null],
+  ["POWER_ACTION_ON", "power-on", "On", "on", null],
+  ["POWER_ACTION_SOFT", "power-soft", "Soft shutdown", "soft shutdown",
+    "Soft shutdown asks the host's system to shut itself down; it does so in its own time, and this answer does not say when it is off."],
+  ["POWER_ACTION_OFF", "power-off", "Off", "off",
+    "Off cuts the power: the running system is stopped at once, and a soft shutdown still running is cut."],
+  ["POWER_ACTION_CYCLE", "power-cycle", "Cycle", "cycle",
+    "Cycle cuts the power and turns it on: the running system is stopped at once, and a soft shutdown still running is cut."],
+  ["POWER_ACTION_RESET", "power-reset", "Reset", "reset",
+    "Reset restarts the host at once: the running system is stopped, and a soft shutdown still running is cut."],
+];
+
+// The words of a power action, as the answer names it (`POWER_ACTION_SOFT` is `soft shutdown`).
+function powerWord(value) {
+  const found = POWER_BUTTONS.find(([id]) => id === value);
+  return found === undefined ? plain(enumLabel(value, "POWER_ACTION_")) : found[3];
+}
+
+// What a Console.Power answer says: the state the BMC reported before the command, and the command
+// sent (the coordinator sends `on` for a cycle of a host that is off).
+export function powerReport(nodeId, action, reply) {
+  const was = reply.state === "POWER_STATE_ON" ? "on" : reply.state === "POWER_STATE_OFF" ? "off" : "in a state the BMC did not say";
+  const sent = typeof reply.sent === "string" ? reply.sent : "";
+  if (action === "POWER_ACTION_STATUS" || sent === "" || sent === "POWER_ACTION_STATUS") {
+    return `${nodeId} is ${was}.`;
+  }
+  const tail = sent === "POWER_ACTION_SOFT" ? " The host shuts down in its own time." : "";
+  return sent === action
+    ? `${nodeId} was ${was}; ${powerWord(sent)} sent.${tail}`
+    : `${nodeId} was ${was}; ${powerWord(sent)} sent instead of ${powerWord(action)}.${tail}`;
+}
+
+// Boot flags in words: `disk, every boot, UEFI`.
+function bootFlags(device, persistent, efi) {
+  const name = { BOOT_DEVICE_DISK: "disk", BOOT_DEVICE_PXE: "the network (PXE)", BOOT_DEVICE_BIOS: "BIOS setup" }[device]
+    || plain(enumLabel(device, "BOOT_DEVICE_"));
+  return `${name}, ${persistent === true ? "every boot" : "next boot only"}, ${efi === true ? "UEFI" : "legacy BIOS"}`;
+}
+
+// The flags of a Console.SetBootDevice answer, as the BMC reads them back.
+export function bootReport(nodeId, reply) {
+  if (typeof reply.device !== "string" || reply.device === "BOOT_DEVICE_UNSPECIFIED") {
+    return `The BMC of ${nodeId} holds no boot device override.`;
+  }
+  return `The BMC of ${nodeId} now boots ${bootFlags(reply.device, reply.persistent, reply.efi)}.`;
+}
+
+// Power and boot: the host's BMC, reached by the coordinator, never by the browser. Every button
+// needs a reason, asks first (the confirm is a courtesy; the coordinator decides) and is audited.
+// No refresh follows: the host's state changes slowly, and the answer says what the BMC reported.
+function powerSection(ctx, nodeId) {
+  const form = { reason: "", device: "BOOT_DEVICE_DISK", persistent: false, efi: false };
+  const needReason = (run) => async () => {
+    if (trimmed(form.reason) === "") {
+      return "Give a reason first.";
+    }
+    return reasonProblem(trimmed(form.reason)) || run(trimmed(form.reason));
+  };
+  const power = ([id, name, label, , warning]) => action(ctx, label, name, needReason(async (reason) => {
+    const question = warning === null ? `Send ${label.toLowerCase()} to ${nodeId}?` : `Send ${label.toLowerCase()} to ${nodeId}? ${warning}`;
+    if (!ctx.confirm(question)) {
+      return "Not sent.";
+    }
+    return powerReport(nodeId, id, await ctx.api.console.power({ hostId: nodeId, action: id, reason }));
+  }), warning !== null && id !== "POWER_ACTION_SOFT" ? { class: "danger" } : {});
+  return h("fieldset", { class: "act power card" },
+    h("legend", {}, "Power and boot"),
+    h("p", { class: "note" },
+      "This is the BMC of a Linux server, reached by the coordinator. Every press is audited with the reason. "
+      + "To fix a host that boots the wrong thing: set the boot device to disk, every boot, then cycle."),
+    field("Reason", "power-reason", form, "reason", { maxlength: 256 }),
+    h("div", { class: "buttons" }, POWER_BUTTONS.map(power)),
+    select("Boot device", "boot-device", form, "device", [
+      ["BOOT_DEVICE_DISK", "Disk"], ["BOOT_DEVICE_PXE", "Network (PXE)"], ["BOOT_DEVICE_BIOS", "BIOS setup"]]),
+    checkbox("Every boot from now on", "boot-persistent", form, "persistent"),
+    checkbox("UEFI", "boot-efi", form, "efi"),
+    action(ctx, "Set boot device", "set-boot-device", needReason(async (reason) => {
+      const { device, persistent, efi } = form;
+      if (!ctx.confirm(`Set the boot device of ${nodeId} to ${bootFlags(device, persistent, efi)}?`)) {
+        return "Not sent.";
+      }
+      return bootReport(nodeId, await ctx.api.console.setBootDevice(
+        { hostId: nodeId, device, persistent: persistent === true, efi: efi === true, reason }));
+    })));
+}
+
 // The audit actions that end an uninstall: the host reported the service gone, or the service
 // was assigned to the host again before it did.
 const UNINSTALLED = "uninstalled";
@@ -545,6 +638,7 @@ export async function render(ctx) {
       }, { class: "primary" }))],
     placement: [where.section],
     group: [hostGroupSection(ctx, nodeId, host, groups, groupsFailure)],
+    power: [powerSection(ctx, nodeId)],
   };
   const tabs = [
     ["overview", "Overview", ""],
@@ -553,6 +647,7 @@ export async function render(ctx) {
     ["labels", "Labels", ""],
     ["placement", "Placement", where.held ? "" : "muted"],
     ["group", "Host group", ""],
+    ["power", "Power and boot", ""],
   ];
   if (!tabs.some(([id]) => id === chosen.tab) || chosen.node !== nodeId) {
     chosen.node = nodeId;

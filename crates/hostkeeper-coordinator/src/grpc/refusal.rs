@@ -275,7 +275,7 @@ pub(crate) fn layout(refusal: LayoutRefusal) -> Status {
 /// The status of a refusal by `Console`.
 pub(crate) fn console(refusal: ConsoleRefusal) -> Status {
     let code = match refusal {
-        ConsoleRefusal::Unspecified => Code::Internal,
+        ConsoleRefusal::Unspecified | ConsoleRefusal::StoreFailed => Code::Internal,
         ConsoleRefusal::Unauthorized => Code::Unauthenticated,
         ConsoleRefusal::Forbidden
         | ConsoleRefusal::NoConsoleAccess
@@ -293,7 +293,8 @@ pub(crate) fn console(refusal: ConsoleRefusal) -> Status {
         ConsoleRefusal::TooManySessions => Code::ResourceExhausted,
         ConsoleRefusal::DeviceUnreachable
         | ConsoleRefusal::BmcBusy
-        | ConsoleRefusal::AuditUnavailable => Code::Unavailable,
+        | ConsoleRefusal::AuditUnavailable
+        | ConsoleRefusal::BmcFailed => Code::Unavailable,
     };
     refused(code, refusal.as_str_name(), "CONSOLE_REFUSAL_")
 }

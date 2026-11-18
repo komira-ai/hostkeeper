@@ -65,6 +65,10 @@ const INVALID_REQUEST: &str = "invalid_request";
 /// The reason a bearer is given for a method only a signed-in person's session may call.
 const SESSION_REQUIRED: &str = "session_required";
 
+/// The reason the coordinator gives a Console call when no console operators file lists the
+/// bearer: the method is served and the operator is not allowed it, which is not a missing handler.
+const NO_CONSOLE_ACCESS: &str = "no_console_access";
+
 /// The methods of `ui/calls.json` that are session-only (`grpc::SESSION_ONLY`): none, now that the
 /// `Mdm` service whose credential writes were the ones is no longer served. A method that is one
 /// is named here: the app calls it with the person's session, which this file has none of, so a
@@ -170,6 +174,14 @@ const REQUESTS: &[(&str, &str)] = &[
     (
         "hostkeeper.operator.v1.Layout/AddRow",
         r#"{"reason": "add row"}"#,
+    ),
+    (
+        "hostkeeper.operator.v1.Console/Power",
+        r#"{"hostId":"storage-1","action":"POWER_ACTION_STATUS","reason":"checking"}"#,
+    ),
+    (
+        "hostkeeper.operator.v1.Console/SetBootDevice",
+        r#"{"hostId":"storage-1","device":"BOOT_DEVICE_DISK","persistent":true,"efi":true,"reason":"checking"}"#,
     ),
     ("hostkeeper.operator.v1.Layout/Get", "{}"),
     (
@@ -690,6 +702,11 @@ fn failure(method: &str, transport: Transport, answer: &Answer) -> Option<String
     let why = match answer.code {
         Code::PermissionDenied
             if answer.reason == SESSION_REQUIRED && SESSION_ONLY_CALLS.contains(&method) =>
+        {
+            return None;
+        }
+        Code::PermissionDenied
+            if answer.reason == NO_CONSOLE_ACCESS && method.contains(".Console/") =>
         {
             return None;
         }

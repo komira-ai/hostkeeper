@@ -344,6 +344,7 @@ async fn a_renewal_that_cannot_be_written_keeps_the_certificate_in_use_and_says_
         &tokens,
         &OperatorKeys::default(),
         &HostPrerequisites::default(),
+        &crate::console::ConsoleFiles::default(),
     )
     .await;
     assert_eq!(served_leaf(&rig, &source).await, first);
@@ -356,6 +357,7 @@ async fn a_renewal_that_cannot_be_written_keeps_the_certificate_in_use_and_says_
         &tokens,
         &OperatorKeys::default(),
         &HostPrerequisites::default(),
+        &crate::console::ConsoleFiles::default(),
     )
     .await;
     let renewed = leaf_of(&rig.files.server_cert);
@@ -453,6 +455,7 @@ async fn one_look_of_the_tick_renews_a_due_certificate_and_the_listener_serves_i
         &tokens,
         &OperatorKeys::default(),
         &HostPrerequisites::default(),
+        &crate::console::ConsoleFiles::default(),
     )
     .await;
     assert_eq!(leaf_of(&rig.files.server_cert), first);
@@ -465,6 +468,7 @@ async fn one_look_of_the_tick_renews_a_due_certificate_and_the_listener_serves_i
         &tokens,
         &OperatorKeys::default(),
         &HostPrerequisites::default(),
+        &crate::console::ConsoleFiles::default(),
     )
     .await;
     let renewed = leaf_of(&rig.files.server_cert);

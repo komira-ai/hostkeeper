@@ -765,6 +765,8 @@ fn every_console_refusal_has_the_code_and_token_its_proto_comment_names() {
                 Unavailable,
                 "audit_unavailable",
             ),
+            (ConsoleRefusal::BmcFailed, Unavailable, "bmc_failed"),
+            (ConsoleRefusal::StoreFailed, Internal, "store_failed"),
         ],
         refusal::console,
     );

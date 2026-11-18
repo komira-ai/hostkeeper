@@ -219,6 +219,14 @@ fn the_console_enums_have_an_unspecified_zero_and_fixed_numbers() {
         ],
         [0, 1, 2]
     );
+    assert_eq!(
+        [
+            op::ConsoleRefusal::AuditUnavailable as i32,
+            op::ConsoleRefusal::BmcFailed as i32,
+            op::ConsoleRefusal::StoreFailed as i32,
+        ],
+        [19, 20, 21]
+    );
     let future = op::ConsolePowerRequest {
         action: 9,
         ..op::ConsolePowerRequest::default()

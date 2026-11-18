@@ -6,10 +6,15 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "The coordinator's console library: the console operators, targets and BMC credential files, and the reason of a console audit line."
+description = "The coordinator's console library: the console operators, targets and BMC credential files, the reason of a console audit line, the ipmitool port and the BMC calls over it, and the console sessions."
 
 # docs/design/console-broker.md decision D1: the pure part of the console. It reads files and
-# opens no socket, starts no process and reads no clock; the coordinator serves the calls.
+# opens no socket, starts no process and reads no clock; the coordinator serves the calls and
+# implements the ipmitool port with a process.
+[features]
+# `hostkeeper_console::scripted`, the ipmitool port's scripted double, for the coordinator's tests.
+testing = []
+
 [dependencies]
 # `MacAddress`, the inventory's own MAC type: a target's MAC is compared with a record's.
 hostkeeper-enrollment = { path = "../hostkeeper-enrollment" }

@@ -39,6 +39,7 @@ async fn tick(enrollment: &Rig) {
         &OperatorTokens::single(OPERATOR),
         &OperatorKeys::default(),
         &HostPrerequisites::default(),
+        &crate::console::ConsoleFiles::default(),
     )
     .await;
 }

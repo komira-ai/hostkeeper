@@ -93,6 +93,54 @@ place the files the flags name:
 
   Each table name is a host group name; a group holds at most 16 names, none twice, each one this release
   knows. A name that breaks a rule refuses the start, naming the group and the name's place.
+- **Owned by `hostkeeper-coordinator`, mode 0600 or 0400, a secret:** the optional
+  `console-bmc-credential-file`, the one user and password every BMC takes (the coordinator's
+  console, [console-broker.md](../../design/console-broker.md)). The coordinator refuses it when
+  others can read it. It is passed to `ipmitool` in the child's environment and is in no log or
+  answer. Its shape:
+
+  ```toml
+  user = "ADMIN"
+  password = "a long random password"
+  ```
+
+  The user is 1 to 16 bytes of printable ASCII with no space, and the password 1 to 20 bytes of
+  printable ASCII, a space allowed; these are the most IPMI 2.0 takes.
+- **Root's, readable by the group, no secret:** the optional `console-operators-file`, which token
+  names may use the console, and `console-targets-file`, the address of each BMC by its MAC. The
+  operators file needs the targets file and the credential file beside it (`serve` refuses it
+  without them); with no operators file nobody has console access and the other two are not read.
+  The coordinator reads all three again on the reload tick (`tls-reload-secs`); a file that is
+  refused on that look leaves the one in use, and a file refused at the start stops the
+  coordinator, naming its flag and never its path. The operators file names tokens of the tokens
+  file; `power = false` allows opening a console but not power or boot-device calls:
+
+  ```toml
+  [[operator]]
+  name = "alice"
+
+  [[operator]]
+  name = "bob"
+  power = false
+  ```
+
+  The targets file gives the address of a BMC by the BMC MAC of its inventory record, an IP address
+  or a name, with no port (the BMC's is 623):
+
+  ```toml
+  [[target]]
+  mac = "00:00:5e:00:53:02"
+  address = "192.0.2.12"
+
+  [[target]]
+  mac = "00:00:5e:00:53:03"
+  address = "bmc-03.lab.example"
+  ```
+
+  The coordinator runs `ipmitool`, which must be installed at `console-ipmitool` (by default
+  `/usr/bin/ipmitool`); the package does not carry it. `console-ipmi-cipher` (3),
+  `console-ipmi-privilege` (`administrator`), `console-ipmi-timeout-s` (1), `console-ipmi-retries`
+  (2), `console-attach-s` (30) and `console-max-sessions` (8) have defaults and need no key.
 - **Writable by the coordinator:** the state files and the CA's key, under
   `/var/lib/hostkeeper-coordinator`.
 

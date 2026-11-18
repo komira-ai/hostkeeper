@@ -42,7 +42,7 @@ mod by_record;
 mod expiry;
 pub(crate) mod groups;
 mod list;
-mod nonce;
+pub(crate) mod nonce;
 mod refusal;
 mod reject;
 mod rpc;

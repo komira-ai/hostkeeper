@@ -11,6 +11,10 @@
 //!   `on*=` handler; in JavaScript an `on*` handler property and an `on*` attribute;
 //! - [`fetches`]: a call of `fetch`, which only the data layer and the entry module may make.
 //!
+//! The one exception: `console.` is not found as the service of the generated client, `api.console.`
+//! or `ctx.api.console.` (the operator API's Console service) and the `"function"` values of `calls.json`;
+//! see [`is_client_service`].
+//!
 //! A needle that opens with a letter matches only where no letter, digit, `_` or `$` comes
 //! before it (`eval(` is not found in `retrieval(`).
 
@@ -52,13 +56,32 @@ fn needles(path: &str, text: &str, list: &[&str]) -> Vec<Finding> {
         let word = stem.starts_with(|c: char| c.is_ascii_alphabetic());
         for (at, _) in text.match_indices(stem) {
             let called = !call || skip_blank(&text[at + stem.len()..]).starts_with('(');
-            if called && !(word && joined(text, at)) {
+            if called && !(word && joined(text, at)) && !is_client_service(path, stem, text, at) {
                 out.push(finding(path, line_of(text, at), format!("`{needle}`")));
             }
         }
     }
     out.sort_by_key(|f| f.line);
     out
+}
+
+/// Whether the match of `stem` at `at` in the file `path` is the `console` service of the generated
+/// API client: in a page, as in `ctx.api.console.power(`, where the client is named `api` (`calls.rs`
+/// reads no other name), so the match is exempt only when `api.` stands right before it and no
+/// letter, digit, `_` or `$` before that `api` makes it another name (`xapi.console.` is found, as
+/// are `console.log(` and `window.console.`); and in `calls.json`, the derived list of the calls,
+/// as the value of a `"function"` key (`"function": "console.power"`).
+fn is_client_service(path: &str, stem: &str, text: &str, at: usize) -> bool {
+    if stem != "console." {
+        return false;
+    }
+    let before = &text[..at];
+    if path == "calls.json" {
+        return before.ends_with("\"function\": \"");
+    }
+    before.strip_suffix("api.").is_some_and(|name| {
+        !name.ends_with(|c: char| c.is_ascii_alphanumeric() || matches!(c, '_' | '$'))
+    })
 }
 
 /// Where a token could be kept past the tab, put in the address, or logged.

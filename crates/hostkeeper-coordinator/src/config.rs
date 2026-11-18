@@ -292,6 +292,8 @@ pub struct Serve {
     pub operator_token_file: Option<PathBuf>,
     #[command(flatten)]
     pub login: LoginFlags,
+    #[command(flatten)]
+    pub console: crate::console::ConsoleFlags,
     /// The ops file: what operators changed (exclusions, labels) and the audit ring, written
     /// by the coordinator and read back at start; created by the first change. Default: the
     /// state file's name with `.ops` added. Its directory must be writable by the
@@ -327,8 +329,8 @@ pub struct Serve {
     /// The prefix of the certificate URI that names the role of the caller's host.
     #[arg(long, default_value = DEFAULT_HOST_ROLE_URI_PREFIX)]
     pub host_role_uri_prefix: String,
-    /// How often the TLS files, the tokens file, the operator keys file and the host prerequisites
-    /// file are looked at again, in seconds.
+    /// How often the TLS files, the tokens file, the operator keys file, the host prerequisites
+    /// file and the console's files are looked at again, in seconds.
     #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u64).range(1..))]
     pub tls_reload_secs: u64,
     /// The enrollment store of the file store: a directory of the coordinator's own holding the
@@ -546,6 +548,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         Some(path) => HostPrerequisites::from_file(path)?,
         None => HostPrerequisites::default(),
     };
+    let console = flags.console.console()?;
     let oidc = AllowList::from_file(&flags.oidc_config)?;
     let prefixes = SanPrefixes::new(&flags.role_uri_prefix, &flags.host_role_uri_prefix)?;
     let legacy = flags.legacy_service.as_deref();
@@ -612,6 +615,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         .with_ui(ui)
         .with_operator_keys(operator_keys)
         .with_host_prerequisites(prerequisites)
+        .with_console(console)
         .with_alert_thresholds(alert_thresholds(flags))
         .with_repository_origin(crate::repository_origin::RepositoryOrigin::new(
             roots.clone(),
@@ -792,6 +796,7 @@ where
     let tokens = parts.coordinator.tokens().clone();
     let operator_keys = parts.coordinator.operator_keys().clone();
     let prerequisites = parts.coordinator.host_prerequisites().clone();
+    let console = parts.coordinator.console().files().clone();
     let enrollment = parts.coordinator.enrollment().cloned();
     let coordinator = parts.coordinator;
     let observing = observe_every(Arc::clone(&coordinator), OBSERVE_EVERY);
@@ -817,6 +822,7 @@ where
         tokens,
         operator_keys,
         prerequisites,
+        console,
         parts.reload,
     );
     let all = together(
