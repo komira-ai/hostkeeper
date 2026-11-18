@@ -45,6 +45,7 @@ fn response_of(answer: Answer, order: Option<Order>) -> proto::HeartbeatResponse
         repositories: None,
         facts: None,
         operator_keys: None,
+        prerequisites: None,
     }
 }
 
@@ -109,6 +110,8 @@ impl Api for AgentService {
             self.coordinator
                 .hear_ssh(identity.host_id.as_str(), from, keys)
                 .await;
+            self.coordinator
+                .hear_prerequisites(&identity, request.get_ref());
         }
         let host_id = identity.host_id.clone();
         let facts = (!retiring)
@@ -133,6 +136,9 @@ impl Api for AgentService {
                 .ssh_access_for(&identity, request.get_ref())
                 .await;
         }
+        response.prerequisites = self
+            .coordinator
+            .prerequisites_for(&identity, request.get_ref());
         Ok(Response::new(response))
     }
 

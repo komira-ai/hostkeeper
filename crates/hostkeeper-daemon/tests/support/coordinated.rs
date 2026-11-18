@@ -345,6 +345,7 @@ impl CoordinatorLink for InProcess {
             facts: None,
             operator_keys: None,
             ssh: None,
+            prerequisites: None,
         })
     }
 }
@@ -401,6 +402,7 @@ impl Host {
             console: None,
             remote_login_probe: None,
             operator_keys: None,
+            prerequisites: None,
         };
         Host {
             heartbeater: links.heartbeater(&daemon),

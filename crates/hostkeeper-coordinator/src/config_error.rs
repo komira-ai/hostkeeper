@@ -17,6 +17,7 @@ use crate::layout::LayoutError;
 use crate::operator_keys::OperatorKeysError;
 use crate::ops::OpsError;
 use crate::origin_https::OriginTlsError;
+use crate::prerequisites::PrerequisitesError;
 use crate::store::postgres::DatabaseError;
 use crate::tokens::TokensError;
 use crate::ui::UiDirError;
@@ -34,6 +35,9 @@ pub enum StartError {
     /// The operator keys file is refused.
     #[error(transparent)]
     OperatorKeys(#[from] OperatorKeysError),
+    /// The host prerequisites file is refused.
+    #[error(transparent)]
+    Prerequisites(#[from] PrerequisitesError),
     /// `--tokens-file` and `--operator-token-file` are both given.
     #[error(
         "--tokens-file and --operator-token-file are both given: name the operator's tokens one way"

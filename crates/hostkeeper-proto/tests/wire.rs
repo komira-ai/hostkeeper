@@ -432,6 +432,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 39] = [
             ("ssh", 13),
             ("remote_login_probe", 14),
             ("operator_keys", 15),
+            ("prerequisites", 16),
         ],
     ),
     (
@@ -444,7 +445,8 @@ const FIELDS: [(&str, &[(&str, u32)]); 39] = [
             ("repositories", 5),
             ("facts", 6),
             ("operator_keys", 7),
-            ("ssh", 8),
+            ("prerequisites", 8),
+            ("ssh", 9),
         ],
     ),
     (
@@ -765,6 +767,7 @@ fn wire_names_are_pinned() {
                 "mdm_tls_renewal_failed",
                 "mdm_dns_credential_rejected",
                 "mdm_identity_near_expiry",
+                "prerequisite_failed",
             ],
         ),
         (

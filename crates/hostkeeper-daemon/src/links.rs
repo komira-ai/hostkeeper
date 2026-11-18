@@ -13,7 +13,8 @@
 //! [`crate::link_adapters`] ([`Links::heartbeater`]). On a Linux host it also gives the repository
 //! sets the coordinator pushes to [`crate::repository_push::RepositoryPush`]; on every host it
 //! gives the host's facts the coordinator sends to the facts file ([`FactsFile`]) and the operator keys
-//! it sends to the host's [`Links::operator_keys`].
+//! it sends to the host's [`Links::operator_keys`], and the host prerequisites it sends to the host's
+//! [`Links::prerequisites`].
 //!
 //! The watchdog: after each heartbeat, whatever it came to, the heartbeat loop tells the service
 //! manager it is alive ([`Links::watchdog`], `WATCHDOG=1` under systemd), and nothing else sends
@@ -53,8 +54,8 @@ use hostkeeper_enroll::{Enroller, RETRY_SECS};
 use hostkeeper_link::{
     CertSource, ClientIdentity, CoordinatorLink, Dispatch, GrpcLinkError, GrpcMtlsLink, Heartbeat,
     Heartbeater, JsonMtlsLink, LinkError, LoopConfig, NegotiatedLink, OperatorKeysSink, Platform,
-    Ports, RemoteLoginProbeSource, Reply, RepositorySink, Sleeper, SshSink, StopFlag, TcpDial,
-    TcpTransport, Tick, UnixClock,
+    Ports, PrerequisitesSink, RemoteLoginProbeSource, Reply, RepositorySink, Sleeper, SshSink,
+    StopFlag, TcpDial, TcpTransport, Tick, UnixClock,
 };
 use hostkeeper_observe::ProcessRunner;
 use hostkeeper_observe::command::MAX_STDOUT;
@@ -137,6 +138,10 @@ pub struct Links {
     /// account's `authorized_keys`, which every heartbeat reports and a set the coordinator sends
     /// replaces. A daemon that has one announces `operator-keys-v1`.
     pub operator_keys: Option<Arc<dyn OperatorKeysSink>>,
+    /// The host prerequisites of the host's group ([`crate::prerequisites`]), which every
+    /// heartbeat reports and a set the coordinator sends replaces. A daemon that has them
+    /// announces `prerequisites-v1`.
+    pub prerequisites: Option<Arc<dyn PrerequisitesSink>>,
 }
 
 impl Links {
@@ -222,6 +227,7 @@ impl Links {
                 remote_login_probe: self.remote_login_probe.clone(),
                 operator_keys: self.operator_keys.clone(),
                 ssh: ssh_setup(PLATFORM, rustix::process::geteuid().as_raw(), &self.log),
+                prerequisites: self.prerequisites.clone(),
             },
         )
     }

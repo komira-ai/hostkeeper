@@ -23,6 +23,7 @@ fn beat(report: Option<KeysReport>) -> Heartbeat {
         remote_login_probe: None,
         operator_keys: report,
         ssh: None,
+        prerequisites: None,
     }
 }
 

@@ -19,7 +19,11 @@
 //! likewise. A Mac's Remote Login probe ([`Heartbeat::remote_login_probe`]) is counted too, and is
 //! the first optional fact dropped. The operator keys report ([`Heartbeat::operator_keys`], as
 //! `operator_keys`: a digest and two texts of at most [`crate::MAX_KEYS_REASON`] bytes each) is
-//! counted and never dropped: it is not in [`DROP_ORDER`].
+//! counted and never dropped: it is not in [`DROP_ORDER`]. The host prerequisites report
+//! ([`Heartbeat::prerequisites`], as `prerequisites`: a digest, a refusal and one state for each of
+//! at most 16 names held; only a name this release knows carries a version or a reason, so with
+//! the one it knows the report is a few hundred bytes and at most about 4 KiB) is counted and
+//! never dropped either.
 
 use hostkeeper_config::names::{ServiceName, Version};
 pub use hostkeeper_proto::MAX_SERVICES_PER_HEARTBEAT;
@@ -29,6 +33,7 @@ use crate::host_ssh::SshReport;
 use crate::operator_keys::KeysReport;
 use crate::order::{DeferredReport, OrderResult};
 use crate::ports::Drift;
+use crate::prerequisites::PrerequisitesReport;
 use crate::probe::RemoteLoginProbe;
 use crate::repositories::RepositoriesReport;
 
@@ -102,6 +107,11 @@ pub enum Feature {
     /// it is announced only by a daemon with an SSH sink ([`crate::SshSink`]): the loop adds it
     /// ([`SSH`]).
     SshV1,
+    /// `prerequisites-v1`: the daemon makes sure of the host prerequisites the coordinator sends
+    /// ([`crate::PushedPrerequisites`]) and reports where each stands
+    /// ([`crate::PrerequisitesReport`]). Like `operator-keys-v1` it is announced only by a daemon
+    /// with a sink for them ([`crate::PrerequisitesSink`]): the loop adds it ([`PREREQUISITES`]).
+    PrerequisitesV1,
 }
 
 /// The features every heartbeat announces, in this order. Each names something the loop does:
@@ -131,7 +141,9 @@ pub const FACTS: Feature = Feature::FactsV1;
 pub const PRIVATE_REPOSITORY: Feature = Feature::PrivateRepositoryV1;
 /// The feature a daemon with a [`crate::OperatorKeysSink`] announces after [`PRIVATE_REPOSITORY`].
 pub const OPERATOR_KEYS: Feature = Feature::OperatorKeysV1;
-/// The feature a daemon with an [`crate::SshSink`] announces last.
+/// The feature a daemon with a [`crate::PrerequisitesSink`] announces after [`OPERATOR_KEYS`].
+pub const PREREQUISITES: Feature = Feature::PrerequisitesV1;
+/// The feature a daemon with an [`crate::SshSink`] announces last, after [`PREREQUISITES`].
 pub const SSH: Feature = Feature::SshV1;
 
 impl Feature {
@@ -154,6 +166,7 @@ impl Feature {
             Feature::PrivateRepositoryV1 => "private-repository-v1",
             Feature::OperatorKeysV1 => "operator-keys-v1",
             Feature::SshV1 => "ssh-v1",
+            Feature::PrerequisitesV1 => "prerequisites-v1",
         }
     }
 
@@ -161,7 +174,14 @@ impl Feature {
     pub fn parse(name: &str) -> Option<Feature> {
         ANNOUNCED
             .into_iter()
-            .chain([REPOSITORIES, FACTS, PRIVATE_REPOSITORY, OPERATOR_KEYS, SSH])
+            .chain([
+                REPOSITORIES,
+                FACTS,
+                PRIVATE_REPOSITORY,
+                OPERATOR_KEYS,
+                PREREQUISITES,
+                SSH,
+            ])
             .find(|feature| feature.as_str() == name)
     }
 }
@@ -406,6 +426,9 @@ pub struct Heartbeat {
     /// What the daemon's SSH setup came to; none from a daemon that has none. Sent over gRPC
     /// only, and counted toward the bound on both.
     pub ssh: Option<SshReport>,
+    /// What the daemon holds of the host prerequisites and where each stands; none from a daemon
+    /// that keeps none. Sent over gRPC only, and counted toward the bound on both.
+    pub prerequisites: Option<PrerequisitesReport>,
 }
 
 impl Heartbeat {
@@ -482,6 +505,9 @@ impl Heartbeat {
                     "detail": report.detail,
                 }),
             );
+        }
+        if let Some(report) = &self.prerequisites {
+            beat.insert("prerequisites".to_owned(), prerequisites_json(report));
         }
         Value::Object(beat)
     }
@@ -574,4 +600,29 @@ pub fn fit(mut beat: Heartbeat) -> Result<Fitted, Oversize> {
     } else {
         Err(Oversize::Bytes { len })
     }
+}
+
+/// The host prerequisites report as the heartbeat's JSON counts it: the field names of the gRPC
+/// message, the status by its wire name.
+fn prerequisites_json(report: &PrerequisitesReport) -> Value {
+    let refused = report
+        .refused
+        .as_ref()
+        .map(|refusal| json!({ "digest": refusal.digest, "reason": refusal.reason }));
+    let states: Vec<Value> = report
+        .states
+        .iter()
+        .map(|state| {
+            json!({
+                "name": state.name,
+                "status": state.status.as_str(),
+                "version": state.version,
+                "reason": state.reason,
+                "failures": state.failures,
+                "next_try_unix": state.next_try_unix,
+                "seen_unix": state.seen_unix,
+            })
+        })
+        .collect();
+    json!({ "digest": report.digest, "refused": refused, "states": states })
 }

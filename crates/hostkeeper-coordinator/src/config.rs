@@ -88,6 +88,7 @@ use crate::listen::{
 use crate::lock::{FileLock, LockGuard, StateLock};
 use crate::operator_keys::OperatorKeys;
 use crate::ops::OpsStore;
+use crate::prerequisites::HostPrerequisites;
 use crate::service::{Clock, Coordinator};
 use crate::ssh_tunnel::run_poll;
 use crate::store::Spent;
@@ -285,6 +286,14 @@ pub struct Serve {
     /// host is sent keys.
     #[arg(long)]
     pub operator_keys_file: Option<PathBuf>,
+    /// The host prerequisites of each host group: a TOML file with a `[host-groups.<name>]` table
+    /// holding `prerequisites = [...]` for each group that needs one; today the one name
+    /// `xcode-command-line-tools`, which the daemon of a Mac installs when the Mac lacks Apple's
+    /// Command Line Tools. A host in a group the file does not list is sent none. No secret: any
+    /// regular file of at most 64 KiB. It is read again every `--tls-reload-secs`. Default: no
+    /// host is sent a set.
+    #[arg(long)]
+    pub host_prerequisites_file: Option<PathBuf>,
     /// A file holding one operator token, mode 0600, owned by the coordinator's user: the one
     /// token, named `operator`. Read once, at start. Not beside `--tokens-file`.
     #[arg(long)]
@@ -329,7 +338,8 @@ pub struct Serve {
     /// The prefix of the certificate URI that names the role of the caller's host.
     #[arg(long, default_value = DEFAULT_HOST_ROLE_URI_PREFIX)]
     pub host_role_uri_prefix: String,
-    /// How often the TLS files and the tokens file are looked at again, in seconds.
+    /// How often the TLS files, the tokens file, the operator keys file and the host prerequisites
+    /// file are looked at again, in seconds.
     #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u64).range(1..))]
     pub tls_reload_secs: u64,
     /// The enrollment store of the file store: a directory of the coordinator's own holding the
@@ -543,6 +553,10 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         Some(path) => OperatorKeys::from_file(path)?,
         None => OperatorKeys::default(),
     };
+    let prerequisites = match &flags.host_prerequisites_file {
+        Some(path) => HostPrerequisites::from_file(path)?,
+        None => HostPrerequisites::default(),
+    };
     let oidc = AllowList::from_file(&flags.oidc_config)?;
     let prefixes = SanPrefixes::new(&flags.role_uri_prefix, &flags.host_role_uri_prefix)?;
     let legacy = flags.legacy_service.as_deref();
@@ -610,6 +624,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         .with_layout(layout)
         .with_ui(ui)
         .with_operator_keys(operator_keys)
+        .with_host_prerequisites(prerequisites)
         .with_alert_thresholds(alert_thresholds(flags))
         .with_repository_origin(crate::repository_origin::RepositoryOrigin::new(
             roots.clone(),
@@ -790,6 +805,7 @@ where
     };
     let tokens = parts.coordinator.tokens().clone();
     let operator_keys = parts.coordinator.operator_keys().clone();
+    let prerequisites = parts.coordinator.host_prerequisites().clone();
     let enrollment = parts.coordinator.enrollment().cloned();
     let coordinator = parts.coordinator;
     let observing = observe_every(Arc::clone(&coordinator), OBSERVE_EVERY);
@@ -816,6 +832,7 @@ where
         vec![parts.heartbeat_tls, parts.control_tls],
         tokens,
         operator_keys,
+        prerequisites,
         parts.reload,
     );
     let all = together(

@@ -27,6 +27,7 @@ mod operator;
 mod operator_desired;
 mod operator_keys;
 mod pending;
+mod prerequisites;
 mod readme_status;
 mod refusal;
 mod remote_login_probe;

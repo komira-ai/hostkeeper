@@ -74,6 +74,9 @@
 //!   the coordinator sends (`ssh-v1`), with [`ssh_files`] (the files and the record's checks),
 //!   [`ssh_effective`] (what `sshd -T` says and the lockout rules judge of it) and [`ssh_host`] (the
 //!   host's port and its real adapters, Linux's and [`ssh_host_mac`]'s).
+//! - [`prerequisites`]: the host prerequisites the coordinator sends (`prerequisites-v1`), made sure
+//!   of on the host and reported by state in every heartbeat; [`xcode_clt`] is the one there is,
+//!   Apple's Command Line Tools, looked for and installed headless on a Mac.
 //! - [`observer`]: what [`Daemon::status`] reports of a running service.
 //! - [`node`]: the host's enrollment and the heartbeat loop's link, as the loops last wrote them,
 //!   which [`Daemon::status`] reports besides the services.
@@ -138,6 +141,7 @@ pub mod own_package;
 pub mod packaged;
 pub mod packages;
 pub mod place;
+pub mod prerequisites;
 pub mod prune;
 pub mod real_packages;
 pub mod refusal;
@@ -165,6 +169,7 @@ pub mod unix_clock;
 pub mod verb;
 pub mod verbs;
 pub mod watchers;
+pub mod xcode_clt;
 
 pub use boot::{BootError, BootReport, BootStep, Outcome, ServiceBoot, Stage};
 pub use executor::{

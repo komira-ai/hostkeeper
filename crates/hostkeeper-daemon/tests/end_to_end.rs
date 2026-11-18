@@ -179,6 +179,7 @@ fn first_beat() -> Heartbeat {
         remote_login_probe: None,
         operator_keys: None,
         ssh: None,
+        prerequisites: None,
     }
 }
 
@@ -210,6 +211,7 @@ fn without_executor(daemon: &Arc<Daemon>, links: &Links) -> Heartbeater {
             remote_login_probe: None,
             operator_keys: None,
             ssh: None,
+            prerequisites: None,
         },
     )
 }
@@ -232,6 +234,7 @@ fn links_over(link: Arc<dyn CoordinatorLink>, dispatch: &Arc<ManualDispatch>) ->
         console: None,
         remote_login_probe: None,
         operator_keys: None,
+        prerequisites: None,
     }
 }
 

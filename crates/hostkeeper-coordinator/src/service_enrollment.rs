@@ -170,6 +170,7 @@ impl Coordinator {
             self.running.forget(&host);
             self.operator_keys.forget(&host);
             self.ssh_reports.forget(&host);
+            self.prerequisites.forget(&host);
             tracing::info!(host_id = %host, "a retiring host reported its update final: slot freed");
             if let Some(enrollment) = &self.enrollment {
                 enrollment.retire(&host);

@@ -70,6 +70,7 @@ fn beat(platform: Platform, agent: &str, services: Vec<ServiceFacts>) -> Heartbe
         remote_login_probe: None,
         operator_keys: None,
         ssh: None,
+        prerequisites: None,
     }
 }
 

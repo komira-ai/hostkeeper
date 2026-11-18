@@ -17,6 +17,7 @@ use crate::host_ssh::{PushedSsh, SshReport};
 use crate::names::Reason;
 use crate::operator_keys::{KeysReport, PushedKeys};
 use crate::order::{Order, OrderRef, OrderResult, Reply};
+use crate::prerequisites::{PrerequisitesReport, PushedPrerequisites};
 use crate::probe::RemoteLoginProbe;
 use crate::repositories::{PushedSet, RepositoriesReport};
 
@@ -301,6 +302,19 @@ pub trait SshSink: Send + Sync {
 
     /// Sets sshd up as `access` says. It says nothing back: the next report does.
     fn apply(&self, access: &PushedSsh);
+}
+
+/// The host prerequisites of the host's group, which the coordinator sends (`prerequisites-v1`).
+/// A daemon that has one announces the feature and reports what it holds and where each stands.
+pub trait PrerequisitesSink: Send + Sync {
+    /// The digest of the set held, the last set refused and the state of each prerequisite: sent
+    /// in every heartbeat. It may also start the work that is due (a look, an install) on a
+    /// worker of the sink's own; it never waits for it.
+    fn report(&self) -> PrerequisitesReport;
+
+    /// Holds `set` when it passes the sink's checks, or keeps the set held. It says nothing back
+    /// and never waits for an install: the next reports do.
+    fn apply(&self, set: &PushedPrerequisites);
 }
 
 /// One job for a worker.

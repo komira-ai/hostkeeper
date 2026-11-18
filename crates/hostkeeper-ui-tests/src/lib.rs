@@ -7,8 +7,8 @@
 //! - [`UI_FILES`]: every file of the app, read at build time with `include_str!`, so no test
 //!   needs a path or a working directory;
 //! - [`client_gen`]: the generator of the app's API client, `ui/gen/client.js`, and its
-//!   TypeScript declarations, `ui/gen/client.d.ts`, from the command table and the descriptors
-//!   of `hostkeeper-proto`;
+//!   TypeScript declarations, `ui/gen/client.d.ts` and one `ui/gen/<namespace>.d.ts` per proto
+//!   package, from the command table and the descriptors of `hostkeeper-proto`;
 //! - [`call_sites`] and [`check_calls`]: the client's functions the app's pages call, read
 //!   from the source, and the check that each method is one of the protobuf descriptors;
 //! - [`derived_calls`], [`calls_json`] and [`listed_calls`]: `ui/calls.json`, the list of those

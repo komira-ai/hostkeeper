@@ -82,8 +82,8 @@ no framework and no build step. Its pages (Home, which is the lab, Host, Host gr
 the coordinator's HTTP/JSON gateway with the operator's token, each button one method call,
 through a client generated from the protos: `ui/gen/client.js`, one function per method of
 `hostkeeper.operator.v1` (`api.releases.setDesired(request)`), with its TypeScript declarations
-in `ui/gen/client.d.ts`. Both are checked in, and a test regenerates them and fails on any
-difference; `ui/calls.json`, the methods the pages call, is derived from the pages the same way. The
+in `ui/gen/client.d.ts` (the client) and one `ui/gen/<namespace>.d.ts` per proto package (the types). All are
+checked in, and a test regenerates them and fails on any difference; `ui/calls.json`, the methods the pages call, is derived from the pages the same way. The
 coordinator serves it under `/ui/` of its private listener: the coordinator's container image
 holds it at `/usr/share/hostkeeper-coordinator/ui`, which the coordinator serves when started
 without `--ui-dir`, and `--ui-dir` names another directory
@@ -98,7 +98,9 @@ test of `hostkeeper-hkctl` regenerates from the protos and compares, so it canno
 Enrolling a node, from its inventory record to its first heartbeat, with every refusal on the way,
 is [docs/operations/enrollment.md](docs/operations/enrollment.md). Putting the operators' SSH public keys
 on every host, Linux and Mac, from one coordinator file is
-[docs/operations/operator-keys.md](docs/operations/operator-keys.md). Installing a new Linux machine
+[docs/operations/operator-keys.md](docs/operations/operator-keys.md). Installing Apple's Command Line Tools on a Mac
+from the coordinator, as root, with no command typed on it, is
+[docs/operations/host-prerequisites.md](docs/operations/host-prerequisites.md). Installing a new Linux machine
 from the farm LAN with `pxe`, and the router and board checks before the first one, is
 [docs/operations/network-install.md](docs/operations/network-install.md); its settings files
 are parsed with that program's own parser. A test (`crates/xtask/tests/enrollment_doc.rs`)

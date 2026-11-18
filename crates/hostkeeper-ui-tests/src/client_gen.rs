@@ -1,5 +1,5 @@
 //! The generator of the web app's API client, `ui/gen/client.js`, and its TypeScript
-//! declarations, `ui/gen/client.d.ts`.
+//! declarations, `ui/gen/client.d.ts` and one `ui/gen/<namespace>.d.ts` per proto package.
 //!
 //! It reads the command table of `hostkeeper-proto` (`hostkeeper_proto::ctl::COMMANDS`, one
 //! entry per unary RPC, which `hkctl` is generated from too) for the functions, and the descriptor
@@ -12,12 +12,14 @@
 //!   order, with one function per method, `releases.setDesired(request)` being
 //!   `call("hostkeeper.operator.v1.Releases/SetDesired", request)`. `ui/api.js` gives it the
 //!   `call` that sends the request and keeps the token rules.
-//! - `client.d.ts` declares `createClient`, the `Client` it returns and every message and enum
-//!   a request or a response reaches, as proto3 JSON writes them: each field by its JSON name and
+//! - `client.d.ts` declares `createClient` and the `Client` it returns, and imports (`import type`)
+//!   the namespaces its methods' types are in. Every message and enum a request or a response
+//!   reaches is declared in the file of its package, `<namespace>.d.ts`, which imports the
+//!   namespaces of the other packages its types name (only those it names). They are described as proto3 JSON writes them: each field by its JSON name and
 //!   optional (a default is not written), a 64-bit integer as a string, `bytes` as base64 text,
 //!   a float or a double as a number or one of the three names JSON gives the values it has no
 //!   number for, an enum as the names of its values, a map as an object. Each type is declared
-//!   in its package's namespace, the package's name with `_` for `.`, a nested one inside its
+//!   in its package's namespace (`export namespace <namespace> { ... }`), the package's name with `_` for `.`, a nested one inside its
 //!   message's namespace, so `hostkeeper_agent_v1.ServiceBeat` is the type of that message and no
 //!   two types share a name. (With dots, a reference to the operator package's `Actor` would end
 //!   in a top-level domain, and read as a host name to the repository's hygiene lint.) The comments of the protos are not copied: what a method does and what a field holds
@@ -42,11 +44,11 @@ use prost_reflect::{DescriptorPool, EnumDescriptor, FieldDescriptor, Kind, Messa
 pub const PACKAGE: &str = "hostkeeper.operator.v1";
 
 /// The longest line of an enum's or a message's declaration on one line; a longer one has a line per
-/// value or field. Wide enough that `ui/gen/client.d.ts` stays under the 1000 lines every file of
-/// the app is held to (`tests/sources.rs`).
+/// value or field. Wide enough that each declarations file stays well under the 1000 lines every
+/// file of the app is held to (`tests/sources.rs`).
 const WIDTH: usize = 200;
 
-/// What the header of both files says about where they come from.
+/// What the header of every generated file says about where they come from.
 const HEADER: &str = "\
 // Generated from hostkeeper-proto's descriptors by hostkeeper-ui-tests (`client_gen`). Do not
 // edit: `cargo test -p hostkeeper-ui-tests --test client` fails when this file differs from what
@@ -77,8 +79,19 @@ impl Function {
 pub struct Client {
     /// `ui/gen/client.js`.
     pub js: String,
-    /// `ui/gen/client.d.ts`.
-    pub dts: String,
+    /// The declarations: `client.d.ts`, then one file per package namespace
+    /// (`hostkeeper_operator_v1.d.ts`), each as its file name under `ui/gen/` and its text.
+    pub dts: Vec<(String, String)>,
+}
+
+impl Client {
+    /// The text of the declarations file `name` (`client.d.ts`), if one was made.
+    pub fn declarations(&self, name: &str) -> Option<&str> {
+        self.dts
+            .iter()
+            .find(|(file, _)| file == name)
+            .map(|(_, text)| text.as_str())
+    }
 }
 
 /// Why the client cannot be generated.
@@ -420,9 +433,53 @@ fn js(commands: &[Command]) -> String {
     out
 }
 
-/// The text of `client.d.ts`.
-fn dts(commands: &[Command], types: &BTreeMap<String, Type>) -> String {
+/// The `import type` lines for `packages`, one per namespace, each from its sibling file, and
+/// a blank line after them; nothing for no package.
+fn imports(packages: &BTreeSet<String>) -> String {
+    let mut out = String::new();
+    for package in packages {
+        let ns = namespace(package);
+        let _ = writeln!(out, "import type {{ {ns} }} from \"./{ns}.js\";");
+    }
+    if !out.is_empty() {
+        out.push('\n');
+    }
+    out
+}
+
+/// The packages `ty`'s fields name other than its own: a map's value counts, its entry does not.
+fn referenced(ty: &Type, out: &mut BTreeSet<String>) {
+    let Type::Message(m) = ty else { return };
+    for field in m.fields() {
+        let kinds: Vec<Kind> = if field.is_map() {
+            let entry = field.kind();
+            let value = entry.as_message().map(|e| e.map_entry_value_field().kind());
+            value.into_iter().collect()
+        } else {
+            vec![field.kind()]
+        };
+        for kind in kinds {
+            let package = match &kind {
+                Kind::Message(inner) => inner.package_name(),
+                Kind::Enum(e) => e.package_name(),
+                _ => continue,
+            };
+            if package != m.package_name() {
+                out.insert(package.to_owned());
+            }
+        }
+    }
+}
+
+/// The declarations: `client.d.ts`, then each package's file.
+fn dts(commands: &[Command], types: &BTreeMap<String, Type>) -> Vec<(String, String)> {
+    let name = |full: &str| types.get(full).map_or_else(String::new, Type::qualified);
+    let used: BTreeSet<String> = operator(commands)
+        .flat_map(|c| [c.request, c.response])
+        .filter_map(|full| types.get(full).map(|t| t.package().to_owned()))
+        .collect();
     let mut out = String::from(HEADER);
+    out.push_str(&imports(&used));
     out.push_str(
         "// The types of `client.js`, in proto3 JSON; each is described in `crates/hostkeeper-proto/proto`.\n\n\
          /** Sends `request` to `method` (`<package>.<Service>/<Method>`) and resolves to the reply. */\n\
@@ -430,7 +487,6 @@ fn dts(commands: &[Command], types: &BTreeMap<String, Type>) -> String {
          /** The operator API: one object per service, one function per method. */\n\
          export interface Client {\n",
     );
-    let name = |full: &str| types.get(full).map_or_else(String::new, Type::qualified);
     let mut open: Option<&str> = None;
     for command in operator(commands) {
         if open != Some(command.service_command) {
@@ -452,6 +508,7 @@ fn dts(commands: &[Command], types: &BTreeMap<String, Type>) -> String {
         out.push_str("  };\n");
     }
     out.push_str("}\n\nexport declare function createClient(call: Call): Client;\n");
+    let mut files = vec![("client.d.ts".to_owned(), out)];
 
     // Every needed type and every message that holds one, by the scope it is declared in.
     let mut scopes = Scopes {
@@ -483,13 +540,18 @@ fn dts(commands: &[Command], types: &BTreeMap<String, Type>) -> String {
     }
     let packages: BTreeSet<&str> = types.values().map(Type::package).collect();
     for package in packages {
-        // No blank line between the namespaces: the file stays under the 1000 lines every
-        // file of ui/ is held to.
-        let _ = writeln!(out, "export namespace {} {{", namespace(package));
-        members(&mut out, "  ", package, &scopes);
-        out.push_str("}\n");
+        let mut named = BTreeSet::new();
+        for ty in types.values().filter(|t| t.package() == package) {
+            referenced(ty, &mut named);
+        }
+        let mut text = String::from(HEADER);
+        text.push_str(&imports(&named));
+        let _ = writeln!(text, "export namespace {} {{", namespace(package));
+        members(&mut text, "  ", package, &scopes);
+        text.push_str("}\n");
+        files.push((format!("{}.d.ts", namespace(package)), text));
     }
-    out
+    files
 }
 
 #[cfg(test)]

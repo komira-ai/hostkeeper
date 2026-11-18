@@ -163,6 +163,7 @@ fn only_the_rollout_module_calls_set_desired() {
             "calls.json",
             "gen/client.js",
             "gen/client.d.ts",
+            "gen/hostkeeper_operator_v1.d.ts",
         ]
         .contains(&f.path)
     }) {

@@ -77,6 +77,7 @@ fn host_probing(
         console: None,
         remote_login_probe: probe,
         operator_keys: None,
+        prerequisites: None,
     };
     (links.heartbeater(&daemon), link, dispatch)
 }
