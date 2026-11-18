@@ -44,6 +44,11 @@ autoinstall:
         owner: "root:root"
         permissions: "0644"
         content: "GRUB_CMDLINE_LINUX=\"$GRUB_CMDLINE_LINUX console=tty0 console=ttyS1,115200n8\"\nGRUB_TERMINAL=\"console serial\"\nGRUB_SERIAL_COMMAND=\"serial --unit=1 --speed=115200\"\n"
+      - path: /etc/systemd/system/serial-getty@ttyS1.service.d/99_hostkeeper.conf
+        owner: "root:root"
+        permissions: "0644"
+        content: "[Service]\nExecStart=\nExecStart=-/sbin/agetty -o '-p -- \\\\u' 115200 - $TERM\n"
     runcmd:
       - [update-grub]
+      - [systemctl, daemon-reload]
       - [systemctl, enable, --now, serial-getty@ttyS1.service]
