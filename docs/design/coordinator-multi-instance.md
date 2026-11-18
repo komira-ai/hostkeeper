@@ -1,8 +1,9 @@
 # The coordinator as N instances on one Postgres
 
-Status: design, for the owner's decision. A living document: it is updated in the pull requests that build it. Tags as in
-[hostkeeper-design.md](hostkeeper-design.md): **Built** names code on `main` with a path, **Designed** means nothing implements
-it yet. Nothing in this document is built.
+Status: design, approved by the owner (2026-11-18), with the answers to its two open questions in section 19. A living
+document: it is updated in the pull requests that build it. Tags as in [hostkeeper-design.md](hostkeeper-design.md): **Built**
+names code on `main` with a path, **Designed** means nothing implements it yet. Built so far: part of section 4 (the shared
+lock, the ledger, the migration runner's mutex); everything else is Designed.
 
 It changes one decision of [coordinator-storage.md](coordinator-storage.md): that decision's section 5 ("the single writer: an
 advisory lock") and the sentence of its section 14 that a heartbeat costs no query. Section 7 of that document designs an
@@ -105,6 +106,17 @@ there is one truth, and a lost instance is only a lost connection.
 Today's lock is exclusive: one session may hold `pg_try_advisory_lock(LOCK_KEY)`. The trigger `lease_fenced` lets a session
 update `lease` only if `pg_locks` shows it holds that key; it does not look at the lock's mode (`0001_state.sql:260-273`).
 
+**Built** (komira-ai/hostkeeper#395; `store/postgres/writer.rs`, `migrate.rs`, `dsn.rs`, migration `0019_tx_ledger.sql`): the
+shared lock; `tx_ledger`, inserted as each transaction's first statement (the id is the row's `gen_random_uuid()` default,
+read back); no `lease.commits` write; no deposed exit; the session's `statement_timeout`, `lock_timeout` and
+`idle_in_transaction_session_timeout`; the runner's mutex. Where the text below differs, the code is the record: the purge of
+ledger rows older than an hour runs in every transaction, not a reload tick; a lost commit is settled at the session's revival
+by inserting its id again with `ON CONFLICT DO NOTHING`, and the outcome goes to the caller (no retry of the closure by that
+id), with a commit older than the ledger's hour and its row gone left unsettled, not called "did not land"; the mutex is a
+session advisory lock on `MIGRATE_KEY` around the runner, each migration its own transaction, the wait bounded by the
+session's `lock_timeout`. Still Designed (M3): the pool of sessions, `instances`, the DDL `lock_timeout` with its retry, and
+the lint rule.
+
 **Designed.** The lock is only a fence between releases: every new instance holds it at once, it elects nobody and no decision
 reads it, and it exists because the release before takes the key exclusively. An instance takes the same key in **shared** mode, `pg_try_advisory_lock_shared(LOCK_KEY)`, on each of its sessions.
 Postgres itself then gives:
@@ -145,7 +157,7 @@ listen)` every few seconds. It is for the status page and for the start rule of 
 
 **Migrations (serialized, and short).** A shared fence excludes nobody, so it cannot serialize two instances that start at the
 same moment (a start-first update, or a third task scaled up by hand): both would read the migrations table, both would run
-migration `0020`, and one would fail on a duplicate object. The runner therefore takes a mutex of its own:
+the same new migration, and one would fail on a duplicate object. The runner therefore takes a mutex of its own:
 
 - One transaction: `pg_advisory_xact_lock(MIGRATE_KEY)` first, a key of its own and not `LOCK_KEY`, then it reads the
   migrations table and applies every missing migration, recording each in the same transaction, then `COMMIT`. A second
@@ -169,7 +181,7 @@ migration `0020`, and one would fail on a duplicate object. The runner therefore
 
 ## 5. The fleet moves into Postgres
 
-### 5.1 Tables (all new, additive; migration `0019`, `-- older-releases: may-run`)
+### 5.1 Tables (all new, additive; migration `0020`, `-- older-releases: may-run`)
 
 | Table | Holds | Logged |
 |---|---|---|
@@ -312,7 +324,7 @@ conflict with it, so decisions would abort and retry under normal load, where th
 Everywhere else a decision is one conditional write whose `WHERE` is its precondition. `SERIALIZABLE` with a retry loop is the
 fallback for a future decision that cannot name its precondition; none does today.
 
-**One row lock is still the right granularity** (question 2). The gate protects the one-service-at-a-time rule and the FIFO,
+**One row lock is the granularity** (decided, section 19). The gate protects the one-service-at-a-time rule and the FIFO,
 which read every service's rows, and `--live-rollouts N` (at most 16) counts live services over every group. Only the live
 services step, so a lock per service would let at most N decisions run side by side, at the price of a second lock and a
 second order for the admission decision, which needs the cluster-wide row anyway. The deciding path runs only while something
@@ -575,14 +587,14 @@ host per minute for the real host count (not read in this work). The hold time o
 | UI login / request | 1 read of the session row, + 1 write at most every 30 s | the session row | one statement | 0 |
 | Enrollment approve / renew | 2 to 3 (`FOR UPDATE`, conditional update, audit) | the request or host row | to commit | 2 transactions |
 | Periodic job claim (section 9), per instance per tick | 1 | the due `periodic_jobs` rows (skip locked), usually none | one statement | 0 |
-| Instance start | migration lock + migrations (one transaction, idempotent, `lock_timeout` on DDL), shared lock, load all parts | the migration advisory lock (seconds, released at commit); the shared advisory lock | migration lock: the migration transaction; shared lock: the instance's life | same plus exclusive lock |
+| Instance start | migration lock + migrations (a transaction each, idempotent, `lock_timeout` on DDL), shared lock, load all parts | the migration advisory lock (seconds, released when the runner ends); the shared advisory lock | migration lock: the runner; shared lock: the instance's life | same plus exclusive lock |
 
 The gate is held by one decision at a time, and what queues behind it is the hosts that beat at that moment and the operator
 edits, whatever the number of instances. If the heartbeat's converged path is more than a few hundred microseconds, the
 fallbacks are in this order: the narrow row and `fillfactor` (done by design), a beat that changes nothing but `seen_unix`
 skips the write when the stored `seen_unix` is under a few seconds old (a config key), then a per-instance read cache of
 `nodes` with a 1 to 2 s TTL (config key). A hot gate row is measured (operators queue on it too), and only then a finer lock
-considered (question 2).
+considered (section 19, decision 6).
 
 ## 8. Sessions and the login limiter
 
@@ -640,7 +652,7 @@ for the status page.
 |---|---|---|
 | Alert observation, every 15 s (`alerts.rs:838`) | logs `alert=` once per first sight, `Book.seen` in memory | job `alerts`. Derive from the shared rows; `INSERT INTO alerts(subject, first_unix) ... ON CONFLICT DO NOTHING RETURNING`: the instance that inserts logs the line, once; a cleared alert is `DELETE ... RETURNING`. `Alerts.List` reads the table. The watcher of `alert=` lines must read the service's logs, not one instance's |
 | Request expiry (`expiry.rs:112`) | audits `request_expired` | job `request-expiry`. `UPDATE ... SET state='expired' WHERE state='pending' AND posted_unix < $1 RETURNING request_id`, audit the returned rows in the same transaction: exactly once |
-| Pruning: `tx_ledger` older than an hour, expired `sessions`, old `login_failures`, `instances` not seen for a day, aged `fleet_orders` | none or per process | jobs `prune-*`: `DELETE ... WHERE ...`, idempotent |
+| Pruning (`tx_ledger` is pruned in every transaction, section 4): expired `sessions`, old `login_failures`, `instances` not seen for a day, aged `fleet_orders` | none or per process | jobs `prune-*`: `DELETE ... WHERE ...`, idempotent |
 | TLS, tokens file, client CA reload (`listen.rs:402-441`) | per process | per instance, unchanged (the files are the same Swarm secrets); not claimed, because each instance must reload its own |
 | Server certificate renewal (`enrollment/mod.rs:220`) | per process | per instance, on its own tmpfs (section 10); not claimed |
 | Host certificate issuance (Enroll, Poll, Renew) | request-driven | not a loop: a transaction, `UPDATE enrollment_requests SET state='approved' WHERE request_id=$1 AND state='pending'`, serial from `take_serial` (one SQL statement); zero rows means another instance won and the caller reads its result |
@@ -715,18 +727,18 @@ Needed:
    `interval` 2 s, `healthy_threshold` 2, `unhealthy_threshold` 2 (the edge's check does not exist yet; these are mine, to be
    confirmed with the edge's owner), DNS 1 s, so the new task is usable in about 1 + 4 + 2 = 7 s, and `--drain-delay-secs` 15,
    `stop_grace_period` 60. During the delay both tasks accept, so there is no instant when a host or an operator is refused or
-   the edge routes to nothing healthy (Envoy's panic mode never has to engage). The Mac listener (item 4) is the one port the
-   old task still holds through the delay, which is why it is open.
+   the edge routes to nothing healthy (Envoy's panic mode never has to engage). The Mac listener (item 4) moves to the edge,
+   so the task holds no host port through the delay.
 3. **No stickiness.** An agent opens a new connection per heartbeat, so a host's beats alternate between instances. Source-IP
    affinity would not help: `min_up` and one-live-rollout are cluster-wide. The shared fleet (section 5) is what makes this
    correct. Beyond TCP keep-alive there is no stickiness, and a connection ends at a server-side maximum age
    (`--connection-max-age-secs`), so none outlives a drain by long.
-4. **The Mac listener (open).** The LAN listener (host-mode publish of 8446 to task port 8447, for Macs) cannot be bound by two
+4. **The Mac listener (decided: (a), section 19).** The LAN listener (host-mode publish of 8446 to task port 8447, for Macs) cannot be bound by two
    tasks on one node, so it also stops a start-first update from starting the new instance while the old one holds the port.
    Options: (a) the edge serves it as one more SNI chain and cluster, `tcp_proxy` with TLS untouched, so
    the certificate survives; (b) the ingress routing mesh on the service VIP (TCP, TLS untouched, so the certificate should
-   survive; not verified); (c) a second one-task service for it, which is a singleton again. Recommendation (a), the edge
-   already is the front door (open question 1).
+   survive; not verified); (c) a second one-task service for it, which is a singleton again. Decided: (a), the edge already
+   is the front door; the host-mode publish is removed and the Macs' port is one more SNI chain of the edge.
 5. **Postgres placement.** The database is reached over the unix socket bind mount of the Postgres socket directory, so every instance runs
    on the one-node Swarm (the placement constraint already holds).
 6. **The first cutover is stop-first.** The release before holds the exclusive lock; a start-first instance would be refused. Every
@@ -741,7 +753,7 @@ sequenceDiagram
     participant E as Edge health check
     participant P as Postgres
     S->>N: start (start-first)
-    N->>P: migration lock (xact advisory); migrations (may-run, lock_timeout on DDL); commit
+    N->>P: migration lock (advisory, MIGRATE_KEY); migrations (may-run, lock_timeout on DDL); commit
     N->>P: shared lock, load
     N-->>E: /healthz 503 starting
     N-->>E: /healthz 200
@@ -812,8 +824,8 @@ test in Rust, before any of the code (PR M2), with a negative variant for every 
 ## 15. Compatibility (B8) and tests
 
 Moved to [coordinator-multi-instance-checks.md](coordinator-multi-instance-checks.md), section 15. In one paragraph: every change
-is additive (new tables, a sequence, columns with defaults, flags; no proto change; the fence trigger untouched), migration `0019`
-is `may-run`, the release before is refused while a new instance runs and runs on the migrated database after they stop, and
+is additive (new tables, a sequence, columns with defaults, flags; no proto change; the fence trigger untouched), migrations
+`0019` (built) and `0020` are `may-run`, the release before is refused while a new instance runs and runs on the migrated database after they stop, and
 each behaviour has a named test with a failure case.
 
 ## 16. Cutover and back-out (reversible)
@@ -824,7 +836,7 @@ each behaviour has a named test with a failure case.
    hashed before and after, never printed. Still one replica.
 3. Add the health check to the edge's clusters, the readiness flag and the drain delay (checked against the edge's values,
    section 11); deploy (stop-first once, the last).
-4. Resolve the Mac listener (open question 1).
+4. Serve the Mac listener through the edge (section 11, item 4; one reversible edge step, a Mac's beat checked after it).
 5. `order: start-first`, `replicas: 1`: the first update that overlaps two instances. Watch: `instances` rows (two only during
    the drain), no `alert=` twice, the heartbeat latency (M1's numbers), the operator edits' gate wait, no refused connection at the edge during the drain
    delay, and that both tasks starting together apply each migration once.
@@ -851,7 +863,7 @@ the farm): the back-out is a stopgap while a fix ships.
 |---|---|---|---|
 | M1 | Measure on the deployment: round trip on the socket, the gate's hold and the operator edit's wait under a 50% stage, how often a beat finds the gate busy, DDL lock wait of a migration against a running instance, `fleet_hosts` write cost at the real host count, `max_connections`, the Postgres version; a table in this document | none | S |
 | M2 | The models of section 14 (spec and Rust state-space test at N = 1, 2, 3), failing on the unlocked variants | M1 | M |
-| M3 | Shared fence lock and pool: `pg_try_advisory_lock_shared`, the `tx_ledger` settle, no `lease.commits` write, no deposed exit, `instances`; the migration mutex, DDL `lock_timeout` and the migration lint rule; the session timeouts; `0019` part 1. Still one instance | M2 | L |
+| M3 | Built by komira-ai/hostkeeper#395: the shared fence lock, the `tx_ledger` settle (`0019`), no `lease.commits` write, no deposed exit, the migration mutex, the session timeouts. Left: the pool of sessions, `instances` (`0020` part 1), DDL `lock_timeout` with its bounded retry, the migration lint rule. Still one instance | M2 | M |
 | M4 | Row-transaction edits and `state_versions` invalidation for desired, ops, accounts, layout, verdicts, with the row-lock order of section 6 and the one-snapshot reload rule; `rollout_gate` with `SKIP LOCKED` for beats and the operator wait; `audit_counter` and its start-time re-seed; `facts_generation` | M3 | L |
 | M5 | Enrollment: conditional writes, `FOR UPDATE`, fresh deny read; spent-token cache | M3 | M |
 | M6 | The fleet in Postgres, without decisions: `fleet_*`, `cluster_quiet` and the gap rule, the ordered beat upsert, the in-SQL bake, the converged path | M4, M5 | M |
@@ -871,7 +883,7 @@ shared, `lease.commits` and the epoch's exit are gone), and these rows of sectio
 the database), "The audit's numbers" (still gap-free, by a counter row, not by the lock) and "A commit of unknown outcome"
 (the ledger). M9 edits those sections to point here. Nothing is deleted from the file store (C9's business).
 
-## 19. Decided, and open questions for the owner
+## 19. Decided by the owner
 
 **Decided by the owner** (kept here so the document does not reopen them):
 
@@ -888,20 +900,16 @@ the database), "The audit's numbers" (still gap-free, by a counter row, not by t
    update, with a facts generation that never goes backward accepted (the host refetches facts once if it does); heartbeat
    order by the host's `sent_unix` with the guard of section 5.2 and no proto change (an optional `beat_seq` in
    `HeartbeatRequest` is additive, B8, and not needed); presence written about every 5 s per host is fine.
+5. **The Mac listener** (2026-11-18). The LAN listener (host-mode publish of 8446 to task port 8447, for Macs) is served by
+   the edge as one more SNI chain and cluster, `tcp_proxy` with TLS untouched, so the client certificate survives and the
+   port is no longer an instance's (option (a) of section 11, item 4). The routing mesh (b) and a one-task service or a
+   stop-first coordinator (c) are not taken. The edge step is M10's; cutover step 4 (section 16).
+6. **One row lock, the gate, is the granularity** (2026-11-18). Only the live services step, the one-service-at-a-time and
+   FIFO rules read every service, a hold is a few statements, and the load on it does not grow with the instances (section
+   5.2). M1 measures the gate's hold, the operator edit's wait under a 50% stage and how often a beat finds it busy; a row per
+   service, taken after the gate, is considered only if that wait shows in the heartbeat's latency.
 
-**Open.**
-
-1. **The Mac listener (the owner's open item).** The LAN listener (host-mode publish of 8446 to task port 8447, for Macs)
-   cannot be bound by two instances on one node, so it also stops a start-first update from starting the new instance on that port
-   while the old one holds it. Options: (a) the edge serves it as one more SNI chain and cluster, `tcp_proxy` with TLS
-   untouched, so the certificate survives and the listener is no longer an instance port; (b) the ingress routing mesh on the
-   service VIP (TCP, TLS untouched, so the certificate should survive; not verified); (c) one task for the Mac listener, a
-   separate one-replica service or the whole coordinator back to stop-first, which is a gap in every update for the Macs.
-   Recommendation: (a), the edge already is the front door; (b) only if verified to keep the client certificate; not (c).
-2. **Is one row lock (the gate) still the right granularity?** Recommendation: yes. Only the live services step, the
-   one-service-at-a-time and FIFO rules read every service, the hold is a few statements, and only operator edits queue at the gate, and
-   the load on it does not grow with the number of instances (section 5.2). M1 measures the wait under a 50% stage; split by service (a row per
-   service taken after the gate) only if the wait shows in the heartbeat's latency.
+Open: nothing of the owner's. The measurements of M1 are still to be taken (section 17).
 
 ## 20. Discussion: the review of this document
 
@@ -965,3 +973,6 @@ Findings of the first review and what was done, including where a finding was ta
     put the operator behind the beats.
 
 Not changed by the review and still open: what was not checked (section 13), and the measurements of M1.
+12. **The owner's answers (2026-11-18).** Both open questions are decided as recommended: the Mac listener through the edge
+    and the one gate row (section 19, decisions 5 and 6). Section 4 is partly Built (komira-ai/hostkeeper#395); its text says
+    where the code differs, and M3 is cut to what is left.
