@@ -88,6 +88,9 @@
 //!   Mac), read from `--host-prerequisites-file` and re-read while the coordinator runs, the set
 //!   each host is sent in the answer to a heartbeat over gRPC, and what its daemon reported of
 //!   them;
+//! - `console`: the operator's `Console` calls (a Linux server's power and boot device through its
+//!   BMC, and the console sessions), over `hostkeeper_console`, with the three files of the
+//!   `--console-*` flags re-read while the coordinator runs and the `ipmitool` process;
 //! - [`status`]: what an operator reads, and the convergence of a service;
 //! - [`alerts`]: the conditions that need a person, derived from what the coordinator holds,
 //!   answered by `Alerts.List` and logged with an `alert=` field;

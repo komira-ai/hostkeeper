@@ -654,9 +654,12 @@ tries network boot before its disk; a person picks network boot once on a board 
 - Legacy BIOS PXE, and 32-bit ARM.
 - UEFI HTTP boot in router mode. The router names a TFTP boot file, and an HTTP boot client needs an `http://` URL and
   the `HTTPClient` vendor class in its answer, which only proxy mode gives (section 3).
-- **BMC power and boot-device control.** Today the BMC MAC is recorded and nothing else (hostkeeper-design.md section
-  12.1). With it, the BMC sets a one-time network boot and powers the machine on: the third step of a board that does
-  not boot network first (section 1), and the one-time network boot of a reinstall (section 8), go away.
+- **BMC power and boot-device control** in the reinstall flow. Power and boot device through the BMC are built as
+  `Console.Power` and `Console.SetBootDevice` and the host page's Power and boot tab (console-broker.md, row C2; the
+  rest of that design, the serial console and the Mac desktop, is still designed). The reinstall flow does not use
+  them automatically yet: an operator sets a one-time network boot and powers the machine on by hand. Using them from
+  the flow would remove the third step of a board that does not boot network first (section 1) and the one-time
+  network boot of a reinstall (section 8).
 - The fully verified boot chain with the farm's own Secure Boot keys (section 6).
 - A TPM claim, and with it Q15 (b).
 - An optional product UUID field on the inventory record (section 7).

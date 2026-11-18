@@ -117,7 +117,7 @@ return { first, second, kept, reset };"#,
     ));
     assert_eq!(
         out["out"]["first"],
-        json!({"names": ["tab-overview", "tab-services", "tab-trust", "tab-labels", "tab-placement", "tab-group", "tab-ssh"],
+        json!({"names": ["tab-overview", "tab-services", "tab-trust", "tab-labels", "tab-placement", "tab-group", "tab-ssh", "tab-power"],
                "on": ["tab-overview"], "open": 1})
     );
     assert_eq!(

@@ -33,6 +33,8 @@ path = "src/main.rs"
 [dependencies]
 # The platform and the service name grammars it shares with the daemon.
 hostkeeper-config = { path = "../hostkeeper-config" }
+# The console's files, sessions and BMC calls (docs/design/console-broker.md, decision D1).
+hostkeeper-console = { path = "../hostkeeper-console" }
 # The CA and the enrollment store (`--enrollment-dir`, `--ca-key-file`).
 hostkeeper-enrollment = { path = "../hostkeeper-enrollment" }
 hostkeeper-oidc = { path = "../hostkeeper-oidc" }
@@ -93,6 +95,8 @@ tracing-subscriber.workspace = true
 x509-parser.workspace = true
 
 [dev-dependencies]
+# The scripted double of the ipmitool port.
+hostkeeper-console = { path = "../hostkeeper-console", features = ["testing"] }
 hostkeeper-oidc = { path = "../hostkeeper-oidc", features = ["testkit"] }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
 # The HTTP/2 client that calls a listener in the listener's tests.
