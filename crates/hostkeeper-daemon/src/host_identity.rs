@@ -207,14 +207,15 @@ fn open_dir(path: &Path, want: Want) -> Result<File, IdentityError> {
         .map(File::from)
         .map_err(|errno| io_error(errno.into()))?;
     let flags = flags | OFlags::NOFOLLOW;
-    let dir = match rustix::fs::openat(&parent, name, flags, Mode::empty()) {
-        Ok(dir) => dir,
-        Err(Errno::NOENT) => {
-            rustix::fs::mkdirat(&parent, name, Mode::from_raw_mode(0o700))
-                .map_err(|errno| io_error(errno.into()))?;
-            rustix::fs::openat(&parent, name, flags, Mode::empty())
-                .map_err(|errno| io_error(errno.into()))?
-        }
+    let open = || rustix::fs::openat(&parent, name, flags, Mode::empty());
+    let opened = match open() {
+        Err(Errno::NOENT) => rustix::fs::mkdirat(&parent, name, Mode::from_raw_mode(0o700))
+            .map_err(|errno| io_error(errno.into()))
+            .map(|()| open())?,
+        opened => opened,
+    };
+    let dir = match opened {
+        Ok(dir) => File::from(dir),
         Err(Errno::LOOP | Errno::NOTDIR) => {
             return Err(IdentityError::NotADirectory {
                 path: path.to_owned(),
@@ -222,16 +223,20 @@ fn open_dir(path: &Path, want: Want) -> Result<File, IdentityError> {
         }
         Err(errno) => return Err(io_error(errno.into())),
     };
-    let dir = File::from(dir);
-    let meta = dir.metadata().map_err(io_error)?;
+    settle(&dir, want).map_err(io_error)?;
+    Ok(dir)
+}
+
+/// Makes the directory `dir` the owner's and the group's, with the mode, as `want` says.
+fn settle(dir: &File, want: Want) -> io::Result<()> {
+    let meta = dir.metadata()?;
     if (meta.uid(), meta.gid()) != (want.uid, want.gid) {
-        fchown(&dir, Some(want.uid), Some(want.gid)).map_err(io_error)?;
+        fchown(dir, Some(want.uid), Some(want.gid))?;
     }
     if meta.mode() & 0o7777 != want.mode {
-        rustix::fs::fchmod(&dir, Mode::from_raw_mode(want.mode))
-            .map_err(|errno| io_error(errno.into()))?;
+        rustix::fs::fchmod(dir, Mode::from_raw_mode(want.mode))?;
     }
-    Ok(dir)
+    Ok(())
 }
 
 /// Makes the file `name` of `dir` hold `bytes` as `want` says; a file that does is left alone.
@@ -248,13 +253,12 @@ fn holds(dir: &File, name: &str, bytes: &[u8], want: Want) -> bool {
     let Ok(file) = rustix::fs::openat(dir, name, flags, Mode::empty()).map(File::from) else {
         return false;
     };
-    let Ok(meta) = file.metadata() else {
-        return false;
-    };
-    let sound = meta.file_type().is_file()
-        & (meta.uid() == want.uid)
-        & (meta.gid() == want.gid)
-        & (meta.mode() & 0o7777 == want.mode);
+    let sound = file.metadata().is_ok_and(|meta| {
+        meta.file_type().is_file()
+            & (meta.uid() == want.uid)
+            & (meta.gid() == want.gid)
+            & (meta.mode() & 0o7777 == want.mode)
+    });
     if !sound {
         return false;
     }
@@ -262,7 +266,9 @@ fn holds(dir: &File, name: &str, bytes: &[u8], want: Want) -> bool {
     let limit = u64::try_from(bytes.len())
         .unwrap_or(u64::MAX)
         .saturating_add(1);
-    file.take(limit).read_to_end(&mut held).is_ok() && held == bytes
+    // A read that fails part way leaves fewer bytes than `bytes`, which is a file to write.
+    let _ = file.take(limit).read_to_end(&mut held);
+    held == bytes
 }
 
 /// Makes the file `name` of `dir` hold `bytes`, through a temporary file of `dir`, as the module's

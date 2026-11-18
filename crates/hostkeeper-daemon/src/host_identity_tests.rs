@@ -543,3 +543,66 @@ fn the_bytes_of_the_pair_are_copied_as_they_are() {
         tagged.key()
     );
 }
+
+/// Proves a directory with no parent or no name (the root) is refused as not a directory.
+#[test]
+fn the_root_directory_is_not_a_place_for_the_copy() {
+    let mut rig = Rig::with_group();
+    rig.copy.dir = PathBuf::from("/");
+    rig.step();
+    assert_eq!(
+        rig.log.lines(),
+        vec![format!("{IDENTITY_NOT_KEPT}/ is not a directory")]
+    );
+}
+
+/// Proves a temporary name taken by a directory, which cannot be removed as a file, ends the step
+/// with an error that names the file being written; the old file stays.
+#[test]
+fn a_leftover_that_cannot_be_removed_is_an_error_and_the_old_file_stays() {
+    let mut rig = Rig::with_group();
+    rig.step();
+    fs::create_dir(rig.file(&format!(".host.crt.{}.tmp", std::process::id())))
+        .expect("a directory");
+    rig.certs.set(pair("certificate two", "key one"));
+    rig.step();
+    assert_eq!(rig.text(CERT_FILE), "certificate one");
+    let lines = rig.log.lines();
+    assert_eq!(lines.len(), 2);
+    assert!(lines[1].starts_with(&format!(
+        "{IDENTITY_NOT_KEPT}{}: ",
+        rig.file(CERT_FILE).display()
+    )));
+}
+
+/// Runs a step of a rig whose parent directory has the mode `mode` (restored afterwards), and
+/// the log. A user that is not root is refused by the mode; root is not, and makes the copy.
+fn step_under_parent_mode(mode: u32) -> (Vec<String>, String) {
+    let mut rig = Rig::with_group();
+    let parent = rig.dir().parent().expect("a parent").to_owned();
+    fs::create_dir_all(&parent).expect("the parent");
+    fs::set_permissions(&parent, fs::Permissions::from_mode(mode)).expect("chmod");
+    rig.step();
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o755)).expect("chmod back");
+    (rig.log.lines(), rig.kept())
+}
+
+/// Proves each way the parent of the identity directory can refuse the daemon (it cannot be
+/// opened, its child cannot be looked up, its child cannot be made) is an error that names the
+/// directory; root is refused by none of them.
+#[test]
+fn a_parent_directory_that_refuses_is_an_error_naming_the_directory() {
+    for (name, mode) in [("opened", 0o000), ("looked-up", 0o600), ("made", 0o500)] {
+        let (lines, kept) = step_under_parent_mode(mode);
+        if me() == 0 {
+            assert_eq!(lines, vec![kept], "{name}");
+        } else {
+            assert_eq!(lines.len(), 1, "{name}");
+            assert!(
+                lines[0].starts_with(IDENTITY_NOT_KEPT)
+                    && lines[0].ends_with("Permission denied (os error 13)"),
+                "{name}: {lines:?}"
+            );
+        }
+    }
+}
