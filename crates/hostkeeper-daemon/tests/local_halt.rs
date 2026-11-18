@@ -17,7 +17,8 @@ use hostkeeper_daemon::link_adapters::DaemonHalts;
 use hostkeeper_daemon::{Daemon, Refusal, Reply};
 use hostkeeper_hook::{Step, Verdict};
 use hostkeeper_link::{HeldHalt, HeldHalts};
-use hostkeeper_steps::record::RECORD_FILE;
+use hostkeeper_steps::RecordStore;
+use hostkeeper_steps::record::{RECORD_FILE, State};
 use support::{Rig, name};
 use support_host::NativeHost;
 
@@ -91,7 +92,7 @@ fn holding(daemon: &Arc<Daemon>) -> Option<HeldHalt> {
 /// The reason of the halt record `web`'s hook left, as the loop reads it.
 fn reason_of(rig: &Rig) -> Option<String> {
     match rig.record("web").expect("the record").state {
-        hostkeeper_steps::record::State::Finished { reason, .. } => reason,
+        State::Finished { reason, .. } => reason,
         other => panic!("not finished: {other:?}"),
     }
 }
@@ -237,4 +238,35 @@ fn the_time_a_generation_was_written_is_its_files() {
         .and_then(|file| file.set_modified(UNIX_EPOCH + Duration::from_secs(WRITTEN)))
         .expect("stamped");
     assert_eq!(store.written_unix(&name("web")), Some(WRITTEN));
+}
+
+/// Proves: a halt whose record names no reason, and one whose reason is no token, are still
+/// reported, with no reason, under the generation held.
+///
+/// Catches: a halt dropped from the report for its reason, which would leave the coordinator
+/// showing the host as `failed_here` again.
+#[test]
+fn a_halt_with_no_usable_reason_is_reported_without_one() {
+    for (case, reason) in [("none", None), ("no-token", Some("Disk Bad".to_owned()))] {
+        let farm = NativeHost::new(&format!("local-halt-reason-{case}"));
+        let rig = farm.rig();
+        let daemon = Arc::new(halted(&farm, 15));
+        let mut record = rig.record("web").expect("the record");
+        record.state = State::Finished {
+            verdict: Verdict::Halt,
+            reason,
+        };
+        RecordStore::new(&rig.state.join("web"))
+            .save(&record)
+            .expect("saved");
+        assert_eq!(
+            holding(&daemon),
+            Some(HeldHalt {
+                reason: None,
+                generation: 15,
+                written_unix: Some(WRITTEN),
+            }),
+            "{case}"
+        );
+    }
 }

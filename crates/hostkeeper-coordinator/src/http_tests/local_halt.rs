@@ -220,3 +220,31 @@ async fn a_clear_sets_aside_only_a_halted_refusal() {
     assert_eq!(reply["reply"], "nothing");
     assert_eq!(hold_of(&rig, "d1").await, "failed_here");
 }
+
+/// Proves: the clear sets aside the `halted` refusal of the host that held a halt of its own and
+/// not that of a host that reported none (a daemon that predates `local_halt`): once the first
+/// reports its halt lifted it is no longer `failed_here` (it waits for the stage the second's
+/// failure keeps open), and the second still is.
+///
+/// Catches: a clear that sets aside every `halted` refusal, ordering a host whose halt no
+/// generation the clear issued is known to lift.
+#[tokio::test]
+async fn a_clear_sets_aside_the_refusal_only_of_a_host_that_held_a_halt() {
+    let rig = farm("local-halt-mixed", 0).await;
+    let refused = format!("{AGENT}{HALTED}");
+    send(
+        &rig,
+        "d1",
+        "daemon",
+        &beat("1.0", &format!("{AGENT}{}{HALTED}", holding(15))),
+    )
+    .await;
+    send(&rig, "d2", "daemon", &beat("1.0", &refused)).await;
+    let (code, _) = clear(&rig).await;
+    assert_eq!(code, StatusCode::OK);
+    send(&rig, "d1", "daemon", &beat("1.0", &refused)).await;
+    send(&rig, "d2", "daemon", &beat("1.0", &refused)).await;
+    assert_eq!(hold_of(&rig, "d2").await, "failed_here");
+    // d1's refusal no longer holds it; it waits for the stage d2's failure keeps open.
+    assert_eq!(hold_of(&rig, "d1").await, "stage_failed");
+}

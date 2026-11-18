@@ -264,8 +264,10 @@ pub struct DeferredReport {
 
 /// A halt the host holds of a service of its own: the service's step record ended in a halt, and
 /// the host refuses every order of it (`halted`) until a halt generation above `generation`
-/// comes ([`ServiceBeat::local_halt`](crate::wire::ServiceBeat::local_halt)). The coordinator
-/// reads it from the gRPC route only (`ServiceBeat.local_halt` of `hostkeeper.agent.v1`).
+/// comes ([`ServiceBeat::local_halt`](crate::wire::ServiceBeat::local_halt)). A hostkeeper
+/// daemon sends it over gRPC only (`ServiceBeat.local_halt` of `hostkeeper.agent.v1`), which the
+/// coordinator reads through this JSON form; a heartbeat on the JSON route that carries it is read
+/// the same way.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LocalHalt {
     /// The halt's reason; absent when it has none, and read as absent when it is no token.
