@@ -12,7 +12,9 @@ use hyper::{Method, StatusCode};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
 use tokio::sync::{mpsc, oneshot};
 
-use super::{HEALTH_PATH, Serving, Verdict, answer, connection, drain_on, serve, verdict};
+use super::{
+    HEALTH_PATH, READY_PATH, Serving, Verdict, answer, connection, drain_on, serve, verdict,
+};
 use crate::marks_support::rig_on;
 use crate::service::Coordinator;
 use crate::store::{Fake, Health};
@@ -58,7 +60,12 @@ async fn asked(
 
 /// The status and the body of the answer to `GET /healthz`.
 async fn get(coordinator: &Coordinator, serving: &Serving) -> (StatusCode, Bytes) {
-    let (status, body, _, _) = asked(coordinator, serving, &Method::GET, HEALTH_PATH).await;
+    get_path(coordinator, serving, HEALTH_PATH).await
+}
+
+/// The status and the body of the answer to `GET` of `path`.
+async fn get_path(coordinator: &Coordinator, serving: &Serving, path: &str) -> (StatusCode, Bytes) {
+    let (status, body, _, _) = asked(coordinator, serving, &Method::GET, path).await;
     (status, body)
 }
 
@@ -251,7 +258,8 @@ async fn the_stop_drains_and_answers_what_it_answered() {
     let (stop, stopped) = oneshot::channel::<io::Result<()>>();
     let mut draining = std::pin::pin!(drain_on(
         async move { stopped.await.expect("sent") },
-        serving.clone()
+        serving.clone(),
+        std::future::ready(())
     ));
     assert!(futures::poll!(draining.as_mut()).is_pending());
     assert!(!serving.is_draining(), "drained before the stop");
@@ -263,11 +271,80 @@ async fn the_stop_drains_and_answers_what_it_answered() {
     let why = drain_on(
         async { Err::<(), _>(io::Error::other("no signal handler")) },
         failed.clone(),
+        std::future::ready(()),
     )
     .await
     .expect_err("the stop's failure");
     assert_eq!(why.to_string(), "no signal handler");
     assert!(failed.is_draining(), "a failed stop drains too");
+}
+
+/// Proves: [`drain_on`] marks the coordinator draining as soon as the stop resolves and then waits
+/// for the delay before it answers: while the delay runs the future is pending and the coordinator
+/// answers `503 draining`, and once the delay is over it answers what the stop answered.
+///
+/// Catches: a stop that ends the process at once (the edge has no time to see the `503` or the
+/// instance that replaces this one), and a delay that starts before the drain is told.
+#[tokio::test]
+async fn the_drain_waits_for_its_delay_and_says_draining_meanwhile() {
+    let fake = Fake::new();
+    let (rig, serving) = serving_on("health-drain-delay", &fake);
+    let (delay_over, delay) = oneshot::channel::<()>();
+    let mut draining = std::pin::pin!(drain_on(async { 7_u8 }, serving.clone(), async move {
+        delay.await.expect("sent")
+    }));
+    assert!(futures::poll!(draining.as_mut()).is_pending());
+    assert!(
+        serving.is_draining(),
+        "the delay runs after the drain is told"
+    );
+    assert_eq!(
+        get(&rig.coordinator, &serving).await,
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Bytes::from_static(b"draining")
+        ),
+        "draining while the delay runs"
+    );
+    delay_over.send(()).expect("sent");
+    assert_eq!(
+        draining.await,
+        7,
+        "the stop's answer once the delay is over"
+    );
+}
+
+/// Proves: `/readyz` answers exactly as `/healthz` does in every state, status, body and headers:
+/// `200 ok` while serving on a store that takes writes, `503 starting`, `503 store_unreachable`
+/// and `503 draining`, for `GET` and for `HEAD`; a `POST` is `404 not_found` as on `/healthz`.
+///
+/// Catches: a readiness check that answers `200` where the health check does not, so an edge sends
+/// a connection to a coordinator that is starting, cannot reach its store or is going away.
+#[tokio::test]
+async fn readyz_answers_as_healthz_does_in_every_state() {
+    let fake = Fake::new();
+    let rig = rig_on("health-readyz", &fake, "");
+    let serving = Serving::default();
+    for step in 0..4 {
+        match step {
+            1 => serving.set(),
+            2 => fake.set_health(Health::Lost),
+            3 => serving.drain(),
+            _ => {}
+        }
+        for method in [Method::GET, Method::HEAD] {
+            let health = asked(&rig.coordinator, &serving, &method, HEALTH_PATH).await;
+            let ready = asked(&rig.coordinator, &serving, &method, READY_PATH).await;
+            assert_eq!(ready, health, "step {step}, {method}");
+        }
+    }
+    let ready = get_path(&rig.coordinator, &serving, READY_PATH).await;
+    assert_eq!(ready.1, Bytes::from_static(b"draining"));
+    let posted = asked(&rig.coordinator, &serving, &Method::POST, READY_PATH).await;
+    assert_eq!(
+        (posted.0, posted.1),
+        (StatusCode::NOT_FOUND, Bytes::from_static(b"not_found"))
+    );
 }
 
 /// Proves: over the listener, a probe answered `200 ok` before the stop, and a probe that
@@ -315,7 +392,7 @@ async fn a_probe_answered_after_the_stop_is_told_draining() {
     let (mut across, server) = tokio::io::duplex(1);
     offer.send(server).expect("offered");
     across.write_all(b"GET ").await.expect("written");
-    drain_on(async {}, serving.clone()).await;
+    drain_on(async {}, serving.clone(), std::future::ready(())).await;
     let answer = exchange(&mut across, &head["GET ".len()..]).await;
     let (status, body) = answer.split_once("\r\n\r\n").expect("a head");
     assert!(
