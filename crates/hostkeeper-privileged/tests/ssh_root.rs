@@ -219,8 +219,10 @@ impl Drop for HostGuard {
         restore(Path::new("/etc/ssh"), &self.etc_ssh);
         let account = self.account.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(name) = *account {
+            // --force: the account's last ssh session may still be closing, and a plain
+            // userdel refuses an account that a process still runs as.
             let _ = Command::new("/usr/sbin/userdel")
-                .args(["--remove", name])
+                .args(["--force", "--remove", name])
                 .output();
         }
         for unit in &self.units {
@@ -238,6 +240,11 @@ impl Drop for HostGuard {
                     .args(["disable", unit.name])
                     .output();
             }
+            // Every test starts the unit again: clear systemd's count of its starts, or the
+            // sixth start within its interval is refused (`start-limit-hit`).
+            let _ = Command::new("/usr/bin/systemctl")
+                .args(["reset-failed", unit.name])
+                .output();
         }
     }
 }
@@ -482,6 +489,9 @@ impl Rig {
         let path = Path::new("/etc/ssh/sshd_config");
         let text = fs::read_to_string(path).expect("sshd_config");
         fs::write(path, format!("{line}\n{text}")).expect("write sshd_config");
+        // sshd -t refuses to run without its privilege separation directory, which only sshd's
+        // own unit (or the setup, before it runs sshd) makes on a host where sshd never ran.
+        fs::create_dir_all(Tools::linux().privsep).expect("the privilege separation directory");
         must(SSHD, &["-t"]);
     }
 }

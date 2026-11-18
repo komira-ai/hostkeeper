@@ -113,10 +113,8 @@ fn a_host_writes_the_facts_of_a_reply_and_reports_their_generation() {
     if hostkeeper_daemon::links::reads_private_repositories(hostkeeper_daemon::links::PLATFORM) {
         features.push(Feature::PrivateRepositoryV1);
     }
-    // Every daemon sets sshd up (`ssh-v1`), a Mac's over Remote Login.
-    if hostkeeper_daemon::links::sets_ssh_up(hostkeeper_daemon::links::PLATFORM) {
-        features.push(Feature::SshV1);
-    }
+    // Every daemon sets sshd up, but names `ssh-v1` only once the coordinator advertised it:
+    // the first beat has none.
     assert_eq!(beats[0].features, features);
     assert_eq!(beats[0].facts_generation, None);
     assert_eq!(beats[1].facts_generation, Some(7));

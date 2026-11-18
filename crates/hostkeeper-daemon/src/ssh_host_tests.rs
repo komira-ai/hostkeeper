@@ -85,6 +85,7 @@ fn host(runner: &Arc<Runner>, etc: &Path) -> SystemHost {
             id: PathBuf::from("/x/id"),
             etc: etc.to_owned(),
             work: etc.join("krl-work"),
+            privsep: etc.join("run-sshd"),
         },
     )
 }
@@ -278,8 +279,9 @@ fn a_reload_is_a_reload() {
 /// Proves `sshd -t -f` is run over the candidate and a failing exit is an error.
 #[test]
 fn the_candidate_is_checked_with_sshd_t() {
+    let dir = scratch("ssh-host-check-config");
     let runner = Runner::new(|_| ok(""));
-    host(&runner, Path::new("/nowhere"))
+    host(&runner, dir.path())
         .check_config(Path::new("/etc/ssh/hostkeeper/candidate.conf"))
         .expect("valid");
     assert_eq!(
@@ -288,7 +290,7 @@ fn the_candidate_is_checked_with_sshd_t() {
     );
     let bad = Runner::new(|_| out(Some(255), ""));
     assert_eq!(
-        host(&bad, Path::new("/nowhere")).check_config(Path::new("/c")),
+        host(&bad, dir.path()).check_config(Path::new("/c")),
         Err("sshd ended with exit 255".to_owned())
     );
 }
@@ -305,7 +307,8 @@ fn the_effective_configuration_and_groups_are_read_from_sshd_and_id() {
             ok("root wheel ops\n")
         }
     });
-    let host = host(&runner, Path::new("/nowhere"));
+    let dir = scratch("ssh-host-effective");
+    let host = host(&runner, dir.path());
     assert_eq!(
         host.effective("root")
             .expect("read")
@@ -321,7 +324,7 @@ fn the_effective_configuration_and_groups_are_read_from_sshd_and_id() {
         ]
     );
     let failing = Runner::new(|_| out(Some(1), ""));
-    let host = super::SystemHost::new(failing, Tools::linux());
+    let host = self::host(&failing, dir.path());
     assert!(host.effective("root").is_err());
     assert!(host.groups("root").is_empty());
 }
@@ -579,6 +582,55 @@ fn the_linux_tools_are_the_distros_places() {
     assert_eq!(tools.systemctl, Path::new("/usr/bin/systemctl"));
     assert_eq!(tools.etc, Path::new("/etc"));
     assert!(tools.work.starts_with("/etc/ssh/hostkeeper"));
+    assert_eq!(tools.privsep, Path::new("/run/sshd"));
+    assert_eq!(Tools::macos().privsep, PathBuf::new());
+}
+
+/// Proves sshd's privilege separation directory is made, mode 0755, before `sshd -t` and before
+/// `sshd -T` when it is missing, is left as it is when it is there, that a host naming none makes
+/// nothing, and that a directory that cannot be made is an error and sshd is not run.
+///
+/// Catches: a host whose sshd was never started (no `/run/sshd`, which only sshd's own unit
+/// makes) reported `config_invalid` forever, because `sshd -t` and `sshd -T` refuse to run
+/// without it.
+#[test]
+fn sshds_privilege_separation_directory_is_made_before_sshd_runs() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = scratch("ssh-host-privsep");
+    let runner = Runner::new(|_| ok(""));
+    let at = dir.path().join("run-sshd");
+    host(&runner, dir.path())
+        .check_config(Path::new("/c"))
+        .expect("valid");
+    let mode = std::fs::metadata(&at).expect("made").permissions().mode();
+    assert_eq!(mode & 0o7777, 0o755);
+    std::fs::set_permissions(&at, std::fs::Permissions::from_mode(0o711)).expect("chmod");
+    host(&runner, dir.path()).effective("root").expect("read");
+    let kept = std::fs::metadata(&at).expect("kept").permissions().mode();
+    assert_eq!(kept & 0o7777, 0o711);
+    assert_eq!(runner.lines().len(), 2);
+
+    let none = Runner::new(|_| ok(""));
+    let mut tools = Tools::macos();
+    tools.sshd = PathBuf::from("/x/sshd");
+    SystemHost::new(Arc::clone(&none) as Arc<dyn CommandRunner>, tools)
+        .effective("root")
+        .expect("read");
+    assert_eq!(
+        none.lines(),
+        ["sshd -T -C user=root,host=localhost,addr=127.0.0.1"]
+    );
+
+    let unrun = Runner::new(|_| ok(""));
+    let nowhere = Path::new("/nowhere");
+    assert!(
+        host(&unrun, nowhere)
+            .check_config(Path::new("/c"))
+            .expect_err("no parent")
+            .starts_with("sshd's privilege separation directory: ")
+    );
+    assert!(host(&unrun, nowhere).effective("root").is_err());
+    assert!(unrun.lines().is_empty());
 }
 
 /// Proves a Linux host holds nothing before the files are written and answers the record's login

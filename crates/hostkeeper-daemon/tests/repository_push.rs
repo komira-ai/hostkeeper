@@ -133,9 +133,7 @@ fn a_host_takes_the_pushed_set_reports_it_and_announces_apt_without_a_restart() 
         Feature::FactsV1,
         Feature::PrivateRepositoryV1,
     ]);
-    if hostkeeper_daemon::links::sets_ssh_up(hostkeeper_daemon::links::PLATFORM) {
-        features.push(Feature::SshV1);
-    }
+    // `ssh-v1` is named only once the coordinator advertised it: the first beat has none.
     assert_eq!(beats[0].features, features);
     assert_eq!(beats[0].repositories, Some(RepositoriesReport::default()));
     assert!(beats[0].installers.is_empty());
@@ -210,9 +208,7 @@ fn a_host_with_no_repository_directory_announces_and_writes_nothing() {
     if hostkeeper_daemon::links::reads_private_repositories(hostkeeper_daemon::links::PLATFORM) {
         features.push(Feature::PrivateRepositoryV1);
     }
-    if hostkeeper_daemon::links::sets_ssh_up(hostkeeper_daemon::links::PLATFORM) {
-        features.push(Feature::SshV1);
-    }
+    // `ssh-v1` is named only once the coordinator advertised it: the first beat has none.
     assert_eq!(beats[0].features, features);
     assert_eq!(beats[1].repositories, None);
     assert!(

@@ -11,6 +11,7 @@
 use std::fs;
 use std::io::Read;
 use std::net::{IpAddr, SocketAddr, TcpStream};
+use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -139,6 +140,11 @@ pub struct Tools {
     pub etc: PathBuf,
     /// A directory the list of revoked serials is built in, made and removed each time.
     pub work: PathBuf,
+    /// sshd's privilege separation directory, which `sshd -t` and `sshd -T` refuse to run
+    /// without; made (root's, mode 0755) before either runs when it is missing, as OpenSSH's
+    /// own unit makes it (`RuntimeDirectory=sshd`) before it starts sshd. Empty on a Mac, whose
+    /// sshd uses `/var/empty`, which the system holds.
+    pub privsep: PathBuf,
 }
 
 impl Tools {
@@ -152,6 +158,7 @@ impl Tools {
             id: PathBuf::from("/usr/bin/id"),
             etc: PathBuf::from("/etc"),
             work: PathBuf::from("/etc/ssh/hostkeeper/.krl-work"),
+            privsep: PathBuf::from("/run/sshd"),
         }
     }
 }
@@ -163,6 +170,7 @@ impl Tools {
     pub fn macos() -> Tools {
         Tools {
             systemctl: PathBuf::new(),
+            privsep: PathBuf::new(),
             ..Tools::linux()
         }
     }
@@ -200,6 +208,19 @@ impl SystemHost {
     }
 
     /// Runs `program` and says what failed unless it exits 0.
+    /// Makes sshd's privilege separation directory when it is missing ([`Tools::privsep`]);
+    /// nothing on a host that names none, and nothing to one that is there.
+    fn privsep(&self) -> Result<(), String> {
+        let dir = &self.tools.privsep;
+        if dir.as_os_str().is_empty() || dir.is_dir() {
+            return Ok(());
+        }
+        fs::DirBuilder::new()
+            .mode(0o755)
+            .create(dir)
+            .map_err(|e| format!("sshd's privilege separation directory: {e}"))
+    }
+
     fn succeed(&self, program: &Path, args: &[&str]) -> Result<String, String> {
         let name = program
             .file_name()
@@ -283,12 +304,14 @@ impl SshHost for SystemHost {
 
     fn check_config(&self, candidate: &Path) -> Result<(), String> {
         let path = candidate.display().to_string();
+        self.privsep()?;
         self.succeed(&self.tools.sshd, &["-t", "-f", path.as_str()])
             .map(drop)
     }
 
     fn effective(&self, user: &str) -> Result<Effective, String> {
         let spec = format!("user={user},host=localhost,addr=127.0.0.1");
+        self.privsep()?;
         self.succeed(&self.tools.sshd, &["-T", "-C", spec.as_str()])
             .map(|text| Effective::parse(&text))
     }
