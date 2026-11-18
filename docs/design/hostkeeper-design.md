@@ -683,7 +683,7 @@ The hook drains inside `prepare`; the updater does not cut work at a deadline. T
 | Boot id | beside the step records | daemon | daemon | written after all records were read |
 | Hook record | `/var/lib/updater/hooks/<service>` | hook | hook | created by the daemon |
 | Held halt generation | beside the step records | daemon | daemon | persisted so a restart cannot lift a halt wrongly |
-| Host certificate and key | `/etc/updater/pki/gen-<n>/` with `current` link | daemon (renew) | daemon | key generated on host and never leaves |
+| Host certificate and key | `/etc/updater/pki/gen-<n>/` with `current` link | daemon (renew) | daemon | key generated on host and never leaves it; the daemon keeps a group-readable copy for the host's services (next row) |
 | Host identity copy | `/var/lib/hostkeeper/identity/` (`host.crt`, `host.key`) | daemon (after every enrollment step) | services of the host, through the group `hostkeeper-identity` | a copy of the current generation's pair, `root:hostkeeper-identity`, key 0640; built as docs/design/host-identity.md says |
 | Desired state | coordinator `--state-file` | coordinator (CI writes through it) | coordinator | desired version per service, and every version CI has set |
 | Rollout file | `--rollout-file` | operator | coordinator | services, roles that run each, `version_scheme`, `min_version`, canary, `stages` (the update plan), bake and backoff settings |

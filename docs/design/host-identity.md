@@ -1,8 +1,7 @@
 # Host identity: the host's own certificate, for the services hostkeeper installs
 
-Status: built by the change that adds this file. It is the E11 item of the hostkeeper design
-(service identity, in place of a service's hand-placed join token), cut down to the host's own
-enrollment certificate.
+Built. This is the hostkeeper design's service identity, in place of a service's hand-placed
+join token, made of the host's own enrollment certificate.
 
 ## 1. What it does
 
@@ -26,6 +25,11 @@ check:
 - **A relying server trusts hostkeeper's CA** by its own configuration and reads the host from the
   certificate's DNS name (js-lease-server: `--agent-client-ca`).
 
+**The group is the trust boundary.** Any account in `hostkeeper-identity`, and anything that can
+change `/etc/group` (root), reads the host's key: it can act as the host toward the coordinator and
+toward every server that trusts hostkeeper's CA, until the certificate expires. Only a service that
+is to speak for the host belongs in the group.
+
 There is no certificate per service, no approval step beyond enrollment, and no revocation list.
 An enrolled host is trusted; a host that must stop being trusted is retired (its certificate is
 not renewed and expires within the host certificate's lifetime, 7 days by default) or taken off
@@ -37,19 +41,24 @@ the network.
   current generation of `/etc/updater/pki` (`current -> gen-<n>`: `cert.pem` and `key` from the
   same generation) and makes the two files say the same: a file whose bytes, owner, group or mode
   differ is replaced; one that already matches is left alone. A host with no current generation
-  (not yet enrolled) gets nothing, and what an earlier enrollment left there stays.
-- Each file is written to a new temporary file in the directory, owned and moded before any byte
-  is written, synced, and renamed over the old one; the directory is synced. A reader sees the old
+  (not yet enrolled, or its pki directory moved aside) has both files removed, the key first, so
+  moving the pki directory aside also takes the key away from the group.
+- Each file is written to a temporary file of a fixed name in the directory (`.host.key.tmp`,
+  `.host.crt.tmp`, removed at every step first, so none a crash left outlives a step), owned and
+  moded before any byte is written, synced, and renamed over the old one; the directory is synced.
+  Directories the daemon makes on the way to it are `0755` whatever the umask. A reader sees the old
   file or the new one, never half of one.
 - `host.key` is written before `host.crt`. A renewal keeps the key (only the certificate changes),
   so a reader never pairs a new certificate with an old key; only a re-enrollment with a new key
   (an operator moving the pki directory aside) changes both, and a reader that fails to load the
   pair loads both again.
-- The group is looked up by name each time (`/etc/group` on Linux, the directory service on
-  macOS). When the host has none, the daemon makes it (`groupadd --system` under systemd,
-  `addgroup -S` on Alpine, `dseditgroup -o create` on macOS). When it cannot be made, the files
-  are written root's alone (group `root`/`wheel`, the key `0600`) and the error is logged once,
-  and again when it changes; the next step tries again.
+- The group is looked up by name (`/etc/group` on Linux at every step; on macOS the directory
+  service, whose answer is kept and asked again every 12 steps). When the host has none, the daemon
+  makes it (`groupadd --system` under systemd, `addgroup -S` on Alpine, `dseditgroup -o create` on
+  macOS). When it cannot be made, the files are written root's alone (group id 0, the directory
+  `0700`, the key `0600`) and the error is logged once, and again when it changes; making the group
+  is tried again every 12 steps (a minute). A group known only to a network directory service, not
+  to `/etc/group`, is not found on Linux.
 - A failure never stops enrollment or renewal; it is logged and the next step tries again.
 
 ## 3. Compatibility
