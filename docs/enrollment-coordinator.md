@@ -16,7 +16,7 @@ id and its key, and which host group it is in from its enrollment record
 certificate issued by a release before names no host role and keeps working until it is renewed,
 read for its host id alone; its renewal carries the URI.
 
-The handlers of `Enroll`, `Poll` and `Renew` are built here. The heartbeat listener serves them
+The handlers of `Enroll`, `Poll`, `Renew`, `IssueServiceCertificate` and `ListDeny` are built here. The heartbeat listener serves them
 as gRPC calls of `hostkeeper.agent.v1.Coordinator` (`crates/hostkeeper-coordinator/src/grpc/`),
 with no client certificate asked of `Enroll` and `Poll`. With `--lan-listen`, a third listener on
 the farm LAN serves the same, to network-installed hosts, which have no tailnet
@@ -183,6 +183,51 @@ round, with the serial), a `Renew` (`cert_renewed`, with the serial) and a reque
 repost of a request, a later poll of an issued one and a refused call write nothing. No reason
 holds a CSR, a key, a nonce or a signature.
 
+## Service identity
+
+`IssueServiceCertificate` signs an 8-hour client certificate for a service a host runs, and
+`ListDeny` (and `GET /v1/deny`) lists the hosts the coordinator denies, for a relying party; the
+design is `docs/design/service-identity.md` and the operator's side is
+[docs/operations/enrollment.md](operations/enrollment.md#service-identity). The handlers are in
+`enrollment/identity.rs` (the store, the CA and the audit), `service_identity.rs` (is the service
+the host's, and does its entry say `identity`) and `operator_host_identity.rs` (`HostIdentity.Get`
+and `Approve`); the daemon's report is kept by `service_identity_report.rs`.
+
+The checks of `IssueServiceCertificate` are made in this order, and the caller is told the first
+that fails:
+
+1. the client certificate is a current host certificate of an enrolled host (`forbidden`): a
+   service certificate is none;
+2. the host is not denied (`denied`);
+3. the service is a service name (`invalid_service`);
+4. the CSR is a P-256 request signed by its own key (`bad_csr`, `key_not_p256`): its subject is
+   not looked at, and nothing but its key is copied;
+5. the service is assigned to the host (`service_not_assigned`): in group mode, the host's group
+   lists it; in role mode, the rollout file and the operator's assignments give it to the host's
+   role; and no uninstall of it is ordered on the host. A host in no group is assigned nothing;
+6. the entry the coordinator would pick for the host at the service's desired version has
+   `identity` in its manifest (`service_not_assigned` too). A host whose daemon was not heard
+   since the coordinator started is picked nothing until its next heartbeat;
+7. the host's assurance allows it (`identity_not_approved`): approved by an operator, or its
+   current key approved with `HostIdentity.Approve`.
+
+It then takes a serial (`allocate_serial`, the counter of the host certificates), signs and writes
+the audit entry `service_identity_issued` (under `coordinator`: the host as node, the service,
+`serial <n>`; never the CSR) before it answers; a serial or an entry that cannot be written is
+`store_failed` (UNAVAILABLE) and nothing is answered. A refusal changes nothing and is logged at
+info level with the host and the service.
+
+`ListDeny` needs a client certificate that is a current host certificate or a service certificate
+of this CA that is valid now (`notBefore <= now < notAfter` by the coordinator's clock), of a host
+that is not denied; the deny rows are read as they are, so a retire is listed at once.
+
+The heartbeat's `service_identities` is read only over gRPC from a daemon that announced
+`service-identity-v1` (a feature the coordinator advertises): at most 16 services, each a service
+name, none twice, each `last_error` cut to 256 bytes at a character boundary. The last good list is
+kept in memory and shown by `Hosts.Get` and `Hosts.List` in the host's heartbeat; a list that
+breaks a rule is counted as a dropped fact `service_identities` and the last one is kept; an empty
+list from a daemon that announces the feature clears it.
+
 ## Request expiry
 
 A request no operator approves within `--enrollment-request-ttl` of the time the coordinator
@@ -281,14 +326,16 @@ Once a transport carries the calls, a refusal is a gRPC status whose message is 
 
 | token | when |
 |---|---|
-| `forbidden` | `Heartbeat` or `Renew` with no client certificate, or one that names no host |
+| `forbidden` | `Heartbeat`, `Renew`, `IssueServiceCertificate` or `ListDeny` with no client certificate, or one that names no host (a service certificate is none, but for `ListDeny`) |
 | `pending_full` | an `Enroll` of a new request while `--max-pending-enrollments` requests wait |
 | `bad_csr` | the CSR is over 4096 bytes, does not parse, is not signed by its own key, or its subject is not `host:<id>` |
 | `key_not_p256` | the CSR's key is not an ECDSA P-256 key |
 | `renewal_not_allowed` | an `Enroll` whose `renewal_of` names an unknown or denied host or one certified for another key; a `Renew` for another key, by a host whose key was replaced, or by a host marked duplicate |
 | `unknown_request` | a `Poll` for a request id the coordinator holds no request for |
 | `bad_signature` | a signed `Poll` whose nonce was not given for the request, was already answered, or whose signature does not verify by the request's key |
-| `denied` | a `Heartbeat` or `Renew` by a host an operator denied, with a certificate not yet expired |
+| `denied` | a `Heartbeat`, `Renew`, `IssueServiceCertificate` or `ListDeny` by a host an operator denied, with a certificate not yet expired |
+| `service_not_assigned`, `identity_not_approved`, `invalid_service` | an `IssueServiceCertificate`, as the section above says |
+| `store_failed` | an `IssueServiceCertificate` whose serial or audit entry could not be written (UNAVAILABLE): nothing was issued |
 
 A `Poll` before approval is answered `PENDING`, not refused; a `Poll` of a denied request is
 answered `DENIED`. A request that cannot be read or written, or a failure to sign, is the gRPC

@@ -8,8 +8,8 @@
 
 use hostkeeper_proto::hostkeeper::operator::v1::{
     AlertsRefusal, ApiTokensRefusal, AuditRefusal, EnrollmentRefusal, HostGroupsRefusal,
-    HostsRefusal, LayoutRefusal, ReleasesRefusal, RepositoriesRefusal, RolloutsRefusal,
-    ServicesRefusal, UsersRefusal,
+    HostIdentityRefusal, HostsRefusal, LayoutRefusal, ReleasesRefusal, RepositoriesRefusal,
+    RolloutsRefusal, ServicesRefusal, UsersRefusal,
 };
 use tonic::{Code, Status};
 
@@ -38,6 +38,20 @@ pub(crate) fn hosts(refusal: HostsRefusal) -> Status {
         HostsRefusal::DaemonTooOld | HostsRefusal::NothingToRetry => Code::FailedPrecondition,
     };
     refused(code, refusal.as_str_name(), "HOSTS_REFUSAL_")
+}
+
+/// The status of a refusal by `HostIdentity`.
+pub(crate) fn host_identity(refusal: HostIdentityRefusal) -> Status {
+    let code = match refusal {
+        HostIdentityRefusal::Unspecified | HostIdentityRefusal::StoreFailed => Code::Internal,
+        HostIdentityRefusal::Unauthorized => Code::Unauthenticated,
+        HostIdentityRefusal::Forbidden => Code::PermissionDenied,
+        HostIdentityRefusal::InvalidRequest => Code::InvalidArgument,
+        HostIdentityRefusal::UnknownHost => Code::NotFound,
+        HostIdentityRefusal::KeyMismatch | HostIdentityRefusal::Denied => Code::FailedPrecondition,
+        HostIdentityRefusal::AuditUnavailable => Code::Unavailable,
+    };
+    refused(code, refusal.as_str_name(), "HOST_IDENTITY_REFUSAL_")
 }
 
 /// The status of a refusal by `Releases`.

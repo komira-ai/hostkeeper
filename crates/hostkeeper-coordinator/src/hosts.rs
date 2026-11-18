@@ -121,6 +121,7 @@ impl Coordinator {
                         crate::picks::show(&fleet, &id, &mut host, &self.services, &desired);
                         self.show_repositories(&fleet, &id, &mut host);
                         crate::remote_login_probe::show(&fleet, &id, &mut host);
+                        crate::service_identity_report::show(&fleet, &id, &mut host);
                         self.show_operator_keys(&fleet, &id, &mut host);
                         host
                     });
@@ -173,6 +174,7 @@ impl Coordinator {
             crate::picks::show(&fleet, &id, &mut host, &self.services, &self.desired.all());
             self.show_repositories(&fleet, &id, &mut host);
             crate::remote_login_probe::show(&fleet, &id, &mut host);
+            crate::service_identity_report::show(&fleet, &id, &mut host);
             self.show_operator_keys(&fleet, &id, &mut host);
             // The verdict of a `clear_record` the host reported, which no rule reads.
             for one in &mut host.services {

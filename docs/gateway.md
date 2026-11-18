@@ -12,7 +12,7 @@ the same checks; the gateway adds no rule of its own. Every command and request 
 
 One route per unary method of the `hostkeeper.operator.v1` services (`Hosts`, `Releases`,
 `Services`, `Enrollment`, `Audit`, `Alerts`, `Rollouts`, `Repositories`, `HostGroups`, `Users`,
-`ApiTokens`, `Layout`):
+`ApiTokens`, `Layout`, `HostIdentity`):
 
 ```
 POST /<package>.<Service>/<Method>
@@ -35,7 +35,7 @@ that fails one of those checks is `PERMISSION_DENIED` with the reason `csrf`, an
 who must still choose a new password is `PERMISSION_DENIED` `password_change_required`; a cookie
 that names no live session is no credential. A call with an `Authorization` header never has its
 cookie read, and the gRPC path never reads one. A method may be declared session-only: a bearer is
-refused it `PERMISSION_DENIED` `session_required`. None is now: the writes of the MDM setup were, and the `Mdm` service is no longer served (a call of it is `UNIMPLEMENTED`). `Users`, `ApiTokens` and `Layout` take an operator only (a token
+refused it `PERMISSION_DENIED` `session_required`. None is now: the writes of the MDM setup were, and the `Mdm` service is no longer served (a call of it is `UNIMPLEMENTED`). `Users`, `ApiTokens`, `Layout` and `HostIdentity` take an operator only (a token
 of the tokens file, a stored API token, or a session), and a bearer is resolved against the tokens file and the store's tokens
 in one pass (`docs/operations/coordinator-state.md`, "Users and API tokens"). `Releases.SetDesired` takes CI's
 OIDC token or an operator token; `Releases.Converge`, `Releases.WaitConverged` and
@@ -57,6 +57,7 @@ operator's reason and then the repository's name, URI, suites and fingerprints, 
 repository (`access` `hosts`) `access hosts credential <path>`, the credential file's path, never
 its bytes (for `Remove`, its name). `Put` of a private repository whose credential file the
 coordinator cannot use is refused `credential_unusable` (`FAILED_PRECONDITION`, HTTP 400).
+`HostIdentity.Approve` approves the current key of a host the coordinator approved itself (by an inventory record) for service identity, and is audited `identity_approve` under the operator's name, with the host as the entry's node and the key's SHA-256 and the operator's reason as its reason; it is written after its audit entry, so a call whose entry cannot be written is refused `audit_unavailable` and changes nothing; `HostIdentity.Get` changes nothing. An `Approve` of a key already approved, or of a host an operator approved by hand, changes nothing and writes no entry (docs/operations/enrollment.md, "Service identity").
 The JSON routes `POST /v1/desired` and `GET /v1/convergence` stay CI's only. The body of
 `POST /v1/desired` takes a release index as `release_index` (its text) and
 `release_index_digest`, and a refused index is a 400 with the reason `index_digest_mismatch` or
@@ -150,7 +151,10 @@ Only the HTTP status 200 is a success.
 
 - No other route. A path that is not a method of `hostkeeper.operator.v1` is not a gateway path:
   the methods of `hostkeeper.agent.v1` and `hostkeeper.local.v1` answer 404, and so does any
-  other path the private listener does not serve.
+  other path the private listener does not serve. The agent's `ListDeny` has a JSON route of its
+  own, `GET /v1/deny`, on the heartbeat listener, for a host's or a service's client certificate
+  (it answers `{"hostIds":[...]}`, the hosts the coordinator denies, as proto3 JSON does, and 403
+  `forbidden` or `denied` otherwise); the private listener answers 404 for it.
 - Only `POST`. Any other method on a gateway path, `OPTIONS` and `GET` included, answers 405.
 - No CORS: no answer carries an `Access-Control-*` header, so a page from another origin cannot
   call the gateway.

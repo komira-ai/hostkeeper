@@ -12,12 +12,20 @@ use crate::grpc::PENDING;
 use crate::http::{Peer, Surface};
 use crate::testutil::{OPERATOR, ci_token};
 
+/// The paths of the agent's service, besides `Heartbeat`, that need a client certificate that names a
+/// host.
+const HOST_CALLS: [&str; 2] = [
+    "/hostkeeper.agent.v1.Coordinator/IssueServiceCertificate",
+    "/hostkeeper.agent.v1.Coordinator/ListDeny",
+];
+
 /// Where `path` is served and with what credentials a call of it is admitted: the heartbeat
-/// listener and, for `Heartbeat`, an updater's certificate; for `Enroll`, `Poll` and `Renew`
-/// nothing; the private listener with CI's token for `SetDesired` and `Converge`, and with the
-/// operator token for every other method (it is admitted at those two as well).
+/// listener and, for `Heartbeat`, `IssueServiceCertificate` and `ListDeny`, an updater's
+/// certificate; for `Enroll`, `Poll` and `Renew` nothing; the private listener with CI's token
+/// for `SetDesired` and `Converge`, and with the operator token for every other method (it is
+/// admitted at those two as well).
 fn credentials(path: &str) -> (Surface, Peer, Option<String>) {
-    if path == HEARTBEAT {
+    if path == HEARTBEAT || HOST_CALLS.contains(&path) {
         (Surface::Heartbeat, updater("host-1", "storage"), None)
     } else if path.starts_with("/hostkeeper.agent.") {
         (Surface::Heartbeat, None, None)

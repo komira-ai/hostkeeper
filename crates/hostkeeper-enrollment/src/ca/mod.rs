@@ -25,6 +25,7 @@ pub use issue::{
 };
 pub use key::{CaError, CaFiles};
 pub use profile::{
-    CsrDefect, MAX_CSR_BYTES, P256Key, ProfileError, VerifiedRequest, check_request,
+    CsrDefect, MAX_CSR_BYTES, P256Key, ProfileError, VerifiedRequest, check_key_request,
+    check_request,
 };
 pub use service::{ServiceCertificate, ServiceCertificateError};

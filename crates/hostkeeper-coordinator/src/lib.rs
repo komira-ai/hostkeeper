@@ -173,6 +173,9 @@ pub mod operator;
 pub mod operator_accounts;
 pub mod operator_enrollment;
 pub mod operator_host_groups;
+pub mod operator_host_identity;
+#[cfg(test)]
+mod operator_host_identity_tests;
 pub mod operator_keys;
 pub mod operator_layout;
 pub mod operator_repositories;
@@ -198,6 +201,14 @@ pub mod retry;
 pub mod rollouts;
 mod running;
 pub mod service;
+pub mod service_identity;
+#[cfg(test)]
+mod service_identity_deny_tests;
+pub(crate) mod service_identity_report;
+#[cfg(test)]
+mod service_identity_support;
+#[cfg(test)]
+mod service_identity_tests;
 pub(crate) mod service_put;
 pub(crate) mod service_repository;
 pub mod services;

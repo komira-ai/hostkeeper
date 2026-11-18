@@ -165,6 +165,25 @@ impl VerifiedRequest {
 /// # Errors
 /// [`ProfileError`]: the first rule the request breaks, in the order the module lists them.
 pub fn check_request(csr_der: &[u8]) -> Result<VerifiedRequest, ProfileError> {
+    let (key, subject) = read_request(csr_der)?;
+    let subject = subject.ok_or(ProfileError::BadCsr(CsrDefect::Subject))?;
+    Ok(VerifiedRequest { key, subject })
+}
+
+/// The key of `csr_der`, a request for a service's certificate: the rules of [`check_request`]
+/// but the subject, which is not looked at (the CA names the subject of a service certificate and
+/// copies nothing but the key).
+///
+/// # Errors
+/// [`ProfileError`]: the first rule the request breaks, in the order the module lists them.
+pub fn check_key_request(csr_der: &[u8]) -> Result<P256Key, ProfileError> {
+    read_request(csr_der).map(|(key, _)| key)
+}
+
+/// The key of `csr_der` and the id its subject names (none when the subject is not one common name
+/// `host:<id>`), once the size, the encoding, the key and the self-signature are held to the
+/// profile.
+fn read_request(csr_der: &[u8]) -> Result<(P256Key, Option<HostId>), ProfileError> {
     if csr_der.len() > MAX_CSR_BYTES {
         return Err(ProfileError::BadCsr(CsrDefect::TooLarge));
     }
@@ -178,8 +197,7 @@ pub fn check_request(csr_der: &[u8]) -> Result<VerifiedRequest, ProfileError> {
     if !key.verify(info.raw, &csr.signature_value.data) {
         return Err(ProfileError::BadCsr(CsrDefect::Signature));
     }
-    let subject = subject_id(&info.subject).ok_or(ProfileError::BadCsr(CsrDefect::Subject))?;
-    Ok(VerifiedRequest { key, subject })
+    Ok((key, subject_id(&info.subject)))
 }
 
 /// The id of a subject that is exactly one common name `host:<id>`.

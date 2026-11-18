@@ -322,7 +322,8 @@ pub struct AuditEntry {
     /// `host_move` (an operator's `HostGroups` calls); CI's: `lift_halt`, `force_ended`, and `unmark_bad` in a
     /// file an earlier build wrote; enrollment's: `enroll_approve`, `enroll_replace`,
     /// `enroll_approve_refused`, `mac_auto_approve_declined`, and the coordinator's
-    /// `enroll_requested`, `enroll_issued`, `cert_renewed` and `request_expired`; the MDM gate's
+    /// `enroll_requested`, `enroll_issued`, `cert_renewed`, `request_expired` and
+    /// `service_identity_issued`, and an operator's `identity_approve`; the MDM gate's
     /// `mdm_nonce_pushed`, `mdm_install_sent` and `mdm_baseline`, by `mdm-gate`; `state_imported`, by
     /// `coordinator`, the last row an earlier release's `import` wrote into the database; this
     /// release writes none).
