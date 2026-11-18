@@ -74,7 +74,7 @@ storage trait (section 4.1).
 | Halts, halt reports, clear generations | `<ops-file>.halts` with the ops file | tables `halts`, `halt_reports`, column `services.halt_generation` |
 | Plan positions (rollout-update-plans.md section 3) | `rollouts` of `<ops-file>.halts` | tables `rollouts`, `rollout_done` |
 | The platform of each inventory record (`linux-x86_64`, `linux-arm64`) | `platforms` of `<ops-file>.halts`, by host id | column `inventory.platform` |
-| The audit log | `<ops-file>.audit` and its sealed segments; the ring of 64 in the ops file | table `audit`; the ring is the newest 64 rows |
+| The audit log | `<ops-file>.audit` and its sealed segments; the ring of 64 in the ops file | table `audit`; the ring is the newest 64 rows that are changes (the console's audit-only lines, `docs/design/console-broker.md` decision D4, are numbered with them and stay out of it) |
 | Enrollment requests, issued certificates, hosts, deny rows, Mac nonces, the serial counter | `--enrollment-dir/*.pb` | the tables of section 3.6 |
 | The MDM gate's device records | `--enrollment-dir/mdm-devices/<enrollment id>.pb` | table `mdm_devices` (section 3.6) |
 | The single-writer lock | `flock` on `<state-file>.lock`; the enrollment store's own `flock` on `<enrollment-dir>/lock` | an advisory lock on one session, and the row `lease` (section 5); the enrollment store keeps its in-process mutex |
@@ -281,7 +281,8 @@ CREATE INDEX audit_time  ON audit (at_unix);
   `node_id`), `seq > since_seq`, `ORDER BY seq` ascending, or descending for `newest` and turned back, `LIMIT` of at
   most 256. `next_seq` keeps its meaning. `Hosts.Retire`'s check of whether a retirement was audited (`retire_audited`)
   becomes `SELECT action FROM audit WHERE node_id = $1 AND action = ANY($2) ORDER BY seq DESC LIMIT 1`. The ring of 64
-  that `Releases.Status` and `/v1/status` show is the newest 64 rows, loaded at start and kept in memory as today; it is
+  that `Releases.Status` and `/v1/status` show is the newest 64 rows that are changes (an audit-only line of the
+  console is not one), loaded at start and kept in memory as today; it is
   not stored apart.
 - **Retention.** Every row is kept. A row is about 200 bytes, and the file default of eight 16 MiB segments, about
   640,000 lines, would be some 130 MB of rows. `--audit-max-bytes` and `--audit-retained-segments` stay flags of the

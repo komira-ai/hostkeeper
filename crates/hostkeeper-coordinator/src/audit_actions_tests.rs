@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 
-use crate::audit_actions::{self, about, from_peer};
+use crate::audit_actions::{self, AuditOnly, about, from_peer};
 use crate::audit_file::{self, AuditLine};
 use crate::ops::{AuditEntry, OpsStore, Write};
 use crate::testutil::scratch;
@@ -147,6 +147,48 @@ fn the_login_actions_are_the_strings_of_the_design() {
             "api_token_revoke",
         ]
     );
+}
+
+/// Proves: the console's actions are the exact strings of the design (decision D4), one for
+/// each, and they are the audit-only actions and no others: `AuditOnly` names each once, as its
+/// string, and a change's action (`include`, `login`) is not one.
+///
+/// Catches: a misspelt or renamed console action, which the audit list's filter would then miss,
+/// an audit-only action without its string, and a change's action that a store would leave out
+/// of the ring it rebuilds at start.
+#[test]
+fn the_console_actions_are_the_strings_of_the_design() {
+    let strings = AuditOnly::ALL.map(AuditOnly::as_str);
+    assert_eq!(
+        strings,
+        [
+            audit_actions::CONSOLE_OPEN,
+            audit_actions::CONSOLE_CLOSE,
+            audit_actions::CONSOLE_DENIED,
+            audit_actions::POWER_ACTION,
+            audit_actions::BOOT_DEVICE_SET,
+            audit_actions::CONSOLE_COORDINATOR_START,
+        ]
+    );
+    assert_eq!(
+        strings,
+        [
+            "console_open",
+            "console_close",
+            "console_denied",
+            "power_action",
+            "boot_device_set",
+            "console_coordinator_start",
+        ]
+    );
+    assert!(
+        strings
+            .iter()
+            .all(|action| AuditOnly::is_audit_only(action))
+    );
+    for change in ["include", "login", "console", "mdm_baseline", ""] {
+        assert!(!AuditOnly::is_audit_only(change), "{change}");
+    }
 }
 
 /// Proves: the helpers set only the field they name: `about` the subject, `from_peer` the source.

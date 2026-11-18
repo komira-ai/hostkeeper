@@ -276,7 +276,7 @@ fn field_type(field: &FieldDescriptor) -> String {
 
 /// Appends the declaration of `ty` at `indent`: an interface of its fields, as the message
 /// declares them, or a union of its values' names. A declaration that fits in [`WIDTH`] is one
-/// line, else one line per field or value.
+/// line, else one line per field or value; a message with no field is `{}` on one line.
 fn declare(out: &mut String, indent: &str, ty: &Type) {
     match ty {
         Type::Message(m) => {
@@ -292,7 +292,9 @@ fn declare(out: &mut String, indent: &str, ty: &Type) {
                 m.name(),
                 declared.join(" ")
             );
-            if !declared.is_empty() && line.len() <= WIDTH {
+            if declared.is_empty() {
+                let _ = writeln!(out, "{indent}export interface {} {{}}", m.name());
+            } else if line.len() <= WIDTH {
                 let _ = writeln!(out, "{line}");
             } else {
                 let _ = writeln!(out, "{indent}export interface {} {{", m.name());
