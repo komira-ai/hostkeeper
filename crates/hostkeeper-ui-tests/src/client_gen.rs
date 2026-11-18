@@ -44,7 +44,7 @@ pub const PACKAGE: &str = "hostkeeper.operator.v1";
 /// The longest line of an enum's or a message's declaration on one line; a longer one has a line per
 /// value or field. Wide enough that `ui/gen/client.d.ts` stays under the 1000 lines every file of
 /// the app is held to (`tests/sources.rs`).
-const WIDTH: usize = 200;
+const WIDTH: usize = 220;
 
 /// What the header of both files says about where they come from.
 const HEADER: &str = "\
