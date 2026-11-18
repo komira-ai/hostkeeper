@@ -26,6 +26,7 @@ use crate::ports::{
 };
 use crate::probe::RemoteLoginProbe;
 use crate::repositories::{PushedSet, RepositoriesReport};
+use crate::service_identity::{ServiceIdentityReport, ServiceIdentitySource};
 
 /// A lock that a panicking test thread did not spoil: what it holds is still the fake's state.
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -586,6 +587,25 @@ impl OperatorKeysSink for FakeOperatorKeys {
     }
 }
 
+/// The services' identities, as a test sets them.
+#[derive(Default)]
+pub struct FakeServiceIdentities {
+    reports: Mutex<Vec<ServiceIdentityReport>>,
+}
+
+impl FakeServiceIdentities {
+    /// Sets what every later heartbeat reports.
+    pub fn set(&self, reports: Vec<ServiceIdentityReport>) {
+        *lock(&self.reports) = reports;
+    }
+}
+
+impl ServiceIdentitySource for FakeServiceIdentities {
+    fn reports(&self) -> Vec<ServiceIdentityReport> {
+        lock(&self.reports).clone()
+    }
+}
+
 /// The unix second the [`World`]'s clock starts at.
 pub const START_UNIX: u64 = 2_000_000_000;
 
@@ -622,6 +642,10 @@ pub struct World {
     /// [`World::keeping_operator_keys`].
     pub operator_keys: Arc<FakeOperatorKeys>,
     keeping_operator_keys: bool,
+    /// What the host's services' identities report; the ports hold it only after
+    /// [`World::keeping_service_identities`].
+    pub service_identities: Arc<FakeServiceIdentities>,
+    keeping_service_identities: bool,
 }
 
 impl Default for World {
@@ -655,6 +679,8 @@ impl World {
             probing: false,
             operator_keys: Arc::default(),
             keeping_operator_keys: false,
+            service_identities: Arc::default(),
+            keeping_service_identities: false,
         }
     }
 
@@ -682,6 +708,13 @@ impl World {
     /// it announces `operator-keys-v1`.
     pub fn keeping_operator_keys(mut self) -> World {
         self.keeping_operator_keys = true;
+        self
+    }
+
+    /// The world of a host that keeps its services' identities: its ports hold
+    /// [`World::service_identities`], and it announces `service-identity-v1`.
+    pub fn keeping_service_identities(mut self) -> World {
+        self.keeping_service_identities = true;
         self
     }
 
@@ -718,6 +751,9 @@ impl World {
             operator_keys: self
                 .keeping_operator_keys
                 .then(|| Arc::clone(&self.operator_keys) as Arc<dyn OperatorKeysSink>),
+            service_identities: self
+                .keeping_service_identities
+                .then(|| Arc::clone(&self.service_identities) as Arc<dyn ServiceIdentitySource>),
         }
     }
 

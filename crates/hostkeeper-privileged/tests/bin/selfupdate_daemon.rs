@@ -443,6 +443,7 @@ fn file_links(
         period,
         dispatch: Arc::new(ThreadDispatch),
         stop,
+        identity: None,
     }
 }
 

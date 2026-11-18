@@ -17,6 +17,7 @@ use hostkeeper_daemon::mac_config::{
 };
 use hostkeeper_daemon::notify::NoNotifier;
 use hostkeeper_daemon::start::{Settings, StartError};
+use hostkeeper_enroll::IdentityDir;
 use hostkeeper_launchd::postinstall::{DAEMON_CONFIG, MANAGED_CONFIG};
 use hostkeeper_launchd::{Platform, PlatformKind};
 use hostkeeper_testkit::Scratch;
@@ -80,6 +81,7 @@ impl Mac {
             config: self.config.clone(),
             state_dir: self.root().join("state"),
             facts_file: packages.with_file_name("facts.json"),
+            identity: IdentityDir::host(&packages.with_file_name("identity")),
             packages_dir: packages,
             run_dir: self.root().join("run"),
             trusted_uid: me(),

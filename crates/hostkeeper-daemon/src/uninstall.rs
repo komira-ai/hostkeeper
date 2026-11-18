@@ -13,7 +13,8 @@
 //!    exit 0 is recorded in the tombstone (`hook_done`) and the uninstall goes on; exit 1, a
 //!    timeout or a signal is `Failed`; 75 is `Deferred`; 76 is a halt, recorded in the tombstone
 //!    (`halted`), and nothing more of the uninstall runs;
-//! 5. the `remove` of the service's installer ([`crate::installers`]): for a repository
+//! 5. the service's identity directory removed ([`crate::service_identity`]), then the `remove` of
+//!    the service's installer ([`crate::installers`]): for a repository
 //!    installer, the package unheld and purged, its enablement links removed and `daemon-reload`
 //!    run, and the record dropped ([`crate::repository::Repository::remove`]); a service with no installer
 //!    recorded has nothing to remove here;
@@ -34,6 +35,7 @@ use std::path::{Path, PathBuf};
 
 use hostkeeper_config::manifest::{Expected, Manifest};
 use hostkeeper_config::names::{ServiceName, Version};
+use hostkeeper_enroll::IdentityFiles;
 use hostkeeper_hook::{Class, Outcome, Phase, Report, Step, Verdict};
 use hostkeeper_placed::{FileKind, Fs, PlacedError, RealFs, Tombstone};
 use hostkeeper_proto::hostkeeper::release::v1::Target;
@@ -378,8 +380,15 @@ fn run_hook(
     Ok(exit)
 }
 
-/// Steps 5 and 6, then the tombstone goes: the service is gone.
+/// Steps 5 and 6, then the tombstone goes: the service is gone. The service's identity directory
+/// goes first, after the hook's `uninstall` step and before anything the tombstone outlives: a
+/// directory already gone is fine, so a resumed uninstall does it again.
 fn remove(ctx: &Ctx, service: &ServiceName) -> Reply {
+    if let Err(error) = ctx.dirs.identity.remove(service.as_str()) {
+        return link_failed(format!(
+            "the identity directory of {service} could not be removed: {error}"
+        ));
+    }
     let steps = ctx
         .placer()
         .store()

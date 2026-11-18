@@ -19,7 +19,9 @@
 //! likewise. A Mac's Remote Login probe ([`Heartbeat::remote_login_probe`]) is counted too, and is
 //! the first optional fact dropped. The operator keys report ([`Heartbeat::operator_keys`], as
 //! `operator_keys`: a digest and two texts of at most [`crate::MAX_KEYS_REASON`] bytes each) is
-//! counted and never dropped: it is not in [`DROP_ORDER`].
+//! counted and never dropped: it is not in [`DROP_ORDER`]. So is the services' identities report
+//! ([`Heartbeat::service_identities`], as `service_identities`: a service name, an end and a text
+//! of at most [`crate::MAX_IDENTITY_ERROR`] bytes each).
 
 use hostkeeper_config::names::{ServiceName, Version};
 pub use hostkeeper_proto::MAX_SERVICES_PER_HEARTBEAT;
@@ -30,6 +32,7 @@ use crate::order::{DeferredReport, OrderResult};
 use crate::ports::Drift;
 use crate::probe::RemoteLoginProbe;
 use crate::repositories::RepositoriesReport;
+use crate::service_identity::ServiceIdentityReport;
 
 /// The most bytes of a heartbeat: its JSON on the JSON route, its encoded message on the gRPC one.
 pub const MAX_HEARTBEAT_BYTES: usize = 16 * 1024;
@@ -96,6 +99,12 @@ pub enum Feature {
     /// by a daemon with a sink for them ([`crate::OperatorKeysSink`]): the loop adds it
     /// ([`OPERATOR_KEYS`]).
     OperatorKeysV1,
+    /// `service-identity-v1`: the daemon keeps a key and an 8-hour certificate for each service
+    /// whose entry asks for an identity, and reports them
+    /// ([`Heartbeat::service_identities`]). Like `operator-keys-v1` it is announced only by a
+    /// daemon with a source for them ([`crate::ServiceIdentitySource`]): the loop adds it
+    /// ([`SERVICE_IDENTITY`]).
+    ServiceIdentityV1,
 }
 
 /// The features every heartbeat announces, in this order. Each names something the loop does:
@@ -123,8 +132,10 @@ pub const REPOSITORIES: Feature = Feature::RepositoriesV1;
 pub const FACTS: Feature = Feature::FactsV1;
 /// The feature a daemon that reads private repositories announces after [`REPOSITORIES`].
 pub const PRIVATE_REPOSITORY: Feature = Feature::PrivateRepositoryV1;
-/// The feature a daemon with a [`crate::OperatorKeysSink`] announces last.
+/// The feature a daemon with a [`crate::OperatorKeysSink`] announces after [`ANNOUNCED`].
 pub const OPERATOR_KEYS: Feature = Feature::OperatorKeysV1;
+/// The feature a daemon with a [`crate::ServiceIdentitySource`] announces last.
+pub const SERVICE_IDENTITY: Feature = Feature::ServiceIdentityV1;
 
 impl Feature {
     /// Its wire name.
@@ -145,6 +156,7 @@ impl Feature {
             Feature::FactsV1 => "facts-v1",
             Feature::PrivateRepositoryV1 => "private-repository-v1",
             Feature::OperatorKeysV1 => "operator-keys-v1",
+            Feature::ServiceIdentityV1 => "service-identity-v1",
         }
     }
 
@@ -152,7 +164,13 @@ impl Feature {
     pub fn parse(name: &str) -> Option<Feature> {
         ANNOUNCED
             .into_iter()
-            .chain([REPOSITORIES, FACTS, PRIVATE_REPOSITORY, OPERATOR_KEYS])
+            .chain([
+                REPOSITORIES,
+                FACTS,
+                PRIVATE_REPOSITORY,
+                OPERATOR_KEYS,
+                SERVICE_IDENTITY,
+            ])
             .find(|feature| feature.as_str() == name)
     }
 }
@@ -394,6 +412,9 @@ pub struct Heartbeat {
     /// What the managed block of the login account's `authorized_keys` holds; none from a daemon
     /// that keeps no operator keys. Sent over gRPC only, and counted toward the bound on both.
     pub operator_keys: Option<KeysReport>,
+    /// What the daemon holds of each service's identity, sorted by service name; empty from a
+    /// daemon that keeps none. Sent over gRPC only, and counted toward the bound on both.
+    pub service_identities: Vec<ServiceIdentityReport>,
 }
 
 impl Heartbeat {
@@ -459,6 +480,20 @@ impl Heartbeat {
                 "operator_keys".to_owned(),
                 json!({ "digest": report.digest, "refused": refused, "failed": report.failed }),
             );
+        }
+        if !self.service_identities.is_empty() {
+            let reports: Vec<Value> = self
+                .service_identities
+                .iter()
+                .map(|report| {
+                    json!({
+                        "service": report.service,
+                        "not_after_unix": report.not_after_unix,
+                        "last_error": report.last_error,
+                    })
+                })
+                .collect();
+            beat.insert("service_identities".to_owned(), reports.into());
         }
         Value::Object(beat)
     }

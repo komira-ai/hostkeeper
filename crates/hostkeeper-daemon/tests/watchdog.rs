@@ -124,6 +124,7 @@ fn links(
         console: None,
         remote_login_probe: None,
         operator_keys: None,
+        identity: None,
     };
     (links, jobs)
 }

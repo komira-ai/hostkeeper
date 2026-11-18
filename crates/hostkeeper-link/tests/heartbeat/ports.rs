@@ -153,6 +153,8 @@ fn the_loop_dials_only_the_coordinator_link_port() {
         "proto_map_keys_tests.rs",
         "proto_map_tests.rs",
         "repositories.rs",
+        "service_identity.rs",
+        "service_identity_tests.rs",
         "testing.rs",
         "wire_map.rs",
     ];

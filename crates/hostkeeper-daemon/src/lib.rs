@@ -67,6 +67,12 @@
 //!   file) and reported by digest in every heartbeat; [`login_account`] finds the account (root on
 //!   Linux, a Mac's one local administrator) and, on a Mac, [`mac_ssh`] makes sure Remote Login is
 //!   on and the account may use ssh.
+//! - [`service_identity`]: the key and 8-hour certificate of each service whose entry asks for an
+//!   identity (`identity` of its manifest), kept in the identity directory (`--identity-dir`) by
+//!   `hostkeeper_enroll::ServiceIdentities` on a worker of its own and reported in every
+//!   heartbeat (`service-identity-v1`); [`service_account`] finds the account that owns the files
+//!   (the passwd file on Linux, `dscl` on a Mac); an uninstall removes the service's directory
+//!   ([`uninstall`]).
 //! - [`observer`]: what [`Daemon::status`] reports of a running service.
 //! - [`node`]: the host's enrollment and the heartbeat loop's link, as the loops last wrote them,
 //!   which [`Daemon::status`] reports besides the services.
@@ -142,6 +148,8 @@ pub mod rollback_floor;
 pub mod run_units;
 pub mod seed;
 pub mod selfupdate;
+pub mod service_account;
+pub mod service_identity;
 pub mod stamp;
 pub mod start;
 pub mod target;

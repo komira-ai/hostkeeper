@@ -67,6 +67,7 @@ pub fn idle_links() -> Links {
         console: None,
         remote_login_probe: None,
         operator_keys: None,
+        identity: None,
         period: DEFAULT_HEARTBEAT_SECS,
         dispatch: Arc::new(ManualDispatch::default()),
         stop: StopFlag::default(),
@@ -419,7 +420,18 @@ impl Rig {
             state: self.state.clone(),
             packages: self.packages.clone(),
             facts: self.facts_file(),
+            identity: self.identity_dir(),
         }
+    }
+
+    /// The identity directory of the rig, beside its packages directory; its "root" is the user
+    /// the test runs as.
+    pub fn identity_dir(&self) -> hostkeeper_enroll::IdentityDir {
+        let owner = hostkeeper_enroll::Owner {
+            uid: my_uid(),
+            gid: rustix::process::getegid().as_raw(),
+        };
+        hostkeeper_enroll::IdentityDir::owned_by(&self.packages.with_file_name("identity"), owner)
     }
 
     /// The host's facts file of the rig: beside its packages directory, as on a host.
@@ -438,6 +450,7 @@ impl Rig {
             state_dir: self.state.clone(),
             packages_dir: self.packages.clone(),
             facts_file: self.facts_file(),
+            identity: self.identity_dir(),
             run_dir: self.run_dir.clone(),
             trusted_uid: my_uid(),
             package_lock_wait_secs: hostkeeper_daemon::cli::DEFAULT_PACKAGE_LOCK_WAIT_SECS,

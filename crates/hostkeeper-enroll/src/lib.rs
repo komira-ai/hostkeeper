@@ -22,6 +22,13 @@
 //!   `validity.rs`, the one file the wall-clock lint allows here);
 //! - `hostkeeper_steps::Clock`: the monotonic clock the retries sleep on.
 //!
+//! The same host key and certificate then serve a service's identity (`service_identity`,
+//! docs/design/service-identity.md): [`ServiceIdentities`] keeps, for each service that wants one, a
+//! key and an 8-hour certificate in the identity directory. Its ports are [`ServiceCertIssuer`]
+//! (the coordinator's `IssueServiceCertificate` over the host's mutual TLS, [`GrpcIssuer`]),
+//! [`IdentityFiles`] (the directory, [`IdentityDir`]) and [`HostTrust`] (the host's id and CA
+//! bundle, [`PkiTrust`]), with the [`Entropy`], [`WallClock`] and monotonic clock above.
+//!
 //! [`Enroller::run_once`] is one step; [`Enroller::run_loop`] paces the steps, and after each
 //! notes in a [`RenewalState`] the end of the current certificate and the step's error, which the
 //! daemon's heartbeat reports.
@@ -32,6 +39,7 @@ mod grpc;
 mod key;
 mod managed;
 mod renewal;
+mod service_identity;
 mod store;
 mod validity;
 mod verify;
@@ -45,13 +53,18 @@ pub use enroller::{
     Enroller, Enrollment, Error, Identity, NOT_ENROLLED, Outcome, Ports, ProtocolError, RETRY_SECS,
     Settings,
 };
-pub use grpc::{GrpcEnroll, GrpcError};
+pub use grpc::{GrpcEnroll, GrpcError, GrpcIssuer};
 pub use key::{Entropy, EntropyError, KEY_DRAWS, KeyError, OsEntropy};
 pub use managed::{
     MAC_NONCE_BYTES, MANAGED_ENROLLMENT, MacNonce, ManagedError, ManagedFile, ManagedNonce,
     ManagedPreferences, read_nonce,
 };
 pub use renewal::{Renewal, RenewalState};
+pub use service_identity::{
+    CHECK_SECS, FilesError, HostTrust, IdentityDir, IdentityFile, IdentityFiles, IdentityPorts,
+    IdentityRefusal, IdentityState, IssueAnswer, MAX_FILE_BYTES, Owner, PkiTrust, RETRY_AFTER_SECS,
+    ServiceCertIssuer, ServiceIdentities, ServiceReport, Trust, Wanted,
+};
 pub use store::{
     CurrentPaths, Fault, FaultGate, KeyFrom, PkiDir, SCHEMA, Store, StoreError, StoreLock, Stored,
 };
