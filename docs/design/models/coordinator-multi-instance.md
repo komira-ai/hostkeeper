@@ -23,7 +23,8 @@ an operator edit), the `state_versions` and `audit_counter` row locks, the uniqu
 is one step whose `WHERE` is its precondition.
 
 The search (`explore.rs`) visits every state reachable from the model's initial states, breadth first, so a broken property comes
-with a shortest trace. Two kinds of property:
+with a shortest trace. A model may keep one state for all the states that differ only by which instance is which (`orders`
+sorts its instances), which is the symmetry the argument below rests on, used to keep the search small. Two kinds of property:
 
 - **Safety**: a predicate that must hold in every reachable state.
 - **Liveness**: from every reachable state, a state where the goal holds can still be reached. The processes of a model can always
@@ -41,7 +42,7 @@ is written.
 each runs the same steps from the same kind of state, and every guard is a lock, a unique key or a compare-and-set on a row, which
 treats every holder alike. So the design's argument is that a failure needs only as many instances as the race it is made of, and
 the races of this protocol are two deciders between a read and a write (N = 2) and, for a limit of k concurrent holders, k + 1
-deciders (here `max_updating` 1 broken at N = 2 and `min_up` at N = 3). The test runs N = 1, which has no race between instances
+deciders (the limits of `orders` are 1, so 2; a limit of 2 would need 3). The test runs N = 1, which has no race between instances
 and shows what a single instance already gets wrong (the environment, an operator's session, a lost connection, is its own
 process), and N = 2 and 3. It is the design's argument, stated here; the test does not prove it for N above 3.
 
@@ -52,7 +53,8 @@ process), and N = 2 and 3. It is the design's argument, stated here; the test do
 The model `orders` is the deciding transaction of a heartbeat (section 5.2) placing orders under `--live-rollouts`, the queue,
 `max_updating` and `min_up`. Rows: the order rows of each host (with the unique index on the host), whether the first service's
 hosts defer (written by their own beats, without the gate, as every beat's rows are), and the gate row. Service `s1` (set first) runs
-on hosts `h0`, `h1`, `h2` in one stage with `max_updating` 1 and `min_up` 1, and `s2` on `h3`; `--live-rollouts` is 1. At the start
+on hosts `h0`, `h1`, `h2` in one stage with `max_updating` 1, and `s2` on `h3`, `h4` in one stage with `min_up` 1 (and
+`max_updating` 2), so each limit is the one that binds in its own stage; `--live-rollouts` is 1. At the start
 `s1`'s hosts defer, so `s2` may go first, and they stop deferring at any moment, once. The decision restates the rules of
 `queue.rs` and `live.rs`: a service set before another takes a place in the queue only while it waits and can be ordered, which is
 why the race on the limit needs an input a beat writes without the gate. Each instance takes beats of any host, forever: ask for
@@ -60,8 +62,8 @@ the gate with `SKIP LOCKED` (busy: answered with the host's stored orders, nothi
 (`ON CONFLICT (host_id) DO NOTHING`), `COMMIT`, reply with the host's order row, new or found. An instance may crash once after
 `COMMIT` and before the reply; one instance may hang once while it holds the gate, and the server ends its transaction (the idle
 timeout), after which it takes beats again. Without the gate, B reads while `s1` defers and decides `s2`, `s1` stops deferring,
-A orders `s1`, and both commit: two live rollouts (N = 2), two updating hosts of the stage (N = 2), and with a third instance no
-host of the stage up (N = 3); the unique index alone still keeps one order per host, and without it two beats of one host order it
+A orders `s1`, and both commit: two live rollouts; two instances ordering two hosts of `s1` at once exceed its `max_updating`,
+and two ordering both hosts of `s2` leave none of them up (each at N = 2); the unique index alone still keeps one order per host, and without it two beats of one host order it
 twice. An instance that orders the queue by its own stamps, as today's memory does, orders `s2` ahead of `s1`; a reply that carries
 only a new order leaves a host whose reply was lost without its order; a hung holder the server never ends stops every decision.
 
@@ -114,7 +116,9 @@ tasks, or to every task it lists when fewer than half are healthy (panic mode). 
 healthcheck passes at some later second and Swarm sends the old task SIGTERM; from then the old task answers 503 and keeps accepting
 for `--drain-delay-secs`, then refuses and exits. As the design assumes, DNS lists the new task no earlier than when it is ready and
 at the latest one refresh after SIGTERM, and a task the edge has just learned is unhealthy until it passes its checks. The other
-N - 1 tasks serve throughout. The locked protocol uses 8 s, the smallest delay the deploy check admits (more than 1 + 2 x 2 + 2);
+N - 1 tasks serve throughout. A test (`the_edge_can_be_in_panic_mode_during_the_drain_delay_of_one_task`) searches the same
+model for a second in panic mode: there is one at N = 1 and 2, and none at N = 3, where the two tasks that serve throughout are
+half of the four the edge lists. The locked protocol uses 8 s, the smallest delay the deploy check admits (more than 1 + 2 x 2 + 2);
 an old task that stops accepting at SIGTERM, or a delay of 3 s, is refused a connection the edge still sends it, at every N.
 
 ## What the models found
@@ -127,8 +131,10 @@ an old task that stops accepting at SIGTERM, or a delay of 3 s, is refused a con
   decision 4).
 - **Panic mode at the edge** (`drain`). Under the design's own assumptions (the edge marks a task it has just learned unhealthy
   until it passes `healthy_threshold` checks, and DNS lists the new task at the latest one refresh after SIGTERM), the edge marks
-  the old task unhealthy after `unhealthy_threshold` failed checks before it has marked the new one healthy, so for a few seconds
-  no task is marked healthy and Envoy's panic mode sends connections to every task it knows. Both accept (the old one for the drain
+  the old task unhealthy after `unhealthy_threshold` failed checks before it has marked the new one healthy, so with the deploy's
+  one task (replicas 1) for a few seconds no task is marked healthy and Envoy's panic mode sends connections to every task it
+  knows (with one more task serving throughout, fewer than half are healthy, and the same follows; the test
+  `the_edge_can_be_in_panic_mode_during_the_drain_delay_of_one_task` finds such a second). Both accept (the old one for the drain
   delay, the new one since it was ready), so no connection is refused, which is the invariant. Section 11 of the design said that
   panic mode never has to engage; it now says what the model shows.
 
@@ -147,8 +153,8 @@ process, the same as another instance, since no step names an instance); the dec
 |---|---|---|
 | `n_instances_decide_one_rollout_at_a_time` | `orders` | at most `--live-rollouts` (1) services have an order row at once |
 | `queue_follows_set_seq_on_both_tasks` | `orders` | no order is committed for a service while one set before it (by `set_seq`) waited and could be ordered, by the rows its decision read |
-| `stage_never_has_more_updating_hosts_than_max_updating` | `orders` | the hosts of the stage with an order row never exceed `max_updating` (1) |
-| `min_up_holds_in_every_stage` | `orders` | the hosts of the stage without an order row never fall below `min_up` (1) |
+| `stage_never_has_more_updating_hosts_than_max_updating` | `orders` | in each stage, the hosts with an order row never exceed its `max_updating` (1 for `s1`, the limit that binds there) |
+| `min_up_holds_in_every_stage` | `orders` | in each stage, the hosts without an order row never fall below its `min_up` (1 for `s2`, the limit that binds there) |
 | `one_host_never_has_two_orders` | `orders` | no host has two order rows |
 | `order_after_crash_is_returned_again` | `orders` | liveness: from every state, a state where every host with an order row has received it in a reply can be reached (an instance may crash after `COMMIT`, before the reply) |
 | `a_host_behind_gets_an_order_whichever_instance_hears_it` | `orders` | liveness: from every state, a state where no host could be given an order (every free slot used) can be reached, whichever instance hears each beat |
@@ -186,7 +192,7 @@ process, the same as another instance, since no step names an instance); the dec
 |---|---|---|---|
 | `decision_without_the_gate` | `orders` | `n_instances_decide_one_rollout_at_a_time` | 2 |
 | `decision_without_the_gate` | `orders` | `stage_never_has_more_updating_hosts_than_max_updating` | 2 |
-| `decision_without_the_gate` | `orders` | `min_up_holds_in_every_stage` | 3 |
+| `decision_without_the_gate` | `orders` | `min_up_holds_in_every_stage` | 2 |
 | `decision_without_the_gate` | `orders` | `one_host_never_has_two_orders` | never |
 | `order_insert_without_unique_index_and_without_the_gate` | `orders` | `one_host_never_has_two_orders` | 2 |
 | `queue_stamped_per_instance` | `orders` | `queue_follows_set_seq_on_both_tasks` | 2 |
@@ -237,7 +243,7 @@ process, the same as another instance, since no step names an instance); the dec
 
 | Model | Bound |
 |---|---|
-| `orders` | N instances, each taking beats of any of 4 hosts without end; s1 on h0, h1, h2 (max_updating 1, min_up 1, deferring until it stops once), s2 on h3; --live-rollouts 1; one crash after COMMIT, one hung holder |
+| `orders` | N instances, each taking beats of any of 5 hosts without end; s1 on h0, h1, h2 (max_updating 1, min_up 0, deferring until it stops once), s2 on h3, h4 (max_updating 2, min_up 1); --live-rollouts 1; one crash after COMMIT, one hung holder |
 | `operator` | N instances, each taking beats of either of 2 hosts without end; one operator edit (halt, hold, or desired 1 to 2); one database outage |
 | `steps` | N instances, each taking beats without end; three scenarios: a plan at stage 1 of 2 advanced by beats and by one operator call, a failed threshold halted by beats, a failure report arriving once while a package is both rolling back and being uninstalled |
 | `quiet` | N instances, each taking beats of either of 2 hosts without end and deciding after each beat; one operator halt; up to 2 gaps in the beats, each a database crash or a restart or outage, which abort what is in flight; a fresh host may go silent |

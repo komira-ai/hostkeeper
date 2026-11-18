@@ -114,6 +114,17 @@ invariant_tests! {
     no_connection_is_refused_at_the_edge_during_an_update,
 }
 
+/// What the spec's "What the models found" says of panic mode, and section 11 of the design with
+/// it: with the deploy's one task (replicas 1) and with two, the edge can be in panic mode for
+/// some seconds of an update; with three, the two tasks that serve throughout are half of the four
+/// it lists, so it never is.
+#[test]
+fn the_edge_can_be_in_panic_mode_during_the_drain_delay_of_one_task() {
+    assert!(drain::panic_mode_is_reached(1));
+    assert!(drain::panic_mode_is_reached(2));
+    assert!(!drain::panic_mode_is_reached(3));
+}
+
 #[test]
 fn the_spec_states_every_invariant_variant_and_bound_of_the_models() {
     if let Err(problems) = harness::compare(SPEC, MODELS, TESTS) {
@@ -123,7 +134,7 @@ fn the_spec_states_every_invariant_variant_and_bound_of_the_models() {
 
 #[test]
 fn a_spec_that_leaves_out_a_variant_or_changes_its_n_is_refused() {
-    let line = "| `decision_without_the_gate` | `orders` | `min_up_holds_in_every_stage` | 3 |";
+    let line = "| `decision_without_the_gate` | `orders` | `min_up_holds_in_every_stage` | 2 |";
     assert!(
         SPEC.contains(line),
         "the spec holds the row this test edits"
@@ -134,17 +145,43 @@ fn a_spec_that_leaves_out_a_variant_or_changes_its_n_is_refused() {
     assert_eq!(
         problems,
         "a model defines a variant (name, model, breaks, fails from N) the spec does not state: \
-         (\"decision_without_the_gate\", \"orders\", \"min_up_holds_in_every_stage\", \"3\")"
+         (\"decision_without_the_gate\", \"orders\", \"min_up_holds_in_every_stage\", \"2\")"
     );
 
-    let changed = SPEC.replace(line, &line.replace("| 3 |", "| 2 |"));
+    let changed = SPEC.replace(line, &line.replace("| 2 |", "| 3 |"));
     let problems = harness::compare(&changed, MODELS, TESTS).expect_err("a row differs");
     assert_eq!(
         problems,
         "the spec states a variant (name, model, breaks, fails from N) no model defines: \
-         (\"decision_without_the_gate\", \"orders\", \"min_up_holds_in_every_stage\", \"2\")\n\
+         (\"decision_without_the_gate\", \"orders\", \"min_up_holds_in_every_stage\", \"3\")\n\
          a model defines a variant (name, model, breaks, fails from N) the spec does not state: \
-         (\"decision_without_the_gate\", \"orders\", \"min_up_holds_in_every_stage\", \"3\")"
+         (\"decision_without_the_gate\", \"orders\", \"min_up_holds_in_every_stage\", \"2\")"
+    );
+}
+
+/// A variant stated to fail from an N the test never runs would never be shown to break its
+/// invariant: such a definition is refused, whatever the spec says.
+#[test]
+fn a_variant_that_fails_from_an_n_no_run_reaches_is_refused() {
+    static CASES: [harness::VariantCase; 1] = [harness::VariantCase {
+        variant: "decision_without_the_gate",
+        breaks: "min_up_holds_in_every_stage",
+        fails_from: Some(4),
+    }];
+    let beyond = ModelDef {
+        cases: &CASES,
+        ..orders::MODEL
+    };
+    let models: Vec<&ModelDef> = MODELS
+        .iter()
+        .map(|m| if m.name == "orders" { &beyond } else { *m })
+        .collect();
+    let problems = harness::compare(SPEC, &models, TESTS).expect_err("N = 4 is never run");
+    assert!(
+        problems.lines().any(|l| l
+            == "the variant decision_without_the_gate of orders fails from N = Some(4), \
+                           which no run reaches"),
+        "{problems}"
     );
 }
 

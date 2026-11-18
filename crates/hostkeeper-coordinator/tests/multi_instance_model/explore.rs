@@ -52,6 +52,14 @@ pub trait Model {
     fn next(&self, s: &Self::State, out: &mut Vec<(Self::Step, Self::State)>);
 
     fn invariants(&self) -> Vec<Invariant<Self>>;
+
+    /// The one state the search keeps for every state that differs from `s` only by which
+    /// instance is which. A model whose instances are interchangeable (no step and no property
+    /// names an instance) may sort them here, which is the symmetry the design's argument for any
+    /// N rests on; the default keeps every state as it is.
+    fn canonical(&self, s: Self::State) -> Self::State {
+        s
+    }
 }
 
 /// Each state the search reached, with the state it was first reached from and the step that
@@ -97,6 +105,7 @@ pub fn explore<M: Model>(model: &M, only: Option<&str>) -> Outcome {
     let mut back: Vec<Vec<usize>> = Vec::new();
     let mut queue = VecDeque::new();
     for s in model.init() {
+        let s = model.canonical(s);
         if !index.contains_key(&s) {
             index.insert(s.clone(), states.len());
             queue.push_back(states.len());
@@ -124,6 +133,7 @@ pub fn explore<M: Model>(model: &M, only: Option<&str>) -> Outcome {
         out.clear();
         model.next(&state, &mut out);
         for (step, s) in out.drain(..) {
+            let s = model.canonical(s);
             let to = match index.get(&s) {
                 Some(&to) => to,
                 None => {

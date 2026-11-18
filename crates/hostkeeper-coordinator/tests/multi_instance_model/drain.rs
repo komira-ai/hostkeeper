@@ -19,7 +19,7 @@
 //! task SIGTERM. From SIGTERM the old task answers `/healthz` 503 and keeps accepting for
 //! `--drain-delay-secs`, then it refuses new connections and exits, and DNS drops it. As the
 //! design assumes: DNS lists the new task no earlier than when it is ready and at the latest one
-//! refresh after SIGTERM, and the edge marks a task it has just learned unhealthy until it passes
+//! refresh (`DNS_REFRESH`, one second) after SIGTERM, and the edge marks a task it has just learned unhealthy until it passes
 //! `HEALTHY_THRESHOLD` checks. Each of those seconds, and the second of the interval each check
 //! starts at, is a choice of the model, so every timing is searched.
 //!
@@ -161,6 +161,30 @@ pub struct Drain {
     /// The tasks that serve throughout: always listed, healthy and accepting.
     others: usize,
     delay: u8,
+    /// Also check `the_edge_is_never_in_panic_mode`, which the locked protocol does not keep:
+    /// [`panic_mode_is_reached`] searches for the state that breaks it.
+    probe_panic: bool,
+}
+
+/// Whether the edge can be in panic mode at some second of the update, with the locked
+/// protocol at `n` tasks: the search finds a state that breaks `the_edge_is_never_in_panic_mode`.
+pub fn panic_mode_is_reached(n: usize) -> bool {
+    let model = Drain {
+        probe_panic: true,
+        ..Drain::new(n, None)
+    };
+    explore(&model, Some("the_edge_is_never_in_panic_mode"))
+        .found
+        .is_some()
+}
+
+/// The tasks the edge lists and the tasks it marks healthy, and whether it is in panic mode
+/// (fewer than half of the listed tasks healthy).
+fn edge_counts(m: &Drain, s: &State) -> (usize, usize, bool) {
+    let views = [s.old_view, s.new_view];
+    let known = m.others + views.iter().filter(|v| v.listed).count();
+    let healthy = m.others + views.iter().filter(|v| v.listed && v.healthy).count();
+    (known, healthy, healthy * 2 < known)
 }
 
 impl Drain {
@@ -176,6 +200,7 @@ impl Drain {
         Drain {
             others: n - 1,
             delay,
+            probe_panic: false,
         }
     }
 
@@ -230,7 +255,8 @@ impl Model for Drain {
                 &[false]
             };
             for &sigterm in sigterms {
-                let must_list = s.since_sigterm.is_some_and(|t| t >= DNS_REFRESH);
+                // The second this step makes is `since_sigterm + 1` after SIGTERM.
+                let must_list = s.since_sigterm.is_some_and(|t| t + 1 >= DNS_REFRESH);
                 let lists: &[bool] = if !ready || s.new_view.listed {
                     &[false]
                 } else if must_list {
@@ -286,7 +312,7 @@ impl Model for Drain {
     }
 
     fn invariants(&self) -> Vec<Invariant<Self>> {
-        vec![Invariant {
+        let mut invariants = vec![Invariant {
             name: "no_connection_is_refused_at_the_edge_during_an_update",
             check: Check::Always(|m: &Drain, s: &State| {
                 let old_accepts = matches!(s.old, Old::Serving | Old::Draining(_));
@@ -295,13 +321,7 @@ impl Model for Drain {
                     (s.old_view, old_accepts, "old"),
                     (s.new_view, new_accepts, "new"),
                 ];
-                let known = m.others + listed.iter().filter(|(v, _, _)| v.listed).count();
-                let healthy = m.others
-                    + listed
-                        .iter()
-                        .filter(|(v, _, _)| v.listed && v.healthy)
-                        .count();
-                let panic = healthy * 2 < known;
+                let (_, _, panic) = edge_counts(m, s);
                 listed
                     .iter()
                     .filter(|(v, _, _)| v.listed && (panic || v.healthy))
@@ -313,6 +333,16 @@ impl Model for Drain {
                         )
                     })
             }),
-        }]
+        }];
+        if self.probe_panic {
+            invariants.push(Invariant {
+                name: "the_edge_is_never_in_panic_mode",
+                check: Check::Always(|m: &Drain, s: &State| {
+                    let (known, healthy, panic) = edge_counts(m, s);
+                    panic.then(|| format!("{healthy} of {known} listed tasks healthy"))
+                }),
+            });
+        }
+        invariants
     }
 }

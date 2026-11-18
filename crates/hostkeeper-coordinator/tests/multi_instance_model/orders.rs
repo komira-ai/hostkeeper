@@ -4,8 +4,9 @@
 //! Rows: `fleet_orders` (the order rows of each host, with the unique index on the host),
 //! `fleet_defers` of the first service's hosts (written by their beats, without the gate, as every
 //! beat's own rows are), and the gate row. Services `s1` (set first: `set_seq` 1) on hosts `h0`,
-//! `h1`, `h2` in one stage with `max_updating` 1 and `min_up` 1, and `s2` (`set_seq` 2) on host
-//! `h3`; `--live-rollouts` 1. At the start `s1`'s hosts defer, so `s2` may go first; they stop
+//! `h1`, `h2` in one stage with `max_updating` 1 (`min_up` 0), and `s2` (`set_seq` 2) on hosts
+//! `h3`, `h4` in one stage with `min_up` 1 (`max_updating` 2), so each of the two limits is the
+//! one that binds in its own stage; `--live-rollouts` 1. At the start `s1`'s hosts defer, so `s2` may go first; they stop
 //! deferring at any moment, once.
 //!
 //! Each instance takes beats one after another, of any host, forever. A beat is the statements of
@@ -25,8 +26,9 @@ use crate::harness::{ModelDef, VariantCase};
 
 pub const MODEL: ModelDef = ModelDef {
     name: "orders",
-    bound: "N instances, each taking beats of any of 4 hosts without end; s1 on h0, h1, h2 \
-            (max_updating 1, min_up 1, deferring until it stops once), s2 on h3; \
+    bound: "N instances, each taking beats of any of 5 hosts without end; s1 on h0, h1, h2 \
+            (max_updating 1, min_up 0, deferring until it stops once), s2 on h3, h4 \
+            (max_updating 2, min_up 1); \
             --live-rollouts 1; one crash after COMMIT, one hung holder",
     invariants: &[
         "n_instances_decide_one_rollout_at_a_time",
@@ -51,7 +53,7 @@ pub const MODEL: ModelDef = ModelDef {
         VariantCase {
             variant: "decision_without_the_gate",
             breaks: "min_up_holds_in_every_stage",
-            fails_from: Some(3),
+            fails_from: Some(2),
         },
         VariantCase {
             variant: "decision_without_the_gate",
@@ -86,11 +88,11 @@ fn run(n: usize, variant: Option<&'static str>, only: Option<&'static str>) -> O
     explore(&Orders::new(n, variant), only)
 }
 
-const HOSTS: usize = 4;
+const HOSTS: usize = 5;
 /// The service of each host: 0 is `s1`, 1 is `s2`.
-const SERVICE: [usize; HOSTS] = [0, 0, 0, 1];
-const MAX_UPDATING: [u8; 2] = [1, 1];
-const MIN_UP: [u8; 2] = [1, 0];
+const SERVICE: [usize; HOSTS] = [0, 0, 0, 1, 1];
+const MAX_UPDATING: [u8; 2] = [1, 2];
+const MIN_UP: [u8; 2] = [0, 1];
 const LIVE_ROLLOUTS: usize = 1;
 /// The queue by `set_seq`: `s1` was set before `s2`.
 const SET_SEQ_ORDER: [usize; 2] = [0, 1];
@@ -137,7 +139,7 @@ impl Variant {
 }
 
 /// What a decision chose for its host.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 enum Choice {
     /// The host already has an order row: the reply carries it.
     Found,
@@ -148,7 +150,7 @@ enum Choice {
 }
 
 /// Where an instance is in its beat.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 enum Pc {
     Idle,
     /// A beat of the host arrived.
@@ -175,7 +177,7 @@ enum Pc {
     },
 }
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 struct Inst {
     pc: Pc,
     /// Hung inside its transaction: it takes no step until the server ends the transaction.
@@ -483,6 +485,20 @@ impl Model for Orders {
         }
     }
 
+    /// The instances in sorted order, the gate's holder renamed with them: no step and no
+    /// invariant names an instance (instance 0's queue is fixed only in the initial states), so
+    /// two states that differ only by which instance is which are one state.
+    fn canonical(&self, mut s: State) -> State {
+        let mut by: Vec<usize> = (0..s.insts.len()).collect();
+        by.sort_by(|a, b| s.insts[*a].cmp(&s.insts[*b]));
+        s.gate = s.gate.map(|g| {
+            let at = by.iter().position(|i| *i == usize::from(g)).unwrap_or(0);
+            u8::try_from(at).unwrap_or(u8::MAX)
+        });
+        s.insts = by.iter().map(|i| s.insts[*i].clone()).collect();
+        s
+    }
+
     fn invariants(&self) -> Vec<Invariant<Self>> {
         vec![
             Invariant {
@@ -506,16 +522,32 @@ impl Model for Orders {
             Invariant {
                 name: "stage_never_has_more_updating_hosts_than_max_updating",
                 check: Check::Always(|_, s: &State| {
-                    let updating: u8 = s.rows.orders[..3].iter().sum();
-                    (updating > MAX_UPDATING[0])
-                        .then(|| format!("{updating} hosts of s1 updating, max_updating 1"))
+                    (0..2).find_map(|svc| {
+                        let updating: u8 = (0..HOSTS)
+                            .filter(|h| SERVICE[*h] == svc)
+                            .map(|h| s.rows.orders[h])
+                            .sum();
+                        (updating > MAX_UPDATING[svc]).then(|| {
+                            format!(
+                                "{updating} hosts of s{} updating, max_updating {}",
+                                svc + 1,
+                                MAX_UPDATING[svc]
+                            )
+                        })
+                    })
                 }),
             },
             Invariant {
                 name: "min_up_holds_in_every_stage",
                 check: Check::Always(|_, s: &State| {
-                    let up = s.rows.orders[..3].iter().filter(|o| **o == 0).count();
-                    (up < usize::from(MIN_UP[0])).then(|| format!("{up} hosts of s1 up, min_up 1"))
+                    (0..2).find_map(|svc| {
+                        let up = (0..HOSTS)
+                            .filter(|h| SERVICE[*h] == svc && s.rows.orders[*h] == 0)
+                            .count();
+                        (up < usize::from(MIN_UP[svc])).then(|| {
+                            format!("{up} hosts of s{} up, min_up {}", svc + 1, MIN_UP[svc])
+                        })
+                    })
                 }),
             },
             Invariant {

@@ -216,6 +216,12 @@ pub fn compare(spec: &str, models: &[&ModelDef], tests: &[&str]) -> Result<(), S
             }
         }
         for c in m.cases {
+            if c.fails_from.is_some_and(|n| !INSTANCES.contains(&n)) {
+                problems.push(format!(
+                    "the variant {} of {} fails from N = {:?}, which no run reaches",
+                    c.variant, m.name, c.fails_from
+                ));
+            }
             if !m.invariants.contains(&c.breaks) {
                 problems.push(format!(
                     "the variant {} of {} names {}, not an invariant of that model",

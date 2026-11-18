@@ -736,7 +736,7 @@ Needed:
    `interval` 2 s, `healthy_threshold` 2, `unhealthy_threshold` 2 (the edge's check does not exist yet; these are mine, to be
    confirmed with the edge's owner), DNS 1 s, so the new task is usable in about 1 + 4 + 2 = 7 s, and `--drain-delay-secs` 15,
    `stop_grace_period` 60. During the delay both tasks accept, so there is no instant when a host or an operator is refused.
-   The edge can still have no task marked healthy for a few seconds: the old task fails `unhealthy_threshold` checks (4 s)
+   With one task (replicas 1) the edge can still have no task marked healthy for a few seconds: the old task fails `unhealthy_threshold` checks (4 s)
    before the new one has passed `healthy_threshold` (up to 7 s), and in those seconds Envoy's panic mode sends connections to
    every task it knows, both of which accept (found by the model `drain` of section 14, M2; an earlier version of this item
    said panic mode never engages). The Mac listener (item 4) moves to the edge, so the task holds no host port through the delay.
@@ -776,7 +776,7 @@ sequenceDiagram
     E->>O: stop choosing O (503, unhealthy_threshold)
     Note over O: --drain-delay-secs elapsed (greater than DNS + healthy_threshold x interval + one interval)
     O->>O: stop accepting, finish in-flight, exit within stop_grace_period
-    Note over S,P: the edge has a healthy, accepting upstream at every moment
+    Note over S,P: no connection is refused: every task the edge sends to accepts (a healthy one, or each it lists in panic mode)
 ```
 
 ## 12. Configuration (every number is a key with a default)

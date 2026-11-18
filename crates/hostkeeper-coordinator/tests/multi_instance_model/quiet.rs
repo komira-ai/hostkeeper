@@ -213,8 +213,6 @@ pub struct State {
     gaps_left: u8,
     /// Which hosts have beaten since the last gap.
     beaten: [bool; HOSTS],
-    /// A committed order was decided with every host having beaten since the last gap.
-    ordered_clean: bool,
     /// A decision that read the operator's halt committed without a decision of its own.
     waited_on_operator_halt: bool,
     /// A committed order was decided in a gap.
@@ -302,7 +300,6 @@ impl Model for Quiet {
             operator: Operator::Pending,
             gaps_left: GAPS,
             beaten: [false; HOSTS],
-            ordered_clean: false,
             waited_on_operator_halt: false,
             order_in_gap: false,
             verdict_in_gap: false,
@@ -415,7 +412,6 @@ impl Model for Quiet {
                         Choice::WaitOnOperatorHalt => t.waited_on_operator_halt = true,
                         Choice::Order => {
                             t.rows.orders = true;
-                            t.ordered_clean |= !partial;
                             t.order_in_gap |= partial;
                             t.order_after_halt |= s.rows.operator_halt;
                         }
