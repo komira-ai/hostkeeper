@@ -19,7 +19,7 @@ autoinstall:
     install-server: true
     allow-pw: false
   late-commands:
-    - "curl --fail --silent --show-error --output /target/var/tmp/hostkeeper.deb http://192.0.2.10/deb/hostkeeper_arm64.deb"
+    - "curl --fail --silent --show-error --output /target/var/tmp/hostkeeper.deb http://192.0.2.10/deb/hostkeeper_amd64.deb"
     - "curtin in-target -- dpkg -i /var/tmp/hostkeeper.deb"
   user-data:
     hostname: "node-a"
@@ -43,7 +43,7 @@ autoinstall:
       - path: /etc/default/grub.d/99_hostkeeper.cfg
         owner: "root:root"
         permissions: "0644"
-        content: "GRUB_CMDLINE_LINUX=\"$GRUB_CMDLINE_LINUX console=tty0 console=ttyAMA0,115200n8\"\n"
+        content: "GRUB_CMDLINE_LINUX=\"$GRUB_CMDLINE_LINUX console=tty0 console=ttyS1,115200n8\"\nGRUB_TERMINAL=\"console serial\"\nGRUB_SERIAL_COMMAND=\"serial --unit=1 --speed=115200\"\n"
     runcmd:
       - [update-grub]
-      - [systemctl, enable, --now, serial-getty@ttyAMA0.service]
+      - [systemctl, enable, --now, serial-getty@ttyS1.service]
