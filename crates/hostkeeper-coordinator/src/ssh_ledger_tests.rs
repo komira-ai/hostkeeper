@@ -236,7 +236,7 @@ fn the_memory_ledger_lists_the_revoked_unexpired_serials_of_one_host() {
         ledger.revoked_serials("node-07"),
         Ok(vec![a.serial, b.serial])
     );
-    ledger.set_clock(AT + 100);
+    ledger.set_clock(AT + 101);
     assert_eq!(ledger.revoked_serials("node-07"), Ok(vec![b.serial]));
     assert_eq!(ledger.revoked_serials("node-08"), Ok(vec![c.serial]));
     ledger.refuse_next(1);
@@ -245,4 +245,29 @@ fn the_memory_ledger_lists_the_revoked_unexpired_serials_of_one_host() {
         Err(LedgerError::Unread(_))
     ));
     assert_eq!(ledger.revoked_serials("node-07"), Ok(vec![b.serial]));
+}
+
+/// Proves: the memory ledger lists a revoked serial through the second `expires_unix` itself
+/// (the certificate's `valid_before` is one later) and not from the next second, and revokes a
+/// certificate at that second too.
+///
+/// Catches: a serial dropped from the revoked list for the one second sshd still accepts the
+/// certificate.
+#[test]
+fn the_memory_ledger_keeps_a_revoked_serial_through_the_second_its_certificate_expires() {
+    let ledger = Memory::at(AT);
+    let a = ledger.issue(&issue("alice", "node-07", 100)).expect("a");
+    let b = ledger.issue(&issue("bob", "node-07", 100)).expect("b");
+    ledger
+        .revoke("carol", Revocation::Serial(a.serial))
+        .expect("revoked");
+    ledger.set_clock(a.issued_unix + 100);
+    assert_eq!(ledger.revoked_serials("node-07"), Ok(vec![a.serial]));
+    assert_eq!(ledger.revoke("carol", Revocation::Serial(b.serial)), Ok(1));
+    assert_eq!(
+        ledger.revoked_serials("node-07"),
+        Ok(vec![a.serial, b.serial])
+    );
+    ledger.set_clock(a.issued_unix + 101);
+    assert_eq!(ledger.revoked_serials("node-07"), Ok(Vec::new()));
 }

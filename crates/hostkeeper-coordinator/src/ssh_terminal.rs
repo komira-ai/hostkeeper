@@ -29,7 +29,7 @@
 //! The key lives in this task alone: it is made when the terminal opens, passed to the SSH client
 //! and dropped when the task ends. It is in no log, file or message.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -38,6 +38,8 @@ use hostkeeper_proto::hostkeeper::operator::v1::SshRefusal as Refusal;
 use hostkeeper_proto::hostkeeper::operator::v1::tunnel_frame::Frame;
 use hyper::upgrade::OnUpgrade;
 use hyper_util::rt::TokioIo;
+use russh::ChannelWriteHalf;
+use russh::client::Msg;
 use russh::keys::Certificate;
 use serde::Deserialize;
 use serde_json::json;
@@ -45,6 +47,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
 use tokio::task::AbortHandle;
 
+use crate::listen::Hold;
 use crate::operator::Caller;
 use crate::service::Coordinator;
 use crate::session::{SessionKey, SessionView};
@@ -63,6 +66,10 @@ const MAX_COLUMNS: u32 = 500;
 /// The most rows a terminal has.
 const MAX_ROWS: u32 = 200;
 
+/// The most messages of the browser that wait while a keystroke is being written to a host that
+/// does not take it: past them the browser is not read until the write is done.
+const MAX_WAITING: usize = 64;
+
 /// The most bytes of a text message read: a first message or a resize is far smaller.
 const MAX_TEXT: usize = 1024;
 
@@ -80,6 +87,9 @@ pub(crate) struct Start {
     pub(crate) host: String,
     /// How long the first message may take.
     pub(crate) patience: Duration,
+    /// The listener's slot of the connection that was upgraded, held until the terminal ends
+    /// (none for a terminal that no listener served).
+    pub(crate) slot: Option<Hold>,
 }
 
 /// What the browser sent, as the terminal task reads it.
@@ -130,10 +140,12 @@ pub(crate) async fn run(start: Start, upgrade: OnUpgrade) {
 }
 
 /// The terminal over `io`, a connection that speaks WebSocket from its first byte.
-pub(crate) async fn serve<S>(start: Start, io: S)
+pub(crate) async fn serve<S>(mut start: Start, io: S)
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
+    // The connection counts against its listener for as long as the terminal serves it.
+    let _slot = start.slot.take();
     let (read, write) = tokio::io::split(io);
     let outbox = Outbox::new(Writer::new(write));
     let (mut input, reader) = listen(read, outbox.clone());
@@ -315,6 +327,7 @@ where
         view,
         host,
         patience,
+        ..
     } = start;
     let hello = match tokio::time::timeout(patience, input.recv()).await {
         Ok(Some(Input::Text(text))) => serde_json::from_str::<Hello>(&text).ok(),
@@ -415,23 +428,34 @@ where
     } = shell;
     let (coordinator, session) = session;
     let typing = async {
+        // What the browser sent while a keystroke was being written, in order.
+        let mut waiting = VecDeque::new();
         loop {
-            match input.recv().await {
-                Some(Input::Binary(bytes)) => {
+            let next = match waiting.pop_front() {
+                Some(next) => next,
+                None => match input.recv().await {
+                    Some(next) => next,
+                    None => return End::Browser,
+                },
+            };
+            match next {
+                Input::Binary(bytes) => {
                     // What is typed is a use of the session: it does not idle out under a
                     // terminal that is in use.
                     touch(coordinator, session);
-                    // A connection that is gone is told by the shell's output, which ends.
-                    let _ = keys.data_bytes(bytes).await;
+                    if let Some(end) = type_into(keys, bytes, input, &mut waiting).await {
+                        return end;
+                    }
                 }
-                Some(Input::Text(text)) => match resize_of(&text) {
+                Input::Text(text) => match resize_of(&text) {
                     Some((columns, rows)) => {
+                        // A connection that is gone is told by the shell's output, which ends.
                         let _ = keys.window_change(columns, rows, 0, 0).await;
                     }
                     None => return End::Bad,
                 },
-                Some(Input::Bad) => return End::Bad,
-                Some(Input::Gone) | None => return End::Browser,
+                Input::Bad => return End::Bad,
+                Input::Gone => return End::Browser,
             }
         }
     };
@@ -456,6 +480,31 @@ where
     tokio::select! {
         end = typing => end,
         end = showing => end,
+    }
+}
+
+/// Writes `bytes` to the shell, which waits while the host's window is full: the browser is read
+/// meanwhile (up to [`MAX_WAITING`] messages, which are kept in `waiting` for after the write), so
+/// a browser that leaves or breaks the protocol ends the relay at once instead of after a host
+/// that does not read its input. The end of the relay, if the browser ended it.
+async fn type_into(
+    keys: &ChannelWriteHalf<Msg>,
+    bytes: Vec<u8>,
+    input: &mut mpsc::Receiver<Input>,
+    waiting: &mut VecDeque<Input>,
+) -> Option<End> {
+    // A connection that is gone is told by the shell's output, which ends.
+    let mut written = std::pin::pin!(keys.data_bytes(bytes));
+    loop {
+        let listening = waiting.len() < MAX_WAITING;
+        tokio::select! {
+            _ = &mut written => return None,
+            next = input.recv(), if listening => match next {
+                Some(next @ (Input::Text(_) | Input::Binary(_))) => waiting.push_back(next),
+                Some(Input::Bad) => return Some(End::Bad),
+                Some(Input::Gone) | None => return Some(End::Browser),
+            },
+        }
     }
 }
 

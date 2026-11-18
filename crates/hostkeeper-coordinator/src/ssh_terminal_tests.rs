@@ -20,6 +20,7 @@ use crate::ssh_ledger::{Ledger as _, Revocation};
 use crate::ssh_sign::refusal_token;
 use crate::ssh_sign::tests::Tune;
 use crate::websocket::tests::client_frame;
+use tokio::sync::watch;
 
 fn pinned() -> Option<Vec<String>> {
     Some(vec![host_fingerprint()])
@@ -488,14 +489,14 @@ async fn the_browser_closing_the_socket_ends_the_tunnel() {
     assert_eq!(lines.last().map(|line| line.1), Some(TUNNEL_CLOSE));
 }
 
-/// Proves: a revoked certificate, an operator taken out of the operators file and a session that
-/// ended (signed out) each close the terminal at the next poll with the tunnel's cause (`revoked`,
-/// `not_permitted`, `token_revoked`), told as the last message.
+/// Proves: a revoked certificate and an operator taken out of the operators file each close the
+/// terminal at the next poll with the tunnel's cause (`revoked`, `not_permitted`), told as the
+/// last message, and the book holds the tunnel's close in both cases. (A session that ended is
+/// `a_terminal_lives_as_long_as_its_session_and_needs_no_token`.)
 ///
-/// Catches: a terminal that outlives the certificate, the permission or the sign-in it was made
-/// under.
+/// Catches: a terminal that outlives the certificate or the permission it was made under.
 #[tokio::test]
-async fn a_revoked_certificate_a_removed_operator_and_an_ended_session_close_the_terminal() {
+async fn a_revoked_certificate_and_a_removed_operator_close_the_terminal() {
     let mut site = site("term-poll-ends").await;
     let mut browser = open_terminal(&site).await;
     let serial = *site
@@ -522,6 +523,8 @@ async fn a_revoked_certificate_a_removed_operator_and_an_ended_session_close_the
     .expect("a new operators file");
     site.rig.poll().await;
     browser.closed("not_permitted").await;
+    let id = site.opened().await;
+    site.rig.closed(id).await;
 }
 
 /// Proves: a terminal's credential is its login session and not a token: the operator of a session
@@ -597,7 +600,7 @@ async fn typing_in_a_terminal_keeps_its_session_from_idling_out() {
     assert!(!sessions.is_live(&site.session.1));
 }
 
-/// Proves: after the shell is open, a resize outside 1..500 by 1..200, a text message that is not
+/// Proves: after the shell is open, a resize outside 1..=500 by 1..=200 (0 or 501 columns, 0 or 201 rows), a text message that is not
 /// a resize, a type that is not `resize` and a binary message of more than 16 KiB each end the
 /// terminal `bad_request`.
 ///
@@ -610,6 +613,8 @@ async fn a_message_the_terminal_does_not_take_ends_it_bad_request() {
     let cases: Vec<Vec<u8>> = vec![
         client_frame(1, br#"{"type":"resize","cols":0,"rows":24}"#),
         client_frame(1, br#"{"type":"resize","cols":80,"rows":201}"#),
+        client_frame(1, br#"{"type":"resize","cols":501,"rows":24}"#),
+        client_frame(1, br#"{"type":"resize","cols":80,"rows":0}"#),
         client_frame(1, br#"{"type":"scroll","cols":80,"rows":24}"#),
         client_frame(1, b"typed as text"),
         client_frame(2, &too_big),
@@ -670,4 +675,146 @@ fn a_refusal_is_told_by_its_lower_case_name() {
         "too_many_tunnels"
     );
     assert_eq!(super::REASON, "coordinator UI terminal");
+}
+
+/// Proves: the smallest and the largest size are taken: a first message of 1x1 and one of 500x200
+/// each reach the host as the pty's size, and a resize to 500x200 and to 1x1 each reach it as a
+/// window change; none ends the terminal.
+///
+/// Catches: a range that is off by one at either end, which would end a working terminal at the
+/// biggest window (or refuse the smallest).
+#[tokio::test]
+async fn the_smallest_and_the_largest_size_are_taken_first_and_as_a_resize() {
+    for (name, columns, rows) in [("term-size-min", 1, 1), ("term-size-max", 500, 200)] {
+        let mut site = site(name).await;
+        let mut browser = site.connect(HOST);
+        browser.text(&site.hello(columns, rows)).await;
+        browser.status("signing").await;
+        browser.status("connecting").await;
+        browser.status("opened").await;
+        assert!(matches!(site.seen.recv().await, Some(Seen::Login(..))));
+        assert_eq!(
+            site.seen.recv().await,
+            Some(Seen::Pty("xterm-256color".to_owned(), columns, rows))
+        );
+        for (columns, rows) in [(500, 200), (1, 1)] {
+            let resize = format!(r#"{{"type":"resize","cols":{columns},"rows":{rows}}}"#);
+            browser.text(&resize).await;
+            browser
+                .output_until(format!("winch {columns}x{rows}\r\n").as_bytes())
+                .await;
+        }
+        browser.binary(b"exit\r").await;
+        browser.closed("exit").await;
+    }
+}
+
+/// Proves: a host that sends more than 64 KiB of output before it answers the shell request and
+/// never answers is dropped: the terminal ends before the shell is open (no `opened`), and the
+/// tunnel is closed.
+///
+/// Catches: output of a host that stays unanswered held in the coordinator's memory without
+/// bound.
+#[tokio::test]
+async fn a_host_that_floods_output_before_it_answers_ends_the_terminal() {
+    let mut site = Site::new(
+        "term-flood",
+        Kind::Ssh(Behavior {
+            floods: true,
+            ..Behavior::good()
+        }),
+        pinned(),
+    )
+    .await;
+    let mut browser = site.connect(HOST);
+    browser.text(&site.hello(80, 24)).await;
+    let before = browser.closed("error").await;
+    assert_eq!(steps(&before), ["signing", "connecting"]);
+    let id = site.opened().await;
+    site.rig.closed(id).await;
+}
+
+/// A site whose host reads no input until `open` is sent `true`.
+async fn deaf_site(name: &str) -> (Site, watch::Sender<bool>) {
+    let (open, held) = watch::channel(false);
+    let site = Site::new(
+        name,
+        Kind::Ssh(Behavior {
+            holds_input: Some(held),
+            ..Behavior::good()
+        }),
+        pinned(),
+    )
+    .await;
+    (site, open)
+}
+
+/// Proves: a browser that closes the socket, or breaks the protocol, while the host is not reading
+/// what was typed (its window is full) ends the terminal and the tunnel at once, the first with
+/// nothing told and the second `bad_request`.
+///
+/// Catches: a relay stuck in a keystroke's write that never sees the browser leave, and holds the
+/// terminal, the SSH session and the tunnel's slot until the tunnel's own limits.
+#[tokio::test]
+async fn a_browser_that_leaves_while_the_host_reads_no_input_ends_the_terminal() {
+    let (mut site, _open) = deaf_site("term-deaf-leaves").await;
+    let mut browser = open_terminal(&site).await;
+    browser.output_until(b"welcome\r\n").await;
+    browser.binary(&vec![b'a'; 16 * 1024]).await;
+    browser.binary(b"waiting").await;
+    browser
+        .text(r#"{"type":"resize","cols":90,"rows":30}"#)
+        .await;
+    browser.raw(&close_frame()).await;
+    assert_eq!(browser.next().await, Sent::Close(1000));
+    assert_eq!(browser.next().await, Sent::End);
+    let id = site.opened().await;
+    site.rig.closed(id).await;
+
+    let mut browser = open_terminal(&site).await;
+    browser.output_until(b"welcome\r\n").await;
+    browser.binary(&vec![b'a'; 16 * 1024]).await;
+    browser.raw(&[0x81, 0x01, b'x']).await;
+    browser.closed("bad_request").await;
+    let id = site.opened().await;
+    site.rig.closed(id).await;
+}
+
+/// Proves: what the browser sends while a keystroke waits for the host's window is not lost or
+/// reordered, nor is it all read at once: a large keystroke message and, behind it, a resize and
+/// more messages than the relay keeps waiting (64) all reach the host in order once it reads: the
+/// host echoes the large message's bytes, then the small ones, and the resize is a window change
+/// between them.
+///
+/// Catches: a relay that drops or reorders what is typed while a write waits, and one that lets
+/// the browser queue messages without a bound.
+#[tokio::test]
+async fn what_is_typed_while_the_host_reads_no_input_arrives_in_order_once_it_does() {
+    let (mut site, open) = deaf_site("term-deaf-order").await;
+    let mut browser = open_terminal(&site).await;
+    browser.binary(&vec![b'a'; 16 * 1024]).await;
+    browser
+        .text(r#"{"type":"resize","cols":90,"rows":30}"#)
+        .await;
+    for _ in 0..80 {
+        browser.binary(b"k").await;
+    }
+    open.send(true).expect("the host is listening");
+    browser.binary(b"exit\r").await;
+    let before = browser.closed("exit").await;
+    let output: Vec<u8> = before
+        .into_iter()
+        .filter_map(|sent| match sent {
+            Sent::Binary(bytes) => Some(bytes),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    let mut expected = b"welcome\r\n".to_vec();
+    expected.extend(vec![b'a'; 16 * 1024]);
+    expected.extend_from_slice(b"winch 90x30\r\n");
+    expected.extend(std::iter::repeat_n(b'k', 80));
+    assert_eq!(output, expected);
+    let id = site.opened().await;
+    site.rig.closed(id).await;
 }

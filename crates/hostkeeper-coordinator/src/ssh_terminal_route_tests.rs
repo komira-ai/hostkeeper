@@ -18,12 +18,13 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use super::Shared;
 use crate::http::{Surface, handle};
 use crate::listen::tests::{connector, tls_material};
-use crate::listen::{CLIENT_PATIENCE, connection};
+use crate::listen::{CLIENT_PATIENCE, accept_each, connection};
 use crate::login::Login;
 use crate::login_support::{Seconds, counting, settings};
 use crate::service::Coordinator;
-use crate::ssh_host_tests::{Behavior, Browser, Kind, Site, host_fingerprint};
+use crate::ssh_host_tests::{Behavior, Browser, Kind, Sent, Site, host_fingerprint};
 use crate::testutil::Rig as ScratchRig;
+use crate::websocket::tests::client_frame;
 
 const PATIENCE: Duration = Duration::from_secs(10);
 
@@ -440,4 +441,58 @@ async fn the_listener_serves_the_upgrade_on_an_http1_connection() {
     let wrong = site.hello(80, 24).replace(&site.csrf, "not-the-token");
     browser.text(&wrong).await;
     browser.closed("bad_request").await;
+}
+
+/// Proves: an upgraded connection keeps its slot of the listener while its terminal lives: with a
+/// listener whose slots are two (one for the connection, one the accept loop holds for the next),
+/// after the `101` and a ping the terminal answers, the connection still holds its slot, and the
+/// slot is free once the terminal has ended.
+///
+/// Catches: a listener that frees the slot of a connection at the upgrade, so that the sockets of
+/// terminals are not counted against its limit.
+#[tokio::test]
+async fn an_upgraded_connection_holds_its_slot_until_the_terminal_ends() {
+    let site = Site::new("route-slot", Kind::Ssh(Behavior::good()), None).await;
+    let (source, ca) = tls_material();
+    let (client, server) = tokio::io::duplex(1 << 20);
+    let slots = Arc::new(tokio::sync::Semaphore::new(2));
+    let mut connections = Some(server);
+    let accept = move || {
+        let next = connections.take();
+        async move {
+            match next {
+                Some(stream) => Ok(stream),
+                None => std::future::pending().await,
+            }
+        }
+    };
+    let coordinator = Arc::clone(&site.rig.coordinator);
+    let accepting = tokio::spawn(accept_each(accept, Arc::clone(&slots), move |stream| {
+        connection(
+            stream,
+            source.clone(),
+            Surface::Control,
+            Arc::clone(&coordinator),
+            CLIENT_PATIENCE,
+        )
+    }));
+    let mut tls = connector(&ca, &[b"http/1.1"])
+        .connect(ServerName::try_from("localhost").expect("a name"), client)
+        .await
+        .expect("a handshake");
+    let head = upgrade(&mut tls, "localhost", &site.session.0).await;
+    assert!(head.starts_with("HTTP/1.1 101 "), "{head}");
+    let mut browser = Browser::over(tls, tokio::spawn(async {}));
+    browser.raw(&client_frame(9, b"alive")).await;
+    assert_eq!(browser.next().await, Sent::Pong(b"alive".to_vec()));
+    for _ in 0..16 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(slots.available_permits(), 0);
+    let wrong = site.hello(80, 24).replace(&site.csrf, "not-the-token");
+    browser.text(&wrong).await;
+    browser.closed("bad_request").await;
+    // The slot comes back once the connection is over, and not before.
+    let _freed = slots.acquire().await.expect("a slot");
+    accepting.abort();
 }

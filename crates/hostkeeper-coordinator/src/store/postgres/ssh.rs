@@ -27,6 +27,33 @@ impl PgLedger {
     pub(crate) fn new(store: Postgres) -> PgLedger {
         PgLedger { store }
     }
+
+    /// The serials [`Ledger::revoked_serials`] gives, as of the unix second `at`, or as of the
+    /// database's clock when `at` is none. A certificate is listed through the second
+    /// `expires_unix` itself, because its `valid_before` is `expires_unix + 1`.
+    pub(in crate::store::postgres) fn revoked_serials_at(
+        &self,
+        host_id: &str,
+        at: Option<u64>,
+    ) -> Result<Vec<u64>, LedgerError> {
+        let host_id = host_id.to_owned();
+        let at = at.map(signed);
+        self.store
+            .read(move |session| {
+                let rows = session.query(
+                    "SELECT c.serial FROM ssh_cert c JOIN ssh_revocation r ON r.serial = c.serial \
+                     WHERE c.host_id = $1 \
+                     AND c.expires_unix + 1 > COALESCE($2::bigint, floor(extract(epoch FROM now()))::bigint) \
+                     ORDER BY c.serial",
+                    &[&host_id, &at],
+                )?;
+                Ok(rows
+                    .iter()
+                    .map(|row| unsigned(row.get::<_, i64>(0)))
+                    .collect())
+            })
+            .map_err(LedgerError::Unread)
+    }
 }
 
 /// A count or a time of the database as the unsigned number it is.
@@ -164,13 +191,13 @@ impl Ledger for PgLedger {
                 (Some(name), _) => tx.execute(
                     "INSERT INTO ssh_revocation (serial, by_name, at_unix) \
                      SELECT serial, $2, $3 FROM ssh_cert \
-                     WHERE operator = $1 AND expires_unix > $3 ON CONFLICT DO NOTHING",
+                     WHERE operator = $1 AND expires_unix + 1 > $3 ON CONFLICT DO NOTHING",
                     &[name, &by, &signed(now)],
                 )?,
                 (None, n) => tx.execute(
                     "INSERT INTO ssh_revocation (serial, by_name, at_unix) \
                      SELECT serial, $2, $3 FROM ssh_cert \
-                     WHERE serial = $1 AND expires_unix > $3 ON CONFLICT DO NOTHING",
+                     WHERE serial = $1 AND expires_unix + 1 > $3 ON CONFLICT DO NOTHING",
                     &[&n, &by, &signed(now)],
                 )?,
             };
@@ -213,21 +240,6 @@ impl Ledger for PgLedger {
     }
 
     fn revoked_serials(&self, host_id: &str) -> Result<Vec<u64>, LedgerError> {
-        let host_id = host_id.to_owned();
-        self.store
-            .read(move |session| {
-                let rows = session.query(
-                    "SELECT c.serial FROM ssh_cert c JOIN ssh_revocation r ON r.serial = c.serial \
-                     WHERE c.host_id = $1 \
-                     AND c.expires_unix > floor(extract(epoch FROM now()))::bigint \
-                     ORDER BY c.serial",
-                    &[&host_id],
-                )?;
-                Ok(rows
-                    .iter()
-                    .map(|row| unsigned(row.get::<_, i64>(0)))
-                    .collect())
-            })
-            .map_err(LedgerError::Unread)
+        self.revoked_serials_at(host_id, None)
     }
 }

@@ -50,6 +50,9 @@ struct Held {
     fingerprints: Vec<String>,
     /// The serials the revoked list holds, when it was written by this setup.
     serials: Option<Vec<u64>>,
+    /// The login user the last enabled record was planned for: the record's own, or the one the
+    /// host resolved when the record named none (a Mac's single administrator).
+    login_user: Option<String>,
 }
 
 /// A record taken up, and what came of it.
@@ -171,6 +174,7 @@ impl SshSetup {
             login_user,
             ..access.clone()
         })?;
+        held.login_user = Some(plan.login_user.clone());
         let unit = self.host.unit().map_err(|why| match why {
             UnitError::Missing => Refused::new(SshState::SshdMissing, "unit"),
             UnitError::Masked => Refused::new(SshState::Unsupported, "unit_masked"),
@@ -289,12 +293,19 @@ impl SshSetup {
         reloaded.inspect_err(|_| self.roll_back(&snapshot, &unit))
     }
 
-    /// Whether the files of the held record are what it asks for.
+    /// Whether the files of the held record are what it asks for, planned for the login user the
+    /// apply used (the host's choice when the record names none).
     fn drifted(&self, access: &PushedSsh, held: &Held) -> bool {
         match (held.taken.map(|taken| taken.state), access.enabled) {
-            (Some(SshState::Applied), true) => plan(access).is_ok_and(|plan| {
-                let files = wanted(&self.paths, &plan, None);
-                !(current(&self.paths, &files) && held.serials.as_ref() == Some(&plan.serials))
+            (Some(SshState::Applied), true) => held.login_user.as_ref().is_some_and(|login_user| {
+                let record = PushedSsh {
+                    login_user: login_user.clone(),
+                    ..access.clone()
+                };
+                plan(&record).is_ok_and(|plan| {
+                    let files = wanted(&self.paths, &plan, None);
+                    !(current(&self.paths, &files) && held.serials.as_ref() == Some(&plan.serials))
+                })
             }),
             (Some(SshState::Disabled), false) => self.paths.drop_in().exists(),
             _ => false,

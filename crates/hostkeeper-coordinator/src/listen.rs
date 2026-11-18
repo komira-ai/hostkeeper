@@ -18,7 +18,8 @@
 //! extended CONNECT); an HTTP/2 connection has a limit on its streams, pings its peer, takes new
 //! calls for one patience only and is closed one patience after that, or, when it holds a
 //! `Releases.WaitConverged` call then, one patience after the last such call ends
-//! ([`crate::wait`]); a listener has a limit on its connections.
+//! ([`crate::wait`]); a listener has a limit on its connections, and an upgraded HTTP/1.1
+//! connection counts against it until the upgraded socket ends ([`Hold`]).
 
 use std::convert::Infallible;
 use std::io;
@@ -38,7 +39,7 @@ use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use rustls::ServerConfig;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::Semaphore;
+use tokio::sync::{Semaphore, mpsc};
 use tokio::time::{Instant, Sleep};
 use tokio_rustls::TlsAcceptor;
 
@@ -68,7 +69,9 @@ pub const MAX_STREAMS: u32 = 16;
 /// body or an unread response in flight holds one for at most [`CLIENT_PATIENCE`] each, and an
 /// HTTP/2 connection is closed two patiences after its handshake (or one after the last held
 /// wait on it, of which a coordinator holds at most [`crate::wait::MAX_WAITS`]), so the cap makes
-/// a flood wait in the kernel's backlog rather than take the process's descriptors and memory.
+/// a flood wait in the kernel's backlog rather than take the process's descriptors and memory. An
+/// upgraded HTTP/1.1 connection (the UI's terminal) holds its slot for as long as the upgraded
+/// socket lives, which its own task bounds.
 pub const MAX_CONNECTIONS: usize = 1024;
 
 /// A transport that can say where it came from.
@@ -111,7 +114,8 @@ pub fn accept_tcp(
 
 /// Serves `listener` for `coordinator` for as long as the future is polled. A client gets
 /// `patience` for its handshake, again for its request head, again for its request body and
-/// again for each write of a response that it does not read, and at most `max_connections` are served at once. It never returns.
+/// again for each write of a response that it does not read, and at most `max_connections` are served at once (an
+/// upgraded socket is served until it ends). It never returns.
 pub fn serve<A, F, S>(
     listener: Listener<A>,
     coordinator: Arc<Coordinator>,
@@ -193,6 +197,13 @@ where
             }
         }
     }
+}
+
+/// Held by an upgraded socket: the connection that was upgraded ends, and so frees its slot of the
+/// listener, only when every hold on it is dropped.
+#[derive(Clone)]
+pub(crate) struct Hold {
+    _held: mpsc::Sender<()>,
 }
 
 /// What a connection hands each of its requests besides the request: its held waits, the
@@ -366,10 +377,13 @@ pub(crate) async fn connection_with<S>(
     let speaks_h2 = tls.get_ref().1.alpn_protocol() == Some(H2);
     let waits = ConnectionWaits::default();
     let held = waits.clone();
+    let (held_by, mut upgraded) = mpsc::channel::<()>(1);
+    let hold = Hold { _held: held_by };
     let service = service_fn(move |mut request: hyper::Request<Incoming>| {
         let coordinator = Arc::clone(&coordinator);
         let peer = peer.clone();
         carry(&mut request, &held, remote, &coordinator);
+        request.extensions_mut().insert(hold.clone());
         async move { Ok::<_, Infallible>(route(&coordinator, surface, &peer, request, patience).await) }
     });
     let io = TokioIo::new(WriteDeadline::new(tls, patience));
@@ -405,6 +419,9 @@ pub(crate) async fn connection_with<S>(
     if let Err(why) = served {
         tracing::debug!(%why, "a connection ended badly");
     }
+    // An upgrade ends the connection's own service and leaves the socket to its task: the
+    // connection is not over, and its slot is not free, until that task lets go of its hold.
+    upgraded.recv().await;
 }
 
 /// Looks at everything that is re-read while the coordinator runs, every `interval`, for as long

@@ -6,7 +6,8 @@
 //! The server takes a certificate only when the test's CA signed it, it is a user certificate, it
 //! is valid at the ledger's time and its principal is `hk-host-<host id>`; it answers a pty and a
 //! shell, and then echoes what it is typed, tells a window change (`winch <cols>x<rows>`), ends the
-//! shell on `exit`, writes to standard error on `err`, and writes 40,000 bytes on `big`.
+//! shell on `exit`, writes to standard error on `err`, and writes 40,000 bytes on `big`. A host can
+//! instead flood output before it answers the shell request, or hold its input.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,7 +20,7 @@ use russh::{Channel, ChannelId};
 use serde_json::Value;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, DuplexStream};
 use tokio::net::TcpListener;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 use crate::session::{SessionKey, Sessions};
 use crate::ssh_cert::fingerprint;
@@ -48,6 +49,12 @@ pub(crate) struct Behavior {
     pub(crate) speaks_after: bool,
     /// Whether the channel is refused when it is opened.
     pub(crate) refuse_channel: bool,
+    /// Whether the shell sends 128 KiB of output before it answers the request, and never
+    /// answers.
+    pub(crate) floods: bool,
+    /// A host that reads no input until the watched value is `true`, and whose window for it is
+    /// 4 KiB.
+    pub(crate) holds_input: Option<watch::Receiver<bool>>,
 }
 
 impl Behavior {
@@ -61,6 +68,8 @@ impl Behavior {
             greets: true,
             speaks_after: false,
             refuse_channel: false,
+            floods: false,
+            holds_input: None,
         }
     }
 }
@@ -162,6 +171,12 @@ impl server::Handler for Sshd {
         if self.behavior.close_on_shell {
             return session.close(channel);
         }
+        if self.behavior.floods {
+            for _ in 0..8 {
+                session.data(channel, vec![b'x'; 16 * 1024])?;
+            }
+            return Ok(());
+        }
         if self.behavior.greets {
             // Output before the reply, as a shell that prints its banner at once does.
             session.data(channel, &b"welcome\r\n"[..])?;
@@ -181,6 +196,11 @@ impl server::Handler for Sshd {
         data: &[u8],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
+        if let Some(open) = &self.behavior.holds_input {
+            // The host's session is stuck here: nothing more is read from the connection.
+            let mut open = open.clone();
+            let _ = open.wait_for(|open| *open).await;
+        }
         match data {
             b"exit\r" => {
                 session.exit_status_request(channel, 0)?;
@@ -311,6 +331,7 @@ impl Site {
                 .expect("a live session"),
             host: host.to_owned(),
             patience: Duration::from_secs(10),
+            slot: None,
         }
     }
 
@@ -368,6 +389,13 @@ async fn host(
         auth_rejection_time: Duration::ZERO,
         auth_rejection_time_initial: Some(Duration::ZERO),
         inactivity_timeout: None,
+        window_size: match &kind {
+            Kind::Ssh(Behavior {
+                holds_input: Some(_),
+                ..
+            }) => 4096,
+            _ => server::Config::default().window_size,
+        },
         ..server::Config::default()
     });
     while let Ok((socket, _)) = listener.accept().await {

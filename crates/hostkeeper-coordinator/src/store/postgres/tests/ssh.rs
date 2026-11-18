@@ -216,6 +216,11 @@ fn a_revocation_counts_the_certificates_it_newly_revokes() {
         .issue(&issue("alice", "node-08", 3600))
         .expect("signed");
     let expired = ledger.issue(&issue("alice", "node-09", 0)).expect("signed");
+    db.run(&format!(
+        "UPDATE ssh_cert SET expires_unix = expires_unix - 1 WHERE serial = {}",
+        expired.serial
+    ))
+    .expect("a certificate past its valid_before");
     let other = ledger
         .issue(&issue("bob", "node-07", 3600))
         .expect("signed");
@@ -296,6 +301,11 @@ fn the_revoked_serials_of_a_host_are_its_own_unexpired_revoked_certificates() {
         .issue(&issue("bob", "node-07", 3600))
         .expect("signed");
     let expired = ledger.issue(&issue("alice", "node-07", 0)).expect("signed");
+    db.run(&format!(
+        "UPDATE ssh_cert SET expires_unix = expires_unix - 1 WHERE serial = {}",
+        expired.serial
+    ))
+    .expect("a certificate past its valid_before");
     assert_eq!(
         ledger.revoke("carol", Revocation::Serial(own.serial)),
         Ok(1)
@@ -320,6 +330,38 @@ fn the_revoked_serials_of_a_host_are_its_own_unexpired_revoked_certificates() {
             .revoked_serials("node-07")
             .expect("read")
             .contains(&kept.serial)
+    );
+}
+
+/// Proves: a revoked certificate is listed through the second `expires_unix` itself, which is
+/// still before its `valid_before` (`expires_unix + 1`), and not from the next second on.
+///
+/// Catches: a serial dropped from the revoked list for the one second sshd still accepts the
+/// certificate.
+#[test]
+fn a_revoked_serial_is_listed_through_the_second_its_certificate_expires() {
+    let db = TestDatabase::new();
+    let (store, _) = db.open("coordinator").expect("the store opens");
+    let ledger = PgLedger::new(store);
+    let cert = ledger
+        .issue(&issue("alice", "node-07", 3600))
+        .expect("signed");
+    assert_eq!(
+        ledger.revoke("carol", Revocation::Serial(cert.serial)),
+        Ok(1)
+    );
+    let expires = cert.issued_unix + 3600;
+    assert_eq!(
+        ledger.revoked_serials_at("node-07", Some(expires - 1)),
+        Ok(vec![cert.serial])
+    );
+    assert_eq!(
+        ledger.revoked_serials_at("node-07", Some(expires)),
+        Ok(vec![cert.serial])
+    );
+    assert_eq!(
+        ledger.revoked_serials_at("node-07", Some(expires + 1)),
+        Ok(Vec::new())
     );
 }
 

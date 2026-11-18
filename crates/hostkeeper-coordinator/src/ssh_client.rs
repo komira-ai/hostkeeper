@@ -225,14 +225,25 @@ impl Shell {
     }
 }
 
+/// The most bytes of output the host may send before it answers a request that wants a reply: a
+/// shell's banner is a few lines, and a host that sends more without answering is not held in
+/// memory for it.
+pub(crate) const MAX_EARLY: usize = 64 * 1024;
+
 /// What the host sends to a request that wants a reply: the output it sent before the reply, and
-/// whether the reply was a success.
+/// whether the reply was a success. More than [`MAX_EARLY`] bytes before the reply is a broken
+/// connection.
 async fn reply(channel: &mut russh::Channel<Msg>) -> Result<Vec<Vec<u8>>, OpenError> {
-    let mut early = Vec::new();
+    let mut early: Vec<Vec<u8>> = Vec::new();
+    let mut held = 0_usize;
     loop {
         match channel.wait().await {
             Some(ChannelMsg::Success) => return Ok(early),
             Some(ChannelMsg::Data { data } | ChannelMsg::ExtendedData { data, .. }) => {
+                held = held.saturating_add(data.len());
+                if held > MAX_EARLY {
+                    return Err(OpenError::Connection);
+                }
                 early.push(data.to_vec());
             }
             Some(ChannelMsg::Failure) => return Err(OpenError::Shell),

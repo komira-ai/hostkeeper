@@ -8,16 +8,17 @@
 //!
 //! | answer | code | when |
 //! |---|---|---|
-//! | 403 | `forbidden` | the request has an `Authorization` header (a bearer is not taken here, and the cookie beside it is not read), or the session's user is no operator's name |
+//! | 403 | `forbidden` | the request has an `Authorization` header (a bearer is not taken here, and the cookie beside it is not read) |
 //! | 401 | `sign_in_required` | no cookie of a live session |
 //! | 403 | `csrf` | `Origin` is missing or is not `https://<authority>`, or `Sec-Fetch-Site` is present and not `same-origin` |
 //! | 403 | `password_change_required` | the session's user must choose a new password first |
+//! | 403 | `forbidden` | the session's user is no operator's name |
 //! | 400 | `bad_request` | the request is not an HTTP/1.1 WebSocket opening (`Upgrade`, `Connection`, version 13, key), or has no `host` in its query |
 //! | 404 | `not_configured` | the coordinator holds no SSH CA or no tunnels |
 //! | 500 | `internal` | the listener did not hand the route its coordinator (a request that came in by no listener) |
 //!
 //! Then `101 Switching Protocols`, with the accept key, and the terminal task takes the upgraded
-//! connection. The CSRF token cannot travel in a header a browser's WebSocket can set, so the
+//! connection, which keeps the listener's slot of it until the terminal ends. The CSRF token cannot travel in a header a browser's WebSocket can set, so the
 //! terminal's first message carries it.
 
 use std::sync::Arc;
@@ -29,6 +30,7 @@ use hyper::header::{AUTHORIZATION, CACHE_CONTROL, CONNECTION, ORIGIN, UPGRADE};
 use hyper::{Request, Response, StatusCode, Version};
 
 use crate::http::error;
+use crate::listen::Hold;
 use crate::login::{Login, authority, held, same_origin};
 use crate::service::Coordinator;
 use crate::ssh_terminal::{Start, run};
@@ -93,6 +95,8 @@ pub(crate) fn answer<B>(
     let Some(Shared(shared)) = request.extensions().get::<Shared>().cloned() else {
         return error(StatusCode::INTERNAL_SERVER_ERROR, "internal");
     };
+    // The socket the upgrade hands over keeps the listener's slot of its connection.
+    let slot = request.extensions().get::<Hold>().cloned();
     let upgrade = hyper::upgrade::on(&mut request);
     tokio::spawn(run(
         Start {
@@ -102,6 +106,7 @@ pub(crate) fn answer<B>(
             view: session.view,
             host,
             patience,
+            slot,
         },
         upgrade,
     ));

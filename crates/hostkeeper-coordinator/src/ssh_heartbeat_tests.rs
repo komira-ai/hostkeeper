@@ -377,7 +377,7 @@ async fn an_expired_certificates_serial_leaves_the_list() {
         .await
         .expect("sent");
     assert_eq!(with.revoked_serials, vec![serial]);
-    world.ledger.set_clock(NOW + 3600);
+    world.ledger.set_clock(NOW + 3601);
     let without = sent(&world, "node-07", &announcing(None))
         .await
         .expect("sent");

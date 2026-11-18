@@ -210,10 +210,11 @@ are those above.
 
 | Answer | Code | When |
 |---|---|---|
-| 403 | `forbidden` | the request has an `Authorization` header (a bearer is not taken on this route, and the cookie beside it is not read), or the session's user name is no operator's name |
+| 403 | `forbidden` | the request has an `Authorization` header (a bearer is not taken on this route, and the cookie beside it is not read) |
 | 401 | `sign_in_required` | no cookie of a live session |
 | 403 | `csrf` | `Origin` is missing or is not `https://<the host asked>`, or `Sec-Fetch-Site` is present and not `same-origin` |
 | 403 | `password_change_required` | the session's user must choose a new password first |
+| 403 | `forbidden` | the session's user name is no operator's name |
 | 400 | `bad_request` | not an HTTP/1.1 WebSocket opening (`Upgrade: websocket`, `Connection: Upgrade`, `Sec-WebSocket-Version: 13`, a 16-byte `Sec-WebSocket-Key`), or no `host` in the query |
 | 404 | `not_configured` | the coordinator holds no SSH CA or no tunnels |
 
@@ -242,14 +243,15 @@ Tunnels (a refusal is told by its token: `too_many_tunnels`, `host_not_live`, ..
 session; the SSH client of the coordinator then speaks to the host's sshd over the tunnel, which must present a host
 key whose `SHA256:` fingerprint is in the pinned set (else `host_key_mismatch`, and the certificate is never shown),
 logs in as the login user with the certificate (else `auth_refused`) and asks for a pty (`xterm-256color`, the size of
-the first message) and a shell (else `shell_refused`). The key is never written, logged or sent, and is dropped when the
+the first message) and a shell (else `shell_refused`); a host that sends more than 64 KiB of output before it answers either request is dropped (`error`). The key is never written, logged or sent, and is dropped when the
 terminal ends.
 
 **Ending.** The last message names the cause: a refusal's token as above, `exit` (the shell ended), `bad_request` (the
 browser sent what it may not: a message that is no resize, a size out of range, a binary message over 16 KiB), or a
 cause of the tunnel (see Closing): `idle`, `max_session`, `host_closed`, `revoked`, `not_permitted`,
 `coordinator_stopping`, `token_revoked` (the session ended), `error`. A browser that closes the socket gets no
-message; the SSH session and the tunnel end, and the audit holds `ssh_tunnel_close` as for any tunnel. What a
+message; the SSH session and the tunnel end, and the audit holds `ssh_tunnel_close` as for any tunnel. An
+upgraded socket keeps its slot of the private listener's connection limit until the terminal ends. A browser that leaves while the host is not reading what was typed ends the terminal at once. What a
 person types in the terminal counts as use of the session, so it does not idle out under a terminal in use; the poll
 asks whether the session lives without counting as use.
 
@@ -285,8 +287,10 @@ daemon that does not announce it, and the JSON route, are sent nothing; so is ev
   `--ssh-cp-ca-public-file`, or the public half of `--ssh-cp-ca-secret-file`.
 - `principal` (`hk-host-<host id>`), `login_user` (`--ssh-login-user-linux`, or `--ssh-login-user-macos` for a Mac)
   and `password_auth` (`--ssh-password-auth`).
-- `revoked_serials`: the serials of the host's own revoked certificates that have not expired by the database's
-  clock (a certificate is valid only for its host's principal, and an expired one is refused by sshd anyway).
+- `revoked_serials`: the serials of the host's own revoked certificates that sshd could still accept by the
+  database's clock: through the second of its expiry itself, as its `valid_before` is one second after (a certificate
+  is valid only for its host's principal, and one past its `valid_before` is refused by sshd anyway, on a host whose
+  clock agrees with the database's).
 - `enabled`: true, except for a control-plane host the coordinator holds no key for (neither control-plane flag):
   that host is sent `enabled = false` and no key, which makes its daemon revert what it set up. This is how the
   owner takes the control-plane class off the coordinator's trust.

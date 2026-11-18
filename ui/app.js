@@ -126,6 +126,17 @@ export function startApp({ doc, root, fetch, confirm, now, every, openSocket, pr
   let shown = null;
   let status = "";
   let generation = 0;
+  // What the latest rendering of the page asked to have run when it stops being the latest.
+  let leavers = [];
+
+  // Runs, once, what the rendering that stops being the latest asked for (`onLeave`).
+  function left() {
+    const due = leavers;
+    leavers = [];
+    for (const run of due) {
+      run();
+    }
+  }
 
   function frame(content) {
     const who = session.who()?.username ?? "";
@@ -336,6 +347,15 @@ export function startApp({ doc, root, fetch, confirm, now, every, openSocket, pr
       openSocket: typeof openSocket === "function" ? (path, handlers) => openSocket(path, handlers) : undefined,
       now: () => now(),
       navigate,
+      // Runs `run` once when this rendering of the page stops being the latest: the operator
+      // went to another page, signed out, or the page was drawn again; at once if it already has.
+      onLeave: (run) => {
+        if (mine === generation) {
+          leavers.push(run);
+        } else {
+          run();
+        }
+      },
       // Runs `run` every `seconds` while this rendering of the page is the latest; it stops itself
       // on the first tick after the operator has left, signed out or the page was drawn again, and
       // the returned function stops it at once.
@@ -374,6 +394,7 @@ export function startApp({ doc, root, fetch, confirm, now, every, openSocket, pr
 
   async function show() {
     generation += 1;
+    left();
     const mine = generation;
     const at = current;
     const [, title, page] = PAGES.find(([name]) => name === at.view);
@@ -400,6 +421,7 @@ export function startApp({ doc, root, fetch, confirm, now, every, openSocket, pr
 
   function onSession() {
     generation += 1;
+    left();
     status = "";
     shown = null;
     const who = session.who();

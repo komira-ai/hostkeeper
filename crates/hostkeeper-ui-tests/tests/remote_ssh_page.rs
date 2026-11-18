@@ -758,6 +758,54 @@ return { closes: socket.closes, status: status(doc) };"#,
     assert_eq!(out["out"]["status"], json!("You left the terminal."));
 }
 
+/// Proves: when the Host page is drawn again (a refresh builds a new panel) while a terminal sits
+/// idle, the old terminal's socket is closed at once, without any output from the host, and the
+/// new panel can open a terminal of its own; a terminal the operator already closed is not closed
+/// twice.
+///
+/// Catches: an idle shell kept open, with its tunnel and certificate session, behind a page nobody
+/// can see, until the server's idle limit.
+#[test]
+fn drawing_the_page_again_closes_an_idle_terminal() {
+    let mut ui = ui_for(&host("web-2", &[]), Some(json!({"state": "pinned"})));
+    // The page is read twice: the redraw asks the gateway again.
+    for (method, reply) in [
+        ("Hosts/Get", json!({"host": host("web-2", &[])})),
+        ("Services/List", json!({})),
+        ("Layout/Get", json!({})),
+        ("Ssh/HostKeys", json!({"state": "pinned"})),
+    ] {
+        ui.reply(&m(method), reply);
+    }
+    let out = run(
+        &mut ui,
+        "web-2",
+        r#"
+const doc = mount();
+fire(domNamed(doc, "open-terminal"), "click", {});
+await settle();
+const socket = seen.sockets[0];
+socket.handlers.open();
+say(socket, { type: "status", step: "opened", login_user: "ops" });
+const before = socket.closes;
+const again = mounted(await render(ctx)).root;
+const afterRedraw = socket.closes;
+fire(domNamed(again, "open-terminal"), "click", {});
+await settle();
+const second = seen.sockets[1];
+second.handlers.open();
+say(second, { type: "status", step: "opened", login_user: "ops" });
+fire(domNamed(again, "close-terminal"), "click", {});
+await settle();
+await render(ctx);
+return { before, afterRedraw, sockets: seen.sockets.length, secondCloses: second.closes };"#,
+    );
+    assert_eq!(out["out"]["before"], json!(0));
+    assert_eq!(out["out"]["afterRedraw"], json!(1));
+    assert_eq!(out["out"]["sockets"], json!(2));
+    assert_eq!(out["out"]["secondCloses"], json!(1));
+}
+
 /// Proves: text messages the page does not understand (not JSON, not an object, an unknown type, a
 /// status step it has no words for) change nothing.
 ///
@@ -834,4 +882,71 @@ export async function main() {
         out["sent"],
         json!(["{\"csrf\":\"csrf_5b2e91c7d4a06f38\",\"cols\":120,\"rows\":36}"])
     );
+}
+
+/// Proves: through the app, an idle terminal (no byte from the host) is closed as soon as the
+/// operator goes to another page, and one is closed when the operator signs out; the socket of a
+/// terminal the operator stays with is not.
+///
+/// Catches: a terminal left open, unseen, after its page is gone, holding a tunnel and a
+/// certificate's session until the coordinator's idle limit.
+#[test]
+fn leaving_the_page_or_signing_out_closes_an_idle_terminal() {
+    let ui = Ui::start();
+    ui.session("csrf_5b2e91c7d4a06f38");
+    for _ in 0..6 {
+        ui.reply(&m("Hosts/List"), json!({"hosts": []}));
+        ui.reply(&m("Releases/Status"), json!({}));
+        ui.reply(&m("Alerts/List"), json!({}));
+        ui.reply(&m("Layout/Get"), json!({}));
+        ui.reply(&m("Enrollment/ListRecords"), json!({}));
+        ui.reply(&m("Hosts/Get"), json!({"host": host("web-2", &[])}));
+        ui.reply(&m("Ssh/HostKeys"), json!({"state": "pinned"}));
+    }
+    let mut ui = ui;
+    let out = ui.run(
+        r#"
+import { fakeDocument, settle, domNamed, fire } from "../test/kit.js";
+import { startApp } from "./app.js";
+export async function main() {
+  const doc = fakeDocument();
+  const closes = [];
+  const opened = [];
+  const app = startApp({
+    doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000,
+    openSocket: (path, handlers) => {
+      const at = closes.length;
+      closes.push(0);
+      opened.push(handlers);
+      return { send: () => {}, close: () => { closes[at] += 1; } };
+    },
+  });
+  await settle();
+  const open = async () => {
+    app.navigate("host", { nodeId: "web-2" });
+    await settle();
+    fire(domNamed(doc.root, "tab-ssh"), "click", {});
+    await settle();
+    fire(domNamed(doc.root, "open-terminal"), "click", {});
+    await settle();
+    opened[opened.length - 1].open();
+    await settle();
+  };
+  await open();
+  const stayed = closes[0];
+  app.navigate("home", {});
+  await settle();
+  const leftPage = closes[0];
+  await open();
+  const beforeSignOut = closes[1];
+  fire(domNamed(doc.root, "sign-out"), "click", {});
+  await settle();
+  return { stayed, leftPage, beforeSignOut, signedOut: closes[1], opened: closes.length };
+}"#,
+    );
+    assert_eq!(out["stayed"], json!(0));
+    assert_eq!(out["leftPage"], json!(1));
+    assert_eq!(out["beforeSignOut"], json!(0));
+    assert_eq!(out["signedOut"], json!(1));
+    assert_eq!(out["opened"], json!(2));
 }

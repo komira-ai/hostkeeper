@@ -96,6 +96,10 @@ function pinWords(state) {
   return `The pin of the host's SSH host keys is "${state}".`;
 }
 
+// Ends the terminal of the panel built last, if it is still open: the page that held it was drawn
+// again (a refresh, another host) and its elements are gone, so nobody can see or close it.
+let endLast = null;
+
 // The panel, as a list of elements. `loaded` is what `loadSsh` returned and `pin(fingerprints)` the
 // call of `Ssh.PinHostKeys` for the host.
 export function sshPanel(ctx, nodeId, loaded, pin) {
@@ -108,6 +112,9 @@ export function sshPanel(ctx, nodeId, loaded, pin) {
   };
   let head = null;
   let box = null;
+  if (endLast !== null) {
+    endLast();
+  }
 
   const paintHead = () => {
     if (head !== null) {
@@ -140,6 +147,20 @@ export function sshPanel(ctx, nodeId, loaded, pin) {
     }
     paintHead();
   };
+
+  endLast = () => {
+    if (view.conn !== null) {
+      end("You left the terminal.");
+    }
+  };
+  // Leaving the page (another page, a sign-out) ends the terminal at once, idle or not.
+  if (typeof ctx.onLeave === "function") {
+    ctx.onLeave(() => {
+      if (view.conn !== null) {
+        end("You left the terminal.");
+      }
+    });
+  }
 
   const sendBytes = (bytes) => {
     if (view.conn !== null && view.phase === "open") {

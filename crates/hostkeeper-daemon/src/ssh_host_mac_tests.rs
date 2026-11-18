@@ -781,3 +781,26 @@ fn a_mac_reads_sshd_and_the_groups_as_the_linux_host_does() {
     assert_eq!(mac.host.revocations(&[ED.to_owned()], &[]), Ok(Vec::new()));
     assert_eq!(mac.host.banner(&at), Ok(()));
 }
+
+/// Proves a Mac whose record names no login user (the administrator is resolved by the host) has a
+/// drifted file put right at the next heartbeat of the same generation, and a Mac whose files are
+/// as they should be is left alone.
+///
+/// Catches: a drift check that plans from the record's empty login user, finds nothing wrong and
+/// leaves certificate login broken while the report says `applied`.
+#[test]
+fn a_mac_with_no_named_login_user_has_a_drifted_file_put_right() {
+    let mac = Mac::new("ssh-mac-drift");
+    let setup = mac.setup();
+    assert_eq!(mac.apply(&setup, &access(1, "")), report("applied", "", 1));
+    let principals = mac.paths.principals("alice");
+    std::fs::remove_file(&principals).expect("a drift");
+    assert_eq!(mac.apply(&setup, &access(1, "")), report("applied", "", 1));
+    assert_eq!(
+        std::fs::read_to_string(&principals).expect("principals"),
+        "hk-host-web-04\n"
+    );
+    let runs = mac.sshd_runs().len();
+    assert_eq!(mac.apply(&setup, &access(1, "")), report("applied", "", 1));
+    assert_eq!(mac.sshd_runs().len(), runs, "nothing drifted");
+}

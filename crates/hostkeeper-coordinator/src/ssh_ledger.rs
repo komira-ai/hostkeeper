@@ -165,7 +165,8 @@ pub(crate) trait Ledger: Send + Sync {
     fn issue(&self, issue: &Issue<'_>) -> Result<Issued, LedgerError>;
 
     /// Revokes by `by`, and writes its audit line in the same write; how many certificates were
-    /// newly revoked, none when every one the target names was revoked already or has expired.
+    /// newly revoked, none when every one the target names was revoked already or is past its
+    /// `valid_before` (one second after its `expires_unix`).
     ///
     /// # Errors
     /// [`LedgerError::UnknownCert`] when no certificate was ever made for the target;
@@ -178,10 +179,12 @@ pub(crate) trait Ledger: Send + Sync {
     /// [`LedgerError::Unwritten`].
     fn denied(&self, by: &str, host_id: &str, why: &str) -> Result<(), LedgerError>;
 
-    /// The serials, ascending, of the revoked certificates of the host `host_id` that have not
-    /// expired by the ledger's clock: the ones the host's sshd is told to refuse. A certificate is
-    /// valid only for its own host's principal, so another host's serials add nothing, and an
-    /// expired one is refused by sshd anyway.
+    /// The serials, ascending, of the revoked certificates of the host `host_id` that sshd could
+    /// still accept by the ledger's clock, through the second `expires_unix` itself (the
+    /// certificate's `valid_before` is `expires_unix + 1`): the ones the host's sshd is told to
+    /// refuse. A certificate is valid only for its own host's principal, so another host's serials
+    /// add nothing, and one past its `valid_before` is refused by sshd anyway (on a host whose
+    /// clock agrees with the ledger's).
     ///
     /// # Errors
     /// [`LedgerError::Unread`] when the ledger cannot be read.
@@ -388,7 +391,7 @@ mod memory {
             }
             let mut revoked = 0;
             for (serial, expires) in named {
-                if expires > now && !state.revoked.contains_key(&serial) {
+                if expires.saturating_add(1) > now && !state.revoked.contains_key(&serial) {
                     state.revoked.insert(serial, by.to_owned());
                     revoked += 1;
                 }
@@ -415,7 +418,7 @@ mod memory {
                 .iter()
                 .filter(|(serial, cert)| {
                     cert.host_id == host_id
-                        && cert.expires_unix > now
+                        && cert.expires_unix.saturating_add(1) > now
                         && state.revoked.contains_key(serial)
                 })
                 .map(|(serial, _)| *serial)

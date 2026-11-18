@@ -99,6 +99,11 @@ export function widthOf(point) {
 // The parts of a CSI sequence that are kept at most, so that one that never ends is dropped.
 const CSI_LIMIT = 64;
 
+// The longest text one cell holds, in UTF-16 units: its character and the combining and zero width
+// code points joined to it. The rest of a longer run is dropped, so a host cannot grow one cell
+// without end.
+const GLYPH_LIMIT = 16;
+
 export class Terminal {
   constructor(cols = DEFAULT_COLS, rows = DEFAULT_ROWS) {
     this.cols = cols;
@@ -730,7 +735,9 @@ export class Terminal {
     const width = widthOf(point);
     if (width === 0) {
       const before = this.grid[this.y][this.wrapPending ? this.x : Math.max(this.x - 1, 0)];
-      before.glyph += String.fromCodePoint(point);
+      if (before.glyph.length < GLYPH_LIMIT) {
+        before.glyph += String.fromCodePoint(point);
+      }
       return;
     }
     if (this.wrapPending || (width === 2 && this.x === this.cols - 1 && this.autowrap)) {

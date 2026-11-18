@@ -376,6 +376,31 @@ fn wide_characters_take_two_columns_and_combining_marks_none() {
     ]);
 }
 
+/// Proves: a long run of combining and zero width code points after one character stops joining
+/// that cell once it holds 16 UTF-16 units, the rest is dropped, and the next character prints in
+/// the next column as usual.
+///
+/// Catches: a host that sends millions of combining marks after one character and grows a single
+/// cell, and the text the page draws for it, without end.
+#[test]
+fn a_run_of_combining_marks_stops_growing_its_cell() {
+    let marks = "\u{301}".repeat(1000);
+    let zero = "\u{200b}".repeat(1000);
+    let kept = format!("e{}", "\u{301}".repeat(15));
+    let kept_zero = format!("e{}", "\u{200b}".repeat(15));
+    let write_marks = format!("e{marks}x");
+    let write_zero = format!("e{zero}x");
+    let line_marks = format!("{kept}x");
+    let line_zero = format!("{kept_zero}x");
+    let results = run(json!([
+        {"cols": 5, "rows": 1, "writes": [write_marks]},
+        {"cols": 5, "rows": 1, "writes": [write_zero]},
+    ]));
+    assert_eq!(results[0]["lines"], json!([line_marks]));
+    assert_eq!(results[1]["lines"], json!([line_zero]));
+    assert_eq!(results[0]["x"], json!(2));
+}
+
 /// Proves: operating system commands (ended by BEL or ST), device control, application, privacy
 /// and start-of-string strings (ended by ST), character set designations, an unknown final
 /// character, a sequence with an intermediate, a private marker other than `?`, and a sequence too
