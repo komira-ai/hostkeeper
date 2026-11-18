@@ -20,6 +20,7 @@ use crate::beat::{Feature, Features};
 use crate::host_facts::PushedFacts;
 use crate::names::{OrderId, PackageDigest, Reason};
 use crate::operator_keys::PushedKeys;
+use crate::prerequisites::PushedPrerequisites;
 use crate::repositories::PushedSet;
 
 /// The coordinator's identity for one try of an order: what a verdict names, and what an
@@ -299,4 +300,8 @@ pub struct Reply {
     /// has. The loop gives them to the daemon's [`crate::OperatorKeysSink`] only while the
     /// coordinator advertises `operator-keys-v1`.
     pub operator_keys: Option<PushedKeys>,
+    /// The host prerequisites of the host's group, whole, over gRPC only; none: keep what the
+    /// host holds. The loop gives them to the daemon's [`crate::PrerequisitesSink`] only while
+    /// the coordinator advertises `prerequisites-v1`.
+    pub prerequisites: Option<PushedPrerequisites>,
 }

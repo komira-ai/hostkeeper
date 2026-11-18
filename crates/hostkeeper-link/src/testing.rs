@@ -20,10 +20,11 @@ use crate::operator_keys::{KeysReport, PushedKeys};
 use crate::order::{Order, OrderRef, OrderResult, Outcome, Reply};
 use crate::ports::{
     CertSource, CertState, ClientIdentity, CoordinatorLink, Dispatch, FactsSink, HeldHalts, Job,
-    LinkError, Log, Observation, OperatorKeysSink, OrderSink, RecordedService,
+    LinkError, Log, Observation, OperatorKeysSink, OrderSink, PrerequisitesSink, RecordedService,
     RemoteLoginProbeSource, RenewalSource, RepositorySink, ServiceObserver, ServiceRecords,
     Sleeper, Tick, TrustedRootSource, UnixClock,
 };
+use crate::prerequisites::{PrerequisitesReport, PushedPrerequisites};
 use crate::probe::RemoteLoginProbe;
 use crate::repositories::{PushedSet, RepositoriesReport};
 
@@ -586,6 +587,36 @@ impl OperatorKeysSink for FakeOperatorKeys {
     }
 }
 
+/// The host prerequisites, as a test sets them: it records every set it is given and reports
+/// what a test sets.
+#[derive(Default)]
+pub struct FakePrerequisites {
+    report: Mutex<PrerequisitesReport>,
+    applied: Mutex<Vec<PushedPrerequisites>>,
+}
+
+impl FakePrerequisites {
+    /// Sets what every later report says.
+    pub fn set_report(&self, report: PrerequisitesReport) {
+        *lock(&self.report) = report;
+    }
+
+    /// Every set the loop gave it, in order.
+    pub fn applied(&self) -> Vec<PushedPrerequisites> {
+        lock(&self.applied).clone()
+    }
+}
+
+impl PrerequisitesSink for FakePrerequisites {
+    fn report(&self) -> PrerequisitesReport {
+        lock(&self.report).clone()
+    }
+
+    fn apply(&self, set: &PushedPrerequisites) {
+        lock(&self.applied).push(set.clone());
+    }
+}
+
 /// The unix second the [`World`]'s clock starts at.
 pub const START_UNIX: u64 = 2_000_000_000;
 
@@ -622,6 +653,9 @@ pub struct World {
     /// [`World::keeping_operator_keys`].
     pub operator_keys: Arc<FakeOperatorKeys>,
     keeping_operator_keys: bool,
+    /// The host prerequisites; the ports hold them only after [`World::keeping_prerequisites`].
+    pub prerequisites: Arc<FakePrerequisites>,
+    keeping_prerequisites: bool,
 }
 
 impl Default for World {
@@ -655,6 +689,8 @@ impl World {
             probing: false,
             operator_keys: Arc::default(),
             keeping_operator_keys: false,
+            prerequisites: Arc::default(),
+            keeping_prerequisites: false,
         }
     }
 
@@ -682,6 +718,13 @@ impl World {
     /// it announces `operator-keys-v1`.
     pub fn keeping_operator_keys(mut self) -> World {
         self.keeping_operator_keys = true;
+        self
+    }
+
+    /// The world of a host that keeps host prerequisites: its ports hold
+    /// [`World::prerequisites`], and it announces `prerequisites-v1`.
+    pub fn keeping_prerequisites(mut self) -> World {
+        self.keeping_prerequisites = true;
         self
     }
 
@@ -718,6 +761,9 @@ impl World {
             operator_keys: self
                 .keeping_operator_keys
                 .then(|| Arc::clone(&self.operator_keys) as Arc<dyn OperatorKeysSink>),
+            prerequisites: self
+                .keeping_prerequisites
+                .then(|| Arc::clone(&self.prerequisites) as Arc<dyn PrerequisitesSink>),
         }
     }
 

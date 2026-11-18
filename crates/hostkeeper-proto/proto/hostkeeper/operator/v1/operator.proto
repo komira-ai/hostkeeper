@@ -1504,6 +1504,12 @@ enum AlertKind {
   // established. The alert's `version` is the `renew_alert_days` it was raised at, or `expired`.
   // Log token `mdm_identity_near_expiry`.
   ALERT_KIND_MDM_IDENTITY_NEAR_EXPIRY = 15;
+  // The host's last prerequisites report holds a prerequisite whose status is
+  // `PREREQUISITE_STATUS_FAILED`: its daemon could not install it or look for it, and tries
+  // again at the `next_try_unix` the report holds. The message names each failed prerequisite
+  // with its failures in a row, its next try and its reason. One alert for each host, listed
+  // while the host's last report holds a failed state. Log token `prerequisite_failed`.
+  ALERT_KIND_PREREQUISITE_FAILED = 16;
 }
 
 // How soon an `Alert` needs a person.

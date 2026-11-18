@@ -84,6 +84,10 @@
 //! - [`operator_keys`]: the operator's SSH public keys of each host group, read from
 //!   `--operator-keys-file` and re-read while the coordinator runs, the set each host is sent in
 //!   the answer to a heartbeat over gRPC, and what its daemon reported of it;
+//! - [`prerequisites`]: the host prerequisites of each host group (Apple's Command Line Tools on a
+//!   Mac), read from `--host-prerequisites-file` and re-read while the coordinator runs, the set
+//!   each host is sent in the answer to a heartbeat over gRPC, and what its daemon reported of
+//!   them;
 //! - [`status`]: what an operator reads, and the convergence of a service;
 //! - [`alerts`]: the conditions that need a person, derived from what the coordinator holds,
 //!   answered by `Alerts.List` and logged with an `alert=` field;
@@ -184,6 +188,7 @@ pub mod orders;
 pub mod origin_https;
 pub mod password;
 pub(crate) mod picks;
+pub mod prerequisites;
 mod queue;
 pub mod reconcile;
 pub mod registry;

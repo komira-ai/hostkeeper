@@ -98,7 +98,9 @@ test of `hostkeeper-hkctl` regenerates from the protos and compares, so it canno
 Enrolling a node, from its inventory record to its first heartbeat, with every refusal on the way,
 is [docs/operations/enrollment.md](docs/operations/enrollment.md). Putting the operators' SSH public keys
 on every host, Linux and Mac, from one coordinator file is
-[docs/operations/operator-keys.md](docs/operations/operator-keys.md). Installing a new Linux machine
+[docs/operations/operator-keys.md](docs/operations/operator-keys.md). Installing Apple's Command Line Tools on a Mac
+from the coordinator, as root, with no command typed on it, is
+[docs/operations/host-prerequisites.md](docs/operations/host-prerequisites.md). Installing a new Linux machine
 from the farm LAN with `pxe`, and the router and board checks before the first one, is
 [docs/operations/network-install.md](docs/operations/network-install.md); its settings files
 are parsed with that program's own parser. A test (`crates/xtask/tests/enrollment_doc.rs`)
