@@ -78,10 +78,11 @@ fn a_file_that_is_a_symbolic_link_is_refused_and_not_followed() {
     assert_eq!(std::fs::read(&target).expect("read"), b"secret");
 }
 
-/// Catches a file owned by another user being read as the account's: the owner the reader
-/// expects is not the file's.
+/// Catches a file owned by another user being read as the account's, or being an error that
+/// stops the service: the owner the reader expects is not the file's, so the file is absent, and
+/// a link in the same place is still refused.
 #[test]
-fn a_file_owned_by_another_user_is_refused() {
+fn a_file_owned_by_another_user_is_absent() {
     let scratch = scratch("dir-owner");
     let root = scratch.path().join("identity");
     let dir = dir_at(&root);
@@ -91,17 +92,33 @@ fn a_file_owned_by_another_user_is_refused() {
         uid: me().uid + 1,
         gid: me().gid,
     };
-    let error = dir
-        .read(SERVICE, IdentityFile::Key, other)
-        .expect_err("refused");
     assert_eq!(
-        error.to_string(),
-        format!(
-            "{} is owned by user {}, not by {}",
-            root.join(SERVICE).join("key.pem").display(),
-            me().uid,
-            me().uid + 1
-        )
+        dir.read(SERVICE, IdentityFile::Key, other).expect("read"),
+        None
+    );
+    assert_eq!(
+        dir.read(SERVICE, IdentityFile::Key, me()).expect("read"),
+        Some(b"key".to_vec())
+    );
+}
+
+/// Catches the services of the root being listed wrongly: each entry with a service name is
+/// listed, in order, whatever it is (a directory, a file, a link); an entry whose name is no
+/// service name is not, and an absent root has none.
+#[test]
+fn the_services_of_the_root_are_the_entries_with_a_service_name() {
+    let scratch = scratch("dir-services");
+    let root = scratch.path().join("identity");
+    let dir = dir_at(&root);
+    assert_eq!(dir.services().expect("list"), Vec::<String>::new());
+    dir.prepare("beta", me()).expect("prepare");
+    dir.prepare("alpha", me()).expect("prepare");
+    std::fs::write(root.join("a-file"), b"x").expect("write");
+    symlink(scratch.path(), root.join("a-link")).expect("symlink");
+    std::fs::write(root.join("Not A Service"), b"x").expect("write");
+    assert_eq!(
+        dir.services().expect("list"),
+        ["a-file", "a-link", "alpha", "beta"]
     );
 }
 

@@ -11,8 +11,12 @@
 //!   cannot be read. The account of each is the manifest's `identity_account`, `root` when it has
 //!   none, resolved by the host's [`ServiceAccounts`]; one it cannot resolve is that service's
 //!   reported error.
+//! - [`installed`]: the services the host has installed at all (a `current` version, no
+//!   tombstone), read after each pass; the keeper removes the identity directory of every other
+//!   service, so a pass that began before an uninstall leaves nothing behind it.
 //! - [`DaemonIdentities`]: the heartbeat's [`ServiceIdentitySource`], over the keeper's
-//!   [`IdentityState`].
+//!   [`IdentityState`]; it reports the first [`MAX_IDENTITY_SERVICES`] services by name, as the
+//!   coordinator drops a longer list whole.
 //! - [`identity_loop`]: the worker and the source made together. The worker makes the keeper's
 //!   ports on its own thread ([`MakePorts`]: the issuer owns an async runtime, as the enroller's
 //!   transport does), logs why when they cannot be made ([`NO_IDENTITY`]) and ends, and otherwise
@@ -31,7 +35,9 @@ use hostkeeper_enroll::{
     GrpcIssuer, IdentityPorts, IdentityState, OsEntropy, PkiDir, PkiTrust, ServiceIdentities,
     SystemWallClock, Wanted,
 };
-use hostkeeper_link::{Log, ServiceIdentityReport, ServiceIdentitySource, StopFlag};
+use hostkeeper_link::{
+    Log, MAX_IDENTITY_SERVICES, ServiceIdentityReport, ServiceIdentitySource, StopFlag,
+};
 
 use crate::adapters::host_clock;
 use crate::cli::ENROLL_TIMEOUT;
@@ -42,6 +48,11 @@ use crate::target;
 
 /// The line the worker logs when it cannot make its ports, before the reason.
 pub const NO_IDENTITY: &str = "error: the service identity loop cannot start: ";
+
+/// The line the worker logs when it cannot remove the identity directory of a service that is not
+/// installed, before the reason.
+pub const NO_SWEEP: &str =
+    "error: the identity directory of an uninstalled service could not be removed: ";
 
 /// Makes the keeper's ports, on the worker's own thread. `Err` says why there are none.
 pub type MakePorts = Box<dyn FnOnce() -> Result<IdentityPorts, String> + Send>;
@@ -71,6 +82,7 @@ impl ServiceIdentitySource for DaemonIdentities {
         self.state
             .get()
             .into_iter()
+            .take(MAX_IDENTITY_SERVICES)
             .map(|report| {
                 ServiceIdentityReport::new(report.service, report.not_after, report.last_error)
             })
@@ -96,6 +108,24 @@ pub fn wanted(ctx: &Ctx, accounts: &dyn ServiceAccounts) -> Vec<Wanted> {
             service,
         })
         .collect()
+}
+
+/// The names of the services the host has installed at all: a `current` version and no tombstone
+/// in `placed.json`. None when the packages directory or `placed.json` cannot be read, as then
+/// nothing is known to be absent.
+pub fn installed(ctx: &Ctx) -> Option<Vec<String>> {
+    let listed = installed::service_dirs(&ctx.dirs.packages).ok()?;
+    let record = ctx.placer().store().load().ok()?;
+    Some(
+        listed
+            .into_values()
+            .filter(|service| !record.uninstalling.contains_key(service.as_str()))
+            .filter(|service| {
+                installed::linked_version(&ctx.dirs.packages, service, CURRENT).is_some()
+            })
+            .map(|service| service.to_string())
+            .collect(),
+    )
 }
 
 /// `service` and its account, when the entry of its `current` version asks for an identity.
@@ -140,9 +170,12 @@ pub fn identity_loop(
             }
         };
         let mut keeper = ServiceIdentities::new(ports, state);
-        keeper.run_loop(&mut || wanted(daemon.ctx(), accounts.as_ref()), &mut || {
-            !stop.is_stopped()
-        });
+        keeper.run_loop(
+            &mut || wanted(daemon.ctx(), accounts.as_ref()),
+            &mut || installed(daemon.ctx()),
+            &mut |error| log.line(&format!("{NO_SWEEP}{error}")),
+            &mut || !stop.is_stopped(),
+        );
     });
     IdentityLoop { worker, source }
 }

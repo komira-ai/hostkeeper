@@ -462,6 +462,10 @@ impl IdentityFiles for Files {
     fn remove(&self, service: &str) -> Result<(), FilesError> {
         self.dir.remove(service)
     }
+
+    fn services(&self) -> Result<Vec<String>, FilesError> {
+        self.dir.services()
+    }
 }
 
 /// A host with a keeper of service identities, over the fakes above.
@@ -552,6 +556,21 @@ impl World {
                 files: Box::new(IdentityDir::owned_by(&self.root(), me())),
                 trust: Box::new(self.host.clone()),
                 entropy: Box::new(NoEntropy),
+                wall: Box::new(self.wall.clone()),
+                clock: Box::new(self.mono.clone()),
+            },
+            self.state.clone(),
+        )
+    }
+
+    /// A keeper over the same things whose identity directory is `files`.
+    pub fn keeper_over(&self, files: Box<dyn IdentityFiles>) -> ServiceIdentities {
+        ServiceIdentities::new(
+            IdentityPorts {
+                issuer: Box::new(self.issuer.clone()),
+                files,
+                trust: Box::new(self.host.clone()),
+                entropy: Box::new(self.draws.clone()),
                 wall: Box::new(self.wall.clone()),
                 clock: Box::new(self.mono.clone()),
             },

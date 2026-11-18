@@ -139,8 +139,7 @@ pub struct Links {
     /// announces `prerequisites-v1`.
     pub prerequisites: Option<Arc<dyn PrerequisitesSink>>,
     /// The service identity loop ([`crate::service_identity`]): its worker is started as the third
-    /// of [`Links::start`], and its source is what every heartbeat reports. A daemon that has one
-    /// announces `service-identity-v1`.
+    /// of [`Links::start`], and its source is what every heartbeat reports. It announces no feature.
     pub identity: Option<IdentityLoop>,
 }
 

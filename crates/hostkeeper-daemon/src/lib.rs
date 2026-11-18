@@ -73,7 +73,7 @@
 //! - [`service_identity`]: the key and 8-hour certificate of each service whose entry asks for an
 //!   identity (`identity` of its manifest), kept in the identity directory (`--identity-dir`) by
 //!   `hostkeeper_enroll::ServiceIdentities` on a worker of its own and reported in every
-//!   heartbeat (`service-identity-v1`); [`service_account`] finds the account that owns the files
+//!   heartbeat; [`service_account`] finds the account that owns the files
 //!   (the passwd file on Linux, `dscl` on a Mac); an uninstall removes the service's directory
 //!   ([`uninstall`]).
 //! - [`observer`]: what [`Daemon::status`] reports of a running service.

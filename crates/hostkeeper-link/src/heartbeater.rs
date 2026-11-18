@@ -109,8 +109,7 @@ use hostkeeper_wire::wire::clip_renew_error;
 
 use crate::beat::{
     ANNOUNCED, FACTS, Feature, Features, Health, Heartbeat, Liveness, OPERATOR_KEYS, Observed,
-    PREREQUISITES, PRIVATE_REPOSITORY, Platform, REPOSITORIES, Renewal, SERVICE_IDENTITY,
-    ServiceFacts, fit,
+    PREREQUISITES, PRIVATE_REPOSITORY, Platform, REPOSITORIES, Renewal, ServiceFacts, fit,
 };
 use crate::deferral::{Book, Deferral};
 use crate::host_facts::PushedFacts;
@@ -194,7 +193,8 @@ pub struct Ports {
     /// announces no `prerequisites-v1`, sends no report and is sent no set.
     pub prerequisites: Option<Arc<dyn PrerequisitesSink>>,
     /// What the daemon holds of its services' identities; none on a host that keeps none, which
-    /// then announces no `service-identity-v1` and sends no report.
+    /// then sends no report. It announces no feature: a coordinator reads the report of every
+    /// heartbeat, and a feature name would count against the bound of the announced list.
     pub service_identities: Option<Arc<dyn ServiceIdentitySource>>,
 }
 
@@ -596,9 +596,6 @@ impl Heartbeater {
         }
         if self.ports.prerequisites.is_some() {
             features.push(PREREQUISITES);
-        }
-        if self.ports.service_identities.is_some() {
-            features.push(SERVICE_IDENTITY);
         }
         features
     }

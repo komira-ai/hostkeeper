@@ -10,9 +10,12 @@
 //!   account and moded `0600` before any byte is written, synced, renamed over the old file, and
 //!   the directory is synced. A reader sees the old file or the new one.
 //! - A file is read through `openat` with `O_NOFOLLOW` and `O_NONBLOCK`, and refused unless it is
-//!   a regular file owned by the account and no larger than [`MAX_FILE_BYTES`]. A link is never
-//!   followed.
-//! - Removing a service removes its directory and what is in it without following any link.
+//!   a regular file no larger than [`MAX_FILE_BYTES`]. A link is never followed. A file owned by
+//!   another user than the account is absent as far as a read goes: it is not read and not
+//!   trusted (a service whose `identityAccount` changed has such files), and the write that
+//!   follows replaces it by rename with a file owned by the account.
+//! - Removing a service removes its directory and what is in it without following any link;
+//!   [`IdentityFiles::services`] names the directories there are.
 //!
 //! "Root" is the [`Owner`] the directory is built with: uid 0 and gid 0 on a host
 //! ([`IdentityDir::host`]), the effective user in a test that is not root.
@@ -129,11 +132,10 @@ pub trait IdentityFiles: Send {
     fn prepare(&self, service: &str, owner: Owner) -> Result<(), FilesError>;
 
     /// The bytes of `file` of `service`, owned by `owner`'s user; none when the service's
-    /// directory or the file is absent.
+    /// directory or the file is absent, or the file is owned by another user.
     ///
     /// # Errors
-    /// [`FilesError`]: a link, a file that is not regular, owned by another user or too large,
-    /// or an I/O error.
+    /// [`FilesError`]: a link, a file that is not regular or too large, or an I/O error.
     fn read(
         &self,
         service: &str,
@@ -158,6 +160,13 @@ pub trait IdentityFiles: Send {
     /// # Errors
     /// [`FilesError`]: a name that is refused, a directory inside it, or an I/O error.
     fn remove(&self, service: &str) -> Result<(), FilesError>;
+
+    /// The names of the services that have an entry in the root, whatever the entry is; an entry
+    /// whose name is not a service name is not listed. Empty when the root is absent.
+    ///
+    /// # Errors
+    /// [`FilesError`]: a root that is refused, or an I/O error.
+    fn services(&self) -> Result<Vec<String>, FilesError>;
 }
 
 /// The identity directory at a path.
@@ -328,7 +337,9 @@ impl IdentityFiles for IdentityDir {
         if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile {
             return Err(FilesError::NotRegular(path));
         }
-        check_owner(&path, stat.st_uid, owner.uid)?;
+        if stat.st_uid != owner.uid {
+            return Ok(None);
+        }
         let mut bytes = Vec::new();
         File::from(fd)
             .take(MAX_FILE_BYTES + 1)
@@ -400,5 +411,22 @@ impl IdentityFiles for IdentityDir {
         }
         rustix::fs::unlinkat(&root, service, AtFlags::REMOVEDIR).map_err(at(&path))?;
         rustix::fs::fsync(&root).map_err(at(&path))
+    }
+
+    fn services(&self) -> Result<Vec<String>, FilesError> {
+        let Some(root) = self.open_root(false)? else {
+            return Ok(Vec::new());
+        };
+        let mut found = Vec::new();
+        for entry in Dir::read_from(&root).map_err(at(&self.root))? {
+            let entry = entry.map_err(at(&self.root))?;
+            if let Ok(name) = entry.file_name().to_str()
+                && is_service_name(name)
+            {
+                found.push(name.to_owned());
+            }
+        }
+        found.sort();
+        Ok(found)
     }
 }

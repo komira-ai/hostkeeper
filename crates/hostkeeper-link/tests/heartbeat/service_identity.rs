@@ -1,11 +1,12 @@
-//! The services' identities of `service-identity-v1`: announced and reported only by a daemon that
-//! keeps them, and reported as the source words them at each heartbeat.
+//! The services' identities: reported only by a daemon that keeps them, as the source words them
+//! at each heartbeat, with no feature of their own.
 
 use hostkeeper_link::testing::World;
 use hostkeeper_link::{
-    ANNOUNCED, FACTS, Feature, PRIVATE_REPOSITORY, REPOSITORIES, SERVICE_IDENTITY,
-    ServiceIdentityReport,
+    ANNOUNCED, FACTS, Feature, PRIVATE_REPOSITORY, REPOSITORIES, ServiceIdentityReport,
 };
+
+use hostkeeper_wire::wire::{MAX_FEATURES, read_heartbeat};
 
 use crate::Rig;
 
@@ -24,34 +25,49 @@ fn a_host_with_no_service_identities_announces_none_and_sends_no_report() {
     assert_eq!(beat.to_json().get("service_identities"), None);
 }
 
-/// Proves a daemon with a source announces `service-identity-v1` after every other feature a
-/// daemon may announce.
+/// Proves a daemon with every port present announces the features of its ports and none for the
+/// services' identities, at most [`MAX_FEATURES`] names, and that the coordinator's reader takes
+/// the heartbeat whole, with its features and its identity report.
+///
+/// Catches: a feature added over the bound, which every released coordinator answers by dropping
+/// the whole list (and the host then gets no repository or key orders).
 #[test]
-fn a_host_with_service_identities_announces_the_feature_last() {
-    let all = Rig::with_world(
+fn a_host_with_every_port_announces_no_more_than_the_wire_bound_and_is_read_whole() {
+    let rig = Rig::with_world(
         "service-identity-announce",
         World::default()
             .managing_repositories()
             .keeping_facts()
             .keeping_operator_keys()
+            .keeping_prerequisites()
             .keeping_service_identities(),
     );
-    all.heartbeater().beat_once();
-    let announced = all.world.link.beats()[0].features.clone();
+    rig.world
+        .service_identities
+        .set(vec![report("js-agent", Some(1_900_028_800), None)]);
+    rig.heartbeater().beat_once();
+    let beat = rig.world.link.beats()[0].clone();
     assert_eq!(
-        announced[ANNOUNCED.len()..],
+        beat.features[ANNOUNCED.len()..],
         [
             REPOSITORIES,
             FACTS,
             PRIVATE_REPOSITORY,
             Feature::OperatorKeysV1,
-            SERVICE_IDENTITY,
+            Feature::PrerequisitesV1,
         ]
     );
-    assert_eq!(
-        announced.last().map(|f| f.as_str()),
-        Some("service-identity-v1")
-    );
+    assert!(beat.features.len() <= MAX_FEATURES);
+    // The wire's reader still asks for the top-level state of the pre-order shape.
+    let mut json = beat.to_json();
+    json["version"] = "1.0".into();
+    json["health"] = "healthy".into();
+    let bytes = serde_json::to_vec(&json).expect("JSON");
+    let read = read_heartbeat(&bytes, None).expect("read");
+    assert_eq!(read.extras_dropped, None);
+    let names: Vec<&str> = beat.features.iter().map(|f| f.as_str()).collect();
+    assert_eq!(read.beat.agent_features, names);
+    assert_eq!(beat.service_identities.len(), 1);
 }
 
 /// Proves the source's reports are in every heartbeat as it words them, and follow it when they

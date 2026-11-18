@@ -109,12 +109,6 @@ pub enum Feature {
     /// ([`crate::PrerequisitesReport`]). Like `operator-keys-v1` it is announced only by a daemon
     /// with a sink for them ([`crate::PrerequisitesSink`]): the loop adds it ([`PREREQUISITES`]).
     PrerequisitesV1,
-    /// `service-identity-v1`: the daemon keeps a key and an 8-hour certificate for each service
-    /// whose entry asks for an identity, and reports them
-    /// ([`Heartbeat::service_identities`]). Like `operator-keys-v1` it is announced only by a
-    /// daemon with a source for them ([`crate::ServiceIdentitySource`]): the loop adds it
-    /// ([`SERVICE_IDENTITY`]).
-    ServiceIdentityV1,
 }
 
 /// The features every heartbeat announces, in this order. Each names something the loop does:
@@ -146,8 +140,6 @@ pub const PRIVATE_REPOSITORY: Feature = Feature::PrivateRepositoryV1;
 pub const OPERATOR_KEYS: Feature = Feature::OperatorKeysV1;
 /// The feature a daemon with a [`crate::PrerequisitesSink`] announces after [`OPERATOR_KEYS`].
 pub const PREREQUISITES: Feature = Feature::PrerequisitesV1;
-/// The feature a daemon with a [`crate::ServiceIdentitySource`] announces after [`PREREQUISITES`].
-pub const SERVICE_IDENTITY: Feature = Feature::ServiceIdentityV1;
 
 impl Feature {
     /// Its wire name.
@@ -169,7 +161,6 @@ impl Feature {
             Feature::PrivateRepositoryV1 => "private-repository-v1",
             Feature::OperatorKeysV1 => "operator-keys-v1",
             Feature::PrerequisitesV1 => "prerequisites-v1",
-            Feature::ServiceIdentityV1 => "service-identity-v1",
         }
     }
 
@@ -183,7 +174,6 @@ impl Feature {
                 PRIVATE_REPOSITORY,
                 OPERATOR_KEYS,
                 PREREQUISITES,
-                SERVICE_IDENTITY,
             ])
             .find(|feature| feature.as_str() == name)
     }

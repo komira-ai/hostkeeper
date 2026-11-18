@@ -1,11 +1,16 @@
 //! What the daemon reports of its services' identities (`HeartbeatRequest.service_identities`
 //! of `hostkeeper.agent.v1`, docs/design/service-identity.md, section 4), as plain data for the
 //! loop. The daemon's [`ServiceIdentitySource`] keeps the certificates; the loop only carries what
-//! the source says. A daemon that has a source announces `service-identity-v1`.
+//! the source says. A daemon that has a source sends the report in every
+//! heartbeat and announces no feature for it.
 
 /// The longest `last_error`, in bytes, that the coordinator reads; a longer one is cut at a
 /// character boundary by [`ServiceIdentityReport::new`].
 pub const MAX_IDENTITY_ERROR: usize = 256;
+
+/// The most services a heartbeat reports, the coordinator reads at most this
+/// many and drops a longer list whole.
+pub const MAX_IDENTITY_SERVICES: usize = 16;
 
 /// What a daemon holds of one service's identity.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -44,7 +49,7 @@ fn clip(text: &str) -> &str {
     &text[..end]
 }
 
-/// The services' identities of the host, which every heartbeat reports (`service-identity-v1`).
+/// The services' identities of the host, which every heartbeat reports.
 pub trait ServiceIdentitySource: Send + Sync {
     /// The report of each service that has an identity, sorted by service name.
     fn reports(&self) -> Vec<ServiceIdentityReport>;

@@ -76,7 +76,7 @@ mod wire_map;
 pub use beat::{
     ANNOUNCED, FACTS, Feature, Features, Fitted, Health, Heartbeat, Liveness, MAX_HEARTBEAT_BYTES,
     Observed, OptionalFact, Oversize, PRIVATE_REPOSITORY, Platform, REPOSITORIES, Renewal,
-    RootReason, SERVICE_IDENTITY, ServiceFacts, TrustedRootFacts, fit,
+    RootReason, ServiceFacts, TrustedRootFacts, fit,
 };
 pub use deferral::{Deferral, DeferralError, Deferrals};
 pub use dial::{CALL_SECS, TcpDial, TcpTransport};
@@ -108,4 +108,6 @@ pub use prerequisites::{
 };
 pub use probe::{ProbeStep, RemoteLoginProbe};
 pub use repositories::{MAX_REFUSAL_REASON, PushedSet, RepositoriesReport, RepositoryRefusal};
-pub use service_identity::{MAX_IDENTITY_ERROR, ServiceIdentityReport, ServiceIdentitySource};
+pub use service_identity::{
+    MAX_IDENTITY_ERROR, MAX_IDENTITY_SERVICES, ServiceIdentityReport, ServiceIdentitySource,
+};

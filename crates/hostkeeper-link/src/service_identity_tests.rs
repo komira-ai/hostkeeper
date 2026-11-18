@@ -6,7 +6,7 @@ use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use serde_json::json;
 
 use super::{MAX_IDENTITY_ERROR, ServiceIdentityReport};
-use crate::beat::{ANNOUNCED, Feature, Heartbeat, Platform, SERVICE_IDENTITY};
+use crate::beat::{ANNOUNCED, Heartbeat, Platform};
 use crate::proto_map::heartbeat;
 
 fn beat(reports: Vec<ServiceIdentityReport>) -> Heartbeat {
@@ -91,14 +91,4 @@ fn a_last_error_is_cut_to_the_bound_at_a_character_boundary() {
     let exact = "é".repeat(MAX_IDENTITY_ERROR / 2);
     let report = ServiceIdentityReport::new("svc".to_owned(), None, Some(exact.clone()));
     assert_eq!(report.last_error, Some(exact));
-}
-
-/// Catches the feature's wire name and its place among the names a reply may advertise.
-#[test]
-fn the_feature_has_its_wire_name_and_is_known_to_a_reply() {
-    assert_eq!(SERVICE_IDENTITY.as_str(), "service-identity-v1");
-    assert_eq!(
-        Feature::parse("service-identity-v1"),
-        Some(SERVICE_IDENTITY)
-    );
 }

@@ -15,7 +15,7 @@ use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::links::Links;
 use hostkeeper_daemon::service_account::ServiceAccounts;
 use hostkeeper_daemon::service_identity::{
-    IdentityLoop, MakePorts, NO_IDENTITY, identity_loop, identity_ports, wanted,
+    IdentityLoop, MakePorts, NO_IDENTITY, NO_SWEEP, identity_loop, identity_ports, wanted,
 };
 use hostkeeper_daemon::{Daemon, Dirs, Refusal, Reply};
 use hostkeeper_enroll::{
@@ -24,7 +24,9 @@ use hostkeeper_enroll::{
 };
 use hostkeeper_hook::Verdict;
 use hostkeeper_link::testing::{FakeCerts, FakeLink, ManualDispatch, RecordingLog, identity};
-use hostkeeper_link::{CertState, Reply as LinkReply, ServiceIdentityReport, StopFlag};
+use hostkeeper_link::{
+    CertState, MAX_IDENTITY_SERVICES, Reply as LinkReply, ServiceIdentityReport, StopFlag,
+};
 use hostkeeper_proto::hostkeeper::release::v1::{Hook, Manifest, StepBounds, Target};
 use hostkeeper_steps::{BootId, BootIdError, Clock};
 use support::{OWN, Rig, config, idle_links, my_uid, uninstall};
@@ -391,9 +393,9 @@ fn the_links_start_the_identity_loop_third_when_they_have_one() {
     assert_eq!(none.pending(), 2);
 }
 
-/// Catches the heartbeat not carrying the identities: a daemon with an identity loop announces
-/// `service-identity-v1` and reports each service as the keeper last said, and one without
-/// announces nothing of it.
+/// Catches the heartbeat not carrying the identities: a daemon with an identity loop reports each
+/// service as the keeper last said and announces no feature for it (the list of features is full
+/// at the coordinator's bound), and one without reports none.
 #[test]
 fn the_heartbeat_announces_and_reports_the_identities_of_the_loop() {
     let refusal = Ok(IssueAnswer::Refused(
@@ -424,11 +426,6 @@ fn the_heartbeat_announces_and_reports_the_identities_of_the_loop() {
     };
     links.heartbeater(&daemon).beat_once();
     let beat = &link.beats()[0];
-    assert!(
-        beat.features
-            .iter()
-            .any(|feature| feature.as_str() == "service-identity-v1")
-    );
     assert_eq!(beat.service_identities, source.reports());
     assert_eq!(beat.service_identities.len(), 1);
 
@@ -438,14 +435,9 @@ fn the_heartbeat_announces_and_reports_the_identities_of_the_loop() {
         ..idle_links()
     };
     plain.heartbeater(&daemon).beat_once();
-    let beat = &link.beats()[1];
-    assert!(
-        !beat
-            .features
-            .iter()
-            .any(|feature| feature.as_str() == "service-identity-v1")
-    );
-    assert_eq!(beat.service_identities, []);
+    let beats = link.beats();
+    assert_eq!(beats[1].service_identities, []);
+    assert_eq!(beats[0].features, beats[1].features);
 }
 
 fn succeeded() -> Reply {
@@ -516,4 +508,115 @@ fn an_identity_directory_that_cannot_be_removed_stops_the_uninstall_and_it_resum
     assert_eq!(rig.daemon().order(&uninstall("api", 2)), succeeded());
     assert!(!dir.exists());
     assert!(!rig.placed_record().uninstalling.contains_key("api"));
+}
+
+/// A host whose identity worker makes one pass and logs into `log`: `alpha` asks for an identity
+/// and the coordinator refuses it.
+fn one_pass(name: &str, log: &Arc<RecordingLog>) -> (Rig, IdentityLoop) {
+    let refusal = Ok(IssueAnswer::Refused(
+        Reason::new("denied").expect("a token"),
+    ));
+    let (rig, daemon, coordinator, stop) = keeping(name, refusal);
+    let kept = identity_loop(
+        daemon,
+        ports(&rig, &coordinator, &stop),
+        mine(),
+        log.clone(),
+        stop,
+    );
+    (rig, kept)
+}
+
+/// Catches a pass that leaves the identity files of a service that is not installed (the race of
+/// an uninstall with a pass that began before its tombstone), or removes those of one that is: a
+/// directory of a service with no package, one with a tombstone and one with a version but no
+/// `current` are removed by the pass, as is a stray directory no service owns; the directory of
+/// an installed service whose entry dropped its identity and the one of a wanted service stay.
+#[test]
+fn a_pass_removes_the_identity_directories_of_services_that_are_not_installed() {
+    let log = Arc::new(RecordingLog::default());
+    let (rig, kept) = one_pass("identity-sweep", &log);
+    installed(&rig, "dropped", &entry(None, None));
+    installed(&rig, "tomb", &entry(Some(true), Some("svc")));
+    rig.store
+        .add_entry("staged", "1.0.0", &entry(Some(true), Some("svc")), false);
+    let mut record = rig.placed_record();
+    record
+        .uninstalling
+        .insert("tomb".to_owned(), hostkeeper_placed::Tombstone::default());
+    rig.save_placed(&record);
+    let stays = [
+        identity_files(&rig, "dropped"),
+        identity_files(&rig, "alpha"),
+    ];
+    let goes = [
+        identity_files(&rig, "tomb"),
+        identity_files(&rig, "staged"),
+        identity_files(&rig, "never-installed"),
+    ];
+    (kept.worker)();
+    for dir in &goes {
+        assert!(!dir.exists(), "{} is removed", dir.display());
+    }
+    for dir in &stays {
+        assert!(dir.join("key.pem").exists(), "{} stays", dir.display());
+    }
+    assert_eq!(log.lines(), Vec::<String>::new());
+}
+
+/// Catches a sweep that goes on when it cannot tell what is installed: with a `placed.json` that
+/// cannot be read no tombstone is known, and the identity directories of every service stay.
+#[test]
+fn a_pass_removes_nothing_while_the_placed_record_cannot_be_read() {
+    let log = Arc::new(RecordingLog::default());
+    let (rig, kept) = one_pass("identity-sweep-unreadable", &log);
+    let stray = identity_files(&rig, "never-installed");
+    fs::write(rig.placed_record_path(), "not json").expect("a damaged record");
+    (kept.worker)();
+    assert!(stray.join("key.pem").exists());
+}
+
+/// Catches a sweep that fails quietly: a directory that cannot be removed is logged once, with its
+/// path, and the other directories are still removed.
+#[test]
+fn a_directory_the_pass_cannot_remove_is_logged_and_the_others_are_removed() {
+    let log = Arc::new(RecordingLog::default());
+    let (rig, kept) = one_pass("identity-sweep-stuck", &log);
+    let stuck = identity_files(&rig, "aaa-stuck");
+    fs::create_dir(stuck.join("nested")).expect("a directory");
+    let other = identity_files(&rig, "zzz-stray");
+    (kept.worker)();
+    assert!(stuck.exists());
+    assert!(!other.exists());
+    let lines = log.lines();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(
+        lines[0].starts_with(&format!("{NO_SWEEP}{}: ", stuck.display())),
+        "{lines:?}"
+    );
+}
+
+/// Catches a report longer than the coordinator reads (it drops a list of more than sixteen
+/// whole): with seventeen services that ask for an identity, the source reports the first sixteen
+/// by service name, in order.
+#[test]
+fn the_report_names_at_most_sixteen_services_the_first_by_name() {
+    let log = Arc::new(RecordingLog::default());
+    let (rig, kept) = one_pass("identity-sixteen", &log);
+    let names: Vec<String> = (1..=16).map(|n| format!("svc-{n:02}")).collect();
+    for service in &names {
+        installed(&rig, service, &entry(Some(true), Some("svc")));
+    }
+    (kept.worker)();
+    let reported: Vec<String> = kept
+        .source
+        .reports()
+        .into_iter()
+        .map(|report| report.service)
+        .collect();
+    // The rig's own `alpha` is the seventeenth service and sorts first.
+    let mut expected = vec!["alpha".to_owned()];
+    expected.extend(names);
+    assert_eq!(reported, expected[..MAX_IDENTITY_SERVICES]);
+    assert_eq!(reported.len(), 16);
 }

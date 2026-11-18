@@ -106,12 +106,15 @@ fn the_loop_makes_a_pass_each_minute_and_retries_a_refusal_at_five_minutes() {
         ))
     });
     let mut passes = 0;
-    world
-        .keeper
-        .run_loop(&mut || vec![wanted(SERVICE)], &mut || {
+    world.keeper.run_loop(
+        &mut || vec![wanted(SERVICE)],
+        &mut || None,
+        &mut |_| {},
+        &mut || {
             passes += 1;
             passes <= 7
-        });
+        },
+    );
     assert_eq!(world.sleeps(), vec![CHECK_SECS; 7]);
     // Passes at 0, 60, ..., 360 seconds: the service is asked at 0 and at 300.
     assert_eq!(world.issuer.calls().len(), 2);

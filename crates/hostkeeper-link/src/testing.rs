@@ -755,7 +755,7 @@ impl World {
     }
 
     /// The world of a host that keeps its services' identities: its ports hold
-    /// [`World::service_identities`], and it announces `service-identity-v1`.
+    /// [`World::service_identities`], and its heartbeats carry them (it announces no feature for it).
     pub fn keeping_service_identities(mut self) -> World {
         self.keeping_service_identities = true;
         self

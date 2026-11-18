@@ -20,9 +20,11 @@
 //!    keeps what is installed and is the service's reported error.
 //!
 //! A service that is not wanted any more is dropped from the report; its files stay until its
-//! uninstall removes them ([`IdentityFiles::remove`]). [`ServiceIdentities::run_loop`] makes a
-//! pass every [`CHECK_SECS`] on the monotonic clock. The wall clock is read only in
-//! `validity.rs`.
+//! uninstall removes them ([`IdentityFiles::remove`]). After the services of a pass,
+//! [`ServiceIdentities::sweep`] removes the directory of every service the host does not have
+//! installed at all, so a pass that began before an uninstall cannot leave files behind it.
+//! [`ServiceIdentities::run_loop`] makes a pass and a sweep every [`CHECK_SECS`] on the
+//! monotonic clock. The wall clock is read only in `validity.rs`.
 //!
 //! [`IdentityState`] holds what each service last reported, for the daemon's heartbeat.
 
@@ -199,16 +201,45 @@ impl ServiceIdentities {
         }
     }
 
-    /// Makes a pass over `wanted()` and waits [`CHECK_SECS`] on the clock, while `keep_going()`.
+    /// Makes a pass over `wanted()`, then a sweep of what `installed()` names (read after the
+    /// pass; none when it cannot be told, which sweeps nothing), and waits [`CHECK_SECS`] on the
+    /// clock, while `keep_going()`. A sweep that fails is handed to `failed` and tried again at
+    /// the next pass.
     pub fn run_loop(
         &mut self,
         wanted: &mut dyn FnMut() -> Vec<Wanted>,
+        installed: &mut dyn FnMut() -> Option<Vec<String>>,
+        failed: &mut dyn FnMut(&FilesError),
         keep_going: &mut dyn FnMut() -> bool,
     ) {
         while keep_going() {
             self.step(&wanted());
+            if let Some(installed) = installed()
+                && let Err(error) = self.sweep(&installed)
+            {
+                failed(&error);
+            }
             self.ports.clock.sleep_secs(CHECK_SECS);
         }
+    }
+
+    /// Removes the identity directory of every service not in `installed`, whatever it holds:
+    /// the identity directory is the daemon's own. A service in `installed` keeps its directory
+    /// whether or not it is wanted.
+    ///
+    /// # Errors
+    /// The first [`FilesError`] of listing or removing; the other directories are still tried.
+    pub fn sweep(&mut self, installed: &[String]) -> Result<(), FilesError> {
+        let mut first = None;
+        for service in self.ports.files.services()? {
+            if installed.contains(&service) {
+                continue;
+            }
+            if let Err(error) = self.ports.files.remove(&service) {
+                first.get_or_insert(error);
+            }
+        }
+        first.map_or(Ok(()), Err)
     }
 
     /// One pass over the services that want an identity.
