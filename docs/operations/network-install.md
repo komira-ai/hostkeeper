@@ -208,10 +208,11 @@ ca-file = "/etc/pxe/ca.pem"
 token-file = "/etc/pxe/token"
 user-id = 65534
 group-id = 65534
+serial-console = "ttyS1"
 ```
 
-Router mode is the same with `mode = "router"`; this one also sets the install disk, the
-serial console and the repository entries of step 3a:
+Router mode is the same with `mode = "router"`; this one also sets the install disk and the
+repository entries of step 3a:
 
 ```toml
 # /etc/pxe/pxe.toml
@@ -226,8 +227,8 @@ ca-file = "/etc/pxe/ca.pem"
 token-file = "/etc/pxe/token"
 user-id = 65534
 group-id = 65534
-install-disk = "serial=SN-*"
 serial-console = "ttyS1"
+install-disk = "serial=SN-*"
 repositories = "/etc/pxe/repositories"
 ```
 
@@ -253,8 +254,18 @@ key or a value the flag refuses stops `serve` and `prepare` with one line naming
   `path=<glob>`, the smallest of those it matches. Without it, the smallest SSD (a disk the
   kernel reports as not rotational). Only that disk is written. See the disks of the board check.
 - `serial-console`: `ttyS<n>` or `ttyAMA<n>`: the installed system's kernel console and a getty
-  on that port at 115200 baud, so the BMC's serial console shows the key hash. Which port the
-  BMC's serial console is depends on the board model **[V]** (the board check records it).
+  on that port at 115200 baud, so the BMC's serial console shows the key hash; on a `ttyS<n>`
+  port GRUB's output too (`GRUB_TERMINAL="console serial"`, `GRUB_SERIAL_COMMAND="serial --unit=<n>
+  --speed=115200"`). Set `"ttyS1"` on every farm: the BMC's serial console (Serial over LAN) is
+  the board's second serial port, COM2, which Linux names `ttyS1`, on every Linux server, a fleet
+  rule and not a value per board model ([console-broker.md](../design/console-broker.md),
+  section 5.2). Every example in this runbook sets it. The board check confirms it (item 8). An
+  Arm board's port is a `ttyAMA<n>`, which gets the kernel's console and the getty but no GRUB
+  serial terminal. On either kind of port the getty stays at 115200 baud: the seed writes a
+  drop-in, `/etc/systemd/system/serial-getty@<port>.service.d/99_hostkeeper.conf`, whose
+  `ExecStart=-/sbin/agetty -o '-p -- \\u' 115200 - $TERM` replaces the stock unit's
+  `--keep-baud 115200,57600,38400,9600`, which drops the port to 9600 at the first Enter over
+  Serial over LAN, after which the BMC's serial console shows NUL bytes.
 - `dhcp-listen`, `proxy-listen`, `tftp-listen`, `http-listen`: `address:port` of each socket; by
   default the protocol ports 67, 4011, 69 and 80 on every address. Keep the HTTP port at 80: a
   port other than 80 is written into GRUB's device name, which Ubuntu's signed GRUB is not known
@@ -282,6 +293,7 @@ ca-file = "/etc/pxe/ca.pem"
 token-file = "/etc/pxe/token"
 user-id = 65534
 group-id = 65534
+serial-console = "ttyS1"
 
 [prepare]
 platform = ["linux-x86_64"]
@@ -517,8 +529,18 @@ keep the packets with the result. Power the machine on and read `serve`'s log fo
    disk is not the smallest SSD, pass `install-disk = "serial=<glob>"` or `model=<glob>`.
 7. **Memory.** The live system loads the whole ISO into memory, so a machine needs several GiB
    of RAM **[V]**: record the board's RAM and whether the install succeeded.
-8. **The serial console.** Which `ttyS<n>` the BMC's serial console reads, for
-   `serial-console`.
+8. **The serial console, COM2 = `ttyS1`.** In the firmware setup, console redirection is on
+   COM2 at 115200 baud, 8 bits, no parity (on a Supermicro board, Advanced, Serial Port Console
+   Redirection, the SOL or COM2 entry; the names are **[V]** per firmware). After the first
+   install of the model, reboot the host once (the kernel's console and GRUB's terminal take
+   effect from the second boot) and open the BMC's serial console (Serial over LAN): the
+   kernel's messages and then the login prompt with the key hash appear on it (GRUB's menu
+   appears only when GRUB's timeout is visible, which Ubuntu's default, hidden with a timeout
+   of 0, is not). Press Enter twice: the login prompt is drawn again, readable. A blank serial
+   console means the BMC does not carry COM2 at 115200 baud: set the redirection and the BMC's
+   SOL bit rate, and check again. NUL bytes or garbage after the first Enter mean the getty
+   fell to a slower baud: `systemctl cat serial-getty@ttyS1.service` must show the seed's
+   drop-in, with `115200` alone and no `--keep-baud`.
 9. **After the first install of the model,** whether the board keeps the boot order curtin
    writes. Curtin puts the installed system first in the UEFI boot order after an install
    (`reorder_uefi`, at its default) **[V]**; on the installed host, `sudo efibootmgr` shows the
@@ -682,6 +704,7 @@ to set one on a record, remove the record and add it again.
    token-file = "/etc/pxe/token"
    user-id = 65534
    group-id = 65534
+   serial-console = "ttyS1"
    reinstall = ["web-17"]
    ```
 

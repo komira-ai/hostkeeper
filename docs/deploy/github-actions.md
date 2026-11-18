@@ -26,10 +26,13 @@ one credential is the OIDC token GitHub issues to the job.
 
 1. **Build and sign.** A push to `main` runs `ci`, `privileged` and `artifacts`. `artifacts`
    builds every file of the release and attests it ([Verify a release](verify-a-release.md)).
-2. **Release.** When all three have passed for the commit, `release.yml` plans the release
-   (`plan`), checks every file and attestation again (`verify`), and publishes the GitHub
-   release `v<X.Y.Z>` (`publish`). Nothing is rebuilt.
-3. **Into the repository.** The release's package-channel jobs (`testing-apt-*`) put the
+2. **Release.** When `ci` (the unit tests) and `artifacts` (the build) have passed for the
+   commit, `release.yml` plans the release (`plan`), checks every file and attestation again
+   (`verify`), and publishes the GitHub release `v<X.Y.Z>` (`publish`). Nothing is rebuilt. No
+   release waits for `privileged`, which runs beside it: a red run of it opens an issue
+   `RELEASE-RED: hostkeeper privileged: ...` (`release-red.yml`) and releases go on.
+3. **Into the repository.** The release's package-channel jobs (`testing-apt-*`), which start
+   once `verify` passed, beside `publish`, put the
    daemon's `.deb` into the repository's `testing` suite. The deploy does not wait for the
    repository: a host ordered before the `.deb` is in the suite defers its `stage`
    (`not_in_repository`, an environment deferral) and tries again on the deferral's schedule.
@@ -257,6 +260,14 @@ that changes those two values and both callers together, after the allow-list en
 new commit (above).
 
 ## When it fails
+
+A red run of `release.yml` on `main`, in any job, opens (or brings up to date) the issue
+`RELEASE-RED: hostkeeper release: a job of the release run failed` (`release-red.yml`, `cargo xtask
+release red`). It names the run, its commit and the jobs that failed, and says whether the deploy
+went out: a failure of the Mac's beta stage, an install check or the promotion to stable, which run
+beside or after the deploy, holds nothing and is not released again; a failure of a deploy job
+(`set-desired` or a job it waits for) is released again by the next release run (`release plan`).
+The next release run that releases something and succeeds closes the issue.
 
 A failure of any of the four jobs (`targets`, `coordinator`, `no-downgrade`, `set-desired`) leaves the release published; only the deploy did not happen.
 Once the cause is fixed, use **Re-run failed jobs** on the release run: it runs the jobs that

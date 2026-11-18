@@ -400,3 +400,34 @@ fn an_image_index_that_is_not_the_one_of_the_two_image_tarballs_is_listed() {
         "{lines:?}"
     );
 }
+
+/// A verifier that answers no batch.
+struct Silent;
+
+impl Verifier for Silent {
+    fn verify(
+        &self,
+        _signer: &Signer,
+        _file: &Path,
+        _bundle: Option<&Path>,
+        _commit: &Commit,
+    ) -> Result<Vec<Attestation>, PortError> {
+        Ok(Vec::new())
+    }
+
+    fn verify_each(&self, _asks: &[Ask<'_>]) -> Vec<Result<Vec<Attestation>, PortError>> {
+        Vec::new()
+    }
+}
+
+#[test]
+fn a_verifier_that_answers_fewer_verifications_than_asked_is_refused() {
+    // Catches: a batch of verifications cut short read as a release whose every attestation
+    // verified, since the answers it lacks are never judged.
+    let (dir, commit) = assets("check-silent");
+    let problems = refused(check(&Silent, &dir, &version(), &commit));
+    assert_eq!(
+        problems,
+        ["the verifier answered 0 of the 58 verifications asked for".to_owned()]
+    );
+}

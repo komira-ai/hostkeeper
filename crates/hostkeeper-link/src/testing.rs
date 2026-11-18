@@ -16,12 +16,16 @@ use hostkeeper_steps::{BootId, BootIdError, Clock};
 use crate::beat::{Health, Heartbeat, Liveness, Platform, Renewal, TrustedRootFacts};
 use crate::heartbeater::{DEFAULT_HEARTBEAT_SECS, Heartbeater, LoopConfig, Ports};
 use crate::host_facts::PushedFacts;
+use crate::operator_keys::{KeysReport, PushedKeys};
 use crate::order::{Order, OrderRef, OrderResult, Outcome, Reply};
 use crate::ports::{
     CertSource, CertState, ClientIdentity, CoordinatorLink, Dispatch, FactsSink, HeldHalts, Job,
-    LinkError, Log, Observation, OrderSink, RecordedService, RenewalSource, RepositorySink,
-    ServiceObserver, ServiceRecords, Sleeper, Tick, TrustedRootSource, UnixClock,
+    LinkError, Log, Observation, OperatorKeysSink, OrderSink, PrerequisitesSink, RecordedService,
+    RemoteLoginProbeSource, RenewalSource, RepositorySink, ServiceObserver, ServiceRecords,
+    Sleeper, Tick, TrustedRootSource, UnixClock,
 };
+use crate::prerequisites::{PrerequisitesReport, PushedPrerequisites};
+use crate::probe::RemoteLoginProbe;
 use crate::repositories::{PushedSet, RepositoriesReport};
 
 /// A lock that a panicking test thread did not spoil: what it holds is still the fake's state.
@@ -444,6 +448,24 @@ impl TrustedRootSource for FakeTrustedRoot {
     }
 }
 
+/// A Mac's Remote Login probe, as a test sets it: none until [`FakeProbe::set`].
+#[derive(Default)]
+pub struct FakeProbe {
+    probe: Mutex<Option<RemoteLoginProbe>>,
+}
+
+impl FakeProbe {
+    pub fn set(&self, probe: Option<RemoteLoginProbe>) {
+        *lock(&self.probe) = probe;
+    }
+}
+
+impl RemoteLoginProbeSource for FakeProbe {
+    fn remote_login_probe(&self) -> Option<RemoteLoginProbe> {
+        lock(&self.probe).clone()
+    }
+}
+
 /// The host's repository configuration, as a test sets it: it holds the report a test gives it,
 /// records every set it is given, and lists the installers a test gives it.
 #[derive(Default)]
@@ -535,6 +557,66 @@ impl FactsSink for FakeFacts {
     }
 }
 
+/// The managed block of the login account's `authorized_keys`, as a test sets it: it records
+/// every set it is given and reports what a test sets.
+#[derive(Default)]
+pub struct FakeOperatorKeys {
+    report: Mutex<KeysReport>,
+    applied: Mutex<Vec<PushedKeys>>,
+}
+
+impl FakeOperatorKeys {
+    /// Sets what every later report says.
+    pub fn set_report(&self, report: KeysReport) {
+        *lock(&self.report) = report;
+    }
+
+    /// Every set the loop gave it, in order.
+    pub fn applied(&self) -> Vec<PushedKeys> {
+        lock(&self.applied).clone()
+    }
+}
+
+impl OperatorKeysSink for FakeOperatorKeys {
+    fn report(&self) -> KeysReport {
+        lock(&self.report).clone()
+    }
+
+    fn apply(&self, keys: &PushedKeys) {
+        lock(&self.applied).push(keys.clone());
+    }
+}
+
+/// The host prerequisites, as a test sets them: it records every set it is given and reports
+/// what a test sets.
+#[derive(Default)]
+pub struct FakePrerequisites {
+    report: Mutex<PrerequisitesReport>,
+    applied: Mutex<Vec<PushedPrerequisites>>,
+}
+
+impl FakePrerequisites {
+    /// Sets what every later report says.
+    pub fn set_report(&self, report: PrerequisitesReport) {
+        *lock(&self.report) = report;
+    }
+
+    /// Every set the loop gave it, in order.
+    pub fn applied(&self) -> Vec<PushedPrerequisites> {
+        lock(&self.applied).clone()
+    }
+}
+
+impl PrerequisitesSink for FakePrerequisites {
+    fn report(&self) -> PrerequisitesReport {
+        lock(&self.report).clone()
+    }
+
+    fn apply(&self, set: &PushedPrerequisites) {
+        lock(&self.applied).push(set.clone());
+    }
+}
+
 /// The unix second the [`World`]'s clock starts at.
 pub const START_UNIX: u64 = 2_000_000_000;
 
@@ -564,6 +646,16 @@ pub struct World {
     pub facts: Arc<FakeFacts>,
     keeping_facts: bool,
     private: bool,
+    /// A Mac's Remote Login probe; the ports hold it only after [`World::probing`].
+    pub probe: Arc<FakeProbe>,
+    probing: bool,
+    /// The managed block of operator keys; the ports hold it only after
+    /// [`World::keeping_operator_keys`].
+    pub operator_keys: Arc<FakeOperatorKeys>,
+    keeping_operator_keys: bool,
+    /// The host prerequisites; the ports hold them only after [`World::keeping_prerequisites`].
+    pub prerequisites: Arc<FakePrerequisites>,
+    keeping_prerequisites: bool,
 }
 
 impl Default for World {
@@ -593,6 +685,12 @@ impl World {
             repositories: Arc::default(),
             managing: false,
             private: false,
+            probe: Arc::default(),
+            probing: false,
+            operator_keys: Arc::default(),
+            keeping_operator_keys: false,
+            prerequisites: Arc::default(),
+            keeping_prerequisites: false,
         }
     }
 
@@ -603,10 +701,30 @@ impl World {
         self
     }
 
+    /// The world of a Mac that runs the Remote Login probe: its ports hold [`World::probe`].
+    pub fn probing(mut self) -> World {
+        self.probing = true;
+        self
+    }
+
     /// The world of a host that keeps a facts file: its ports hold [`World::facts`], and it
     /// announces `facts-v1`.
     pub fn keeping_facts(mut self) -> World {
         self.keeping_facts = true;
+        self
+    }
+
+    /// The world of a host that keeps operator keys: its ports hold [`World::operator_keys`], and
+    /// it announces `operator-keys-v1`.
+    pub fn keeping_operator_keys(mut self) -> World {
+        self.keeping_operator_keys = true;
+        self
+    }
+
+    /// The world of a host that keeps host prerequisites: its ports hold
+    /// [`World::prerequisites`], and it announces `prerequisites-v1`.
+    pub fn keeping_prerequisites(mut self) -> World {
+        self.keeping_prerequisites = true;
         self
     }
 
@@ -637,6 +755,15 @@ impl World {
             facts: self
                 .keeping_facts
                 .then(|| Arc::clone(&self.facts) as Arc<dyn FactsSink>),
+            remote_login_probe: self
+                .probing
+                .then(|| Arc::clone(&self.probe) as Arc<dyn RemoteLoginProbeSource>),
+            operator_keys: self
+                .keeping_operator_keys
+                .then(|| Arc::clone(&self.operator_keys) as Arc<dyn OperatorKeysSink>),
+            prerequisites: self
+                .keeping_prerequisites
+                .then(|| Arc::clone(&self.prerequisites) as Arc<dyn PrerequisitesSink>),
         }
     }
 

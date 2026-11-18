@@ -348,8 +348,15 @@ deb, writes `hostkeeper.toml`, and reboots. The daemon starts from the installed
     `Restart=always` with no start limit), so this ordering is not load-bearing.
   - With `--serial-console <port>` (`ttyS<n>` or `ttyAMA<n>`, at 115200 baud), the installed kernel's `console=` names
     that serial port and its serial getty is enabled, so the BMC's serial console shows the login prompt (section 7).
-    The kernel's console is a GRUB default the first boot's cloud-init writes and applies, so it takes effect from the
-    second boot; the getty is started on the first.
+    On a `ttyS<n>` port GRUB's terminal is that port as well (`GRUB_TERMINAL="console serial"`,
+    `GRUB_SERIAL_COMMAND="serial --unit=<n> --speed=115200"`), so GRUB's output shows there too. The farm's port is
+    `ttyS1`, COM2, on every Linux server (console-broker.md section 5.2); the runbook's install configuration sets it.
+    On either kind of port a systemd drop-in, `serial-getty@<port>.service.d/99_hostkeeper.conf`, clears the stock
+    getty's `ExecStart` and runs `agetty -o '-p -- \\u' 115200 - $TERM`: the stock `--keep-baud
+    115200,57600,38400,9600` drops the port to 9600 at the first Enter over Serial over LAN, and the BMC's serial
+    console then shows NUL bytes. The kernel's console and GRUB's terminal are GRUB defaults the first boot's
+    cloud-init writes and applies, so they take effect from the second boot; the getty is started on the first, after
+    a `systemctl daemon-reload` so that it starts with the drop-in.
   - Curtin's `reorder_uefi` is left at its default, which puts the installed system's entry first in the UEFI boot order
     after the install (section 1, **[V]**). The design's safety does not rest on it: a board that keeps network boot
     first still gets no install answer for an installed machine (section 3).

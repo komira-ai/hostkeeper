@@ -35,6 +35,9 @@
 //!   which the start of a Mac's daemon does when its config is not there.
 //! - [`keep_awake`]: a Mac's power settings, made at the start of its daemon so that the Mac never
 //!   sleeps (`pmset`), unless the daemon config's `keep_awake` is off.
+//! - [`remote_login_probe`]: a Mac's report of what its daemon can do of Remote Login without
+//!   Full Disk Access, and of why the Mac may sleep, run once at its start and sent in every
+//!   heartbeat after ([`line_process`] reads `pmset -g log` for it).
 //! - [`adapters`]: the step launcher, service manager, unit directory, observer ports and package
 //!   check of the host's platform ([`adapters::Adapters::for_platform`]: systemd on Linux,
 //!   launchd on macOS), and the claims of its enrollment.
@@ -59,6 +62,14 @@
 //!   with no hook program; [`mirror`] the files of a private repository, read from the coordinator into a local copy apt reads; [`repository_push`] the repository sets the coordinator pushes, written
 //!   as the host's repository configuration and taken into use without a restart.
 //! - [`facts_file`]: the host's facts file, written from the facts the coordinator sends.
+//! - [`operator_keys`]: the operator keys the coordinator sends (`operator-keys-v1`), put in the
+//!   managed block of the login account's `authorized_keys` ([`authorized_keys`], the block and the
+//!   file) and reported by digest in every heartbeat; [`login_account`] finds the account (root on
+//!   Linux, a Mac's one local administrator) and, on a Mac, [`mac_ssh`] makes sure Remote Login is
+//!   on and the account may use ssh.
+//! - [`prerequisites`]: the host prerequisites the coordinator sends (`prerequisites-v1`), made sure
+//!   of on the host and reported by state in every heartbeat; [`xcode_clt`] is the one there is,
+//!   Apple's Command Line Tools, looked for and installed headless on a Mac.
 //! - [`observer`]: what [`Daemon::status`] reports of a running service.
 //! - [`node`]: the host's enrollment and the heartbeat loop's link, as the loops last wrote them,
 //!   which [`Daemon::status`] reports besides the services.
@@ -82,6 +93,7 @@
 
 pub mod adapters;
 pub mod archive_versions;
+pub mod authorized_keys;
 pub mod boot;
 pub mod builtin;
 pub mod checks;
@@ -99,26 +111,34 @@ pub mod installed;
 pub mod installers;
 pub mod ipmi;
 pub mod keep_awake;
+#[cfg(test)]
+mod key_fixture_tests;
 mod launchd_plist;
 pub mod layout;
+pub mod line_process;
 pub mod link_adapters;
 pub mod links;
 pub mod locks;
+pub mod login_account;
 pub mod mac;
 pub mod mac_config;
 pub mod mac_files;
+pub mod mac_ssh;
 pub mod macos_pkg;
 pub mod mirror;
 pub mod node;
 pub mod notify;
 pub mod observer;
+pub mod operator_keys;
 pub mod own_package;
 pub mod packaged;
 pub mod packages;
 pub mod place;
+pub mod prerequisites;
 pub mod prune;
 pub mod real_packages;
 pub mod refusal;
+pub mod remote_login_probe;
 pub mod repositories;
 pub mod repository;
 pub mod repository_push;
@@ -137,6 +157,7 @@ pub mod unix_clock;
 pub mod verb;
 pub mod verbs;
 pub mod watchers;
+pub mod xcode_clt;
 
 pub use boot::{BootError, BootReport, BootStep, Outcome, ServiceBoot, Stage};
 pub use executor::{

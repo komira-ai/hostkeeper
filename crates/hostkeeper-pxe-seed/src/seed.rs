@@ -18,7 +18,12 @@
 //!   `/etc/hostkeeper/repositories/<file name>`, owned by root, mode 0644, byte for byte (as
 //!   base64), so the entries are there when the daemon's config appears; the
 //!   datasource list `[ NoCloud, None ]`; and, with a serial console, the kernel's `console=`
-//!   and an enabled serial getty.
+//!   and an enabled serial getty held at 115200 baud by a drop-in (`getty_drop_in`: the
+//!   stock unit's `--keep-baud` list lets the port fall to a slower rate when a line arrives,
+//!   and a BMC's serial console then shows NUL bytes), and on a `ttyS<n>` port GRUB's terminal
+//!   on that port too (`GRUB_TERMINAL="console serial"` and `GRUB_SERIAL_COMMAND="serial
+//!   --unit=<n> --speed=115200"`), so GRUB's output shows on the serial console as well
+//!   (docs/design/console-broker.md, section 5.2).
 //! - `meta-data`: the instance id, from the host id.
 //!
 //! Curtin's `reorder_uefi` is left at its default. The record's role is not in the seed.
@@ -47,6 +52,30 @@ const REPOSITORIES_DIR: &str = "/etc/hostkeeper/repositories";
 
 /// The GRUB defaults file of the installed system that adds the serial console.
 const GRUB_CONSOLE_FILE: &str = "/etc/default/grub.d/99_hostkeeper.cfg";
+
+/// The getty's `ExecStart` in the drop-in: agetty at 115200 baud alone. The stock
+/// `serial-getty@.service` runs agetty with `--keep-baud 115200,57600,38400,9600`, which on a
+/// BMC's Serial over LAN drops the port to 9600 at the first Enter; with one rate and no
+/// `--keep-baud` the port stays at the kernel console's 115200. `-o '-p -- \\u'` are the stock
+/// unit's options for login (keep the environment; `\u`, which agetty replaces with the user
+/// name, written `\\u` because systemd reads a backslash as an escape).
+const GETTY_EXEC_START: &str = "-/sbin/agetty -o '-p -- \\\\u' 115200 - $TERM";
+
+/// The drop-in of the installed system's `serial-getty@<port>.service`, at
+/// `/etc/systemd/system/serial-getty@<port>.service.d/`, whose file name is this.
+const GETTY_DROP_IN_FILE: &str = "99_hostkeeper.conf";
+
+/// The drop-in that holds `port`'s getty at 115200 baud: an empty `ExecStart=` clears the
+/// stock unit's command, and [`GETTY_EXEC_START`] is the one that runs.
+fn getty_drop_in(port: &SerialConsole) -> (String, String) {
+    (
+        format!(
+            "/etc/systemd/system/serial-getty@{}.service.d/{GETTY_DROP_IN_FILE}",
+            port.as_str()
+        ),
+        format!("[Service]\nExecStart=\nExecStart={GETTY_EXEC_START}\n"),
+    )
+}
 
 /// What a seed is made from.
 #[derive(Clone, Debug)]
@@ -194,16 +223,30 @@ autoinstall:
     );
     if let Some(console) = inputs.serial_console {
         let port = console.as_str();
-        let defaults = quoted(&format!(
+        let mut defaults = format!(
             "GRUB_CMDLINE_LINUX=\"$GRUB_CMDLINE_LINUX console=tty0 console={port},115200n8\"\n"
-        ));
+        );
+        if let Some(unit) = console.grub_unit() {
+            defaults.push_str(&format!(
+                "GRUB_TERMINAL=\"console serial\"\n\
+                 GRUB_SERIAL_COMMAND=\"serial --unit={unit} --speed=115200\"\n"
+            ));
+        }
+        let defaults = quoted(&defaults);
+        let (getty_path, getty) = getty_drop_in(console);
+        let getty = quoted(&getty);
         text.push_str(&format!(
             "      - path: {GRUB_CONSOLE_FILE}
         owner: \"root:root\"
         permissions: \"0644\"
         content: {defaults}
+      - path: {getty_path}
+        owner: \"root:root\"
+        permissions: \"0644\"
+        content: {getty}
     runcmd:
       - [update-grub]
+      - [systemctl, daemon-reload]
       - [systemctl, enable, --now, serial-getty@{port}.service]
 "
         ));

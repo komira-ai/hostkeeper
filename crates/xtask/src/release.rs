@@ -47,6 +47,9 @@
 //! - `plan` ([`plan`]): which commits since the last release are released, oldest first, and
 //!   under which versions.
 //! - `locate` ([`locate`]): the commit is on `main` and its runs exist; the id of its build run.
+//! - `red` ([`red`]): the `RELEASE-RED` issue of a completed run of `release.yml` or
+//!   `privileged.yml` on `main`: opened or brought up to date when it failed, closed by a later
+//!   success.
 //! - `check` ([`check`]): every asset against `SHA256SUMS`, every attestation and bundle against
 //!   the signer identity of [`contract`] and the commit.
 //! - `publish` ([`publish`]): the GitHub release of a checked directory, idempotent.
@@ -90,6 +93,7 @@ mod plan;
 pub(crate) mod ports;
 mod publish;
 pub(crate) mod real;
+mod red;
 mod run_state;
 mod set_version;
 mod targets;
@@ -498,6 +502,22 @@ pub(crate) enum Verb {
         #[arg(long)]
         output: Option<PathBuf>,
     },
+    /// Open, bring up to date or close the `RELEASE-RED` issue of a completed run of
+    /// `release.yml` or `privileged.yml` on `main`: one issue per workflow, opened when a run
+    /// fails, closed by a later run that succeeds on a commit after the red one.
+    Red {
+        #[arg(long)]
+        repo: Repo,
+        /// The run's workflow file, by name or path.
+        #[arg(long)]
+        workflow: String,
+        /// The run's id.
+        #[arg(long)]
+        run_id: u64,
+        /// The run's head commit.
+        #[arg(long)]
+        commit: Commit,
+    },
     /// Check a directory of assets: the sums, then every attestation online and from its bundle.
     Check {
         dir: PathBuf,
@@ -768,6 +788,20 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
             commit,
             output,
         } => locate::locate(ports.runs, &repo, &commit, output.as_deref()),
+        Verb::Red {
+            repo,
+            workflow,
+            run_id,
+            commit,
+        } => red::red(
+            ports,
+            &red::Request {
+                repo,
+                workflow,
+                run_id,
+                commit,
+            },
+        ),
         Verb::Check {
             dir,
             version,

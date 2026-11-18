@@ -323,6 +323,86 @@ made at each start of the daemon, not watched in between; the heartbeat does not
 A configuration profile is the other way to hold power settings on a managed Mac; the daemon is
 what ships, so a Mac needs nothing but hostkeeper.
 
+### The Remote Login probe
+
+Whether the daemon needs Full Disk Access to turn on Remote Login (sshd) is not stated by Apple
+(docs/design/ssh-through-coordinator.md, section 3). The daemon answered it itself, on the three
+build Macs on 0.1.337: `systemsetup -setremotelogin on` is refused without Full Disk Access, and
+`launchctl enable` and `bootstrap` of sshd's job turn Remote Login on without it, so the SSH design
+uses `launchctl` and the daemon needs no Full Disk Access and no Developer ID Application
+signature (the design's section 3 has the table of results).
+
+At each start of a Mac's daemon, a thread of its own (`crates/hostkeeper-daemon/src/remote_login_probe.rs`) runs,
+as the daemon (root under launchd, with whatever privacy grants the daemon has), these steps in
+order and keeps the exit code, standard output and standard error of each, or why it could not be
+done:
+
+| step | what it runs or reads |
+|---|---|
+| `remote_login_get_before` | `systemsetup -getremotelogin` |
+| `sshd_print_before` | `launchctl print system/com.openssh.sshd` |
+| `ssh_banner_before` | a connect to `127.0.0.1:22`, and the banner sshd writes |
+| `remote_login_set_on` | `systemsetup -setremotelogin on` |
+| `remote_login_get_after_set` | `systemsetup -getremotelogin` |
+| `sshd_enable` | `launchctl enable system/com.openssh.sshd` |
+| `sshd_bootstrap` | `launchctl bootstrap system /System/Library/LaunchDaemons/ssh.plist` |
+| `sshd_print_after` | `launchctl print system/com.openssh.sshd` |
+| `remote_login_get_after` | `systemsetup -getremotelogin` |
+| `ssh_banner_after` | the connect and banner again |
+| `sshd_config_include` | the `Include` lines of `/etc/ssh/sshd_config` |
+| `access_ssh_group` | `dscl . -read /Groups/com.apple.access_ssh` |
+| `tcc_db_open` | whether `/Library/Application Support/com.apple.TCC/TCC.db` opens for reading |
+| `tcc_full_disk_access` | `sqlite3 -readonly` on it: the rows of `kTCCServiceSystemPolicyAllFiles` |
+| `codesign_running` | `codesign -dvv` of the running binary (ad hoc or a Team ID) |
+| `codesign_installed_requirement` | `codesign -dr -` of `/usr/local/bin/hostkeeper` |
+| `power_custom` | `pmset -g custom` |
+| `power_settings` | `pmset -g` |
+| `power_assertions` | `pmset -g assertions` |
+| `power_log_sleep_wake` | the newest `Sleep` and `Wake` lines of `pmset -g log` that start or end a system sleep, with their cause, read line by line as it is written; a sleeping Mac's maintenance wakes (`DarkWake`, `Wake Requests` and a sleep due to `'Maintenance Sleep'`) are left out |
+| `keep_awake_log` | the newest `keep_awake:` lines of `/var/log/hostkeeper/daemon.err.log`, what the daemon's power settings said at its starts |
+
+`remote_login_set_on`, `sshd_enable` and `sshd_bootstrap` may turn Remote Login on, and nothing
+turns it off again; the steps before them show whether it was on already. A command's output is
+cut to its first 1024 bytes and the two log steps keep their newest lines, to 3072 and 1024 bytes
+(`truncated` says so); when the whole probe is still over 10 KiB as JSON, the power log, then the
+assertions, the `keep_awake` lines, the two `launchctl print` and `codesign -dvv` are cut further,
+in that order. Every gRPC heartbeat after the probe is done carries it
+(`HeartbeatRequest.remote_login_probe`); it is the first fact a heartbeat drops when it would not
+fit 16 KiB. The coordinator keeps the last one in memory and shows it in the host's heartbeat:
+`hkctl hosts get --node-id <host>` answers it as `host.heartbeat.remoteLoginProbe`. Nothing decides
+on it; a restart of the daemon (an update included) runs it again.
+
+### Operator SSH keys and Remote Login
+
+A Mac's daemon announces `operator-keys-v1` like every other host's
+([design/operator-keys.md](design/operator-keys.md)). When the coordinator sends the keys of the
+Mac's host group, the daemon (`crates/hostkeeper-daemon/src/operator_keys.rs`) finds the one local
+administrator account with `dscl` (uid 501 or more, a member of `admin`, not hidden), writes the
+keys into the managed block of that account's `~/.ssh/authorized_keys` (mode 0600, owned by the
+account), and, when the set is not empty, makes sure the account can log in: Remote Login by
+`launchctl enable` and `bootstrap` of `system/com.openssh.sshd` when `launchctl print` does not find
+it loaded (never `systemsetup`, which needs Full Disk Access, and never a step that turns it off),
+then `dseditgroup -o edit -a <account> -t user com.apple.access_ssh` when that group exists and the
+account is not in it. A Mac with no administrator account, or with several, is refused and left as
+it is; the report in the heartbeat says so. Nothing here needs Full Disk Access, a privacy profile
+or a password.
+
+### Command Line Tools
+
+A Mac's daemon announces `prerequisites-v1` like every other host's
+([design/host-prerequisites.md](design/host-prerequisites.md)). When the coordinator sends a set
+that lists `xcode-command-line-tools`, the daemon (`crates/hostkeeper-daemon/src/xcode_clt.rs`)
+looks with `pkgutil --pkg-info=com.apple.pkg.CLTools_Executables` and `xcode-select -p`, and, when
+the package is missing, makes the marker file
+`/tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress`, takes the highest version
+`softwareupdate --list` names and installs it with `softwareupdate --install`, then removes the
+marker. It runs as root under launchd, so no password, account name or sudoers rule is needed on
+the Mac. It looks again every hour and after every start, installs the tools again when they are
+gone, and never removes them. A failed try is repeated after 30 minutes, then after twice as long
+each time, at most 24 hours, and the coordinator raises `prerequisite_failed` meanwhile. The
+report is `host.heartbeat.prerequisites` in `hkctl hosts get`
+([operations/host-prerequisites.md](operations/host-prerequisites.md)).
+
 ### Release and installer pkg
 
 Every release ships macos-arm64 beside the two Linux platforms: the binary tarball

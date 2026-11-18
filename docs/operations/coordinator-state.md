@@ -46,7 +46,7 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   Enrollment is on when `--ca-key-file` is given (with `--server-cert-file` and `--server-name`, as
   with the file store); the enrollment store is the database's.
 - **The start.** `serve` opens one session, takes the coordinator's advisory lock of the database
-  without waiting, runs the migrations the database lacks (each in its own transaction, recorded in
+  shared and without waiting (several coordinators hold it together), runs the migrations the database lacks (each in its own transaction, recorded in
   `schema_version`), raises the lease's epoch, and loads the state. Nothing is read or written
   before the lock is held. It refuses to start, naming why, when:
   - the database is not up (`the database is not up: ...`): nothing listens, or it is starting up.
@@ -54,14 +54,15 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   - the server refuses (`the database refused the coordinator: ...`): a login, a database that is
     not there, or a setting. A database with `fsync`, `synchronous_commit` or `full_page_writes`
     off is refused, naming the setting: the coordinator acknowledges what is committed;
-  - another session holds the lock: `another coordinator holds the lock of this database`;
+  - a session holds the lock exclusively (the release before this one, an `import` or an `export`):
+    `another coordinator holds the lock of this database`;
   - the database holds a migration this release does not know, and that migration says older
     releases must not run on it: `the database's schema is newer than this coordinator (migration
     <n>, <name>)`;
   - a migration fails: it is rolled back whole, and the start names it.
-- **One writer.** Every write goes through the session that holds the lock. Each transaction moves
-  the lease's commit counter on, and the database refuses that from any session without the lock,
-  so a coordinator that lost its session can commit nothing. Reads that are not decisions
+- **The writing session.** Every write goes through the one session that holds the lock. Each
+  transaction first inserts its row of the `tx_ledger` table, which names it if its commit is lost.
+  A coordinator that lost its session commits nothing until it has the lock again. Reads that are not decisions
   (`Audit.List`, the enrollment lists, the alerts' scans) run on a second, read-only session.
   Decisions read memory: a heartbeat in the steady state runs no query.
 - **Generations and write ids.** The database keeps, with each service's desired state, its
@@ -164,19 +165,16 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   `store_failed`, keeps a change that raises protection (a halt, a bad mark, a pause, an abort) in
   memory, still answers heartbeats, and raises the critical alert `store_unreachable`
   ([holds-and-force.md](holds-and-force.md)). At each heartbeat it opens a new session and takes the
-  lock again, on a thread of its own. With the lock it reads the lease:
-  - the same epoch: no other coordinator led meanwhile. A commit whose session was lost while it was
-    in flight is settled by the lease's counter (when it landed, memory takes it and the log says
-    so), the changes in memory are committed, and the coordinator orders again;
-  - another epoch: another coordinator led the database meanwhile and this one's memory is stale.
-    It logs every change it drops by its audit number, removes the marker, and exits non-zero
-    (`another coordinator led the database while this one's session was lost ...`); its supervisor
-    starts it again on the database as the other left it.
+  lock again (shared: another coordinator may have started meanwhile, which changes nothing), on a
+  thread of its own. With the lock, a commit whose session was lost while it was in flight is
+  settled by its row of the `tx_ledger` table (when it landed, memory takes it and the log says
+  so), the changes in memory are committed, and the coordinator orders again.
 - **The marker** (`--halt-marker-file`, on a local disk that stays writable when the database is
   not) lists the audit number of every change in memory and not yet committed, with the epoch:
   `{"unwritten":[41,42],"epoch":3}`. It is written before such a change's commit is tried and
   removed once nothing is pending. A start that finds it removes it when the database is still at
-  the epoch the marker names and every number it lists has its row in the `audit` table (each such
+  the epoch the marker names (each start of any coordinator of the database raises the epoch by
+  one) and every number it lists has its row in the `audit` table (each such
   change commits its audit row with it); otherwise it refuses to start, naming the numbers that did
   not land (every number, when another coordinator led the database since, as its rows can carry
   the same numbers): look each up in the log, make it again by
@@ -243,7 +241,7 @@ The rest of this page is the file store.
 | `<state-file>.layout` | The lab's layout (`docs/design/ui-shell-lab.md`): the one cluster's name, its numbered rows, the numbered racks of each row with their height in U, and the placements of servers (an inventory entry, or a host no entry matches) in racks, each with its lowest U and its height in U. Written whole when a change of the layout commits, and only then; a file that is not there is an empty layout, and one that breaks a rule of it (a placement outside its rack, two on one U) stops the start, naming the file. Backed up and restored with the state file. | The Home page shows an empty lab and every server unplaced; rows, racks and placements are made again on the page. |
 | `<state-file>.lock` | Nothing: the lock `serve` holds while it runs, so a second coordinator on the same files is refused. | Nothing. It is not backed up. |
 | `--ops-file` | What operators changed: exclusions, labels, halts and their clears, holds, assignments, minimum versions, the `repository` key of a service (the repository `Services.SetRepository` set; written only while set; a coordinator before it passes over it), the `trusted_publishers` key of a service (its trusted publishers, [ci-client.md](../deploy/ci-client.md#trusted-publishers); written only once an operator changed the package's list; a coordinator before it refuses the file then), uninstall intents, the host inventory (each record's host group among it), the marks of last good and bad versions, and the audit ring; and, under `host_groups`, each (host group, package)'s minimum version, last good version, halt with its reports and generation, force, and plan position, all in this file (none in the halts file). `host_groups`, and a record's or an entry's `host_group`, are written only when there are any, and a coordinator before groups refuses the file then. | All of it. |
-| `<ops-file>.audit` | Every change to the ops file, one JSON line each; a change of a host group says it in its `detail` as `host_group`, which a coordinator before groups passes over. | The audit history. |
+| `<ops-file>.audit` | Every change to the ops file, one JSON line each, and the console's audit-only lines (`console_open`, `power_action` and the rest), numbered with the changes, which change nothing and never enter the ops file's ring; a change of a host group says it in its `detail` as `host_group`, which a coordinator before groups passes over. | The audit history. |
 | `<ops-file>.audit.<n>` | The sealed segments of the audit file, the older changes, one JSON line each ([holds-and-force.md](holds-and-force.md#the-audit-file)). Written once the audit file has been rotated. | The audit history before the newest rotation. |
 | `<ops-file>.halts` | The halt reports, who raised each halt, the reports kept while a halt stood, each service's clear generation, and each service's update plan position (`rollouts`: the version it is for, the stages entered, the hosts recorded done, an operator's pause; [rollout-plans.md](rollout-plans.md#what-a-restart-keeps)). Written once there is a halt or a plan that went past its first stage or was paused. | The halt reports and the clear generations: a halted service halts again after its clear. The plan positions: each plan starts at its first stage with no host recorded done, and an operator's pause is gone, so a paused plan goes on until it is paused again. |
 | `<ops-file>.halts.next` | Only after a crash in the middle of a change: the halts file that change staged. The next start settles it. | The ops file holds that change and the halts file does not: what the change added to the halts file (a clear's generation, the reports of its acknowledgements) is lost. |

@@ -81,6 +81,13 @@
 //!   [`operator_repositories`]), kept beside the desired state, and `repository_push`: the
 //!   set of it each Linux host is sent in the answer to a heartbeat over gRPC, and what its
 //!   daemon reported of it;
+//! - [`operator_keys`]: the operator's SSH public keys of each host group, read from
+//!   `--operator-keys-file` and re-read while the coordinator runs, the set each host is sent in
+//!   the answer to a heartbeat over gRPC, and what its daemon reported of it;
+//! - [`prerequisites`]: the host prerequisites of each host group (Apple's Command Line Tools on a
+//!   Mac), read from `--host-prerequisites-file` and re-read while the coordinator runs, the set
+//!   each host is sent in the answer to a heartbeat over gRPC, and what its daemon reported of
+//!   them;
 //! - [`status`]: what an operator reads, and the convergence of a service;
 //! - [`alerts`]: the conditions that need a person, derived from what the coordinator holds,
 //!   answered by `Alerts.List` and logged with an `alert=` field;
@@ -127,6 +134,7 @@ pub mod bake;
 pub mod canary;
 pub mod clear_record;
 pub mod config;
+pub(crate) mod console;
 pub mod converge;
 pub mod decide;
 pub mod defer;
@@ -170,6 +178,7 @@ pub mod operator;
 pub mod operator_accounts;
 pub mod operator_enrollment;
 pub mod operator_host_groups;
+pub mod operator_keys;
 pub mod operator_layout;
 pub mod operator_repositories;
 pub mod ops;
@@ -179,10 +188,12 @@ pub mod orders;
 pub mod origin_https;
 pub mod password;
 pub(crate) mod picks;
+pub mod prerequisites;
 mod queue;
 pub mod reconcile;
 pub mod registry;
 pub(crate) mod releases;
+pub(crate) mod remote_login_probe;
 pub(crate) mod repositories;
 pub(crate) mod repository_credential;
 pub(crate) mod repository_discover;
@@ -230,6 +241,8 @@ mod audit_actions_tests;
 mod audit_file_tests;
 #[cfg(test)]
 mod audit_list_tests;
+#[cfg(test)]
+mod audit_only_tests;
 #[cfg(test)]
 mod audit_refusal_tests;
 #[cfg(test)]

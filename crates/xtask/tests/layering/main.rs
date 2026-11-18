@@ -878,8 +878,8 @@ fn enrollment_depending_on_a_workspace_crate_is_refused() {
              hostkeeper-steps, which is neither itself nor hostkeeper-testkit"
         )
     );
-    // The coordinator, the seed generator and the boot server depend on the enrollment crate, so
-    // they lose the dependency with it.
+    // The console library, the coordinator, the seed generator and the boot server depend on the
+    // enrollment crate, so they lose the dependency with it.
     let without = format!("{WIRE_DEP}{OIDC_DEP}{TLS_DEP}{PROTO_DEP}{CONFIG_DEP}");
     let seed_without = format!("{CONFIG_DEP}{WIRE_DEP}");
     let pxe_without = format!(
@@ -900,6 +900,10 @@ fn enrollment_depending_on_a_workspace_crate_is_refused() {
                 "hostkeeper-pxe",
                 layered("hostkeeper-pxe", &pxe_without, "", TESTKIT_DEP),
             ),
+            manifest_of(
+                "hostkeeper-console",
+                layered("hostkeeper-console", WIRE_DEP, "", TESTKIT_DEP),
+            ),
         ],
     );
     std::fs::remove_dir_all(dir.join("crates/hostkeeper-enrollment")).expect("remove the crate");
@@ -907,7 +911,10 @@ fn enrollment_depending_on_a_workspace_crate_is_refused() {
     assert_eq!(
         check(&dir),
         refused(&format!(
-            "hostkeeper-coordinator depends (normal or build) on the workspace crates \
+            "hostkeeper-console depends (normal or build) on the workspace crates \
+             {{hostkeeper-wire}}, but must depend on exactly \
+             {{hostkeeper-enrollment, hostkeeper-wire}}\n\
+             hostkeeper-coordinator depends (normal or build) on the workspace crates \
              {{hostkeeper-config, hostkeeper-oidc, hostkeeper-proto, hostkeeper-tls, \
              hostkeeper-wire}}, \
              but must depend on exactly {COORDINATOR_DEPS}\n\

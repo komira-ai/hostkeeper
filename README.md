@@ -47,6 +47,7 @@ update coordinator, `hostkeeper-coordinator serve`. The parts are being moved he
 |---|---|
 | [`hostkeeper`](crates/hostkeeper) | the binary: `hostkeeper daemon`; it only forwards to `hostkeeper-daemon` |
 | [`hostkeeper-daemon`](crates/hostkeeper-daemon) | the daemon: start-up and its lock, the order executor with its locks and try rules, the held halts, and the enrollment and heartbeat loops (no socket: `hostkeeper admin` and the admin socket are gone) |
+| [`hostkeeper-console`](crates/hostkeeper-console) | the console's files, which the coordinator's `Console` calls are to read (docs/design/console-broker.md, C2): the console operators file (who may open a console and who may also change power), the targets file (the address of each BMC and Mac by MAC) and the BMC credential (a secret file, printed redacted), and the reason of a console audit line |
 | [`hostkeeper-config`](crates/hostkeeper-config) | the strict loader of `hostkeeper.toml`, the manifest of an installed version with its refusals, the owner and mode check of a trusted file, and the name and path grammars |
 | [`hostkeeper-hook`](crates/hostkeeper-hook) | the contract between the host and a service's update hook, and the conformance harness a service tests its hook with (feature `conformance`) |
 | [`hostkeeper-install`](crates/hostkeeper-install) | the installer contract (`stage`, `activate`, `retire`, `remove`), the registry of the installers the daemon is built with (`apt`), which installers a daemon announces from its platform and the host's `os-release`, and the repository installer with its `apt` backend (the host's repository entries under `/etc/hostkeeper/repositories/`, stage, activate, rollback, remove and drift), the sealed version directory published from a staging directory an installer filled, and the `macos-pkg` installer of a signed flat `.pkg` (signers file, signature, shape, stage, activate, remove, drift, receipts and record) over ports for the Mac's tools ([design](docs/design/packages-repositories.md) section 4.7) |
@@ -95,7 +96,11 @@ the hook contract and the step record.
 Every command of `hkctl`, with its flags and exit codes, is in [docs/cli.md](docs/cli.md), which a
 test of `hostkeeper-hkctl` regenerates from the protos and compares, so it cannot drift from them.
 Enrolling a node, from its inventory record to its first heartbeat, with every refusal on the way,
-is [docs/operations/enrollment.md](docs/operations/enrollment.md). Installing a new Linux machine
+is [docs/operations/enrollment.md](docs/operations/enrollment.md). Putting the operators' SSH public keys
+on every host, Linux and Mac, from one coordinator file is
+[docs/operations/operator-keys.md](docs/operations/operator-keys.md). Installing Apple's Command Line Tools on a Mac
+from the coordinator, as root, with no command typed on it, is
+[docs/operations/host-prerequisites.md](docs/operations/host-prerequisites.md). Installing a new Linux machine
 from the farm LAN with `pxe`, and the router and board checks before the first one, is
 [docs/operations/network-install.md](docs/operations/network-install.md); its settings files
 are parsed with that program's own parser. A test (`crates/xtask/tests/enrollment_doc.rs`)

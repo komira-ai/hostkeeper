@@ -325,7 +325,9 @@ pub struct AuditEntry {
     /// `enroll_requested`, `enroll_issued`, `cert_renewed` and `request_expired`; the MDM gate's
     /// `mdm_nonce_pushed`, `mdm_install_sent` and `mdm_baseline`, by `mdm-gate`; `state_imported`, by
     /// `coordinator`, the last row an earlier release's `import` wrote into the database; this
-    /// release writes none).
+    /// release writes none; the console's `console_open`, `console_close`, `console_denied`,
+    /// `power_action`, `boot_device_set` and `console_coordinator_start`, lines that change no
+    /// state and never enter the ring, [`OpsStore::append_audit_only`]).
     pub action: String,
     /// The service it concerned, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -544,11 +546,6 @@ pub struct OpsStore {
     marker: Option<PathBuf>,
     /// The changes in memory and not yet committed.
     pending: Mutex<pending::Pending>,
-    /// Told when the store is deposed: another coordinator led its database while its link was
-    /// lost, and the coordinator stops ([`OpsStore::depose`]).
-    deposed: tokio::sync::Notify,
-    /// The epoch the deposing coordinator held, once deposed.
-    deposed_by: std::sync::OnceLock<u64>,
     /// The file and rotation of a store over a file, which a test hook opens again.
     #[cfg(test)]
     files: Option<(PathBuf, Rotation)>,
@@ -636,8 +633,6 @@ impl OpsStore {
             record_window: RecordWindow::default(),
             marker: None,
             pending: Mutex::new(pending::Pending::default()),
-            deposed: tokio::sync::Notify::new(),
-            deposed_by: std::sync::OnceLock::new(),
             #[cfg(test)]
             files: None,
             #[cfg(test)]
@@ -945,6 +940,10 @@ impl OpsStore {
 mod pending;
 
 pub(crate) use pending::{Marker, unlanded};
+
+/// The store's audit-only append: a numbered line that changes no state.
+#[path = "ops_audit_only.rs"]
+mod audit_only;
 
 /// The store's hooks for tests: a clock, a writer and an appender put in, a rival writer's change
 /// made between a read and a change.

@@ -9,7 +9,7 @@ jobs are skipped and a release run ends as it did without them.
 ## The two jobs
 
 1. **`cp-deploy-digest`** reads the repository and nothing else. After every publish and image push
-   of the run (it waits for `newest`), it takes the newest release's files from the run's artifact
+   of the run (it waits for `newest`, `publish` and `image`), it takes the newest release's files from the run's artifact
    `release-<tag>`, the files `verify` checked, and checks them against `SHA256SUMS` once more. Then
    `cargo xtask release image-digest` outputs:
    - `digest`: the digest of the one manifest the linux-x86_64 image tarball's `index.json` names

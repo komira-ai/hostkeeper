@@ -7,22 +7,11 @@
 //! number and never holds the line's text, so a private key given by mistake is not repeated
 //! into a log.
 
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD;
+use hostkeeper_wire::operator_keys::{KeyLineError, public_key};
 
-/// The key types accepted, as `ssh-keygen` writes them. The two security-key types are
-/// OpenSSH's own names, `<type>@openssh.com`. The repository's hygiene lint reads that spelling
-/// as an e-mail address, so each is joined from two pieces; the domain piece alone is allowed
-/// by name in the lint's public domains.
-pub const KEY_TYPES: [&str; 7] = [
-    "ecdsa-sha2-nistp256",
-    "ecdsa-sha2-nistp384",
-    "ecdsa-sha2-nistp521",
-    concat!("sk-ecdsa-sha2-nistp256@", "openssh.com"),
-    concat!("sk-ssh-ed25519@", "openssh.com"),
-    "ssh-ed25519",
-    "ssh-rsa",
-];
+/// The key types accepted: the rule of the operator keys a coordinator sends
+/// (`hostkeeper_wire::operator_keys`), which reads each line of this file too.
+pub use hostkeeper_wire::operator_keys::KEY_TYPES;
 
 /// Why the file of SSH public keys was refused. Each line number counts from 1.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -79,38 +68,12 @@ fn is_private(line: &str) -> bool {
     line.contains("PRIVATE KEY") | line.starts_with("PuTTY-User-Key-File-")
 }
 
-/// The key of one line that is neither blank nor a comment.
+/// The key of one line that is neither blank nor a comment, by the rule of
+/// [`public_key`].
 fn key(line_text: &str, line: usize) -> Result<String, KeysError> {
-    let mut words = line_text.split_ascii_whitespace();
-    let (Some(kind), Some(blob)) = (words.next(), words.next()) else {
-        return Err(KeysError::NotAPublicKey { line });
-    };
-    if !KEY_TYPES.contains(&kind) {
-        return Err(KeysError::NotAPublicKey { line });
-    }
-    let decoded = STANDARD
-        .decode(blob)
-        .map_err(|_| KeysError::Blob { line })?;
-    if !names_type(&decoded, kind) {
-        return Err(KeysError::Blob { line });
-    }
-    let comment: Vec<&str> = words.collect();
-    let comment = comment.join(" ");
-    if !comment.bytes().all(|b| (b' '..=b'~').contains(&b)) {
-        return Err(KeysError::Comment { line });
-    }
-    Ok(match comment.as_str() {
-        "" => format!("{kind} {blob}"),
-        _ => format!("{kind} {blob} {comment}"),
+    public_key(line_text).map_err(|why| match why {
+        KeyLineError::NotAPublicKey => KeysError::NotAPublicKey { line },
+        KeyLineError::Blob => KeysError::Blob { line },
+        KeyLineError::Comment => KeysError::Comment { line },
     })
-}
-
-/// Whether the decoded blob starts with the SSH string of `kind`: a 4-byte big-endian length,
-/// then that many bytes, equal to `kind` (RFC 4253 section 6.6).
-fn names_type(blob: &[u8], kind: &str) -> bool {
-    let length = blob
-        .get(..4)
-        .map(|n| u32::from_be_bytes([n[0], n[1], n[2], n[3]]) as usize);
-    let end = length.map(|n| n.saturating_add(4));
-    end.and_then(|end| blob.get(4..end)) == Some(kind.as_bytes())
 }

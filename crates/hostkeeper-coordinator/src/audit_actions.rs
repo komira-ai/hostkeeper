@@ -1,7 +1,12 @@
 //! The `action` strings of the operator login's audit entries (`docs/design/operator-login.md`
-//! section 8) and of the MDM setup's (`docs/design/coordinator-mdm.md`, section 4.9, the `mdm_*`
-//! ones). Each is an additive string of the existing `action` field; `by` and `subject` say who
-//! did it and whom or what it concerned.
+//! section 8), of the MDM setup's (`docs/design/coordinator-mdm.md`, section 4.9, the `mdm_*`
+//! ones) and of the console's (`docs/design/console-broker.md`, decision D4). Each is an additive
+//! string of the existing `action` field; `by` and `subject` say who did it and whom or what it
+//! concerned.
+//!
+//! The console's lines change no operations state: they are appended with
+//! [`crate::ops::OpsStore::append_audit_only`], which takes their action as an [`AuditOnly`], and
+//! stay out of the ring that `/v1/status` shows.
 
 use crate::ops::AuditEntry;
 
@@ -76,6 +81,72 @@ pub const MDM_ENROLL_DECLINED: &str = "mdm_enroll_declined";
 pub const MDM_ENROLL_HELD: &str = "mdm_enroll_held";
 /// An operator confirmed the held request of the serial `subject`, after the ABM table listed it.
 pub const MDM_ENROLL_CONFIRMED: &str = "mdm_enroll_confirmed";
+
+/// An operator opened a console session on the host `node_id`; written before the device is
+/// contacted.
+pub const CONSOLE_OPEN: &str = "console_open";
+/// A console session on the host `node_id` ended, by the operator who closed it or by
+/// `coordinator`.
+pub const CONSOLE_CLOSE: &str = "console_close";
+/// A console call of an operator named in the console operators file was refused; the reason
+/// names the cause.
+pub const CONSOLE_DENIED: &str = "console_denied";
+/// An operator sent a power command to the BMC of the host `node_id`.
+pub const POWER_ACTION: &str = "power_action";
+/// An operator set the boot device of the host `node_id` at its BMC.
+pub const BOOT_DEVICE_SET: &str = "boot_device_set";
+/// The coordinator started, by `coordinator`: every console session open before it ended there.
+pub const CONSOLE_COORDINATOR_START: &str = "console_coordinator_start";
+
+/// The action of an audit line that changes no operations state: one of the console's, which
+/// [`crate::ops::OpsStore::append_audit_only`] appends outside the `/v1/status` ring.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuditOnly {
+    /// [`CONSOLE_OPEN`].
+    ConsoleOpen,
+    /// [`CONSOLE_CLOSE`].
+    ConsoleClose,
+    /// [`CONSOLE_DENIED`].
+    ConsoleDenied,
+    /// [`POWER_ACTION`].
+    PowerAction,
+    /// [`BOOT_DEVICE_SET`].
+    BootDeviceSet,
+    /// [`CONSOLE_COORDINATOR_START`].
+    ConsoleCoordinatorStart,
+}
+
+impl AuditOnly {
+    /// Every audit-only action, in the order of the design.
+    pub const ALL: [AuditOnly; 6] = [
+        AuditOnly::ConsoleOpen,
+        AuditOnly::ConsoleClose,
+        AuditOnly::ConsoleDenied,
+        AuditOnly::PowerAction,
+        AuditOnly::BootDeviceSet,
+        AuditOnly::ConsoleCoordinatorStart,
+    ];
+
+    /// The action's string, as the audit line carries it.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            AuditOnly::ConsoleOpen => CONSOLE_OPEN,
+            AuditOnly::ConsoleClose => CONSOLE_CLOSE,
+            AuditOnly::ConsoleDenied => CONSOLE_DENIED,
+            AuditOnly::PowerAction => POWER_ACTION,
+            AuditOnly::BootDeviceSet => BOOT_DEVICE_SET,
+            AuditOnly::ConsoleCoordinatorStart => CONSOLE_COORDINATOR_START,
+        }
+    }
+
+    /// Whether `action` is the string of an audit-only action: a line that a store which
+    /// rebuilds the ring from its audit leaves out of it.
+    #[must_use]
+    pub fn is_audit_only(action: &str) -> bool {
+        Self::ALL.iter().any(|only| only.as_str() == action)
+    }
+}
 
 /// The entry of `action` by `by` concerning `subject`.
 #[must_use]

@@ -341,6 +341,9 @@ fn a_reply_from_the_real_coordinator_maps_to_the_loops_reply() {
         installers: Vec::new(),
         repositories: None,
         facts_generation: None,
+        remote_login_probe: None,
+        operator_keys: None,
+        prerequisites: None,
     };
     assert_eq!(
         json.heartbeat(&farm.host.identity(), &beat),
@@ -360,6 +363,8 @@ fn a_reply_from_the_real_coordinator_maps_to_the_loops_reply() {
             acknowledged: Vec::new(),
             repositories: None,
             facts: None,
+            operator_keys: None,
+            prerequisites: None,
         })
     );
     server.join().expect("the server").expect("a request");

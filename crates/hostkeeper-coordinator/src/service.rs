@@ -191,31 +191,7 @@ pub struct Set {
     pub dropped_roles: Vec<String>,
 }
 
-pub use crate::features::FEATURES;
-
-/// The fields of the answer to a heartbeat that go only to an agent that announced a feature,
-/// each with the feature: the one place that says which. An older agent reads the answer
-/// strictly and refuses a field it does not know, so a field listed here is left out of the
-/// answer to an agent that did not announce its feature, and to every agent while this
-/// coordinator does not advertise it ([`FEATURES`]). A field not listed is sent to every agent.
-pub const GATED_FIELDS: &[(&str, &str)] = &[
-    ("halts", halt::FEATURE),
-    ("order_id", ORDER_FEATURE),
-    ("order_try", ORDER_FEATURE),
-    ("package_digest", ORDER_FEATURE),
-    ("acks", verdict_file::FEATURE),
-];
-
-/// Whether the answer field `field` goes to an agent whose announced features this coordinator
-/// also advertises are `agreed` (none for an agent that announced none): yes for a field
-/// [`GATED_FIELDS`] does not list, and for one it lists only when its feature is agreed.
-#[must_use]
-pub fn sends(field: &str, agreed: Option<&[String]>) -> bool {
-    GATED_FIELDS
-        .iter()
-        .find(|(name, _)| *name == field)
-        .is_none_or(|(_, feature)| agreed.is_some_and(|names| names.iter().any(|n| n == feature)))
-}
+pub use crate::features::{FEATURES, GATED_FIELDS, sends};
 
 /// How long a host's warn about one dropped fact is silent after it was logged.
 const EXTRAS_LOG_EVERY: Duration = Duration::from_secs(3600);
@@ -265,6 +241,10 @@ pub struct Coordinator {
     pub(crate) waits: crate::wait::Waits,
     /// What each host's daemon last reported of its repositories ([`crate::repository_push`]).
     pub(crate) repository_reports: crate::repository_push::Reports,
+    /// The operator keys file and what each host reported of them ([`crate::operator_keys`]).
+    pub(crate) operator_keys: crate::operator_keys::OperatorKeys,
+    /// The host prerequisites file and the hosts' reports ([`crate::prerequisites`]).
+    pub(crate) prerequisites: crate::prerequisites::HostPrerequisites,
     /// What each host heard runs ([`crate::running`]).
     pub(crate) running: crate::running::Kept,
     /// Reads private repositories' origins ([`crate::repository_serve`]); none: those reads are 502.
@@ -333,6 +313,8 @@ impl Coordinator {
             alerts: crate::alerts::Book::default(),
             waits: crate::wait::Waits::default(),
             repository_reports: crate::repository_push::Reports::default(),
+            operator_keys: crate::operator_keys::OperatorKeys::default(),
+            prerequisites: crate::prerequisites::HostPrerequisites::default(),
             running: crate::running::Kept::default(),
             repository_origin: None,
             discovery: crate::repository_discover::Limits::default(),

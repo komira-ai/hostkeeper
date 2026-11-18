@@ -8,6 +8,8 @@
 //! - `answers`: `--response-file`, the exit code of every gateway code, `refused:` lines, an
 //!   answer that is not the gateway's, and calls through the real gateway;
 //! - `host_groups`: the `HostGroups` calls, `--host-group`, and an `UNIMPLEMENTED` answer;
+//! - `console`: the `Console` calls' requests, their enum flags' usage errors, and the
+//!   coordinator's `no_console_access` through the real gateway;
 //! - `hosts_retry`: `hosts retry`, its request and its refusal;
 //! - `secrets`: the token never in an argument list, a child's environment or stderr, and a
 //!   token file others can read refused;
@@ -19,6 +21,7 @@
 
 mod accounts;
 mod answers;
+mod console;
 mod flags;
 mod gateway;
 mod host_groups;

@@ -158,8 +158,12 @@ message HeartbeatRequest {
   // takes the `ClearRecord` verb, `verdict-acks-v1`, which asks for `HeartbeatResponse.acks`,
   // `target-v1`, which announces that it takes `target` in orders and lists `installers`, and
   // `repositories-v1`, which announces that it writes the repositories the coordinator sends and
-  // reports them in `repositories`, and `facts-v1`, which asks for `HeartbeatResponse.facts`,
-  // writes them to the host's facts file and reports `facts_generation`):
+  // reports them in `repositories`, `facts-v1`, which asks for `HeartbeatResponse.facts`,
+  // writes them to the host's facts file and reports `facts_generation`, `operator-keys-v1`,
+  // which asks for `HeartbeatResponse.operator_keys`, writes them to the managed block of the
+  // host's login account's `authorized_keys` and reports `operator_keys`, and
+  // `prerequisites-v1`, which asks for `HeartbeatResponse.prerequisites`, makes sure of them on
+  // the host and reports `prerequisites`):
   // at most 16, each 1 to 32 bytes of `[a-z0-9-]`, none twice. An agent
   // that lists every service it runs in `services` announces `heartbeat-v2`; without it the
   // coordinator counts the host as unmanaged for every service but the legacy one, rather than
@@ -202,6 +206,161 @@ message HeartbeatRequest {
   // (`HeartbeatResponse.facts`). Absent when it wrote none, and from an agent that does not
   // announce `facts-v1`.
   optional uint64 facts_generation = 12;
+  // What a Mac's daemon saw when it ran the Remote Login probe once at its start: each command,
+  // in order, with its exit code and output, as run by the daemon itself (as root under
+  // launchd); its steps may turn Remote Login on. The coordinator keeps the last one it read, in
+  // memory, and shows it in the host's heartbeat (`hostkeeper.operator.v1.Host.heartbeat`);
+  // nothing decides on it. Sent in every heartbeat once the probe is done, read only over gRPC;
+  // absent from any other daemon, before the probe is done, from one that predates it, and when
+  // the heartbeat would exceed 16 KiB with it. A probe that breaks a rule of `RemoteLoginProbe`
+  // is dropped and the coordinator keeps the last one it read.
+  optional RemoteLoginProbe remote_login_probe = 14;
+  // What the daemon holds of the operator keys the coordinator sends
+  // (`HeartbeatResponse.operator_keys`). Sent in every heartbeat by a daemon that announces
+  // `operator-keys-v1`, read only over gRPC; absent from one that predates it. A report that
+  // breaks a rule of `OperatorKeysReport` is dropped and the coordinator keeps the last one it
+  // read.
+  optional OperatorKeysReport operator_keys = 15;
+  // What the daemon holds of the host prerequisites the coordinator sends
+  // (`HeartbeatResponse.prerequisites`), and the state of each on the host. Sent in every
+  // heartbeat by a daemon that announces `prerequisites-v1`, read only over gRPC; absent from one
+  // that predates it. A report that breaks a rule of `PrerequisitesReport` is dropped and the
+  // coordinator keeps the last one it read.
+  optional PrerequisitesReport prerequisites = 16;
+}
+
+// What a host's daemon holds of the host prerequisites of its group, and the state of each.
+message PrerequisitesReport {
+  // The `digest` of the set the daemon holds: the last set it was sent and took since it
+  // started, which it keeps making sure of (it looks again on its own, and after a macOS update)
+  // until it is sent another. 64 lower-case hex characters; empty while it holds none, so that
+  // the coordinator sends the set again (after every start of the daemon).
+  string digest = 1;
+  // The last set the daemon refused (its digest is not its names', or it breaks a rule of a
+  // set), while that set is the last one it was sent: the daemon keeps the set it held. Absent
+  // when it refused none.
+  optional PrerequisitesRefusal refused = 2;
+  // The state of each prerequisite of the set the daemon holds, in the set's order: at most 16,
+  // each named once. Empty while it holds none.
+  repeated PrerequisiteState states = 3;
+}
+
+// A set of host prerequisites a daemon refused, and why.
+message PrerequisitesRefusal {
+  // The refused set's `digest`, 64 lower-case hex characters.
+  string digest = 1;
+  // Why, as the daemon words it: 1 to 256 bytes (a reader cuts a longer one at a character
+  // boundary).
+  string reason = 2;
+}
+
+// The state of one host prerequisite on the host.
+message PrerequisiteState {
+  // Its name, as the set names it (`xcode-command-line-tools`).
+  string name = 1;
+  // Where it stands.
+  PrerequisiteStatus status = 2;
+  // `PREREQUISITE_STATUS_PRESENT`: the version the host has, as the platform's tool says it (for
+  // the Command Line Tools, the `version` `pkgutil` gives of `com.apple.pkg.CLTools_Executables`),
+  // at most 64 bytes (a reader cuts a longer one at a character boundary); empty otherwise.
+  string version = 3;
+  // `PREREQUISITE_STATUS_FAILED`: why the last try failed, as the daemon words it, at most 256
+  // bytes (a reader cuts a longer one at a character boundary); empty otherwise.
+  string reason = 4;
+  // `PREREQUISITE_STATUS_FAILED`: how many tries in a row failed, 1 or more; 0 otherwise.
+  uint32 failures = 5;
+  // `PREREQUISITE_STATUS_FAILED`: the Unix time from which the daemon tries again (it waits
+  // longer after each failure, and never loops on one); 0 otherwise.
+  uint64 next_try_unix = 6;
+  // The Unix time the daemon last looked at it on the host; 0 before it first did.
+  uint64 seen_unix = 7;
+}
+
+// Where a host prerequisite stands on a host.
+enum PrerequisiteStatus {
+  // Not reported.
+  PREREQUISITE_STATUS_UNSPECIFIED = 0;
+  // The daemon holds it and has not looked at the host for it yet.
+  PREREQUISITE_STATUS_PENDING = 1;
+  // The host has it.
+  PREREQUISITE_STATUS_PRESENT = 2;
+  // The host did not have it, and the daemon is installing it now.
+  PREREQUISITE_STATUS_INSTALLING = 3;
+  // The last try to install it, or to look for it, failed: `reason` says why and
+  // `next_try_unix` when the daemon tries again.
+  PREREQUISITE_STATUS_FAILED = 4;
+  // It is of another platform than the host's (the Command Line Tools on Linux): nothing is done.
+  PREREQUISITE_STATUS_NOT_APPLICABLE = 5;
+  // The daemon does not know the name (a newer coordinator's): nothing is done.
+  PREREQUISITE_STATUS_UNKNOWN = 6;
+}
+
+// What a host's daemon holds of the operator keys: the managed block of its login account's
+// `authorized_keys` (root on Linux; on a Mac the one local administrator account). The report
+// names no account.
+message OperatorKeysReport {
+  // The `digest` of the set in force: the keys the managed block holds as the daemon read it for
+  // this heartbeat, in a file of the login account's ownership and mode `0600`, after the last
+  // set it was sent was put in force whole (on a Mac, Remote Login on and the account allowed
+  // SSH). 64 lower-case hex characters; empty while the daemon holds no set it was sent since
+  // it started, or when the file no longer holds that block, so that the coordinator sends the
+  // set again.
+  string digest = 1;
+  // The last set the daemon refused, while that set is the last one it was sent: the daemon
+  // keeps what is in force and does not try a refused set again until it is sent another or
+  // starts again. Absent when it refused none.
+  optional OperatorKeysRefusal refused = 2;
+  // Why the last try to put the set in force failed (a file that could not be written, Remote
+  // Login that did not start), as the daemon words it: at most 256 bytes (a reader cuts a
+  // longer one at a character boundary). The daemon tries again when it is sent the set again.
+  // Empty when the last try did not fail.
+  string failed = 3;
+}
+
+// A set of operator keys a daemon refused, and why.
+message OperatorKeysRefusal {
+  // The refused set's `digest`, 64 lower-case hex characters.
+  string digest = 1;
+  // Why, as the daemon words it: 1 to 256 bytes (a reader cuts a longer one at a character
+  // boundary), for example the place of a key that breaks a rule (never its text), or that the
+  // Mac has no single local administrator account.
+  string reason = 2;
+}
+
+// One run of the Remote Login probe of a Mac's daemon: the commands that tell whether the
+// daemon, with no Full Disk Access, can turn on Remote Login (`systemsetup`, or `launchctl` on
+// `com.openssh.sshd`), whether sshd answers afterwards, and what the daemon's own signature and
+// privacy state are; and why a Mac may sleep (`pmset`, and what the daemon's own power settings
+// said at its starts).
+message RemoteLoginProbe {
+  // The host's clock when the probe started, in seconds since the epoch.
+  uint64 started_unix = 1;
+  // Each step, in the order it ran: at most 24.
+  repeated ProbeStep steps = 2;
+}
+
+// One step of a probe: a command it ran, or a file or socket it read. Every text is at most
+// 4096 bytes, cut at a character boundary by the daemon (`truncated` says so).
+message ProbeStep {
+  // What the step is, 1 to 64 bytes of `[a-z0-9_]` (`remote_login_set_on`).
+  string name = 1;
+  // The program and its arguments as run, or for a step that runs nothing, what it read
+  // (`connect 127.0.0.1:22`, `read /etc/ssh/sshd_config`). At most 8, each at most
+  // 4096 bytes.
+  repeated string argv = 2;
+  // The exit status of the program; absent when it ran nothing, could not be started, timed out
+  // or was ended by a signal.
+  optional int32 exit_code = 3;
+  // What it wrote to its standard output, as UTF-8 (a byte that is not is replaced); for a step
+  // that runs nothing, what it read.
+  string stdout = 4;
+  // What it wrote to its standard error, as UTF-8.
+  string stderr = 5;
+  // Why the step could not be done (the program could not be started, it timed out, the file
+  // or the socket could not be read); empty when it was done.
+  string error = 6;
+  // Whether `stdout` or `stderr` was cut by the daemon.
+  bool truncated = 7;
 }
 
 // What a host's daemon holds of the repositories the coordinator sends
@@ -470,6 +629,46 @@ message HeartbeatResponse {
   // (`HeartbeatRequest.facts_generation`), and the agent writes them before it acts on this
   // answer's order. Absent otherwise.
   HostFacts facts = 6;
+  // The operator keys of the host's group, whole: sent to an agent that announced
+  // `operator-keys-v1` when the coordinator was given an operator keys file and the host's
+  // report (`HeartbeatRequest.operator_keys`) holds neither this set's digest in force nor
+  // refused. A host in no group, or in a group the file does not list, is sent the empty set.
+  // The daemon replaces the managed block of its login account's `authorized_keys` with these
+  // keys and only these, and keeps every line outside the block; the empty set takes the block
+  // away. Absent: keep what it has.
+  optional OperatorKeys operator_keys = 7;
+  // The host prerequisites of the host's group, whole: sent to an agent that announced
+  // `prerequisites-v1` when the coordinator was given a host prerequisites file and the host's
+  // report (`HeartbeatRequest.prerequisites`) holds neither this set's digest nor refused it. A
+  // host in no group, or in a group the file does not list, is sent the empty set. The daemon
+  // makes sure of each prerequisite that applies to its platform, and keeps doing so until it is
+  // sent another set; it never removes one. Absent: keep what it holds.
+  optional HostPrerequisites prerequisites = 8;
+}
+
+// The host prerequisites of a host group, as the coordinator's host prerequisites file holds
+// them.
+message HostPrerequisites {
+  // The SHA-256 of the names, each followed by one newline, in order, as 64 lower-case hex
+  // characters, by the rule of the crate `hostkeeper-wire` (`prerequisites::digest`), which
+  // daemon and coordinator share.
+  string digest = 1;
+  // The names, 0 to 16, each 1 to 64 bytes of `[a-z0-9-]`, a letter first, none twice
+  // (`prerequisites::check_set`). This release knows `xcode-command-line-tools`: Apple's Command
+  // Line Tools for Xcode, on macOS.
+  repeated string names = 2;
+}
+
+// The operator keys of a host group, as the coordinator's operator keys file holds them.
+message OperatorKeys {
+  // The SHA-256 of the keys, each followed by one newline, in order, as 64 lower-case hex
+  // characters, by the rule of the crate `hostkeeper-wire` (`operator_keys::digest`), which
+  // daemon and coordinator share.
+  string digest = 1;
+  // The keys, 0 to 64, each one line in the `authorized_keys` form `<type> <base64> [comment]`
+  // with single spaces and no options, at most 4096 bytes, none twice
+  // (`operator_keys::check_set`). A public key is not a secret.
+  repeated string keys = 2;
 }
 
 // A host's own values, as the coordinator holds them, for the daemon's facts file. The daemon

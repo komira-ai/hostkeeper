@@ -41,8 +41,13 @@ use hostkeeper_wire::wire::{is_drift_version, is_service_name};
 use crate::beat::{AGENT_NAME, Feature, Health, Heartbeat, Platform, RootReason, ServiceFacts};
 use crate::host_facts::PushedFacts;
 use crate::names::{OrderId, PackageDigest};
+use crate::operator_keys::{KeysReport, PushedKeys};
 use crate::order::{DeferredReport, Entry, Order, OrderResult, Outcome, Reply, Target, Verb};
 use crate::ports::{Drift, Unsendable};
+use crate::prerequisites::{
+    PrerequisiteState, PrerequisiteStatus, PrerequisitesReport, PushedPrerequisites,
+};
+use crate::probe::RemoteLoginProbe;
 use crate::repositories::{PushedSet, RepositoriesReport};
 use crate::wire_map::acknowledged;
 
@@ -86,7 +91,30 @@ pub(crate) fn heartbeat(beat: &Heartbeat) -> Result<pb::HeartbeatRequest, Unsend
             })
             .into(),
         facts_generation: beat.facts_generation,
+        remote_login_probe: beat.remote_login_probe.as_ref().map(remote_login_probe),
+        operator_keys: beat.operator_keys.as_ref().map(keys_report),
+        prerequisites: beat.prerequisites.as_ref().map(prerequisites_report),
     })
+}
+
+/// The Remote Login probe as `remote_login_probe`.
+fn remote_login_probe(probe: &RemoteLoginProbe) -> pb::RemoteLoginProbe {
+    pb::RemoteLoginProbe {
+        started_unix: probe.started_unix,
+        steps: probe
+            .steps
+            .iter()
+            .map(|step| pb::ProbeStep {
+                name: step.name.clone(),
+                argv: step.argv.clone(),
+                exit_code: step.exit_code,
+                stdout: step.stdout.clone(),
+                stderr: step.stderr.clone(),
+                error: step.error.clone(),
+                truncated: step.truncated,
+            })
+            .collect(),
+    }
 }
 
 /// The repositories report as `repositories`.
@@ -102,6 +130,57 @@ fn repositories_report(report: &RepositoriesReport) -> pb::RepositoriesReport {
                 digest: refusal.digest.clone(),
                 reason: refusal.reason.clone(),
             }),
+    }
+}
+
+/// The report of the operator keys as `operator_keys`.
+fn keys_report(report: &KeysReport) -> pb::OperatorKeysReport {
+    pb::OperatorKeysReport {
+        digest: report.digest.clone(),
+        refused: report
+            .refused
+            .as_ref()
+            .map(|refusal| pb::OperatorKeysRefusal {
+                digest: refusal.digest.clone(),
+                reason: refusal.reason.clone(),
+            }),
+        failed: report.failed.clone(),
+    }
+}
+
+/// The report of the host prerequisites as `prerequisites`.
+fn prerequisites_report(report: &PrerequisitesReport) -> pb::PrerequisitesReport {
+    pb::PrerequisitesReport {
+        digest: report.digest.clone(),
+        refused: report
+            .refused
+            .as_ref()
+            .map(|refusal| pb::PrerequisitesRefusal {
+                digest: refusal.digest.clone(),
+                reason: refusal.reason.clone(),
+            }),
+        states: report.states.iter().map(prerequisite_state).collect(),
+    }
+}
+
+/// One prerequisite's state as a `PrerequisiteState`.
+fn prerequisite_state(state: &PrerequisiteState) -> pb::PrerequisiteState {
+    let status = match state.status {
+        PrerequisiteStatus::Pending => pb::PrerequisiteStatus::Pending,
+        PrerequisiteStatus::Present => pb::PrerequisiteStatus::Present,
+        PrerequisiteStatus::Installing => pb::PrerequisiteStatus::Installing,
+        PrerequisiteStatus::Failed => pb::PrerequisiteStatus::Failed,
+        PrerequisiteStatus::NotApplicable => pb::PrerequisiteStatus::NotApplicable,
+        PrerequisiteStatus::Unknown => pb::PrerequisiteStatus::Unknown,
+    };
+    pb::PrerequisiteState {
+        name: state.name.clone(),
+        status: status.into(),
+        version: state.version.clone(),
+        reason: state.reason.clone(),
+        failures: state.failures,
+        next_try_unix: state.next_try_unix,
+        seen_unix: state.seen_unix,
     }
 }
 
@@ -252,6 +331,8 @@ pub(crate) fn reply(response: pb::HeartbeatResponse) -> Mapped {
         acks,
         repositories,
         facts,
+        operator_keys,
+        prerequisites,
     } = response;
     let features = features
         .iter()
@@ -291,6 +372,14 @@ pub(crate) fn reply(response: pb::HeartbeatResponse) -> Mapped {
                 host_id: facts.host_id,
                 host_group: facts.host_group,
                 labels: facts.labels.into_iter().collect(),
+            }),
+            operator_keys: operator_keys.map(|set| PushedKeys {
+                digest: set.digest,
+                keys: set.keys,
+            }),
+            prerequisites: prerequisites.map(|set| PushedPrerequisites {
+                digest: set.digest,
+                names: set.names,
             }),
         },
         dropped,
@@ -423,3 +512,11 @@ mod tests;
 #[cfg(test)]
 #[path = "proto_map_facts_tests.rs"]
 mod facts_tests;
+
+#[cfg(test)]
+#[path = "proto_map_keys_tests.rs"]
+mod keys_tests;
+
+#[cfg(test)]
+#[path = "proto_map_prerequisites_tests.rs"]
+mod prerequisites_tests;

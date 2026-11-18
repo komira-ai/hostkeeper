@@ -20,6 +20,7 @@ const TESTKIT: &str = "hostkeeper-testkit";
 const WIRE: &str = "hostkeeper-wire";
 const OIDC: &str = "hostkeeper-oidc";
 const TLS: &str = "hostkeeper-tls";
+const CONSOLE: &str = "hostkeeper-console";
 const COORDINATOR: &str = "hostkeeper-coordinator";
 const ENROLLMENT: &str = "hostkeeper-enrollment";
 const OBSERVE: &str = "hostkeeper-observe";
@@ -85,7 +86,7 @@ pub type Layer = (
 /// installer's tool port and signature reader (`hostkeeper-install`, with the paths of
 /// `hostkeeper-launchd`), the HTTPS transport (`hostkeeper-package`) and the repository descriptor
 /// (`hostkeeper-release`), and is read by no crate.
-pub const LAYERS: [Layer; 29] = [
+pub const LAYERS: [Layer; 30] = [
     (BINARY, &[DAEMON], &[LAUNCHD]),
     (
         BOOTSTRAP,
@@ -93,6 +94,7 @@ pub const LAYERS: [Layer; 29] = [
         &[],
     ),
     (CONFIG, &[], &[]),
+    (CONSOLE, &[ENROLLMENT, WIRE], &[]),
     (
         COORDINATOR,
         &[CONFIG, ENROLLMENT, OIDC, PROTO, RELEASE, TLS, WIRE],
@@ -102,9 +104,9 @@ pub const LAYERS: [Layer; 29] = [
         DAEMON,
         &[
             CONFIG, ENROLL, HOOK, INSTALL, LAUNCHD, LINK, OBSERVE, OPENRC, PACKAGE, PLACED, PROTO,
-            RELEASE, STEPS,
+            RELEASE, STEPS, WIRE,
         ],
-        &[COORDINATOR, HELLO, OIDC, TLS, WIRE],
+        &[COORDINATOR, HELLO, OIDC, TLS],
     ),
     (ENROLL, &[CONFIG, PROTO, STEPS], &[COORDINATOR, ENROLLMENT]),
     (ENROLLMENT, &[], &[]),

@@ -1494,6 +1494,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "hostkeeper-console"
+version = "0.1.0"
+dependencies = [
+ "hostkeeper-enrollment",
+ "hostkeeper-testkit",
+ "hostkeeper-wire",
+ "serde",
+ "thiserror",
+ "toml",
+]
+
+[[package]]
 name = "hostkeeper-coordinator"
 version = "0.1.0"
 dependencies = [
@@ -2063,12 +2075,14 @@ dependencies = [
 name = "hostkeeper-wire"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
  "hostkeeper-testkit",
  "libc",
  "rcgen",
  "rustix",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "thiserror",
  "x509-parser",
 ]

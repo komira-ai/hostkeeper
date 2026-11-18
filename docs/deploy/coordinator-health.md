@@ -32,13 +32,13 @@ inside the container is the machine's own, and a probe on the machine reaches it
 | `GET /healthz` (a query is ignored), serving | `200` | `ok` |
 | `GET /healthz`, a listener not yet bound | `503` | `starting` |
 | `GET /healthz`, the database's link lost | `503` | `store_unreachable` |
-| `GET /healthz`, another coordinator led the database while this one's link was lost | `503` | `not_writer` |
 | `GET /healthz`, from SIGTERM or SIGINT until the process exits, whatever else holds | `503` | `draining` |
 | `HEAD /healthz` | as `GET` | none |
 | any other path, or any other method (`POST` among them) | `404` | `not_found` |
 
 `200 ok` means every listener the flags name is bound and serving and the store takes writes: with
-the Postgres store (`--database-dsn-file`), this coordinator holds the single-writer lock
+the Postgres store (`--database-dsn-file`), this coordinator holds the database's lock, shared
+with any other coordinator of the database
 ([coordinator-storage.md](../design/coordinator-storage.md), section 5). The file store's link is
 never lost, so a file-store coordinator is `ok` once it serves. The body is the word and nothing
 else, as `text/plain` with `cache-control: no-store`: no version, no host, no count. An answer
@@ -49,7 +49,6 @@ reads memory only and writes no audit line.
 - `store_unreachable` stands while the session with the database is lost. The coordinator keeps
   answering heartbeats meanwhile and orders nothing; the `store_unreachable` alert of
   `Alerts.List` says the same.
-- `not_writer` is the coordinator's last answer: it stops, and the restart policy starts it again.
 - `draining` is answered from the moment the coordinator takes SIGTERM or SIGINT until it exits,
   ahead of every other token: every answer made after the signal is `draining`, never `ok`, a
   probe that connected before the signal among them. It never turns back into `ok`. The

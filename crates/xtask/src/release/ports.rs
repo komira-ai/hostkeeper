@@ -163,6 +163,25 @@ pub(crate) trait Verifier {
         bundle: Option<&Path>,
         commit: &Commit,
     ) -> Result<Vec<Attestation>, PortError>;
+
+    /// The answer of [`Verifier::verify`] to each ask, in the order asked. The default verifies
+    /// them one after the other; an adapter whose verifications are independent programs runs
+    /// them side by side (`release check` verifies every attested asset of a release twice).
+    fn verify_each(&self, asks: &[Ask<'_>]) -> Vec<Result<Vec<Attestation>, PortError>> {
+        asks.iter()
+            .map(|a| self.verify(a.signer, a.file, a.bundle, a.commit))
+            .collect()
+    }
+}
+
+/// One verification [`Verifier::verify_each`] is asked for: the arguments of
+/// [`Verifier::verify`].
+#[derive(Clone, Copy)]
+pub(crate) struct Ask<'a> {
+    pub(crate) signer: &'a Signer,
+    pub(crate) file: &'a Path,
+    pub(crate) bundle: Option<&'a Path>,
+    pub(crate) commit: &'a Commit,
 }
 
 /// What a program printed and how it ended.
@@ -243,6 +262,41 @@ pub(crate) struct Ran {
 /// Starts a program with arguments in the current directory and waits for it.
 pub(crate) trait Exec {
     fn spawn(&self, program: &str, args: &[String]) -> std::io::Result<Ran>;
+
+    /// Each run, a program and its arguments, answered in the order given. The default runs
+    /// them one after the other; the process runner runs them side by side
+    /// ([`spawn_side_by_side`]).
+    fn spawn_each(&self, runs: &[(String, Vec<String>)]) -> Vec<std::io::Result<Ran>> {
+        runs.iter()
+            .map(|(program, args)| self.spawn(program, args))
+            .collect()
+    }
+}
+
+/// How many programs [`spawn_side_by_side`] runs at once.
+pub(crate) const SIDE_BY_SIDE: usize = 8;
+
+/// Each run through `exec`, at most `width` (at least one) at once, each on a thread of its
+/// own; the answers in the order of `runs`. A run whose thread panicked is an error.
+pub(crate) fn spawn_side_by_side<E: Exec + Sync>(
+    exec: &E,
+    runs: &[(String, Vec<String>)],
+    width: usize,
+) -> Vec<std::io::Result<Ran>> {
+    let mut answers = Vec::with_capacity(runs.len());
+    for batch in runs.chunks(width.max(1)) {
+        std::thread::scope(|scope| {
+            let started: Vec<_> = batch
+                .iter()
+                .map(|(program, args)| scope.spawn(move || exec.spawn(program, args)))
+                .collect();
+            answers.extend(started.into_iter().map(|run| {
+                run.join()
+                    .unwrap_or_else(|_| Err(std::io::Error::other("the run's thread panicked")))
+            }));
+        });
+    }
+    answers
 }
 
 /// One run of a program that inherits nothing: its environment is exactly `env`, and it runs in
@@ -280,3 +334,6 @@ pub(crate) struct Ports<'a> {
 pub(crate) trait Adapters {
     fn ports(&self) -> Ports<'_>;
 }
+
+#[cfg(test)]
+mod tests;

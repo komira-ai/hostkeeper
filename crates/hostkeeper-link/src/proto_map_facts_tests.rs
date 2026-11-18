@@ -19,6 +19,9 @@ fn beat(platform: Platform) -> Heartbeat {
         installers: Vec::new(),
         repositories: None,
         facts_generation: None,
+        remote_login_probe: None,
+        operator_keys: None,
+        prerequisites: None,
     }
 }
 
@@ -70,4 +73,73 @@ fn a_response_keeps_its_facts_as_decoded() {
     );
     assert_eq!(mapped.dropped, None);
     assert_eq!(reply(pb::HeartbeatResponse::default()).reply.facts, None);
+}
+
+/// Proves the Remote Login probe a heartbeat holds goes out as `remote_login_probe`, field for
+/// field and step for step in order (an unstarted step with its error and cut text, and a step
+/// that ran with its exit code, argv and both outputs), and a heartbeat with none leaves the field
+/// out.
+#[test]
+fn the_remote_login_probe_goes_out_as_its_field() {
+    use crate::probe::{ProbeStep, RemoteLoginProbe};
+    let mut with = beat(Platform::DarwinArm64);
+    with.remote_login_probe = Some(RemoteLoginProbe {
+        started_unix: 1_700_000_123,
+        steps: vec![
+            ProbeStep {
+                name: "systemsetup_on".to_owned(),
+                argv: Vec::new(),
+                exit_code: None,
+                stdout: String::new(),
+                stderr: String::new(),
+                error: "no such file".to_owned(),
+                truncated: true,
+            },
+            ProbeStep {
+                name: "launchctl_print".to_owned(),
+                argv: vec![
+                    "/bin/launchctl".to_owned(),
+                    "print".to_owned(),
+                    "system/com.openssh.sshd".to_owned(),
+                ],
+                exit_code: Some(0),
+                stdout: "state = running".to_owned(),
+                stderr: "warning".to_owned(),
+                error: String::new(),
+                truncated: false,
+            },
+        ],
+    });
+    assert_eq!(
+        sent(&with).remote_login_probe,
+        Some(pb::RemoteLoginProbe {
+            started_unix: 1_700_000_123,
+            steps: vec![
+                pb::ProbeStep {
+                    name: "systemsetup_on".to_owned(),
+                    argv: Vec::new(),
+                    exit_code: None,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    error: "no such file".to_owned(),
+                    truncated: true,
+                },
+                pb::ProbeStep {
+                    name: "launchctl_print".to_owned(),
+                    argv: vec![
+                        "/bin/launchctl".to_owned(),
+                        "print".to_owned(),
+                        "system/com.openssh.sshd".to_owned(),
+                    ],
+                    exit_code: Some(0),
+                    stdout: "state = running".to_owned(),
+                    stderr: "warning".to_owned(),
+                    error: String::new(),
+                    truncated: false,
+                },
+            ],
+        })
+    );
+    with.remote_login_probe = None;
+    assert_eq!(sent(&with).remote_login_probe, None);
 }

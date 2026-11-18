@@ -91,6 +91,9 @@ fn links_with(
         renewal: hostkeeper_enroll::RenewalState::default(),
         watchdog: Box::new(NoWatchdog),
         console: None,
+        remote_login_probe: None,
+        operator_keys: None,
+        prerequisites: None,
     }
 }
 

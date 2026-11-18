@@ -44,7 +44,7 @@ pub const PACKAGE: &str = "hostkeeper.operator.v1";
 /// The longest line of an enum's or a message's declaration on one line; a longer one has a line per
 /// value or field. Wide enough that `ui/gen/client.d.ts` stays under the 1000 lines every file of
 /// the app is held to (`tests/sources.rs`).
-const WIDTH: usize = 200;
+const WIDTH: usize = 220;
 
 /// What the header of both files says about where they come from.
 const HEADER: &str = "\
@@ -276,7 +276,7 @@ fn field_type(field: &FieldDescriptor) -> String {
 
 /// Appends the declaration of `ty` at `indent`: an interface of its fields, as the message
 /// declares them, or a union of its values' names. A declaration that fits in [`WIDTH`] is one
-/// line, else one line per field or value.
+/// line, else one line per field or value; a message with no field is `{}` on one line.
 fn declare(out: &mut String, indent: &str, ty: &Type) {
     match ty {
         Type::Message(m) => {
@@ -292,7 +292,9 @@ fn declare(out: &mut String, indent: &str, ty: &Type) {
                 m.name(),
                 declared.join(" ")
             );
-            if !declared.is_empty() && line.len() <= WIDTH {
+            if declared.is_empty() {
+                let _ = writeln!(out, "{indent}export interface {} {{}}", m.name());
+            } else if line.len() <= WIDTH {
                 let _ = writeln!(out, "{line}");
             } else {
                 let _ = writeln!(out, "{indent}export interface {} {{", m.name());

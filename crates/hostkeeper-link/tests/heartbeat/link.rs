@@ -30,6 +30,9 @@ fn beat() -> Heartbeat {
         installers: Vec::new(),
         repositories: None,
         facts_generation: None,
+        remote_login_probe: None,
+        operator_keys: None,
+        prerequisites: None,
     }
 }
 
@@ -448,6 +451,8 @@ fn an_update_without_its_terms_is_not_run_and_is_logged_once_per_change() {
         acknowledged: Vec::new(),
         repositories: None,
         facts: None,
+        operator_keys: None,
+        prerequisites: None,
     };
     let line = |whom: &str, to: &str, why: &str| {
         format!("error: the coordinator's update of {whom} to {to} is not run: {why}")

@@ -5,24 +5,35 @@
 //! limit of `hostkeeper-proto`, and is at most [`MAX_HEARTBEAT_BYTES`] as JSON with the wire's
 //! names ([`Heartbeat::encoded_len`]). [`fit`] keeps it: a heartbeat with more services is
 //! refused, never cut short; one with too many bytes loses its optional facts, a group at a
-//! time in the order of [`DROP_ORDER`] (the health detail, then the deferral detail, then the
-//! observer's detail), and is refused when that is not enough. The service, its version, its
-//! health, the update running and the last verdict are never dropped, nor are the host's clock
-//! and certificate facts ([`Heartbeat::sent_unix`], [`Heartbeat::renewal`]), whose one text is
-//! at most [`hostkeeper_wire::wire::MAX_RENEW_ERROR`] bytes, nor its trusted root
+//! time in the order of [`DROP_ORDER`] (the Remote Login probe, then the health detail, then the
+//! deferral detail, then the observer's detail), and is refused when that is not enough. The
+//! service, its version, its health, the update running and the last verdict are never
+//! dropped, nor are the host's clock and certificate facts ([`Heartbeat::sent_unix`],
+//! [`Heartbeat::renewal`]), whose one text is at most
+//! [`hostkeeper_wire::wire::MAX_RENEW_ERROR`] bytes, nor its trusted root
 //! ([`Heartbeat::trusted_root`]). The trusted root goes out on the gRPC route only (the JSON
 //! route is frozen), but counts toward the bound on both, as `trusted_root_age_secs` and
 //! `trusted_root_reason`. The installers ([`Heartbeat::installers`]) are counted the same way, as
 //! `installers`; a service's `installer` ([`ServiceFacts::installer`]), the repositories report
 //! ([`Heartbeat::repositories`]) and the facts generation ([`Heartbeat::facts_generation`])
-//! likewise.
+//! likewise. A Mac's Remote Login probe ([`Heartbeat::remote_login_probe`]) is counted too, and is
+//! the first optional fact dropped. The operator keys report ([`Heartbeat::operator_keys`], as
+//! `operator_keys`: a digest and two texts of at most [`crate::MAX_KEYS_REASON`] bytes each) is
+//! counted and never dropped: it is not in [`DROP_ORDER`]. The host prerequisites report
+//! ([`Heartbeat::prerequisites`], as `prerequisites`: a digest, a refusal and one state for each of
+//! at most 16 names held; only a name this release knows carries a version or a reason, so with
+//! the one it knows the report is a few hundred bytes and at most about 4 KiB) is counted and
+//! never dropped either.
 
 use hostkeeper_config::names::{ServiceName, Version};
 pub use hostkeeper_proto::MAX_SERVICES_PER_HEARTBEAT;
 use serde_json::{Map, Value, json};
 
+use crate::operator_keys::KeysReport;
 use crate::order::{DeferredReport, OrderResult};
 use crate::ports::Drift;
+use crate::prerequisites::PrerequisitesReport;
+use crate::probe::RemoteLoginProbe;
 use crate::repositories::RepositoriesReport;
 
 /// The most bytes of a heartbeat: its JSON on the JSON route, its encoded message on the gRPC one.
@@ -84,6 +95,17 @@ pub enum Feature {
     /// repository entry and a package of one. Announced by a daemon with a repository sink and
     /// by one the wiring says reads them another way (a Mac); not in [`ANNOUNCED`].
     PrivateRepositoryV1,
+    /// `operator-keys-v1`: the daemon writes the operator keys the coordinator sends
+    /// ([`crate::PushedKeys`]) to the managed block of its login account's `authorized_keys`
+    /// and reports what it holds ([`crate::KeysReport`]). Like `facts-v1` it is announced only
+    /// by a daemon with a sink for them ([`crate::OperatorKeysSink`]): the loop adds it
+    /// ([`OPERATOR_KEYS`]).
+    OperatorKeysV1,
+    /// `prerequisites-v1`: the daemon makes sure of the host prerequisites the coordinator sends
+    /// ([`crate::PushedPrerequisites`]) and reports where each stands
+    /// ([`crate::PrerequisitesReport`]). Like `operator-keys-v1` it is announced only by a daemon
+    /// with a sink for them ([`crate::PrerequisitesSink`]): the loop adds it ([`PREREQUISITES`]).
+    PrerequisitesV1,
 }
 
 /// The features every heartbeat announces, in this order. Each names something the loop does:
@@ -111,6 +133,10 @@ pub const REPOSITORIES: Feature = Feature::RepositoriesV1;
 pub const FACTS: Feature = Feature::FactsV1;
 /// The feature a daemon that reads private repositories announces after [`REPOSITORIES`].
 pub const PRIVATE_REPOSITORY: Feature = Feature::PrivateRepositoryV1;
+/// The feature a daemon with a [`crate::OperatorKeysSink`] announces last.
+pub const OPERATOR_KEYS: Feature = Feature::OperatorKeysV1;
+/// The feature a daemon with a [`crate::PrerequisitesSink`] announces after [`OPERATOR_KEYS`].
+pub const PREREQUISITES: Feature = Feature::PrerequisitesV1;
 
 impl Feature {
     /// Its wire name.
@@ -130,6 +156,8 @@ impl Feature {
             Feature::RepositoriesV1 => "repositories-v1",
             Feature::FactsV1 => "facts-v1",
             Feature::PrivateRepositoryV1 => "private-repository-v1",
+            Feature::OperatorKeysV1 => "operator-keys-v1",
+            Feature::PrerequisitesV1 => "prerequisites-v1",
         }
     }
 
@@ -137,7 +165,13 @@ impl Feature {
     pub fn parse(name: &str) -> Option<Feature> {
         ANNOUNCED
             .into_iter()
-            .chain([REPOSITORIES, FACTS, PRIVATE_REPOSITORY])
+            .chain([
+                REPOSITORIES,
+                FACTS,
+                PRIVATE_REPOSITORY,
+                OPERATOR_KEYS,
+                PREREQUISITES,
+            ])
             .find(|feature| feature.as_str() == name)
     }
 }
@@ -372,6 +406,16 @@ pub struct Heartbeat {
     /// no facts file or has written none yet. Sent over gRPC only, and counted toward the bound
     /// on both.
     pub facts_generation: Option<u64>,
+    /// The Remote Login probe the daemon ran at its start; none from a daemon that runs none (any
+    /// but a Mac's) or has not finished it. Sent over gRPC only, counted toward the bound on both,
+    /// and the first optional fact [`fit`] drops.
+    pub remote_login_probe: Option<RemoteLoginProbe>,
+    /// What the managed block of the login account's `authorized_keys` holds; none from a daemon
+    /// that keeps no operator keys. Sent over gRPC only, and counted toward the bound on both.
+    pub operator_keys: Option<KeysReport>,
+    /// What the daemon holds of the host prerequisites and where each stands; none from a daemon
+    /// that keeps none. Sent over gRPC only, and counted toward the bound on both.
+    pub prerequisites: Option<PrerequisitesReport>,
 }
 
 impl Heartbeat {
@@ -425,6 +469,22 @@ impl Heartbeat {
         if let Some(generation) = self.facts_generation {
             beat.insert("facts_generation".to_owned(), generation.into());
         }
+        if let Some(probe) = &self.remote_login_probe {
+            beat.insert("remote_login_probe".to_owned(), probe.to_json());
+        }
+        if let Some(report) = &self.operator_keys {
+            let refused = report
+                .refused
+                .as_ref()
+                .map(|refusal| json!({ "digest": refusal.digest, "reason": refusal.reason }));
+            beat.insert(
+                "operator_keys".to_owned(),
+                json!({ "digest": report.digest, "refused": refused, "failed": report.failed }),
+            );
+        }
+        if let Some(report) = &self.prerequisites {
+            beat.insert("prerequisites".to_owned(), prerequisites_json(report));
+        }
         Value::Object(beat)
     }
 
@@ -434,8 +494,12 @@ impl Heartbeat {
     }
 
     fn drop_fact(&mut self, fact: OptionalFact) {
+        if fact == OptionalFact::RemoteLoginProbe {
+            self.remote_login_probe = None;
+        }
         for service in &mut self.services {
             match fact {
+                OptionalFact::RemoteLoginProbe => {}
                 OptionalFact::HealthDetail => service.health_detail = None,
                 OptionalFact::DeferralDetail => service.deferred = None,
                 OptionalFact::ObserverDetail => service.observed = None,
@@ -447,6 +511,8 @@ impl Heartbeat {
 /// A group of optional facts a heartbeat loses, every service's at once, to fit its bound.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OptionalFact {
+    /// [`Heartbeat::remote_login_probe`], the host's own.
+    RemoteLoginProbe,
     /// [`ServiceFacts::health_detail`].
     HealthDetail,
     /// [`ServiceFacts::deferred`].
@@ -456,7 +522,8 @@ pub enum OptionalFact {
 }
 
 /// The order in which [`fit`] drops the optional facts.
-pub const DROP_ORDER: [OptionalFact; 3] = [
+pub const DROP_ORDER: [OptionalFact; 4] = [
+    OptionalFact::RemoteLoginProbe,
     OptionalFact::HealthDetail,
     OptionalFact::DeferralDetail,
     OptionalFact::ObserverDetail,
@@ -480,7 +547,8 @@ pub struct Fitted {
 }
 
 /// `beat` within its bound: as it is, or without its optional facts, dropped a group at a time
-/// in the order of [`DROP_ORDER`] until it fits.
+/// in the order of [`DROP_ORDER`] until it fits. The probe's group is dropped, and listed, only
+/// when the heartbeat holds a probe.
 ///
 /// # Errors
 /// More services than [`MAX_SERVICES_PER_HEARTBEAT`], or more than [`MAX_HEARTBEAT_BYTES`] with
@@ -495,6 +563,10 @@ pub fn fit(mut beat: Heartbeat) -> Result<Fitted, Oversize> {
         if beat.encoded_len() <= MAX_HEARTBEAT_BYTES {
             return Ok(Fitted { beat, dropped });
         }
+        // A heartbeat without a probe has none to lose: the group is passed over, not listed.
+        if fact == OptionalFact::RemoteLoginProbe && beat.remote_login_probe.is_none() {
+            continue;
+        }
         beat.drop_fact(fact);
         dropped.push(fact);
     }
@@ -504,4 +576,29 @@ pub fn fit(mut beat: Heartbeat) -> Result<Fitted, Oversize> {
     } else {
         Err(Oversize::Bytes { len })
     }
+}
+
+/// The host prerequisites report as the heartbeat's JSON counts it: the field names of the gRPC
+/// message, the status by its wire name.
+fn prerequisites_json(report: &PrerequisitesReport) -> Value {
+    let refused = report
+        .refused
+        .as_ref()
+        .map(|refusal| json!({ "digest": refusal.digest, "reason": refusal.reason }));
+    let states: Vec<Value> = report
+        .states
+        .iter()
+        .map(|state| {
+            json!({
+                "name": state.name,
+                "status": state.status.as_str(),
+                "version": state.version,
+                "reason": state.reason,
+                "failures": state.failures,
+                "next_try_unix": state.next_try_unix,
+                "seen_unix": state.seen_unix,
+            })
+        })
+        .collect();
+    json!({ "digest": report.digest, "refused": refused, "states": states })
 }

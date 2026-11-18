@@ -267,6 +267,9 @@ fn bare_beat() -> Heartbeat {
         installers: Vec::new(),
         repositories: None,
         facts_generation: None,
+        remote_login_probe: None,
+        operator_keys: None,
+        prerequisites: None,
     }
 }
 
@@ -313,6 +316,10 @@ fn the_shipped_heartbeat_reaches_the_coordinator_and_its_order_reaches_the_daemo
             Box::new(hostkeeper_daemon::NoWatchdog),
         )
     };
+    assert!(
+        links.operator_keys.is_some(),
+        "the shipped links keep operator keys, so the daemon announces operator-keys-v1"
+    );
     let mut heartbeater = links.heartbeater(&daemon);
 
     assert_eq!(heartbeater.beat_once(), BeatOutcome::Sent);

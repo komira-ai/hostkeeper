@@ -22,8 +22,8 @@
 # pr_device.rs) holds this file to its trigger, its concurrency, its top-level keys, its jobs,
 # their runners, the copied jobs to privileged.yml's, and to no secret.
 #
-# privileged.yml still runs every job after every merge to main, and a release still waits for
-# that run on its commit (release.yml); this workflow is no part of a release.
+# privileged.yml still runs every job after every merge to main; no release waits for that run (a
+# red one opens a RELEASE-RED issue, release-red.yml), and this workflow is no part of a release.
 name: pr-device
 
 on:
@@ -197,9 +197,9 @@ jobs:
       - name: Pull opensuse/tumbleweed
         run: docker pull opensuse/tumbleweed@sha256:871173bf717af0926bd92324ee6f73ba285e0721f0c8ac00ef2c77f1c88d979e
       - name: Build the privileged tests as the runner's user
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test transient_unit --test observer --test unit_control --test self_update --test tierstore_shaped --test self_update_across_releases --test linux_packages --test install_apt
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test transient_unit --test observer --test unit_control --test self_update --test tierstore_shaped --test self_update_across_releases --test linux_packages --test install_apt --test operator_keys_root
       - name: Run the privileged tests as root
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test transient_unit --test observer --test unit_control --test self_update --test tierstore_shaped --test self_update_across_releases --test linux_packages --test install_apt -- --test-threads=1
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test transient_unit --test observer --test unit_control --test self_update --test tierstore_shaped --test self_update_across_releases --test linux_packages --test install_apt --test operator_keys_root -- --test-threads=1
       - name: The journal of the test units
         if: failure()
         run: journalctl --unit 'hostkeeper-ci-*' --no-pager

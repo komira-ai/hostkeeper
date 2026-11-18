@@ -277,6 +277,8 @@ pub(crate) fn reply(answer: Answer) -> Mapped {
             acknowledged,
             repositories: None,
             facts: None,
+            operator_keys: None,
+            prerequisites: None,
         },
         update,
     }

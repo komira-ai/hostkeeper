@@ -12,7 +12,8 @@
 //! - `hostkeeper.operator.v1` also holds `Services`: which hosts run each service, and the
 //!   operator's holds; `Enrollment`, the hosts waiting for an operator's approval; `Audit`,
 //!   the log of every change; `Alerts`, the conditions that need a person; `Rollouts`, the
-//!   update plans; and `Mdm`, the devices the MDM policy gate knows.
+//!   update plans; `Mdm`, the devices the MDM policy gate knows; and `Console`, a host's serial
+//!   console, power and boot device through its BMC, or a Mac's screen (console.proto).
 //! - `hostkeeper.release.v1`: no service; the messages of a release, a list of artifacts per
 //!   platform, one per installer, each with its manifest, which the operator API's
 //!   `SetDesired` and `GetRelease` carry, and an agent's order the one entry picked for its host
@@ -43,7 +44,7 @@ pub mod hostkeeper {
     }
     pub mod operator {
         /// What an operator and CI ask of the coordinator: `Hosts`, `Releases`, `Services`,
-        /// `Enrollment`, `Audit`, `Alerts`, `Rollouts` and `Mdm`.
+        /// `Enrollment`, `Audit`, `Alerts`, `Rollouts`, `Mdm` and `Console`.
         pub mod v1 {
             tonic::include_proto!("hostkeeper.operator.v1");
         }
@@ -59,6 +60,16 @@ pub mod hostkeeper {
 /// The most services one heartbeat lists, as the header of `hostkeeper/agent/v1/agent.proto`
 /// says ("A heartbeat lists at most 16 services.").
 pub const MAX_SERVICES_PER_HEARTBEAT: usize = 16;
+
+/// The most steps of a `RemoteLoginProbe`, as `hostkeeper/agent/v1/agent.proto` says.
+pub const MAX_PROBE_STEPS: usize = 24;
+
+/// The most arguments of a `ProbeStep`, as `hostkeeper/agent/v1/agent.proto` says.
+pub const MAX_PROBE_ARGS: usize = 8;
+
+/// The most bytes of each text of a `ProbeStep` (an argument, its output, its error), as
+/// `hostkeeper/agent/v1/agent.proto` says.
+pub const MAX_PROBE_TEXT: usize = 4096;
 
 /// The `FileDescriptorSet` every file under `proto/hostkeeper` compiles to, with the files they
 /// import and their comments, encoded. Custom options (`(hostkeeper.secret)`) are kept in it.

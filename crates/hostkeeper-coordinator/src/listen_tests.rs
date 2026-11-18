@@ -34,6 +34,9 @@ use tonic::{Code, Status};
 
 use super::{CLIENT_PATIENCE, Remote, WriteDeadline, carry, connection, reload_all};
 use crate::http::{PeerAddr, STATUS_PATH, Surface};
+use crate::operator_keys::OperatorKeys;
+use crate::operator_keys::tests::{file, group, key};
+use crate::prerequisites::HostPrerequisites;
 use crate::service::Coordinator;
 use crate::testutil::{OPERATOR, Rig, ci_token, scratch};
 use crate::tokens::OperatorTokens;
@@ -134,9 +137,116 @@ async fn one_look_of_the_tick_reads_the_tokens_file_again() {
     let tokens = OperatorTokens::from_file(&path).expect("tokens");
     assert!(tokens.name_of(first).is_some());
     tokens_file(&path, second);
-    reload_all(None, &[], &tokens).await;
+    reload_all(
+        None,
+        &[],
+        &tokens,
+        &OperatorKeys::default(),
+        &HostPrerequisites::default(),
+    )
+    .await;
     assert_eq!(tokens.name_of(first), None);
     assert!(tokens.name_of(second).is_some());
+}
+
+/// Proves that one look of the tick reads the operator keys file again: after `reload_all` a
+/// group's keys replaced in the file are the ones listed, with no TLS source and no tokens in
+/// play.
+///
+/// Catches: the tick that looks at the TLS files and the tokens leaving the operator keys file
+/// alone, so that a change of the keys reaches no host until the coordinator restarts.
+#[tokio::test]
+async fn one_look_of_the_tick_reads_the_operator_keys_file_again() {
+    let dir = scratch("listen-tick-operator-keys");
+    let first = vec![key(1, "ops laptop")];
+    let path = file(dir.path(), &group("build", &first));
+    let keys = OperatorKeys::from_file(&path).expect("keys");
+    assert_eq!(keys.set_of("build").expect("a set").keys, first);
+    let second = vec![key(2, "ops laptop")];
+    file(dir.path(), &group("build", &second));
+    reload_all(
+        None,
+        &[],
+        &OperatorTokens::none(),
+        &keys,
+        &HostPrerequisites::default(),
+    )
+    .await;
+    assert_eq!(keys.set_of("build").expect("a set").keys, second);
+}
+
+/// Proves that one look of the tick reads the host prerequisites file again: after `reload_all` a
+/// group's names replaced in the file are the ones listed, with no TLS source and no tokens in
+/// play.
+///
+/// Catches: the tick that looks at the TLS files, the tokens and the operator keys leaving the
+/// host prerequisites file alone, so that a change of a group's set reaches no host until the
+/// coordinator restarts.
+#[tokio::test]
+async fn one_look_of_the_tick_reads_the_host_prerequisites_file_again() {
+    use crate::prerequisites::tests::{file, group};
+    let dir = scratch("listen-tick-prerequisites");
+    let path = file(dir.path(), &group("build", &[]));
+    let held = HostPrerequisites::from_file(&path).expect("prerequisites");
+    assert_eq!(held.set_of("build").expect("a set").names.len(), 0);
+    file(dir.path(), &group("build", &["xcode-command-line-tools"]));
+    reload_all(
+        None,
+        &[],
+        &OperatorTokens::none(),
+        &OperatorKeys::default(),
+        &held,
+    )
+    .await;
+    assert_eq!(
+        held.set_of("build").expect("a set").names,
+        ["xcode-command-line-tools"]
+    );
+}
+
+/// Proves that `reload_every` looks at the files once each interval, for as long as it is polled:
+/// the first tick of the interval passes at once and reads nothing, and after one interval of the
+/// paused clock the operator keys file and the host prerequisites file are read again. The driver
+/// waits on the sets changing, never on a clock.
+///
+/// Catches: a tick loop that never reads the files again, or reads them before the interval.
+#[tokio::test(start_paused = true)]
+async fn the_tick_loop_reads_the_files_again_each_interval() {
+    use crate::prerequisites::tests::{file as prerequisites_file, group as prerequisites_group};
+    let interval = Duration::from_secs(60);
+    let dir = scratch("listen-tick-loop");
+    let keys_path = file(dir.path(), &group("build", &[key(1, "ops laptop")]));
+    let keys = OperatorKeys::from_file(&keys_path).expect("keys");
+    let prerequisites_path = prerequisites_file(dir.path(), &prerequisites_group("build", &[]));
+    let held = HostPrerequisites::from_file(&prerequisites_path).expect("prerequisites");
+    let reloading = super::reload_every(
+        None,
+        Vec::new(),
+        OperatorTokens::none(),
+        keys.clone(),
+        held.clone(),
+        interval,
+    );
+    let second = vec![key(2, "ops laptop")];
+    let driver = async {
+        file(dir.path(), &group("build", &second));
+        prerequisites_file(
+            dir.path(),
+            &prerequisites_group("build", &["xcode-command-line-tools"]),
+        );
+        assert_eq!(held.set_of("build").expect("a set").names.len(), 0);
+        tokio::time::advance(interval).await;
+        while keys.set_of("build").expect("a set").keys != second
+            || held.set_of("build").expect("a set").names.is_empty()
+        {
+            tokio::task::yield_now().await;
+        }
+    };
+    tokio::select! {
+        biased;
+        never = reloading => match never {},
+        () = driver => {}
+    }
 }
 
 // ---- the protocol a connection speaks -----------------------------------------------------

@@ -902,8 +902,8 @@ The tree digest and the seal of a placed version are a public format
 packages, deb and rpm, an SBOM, a coordinator image built twice and compared, and an unsigned
 macOS installer. It attests every file it sums, with a bundle beside each archive, package and
 installer, and SBOM attestations for the binaries. <code>release.yml</code> publishes a release from <code>main</code>
-with no manual tag step, once <code>ci</code>, <code>privileged</code> and <code>artifacts</code> have passed on the commit; a
-failed <code>privileged</code> run holds later releases
+with no manual tag step, once <code>ci</code> and <code>artifacts</code> have passed on the commit; a red
+<code>privileged</code> or release run opens a <code>RELEASE-RED</code> issue and holds no release
 (<a href="https://github.com/komira-ai/hostkeeper/blob/main/.github/workflows/artifacts.yml">.github/workflows/artifacts.yml</a>,
 <a href="https://github.com/komira-ai/hostkeeper/blob/main/.github/workflows/release.yml">.github/workflows/release.yml</a>,
 <a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/deploy/verify-a-release.md">docs/deploy/verify-a-release.md</a>). On the host, a pinned <code>gh

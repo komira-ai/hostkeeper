@@ -86,7 +86,9 @@ use crate::listen::{
     CLIENT_PATIENCE, Listener, MAX_CONNECTIONS, Remote, reload_every, serve, together,
 };
 use crate::lock::{FileLock, LockGuard, StateLock};
+use crate::operator_keys::OperatorKeys;
 use crate::ops::OpsStore;
+use crate::prerequisites::HostPrerequisites;
 use crate::service::{Clock, Coordinator};
 use crate::store::Spent;
 use crate::transfer::{Export, export};
@@ -268,6 +270,22 @@ pub struct Serve {
     /// beside `--operator-token-file`; one of the two or `--initial-admin-file` is required.
     #[arg(long)]
     pub tokens_file: Option<PathBuf>,
+    /// The operator's SSH public keys for each host group: a TOML file with a
+    /// `[host-groups.<name>]` table holding `keys = [...]` for each group that has keys. The
+    /// daemon of each host in the group writes them into its login account's `authorized_keys`;
+    /// a host in a group the file does not list is sent none. Public keys only, no secret: any
+    /// regular file of at most 256 KiB. It is read again every `--tls-reload-secs`. Default: no
+    /// host is sent keys.
+    #[arg(long)]
+    pub operator_keys_file: Option<PathBuf>,
+    /// The host prerequisites of each host group: a TOML file with a `[host-groups.<name>]` table
+    /// holding `prerequisites = [...]` for each group that needs one; today the one name
+    /// `xcode-command-line-tools`, which the daemon of a Mac installs when the Mac lacks Apple's
+    /// Command Line Tools. A host in a group the file does not list is sent none. No secret: any
+    /// regular file of at most 64 KiB. It is read again every `--tls-reload-secs`. Default: no
+    /// host is sent a set.
+    #[arg(long)]
+    pub host_prerequisites_file: Option<PathBuf>,
     /// A file holding one operator token, mode 0600, owned by the coordinator's user: the one
     /// token, named `operator`. Read once, at start. Not beside `--tokens-file`.
     #[arg(long)]
@@ -309,7 +327,8 @@ pub struct Serve {
     /// The prefix of the certificate URI that names the role of the caller's host.
     #[arg(long, default_value = DEFAULT_HOST_ROLE_URI_PREFIX)]
     pub host_role_uri_prefix: String,
-    /// How often the TLS files and the tokens file are looked at again, in seconds.
+    /// How often the TLS files, the tokens file, the operator keys file and the host prerequisites
+    /// file are looked at again, in seconds.
     #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u64).range(1..))]
     pub tls_reload_secs: u64,
     /// The enrollment store of the file store: a directory of the coordinator's own holding the
@@ -519,6 +538,14 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
     let record_window = RecordWindow::new(flags.record_approve_for, flags.record_approve_max)?;
 
     let tokens = state::operator_tokens(flags)?;
+    let operator_keys = match &flags.operator_keys_file {
+        Some(path) => OperatorKeys::from_file(path)?,
+        None => OperatorKeys::default(),
+    };
+    let prerequisites = match &flags.host_prerequisites_file {
+        Some(path) => HostPrerequisites::from_file(path)?,
+        None => HostPrerequisites::default(),
+    };
     let oidc = AllowList::from_file(&flags.oidc_config)?;
     let prefixes = SanPrefixes::new(&flags.role_uri_prefix, &flags.host_role_uri_prefix)?;
     let legacy = flags.legacy_service.as_deref();
@@ -583,6 +610,8 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         .with_accounts(accounts)
         .with_layout(layout)
         .with_ui(ui)
+        .with_operator_keys(operator_keys)
+        .with_host_prerequisites(prerequisites)
         .with_alert_thresholds(alert_thresholds(flags))
         .with_repository_origin(crate::repository_origin::RepositoryOrigin::new(
             roots.clone(),
@@ -662,7 +691,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
 /// The LAN listener serves the heartbeat listener's TLS and surface. It never returns `Ok`.
 ///
 /// # Errors
-/// An address cannot be bound; the store is deposed ([`StartError::Deposed`]).
+/// An address cannot be bound.
 pub async fn run<Bind, Binding, Accept, Next, Stream>(
     parts: Parts,
     bind: Bind,
@@ -718,8 +747,7 @@ where
 }
 
 /// [`run`] past the health listener: binds the other listeners, calls `ready` with their
-/// addresses (`health` none), and serves them until the future is dropped or the store is
-/// deposed.
+/// addresses (`health` none), and serves them until the future is dropped.
 async fn run_listeners<Bind, Binding, Accept, Next, Stream>(
     parts: Parts,
     bind: Bind,
@@ -762,9 +790,10 @@ where
         surface: Surface::Control,
     };
     let tokens = parts.coordinator.tokens().clone();
+    let operator_keys = parts.coordinator.operator_keys().clone();
+    let prerequisites = parts.coordinator.host_prerequisites().clone();
     let enrollment = parts.coordinator.enrollment().cloned();
     let coordinator = parts.coordinator;
-    let watching = Arc::clone(&coordinator);
     let observing = observe_every(Arc::clone(&coordinator), OBSERVE_EVERY);
     let adopting = watch_every(Arc::clone(&coordinator), parts.reload);
     // Without a LAN listener, a future that never finishes stands in for it.
@@ -786,19 +815,16 @@ where
         enrollment,
         vec![parts.heartbeat_tls, parts.control_tls],
         tokens,
+        operator_keys,
+        prerequisites,
         parts.reload,
     );
     let all = together(
         together(serving, serving_lan),
         together(reloading, together(observing, adopting)),
     );
-    // A store another coordinator led while this one's link was lost stops the serve: its memory
-    // is stale (`docs/design/coordinator-storage.md`, section 5).
     // On the heap: the futures together are too large for a stack of a test's thread.
-    match select(Box::pin(all), pin!(watching.deposed())).await {
-        Either::Left((never, _)) => match never {},
-        Either::Right(((epoch, found), _)) => Err(StartError::Deposed { epoch, found }),
-    }
+    match Box::pin(all).await {}
 }
 
 /// Resolves on SIGTERM or SIGINT.

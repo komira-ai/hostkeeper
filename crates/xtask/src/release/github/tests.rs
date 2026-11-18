@@ -876,6 +876,7 @@ fn verify_refuses_a_file_or_bundle_path_that_is_not_utf8() {
 }
 
 mod signer;
+mod verify_each;
 
 #[test]
 fn jobs_reads_the_jobs_of_every_page_in_order_with_their_conclusions() {

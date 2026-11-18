@@ -108,8 +108,8 @@ use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_wire::wire::clip_renew_error;
 
 use crate::beat::{
-    ANNOUNCED, FACTS, Feature, Features, Health, Heartbeat, Liveness, Observed, PRIVATE_REPOSITORY,
-    Platform, REPOSITORIES, Renewal, ServiceFacts, fit,
+    ANNOUNCED, FACTS, Feature, Features, Health, Heartbeat, Liveness, OPERATOR_KEYS, Observed,
+    PREREQUISITES, PRIVATE_REPOSITORY, Platform, REPOSITORIES, Renewal, ServiceFacts, fit,
 };
 use crate::deferral::{Book, Deferral};
 use crate::host_facts::PushedFacts;
@@ -117,8 +117,9 @@ use crate::names::Reason;
 use crate::order::{Acknowledged, Order, OrderRef, OrderResult, Outcome, Reply, Verb};
 use crate::ports::{
     CertSource, CertState, CoordinatorLink, Dispatch, FactsSink, HeldHalts, LinkError, Log,
-    OrderSink, RecordedService, RenewalSource, RepositorySink, ServiceObserver, ServiceRecords,
-    Sleeper, Tick, TrustedRootSource, UnixClock,
+    OperatorKeysSink, OrderSink, PrerequisitesSink, RecordedService, RemoteLoginProbeSource,
+    RenewalSource, RepositorySink, ServiceObserver, ServiceRecords, Sleeper, Tick,
+    TrustedRootSource, UnixClock,
 };
 
 /// The period when the daemon is given none: 15 seconds.
@@ -181,6 +182,15 @@ pub struct Ports {
     /// The host's facts file; none on a host that keeps none, which then announces no
     /// `facts-v1`, reports no generation and writes no facts.
     pub facts: Option<Arc<dyn FactsSink>>,
+    /// The Remote Login probe of a Mac's daemon; none on a host that runs none, which then sends
+    /// none.
+    pub remote_login_probe: Option<Arc<dyn RemoteLoginProbeSource>>,
+    /// The managed block of the login account's `authorized_keys`; none on a host that keeps
+    /// none, which then announces no `operator-keys-v1`, sends no report and writes no keys.
+    pub operator_keys: Option<Arc<dyn OperatorKeysSink>>,
+    /// The host prerequisites of the host's group; none on a host that keeps none, which then
+    /// announces no `prerequisites-v1`, sends no report and is sent no set.
+    pub prerequisites: Option<Arc<dyn PrerequisitesSink>>,
 }
 
 /// What one heartbeat came to.
@@ -545,13 +555,21 @@ impl Heartbeater {
                 .map_or_else(|| self.config.installers.clone(), |sink| sink.installers()),
             repositories: self.ports.repositories.as_ref().map(|sink| sink.report()),
             facts_generation: self.ports.facts.as_ref().and_then(|sink| sink.generation()),
+            remote_login_probe: self
+                .ports
+                .remote_login_probe
+                .as_ref()
+                .and_then(|source| source.remote_login_probe()),
+            operator_keys: self.ports.operator_keys.as_ref().map(|sink| sink.report()),
+            prerequisites: self.ports.prerequisites.as_ref().map(|sink| sink.report()),
         })
     }
 
     /// The features every heartbeat announces: [`ANNOUNCED`], `repositories-v1` when the host
     /// has a repository configuration to manage, `facts-v1` when it has a facts file, and
     /// `private-repository-v1` when it has a repository configuration or is told it reads
-    /// private repositories.
+    /// private repositories, `operator-keys-v1` when it keeps operator keys, and
+    /// `prerequisites-v1` when it keeps host prerequisites.
     fn announced(&self) -> Vec<Feature> {
         let mut features = ANNOUNCED.to_vec();
         if self.ports.repositories.is_some() {
@@ -562,6 +580,12 @@ impl Heartbeater {
         }
         if self.ports.repositories.is_some() || self.config.private_repository {
             features.push(PRIVATE_REPOSITORY);
+        }
+        if self.ports.operator_keys.is_some() {
+            features.push(OPERATOR_KEYS);
+        }
+        if self.ports.prerequisites.is_some() {
+            features.push(PREREQUISITES);
         }
         features
     }
@@ -625,12 +649,26 @@ impl Heartbeater {
             acknowledged,
             repositories,
             facts,
+            operator_keys,
+            prerequisites,
         } = reply;
         self.advertised = Features::of(&features);
         let facts_held = self.write_facts(facts);
         if let Some(set) = repositories
             && self.advertised.has(Feature::RepositoriesV1)
             && let Some(sink) = &self.ports.repositories
+        {
+            sink.apply(&set);
+        }
+        if let Some(keys) = operator_keys
+            && self.advertised.has(Feature::OperatorKeysV1)
+            && let Some(sink) = &self.ports.operator_keys
+        {
+            sink.apply(&keys);
+        }
+        if let Some(set) = prerequisites
+            && self.advertised.has(Feature::PrerequisitesV1)
+            && let Some(sink) = &self.ports.prerequisites
         {
             sink.apply(&set);
         }

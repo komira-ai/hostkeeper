@@ -95,6 +95,9 @@ fn a_retry_time_far_ahead_is_capped_at_an_hour_from_now() {
         renewal: hostkeeper_enroll::RenewalState::default(),
         watchdog: Box::new(hostkeeper_daemon::NoWatchdog),
         console: None,
+        remote_login_probe: None,
+        operator_keys: None,
+        prerequisites: None,
     };
     let mut heartbeater = links.heartbeater(&daemon);
 

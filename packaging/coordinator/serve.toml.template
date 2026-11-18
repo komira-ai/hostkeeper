@@ -21,6 +21,16 @@ client-ca = "/etc/hostkeeper-coordinator/client-ca.pem"
 oidc-config = "/etc/hostkeeper-coordinator/oidc.toml"
 tokens-file = "/etc/hostkeeper-coordinator/tokens.toml"
 
+# The operator's SSH public keys for each host group (public keys only, no secret; root's, readable by the
+# group), written by each host's daemon into its login account's authorized_keys; read again every
+# tls-reload-secs. Without it no host is sent keys.
+# operator-keys-file = "/etc/hostkeeper-coordinator/operator-keys.toml"
+
+# The host prerequisites of each host group (no secret; root's, readable by the group): today the one
+# name xcode-command-line-tools, which the daemon of a Mac installs when the Mac lacks Apple's Command
+# Line Tools; read again every tls-reload-secs. Without it no host is sent a set.
+# host-prerequisites-file = "/etc/hostkeeper-coordinator/host-prerequisites.toml"
+
 # The state: files in the coordinator's directory. For Postgres, replace this line with
 # database-dsn-file and halt-marker-file.
 state-file = "/var/lib/hostkeeper-coordinator/state.json"

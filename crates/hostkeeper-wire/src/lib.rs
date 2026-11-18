@@ -6,11 +6,17 @@
 //! - [`names`]: the role, host and platform names;
 //! - [`san`] and [`identity`]: who a certificate says its holder is, read from its
 //!   subjectAltNames under two configurable URI prefixes;
+//! - [`operator_keys`]: the SSH public keys of a host's managed `authorized_keys` block, their
+//!   rules and their digest;
+//! - [`prerequisites`]: the host prerequisites a host group names (Xcode's Command Line Tools on a
+//!   Mac), their names, the rules of a set and its digest;
 //! - [`secret`]: a secret file read under the file rule (regular, owned by this user, mode
 //!   `0600` or `0400`).
 
 pub mod identity;
 pub mod names;
+pub mod operator_keys;
+pub mod prerequisites;
 pub mod san;
 pub mod secret;
 pub mod version;

@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
-use super::{AT, SPENT_NOW, TestDatabase, off_runtime, unix};
+use super::{AT, ID, SPENT_NOW, TestDatabase, off_runtime, unix};
 use crate::audit_file::UnixClock;
 use crate::ops::{AUDIT_RING, OpsState};
 use crate::store::conformance_tests::{desired_at, lines, normal, rich_ops, rich_verdicts};
@@ -187,7 +187,7 @@ fn read(session: &mut Session, table: &Table) -> Result<Rows, String> {
 
 fn landed(commit: &Commit<'_>) -> Landing {
     Landing {
-        number: 1,
+        id: ID.to_owned(),
         landed: true,
         change: Some(Owned::of(commit)),
     }
@@ -325,7 +325,7 @@ fn verdicts_that_landed_are_laid_over_memory() {
 #[test]
 fn a_landing_without_its_change_gives_memory_nothing() {
     let landing = Landing {
-        number: 2,
+        id: ID.to_owned(),
         landed: true,
         change: None,
     };
