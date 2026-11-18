@@ -1,6 +1,7 @@
 //! The identity directory on disk: ownership and modes, links that are not followed, the size
 //! bound, and removal.
 
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 use std::path::Path;
 
@@ -116,6 +117,8 @@ fn the_services_of_the_root_are_the_entries_with_a_service_name() {
     std::fs::write(root.join("a-file"), b"x").expect("write");
     symlink(scratch.path(), root.join("a-link")).expect("symlink");
     std::fs::write(root.join("Not A Service"), b"x").expect("write");
+    let not_utf8 = std::ffi::OsStr::from_bytes(b"caf\xe9");
+    std::fs::write(root.join(not_utf8), b"x").expect("write");
     assert_eq!(
         dir.services().expect("list"),
         ["a-file", "a-link", "alpha", "beta"]

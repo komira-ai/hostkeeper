@@ -564,14 +564,23 @@ fn a_pass_removes_the_identity_directories_of_services_that_are_not_installed() 
     assert_eq!(log.lines(), Vec::<String>::new());
 }
 
-/// Catches a sweep that goes on when it cannot tell what is installed: with a `placed.json` that
-/// cannot be read no tombstone is known, and the identity directories of every service stay.
+/// Catches a sweep that goes on when it cannot tell what is installed: with a `placed.json` or a
+/// package directory that cannot be read no tombstone or version is known, and the identity
+/// directories of every service stay.
 #[test]
 fn a_pass_removes_nothing_while_the_placed_record_cannot_be_read() {
     let log = Arc::new(RecordingLog::default());
     let (rig, kept) = one_pass("identity-sweep-unreadable", &log);
     let stray = identity_files(&rig, "never-installed");
     fs::write(rig.placed_record_path(), "not json").expect("a damaged record");
+    (kept.worker)();
+    assert!(stray.join("key.pem").exists());
+
+    let log = Arc::new(RecordingLog::default());
+    let (rig, kept) = one_pass("identity-sweep-no-packages", &log);
+    let stray = identity_files(&rig, "never-installed");
+    fs::remove_dir_all(&rig.packages).expect("no packages");
+    fs::write(&rig.packages, "a file").expect("a file where the packages were");
     (kept.worker)();
     assert!(stray.join("key.pem").exists());
 }
