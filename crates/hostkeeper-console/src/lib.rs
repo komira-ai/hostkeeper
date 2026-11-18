@@ -14,7 +14,13 @@
 //! - [`bmc`]: a Linux server's power and boot device through its BMC over that port, each after
 //!   the check that the BMC at the address has the host's BMC MAC (decision D8), and the closed
 //!   errors of a call.
-//! - [`session`]: the console sessions, one per host, on a time the caller passes.
+//! - [`sol`]: a Linux server's serial console over its BMC's Serial over LAN, on the same port:
+//!   the checks before `sol activate`, the activation, the deactivation, and why a stream ended.
+//! - [`session`]: the console sessions, one per host, on a time the caller passes: the window to
+//!   attach, the attach of a WebSocket by the operator who opened the session, and the idle and
+//!   total limits of an attached one.
+//! - [`bridge`]: the bounded copy between a WebSocket and a device, both ways, over channels.
+//! - [`close`]: the close codes and reason tokens of a stream that ended after its upgrade.
 //! - `scripted` (feature `testing`): the port's scripted double.
 //!
 //! The three files are new and read by this release alone: no file of an earlier release
@@ -22,6 +28,8 @@
 //! credential file holds none of its text.
 
 pub mod bmc;
+pub mod bridge;
+pub mod close;
 pub mod credential;
 mod file;
 pub mod ipmi;
@@ -30,6 +38,7 @@ pub mod reason;
 #[cfg(any(test, feature = "testing"))]
 pub mod scripted;
 pub mod session;
+pub mod sol;
 pub mod targets;
 
 pub use file::ReadError;

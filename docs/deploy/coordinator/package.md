@@ -140,7 +140,11 @@ place the files the flags name:
   The coordinator runs `ipmitool`, which must be installed at `console-ipmitool` (by default
   `/usr/bin/ipmitool`); the package does not carry it. `console-ipmi-cipher` (3),
   `console-ipmi-privilege` (`administrator`), `console-ipmi-timeout-s` (1), `console-ipmi-retries`
-  (2), `console-attach-s` (30) and `console-max-sessions` (8) have defaults and need no key.
+  (2), `console-attach-s` (30), `console-max-sessions` (8), `console-idle-s` (1800, a stream that
+  carries no byte either way for that long closes), `console-total-s` (28800, the longest a stream
+  stays attached) and `console-connect-timeout-s` (5, the dial of a Mac's Screen Sharing on TCP
+  5900) have defaults and need no key. A console stream is the WebSocket
+  `GET /console/v1/stream/<session>` on the private listener, which `Console/Open` hands out.
 - **Writable by the coordinator:** the state files and the CA's key, under
   `/var/lib/hostkeeper-coordinator`.
 

@@ -630,7 +630,7 @@ fn credential_holds(coordinator: &Coordinator, operator: &str, credential: Crede
 }
 
 /// Whether the operator `name` has a token: one of the tokens file, or an API token.
-fn has_token(coordinator: &Coordinator, name: &str) -> bool {
+pub(crate) fn has_token(coordinator: &Coordinator, name: &str) -> bool {
     coordinator.tokens().has_name(name)
         || coordinator
             .accounts()

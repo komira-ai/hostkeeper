@@ -13,23 +13,23 @@ use crate::targets::Address;
 
 /// The MAC of the host's inventory record, and the answer of a BMC that has it.
 const MAC: &str = "0c:c4:7a:00:00:02";
-const MAC_ANSWER: &str = " 11 0c c4 7a 00 00 02\n";
+pub(crate) const MAC_ANSWER: &str = " 11 0c c4 7a 00 00 02\n";
 /// The answer of a BMC that has another MAC.
-const OTHER_MAC_ANSWER: &str = " 11 0c c4 7a 00 00 09\n";
+pub(crate) const OTHER_MAC_ANSWER: &str = " 11 0c c4 7a 00 00 09\n";
 /// What the tool prints when it cannot open a session, whatever the cause, at its default
 /// verbosity.
-const NO_SESSION: &str = "Error: Unable to establish IPMI v2 / RMCP+ session\n";
-const PASSWORD: &str = "a long random pass";
+pub(crate) const NO_SESSION: &str = "Error: Unable to establish IPMI v2 / RMCP+ session\n";
+pub(crate) const PASSWORD: &str = "a long random pass";
 
-struct Fixture {
-    tool: Scripted,
+pub(crate) struct Fixture {
+    pub(crate) tool: Scripted,
     address: Address,
     credential: BmcCredential,
     settings: Settings,
 }
 
 impl Fixture {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             tool: Scripted::new(),
             address: Address::Ip("192.0.2.12".parse().expect("an address")),
@@ -41,7 +41,7 @@ impl Fixture {
         }
     }
 
-    fn bmc(&self) -> Bmc<'_> {
+    pub(crate) fn bmc(&self) -> Bmc<'_> {
         Bmc {
             tool: &self.tool,
             address: &self.address,
@@ -54,7 +54,7 @@ impl Fixture {
 
 /// The arguments of a session at the fixture's BMC with the default settings, `-v` among them
 /// when `verbose`.
-fn args(verbose: bool) -> Vec<String> {
+pub(crate) fn args(verbose: bool) -> Vec<String> {
     let mut args: Vec<String> = [
         "-I",
         "lanplus",
@@ -81,14 +81,15 @@ fn args(verbose: bool) -> Vec<String> {
     args
 }
 
-fn opened(verbose: bool) -> Seen {
+pub(crate) fn opened(verbose: bool) -> Seen {
     Seen::Open {
         args: args(verbose),
+        escape: None,
         password: PASSWORD.to_owned(),
     }
 }
 
-fn asked(command: &str) -> Seen {
+pub(crate) fn asked(command: &str) -> Seen {
     Seen::Ask(command.to_owned())
 }
 

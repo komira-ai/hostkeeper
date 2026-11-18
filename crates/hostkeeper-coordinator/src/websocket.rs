@@ -31,6 +31,15 @@ const MAX_CONTROL: usize = 125;
 /// The close status of a normal closure.
 pub(crate) const CLOSE_NORMAL: u16 = 1000;
 
+/// The close status of a peer that broke the protocol.
+pub(crate) const CLOSE_PROTOCOL: u16 = 1002;
+
+/// The close status of a message longer than the endpoint takes.
+pub(crate) const CLOSE_TOO_BIG: u16 = 1009;
+
+/// The most bytes of a close frame's reason: a control frame's payload less the status.
+const MAX_REASON: usize = MAX_CONTROL - 2;
+
 /// A message the browser sent.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Message {
@@ -278,8 +287,23 @@ impl<W: AsyncWrite + Unpin> Outbox<W> {
     /// # Errors
     /// The transport failed.
     pub(crate) async fn close(&self, status: u16) -> std::io::Result<()> {
+        self.close_with(status, "").await
+    }
+
+    /// Sends a close frame with `status` and the reason `reason` (cut to the 123 bytes a close
+    /// frame holds, at a character's edge), and ends the write side of the transport.
+    ///
+    /// # Errors
+    /// The transport failed.
+    pub(crate) async fn close_with(&self, status: u16, reason: &str) -> std::io::Result<()> {
+        let mut cut = reason.len().min(MAX_REASON);
+        while !reason.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        let mut payload = status.to_be_bytes().to_vec();
+        payload.extend_from_slice(&reason.as_bytes()[..cut]);
         let mut writer = self.0.lock().await;
-        writer.frame(0x8, &status.to_be_bytes()).await?;
+        writer.frame(0x8, &payload).await?;
         writer.inner.shutdown().await
     }
 }

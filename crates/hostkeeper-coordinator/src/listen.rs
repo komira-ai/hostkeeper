@@ -19,13 +19,17 @@
 //! calls for one patience only and is closed one patience after that, or, when it holds a
 //! `Releases.WaitConverged` call then, one patience after the last such call ends
 //! ([`crate::wait`]); a listener has a limit on its connections, and an upgraded HTTP/1.1
-//! connection counts against it until the upgraded socket ends ([`Hold`]).
+//! connection counts against it until the upgraded socket ends ([`Hold`]). A console stream
+//! ([`crate::console`]) also takes its upgraded connection off the patience rule ([`Patience`]): a
+//! write the browser does not read is not cut after a patience, and the stream counts against
+//! `--console-max-sessions` instead.
 
 use std::convert::Infallible;
 use std::io;
 use std::net::SocketAddr;
 use std::pin::{Pin, pin};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -208,6 +212,24 @@ pub(crate) struct Hold {
     _held: mpsc::Sender<()>,
 }
 
+/// Handed to each request of a connection: a route that upgrades the connection to a console
+/// stream releases it, and from then on no write of the connection is held to the patience (the
+/// bridge's own bounds hold a browser that reads nothing).
+#[derive(Clone, Default)]
+pub(crate) struct Patience(Arc<AtomicBool>);
+
+impl Patience {
+    /// Takes the connection off the patience rule.
+    pub(crate) fn release(&self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+
+    /// Whether the connection was taken off the patience rule.
+    fn released(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+}
+
 /// What a connection hands each of its requests besides the request: its held waits, the
 /// coordinator (which the upgrade of a UI terminal outlives the request with) and the address it
 /// came from when it has one.
@@ -242,6 +264,7 @@ pub(crate) async fn together(
 pub(crate) struct WriteDeadline<S> {
     inner: S,
     deadline: Deadline,
+    patience: Patience,
 }
 
 /// The clock of a [`WriteDeadline`]: started when a write first has to wait, and cleared
@@ -292,10 +315,28 @@ impl Deadline {
 impl<S> WriteDeadline<S> {
     /// `inner`, whose writes fail once one makes no progress for `patience`.
     pub(crate) fn new(inner: S, patience: Duration) -> Self {
+        Self::released_by(inner, patience, Patience::default())
+    }
+
+    /// As [`Self::new`], and no write is limited once `patience` is released.
+    pub(crate) fn released_by(inner: S, limit: Duration, patience: Patience) -> Self {
         Self {
             inner,
-            deadline: Deadline::new(patience),
+            deadline: Deadline::new(limit),
+            patience,
         }
+    }
+
+    /// `polled`, limited by the deadline unless the connection was released from it.
+    fn limit(
+        &mut self,
+        cx: &mut Context<'_>,
+        polled: Poll<io::Result<usize>>,
+    ) -> Poll<io::Result<usize>> {
+        if self.patience.released() {
+            return polled;
+        }
+        self.deadline.limit(cx, polled)
     }
 }
 
@@ -316,17 +357,17 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for WriteDeadline<S> {
         data: &[u8],
     ) -> Poll<io::Result<usize>> {
         let polled = Pin::new(&mut self.inner).poll_write(cx, data);
-        self.deadline.limit(cx, polled)
+        self.limit(cx, polled)
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let polled = Pin::new(&mut self.inner).poll_flush(cx).map_ok(|()| 0);
-        self.deadline.limit(cx, polled).map_ok(|_| ())
+        self.limit(cx, polled).map_ok(|_| ())
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let polled = Pin::new(&mut self.inner).poll_shutdown(cx).map_ok(|()| 0);
-        self.deadline.limit(cx, polled).map_ok(|_| ())
+        self.limit(cx, polled).map_ok(|_| ())
     }
 }
 
@@ -381,14 +422,17 @@ pub(crate) async fn connection_with<S>(
     let held = waits.clone();
     let (held_by, mut upgraded) = mpsc::channel::<()>(1);
     let hold = Hold { _held: held_by };
+    let patience_of = Patience::default();
+    let released = patience_of.clone();
     let service = service_fn(move |mut request: hyper::Request<Incoming>| {
         let coordinator = Arc::clone(&coordinator);
         let peer = peer.clone();
         carry(&mut request, &held, remote, &coordinator);
         request.extensions_mut().insert(hold.clone());
+        request.extensions_mut().insert(released.clone());
         async move { Ok::<_, Infallible>(route(&coordinator, surface, &peer, request, patience).await) }
     });
-    let io = TokioIo::new(WriteDeadline::new(tls, patience));
+    let io = TokioIo::new(WriteDeadline::released_by(tls, patience, patience_of));
     let served = if speaks_h2 {
         let serving = http2::Builder::new(TokioExecutor::new())
             .timer(TokioTimer::new())

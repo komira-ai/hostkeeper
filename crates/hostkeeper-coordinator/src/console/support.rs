@@ -2,13 +2,16 @@
 //! fake, with a Linux server and a Mac enrolled against their records, the console's three files,
 //! the scripted BMC tool, and session ids drawn from a counter.
 
-use std::sync::Arc;
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+use futures::FutureExt;
 
 use hostkeeper_console::ipmi::Settings;
 use hostkeeper_console::scripted::Scripted;
-use hostkeeper_console::session::Sessions;
+use hostkeeper_console::session::{Bounds, Sessions};
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_testkit::Scratch;
 
@@ -49,6 +52,59 @@ pub(crate) struct Fixture {
     pub(crate) fake: Fake,
     pub(crate) tool: Scripted,
     pub(crate) files: Paths,
+    pub(crate) dials: Dials,
+}
+
+/// The dial double: each dial of a Mac takes the next scripted outcome, and is recorded; with
+/// none scripted it is refused as a closed port.
+#[derive(Clone, Default)]
+pub(crate) struct Dials {
+    outcomes: Arc<Mutex<VecDeque<std::io::Result<tokio::io::DuplexStream>>>>,
+    dialled: Arc<Mutex<Vec<String>>>,
+}
+
+impl Dials {
+    /// The next dial connects: the Mac's end of the connection is answered.
+    pub(crate) fn connect(&self) -> tokio::io::DuplexStream {
+        let (coordinator, mac) = tokio::io::duplex(1 << 16);
+        self.outcomes
+            .lock()
+            .expect("lock")
+            .push_back(Ok(coordinator));
+        mac
+    }
+
+    /// The next dial fails as `kind`.
+    pub(crate) fn fail(&self, kind: std::io::ErrorKind) {
+        self.outcomes
+            .lock()
+            .expect("lock")
+            .push_back(Err(kind.into()));
+    }
+
+    /// The addresses dialled, in order.
+    pub(crate) fn dialled(&self) -> Vec<String> {
+        self.dialled.lock().expect("lock").clone()
+    }
+
+    /// The dial of the console.
+    pub(crate) fn dial(&self) -> super::Dial {
+        let dials = self.clone();
+        Arc::new(move |address| {
+            dials
+                .dialled
+                .lock()
+                .expect("lock")
+                .push(address.to_string());
+            let next = dials.outcomes.lock().expect("lock").pop_front();
+            async move {
+                let stream =
+                    next.unwrap_or_else(|| Err(std::io::ErrorKind::ConnectionRefused.into()))?;
+                Ok(Box::new(stream) as Box<dyn super::Duplex>)
+            }
+            .boxed()
+        })
+    }
 }
 
 /// The caller `name`.
@@ -70,13 +126,15 @@ impl Fixture {
         rig.at(2_000);
         let files = write_files(&rig.dir, OPERATORS);
         let tool = Scripted::new();
-        let console = console(&files, &tool, max, window);
+        let dials = Dials::default();
+        let console = console(&files, &tool, max, window).with_dial(dials.dial());
         let fixture = Self {
             rig,
             enrollment,
             fake,
             tool,
             files,
+            dials,
         };
         fixture.record(NODE, &[NODE_DATA], NODE_BMC, "");
         fixture.record(MAC, &[MAC_DATA], "", MAC_SERIAL);
@@ -222,7 +280,12 @@ pub(crate) fn console(files: &Paths, tool: &Scripted, max: usize, window: Durati
         ConsoleFiles::read(files.clone()).expect("the files"),
         Arc::new(tool.clone()),
         Settings::default(),
-        Sessions::new(max, window),
+        Sessions::new(Bounds {
+            max,
+            window,
+            idle: super::DEFAULT_IDLE,
+            total: super::DEFAULT_TOTAL,
+        }),
     )
     .with_random(Box::new(move |buffer| {
         let next = counter.fetch_add(1, Ordering::SeqCst) + 1;
