@@ -18,7 +18,10 @@
 //!   `/etc/hostkeeper/repositories/<file name>`, owned by root, mode 0644, byte for byte (as
 //!   base64), so the entries are there when the daemon's config appears; the
 //!   datasource list `[ NoCloud, None ]`; and, with a serial console, the kernel's `console=`
-//!   and an enabled serial getty.
+//!   and an enabled serial getty, and on a `ttyS<n>` port GRUB's terminal on that port too
+//!   (`GRUB_TERMINAL="console serial"` and `GRUB_SERIAL_COMMAND="serial --unit=<n>
+//!   --speed=115200"`), so GRUB's menu shows on the serial console as well
+//!   (docs/design/console-broker.md, section 5.2).
 //! - `meta-data`: the instance id, from the host id.
 //!
 //! Curtin's `reorder_uefi` is left at its default. The record's role is not in the seed.
@@ -194,9 +197,16 @@ autoinstall:
     );
     if let Some(console) = inputs.serial_console {
         let port = console.as_str();
-        let defaults = quoted(&format!(
+        let mut defaults = format!(
             "GRUB_CMDLINE_LINUX=\"$GRUB_CMDLINE_LINUX console=tty0 console={port},115200n8\"\n"
-        ));
+        );
+        if let Some(unit) = console.grub_unit() {
+            defaults.push_str(&format!(
+                "GRUB_TERMINAL=\"console serial\"\n\
+                 GRUB_SERIAL_COMMAND=\"serial --unit={unit} --speed=115200\"\n"
+            ));
+        }
+        let defaults = quoted(&defaults);
         text.push_str(&format!(
             "      - path: {GRUB_CONSOLE_FILE}
         owner: \"root:root\"
