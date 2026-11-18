@@ -438,6 +438,7 @@ fn file_links(
         renewal: hostkeeper_daemon::links::RenewalState::default(),
         watchdog,
         console: None,
+        identity: None,
         remote_login_probe: None,
         operator_keys: None,
         prerequisites: None,

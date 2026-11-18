@@ -602,6 +602,40 @@ another is refused `host_group_differs`. The node
 then logs `enrolled as host:<id> (generation <n>)`. A request whose `renewal_of` names a host that
 is unknown, denied or certified for another key is refused `renewal_not_allowed`.
 
+## Host identity
+
+The daemon keeps a copy of the host's certificate and key where the services of the host may
+read it (docs/design/host-identity.md). The pki directory stays root's alone.
+
+| Path | Owner and group | Mode | Holds |
+| --- | --- | --- | --- |
+| `/var/lib/hostkeeper/identity/` | `root:hostkeeper-identity` | 0750 | the two files |
+| `/var/lib/hostkeeper/identity/host.crt` | `root:hostkeeper-identity` | 0644 | the current certificate, PEM |
+| `/var/lib/hostkeeper/identity/host.key` | `root:hostkeeper-identity` | 0640 | its key, PKCS#8 PEM |
+
+- After every step of the enrollment loop (every 5 seconds) the daemon reads the pki directory's
+  `current` generation and replaces a file whose bytes, owner, group or mode differ; one that
+  already matches is not written. The key is written before the certificate. A host with no
+  current generation (not enrolled yet) gets nothing, and what an earlier enrollment left stays.
+- A renewal keeps the key, so only `host.crt` changes. Each file is replaced whole (a new file
+  renamed over the old one), so a reader sees the old file or the new one.
+- The daemon looks the group up by name (`/etc/group` on Linux, the directory service on a Mac)
+  and makes it when the host has none: `groupadd --system` under systemd, `addgroup -S` on Alpine,
+  `dseditgroup -o create` on a Mac. When the group cannot be found or made, the daemon logs
+  `error: the host identity copy is for root alone, since its group is not there: <why>` (once,
+  and again when the reason changes), writes the directory 0700 and the key 0600 with the group
+  `root`, and tries again at the next step. A failure to write the copy is logged as `error: the
+  host identity copy is not made: <why>`; it never stops enrollment or renewal. The line
+  `the host identity is kept for the group in /var/lib/hostkeeper/identity` is logged when the copy
+  is first made, and again after a line of either error.
+- **How a service uses it.** A service that presents the host's identity runs as root or as an
+  account in `hostkeeper-identity` (its own package arranges that), and its own configuration
+  names the two files. hostkeeper writes no other service's configuration. A reader that fails to
+  load the pair loads both files again.
+- **Enrolling again changes the key.** After [Enrolling a node
+  again](#enrolling-a-node-again) the first step that finds the new `current` generation replaces
+  both files; until then the copy of the earlier enrollment stays.
+
 ## Retire a node
 
 Retire a node that is lost, dead or replaced. A deny row is written for its host id: its

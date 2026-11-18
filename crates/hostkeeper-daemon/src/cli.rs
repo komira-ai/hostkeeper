@@ -60,6 +60,8 @@ use crate::console::{AGETTY, ConsoleIssue, ENROLLMENT_ISSUE};
 use crate::coordinator_store::CoordinatorFetcher;
 use crate::executor::{Daemon, Placement, Ports};
 use crate::handover::ProcessExec;
+use crate::host_identity::{HostIdentity, IDENTITY_DIR};
+use crate::identity_group::IdentityGroup;
 use crate::ipmi::DevIpmi;
 use crate::links::{DaemonLog, HostLink, Links};
 use crate::mac::HostIoreg;
@@ -120,6 +122,9 @@ pub const DEADMAN_POLL_SECS: u64 = 1;
 /// The pki directory: the host's key and its certificate generations, `current` the one in use
 /// (design section 10).
 pub const PKI_DIR: &str = "/etc/updater/pki";
+/// The owner, and the group a copy for root alone has, of the host identity copy: uid and gid 0
+/// on every platform the daemon runs on (a Mac's `wheel` is gid 0).
+const ROOT: u32 = 0;
 /// How long the enrollment loop's connection, handshake and each call to the coordinator may take.
 pub const ENROLL_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long `agetty --reload` may run: it only touches agetty's reload file and exits.
@@ -381,6 +386,9 @@ async fn start_and_serve(
 /// - the heartbeat loop tells `watchdog` after each heartbeat that it is alive;
 /// - on a Mac (`kind`), the Remote Login probe starts on a thread of its own, and every heartbeat
 ///   after it is done reports it ([`crate::remote_login_probe::at_host_start`]);
+/// - every host keeps the certificate and key of the pki directory's `current` generation at
+///   [`IDENTITY_DIR`], after each step of the enrollment loop, for the group `hostkeeper-identity`
+///   ([`HostIdentity`], [`IdentityGroup::for_host`]);
 /// - every host keeps the operator keys the coordinator sends in the managed block of its login
 ///   account's `authorized_keys` ([`OperatorKeys::at_host`]);
 /// - every host keeps the host prerequisites the coordinator sends, which a Mac installs and a
@@ -422,12 +430,20 @@ pub fn host_links(
         Arc::clone(&ctx.clock),
         log.clone(),
     );
+    let certs = Arc::new(PkiCertSource::new(&files.pki, log.clone()));
+    let identity = HostIdentity::new(
+        certs.clone(),
+        PathBuf::from(IDENTITY_DIR),
+        IdentityGroup::for_host(kind),
+        ROOT,
+        ROOT,
+    );
     let operator_keys = OperatorKeys::at_host(kind, log.clone());
     let prerequisites = Prerequisites::at_host(kind, log.clone());
     Links {
         enroller: Box::new(move || host_enroller(&endpoint, &pki, settings.clone(), kind)),
         link: Arc::new(link),
-        certs: Arc::new(PkiCertSource::new(&files.pki, log.clone())),
+        certs,
         clock: Arc::new(SystemUnixClock),
         log,
         sleeper: Box::new(ClockSleeper::new(Arc::clone(&ctx.clock), stop.clone())),
@@ -438,6 +454,7 @@ pub fn host_links(
         stop,
         watchdog,
         console,
+        identity: Some(identity),
         remote_login_probe: crate::remote_login_probe::at_host_start(kind),
         operator_keys: Some(Arc::new(operator_keys)),
         prerequisites: Some(Arc::new(prerequisites)),

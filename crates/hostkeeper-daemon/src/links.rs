@@ -34,6 +34,11 @@
 //! the current certificate and the error of the enroller's last step, which the enroller notes
 //! once it runs.
 //!
+//! On every host, the enrollment loop also keeps the host's identity copy current after each step
+//! ([`Links::identity`], [`crate::host_identity`]): the certificate and key of the pki directory's
+//! `current` generation, readable by the group `hostkeeper-identity`, for the services of the
+//! host. A failure there is logged and never reaches the enroller.
+//!
 //! On a Linux host, the enrollment loop also writes the console's issue file after each step,
 //! and after each failure to make the enroller ([`Links::console`], [`crate::console`]): the
 //! request's state, the coordinator and the key hash, for the login prompt of the machine's
@@ -64,6 +69,7 @@ use hostkeeper_steps::Clock;
 use crate::console::ConsoleIssue;
 use crate::executor::Daemon;
 use crate::facts_file::FactsFile;
+use crate::host_identity::HostIdentity;
 use crate::link_adapters::{
     DaemonHalts, DaemonObserver, DaemonOrders, DaemonRecords, DaemonRenewal, NoTrustedRoot,
 };
@@ -131,6 +137,9 @@ pub struct Links {
     /// The console's issue file, which the enrollment loop writes after each step and each
     /// failure to make its enroller; none on a host whose console shows none (a Mac).
     pub console: Option<ConsoleIssue>,
+    /// The host's identity copy ([`crate::host_identity`]), which the enrollment loop makes
+    /// current after each step; none where a host keeps none.
+    pub identity: Option<HostIdentity>,
     /// The Remote Login probe the daemon started ([`crate::remote_login_probe`]), which every
     /// heartbeat reports once it is done; none on any host but a Mac.
     pub remote_login_probe: Option<Arc<dyn RemoteLoginProbeSource>>,
@@ -162,6 +171,7 @@ impl Links {
             stop,
             watchdog,
             mut console,
+            mut identity,
             ..
         } = self;
         let enrolling = Arc::clone(daemon);
@@ -174,7 +184,7 @@ impl Links {
                 sleeper: &*enroll_sleeper,
                 stop: &stop,
             };
-            loop_ports.run(&mut enroller, &mut console);
+            loop_ports.run(&mut enroller, &mut console, &mut identity);
         }));
         let beating = Arc::clone(daemon);
         dispatch.start(Box::new(move || {
@@ -258,9 +268,15 @@ impl EnrollLoop<'_> {
     /// again after a wait on `sleeper` of [`OPEN_RETRY_FIRST_SECS`], doubled after each failure
     /// up to [`OPEN_RETRY_MAX_SECS`]; `node` is left without an enrollment meanwhile. `console`,
     /// when there is one, shows what each step came to, and each failure to make the enroller,
-    /// before the wait that follows it. The loop ends when `stop` is set before a try, or the
+    /// before the wait that follows it. `identity`, when there is one, makes the host's identity
+    /// copy current after each step. The loop ends when `stop` is set before a try, or the
     /// wait says [`Tick::Stop`].
-    fn run(&self, make: &mut MakeEnroller, console: &mut Option<ConsoleIssue>) {
+    fn run(
+        &self,
+        make: &mut MakeEnroller,
+        console: &mut Option<ConsoleIssue>,
+        identity: &mut Option<HostIdentity>,
+    ) {
         let mut wait = OPEN_RETRY_FIRST_SECS;
         let mut logged: Option<String> = None;
         while !self.stop.is_stopped() {
@@ -271,6 +287,9 @@ impl EnrollLoop<'_> {
                         &mut |step, enrollment| {
                             if let Some(console) = console.as_mut() {
                                 console.after_step(step, &enrollment, self.log);
+                            }
+                            if let Some(identity) = identity.as_mut() {
+                                identity.after_step(self.log);
                             }
                             self.node.set_enrollment(enrollment);
                         },

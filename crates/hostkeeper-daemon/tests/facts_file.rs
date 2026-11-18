@@ -75,6 +75,7 @@ fn host_probing(
         renewal: hostkeeper_enroll::RenewalState::default(),
         watchdog: Box::new(hostkeeper_daemon::NoWatchdog),
         console: None,
+        identity: None,
         remote_login_probe: probe,
         operator_keys: None,
         prerequisites: None,

@@ -400,6 +400,7 @@ impl Host {
             renewal: hostkeeper_enroll::RenewalState::default(),
             watchdog: Box::new(hostkeeper_daemon::NoWatchdog),
             console: None,
+            identity: None,
             remote_login_probe: None,
             operator_keys: None,
             prerequisites: None,
