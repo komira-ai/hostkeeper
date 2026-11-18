@@ -3,7 +3,7 @@
 Status: design, approved by the owner (2026-11-18), with the answers to its two open questions in section 19. A living
 document: it is updated in the pull requests that build it. Tags as in [hostkeeper-design.md](hostkeeper-design.md): **Built**
 names code on `main` with a path, **Designed** means nothing implements it yet. Built so far: part of section 4 (the shared
-lock, the ledger, the migration runner's mutex); everything else is Designed.
+lock, the ledger, the migration runner's mutex); everything else is Designed. The measurements of M1 are taken (section 7).
 
 It changes one decision of [coordinator-storage.md](coordinator-storage.md): that decision's section 5 ("the single writer: an
 advisory lock") and the sentence of its section 14 that a heartbeat costs no query. Section 7 of that document designs an
@@ -152,8 +152,8 @@ Two consequences, both changes of code:
 
 **Sessions.** The single writing thread becomes a small pool of sessions per instance (a config key, section 12), each holding the
 shared lock, so heartbeats of one task do not queue behind each other on one session. The pool plus one reader session is
-how many connections an instance needs; `max_connections` of the Postgres service must cover `instances x (pool + 1)` with room (not
-checked, section 13).
+how many connections an instance needs; `max_connections` of the Postgres service must cover `instances x (pool + 1)` with room (it is 200,
+with 173 free: M1, section 7).
 
 **Instances.** Each instance has an `instance_id` (random at start) and upserts `instances(id, started_unix, seen_unix, release,
 listen)` every few seconds. It is for the status page and for the start rule of section 5; correctness never reads it.
@@ -188,7 +188,7 @@ the same new migration, and one would fail on a duplicate object. The runner the
 
 | Table | Holds | Logged |
 |---|---|---|
-| `fleet_hosts(host_id pk, role, beat bytea, seen_unix, sent_unix, running bytea, repo_report bytea, instance)` | the last heartbeat of each host (the proto, as received), the host's own `sent_unix` of it, what it runs and its repository report (today `running.rs:43`, `repository_push.rs:119`) | unlogged, `fillfactor` 50, no index on updated columns (HOT) |
+| `fleet_hosts(host_id pk, role, beat bytea, seen_unix, sent_unix, running bytea, repo_report bytea, instance)` | the last heartbeat of each host (the proto, as received), the host's own `sent_unix` of it, what it runs and its repository report (today `running.rs:43`, `repository_push.rs:119`) | logged (decided by M1, below), `fillfactor` 50, no index on updated columns (HOT) |
 | `fleet_bakes(host_id, service, target, beats int, at_unix)` | the count of healthy beats in a row at one version, per service and host (today `Bake`, `bake.rs:33`) | unlogged |
 | `fleet_orders(host_id, service, target, uninstall_id, at_unix, try)` | an outstanding order that holds a slot (today `orders`, `ORDER_AGE` 120 s); a unique index on `host_id` (one update at a time on a host) backs the gate | logged |
 | `fleet_tries`, `fleet_canaries`, `fleet_queued_orders(host_id, service, kind, order_id)`, `fleet_found`, `fleet_defers` | the other maps of `Fleet` (`fleet.rs:180-210`) | logged |
@@ -197,13 +197,15 @@ the same new migration, and one would fail on a duplicate object. The runner the
 | `periodic_jobs(name, next_run_unix, last_run_unix, last_instance)` | the due time of each periodic job, advanced by whoever claims it (section 9) | logged |
 | `desired_seq` (sequence) and columns `set_seq`, `set_for` on `desired`/`group_desired` | the FIFO order of the queue (today `queue.rs:58`, per instance), and the version the `set_seq` was taken for (section 16, back-out) | logged |
 
-`fleet_hosts` is unlogged because it is rebuilt by the next beat of each host within 15 s (`heartbeater.rs:124`); a database
-crash empties it. Orders, tries and canaries are decisions and stay logged. A row older than `DOWN_AFTER` (45 s) means down,
-as `is_live` says today. Whether unlogged pays for itself is measured before it is chosen (section 7).
+`fleet_hosts` is logged. It could be unlogged, since the next beat of each host rebuilds it within 15 s
+(`heartbeater.rs:124`), but decision 4 makes it unlogged only if its WAL cost matters, and M1 found that it does not: 270 B/s
+and 0.73 flushes/s at the real 11 hosts (section 7). `fleet_bakes` stays unlogged; a crash that empties it only restarts the
+bakes. Orders, tries and canaries are decisions and stay logged. A row older than `DOWN_AFTER` (45 s) means down, as
+`is_live` says today.
 
 **The start rule becomes the cluster's.** Today a restarted instance forgets its outstanding orders and waits `QUIET_START` for the
 hosts to report. With orders durable that wait is not needed for them; it is needed whenever the fleet table is **empty or
-stale as a whole**: a database crash (the unlogged table is truncated), a clean Postgres restart, any outage longer
+stale as a whole**: a database crash, a clean Postgres restart, any outage longer
 than `DOWN_AFTER`, the first start, and a back-out followed by a new cutover (the release before wrote no `fleet_hosts`
 rows, so the old ones are old). In all of them the rows still there carry an old `seen_unix`, so judging "down" by `seen_unix`
 alone would count most of the fleet as down while the first hosts beat, and `min_up`, the stages and the halt logic (a host
@@ -212,9 +214,9 @@ that did not come back) would act on a partial fleet. The rule keys on the signa
 - The heartbeat's one statement reads `max(seen_unix)` of `fleet_hosts` **as the statement's snapshot has it, before its own
   upsert** (a data-modifying CTE does not see its own rows), and in the same statement, when that value is older than
   `DOWN_AFTER` or the table is empty, sets `cluster_quiet.until_unix = greatest(until_unix, now() + quiet)`. No sentinel row
-  and no epoch are needed: an empty table is a gap too. The table holds tens to hundreds of rows (not measured, section 7), so the
-  `max` is a scan of a few pages with no index on the updated column (M1 measures it; the fallback is one more row,
-  `cluster_quiet.last_beat_unix`, written at most once per second).
+  and no epoch are needed: an empty table is a gap too. The table holds 11 rows today (M1), so the `max` is a
+  scan of a few pages with no index on the updated column: 45 to 71 us at 11 and 500 rows (M1, section 7). The fallback,
+  one more row `cluster_quiet.last_beat_unix` written at most once per second, is not needed.
 - Every deciding transaction reads `cluster_quiet` after it holds the gate and takes **no decision of its own** while
   `until_unix` is in the future. What is held back is every step the fleet's state would drive: no order, no stage advance, no
   halt raised on a threshold ("a host did not come back"), no version marked bad, no rollback to `last_good`. A partial fleet
@@ -318,8 +320,9 @@ bound, on its own clock, on every pool session: `idle_in_transaction_session_tim
 terminated by the server after the first, a running statement is cancelled after the second, and either rolls the transaction back
 and releases the gate and every row lock. The stalled process finds a dead session when it resumes (`Lost`, then `Reviving`,
 section 4), and its ledger-id retry lands nothing twice. The longest the gate can be held by an instance that has gone silent is
-therefore the idle timeout; every edit and decision waits at most that long for it. (`transaction_timeout` of newer Postgres
-would bound the whole transaction; it is not relied on, because the version of the Postgres service was not checked, section 13.)
+therefore the idle timeout; every edit and decision waits at most that long for it. (`transaction_timeout` would bound the whole
+transaction. The Postgres service is 17.10 and has it (M1, section 7), but it is not relied on: the two timeouts above
+already bound a hold.)
 
 **Isolation.** No transaction of this design needs `SERIALIZABLE`. The deciding transaction would pay for it and gain nothing:
 it reads most of the fleet rows, and under serializable snapshot isolation every concurrent beat upsert would be a read-write
@@ -572,11 +575,13 @@ can only refuse earlier (`store/mod.rs:296`). No new table.
 
 ## 7. Latency budget
 
-Counts are round trips on the unix socket (the Postgres socket directory), the rows locked and how long they are held. **They are design
-counts (inferred from the flows above), not measurements.** The measurement is part of PR M1 (section 17) on the deployment: round-trip
-time of the statements, the wait on the gate under a 50% stage of the fleet, WAL and vacuum of `fleet_hosts` at 4 upserts per
-host per minute for the real host count (not read in this work). The hold time of the gate is the span from its grant to
-`COMMIT`: the read batch, the write batch and one WAL flush; M1 states it in milliseconds.
+Counts are round trips on the unix socket (the Postgres socket directory), the rows locked and how long they are held. **The table
+below gives design counts (inferred from the flows above), not measurements.** The measurements of M1 are in
+[coordinator-multi-instance-checks.md, section 7](coordinator-multi-instance-checks.md#7-the-latency-budget-measured-m1), each
+with its command or query and with where it was taken: live, scratch or inferred. In short: live, 11 enrolled hosts, a socket round
+trip of 7 to 9 us and a commit flush of 0.84 ms; inferred, the gate held about 1.4 ms per decision on the live disk; on the
+scratch copy, no beat found the gate busy at the real host count, an operator edit waited 0.7 to 1 ms (mean) under a 50%
+stage, and a migration's DDL waited at most 20 ms, never its 3 s lock timeout.
 
 | Operation | Round trips | Rows locked | Lock hold | Today |
 |---|---|---|---|---|
@@ -597,7 +602,7 @@ edits, whatever the number of instances. If the heartbeat's converged path is mo
 fallbacks are in this order: the narrow row and `fillfactor` (done by design), a beat that changes nothing but `seen_unix`
 skips the write when the stored `seen_unix` is under a few seconds old (a config key), then a per-instance read cache of
 `nodes` with a 1 to 2 s TTL (config key). A hot gate row is measured (operators queue on it too), and only then a finer lock
-considered (section 19, decision 6).
+considered (section 19, decision 6). M1 measured it: the operator's wait does not show in the heartbeat's latency.
 
 ## 8. Sessions and the login limiter
 
@@ -811,10 +816,8 @@ losing one unflushed 5-minute usage buffer when an instance dies is accepted (wr
 cheap).
 
 Not checked, because access was denied or needs a secret, and to be confirmed by the owner or engineering before the cutover:
-the files of the state volume (names and sizes are from the service's flags); the Postgres socket directory;
-`max_connections` of the Postgres service and the role's connection limit (needs the DSN); live table contents (including the
-number of enrolled hosts, which sizes section 7); whether any registry row names a credential file; the version of
-the Postgres service (whether `transaction_timeout` exists); the edge's check interval and thresholds (no active check exists yet, the
+the files of the state volume (names and sizes are from the service's flags); whether any registry row names a credential
+file; the edge's check interval and thresholds (no active check exists yet, the
 values of section 11 are proposed).
 
 ## 14. The model check, before code
@@ -864,7 +867,7 @@ the farm): the back-out is a stopgap while a fix ships.
 
 | # | Item | After | Size |
 |---|---|---|---|
-| M1 | Measure on the deployment: round trip on the socket, the gate's hold and the operator edit's wait under a 50% stage, how often a beat finds the gate busy, DDL lock wait of a migration against a running instance, `fleet_hosts` write cost at the real host count, `max_connections`, the Postgres version; a table in this document | none | S |
+| M1 | Measured: the deployment read only, the rest on a scratch copy of the same version (section 7). Round trip on the socket, the gate's hold and the operator edit's wait under a 50% stage, how often a beat finds the gate busy, DDL lock wait of a migration against a running instance, `fleet_hosts` write cost at the real host count, `max_connections`, the Postgres version; a table in the companion document | none | S |
 | M2 | The models of section 14 (spec and Rust state-space test at N = 1, 2, 3), failing on the unlocked variants | M1 | M |
 | M3 | Built by komira-ai/hostkeeper#395: the shared fence lock, the `tx_ledger` settle (`0019`), no `lease.commits` write, no deposed exit, the migration mutex, the session timeouts. Left: the pool of sessions, `instances` (a migration of its own), DDL `lock_timeout` with its bounded retry, the migration lint rule. Still one instance | M2 | M |
 | M4 | Row-transaction edits and `state_versions` invalidation for desired, ops, accounts, layout, verdicts, with the row-lock order of section 6 and the one-snapshot reload rule; `rollout_gate` with `SKIP LOCKED` for beats and the operator wait; `audit_counter` and its start-time re-seed; `facts_generation` | M3 | L |
@@ -899,7 +902,7 @@ the database), "The audit's numbers" (still gap-free, by a counter row, not by t
 4. Zero staleness for a host's deny row and for revoked API tokens (the deny row is read in the heartbeat's one statement,
    tokens by the version vector, one `SELECT` per request); keep the initial-admin file on the shared volume for now (idempotent,
    section 9; a one-shot `bootstrap-admin` that writes the database is the later retirement); `fleet_hosts` unlogged only if M1
-   shows the WAL cost matters (its loss only re-quiets the fleet); `may-run` migrations so a release rollback is a service
+   shows the WAL cost matters (its loss only re-quiets the fleet; M1 found that it does not, so the table is logged, section 7); `may-run` migrations so a release rollback is a service
    update, with a facts generation that never goes backward accepted (the host refetches facts once if it does); heartbeat
    order by the host's `sent_unix` with the guard of section 5.2 and no proto change (an optional `beat_seq` in
    `HeartbeatRequest` is additive, B8, and not needed); presence written about every 5 s per host is fine.
@@ -910,9 +913,10 @@ the database), "The audit's numbers" (still gap-free, by a counter row, not by t
 6. **One row lock, the gate, is the granularity** (2026-11-18). Only the live services step, the one-service-at-a-time and
    FIFO rules read every service, a hold is a few statements, and the load on it does not grow with the instances (section
    5.2). M1 measures the gate's hold, the operator edit's wait under a 50% stage and how often a beat finds it busy; a row per
-   service, taken after the gate, is considered only if that wait shows in the heartbeat's latency.
+   service, taken after the gate, is considered only if that wait shows in the heartbeat's latency. M1's verdict (section 7):
+   it does not show, so the one gate row stays.
 
-Open: nothing of the owner's. The measurements of M1 are still to be taken (section 17).
+Open: nothing of the owner's. The measurements of M1 are taken (section 7).
 
 ## 20. Discussion: the review of this document
 
@@ -932,7 +936,7 @@ Findings of the first review and what was done, including where a finding was ta
 3. **The quiet rule keys on the wrong signal** (major). Right: the sentinel covered the crash only. Replaced by the gap rule
    (section 5.1), which covers a crash, a clean restart, an outage over `DOWN_AFTER`, the first start and a back-out followed by a
    cutover; the sentinel and `fleet_epoch` are gone. Not claimed: that the cost of the `max` is small at the real host count
-   (not read; M1 measures it).
+   (not read; M1 measures it: measured, section 7).
 4. **The heartbeat upsert can be overwritten** (major). Right on the ordering and on the unstated owners of the bake and of the
    slots. Changed: the guarded upsert and who frees a slot (section 5.2). **Not right** on one point: the bake *can* be computed
    in SQL, because `Bake::after` reads only the beat (health, updating, promotion pending, version) and the previous row, not
@@ -972,11 +976,11 @@ Findings of the first review and what was done, including where a finding was ta
     `idle_in_transaction_session_timeout` and `statement_timeout` on every pool session bound a hold by a hung instance; beats
     use `SKIP LOCKED` and never queue, so an operator edit waits only for the holder and earlier operator edits, with its own
     longer `lock_timeout` (section 5.2). The cost is that a beat that finds the gate busy decides one beat later (15 s); M1
-    measures how often. The finding's suggestion of a longer operator wait alone was not enough, since the FIFO queue would still
+    measures how often (measured: section 7). The finding's suggestion of a longer operator wait alone was not enough, since the FIFO queue would still
     put the operator behind the beats.
 
 12. **The owner's answers (2026-11-18).** Both open questions are decided as recommended: the Mac listener through the edge
     and the one gate row (section 19, decisions 5 and 6). Section 4 is partly Built (komira-ai/hostkeeper#395); its text says
     where the code differs, and M3 is cut to what is left.
 
-Not changed by the review and still open: what was not checked (section 13), and the measurements of M1.
+Not changed by the review and still open: what was not checked (section 13). The measurements of M1 are taken (section 7).
