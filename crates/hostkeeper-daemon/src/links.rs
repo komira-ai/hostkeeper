@@ -269,8 +269,8 @@ impl EnrollLoop<'_> {
     /// up to [`OPEN_RETRY_MAX_SECS`]; `node` is left without an enrollment meanwhile. `console`,
     /// when there is one, shows what each step came to, and each failure to make the enroller,
     /// before the wait that follows it. `identity`, when there is one, makes the host's identity
-    /// copy current after each step. The loop ends when `stop` is set before a try, or the
-    /// wait says [`Tick::Stop`].
+    /// copy current after each step, once `node` holds that step's enrollment. The loop ends
+    /// when `stop` is set before a try, or the wait says [`Tick::Stop`].
     fn run(
         &self,
         make: &mut MakeEnroller,
@@ -288,10 +288,10 @@ impl EnrollLoop<'_> {
                             if let Some(console) = console.as_mut() {
                                 console.after_step(step, &enrollment, self.log);
                             }
+                            self.node.set_enrollment(enrollment);
                             if let Some(identity) = identity.as_mut() {
                                 identity.after_step(self.log);
                             }
-                            self.node.set_enrollment(enrollment);
                         },
                         self.renewal,
                         &mut || !self.stop.is_stopped(),

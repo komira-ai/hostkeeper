@@ -5,7 +5,7 @@
 use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 
-use hostkeeper_launchd::LaunchctlOutput;
+use hostkeeper_launchd::{FakeLaunchctl, LaunchctlOutput, PlatformKind};
 use hostkeeper_link::testing::{FakeCerts, RecordingLog, identity};
 use hostkeeper_link::{CertState, ClientIdentity, PkiCertSource};
 use hostkeeper_testkit::Scratch;
@@ -20,6 +20,13 @@ fn me() -> u32 {
 
 fn my_gid() -> u32 {
     rustix::process::getegid().as_raw()
+}
+
+fn owner() -> IdentityOwner {
+    IdentityOwner {
+        uid: me(),
+        gid: my_gid(),
+    }
 }
 
 fn pair(cert: &str, key: &str) -> CertState {
@@ -58,10 +65,10 @@ impl Rig {
             IDENTITY_GROUP,
             file,
             Box::new(tool.clone()),
-            vec!["--system".to_owned(), IDENTITY_GROUP.to_owned()],
+            PlatformKind::Linux,
         );
         let dir = scratch.path().join("var/lib/hostkeeper/identity");
-        let copy = HostIdentity::new(certs.clone(), dir, group, me(), my_gid());
+        let copy = HostIdentity::new(certs.clone(), dir, group, owner());
         Rig {
             scratch,
             certs,
@@ -226,28 +233,130 @@ fn a_key_that_cannot_be_written_leaves_the_certificate_as_it_was() {
     )));
 }
 
-/// Proves a host with no current pair gets nothing (not even the directory), that what an earlier
-/// enrollment left stays, and that the line is logged again when the pair comes back.
+/// Proves a host with no pair from the start gets nothing (not even the directory, and no line),
+/// and that a host whose pair goes away (no enrollment, a pki directory moved aside) loses the
+/// key and the certificate, key first, with one line logged for it, while the directory stays; the
+/// line of the pair is logged again when the pair comes back.
 #[test]
-fn a_host_with_no_pair_writes_nothing_and_keeps_what_was_there() {
+fn a_host_that_loses_its_pair_loses_the_copy_and_logs_it_once() {
     let mut rig = Rig::with_group();
-    rig.certs.set(CertState::NotEnrolled {
+    let none = || CertState::NotEnrolled {
         waiting_for: PathBuf::from("current"),
-    });
+    };
+    rig.certs.set(none());
     rig.step();
     assert!(!rig.dir().exists());
     assert!(rig.log.lines().is_empty());
     rig.certs.set(pair("certificate one", "key one"));
     rig.step();
+    rig.certs.set(none());
+    rig.step();
+    rig.step();
+    assert_eq!(rig.names(), Vec::<String>::new());
+    assert!(rig.dir().is_dir());
+    let removed = format!("{IDENTITY_REMOVED}{}", rig.dir().display());
+    assert_eq!(rig.log.lines(), vec![rig.kept(), removed.clone()]);
+    rig.certs.set(pair("certificate one", "key one"));
+    rig.step();
+    assert_eq!(rig.log.lines(), vec![rig.kept(), removed, rig.kept()]);
+    assert_eq!(rig.text(KEY_FILE), "key one");
+}
+
+/// Proves the removal for a host without a pair takes the temporary files a crash left too, and
+/// removes a link at a name itself without touching what it points to.
+#[test]
+fn a_host_without_a_pair_loses_leftover_temporaries_and_links_too() {
+    let mut rig = Rig::with_group();
+    rig.step();
+    let victim = rig.scratch.path().join("victim");
+    fs::write(&victim, "untouched").expect("the victim");
+    fs::remove_file(rig.file(CERT_FILE)).expect("remove the certificate");
+    symlink(&victim, rig.file(CERT_FILE)).expect("a link");
+    fs::write(rig.file(".host.key.tmp"), "left").expect("a leftover");
     rig.certs.set(CertState::NotEnrolled {
         waiting_for: PathBuf::from("current"),
     });
     rig.step();
-    assert_eq!(rig.text(KEY_FILE), "key one");
-    assert_eq!(rig.text(CERT_FILE), "certificate one");
-    rig.certs.set(pair("certificate one", "key one"));
+    assert_eq!(rig.names(), Vec::<String>::new());
+    assert_eq!(fs::read_to_string(&victim).expect("victim"), "untouched");
+}
+
+/// Proves a host without a pair whose identity directory is missing, a link or a file removes
+/// nothing, follows nothing and logs nothing.
+#[test]
+fn a_host_without_a_pair_leaves_a_missing_or_linked_identity_directory_alone() {
+    let mut rig = Rig::with_group();
+    rig.certs.set(CertState::NotEnrolled {
+        waiting_for: PathBuf::from("current"),
+    });
+    let elsewhere = rig.scratch.path().join("elsewhere");
+    fs::create_dir(&elsewhere).expect("the target");
+    fs::write(elsewhere.join(KEY_FILE), "kept").expect("a key");
+    fs::create_dir_all(rig.dir().parent().expect("a parent")).expect("the parent");
+    symlink(&elsewhere, rig.dir()).expect("the link");
     rig.step();
-    assert_eq!(rig.log.lines(), vec![rig.kept(), rig.kept()]);
+    assert_eq!(
+        fs::read_to_string(elsewhere.join(KEY_FILE)).expect("the key"),
+        "kept"
+    );
+    assert!(rig.log.lines().is_empty());
+    fs::remove_file(rig.dir()).expect("remove the link");
+    fs::write(rig.dir(), "a file").expect("a file");
+    rig.step();
+    assert!(rig.log.lines().is_empty());
+}
+
+/// Proves a name that cannot be removed (a directory at the key's name) is an error line naming
+/// it, given once however many steps follow, and that the certificate is not touched after it.
+#[test]
+fn a_copy_that_cannot_be_removed_is_an_error_logged_once() {
+    let mut rig = Rig::with_group();
+    rig.step();
+    fs::remove_file(rig.file(KEY_FILE)).expect("remove the key");
+    fs::create_dir(rig.file(KEY_FILE)).expect("a directory in its place");
+    rig.certs.set(CertState::NotEnrolled {
+        waiting_for: PathBuf::from("current"),
+    });
+    rig.step();
+    rig.step();
+    let lines = rig.log.lines();
+    assert_eq!(lines.len(), 2);
+    assert!(
+        lines[1].starts_with(&format!(
+            "{IDENTITY_NOT_REMOVED}{}: ",
+            rig.file(KEY_FILE).display()
+        )),
+        "{lines:?}"
+    );
+    assert_eq!(rig.text(CERT_FILE), "certificate one");
+}
+
+/// Proves an identity directory that cannot be looked up for the removal (its name is longer
+/// than the system allows) is an error that names it, and a directory below a file is not one.
+#[test]
+fn a_directory_that_cannot_be_opened_for_the_removal_is_an_error() {
+    let mut rig = Rig::with_group();
+    rig.certs.set(CertState::NotEnrolled {
+        waiting_for: PathBuf::from("current"),
+    });
+    let blocked = rig.scratch.path().join("blocked");
+    fs::write(&blocked, "a file").expect("the file");
+    rig.copy.dir = blocked.join("identity");
+    rig.step();
+    assert!(
+        rig.log.lines().is_empty(),
+        "a path below a file has nothing"
+    );
+    let long = rig.scratch.path().join("n".repeat(300));
+    rig.copy.dir = long.clone();
+    rig.step();
+    assert_eq!(
+        rig.log.lines(),
+        vec![format!(
+            "{IDENTITY_NOT_REMOVED}{}: File name too long (os error 36)",
+            long.display()
+        )]
+    );
 }
 
 /// Proves a file whose mode was changed, a file whose bytes were changed and a directory whose
@@ -291,23 +400,30 @@ fn a_link_in_the_place_of_a_file_is_replaced_and_not_followed() {
     );
 }
 
-/// Proves a temporary file a crash left, whether a file or a link to another file, is removed and
-/// never written through.
+/// Proves the temporary names of the files (`.host.key.tmp`, `.host.crt.tmp`) are removed at the
+/// step after a crash, whether the leftover is a file already given to the group or a link to a
+/// file outside, never written through, and also when the pair is already kept and nothing needs
+/// writing: the leftover key, group readable, does not stay.
+///
+/// Catches: a temporary named by the process id, which the next process never removes.
 #[test]
 fn a_leftover_temporary_file_is_removed_and_not_written_through() {
     let mut rig = Rig::with_group();
     rig.step();
     let victim = rig.scratch.path().join("victim");
     fs::write(&victim, "untouched").expect("the victim");
-    let pid = std::process::id();
-    fs::write(rig.file(&format!(".host.crt.{pid}.tmp")), "left").expect("a leftover");
-    symlink(&victim, rig.file(&format!(".host.key.{pid}.tmp"))).expect("a leftover link");
+    fs::write(rig.file(".host.key.tmp"), "left").expect("a leftover key");
+    fs::set_permissions(rig.file(".host.key.tmp"), fs::Permissions::from_mode(0o640))
+        .expect("chmod");
+    symlink(&victim, rig.file(".host.crt.tmp")).expect("a leftover link");
+    rig.step();
+    assert_eq!(rig.names(), vec!["host.crt", "host.key"]);
+    assert_eq!(fs::read_to_string(&victim).expect("victim"), "untouched");
+    symlink(&victim, rig.file(".host.key.tmp")).expect("a leftover link");
+    fs::write(rig.file(".host.crt.tmp"), "left").expect("a leftover certificate");
     rig.certs.set(pair("certificate two", "key two"));
     rig.step();
-    assert_eq!(
-        fs::read_to_string(&victim).expect("the victim"),
-        "untouched"
-    );
+    assert_eq!(fs::read_to_string(&victim).expect("victim"), "untouched");
     assert_eq!(rig.names(), vec!["host.crt", "host.key"]);
     assert_eq!(rig.text(KEY_FILE), "key two");
     assert_eq!(rig.text(CERT_FILE), "certificate two");
@@ -383,7 +499,7 @@ fn a_missing_group_is_made_once_and_the_files_are_for_it() {
 
 /// Proves a group that cannot be made gives files for root alone (the directory 0700, the key
 /// 0600, the certificate 0644, the fallback group), one line of why for as long as the reason is
-/// the same, and the next step tries again; once the group is there the files are the group's and
+/// the same, and the tool is run again once every 12 steps; once the group is there the files are the group's and
 /// the next line says so.
 #[test]
 fn a_group_that_cannot_be_made_gives_files_for_root_alone_until_it_is_there() {
@@ -394,7 +510,20 @@ fn a_group_that_cannot_be_made_gives_files_for_root_alone_until_it_is_there() {
     let mut rig = Rig::over(scratch, file.clone(), tool);
     rig.step();
     rig.step();
-    assert_eq!(rig.tool.calls().len(), 2, "each step tries again");
+    for _ in 0..10 {
+        rig.step();
+    }
+    assert_eq!(
+        rig.tool.calls().len(),
+        1,
+        "the tool is not run at each step"
+    );
+    rig.step();
+    assert_eq!(
+        rig.tool.calls().len(),
+        2,
+        "it is run again at the 13th step"
+    );
     assert_eq!(rig.mode(KEY_FILE), 0o600);
     assert_eq!(rig.mode(CERT_FILE), 0o644);
     let dir = fs::metadata(rig.dir()).expect("the directory");
@@ -430,31 +559,24 @@ fn a_group_file_that_cannot_be_read_gives_files_for_root_alone() {
     );
 }
 
-/// Proves the files are given the group's gid, which is not the test's own: a user that is not
-/// root cannot give a file to another group, so the step fails and says so; root's files have the
-/// gid.
+/// Proves the directory and both files are given the gid the group file gives (the test's own
+/// group, which a user may give a file to), not the owner's fallback gid.
 #[test]
 fn the_files_are_given_the_gid_the_group_has() {
-    let mine = my_gid();
-    let other = mine + 1;
-    let mut rig = Rig::new("hi-gid", &format!("{IDENTITY_GROUP}:x:{other}:\n"));
+    let mut rig = Rig::with_group();
+    rig.copy.owner = IdentityOwner {
+        uid: me(),
+        gid: u32::MAX - 1,
+    };
     rig.step();
-    if me() == 0 {
-        assert_eq!(
-            fs::metadata(rig.file(KEY_FILE)).expect("the key").gid(),
-            other
-        );
-    } else {
-        let lines = rig.log.lines();
-        assert_eq!(lines.len(), 1);
-        assert_eq!(
-            lines[0],
-            format!(
-                "{IDENTITY_NOT_KEPT}{}: Operation not permitted (os error 1)",
-                rig.dir().display()
-            )
-        );
+    for meta in [
+        fs::metadata(rig.dir()).expect("the directory"),
+        fs::metadata(rig.file(KEY_FILE)).expect("the key"),
+        fs::metadata(rig.file(CERT_FILE)).expect("the certificate"),
+    ] {
+        assert_eq!(meta.gid(), my_gid());
     }
+    assert_eq!(rig.log.lines(), vec![rig.kept()]);
 }
 
 /// Proves the copy is made from what the heartbeat loop's certificate source reads of a real pki
@@ -484,9 +606,10 @@ fn the_copy_is_made_from_the_pki_directory_s_current_generation() {
     let file = scratch.path().join("group");
     fs::write(&file, format!("{IDENTITY_GROUP}:x:{}:\n", my_gid())).expect("the group file");
     let tool = MakesGroup::answering(Ok(LaunchctlOutput::success("")));
-    let group = IdentityGroup::in_group_file(IDENTITY_GROUP, file, Box::new(tool), Vec::new());
+    let group =
+        IdentityGroup::in_group_file(IDENTITY_GROUP, file, Box::new(tool), PlatformKind::Linux);
     let dir = scratch.path().join("identity");
-    let mut copy = HostIdentity::new(source, dir.clone(), group, me(), my_gid());
+    let mut copy = HostIdentity::new(source, dir.clone(), group, owner());
     copy.after_step(log.as_ref());
     assert!(!dir.exists(), "no current generation, nothing written");
     let first = generation(1, "one.example");
@@ -562,8 +685,7 @@ fn the_root_directory_is_not_a_place_for_the_copy() {
 fn a_leftover_that_cannot_be_removed_is_an_error_and_the_old_file_stays() {
     let mut rig = Rig::with_group();
     rig.step();
-    fs::create_dir(rig.file(&format!(".host.crt.{}.tmp", std::process::id())))
-        .expect("a directory");
+    fs::create_dir(rig.file(".host.crt.tmp")).expect("a directory");
     rig.certs.set(pair("certificate two", "key one"));
     rig.step();
     assert_eq!(rig.text(CERT_FILE), "certificate one");
@@ -575,34 +697,117 @@ fn a_leftover_that_cannot_be_removed_is_an_error_and_the_old_file_stays() {
     )));
 }
 
-/// Runs a step of a rig whose parent directory has the mode `mode` (restored afterwards), and
-/// the log. A user that is not root is refused by the mode; root is not, and makes the copy.
-fn step_under_parent_mode(mode: u32) -> (Vec<String>, String) {
-    let mut rig = Rig::with_group();
-    let parent = rig.dir().parent().expect("a parent").to_owned();
-    fs::create_dir_all(&parent).expect("the parent");
-    fs::set_permissions(&parent, fs::Permissions::from_mode(mode)).expect("chmod");
-    rig.step();
-    fs::set_permissions(&parent, fs::Permissions::from_mode(0o755)).expect("chmod back");
-    (rig.log.lines(), rig.kept())
-}
-
-/// Proves each way the parent of the identity directory can refuse the daemon (it cannot be
-/// opened, its child cannot be looked up, its child cannot be made) is an error that names the
-/// directory; root is refused by none of them.
+/// Proves each way the parent of the identity directory can refuse the daemon is an error that
+/// names the directory and the system's reason, the same for root and for any user: the parent is
+/// a file (it cannot be opened), a directory above it is a file (it cannot be made), and the
+/// name of the directory is longer than the system allows (it cannot be looked up).
 #[test]
 fn a_parent_directory_that_refuses_is_an_error_naming_the_directory() {
-    for (name, mode) in [("opened", 0o000), ("looked-up", 0o600), ("made", 0o500)] {
-        let (lines, kept) = step_under_parent_mode(mode);
-        if me() == 0 {
-            assert_eq!(lines, vec![kept], "{name}");
-        } else {
-            assert_eq!(lines.len(), 1, "{name}");
-            assert!(
-                lines[0].starts_with(IDENTITY_NOT_KEPT)
-                    && lines[0].ends_with("Permission denied (os error 13)"),
-                "{name}: {lines:?}"
-            );
-        }
+    let mut rig = Rig::with_group();
+    let blocked = rig.scratch.path().join("blocked");
+    fs::write(&blocked, "a file").expect("the file");
+    let long = "n".repeat(300);
+    let parent = rig.scratch.path().join("parent");
+    fs::create_dir(&parent).expect("the parent");
+    for (dir, reason) in [
+        (blocked.join("identity"), "Not a directory (os error 20)"),
+        (
+            blocked.join("above").join("identity"),
+            "Not a directory (os error 20)",
+        ),
+        (parent.join(&long), "File name too long (os error 36)"),
+    ] {
+        rig.copy.dir = dir.clone();
+        rig.copy.logged = None;
+        let before = rig.log.lines().len();
+        rig.step();
+        let lines = rig.log.lines();
+        assert_eq!(
+            lines[before..],
+            [format!("{IDENTITY_NOT_KEPT}{}: {reason}", dir.display())]
+        );
     }
+}
+
+/// Proves the parents the daemon makes on the way to the directory are given mode 0755: they are
+/// created with 0700 and then chmod-ed, so the mode is the daemon's whatever the umask the process
+/// has, and a parent that was there is left as it was.
+#[test]
+fn the_parents_made_on_the_way_are_given_mode_0755_and_those_there_are_left() {
+    let mut rig = Rig::with_group();
+    let top = rig.scratch.path().join("top");
+    fs::create_dir(&top).expect("a parent that is there");
+    fs::set_permissions(&top, fs::Permissions::from_mode(0o700)).expect("chmod");
+    rig.copy.dir = top.join("one/two/identity");
+    rig.step();
+    let mode = |path: &Path| fs::metadata(path).expect("a directory").mode() & 0o7777;
+    assert_eq!(mode(&top), 0o700);
+    assert_eq!(mode(&top.join("one")), 0o755);
+    assert_eq!(mode(&top.join("one/two")), 0o755);
+    assert_eq!(rig.log.lines().len(), 1);
+}
+
+/// Proves a write that fails while the group was used (the identity directory is a file) makes a
+/// Mac look the group up again at the next step, instead of waiting for its twelve steps.
+#[test]
+fn a_failed_write_makes_the_group_looked_up_again() {
+    let scratch = scratch("hi-forget");
+    let dscl = FakeLaunchctl::new();
+    dscl.always(
+        &[
+            ".".to_owned(),
+            "-list".to_owned(),
+            "/Groups".to_owned(),
+            "PrimaryGroupID".to_owned(),
+        ],
+        Ok(LaunchctlOutput::success(&format!(
+            "{IDENTITY_GROUP}  {}\n",
+            my_gid()
+        ))),
+    );
+    let group = IdentityGroup::in_directory_service(
+        IDENTITY_GROUP,
+        Box::new(dscl.clone()),
+        Box::new(MakesGroup::answering(Ok(LaunchctlOutput::success("")))),
+    );
+    let dir = scratch.path().join("identity");
+    fs::write(&dir, "a file").expect("a file in the place");
+    let certs = Arc::new(FakeCerts::new(pair("certificate one", "key one")));
+    let mut copy = HostIdentity::new(certs, dir.clone(), group, owner());
+    let log = RecordingLog::default();
+    copy.after_step(&log);
+    copy.after_step(&log);
+    assert_eq!(
+        dscl.calls().len(),
+        2,
+        "a failed write is followed by a lookup"
+    );
+    fs::remove_file(&dir).expect("remove the file");
+    copy.after_step(&log);
+    copy.after_step(&log);
+    assert_eq!(dscl.calls().len(), 3, "a sound write keeps the gid");
+}
+
+/// Proves a write that fails while the group is missing (the files are for the owner alone) is the
+/// error line of the failed write, with the group's lookup unchanged: the tool is run once.
+#[test]
+fn a_failed_write_for_the_owner_alone_is_an_error_line() {
+    let scratch = scratch("hi-alone-fail");
+    let file = scratch.path().join("group");
+    fs::write(&file, "root:x:0:\n").expect("the group file");
+    let tool = MakesGroup::answering(Ok(LaunchctlOutput::exit(9, "groupadd: boom")));
+    let mut rig = Rig::over(scratch, file, tool);
+    let blocked = rig.scratch.path().join("blocked");
+    fs::write(&blocked, "a file").expect("the file");
+    rig.copy.dir = blocked.join("identity");
+    rig.step();
+    rig.step();
+    assert_eq!(rig.tool.calls().len(), 1);
+    assert_eq!(
+        rig.log.lines(),
+        vec![format!(
+            "{IDENTITY_NOT_KEPT}{}: Not a directory (os error 20)",
+            blocked.join("identity").display()
+        )]
+    );
 }

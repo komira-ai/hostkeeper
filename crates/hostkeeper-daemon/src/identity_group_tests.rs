@@ -82,7 +82,7 @@ fn etc_group(file: &Path, tool: &MakesGroup) -> IdentityGroup {
         IDENTITY_GROUP,
         file.to_owned(),
         Box::new(tool.clone()),
-        words(&["--system", IDENTITY_GROUP]),
+        PlatformKind::Linux,
     )
 }
 
@@ -127,7 +127,7 @@ fn a_group_in_the_group_file_gives_its_gid_and_is_not_made_again() {
     let scratch = scratch("ig-found");
     let file = group_file(&scratch, ETC);
     let tool = MakesGroup::answering(Ok(LaunchctlOutput::success("")));
-    assert_eq!(etc_group(&file, &tool).ensure(), Ok(977));
+    assert_eq!(etc_group(&file, &tool).ensure().expect("a gid"), 977);
     assert_eq!(tool.calls(), Vec::<Vec<String>>::new());
 }
 
@@ -138,10 +138,10 @@ fn a_missing_group_is_made_once_and_its_gid_is_then_found() {
     let scratch = scratch("ig-make");
     let file = group_file(&scratch, "root:x:0:\n");
     let tool = MakesGroup::making(&file, "hostkeeper-identity:x:988:");
-    let group = etc_group(&file, &tool);
-    assert_eq!(group.ensure(), Ok(988));
+    let mut group = etc_group(&file, &tool);
+    assert_eq!(group.ensure().expect("a gid"), 988);
     assert_eq!(tool.calls(), vec![words(&["--system", IDENTITY_GROUP])]);
-    assert_eq!(group.ensure(), Ok(988));
+    assert_eq!(group.ensure().expect("a gid"), 988);
     assert_eq!(
         tool.calls().len(),
         1,
@@ -186,10 +186,7 @@ fn a_tool_that_makes_nothing_leaves_the_group_missing() {
     let file = group_file(&scratch, "root:x:0:\n");
     let tool = MakesGroup::answering(Ok(LaunchctlOutput::success("")));
     let error = etc_group(&file, &tool).ensure().expect_err("a failure");
-    assert_eq!(
-        error,
-        GroupError::StillMissing("hostkeeper-identity".to_owned())
-    );
+    assert!(matches!(&error, GroupError::StillMissing(name) if name == IDENTITY_GROUP));
     assert_eq!(
         error.to_string(),
         "the group hostkeeper-identity is not there after it was made"
@@ -245,7 +242,6 @@ fn mac(dscl: &FakeLaunchctl, maker: &MakesGroup) -> IdentityGroup {
         IDENTITY_GROUP,
         Box::new(dscl.clone()),
         Box::new(maker.clone()),
-        words(&["-o", "create", IDENTITY_GROUP]),
     )
 }
 
@@ -261,7 +257,7 @@ fn a_mac_group_in_the_directory_service_gives_its_gid() {
         )),
     );
     let maker = MakesGroup::answering(Ok(LaunchctlOutput::success("")));
-    assert_eq!(mac(&dscl, &maker).ensure(), Ok(601));
+    assert_eq!(mac(&dscl, &maker).ensure().expect("a gid"), 601);
     assert!(maker.calls().is_empty());
 }
 
@@ -278,7 +274,7 @@ fn a_mac_makes_a_missing_group_with_dseditgroup_and_reads_its_gid() {
         )),
     );
     let maker = MakesGroup::answering(Ok(LaunchctlOutput::success("")));
-    assert_eq!(mac(&dscl, &maker).ensure(), Ok(402));
+    assert_eq!(mac(&dscl, &maker).ensure().expect("a gid"), 402);
     assert_eq!(
         maker.calls(),
         vec![words(&["-o", "create", IDENTITY_GROUP])]
@@ -310,5 +306,64 @@ fn a_mac_whose_directory_service_fails_or_gives_no_gid_makes_nothing() {
             .to_string(),
         "the line of the group hostkeeper-identity in the directory service does not give a gid"
     );
+    assert!(maker.calls().is_empty());
+}
+
+/// Proves a group file that cannot be read keeps the operating system's error as the source of the
+/// error, for a reader that walks the chain.
+#[test]
+fn a_group_file_that_cannot_be_read_carries_the_io_error_as_its_source() {
+    let scratch = scratch("ig-source");
+    let file = scratch.path().join("absent");
+    let tool = MakesGroup::answering(Ok(LaunchctlOutput::success("")));
+    let error = etc_group(&file, &tool).ensure().expect_err("a failure");
+    let source = std::error::Error::source(&error).expect("a source");
+    assert_eq!(source.to_string(), "No such file or directory (os error 2)");
+}
+
+/// Proves a tool that failed is run again once every `LOOKUP_EVERY` steps and not at the steps
+/// between, which look the group up as always and give the failure again, and that the group is
+/// found at once, without the tool, when it appears between two tries.
+///
+/// Catches: a group tool that runs at every 5 second step of a host where it cannot succeed.
+#[test]
+fn a_failing_group_tool_is_run_once_every_twelve_steps() {
+    let scratch = scratch("ig-backoff");
+    let file = group_file(&scratch, "root:x:0:\n");
+    let tool = MakesGroup::answering(Ok(LaunchctlOutput::exit(9, "groupadd: boom")));
+    let mut group = etc_group(&file, &tool);
+    let boom = "making the identity group failed with exit code 9: groupadd: boom";
+    for step in 1..=36 {
+        let error = group.ensure().expect_err("a failure");
+        assert_eq!(error.to_string(), boom, "step {step}");
+        let tries = [1, 13, 25].iter().filter(|&&at| at <= step).count();
+        assert_eq!(tool.calls().len(), tries, "step {step}");
+    }
+    assert_eq!(group.ensure().expect_err("a failure").to_string(), boom);
+    assert_eq!(tool.calls().len(), 4, "the step after 36 is the 37th");
+    fs::write(&file, ETC).expect("the group appears");
+    assert_eq!(group.ensure().expect("a gid"), 977);
+    assert_eq!(tool.calls().len(), 4);
+}
+
+/// Proves a Mac runs `dscl` once every `LOOKUP_EVERY` steps while the gid it gave is sound, uses
+/// the gid kept in between, and looks again at once after `forget`.
+#[test]
+fn a_mac_runs_dscl_once_every_twelve_steps_while_its_gid_is_kept() {
+    let dscl = FakeLaunchctl::new();
+    dscl.always(
+        &words(LIST),
+        Ok(LaunchctlOutput::success("hostkeeper-identity  601\n")),
+    );
+    let maker = MakesGroup::answering(Ok(LaunchctlOutput::success("")));
+    let mut group = mac(&dscl, &maker);
+    for step in 1..=36 {
+        assert_eq!(group.ensure().expect("a gid"), 601, "step {step}");
+        let runs = [1, 13, 25].iter().filter(|&&at| at <= step).count();
+        assert_eq!(dscl.calls().len(), runs, "step {step}");
+    }
+    group.forget();
+    assert_eq!(group.ensure().expect("a gid"), 601);
+    assert_eq!(dscl.calls().len(), 4);
     assert!(maker.calls().is_empty());
 }

@@ -60,7 +60,7 @@ use crate::console::{AGETTY, ConsoleIssue, ENROLLMENT_ISSUE};
 use crate::coordinator_store::CoordinatorFetcher;
 use crate::executor::{Daemon, Placement, Ports};
 use crate::handover::ProcessExec;
-use crate::host_identity::{HostIdentity, IDENTITY_DIR};
+use crate::host_identity::{HostIdentity, IDENTITY_DIR, IdentityOwner};
 use crate::identity_group::IdentityGroup;
 use crate::ipmi::DevIpmi;
 use crate::links::{DaemonLog, HostLink, Links};
@@ -124,7 +124,7 @@ pub const DEADMAN_POLL_SECS: u64 = 1;
 pub const PKI_DIR: &str = "/etc/updater/pki";
 /// The owner, and the group a copy for root alone has, of the host identity copy: uid and gid 0
 /// on every platform the daemon runs on (a Mac's `wheel` is gid 0).
-const ROOT: u32 = 0;
+const ROOT: IdentityOwner = IdentityOwner { uid: 0, gid: 0 };
 /// How long the enrollment loop's connection, handshake and each call to the coordinator may take.
 pub const ENROLL_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long `agetty --reload` may run: it only touches agetty's reload file and exits.
@@ -435,7 +435,6 @@ pub fn host_links(
         certs.clone(),
         PathBuf::from(IDENTITY_DIR),
         IdentityGroup::for_host(kind),
-        ROOT,
         ROOT,
     );
     let operator_keys = OperatorKeys::at_host(kind, log.clone());

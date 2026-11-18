@@ -324,15 +324,7 @@ fn host_params(host_id: &HostId, host_role_uri: &str) -> Result<CertificateParam
     params.is_ca = IsCa::ExplicitNoCa;
     params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
     params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
-    // A host id is a DNS label of ASCII letters, digits and hyphens, so it is always an IA5
-    // string; the name is added when it converts, which it always does.
-    params.subject_alt_names = std::iter::once(SanType::URI(uri))
-        .chain(
-            Ia5String::try_from(host_id.as_str())
-                .ok()
-                .map(SanType::DnsName),
-        )
-        .collect();
+    params.subject_alt_names = vec![SanType::URI(uri), dns_name(host_id.as_str())?];
     Ok(params)
 }
 

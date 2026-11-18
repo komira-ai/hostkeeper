@@ -386,13 +386,18 @@ fn run_daemon(
         );
         let started = start::startup_notifying(&settings, ports, own, notifier.as_ref())?;
         let links = if coordinator_link {
-            cli::host_links(
+            let mut links = cli::host_links(
                 started.daemon(),
                 &files,
                 flags.link.heartbeat_secs,
                 platform.kind,
                 watchdog,
-            )
+            );
+            // The shipped loops keep the host identity copy under the real
+            // /var/lib/hostkeeper/identity and make its group with the real group tool; this
+            // fixture's host must not.
+            links.identity = None;
+            links
         } else {
             file_links(
                 started.daemon(),
