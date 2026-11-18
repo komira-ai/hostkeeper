@@ -112,7 +112,7 @@ fn a_host_writes_the_facts_of_a_reply_and_reports_their_generation() {
     if hostkeeper_daemon::links::reads_private_repositories(hostkeeper_daemon::links::PLATFORM) {
         features.push(Feature::PrivateRepositoryV1);
     }
-    // A Linux daemon sets sshd up (`ssh-v1`); a Mac's setup is a later change.
+    // Every daemon sets sshd up (`ssh-v1`), a Mac's over Remote Login.
     if hostkeeper_daemon::links::sets_ssh_up(hostkeeper_daemon::links::PLATFORM) {
         features.push(Feature::SshV1);
     }
@@ -132,14 +132,25 @@ fn a_host_writes_the_facts_of_a_reply_and_reports_their_generation() {
     assert_eq!(dispatch.pending(), 1, "the order of the reply was started");
 }
 
-/// Proves a Linux daemon sets sshd up (and announces `ssh-v1`) and a Mac daemon does not, yet.
+/// Proves a daemon of each platform sets sshd up (and announces `ssh-v1`), a Mac's over Remote
+/// Login, and that the setup is built for each without running anything on the host.
+///
+/// Catches: a Mac daemon that announces no `ssh-v1` and drops every `SshAccess` it is sent.
 #[test]
-fn only_a_linux_daemon_sets_ssh_up() {
-    use hostkeeper_daemon::links::sets_ssh_up;
-    use hostkeeper_link::Platform;
-    assert!(sets_ssh_up(Platform::LinuxX86_64));
-    assert!(sets_ssh_up(Platform::LinuxArm64));
-    assert!(!sets_ssh_up(Platform::DarwinArm64));
+fn every_daemon_sets_ssh_up() {
+    use hostkeeper_daemon::links::{sets_ssh_up, ssh_setup};
+    use hostkeeper_link::{Log, Platform};
+    let log: std::sync::Arc<dyn Log> =
+        std::sync::Arc::new(hostkeeper_link::testing::RecordingLog::default());
+    for platform in [
+        Platform::LinuxX86_64,
+        Platform::LinuxArm64,
+        Platform::DarwinArm64,
+    ] {
+        assert!(sets_ssh_up(platform));
+        let setup = ssh_setup(platform, 0, &log).expect("a setup");
+        assert_eq!(setup.report(), None, "nothing is taken up before a record");
+    }
 }
 
 /// Proves facts from a coordinator that does not advertise `facts-v1` are not written, and the

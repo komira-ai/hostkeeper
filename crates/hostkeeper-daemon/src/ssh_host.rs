@@ -1,8 +1,9 @@
 //! The host the daemon sets sshd up on, behind a port: the sshd unit, `sshd -t` and `sshd -T`,
 //! the accounts and their groups, sshd's host keys and the list of revoked serials
-//! (docs/design/ssh-through-coordinator.md section 3). [`SystemHost`] is the real one, over the
-//! process port of `hostkeeper_observe` (`systemctl`, `sshd`, `ssh-keygen`, `id`) and the files
-//! of `/etc`; the setup's tests script the port.
+//! (docs/design/ssh-through-coordinator.md section 3). [`SystemHost`] is the real one of a Linux
+//! host, over the process port of `hostkeeper_observe` (`systemctl`, `sshd`, `ssh-keygen`, `id`)
+//! and the files of `/etc`; [`crate::ssh_host_mac::MacHost`] is a Mac's, which reuses its
+//! `sshd`, `ssh-keygen` and `id` steps. The setup's tests script the port.
 //!
 //! Nothing here stops a unit or edits a file of sshd's own (rule 6 and rule 1 of the design):
 //! the one change [`SshHost::start`] makes is to enable a disabled unit and start a stopped one.
@@ -17,6 +18,7 @@ use std::time::Duration;
 use hostkeeper_observe::CommandRunner;
 
 use crate::ssh_effective::Effective;
+use crate::ssh_files::Refused;
 
 /// The longest a program of the host is given.
 pub const RUN_DEADLINE: Duration = Duration::from_secs(20);
@@ -32,6 +34,9 @@ pub enum SshdUnit {
     /// The socket unit is the active one: sshd is started per connection and reads its
     /// configuration then, so there is nothing to reload.
     Socket,
+    /// A Mac's Remote Login: launchd starts sshd per connection, so as with a socket there is
+    /// nothing to reload, and starting it is the `launchctl` ensure step of the design.
+    Launchd,
 }
 
 /// Why there is no unit to use.
@@ -57,20 +62,31 @@ pub struct Account {
 
 /// The host, as the sshd setup needs it.
 pub trait SshHost: Send + Sync {
+    /// What the host must hold before anything is written, and the account that takes the
+    /// certificates: `requested` (the record's login user, possibly empty) or the host's own pick
+    /// for an empty one. `passwords_off` is whether the record asks to turn passwords off. A Linux
+    /// host holds nothing and answers `requested`; a Mac checks its `Include`, picks its
+    /// administrator and checks the access group.
+    ///
+    /// # Errors
+    /// The state the setup ends in, with its detail, when the host cannot take the access.
+    fn prepare(&self, requested: &str, passwords_off: bool) -> Result<String, Refused>;
+
     /// The unit that runs sshd, found without changing anything.
     ///
     /// # Errors
     /// Why there is none.
     fn unit(&self) -> Result<SshdUnit, UnitError>;
 
-    /// Enables the unit when it is disabled and starts it when it is stopped; stops nothing.
+    /// Enables the unit when it is disabled and starts it when it is stopped; stops nothing. On a
+    /// Mac, loads Remote Login's job if it is not loaded.
     ///
     /// # Errors
     /// What failed.
     fn start(&self, unit: &SshdUnit) -> Result<(), String>;
 
     /// Has sshd read its configuration again, keeping established sessions; nothing for a
-    /// socket.
+    /// socket or for launchd.
     ///
     /// # Errors
     /// What failed.
@@ -114,6 +130,7 @@ pub trait SshHost: Send + Sync {
 /// Where the real host's programs and files are.
 #[derive(Clone, Debug)]
 pub struct Tools {
+    /// Empty on a Mac, which has no `systemctl`.
     pub systemctl: PathBuf,
     pub sshd: PathBuf,
     pub ssh_keygen: PathBuf,
@@ -135,6 +152,18 @@ impl Tools {
             id: PathBuf::from("/usr/bin/id"),
             etc: PathBuf::from("/etc"),
             work: PathBuf::from("/etc/ssh/hostkeeper/.krl-work"),
+        }
+    }
+}
+
+impl Tools {
+    /// The places of a Mac: the same `sshd`, `ssh-keygen`, `id`, `/etc` and work directory, and no
+    /// `systemctl`.
+    #[must_use]
+    pub fn macos() -> Tools {
+        Tools {
+            systemctl: PathBuf::new(),
+            ..Tools::linux()
         }
     }
 }
@@ -206,6 +235,10 @@ impl SystemHost {
 }
 
 impl SshHost for SystemHost {
+    fn prepare(&self, requested: &str, _passwords_off: bool) -> Result<String, Refused> {
+        Ok(requested.to_owned())
+    }
+
     fn unit(&self) -> Result<SshdUnit, UnitError> {
         if self.show("ssh.socket")?.active {
             return Ok(SshdUnit::Socket);
@@ -241,7 +274,7 @@ impl SshHost for SystemHost {
 
     fn reload(&self, unit: &SshdUnit) -> Result<(), String> {
         match unit {
-            SshdUnit::Socket => Ok(()),
+            SshdUnit::Socket | SshdUnit::Launchd => Ok(()),
             SshdUnit::Service(name) => self
                 .succeed(&self.tools.systemctl, &["reload", name.as_str()])
                 .map(drop),

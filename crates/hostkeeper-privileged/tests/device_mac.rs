@@ -847,3 +847,170 @@ fn an_operator_key_logs_in_to_the_administrator_account_with_no_password() {
     assert_eq!(sink.report().digest, keys_digest(&[]));
     login(false);
 }
+
+/// Takes the SSH access away when dropped, so the runner's sshd is left as it was whether the
+/// test passed or not.
+struct RevertSshAtEnd<'a>(&'a dyn hostkeeper_link::SshSink);
+
+impl Drop for RevertSshAtEnd<'_> {
+    fn drop(&mut self) {
+        self.0.apply(&ssh_access(99, false, ""));
+    }
+}
+
+/// The SSH access of the tests: a CA public key (empty for none), the principal
+/// `hk-host-ci` and the empty login user, which on a Mac is the one local administrator.
+fn ssh_access(generation: u64, enabled: bool, ca: &str) -> hostkeeper_link::PushedSsh {
+    hostkeeper_link::PushedSsh {
+        generation,
+        enabled,
+        ca_public_keys: if ca.is_empty() {
+            Vec::new()
+        } else {
+            vec![ca.to_owned()]
+        },
+        login_user: String::new(),
+        principal: "hk-host-ci".to_owned(),
+        revoked_serials: Vec::new(),
+        password_auth: "keep".to_owned(),
+    }
+}
+
+/// Proves the daemon's SSH setup on a Mac, as the daemon runs it (`links::ssh_setup`): a CA made
+/// with `ssh-keygen` is applied (the state `applied`), a certificate for the one local
+/// administrator account with the principal `hk-host-ci` logs in over ssh to 127.0.0.1 with no
+/// password and no `authorized_keys` entry, a certificate with another principal is refused, and
+/// after the revert (state `disabled`) the files are gone, the same certificate is refused and
+/// Remote Login is still on. A Mac with no single administrator, no `Include` or an access group
+/// that does not admit the account says so and ends (the states are the design's, and the scripted
+/// tests hold each). Catches: a drop-in or principals file that a real sshd on macOS does not read
+/// or refuses, a state `applied` that is not a working certificate login, and a revert that leaves
+/// trust behind or turns Remote Login off.
+#[test]
+fn a_ca_certificate_logs_in_to_the_administrator_account_and_the_revert_removes_it() {
+    use hostkeeper_daemon::links::{PLATFORM, ssh_setup};
+    as_root();
+    let account = match mac_admin() {
+        Ok(account) => account,
+        Err(reason) => {
+            eprintln!("skipped: this Mac has no single local administrator ({reason})");
+            return;
+        }
+    };
+    let dir = scratch("ssh-ca-login");
+    let path = |name: &str| dir.path().join(name).to_str().expect("UTF-8").to_owned();
+    let keygen = |args: &[&str]| run("/usr/bin/ssh-keygen", args);
+    keygen(&[
+        "-q",
+        "-t",
+        "ed25519",
+        "-N",
+        "",
+        "-C",
+        "ci ca",
+        "-f",
+        &path("ca"),
+    ]);
+    keygen(&[
+        "-q",
+        "-t",
+        "ed25519",
+        "-N",
+        "",
+        "-C",
+        "ci user",
+        "-f",
+        &path("id"),
+    ]);
+    for (name, principal) in [("good", "hk-host-ci"), ("other", "hk-host-other")] {
+        fs::copy(
+            dir.path().join("id.pub"),
+            dir.path().join(format!("{name}.pub")),
+        )
+        .expect("a copy of the public key");
+        keygen(&[
+            "-q",
+            "-s",
+            &path("ca"),
+            "-I",
+            name,
+            "-n",
+            principal,
+            "-V",
+            "+1h",
+            &path(&format!("{name}.pub")),
+        ]);
+    }
+    let ca = fs::read_to_string(dir.path().join("ca.pub")).expect("the CA key");
+    let lines: std::sync::Arc<dyn hostkeeper_link::Log> = std::sync::Arc::new(Lines::default());
+    let setup = ssh_setup(PLATFORM, 0, &lines).expect("a Mac sets ssh up");
+    let _cleanup = RevertSshAtEnd(&*setup);
+
+    setup.apply(&ssh_access(1, true, ca.trim()));
+    let report = setup.report().expect("a report");
+    eprintln!("{report:?}");
+    if matches!(
+        report.state.as_str(),
+        "no_include" | "no_login_user" | "blocked_by_access_group"
+    ) {
+        eprintln!(
+            "skipped: this Mac is refused by its own state: {}",
+            report.state
+        );
+        return;
+    }
+    assert_eq!(
+        (report.state.as_str(), report.detail.as_str()),
+        ("applied", "")
+    );
+
+    let login = |certificate: &str| {
+        let certificate = format!("CertificateFile={}", path(certificate));
+        Command::new("/usr/bin/ssh")
+            .args([
+                "-i",
+                &path("id"),
+                "-o",
+                &certificate,
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "IdentitiesOnly=yes",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+                "-o",
+                "ConnectTimeout=30",
+                &format!("{}@127.0.0.1", account.name),
+                "/usr/bin/id",
+                "-u",
+            ])
+            .output()
+            .expect("ssh")
+    };
+    let good = login("good-cert.pub");
+    assert!(
+        good.status.success(),
+        "{}",
+        String::from_utf8_lossy(&good.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&good.stdout).trim(),
+        account.uid.to_string()
+    );
+    assert!(!login("other-cert.pub").status.success());
+
+    setup.apply(&ssh_access(2, false, ""));
+    assert_eq!(setup.report().expect("a report").state, "disabled");
+    assert!(!Path::new("/etc/ssh/sshd_config.d/10-hostkeeper.conf").exists());
+    assert!(!login("good-cert.pub").status.success());
+    let printed = launchctl()
+        .run(&["print".to_owned(), "system/com.openssh.sshd".to_owned()])
+        .expect("launchctl print");
+    assert_eq!(
+        printed.code,
+        Some(0),
+        "Remote Login stays on after the revert"
+    );
+}

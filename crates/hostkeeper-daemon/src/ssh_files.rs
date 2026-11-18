@@ -29,6 +29,8 @@ pub enum SshState {
     ReloadFailed,
     WouldLockOut,
     NoLoginUser,
+    NoInclude,
+    BlockedByAccessGroup,
     CertLoginNotPossible,
     ShadowedByStock,
     Unsupported,
@@ -47,6 +49,8 @@ impl SshState {
             SshState::ReloadFailed => "reload_failed",
             SshState::WouldLockOut => "would_lock_out",
             SshState::NoLoginUser => "no_login_user",
+            SshState::NoInclude => "no_include",
+            SshState::BlockedByAccessGroup => "blocked_by_access_group",
             SshState::CertLoginNotPossible => "cert_login_not_possible",
             SshState::ShadowedByStock => "shadowed_by_stock",
             SshState::Unsupported => "unsupported",
@@ -149,7 +153,7 @@ const KEY_TYPES: [&str; 5] = [
 const MAX_CA_KEYS: usize = 2;
 
 /// Whether `word` is made of the characters of an account name or a principal.
-fn plain(word: &str, longest: usize) -> bool {
+pub(crate) fn plain(word: &str, longest: usize) -> bool {
     !word.is_empty()
         && word.len() <= longest
         && !word.starts_with('-')

@@ -3,7 +3,7 @@
 What a Linux host's daemon does with the SSH access the coordinator sends (`ssh-v1`,
 `docs/design/ssh-through-coordinator.md` sections 3 and 6). Nothing in it runs until the coordinator
 sends a record (`HeartbeatResponse.ssh`) in a reply that advertises `ssh-v1`; today's coordinator
-sends none. A Mac's daemon does not announce `ssh-v1` yet.
+sends none. A Mac's daemon announces `ssh-v1` too and runs the same steps over Remote Login; what is different there is in `docs/macos.md`, "Remote Login for ssh through the coordinator", and adds the states `no_include` and `blocked_by_access_group`.
 
 ## What the daemon writes
 
@@ -64,14 +64,15 @@ the daemon.
 
 `HeartbeatRequest.ssh` (`SshReport`): `applied_generation` (the generation last taken up,
 whatever it came to), `state` (`applied`, `disabled`, `blocked_by_allow_list`, `sshd_missing`,
-`config_invalid`, `reload_failed`, `would_lock_out`, `no_login_user`, `cert_login_not_possible`,
-`shadowed_by_stock`, `unsupported`), `host_key_fingerprints` (`SHA256:` of the files
+`no_include`, `config_invalid`, `reload_failed`, `would_lock_out`, `no_login_user`,
+`cert_login_not_possible`, `shadowed_by_stock`, `blocked_by_access_group`, `unsupported`), `host_key_fingerprints` (`SHA256:` of the files
 `/etc/ssh/ssh_host_*_key.pub`) and `detail` (the keyword or class that failed, never an account name
 or a secret). `sshd_missing` is a host with neither unit, `unsupported` one with no `systemctl` or
-with a masked unit. The daemon sends nothing before it has taken up a first record.
+with a masked unit, and on a Mac `password_auth = off`. The daemon sends nothing before it has taken up a first record.
 
 ## Not built here
 
-Real sshd is not run by this change's tests: its port (`SshHost`) is scripted. The states
-`needs_full_disk_access`, `no_include` and `blocked_by_access_group` of the design are the Mac's
-(C3m). The coordinator's side of the heartbeat is in [ssh-ca.md](ssh-ca.md) ("What hosts are sent").
+A real sshd runs in the root tests (`crates/hostkeeper-privileged/tests/ssh_root.rs` on Linux, the
+certificate test of `device_mac.rs` on a Mac); every other test scripts its port (`SshHost`). The
+coordinator's side of the heartbeat is in [ssh-ca.md](ssh-ca.md) ("What hosts are sent"). The host key
+fingerprints of the enrollment request are not read yet.

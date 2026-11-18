@@ -600,30 +600,41 @@ The digest of the release's pkg is the line of `SHA256SUMS`, the signed file's.
 
 ### Remote Login for ssh through the coordinator
 
-`ssh_macos::MacSsh::prepare` is what a Mac must hold before the daemon sets up its sshd to trust
-the coordinator's SSH user CA (docs/design/ssh-through-coordinator.md, sections 3 and 4). It
-checks, in this order, and changes nothing until the last step:
+A Mac's daemon announces `ssh-v1` and takes up the coordinator's SSH access with the same
+`SshSetup` flow as a Linux host (docs/design/ssh-through-coordinator.md, section 3): the same
+three files (`/etc/ssh/sshd_config.d/10-hostkeeper.conf`, and `user_ca.pub` and
+`principals.<login user>` in `/etc/ssh/hostkeeper`) and the same rules. What a Mac does differently
+is `ssh_host_mac::MacHost`. Before any file is written, in this order:
 
-1. `/etc/ssh/sshd_config` has an `Include` of `/etc/ssh/sshd_config.d/*` before any `Match` line.
-   The daemon never edits the file, which Apple owns; without it the state is `no_include` and the
-   Mac stays untrusted.
-2. The login user: the one the coordinator names, else the single local administrator (user id of
-   501 or more, member of `admin`, not hidden), else `no_login_user`. A name that is not a plain
-   account name (letters, digits, `.`, `_`, `-`) is refused, since it becomes the name of a file.
+1. `/etc/ssh/sshd_config` has an `Include` of `/etc/ssh/sshd_config.d/*` before any `Match` line,
+   checked at each apply. The daemon never edits the file, which Apple owns; without it the state
+   is `no_include` and the Mac stays untrusted.
+2. The login user: the one the coordinator names (`--ssh-login-user-macos`, which must be an
+   account), else the single local administrator (user id of 501 or more, member of `admin`, not
+   hidden, the rule of the operator keys); with none or more than one, or a named user that does
+   not exist, the state is `no_login_user`. A name that is not a plain account name (letters,
+   digits, `.`, `_`, `-`) is `config_invalid`, since it becomes the name of a file.
 3. When the group `com.apple.access_ssh` exists, the login user is in it, or the group nests
-   `admin` and the login user is an administrator; otherwise `blocked_by_access_group`. The
-   daemon never edits a group.
-4. Remote Login is on. If `systemsetup -getremotelogin` says Off, the daemon runs
-   `systemsetup -setremotelogin on` and reads it back. The daemon never turns Remote Login off, so
-   reverting the access leaves sshd as it found it.
+   `admin` and the login user is an administrator; otherwise the state is
+   `blocked_by_access_group`. The daemon never edits a group: add the account to the group by
+   hand (or by device management) and the next record is taken up.
+4. `password_auth = off` is `unsupported`: a Mac has no shadow file to prove that no account is
+   left without another way in.
 
-macOS 13 and later refuse `systemsetup -setremotelogin` to a process without Full Disk Access
-(the tool says "requires Full Disk Access privileges"). The daemon then reports
-`needs_full_disk_access` and changes nothing, until the Full Disk Access configuration profile
-`docs/deploy/mac/hostkeeper-full-disk-access.mobileconfig` (added by the design's PR, komira-ai/hostkeeper#394,
-and corrected by #400, which names the program by its installed path) is pushed to the Mac. This
-change adds no second copy of that profile. The tool's text and whether the grant reaches `systemsetup`
-as a child of the daemon are not measured here: they are the measurements of build item C0 of the design.
+Remote Login is then ensured, by `launchctl` and not by `systemsetup`, which needs Full Disk
+Access: `launchctl print system/com.openssh.sshd`, and only when the job is not loaded, `enable`
+and `bootstrap` of `/System/Library/LaunchDaemons/ssh.plist` and `print` again. When that fails
+the state is `reload_failed` with `remote_login` as the detail, and no file is written. It runs at
+each apply, and so when the daemon starts and takes up the coordinator's record again: a Mac that
+lost Remote Login gets it back, with no file rewritten when the files are already as asked. launchd
+starts sshd per connection, so there is no reload: sshd reads the files at each start, and the
+check is `sshd -t` and the banner.
+
+A revert (`enabled = false`) removes the files and leaves Remote Login on, since turning it off
+could cut a login that came by `authorized_keys`; the daemon never runs `launchctl disable` or
+`bootout`. The test `device_mac` of `hostkeeper-privileged` (the `macos-device` job of
+`release.yml`) applies a CA through this flow on the Mac, logs in over ssh with a certificate
+for the administrator account, and reverts.
 
 ### Boot id
 

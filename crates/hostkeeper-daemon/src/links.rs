@@ -70,7 +70,8 @@ use crate::node::NodeState;
 use crate::notify::Watchdog;
 use crate::repository_push::RepositoryPush;
 use crate::ssh_files::SshPaths;
-use crate::ssh_host::{SystemHost, Tools};
+use crate::ssh_host::{SshHost, SystemHost, Tools};
+use crate::ssh_host_mac::MacHost;
 use crate::ssh_setup::SshSetup;
 
 pub use hostkeeper_enroll::RenewalState;
@@ -220,17 +221,7 @@ impl Links {
                 ))),
                 remote_login_probe: self.remote_login_probe.clone(),
                 operator_keys: self.operator_keys.clone(),
-                ssh: sets_ssh_up(PLATFORM).then(|| {
-                    Arc::new(SshSetup::new(
-                        Arc::new(SystemHost::new(
-                            Arc::new(ProcessRunner::new(MAX_STDOUT)),
-                            Tools::linux(),
-                        )),
-                        SshPaths::linux(),
-                        rustix::process::geteuid().as_raw(),
-                        Arc::clone(&self.log),
-                    )) as Arc<dyn SshSink>
-                }),
+                ssh: ssh_setup(PLATFORM, rustix::process::geteuid().as_raw(), &self.log),
             },
         )
     }
@@ -311,10 +302,31 @@ pub const fn reads_private_repositories(platform: Platform) -> bool {
 }
 
 /// Whether a daemon of `platform` sets sshd up to trust the coordinator's SSH user CA
-/// (`ssh-v1`): a Linux daemon does; a Mac's setup is a later change
-/// (docs/design/ssh-through-coordinator.md, C3m), so it announces nothing of it.
+/// (`ssh-v1`): every platform's daemon does, a Linux one over systemd's or OpenRC's sshd and a
+/// Mac's over Remote Login (docs/design/ssh-through-coordinator.md, section 3).
 pub const fn sets_ssh_up(platform: Platform) -> bool {
-    matches!(platform, Platform::LinuxX86_64 | Platform::LinuxArm64)
+    matches!(
+        platform,
+        Platform::LinuxX86_64 | Platform::LinuxArm64 | Platform::DarwinArm64
+    )
+}
+
+/// The sshd setup of a daemon of `platform`, writing as `owner`: over the Linux host on Linux and
+/// over the Mac's ([`MacHost`]) on a Mac; none where [`sets_ssh_up`] is false.
+pub fn ssh_setup(platform: Platform, owner: u32, log: &Arc<dyn Log>) -> Option<Arc<dyn SshSink>> {
+    let runner = Arc::new(ProcessRunner::new(MAX_STDOUT));
+    let host: Arc<dyn SshHost> = match platform {
+        Platform::DarwinArm64 => Arc::new(MacHost::system(runner, Arc::clone(log))),
+        _ => Arc::new(SystemHost::new(runner, Tools::linux())),
+    };
+    sets_ssh_up(platform).then(|| {
+        Arc::new(SshSetup::new(
+            host,
+            SshPaths::linux(),
+            owner,
+            Arc::clone(log),
+        )) as Arc<dyn SshSink>
+    })
 }
 
 /// The platform this daemon was built for.

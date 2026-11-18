@@ -65,6 +65,10 @@ impl FakeHost {
 }
 
 impl SshHost for FakeHost {
+    fn prepare(&self, requested: &str, _passwords_off: bool) -> Result<String, Refused> {
+        Ok(requested.to_owned())
+    }
+
     fn unit(&self) -> Result<SshdUnit, UnitError> {
         self.lock().unit.clone()
     }

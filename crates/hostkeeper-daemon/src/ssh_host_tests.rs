@@ -580,3 +580,19 @@ fn the_linux_tools_are_the_distros_places() {
     assert_eq!(tools.etc, Path::new("/etc"));
     assert!(tools.work.starts_with("/etc/ssh/hostkeeper"));
 }
+
+/// Proves a Linux host holds nothing before the files are written and answers the record's login
+/// user as it is (an empty one stays empty for the setup to refuse), and that a Mac's launchd unit
+/// is neither started nor reloaded by the Linux steps: no program runs.
+///
+/// Catches: a Linux host that picks its own login user, or runs `systemctl` for a launchd unit.
+#[test]
+fn a_linux_host_prepares_nothing_and_has_no_step_for_a_launchd_unit() {
+    let runner = Runner::new(|_| ok(""));
+    let host = host(&runner, Path::new("/nowhere"));
+    assert_eq!(host.prepare("deploy", true), Ok("deploy".to_owned()));
+    assert_eq!(host.prepare("", false), Ok(String::new()));
+    assert_eq!(host.start(&SshdUnit::Launchd), Ok(()));
+    assert_eq!(host.reload(&SshdUnit::Launchd), Ok(()));
+    assert!(runner.lines().is_empty());
+}

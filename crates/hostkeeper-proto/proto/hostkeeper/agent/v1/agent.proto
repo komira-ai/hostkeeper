@@ -231,8 +231,8 @@ message HeartbeatRequest {
 message SshReport {
   // The `SshAccess.generation` the daemon last applied or refused; 0 when it has seen none.
   uint64 applied_generation = 1;
-  // `applied`, `disabled`, `needs_full_disk_access`, `blocked_by_allow_list`, `sshd_missing`,
-  // `no_include`, `config_invalid`, `reload_failed`, `would_lock_out`, `no_login_user`,
+  // `applied`, `disabled`, `blocked_by_allow_list`, `sshd_missing`, `no_include`,
+  // `config_invalid`, `reload_failed`, `would_lock_out`, `no_login_user`,
   // `cert_login_not_possible`, `shadowed_by_stock`, `blocked_by_access_group` or `unsupported`:
   // a closed set, at most 32 bytes. A reader counts any other as `other`.
   string state = 2;

@@ -1,6 +1,8 @@
 //! The daemon sets sshd up to trust the coordinator's SSH user CA (`ssh-v1`;
 //! docs/design/ssh-through-coordinator.md sections 3 and 6): the [`SshSink`] of the heartbeat
-//! loop on a Linux host.
+//! loop, on a Linux host over [`crate::ssh_host::SystemHost`] and on a Mac over
+//! [`crate::ssh_host_mac::MacHost`]; the steps are the same, and what differs is behind
+//! [`SshHost`].
 //!
 //! A record ([`PushedSsh`]) is taken up when its generation differs from the one the daemon last
 //! took up, or when the files of an applied record are no longer what it asks for (a drift is
@@ -17,19 +19,22 @@
 //!    the drop-in's; every other account's settings must be what they were
 //!    ([`crate::ssh_effective`]). A failure puts the files back.
 //! 4. A reload (never a restart) follows a change, and then a connection reads the banner;
-//!    without one the files are put back and sshd reloaded again. A socket-activated sshd has no
-//!    reload, only the check.
+//!    without one the files are put back and sshd reloaded again. A socket-activated sshd, and a
+//!    Mac's, which launchd starts per connection, has no reload, only the check.
 //! 5. Passwords stay as found, unless the record says `off` and every account with a password
-//!    has a key path too (or is the login user).
-//! 6. A stopped sshd is started and a disabled unit enabled; nothing is stopped, and the unit that
-//!    listens is never switched.
-//! 7. `enabled = false` removes the files and reloads; sshd is left running.
+//!    has a key path too (or is the login user). A Mac has no shadow file to read, so `off` is
+//!    `unsupported` there and nothing is written.
+//! 6. A stopped sshd is started and a disabled unit enabled (a Mac's Remote Login is loaded with
+//!    `launchctl`, `remote_login` in the detail when that fails); nothing is stopped, and the unit
+//!    that listens is never switched.
+//! 7. `enabled = false` removes the files and reloads; sshd is left running (a Mac's Remote Login
+//!    stays on).
 //! 8. An allow or deny list that excludes the login user stops the setup before any change.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use hostkeeper_link::{Log, PushedSsh, SshReport, SshSink};
+use hostkeeper_link::{Log, PASSWORD_OFF, PushedSsh, SshReport, SshSink};
 
 use crate::ssh_effective::{Effective, Failing, Ours, PASSWORD_KEYWORDS};
 use crate::ssh_files::{
@@ -159,7 +164,13 @@ impl SshSetup {
 
     /// Takes up an enabled record.
     fn enable(&self, access: &PushedSsh, held: &mut Held) -> Result<(), Refused> {
-        let plan = plan(access)?;
+        let login_user = self
+            .host
+            .prepare(&access.login_user, access.password_auth == PASSWORD_OFF)?;
+        let plan = plan(&PushedSsh {
+            login_user,
+            ..access.clone()
+        })?;
         let unit = self.host.unit().map_err(|why| match why {
             UnitError::Missing => Refused::new(SshState::SshdMissing, "unit"),
             UnitError::Masked => Refused::new(SshState::Unsupported, "unit_masked"),
@@ -182,9 +193,13 @@ impl SshSetup {
         {
             return Err(Refused::new(SshState::WouldLockOut, "account_without_key"));
         }
+        let step = match unit {
+            SshdUnit::Launchd => "remote_login",
+            _ => "start",
+        };
         self.host
             .start(&unit)
-            .map_err(|_| Refused::new(SshState::ReloadFailed, "start"))?;
+            .map_err(|_| Refused::new(SshState::ReloadFailed, step))?;
         let revoked =
             if held.serials.as_ref() == Some(&plan.serials) && self.paths.revoked().is_file() {
                 None
