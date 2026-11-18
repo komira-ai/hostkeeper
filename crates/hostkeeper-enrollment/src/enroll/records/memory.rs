@@ -134,6 +134,18 @@ impl Records for MemoryRecords {
             .collect())
     }
 
+    fn deny_ids(&self) -> Result<Vec<HostId>, StoreError> {
+        Ok(self
+            .step("deny ids")?
+            .records
+            .keys()
+            .filter_map(|key| match key {
+                RecordKey::Deny(host) => Some(host.clone()),
+                _ => None,
+            })
+            .collect())
+    }
+
     fn deny(&self, host: &HostId) -> Result<Option<pb::Deny>, StoreError> {
         Ok(
             match self.step("deny")?.get(&RecordKey::Deny(host.clone())) {
@@ -197,6 +209,16 @@ impl Records for MemoryRecords {
     fn set_running(&self, host: &pb::Host, running: pb::Running) -> Result<(), StoreError> {
         let mut host = host.clone();
         host.running = Some(running);
+        self.commit(&[Record::Host(host)])
+    }
+
+    fn set_identity_approval(
+        &self,
+        host: &pb::Host,
+        approval: pb::IdentityApproval,
+    ) -> Result<(), StoreError> {
+        let mut host = host.clone();
+        host.identity_approval = Some(approval);
         self.commit(&[Record::Host(host)])
     }
 

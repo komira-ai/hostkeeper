@@ -36,6 +36,10 @@ export interface Client {
     remove(request: hostkeeper_operator_v1.RemoveHostGroupRequest): Promise<hostkeeper_operator_v1.RemoveHostGroupResponse>;
     move(request: hostkeeper_operator_v1.MoveHostRequest): Promise<hostkeeper_operator_v1.MoveHostResponse>;
   };
+  readonly hostIdentity: {
+    get(request: hostkeeper_operator_v1.GetHostIdentityRequest): Promise<hostkeeper_operator_v1.GetHostIdentityResponse>;
+    approve(request: hostkeeper_operator_v1.ApproveHostIdentityRequest): Promise<hostkeeper_operator_v1.ApproveHostIdentityResponse>;
+  };
   readonly hosts: {
     list(request: hostkeeper_operator_v1.ListHostsRequest): Promise<hostkeeper_operator_v1.ListHostsResponse>;
     get(request: hostkeeper_operator_v1.GetHostRequest): Promise<hostkeeper_operator_v1.GetHostResponse>;
@@ -136,13 +140,7 @@ export namespace hostkeeper_agent_v1 {
   export interface DeferredReport { target?: string; reason?: string; retryAfterSecs?: string; }
   export interface DriftReport { found?: string; recorded?: string; }
   export type FailureClass = "FAILURE_CLASS_UNSPECIFIED" | "FAILURE_CLASS_RELEASE" | "FAILURE_CLASS_ENVIRONMENT";
-  export type FailurePhase =
-    | "FAILURE_PHASE_UNSPECIFIED"
-    | "FAILURE_PHASE_BEFORE_COMMIT"
-    | "FAILURE_PHASE_GATE_RELEASE"
-    | "FAILURE_PHASE_GATE_ENVIRONMENT"
-    | "FAILURE_PHASE_AFTER_COMMIT"
-    | "FAILURE_PHASE_HALT";
+  export type FailurePhase = "FAILURE_PHASE_UNSPECIFIED" | "FAILURE_PHASE_BEFORE_COMMIT" | "FAILURE_PHASE_GATE_RELEASE" | "FAILURE_PHASE_GATE_ENVIRONMENT" | "FAILURE_PHASE_AFTER_COMMIT" | "FAILURE_PHASE_HALT";
   export type Health = "HEALTH_UNSPECIFIED" | "HEALTH_HEALTHY" | "HEALTH_UNHEALTHY" | "HEALTH_ABSENT";
   export interface HeartbeatRequest {
     platform?: hostkeeper_agent_v1.Platform;
@@ -159,6 +157,7 @@ export namespace hostkeeper_agent_v1 {
     factsGeneration?: string;
     remoteLoginProbe?: hostkeeper_agent_v1.RemoteLoginProbe;
     operatorKeys?: hostkeeper_agent_v1.OperatorKeysReport;
+    serviceIdentities?: hostkeeper_agent_v1.ServiceIdentityReport[];
   }
   export interface OperatorKeysRefusal { digest?: string; reason?: string; }
   export interface OperatorKeysReport { digest?: string; refused?: hostkeeper_agent_v1.OperatorKeysRefusal; failed?: string; }
@@ -185,6 +184,7 @@ export namespace hostkeeper_agent_v1 {
     installer?: string;
     drift?: hostkeeper_agent_v1.DriftReport;
   }
+  export interface ServiceIdentityReport { service?: string; notAfterUnix?: string; lastError?: string; }
   export interface StepRun { name?: string; attempt?: number; }
   export type TrustedRootReason = "TRUSTED_ROOT_REASON_UNSPECIFIED" | "TRUSTED_ROOT_REASON_NONE" | "TRUSTED_ROOT_REASON_STALE" | "TRUSTED_ROOT_REASON_MISSING" | "TRUSTED_ROOT_REASON_UNPARSEABLE";
   export interface UpdateResult {
@@ -256,6 +256,8 @@ export namespace hostkeeper_operator_v1 {
   export type AlertSeverity = "ALERT_SEVERITY_UNSPECIFIED" | "ALERT_SEVERITY_CRITICAL" | "ALERT_SEVERITY_WARNING";
   export interface ApiTokenInfo { name?: string; source?: hostkeeper_operator_v1.ApiTokenSource; createdBy?: string; createdUnix?: string; }
   export type ApiTokenSource = "API_TOKEN_SOURCE_UNSPECIFIED" | "API_TOKEN_SOURCE_STORE" | "API_TOKEN_SOURCE_TOKENS_FILE";
+  export interface ApproveHostIdentityRequest { nodeId?: string; keySha256?: string; reason?: string; }
+  export interface ApproveHostIdentityResponse { nodeId?: string; approval?: hostkeeper_operator_v1.IdentityApprovalInfo; }
   export interface ApproveRequest {
     requestId?: string;
     keySha256?: string;
@@ -276,17 +278,7 @@ export namespace hostkeeper_operator_v1 {
   export interface AssignResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface AssignedHost { nodeId?: string; role?: string; installedVersion?: string; minVersion?: string; holds?: hostkeeper_operator_v1.HoldMark[]; }
   export interface Assignment { role?: string; host?: string; removed?: boolean; }
-  export interface AuditEntry {
-    seq?: string;
-    by?: hostkeeper_operator_v1.Actor;
-    action?: string;
-    service?: string;
-    nodeId?: string;
-    reason?: string;
-    atUnix?: string;
-    byName?: string;
-    hostGroup?: string;
-  }
+  export interface AuditEntry { seq?: string; by?: hostkeeper_operator_v1.Actor; action?: string; service?: string; nodeId?: string; reason?: string; atUnix?: string; byName?: string; hostGroup?: string; }
   export interface Canary { count?: number; }
   export interface ClearHaltRequest { service?: string; reason?: string; }
   export interface ClearHaltResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
@@ -339,17 +331,7 @@ export namespace hostkeeper_operator_v1 {
   }
   export interface EnableUserRequest { name?: string; }
   export interface EnableUserResponse { user?: hostkeeper_operator_v1.UserInfo; }
-  export interface EnrollmentRequest {
-    serial?: string;
-    udid?: string;
-    product?: string;
-    reason?: string;
-    firstUnix?: string;
-    lastUnix?: string;
-    count?: number;
-    inAbm?: boolean;
-    confirmedUntilUnix?: string;
-  }
+  export interface EnrollmentRequest { serial?: string; udid?: string; product?: string; reason?: string; firstUnix?: string; lastUnix?: string; count?: number; inAbm?: boolean; confirmedUntilUnix?: string; }
   export type EnrollmentRequestState = "ENROLLMENT_REQUEST_STATE_UNSPECIFIED" | "ENROLLMENT_REQUEST_STATE_PENDING" | "ENROLLMENT_REQUEST_STATE_UNENROLLED";
   export interface ExcludeRequest { service?: string; nodeId?: string; reason?: string; abandon?: boolean; }
   export interface ExcludeResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
@@ -412,6 +394,15 @@ export namespace hostkeeper_operator_v1 {
   export interface GetAbmPublicKeyResponse { certificatePem?: string; fingerprintSha256?: string; created?: boolean; }
   export interface GetHostGroupRequest { hostGroup?: string; limit?: number; pageToken?: string; }
   export interface GetHostGroupResponse { hostGroup?: hostkeeper_operator_v1.HostGroupState; nodeIds?: string[]; nextPageToken?: string; }
+  export interface GetHostIdentityRequest { nodeId?: string; }
+  export interface GetHostIdentityResponse {
+    nodeId?: string;
+    assurance?: hostkeeper_operator_v1.HostAssurance;
+    keySha256?: string;
+    allowed?: boolean;
+    approval?: hostkeeper_operator_v1.IdentityApprovalInfo;
+    denied?: boolean;
+  }
   export interface GetHostRequest { nodeId?: string; }
   export interface GetHostResponse { host?: hostkeeper_operator_v1.Host; }
   export interface GetLayoutRequest {
@@ -463,6 +454,7 @@ export namespace hostkeeper_operator_v1 {
     repositories?: hostkeeper_operator_v1.HostRepositories;
     hostGroup?: string;
   }
+  export type HostAssurance = "HOST_ASSURANCE_UNSPECIFIED" | "HOST_ASSURANCE_OPERATOR" | "HOST_ASSURANCE_AUTO";
   export interface HostCounts {
     missing?: number;
     absent?: number;
@@ -493,6 +485,7 @@ export namespace hostkeeper_operator_v1 {
     stage?: number;
     order?: hostkeeper_operator_v1.CurrentOrder;
   }
+  export interface IdentityApprovalInfo { approver?: string; approvedUnix?: string; }
   export interface IncludeRequest { service?: string; nodeId?: string; }
   export interface IncludeResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export type InventoryMatch = "INVENTORY_MATCH_UNSPECIFIED" | "INVENTORY_MATCH_MATCHED" | "INVENTORY_MATCH_UNMATCHED" | "INVENTORY_MATCH_AMBIGUOUS";
@@ -952,6 +945,8 @@ export namespace hostkeeper_release_v1 {
     minHostkeeper?: string;
     containers?: hostkeeper_release_v1.Container[];
     installerBounds?: hostkeeper_release_v1.InstallerBounds;
+    identity?: boolean;
+    identityAccount?: string;
   }
   export interface Param { text?: string; integer?: string; float?: number | "NaN" | "Infinity" | "-Infinity"; flag?: boolean; }
   export interface Place { kind?: string; source?: string; path?: string; }

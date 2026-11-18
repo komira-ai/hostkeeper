@@ -52,11 +52,6 @@ pub mod pb {
 
 /// One record a commit writes.
 #[derive(Clone, Debug, PartialEq)]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "a commit holds a handful of records, built and dropped at once; boxing the request \
-              would add an allocation and a dereference at every use for no memory that matters"
-)]
 pub enum Record {
     /// Kept under its `request_id`.
     Request(pb::Request),
@@ -178,6 +173,12 @@ pub trait Records: Send + Sync + fmt::Debug {
     /// [`StoreError`] when they cannot be listed.
     fn host_ids(&self) -> Result<Vec<HostId>, StoreError>;
 
+    /// The ids of every deny row, sorted: a host id with a row in any state, cleared ones too.
+    ///
+    /// # Errors
+    /// [`StoreError`] when they cannot be listed.
+    fn deny_ids(&self) -> Result<Vec<HostId>, StoreError>;
+
     /// The deny row of `host`.
     ///
     /// # Errors
@@ -223,6 +224,17 @@ pub trait Records: Send + Sync + fmt::Debug {
     /// # Errors
     /// [`StoreError`] when it cannot be written.
     fn set_running(&self, host: &pb::Host, running: pb::Running) -> Result<(), StoreError>;
+
+    /// Writes `host`, as the store loaded it, with `approval` as an operator's approval of its key
+    /// for service identity.
+    ///
+    /// # Errors
+    /// [`StoreError`] when it cannot be written.
+    fn set_identity_approval(
+        &self,
+        host: &pb::Host,
+        approval: pb::IdentityApproval,
+    ) -> Result<(), StoreError>;
 
     /// Writes `host`, as the store loaded it, marked duplicate.
     ///

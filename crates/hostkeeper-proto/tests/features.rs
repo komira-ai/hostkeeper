@@ -41,6 +41,7 @@ fn feature_names_are_pinned() {
             "operator-keys-v1",
             "private-repository-v1",
             "repositories-v1",
+            "service-identity-v1",
             "target-v1",
             "verdict-acks-v1"
         ]

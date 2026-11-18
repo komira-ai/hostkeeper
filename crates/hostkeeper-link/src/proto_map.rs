@@ -90,6 +90,7 @@ pub(crate) fn heartbeat(beat: &Heartbeat) -> Result<pb::HeartbeatRequest, Unsend
         facts_generation: beat.facts_generation,
         remote_login_probe: beat.remote_login_probe.as_ref().map(remote_login_probe),
         operator_keys: beat.operator_keys.as_ref().map(keys_report),
+        service_identities: Vec::new(),
     })
 }
 

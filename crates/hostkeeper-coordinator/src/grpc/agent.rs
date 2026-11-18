@@ -147,4 +147,19 @@ impl Api for AgentService {
             .map(Response::new)
             .map_err(|why| why.status())
     }
+
+    // The two methods below are answered `UNIMPLEMENTED` until their handlers are wired in.
+    async fn issue_service_certificate(
+        &self,
+        _request: Request<proto::IssueServiceCertificateRequest>,
+    ) -> Result<Response<proto::IssueServiceCertificateResponse>, Status> {
+        Err(Status::unimplemented(""))
+    }
+
+    async fn list_deny(
+        &self,
+        _request: Request<proto::ListDenyRequest>,
+    ) -> Result<Response<proto::ListDenyResponse>, Status> {
+        Err(Status::unimplemented(""))
+    }
 }

@@ -634,6 +634,8 @@ impl EnrollmentStore {
             first_serving_unix: None,
             // ... and for what its daemon says it runs.
             running: None,
+            // ... and for an operator's approval of this key for service identity.
+            identity_approval: None,
             // A renewal keeps the host's group (the one it names, which is the same), the move
             // under way and its facts' generation.
             host_group: host_group.clone(),

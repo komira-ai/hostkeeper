@@ -209,6 +209,22 @@ impl Coordinator for Double {
             })
             .map(Response::new)
     }
+
+    async fn issue_service_certificate(
+        &self,
+        _request: Request<pb::IssueServiceCertificateRequest>,
+    ) -> Result<Response<pb::IssueServiceCertificateResponse>, Status> {
+        Err(Status::unimplemented(
+            "this coordinator issues no service certificate",
+        ))
+    }
+
+    async fn list_deny(
+        &self,
+        _request: Request<pb::ListDenyRequest>,
+    ) -> Result<Response<pb::ListDenyResponse>, Status> {
+        Err(Status::unimplemented("this coordinator lists no deny"))
+    }
 }
 
 /// A loopback gRPC server with TLS serving a [`Double`]; it stops when dropped, with its runtime.

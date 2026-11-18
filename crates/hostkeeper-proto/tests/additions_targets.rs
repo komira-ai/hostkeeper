@@ -72,6 +72,8 @@ const SHAPE: &[(&str, &[&str])] = &[
             "min_hostkeeper 7 string -",
             "containers 8 Container repeated",
             "installer_bounds 9 InstallerBounds -",
+            "identity 10 bool optional",
+            "identity_account 11 string optional",
         ],
     ),
     (
@@ -298,6 +300,8 @@ fn manifest() -> release::Manifest {
             activate_secs: 120,
             remove_secs: 60,
         }),
+        identity: Some(true),
+        identity_account: Some("tierstore".to_owned()),
     }
 }
 

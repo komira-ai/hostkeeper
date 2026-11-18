@@ -289,6 +289,8 @@ pub fn of_entry(
         health_url: manifest.health_url.clone(),
         files: Vec::new(),
         params,
+        identity: manifest.identity == Some(true),
+        identity_account: manifest.identity_account.clone(),
     })
 }
 

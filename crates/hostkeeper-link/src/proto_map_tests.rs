@@ -276,6 +276,7 @@ fn a_heartbeat_with_every_fact_maps_to_the_request_field_for_field() {
             facts_generation: None,
             remote_login_probe: None,
             operator_keys: None,
+            service_identities: Vec::new(),
         }
     );
 }

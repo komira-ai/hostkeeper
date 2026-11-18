@@ -343,6 +343,8 @@ const RPCS: [(&str, &[&str]); 7] = [
             "Enroll(EnrollRequest) EnrollResponse",
             "Poll(PollRequest) PollResponse",
             "Renew(RenewRequest) RenewResponse",
+            "IssueServiceCertificate(IssueServiceCertificateRequest) IssueServiceCertificateResponse",
+            "ListDeny(ListDenyRequest) ListDenyResponse",
         ],
     ),
     (
@@ -431,6 +433,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 39] = [
             ("facts_generation", 12),
             ("remote_login_probe", 14),
             ("operator_keys", 15),
+            ("service_identities", 16),
         ],
     ),
     (
@@ -736,6 +739,10 @@ fn wire_names_are_pinned() {
                 "unknown_request",
                 "bad_signature",
                 "renewal_not_allowed",
+                "service_not_assigned",
+                "identity_not_approved",
+                "invalid_service",
+                "store_failed",
             ],
         ),
         (

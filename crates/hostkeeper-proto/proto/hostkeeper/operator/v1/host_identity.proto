@@ -1,0 +1,119 @@
+// hostkeeper.operator.v1: the `HostIdentity` service of the operator API and its refusals
+// (`HostIdentityRefusal`): whether a host may get certificates for the services it runs with an
+// identity, and an operator's approval of a host for it (docs/design/service-identity.md). The rest
+// of the package, `Hosts` and `HostsRefusal`, `Enrollment` and `EnrollmentRefusal`
+// (enrollment.proto) and `Audit` and `AuditRefusal` among it, is operator.proto; this file is
+// the same package and API, kept apart so that each file stays short.
+//
+// A host an operator approved by hand (`Enrollment.Approve`) has the assurance `operator`: the
+// coordinator signs certificates for its services with an identity. A host the coordinator
+// approved itself, by an inventory record, has the assurance `auto`: it gets none until an
+// operator approves its current key with `HostIdentity.Approve`, naming the key's SHA-256. A new
+// key (a replace, a re-enrollment) needs a new approval.
+//
+// Served by: the coordinator, on its control listener, as operator.proto says.
+//
+// Authentication: `HostIdentity` takes the operator's credential only; no CI token reaches it.
+// `Approve` is audited under the caller's name, with the host as the entry's node:
+// `identity_approve`.
+//
+// Refusals: a gRPC status whose message is exactly one token of `HostIdentityRefusal`, written as
+// the value's name without the prefix, in lower case; the status code is the one each value
+// names. A refused request changes nothing; a call that cannot write its audit line changes
+// nothing either (`audit_unavailable`).
+//
+// Units: as operator.proto says: a node id is a host id, and a key hash is SHA-256 as 64
+// lower-case hex characters; times are unix seconds. A request is at most 4 KiB.
+//
+// Extending: as operator.proto says: add fields, messages, enum values and RPCs; never renumber,
+// rename, retype or remove one, and never reuse a number.
+syntax = "proto3";
+
+package hostkeeper.operator.v1;
+
+// A host's service identity: its assurance and an operator's approval of it.
+service HostIdentity {
+  // The host's assurance, the SHA-256 of its current key, and whether the coordinator signs
+  // certificates for its services with an identity. Changes nothing.
+  rpc Get(GetHostIdentityRequest) returns (GetHostIdentityResponse);
+  // Approves the host's current key for service identity: refused unless `key_sha256` is the
+  // SHA-256 of the key the host holds now. Approving a key approved already, or a host whose
+  // assurance is `operator`, changes nothing and writes no audit entry.
+  rpc Approve(ApproveHostIdentityRequest) returns (ApproveHostIdentityResponse);
+}
+
+// Why `HostIdentity` refused a request. The token is the value's name without the prefix, in
+// lower case.
+enum HostIdentityRefusal {
+  HOST_IDENTITY_REFUSAL_UNSPECIFIED = 0;
+  // UNAUTHENTICATED: no credential, or not an operator's.
+  HOST_IDENTITY_REFUSAL_UNAUTHORIZED = 1;
+  // PERMISSION_DENIED: the bearer is a valid CI token, which `HostIdentity` does not take.
+  HOST_IDENTITY_REFUSAL_FORBIDDEN = 2;
+  // INVALID_ARGUMENT: a node id that is not a host id, a key hash that is not 64 lower-case hex
+  // characters, or a reason that breaks operator.proto's rule.
+  HOST_IDENTITY_REFUSAL_INVALID_REQUEST = 3;
+  // NOT_FOUND: no enrolled host has the node id.
+  HOST_IDENTITY_REFUSAL_UNKNOWN_HOST = 4;
+  // FAILED_PRECONDITION: `Approve` whose `key_sha256` is not the SHA-256 of the host's current
+  // key.
+  HOST_IDENTITY_REFUSAL_KEY_MISMATCH = 5;
+  // FAILED_PRECONDITION: `Approve` of a host an operator retired.
+  HOST_IDENTITY_REFUSAL_DENIED = 6;
+  // INTERNAL: the approval could not be written. Nothing changed, and asking again is safe.
+  HOST_IDENTITY_REFUSAL_STORE_FAILED = 7;
+  // UNAVAILABLE: the audit entry could not be written. Nothing changed.
+  HOST_IDENTITY_REFUSAL_AUDIT_UNAVAILABLE = 8;
+}
+
+// How a host was approved.
+enum HostAssurance {
+  HOST_ASSURANCE_UNSPECIFIED = 0;
+  // An operator approved its current key by hand.
+  HOST_ASSURANCE_OPERATOR = 1;
+  // The coordinator approved its current key itself, by an inventory record; also a host whose
+  // approval the coordinator no longer finds.
+  HOST_ASSURANCE_AUTO = 2;
+}
+
+message GetHostIdentityRequest {
+  // The host.
+  string node_id = 1;
+}
+
+message GetHostIdentityResponse {
+  string node_id = 1;
+  HostAssurance assurance = 2;
+  // The SHA-256 of the host's current key: what `Approve` names.
+  string key_sha256 = 3;
+  // Whether the coordinator signs certificates for the host's services with an identity: its
+  // assurance is `operator`, or an operator approved its current key, and it is not denied.
+  bool allowed = 4;
+  // The operator's approval of the current key; absent when there is none.
+  optional IdentityApprovalInfo approval = 5;
+  // Whether an operator retired the host.
+  bool denied = 6;
+}
+
+// An operator's approval of a host's key for service identity.
+message IdentityApprovalInfo {
+  // Who approved it.
+  string approver = 1;
+  uint64 approved_unix = 2;
+}
+
+message ApproveHostIdentityRequest {
+  // The host.
+  string node_id = 1;
+  // The SHA-256 of the host's current key, as `Get` showed it.
+  string key_sha256 = 2;
+  // Why, for the audit entry; optional.
+  string reason = 3;
+}
+
+message ApproveHostIdentityResponse {
+  string node_id = 1;
+  // The approval in force: the one written, or the one there already (absent for a host whose
+  // assurance is `operator`, which needs none).
+  optional IdentityApprovalInfo approval = 2;
+}

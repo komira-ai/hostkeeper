@@ -701,7 +701,7 @@ FAILED_PRECONDITION, 3 on UNAUTHENTICATED and PERMISSION_DENIED, and 1 on the ot
 
 ## Refusals of the host's calls
 
-The daemon's `Enroll`, `Poll` and `Renew` are refused with one of these tokens. The node logs an
+The daemon's `Enroll`, `Poll`, `Renew` and `IssueServiceCertificate` are refused with one of these tokens. The node logs an
 `Enroll` or `Poll` refusal as `the coordinator could not be reached: <call> was answered with the
 status <code>: "<token>"` and a `Renew` refusal as `renewal refused: <token>`, and tries again
 every 5 seconds.
@@ -716,3 +716,7 @@ every 5 seconds.
 | `unknown_request` | NOT_FOUND | a `Poll` for a request the coordinator does not hold | restart the unit: the daemon posts its request again at its start |
 | `bad_signature` | UNAUTHENTICATED | a `Poll` whose signature does not verify, or whose nonce is not one the coordinator gave or was used | none: the daemon asks for a new nonce on its next try |
 | `renewal_not_allowed` | FAILED_PRECONDITION | an `Enroll` whose `renewal_of` names a host that is unknown, denied or certified for another key; a `Renew` for another key than the certificate's, by a host whose host id went to another key, or by a host marked duplicate (two machines heartbeating under one host id; no path of this build sets that mark) | the node's key no longer names a host: [enroll it again](#enrolling-a-node-again); only such an approval, with `--replace true`, clears a duplicate mark |
+| `service_not_assigned` | FAILED_PRECONDITION | an `IssueServiceCertificate` for a service the host's group does not list, that is being uninstalled from the host, or whose entry for the host does not say `identity` (docs/design/service-identity.md) | list the service in the host's group, or set `identity` in the manifest of its entry |
+| `identity_not_approved` | FAILED_PRECONDITION | an `IssueServiceCertificate` by a host the coordinator approved by an inventory record, whose current key no operator approved for identity | approve the key for identity: `HostIdentity.Approve`, naming the key's SHA-256 |
+| `invalid_service` | INVALID_ARGUMENT | an `IssueServiceCertificate` whose service is not a service name | none from a hostkeeper daemon; report it |
+| `store_failed` | UNAVAILABLE | an `IssueServiceCertificate` the coordinator could not record (its serial or its audit entry); nothing was issued | none: the daemon asks again |

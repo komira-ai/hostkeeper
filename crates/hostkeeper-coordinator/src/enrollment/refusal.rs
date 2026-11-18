@@ -61,13 +61,19 @@ impl RpcError {
             RpcError::Refused(
                 CoordinatorRefusal::InvalidHeartbeat
                 | CoordinatorRefusal::KeyNotP256
-                | CoordinatorRefusal::BadCsr,
+                | CoordinatorRefusal::BadCsr
+                | CoordinatorRefusal::InvalidService,
             )
             | RpcError::Malformed => Code::InvalidArgument,
             RpcError::Refused(CoordinatorRefusal::PendingFull) => Code::ResourceExhausted,
             RpcError::Refused(CoordinatorRefusal::UnknownRequest) => Code::NotFound,
             RpcError::Refused(CoordinatorRefusal::BadSignature) => Code::Unauthenticated,
-            RpcError::Refused(CoordinatorRefusal::RenewalNotAllowed) => Code::FailedPrecondition,
+            RpcError::Refused(
+                CoordinatorRefusal::RenewalNotAllowed
+                | CoordinatorRefusal::ServiceNotAssigned
+                | CoordinatorRefusal::IdentityNotApproved,
+            ) => Code::FailedPrecondition,
+            RpcError::Refused(CoordinatorRefusal::StoreFailed) => Code::Unavailable,
             RpcError::Refused(CoordinatorRefusal::Unspecified) | RpcError::Internal => {
                 Code::Internal
             }

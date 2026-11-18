@@ -260,3 +260,82 @@ fn a_health_url_must_be_http_to_a_loopback_literal() {
     );
     assert_eq!(check(&with_url(placeholder, &[])), Ok(()));
 }
+
+/// Catches: an identity request refused or its account mangled by a rule it does not break, and
+/// a manifest that asks for no identity (neither field, or `identity` false alone) refused.
+#[test]
+fn a_manifest_may_ask_for_an_identity_with_or_without_an_account() {
+    for (identity, account) in [
+        (None, None),
+        (Some(false), None),
+        (Some(true), None),
+        (Some(true), Some("root")),
+        (Some(true), Some("_svc-1")),
+        (Some(true), Some("a")),
+        (Some(true), Some(&"a".repeat(32)[..])),
+    ] {
+        let mut m = manifest(Installer::Apt);
+        m.identity = identity;
+        m.identity_account = account.map(str::to_owned);
+        assert_eq!(check(&m), Ok(()), "{identity:?} {account:?}");
+    }
+}
+
+/// Catches: an account given without an identity (absent or false) passing, so that a manifest
+/// names an owner for files it never asks for.
+#[test]
+fn an_identity_account_is_refused_unless_identity_is_true() {
+    for identity in [None, Some(false)] {
+        let mut m = manifest(Installer::Apt);
+        m.identity = identity;
+        m.identity_account = Some("root".to_owned());
+        assert_eq!(
+            check(&m),
+            Err(ManifestError::IdentityAccountWithoutIdentity(
+                "root".to_owned()
+            )),
+            "{identity:?}"
+        );
+    }
+    assert_eq!(
+        ManifestError::IdentityAccountWithoutIdentity("root".to_owned()).to_string(),
+        "identity_account \"root\" is given, but identity is not true"
+    );
+}
+
+/// Catches: an account name outside the grammar passing: empty, over 32 bytes, one that starts
+/// with a digit or `-`, upper case, or a character that is no part of a name.
+#[test]
+fn an_identity_account_is_one_to_32_bytes_of_the_account_grammar() {
+    let long = "a".repeat(33);
+    for (account, why) in [
+        ("", "is empty"),
+        (long.as_str(), "is longer than 32 bytes"),
+        ("1abc", "does not start with a lower-case letter or _"),
+        ("-abc", "does not start with a lower-case letter or _"),
+        ("Root", "does not start with a lower-case letter or _"),
+        ("ro.ot", "has a character other than a-z, 0-9, _ and -"),
+        ("root ", "has a character other than a-z, 0-9, _ and -"),
+        ("rOot", "has a character other than a-z, 0-9, _ and -"),
+        ("r\u{e9}", "has a character other than a-z, 0-9, _ and -"),
+    ] {
+        let mut m = manifest(Installer::Apt);
+        m.identity = Some(true);
+        m.identity_account = Some(account.to_owned());
+        assert_eq!(
+            check(&m),
+            Err(ManifestError::IdentityAccount {
+                account: account.to_owned(),
+                why
+            }),
+            "{account:?}"
+        );
+    }
+    let mut m = manifest(Installer::Apt);
+    m.identity = Some(true);
+    m.identity_account = Some("9".to_owned());
+    assert_eq!(
+        check(&m).expect_err("refused").to_string(),
+        "identity_account \"9\" does not start with a lower-case letter or _; it is 1 to 32 bytes of a-z, 0-9, _ and -, the first a letter or _"
+    );
+}
