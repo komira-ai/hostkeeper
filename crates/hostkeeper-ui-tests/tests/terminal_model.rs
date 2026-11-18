@@ -410,9 +410,9 @@ export async function main() {
   return [t.cellAt(0, 0), t.cellAt(0, 3), t.cellAt(1, 0)];
 }"#;
     let out = Ui::start().run(driver);
-    let blue = json!({"ch": " ", "fg": -1, "bg": 4, "bold": false, "dim": false, "italic": false,
+    let blue = json!({"glyph": " ", "fg": -1, "bg": 4, "bold": false, "dim": false, "italic": false,
                       "underline": false, "inverse": false});
-    let plain = json!({"ch": " ", "fg": -1, "bg": -1, "bold": false, "dim": false, "italic": false,
+    let plain = json!({"glyph": " ", "fg": -1, "bg": -1, "bold": false, "dim": false, "italic": false,
                        "underline": false, "inverse": false});
     assert_eq!(out, json!([blue, blue, plain]));
 }
@@ -647,9 +647,9 @@ export async function main() {
   const restored = t.cellAt(0, 0);
   t.write(utf8("\x1b[?1h\x1b[?25l\x1b[?2004h\x1b[?7l\x1b[2;3r\x1b[?1049hjunk\x1b[1mq\x1bc"));
   const fresh = new Terminal(10, 3);
-  const same = JSON.stringify([t.grid, t.scrollback, t.x, t.y, t.pen, t.top, t.bottom, t.alt, t.cursorVisible,
+  const same = JSON.stringify([t.grid, t.scrollback, t.x, t.y, t.pen, t.regionTop, t.bottom, t.alt, t.cursorVisible,
     t.appCursor, t.bracketedPaste, t.autowrap]) === JSON.stringify([fresh.grid, fresh.scrollback, fresh.x,
-    fresh.y, fresh.pen, fresh.top, fresh.bottom, fresh.alt, fresh.cursorVisible, fresh.appCursor,
+    fresh.y, fresh.pen, fresh.regionTop, fresh.bottom, fresh.alt, fresh.cursorVisible, fresh.appCursor,
     fresh.bracketedPaste, fresh.autowrap]);
   return { restored, same };
 }"#;

@@ -27,7 +27,7 @@ export async function main() {{
     return {{
       lines, x: t.x, y: t.y, alt: t.alt, cursorVisible: t.cursorVisible, appCursor: t.appCursor,
       bracketedPaste: t.bracketedPaste, autowrap: t.autowrap,
-      scrollback: t.scrollback.map((row) => row.map((cell) => cell.ch).join("").replace(/ +$/, "")),
+      scrollback: t.scrollback.map((row) => row.map((cell) => cell.glyph).join("").replace(/ +$/, "")),
     }};
   }});
 }}"#

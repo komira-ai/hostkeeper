@@ -9,7 +9,7 @@ use support::Ui;
 fn keys(events: Vec<(Value, bool)>) -> Vec<Value> {
     let input: Vec<Value> = events
         .iter()
-        .map(|(event, app)| json!({"event": event, "app": app}))
+        .map(|(event, app)| json!({"event": event, "appKeys": app}))
         .collect();
     let driver = format!(
         r#"
@@ -17,7 +17,7 @@ import {{ encodeKey }} from "./terminal_keys.js";
 const cases = {};
 export async function main() {{
   return cases.map((c) => {{
-    const bytes = encodeKey(c.event, c.app);
+    const bytes = encodeKey(c.event, c.appKeys);
     return bytes === null ? null : Array.from(bytes);
   }});
 }}"#,

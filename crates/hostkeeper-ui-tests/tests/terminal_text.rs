@@ -36,7 +36,7 @@ export async function main() {{
 }
 
 fn style(fg: i64, bg: i64, flags: &str) -> Value {
-    json!({"ch": "X", "fg": fg, "bg": bg, "bold": flags.contains('b'), "dim": flags.contains('d'),
+    json!({"glyph": "X", "fg": fg, "bg": bg, "bold": flags.contains('b'), "dim": flags.contains('d'),
            "italic": flags.contains('i'), "underline": flags.contains('u'),
            "inverse": flags.contains('v')})
 }

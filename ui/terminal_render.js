@@ -49,18 +49,18 @@ export function classesOf(style, cursor) {
 // this row, or -1.
 function drawRow(cells, cursorAt) {
   let end = cells.length;
-  while (end > 0 && end - 1 !== cursorAt && cells[end - 1].ch === " " && cells[end - 1].st === 0) {
+  while (end > 0 && end - 1 !== cursorAt && cells[end - 1].glyph === " " && cells[end - 1].st === 0) {
     end -= 1;
   }
   const runs = [];
   let run = null;
   for (let x = 0; x < end; x++) {
-    const { ch, st } = cells[x];
+    const { glyph, st } = cells[x];
     const classes = classesOf(st, x === cursorAt);
     if (run !== null && run.classes === classes) {
-      run.text += ch;
+      run.text += glyph;
     } else {
-      run = { classes, text: ch };
+      run = { classes, text: glyph };
       runs.push(run);
     }
   }

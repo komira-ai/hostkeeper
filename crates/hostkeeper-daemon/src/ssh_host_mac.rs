@@ -29,7 +29,9 @@ use hostkeeper_launchd::{Launchctl, LaunchctlProcess};
 use hostkeeper_link::Log;
 use hostkeeper_observe::CommandRunner;
 
-use crate::login_account::{AccountError, AccountSource, MacAdmin, dscl_value, group_members, run};
+use crate::login_account::{
+    AccountError, AccountSource, MacAdmin, USERS, dscl_value, group_members, run,
+};
 use crate::mac::TOOL_DEADLINE;
 use crate::mac_ssh::{DSEDITGROUP, MacSsh, NO_RECORD};
 use crate::remote_login_probe::DSCL;
@@ -129,7 +131,7 @@ impl MacHost {
         if !plain(requested, NAME_MAX) {
             return Err(Refused::new(SshState::ConfigInvalid, "login_user"));
         }
-        let record = format!("/Users/{requested}");
+        let record = format!("{USERS}/{requested}");
         let output = run(
             &*self.dscl,
             "dscl read of a user record",
@@ -242,7 +244,7 @@ impl SshHost for MacHost {
         let Ok(output) = run(
             &*self.dscl,
             "dscl list of homes",
-            &[".", "-list", "/Users", "NFSHomeDirectory"],
+            &[".", "-list", USERS, "NFSHomeDirectory"],
         ) else {
             return Vec::new();
         };

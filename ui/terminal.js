@@ -117,7 +117,7 @@ export class Terminal {
     this.y = 0;
     this.pen = 0;
     this.wrapPending = false;
-    this.top = 0;
+    this.regionTop = 0;
     this.bottom = this.rows - 1;
     this.saved = { x: 0, y: 0, pen: 0 };
     this.stash = null;
@@ -134,7 +134,7 @@ export class Terminal {
   }
 
   blank(style) {
-    return { ch: " ", st: style & BG_MASK };
+    return { glyph: " ", st: style & BG_MASK };
   }
 
   blankRow(style) {
@@ -364,7 +364,7 @@ export class Terminal {
     const n = Math.max(args[0], 1);
     switch (final) {
       case "A":
-        this.moveTo(this.x, Math.max(this.y - n, this.y >= this.top ? this.top : 0));
+        this.moveTo(this.x, Math.max(this.y - n, this.y >= this.regionTop ? this.regionTop : 0));
         break;
       case "B":
         this.moveTo(this.x, Math.min(this.y + n, this.y <= this.bottom ? this.bottom : this.rows - 1));
@@ -379,7 +379,7 @@ export class Terminal {
         this.moveTo(0, Math.min(this.y + n, this.y <= this.bottom ? this.bottom : this.rows - 1));
         break;
       case "F":
-        this.moveTo(0, Math.max(this.y - n, this.y >= this.top ? this.top : 0));
+        this.moveTo(0, Math.max(this.y - n, this.y >= this.regionTop ? this.regionTop : 0));
         break;
       case "G":
         this.moveTo(Math.min(n - 1, this.cols - 1), this.y);
@@ -466,16 +466,16 @@ export class Terminal {
       if (keep) {
         this.save();
       }
-      this.stash = { grid: this.grid, top: this.top, bottom: this.bottom };
+      this.stash = { grid: this.grid, regionTop: this.regionTop, bottom: this.bottom };
       this.grid = [];
       for (let y = 0; y < this.rows; y++) {
         this.grid.push(this.blankRow(0));
       }
-      this.top = 0;
+      this.regionTop = 0;
       this.bottom = this.rows - 1;
       this.alt = true;
     } else {
-      ({ grid: this.grid, top: this.top, bottom: this.bottom } = this.stash);
+      ({ grid: this.grid, regionTop: this.regionTop, bottom: this.bottom } = this.stash);
       this.stash = null;
       this.alt = false;
       if (keep) {
@@ -512,7 +512,7 @@ export class Terminal {
 
   reverseIndex() {
     this.wrapPending = false;
-    if (this.y === this.top) {
+    if (this.y === this.regionTop) {
       this.scrollDown(1);
     } else if (this.y > 0) {
       this.y -= 1;
@@ -520,10 +520,10 @@ export class Terminal {
   }
 
   scrollUp(count) {
-    const n = Math.min(count, this.bottom - this.top + 1);
+    const n = Math.min(count, this.bottom - this.regionTop + 1);
     for (let i = 0; i < n; i++) {
-      const gone = this.grid.splice(this.top, 1)[0];
-      if (!this.alt && this.top === 0 && this.bottom === this.rows - 1) {
+      const gone = this.grid.splice(this.regionTop, 1)[0];
+      if (!this.alt && this.regionTop === 0 && this.bottom === this.rows - 1) {
         this.scrollback.push(gone);
         if (this.scrollback.length > SCROLLBACK) {
           this.scrollback.shift();
@@ -534,10 +534,10 @@ export class Terminal {
   }
 
   scrollDown(count) {
-    const n = Math.min(count, this.bottom - this.top + 1);
+    const n = Math.min(count, this.bottom - this.regionTop + 1);
     for (let i = 0; i < n; i++) {
       this.grid.splice(this.bottom, 1);
-      this.grid.splice(this.top, 0, this.blankRow(this.pen));
+      this.grid.splice(this.regionTop, 0, this.blankRow(this.pen));
     }
   }
 
@@ -547,14 +547,14 @@ export class Terminal {
     const first = Math.max(top, 1) - 1;
     const last = (bottom === 0 ? this.rows : Math.min(bottom, this.rows)) - 1;
     if (first < last) {
-      this.top = first;
+      this.regionTop = first;
       this.bottom = last;
       this.moveTo(0, 0);
     }
   }
 
   insideRegion() {
-    return this.y >= this.top && this.y <= this.bottom;
+    return this.y >= this.regionTop && this.y <= this.bottom;
   }
 
   insertLines(n) {
@@ -730,7 +730,7 @@ export class Terminal {
     const width = widthOf(point);
     if (width === 0) {
       const before = this.grid[this.y][this.wrapPending ? this.x : Math.max(this.x - 1, 0)];
-      before.ch += String.fromCodePoint(point);
+      before.glyph += String.fromCodePoint(point);
       return;
     }
     if (this.wrapPending || (width === 2 && this.x === this.cols - 1 && this.autowrap)) {
@@ -744,9 +744,9 @@ export class Terminal {
       return;
     }
     const row = this.grid[this.y];
-    row[this.x] = { ch: String.fromCodePoint(point), st: this.pen };
+    row[this.x] = { glyph: String.fromCodePoint(point), st: this.pen };
     if (width === 2) {
-      row[this.x + 1] = { ch: "", st: this.pen };
+      row[this.x + 1] = { glyph: "", st: this.pen };
     }
     const next = this.x + width;
     if (next >= this.cols) {
@@ -759,14 +759,14 @@ export class Terminal {
 
   // The text of row `y` of the screen, without the blanks at its end.
   lineText(y) {
-    return this.grid[y].map((cell) => cell.ch).join("").replace(/ +$/, "");
+    return this.grid[y].map((cell) => cell.glyph).join("").replace(/ +$/, "");
   }
 
   // The cell at row `y`, column `x` as the page shows it: its text and, by name, its style.
   cellAt(y, x) {
-    const { ch, st } = this.grid[y][x];
+    const { glyph, st } = this.grid[y][x];
     return {
-      ch,
+      glyph,
       fg: fgOf(st),
       bg: bgOf(st),
       bold: (st & BOLD) !== 0,

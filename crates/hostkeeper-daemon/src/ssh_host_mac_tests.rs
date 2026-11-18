@@ -162,7 +162,7 @@ impl Mac {
         };
         std::fs::write(mac.dir.path().join("sshd_config"), STOCK_CONFIG).expect("sshd_config");
         mac.dscl_ok(
-            &[".", "-list", "/Users", "UniqueID"],
+            &[".", "-list", USERS, "UniqueID"],
             "_sshd   75\nalice   501\nroot    0\n",
         );
         mac.dscl_ok(
@@ -173,12 +173,12 @@ impl Mac {
             &[
                 ".",
                 "-read",
-                "/Users/alice",
+                &format!("{USERS}/alice"),
                 "NFSHomeDirectory",
                 "PrimaryGroupID",
                 "IsHidden",
             ],
-            "NFSHomeDirectory: /Users/alice\nPrimaryGroupID: 20\nIsHidden: 0\n",
+            &format!("NFSHomeDirectory: {USERS}/alice\nPrimaryGroupID: 20\nIsHidden: 0\n"),
         );
         mac.dscl.always(
             &args(&ACCESS_READ),
@@ -191,7 +191,7 @@ impl Mac {
         std::fs::create_dir_all(home.join(".ssh")).expect("a home");
         std::fs::write(home.join(".ssh/authorized_keys"), format!("{ED}\n")).expect("a key");
         mac.dscl_ok(
-            &[".", "-list", "/Users", "NFSHomeDirectory"],
+            &[".", "-list", USERS, "NFSHomeDirectory"],
             &format!("alice {}\nroot /var/root\n", home.display()),
         );
         mac.launchctl_loaded();
@@ -527,12 +527,15 @@ fn an_include_that_does_not_read_the_drop_in_directory_for_every_connection_is_r
 #[test]
 fn a_named_login_user_is_checked_against_the_directory() {
     let mac = Mac::new("ssh-mac-named");
-    mac.dscl_ok(&[".", "-read", "/Users/bob", "UniqueID"], "UniqueID: 502\n");
+    mac.dscl_ok(
+        &[".", "-read", &format!("{USERS}/bob"), "UniqueID"],
+        "UniqueID: 502\n",
+    );
     assert_eq!(mac.host.prepare("bob", false), Ok("bob".to_owned()));
     assert!(
         !mac.dscl
             .calls()
-            .contains(&args(&[".", "-list", "/Users", "UniqueID"]))
+            .contains(&args(&[".", "-list", USERS, "UniqueID"]))
     );
     let reads = mac.dscl.calls().len();
     assert_eq!(
@@ -546,7 +549,7 @@ fn a_named_login_user_is_checked_against_the_directory() {
         "an answer the fake does not have is a tool that cannot run"
     );
     mac.dscl.always(
-        &args(&[".", "-read", "/Users/carol", "UniqueID"]),
+        &args(&[".", "-read", &format!("{USERS}/carol"), "UniqueID"]),
         Ok(LaunchctlOutput::exit(56, "eDSRecordNotFound")),
     );
     assert_eq!(
@@ -571,10 +574,7 @@ fn an_empty_login_user_is_the_single_administrator_or_no_login_user() {
         mac.host.prepare("", false),
         refused(SshState::NoLoginUser, "administrator")
     );
-    mac.dscl_ok(
-        &[".", "-list", "/Users", "UniqueID"],
-        "alice 501\nbob 502\n",
-    );
+    mac.dscl_ok(&[".", "-list", USERS, "UniqueID"], "alice 501\nbob 502\n");
     mac.dscl_ok(
         &[".", "-read", "/Groups/admin", "GroupMembership"],
         "GroupMembership: root alice bob\n",
@@ -583,19 +583,19 @@ fn an_empty_login_user_is_the_single_administrator_or_no_login_user() {
         &[
             ".",
             "-read",
-            "/Users/bob",
+            &format!("{USERS}/bob"),
             "NFSHomeDirectory",
             "PrimaryGroupID",
             "IsHidden",
         ],
-        "NFSHomeDirectory: /Users/bob\nPrimaryGroupID: 20\n",
+        &format!("NFSHomeDirectory: {USERS}/bob\nPrimaryGroupID: 20\n"),
     );
     assert_eq!(
         mac.host.prepare("", false),
         refused(SshState::NoLoginUser, "administrator")
     );
     mac.dscl
-        .always(&args(&[".", "-list", "/Users", "UniqueID"]), no_answer());
+        .always(&args(&[".", "-list", USERS, "UniqueID"]), no_answer());
     assert_eq!(
         mac.host.prepare("", false),
         refused(SshState::Unsupported, "dscl")
@@ -631,7 +631,10 @@ fn the_access_group_admits_its_members_and_blocks_the_rest_without_editing_it() 
     assert_eq!(mac.host.prepare("", false), Ok("alice".to_owned()));
     mac.group("NestedGroups: AAAAAAAA-2222-3333-4444-555555555555\n");
     assert_eq!(mac.host.prepare("", false), blocked());
-    mac.dscl_ok(&[".", "-read", "/Users/bob", "UniqueID"], "UniqueID: 502\n");
+    mac.dscl_ok(
+        &[".", "-read", &format!("{USERS}/bob"), "UniqueID"],
+        "UniqueID: 502\n",
+    );
     mac.group(&format!("NestedGroups: {ADMIN_GROUP_GUID}\n"));
     assert_eq!(
         mac.host.prepare("bob", false),
@@ -661,7 +664,10 @@ fn the_access_group_admits_its_members_and_blocks_the_rest_without_editing_it() 
 #[test]
 fn an_admin_group_that_cannot_be_read_does_not_admit_through_nesting() {
     let mac = Mac::new("ssh-mac-group-admin-unread");
-    mac.dscl_ok(&[".", "-read", "/Users/bob", "UniqueID"], "UniqueID: 502\n");
+    mac.dscl_ok(
+        &[".", "-read", &format!("{USERS}/bob"), "UniqueID"],
+        "UniqueID: 502\n",
+    );
     mac.group(&format!("NestedGroups: {ADMIN_GROUP_GUID}\n"));
     mac.dscl.always(
         &args(&[".", "-read", "/Groups/admin", "GroupMembership"]),
@@ -728,10 +734,10 @@ fn the_accounts_with_keys_come_from_the_directory_service() {
             password: false
         }]
     );
-    mac.dscl_ok(&[".", "-list", "/Users", "NFSHomeDirectory"], "orphan\n");
+    mac.dscl_ok(&[".", "-list", USERS, "NFSHomeDirectory"], "orphan\n");
     assert!(mac.host.accounts().is_empty());
     mac.dscl.always(
-        &args(&[".", "-list", "/Users", "NFSHomeDirectory"]),
+        &args(&[".", "-list", USERS, "NFSHomeDirectory"]),
         no_answer(),
     );
     assert!(mac.host.accounts().is_empty());

@@ -521,7 +521,8 @@ fn an_expired_certificate_is_refused() {
         rig.login("root", &rig.user, Some(&valid)),
         Ok("root".to_owned())
     );
-    let expired = rig.cert(PRINCIPAL, "20200101:20200102", 2);
+    // Valid from two hours ago to one hour ago: expired, in ssh-keygen's relative times.
+    let expired = rig.cert(PRINCIPAL, "-2h:-1h", 2);
     rig.refused("root", &rig.user, &expired);
 }
 
