@@ -5,7 +5,9 @@ use std::path::Path;
 
 use hostkeeper_proto::ctl::COMMANDS;
 use hostkeeper_ui_tests::client_gen::functions;
-use hostkeeper_ui_tests::scan::{Finding, fetches, inline_code, network_and_code, token_keepers};
+use hostkeeper_ui_tests::scan::{
+    Finding, fetches, inline_code, network_and_code, sockets, token_keepers,
+};
 use hostkeeper_ui_tests::{
     CallSite, UI_FILES, UiFile, UnknownCall, call_sites, check_calls, descriptor_methods,
     listed_calls,
@@ -225,6 +227,26 @@ fn only_the_data_layer_and_the_entry_module_call_fetch() {
         match file.path {
             "api.js" | "main.js" => assert_eq!(found.len(), 1, "{}", file.path),
             _ => assert_none(found),
+        }
+    }
+}
+
+#[test]
+fn only_the_entry_module_opens_a_socket_and_it_opens_exactly_one() {
+    // Catches: a page or the data layer that opens a socket of its own, past the injected
+    // `ctx.openSocket`, and an entry module that opens none or more than the one.
+    for file in UI_FILES {
+        let found = sockets(file.path, file.text);
+        match file.path {
+            "main.js" => assert_eq!(found.len(), 1, "{}", file.path),
+            _ => assert_none(found),
+        }
+        if file.path != "main.js" {
+            assert!(
+                !file.text.contains("WebSocket"),
+                "{} names WebSocket: only main.js does",
+                file.path
+            );
         }
     }
 }

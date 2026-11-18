@@ -142,6 +142,19 @@ by their route and are not in the menu.
   group selected and, for a host in none, the blank "Unassigned" (a host in no group is ordered no package). Pages label a host with no group "Unassigned". Choosing another group
   and pressing **Move** calls `HostGroups.Move` after a confirmation, with the reason "moved in the
   console" (the form has no reason field); choosing the blank moves the host to no group. A refused List is shown inline and the rest of the page renders.
+- **Remote SSH** (a tab of the Host page, `ui/sshpanel.js`; design:
+  [SSH through the coordinator](design/ssh-through-coordinator.md) section 13): the tab says whether the host's SSH host keys are
+  pinned (`Ssh.HostKeys`, read with the page) and lists them. When none is pinned, or the host reports others than the pinned ones, and
+  its last heartbeat reported its keys, it lists the reported keys and **Pin these host keys** asks first, then sends
+  `Ssh.PinHostKeys` with exactly those keys. **Open a terminal** opens one socket to `/v1/ssh/terminal?host=<host id>` of the page's own
+  origin (over TLS), sends `{csrf, cols, rows}` first (the session's CSRF token and a terminal of 120 by 36), then keystrokes and
+  pastes as binary messages; the host's output comes back as binary messages and is drawn by the app's own terminal (`ui/terminal.js`,
+  `ui/terminal_render.js`, `ui/terminal_keys.js`; no third-party code), into elements classed by `ui/styles/terminal.css`, so no inline
+  style or script is used and the policy above stays as it is. The coordinator's `status` messages show how far it has got and its last
+  message, `closed`, gives the cause, which the tab shows in words (every refusal of `SshRefusal`, every close cause of a tunnel,
+  `no_pin`, `host_key_mismatch`, `auth_refused`, `shell_refused`, `bad_request` and `exit`); a socket that closes without it says so.
+  **Close** closes the socket. The terminal has no resize (it is always 120 by 36) and keeps the last 200 lines that scrolled off.
+  A proxy in front of the private listener must pass WebSocket upgrades on that path.
 - **Users** (`Users.List`; `Users.Create`, `Disable`, `Enable`, `ResetPassword` and `Delete` on a button): a table
   of the users with whether each is enabled, must change its password, who made it and when, its last sign-in and the
   second its temporary password stops working. Create takes a name; Create and Reset password show the temporary
@@ -172,6 +185,10 @@ by their route and are not in the menu.
   `Referrer-Policy: no-referrer` and
   `Content-Security-Policy: default-src 'self'; frame-ancestors 'none'`. No answer of the
   coordinator carries an `Access-Control-*` header.
+- The one socket: the app opens a socket in exactly one place, `ui/main.js`, which builds `ctx.openSocket(path, handlers)` from the
+  page's own host and hands it to the pages as it hands them `fetch`. The scan of the sources
+  (`crates/hostkeeper-ui-tests/src/scan.rs`) refuses `WebSocket` in every other file and a `ws://` or `wss://` address in every file, and holds
+  `main.js` to one `WebSocket(` call.
 - The files need no sign-in. The operator API the app calls still needs a session (with its CSRF
   header) or an operator token on every call.
 

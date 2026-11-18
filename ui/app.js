@@ -90,8 +90,11 @@ export function redirected(name, params) {
 // yes-or-no question to the operator (the browser's confirm), `now` the time in unix seconds
 // and `every` (`(run, milliseconds)` to a function that stops it) the repeating of a call a page
 // asks for, each injected so tests can fake them; without `every` a page's repeat never runs.
+// `openSocket(path, handlers)` opens a socket to `path` of the page's own origin (`main.js` makes
+// it, the one place that opens a socket) and returns `{send, close}`; a page that needs one
+// finds it as `ctx.openSocket`, which is absent when none was given.
 // Returns the frame's controls, which the browser does not need.
-export function startApp({ doc, root, fetch, confirm, now, every, prefs = NO_PREFS }) {
+export function startApp({ doc, root, fetch, confirm, now, every, openSocket, prefs = NO_PREFS }) {
   // The operator's look, kept in memory: the theme (`prefs.apply(theme)` shows it) and whether the
   // side menu is collapsed to icons.
   let theme = "system";
@@ -330,6 +333,7 @@ export function startApp({ doc, root, fetch, confirm, now, every, prefs = NO_PRE
       api,
       params: at.params,
       confirm: (question) => confirm(question) === true,
+      openSocket: typeof openSocket === "function" ? (path, handlers) => openSocket(path, handlers) : undefined,
       now: () => now(),
       navigate,
       // Runs `run` every `seconds` while this rendering of the page is the latest; it stops itself

@@ -48,7 +48,7 @@ MDM setup), Fleet a table of hosts. After: a side menu, and Home a picture of th
   at an end with more beyond, snaps to a rack, and fits a rack's height to the viewport; a phone shows one rack at a time.
 - **Host page** (`ui/pages/host.js`, `ui/styles/host.css`): a dark status header (name, a light and the state in words, role,
   group, what it runs, the last heartbeat, and a small elevation of the rack the host stands in with its U lit, or "Unplaced"), then
-  tabs (Overview, Services, Certificate, Labels, Placement, Host group; a dot on Services or Certificate when something needs
+  tabs (Overview, Services, Certificate, Labels, Placement, Host group, Remote SSH; a dot on Services or Certificate when something needs
   attention; the tab chosen is kept across a refresh of the same host), then Retire alone in a red-bordered danger zone at the bottom.
   The state is `degraded`, not `healthy`, for a live host whose service reports unhealthy or whose last update failed.
 - Edit layout (a toggle on Home) shows the controls: rename the cluster, add a row (the next number), add a rack to a row (height
@@ -129,7 +129,14 @@ approval asks for no placement); `hkctl` gets the verbs from the generated comma
   free slots, breadcrumbs, the words of a refusal). `ui/pages/home.js`: the three levels and the edit mode; `ui/sleds.js` draws the
   sleds and decides the drops, `ui/sledpanels.js` has the edit panels, `ui/styles/sleds.css` the trays and boxes.
   `ui/pages/enrollment.js`: the placement control only; `ui/pages/host.js` also lays out the Host page above.
-- `ui/view.js`: `pill`, the `vars` of an element (custom properties), `aria-*`, `draggable`, `tabindex`, and the events the strip and the
+- `ui/sshpanel.js` is the Remote SSH tab of the Host page (the pin of the host's SSH host keys and the terminal; section 13 of
+  `docs/design/ssh-through-coordinator.md`). The terminal is the UI's own, in three modules: `ui/terminal.js` (the model: UTF-8, a grid of
+  cells, the cursor, SGR colours mapped to 16, the scroll region, the alternate screen, the modes the page reads), `ui/terminal_render.js`
+  (the model as `pre`, `div` and `span` elements with class names, drawn by `ui/styles/terminal.css`) and `ui/terminal_keys.js` (a key or
+  a paste as the bytes a shell reads). The socket is the one thing the page is handed that it cannot make: `ctx.openSocket(path,
+  handlers)` is built in `ui/main.js`, the only file that names a WebSocket, and the scan refuses the word in every other file.
+- `ui/view.js`: `redraw(element, tree)` (replaces one live element's children, as the terminal draws its screen), the `paste` event,
+  `pill`, the `vars` of an element (custom properties), `aria-*`, `draggable`, `tabindex`, and the events the strip and the
   drag use. `ui/app.css` (tokens, frame, components) and `ui/lab.css` (the lab) are two files so that each stays under 1000 lines.
   `ui/styles/forms.css` holds the page-scoped styles of sign-in, Inventory, Host groups and MDM setup (each rule starts with its page's class).
 
@@ -145,6 +152,9 @@ approval asks for no placement); `hkctl` gets the verbs from the generated comma
   (`fleet`, and Release, Rollout, Holds still open), the lab at each level (floor plan, row, rack, breadcrumbs, empty, gone, failed
   layout, the strip's keys and drag), the edit mode (each call and body, refusals in words, names, pick, click and drag to place, take
   out), the placement on the approval and on the Host page (choices that fit, calls, refusals), and the mounting of custom properties.
+  The Remote SSH tab runs against a fake socket the test drives message by message (no clock): the pin state and the pin, the socket's path
+  and first message, binary keys and pastes, the drawn screen, every cause in words, a close with no cause, Close; the terminal model, the
+  key encoder and the renderer are tested on byte inputs and exact screens.
 - Report: `docs/report/hostkeeper.html` draws the shell (wide and narrow, light and dark), the lab at each level and the edit mode, and the
   placement fields of the approval and the Host page; its test checks each UI string against the page modules.
 

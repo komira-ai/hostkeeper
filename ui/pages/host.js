@@ -12,10 +12,12 @@
 // the "Host group" dropdown offers, and HostGroups.Move, after a confirm, moves the host into the
 // group chosen, or into none when the blank is chosen; a host in no group is Unassigned and is ordered no package. Retire is offered when Hosts.Get fails too,
 // for an enrolled host the coordinator has not heard from since it started (a dead one).
+// The Remote SSH tab is `sshpanel.js`: Ssh.HostKeys is called when the page is read, and on a button
+// Ssh.PinHostKeys (after a confirm); its terminal is a socket from `ctx.openSocket`.
 //
 // The page is a status header (name, status LED and word, role, group, what it runs, the last
 // heartbeat, and a small elevation of the rack it stands in), then tabs (Overview, Services,
-// Certificate, Labels, Placement, Host group; every panel is in the page, the stylesheet shows the
+// Certificate, Labels, Placement, Host group, Remote SSH; every panel is in the page, the stylesheet shows the
 // chosen one, and the choice is kept across a refresh of the same host), then the danger zone,
 // which holds Retire. The status says "degraded" for a live host whose service is unhealthy or whose
 // last update failed; the lab's state alone would call it healthy.
@@ -25,6 +27,7 @@ import {
   scopeLabel, select, table, trimmed,
 } from "../view.js";
 import { crumbs, hostState, layoutOf, layoutProblem, rackName, slotOf, slotOptions, subjectOf } from "../lab.js";
+import { loadSsh, sshPanel } from "../sshpanel.js";
 
 // Rows of a facts table: a name and its value, no heading strip.
 function kv(rows, extra) {
@@ -488,6 +491,7 @@ export async function render(ctx) {
   } catch (error) {
     groupsFailure = error;
   }
+  const ssh = await loadSsh(host, () => ctx.api.ssh.hostKeys({ hostId: nodeId }));
   const now = ctx.now();
   const agent = host.heartbeat && host.heartbeat.agent;
   const where = await placementSection(ctx, host, nodeId, () => repaint());
@@ -545,6 +549,7 @@ export async function render(ctx) {
       }, { class: "primary" }))],
     placement: [where.section],
     group: [hostGroupSection(ctx, nodeId, host, groups, groupsFailure)],
+    ssh: sshPanel(ctx, nodeId, ssh, (fingerprints) => ctx.api.ssh.pinHostKeys({ hostId: nodeId, fingerprints })),
   };
   const tabs = [
     ["overview", "Overview", ""],
@@ -553,6 +558,7 @@ export async function render(ctx) {
     ["labels", "Labels", ""],
     ["placement", "Placement", where.held ? "" : "muted"],
     ["group", "Host group", ""],
+    ["ssh", "Remote SSH", ""],
   ];
   if (!tabs.some(([id]) => id === chosen.tab) || chosen.node !== nodeId) {
     chosen.node = nodeId;
