@@ -51,7 +51,7 @@ mod expiry;
 pub(crate) mod groups;
 mod identity;
 mod list;
-mod nonce;
+pub(crate) mod nonce;
 mod refusal;
 mod reject;
 mod rpc;

@@ -144,6 +144,7 @@ async fn one_look_of_the_tick_reads_the_tokens_file_again() {
         &tokens,
         &OperatorKeys::default(),
         &HostPrerequisites::default(),
+        &crate::console::ConsoleFiles::default(),
     )
     .await;
     assert_eq!(tokens.name_of(first), None);
@@ -171,6 +172,7 @@ async fn one_look_of_the_tick_reads_the_operator_keys_file_again() {
         &OperatorTokens::none(),
         &keys,
         &HostPrerequisites::default(),
+        &crate::console::ConsoleFiles::default(),
     )
     .await;
     assert_eq!(keys.set_of("build").expect("a set").keys, second);
@@ -197,6 +199,7 @@ async fn one_look_of_the_tick_reads_the_host_prerequisites_file_again() {
         &OperatorTokens::none(),
         &OperatorKeys::default(),
         &held,
+        &crate::console::ConsoleFiles::default(),
     )
     .await;
     assert_eq!(
@@ -226,6 +229,7 @@ async fn the_tick_loop_reads_the_files_again_each_interval() {
         OperatorTokens::none(),
         keys.clone(),
         held.clone(),
+        crate::console::ConsoleFiles::default(),
         interval,
     );
     let second = vec![key(2, "ops laptop")];
@@ -815,5 +819,34 @@ async fn a_tls_handshake_that_does_not_finish_is_logged_with_the_address_of_its_
         text.contains("a TLS handshake did not finish in time")
             && text.contains("remote=Some(192.0.2.8:5544)"),
         "log: {text}"
+    );
+}
+
+/// Proves: one look of the reload tick reads the console's files again: an operator taken out of
+/// the operators file has no console access after it.
+///
+/// Catches: a tick that leaves the console's files out, so a revoked operator keeps power over
+/// every BMC until the coordinator restarts.
+#[tokio::test]
+async fn one_look_of_the_tick_reads_the_console_files_again() {
+    use hostkeeper_console::operators::{Denied, Need};
+
+    let dir = crate::testutil::scratch("listen-console-reload");
+    let paths = crate::console::support::write_files(&dir, "[[operator]]\nname = \"alice\"\n");
+    let console = crate::console::ConsoleFiles::read(paths).expect("the files");
+    assert!(console.grant("alice", Need::Power).is_ok());
+    crate::console::support::write_files(&dir, "[[operator]]\nname = \"bob\"\n");
+    reload_all(
+        None,
+        &[],
+        &OperatorTokens::none(),
+        &OperatorKeys::default(),
+        &HostPrerequisites::default(),
+        &console,
+    )
+    .await;
+    assert_eq!(
+        console.grant("alice", Need::Power).err(),
+        Some(Denied::NoConsoleAccess)
     );
 }

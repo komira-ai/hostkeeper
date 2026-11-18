@@ -1769,6 +1769,7 @@ dependencies = [
  "futures",
  "getrandom 0.4.3",
  "hostkeeper-config",
+ "hostkeeper-console",
  "hostkeeper-enrollment",
  "hostkeeper-oidc",
  "hostkeeper-proto",

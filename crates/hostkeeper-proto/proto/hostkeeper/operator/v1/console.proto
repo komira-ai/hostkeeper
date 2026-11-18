@@ -104,6 +104,12 @@ enum ConsoleRefusal {
   CONSOLE_REFUSAL_NO_SESSION = 18;
   // UNAVAILABLE: the audit entry could not be written. Nothing was done.
   CONSOLE_REFUSAL_AUDIT_UNAVAILABLE = 19;
+  // UNAVAILABLE: the coordinator could not run the BMC tool, or could not read the BMC's answer
+  // to a command, or the BMC did not acknowledge it. The tool's text is in no answer.
+  CONSOLE_REFUSAL_BMC_FAILED = 20;
+  // INTERNAL: the coordinator could not read its enrollment store, draw a session's id, or finish
+  // the call.
+  CONSOLE_REFUSAL_STORE_FAILED = 21;
 }
 
 // What a console session carries.

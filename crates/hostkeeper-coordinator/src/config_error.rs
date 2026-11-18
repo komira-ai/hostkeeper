@@ -38,6 +38,9 @@ pub enum StartError {
     /// The host prerequisites file is refused.
     #[error(transparent)]
     Prerequisites(#[from] PrerequisitesError),
+    /// A console file is refused.
+    #[error(transparent)]
+    Console(#[from] crate::console::ConsoleFilesError),
     /// `--tokens-file` and `--operator-token-file` are both given.
     #[error(
         "--tokens-file and --operator-token-file are both given: name the operator's tokens one way"
