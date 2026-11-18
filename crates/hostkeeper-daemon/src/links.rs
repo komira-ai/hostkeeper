@@ -13,7 +13,8 @@
 //! [`crate::link_adapters`] ([`Links::heartbeater`]). On a Linux host it also gives the repository
 //! sets the coordinator pushes to [`crate::repository_push::RepositoryPush`]; on every host it
 //! gives the host's facts the coordinator sends to the facts file ([`FactsFile`]) and the operator keys
-//! it sends to the host's [`Links::operator_keys`].
+//! it sends to the host's [`Links::operator_keys`], and the host prerequisites it sends to the host's
+//! [`Links::prerequisites`].
 //!
 //! The watchdog: after each heartbeat, whatever it came to, the heartbeat loop tells the service
 //! manager it is alive ([`Links::watchdog`], `WATCHDOG=1` under systemd), and nothing else sends

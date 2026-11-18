@@ -80,7 +80,7 @@ pub struct PrerequisiteState {
     /// otherwise.
     pub next_try_unix: u64,
     /// The Unix time the daemon last looked at the host for it; 0 before it first did.
-    pub checked_unix: u64,
+    pub seen_unix: u64,
 }
 
 /// What the daemon holds of the host prerequisites: the set's digest, the last set refused, and

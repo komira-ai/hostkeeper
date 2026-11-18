@@ -38,7 +38,12 @@
 //!   gives no facts rather than refusing the list, so the alert is seen;
 //! - `trusted_root`: a host heard since the start whose last heartbeat said its Sigstore trusted
 //!   root is stale, missing or unparseable ([`crate::trusted_root`]), one alert per host; a host
-//!   whose last heartbeat said nothing of the root (unknown) raises none.
+//!   whose last heartbeat said nothing of the root (unknown) raises none;
+//! - `prerequisite_failed`: a host of the fleet whose last heartbeat announced
+//!   `prerequisites-v1` and whose last prerequisites report ([`crate::prerequisites`]) holds a
+//!   state whose status is failed, one alert per host naming each failed prerequisite
+//!   with its failures in a row, its next try and its reason; it stands until the host's last
+//!   report holds none.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
@@ -47,6 +52,7 @@ use std::time::Duration;
 
 use hostkeeper_enrollment::enroll::{RecordedApproval, RequestState, RequestView, StoreError};
 use hostkeeper_enrollment::names::MacAddress;
+use hostkeeper_proto::hostkeeper::agent::v1::{PrerequisiteStatus, PrerequisitesReport};
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_wire::HostId;
 
@@ -110,6 +116,8 @@ pub enum Kind {
     StoreUnreachable,
     /// A host's trusted root is stale, missing or unparseable.
     TrustedRoot,
+    /// A host's daemon failed to make sure of a host prerequisite.
+    PrerequisiteFailed,
 }
 
 impl Kind {
@@ -130,6 +138,7 @@ impl Kind {
             Self::CertNearExpiry => "cert_near_expiry",
             Self::StoreUnreachable => "store_unreachable",
             Self::TrustedRoot => "trusted_root",
+            Self::PrerequisiteFailed => "prerequisite_failed",
         }
     }
 
@@ -146,7 +155,8 @@ impl Kind {
             | Self::AbandonedWhileUpdating
             | Self::SilentHost
             | Self::CertNearExpiry
-            | Self::TrustedRoot => proto::AlertSeverity::Warning,
+            | Self::TrustedRoot
+            | Self::PrerequisiteFailed => proto::AlertSeverity::Warning,
         }
     }
 
@@ -165,6 +175,7 @@ impl Kind {
             Self::CertNearExpiry => proto::AlertKind::CertNearExpiry,
             Self::StoreUnreachable => proto::AlertKind::StoreUnreachable,
             Self::TrustedRoot => proto::AlertKind::TrustedRoot,
+            Self::PrerequisiteFailed => proto::AlertKind::PrerequisiteFailed,
         }
     }
 }
@@ -224,9 +235,10 @@ pub struct Waiting {
     pub other_host: Option<String>,
 }
 
-/// What the enrollment store holds that the alerts read, read once per observation (an empty
-/// one for a coordinator without `--enrollment-dir`).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// What the alerts read beyond the fleet, the ops state and the services, read once per
+/// observation: what the enrollment store holds (empty for a coordinator without
+/// `--enrollment-dir`) and the last prerequisites report of each host.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct EnrollmentFacts {
     /// The pending requests, duplicate claims included.
     pub waiting: Vec<Waiting>,
@@ -234,6 +246,9 @@ pub struct EnrollmentFacts {
     pub duplicates: BTreeSet<HostId>,
     /// When the certificate the coordinator serves its hosts expires, unix seconds.
     pub server_not_after: Option<u64>,
+    /// The last prerequisites report of each host that sent one ([`crate::prerequisites`]); not
+    /// the store's, the coordinator's memory.
+    pub prerequisites: BTreeMap<HostId, PrerequisitesReport>,
 }
 
 /// When an observation is made: by the coordinator's clock (since its start, the clock the
@@ -300,6 +315,7 @@ pub(crate) fn derive_in(
     ));
     alerts.extend(store_unreachable(fleet));
     alerts.extend(trusted_roots(fleet));
+    alerts.extend(prerequisite_failures(fleet, &enrollment.prerequisites));
     alerts.sort_by(|a, b| a.subject.cmp(&b.subject));
     alerts.dedup_by(|a, b| a.subject == b.subject);
     alerts
@@ -582,6 +598,46 @@ fn trusted_roots(fleet: &Fleet) -> Vec<Alert> {
         .collect()
 }
 
+/// `prerequisite_failed`: each host of the fleet whose last heartbeat announced
+/// `prerequisites-v1` and whose last prerequisites report holds a failed state, with each failed
+/// prerequisite, its failures in a row, the Unix time of its next try and its reason. A report
+/// kept for a host that left the fleet, or whose daemon no longer announces the feature, raises
+/// none.
+fn prerequisite_failures(
+    fleet: &Fleet,
+    reports: &BTreeMap<HostId, PrerequisitesReport>,
+) -> Vec<Alert> {
+    reports
+        .iter()
+        .filter(|(id, _)| fleet.announced(id, crate::prerequisites::FEATURE))
+        .filter_map(|(id, report)| {
+            let failed: Vec<String> = report
+                .states
+                .iter()
+                .filter(|state| state.status == PrerequisiteStatus::Failed as i32)
+                .map(|state| {
+                    format!(
+                        "{} failed {} in a row, next try at unix {}: {}",
+                        state.name, state.failures, state.next_try_unix, state.reason
+                    )
+                })
+                .collect();
+            (!failed.is_empty()).then(|| Alert {
+                subject: Subject {
+                    host: id.to_string(),
+                    ..Subject::of(Kind::PrerequisiteFailed)
+                },
+                message: format!(
+                    "{id} cannot make sure of its host prerequisites ({}); its daemon tries \
+                     again by itself, and until it succeeds the host lacks what its host group \
+                     needs",
+                    failed.join("; ")
+                ),
+            })
+        })
+        .collect()
+}
+
 /// `cert_near_expiry`: the certificate the coordinator serves its hosts, when it expires
 /// before `unix` plus `window` seconds.
 fn cert_near_expiry(enrollment: &EnrollmentFacts, unix: u64, window: u64) -> Vec<Alert> {
@@ -750,6 +806,10 @@ impl Coordinator {
                 }
                 Err(why) => return Err(why),
             };
+            let enrollment = EnrollmentFacts {
+                prerequisites: self.prerequisites.reports(),
+                ..enrollment
+            };
             let at = At {
                 now: (self.clock)(),
                 unix: self.ops.unix_now(),
@@ -827,6 +887,7 @@ impl Coordinator {
                 .cloned()
                 .collect(),
             server_not_after: Some(enrollment.server_certificate().not_after),
+            prerequisites: BTreeMap::new(),
         })
     }
 }

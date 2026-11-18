@@ -20,9 +20,10 @@
 //! the first optional fact dropped. The operator keys report ([`Heartbeat::operator_keys`], as
 //! `operator_keys`: a digest and two texts of at most [`crate::MAX_KEYS_REASON`] bytes each) is
 //! counted and never dropped: it is not in [`DROP_ORDER`]. The host prerequisites report
-//! ([`Heartbeat::prerequisites`], as `prerequisites`: a digest, a refusal and one state per
-//! prerequisite held, of which at most one carries a version and a reason for each prerequisite
-//! this release knows) is counted and never dropped either.
+//! ([`Heartbeat::prerequisites`], as `prerequisites`: a digest, a refusal and one state for each of
+//! at most 16 names held; only a name this release knows carries a version or a reason, so with
+//! the one it knows the report is a few hundred bytes and at most about 4 KiB) is counted and
+//! never dropped either.
 
 use hostkeeper_config::names::{ServiceName, Version};
 pub use hostkeeper_proto::MAX_SERVICES_PER_HEARTBEAT;
@@ -595,7 +596,7 @@ fn prerequisites_json(report: &PrerequisitesReport) -> Value {
                 "reason": state.reason,
                 "failures": state.failures,
                 "next_try_unix": state.next_try_unix,
-                "checked_unix": state.checked_unix,
+                "seen_unix": state.seen_unix,
             })
         })
         .collect();

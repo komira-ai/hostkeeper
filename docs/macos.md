@@ -387,6 +387,22 @@ account is not in it. A Mac with no administrator account, or with several, is r
 it is; the report in the heartbeat says so. Nothing here needs Full Disk Access, a privacy profile
 or a password.
 
+### Command Line Tools
+
+A Mac's daemon announces `prerequisites-v1` like every other host's
+([design/host-prerequisites.md](design/host-prerequisites.md)). When the coordinator sends a set
+that lists `xcode-command-line-tools`, the daemon (`crates/hostkeeper-daemon/src/xcode_clt.rs`)
+looks with `pkgutil --pkg-info=com.apple.pkg.CLTools_Executables` and `xcode-select -p`, and, when
+the package is missing, makes the marker file
+`/tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress`, takes the highest version
+`softwareupdate --list` names and installs it with `softwareupdate --install`, then removes the
+marker. It runs as root under launchd, so no password, account name or sudoers rule is needed on
+the Mac. It looks again every hour and after every start, installs the tools again when they are
+gone, and never removes them. A failed try is repeated after 30 minutes, then after twice as long
+each time, at most 24 hours, and the coordinator raises `prerequisite_failed` meanwhile. The
+report is `host.heartbeat.prerequisites` in `hkctl hosts get`
+([operations/host-prerequisites.md](operations/host-prerequisites.md)).
+
 ### Release and installer pkg
 
 Every release ships macos-arm64 beside the two Linux platforms: the binary tarball

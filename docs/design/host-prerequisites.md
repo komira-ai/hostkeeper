@@ -69,8 +69,9 @@ it. The fields are additive (`crates/hostkeeper-proto/tests/additions_prerequisi
 The report is sent in every heartbeat: the digest of the set the daemon holds (empty after a start
 until the first set arrives, so every start takes the set again), the last set it refused with the
 reason, and one `PrerequisiteState` for each name of the held set: its status (`PENDING`,
-`PRESENT`, `INSTALLING`, `FAILED`, `NOT_APPLICABLE`, `UNKNOWN`), the version when present, and,
-when failed, the reason, the count of failures in a row and the Unix time of the next try. The
+`PRESENT`, `INSTALLING`, `FAILED`, `NOT_APPLICABLE`, `UNKNOWN`), the version when present, when
+failed the reason, the count of failures in a row and the Unix time of the next try, and the Unix
+time the daemon last looked at the host for it (`seen_unix`). The
 coordinator keeps the last report of each host in memory and shows it in the host's heartbeat
 (`hkctl hosts get --node-id <host>`: `host.heartbeat.prerequisites`).
 
@@ -80,7 +81,7 @@ as it came.
 
 ## 4. The daemon
 
-**Which set.** The daemon holds the last set it was sent, after checking that the digest is the
+**Which set.** The daemon holds the last set it was sent (which clears a refusal), after checking that the digest is the
 digest of the names and that the set keeps the rules of a set (at most 16 names of the grammar,
 none twice); a set that fails either is *refused*: the report names it and why, and the daemon
 keeps the set it held. A set whose digest is the one held changes nothing. When a new set is held,
@@ -117,7 +118,8 @@ failure, and sets the next try: 30 minutes after the first failure, doubled afte
 at most 24 hours. Nothing is tried before then; a success counts the failures back to 0. Every
 failure is a line of the daemon's log, and the coordinator raises the alert `prerequisite_failed`
 for the host while its last report holds a `FAILED` state. The count and the wait are kept in
-memory: a daemon that starts again (after an update of hostkeeper, or a restart of the Mac) looks
+memory: a pass that ends with a prerequisite still `INSTALLING` (a panic of its worker) counts
+as a failure with its wait. A daemon that starts again (after an update of hostkeeper, or a restart of the Mac) looks
 once more at its first set.
 
 **Linux.** A Linux daemon (systemd or OpenRC) announces the feature, holds the set and reports

@@ -180,7 +180,7 @@ fn prerequisite_state(state: &PrerequisiteState) -> pb::PrerequisiteState {
         reason: state.reason.clone(),
         failures: state.failures,
         next_try_unix: state.next_try_unix,
-        checked_unix: state.checked_unix,
+        seen_unix: state.seen_unix,
     }
 }
 
@@ -516,3 +516,7 @@ mod facts_tests;
 #[cfg(test)]
 #[path = "proto_map_keys_tests.rs"]
 mod keys_tests;
+
+#[cfg(test)]
+#[path = "proto_map_prerequisites_tests.rs"]
+mod prerequisites_tests;

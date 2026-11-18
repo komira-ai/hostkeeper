@@ -273,7 +273,7 @@ message PrerequisiteState {
   // longer after each failure, and never loops on one); 0 otherwise.
   uint64 next_try_unix = 6;
   // The Unix time the daemon last looked at it on the host; 0 before it first did.
-  uint64 checked_unix = 7;
+  uint64 seen_unix = 7;
 }
 
 // Where a host prerequisite stands on a host.

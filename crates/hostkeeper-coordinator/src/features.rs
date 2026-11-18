@@ -22,7 +22,9 @@ use crate::{halt, verdict_file};
 /// (host id, host group, labels) in every answer until it reports their generation
 /// ([`crate::facts`]). `operator-keys-v1`: the `operator_keys` report of a gRPC heartbeat is read,
 /// and the host is sent the operator keys of its host group until it reports their digest
-/// ([`crate::operator_keys`]).
+/// ([`crate::operator_keys`]). `prerequisites-v1`: the `prerequisites` report of a gRPC heartbeat
+/// is read, and the host is sent the host prerequisites of its host group until it reports their
+/// digest ([`crate::prerequisites`]).
 pub const FEATURES: &[&str] = &[
     "deferred-v1",
     halt::FEATURE,
@@ -35,6 +37,7 @@ pub const FEATURES: &[&str] = &[
     crate::repository_push::FEATURE,
     crate::facts::FEATURE,
     crate::operator_keys::FEATURE,
+    crate::prerequisites::FEATURE,
 ];
 
 /// The fields of the answer to a heartbeat that go only to an agent that announced a feature,

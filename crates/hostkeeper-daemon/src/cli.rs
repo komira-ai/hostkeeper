@@ -68,6 +68,7 @@ use crate::notify::{
 };
 use crate::observer::{OwnService, observer_with};
 use crate::operator_keys::OperatorKeys;
+use crate::prerequisites::Prerequisites;
 use crate::prune::{LayoutPrune, NoLockPoint};
 use crate::real_packages::RealPackages;
 use crate::repositories;
@@ -382,6 +383,8 @@ async fn start_and_serve(
 ///   after it is done reports it ([`crate::remote_login_probe::at_host_start`]);
 /// - every host keeps the operator keys the coordinator sends in the managed block of its login
 ///   account's `authorized_keys` ([`OperatorKeys::at_host`]);
+/// - every host keeps the host prerequisites the coordinator sends, which a Mac installs and a
+///   Linux host only reports ([`Prerequisites::at_host`]);
 /// - when `files` names a console, the enrollment loop writes its issue file, naming the daemon
 ///   config's `coordinator`, and has the gettys redraw by running its agetty with `--reload` as
 ///   a child process, its output read to [`AGETTY_OUTPUT_CAP`] and bounded by
@@ -420,6 +423,7 @@ pub fn host_links(
         log.clone(),
     );
     let operator_keys = OperatorKeys::at_host(kind, log.clone());
+    let prerequisites = Prerequisites::at_host(kind, log.clone());
     Links {
         enroller: Box::new(move || host_enroller(&endpoint, &pki, settings.clone(), kind)),
         link: Arc::new(link),
@@ -436,7 +440,7 @@ pub fn host_links(
         console,
         remote_login_probe: crate::remote_login_probe::at_host_start(kind),
         operator_keys: Some(Arc::new(operator_keys)),
-        prerequisites: None,
+        prerequisites: Some(Arc::new(prerequisites)),
     }
 }
 
