@@ -574,7 +574,9 @@ impl Heartbeater {
     /// has a repository configuration to manage, `facts-v1` when it has a facts file, and
     /// `private-repository-v1` when it has a repository configuration or is told it reads
     /// private repositories, `operator-keys-v1` when it keeps operator keys, and
-    /// `prerequisites-v1` when it keeps host prerequisites.
+    /// `prerequisites-v1` when it keeps host prerequisites, and `ssh-v1` when it sets sshd up and
+    /// the coordinator's last reply advertised `ssh-v1`: a coordinator of a release before it reads
+    /// at most 16 names and drops a longer list whole, and a daemon with every port names 17.
     fn announced(&self) -> Vec<Feature> {
         let mut features = ANNOUNCED.to_vec();
         if self.ports.repositories.is_some() {
@@ -592,7 +594,7 @@ impl Heartbeater {
         if self.ports.prerequisites.is_some() {
             features.push(PREREQUISITES);
         }
-        if self.ports.ssh.is_some() {
+        if self.ports.ssh.is_some() && self.advertised.has(Feature::SshV1) {
             features.push(SSH);
         }
         features

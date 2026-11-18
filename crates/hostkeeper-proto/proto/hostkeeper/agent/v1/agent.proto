@@ -165,7 +165,9 @@ message HeartbeatRequest {
   // `prerequisites-v1`, which asks for `HeartbeatResponse.prerequisites`, makes sure of them on
   // the host and reports `prerequisites`, and `ssh-v1`, which asks for `HeartbeatResponse.ssh`,
   // sets up the host's sshd to trust the certificates it names and reports `ssh`):
-  // at most 16, each 1 to 32 bytes of `[a-z0-9-]`, none twice. An agent
+  // at most 32, each 1 to 32 bytes of `[a-z0-9-]`, none twice; at most 16 to a coordinator that
+  // does not advertise `ssh-v1` (a coordinator of a release before it drops a longer list
+  // whole), so an agent announces `ssh-v1` only once the coordinator advertised it. An agent
   // that lists every service it runs in `services` announces `heartbeat-v2`; without it the
   // coordinator counts the host as unmanaged for every service but the legacy one, rather than
   // as missing them.

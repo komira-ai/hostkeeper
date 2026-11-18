@@ -4,6 +4,7 @@
 
 use hostkeeper_link::testing::World;
 use hostkeeper_link::{ANNOUNCED, Feature, PASSWORD_KEEP, PushedSsh, Reply, SSH, SshReport};
+use hostkeeper_wire::wire::{MAX_FEATURES, MAX_FEATURES_BEFORE_SSH};
 
 use crate::{Rig, recorded, reply, update};
 
@@ -55,19 +56,28 @@ fn a_host_with_no_ssh_setup_announces_none_and_reports_none() {
     assert!(rig.world.ssh.applied().is_empty());
 }
 
-/// Proves a daemon with an sshd setup announces `ssh-v1` after the others, and sends the report
+/// Proves a daemon with an sshd setup announces `ssh-v1`, after the others, only once the
+/// coordinator's last reply advertised it, stops when a reply no longer does, and sends the report
 /// the setup gives (none while it has none).
+///
+/// Catches: a daemon that names `ssh-v1` to a coordinator of a release before it, which reads at
+/// most 16 names and drops a longer list whole.
 #[test]
 fn a_host_with_an_ssh_setup_announces_the_feature_and_sends_its_report() {
     let rig = setting_up("host-ssh-report");
     let mut heartbeater = rig.heartbeater();
+    rig.world.link.answer(Ok(reply(None, &[Feature::SshV1])));
+    rig.world.link.answer(Ok(reply(None, &[])));
     heartbeater.beat_once();
     rig.world.ssh.set_report(Some(report(7)));
     heartbeater.beat_once();
+    heartbeater.beat_once();
     let beats = rig.world.link.beats();
     let mut features = ANNOUNCED.to_vec();
-    features.push(SSH);
     assert_eq!(beats[0].features, features);
+    features.push(SSH);
+    assert_eq!(beats[1].features, features);
+    assert_eq!(beats[2].features, ANNOUNCED.to_vec());
     assert_eq!(beats[0].ssh, None);
     assert_eq!(beats[1].ssh, Some(report(7)));
     assert_eq!(Feature::parse("ssh-v1"), Some(Feature::SshV1));
@@ -104,4 +114,36 @@ fn an_order_is_started_whatever_the_setup_came_to() {
     heartbeater.beat_once();
     assert_eq!(rig.world.ssh.applied(), vec![(access(4), 0)]);
     assert_eq!(rig.world.dispatch.pending(), 1);
+}
+
+/// Proves a daemon with every port (repositories, facts, private repositories, operator keys,
+/// host prerequisites and an sshd setup) names at most [`MAX_FEATURES_BEFORE_SSH`] features to a
+/// coordinator that does not advertise `ssh-v1`, and all of them, `ssh-v1` last and within
+/// [`MAX_FEATURES`], to one that does.
+///
+/// Catches: a heartbeat whose feature list a coordinator of the release before drops whole, so
+/// the host is sent no repositories, facts or keys and no build is picked for it.
+#[test]
+fn a_daemon_with_every_port_names_no_more_than_an_older_coordinator_reads() {
+    let world = World::default()
+        .managing_repositories()
+        .keeping_facts()
+        .keeping_operator_keys()
+        .keeping_prerequisites()
+        .reading_private_repositories()
+        .setting_ssh_up();
+    let rig = Rig::with_world("host-ssh-every-port", world);
+    let mut heartbeater = rig.heartbeater();
+    rig.world.link.answer(Ok(reply(None, &[])));
+    rig.world.link.answer(Ok(reply(None, &[Feature::SshV1])));
+    for _ in 0..3 {
+        heartbeater.beat_once();
+    }
+    let beats = rig.world.link.beats();
+    assert_eq!(beats[0].features.len(), MAX_FEATURES_BEFORE_SSH);
+    assert_eq!(beats[1].features.len(), MAX_FEATURES_BEFORE_SSH);
+    assert!(!beats[1].features.contains(&SSH));
+    assert_eq!(beats[2].features.len(), MAX_FEATURES_BEFORE_SSH + 1);
+    assert_eq!(beats[2].features.last(), Some(&SSH));
+    assert!(beats[2].features.len() <= MAX_FEATURES);
 }

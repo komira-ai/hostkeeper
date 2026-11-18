@@ -166,14 +166,25 @@ async fn a_coordinator_that_advertises_nothing_answers_an_announcing_agent_with_
 
 /// Catches: a bad announcement costing the host its heartbeat or being answered as a good one:
 /// the heartbeat is still read, and the answer carries no `features` (a bad list is no
-/// announcement). A list one name over the bound of 16 is bad.
+/// announcement). A list one name over the bound of 32 is bad; a list of seventeen, what a daemon
+/// with every port and `ssh-v1` names, is read.
 #[tokio::test]
 async fn a_bad_announcement_is_dropped_and_the_host_is_answered_as_an_old_agent() {
     let rig = rig("http-features-bad", &["halt-v1"]).await;
+    let names = |n: usize| {
+        let list: Vec<String> = (0..n).map(|i| format!("f{i}")).collect();
+        format!(r#","agent_features":{}"#, serde_json::json!(list))
+    };
+    let seventeen = names(17).replacen("\"f0\"", "\"halt-v1\"", 1);
+    assert_eq!(
+        beat_text(&rig, "d3", "daemon", &beat("2.0", &seventeen)).await,
+        r#"{"reply":"nothing","features":["halt-v1"]}"#
+    );
+    let over = names(hostkeeper_wire::wire::MAX_FEATURES + 1);
     let bad = [
         r#","agent_features":["Halt-V1"]"#,
         r#","agent_features":["halt-v1","halt-v1"]"#,
-        r#","agent_features":["a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p","q"]"#,
+        over.as_str(),
         r#","agent_features":[""]"#,
     ];
     assert_eq!(

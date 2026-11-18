@@ -23,8 +23,14 @@ use crate::wire::{MAX_SERVICES, ServiceReply, is_service_name};
 pub const MAX_TOKEN: usize = 64;
 
 /// The most feature names an agent announces, and a reply names. A reader of an earlier release
-/// took at most 8, and dropped a longer list whole.
-pub const MAX_FEATURES: usize = 16;
+/// took at most [`MAX_FEATURES_BEFORE_SSH`], and one before that at most 8, each dropping a longer
+/// list whole.
+pub const MAX_FEATURES: usize = 32;
+
+/// The most feature names a coordinator of a release before `ssh-v1` reads; it drops a longer list
+/// whole. An agent therefore announces more than this many only to a coordinator that advertises
+/// `ssh-v1`, which reads up to [`MAX_FEATURES`].
+pub const MAX_FEATURES_BEFORE_SSH: usize = 16;
 
 /// The most bytes of a feature name.
 pub const MAX_FEATURE_NAME: usize = 32;
