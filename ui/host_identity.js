@@ -1,8 +1,9 @@
 // The "Service identity" section of the Host page: whether the coordinator signs certificates for
 // the services of the host that ask for an identity, and the services' identities as the host's
 // last heartbeat reported them.
-// Calls: HostIdentity.Get of the host, and, on the "Approve identity" button after a confirm,
-// HostIdentity.Approve with the key hash Get answered. A refused Get (`unknown_host` for a host the
+// The Host page makes the calls and hands them in as `calls` (calls belong to pages/): `get()`,
+// HostIdentity.Get of the host, and `approve(keySha256)`, HostIdentity.Approve, which the
+// "Approve identity" button makes after a confirm, with the key hash Get answered. A refused Get (`unknown_host` for a host the
 // coordinator has no enrollment of, `unimplemented` of a coordinator that predates the service) is
 // said in the section and nothing else of the page is affected.
 //
@@ -11,7 +12,7 @@
 // signed for the host (allowed), the approval (who, when) and whether an operator retired the host
 // (denied). The button is offered for an `auto` host that is neither allowed nor denied.
 
-import { action, describeError, enumLabel, fmtUnix, h, list } from "../view.js";
+import { action, describeError, enumLabel, fmtUnix, h, list } from "./view.js";
 
 function facts(rows) {
   return h("div", { class: "table-wrap cols card" }, h("table", { class: "kv" },
@@ -33,10 +34,10 @@ function reported(heartbeat) {
       h("td", {}, typeof row.lastError === "string" && row.lastError !== "" ? row.lastError : "-"))))));
 }
 
-export async function identitySection(ctx, nodeId, heartbeat) {
+export async function identitySection(ctx, nodeId, heartbeat, calls) {
   let identity;
   try {
-    identity = await ctx.api.hostIdentity.get({ nodeId });
+    identity = await calls.get();
   } catch (error) {
     return h("section", { class: "identity" }, h("h3", {}, "Service identity"),
       h("p", { class: "warning", role: "alert" }, `The service identity cannot be read: ${describeError(error)}`),
@@ -60,7 +61,7 @@ export async function identitySection(ctx, nodeId, heartbeat) {
           + `services that ask for an identity, for its current key ${keySha256}.`)) {
           return "Identity not approved.";
         }
-        await ctx.api.hostIdentity.approve({ nodeId, keySha256 });
+        await calls.approve(keySha256);
         ctx.refresh();
         return `Approved the identity of ${nodeId}: the coordinator signs certificates for its services.`;
       }, { class: "primary" }))
