@@ -5,8 +5,9 @@
 //! `auto` when the coordinator did, by an inventory record ([`INVENTORY_APPROVER`]). An auto host
 //! gets certificates only after an operator approved its current key for identity
 //! ([`EnrollmentStore::approve_identity`]), which is kept in the host's record
-//! (`Host.identity_approval`) and counts only while it names the key the host holds: an approval
-//! of a host writes that record anew without it, so a new key needs a new approval.
+//! (`Host.identity_approval`) and counts only while it names the key the host holds: a renewal
+//! of a host (the same key) keeps the record's approval, and any other approval of a host (a new
+//! key, a replace, a rejoin) writes that record anew without it, so a new key needs a new approval.
 //!
 //! The assurance is not stored. It is read from the approval of the request whose id is the
 //! host's key hash: [`INVENTORY_APPROVER`] is `auto`, anything else `operator`; a host whose

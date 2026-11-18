@@ -13,7 +13,7 @@ use hostkeeper_enrollment::enroll::{
 };
 use hostkeeper_enrollment::fs::RealFs;
 use hostkeeper_testkit::Scratch;
-use support::{HostKey, NOW, decision, host_id, request, scratch};
+use support::{HostKey, NOW, TestCa, decision, host_id, renewal, request, scratch};
 
 /// A store, its records to read what was written beside it, and the scratch directory the files
 /// are in, which is removed when the last of them is dropped.
@@ -521,5 +521,117 @@ fn the_denied_hosts_are_the_retiring_and_the_retired_sorted() {
             [host_id("web-1"), host_id("zed-1")],
             "{label}: web-2 was taken back"
         );
+    }
+}
+
+/// Issues the certificate of the approved request of `key`, which is what a renewal follows.
+fn issue(store: &EnrollmentStore, ca: &TestCa, key: &HostKey) {
+    store.issue(&ca.ca, &key.key_hash()).expect("issued");
+}
+
+/// Posts a renewal of `host` by `key` and approves it as the same host by `approver`.
+fn renew(store: &EnrollmentStore, key: &HostKey, machine: &str, host: &str, approver: &str) {
+    let id = store
+        .post(renewal(key, machine, host), NOW + 10)
+        .expect("renewal posted")
+        .request_id;
+    store
+        .approve_recorded(
+            &id,
+            &key.key_hash(),
+            &decision(host, false),
+            &record(approver),
+        )
+        .expect("renewal approved");
+}
+
+/// Proves: a renewal of an auto host by the same key keeps the operator's approval of that key
+/// (the host stays allowed, the approval is unchanged, and a store opened again reads it), and
+/// the assurance after the renewal is that of the renewal's approver: `auto` when an inventory
+/// record approved it, `operator` when an operator did.
+///
+/// Catches: an auto host that re-enrols with its own key losing its identity approval, so its
+/// services get no certificates until an operator approves the same key again.
+#[test]
+fn a_renewal_with_the_same_key_keeps_the_identity_approval() {
+    let ca = TestCa::new("identity-renewal-ca");
+    for (label, store, records, _dir) in stores("identity-renewal") {
+        let key = HostKey::new();
+        enroll(
+            &store,
+            &key,
+            "m-1",
+            "auto-1",
+            Some(INVENTORY_APPROVER),
+            false,
+        );
+        let host = host_id("auto-1");
+        store
+            .approve_identity(&host, &key.key_hash(), "alice", NOW + 5)
+            .expect("approved");
+
+        issue(&store, &ca, &key);
+        renew(&store, &key, "m-1", "auto-1", INVENTORY_APPROVER);
+        let state = store.identity_state(&host).expect("read").expect("a host");
+        assert_eq!(state.assurance, Assurance::Auto, "{label}");
+        assert_eq!(
+            state.approval,
+            Some(approval(&key, "alice", NOW + 5)),
+            "{label}"
+        );
+        assert!(store.identity_allowed(&host).expect("read"), "{label}");
+        let reopened = EnrollmentStore::new(records.clone());
+        assert!(reopened.identity_allowed(&host).expect("read"), "{label}");
+
+        issue(&store, &ca, &key);
+        renew(&store, &key, "m-1", "auto-1", "ops");
+        let state = store.identity_state(&host).expect("read").expect("a host");
+        assert_eq!(state.assurance, Assurance::Operator, "{label}");
+        assert_eq!(
+            state.approval,
+            Some(approval(&key, "alice", NOW + 5)),
+            "{label}"
+        );
+        assert!(store.identity_allowed(&host).expect("read"), "{label}");
+    }
+}
+
+/// Proves: a renewal of a host that holds no identity approval leaves it without one, and a
+/// replace by a new key of a host that holds one writes it without.
+///
+/// Catches: a renewal inventing an approval, and a new key inheriting the old key's.
+#[test]
+fn a_renewal_invents_no_identity_approval_and_a_replace_clears_it() {
+    let ca = TestCa::new("identity-renewal-none-ca");
+    for (label, store, records, _dir) in stores("identity-renewal-none") {
+        let key = HostKey::new();
+        enroll(
+            &store,
+            &key,
+            "m-1",
+            "auto-1",
+            Some(INVENTORY_APPROVER),
+            false,
+        );
+        let host = host_id("auto-1");
+        issue(&store, &ca, &key);
+        renew(&store, &key, "m-1", "auto-1", INVENTORY_APPROVER);
+        assert!(!store.identity_allowed(&host).expect("read"), "{label}");
+
+        store
+            .approve_identity(&host, &key.key_hash(), "alice", NOW + 5)
+            .expect("approved");
+        let next = HostKey::new();
+        enroll(
+            &store,
+            &next,
+            "m-1",
+            "auto-1",
+            Some(INVENTORY_APPROVER),
+            true,
+        );
+        let held = records.host(&host).expect("read").expect("the host");
+        assert_eq!(held.identity_approval, None, "{label}");
+        assert!(!store.identity_allowed(&host).expect("read"), "{label}");
     }
 }
