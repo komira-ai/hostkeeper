@@ -289,3 +289,55 @@ Tests that matter most (named in each PR): a certificate signed by C2 is accepte
 - **Q5. May the daemon add the Mac login user to `com.apple.access_ssh` when that group exists and the user is not in it?** Without it, those Macs report `blocked_by_access_group`. Recommendation: yes, that one user, one group, nothing else, reverted with the feature. The operator keys (`docs/design/operator-keys.md` section 4) already do this for the one administrator account they write the keys of.
 - **Q6. Does the coordinator hold the private key of the control-plane CA?** Recommendation: no. You sign for the NUC offline with `ssh-ca sign`; a coordinator compromise is then not root on the machine that holds the control plane. Cost: no tunnel-assisted certificate for the NUC without you.
 - **Q7. If the heartbeat path hides the host's address (a proxy in front of the heartbeat listener), do we add PROXY protocol on it?** Recommendation: yes, in C4, if the deployed path needs it; the coordinator does not dial an address it cannot trust.
+
+## 13. Amendment: Remote SSH from the coordinator UI
+
+The owner's addition: on a host's page an operator signed in to the coordinator's UI clicks **Remote SSH**, and the coordinator gives that operator a terminal on the host, through the same certificate, tunnel, audit and revocation as `hkctl ssh` (sections 5, 7, 8). No static key, no token, no command on the host.
+
+**Sequence.**
+
+```mermaid
+sequenceDiagram
+    participant B as Browser (host page)
+    participant C as Coordinator (any instance)
+    participant H as Host sshd
+    B->>C: GET /v1/ssh/terminal?host=<id>, Upgrade: websocket [session cookie, Origin]
+    C->>C: live session, same origin, no Authorization header, password not due
+    C-->>B: 101 Switching Protocols
+    B->>C: first text message {csrf, cols, rows}
+    C->>C: CSRF token is the session's; HostKeys(host): permitted, pin present
+    C->>C: make an Ed25519 key in memory for this terminal
+    C->>C: SignUserCert(public key, host, reason "coordinator UI terminal"): operators file, audit, sign
+    C->>H: Tunnel Open{host, serial}: the same checks, row and audit line as hkssh's
+    C->>H: SSH client over the tunnel: host key in the pinned set, certificate login as the login user
+    C->>H: pty (xterm-256color, cols x rows) and shell
+    B-->>C: binary messages: keystrokes; text {resize}
+    C-->>B: binary messages: the host's output; text {status} and a last {closed, cause}
+```
+
+**Who and what is checked.** The caller is the session's user, as the operator name of every other UI call (`docs/design/operator-login.md`); a bearer token is not taken on this route (a request with an `Authorization` header is refused), and CI tokens never reach it. The upgrade is refused before any byte is relayed unless the session cookie is live, the request's `Origin` is the coordinator's own (`https://<authority>`; a missing `Origin` is refused, as is a `Sec-Fetch-Site` other than `same-origin`) and the session's password is not due. A browser cannot set a header on a WebSocket, so the CSRF token travels as the first message, which must arrive within the listener's patience (10 s) and match the session's token; anything else closes the socket with nothing done. Then, in `hkctl ssh`'s order: the operators file must permit the host (`not_permitted`), the host must be enrolled (`unknown_host`) and have a pinned host key set (`no_pin`: the operator pins it first, on the same page or with `hkctl ssh pin-host-keys`), the certificate is signed and audited (`ssh_cert_signed`), the tunnel is opened and audited (`ssh_tunnel_open`, every refusal of section 7), and the host's sshd must present a host key whose `SHA256:` fingerprint is in the pinned set, else the terminal ends `host_key_mismatch` before the certificate is shown.
+
+**The key.** The brief allows the key to live in the browser or in the coordinator process. It lives in the coordinator process: one Ed25519 key per terminal, made from the coordinator's random source when the terminal opens, held in memory by that terminal's task only, never written, logged or sent, and dropped when the terminal ends. The browser holds no key and runs no SSH: an SSH client in the page would be third-party code of a size the UI's rules (`docs/design/ui-shell-lab.md`: no third-party code, no build step, `default-src 'self'`) do not admit, and the certificate is good for one host only in either case. The certificate is the one `SignUserCert` makes (section 5: principal `hk-host-<id>`, `--ssh-cert-ttl-s`, `permit-pty` only), so a stolen copy is useless without the key, which never leaves the process.
+
+**The SSH client.** The coordinator speaks SSH itself through the `russh` crate (Apache-2.0, `ring` backend only, so no C toolchain and no new licence), over the in-process end of the same tunnel `hkssh` uses: the bytes go through `Tunnels` exactly as an `Ssh/Tunnel` stream's do, so the limits (`--ssh-max-tunnels`, per operator, idle, session), the revocation poll and the drain apply unchanged. The host key check is against the pin of section 8, never against what the host reports in its heartbeat.
+
+**Ending.** A terminal ends when the shell exits, the operator closes the page or the socket, the tunnel ends for any cause of section 7 (idle, session limit, revoked certificate, operator no longer permitted, drain), or the login session ends: the revocation poll treats a terminal's session as its credential, so a sign-out, an expired session or a removed user ends the terminal with `token_revoked` at the next poll, as a revoked token does for `hkssh`. The last text message names the cause; the audit has the close (`ssh_tunnel_close`) as for any tunnel.
+
+**Wire and route (additive).** No proto change and no new flag. One new private-listener route, `GET /v1/ssh/terminal?host=<host id>` (HTTP/1.1 upgrade to WebSocket, RFC 6455; the heartbeat listener never serves it). Messages:
+
+| direction | type | content |
+|---|---|---|
+| browser to coordinator | text, first | `{"csrf": "<token>", "cols": 1..500, "rows": 1..200}` |
+| browser to coordinator | binary | keystrokes, at most 16 KiB per message |
+| browser to coordinator | text | `{"type": "resize", "cols": n, "rows": n}` |
+| coordinator to browser | text | `{"type": "status", "step": "signing" \| "connecting" \| "opened", "login_user": "<name>"}` (`login_user` on `opened` only) |
+| coordinator to browser | binary | the host's output, at most 16 KiB per message |
+| coordinator to browser | text, last | `{"type": "closed", "cause": "<token>"}`: a refusal token of `SshRefusal`, a close cause of section 7, `no_pin`, `host_key_mismatch`, `auth_refused`, `shell_refused`, `bad_request` or `exit` |
+
+A proxy in front of the private listener must pass WebSocket upgrades on that path, with stream timeouts at least those of the `Ssh/Tunnel` route (section 7).
+
+**The page.** The host page gets a **Remote SSH** tab with one button. The terminal is a small VT100/xterm-subset emulator of the UI's own (`ui/terminal.js`: text, colours of SGR, cursor movement, erase, scroll region, the alternate screen, bracketed paste ignored), drawn into the page's own elements with no inline style or script, so the CSP stays `default-src 'self'`. The page opens the socket through one injected function (`ctx.openSocket`, as `fetch` is injected), the only place in `ui/` where `WebSocket` is named, so the UI tests drive the page with a fake socket and no timing.
+
+**Tests.** The coordinator side runs against a real `russh` server inside the test, on loopback port 0, as the host: a terminal carries bytes both ways and resizes; each refusal of the order above ends the socket with its cause and nothing after it (a missing or foreign `Origin`, a dead session, a wrong CSRF token, a host not permitted, no pin, a host key outside the pin, a certificate the host refuses); the audit holds the signing and the tunnel's open and close; a revoked certificate, a removed operator and an ended session each close the terminal at the poll. The page side runs in the UI tests' engine with a fake socket: the button opens one socket to the host's path, the first message carries the session's CSRF token and the size, bytes typed go out as binary, the host's bytes are drawn, every `closed` cause is shown in words. No test waits on a clock.
+
+**Build item.** C7, after C4, C5 and C6: this section. It needs the owner's review.
