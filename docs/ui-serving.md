@@ -141,6 +141,13 @@ by their route and are not in the menu.
   group selected and, for a host in none, the blank "Unassigned" (a host in no group is ordered no package). Pages label a host with no group "Unassigned". Choosing another group
   and pressing **Move** calls `HostGroups.Move` after a confirmation, with the reason "moved in the
   console" (the form has no reason field); choosing the blank moves the host to no group. A refused List is shown inline and the rest of the page renders.
+  The **Certificate** tab also holds a **Service identity** section (`HostIdentity.Get`): the host's assurance (`operator`, approved
+  by hand, or `auto`, approved by the coordinator through an inventory record), the SHA-256 of its key, whether the coordinator signs
+  certificates for the services that ask for an identity (allowed), the approval (who and when) and whether an operator retired the
+  host (denied), and the service identities its last heartbeat reported (service, when the certificate ends, last error). For an
+  `auto` host that is neither allowed nor denied, **Approve identity** asks to confirm and then calls `HostIdentity.Approve` with the
+  key hash `Get` answered; a refusal (`key_mismatch` for a key that changed meanwhile, say) is shown with its token. A refused `Get`
+  (`unknown_host`, or `unimplemented` of an older coordinator) is said in the section and the rest of the page renders.
 - **Users** (`Users.List`; `Users.Create`, `Disable`, `Enable`, `ResetPassword` and `Delete` on a button): a table
   of the users with whether each is enabled, must change its password, who made it and when, its last sign-in and the
   second its temporary password stops working. Create takes a name; Create and Reset password show the temporary

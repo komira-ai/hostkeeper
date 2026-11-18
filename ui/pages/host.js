@@ -1,8 +1,9 @@
 // Host: one host's services, holds, marks and last update, the host-inventory record its
 // enrollment matched (linked to the Inventory page) with that record's data MACs, BMC MAC and
 // serial, when it enrolled, its certificate and its Sigstore trusted root as its last heartbeat
-// said them, and what an operator may do to it. The page reads the time from `ctx.now()` (unix
-// seconds), once per rendering, to say how soon the certificate ends.
+// said them, its service identity (host_identity.js, on the Certificate tab), and what an operator
+// may do to it. The page reads the time from `ctx.now()` (unix seconds), once per rendering, to say
+// how soon the certificate ends.
 // Calls: Hosts.Get, then Services.List for the services assigned to the host (it is called even
 // when Hosts.Get fails, and each failure is shown as is), then, when a service is assigned to the
 // host, Audit.List of the host's entries, page by page, to mark a service whose last uninstall was
@@ -24,6 +25,7 @@ import {
   h, action, allPages, checkbox, describeError, enumLabel, errorView, field, fmtUnix, list, pill, reasonProblem,
   scopeLabel, select, table, trimmed,
 } from "../view.js";
+import { identitySection } from "./host_identity.js";
 import { crumbs, hostState, layoutOf, layoutProblem, rackName, slotOf, slotOptions, subjectOf } from "../lab.js";
 
 // Rows of a facts table: a name and its value, no heading strip.
@@ -491,6 +493,7 @@ export async function render(ctx) {
   const now = ctx.now();
   const agent = host.heartbeat && host.heartbeat.agent;
   const where = await placementSection(ctx, host, nodeId, () => repaint());
+  const identity = await identitySection(ctx, nodeId, host.heartbeat);
   const labelsForm = {
     labels: Object.entries(host.labels || {}).map(([k, v]) => `${k}=${v}`).join(", "),
   };
@@ -523,7 +526,7 @@ export async function render(ctx) {
     services: services.length === 0
       ? [h("p", { class: "quiet" }, "The host reports no service.")]
       : services.map((view) => serviceSection(ctx, nodeId, view)),
-    trust: [h("div", { class: "pair" }, certificate(host, now), trustedRoot(host))],
+    trust: [h("div", { class: "pair" }, certificate(host, now), trustedRoot(host)), identity],
     labels: [h("fieldset", { class: "card" },
       h("legend", {}, "Labels"),
       h("div", { class: "chips" }, Object.entries(host.labels || {}).map(([k, v]) => h("span", { class: "chip" }, `${k}=${v}`))),
