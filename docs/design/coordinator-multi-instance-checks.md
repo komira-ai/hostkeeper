@@ -77,7 +77,19 @@ statement would cut. At 0.73 beats/s that is not a load, so none of section 7's 
 ## 14. The model check, before code
 
 The protocol to check is the deciding transaction, the conditional writes and the periodic claim, not the SQL. Two tools, one
-idea each:
+idea each, as first designed; what was built (M2) is one of them, below.
+
+**Built** (M2: `docs/design/models/coordinator-multi-instance.md`, the spec, and
+`crates/hostkeeper-coordinator/tests/multi_instance_model/`, the test, `cargo test -p hostkeeper-coordinator --test
+multi_instance_model`). The model is the Rust state-space test of the second item, split into twelve small models (`orders`,
+`operator`, `steps`, `quiet`, `ledger`, `beats`, `reload`, `audit`, `periodic`, `migrate`, `locks`, `drain`), each searched over
+every interleaving of its statements at N = 1, 2 and 3, with one test per invariant. The spec is not TLA+: it is a document whose
+tables (every invariant with its model, every variant with the invariant it breaks and the smallest N at which it does, every
+model's bound) the test reads and holds to the models in both directions, so the spec is checked by the same test run that CI
+already runs, and no second tool (TLC needs Java, and B9 lets a pull request run only build and unit tests) is needed. What the
+models found is in the spec's section "What the models found"; one of them changed section 11 of the design (panic mode at the
+edge can engage for a few seconds during the drain delay, with no refused connection). The first item below is kept as it was
+designed, for the record of what the models cover.
 
 - **A model of the protocol** (TLA+/PlusCal, `docs/design/models/` in the PR that builds M2; run by an `xtask` verb outside
   the PR gate, since TLC needs Java and B9 allows only build and unit tests with coverage). The number of instances is a
