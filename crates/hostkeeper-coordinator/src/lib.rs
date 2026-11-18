@@ -207,8 +207,8 @@ pub(crate) mod ssh_access;
 pub(crate) mod ssh_book;
 pub mod ssh_ca;
 pub(crate) mod ssh_cert;
-pub mod ssh_heartbeat;
 pub(crate) mod ssh_client;
+pub mod ssh_heartbeat;
 #[cfg(test)]
 mod ssh_host_tests;
 pub(crate) mod ssh_ledger;
