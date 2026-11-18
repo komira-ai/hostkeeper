@@ -16,7 +16,9 @@ use hostkeeper_ui_tests::{UI_FILES, UiFile, call_sites, calls_json, derived_call
 use serde_json::{Value, json};
 use support::Ui;
 use swc_common::BytePos;
-use swc_ecma_ast::{Decl, Expr, ModuleDecl, ModuleItem, TsInterfaceDecl, TsType, TsTypeElement};
+use swc_ecma_ast::{
+    Decl, Expr, ImportSpecifier, ModuleDecl, ModuleItem, TsInterfaceDecl, TsType, TsTypeElement,
+};
 use swc_ecma_parser::{Parser, StringInput, Syntax, TsSyntax};
 
 /// Fails unless the checked-in `ui/<path>` is `current`; when it is not, writes `current` to
@@ -38,13 +40,40 @@ fn assert_current(path: &str, current: &str) {
     }
 }
 
-/// Catches `ui/gen/` left behind when a proto, the command table or the generator changes, and
-/// a hand edit of either file.
+/// The `.d.ts` files the app holds under `gen/`, by name.
+fn held_declarations() -> BTreeSet<String> {
+    UI_FILES
+        .iter()
+        .filter_map(|f| f.path.strip_prefix("gen/"))
+        .filter(|name| name.ends_with(".d.ts"))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Proves: `ui/gen/client.js` and every declarations file under `ui/gen/` are what the
+/// generator makes now, and the declarations files the app holds are exactly the emitted ones.
+/// Catches: `ui/gen/` left behind when a proto, the command table or the generator changes, a hand
+/// edit of a file, and a stale `.d.ts` (a package that is gone, a file nothing emits) left beside
+/// the current ones; also a `.d.ts` on disk that the crate's file list misses.
 #[test]
 fn ui_gen_equals_the_emitters_output() {
     let client = current().expect("the client generates");
     assert_current("gen/client.js", &client.js);
-    assert_current("gen/client.d.ts", &client.dts);
+    for (name, text) in &client.dts {
+        assert_current(&format!("gen/{name}"), text);
+    }
+    let emitted: BTreeSet<String> = client.dts.iter().map(|(n, _)| n.clone()).collect();
+    assert_eq!(held_declarations(), emitted, "the held gen/*.d.ts files");
+    let mut on_disk = BTreeSet::new();
+    let gen_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ui/gen");
+    for entry in std::fs::read_dir(&gen_dir).expect("read ui/gen") {
+        let name = entry.expect("a directory entry").file_name();
+        let name = name.to_string_lossy().into_owned();
+        if name.ends_with(".d.ts") {
+            on_disk.insert(name);
+        }
+    }
+    assert_eq!(on_disk, emitted, "the gen/*.d.ts files on disk");
 }
 
 /// The module `text` is, read as TypeScript declarations (`.d.ts`): the parser's errors, the
@@ -77,12 +106,33 @@ fn declarations(text: &str) -> Result<swc_ecma_ast::Module, Vec<String>> {
     }
 }
 
+/// Whether `import` is `import type { X } from "./<name>.js"`: named, type-only, from a sibling
+/// file of the same directory whose name ends in `.js` (the declarations of a generated file).
+fn is_sibling_type_import(import: &swc_ecma_ast::ImportDecl) -> bool {
+    let path = import.src.value.to_string_lossy();
+    let sibling = path
+        .strip_prefix("./")
+        .and_then(|name| name.strip_suffix(".js"))
+        .is_some_and(|name| {
+            !name.is_empty() && !name.contains(['/', '\\']) && name != "." && name != ".."
+        });
+    import.type_only
+        && import.with.is_none()
+        && sibling
+        && !import.specifiers.is_empty()
+        && import.specifiers.iter().all(
+            |s| matches!(s, ImportSpecifier::Named(n) if !n.is_type_only && n.imported.is_none()),
+        )
+}
+
 /// What a declarations file may hold at its top level: `export` of an interface, a type, a
-/// namespace, or a function with no body. Anything else, a statement that runs, a default
-/// export, an import, is named.
+/// namespace, or a function with no body, and `import type { X } from "./<name>.js"` of a
+/// sibling generated file. Anything else, a statement that runs, a default export, any other
+/// import, is named.
 fn top_level(module: &swc_ecma_ast::Module) -> Result<(), String> {
     for item in &module.body {
         let declared = match item {
+            ModuleItem::ModuleDecl(ModuleDecl::Import(import)) => is_sibling_type_import(import),
             ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(export)) => match &export.decl {
                 Decl::TsInterface(_) | Decl::TsTypeAlias(_) | Decl::TsModule(_) => true,
                 Decl::Fn(f) => f.function.body.is_none(),
@@ -151,26 +201,52 @@ fn table_functions() -> BTreeSet<String> {
     functions(COMMANDS).iter().map(Function::call).collect()
 }
 
-/// Catches a `client.d.ts` a TypeScript parser refuses, one that holds code rather than
-/// declarations, and one whose `Client` misses a function of the table or adds one.
+/// Proves: every `.d.ts` under `ui/gen/` parses as TypeScript declarations holding only
+/// declarations and sibling type imports, each import names a namespace file that exists, and
+/// `client.d.ts`'s `Client` has exactly the table's functions.
+/// Catches: a declarations file a TypeScript parser refuses, one that holds code rather than
+/// declarations, an import of a file that is not generated, and a `Client` that misses a function
+/// of the table or adds one.
 #[test]
 fn client_d_ts_parses() {
+    let names = held_declarations();
+    assert!(names.contains("client.d.ts"), "{names:?}");
+    for name in &names {
+        let text = UiFile::named(&format!("gen/{name}"))
+            .expect("a file of the app")
+            .text;
+        let module = declarations(text).unwrap_or_else(|e| panic!("{name} does not parse: {e:?}"));
+        assert_eq!(top_level(&module), Ok(()), "{name}");
+        for item in &module.body {
+            if let ModuleItem::ModuleDecl(ModuleDecl::Import(import)) = item {
+                let target = import.src.value.to_string_lossy().into_owned();
+                let file = target.trim_start_matches("./").replace(".js", ".d.ts");
+                assert!(
+                    names.contains(&file),
+                    "{name} imports {target}: no such file"
+                );
+            }
+        }
+    }
     let text = UiFile::named("gen/client.d.ts")
         .expect("ui/gen/client.d.ts is a file of the app")
         .text;
-    let module = declarations(text).unwrap_or_else(|e| panic!("client.d.ts does not parse: {e:?}"));
-    assert_eq!(top_level(&module), Ok(()));
+    let module = declarations(text).expect("client.d.ts parses");
     let declared = declared_functions(client_interface(&module));
     assert_eq!(declared, table_functions());
     assert!(declared.contains("releases.setDesired"), "{declared:?}");
 }
 
-/// Catches a parse check that passes what a TypeScript compiler would refuse in a `.d.ts`: a
-/// syntax error, a function with a body, a statement that runs, a default export, a type left
-/// unexported.
+/// Proves: the parse check admits declarations and `import type { X } from "./<name>.js"` of a
+/// sibling file, and names every other import, statement and default export.
+/// Catches: a parse check that passes what a TypeScript compiler would refuse in a `.d.ts` or a
+/// generated file may not hold: a syntax error, a function with a body, a statement that runs, a
+/// default export, a type left unexported, a value import, an import of a file outside the
+/// directory, an import that is not type-only or not named.
 #[test]
 fn the_declarations_check_refuses_what_a_d_ts_may_not_hold() {
-    let good = "export interface A { b?: string; }\nexport type C = \"X\" | \"Y\";\n\
+    let good = "import type { x_y } from \"./x_y.js\";\nimport type { p, q } from \"./p.js\";\n\
+                export interface A { b?: string; }\nexport type C = \"X\" | \"Y\";\n\
                 export namespace d.e { export interface F { g?: d.e.F[]; } }\n\
                 export declare function h(i: A): Promise<C>;\n";
     let module = declarations(good).expect("the declarations parse");
@@ -185,7 +261,19 @@ fn the_declarations_check_refuses_what_a_d_ts_may_not_hold() {
         "export const y: number;",
         "export default interface A {}",
         "interface A {}",
-        "import { a } from \"./b\";",
+        "import { a } from \"./b.js\";",
+        "import type { a } from \"./b\";",
+        "import type { a } from \"../b.js\";",
+        "import type { a } from \"./sub/b.js\";",
+        "import type { a } from \"/b.js\";",
+        "import type { a } from \"b.js\";",
+        "import type { a } from \"https://example.test/b.js\";",
+        "import type a from \"./b.js\";",
+        "import type * as a from \"./b.js\";",
+        "import type {} from \"./b.js\";",
+        "import type { a as c } from \"./b.js\";",
+        "import \"./b.js\";",
+        "import a = require(\"./b.js\");",
     ] {
         let module = declarations(code).unwrap_or_else(|e| panic!("{code}: {e:?}"));
         assert!(top_level(&module).is_err(), "{code}");

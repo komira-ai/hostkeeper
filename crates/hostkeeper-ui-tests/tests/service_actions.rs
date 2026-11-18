@@ -502,6 +502,7 @@ fn host_lists_its_assigned_services_with_installed_against_desired() {
             (m("Services/List"), json!({})),
             (m("Audit/List"), json!({"nodeId": "web-2"})),
             (m("HostGroups/List"), json!({})),
+            (m("Ssh/HostKeys"), json!({"hostId": "web-2"})),
             (m("Layout/Get"), json!({}))
         ]
     );
@@ -854,6 +855,7 @@ fn host_marks_a_service_whose_last_uninstall_was_cancelled() {
             (m("Audit/List"), json!({"nodeId": "web-2", "sinceSeq": "4"})),
             (m("Audit/List"), json!({"nodeId": "web-2", "sinceSeq": "9"})),
             (m("HostGroups/List"), json!({})),
+            (m("Ssh/HostKeys"), json!({"hostId": "web-2"})),
             (m("Layout/Get"), json!({})),
         ]
     );
@@ -890,6 +892,7 @@ fn host_stops_paging_the_audit_when_next_seq_does_not_move() {
             (m("Audit/List"), json!({"nodeId": "web-2"})),
             (m("Audit/List"), json!({"nodeId": "web-2", "sinceSeq": "3"})),
             (m("HostGroups/List"), json!({})),
+            (m("Ssh/HostKeys"), json!({"hostId": "web-2"})),
             (m("Layout/Get"), json!({})),
         ]
     );
@@ -954,6 +957,7 @@ fn host_reads_no_audit_when_nothing_is_assigned_or_the_list_fails() {
                 m("Hosts/Get"),
                 m("Services/List"),
                 m("HostGroups/List"),
+                m("Ssh/HostKeys"),
                 m("Layout/Get")
             ],
             "{node}"

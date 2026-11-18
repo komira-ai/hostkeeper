@@ -448,6 +448,7 @@ fn proto_service(service: &Svc) -> proto::ServiceBeat {
 /// The same heartbeat as [`json_text`], as `Coordinator.Heartbeat` carries it.
 pub(super) fn proto_message(services: &[Svc]) -> proto::HeartbeatRequest {
     proto::HeartbeatRequest {
+        ssh: None,
         installers: vec!["apt".to_owned()],
         repositories: None,
         platform: proto::Platform::LinuxX8664 as i32,

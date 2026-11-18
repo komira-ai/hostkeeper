@@ -41,6 +41,7 @@ use prost_reflect::{
 use serde_json::{Value, json};
 
 pub mod pages;
+pub mod screen;
 
 /// The fake document, tree queries and page context the drivers share.
 const KIT: &str = include_str!("kit.js");

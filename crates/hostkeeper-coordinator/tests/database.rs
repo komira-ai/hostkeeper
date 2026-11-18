@@ -345,7 +345,7 @@ fn services_have_repository(database: &Database) -> bool {
 
 /// Proves: a `serve` with no `--rollout-file` starts on a database at the schema of the release
 /// before (0.1.252: migrations `0001` to `0008`, no `repository` column on `services`): it runs
-/// `0009` to `0019`, so `schema_version` holds 1 to 19 and the column is there, and an operator's change is
+/// `0009` to `0021`, so `schema_version` holds 1 to 21 and the column is there, and an operator's change is
 /// held by the audit table.
 ///
 /// Catches: a release that cannot start on the database the release before left, or that starts
@@ -362,7 +362,7 @@ fn a_serve_starts_on_a_database_at_the_schema_of_the_release_before() {
 
     drop(start(args.clone()));
     database.lock_is_free();
-    // The schema of 0.1.252: `0009` to `0018` taken back, the column, the tables and their
+    // The schema of 0.1.252: `0009` to `0021` taken back, the column, the tables and their
     // `schema_version` rows.
     run(
         &database,
@@ -372,13 +372,14 @@ fn a_serve_starts_on_a_database_at_the_schema_of_the_release_before() {
          abm_devices, abm_state; \
          DROP TABLE lab_cluster, lab_rows, lab_racks, lab_placements, lab_devices, lab_sleds, lab_sled_items; \
          DROP TABLE tx_ledger; \
+         DROP TABLE ssh_tunnel, ssh_host_key_pin, ssh_host, ssh_revocation, ssh_cert, ssh_audit; DROP SEQUENCE ssh_cert_serial; \
          DELETE FROM schema_version WHERE version >= 9",
     );
     assert_eq!(schema_versions(&database), (1..=8).collect::<Vec<i32>>());
     assert!(!services_have_repository(&database));
 
     let parts = start(args);
-    assert_eq!(schema_versions(&database), (1..=19).collect::<Vec<i32>>());
+    assert_eq!(schema_versions(&database), (1..=21).collect::<Vec<i32>>());
     assert!(services_have_repository(&database));
     let done = parts
         .coordinator
@@ -394,7 +395,7 @@ fn a_serve_starts_on_a_database_at_the_schema_of_the_release_before() {
 }
 
 /// Proves: a `serve` is refused on a database that holds a migration newer than this release's
-/// that says `refuse`, with the exact text of the database's refusal naming migration 20; a newer
+/// that says `refuse`, with the exact text of the database's refusal naming migration 22; a newer
 /// one that says `may-run` is taken.
 ///
 /// Catches: a coordinator that starts on, and writes to, a schema a newer release changed in a
@@ -408,17 +409,17 @@ fn a_serve_refuses_a_database_newer_than_this_release() {
     database.lock_is_free();
 
     let put = "INSERT INTO schema_version (version, name, older_releases) \
-               VALUES (20, 'from_the_future', ";
+               VALUES (22, 'from_the_future', ";
     run(&database, &format!("{put}'refuse')"));
     let why = refusal(args.clone());
     assert!(matches!(&why, StartError::Database(_)), "{why}");
     assert_eq!(
         why.to_string(),
-        "the database's schema is newer than this coordinator (migration 20, from_the_future)"
+        "the database's schema is newer than this coordinator (migration 22, from_the_future)"
     );
     database.lock_is_free();
 
-    run(&database, "DELETE FROM schema_version WHERE version = 20");
+    run(&database, "DELETE FROM schema_version WHERE version = 22");
     run(&database, &format!("{put}'may-run')"));
     drop(start(args));
 }

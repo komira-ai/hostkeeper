@@ -614,6 +614,44 @@ On a Mac, `pkgutil --check-signature hostkeeper-<version>-macos-arm64.pkg` (or
 `hello-<version>-macos-arm64.pkg`) shows the signature.
 The digest of the release's pkg is the line of `SHA256SUMS`, the signed file's.
 
+### Remote Login for ssh through the coordinator
+
+A Mac's daemon announces `ssh-v1` and takes up the coordinator's SSH access with the same
+`SshSetup` flow as a Linux host (docs/design/ssh-through-coordinator.md, section 3): the same
+three files (`/etc/ssh/sshd_config.d/10-hostkeeper.conf`, and `user_ca.pub` and
+`principals.<login user>` in `/etc/ssh/hostkeeper`) and the same rules. What a Mac does differently
+is `ssh_host_mac::MacHost`. Before any file is written, in this order:
+
+1. `/etc/ssh/sshd_config` has an `Include` of `/etc/ssh/sshd_config.d/*` before any `Match` line,
+   checked at each apply. The daemon never edits the file, which Apple owns; without it the state
+   is `no_include` and the Mac stays untrusted.
+2. The login user: the one the coordinator names (`--ssh-login-user-macos`, which must be an
+   account), else the single local administrator (user id of 501 or more, member of `admin`, not
+   hidden, the rule of the operator keys); with none or more than one, or a named user that does
+   not exist, the state is `no_login_user`. A name that is not a plain account name (letters,
+   digits, `.`, `_`, `-`) is `config_invalid`, since it becomes the name of a file.
+3. When the group `com.apple.access_ssh` exists, the login user is in it, or the group nests
+   `admin` and the login user is an administrator; otherwise the state is
+   `blocked_by_access_group`. The daemon never edits a group: add the account to the group by
+   hand (or by device management) and the next record is taken up.
+4. `password_auth = off` is `unsupported`: a Mac has no shadow file to prove that no account is
+   left without another way in.
+
+Remote Login is then ensured, by `launchctl` and not by `systemsetup`, which needs Full Disk
+Access: `launchctl print system/com.openssh.sshd`, and only when the job is not loaded, `enable`
+and `bootstrap` of `/System/Library/LaunchDaemons/ssh.plist` and `print` again. When that fails
+the state is `reload_failed` with `remote_login` as the detail, and no file is written. It runs at
+each apply, and so when the daemon starts and takes up the coordinator's record again: a Mac that
+lost Remote Login gets it back, with no file rewritten when the files are already as asked. launchd
+starts sshd per connection, so there is no reload: sshd reads the files at each start, and the
+check is `sshd -t` and the banner.
+
+A revert (`enabled = false`) removes the files and leaves Remote Login on, since turning it off
+could cut a login that came by `authorized_keys`; the daemon never runs `launchctl disable` or
+`bootout`. The test `device_mac` of `hostkeeper-privileged` (the `macos-device` job of
+`release.yml`) applies a CA through this flow on the Mac, logs in over ssh with a certificate
+for the administrator account, and reverts.
+
 ### Boot id
 
 The daemon's clock reads the boot id through a port, `hostkeeper_steps::BootIdSource`. On a Mac

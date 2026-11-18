@@ -5,11 +5,14 @@
 //!   a cookie, the address (the location's hash and search, `history.`) and the console;
 //! - [`network_and_code`]: a URL of another origin (`http://`, `https://`, protocol-relative
 //!   `//`), a stylesheet import, code made from text (`eval(`, `Function(`, `import(`), markup
-//!   made from text (`innerHTML` and its kin), and any other channel than `fetch`;
+//!   made from text (`innerHTML` and its kin), and any other channel than `fetch` and the one
+//!   socket (`WebSocket` is found in every file but [`SOCKET_OPENER`], `ws://` and `wss://` in every file);
 //! - [`inline_code`]: what the page's Content-Security-Policy (`default-src 'self'`) refuses:
 //!   in HTML a script that is not a `src` reference, a `style` element or attribute and an
 //!   `on*=` handler; in JavaScript an `on*` handler property and an `on*` attribute;
-//! - [`fetches`]: a call of `fetch`, which only the data layer and the entry module may make.
+//! - [`fetches`]: a call of `fetch`, which only the data layer and the entry module may make;
+//! - [`sockets`]: a call of `WebSocket`, which only the entry module may make, once (it builds the
+//!   one function, `openSocket`, that pages are given as `ctx.openSocket`, as they are given `fetch`).
 //!
 //! A needle that opens with a letter matches only where no letter, digit, `_` or `$` comes
 //! before it (`eval(` is not found in `retrieval(`).
@@ -103,6 +106,8 @@ pub const NETWORK_AND_CODE: &[&str] = &[
     "javascript:",
     "XMLHttpRequest",
     "WebSocket",
+    "ws://",
+    "wss://",
     "EventSource",
     "sendBeacon",
 ];
@@ -113,9 +118,22 @@ pub const NETWORK_AND_CODE: &[&str] = &[
 /// `https://` is still found.
 pub const DOCS_LINK: &str = "https://github.com/komira-ai/hostkeeper/blob/main/docs/";
 
-/// The places [`NETWORK_AND_CODE`] names, in any file, but for [`DOCS_LINK`].
+/// The one file that may name a `WebSocket`: the entry module, which builds the function that opens
+/// the Remote SSH terminal's socket on the page's own host and hands it to the pages. Every other
+/// file is refused the word. No file may write a `ws://` or `wss://` address, this one included: it
+/// builds the address from the page's own protocol and host.
+pub const SOCKET_OPENER: &str = "main.js";
+
+/// The needle of [`NETWORK_AND_CODE`] that [`SOCKET_OPENER`] may hold.
+const SOCKET_NEEDLE: &str = "`WebSocket`";
+
+/// The places [`NETWORK_AND_CODE`] names, in any file, but for [`DOCS_LINK`], and, in
+/// [`SOCKET_OPENER`], for the `WebSocket` needle.
 pub fn network_and_code(path: &str, text: &str) -> Vec<Finding> {
     let mut found = needles(path, text, NETWORK_AND_CODE);
+    if path == SOCKET_OPENER {
+        found.retain(|f| f.what != SOCKET_NEEDLE);
+    }
     found.retain(|f| {
         !(f.what == "`https://`"
             && text
@@ -229,6 +247,11 @@ pub fn inline_code(path: &str, text: &str) -> Vec<Finding> {
 /// Every call of `fetch`.
 pub fn fetches(path: &str, text: &str) -> Vec<Finding> {
     needles(path, text, &["fetch("])
+}
+
+/// Every call of `WebSocket` (`new WebSocket(address)`).
+pub fn sockets(path: &str, text: &str) -> Vec<Finding> {
+    needles(path, text, &["WebSocket("])
 }
 
 #[cfg(test)]
