@@ -53,7 +53,10 @@ After that the request is in the coordinator's queue (or approved by the record)
 ordinary host. At its first heartbeat its daemon writes its group's operator SSH keys into the
 administrator account's `authorized_keys` and turns Remote Login on, so the Mac can be reached over
 SSH with no password typed ([operator-keys.md](operator-keys.md)). A Mac that already has a host certificate, or `/usr/local/bin/hostkeeper` with the bootstrap's finished-install marker, is left alone
-by the bootstrap, however many times it runs.
+by the bootstrap, however many times it runs. The bootstrap does not install Apple's Command Line
+Tools and nobody types `sudo softwareupdate` on the Mac: when the Mac's host group lists
+`xcode-command-line-tools` in the coordinator's host prerequisites file, its daemon installs them as
+root ([host-prerequisites.md](host-prerequisites.md)).
 
 ## What the bootstrap does not do
 

@@ -44,6 +44,7 @@ fn response_of(answer: Answer, order: Option<Order>) -> proto::HeartbeatResponse
         repositories: None,
         facts: None,
         operator_keys: None,
+        prerequisites: None,
     }
 }
 
@@ -92,6 +93,8 @@ impl Api for AgentService {
                 .hear_remote_login_probe(&identity, request.get_ref());
             self.coordinator
                 .hear_operator_keys(&identity, request.get_ref());
+            self.coordinator
+                .hear_prerequisites(&identity, request.get_ref());
         }
         let host_id = identity.host_id.clone();
         let facts = (!retiring)
@@ -110,6 +113,9 @@ impl Api for AgentService {
         response.operator_keys = self
             .coordinator
             .operator_keys_for(&identity, request.get_ref());
+        response.prerequisites = self
+            .coordinator
+            .prerequisites_for(&identity, request.get_ref());
         Ok(Response::new(response))
     }
 

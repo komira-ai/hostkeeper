@@ -22,7 +22,7 @@ libc.workspace = true
 rustix = { workspace = true, features = ["process"] }
 serde.workspace = true
 serde_json.workspace = true
-# The digest of a set of operator keys (`operator_keys`).
+# The digest of a set of operator keys (`operator_keys`) and of host prerequisites (`prerequisites`).
 sha2.workspace = true
 thiserror.workspace = true
 x509-parser.workspace = true
