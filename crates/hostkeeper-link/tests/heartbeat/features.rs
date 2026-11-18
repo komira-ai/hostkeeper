@@ -140,11 +140,12 @@ fn the_optional_features_read_back_and_fit_the_wire_limit() {
         Feature::FactsV1,
         Feature::PrivateRepositoryV1,
         Feature::OperatorKeysV1,
+        Feature::PrerequisitesV1,
     ] {
         assert_eq!(Feature::parse(feature.as_str()), Some(feature));
         assert!(!ANNOUNCED.contains(&feature));
     }
-    assert!(ANNOUNCED.len() + 4 <= hostkeeper_wire::wire::MAX_FEATURES);
+    assert!(ANNOUNCED.len() + 5 <= hostkeeper_wire::wire::MAX_FEATURES);
     let rig = Rig::with_world(
         "features-keeping-keys",
         World::default().keeping_operator_keys(),

@@ -261,6 +261,9 @@ async fn advertised_features_equal_the_handled_set() {
         } else if *name == crate::operator_keys::FEATURE {
             // The operator keys of a host go only in the answer over gRPC.
             crate::operator_keys::tests::operator_keys_v1_is_acted_on();
+        } else if *name == crate::prerequisites::FEATURE {
+            // The host prerequisites of a host go only in the answer over gRPC.
+            crate::prerequisites::tests::prerequisites_v1_is_acted_on();
         } else if let Some(extra) = uses.get(name) {
             let without = typed_text(&rig, "d1", "daemon", &beat("1.0", &announce)).await;
             let with_it = beat("1.0", &format!("{announce}{extra}"));
@@ -281,6 +284,7 @@ async fn advertised_features_equal_the_handled_set() {
     handled.push(crate::repository_push::FEATURE);
     handled.push(crate::facts::FEATURE);
     handled.push(crate::operator_keys::FEATURE);
+    handled.push(crate::prerequisites::FEATURE);
     handled.sort_unstable();
     proven.sort_unstable();
     assert_eq!(proven, handled);

@@ -23,6 +23,7 @@ use crate::listen::reload_all;
 use crate::operator::Caller;
 use crate::operator_keys::OperatorKeys;
 use crate::ops::OpsState;
+use crate::prerequisites::HostPrerequisites;
 use crate::rollback_tests::unwritable;
 use crate::testutil::{Log, OPERATOR};
 use crate::tokens::OperatorTokens;
@@ -37,6 +38,7 @@ async fn tick(enrollment: &Rig) {
         &[],
         &OperatorTokens::single(OPERATOR),
         &OperatorKeys::default(),
+        &HostPrerequisites::default(),
     )
     .await;
 }

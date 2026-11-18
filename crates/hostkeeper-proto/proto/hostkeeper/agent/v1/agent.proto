@@ -159,9 +159,11 @@ message HeartbeatRequest {
   // `target-v1`, which announces that it takes `target` in orders and lists `installers`, and
   // `repositories-v1`, which announces that it writes the repositories the coordinator sends and
   // reports them in `repositories`, `facts-v1`, which asks for `HeartbeatResponse.facts`,
-  // writes them to the host's facts file and reports `facts_generation`, and `operator-keys-v1`,
+  // writes them to the host's facts file and reports `facts_generation`, `operator-keys-v1`,
   // which asks for `HeartbeatResponse.operator_keys`, writes them to the managed block of the
-  // host's login account's `authorized_keys` and reports `operator_keys`):
+  // host's login account's `authorized_keys` and reports `operator_keys`, and
+  // `prerequisites-v1`, which asks for `HeartbeatResponse.prerequisites`, makes sure of them on
+  // the host and reports `prerequisites`):
   // at most 16, each 1 to 32 bytes of `[a-z0-9-]`, none twice. An agent
   // that lists every service it runs in `services` announces `heartbeat-v2`; without it the
   // coordinator counts the host as unmanaged for every service but the legacy one, rather than
@@ -219,6 +221,78 @@ message HeartbeatRequest {
   // breaks a rule of `OperatorKeysReport` is dropped and the coordinator keeps the last one it
   // read.
   optional OperatorKeysReport operator_keys = 15;
+  // What the daemon holds of the host prerequisites the coordinator sends
+  // (`HeartbeatResponse.prerequisites`), and the state of each on the host. Sent in every
+  // heartbeat by a daemon that announces `prerequisites-v1`, read only over gRPC; absent from one
+  // that predates it. A report that breaks a rule of `PrerequisitesReport` is dropped and the
+  // coordinator keeps the last one it read.
+  optional PrerequisitesReport prerequisites = 16;
+}
+
+// What a host's daemon holds of the host prerequisites of its group, and the state of each.
+message PrerequisitesReport {
+  // The `digest` of the set the daemon holds: the last set it was sent and took since it
+  // started, which it keeps making sure of (it looks again on its own, and after a macOS update)
+  // until it is sent another. 64 lower-case hex characters; empty while it holds none, so that
+  // the coordinator sends the set again (after every start of the daemon).
+  string digest = 1;
+  // The last set the daemon refused (its digest is not its names', or it breaks a rule of a
+  // set), while that set is the last one it was sent: the daemon keeps the set it held. Absent
+  // when it refused none.
+  optional PrerequisitesRefusal refused = 2;
+  // The state of each prerequisite of the set the daemon holds, in the set's order: at most 16,
+  // each named once. Empty while it holds none.
+  repeated PrerequisiteState states = 3;
+}
+
+// A set of host prerequisites a daemon refused, and why.
+message PrerequisitesRefusal {
+  // The refused set's `digest`, 64 lower-case hex characters.
+  string digest = 1;
+  // Why, as the daemon words it: 1 to 256 bytes (a reader cuts a longer one at a character
+  // boundary).
+  string reason = 2;
+}
+
+// The state of one host prerequisite on the host.
+message PrerequisiteState {
+  // Its name, as the set names it (`xcode-command-line-tools`).
+  string name = 1;
+  // Where it stands.
+  PrerequisiteStatus status = 2;
+  // `PREREQUISITE_STATUS_PRESENT`: the version the host has, as the platform's tool says it (for
+  // the Command Line Tools, the `version` `pkgutil` gives of `com.apple.pkg.CLTools_Executables`),
+  // at most 64 bytes (a reader cuts a longer one at a character boundary); empty otherwise.
+  string version = 3;
+  // `PREREQUISITE_STATUS_FAILED`: why the last try failed, as the daemon words it, at most 256
+  // bytes (a reader cuts a longer one at a character boundary); empty otherwise.
+  string reason = 4;
+  // `PREREQUISITE_STATUS_FAILED`: how many tries in a row failed, 1 or more; 0 otherwise.
+  uint32 failures = 5;
+  // `PREREQUISITE_STATUS_FAILED`: the Unix time from which the daemon tries again (it waits
+  // longer after each failure, and never loops on one); 0 otherwise.
+  uint64 next_try_unix = 6;
+  // The Unix time the daemon last looked at it on the host; 0 before it first did.
+  uint64 seen_unix = 7;
+}
+
+// Where a host prerequisite stands on a host.
+enum PrerequisiteStatus {
+  // Not reported.
+  PREREQUISITE_STATUS_UNSPECIFIED = 0;
+  // The daemon holds it and has not looked at the host for it yet.
+  PREREQUISITE_STATUS_PENDING = 1;
+  // The host has it.
+  PREREQUISITE_STATUS_PRESENT = 2;
+  // The host did not have it, and the daemon is installing it now.
+  PREREQUISITE_STATUS_INSTALLING = 3;
+  // The last try to install it, or to look for it, failed: `reason` says why and
+  // `next_try_unix` when the daemon tries again.
+  PREREQUISITE_STATUS_FAILED = 4;
+  // It is of another platform than the host's (the Command Line Tools on Linux): nothing is done.
+  PREREQUISITE_STATUS_NOT_APPLICABLE = 5;
+  // The daemon does not know the name (a newer coordinator's): nothing is done.
+  PREREQUISITE_STATUS_UNKNOWN = 6;
 }
 
 // What a host's daemon holds of the operator keys: the managed block of its login account's
@@ -563,6 +637,26 @@ message HeartbeatResponse {
   // keys and only these, and keeps every line outside the block; the empty set takes the block
   // away. Absent: keep what it has.
   optional OperatorKeys operator_keys = 7;
+  // The host prerequisites of the host's group, whole: sent to an agent that announced
+  // `prerequisites-v1` when the coordinator was given a host prerequisites file and the host's
+  // report (`HeartbeatRequest.prerequisites`) holds neither this set's digest nor refused it. A
+  // host in no group, or in a group the file does not list, is sent the empty set. The daemon
+  // makes sure of each prerequisite that applies to its platform, and keeps doing so until it is
+  // sent another set; it never removes one. Absent: keep what it holds.
+  optional HostPrerequisites prerequisites = 8;
+}
+
+// The host prerequisites of a host group, as the coordinator's host prerequisites file holds
+// them.
+message HostPrerequisites {
+  // The SHA-256 of the names, each followed by one newline, in order, as 64 lower-case hex
+  // characters, by the rule of the crate `hostkeeper-wire` (`prerequisites::digest`), which
+  // daemon and coordinator share.
+  string digest = 1;
+  // The names, 0 to 16, each 1 to 64 bytes of `[a-z0-9-]`, a letter first, none twice
+  // (`prerequisites::check_set`). This release knows `xcode-command-line-tools`: Apple's Command
+  // Line Tools for Xcode, on macOS.
+  repeated string names = 2;
 }
 
 // The operator keys of a host group, as the coordinator's operator keys file holds them.
