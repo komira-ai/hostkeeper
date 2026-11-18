@@ -4,7 +4,9 @@
 //! read the real file with ([`settings::parse`], then the parser of `serve` with a `--dir`, and
 //! that of `[prepare]`). Every block must read, and among the blocks there must be one in proxy
 //! mode, one in router mode, one with `reinstall`, and one with a `[prepare]` table that names
-//! `platform`. The runbook shows no `pxe serve` or `pxe prepare` command line to type: the unit
+//! `platform`. Every block also sets `serial-console = "ttyS1"`: the fleet's serial console is
+//! the board's second port, COM2, on every Linux server (docs/design/console-broker.md, section
+//! 5.2), so an example a farm copies installs it. The runbook shows no `pxe serve` or `pxe prepare` command line to type: the unit
 //! and the daemon run them. A renamed or misspelled key, a value a flag does not take, or a
 //! required flag the runbook leaves out fails here.
 
@@ -22,6 +24,9 @@ const RUNBOOK: &str = "../../docs/operations/network-install.md";
 
 /// The first line of an example settings file.
 const MARK: &str = "# /etc/pxe/pxe.toml";
+
+/// The serial console every example settings file sets: COM2, which Linux names `ttyS1`.
+const FLEET_SERIAL_CONSOLE: &str = "ttyS1";
 
 /// The kinds of settings file the runbook must show.
 const KINDS: [&str; 4] = ["proxy", "router", "reinstall", "prepare platform"];
@@ -62,7 +67,7 @@ fn examples(doc: &str) -> Vec<String> {
     blocks
 }
 
-/// The kinds `block` is, or why it does not read.
+/// The kinds `block` is, or why it does not read or does not set the fleet's serial console.
 fn kinds_of(block: &str) -> Result<BTreeSet<&'static str>, String> {
     let file = settings::parse(block)?;
     let serve = serve_flags(
@@ -72,6 +77,13 @@ fn kinds_of(block: &str) -> Result<BTreeSet<&'static str>, String> {
     )?;
     let prepare = PrepareFlags::try_parse_from(&file.prepare)
         .map_err(|e| format!("[prepare]: {}", crate::cli::one_line(&e)))?;
+    let console = serve.serial_console.as_ref().map(|port| port.as_str());
+    if console != Some(FLEET_SERIAL_CONSOLE) {
+        return Err(format!(
+            "serial-console is {}; the fleet's is \"{FLEET_SERIAL_CONSOLE}\"",
+            console.map_or("not set".to_owned(), |port| format!("\"{port}\""))
+        ));
+    }
     let mut kinds = BTreeSet::new();
     kinds.insert(match serve.mode {
         ModeFlag::Proxy => "proxy",
@@ -112,7 +124,7 @@ fn settings_file(mode: &str, extra: &str, prepare: &str) -> String {
          coordinator = \"https://192.0.2.1:8444\"\nca-file = \"/etc/pxe/ca.pem\"\n\
          token-file = \"/etc/pxe/token\"\ndaemon-config = \"/etc/hostkeeper/hostkeeper.toml\"\n\
          ssh-authorized-keys = \"/etc/pxe/authorized_keys\"\nuser-id = 65534\ngroup-id = 65534\n\
-         {extra}{prepare}"
+         serial-console = \"ttyS1\"\n{extra}{prepare}"
     )
 }
 
@@ -232,6 +244,63 @@ fn a_block_the_parsers_refuse_is_a_problem() {
     }
     let cut = problems(&(document(&every_kind()) + &format!("```toml\n{MARK}\n[serve]\n")));
     assert_eq!(cut.len(), 1, "{cut:?}");
+}
+
+/// The runbook's example settings files, the farm's install configuration, each set the serial
+/// console to `ttyS1`.
+///
+/// Catches a runbook example that installs a farm machine with its console on another port, or
+/// with none, so the BMC's serial console shows nothing.
+#[test]
+#[expect(
+    non_snake_case,
+    reason = "named after the port, ttyS1, as the console design names this test"
+)]
+fn the_farm_install_configuration_sets_ttyS1() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(RUNBOOK);
+    let doc = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {RUNBOOK}: {e}"));
+    let blocks = examples(&doc);
+    assert!(!blocks.is_empty(), "{RUNBOOK} shows no settings file");
+    for block in blocks {
+        let file = settings::parse(&block).unwrap_or_else(|e| panic!("{block}\n{e}"));
+        let serve = serve_flags(
+            Path::new("/etc/pxe/pxe.toml"),
+            &file.serve,
+            Path::new("/var/lib/pxe/current"),
+        )
+        .unwrap_or_else(|e| panic!("{block}\n{e}"));
+        let console = serve.serial_console.as_ref().map(|port| port.as_str());
+        assert_eq!(console, Some(FLEET_SERIAL_CONSOLE), "{block}");
+    }
+}
+
+/// A block that sets no serial console, or one on another port, is a problem that names the
+/// block and the port it sets.
+///
+/// Catches the check passing an example that installs the console on `ttyS0`, the port the lab
+/// nodes had before, or on no serial port at all.
+#[test]
+fn a_block_without_the_fleet_serial_console_is_a_problem() {
+    let base = settings_file("proxy", "", "");
+    let cases = [
+        (
+            base.replace("serial-console = \"ttyS1\"\n", ""),
+            "serial-console is not set; the fleet's is \"ttyS1\"",
+        ),
+        (
+            base.replace("\"ttyS1\"", "\"ttyS0\""),
+            "serial-console is \"ttyS0\"; the fleet's is \"ttyS1\"",
+        ),
+        (
+            base.replace("\"ttyS1\"", "\"ttyAMA0\""),
+            "serial-console is \"ttyAMA0\"; the fleet's is \"ttyS1\"",
+        ),
+    ];
+    for (block, why) in cases {
+        assert_ne!(block, base, "{why}");
+        let found = problems(&(document(&every_kind()) + &document(std::slice::from_ref(&block))));
+        assert_eq!(found, [format!("{block}\n{why}")], "{why}");
+    }
 }
 
 /// A runbook that leaves out a kind of settings file has a problem that names it.
