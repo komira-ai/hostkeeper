@@ -259,7 +259,9 @@ key or a value the flag refuses stops `serve` and `prepare` with one line naming
   --speed=115200"`). Set `"ttyS1"` on every farm: the BMC's serial console (Serial over LAN) is
   the board's second serial port, COM2, which Linux names `ttyS1`, on every Linux server, a fleet
   rule and not a value per board model ([console-broker.md](../design/console-broker.md),
-  section 5.2). Every example in this runbook sets it. The board check confirms it (item 8).
+  section 5.2). Every example in this runbook sets it. The board check confirms it (item 8). An
+  Arm board's port is a `ttyAMA<n>`, which gets the kernel's console and the getty but no GRUB
+  serial terminal.
 - `dhcp-listen`, `proxy-listen`, `tftp-listen`, `http-listen`: `address:port` of each socket; by
   default the protocol ports 67, 4011, 69 and 80 on every address. Keep the HTTP port at 80: a
   port other than 80 is written into GRUB's device name, which Ubuntu's signed GRUB is not known
@@ -526,8 +528,9 @@ keep the packets with the result. Power the machine on and read `serve`'s log fo
 8. **The serial console, COM2 = `ttyS1`.** In the firmware setup, console redirection is on
    COM2 at 115200 baud, 8 bits, no parity (on a Supermicro board, Advanced, Serial Port Console
    Redirection, the SOL or COM2 entry; the names are **[V]** per firmware). After the first
-   install of the model, open the BMC's serial console (Serial over LAN): GRUB's menu and then
-   the login prompt with the key hash appear on it. A blank serial console means the BMC does
+   install of the model, reboot the host once (the kernel's console and GRUB's terminal take
+   effect from the second boot) and open the BMC's serial console (Serial over LAN): GRUB's
+   menu and then the login prompt with the key hash appear on it. A blank serial console means the BMC does
    not carry COM2 at 115200 baud: set the redirection and the BMC's SOL bit rate, and check again.
 9. **After the first install of the model,** whether the board keeps the boot order curtin
    writes. Curtin puts the installed system first in the UEFI boot order after an install

@@ -6,9 +6,10 @@
 //! mode, one in router mode, one with `reinstall`, and one with a `[prepare]` table that names
 //! `platform`. Every block also sets `serial-console = "ttyS1"`: the fleet's serial console is
 //! the board's second port, COM2, on every Linux server (docs/design/console-broker.md, section
-//! 5.2), so an example a farm copies installs it. The runbook shows no `pxe serve` or `pxe prepare` command line to type: the unit
-//! and the daemon run them. A renamed or misspelled key, a value a flag does not take, or a
-//! required flag the runbook leaves out fails here.
+//! 5.2), so an example a farm copies installs it. The runbook shows no `pxe serve` or `pxe
+//! prepare` command line to type: the unit and the daemon run them. A renamed or misspelled key,
+//! a value a flag does not take, a required flag the runbook leaves out, or a serial console on
+//! another port fails here.
 
 use std::collections::BTreeSet;
 use std::path::Path;
