@@ -1,6 +1,7 @@
 //! The seed of a machine, against its goldens by exact equality: for each platform, with and
 //! without a role, with one SSH key and several, for each `--install-disk` form, with a serial
-//! console (`ttyS1` with GRUB's serial terminal, an Arm `ttyAMA` port without), and on a port
+//! console (`ttyS1` with GRUB's serial terminal, an Arm `ttyAMA` port without, and the getty
+//! held at 115200 baud on each), and on a port
 //! other than 80 (network-install.md section 11, "Seed generator"). Each
 //! user-data is also read back as YAML, and the whole list of its keys and values is asserted, so
 //! no field beyond the documented ones is in a seed.
@@ -314,8 +315,138 @@ fn the_grub_serial_unit_is_the_ttys_number_and_a_ttyama_port_has_none() {
     }
 }
 
+/// The getty drop-in of a seed with a serial console, as the installed system reads it: the
+/// stock `ExecStart` cleared, then agetty at 115200 baud alone, with no `--keep-baud` list to
+/// fall back to 9600 from (`\\u` is systemd's escape of agetty's `\u`).
+const GETTY_DROP_IN: &str =
+    "[Service]\nExecStart=\nExecStart=-/sbin/agetty -o '-p -- \\\\u' 115200 - $TERM\n";
+
+/// `(path, content)` of every `write_files` entry of a seed, and its `runcmd` lines, each as
+/// its words, read back as YAML.
+fn files_and_runcmd(user_data: &str) -> (Vec<(String, String)>, Vec<Vec<String>>) {
+    let all = scalars(user_data);
+    let field = |index: usize, name: &str| {
+        all.iter()
+            .find(|(path, _)| {
+                *path == format!(".autoinstall.user-data.write_files[{index}].{name}")
+            })
+            .map(|(_, value)| value.clone())
+    };
+    let files = (0..)
+        .map_while(|index| Some((field(index, "path")?, field(index, "content")?)))
+        .collect();
+    let mut runcmd: Vec<Vec<String>> = Vec::new();
+    for (path, value) in &all {
+        let Some(rest) = path.strip_prefix(".autoinstall.user-data.runcmd[") else {
+            continue;
+        };
+        let line: usize = rest[..rest.find(']').expect("an index")]
+            .parse()
+            .expect("a number");
+        if runcmd.len() == line {
+            runcmd.push(Vec::new());
+        }
+        runcmd[line].push(value.clone());
+    }
+    (files, runcmd)
+}
+
+/// The fleet's serial console `ttyS1` (docs/design/console-broker.md, section 5.2): the seed
+/// writes the getty's drop-in, which clears the stock `ExecStart` and runs agetty at 115200
+/// baud alone, and reloads systemd before it enables and starts the getty, so the getty that
+/// starts is the one held at 115200.
+///
+/// Catches a getty left on the stock `--keep-baud 115200,57600,38400,9600` (which drops the
+/// port to 9600 at the first Enter over Serial over LAN, after which the BMC's serial console
+/// shows NUL bytes), a drop-in that adds a second `ExecStart` without clearing the first, a
+/// drop-in for another port's getty or in another directory, a getty enabled before systemd
+/// has read its drop-in, or a seed that differs from its golden in any byte.
+#[test]
+#[expect(
+    non_snake_case,
+    reason = "named after the port, ttyS1, as the console design names this test"
+)]
+fn the_seed_holds_the_ttyS1_getty_at_115200_baud() {
+    let mut build = Build::new(LinuxPlatform::X86_64);
+    build.console = Some("ttyS1".parse().expect("a serial port"));
+    let user_data = build.seed().user_data;
+    assert_eq!(
+        user_data,
+        include_str!("golden/user-data-serial-console.yaml")
+    );
+    let (files, runcmd) = files_and_runcmd(&user_data);
+    let drop_in: Vec<&(String, String)> = files
+        .iter()
+        .filter(|(path, _)| path.contains("serial-getty"))
+        .collect();
+    assert_eq!(
+        drop_in,
+        [&(
+            "/etc/systemd/system/serial-getty@ttyS1.service.d/99_hostkeeper.conf".to_owned(),
+            GETTY_DROP_IN.to_owned()
+        )]
+    );
+    assert!(!GETTY_DROP_IN.contains("keep-baud"));
+    assert_eq!(
+        runcmd,
+        [
+            vec!["update-grub"],
+            vec!["systemctl", "daemon-reload"],
+            vec!["systemctl", "enable", "--now", "serial-getty@ttyS1.service"],
+        ]
+    );
+}
+
+/// The drop-in is the getty's of the seed's own port, at each end of the `ttyS` range, with
+/// two digits, and on an Arm `ttyAMA` port, whose kernel console is at 115200 baud too; a seed
+/// without a serial console writes no drop-in and runs nothing.
+///
+/// Catches a drop-in fixed at `ttyS1` whatever the port, one cut to the first digit of the
+/// port, one written for `ttyS` ports alone, or a drop-in or a `runcmd` in a seed with no
+/// serial console.
+#[test]
+fn the_getty_drop_in_is_the_ports_own_and_absent_without_a_console() {
+    for (platform, port) in [
+        (LinuxPlatform::X86_64, "ttyS0"),
+        (LinuxPlatform::X86_64, "ttyS10"),
+        (LinuxPlatform::X86_64, "ttyS99"),
+        (LinuxPlatform::Arm64, "ttyAMA1"),
+        (LinuxPlatform::Arm64, "ttyAMA12"),
+    ] {
+        let mut build = Build::new(platform);
+        build.console = Some(port.parse().expect("a serial port"));
+        let (files, runcmd) = files_and_runcmd(&build.seed().user_data);
+        assert_eq!(
+            files.last(),
+            Some(&(
+                format!("/etc/systemd/system/serial-getty@{port}.service.d/99_hostkeeper.conf"),
+                GETTY_DROP_IN.to_owned()
+            )),
+            "{port}"
+        );
+        assert_eq!(
+            runcmd.last(),
+            Some(&vec![
+                "systemctl".to_owned(),
+                "enable".to_owned(),
+                "--now".to_owned(),
+                format!("serial-getty@{port}.service")
+            ]),
+            "{port}"
+        );
+    }
+    for platform in [LinuxPlatform::X86_64, LinuxPlatform::Arm64] {
+        let user_data = Build::new(platform).seed().user_data;
+        let (files, runcmd) = files_and_runcmd(&user_data);
+        assert_eq!(files.len(), 2, "{platform}");
+        assert!(runcmd.is_empty(), "{platform}");
+        assert!(!user_data.contains("serial-getty"), "{platform}");
+    }
+}
+
 /// Catches a serial console that is not the installed kernel's `console=`, or whose getty is
-/// not enabled, on an Arm port, whose GRUB defaults are the kernel's `console=` alone.
+/// not enabled or not held at 115200 baud, on an Arm port, whose GRUB defaults are the kernel's
+/// `console=` alone.
 #[test]
 fn a_serial_console_sets_the_kernel_console_and_enables_its_getty() {
     let mut build = Build::new(LinuxPlatform::Arm64);
@@ -329,6 +460,7 @@ fn a_serial_console_sets_the_kernel_console_and_enables_its_getty() {
         .into_iter()
         .filter(|(path, _)| {
             path.starts_with(".autoinstall.user-data.write_files[2]")
+                | path.starts_with(".autoinstall.user-data.write_files[3]")
                 | path.starts_with(".autoinstall.user-data.runcmd")
         })
         .collect();
@@ -345,12 +477,24 @@ fn a_serial_console_sets_the_kernel_console_and_enables_its_getty() {
                 ".autoinstall.user-data.write_files[2].content",
                 "GRUB_CMDLINE_LINUX=\"$GRUB_CMDLINE_LINUX console=tty0 console=ttyAMA0,115200n8\"\n",
             ),
+            (
+                ".autoinstall.user-data.write_files[3].path",
+                "/etc/systemd/system/serial-getty@ttyAMA0.service.d/99_hostkeeper.conf"
+            ),
+            (".autoinstall.user-data.write_files[3].owner", "root:root"),
+            (".autoinstall.user-data.write_files[3].permissions", "0644"),
+            (
+                ".autoinstall.user-data.write_files[3].content",
+                GETTY_DROP_IN
+            ),
             (".autoinstall.user-data.runcmd[0][0]", "update-grub"),
             (".autoinstall.user-data.runcmd[1][0]", "systemctl"),
-            (".autoinstall.user-data.runcmd[1][1]", "enable"),
-            (".autoinstall.user-data.runcmd[1][2]", "--now"),
+            (".autoinstall.user-data.runcmd[1][1]", "daemon-reload"),
+            (".autoinstall.user-data.runcmd[2][0]", "systemctl"),
+            (".autoinstall.user-data.runcmd[2][1]", "enable"),
+            (".autoinstall.user-data.runcmd[2][2]", "--now"),
             (
-                ".autoinstall.user-data.runcmd[1][3]",
+                ".autoinstall.user-data.runcmd[2][3]",
                 "serial-getty@ttyAMA0.service"
             ),
         ])

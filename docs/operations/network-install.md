@@ -261,7 +261,11 @@ key or a value the flag refuses stops `serve` and `prepare` with one line naming
   rule and not a value per board model ([console-broker.md](../design/console-broker.md),
   section 5.2). Every example in this runbook sets it. The board check confirms it (item 8). An
   Arm board's port is a `ttyAMA<n>`, which gets the kernel's console and the getty but no GRUB
-  serial terminal.
+  serial terminal. On either kind of port the getty stays at 115200 baud: the seed writes a
+  drop-in, `/etc/systemd/system/serial-getty@<port>.service.d/99_hostkeeper.conf`, whose
+  `ExecStart=-/sbin/agetty -o '-p -- \\u' 115200 - $TERM` replaces the stock unit's
+  `--keep-baud 115200,57600,38400,9600`, which drops the port to 9600 at the first Enter over
+  Serial over LAN, after which the BMC's serial console shows NUL bytes.
 - `dhcp-listen`, `proxy-listen`, `tftp-listen`, `http-listen`: `address:port` of each socket; by
   default the protocol ports 67, 4011, 69 and 80 on every address. Keep the HTTP port at 80: a
   port other than 80 is written into GRUB's device name, which Ubuntu's signed GRUB is not known
@@ -529,9 +533,14 @@ keep the packets with the result. Power the machine on and read `serve`'s log fo
    COM2 at 115200 baud, 8 bits, no parity (on a Supermicro board, Advanced, Serial Port Console
    Redirection, the SOL or COM2 entry; the names are **[V]** per firmware). After the first
    install of the model, reboot the host once (the kernel's console and GRUB's terminal take
-   effect from the second boot) and open the BMC's serial console (Serial over LAN): GRUB's
-   menu and then the login prompt with the key hash appear on it. A blank serial console means the BMC does
-   not carry COM2 at 115200 baud: set the redirection and the BMC's SOL bit rate, and check again.
+   effect from the second boot) and open the BMC's serial console (Serial over LAN): the
+   kernel's messages and then the login prompt with the key hash appear on it (GRUB's menu
+   appears only when GRUB's timeout is visible, which Ubuntu's default, hidden with a timeout
+   of 0, is not). Press Enter twice: the login prompt is drawn again, readable. A blank serial
+   console means the BMC does not carry COM2 at 115200 baud: set the redirection and the BMC's
+   SOL bit rate, and check again. NUL bytes or garbage after the first Enter mean the getty
+   fell to a slower baud: `systemctl cat serial-getty@ttyS1.service` must show the seed's
+   drop-in, with `115200` alone and no `--keep-baud`.
 9. **After the first install of the model,** whether the board keeps the boot order curtin
    writes. Curtin puts the installed system first in the UEFI boot order after an install
    (`reorder_uefi`, at its default) **[V]**; on the installed host, `sudo efibootmgr` shows the
