@@ -20,10 +20,10 @@ use crate::host_ssh::{PushedSsh, SshReport};
 use crate::operator_keys::{KeysReport, PushedKeys};
 use crate::order::{Order, OrderRef, OrderResult, Outcome, Reply};
 use crate::ports::{
-    CertSource, CertState, ClientIdentity, CoordinatorLink, Dispatch, FactsSink, HeldHalts, Job,
-    LinkError, Log, Observation, OperatorKeysSink, OrderSink, PrerequisitesSink, RecordedService,
-    RemoteLoginProbeSource, RenewalSource, RepositorySink, ServiceObserver, ServiceRecords,
-    Sleeper, SshSink, Tick, TrustedRootSource, UnixClock,
+    CertSource, CertState, ClientIdentity, CoordinatorLink, Dispatch, FactsSink, HeldHalt,
+    HeldHalts, Job, LinkError, Log, Observation, OperatorKeysSink, OrderSink, PrerequisitesSink,
+    RecordedService, RemoteLoginProbeSource, RenewalSource, RepositorySink, ServiceObserver,
+    ServiceRecords, Sleeper, SshSink, Tick, TrustedRootSource, UnixClock,
 };
 use crate::prerequisites::{PrerequisitesReport, PushedPrerequisites};
 use crate::probe::RemoteLoginProbe;
@@ -266,12 +266,15 @@ impl Dispatch for ManualDispatch {
     }
 }
 
-/// A held-halt store in memory: monotone like the daemon's, with every raise recorded.
+/// A held-halt store in memory: monotone like the daemon's, with every raise recorded, and the
+/// halts it holds, each lifted by a raise above its generation as the daemon's is.
 #[derive(Default)]
 pub struct FakeHalts {
     held: Mutex<BTreeMap<String, u64>>,
     raises: Mutex<Vec<(String, u64)>>,
     failing: AtomicBool,
+    halts: Mutex<BTreeMap<String, HeldHalt>>,
+    asked: AtomicU64,
 }
 
 impl FakeHalts {
@@ -290,6 +293,17 @@ impl FakeHalts {
     pub fn raises(&self) -> Vec<(String, u64)> {
         lock(&self.raises).clone()
     }
+
+    /// `service` holds a halt from now on, under `halt.generation`, which is also the one held.
+    pub fn halt(&self, service: &ServiceName, halt: HeldHalt) {
+        self.set(service, halt.generation);
+        lock(&self.halts).insert(service.as_str().to_owned(), halt);
+    }
+
+    /// How many times the loop asked which halt a service holds.
+    pub fn asked(&self) -> u64 {
+        self.asked.load(Ordering::SeqCst)
+    }
 }
 
 impl HeldHalts for FakeHalts {
@@ -304,8 +318,16 @@ impl HeldHalts for FakeHalts {
         }
         let mut held = lock(&self.held);
         let entry = held.entry(service.as_str().to_owned()).or_insert(0);
+        if generation > *entry {
+            lock(&self.halts).remove(service.as_str());
+        }
         *entry = (*entry).max(generation);
         Ok(())
+    }
+
+    fn holding(&self, service: &ServiceName) -> Option<HeldHalt> {
+        self.asked.fetch_add(1, Ordering::SeqCst);
+        lock(&self.halts).get(service.as_str()).cloned()
     }
 }
 

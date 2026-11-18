@@ -262,6 +262,30 @@ pub struct DeferredReport {
     pub retry_after_secs: u64,
 }
 
+/// A halt the host holds of a service of its own: the service's step record ended in a halt, and
+/// the host refuses every order of it (`halted`) until a halt generation above `generation`
+/// comes ([`ServiceBeat::local_halt`](crate::wire::ServiceBeat::local_halt)). The coordinator
+/// reads it from the gRPC route only (`ServiceBeat.local_halt` of `hostkeeper.agent.v1`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalHalt {
+    /// The halt's reason; absent when it has none, and read as absent when it is no token.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient"
+    )]
+    pub reason: Option<Token>,
+    /// The halt generation the host holds; 0 when it holds none.
+    pub generation: u64,
+    /// Seconds since the host last wrote that generation; absent when it has none written.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient"
+    )]
+    pub age_secs: Option<u64>,
+}
+
 /// A field that is read as `None` when its value is not one of `T`: for a fact a newer agent
 /// may spell in a way this reader does not know.
 pub(crate) fn lenient<'de, D, T>(d: D) -> Result<Option<T>, D::Error>

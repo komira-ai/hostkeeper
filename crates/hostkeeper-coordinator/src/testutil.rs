@@ -241,6 +241,7 @@ pub fn secs(n: u64) -> Duration {
 /// A healthy heartbeat of a host running `running`, not updating, with no update behind it.
 pub fn beat(running: &str) -> Heartbeat {
     Heartbeat {
+        local_halt: None,
         platform: Platform::LinuxX86_64,
         version: version(running),
         health: Health::Healthy,

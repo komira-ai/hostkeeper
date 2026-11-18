@@ -108,8 +108,9 @@ use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_wire::wire::clip_renew_error;
 
 use crate::beat::{
-    ANNOUNCED, FACTS, Feature, Features, Health, Heartbeat, Liveness, OPERATOR_KEYS, Observed,
-    PREREQUISITES, PRIVATE_REPOSITORY, Platform, REPOSITORIES, Renewal, SSH, ServiceFacts, fit,
+    ANNOUNCED, FACTS, Feature, Features, Health, Heartbeat, Liveness, LocalHalt, OPERATOR_KEYS,
+    Observed, PREREQUISITES, PRIVATE_REPOSITORY, Platform, REPOSITORIES, Renewal, SSH,
+    ServiceFacts, fit,
 };
 use crate::deferral::{Book, Deferral};
 use crate::host_facts::PushedFacts;
@@ -517,6 +518,11 @@ impl Heartbeater {
                 record_try,
                 installer,
                 drift: observation.drift,
+                local_halt: self
+                    .ports
+                    .halts
+                    .holding(&name)
+                    .map(|held| LocalHalt::at(held, now)),
                 name,
             });
         }
@@ -646,6 +652,7 @@ impl Heartbeater {
             record_try: None,
             installer: None,
             drift: None,
+            local_halt: None,
             name,
         }
     }

@@ -512,6 +512,14 @@ fn installed_version(beat: &Heartbeat) -> Option<String> {
 /// already the service's own entry.
 fn service_beat(service: &str, beat: &Heartbeat) -> agent::ServiceBeat {
     agent::ServiceBeat {
+        local_halt: beat.local_halt.as_ref().map(|halt| agent::LocalHalt {
+            reason: halt
+                .reason
+                .as_ref()
+                .map(|reason| reason.as_str().to_owned()),
+            generation: halt.generation,
+            age_secs: halt.age_secs,
+        }),
         name: service.to_owned(),
         version: beat.version.as_str().to_owned(),
         health: health(beat.health).into(),
@@ -624,6 +632,8 @@ fn gate_reason(hold: Option<Why>) -> proto::GateReason {
 fn gate_of(gate: Gate) -> proto::GateReason {
     match gate {
         Gate::Halted => proto::GateReason::Halted,
+        Gate::HaltedHere => proto::GateReason::HaltedHere,
+        Gate::StaleHaltHere => proto::GateReason::StaleHaltHere,
         Gate::Held => proto::GateReason::Held,
         Gate::Bad => proto::GateReason::Bad,
         Gate::BelowMinVersion => proto::GateReason::Unspecified,

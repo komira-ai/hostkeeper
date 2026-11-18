@@ -39,7 +39,9 @@ use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use hostkeeper_wire::version::Version as WireVersion;
 use hostkeeper_wire::wire::{is_drift_version, is_service_name};
 
-use crate::beat::{AGENT_NAME, Feature, Health, Heartbeat, Platform, RootReason, ServiceFacts};
+use crate::beat::{
+    AGENT_NAME, Feature, Health, Heartbeat, LocalHalt, Platform, RootReason, ServiceFacts,
+};
 use crate::host_facts::PushedFacts;
 use crate::host_ssh::{PushedSsh, SshReport};
 use crate::names::{OrderId, PackageDigest};
@@ -249,8 +251,21 @@ fn service(facts: &ServiceFacts) -> Result<pb::ServiceBeat, Unsendable> {
         record_try: facts.record_try,
         installer: facts.installer.clone(),
         drift: facts.drift.as_ref().and_then(drift),
+        local_halt: facts.local_halt.as_ref().map(local_halt),
         ..pb::ServiceBeat::default()
     })
+}
+
+/// A halt the host holds as `local_halt`.
+fn local_halt(halt: &LocalHalt) -> pb::LocalHalt {
+    pb::LocalHalt {
+        reason: halt
+            .reason
+            .as_ref()
+            .map(|reason| reason.as_str().to_owned()),
+        generation: halt.generation,
+        age_secs: halt.age_secs,
+    }
 }
 
 /// A drift as `drift`; none for one whose string is outside the grammar of a package version,
@@ -557,3 +572,7 @@ mod keys_tests;
 #[cfg(test)]
 #[path = "proto_map_prerequisites_tests.rs"]
 mod prerequisites_tests;
+
+#[cfg(test)]
+#[path = "proto_map_local_halt_tests.rs"]
+mod local_halt_tests;

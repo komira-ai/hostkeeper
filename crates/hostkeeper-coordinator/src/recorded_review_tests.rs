@@ -24,6 +24,7 @@ fn who(name: &str, role: RoleName) -> Identity {
 /// `top` that also runs `service` at `running`.
 fn announcing_other(mut top: Heartbeat, service: &str, running: &str) -> Heartbeat {
     top.services = Some(vec![ServiceBeat {
+        local_halt: None,
         name: service.to_owned(),
         version: version(running),
         health: Health::Healthy,
@@ -207,6 +208,8 @@ fn the_hold_strings_are_the_ones_the_status_documents() {
     let gate = |gate: Gate| -> &'static str {
         match gate {
             Gate::Halted => "halted",
+            Gate::HaltedHere => "halted_here",
+            Gate::StaleHaltHere => "stale_halt_here",
             Gate::Held => "held",
             Gate::Bad => "bad",
             Gate::BelowMinVersion => "below_min_version",
@@ -244,6 +247,8 @@ fn the_hold_strings_are_the_ones_the_status_documents() {
     };
     for g in [
         Gate::Halted,
+        Gate::HaltedHere,
+        Gate::StaleHaltHere,
         Gate::Held,
         Gate::Bad,
         Gate::BelowMinVersion,

@@ -19,9 +19,9 @@ use serde::{Deserialize, Serialize};
 use crate::names::Platform;
 use crate::version::Version;
 pub use crate::wire_report::{
-    Answer, Class, CommitState, DeferredReport, MAX_ACKS, MAX_FEATURES, MAX_FEATURES_BEFORE_SSH,
-    MAX_ORDER_ID, MAX_STEP_NAME, MAX_STEP_SECS, MAX_TOKEN, ORDER_FEATURE, OrderId, PackageDigest,
-    Phase, StepName, StepRun, Token, VERDICT_ACKS_FEATURE, VerdictAck,
+    Answer, Class, CommitState, DeferredReport, LocalHalt, MAX_ACKS, MAX_FEATURES,
+    MAX_FEATURES_BEFORE_SSH, MAX_ORDER_ID, MAX_STEP_NAME, MAX_STEP_SECS, MAX_TOKEN, ORDER_FEATURE,
+    OrderId, PackageDigest, Phase, StepName, StepRun, Token, VERDICT_ACKS_FEATURE, VerdictAck,
 };
 use crate::wire_report::{features_text, is_false, lenient, or_default, step_secs_text};
 
@@ -109,6 +109,10 @@ pub struct UpdateResult {
 /// try as its step record's for another package (`try_conflict`), or a lower one (`stale_try`).
 pub const TRY_REFUSALS: [&str; 2] = ["try_conflict", "stale_try"];
 
+/// The reason of the refusal a daemon gives every order of a service it holds a halt of
+/// ([`ServiceBeat::local_halt`]) until a greater halt generation lifts it.
+pub const HALTED_REFUSAL: &str = "halted";
+
 impl UpdateResult {
     /// Whether this is a refusal of [`TRY_REFUSALS`]: failed, with no phase and no class, for
     /// one of their reasons. The host ran nothing; the two sides disagree on the try, and the
@@ -123,6 +127,20 @@ impl UpdateResult {
                 .reason
                 .as_ref()
                 .is_some_and(|reason| TRY_REFUSALS.contains(&reason.as_str()))
+    }
+
+    /// Whether this is the refusal a daemon gives every order of a service it holds a halt of
+    /// ([`HALTED_REFUSAL`]): failed, with no phase and no class. The host ran nothing; the halt
+    /// it holds, not the version, refused it.
+    #[must_use]
+    pub fn is_halted_refusal(&self) -> bool {
+        self.outcome == Outcome::Failed
+            && self.phase.is_none()
+            && self.class.is_none()
+            && self
+                .reason
+                .as_ref()
+                .is_some_and(|reason| reason.as_str() == HALTED_REFUSAL)
     }
 
     /// A result with no phase, class, reason or order: what an updater without them reports.
@@ -248,6 +266,14 @@ pub struct Heartbeat {
         deserialize_with = "lenient"
     )]
     pub record_try: Option<u64>,
+    /// A halt the host holds of the service of its own ([`LocalHalt`]); absent while it holds
+    /// none, and from an agent that predates it. A value that is no [`LocalHalt`] reads as `None`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient"
+    )]
+    pub local_halt: Option<LocalHalt>,
 }
 
 /// The most bytes of a heartbeat's `last_renew_error` that are sent and read.
@@ -390,6 +416,14 @@ pub struct ServiceBeat {
         deserialize_with = "lenient"
     )]
     pub record_try: Option<u64>,
+    /// A halt the host holds of the service of its own ([`LocalHalt`]); absent while it holds
+    /// none, and from an agent that predates it. A value that is no [`LocalHalt`] reads as `None`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient"
+    )]
+    pub local_halt: Option<LocalHalt>,
 }
 
 impl ServiceBeat {
@@ -414,6 +448,7 @@ impl ServiceBeat {
             cert_not_after_unix: None,
             last_renew_error: None,
             record_try: self.record_try,
+            local_halt: self.local_halt.clone(),
         }
     }
 }
@@ -588,6 +623,8 @@ struct HeartbeatLoose {
     last_renew_error: Option<String>,
     #[serde(default, deserialize_with = "lenient")]
     record_try: Option<u64>,
+    #[serde(default, deserialize_with = "lenient")]
+    local_halt: Option<LocalHalt>,
 }
 
 /// One droppable value read as `T`: its default, and the reason, when it is bad.
@@ -682,6 +719,7 @@ fn without_droppable(bytes: &[u8]) -> Option<HeartbeatRead> {
         cert_not_after_unix: rest.cert_not_after_unix,
         last_renew_error: rest.last_renew_error,
         record_try: rest.record_try,
+        local_halt: rest.local_halt,
     };
     let mut facts: Vec<&'static str> = extras.iter().map(|(fact, _)| *fact).collect();
     facts.sort_unstable();

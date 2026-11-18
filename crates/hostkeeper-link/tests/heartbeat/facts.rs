@@ -52,6 +52,7 @@ fn heartbeat_lists_installed_services_from_records_and_observer() {
         features: ANNOUNCED.to_vec(),
         services: vec![
             ServiceFacts {
+                local_halt: None,
                 name: service("x"),
                 version: version("1.0"),
                 health: Health::Unhealthy,
@@ -68,6 +69,7 @@ fn heartbeat_lists_installed_services_from_records_and_observer() {
                 drift: None,
             },
             ServiceFacts {
+                local_halt: None,
                 name: service("y"),
                 version: version("2.0"),
                 health: Health::Healthy,

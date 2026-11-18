@@ -145,6 +145,15 @@ pub enum Gate {
     /// The service is halted: a host reported a failure no version can repair and an operator
     /// has not cleared it. Checked before every other rule ([`crate::halt::decide`]).
     Halted,
+    /// The host holds a halt of the service of its own (its beat's `local_halt`) that no halt of
+    /// this coordinator stands for, under a generation this coordinator has issued: it refuses
+    /// every order of the service until a greater one, which `clear_halt` issues. Checked right
+    /// after [`Gate::Halted`] ([`crate::halt::decide`]).
+    HaltedHere,
+    /// As [`Gate::HaltedHere`], under a generation above any this coordinator has issued (another
+    /// coordinator's): no generation it sends lifts it but the one `clear_halt` issues past it
+    /// ([`crate::operate::past_held`]).
+    StaleHaltHere,
     /// An operator holds the pair ([`crate::holds`]): it is ordered nothing until the hold is
     /// released. Checked right after the host is found a member of the service.
     Held,

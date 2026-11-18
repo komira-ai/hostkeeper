@@ -149,7 +149,7 @@ service Releases {
   rpc Force(ForceRequest) returns (ForceResponse);
   // Lift a bad mark from a version, so that it may be ordered and CI may set it again.
   rpc UnmarkBad(UnmarkBadRequest) returns (UnmarkBadResponse);
-  // Lift a service's standing halt.
+  // Lift a service's standing halt, and the halts hosts hold of it of their own.
   rpc ClearHalt(ClearHaltRequest) returns (ClearHaltResponse);
   // Everything the coordinator holds about each service. Changes nothing.
   rpc Status(StatusRequest) returns (StatusResponse);
@@ -295,7 +295,7 @@ enum ReleasesRefusal {
   // FAILED_PRECONDITION: a force to a version older than the service's `min_version`, the first
   // release that has its update hook. Such a release is installed on each host by hand.
   RELEASES_REFUSAL_BELOW_MIN_VERSION = 8;
-  // FAILED_PRECONDITION: `ClearHalt` of a service that is not halted.
+  // FAILED_PRECONDITION: `ClearHalt` of a service that is not halted and no host holds halted.
   RELEASES_REFUSAL_NOT_HALTED = 9;
   // FAILED_PRECONDITION: `UnmarkBad` of a version that is not marked bad.
   RELEASES_REFUSAL_NOT_MARKED_BAD = 10;
@@ -691,6 +691,12 @@ enum GateReason {
   // whose uninstall goes before it, because the group listed it after this one, is still on the
   // host, so a config package goes before its service (docs/design/hostgroups.md section 1.4).
   GATE_REASON_UNINSTALL_ORDER = 36;
+  // The host holds a halt of the service of its own (`ServiceBeat.local_halt` names it) that no
+  // halt of this coordinator stands for; `Releases.ClearHalt` of the service lifts it.
+  GATE_REASON_HALTED_HERE = 37;
+  // As `GATE_REASON_HALTED_HERE`, but the host holds a generation above any this coordinator has
+  // issued, so no generation it sends lifts it but the one `Releases.ClearHalt` issues past it.
+  GATE_REASON_STALE_HALT_HERE = 38;
 }
 
 // Whether a service counts a host.
@@ -1098,9 +1104,10 @@ message UnmarkBadResponse {
 }
 
 // Lifts the halt, acknowledges the report that raised it and every other halt report received
-// while it stood, and raises the service's clear generation by one, which agents are told in
-// every heartbeat reply (`halt_generations`). An acknowledged report does not halt the service
-// again while its host keeps reporting it.
+// while it stood, and raises the service's clear generation by one, or past the highest one a host
+// reports holding a halt under (`ServiceBeat.local_halt`), which agents are told in every
+// heartbeat reply (`halt_generations`). An acknowledged report does not halt the service again
+// while its host keeps reporting it.
 message ClearHaltRequest {
   string service = 1;
   string reason = 2;

@@ -960,7 +960,7 @@ Lift a bad mark from a version, so that it may be ordered and CI may set it agai
 
 `/hostkeeper.operator.v1.Releases/ClearHalt`
 
-Lift a service's standing halt.
+Lift a service's standing halt, and the halts hosts hold of it of their own.
 
 | flag | value | meaning |
 |---|---|---|

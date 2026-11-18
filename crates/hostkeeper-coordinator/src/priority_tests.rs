@@ -65,6 +65,7 @@ fn offered(rig: &Rig, announced: &[&str]) -> Vec<String> {
                 .map(|name| {
                     let b = beat("1.0");
                     ServiceBeat {
+                        local_halt: None,
                         name: (*name).to_owned(),
                         version: running.get(*name).cloned().unwrap_or(b.version),
                         health: b.health,
