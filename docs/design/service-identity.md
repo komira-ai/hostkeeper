@@ -92,7 +92,11 @@ nothing.
   rename or replace any; root never follows a link it did not make there. Each file is owned by
   the account, mode `0600`. The account is `identityAccount` from the manifest, `root` when absent.
   It is looked up on the host by name (`/etc/passwd` on Linux, the directory service on macOS); an
-  account the host does not have is reported and nothing is written.
+  account the host does not have is reported and nothing is written. A file in a service's
+  directory owned by another user than the account (the account changed) counts as absent: it is
+  neither read nor trusted, and the pass makes a new key, asks for a certificate for it and
+  installs both, owned by the new account. A link is still refused, and so is a file that is not
+  regular or is too large.
 - **Writing.** Each file is written to a new temporary file in the same directory, owned and moded
   before any byte is written, synced, and renamed over the old one; the directory is synced. A
   reader sees the old file or the new one, never half of one. The key is written before the
@@ -109,11 +113,19 @@ nothing.
   service with `identity`, the installed certificate's `notAfter` and the last error
   (`HeartbeatRequest.service_identities`, read whatever features the heartbeat announces: a
   heartbeat's list of features holds at most 16 names, which a Linux daemon already fills, so no
-  feature is announced for it, and a daemon that predates the field leaves it empty); `Hosts.Get` shows it in the host's heartbeat.
+  feature is announced for it, and a daemon that predates the field leaves it empty); `Hosts.Get`
+  shows it in the host's heartbeat. The report names at most 16 services, the first 16 by name,
+  since the coordinator drops a longer list whole; the daemon keeps the certificates of every
+  service all the same.
 - **Stopping.** The coordinator refuses a host that is retired, a service that is unassigned or
   being uninstalled, and an auto host without approval: the daemon keeps what it holds, which
   expires within 8 hours, and keeps asking. Uninstalling a service removes its identity
-  directory, after the hook's `uninstall` step and before the service is forgotten.
+  directory, after the hook's `uninstall` step and before the service is forgotten. After each
+  pass the daemon also removes the identity directory of every service it does not have
+  installed (no `current` version, or an uninstall under way) and any directory no service
+  owns, reading what is installed after the pass, so a pass that began before an uninstall
+  leaves no key behind; when it cannot read what is installed it removes nothing. An installed
+  service whose entry no longer asks for an identity keeps what it holds.
 
 ## 5. The deny list for relying parties
 
