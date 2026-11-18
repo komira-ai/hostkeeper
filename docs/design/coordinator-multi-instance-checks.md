@@ -56,7 +56,7 @@ states. It was run on the first draft's lock and not rerun for the gate row, whi
 All changes are additive: tables `fleet_*`, `cluster_quiet`, `rollout_gate`, `periodic_jobs`, `instances`, `sessions`, `login_failures`, `alerts`,
 `state_versions`, `tx_ledger`, `audit_counter`, `fleet_bakes`, the sequence `desired_seq`, columns with defaults (`set_seq`,
 `set_for`, `facts_generation`). No column renumbered, renamed or re-meant; no proto change. The fence trigger is untouched.
-Migrations `0019` (`tx_ledger`, built) and `0020` say `older-releases: may-run` (the migration lint's header rule; both add only). Why that is safe, and
+Migration `0019` (`tx_ledger`, built) and every new one from `0020` say `older-releases: may-run` (the migration lint's header rule; each adds only). Why that is safe, and
 no `refuse`: while any new instance runs it holds the shared lock, so the release before cannot start (exclusive lock refused);
 with none running the release before takes the exclusive lock and runs on its own tables, ignoring the new ones, which is
 the back-out. What it forgets is the fleet (it never had one stored), as at every start of today.

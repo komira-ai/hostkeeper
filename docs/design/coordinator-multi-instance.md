@@ -181,7 +181,7 @@ the same new migration, and one would fail on a duplicate object. The runner the
 
 ## 5. The fleet moves into Postgres
 
-### 5.1 Tables (all new, additive; migration `0020`, `-- older-releases: may-run`)
+### 5.1 Tables (all new, additive; migrations from `0020`, each `-- older-releases: may-run`)
 
 | Table | Holds | Logged |
 |---|---|---|
@@ -825,7 +825,7 @@ test in Rust, before any of the code (PR M2), with a negative variant for every 
 
 Moved to [coordinator-multi-instance-checks.md](coordinator-multi-instance-checks.md), section 15. In one paragraph: every change
 is additive (new tables, a sequence, columns with defaults, flags; no proto change; the fence trigger untouched), migrations
-`0019` (built) and `0020` are `may-run`, the release before is refused while a new instance runs and runs on the migrated database after they stop, and
+`0019` (built) and every new one from `0020` are `may-run`, the release before is refused while a new instance runs and runs on the migrated database after they stop, and
 each behaviour has a named test with a failure case.
 
 ## 16. Cutover and back-out (reversible)
@@ -863,7 +863,7 @@ the farm): the back-out is a stopgap while a fix ships.
 |---|---|---|---|
 | M1 | Measure on the deployment: round trip on the socket, the gate's hold and the operator edit's wait under a 50% stage, how often a beat finds the gate busy, DDL lock wait of a migration against a running instance, `fleet_hosts` write cost at the real host count, `max_connections`, the Postgres version; a table in this document | none | S |
 | M2 | The models of section 14 (spec and Rust state-space test at N = 1, 2, 3), failing on the unlocked variants | M1 | M |
-| M3 | Built by komira-ai/hostkeeper#395: the shared fence lock, the `tx_ledger` settle (`0019`), no `lease.commits` write, no deposed exit, the migration mutex, the session timeouts. Left: the pool of sessions, `instances` (`0020` part 1), DDL `lock_timeout` with its bounded retry, the migration lint rule. Still one instance | M2 | M |
+| M3 | Built by komira-ai/hostkeeper#395: the shared fence lock, the `tx_ledger` settle (`0019`), no `lease.commits` write, no deposed exit, the migration mutex, the session timeouts. Left: the pool of sessions, `instances` (a migration of its own), DDL `lock_timeout` with its bounded retry, the migration lint rule. Still one instance | M2 | M |
 | M4 | Row-transaction edits and `state_versions` invalidation for desired, ops, accounts, layout, verdicts, with the row-lock order of section 6 and the one-snapshot reload rule; `rollout_gate` with `SKIP LOCKED` for beats and the operator wait; `audit_counter` and its start-time re-seed; `facts_generation` | M3 | L |
 | M5 | Enrollment: conditional writes, `FOR UPDATE`, fresh deny read; spent-token cache | M3 | M |
 | M6 | The fleet in Postgres, without decisions: `fleet_*`, `cluster_quiet` and the gap rule, the ordered beat upsert, the in-SQL bake, the converged path | M4, M5 | M |
