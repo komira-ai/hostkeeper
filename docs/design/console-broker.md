@@ -61,7 +61,7 @@ For the incident: **Boot device: disk, persistent**, then **Power: cycle**, then
 - **Addresses.** **No IP address of a host or a BMC is stored.** `Claims.addresses` is link-layer addresses only.
 - **Records.** A host's `Host` message carries `data_macs` and `bmc_mac` only when exactly one inventory record matches. The six lab nodes enrolled before records existed; each now has a record (`Enrollment.AddRecord` with the role empty, [enrollment.md](../operations/enrollment.md)) whose `bmc_mac` equals the MAC its BMC reports (**Measured**, C0, section 17.1; the records were in place before C0 ran).
 - **MDM.** The gate is linked into the coordinator and talks to NanoHUB on loopback only (**Built**: `src/mdm.rs`, `crates/hostkeeper-mdm-gate/src/command.rs`). `COMMAND_TYPES` has five types (`DeviceInformation`, `SecurityInfo`, `InstallProfile`, `RemoveProfile`, `InstallEnterpriseApplication`), pinned by `the_gate_enqueues_only_its_five_command_types`; `QUERIES` has three (`SerialNumber`, `UDID`, `IsSupervised`), pinned by `a_command_is_the_xml_plist_nanohub_takes`. Enrollment step 3 installs the config profile and then the pkg (hostkeeper-mdm.md (hostkeeper-mdm.md, removed) section 2).
-- **Install.** `--serial-console ttyS<n>` makes the seed write the installed kernel's `console=tty0 console=ttyS<n>,115200n8` and enable `serial-getty@ttyS<n>` (**Built**: `crates/hostkeeper-pxe-seed/src/seed.rs`). It does not write the GRUB serial terminal lines (section 5.3).
+- **Install.** `--serial-console ttyS<n>` makes the seed write the installed kernel's `console=tty0 console=ttyS<n>,115200n8` and enable `serial-getty@ttyS<n>`, and on a `ttyS<n>` port the GRUB serial terminal lines of section 5.2 with `--unit=<n>` (**Built**, C8: `crates/hostkeeper-pxe-seed/src/seed.rs`). The runbook's install configuration sets `ttyS1` (section 5.3).
 
 ## 5. The serial standard: COM2 on every Linux server
 
@@ -89,7 +89,7 @@ Supermicro BMCs carry SOL on the board's second serial port, COM2, which Linux n
 
 ### 5.3 The install baseline
 
-[network-install.md](../operations/network-install.md) and its install configuration move to `--serial-console ttyS1` for every Linux server, and the seed gains the two GRUB lines above (today it writes only the kernel `console=` and the getty). That is a change to the seed's golden and to the doc's "serial console" paragraph and its board check (**Designed**, C8). The six existing nodes were not installed that way: they move to the baseline by editing `/etc/default/grub` and enabling the getty once each, a step in the operations doc (C9), and C0 tries it on one node first.
+[network-install.md](../operations/network-install.md) and its install configuration move to `--serial-console ttyS1` for every Linux server, and the seed writes the two GRUB lines above beside the kernel `console=` and the getty. That is a change to the seed's golden and to the doc's "serial console" paragraph and its board check (**Built**, C8: `the_seed_writes_the_grub_serial_terminal_for_ttyS1` in `crates/hostkeeper-pxe-seed/tests/seed.rs`, `the_farm_install_configuration_sets_ttyS1` in `crates/hostkeeper-pxe/src/runbook_tests.rs`). An Arm `ttyAMA<n>` port keeps the kernel `console=` and the getty alone: GRUB's `--unit` numbers the PC's COM ports, not the Arm one. The six existing nodes were not installed that way: they move to the baseline by editing `/etc/default/grub` and enabling the getty once each, a step in the operations doc (C9), and C0 tries it on one node first.
 
 ## 6. What each device offers
 
