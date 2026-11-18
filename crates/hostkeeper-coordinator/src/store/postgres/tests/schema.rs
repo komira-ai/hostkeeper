@@ -39,6 +39,7 @@ fn shipped_rows() -> Vec<Vec<Option<String>>> {
         row("17", "lab_sleds", "may-run"),
         row("18", "remove_host_group_all", "may-run"),
         row("19", "tx_ledger", "may-run"),
+        row("20", "ssh_certs", "may-run"),
     ]
 }
 

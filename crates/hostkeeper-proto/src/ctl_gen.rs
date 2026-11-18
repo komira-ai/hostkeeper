@@ -10,7 +10,8 @@
 //!
 //! - `(hostkeeper.secret)` on a field that is not `string` or `bytes`, anywhere a request or a
 //!   response reaches;
-//! - a streaming RPC (the generated command lines make unary calls only);
+//! - a streaming RPC (the generated command lines make unary calls only), except the ones
+//!   [`GRPC_ONLY`] names, which the table leaves out and a hand-written command calls;
 //! - a request or response that reaches a `google.protobuf.*` message, whose canonical JSON has
 //!   special forms the output does not write;
 //! - two RPCs with one command path, two inputs of one RPC with one flag, or an input whose flag
@@ -39,6 +40,10 @@ pub const RESERVED_FLAGS: &[&str] = &[
     "token-stdin",
     "transport",
 ];
+
+/// The streaming RPCs the command table leaves out, by full name: a hand-written command makes
+/// the call (`hkctl ssh-proxy`). Any other streaming RPC fails the build.
+pub const GRPC_ONLY: &[&str] = &["hostkeeper.operator.v1.Ssh.Tunnel"];
 
 /// Whether a service is one of a host's admin socket (its package is `hostkeeper.local.v<n>`),
 /// whose verbs stay hand-written.
@@ -421,6 +426,9 @@ pub fn generate(pool: &DescriptorPool) -> Result<String, GenError> {
             continue;
         }
         for method in service.methods() {
+            if GRPC_ONLY.contains(&method.full_name()) {
+                continue;
+            }
             let command = format!("{} {}", kebab(service.name()), kebab(method.name()));
             if !commands.insert(command.clone()) {
                 return Err(GenError::CommandClash { command });

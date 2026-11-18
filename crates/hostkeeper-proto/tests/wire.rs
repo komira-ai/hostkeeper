@@ -429,6 +429,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 39] = [
             ("installers", 10),
             ("repositories", 11),
             ("facts_generation", 12),
+            ("ssh", 13),
             ("remote_login_probe", 14),
             ("operator_keys", 15),
         ],
@@ -443,6 +444,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 39] = [
             ("repositories", 5),
             ("facts", 6),
             ("operator_keys", 7),
+            ("ssh", 8),
         ],
     ),
     (
@@ -491,6 +493,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 39] = [
             ("image", 3),
             ("renewal_of", 4),
             ("mac_nonce", 5),
+            ("host_key_fingerprints", 6),
         ],
     ),
     (

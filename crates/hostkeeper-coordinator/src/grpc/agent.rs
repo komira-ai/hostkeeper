@@ -37,6 +37,7 @@ pub(crate) fn beat_status(refused: BeatRefused) -> Status {
 /// The `HeartbeatResponse` for `answer`, and the typed order beside it when there is one.
 fn response_of(answer: Answer, order: Option<Order>) -> proto::HeartbeatResponse {
     proto::HeartbeatResponse {
+        ssh: None,
         order: order.as_ref().map(Order::to_proto),
         features: answer.features.unwrap_or_default(),
         halt_generations: answer.halts.into_iter().collect(),

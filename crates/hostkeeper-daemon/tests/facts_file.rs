@@ -112,6 +112,10 @@ fn a_host_writes_the_facts_of_a_reply_and_reports_their_generation() {
     if hostkeeper_daemon::links::reads_private_repositories(hostkeeper_daemon::links::PLATFORM) {
         features.push(Feature::PrivateRepositoryV1);
     }
+    // A Linux daemon sets sshd up (`ssh-v1`); a Mac's setup is a later change.
+    if hostkeeper_daemon::links::sets_ssh_up(hostkeeper_daemon::links::PLATFORM) {
+        features.push(Feature::SshV1);
+    }
     assert_eq!(beats[0].features, features);
     assert_eq!(beats[0].facts_generation, None);
     assert_eq!(beats[1].facts_generation, Some(7));
@@ -126,6 +130,16 @@ fn a_host_writes_the_facts_of_a_reply_and_reports_their_generation() {
         )
     );
     assert_eq!(dispatch.pending(), 1, "the order of the reply was started");
+}
+
+/// Proves a Linux daemon sets sshd up (and announces `ssh-v1`) and a Mac daemon does not, yet.
+#[test]
+fn only_a_linux_daemon_sets_ssh_up() {
+    use hostkeeper_daemon::links::sets_ssh_up;
+    use hostkeeper_link::Platform;
+    assert!(sets_ssh_up(Platform::LinuxX86_64));
+    assert!(sets_ssh_up(Platform::LinuxArm64));
+    assert!(!sets_ssh_up(Platform::DarwinArm64));
 }
 
 /// Proves facts from a coordinator that does not advertise `facts-v1` are not written, and the

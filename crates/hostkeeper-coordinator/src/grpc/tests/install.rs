@@ -17,6 +17,7 @@ const INSTALLER: [&str; 3] = ["heartbeat-v2", "install-v1", "target-v1"];
 /// version and healthy.
 fn installer_beat(services: &[(&str, &str)]) -> proto::HeartbeatRequest {
     proto::HeartbeatRequest {
+        ssh: None,
         installers: vec!["apt".to_owned()],
         repositories: None,
         platform: proto::Platform::LinuxArm64 as i32,

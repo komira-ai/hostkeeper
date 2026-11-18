@@ -278,6 +278,7 @@ pub(crate) fn reply(answer: Answer) -> Mapped {
             repositories: None,
             facts: None,
             operator_keys: None,
+            ssh: None,
         },
         update,
     }

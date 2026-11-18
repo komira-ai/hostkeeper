@@ -13,6 +13,7 @@ use hostkeeper_steps::Clock;
 
 use crate::beat::{Health, Heartbeat, Liveness, Oversize, Renewal, TrustedRootFacts};
 use crate::host_facts::PushedFacts;
+use crate::host_ssh::{PushedSsh, SshReport};
 use crate::names::Reason;
 use crate::operator_keys::{KeysReport, PushedKeys};
 use crate::order::{Order, OrderRef, OrderResult, Reply};
@@ -289,6 +290,17 @@ pub trait OperatorKeysSink: Send + Sync {
     /// Puts `keys` in force when they pass the sink's checks, or keeps what is in force. It says
     /// nothing back: the next report does.
     fn apply(&self, keys: &PushedKeys);
+}
+
+/// The host's sshd setup, which the coordinator's SSH access replaces (`ssh-v1`). A daemon that
+/// has one announces the feature and reports what its last setup came to.
+pub trait SshSink: Send + Sync {
+    /// What the setup has come to, or none until it has been asked to do anything. Sent in
+    /// every heartbeat.
+    fn report(&self) -> Option<SshReport>;
+
+    /// Sets sshd up as `access` says. It says nothing back: the next report does.
+    fn apply(&self, access: &PushedSsh);
 }
 
 /// One job for a worker.

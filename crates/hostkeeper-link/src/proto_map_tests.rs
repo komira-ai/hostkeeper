@@ -55,6 +55,7 @@ fn beat(platform: Platform, services: Vec<ServiceFacts>) -> Heartbeat {
         facts_generation: None,
         remote_login_probe: None,
         operator_keys: None,
+        ssh: None,
     }
 }
 
@@ -213,6 +214,7 @@ fn a_heartbeat_with_every_fact_maps_to_the_request_field_for_field() {
     assert_eq!(
         request,
         pb::HeartbeatRequest {
+            ssh: None,
             installers: Vec::new(),
             repositories: None,
             platform: pb::Platform::LinuxArm64 as i32,

@@ -1,0 +1,39 @@
+[package]
+name = "hostkeeper-hkssh"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "`hkssh`: the operator's side of SSH through the coordinator: the byte-stream proxy to a host's sshd, `ssh` with a short-lived certificate, revoking certificates, and the status of a host's pins."
+
+# docs/design/ssh-through-coordinator.md section 8. `hkctl ssh`, `hkctl ssh-proxy`,
+# `hkctl ssh-revoke` and `hkctl ssh-status` run this binary; it ships beside `hkctl`. It holds the
+# operator's token only as the file the flag names, reads it for each call and never puts it in
+# an argument or a file of its own.
+[[bin]]
+name = "hkssh"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+# The `Ssh` client and its messages.
+hostkeeper-proto = { path = "../hostkeeper-proto" }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-std", "io-util", "macros", "rt", "sync"] }
+# The sender half of the tunnel's request stream, as the stream gRPC reads.
+tokio-stream.workspace = true
+# The channel to the coordinator over TLS that trusts the CA file given, and the client side of
+# the tunnel's bidirectional stream.
+tonic = { workspace = true, features = ["channel", "tls-ring"] }
+
+[dev-dependencies]
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }
+rcgen.workspace = true
+tokio = { workspace = true, features = ["net", "rt-multi-thread", "time"] }
+tokio-stream = { workspace = true, features = ["net"] }
+tonic = { workspace = true, features = ["server", "tls-ring"] }
+
+[lints]
+workspace = true

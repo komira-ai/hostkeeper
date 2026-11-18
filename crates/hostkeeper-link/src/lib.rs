@@ -55,6 +55,7 @@ pub mod fetch;
 pub mod grpc;
 pub mod heartbeater;
 pub mod host_facts;
+pub mod host_ssh;
 pub mod mtls;
 pub mod names;
 pub mod negotiated;
@@ -72,7 +73,7 @@ mod wire_map;
 pub use beat::{
     ANNOUNCED, FACTS, Feature, Features, Fitted, Health, Heartbeat, Liveness, MAX_HEARTBEAT_BYTES,
     Observed, OptionalFact, Oversize, PRIVATE_REPOSITORY, Platform, REPOSITORIES, Renewal,
-    RootReason, ServiceFacts, TrustedRootFacts, fit,
+    RootReason, SSH, ServiceFacts, TrustedRootFacts, fit,
 };
 pub use deferral::{Deferral, DeferralError, Deferrals};
 pub use dial::{CALL_SECS, TcpDial, TcpTransport};
@@ -83,6 +84,7 @@ pub use heartbeater::{
     ACKED_KEPT, BeatOutcome, DEFAULT_HEARTBEAT_SECS, Heartbeater, LoopConfig, LoopFlags, Ports,
 };
 pub use host_facts::PushedFacts;
+pub use host_ssh::{PASSWORD_KEEP, PASSWORD_OFF, PushedSsh, SshReport};
 pub use mtls::{Conn, EndpointError, HEAD_MAX, JsonMtlsLink, REPLY_MAX, Transport};
 pub use names::{OrderId, PackageDigest, Reason, WordError};
 pub use negotiated::NegotiatedLink;
@@ -95,7 +97,7 @@ pub use ports::{
     CertSource, CertState, ClientIdentity, ClockSleeper, CoordinatorLink, Dispatch, Drift,
     FactsSink, HeldHalts, Job, LinkError, Log, Observation, OperatorKeysSink, OrderSink,
     RecordedService, RemoteLoginProbeSource, RenewalSource, ReplyFault, RepositorySink,
-    ServiceObserver, ServiceRecords, Sleeper, StopFlag, ThreadDispatch, Tick, TrustFault,
+    ServiceObserver, ServiceRecords, Sleeper, SshSink, StopFlag, ThreadDispatch, Tick, TrustFault,
     TrustedRootSource, UnixClock, Unsendable,
 };
 pub use probe::{ProbeStep, RemoteLoginProbe};

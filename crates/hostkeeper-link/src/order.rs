@@ -18,6 +18,7 @@ use serde_json::{Value, json};
 
 use crate::beat::{Feature, Features};
 use crate::host_facts::PushedFacts;
+use crate::host_ssh::PushedSsh;
 use crate::names::{OrderId, PackageDigest, Reason};
 use crate::operator_keys::PushedKeys;
 use crate::repositories::PushedSet;
@@ -299,4 +300,8 @@ pub struct Reply {
     /// has. The loop gives them to the daemon's [`crate::OperatorKeysSink`] only while the
     /// coordinator advertises `operator-keys-v1`.
     pub operator_keys: Option<PushedKeys>,
+    /// The host's SSH access, whole, over gRPC only; none: keep what the host has. The loop
+    /// gives it to the daemon's [`crate::SshSink`] only while the coordinator advertises
+    /// `ssh-v1`.
+    pub ssh: Option<PushedSsh>,
 }

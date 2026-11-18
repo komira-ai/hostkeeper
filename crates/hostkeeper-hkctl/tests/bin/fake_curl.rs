@@ -1,5 +1,5 @@
 //! The program the integration tests of the emitted script (tests/hkctl_integration.rs) put
-//! first on PATH, copied as `curl` and as `find` into a directory of the test. A program of the
+//! first on PATH, copied as `curl`, as `find` and, in the tests of `ssh`, as `hkssh` into a directory of the test. A program of the
 //! tests, not shipped.
 //!
 //! Every run records, under `<its directory>/calls/<n>/` (`n` counting from 0 in the order of the
@@ -222,6 +222,10 @@ fn main() -> ExitCode {
 
     if program == "find" {
         return real_find(&dir, &args);
+    }
+    // `hkssh` records what it was given, like curl, and does nothing else.
+    if program == "hkssh" {
+        return ExitCode::SUCCESS;
     }
     // This run's place among the runs of curl, from 1: the recorded runs of curl, itself included.
     let nth = std::fs::read_dir(dir.join("calls"))

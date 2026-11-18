@@ -117,6 +117,11 @@ export interface Client {
     hold(request: hostkeeper_operator_v1.HoldRequest): Promise<hostkeeper_operator_v1.HoldResponse>;
     unhold(request: hostkeeper_operator_v1.UnholdRequest): Promise<hostkeeper_operator_v1.UnholdResponse>;
   };
+  readonly ssh: {
+    signUserCert(request: hostkeeper_operator_v1.SignUserCertRequest): Promise<hostkeeper_operator_v1.SignUserCertResponse>;
+    hostKeys(request: hostkeeper_operator_v1.HostKeysRequest): Promise<hostkeeper_operator_v1.HostKeysResponse>;
+    revoke(request: hostkeeper_operator_v1.RevokeRequest): Promise<hostkeeper_operator_v1.RevokeResponse>;
+  };
   readonly users: {
     list(request: hostkeeper_operator_v1.ListUsersRequest): Promise<hostkeeper_operator_v1.ListUsersResponse>;
     create(request: hostkeeper_operator_v1.CreateUserRequest): Promise<hostkeeper_operator_v1.CreateUserResponse>;
@@ -159,6 +164,7 @@ export namespace hostkeeper_agent_v1 {
     factsGeneration?: string;
     remoteLoginProbe?: hostkeeper_agent_v1.RemoteLoginProbe;
     operatorKeys?: hostkeeper_agent_v1.OperatorKeysReport;
+    ssh?: hostkeeper_agent_v1.SshReport;
   }
   export interface OperatorKeysRefusal { digest?: string; reason?: string; }
   export interface OperatorKeysReport { digest?: string; refused?: hostkeeper_agent_v1.OperatorKeysRefusal; failed?: string; }
@@ -185,6 +191,7 @@ export namespace hostkeeper_agent_v1 {
     installer?: string;
     drift?: hostkeeper_agent_v1.DriftReport;
   }
+  export interface SshReport { appliedGeneration?: string; state?: string; hostKeyFingerprints?: string[]; detail?: string; }
   export interface StepRun { name?: string; attempt?: number; }
   export type TrustedRootReason = "TRUSTED_ROOT_REASON_UNSPECIFIED" | "TRUSTED_ROOT_REASON_NONE" | "TRUSTED_ROOT_REASON_STALE" | "TRUSTED_ROOT_REASON_MISSING" | "TRUSTED_ROOT_REASON_UNPARSEABLE";
   export interface UpdateResult {
@@ -477,6 +484,8 @@ export namespace hostkeeper_operator_v1 {
   export interface HostGroup { name?: string; packages?: string[]; policy?: hostkeeper_operator_v1.RolloutPolicy; }
   export interface HostGroupState { group?: hostkeeper_operator_v1.HostGroup; generation?: string; hosts?: number; packages?: hostkeeper_operator_v1.GroupPackage[]; }
   export type HostHeld = "HOST_HELD_UNSPECIFIED" | "HOST_HELD_NONE" | "HOST_HELD_APPROVED" | "HOST_HELD_DENIED" | "HOST_HELD_RETIRED";
+  export interface HostKeysRequest { hostId?: string; }
+  export interface HostKeysResponse { fingerprints?: string[]; state?: string; }
   export interface HostList { nodeIds?: string[]; }
   export interface HostRepositories { named?: string[]; unregistered?: string[]; digest?: string; generation?: string; current?: boolean; refused?: string; }
   export interface HostService {
@@ -802,6 +811,8 @@ export namespace hostkeeper_operator_v1 {
   export interface RevokeApiTokenRequest { name?: string; }
   export interface RevokeApiTokenResponse {
   }
+  export interface RevokeRequest { operator?: string; serial?: string; }
+  export interface RevokeResponse { revoked?: string; }
   export interface RoleCounts { role?: string; atDesired?: number; updating?: number; failed?: number; down?: number; pinned?: number; }
   export type RollbackMode = "ROLLBACK_MODE_UNSPECIFIED" | "ROLLBACK_MODE_MANUAL" | "ROLLBACK_MODE_AUTOMATIC";
   export interface RolloutPlan {
@@ -886,6 +897,8 @@ export namespace hostkeeper_operator_v1 {
   export interface SetMinVersionResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface SetRepositoryRequest { service?: string; repository?: string; reason?: string; }
   export interface SetRepositoryResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
+  export interface SignUserCertRequest { publicKey?: string; reason?: string; hostId?: string; }
+  export interface SignUserCertResponse { certificate?: string; loginUser?: string; expiresUnix?: string; keyId?: string; }
   export interface SkippedHost { nodeId?: string; reason?: string; }
   export type StageAdvance = "STAGE_ADVANCE_UNSPECIFIED" | "STAGE_ADVANCE_AUTO" | "STAGE_ADVANCE_MANUAL";
   export interface StatusRequest { service?: string; }

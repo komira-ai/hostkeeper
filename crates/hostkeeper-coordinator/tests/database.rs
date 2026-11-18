@@ -345,7 +345,7 @@ fn services_have_repository(database: &Database) -> bool {
 
 /// Proves: a `serve` with no `--rollout-file` starts on a database at the schema of the release
 /// before (0.1.252: migrations `0001` to `0008`, no `repository` column on `services`): it runs
-/// `0009` to `0019`, so `schema_version` holds 1 to 19 and the column is there, and an operator's change is
+/// `0009` to `0020`, so `schema_version` holds 1 to 20 and the column is there, and an operator's change is
 /// held by the audit table.
 ///
 /// Catches: a release that cannot start on the database the release before left, or that starts
@@ -362,7 +362,7 @@ fn a_serve_starts_on_a_database_at_the_schema_of_the_release_before() {
 
     drop(start(args.clone()));
     database.lock_is_free();
-    // The schema of 0.1.252: `0009` to `0018` taken back, the column, the tables and their
+    // The schema of 0.1.252: `0009` to `0020` taken back, the column, the tables and their
     // `schema_version` rows.
     run(
         &database,
@@ -372,13 +372,14 @@ fn a_serve_starts_on_a_database_at_the_schema_of_the_release_before() {
          abm_devices, abm_state; \
          DROP TABLE lab_cluster, lab_rows, lab_racks, lab_placements, lab_devices, lab_sleds, lab_sled_items; \
          DROP TABLE tx_ledger; \
+         DROP TABLE ssh_revocation, ssh_cert, ssh_audit; DROP SEQUENCE ssh_cert_serial; \
          DELETE FROM schema_version WHERE version >= 9",
     );
     assert_eq!(schema_versions(&database), (1..=8).collect::<Vec<i32>>());
     assert!(!services_have_repository(&database));
 
     let parts = start(args);
-    assert_eq!(schema_versions(&database), (1..=19).collect::<Vec<i32>>());
+    assert_eq!(schema_versions(&database), (1..=20).collect::<Vec<i32>>());
     assert!(services_have_repository(&database));
     let done = parts
         .coordinator

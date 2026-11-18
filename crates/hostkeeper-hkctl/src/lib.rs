@@ -176,7 +176,18 @@ A call refused `invalid_request` makes one more call, with no token, to the coor
 `GET /v1/version?at_least=<this hkctl's release>`: when that says the coordinator is older (`409`, \
 or `404` from a coordinator before the route), hkctl says so on stderr, with the coordinator's \
 version when it gave one, and the reason it prints is `coordinator_older`; any other answer, or \
-none, leaves `invalid_request`.";
+none, leaves `invalid_request`.
+
+Four commands are not gateway calls: they run `hkssh`, which ships beside hkctl (or is on the \
+PATH). `hkctl ssh <host-id> [--identity FILE] [--reason TEXT] [-- ssh args]` gets a one-host SSH \
+certificate and runs ssh to the host through the coordinator's tunnel (a word after `ssh` that is \
+not a method of the service `ssh` is a host id). `hkctl ssh-proxy <host-id>` is the byte stream \
+for `ProxyCommand hkctl --endpoint URL --ca-file PATH --token-file PATH ssh-proxy %h` in \
+`~/.ssh/config`. `hkctl ssh-revoke --operator NAME | --serial N | --host <host-id>` revokes \
+certificates. `hkctl ssh-status <host-id>` shows the host keys pinned for a host and the \
+certificate held. They need --endpoint, --ca-file and --token-file, take no other credential, \
+keep the key, the certificates and the pins in `$HOME/.hostkeeper/ssh`, and give hkssh the path \
+of the token file, never the token.";
 
 /// Why a command table cannot be written as a script.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

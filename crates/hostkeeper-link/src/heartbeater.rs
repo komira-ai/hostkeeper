@@ -109,16 +109,18 @@ use hostkeeper_wire::wire::clip_renew_error;
 
 use crate::beat::{
     ANNOUNCED, FACTS, Feature, Features, Health, Heartbeat, Liveness, OPERATOR_KEYS, Observed,
-    PRIVATE_REPOSITORY, Platform, REPOSITORIES, Renewal, ServiceFacts, fit,
+    PRIVATE_REPOSITORY, Platform, REPOSITORIES, Renewal, SSH, ServiceFacts, fit,
 };
 use crate::deferral::{Book, Deferral};
 use crate::host_facts::PushedFacts;
+use crate::host_ssh::PushedSsh;
 use crate::names::Reason;
 use crate::order::{Acknowledged, Order, OrderRef, OrderResult, Outcome, Reply, Verb};
 use crate::ports::{
     CertSource, CertState, CoordinatorLink, Dispatch, FactsSink, HeldHalts, LinkError, Log,
     OperatorKeysSink, OrderSink, RecordedService, RemoteLoginProbeSource, RenewalSource,
-    RepositorySink, ServiceObserver, ServiceRecords, Sleeper, Tick, TrustedRootSource, UnixClock,
+    RepositorySink, ServiceObserver, ServiceRecords, Sleeper, SshSink, Tick, TrustedRootSource,
+    UnixClock,
 };
 
 /// The period when the daemon is given none: 15 seconds.
@@ -187,6 +189,9 @@ pub struct Ports {
     /// The managed block of the login account's `authorized_keys`; none on a host that keeps
     /// none, which then announces no `operator-keys-v1`, sends no report and writes no keys.
     pub operator_keys: Option<Arc<dyn OperatorKeysSink>>,
+    /// The host's sshd setup; none on a host that has none (a Mac, for now), which then
+    /// announces no `ssh-v1`, reports nothing and sets nothing up.
+    pub ssh: Option<Arc<dyn SshSink>>,
 }
 
 /// What one heartbeat came to.
@@ -557,6 +562,7 @@ impl Heartbeater {
                 .as_ref()
                 .and_then(|source| source.remote_login_probe()),
             operator_keys: self.ports.operator_keys.as_ref().map(|sink| sink.report()),
+            ssh: self.ports.ssh.as_ref().and_then(|sink| sink.report()),
         })
     }
 
@@ -577,6 +583,9 @@ impl Heartbeater {
         }
         if self.ports.operator_keys.is_some() {
             features.push(OPERATOR_KEYS);
+        }
+        if self.ports.ssh.is_some() {
+            features.push(SSH);
         }
         features
     }
@@ -641,9 +650,11 @@ impl Heartbeater {
             repositories,
             facts,
             operator_keys,
+            ssh,
         } = reply;
         self.advertised = Features::of(&features);
         let facts_held = self.write_facts(facts);
+        self.set_ssh_up(ssh);
         if let Some(set) = repositories
             && self.advertised.has(Feature::RepositoriesV1)
             && let Some(sink) = &self.ports.repositories
@@ -725,6 +736,17 @@ impl Heartbeater {
                 sink.apply(&facts)
             }
             _ => true,
+        }
+    }
+
+    /// Gives the host's SSH access of a reply to the [`SshSink`], when the reply advertises
+    /// `ssh-v1` and the host has a sink. It gates nothing: an order is acted on whatever came of
+    /// the setup. Access from a coordinator that did not advertise the feature is dropped.
+    fn set_ssh_up(&self, access: Option<PushedSsh>) {
+        if let (Some(access), Some(sink)) = (access, &self.ports.ssh)
+            && self.advertised.has(Feature::SshV1)
+        {
+            sink.apply(&access);
         }
     }
 

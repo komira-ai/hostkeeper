@@ -37,6 +37,7 @@ mod rollouts;
 mod services_put;
 mod services_repository;
 mod sessions;
+mod ssh;
 mod support;
 mod targets;
 mod trusted_publishers;

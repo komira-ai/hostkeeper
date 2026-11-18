@@ -53,9 +53,11 @@ use hostkeeper_enroll::{Enroller, RETRY_SECS};
 use hostkeeper_link::{
     CertSource, ClientIdentity, CoordinatorLink, Dispatch, GrpcLinkError, GrpcMtlsLink, Heartbeat,
     Heartbeater, JsonMtlsLink, LinkError, LoopConfig, NegotiatedLink, OperatorKeysSink, Platform,
-    Ports, RemoteLoginProbeSource, Reply, RepositorySink, Sleeper, StopFlag, TcpDial, TcpTransport,
-    Tick, UnixClock,
+    Ports, RemoteLoginProbeSource, Reply, RepositorySink, Sleeper, SshSink, StopFlag, TcpDial,
+    TcpTransport, Tick, UnixClock,
 };
+use hostkeeper_observe::ProcessRunner;
+use hostkeeper_observe::command::MAX_STDOUT;
 use hostkeeper_steps::Clock;
 
 use crate::console::ConsoleIssue;
@@ -67,6 +69,9 @@ use crate::link_adapters::{
 use crate::node::NodeState;
 use crate::notify::Watchdog;
 use crate::repository_push::RepositoryPush;
+use crate::ssh_files::SshPaths;
+use crate::ssh_host::{SystemHost, Tools};
+use crate::ssh_setup::SshSetup;
 
 pub use hostkeeper_enroll::RenewalState;
 pub use hostkeeper_link::Log;
@@ -215,6 +220,17 @@ impl Links {
                 ))),
                 remote_login_probe: self.remote_login_probe.clone(),
                 operator_keys: self.operator_keys.clone(),
+                ssh: sets_ssh_up(PLATFORM).then(|| {
+                    Arc::new(SshSetup::new(
+                        Arc::new(SystemHost::new(
+                            Arc::new(ProcessRunner::new(MAX_STDOUT)),
+                            Tools::linux(),
+                        )),
+                        SshPaths::linux(),
+                        rustix::process::geteuid().as_raw(),
+                        Arc::clone(&self.log),
+                    )) as Arc<dyn SshSink>
+                }),
             },
         )
     }
@@ -292,6 +308,13 @@ impl EnrollLoop<'_> {
 /// repository sink (the link's rule), which is when its mirror reads private repositories.
 pub const fn reads_private_repositories(platform: Platform) -> bool {
     matches!(platform, Platform::DarwinArm64)
+}
+
+/// Whether a daemon of `platform` sets sshd up to trust the coordinator's SSH user CA
+/// (`ssh-v1`): a Linux daemon does; a Mac's setup is a later change
+/// (docs/design/ssh-through-coordinator.md, C3m), so it announces nothing of it.
+pub const fn sets_ssh_up(platform: Platform) -> bool {
+    matches!(platform, Platform::LinuxX86_64 | Platform::LinuxArm64)
 }
 
 /// The platform this daemon was built for.

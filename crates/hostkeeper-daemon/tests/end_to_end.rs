@@ -178,6 +178,7 @@ fn first_beat() -> Heartbeat {
         facts_generation: None,
         remote_login_probe: None,
         operator_keys: None,
+        ssh: None,
     }
 }
 
@@ -208,6 +209,7 @@ fn without_executor(daemon: &Arc<Daemon>, links: &Links) -> Heartbeater {
             facts: None,
             remote_login_probe: None,
             operator_keys: None,
+            ssh: None,
         },
     )
 }
