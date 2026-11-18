@@ -3,7 +3,8 @@
 Status: design, approved by the owner (2026-11-18), with the answers to its two open questions in section 19. A living
 document: it is updated in the pull requests that build it. Tags as in [hostkeeper-design.md](hostkeeper-design.md): **Built**
 names code on `main` with a path, **Designed** means nothing implements it yet. Built so far: part of section 4 (the shared
-lock, the ledger, the migration runner's mutex); everything else is Designed. The measurements of M1 are taken (section 7).
+lock, the ledger, the migration runner's mutex) and the models of section 14 (M2); everything else is Designed. The
+measurements of M1 are taken (section 7).
 
 It changes one decision of [coordinator-storage.md](coordinator-storage.md): that decision's section 5 ("the single writer: an
 advisory lock") and the sentence of its section 14 that a heartbeat costs no query. Section 7 of that document designs an
@@ -734,9 +735,11 @@ Needed:
    the edge's new check and that `stop_grace_period > --drain-delay-secs + the longest in-flight call`. Proposed values: check
    `interval` 2 s, `healthy_threshold` 2, `unhealthy_threshold` 2 (the edge's check does not exist yet; these are mine, to be
    confirmed with the edge's owner), DNS 1 s, so the new task is usable in about 1 + 4 + 2 = 7 s, and `--drain-delay-secs` 15,
-   `stop_grace_period` 60. During the delay both tasks accept, so there is no instant when a host or an operator is refused or
-   the edge routes to nothing healthy (Envoy's panic mode never has to engage). The Mac listener (item 4) moves to the edge,
-   so the task holds no host port through the delay.
+   `stop_grace_period` 60. During the delay both tasks accept, so there is no instant when a host or an operator is refused.
+   With one task (replicas 1) the edge can still have no task marked healthy for a few seconds: the old task fails `unhealthy_threshold` checks (4 s)
+   before the new one has passed `healthy_threshold` (up to 7 s), and in those seconds Envoy's panic mode sends connections to
+   every task it knows, both of which accept (found by the model `drain` of section 14, M2; an earlier version of this item
+   said panic mode never engages). The Mac listener (item 4) moves to the edge, so the task holds no host port through the delay.
 3. **No stickiness.** An agent opens a new connection per heartbeat, so a host's beats alternate between instances. Source-IP
    affinity would not help: `min_up` and one-live-rollout are cluster-wide. The shared fleet (section 5) is what makes this
    correct. Beyond TCP keep-alive there is no stickiness, and a connection ends at a server-side maximum age
@@ -773,7 +776,7 @@ sequenceDiagram
     E->>O: stop choosing O (503, unhealthy_threshold)
     Note over O: --drain-delay-secs elapsed (greater than DNS + healthy_threshold x interval + one interval)
     O->>O: stop accepting, finish in-flight, exit within stop_grace_period
-    Note over S,P: the edge has a healthy, accepting upstream at every moment
+    Note over S,P: no connection is refused: every task the edge sends to accepts (a healthy one, or each it lists in panic mode)
 ```
 
 ## 12. Configuration (every number is a key with a default)
@@ -824,8 +827,10 @@ values of section 11 are proposed).
 
 Moved to [coordinator-multi-instance-checks.md](coordinator-multi-instance-checks.md), section 14. In one paragraph: the concurrency
 protocol (the gate with `SKIP LOCKED` for beats, the conditional writes, the migration mutex, the one-snapshot cache reload, the
-quiet rule, the periodic claim, the drain delay) is modelled in TLA+/PlusCal at N = 1, 2 and 3 and as an exhaustive interleaving
-test in Rust, before any of the code (PR M2), with a negative variant for every missing lock or conditional write.
+quiet rule, the periodic claim, the drain delay) is modelled as an exhaustive interleaving test in Rust at N = 1, 2 and 3, before
+any of the code, with a negative variant for every missing lock or conditional write. **Built** (M2): the spec
+`docs/design/models/coordinator-multi-instance.md`, whose tables the test reads, and the test
+`crates/hostkeeper-coordinator/tests/multi_instance_model/`; the spec is not TLA+ (the companion's section 14 says why).
 
 ## 15. Compatibility (B8) and tests
 
@@ -868,7 +873,7 @@ the farm): the back-out is a stopgap while a fix ships.
 | # | Item | After | Size |
 |---|---|---|---|
 | M1 | Measured: the deployment read only, the rest on a scratch copy of the same version (section 7). Round trip on the socket, the gate's hold and the operator edit's wait under a 50% stage, how often a beat finds the gate busy, DDL lock wait of a migration against a running instance, `fleet_hosts` write cost at the real host count, `max_connections`, the Postgres version; a table in the companion document | none | S |
-| M2 | The models of section 14 (spec and Rust state-space test at N = 1, 2, 3), failing on the unlocked variants | M1 | M |
+| M2 | Built: the models of section 14 (spec and Rust state-space test at N = 1, 2, 3), failing on the unlocked variants (`docs/design/models/`, `crates/hostkeeper-coordinator/tests/multi_instance_model/`) | M1 | M |
 | M3 | Built by komira-ai/hostkeeper#395: the shared fence lock, the `tx_ledger` settle (`0019`), no `lease.commits` write, no deposed exit, the migration mutex, the session timeouts. Left: the pool of sessions, `instances` (a migration of its own), DDL `lock_timeout` with its bounded retry, the migration lint rule. Still one instance | M2 | M |
 | M4 | Row-transaction edits and `state_versions` invalidation for desired, ops, accounts, layout, verdicts, with the row-lock order of section 6 and the one-snapshot reload rule; `rollout_gate` with `SKIP LOCKED` for beats and the operator wait; `audit_counter` and its start-time re-seed; `facts_generation` | M3 | L |
 | M5 | Enrollment: conditional writes, `FOR UPDATE`, fresh deny read; spent-token cache | M3 | M |
