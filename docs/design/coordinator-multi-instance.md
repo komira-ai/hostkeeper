@@ -114,7 +114,10 @@ ledger rows older than an hour runs in every transaction, not a reload tick; a l
 by inserting its id again with `ON CONFLICT DO NOTHING`, and the outcome goes to the caller (no retry of the closure by that
 id), with a commit older than the ledger's hour and its row gone left unsettled, not called "did not land"; the mutex is a
 session advisory lock on `MIGRATE_KEY` around the runner, each migration its own transaction, the wait bounded by the
-session's `lock_timeout`. Still Designed (M3): the pool of sessions, `instances`, the DDL `lock_timeout` with its retry, and
+session's `lock_timeout`, and the runner runs on a session that already holds the shared lock (`mod.rs`, `open_session`),
+then a start bumps `lease.epoch` and `holder` once in a transaction of its own; the timeouts are constants in `dsn.rs`
+(statement 5 s, lock 3 s, idle in transaction equal to the statement's), not the flags of section 12, and a lost commit is
+settled once, at the revival, with no retry window. Still Designed (M3): the pool of sessions, `instances`, the DDL `lock_timeout` with its retry, and
 the lint rule.
 
 **Designed.** The lock is only a fence between releases: every new instance holds it at once, it elects nobody and no decision
@@ -143,7 +146,7 @@ Two consequences, both changes of code:
   success means it did not, and the retry's own writes are the only ones. A duplicate audit line, a double increment or a
   second order cannot happen. The retry window is bounded (a few seconds, a config key, section 12), far inside the hour a
   ledger row lives. Any instance prunes rows older than an hour in its reload tick (`DELETE ... WHERE at_unix < $1`,
-  idempotent). The `lease` row is left as it is, written once by the old release only.
+  idempotent). The `lease` row is no longer written per transaction (Built: a start still bumps its epoch and holder once).
 - **"Deposed" goes.** Another instance's epoch is normal now (`config.rs:798`, `ops.rs:551`). `Lost`/`Reviving` stay: an instance whose
   session is gone orders nothing until it is revived (`writer.rs`), and answers 503 meanwhile.
 
@@ -165,7 +168,7 @@ the same new migration, and one would fail on a duplicate object. The runner the
   nothing. Postgres releases the lock at commit, rollback or the death of the backend, so a starter that dies mid-migration
   leaves nothing to clear. This is a mutex around a few seconds of start-up, not a leader: it elects nobody, no decision
   reads it, and it is gone when the transaction ends.
-- Lock order: the migration lock is taken and released **before** the shared fence lock, and the runner never takes the gate
+- Lock order: the migration lock is taken after the shared fence lock (Built; a shared lock never waits on it), and the runner never takes the gate
   or a `state_versions` row, so it joins no cycle (`lock_order_has_no_cycle` covers it).
 - A migration's DDL can need `ACCESS EXCLUSIVE` on a table the running instance uses (`fleet_orders`, `state_versions`).
   Postgres queues every later statement on that table behind a waiting DDL, so an unbounded wait behind the old instance's open
@@ -753,8 +756,8 @@ sequenceDiagram
     participant E as Edge health check
     participant P as Postgres
     S->>N: start (start-first)
-    N->>P: migration lock (advisory, MIGRATE_KEY); migrations (may-run, lock_timeout on DDL); commit
-    N->>P: shared lock, load
+    N->>P: shared lock
+    N->>P: migration lock (advisory, MIGRATE_KEY); migrations (may-run, lock_timeout on DDL); load
     N-->>E: /healthz 503 starting
     N-->>E: /healthz 200
     Note over S,N: Docker healthcheck of N passes
@@ -972,7 +975,8 @@ Findings of the first review and what was done, including where a finding was ta
     measures how often. The finding's suggestion of a longer operator wait alone was not enough, since the FIFO queue would still
     put the operator behind the beats.
 
-Not changed by the review and still open: what was not checked (section 13), and the measurements of M1.
 12. **The owner's answers (2026-11-18).** Both open questions are decided as recommended: the Mac listener through the edge
     and the one gate row (section 19, decisions 5 and 6). Section 4 is partly Built (komira-ai/hostkeeper#395); its text says
     where the code differs, and M3 is cut to what is left.
+
+Not changed by the review and still open: what was not checked (section 13), and the measurements of M1.
