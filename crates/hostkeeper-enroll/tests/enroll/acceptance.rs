@@ -187,6 +187,25 @@ fn an_untrusted_coordinator_certificate_is_refused() {
     assert!(matches!(outcome, Outcome::Enrolled(_)), "{outcome:?}");
 }
 
+/// Proves: a certificate with no DNS subjectAltName, as every certificate a coordinator issued
+/// before the host id became a DNS name, is accepted and stored: the daemon enrolls.
+///
+/// Catches: a verifier that requires the DNS name, which would refuse every certificate issued
+/// before and every renewal a not yet updated coordinator signs.
+#[test]
+fn a_certificate_without_the_dns_name_is_still_accepted() {
+    let world = World::new("no-dns-name");
+    let mut enroller = world.open();
+    assert_eq!(enroller.run_once().expect("post"), Outcome::Pending);
+    world.coordinator().approve(HOST);
+    let Outcome::Enrolled(identity) = enroller.run_once().expect("enroll") else {
+        panic!("not enrolled");
+    };
+    assert_eq!(identity.host_id.as_str(), HOST);
+    let stored = fs::read_to_string(&identity.cert).expect("the stored certificate");
+    assert!(stored.starts_with("-----BEGIN CERTIFICATE-----"));
+}
+
 /// Catches renewal one second early or one second late, or a renewal not signed by the held
 /// key (the coordinator checks the request against the enrolled key).
 #[test]

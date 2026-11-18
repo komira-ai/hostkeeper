@@ -257,7 +257,7 @@ fn alt_names(cert: &X509Certificate<'_>) -> Vec<String> {
 
 /// Catches the CA copying anything the request asked for: a CSR asking for `serverAuth`, a
 /// subjectAltName, `CA:TRUE` and `keyCertSign` is accepted, and its certificate has none of
-/// them: its one subjectAltName is the fixed host role every host certificate names.
+/// them: its subjectAltNames are the fixed host role and the host id, and nothing asked for.
 #[test]
 fn requested_extensions_are_never_copied() {
     let ca = TestCa::new("no-copy");
@@ -281,7 +281,10 @@ fn requested_extensions_are_never_copied() {
         .expect("issued");
     let parsed = parse(&cert.der);
     assert_eq!(purposes(&parsed), (false, true, false));
-    assert_eq!(alt_names(&parsed), ["uri:urn:hostkeeper:host-role:host"]);
+    assert_eq!(
+        alt_names(&parsed),
+        ["uri:urn:hostkeeper:host-role:host", "dns:web-2"]
+    );
     assert!(
         !parsed
             .basic_constraints()
@@ -735,9 +738,10 @@ fn the_ca_fingerprint_is_the_sha256_of_the_ca_certificate() {
     assert!(format!("{:?}", ca.ca).starts_with("Ca("));
 }
 
-/// Proves: a host certificate names the fixed host role `host` as its one subjectAltName, after
-/// the default prefix, or after the prefix the CA is given (the coordinator's
-/// `--host-role-uri-prefix`), whatever the host id; the server certificate names no URI.
+/// Proves: a host certificate names the fixed host role `host` as its first subjectAltName,
+/// after the default prefix, or after the prefix the CA is given (the coordinator's
+/// `--host-role-uri-prefix`), whatever the host id, then the host id as a DNS name; the server
+/// certificate names no URI.
 ///
 /// Catches: a host certificate without a host-role URI, which readers that require one refuse,
 /// or one naming a role of the host, which would go stale at its first move.
@@ -751,7 +755,7 @@ fn every_host_certificate_names_the_fixed_host_role() {
         .expect("issued");
     assert_eq!(
         alt_names(&parse(&issued.der)),
-        ["uri:urn:hostkeeper:host-role:host"]
+        ["uri:urn:hostkeeper:host-role:host", "dns:db-7"]
     );
     let server = test
         .ca
@@ -773,7 +777,7 @@ fn every_host_certificate_names_the_fixed_host_role() {
         .expect("issued");
     assert_eq!(
         alt_names(&parse(&issued.der)),
-        ["uri:urn:kbf:host-role:host"]
+        ["uri:urn:kbf:host-role:host", "dns:web-1"]
     );
 }
 
@@ -840,4 +844,116 @@ fn a_host_certificate_without_a_host_role_is_still_read() {
 
     assert_eq!(read.host_id, host_id("web-1"));
     assert_eq!(read.key.point(), host.p256().point());
+}
+
+/// Proves: a host certificate's subjectAltNames are exactly the host-role URI and the host id as
+/// a DNS name, in that order, in one extension that is not critical (the subject is not empty,
+/// so a verifier that does not know a name refuses nothing); the extended key usage is
+/// `clientAuth` alone.
+///
+/// Catches: a second DNS name, a critical subjectAltName that a released daemon refuses, or a
+/// server purpose added with the name.
+#[test]
+fn a_host_certificate_names_the_host_by_one_non_critical_dns_name() {
+    let test = TestCa::new("host-dns");
+    let issued = test
+        .ca
+        .issue_host(
+            &host_id("web-1"),
+            &HostKey::new().p256(),
+            HOST_VALIDITY_SECS,
+            5,
+        )
+        .expect("issued");
+    let parsed = parse(&issued.der);
+    assert_eq!(
+        alt_names(&parsed),
+        ["uri:urn:hostkeeper:host-role:host", "dns:web-1"]
+    );
+    let san = parsed
+        .subject_alternative_name()
+        .expect("one")
+        .expect("present");
+    assert!(!san.critical);
+    assert_eq!(purposes(&parsed), (false, true, false));
+    assert_eq!(common_names(parsed.subject()), ["host:web-1"]);
+}
+
+/// Proves: a host id of the longest length, 63 bytes, is a host certificate's DNS name whole.
+///
+/// Catches: a DNS name cut or refused at the label limit.
+#[test]
+fn a_host_id_of_63_bytes_is_the_dns_name_whole() {
+    let test = TestCa::new("host-dns-63");
+    let id = format!("h{}", "a".repeat(62));
+    assert_eq!(id.len(), 63);
+    let issued = test
+        .ca
+        .issue_host(&host_id(&id), &HostKey::new().p256(), HOST_VALIDITY_SECS, 5)
+        .expect("issued");
+    assert_eq!(
+        alt_names(&parse(&issued.der)),
+        [
+            "uri:urn:hostkeeper:host-role:host".to_owned(),
+            format!("dns:{id}")
+        ]
+    );
+}
+
+/// Proves: the coordinator's server certificate names only what it is asked for: its DNS names
+/// and addresses, no host-role URI and no host id, and `serverAuth` alone.
+///
+/// Catches: the host name added to the server profile with the host profile's.
+#[test]
+fn the_server_certificate_keeps_its_names_and_purpose() {
+    let test = TestCa::new("server-unchanged");
+    let server = test
+        .ca
+        .issue_server(
+            &HostKey::new().p256(),
+            ServerNames {
+                dns: &["coordinator.example".to_owned()],
+                ips: &["192.0.2.7".parse().expect("an address")],
+            },
+            SERVER_VALIDITY_CAP_SECS,
+            6,
+        )
+        .expect("server certificate");
+    let parsed = parse(&server.der);
+    assert_eq!(
+        alt_names(&parsed),
+        [
+            "dns:coordinator.example".to_owned(),
+            "other:IPAddress([192, 0, 2, 7])".to_owned()
+        ]
+    );
+    assert_eq!(purposes(&parsed), (true, false, false));
+}
+
+/// Proves: a certificate issued again for the same host and key, as the coordinator's `Renew`
+/// issues it (a new serial, the same `issue_host`), carries the same DNS name and host role as
+/// the first.
+///
+/// Catches: a renewal that drops the host name, so a host loses it at its first renewal.
+#[test]
+fn a_renewed_host_certificate_carries_the_dns_name_too() {
+    let test = TestCa::new("host-dns-renewed");
+    let key = HostKey::new();
+    let first = test
+        .ca
+        .issue_host(&host_id("web-1"), &key.p256(), HOST_VALIDITY_SECS, 5)
+        .expect("first");
+    let renewed = test
+        .ca
+        .issue_host(&host_id("web-1"), &key.p256(), HOST_VALIDITY_SECS, 6)
+        .expect("renewed");
+    assert_ne!(first.der, renewed.der);
+    assert_eq!(
+        alt_names(&parse(&renewed.der)),
+        alt_names(&parse(&first.der))
+    );
+    assert_eq!(
+        alt_names(&parse(&renewed.der)),
+        ["uri:urn:hostkeeper:host-role:host", "dns:web-1"]
+    );
 }
