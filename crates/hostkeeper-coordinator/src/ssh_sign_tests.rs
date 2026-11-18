@@ -61,6 +61,10 @@ impl Ledger for Watched {
     fn denied(&self, by: &str, host_id: &str, why: &str) -> Result<(), LedgerError> {
         self.inner.denied(by, host_id, why)
     }
+
+    fn revoked_serials(&self, host_id: &str) -> Result<Vec<u64>, LedgerError> {
+        self.inner.revoked_serials(host_id)
+    }
 }
 
 /// A coordinator that signs, with three enrolled hosts (`node-07`, `node-08` and `nuc`), and what
@@ -71,8 +75,8 @@ pub(crate) struct World {
     steps: Arc<Mutex<Vec<&'static str>>>,
     pub(crate) records: Arc<MemoryRecords>,
     /// The keys of the fleet secret, as they were made, and the control-plane key's public half.
-    fleet: Vec<String>,
-    control_plane: String,
+    pub(crate) fleet: Vec<String>,
+    pub(crate) control_plane: String,
     pub(crate) operators: std::path::PathBuf,
     pub(crate) _enrollment: EnrollmentRig,
     pub(crate) _rig: Rig,
@@ -125,6 +129,8 @@ pub(crate) fn world(name: &str, file: Option<&str>, tune: Tune) -> World {
         fleet,
         signing: tune.signing,
         control_plane: (!tune.no_control_plane_key).then_some(cp),
+        control_plane_public: None,
+        password_auth: crate::config::PasswordAuth::Keep,
         control_plane_hosts: BTreeSet::from(["nuc".to_owned()]),
         operators: operators.clone(),
         ttl_secs: 3600,

@@ -4,10 +4,9 @@ What the coordinator does with `--ssh-ca-secret-file` set (build items C2 and C4
 [ssh-through-coordinator.md](../design/ssh-through-coordinator.md)): it signs short-lived OpenSSH user
 certificates for the operators the owner lists, one host each, revokes them, and carries an operator's ssh
 connection to a host's sshd through its private listener (the `Ssh/Tunnel` stream, below). The clients of the
-tunnel (the ssh commands of `hkctl` and its proxy, C5), the daemon's sshd setup and its report of the host keys (C3,
-C3m) and the heartbeat plumbing that tells hosts the CA's public key and the revoked serials (C6) are other
-changes. Until C6, an owner who wants a host to trust the CA adds its public key to that host's
-`TrustedUserCAKeys` by hand.
+tunnel (the ssh commands of `hkctl` and its proxy, C5) and the daemon's sshd setup and its report of the host keys
+(C3, C3m) are other changes. The heartbeat plumbing (C6) tells each host's daemon the CA's public key, its
+principal and login user, the password policy and the revoked serials (below, "What hosts are sent").
 
 The feature is off without `--ssh-ca-secret-file`: the coordinator signs nothing, holds no tunnel and `Ssh`
 answers `not_configured`.
@@ -34,7 +33,10 @@ The coordinator reads it with the rule of every secret file: a regular file owne
 
 The control-plane class (the NUC) has a CA of its own so that a stolen coordinator is not root there. Run
 `ssh-ca init` again into another directory for it, and either give the coordinator that key too
-(`--ssh-cp-ca-secret-file`) or leave it out and sign for the control-plane hosts yourself:
+(`--ssh-cp-ca-secret-file`) or leave it out and sign for the control-plane hosts yourself. Either way the control-plane
+hosts are told to trust that CA's public key: from `--ssh-cp-ca-public-file` (one `ssh-ed25519 <base64> [comment]`
+line, read once at start) or, when the coordinator holds the private key, from it; when both are given they must be
+one key, or the start is refused:
 
 ```
 hostkeeper-coordinator ssh-ca sign --ca-key-file ./cp-ca/ssh_user_ca --public-key-file ~/.ssh/id_ed25519.pub \
@@ -206,6 +208,47 @@ Each needs `--ssh-ca-secret-file`.
 | `--ssh-max-tunnels-per-operator` | 4 | 1 to 64 | open tunnels of one operator, over every instance |
 | `--ssh-revoke-poll-s` | 10 | 1 to 300 | how often an instance looks for tunnels that must close |
 | `--ssh-drain-s` | 600 | 0 to 3600 | how long a stopping instance lets its tunnels run; the stop grace must be at least this |
+
+## What hosts are sent
+
+A daemon that announces `ssh-v1` is answered, in the heartbeat over gRPC, an `SshAccess` made for its host (a
+daemon that does not announce it, and the JSON route, are sent nothing; so is every host while no
+`--ssh-ca-secret-file` is given):
+
+- `ca_public_keys`: the keys of the host's class only. A fleet host gets every key of `--ssh-ca-secret-file`, the
+  current one then the next (so both are trusted while a rotation runs). A control-plane host gets the key of
+  `--ssh-cp-ca-public-file`, or the public half of `--ssh-cp-ca-secret-file`.
+- `principal` (`hk-host-<host id>`), `login_user` (`--ssh-login-user-linux`, or `--ssh-login-user-macos` for a Mac)
+  and `password_auth` (`--ssh-password-auth`).
+- `revoked_serials`: the serials of the host's own revoked certificates that have not expired by the database's
+  clock (a certificate is valid only for its host's principal, and an expired one is refused by sshd anyway).
+- `enabled`: true, except for a control-plane host the coordinator holds no key for (neither control-plane flag):
+  that host is sent `enabled = false` and no key, which makes its daemon revert what it set up. This is how the
+  owner takes the control-plane class off the coordinator's trust.
+
+`generation` is the first eight bytes, big-endian, of the SHA-256 of every other field in a fixed encoding (a one
+byte `enabled`, then the keys, `login_user`, `principal`, `password_auth` and the serials, each text and each list
+preceded by its length in eight big-endian bytes; 0 is made 1). It therefore changes at any change of the rest (a
+revocation, an expiry, a rotated key, a flag) and is the same on every instance and after a restart; nothing about
+it is kept. The access is in every answer until the host's last report says `applied_generation` equals it
+(applied or refused). A heartbeat that arrives while the enrollment record or the revocations cannot be read is
+answered without an access, and a warning is logged; the daemon keeps what it has and the next heartbeat tries
+again.
+
+The last `SshReport` of each daemon that announces `ssh-v1` is kept in memory (a restart forgets it until the
+host's next heartbeat) and is shown by `Hosts.Get` and `Hosts.List` in the host's `heartbeat.ssh`. A report whose
+`state` is over 32 bytes, with more than 8 fingerprints or one that is not `SHA256:` and 43 base64 characters is
+dropped and counted as a dropped optional field `ssh`, and the last one is kept; a `state` outside the closed set
+is shown as `other`, and a `detail` over 128 bytes is cut.
+
+## Flags of the heartbeat
+
+Each needs `--ssh-ca-secret-file`.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--ssh-cp-ca-public-file` | none | public key of the control-plane CA, one `ssh-ed25519` line, sent to the control-plane hosts; read once at start; must be the public half of `--ssh-cp-ca-secret-file` when that is given |
+| `--ssh-password-auth` | `keep` | `keep` or `off`: whether the daemon leaves sshd's password logins or turns them off |
 
 ## What the database holds for tunnels (migration `0021`, `may-run`)
 

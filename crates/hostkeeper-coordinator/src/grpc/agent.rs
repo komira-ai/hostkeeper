@@ -93,6 +93,8 @@ impl Api for AgentService {
                 .hear_remote_login_probe(&identity, request.get_ref());
             self.coordinator
                 .hear_operator_keys(&identity, request.get_ref());
+            self.coordinator
+                .hear_ssh_report(&identity, request.get_ref());
             // Where the host was heard from and the host keys it reports, for the tunnels.
             let from = request
                 .extensions()
@@ -125,6 +127,12 @@ impl Api for AgentService {
         response.operator_keys = self
             .coordinator
             .operator_keys_for(&identity, request.get_ref());
+        if !retiring {
+            response.ssh = self
+                .coordinator
+                .ssh_access_for(&identity, request.get_ref())
+                .await;
+        }
         Ok(Response::new(response))
     }
 

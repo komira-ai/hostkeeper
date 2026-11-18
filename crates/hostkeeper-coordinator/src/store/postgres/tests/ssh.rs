@@ -270,3 +270,72 @@ fn a_write_the_database_refuses_is_unwritten_and_changes_nothing() {
     ));
     assert_eq!(count(&db, "ssh_revocation"), 0);
 }
+
+/// Proves: the revoked serials of a host are those of its own revoked certificates that have not
+/// expired by the server's clock, ascending: another host's revoked serial, an unrevoked
+/// certificate of the host and a revoked certificate that has expired are left out.
+///
+/// Catches: a list that tells a host another host's serials, one that keeps expired serials for
+/// ever, and one that lists a certificate nobody revoked.
+#[test]
+fn the_revoked_serials_of_a_host_are_its_own_unexpired_revoked_certificates() {
+    let db = TestDatabase::new();
+    let (store, _) = db.open("coordinator").expect("the store opens");
+    let ledger = PgLedger::new(store.clone());
+    assert_eq!(ledger.revoked_serials("node-07"), Ok(Vec::new()));
+    let own = ledger
+        .issue(&issue("alice", "node-07", 3600))
+        .expect("signed");
+    let kept = ledger
+        .issue(&issue("alice", "node-07", 3600))
+        .expect("signed");
+    let other = ledger
+        .issue(&issue("alice", "node-08", 3600))
+        .expect("signed");
+    let again = ledger
+        .issue(&issue("bob", "node-07", 3600))
+        .expect("signed");
+    let expired = ledger.issue(&issue("alice", "node-07", 0)).expect("signed");
+    assert_eq!(
+        ledger.revoke("carol", Revocation::Serial(own.serial)),
+        Ok(1)
+    );
+    assert_eq!(
+        ledger.revoke("carol", Revocation::Serial(other.serial)),
+        Ok(1)
+    );
+    assert_eq!(ledger.revoke("carol", Revocation::Operator("bob")), Ok(1));
+    db.run(&format!(
+        "INSERT INTO ssh_revocation (serial, by_name, at_unix) VALUES ({}, 'carol', 1)",
+        expired.serial
+    ))
+    .expect("an expired certificate's revocation");
+    assert_eq!(
+        ledger.revoked_serials("node-07"),
+        Ok(vec![own.serial, again.serial])
+    );
+    assert_eq!(ledger.revoked_serials("node-08"), Ok(vec![other.serial]));
+    assert!(
+        !ledger
+            .revoked_serials("node-07")
+            .expect("read")
+            .contains(&kept.serial)
+    );
+}
+
+/// Proves: a ledger the database cannot read answers `Unread` with the database's reason, and
+/// not an empty list.
+///
+/// Catches: a read failure taken for "nothing is revoked", which would tell a host to trust a
+/// revoked certificate.
+#[test]
+fn a_read_the_database_refuses_is_unread() {
+    let db = TestDatabase::new();
+    let (store, _) = db.open("coordinator").expect("the store opens");
+    let ledger = PgLedger::new(store.clone());
+    db.run("DROP TABLE ssh_revocation").expect("dropped");
+    assert!(matches!(
+        ledger.revoked_serials("node-07"),
+        Err(LedgerError::Unread(_))
+    ));
+}

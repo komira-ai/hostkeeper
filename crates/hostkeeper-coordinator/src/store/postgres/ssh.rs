@@ -211,4 +211,23 @@ impl Ledger for PgLedger {
             })
             .map_err(|fail| unwritten(&fail))
     }
+
+    fn revoked_serials(&self, host_id: &str) -> Result<Vec<u64>, LedgerError> {
+        let host_id = host_id.to_owned();
+        self.store
+            .read(move |session| {
+                let rows = session.query(
+                    "SELECT c.serial FROM ssh_cert c JOIN ssh_revocation r ON r.serial = c.serial \
+                     WHERE c.host_id = $1 \
+                     AND c.expires_unix > floor(extract(epoch FROM now()))::bigint \
+                     ORDER BY c.serial",
+                    &[&host_id],
+                )?;
+                Ok(rows
+                    .iter()
+                    .map(|row| unsigned(row.get::<_, i64>(0)))
+                    .collect())
+            })
+            .map_err(LedgerError::Unread)
+    }
 }

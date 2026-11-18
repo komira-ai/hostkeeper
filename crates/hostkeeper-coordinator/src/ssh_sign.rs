@@ -46,6 +46,11 @@ pub struct Signing {
     pub(crate) signing: usize,
     /// The key of the `control-plane` CA, when the coordinator holds its private half.
     pub(crate) control_plane: Option<CaKey>,
+    /// The public key of the `control-plane` CA the owner gave (`--ssh-cp-ca-public-file`), as
+    /// `ssh-ed25519 <base64>`.
+    pub(crate) control_plane_public: Option<String>,
+    /// What every host is told to do with its password logins.
+    pub(crate) password_auth: crate::config::PasswordAuth,
     /// The hosts of the `control-plane` class.
     pub(crate) control_plane_hosts: BTreeSet<String>,
     /// The operators file, read again at each call.
@@ -256,7 +261,7 @@ impl Coordinator {
         match ssh.ledger.revoke(by, target) {
             Ok(revoked) => Ok(proto::RevokeResponse { revoked }),
             Err(LedgerError::UnknownCert) => Err(Refusal::UnknownCert),
-            Err(why @ LedgerError::Unwritten(_)) => {
+            Err(why) => {
                 tracing::error!(%why, "a revocation was not written: nothing changed");
                 Err(Refusal::AuditUnavailable)
             }

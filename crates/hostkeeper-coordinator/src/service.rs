@@ -139,6 +139,8 @@ pub struct Coordinator {
     pub(crate) repository_reports: crate::repository_push::Reports,
     /// The operator keys file and what each host reported of them ([`crate::operator_keys`]).
     pub(crate) operator_keys: crate::operator_keys::OperatorKeys,
+    /// What each host's daemon last reported of its SSH access ([`crate::ssh_heartbeat`]).
+    pub(crate) ssh_reports: crate::ssh_heartbeat::SshReports,
     /// What each host heard runs ([`crate::running`]).
     pub(crate) running: crate::running::Kept,
     /// Reads private repositories' origins ([`crate::repository_serve`]); none: those reads are 502.
@@ -210,6 +212,7 @@ impl Coordinator {
             waits: crate::wait::Waits::default(),
             repository_reports: crate::repository_push::Reports::default(),
             operator_keys: crate::operator_keys::OperatorKeys::default(),
+            ssh_reports: crate::ssh_heartbeat::SshReports::default(),
             running: crate::running::Kept::default(),
             repository_origin: None,
             discovery: crate::repository_discover::Limits::default(),

@@ -74,4 +74,4 @@ with a masked unit. The daemon sends nothing before it has taken up a first reco
 
 Real sshd is not run by this change's tests: its port (`SshHost`) is scripted. The states
 `needs_full_disk_access`, `no_include` and `blocked_by_access_group` of the design are the Mac's
-(C3m). The enrollment request's host key fingerprints and the coordinator's side are C4 to C6.
+(C3m). The coordinator's side of the heartbeat is in [ssh-ca.md](ssh-ca.md) ("What hosts are sent").

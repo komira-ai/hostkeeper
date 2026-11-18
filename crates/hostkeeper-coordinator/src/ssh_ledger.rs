@@ -88,6 +88,9 @@ pub(crate) enum LedgerError {
     /// as this call can tell.
     #[error("the ledger could not be written: {0}")]
     Unwritten(String),
+    /// The database could not be read.
+    #[error("the ledger could not be read: {0}")]
+    Unread(String),
 }
 
 /// The detail of the line of a certificate.
@@ -174,6 +177,15 @@ pub(crate) trait Ledger: Send + Sync {
     /// # Errors
     /// [`LedgerError::Unwritten`].
     fn denied(&self, by: &str, host_id: &str, why: &str) -> Result<(), LedgerError>;
+
+    /// The serials, ascending, of the revoked certificates of the host `host_id` that have not
+    /// expired by the ledger's clock: the ones the host's sshd is told to refuse. A certificate is
+    /// valid only for its own host's principal, so another host's serials add nothing, and an
+    /// expired one is refused by sshd anyway.
+    ///
+    /// # Errors
+    /// [`LedgerError::Unread`] when the ledger cannot be read.
+    fn revoked_serials(&self, host_id: &str) -> Result<Vec<u64>, LedgerError>;
 }
 
 #[cfg(test)]
@@ -389,6 +401,25 @@ mod memory {
                 detail: revoke_detail(target, revoked),
             });
             Ok(revoked)
+        }
+
+        fn revoked_serials(&self, host_id: &str) -> Result<Vec<u64>, LedgerError> {
+            let now = self.now();
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            if state.refuse > 0 {
+                state.refuse -= 1;
+                return Err(LedgerError::Unread("the ledger is down".to_owned()));
+            }
+            Ok(state
+                .certs
+                .iter()
+                .filter(|(serial, cert)| {
+                    cert.host_id == host_id
+                        && cert.expires_unix > now
+                        && state.revoked.contains_key(serial)
+                })
+                .map(|(serial, _)| *serial)
+                .collect())
         }
 
         fn denied(&self, by: &str, host_id: &str, why: &str) -> Result<(), LedgerError> {

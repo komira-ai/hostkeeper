@@ -9,12 +9,14 @@ use std::sync::Arc;
 use clap::Parser as _;
 
 use super::{
-    SSHD_PORT, SigningKey, SshFlags, SshStartError, account, attach, drained, limits, signing,
+    PasswordAuth, SSHD_PORT, SigningKey, SshFlags, SshStartError, account, attach, drained, limits,
+    signing,
 };
 use crate::config::{Cli, Command, Serve, StartError};
 use crate::enrollment::{Random, os_random};
 use crate::host_groups_support::coordinator_on;
 use crate::ssh_book::{self, Book};
+use crate::ssh_cert::tests::{ECDSA_KEY, ED25519_KEY};
 use crate::ssh_cert::{CaKey, KeyError};
 use crate::ssh_ledger::{Ledger, Memory};
 use crate::ssh_tunnel::tests::Rig as TunnelRig;
@@ -84,6 +86,8 @@ fn the_ssh_flags_are_off_by_default_and_have_the_designs_defaults() {
     assert_eq!(flags.ssh.ssh_cert_ttl_s, 3600);
     assert_eq!(flags.ssh.ssh_login_user_linux, "root");
     assert_eq!(flags.ssh.ssh_login_user_macos, "");
+    assert_eq!(flags.ssh.ssh_password_auth, PasswordAuth::Keep);
+    assert_eq!(flags.ssh.ssh_cp_ca_public_file, None);
     assert!(flags.ssh.ssh_control_plane_host.is_empty());
     assert!(signing(&flags, ledger()).expect("none").is_none());
 }
@@ -548,4 +552,106 @@ async fn the_drain_of_a_stop_waits_for_tunnels_while_serving_goes_on() {
     drained(&tunnels.coordinator, std::future::pending())
         .await
         .expect("no tunnel is held: the drain is over");
+}
+
+/// The public key line of the key `key_file(seed)` holds.
+fn public_of(seed: u8) -> String {
+    CaKey::parse_secret(&key_file(seed)).expect("a key")[0].public_line()
+}
+
+/// Proves: `--ssh-cp-ca-public-file` and `--ssh-password-auth` each need `--ssh-ca-secret-file`,
+/// the policy takes `keep` and `off` and nothing else, and the signing carries both: the public
+/// key as `ssh-ed25519 <base64>` without its comment or the file's line end, and the policy.
+///
+/// Catches: a flag that is read and not carried to the heartbeat, a comment sent to hosts as part
+/// of the CA's key, and a policy word the daemon does not know.
+#[test]
+fn the_public_key_and_password_flags_are_required_with_the_ca_and_carried_to_the_signing() {
+    let refused = |extra: &[&str]| serve(extra).expect_err("refused").to_string();
+    assert!(refused(&["--ssh-cp-ca-public-file", "x"]).contains("--ssh-ca-secret-file"));
+    assert!(refused(&["--ssh-password-auth", "off"]).contains("--ssh-ca-secret-file"));
+    let dir = scratch("ssh-config-public");
+    let base = ca_flags(dir.path());
+    assert!(serve_with(&base, &["--ssh-password-auth", "sometimes"]).is_err());
+    assert_eq!(PasswordAuth::Keep.as_str(), "keep");
+    assert_eq!(PasswordAuth::Off.as_str(), "off");
+    let public = public_of(3);
+    let file = secret(dir.path(), "cp.pub", &format!("{public} cp-ca\n"));
+    let flags = serve_with(
+        &base,
+        &[
+            "--ssh-cp-ca-public-file",
+            &file,
+            "--ssh-password-auth",
+            "off",
+        ],
+    )
+    .expect("flags");
+    let made = signing(&flags, ledger()).expect("made").expect("on");
+    assert_eq!(made.control_plane_public, Some(public.clone()));
+    assert!(made.control_plane.is_none());
+    assert_eq!(made.password_auth, PasswordAuth::Off);
+    let plain = serve_with(&base, &[]).expect("flags");
+    let made = signing(&plain, ledger()).expect("made").expect("on");
+    assert_eq!(made.control_plane_public, None);
+    assert_eq!(made.password_auth, PasswordAuth::Keep);
+    // The same key as the private half the coordinator holds is accepted.
+    let cp = secret(dir.path(), "cp", &key_file(3));
+    let both = serve_with(
+        &base,
+        &[
+            "--ssh-cp-ca-public-file",
+            &file,
+            "--ssh-cp-ca-secret-file",
+            &cp,
+        ],
+    )
+    .expect("flags");
+    let made = signing(&both, ledger()).expect("made").expect("on");
+    assert_eq!(made.control_plane_public, Some(public));
+    assert!(made.control_plane.is_some());
+}
+
+/// Proves: a public key file that cannot be read, is not one `ssh-ed25519` line (empty, text,
+/// two lines, an ECDSA key, a private key, over 4 KiB) or names another key than the
+/// control-plane private key the coordinator holds, stops the start with the flag named and
+/// exactly this text.
+///
+/// Catches: a start that goes on with no control-plane key and so reverts those hosts, or trusts
+/// a key the owner did not mean, and an error that prints the file's content.
+#[test]
+fn a_public_key_file_that_is_not_the_control_planes_key_stops_the_start() {
+    let dir = scratch("ssh-config-public-refused");
+    let base = ca_flags(dir.path());
+    let refused = |text: Option<&str>, extra: &[&str]| {
+        let path = dir.path().join("cp.pub");
+        if let Some(text) = text {
+            fs::write(&path, text).expect("a file");
+        }
+        let path = path.display().to_string();
+        let mut flags = vec!["--ssh-cp-ca-public-file", path.as_str()];
+        flags.extend(extra);
+        let flags = serve_with(&base, &flags).expect("flags");
+        signing(&flags, ledger()).expect_err("refused").to_string()
+    };
+    let not_one = "--ssh-cp-ca-public-file: not one ssh-ed25519 public key line";
+    assert_eq!(
+        refused(None, &[]),
+        "--ssh-cp-ca-public-file: cannot be read (entity not found)"
+    );
+    for text in [
+        "",
+        "not a key",
+        &format!("{ED25519_KEY}\n{ED25519_KEY}\n"),
+        ECDSA_KEY,
+        &key_file(3),
+        &format!("{ED25519_KEY} {}", "c".repeat(5000)),
+    ] {
+        assert_eq!(refused(Some(text), &[]), not_one, "{text:.40}");
+    }
+    let cp = secret(dir.path(), "cp", &key_file(3));
+    assert_eq!(
+        refused(Some(&public_of(4)), &["--ssh-cp-ca-secret-file", &cp]),
+        "--ssh-cp-ca-public-file is not the public half of --ssh-cp-ca-secret-file"
+    );
 }

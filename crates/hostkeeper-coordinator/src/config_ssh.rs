@@ -9,6 +9,7 @@
 
 use std::collections::BTreeSet;
 use std::convert::Infallible;
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -23,7 +24,7 @@ use crate::enrollment::{Random, os_random};
 use crate::service::Coordinator;
 use crate::ssh_book::Book;
 use crate::ssh_ca::MAX_TTL_SECS;
-use crate::ssh_cert::{CaKey, KeyError};
+use crate::ssh_cert::{CaKey, KeyError, UserKey};
 use crate::ssh_ledger::Ledger;
 use crate::ssh_operators::{Operators, OperatorsError};
 use crate::ssh_sign::Signing;
@@ -43,6 +44,27 @@ pub enum SigningKey {
     Current,
     /// The second key, once every host trusts both.
     Next,
+}
+
+/// What sshd does with password logins on a host once it trusts the CA (section 6, rule 5): sent
+/// to every host in its `SshAccess`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
+pub enum PasswordAuth {
+    /// Password logins stay as the host has them.
+    #[default]
+    Keep,
+    /// The daemon turns password logins off.
+    Off,
+}
+
+impl PasswordAuth {
+    /// The word `SshAccess.password_auth` carries.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            PasswordAuth::Keep => "keep",
+            PasswordAuth::Off => "off",
+        }
+    }
 }
 
 /// The flags of the SSH user CA.
@@ -67,6 +89,12 @@ pub struct SshFlags {
     /// certificate for those hosts is made offline with `ssh-ca sign`.
     #[arg(long, value_name = "FILE", requires = "ssh_ca_secret_file")]
     pub ssh_cp_ca_secret_file: Option<PathBuf>,
+    /// The public key of the control-plane CA, one `ssh-ed25519 <base64> [comment]` line, which the
+    /// control-plane hosts are told to trust and the fleet's hosts are not. Read once at start.
+    /// With --ssh-cp-ca-secret-file as well, it must be that key's public half. A control-plane
+    /// host is told to trust no CA when neither is given.
+    #[arg(long, value_name = "FILE", requires = "ssh_ca_secret_file")]
+    pub ssh_cp_ca_public_file: Option<PathBuf>,
     /// A host id of the control-plane class, which trusts the control-plane CA and not the
     /// fleet's. Repeatable.
     #[arg(long, value_name = "HOST_ID", requires = "ssh_ca_secret_file")]
@@ -90,6 +118,10 @@ pub struct SshFlags {
     /// administrator.
     #[arg(long, default_value = "", requires = "ssh_ca_secret_file")]
     pub ssh_login_user_macos: String,
+    /// Whether each host's sshd keeps its password logins (`keep`) or has them turned off (`off`),
+    /// as the daemon is told in every host's `SshAccess`.
+    #[arg(long, value_enum, default_value_t = PasswordAuth::Keep, requires = "ssh_ca_secret_file")]
+    pub ssh_password_auth: PasswordAuth,
     /// How recent a host's last heartbeat must be for a tunnel to be opened to it, in seconds,
     /// 10 to 3600. A host that has not been heard in that time is refused `host_not_live`.
     #[arg(
@@ -192,6 +224,15 @@ pub enum SshStartError {
     /// `--ssh-signing-key next` and the secret holds one key.
     #[error("--ssh-signing-key next: --ssh-ca-secret-file holds one key")]
     NoNextKey,
+    /// `--ssh-cp-ca-public-file` cannot be read.
+    #[error("--ssh-cp-ca-public-file: cannot be read ({0})")]
+    CpPublicUnread(std::io::ErrorKind),
+    /// `--ssh-cp-ca-public-file` is not one `ssh-ed25519` public key line.
+    #[error("--ssh-cp-ca-public-file: not one ssh-ed25519 public key line")]
+    CpPublicKey,
+    /// `--ssh-cp-ca-public-file` and `--ssh-cp-ca-secret-file` name different keys.
+    #[error("--ssh-cp-ca-public-file is not the public half of --ssh-cp-ca-secret-file")]
+    CpPublicMismatch,
     /// A `--ssh-control-plane-host` that is not a host id.
     #[error("--ssh-control-plane-host {0:?}: not a host id ({grammar})", grammar = HostId::GRAMMAR)]
     HostId(String),
@@ -221,6 +262,28 @@ fn keys_of(path: &Path, flag: &'static str) -> Result<Vec<CaKey>, SshStartError>
     let text = read_secret(path, flag, MAX_SECRET_BYTES)?;
     CaKey::parse_secret(&String::from_utf8_lossy(&text))
         .map_err(|why| SshStartError::Key { flag, why })
+}
+
+/// The most bytes of the public key file.
+const MAX_PUBLIC_BYTES: u64 = 4096;
+
+/// The line `ssh-ed25519 <base64>` of the public key file `path`: the key, without its comment.
+fn public_line_of(path: &Path) -> Result<String, SshStartError> {
+    let mut text = String::new();
+    std::fs::File::open(path)
+        .and_then(|file| file.take(MAX_PUBLIC_BYTES + 1).read_to_string(&mut text))
+        .map_err(|why| SshStartError::CpPublicUnread(why.kind()))?;
+    if text.len() as u64 > MAX_PUBLIC_BYTES {
+        return Err(SshStartError::CpPublicKey);
+    }
+    let line = text.trim();
+    let parsed = UserKey::parse(line).map_err(|_| SshStartError::CpPublicKey)?;
+    if !matches!(parsed.key, UserKey::Ed25519 { .. }) {
+        return Err(SshStartError::CpPublicKey);
+    }
+    // `parse` read a type and a blob, so the second field is there.
+    let blob = line.split_ascii_whitespace().nth(1).unwrap_or_default();
+    Ok(format!("ssh-ed25519 {blob}"))
 }
 
 /// The signing `flags` name over `ledger`: `None` without `--ssh-ca-secret-file`.
@@ -255,6 +318,16 @@ pub(super) fn signing(
         }
         None => None,
     };
+    let control_plane_public = ssh
+        .ssh_cp_ca_public_file
+        .as_deref()
+        .map(public_line_of)
+        .transpose()?;
+    if let (Some(public), Some(held)) = (&control_plane_public, &control_plane)
+        && *public != held.public_line()
+    {
+        return Err(SshStartError::CpPublicMismatch);
+    }
     let mut control_plane_hosts = BTreeSet::new();
     for host in &ssh.ssh_control_plane_host {
         control_plane_hosts.insert(
@@ -279,6 +352,8 @@ pub(super) fn signing(
         fleet,
         signing: index,
         control_plane,
+        control_plane_public,
+        password_auth: ssh.ssh_password_auth,
         control_plane_hosts,
         operators: operators.clone(),
         ttl_secs: ssh.ssh_cert_ttl_s,

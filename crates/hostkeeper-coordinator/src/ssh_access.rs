@@ -84,7 +84,7 @@ impl Refused {
 }
 
 /// Whether `fingerprint` is `SHA256:` and the 43 base64 characters OpenSSH prints.
-fn fingerprint_ok(fingerprint: &str) -> bool {
+pub(crate) fn fingerprint_ok(fingerprint: &str) -> bool {
     fingerprint.strip_prefix("SHA256:").is_some_and(|digest| {
         digest.len() == 43
             && digest

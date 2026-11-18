@@ -101,7 +101,7 @@ mod error;
 /// The flags of the SSH user CA and the start's use of them.
 #[path = "config_ssh.rs"]
 mod ssh;
-pub use ssh::{SigningKey, SshFlags, SshStartError};
+pub use ssh::{PasswordAuth, SigningKey, SshFlags, SshStartError};
 
 #[path = "config_file.rs"]
 mod config_file;

@@ -207,6 +207,7 @@ pub(crate) mod ssh_access;
 pub(crate) mod ssh_book;
 pub mod ssh_ca;
 pub(crate) mod ssh_cert;
+pub mod ssh_heartbeat;
 pub(crate) mod ssh_ledger;
 pub mod ssh_operators;
 pub mod ssh_sign;

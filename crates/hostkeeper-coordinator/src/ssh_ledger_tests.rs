@@ -214,3 +214,35 @@ fn a_refused_call_is_a_line_and_a_ledger_that_cannot_write_records_nothing() {
     assert_eq!(ledger.audit().len(), 1);
     assert_eq!(ledger.issue(&issue("a", "h", 1)).map(|i| i.serial), Ok(1));
 }
+
+/// Proves: the memory ledger lists the revoked serials of one host that have not expired by its
+/// clock, ascending, and answers `Unread` while it is down, as the database's ledger does.
+///
+/// Catches: another host's serial, an unrevoked or an expired certificate in the list, and a
+/// read failure taken for an empty list.
+#[test]
+fn the_memory_ledger_lists_the_revoked_unexpired_serials_of_one_host() {
+    let ledger = Memory::at(AT);
+    let a = ledger.issue(&issue("alice", "node-07", 100)).expect("a");
+    let b = ledger.issue(&issue("alice", "node-07", 1000)).expect("b");
+    let c = ledger.issue(&issue("alice", "node-08", 1000)).expect("c");
+    let _plain = ledger.issue(&issue("bob", "node-07", 1000)).expect("d");
+    for serial in [a.serial, b.serial, c.serial] {
+        ledger
+            .revoke("carol", Revocation::Serial(serial))
+            .expect("revoked");
+    }
+    assert_eq!(
+        ledger.revoked_serials("node-07"),
+        Ok(vec![a.serial, b.serial])
+    );
+    ledger.set_clock(AT + 100);
+    assert_eq!(ledger.revoked_serials("node-07"), Ok(vec![b.serial]));
+    assert_eq!(ledger.revoked_serials("node-08"), Ok(vec![c.serial]));
+    ledger.refuse_next(1);
+    assert!(matches!(
+        ledger.revoked_serials("node-07"),
+        Err(LedgerError::Unread(_))
+    ));
+    assert_eq!(ledger.revoked_serials("node-07"), Ok(vec![b.serial]));
+}
