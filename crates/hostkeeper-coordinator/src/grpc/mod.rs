@@ -43,6 +43,7 @@ use hostkeeper_proto::hostkeeper::agent::v1::coordinator_server::CoordinatorServ
 use hostkeeper_proto::hostkeeper::operator::v1::alerts_server::AlertsServer;
 use hostkeeper_proto::hostkeeper::operator::v1::api_tokens_server::ApiTokensServer;
 use hostkeeper_proto::hostkeeper::operator::v1::audit_server::AuditServer;
+use hostkeeper_proto::hostkeeper::operator::v1::console_server::ConsoleServer;
 use hostkeeper_proto::hostkeeper::operator::v1::enrollment_server::EnrollmentServer;
 use hostkeeper_proto::hostkeeper::operator::v1::host_groups_server::HostGroupsServer;
 use hostkeeper_proto::hostkeeper::operator::v1::hosts_server::HostsServer;
@@ -67,6 +68,7 @@ use self::operator::{
     ServicesService,
 };
 use self::operator_accounts::{ApiTokensService, UsersService};
+use self::operator_console::ConsoleService;
 use self::operator_host_groups::HostGroupsService;
 use self::operator_layout::LayoutService;
 use self::operator_repositories::RepositoriesService;
@@ -87,6 +89,7 @@ mod beat_map;
 pub(crate) mod gateway;
 pub(crate) mod operator;
 mod operator_accounts;
+mod operator_console;
 mod operator_host_groups;
 mod operator_layout;
 mod operator_repositories;
@@ -135,6 +138,8 @@ const USERS: &str = "hostkeeper.operator.v1.Users";
 const API_TOKENS: &str = "hostkeeper.operator.v1.ApiTokens";
 /// The full name of the operator API's `Layout`.
 const LAYOUT: &str = "hostkeeper.operator.v1.Layout";
+/// The full name of the operator API's `Console`.
+const CONSOLE: &str = "hostkeeper.operator.v1.Console";
 
 /// The path of `Coordinator.Heartbeat`, which needs a client certificate that names a host.
 const HEARTBEAT: &str = "/hostkeeper.agent.v1.Coordinator/Heartbeat";
@@ -294,7 +299,7 @@ pub(crate) async fn admit_via(
             Surface::Control,
             Some(
                 HOSTS | RELEASES | SERVICES | ENROLLMENT | AUDIT | ALERTS | ROLLOUTS | REPOSITORIES
-                | HOST_GROUPS | USERS | API_TOKENS | LAYOUT,
+                | HOST_GROUPS | USERS | API_TOKENS | LAYOUT | CONSOLE,
             ),
         ) => Served::Operator,
         _ => return Err(Status::unimplemented("")),
@@ -509,6 +514,11 @@ where
         }
         Some(LAYOUT) => {
             let server = LayoutServer::new(LayoutService::new(coordinator))
+                .max_decoding_message_size(MAX_OPERATOR_BYTES);
+            call(server, request).await
+        }
+        Some(CONSOLE) => {
+            let server = ConsoleServer::new(ConsoleService::new(coordinator))
                 .max_decoding_message_size(MAX_OPERATOR_BYTES);
             call(server, request).await
         }

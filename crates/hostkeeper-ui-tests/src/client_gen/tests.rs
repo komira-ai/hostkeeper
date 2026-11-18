@@ -133,6 +133,7 @@ enum LongEnumNameForWrappingPastTheWidth {
   LONG_ENUM_NAME_FOR_WRAPPING_PAST_THE_WIDTH_UNSPECIFIED = 0;
   LONG_ENUM_NAME_FOR_WRAPPING_PAST_THE_WIDTH_FIRST = 1;
   LONG_ENUM_NAME_FOR_WRAPPING_PAST_THE_WIDTH_SECOND = 2;
+  LONG_ENUM_NAME_FOR_WRAPPING_PAST_THE_WIDTH_THIRD = 3;
 }
 
 message Holder {
@@ -184,7 +185,8 @@ fn header() -> String {
 /// declared though nothing needs it, a holder's namespace declared twice for two of its types,
 /// a map entry declared as a type, a repeated union without
 /// its parentheses, a long enum on one line, a message declared on several lines though it fits
-/// one, or on one though it does not, and a type reached twice declared twice.
+/// one, or on one though it does not, a message with no field declared on more than one line,
+/// and a type reached twice declared twice.
 #[test]
 fn every_kind_of_field_is_declared_as_proto3_json_writes_it() {
     let client = emit(&things(), &fixture()).expect("the fixture generates");
@@ -207,8 +209,7 @@ export interface Client {
 export declare function createClient(call: Call): Client;
 
 export namespace hostkeeper_operator_v1 {
-  export interface Empty {
-  }
+  export interface Empty {}
   export interface GetThingRequest {
     d?: number | "NaN" | "Infinity" | "-Infinity";
     f?: number | "NaN" | "Infinity" | "-Infinity";
@@ -251,15 +252,15 @@ export namespace hostkeeper_operator_v1 {
   }
   export interface GetThingResponse { state?: hostkeeper_operator_v1.LongEnumNameForWrappingPastTheWidth; }
   export namespace Holder {
-    export interface Also {
-    }
+    export interface Also {}
     export interface Nested { x?: string; }
   }
   export type Kind = "KIND_UNSPECIFIED" | "KIND_A";
   export type LongEnumNameForWrappingPastTheWidth =
     | "LONG_ENUM_NAME_FOR_WRAPPING_PAST_THE_WIDTH_UNSPECIFIED"
     | "LONG_ENUM_NAME_FOR_WRAPPING_PAST_THE_WIDTH_FIRST"
-    | "LONG_ENUM_NAME_FOR_WRAPPING_PAST_THE_WIDTH_SECOND";
+    | "LONG_ENUM_NAME_FOR_WRAPPING_PAST_THE_WIDTH_SECOND"
+    | "LONG_ENUM_NAME_FOR_WRAPPING_PAST_THE_WIDTH_THIRD";
   export interface Tree { children?: hostkeeper_operator_v1.Tree[]; }
 }
 

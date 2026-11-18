@@ -310,6 +310,16 @@ impl Files {
         let Some(ops) = &self.ops else {
             return Ok(());
         };
+        self.append_lines(lines)?;
+        Ok((ops.write)(state)?)
+    }
+
+    /// Appends to the audit file each of `lines` it does not hold yet; with no ops file there is
+    /// no audit file, and nothing is appended.
+    fn append_lines(&self, lines: &[AuditLine]) -> Result<(), BackendError> {
+        let Some(ops) = &self.ops else {
+            return Ok(());
+        };
         for line in lines.iter().filter(|line| line.seq > ops.log.last_seq()) {
             (ops.append)(line).map_err(|why| {
                 tracing::error!(
@@ -321,7 +331,7 @@ impl Files {
                 OpsError::AuditUnavailable(why)
             })?;
         }
-        Ok((ops.write)(state)?)
+        Ok(())
     }
 
     fn write_accounts(&self, held: &Accounts) -> Result<(), BackendError> {
@@ -374,8 +384,11 @@ impl Backend for Files {
             }
             return in_turn(self, self, part, change);
         }
-        if let Some((_, after)) = change.ops {
-            self.write_ops(after, change.audit)?;
+        match change.ops {
+            Some((_, after)) => self.write_ops(after, change.audit)?,
+            // An audit-only line ([`crate::ops::OpsStore::append_audit_only`]): the audit file
+            // takes it, and the ops file is not written.
+            None => self.append_lines(change.audit)?,
         }
         if let Some((_, after)) = change.verdicts {
             self.write_verdicts(after)?;

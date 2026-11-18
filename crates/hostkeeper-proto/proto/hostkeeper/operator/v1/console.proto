@@ -1,0 +1,235 @@
+// hostkeeper.operator.v1: the `Console` service of the operator API and its refusals
+// (`ConsoleRefusal`): a host's console through the coordinator (docs/design/console-broker.md).
+// A Linux server's console is its serial port over the BMC's Serial over LAN, and its power and
+// boot device are the BMC's; a Mac's is its screen. `Open` hands out a session that a WebSocket on
+// the coordinator's private listener attaches to; the other calls are answered whole. The rest of
+// the package, `Enrollment` and `EnrollmentRefusal` (enrollment.proto) and `Audit` and
+// `AuditRefusal` among it, is operator.proto; this file is the same package and API, kept apart
+// so that each file stays short.
+//
+// Served by: the coordinator, on its control listener, as operator.proto says.
+//
+// Authentication: `Console` takes the operator's credential only; no CI token reaches it (see
+// operator.proto). An operator must also be named in the coordinator's console operators file,
+// and only an operator whose entry allows power may call `Power` and `SetBootDevice`; with no
+// such file nobody has console access (`no_console_access`).
+//
+// Refusals: a gRPC status whose message is exactly one token of `ConsoleRefusal`, written as the
+// value's name without the prefix, in lower case; the status code is the one each value names. A
+// refused request changes nothing and contacts no device. `Open`, `Power` and `SetBootDevice`
+// each write their audit line before any device is contacted, and a call that cannot write it
+// does nothing (`audit_unavailable`).
+//
+// Units: as operator.proto says; times are unix seconds and durations whole seconds. A host id
+// is a node id. Every `Open`, `Power` and `SetBootDevice` carries a reason of 1 to 256 bytes once
+// trimmed, with no control character; no action is exempt, `status` and `on` included. A
+// session is 256 random bits as 64 lower-case hex characters. A request is at most 4 KiB.
+//
+// Extending: as operator.proto says: add fields, messages, enum values and RPCs; never renumber,
+// rename, retype or remove one, and never reuse a number.
+syntax = "proto3";
+
+package hostkeeper.operator.v1;
+
+// A host's console. One session per host: a second `Open` of a host that has one is refused
+// `console_busy`, and `List` names who holds it. Each call that acts is audited under the
+// caller's name with the host as the entry's node: `console_open`, `console_close`,
+// `power_action` and `boot_device_set`; a refusal of an operator named in the console operators
+// file is audited as `console_denied` with its cause.
+service Console {
+  // Opens a console session on a host: takes the host's one session slot and writes the audit
+  // line, without contacting the device. The session is then attached by a WebSocket at
+  // `/console/v1/stream/<session>` on the private listener, by the same operator name, within
+  // `expires_in_secs`; an unattached session ends after that.
+  rpc Open(OpenConsoleRequest) returns (OpenConsoleResponse);
+  // Reads or changes a Linux server's power through its BMC, after checking that the BMC at the
+  // host's address has the host's BMC MAC. Answered when the BMC has acknowledged the command;
+  // the host's own state follows later (`Hosts.Get`).
+  rpc Power(ConsolePowerRequest) returns (ConsolePowerResponse);
+  // Sets the device a Linux server boots from through its BMC, after the same MAC check as
+  // `Power`, and answers with the boot flags the BMC holds afterwards, read back.
+  rpc SetBootDevice(SetBootDeviceRequest) returns (SetBootDeviceResponse);
+  // Every open console session, by host id. Changes nothing and is not audited.
+  rpc List(ListConsoleSessionsRequest) returns (ListConsoleSessionsResponse);
+  // Ends the console session of a host, whoever holds it. The closer's name is in the audit
+  // line.
+  rpc Close(CloseConsoleRequest) returns (CloseConsoleResponse);
+}
+
+// Why `Console` refused a request. The token is the value's name without the prefix, in lower
+// case.
+enum ConsoleRefusal {
+  CONSOLE_REFUSAL_UNSPECIFIED = 0;
+  // UNAUTHENTICATED: no credential, or not an operator's.
+  CONSOLE_REFUSAL_UNAUTHORIZED = 1;
+  // PERMISSION_DENIED: the bearer is a valid CI token, which `Console` does not take.
+  CONSOLE_REFUSAL_FORBIDDEN = 2;
+  // INVALID_ARGUMENT: a host id that is not a node id, an unspecified action or boot device, or a
+  // reason with a control character.
+  CONSOLE_REFUSAL_INVALID_REQUEST = 3;
+  // INVALID_ARGUMENT: `Open`, `Power` or `SetBootDevice` without a reason, or with one that is
+  // empty once trimmed.
+  CONSOLE_REFUSAL_REASON_REQUIRED = 4;
+  // INVALID_ARGUMENT: a reason over 256 bytes once trimmed.
+  CONSOLE_REFUSAL_REASON_TOO_LONG = 5;
+  // PERMISSION_DENIED: the operator is not named in the console operators file, or the
+  // coordinator has no such file.
+  CONSOLE_REFUSAL_NO_CONSOLE_ACCESS = 6;
+  // PERMISSION_DENIED: `Power` or `SetBootDevice` by an operator whose entry in the console
+  // operators file does not allow power.
+  CONSOLE_REFUSAL_POWER_NOT_PERMITTED = 7;
+  // NOT_FOUND: no host has the id.
+  CONSOLE_REFUSAL_HOST_NOT_FOUND = 8;
+  // FAILED_PRECONDITION: the console targets file gives no address for the host's MAC.
+  CONSOLE_REFUSAL_NO_ADDRESS = 9;
+  // FAILED_PRECONDITION: `Power` or `SetBootDevice` of a host whose inventory record has no BMC
+  // MAC; a Mac has none.
+  CONSOLE_REFUSAL_NO_BMC_MAC = 10;
+  // FAILED_PRECONDITION: more than one inventory record matches the host.
+  CONSOLE_REFUSAL_AMBIGUOUS_RECORD = 11;
+  // FAILED_PRECONDITION: the BMC at the host's address reports another MAC than the host's
+  // record. Nothing was sent to it.
+  CONSOLE_REFUSAL_ADDRESS_MISMATCH = 12;
+  // ALREADY_EXISTS: `Open` of a host that already has a session; `List` names its holder.
+  CONSOLE_REFUSAL_CONSOLE_BUSY = 13;
+  // RESOURCE_EXHAUSTED: `Open` when the coordinator holds as many sessions as it allows.
+  CONSOLE_REFUSAL_TOO_MANY_SESSIONS = 14;
+  // UNAVAILABLE: the device did not answer at the host's address.
+  CONSOLE_REFUSAL_DEVICE_UNREACHABLE = 15;
+  // UNAVAILABLE: the BMC has no free session. Asking again later may succeed.
+  CONSOLE_REFUSAL_BMC_BUSY = 16;
+  // FAILED_PRECONDITION: the BMC refused the coordinator's BMC credential.
+  CONSOLE_REFUSAL_BMC_AUTH_FAILED = 17;
+  // NOT_FOUND: `Close` of a host that has no session.
+  CONSOLE_REFUSAL_NO_SESSION = 18;
+  // UNAVAILABLE: the audit entry could not be written. Nothing was done.
+  CONSOLE_REFUSAL_AUDIT_UNAVAILABLE = 19;
+}
+
+// What a console session carries.
+enum ConsoleKind {
+  CONSOLE_KIND_UNSPECIFIED = 0;
+  // A Linux server's serial port, over its BMC's Serial over LAN: a byte stream for a terminal.
+  CONSOLE_KIND_SERIAL = 1;
+  // A Mac's screen, as Screen Sharing's RFB stream for a VNC viewer.
+  CONSOLE_KIND_SCREEN = 2;
+}
+
+// A power command to a BMC.
+enum PowerAction {
+  POWER_ACTION_UNSPECIFIED = 0;
+  // Reads the power state and sends nothing.
+  POWER_ACTION_STATUS = 1;
+  // Powers the host on.
+  POWER_ACTION_ON = 2;
+  // Powers the host off at once.
+  POWER_ACTION_OFF = 3;
+  // Asks the host's system to shut down (an ACPI power button press).
+  POWER_ACTION_SOFT = 4;
+  // Powers the host off and on again; to a host that is off, `on` is sent instead.
+  POWER_ACTION_CYCLE = 5;
+  // Resets the host without powering it off.
+  POWER_ACTION_RESET = 6;
+}
+
+// A host's power as its BMC reports it.
+enum PowerState {
+  POWER_STATE_UNSPECIFIED = 0;
+  POWER_STATE_ON = 1;
+  POWER_STATE_OFF = 2;
+}
+
+// A device a BMC can boot its host from.
+enum BootDevice {
+  BOOT_DEVICE_UNSPECIFIED = 0;
+  // The network (PXE).
+  BOOT_DEVICE_PXE = 1;
+  // The first disk.
+  BOOT_DEVICE_DISK = 2;
+  // The firmware's setup screen.
+  BOOT_DEVICE_BIOS = 3;
+}
+
+message OpenConsoleRequest {
+  // The host's id.
+  string host_id = 1;
+  // Why the console is opened; the audit line carries it.
+  string reason = 2;
+}
+
+message OpenConsoleResponse {
+  // What the session carries: `serial` for a Linux server, `screen` for a Mac.
+  ConsoleKind kind = 1;
+  // The session's id, 64 lower-case hex characters, which the WebSocket's path names. It is not
+  // a credential: attaching also takes the bearer of the operator name that opened it, once.
+  string session = 2;
+  // How long the session waits to be attached, in seconds.
+  uint64 expires_in_secs = 3;
+}
+
+message ConsolePowerRequest {
+  // The host's id.
+  string host_id = 1;
+  // The command.
+  PowerAction action = 2;
+  // Why; the audit line carries it.
+  string reason = 3;
+}
+
+message ConsolePowerResponse {
+  // The power state the BMC reported before the command was sent; for `status`, the answer.
+  PowerState state = 1;
+  // The command sent: the one asked for, but `on` for `cycle` of a host that was off, and
+  // `status` when nothing was sent.
+  PowerAction sent = 2;
+}
+
+message SetBootDeviceRequest {
+  // The host's id.
+  string host_id = 1;
+  // The device to boot from.
+  BootDevice device = 2;
+  // Every boot from now on, not only the next one.
+  bool persistent = 3;
+  // Boot in UEFI mode; a UEFI board may ignore the device otherwise.
+  bool efi = 4;
+  // Why; the audit line carries it.
+  string reason = 5;
+}
+
+message SetBootDeviceResponse {
+  // The boot flags the BMC holds after the command, read back from it.
+  BootDevice device = 1;
+  bool persistent = 2;
+  bool efi = 3;
+}
+
+// An open console session as `List` tells it. The session's id is never in it.
+message ConsoleSession {
+  // The host's id.
+  string host_id = 1;
+  // What the session carries.
+  ConsoleKind kind = 2;
+  // The operator name that opened it, which the audit's `by` is.
+  string opened_by = 3;
+  // When it was opened, in unix seconds.
+  uint64 opened_unix = 4;
+  // Whether a WebSocket is attached to it.
+  bool attached = 5;
+  // The reason it was opened with.
+  string reason = 6;
+}
+
+message ListConsoleSessionsRequest {}
+
+message ListConsoleSessionsResponse {
+  // The open sessions, by host id.
+  repeated ConsoleSession sessions = 1;
+}
+
+message CloseConsoleRequest {
+  // The host whose session ends.
+  string host_id = 1;
+}
+
+message CloseConsoleResponse {}

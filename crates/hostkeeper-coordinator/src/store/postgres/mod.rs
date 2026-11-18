@@ -54,6 +54,7 @@ use self::session::{Fail, Session, Worker, describe, ends_session, not_up};
 use self::writer::{Link, State, Tx, WriteFail, Writer, try_lock_shared};
 use super::{Backend, BackendError, Commit, Health, Loaded};
 use crate::accounts::Accounts;
+use crate::audit_actions::AuditOnly;
 use crate::audit_file::{Actor, AuditLine, Detail, Logged, Query, UnixClock};
 use crate::desired::{self, StoreError};
 use crate::layout::Layout;
@@ -276,11 +277,14 @@ fn load_all(session: &mut Session, now: u64) -> Result<Loaded, BackendError> {
     let verdicts = state::verdicts_of(&read(session, &state::VERDICTS)?)?;
     let accounts = accounts::of_tables(&read(session, &accounts::TABLES)?)?;
     let layout = layout::of_tables(&read(session, &layout::TABLES)?)?;
+    // The ring holds changes only: an audit-only line (the console's) stays out of it, as it
+    // does in memory ([`crate::ops::OpsStore::append_audit_only`]).
+    let audit_only: Vec<&str> = AuditOnly::ALL.iter().map(|only| only.as_str()).collect();
     let ring = session
         .query(
             "SELECT seq, at_unix, by_name, action, service, node_id, reason, host_group FROM audit \
-             ORDER BY seq DESC LIMIT $1",
-            &[&(AUDIT_RING as i64)],
+             WHERE action <> ALL($2) ORDER BY seq DESC LIMIT $1",
+            &[&(AUDIT_RING as i64), &audit_only],
         )
         .map_err(|e| unwritten(&describe(&e)))?;
     ops.audit = ring.iter().rev().map(|row| logged_of(row).entry).collect();
