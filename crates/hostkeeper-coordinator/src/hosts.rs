@@ -123,6 +123,7 @@ impl Coordinator {
                         crate::remote_login_probe::show(&fleet, &id, &mut host);
                         crate::service_identity_report::show(&fleet, &id, &mut host);
                         self.show_operator_keys(&fleet, &id, &mut host);
+                        self.show_ssh_report(&fleet, &id, &mut host);
                         self.show_prerequisites(&fleet, &id, &mut host);
                         host
                     });
@@ -177,6 +178,7 @@ impl Coordinator {
             crate::remote_login_probe::show(&fleet, &id, &mut host);
             crate::service_identity_report::show(&fleet, &id, &mut host);
             self.show_operator_keys(&fleet, &id, &mut host);
+            self.show_ssh_report(&fleet, &id, &mut host);
             self.show_prerequisites(&fleet, &id, &mut host);
             // The verdict of a `clear_record` the host reported, which no rule reads.
             for one in &mut host.services {
@@ -281,6 +283,7 @@ impl Coordinator {
         if !update_in_flight {
             self.running.forget(&id);
             self.operator_keys.forget(&id);
+            self.ssh_reports.forget(&id);
             self.prerequisites.forget(&id);
             tracing::info!(host_id = %id, "a retired host held no update: slot freed");
             enrollment.retire(&id);

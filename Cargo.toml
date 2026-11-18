@@ -84,6 +84,10 @@ prost-reflect = "0.16.5"
 # Compiles .proto files in pure Rust, with no protoc: hostkeeper-proto's and
 # hostkeeper-enrollment's build scripts, and tests.
 protox = "0.10.0"
+# The SSH client of the coordinator's UI terminal (`hostkeeper-coordinator`, `ssh_client.rs`) and
+# the SSH server its tests play the host with. The `ring` backend alone: never `aws-lc-rs`,
+# which needs a C toolchain and another licence.
+russh = { version = "=0.65.1", default-features = false, features = ["ring"] }
 # Certificates: the CA module of hostkeeper-enrollment signs with it (members add `x509-parser`,
 # which reads a public key back for signing), and the TLS tests of hostkeeper-enroll,
 # hostkeeper-testkit and the coordinator crates make their test certificates with it at run time,

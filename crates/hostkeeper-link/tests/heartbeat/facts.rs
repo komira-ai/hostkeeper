@@ -92,6 +92,7 @@ fn heartbeat_lists_installed_services_from_records_and_observer() {
         facts_generation: None,
         remote_login_probe: None,
         operator_keys: None,
+        ssh: None,
         prerequisites: None,
         service_identities: Vec::new(),
     };

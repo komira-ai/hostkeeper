@@ -142,7 +142,7 @@ retire is listed at once: the list is read from the deny rows the coordinator ho
   identity, and an entry without them asks for none. A coordinator before this change answers the
   new RPCs `UNIMPLEMENTED`; the daemon reports that and keeps going.
 - The coordinator's store gains `Host.identity_approval` (field 14), kept by the file store in the
-  host's file and by Postgres in a side table (`enrollment_host_identity`, migration `0020`, which
+  host's file and by Postgres in a side table (`enrollment_host_identity`, migration `0022`, which
   an older release may run on: it never reads it, and its writes of a host row do not touch it). A
   row for another key than the host's counts as absent, so a row an older release left behind
   never approves a new key.

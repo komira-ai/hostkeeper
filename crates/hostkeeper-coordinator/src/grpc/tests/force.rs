@@ -15,6 +15,7 @@ use crate::testutil::OPERATOR;
 /// both healthy.
 fn daemon_beat(features: &[&str]) -> proto::HeartbeatRequest {
     proto::HeartbeatRequest {
+        ssh: None,
         installers: vec!["apt".to_owned()],
         repositories: None,
         platform: proto::Platform::LinuxArm64 as i32,

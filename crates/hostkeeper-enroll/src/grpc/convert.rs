@@ -77,6 +77,7 @@ pub(super) fn pem(label: &str, der: &[u8]) -> Result<String, TransportError> {
 pub(super) fn enroll_request(request: &EnrollRequest) -> pb::EnrollRequest {
     let claims = &request.claims;
     pb::EnrollRequest {
+        host_key_fingerprints: Vec::new(),
         csr_der: request.csr_der.clone(),
         claims: Some(pb::Claims {
             machine_id: claims.machine_id.clone().unwrap_or_default(),

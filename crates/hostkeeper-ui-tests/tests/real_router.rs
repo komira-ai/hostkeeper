@@ -176,6 +176,15 @@ const REQUESTS: &[(&str, &str)] = &[
         r#"{"nodeId": "storage-1", "labels": {"rack": "r1"}}"#,
     ),
     (
+        "hostkeeper.operator.v1.Ssh/HostKeys",
+        r#"{"hostId": "storage-1"}"#,
+    ),
+    (
+        "hostkeeper.operator.v1.Ssh/PinHostKeys",
+        r#"{"hostId": "storage-1",
+            "fingerprints": ["SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]}"#,
+    ),
+    (
         "hostkeeper.operator.v1.Layout/AddRow",
         r#"{"reason": "add row"}"#,
     ),

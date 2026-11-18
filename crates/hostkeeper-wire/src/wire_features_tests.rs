@@ -200,16 +200,17 @@ fn an_unknown_phase_class_or_reason_reads_as_absent_and_keeps_the_result() {
     assert_eq!(result, UpdateResult::new(v("1.1"), Outcome::Failed));
 }
 
-/// Catches: a feature list cut at the old bound of 8, which would drop the whole list of an agent
-/// that announces ten (the hostkeeper daemon with `install-v1`, `abort-v1` and
-/// `clear-record-v1`): ten names and
+/// Catches: a feature list cut at an old bound (8, then 16), which would drop the whole list of an
+/// agent that announces more (ten for the hostkeeper daemon with `install-v1`, `abort-v1` and
+/// `clear-record-v1`; seventeen for a daemon with every port and `ssh-v1`): ten, seventeen and
 /// [`MAX_FEATURES`] names are read as sent, by the strict read and by the coordinator's reader,
 /// and one more is refused by the one and dropped by the other.
 #[test]
 fn a_feature_list_up_to_the_bound_is_read_whole_and_one_over_it_is_not() {
     let names = |n: usize| -> Vec<String> { (0..n).map(|i| format!("f{i}")).collect() };
-    assert_eq!(MAX_FEATURES, 16);
-    for n in [10, MAX_FEATURES] {
+    assert_eq!(MAX_FEATURES, 32);
+    assert_eq!(crate::wire::MAX_FEATURES_BEFORE_SSH, 16);
+    for n in [10, 17, MAX_FEATURES] {
         let mut wire = full_beat();
         wire["agent_features"] = json!(names(n));
         assert_eq!(read(&wire).expect("read").agent_features, names(n), "{n}");

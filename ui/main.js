@@ -13,11 +13,31 @@ const prefs = {
   },
 };
 
+// The one place that opens the socket (the scan of the sources refuses the word for it everywhere else): a
+// socket to `path` of the page's own host (over TLS when the page is). `handlers.open()` runs when it is open,
+// `handlers.message(frame)` for each message (a string for text, a Uint8Array for binary) and
+// `handlers.close()` when it has closed, for any reason. A text or a Uint8Array goes out through
+// `send`, the other way round.
+function openSocket(path, handlers) {
+  const { protocol, host } = window.location;
+  const scheme = protocol === "https:" ? "wss:" : "ws:";
+  const socket = new WebSocket(`${scheme}//${host}${path}`);
+  socket.binaryType = "arraybuffer";
+  socket.addEventListener("open", () => handlers.open());
+  socket.addEventListener("message", (event) => {
+    const { data } = event;
+    handlers.message(typeof data === "string" ? data : new Uint8Array(data));
+  });
+  socket.addEventListener("close", () => handlers.close());
+  return { send: (data) => socket.send(data), close: () => socket.close() };
+}
+
 startApp({
   doc: document,
   root: document.getElementById("app"),
   fetch: (url, init) => window.fetch(url, init),
   confirm: (question) => window.confirm(question),
+  openSocket,
   now: () => Math.floor(Date.now() / 1000),
   prefs,
   every: (run, milliseconds) => {

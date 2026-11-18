@@ -35,6 +35,8 @@ mod releases;
 mod repositories;
 pub(crate) mod rows;
 pub(crate) mod session;
+pub(crate) mod ssh;
+pub(crate) mod ssh_book;
 pub(crate) mod state;
 pub(crate) mod transfer;
 pub(crate) mod writer;

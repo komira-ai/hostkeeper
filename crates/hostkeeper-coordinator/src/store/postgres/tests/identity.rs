@@ -1,5 +1,5 @@
 //! An operator's approval of a host's key for service identity, in the database (migration
-//! `0020`, the table `enrollment_host_identity`): the enrollment store's `approve_identity` over
+//! `0022`, the table `enrollment_host_identity`): the enrollment store's `approve_identity` over
 //! the Postgres records writes the approval into its own table, an approval of the host takes it
 //! away, a row for another key counts as absent, an export reads it back and refuses one that
 //! does not decode, the deny list is read from the deny rows, and the release before and this
@@ -282,17 +282,17 @@ fn the_denied_hosts_are_read_from_the_deny_rows_of_the_database() {
     assert_eq!(reopened.denied_hosts().expect("listed"), wanted);
 }
 
-/// Proves: `0020` does not stop the release before it (migrations `0001` to `0019`) on a
+/// Proves: `0022` does not stop the release before it (migrations `0001` to `0021`) on a
 /// database this release migrated and holds an identity approval in: its runner runs nothing and
 /// is not refused, the state reads as this release loads it, and its write of a host row, naming
 /// the columns `enrollment_hosts` has, leaves the approval's row; and the other way: this release
-/// starts on a database the release before migrated and runs `0020` alone.
+/// starts on a database the release before migrated and runs `0022` alone.
 ///
 /// Catches: an approval that stops the previous coordinator by itself, a host write of the
 /// release before that takes the approval away, and a migration this release does not run on a
 /// database of the release before.
 #[test]
-fn the_release_before_starts_on_a_database_with_0020_and_this_one_on_its() {
+fn the_release_before_starts_on_a_database_with_0022_and_this_one_on_its() {
     let database = TestDatabase::new();
     let (store, loaded) = database.open("this release").expect("the store opens");
     let (enrollment, id, key) = approved_by(&store, "web-1", INVENTORY_APPROVER);
@@ -301,7 +301,7 @@ fn the_release_before_starts_on_a_database_with_0020_and_this_one_on_its() {
         .expect("approved");
     store.stop();
     let (ran, before_loaded) = with_session(&database, |session| {
-        let before = migrate::checked(&migrate::SHIPPED[..19]).expect("the release before's set");
+        let before = migrate::checked(&migrate::SHIPPED[..21]).expect("the release before's set");
         (
             migrate::apply(session, &before).expect("the release before is not refused"),
             load_all(session, SPENT_NOW).expect("the state reads"),
@@ -334,15 +334,15 @@ fn the_release_before_starts_on_a_database_with_0020_and_this_one_on_its() {
 
     let older = TestDatabase::new();
     let ran = with_session(&older, |session| {
-        let before = migrate::checked(&migrate::SHIPPED[..19]).expect("the release before's set");
+        let before = migrate::checked(&migrate::SHIPPED[..21]).expect("the release before's set");
         migrate::apply(session, &before).expect("the release before migrates")
     });
-    assert_eq!(ran, (1..=19).collect::<Vec<i32>>());
+    assert_eq!(ran, (1..=21).collect::<Vec<i32>>());
     let (store, _) = older.open("this release").expect("this release starts");
     store.stop();
     assert_eq!(
-        older.rows("SELECT version FROM schema_version WHERE version > 19"),
-        vec![vec![Some("20".to_owned())]]
+        older.rows("SELECT version FROM schema_version WHERE version > 21"),
+        vec![vec![Some("22".to_owned())]]
     );
     assert_eq!(held(&older), vec![]);
 }

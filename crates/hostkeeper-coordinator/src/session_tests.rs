@@ -642,3 +642,55 @@ fn clearing_must_change_of_an_unknown_or_ended_or_expired_session_finds_none() {
     set(&clock, START + 100);
     assert!(sessions.clear_must_change(idle.as_str()).is_none());
 }
+
+/// Proves: a session's handle says whether the session lives without using it: it is live from
+/// creation, stays live while the clock runs up to the idle deadline however often it is asked
+/// (asking pushes nothing out, so the session still ends at its first idle deadline), is not live
+/// once the idle deadline passed, once the session was ended and for a handle of no session, and
+/// the handle's debug text holds nothing of the cookie.
+///
+/// Catches: a liveness question that counts as a use (a poll that asks every few seconds would
+/// keep every session for ever), and a handle that outlives its session.
+#[test]
+fn a_handle_tells_whether_a_session_lives_and_asking_is_no_use() {
+    let clock = clock();
+    let sessions = sessions(settings(100, 1000, 4), &clock);
+    let (id, _) = sessions.create("admin", false, None).unwrap();
+    let key = Sessions::key_of(id.as_str());
+    assert!(sessions.is_live(&key));
+    set(&clock, START + 99);
+    assert!(sessions.is_live(&key));
+    set(&clock, START + 100);
+    assert!(
+        !sessions.is_live(&key),
+        "the idle deadline was not pushed out by asking"
+    );
+    assert!(sessions.lookup(id.as_str()).is_none());
+    let (again, _) = sessions.create("admin", false, None).unwrap();
+    let key = Sessions::key_of(again.as_str());
+    assert!(sessions.end(again.as_str()));
+    assert!(!sessions.is_live(&key));
+    assert!(!sessions.is_live(&Sessions::key_of("no such session")));
+    assert_eq!(format!("{key:?}"), "SessionKey(<redacted>)");
+}
+
+/// Proves: touching a session by its handle pushes its idle deadline out as a use of its cookie
+/// does (so a session in which a terminal is typed into does not idle out), says no for a session
+/// that is gone or past a deadline, and forgets the expired one.
+///
+/// Catches: a touch that revives an expired session or does not push the deadline.
+#[test]
+fn touching_a_session_by_its_handle_is_a_use() {
+    let clock = clock();
+    let sessions = sessions(settings(100, 1000, 4), &clock);
+    let (id, _) = sessions.create("admin", false, None).unwrap();
+    let key = Sessions::key_of(id.as_str());
+    set(&clock, START + 99);
+    assert!(sessions.touch(&key));
+    set(&clock, START + 150);
+    assert!(sessions.is_live(&key), "the touch pushed the deadline out");
+    set(&clock, START + 250);
+    assert!(!sessions.touch(&key), "expired");
+    assert!(sessions.is_empty(), "the expired session was forgotten");
+    assert!(!sessions.touch(&Sessions::key_of("no such session")));
+}

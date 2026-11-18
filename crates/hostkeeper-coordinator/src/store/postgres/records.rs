@@ -43,7 +43,7 @@ const HOST_COLUMNS: &str = "host_id, key_hash, machine_id, role, services, dupli
 
 /// What a read of a host takes: the columns of `enrollment_hosts`, the running record
 /// (`enrollment_host_running`, migration `0006`) and the identity approval
-/// (`enrollment_host_identity`, migration `0020`) of the same host, which a host without one has
+/// (`enrollment_host_identity`, migration `0022`) of the same host, which a host without one has
 /// `NULL` for ([`host_of`] reads the columns of [`HOST_READ`]).
 const HOST_FROM: &str = "enrollment_hosts LEFT JOIN enrollment_host_running USING (host_id) \
     LEFT JOIN enrollment_host_identity USING (host_id)";

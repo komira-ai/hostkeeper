@@ -53,6 +53,7 @@ use hostkeeper_proto::hostkeeper::operator::v1::releases_server::ReleasesServer;
 use hostkeeper_proto::hostkeeper::operator::v1::repositories_server::RepositoriesServer;
 use hostkeeper_proto::hostkeeper::operator::v1::rollouts_server::RolloutsServer;
 use hostkeeper_proto::hostkeeper::operator::v1::services_server::ServicesServer;
+use hostkeeper_proto::hostkeeper::operator::v1::ssh_server::SshServer;
 use hostkeeper_proto::hostkeeper::operator::v1::users_server::UsersServer;
 use hostkeeper_wire::wire::MAX_HEARTBEAT_BYTES;
 use http_body_util::{Either, Full};
@@ -74,11 +75,12 @@ use self::operator_host_groups::HostGroupsService;
 use self::operator_host_identity::HostIdentityService;
 use self::operator_layout::LayoutService;
 use self::operator_repositories::RepositoriesService;
+use self::operator_ssh::SshService;
 use self::refusal::token_status;
 use crate::enrollment::MAX_MESSAGE_BYTES;
 use crate::http::{
-    BoxError, MAX_HOST_GROUPS_PUT_BYTES, MAX_OPERATOR_BYTES, MAX_SET_DESIRED_BYTES, Peer, Surface,
-    bearer_in, beat_caller, error, handle,
+    BoxError, MAX_HOST_GROUPS_PUT_BYTES, MAX_OPERATOR_BYTES, MAX_SET_DESIRED_BYTES,
+    MAX_TUNNEL_FRAME_BYTES, Peer, Surface, bearer_in, beat_caller, error, handle,
 };
 use crate::identity::Identity;
 use crate::operator::Caller;
@@ -96,6 +98,7 @@ mod operator_host_groups;
 mod operator_host_identity;
 mod operator_layout;
 mod operator_repositories;
+mod operator_ssh;
 pub(crate) mod refusal;
 pub(crate) mod report;
 
@@ -143,6 +146,8 @@ const API_TOKENS: &str = "hostkeeper.operator.v1.ApiTokens";
 const LAYOUT: &str = "hostkeeper.operator.v1.Layout";
 /// The full name of the operator API's `HostIdentity`.
 const HOST_IDENTITY: &str = "hostkeeper.operator.v1.HostIdentity";
+/// The full name of the operator API's `Ssh`.
+const SSH: &str = "hostkeeper.operator.v1.Ssh";
 /// The full name of the operator API's `Console`.
 const CONSOLE: &str = "hostkeeper.operator.v1.Console";
 
@@ -152,6 +157,8 @@ const HEARTBEAT: &str = "/hostkeeper.agent.v1.Coordinator/Heartbeat";
 const REPOSITORIES_PUT: &str = "/hostkeeper.operator.v1.Repositories/Put";
 /// The path of `HostGroups.Put`, which takes the operator's token and a body of up to 64 KiB.
 const HOST_GROUPS_PUT: &str = "/hostkeeper.operator.v1.HostGroups/Put";
+/// The path of `Ssh.Tunnel`, whose frames carry up to 16 KiB of data.
+const SSH_TUNNEL: &str = "/hostkeeper.operator.v1.Ssh/Tunnel";
 /// The path of `Releases.SetDesired`, which takes CI's token or the operator's.
 const SET_DESIRED: &str = "/hostkeeper.operator.v1.Releases/SetDesired";
 /// The path of `Releases.Converge`, which takes CI's token or the operator's: it changes nothing.
@@ -304,7 +311,7 @@ pub(crate) async fn admit_via(
             Surface::Control,
             Some(
                 HOSTS | RELEASES | SERVICES | ENROLLMENT | AUDIT | ALERTS | ROLLOUTS | REPOSITORIES
-                | HOST_GROUPS | USERS | API_TOKENS | LAYOUT | HOST_IDENTITY | CONSOLE,
+                | HOST_GROUPS | USERS | API_TOKENS | LAYOUT | HOST_IDENTITY | SSH | CONSOLE,
             ),
         ) => Served::Operator,
         _ => return Err(Status::unimplemented("")),
@@ -422,12 +429,15 @@ where
 
 /// The most bytes an operator's call of `path` reads: [`MAX_SET_DESIRED_BYTES`] for
 /// `SetDesired` and `Repositories.Put`, [`MAX_HOST_GROUPS_PUT_BYTES`] for `HostGroups.Put`,
-/// [`MAX_OPERATOR_BYTES`] for every other method.
+/// [`MAX_TUNNEL_FRAME_BYTES`] for each frame of `Ssh.Tunnel`, [`MAX_OPERATOR_BYTES`] for every
+/// other method.
 pub(crate) fn operator_limit(path: &str) -> usize {
     if path == SET_DESIRED || path == REPOSITORIES_PUT {
         MAX_SET_DESIRED_BYTES
     } else if path == HOST_GROUPS_PUT {
         MAX_HOST_GROUPS_PUT_BYTES
+    } else if path == SSH_TUNNEL {
+        MAX_TUNNEL_FRAME_BYTES
     } else {
         MAX_OPERATOR_BYTES
     }
@@ -436,8 +446,8 @@ pub(crate) fn operator_limit(path: &str) -> usize {
 /// Serves the gRPC call `request` with the tonic server of its service, in process, with
 /// `admitted` in its extensions for the adapter. The service's message limit applies to the
 /// request: 16 KiB for a heartbeat, 8 KiB for `Enroll`, `Poll` and `Renew`, 256 KiB for
-/// `SetDesired` and `Repositories.Put`, 64 KiB for `HostGroups.Put`
-/// ([`operator_limit`]), 4 KiB for every other operator's call. A path of a
+/// `SetDesired` and `Repositories.Put`, 64 KiB for `HostGroups.Put`, 16 KiB and 64 bytes for each
+/// frame of `Ssh.Tunnel` ([`operator_limit`]), 4 KiB for every other operator's call. A path of a
 /// service this coordinator does not serve is `UNIMPLEMENTED`.
 pub(crate) async fn serve_admitted<B>(
     coordinator: &Arc<Coordinator>,
@@ -525,6 +535,11 @@ where
         Some(HOST_IDENTITY) => {
             let server = HostIdentityServer::new(HostIdentityService::new(coordinator))
                 .max_decoding_message_size(MAX_OPERATOR_BYTES);
+            call(server, request).await
+        }
+        Some(SSH) => {
+            let server = SshServer::new(SshService::new(coordinator))
+                .max_decoding_message_size(operator_limit(path));
             call(server, request).await
         }
         Some(CONSOLE) => {

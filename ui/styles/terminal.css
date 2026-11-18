@@ -1,0 +1,106 @@
+/* The terminal of the host page's Remote SSH tab (ui/terminal.js draws into it). The 16 colours are
+   named by class (tf0 to tf15 for the text, tb0 to tb15 for the ground); tfd and tbd are the
+   default ground and text colours swapped, which inverse video of a default colour is. No style
+   attribute is used anywhere, so the content security policy stays default-src 'self'. */
+
+.termbox {
+  --t-ground: #0c1219;
+  --t-text: #d7e0e8;
+  --t-0: #1b2733; --t-1: #e0584a; --t-2: #4fc27a; --t-3: #d9b34a;
+  --t-4: #5b8fe0; --t-5: #b676d6; --t-6: #4cc2c9; --t-7: #c9d3dc;
+  --t-8: #5d6c7b; --t-9: #ff7a6b; --t-10: #72e39c; --t-11: #f5cf6a;
+  --t-12: #7fadff; --t-13: #d596f2; --t-14: #78dde2; --t-15: #f4f8fb;
+  box-sizing: border-box;
+  max-width: 100%;
+  height: calc(36 * 1.25em + 20px);
+  overflow: auto;
+  margin: 12px 0 0;
+  padding: 10px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--t-ground);
+  color: var(--t-text);
+  font: 13px / 1.25 var(--mono);
+}
+
+.termbox:empty {
+  display: none;
+}
+
+.termbox:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.tscreen {
+  margin: 0;
+  font: inherit;
+  white-space: pre;
+}
+
+.tline {
+  min-height: 1.25em;
+  white-space: pre;
+}
+
+.tbold { font-weight: 700; }
+.tdim { opacity: 0.65; }
+.titalic { font-style: italic; }
+.tunderline { text-decoration: underline; }
+
+.tf0 { color: var(--t-0); }
+.tf1 { color: var(--t-1); }
+.tf2 { color: var(--t-2); }
+.tf3 { color: var(--t-3); }
+.tf4 { color: var(--t-4); }
+.tf5 { color: var(--t-5); }
+.tf6 { color: var(--t-6); }
+.tf7 { color: var(--t-7); }
+.tf8 { color: var(--t-8); }
+.tf9 { color: var(--t-9); }
+.tf10 { color: var(--t-10); }
+.tf11 { color: var(--t-11); }
+.tf12 { color: var(--t-12); }
+.tf13 { color: var(--t-13); }
+.tf14 { color: var(--t-14); }
+.tf15 { color: var(--t-15); }
+.tfd { color: var(--t-ground); }
+
+.tb0 { background: var(--t-0); }
+.tb1 { background: var(--t-1); }
+.tb2 { background: var(--t-2); }
+.tb3 { background: var(--t-3); }
+.tb4 { background: var(--t-4); }
+.tb5 { background: var(--t-5); }
+.tb6 { background: var(--t-6); }
+.tb7 { background: var(--t-7); }
+.tb8 { background: var(--t-8); }
+.tb9 { background: var(--t-9); }
+.tb10 { background: var(--t-10); }
+.tb11 { background: var(--t-11); }
+.tb12 { background: var(--t-12); }
+.tb13 { background: var(--t-13); }
+.tb14 { background: var(--t-14); }
+.tb15 { background: var(--t-15); }
+.tbd { background: var(--t-text); }
+
+/* The cursor's cell, in the terminal's own colours, whatever the cell's. */
+.tscreen .tcursor {
+  background: var(--t-text);
+  color: var(--t-ground);
+}
+
+/* Remote SSH panel: the keys, the buttons and the status line above the terminal. */
+
+.sshpanel .keys code {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.sshpanel .row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 10px 0 0;
+}

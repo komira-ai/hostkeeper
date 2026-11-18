@@ -65,6 +65,7 @@ update coordinator, `hostkeeper-coordinator serve`. The parts are being moved he
 | [`hostkeeper-wire`](crates/hostkeeper-wire) | what the coordinator and a host exchange: the heartbeat and its reply, versions, host ids, role names and platforms, the certificate identity, the secret-file rule |
 | [`hostkeeper-proto`](crates/hostkeeper-proto) | the protobuf services of the coordinator (`hostkeeper.agent.v1`, `hostkeeper.operator.v1`) and the frozen file of the daemon's former admin socket (`hostkeeper.local.v1`, no code generated from it), the messages of a release (`hostkeeper.release.v1`), the command table `hkctl` and the UI's generated client are made from, and the compatibility test |
 | [`hostkeeper-hkctl`](crates/hostkeeper-hkctl) | `hkctl`, the operator's bash command line over the gateway: the emitter of its script from the same command table (`cargo xtask release hkctl` writes the asset `hkctl-<version>`), [docs/cli.md](docs/cli.md), and the scan that holds the script to bash 3.2 |
+| [`hostkeeper-hkssh`](crates/hostkeeper-hkssh) | `hkssh`, the operator's side of SSH through the coordinator (`hkctl ssh`, `ssh-proxy`, `ssh-revoke`, `ssh-status` run it): the byte-stream proxy over `Ssh/Tunnel`, the one-host certificate and the pinned host keys |
 | [`hostkeeper-coordinator`](crates/hostkeeper-coordinator) | the update coordinator: the host groups (the packages, rollout policy and hosts of each), the desired version of each package per group, the repository of each package (`Services.SetRepository`), the heartbeat endpoint, the operator endpoint, the convergence of a fleet, and its state in Postgres (the migrations, the advisory lock and `export`) or in the file store kept as the way back |
 | [`hostkeeper-enrollment`](crates/hostkeeper-enrollment) | the coordinator's certificate authority (profile, certificates, key file, CA bundle) and its durable enrollment store |
 | [`hostkeeper-oidc`](crates/hostkeeper-oidc) | the verifier of OIDC tokens (CI tokens) against an allow-list, with its issuer keys fetched over HTTPS |
@@ -82,8 +83,8 @@ no framework and no build step. Its pages (Home, which is the lab, Host, Host gr
 the coordinator's HTTP/JSON gateway with the operator's token, each button one method call,
 through a client generated from the protos: `ui/gen/client.js`, one function per method of
 `hostkeeper.operator.v1` (`api.releases.setDesired(request)`), with its TypeScript declarations
-in `ui/gen/client.d.ts`. Both are checked in, and a test regenerates them and fails on any
-difference; `ui/calls.json`, the methods the pages call, is derived from the pages the same way. The
+in `ui/gen/client.d.ts` (the client) and one `ui/gen/<namespace>.d.ts` per proto package (the types). All are
+checked in, and a test regenerates them and fails on any difference; `ui/calls.json`, the methods the pages call, is derived from the pages the same way. The
 coordinator serves it under `/ui/` of its private listener: the coordinator's container image
 holds it at `/usr/share/hostkeeper-coordinator/ui`, which the coordinator serves when started
 without `--ui-dir`, and `--ui-dir` names another directory

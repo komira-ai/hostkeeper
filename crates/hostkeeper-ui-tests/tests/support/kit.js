@@ -55,7 +55,7 @@ export const NOW = 1800000000;
 // replies to the page's questions, in order; a question beyond them is answered no. Its clock
 // reads `now` (NOW when absent).
 export function recorder(client, params, answers, now) {
-  const seen = { reports: [], refreshes: 0, navigations: [], questions: [], shown: [], repeats: [] };
+  const seen = { reports: [], refreshes: 0, navigations: [], questions: [], shown: [], repeats: [], sockets: [] };
   const left = (answers || []).slice();
   const ctx = {
     api: client,
@@ -66,6 +66,21 @@ export function recorder(client, params, answers, now) {
     },
     now() {
       return now === undefined ? NOW : now;
+    },
+    // A socket the test drives: nothing arrives by itself. The test calls `handlers.open()`,
+    // `handlers.message(frame)` (a string, or a Uint8Array) and `handlers.close()` itself; what the
+    // page sends is kept in `sent` (`{text}` or `{bytes}`), and each `close()` is counted.
+    openSocket(path, handlers) {
+      const socket = { path, handlers, sent: [], closes: 0 };
+      seen.sockets.push(socket);
+      return {
+        send(data) {
+          socket.sent.push(typeof data === "string" ? { text: data } : { bytes: Array.from(data) });
+        },
+        close() {
+          socket.closes += 1;
+        },
+      };
     },
     navigate(name, to) {
       seen.navigations.push({ name, params: to || {} });
@@ -192,6 +207,9 @@ export function fakeDocument() {
       nodeType: 1,
       tagName: tag.toUpperCase(),
       attributes: {},
+      // What a scrolling box reads and sets: the height of its content and how far it is scrolled.
+      scrollHeight: 500,
+      scrollTop: 0,
       children: [],
       listeners: {},
       // The element's style object: only custom properties are set through it, which the page's
@@ -235,17 +253,17 @@ export function fakeDocument() {
         this.listeners[event] = (this.listeners[event] || []).concat([listener]);
       },
     };
+    element.ownerDocument = theDocument;
     created.push(element);
     return element;
   }
-  return {
+  const theDocument = {
     created,
     createElement,
     createElementNS: (namespace, tag) => createElement(tag, namespace),
     createTextNode(data) {
       return { nodeType: 3, data };
     },
-    root: createElement("div"),
     // The window: the listeners the page keeps on it, by event name (`resize`).
     defaultView: {
       listeners: {},
@@ -257,6 +275,8 @@ export function fakeDocument() {
       },
     },
   };
+  theDocument.root = createElement("div");
+  return theDocument;
 }
 
 // Every element under `node` in a fake document, `node` included.

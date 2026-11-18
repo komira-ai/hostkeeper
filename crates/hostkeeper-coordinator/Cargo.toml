@@ -68,10 +68,13 @@ prost-reflect = { workspace = true, features = ["serde"] }
 # The key of the coordinator's server certificate.
 rcgen.workspace = true
 ring.workspace = true
+# The SSH client of the UI terminal (`src/ssh_client.rs`), over the in-process end of a tunnel.
+russh.workspace = true
 # The TLS of the listeners.
 rustls.workspace = true
 rustls-native-certs.workspace = true
 serde.workspace = true
+sha1.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 subtle.workspace = true

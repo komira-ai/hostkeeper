@@ -24,6 +24,7 @@ fn beat(reports: Vec<ServiceIdentityReport>) -> Heartbeat {
         remote_login_probe: None,
         operator_keys: None,
         prerequisites: None,
+        ssh: None,
         service_identities: reports,
     }
 }

@@ -22,7 +22,7 @@ use super::Admitted;
 use super::beat_map;
 use super::refusal::token_status;
 use crate::enrollment::Enrollment;
-use crate::http::{BeatCaller, BeatRefused, Peer, beat};
+use crate::http::{BeatCaller, BeatRefused, Peer, PeerAddr, beat};
 use crate::orders::Order;
 use crate::service::Coordinator;
 use crate::trusted_root::TrustedRootSaid;
@@ -39,6 +39,7 @@ pub(crate) fn beat_status(refused: BeatRefused) -> Status {
 /// The `HeartbeatResponse` for `answer`, and the typed order beside it when there is one.
 fn response_of(answer: Answer, order: Option<Order>) -> proto::HeartbeatResponse {
     proto::HeartbeatResponse {
+        ssh: None,
         order: order.as_ref().map(Order::to_proto),
         features: answer.features.unwrap_or_default(),
         halt_generations: answer.halts.into_iter().collect(),
@@ -105,6 +106,22 @@ impl Api for AgentService {
             self.coordinator
                 .hear_operator_keys(&identity, request.get_ref());
             self.coordinator
+                .hear_ssh_report(&identity, request.get_ref());
+            // Where the host was heard from and the host keys it reports, for the tunnels.
+            let from = request
+                .extensions()
+                .get::<PeerAddr>()
+                .map(|peer| peer.0.ip());
+            let keys = request
+                .get_ref()
+                .ssh
+                .as_ref()
+                .map(|report| report.host_key_fingerprints.clone())
+                .unwrap_or_default();
+            self.coordinator
+                .hear_ssh(identity.host_id.as_str(), from, keys)
+                .await;
+            self.coordinator
                 .hear_prerequisites(&identity, request.get_ref());
             self.coordinator
                 .hear_service_identities(&identity, request.get_ref());
@@ -126,6 +143,12 @@ impl Api for AgentService {
         response.operator_keys = self
             .coordinator
             .operator_keys_for(&identity, request.get_ref());
+        if !retiring {
+            response.ssh = self
+                .coordinator
+                .ssh_access_for(&identity, request.get_ref())
+                .await;
+        }
         response.prerequisites = self
             .coordinator
             .prerequisites_for(&identity, request.get_ref());

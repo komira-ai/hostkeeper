@@ -213,6 +213,30 @@ impl Tx<'_> {
     ) -> Result<postgres::Row, postgres::Error> {
         self.session.query_one(sql, params)
     }
+
+    /// Runs a statement that returns at most one row.
+    ///
+    /// # Errors
+    /// The client's error, and when it returns more than one row.
+    pub(crate) fn query_opt(
+        &mut self,
+        sql: &str,
+        params: Params<'_>,
+    ) -> Result<Option<postgres::Row>, postgres::Error> {
+        self.session.query_opt(sql, params)
+    }
+
+    /// Runs a statement; its rows, as many as there are.
+    ///
+    /// # Errors
+    /// The client's error.
+    pub(crate) fn query(
+        &mut self,
+        sql: &str,
+        params: Params<'_>,
+    ) -> Result<Vec<postgres::Row>, postgres::Error> {
+        self.session.query(sql, params)
+    }
 }
 
 /// Takes the coordinator's advisory lock on `session` shared, without waiting: false when a

@@ -21,6 +21,7 @@ fn beat(platform: Platform) -> Heartbeat {
         facts_generation: None,
         remote_login_probe: None,
         operator_keys: None,
+        ssh: None,
         prerequisites: None,
         service_identities: Vec::new(),
     }
@@ -143,4 +144,61 @@ fn the_remote_login_probe_goes_out_as_its_field() {
     );
     with.remote_login_probe = None;
     assert_eq!(sent(&with).remote_login_probe, None);
+}
+
+/// Proves the report of the daemon's sshd setup goes out as `ssh` field for field, and a
+/// heartbeat with none leaves the field out.
+#[test]
+fn the_ssh_report_goes_out_as_its_field() {
+    use crate::host_ssh::SshReport;
+    let mut with = beat(Platform::LinuxX86_64);
+    with.ssh = Some(SshReport {
+        applied_generation: 7,
+        state: "blocked_by_allow_list".to_owned(),
+        host_key_fingerprints: vec!["SHA256:aaa".to_owned(), "SHA256:bbb".to_owned()],
+        detail: "allowusers".to_owned(),
+    });
+    assert_eq!(
+        sent(&with).ssh,
+        Some(pb::SshReport {
+            applied_generation: 7,
+            state: "blocked_by_allow_list".to_owned(),
+            host_key_fingerprints: vec!["SHA256:aaa".to_owned(), "SHA256:bbb".to_owned()],
+            detail: "allowusers".to_owned(),
+        })
+    );
+    with.ssh = None;
+    assert_eq!(sent(&with).ssh, None);
+}
+
+/// Proves the SSH access of a response comes in whole, as decoded, and a response with none has
+/// none.
+#[test]
+fn a_response_keeps_its_ssh_access_as_decoded() {
+    use crate::host_ssh::PushedSsh;
+    let mapped = reply(pb::HeartbeatResponse {
+        ssh: Some(pb::SshAccess {
+            generation: 9,
+            enabled: true,
+            ca_public_keys: vec!["ssh-ed25519 AAAA".to_owned()],
+            login_user: "root".to_owned(),
+            principal: "hk-host-web-04".to_owned(),
+            revoked_serials: vec![3, 1_000_000_000_000],
+            password_auth: "off".to_owned(),
+        }),
+        ..pb::HeartbeatResponse::default()
+    });
+    assert_eq!(
+        mapped.reply.ssh,
+        Some(PushedSsh {
+            generation: 9,
+            enabled: true,
+            ca_public_keys: vec!["ssh-ed25519 AAAA".to_owned()],
+            login_user: "root".to_owned(),
+            principal: "hk-host-web-04".to_owned(),
+            revoked_serials: vec![3, 1_000_000_000_000],
+            password_auth: "off".to_owned(),
+        })
+    );
+    assert_eq!(reply(pb::HeartbeatResponse::default()).reply.ssh, None);
 }
