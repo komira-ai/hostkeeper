@@ -159,7 +159,7 @@ pub(crate) fn check(
 }
 
 /// The certificate is an end entity for client authentication; see the module documentation.
-pub(crate) fn check_usage(leaf: &Certificate) -> Result<(), Refusal> {
+fn check_usage(leaf: &Certificate) -> Result<(), Refusal> {
     let tbs = leaf.tbs_certificate();
     // An extension that does not decode, or appears twice, refuses as its check would.
     let constraints = tbs
@@ -201,7 +201,7 @@ fn der_sha256(cert: &Certificate) -> Option<String> {
 }
 
 /// The certificate's signature verifies under `ca`'s P-256 key.
-pub(crate) fn signed_by(leaf: &Certificate, ca: &Certificate) -> bool {
+fn signed_by(leaf: &Certificate, ca: &Certificate) -> bool {
     let key = ca
         .tbs_certificate()
         .subject_public_key_info()

@@ -12,8 +12,7 @@
 //!
 //! The rules run in a fixed order, and the first broken one is the answer: the size, the counts,
 //! `min_hostkeeper`, the hook, `run`, the health URL, `place`, `params`, the containers, the
-//! installer bounds, the identity account; then, in [`check_for`], the installer's fields, the
-//! hook's last.
+//! installer bounds; then, in [`check_for`], the installer's fields, the hook's last.
 
 use std::collections::BTreeSet;
 
@@ -36,9 +35,6 @@ use crate::{
     MAX_CONTAINERS, MAX_INSTALLER_SECS, MAX_MANIFEST_BYTES, MAX_PARAMS, MAX_PLACE, MAX_RUN,
     MIN_HOST_PORT,
 };
-
-/// The most bytes of `identity_account`.
-pub const MAX_IDENTITY_ACCOUNT: usize = 32;
 
 /// The `kind` of a `place` entry that links a unit file.
 pub const PLACE_UNIT: &str = "unit";
@@ -266,20 +262,6 @@ pub enum ManifestError {
         /// Its value.
         secs: u64,
     },
-    /// `identity_account` is present and `identity` is not `true`.
-    #[error("identity_account {0:?} is given, but identity is not true")]
-    IdentityAccountWithoutIdentity(String),
-    /// `identity_account` is not an account name: 1 to 32 bytes of `a-z`, `0-9`, `_` and `-`, the
-    /// first a letter or `_`.
-    #[error(
-        "identity_account {account:?} {why}; it is 1 to 32 bytes of a-z, 0-9, _ and -, the first a letter or _"
-    )]
-    IdentityAccount {
-        /// The account as given.
-        account: String,
-        /// The rule it breaks.
-        why: &'static str,
-    },
 }
 
 /// Applies the rules of every manifest of `service` for `platform`, whatever its installer and
@@ -319,7 +301,7 @@ pub fn check(
     if let Some(bounds) = &manifest.installer_bounds {
         installer_bounds(bounds)?;
     }
-    identity(manifest)
+    Ok(())
 }
 
 /// Applies [`check`], then the rules of `installer`: the fields it requires present and those
@@ -381,40 +363,6 @@ pub fn check_hook_of(native: bool, manifest: &Manifest) -> Result<(), ManifestEr
         })
     } else {
         check_relative(&program).map_err(|why| ManifestError::HookProgram { program, why })
-    }
-}
-
-/// `identity_account`: given only with `identity` true, and an account name. Both fields absent
-/// is a manifest that asks for no identity.
-fn identity(manifest: &Manifest) -> Result<(), ManifestError> {
-    let Some(account) = &manifest.identity_account else {
-        return Ok(());
-    };
-    if manifest.identity != Some(true) {
-        return Err(ManifestError::IdentityAccountWithoutIdentity(
-            account.clone(),
-        ));
-    }
-    let why = if account.is_empty() {
-        Some("is empty")
-    } else if account.len() > MAX_IDENTITY_ACCOUNT {
-        Some("is longer than 32 bytes")
-    } else if !account.starts_with(|c: char| c.is_ascii_lowercase() || c == '_') {
-        Some("does not start with a lower-case letter or _")
-    } else if !account
-        .bytes()
-        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
-    {
-        Some("has a character other than a-z, 0-9, _ and -")
-    } else {
-        None
-    };
-    match why {
-        Some(why) => Err(ManifestError::IdentityAccount {
-            account: account.clone(),
-            why,
-        }),
-        None => Ok(()),
     }
 }
 

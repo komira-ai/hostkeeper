@@ -1,6 +1,5 @@
-//! The wall clock, and the only questions this crate asks it: is renewal due, has the
-//! certificate expired, is a certificate just issued valid now, and the two of those for a
-//! service's certificate (`service_due`, `service_valid_now`).
+//! The wall clock, and the only three questions this crate asks it: is renewal due, has the
+//! certificate expired, and is a certificate just issued valid now.
 //!
 //! Nothing else in the crate reads the wall clock: retries are paced by the monotonic
 //! `hostkeeper_steps::Clock`. A [`WallClock`] is asked through a [`Site`], which only this module
@@ -8,19 +7,17 @@
 //! (`crates/xtask/tests/wallclock`) allows the one real read, in [`SystemWallClock`], in this file
 //! only.
 //!
-//! Times are whole seconds since the Unix epoch. A host certificate is valid from `not_before`
-//! through `not_after`, both included (the Validity field of RFC 5280); a service certificate is
-//! installed only while `now < not_after`.
+//! Times are whole seconds since the Unix epoch. A certificate is valid from `not_before` through
+//! `not_after`, both included (the Validity field of RFC 5280).
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Who reads the wall clock. Only this module makes one: the checks below.
+/// Who reads the wall clock. Only this module makes one: the three checks below.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Site(&'static str);
 
 impl Site {
-    /// The name of the check: `renewal_due`, `expired`, `leaf_valid_now`, `service_due` or
-    /// `service_valid_now`.
+    /// The name of the check: `renewal_due`, `expired` or `leaf_valid_now`.
     pub fn name(self) -> &'static str {
         self.0
     }
@@ -29,8 +26,6 @@ impl Site {
 const RENEWAL_DUE: Site = Site("renewal_due");
 const EXPIRED: Site = Site("expired");
 const LEAF_VALID_NOW: Site = Site("leaf_valid_now");
-const SERVICE_DUE: Site = Site("service_due");
-const SERVICE_VALID_NOW: Site = Site("service_valid_now");
 
 /// The wall clock: seconds since the Unix epoch, read for `site`.
 pub trait WallClock: Send {
@@ -57,18 +52,6 @@ fn unix_secs(time: SystemTime) -> u64 {
 pub(crate) fn renewal_due(wall: &dyn WallClock, not_before: u64, not_after: u64) -> bool {
     let midpoint = not_before + not_after.saturating_sub(not_before) / 2;
     wall.now_unix_secs(RENEWAL_DUE) >= midpoint
-}
-
-/// A service's certificate is due for renewal: the middle of its validity is reached.
-pub(crate) fn service_due(wall: &dyn WallClock, not_before: u64, not_after: u64) -> bool {
-    let midpoint = not_before + not_after.saturating_sub(not_before) / 2;
-    wall.now_unix_secs(SERVICE_DUE) >= midpoint
-}
-
-/// A service's certificate just issued is valid now: `not_before <= now < not_after`.
-pub(crate) fn service_valid_now(wall: &dyn WallClock, not_before: u64, not_after: u64) -> bool {
-    let now = wall.now_unix_secs(SERVICE_VALID_NOW);
-    not_before <= now && now < not_after
 }
 
 /// The certificate expired: the wall clock is past `not_after`, so the certificate cannot
@@ -125,41 +108,11 @@ mod tests {
         assert!(renewal_due(&At(300), 300, 200));
     }
 
-    /// Catches a service certificate valid at its `not_after` second, or not at its first one.
-    #[test]
-    fn a_service_certificate_is_valid_until_its_not_after_second() {
-        assert!(!service_valid_now(&At(99), 100, 200));
-        assert!(service_valid_now(&At(100), 100, 200));
-        assert!(service_valid_now(&At(199), 100, 200));
-        assert!(!service_valid_now(&At(200), 100, 200));
-    }
-
-    /// Catches a service certificate renewed before or after the middle of its validity.
-    #[test]
-    fn a_service_certificate_is_due_from_the_middle_of_its_validity() {
-        assert!(!service_due(&At(149), 100, 200));
-        assert!(service_due(&At(150), 100, 200));
-        assert!(service_due(&At(900), 100, 200));
-    }
-
     #[test]
     fn each_check_has_its_name() {
         assert_eq!(
-            [
-                RENEWAL_DUE,
-                EXPIRED,
-                LEAF_VALID_NOW,
-                SERVICE_DUE,
-                SERVICE_VALID_NOW
-            ]
-            .map(Site::name),
-            [
-                "renewal_due",
-                "expired",
-                "leaf_valid_now",
-                "service_due",
-                "service_valid_now"
-            ]
+            [RENEWAL_DUE, EXPIRED, LEAF_VALID_NOW].map(Site::name),
+            ["renewal_due", "expired", "leaf_valid_now"]
         );
     }
 }

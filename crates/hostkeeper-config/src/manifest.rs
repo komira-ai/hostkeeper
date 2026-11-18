@@ -196,12 +196,6 @@ pub struct Manifest {
     pub files: Vec<FileEntry>,
     /// `[params]`: scalars only, no `updater.*` key.
     pub params: toml::Table,
-    /// Whether the entry asks for a service identity (`Manifest.identity` of a release entry);
-    /// `false` for a manifest read from `manifest.toml`, which has no such key.
-    pub identity: bool,
-    /// The account that owns the identity's files (`Manifest.identity_account`); `None` means
-    /// `root`.
-    pub identity_account: Option<String>,
 }
 
 /// Whether `name` may name a hook's additive boot step: 1 to [`MAX_BOOT_NAME`] bytes of

@@ -17,8 +17,6 @@ export namespace hostkeeper_release_v1 {
     minHostkeeper?: string;
     containers?: hostkeeper_release_v1.Container[];
     installerBounds?: hostkeeper_release_v1.InstallerBounds;
-    identity?: boolean;
-    identityAccount?: string;
   }
   export interface Param { text?: string; integer?: string; float?: number | "NaN" | "Infinity" | "-Infinity"; flag?: boolean; }
   export interface Place { kind?: string; source?: string; path?: string; }

@@ -69,7 +69,6 @@ pub mod prerequisites;
 pub mod probe;
 mod proto_map;
 pub mod repositories;
-pub mod service_identity;
 #[cfg(feature = "testing")]
 pub mod testing;
 mod wire_map;
@@ -110,6 +109,3 @@ pub use prerequisites::{
 };
 pub use probe::{ProbeStep, RemoteLoginProbe};
 pub use repositories::{MAX_REFUSAL_REASON, PushedSet, RepositoriesReport, RepositoryRefusal};
-pub use service_identity::{
-    MAX_IDENTITY_ERROR, MAX_IDENTITY_SERVICES, ServiceIdentityReport, ServiceIdentitySource,
-};

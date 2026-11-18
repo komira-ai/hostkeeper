@@ -1,4 +1,5 @@
-//! The tests of `proto_map`: each conversion to or from `hostkeeper.agent.v1`, on fixed inputs.
+//! The tests of `proto_map`: each conversion between the loop's types and those of
+//! `hostkeeper.agent.v1`, on fixed inputs.
 
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_hook::{Class, Phase};
@@ -56,7 +57,6 @@ fn beat(platform: Platform, services: Vec<ServiceFacts>) -> Heartbeat {
         operator_keys: None,
         ssh: None,
         prerequisites: None,
-        service_identities: Vec::new(),
     }
 }
 
@@ -280,7 +280,6 @@ fn a_heartbeat_with_every_fact_maps_to_the_request_field_for_field() {
             remote_login_probe: None,
             operator_keys: None,
             prerequisites: None,
-            service_identities: Vec::new(),
         }
     );
 }

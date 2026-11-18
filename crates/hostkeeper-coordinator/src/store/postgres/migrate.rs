@@ -51,7 +51,7 @@ pub(crate) struct Migration {
 }
 
 /// The migrations this binary ships, in order.
-pub(crate) const SHIPPED: [(i32, &str, &str); 22] = [
+pub(crate) const SHIPPED: [(i32, &str, &str); 21] = [
     (1, "state", include_str!("migrations/0001_state.sql")),
     (
         2,
@@ -141,7 +141,6 @@ pub(crate) const SHIPPED: [(i32, &str, &str); 22] = [
         "ssh_tunnels",
         include_str!("migrations/0021_ssh_tunnels.sql"),
     ),
-    (22, "identity", include_str!("migrations/0022_identity.sql")),
 ];
 
 /// Why a migration, or the set of them, is refused before it runs.

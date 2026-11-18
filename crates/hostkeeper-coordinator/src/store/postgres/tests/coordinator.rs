@@ -586,7 +586,6 @@ fn host_record(host: &str, role: &str) -> pb::Host {
         first_heartbeat_unix: None,
         first_serving_unix: None,
         running: None,
-        identity_approval: None,
     }
 }
 

@@ -51,9 +51,8 @@ use super::groups::group_in;
 use crate::inventory::{InventoryMatch, InventoryRecord, mark_used, match_claims};
 use crate::ops::{AuditEntry, OpsStore, Write};
 
-/// The approver of an approval made by an inventory record: the one string the enrollment store
-/// also reads a host's assurance by.
-pub use hostkeeper_enrollment::enroll::INVENTORY_APPROVER;
+/// The approver of an approval made by an inventory record.
+pub const INVENTORY_APPROVER: &str = "inventory";
 
 /// The audit action of an approval made by an inventory record.
 pub const ACTION_AUTO_APPROVED: &str = "enrollment.auto_approved";

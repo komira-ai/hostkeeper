@@ -1,13 +1,13 @@
 //! Issuance: the certificates the CA signs, each under its profile (design 4.4).
 //!
-//! | | host client certificate | coordinator server certificate | service certificate |
-//! |---|---|---|---|
-//! | subject | `CN=host:<id>`, the approved id | `CN=hostkeeper coordinator` | `CN=service:<name>` |
-//! | subjectAltName | one URI: the fixed host role, [`HOST_ROLE`] after the host-role prefix | the DNS names and IP addresses asked for | the URI `urn:hostkeeper:service:<name>` and the DNS name `<host id>` |
-//! | extended key usage | `clientAuth` only | `serverAuth` only | `clientAuth` only |
-//! | key usage | `digitalSignature` | `digitalSignature` | `digitalSignature` |
-//! | basic constraints | `CA:FALSE` | `CA:FALSE` | `CA:FALSE` |
-//! | validity | from now, at most [`HOST_VALIDITY_SECS`] (7 days) | from now, at most [`SERVER_VALIDITY_CAP_SECS`] (90 days) | from now, [`SERVICE_VALIDITY_SECS`] (8 hours), also its cap |
+//! | | host client certificate | coordinator server certificate |
+//! |---|---|---|
+//! | subject | `CN=host:<id>`, the approved id | `CN=hostkeeper coordinator` |
+//! | subjectAltName | one URI: the fixed host role, [`HOST_ROLE`] after the host-role prefix | the DNS names and IP addresses asked for |
+//! | extended key usage | `clientAuth` only | `serverAuth` only |
+//! | key usage | `digitalSignature` | `digitalSignature` |
+//! | basic constraints | `CA:FALSE` | `CA:FALSE` |
+//! | validity | from now, at most [`HOST_VALIDITY_SECS`] (7 days) | from now, at most [`SERVER_VALIDITY_CAP_SECS`] (90 days) |
 //!
 //! "Now" is the CA's [`UnixClock`], read once per certificate. A validity above the cap is
 //! refused (`validity_over_cap`), never clamped; the cap is held here, not by the caller.
@@ -32,15 +32,12 @@ use rcgen::{
 
 use crate::ca::bundle::CaBundle;
 use crate::ca::profile::P256Key;
-use crate::names::{HostId, ServiceName};
+use crate::names::HostId;
 use crate::validity::{UnixClock, Window};
 
 /// The validity of a host's client certificate unless the store is given another
 /// ([`crate::enroll::EnrollmentStore::with_host_validity_secs`]), and its cap: 7 days.
 pub const HOST_VALIDITY_SECS: u64 = 7 * 24 * 60 * 60;
-
-/// The validity of a service's certificate, and its cap: 8 hours.
-pub const SERVICE_VALIDITY_SECS: u64 = 8 * 60 * 60;
 
 /// The longest validity of the coordinator's server certificate: 90 days. The coordinator asks
 /// for a new one before it ends.
@@ -59,12 +56,6 @@ pub const CA_COMMON_NAME: &str = "hostkeeper CA";
 /// The common name of the coordinator's server certificate.
 pub const SERVER_COMMON_NAME: &str = "hostkeeper coordinator";
 
-/// What the common name of a service certificate begins with; the service's name follows.
-pub const SERVICE_COMMON_NAME_PREFIX: &str = "service:";
-
-/// What the URI subjectAltName of a service certificate begins with; the service's name follows.
-pub const SERVICE_URI_PREFIX: &str = "urn:hostkeeper:service:";
-
 /// The host role every host certificate names: a fixed word that means nothing.
 pub const HOST_ROLE: &str = "host";
 
@@ -79,13 +70,6 @@ pub enum Subject<'a> {
     Host(&'a HostId),
     /// The coordinator's server certificate, for these names.
     Server(ServerNames<'a>),
-    /// A client certificate for `service` running on `host`.
-    Service {
-        /// The service.
-        service: &'a ServiceName,
-        /// The host it runs on.
-        host: &'a HostId,
-    },
 }
 
 /// The names a coordinator's server certificate is for: at least one DNS name, and the IP
@@ -137,9 +121,6 @@ pub enum SignError {
     /// The host-role URI is not ASCII ([`Ca::with_host_role_uri_prefix`]).
     #[error("the host-role URI {0:?} is not one a certificate carries")]
     BadHostRoleUri(String),
-    /// The service URI is not ASCII (a service name is, so this is not reached by a valid one).
-    #[error("the service URI {0:?} is not one a certificate carries")]
-    BadServiceUri(String),
     /// A server certificate with no DNS name.
     #[error("a server certificate needs at least one DNS name")]
     NoDnsName,
@@ -250,25 +231,6 @@ impl Ca {
             serial,
         })
     }
-
-    /// A client certificate for `service` on `host`, valid [`SERVICE_VALIDITY_SECS`] from now.
-    ///
-    /// # Errors
-    /// [`SignError`], as [`Signer::sign`].
-    pub fn issue_service(
-        &self,
-        service: &ServiceName,
-        host: &HostId,
-        key: &P256Key,
-        serial: u64,
-    ) -> Result<Certificate, SignError> {
-        self.sign(&SignRequest {
-            subject: Subject::Service { service, host },
-            key,
-            validity_secs: SERVICE_VALIDITY_SECS,
-            serial,
-        })
-    }
 }
 
 impl Signer for Ca {
@@ -279,9 +241,6 @@ impl Signer for Ca {
                 host_params(host_id, &self.host_role_uri)?,
             ),
             Subject::Server(names) => (SERVER_VALIDITY_CAP_SECS, server_params(names)?),
-            Subject::Service { service, host } => {
-                (SERVICE_VALIDITY_SECS, service_params(service, host)?)
-            }
         };
         let requested = request.validity_secs;
         if requested == 0 {
@@ -365,22 +324,6 @@ fn host_params(host_id: &HostId, host_role_uri: &str) -> Result<CertificateParam
     params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
     params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
     params.subject_alt_names = vec![SanType::URI(uri)];
-    Ok(params)
-}
-
-/// A service's client certificate: its name as the common name and the URI, the host's id as the
-/// DNS name. Nothing of the request is copied but its key.
-fn service_params(service: &ServiceName, host: &HostId) -> Result<CertificateParams, SignError> {
-    let uri = format!("{SERVICE_URI_PREFIX}{}", service.as_str());
-    let uri = rcgen::string::Ia5String::try_from(uri.as_str())
-        .map_err(|_| SignError::BadServiceUri(uri.clone()))?;
-    let mut params = CertificateParams::default();
-    params.distinguished_name =
-        common_name(&format!("{SERVICE_COMMON_NAME_PREFIX}{}", service.as_str()));
-    params.is_ca = IsCa::ExplicitNoCa;
-    params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
-    params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
-    params.subject_alt_names = vec![SanType::URI(uri), dns_name(host.as_str())?];
     Ok(params)
 }
 

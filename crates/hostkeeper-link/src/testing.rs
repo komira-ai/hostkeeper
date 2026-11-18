@@ -28,7 +28,6 @@ use crate::ports::{
 use crate::prerequisites::{PrerequisitesReport, PushedPrerequisites};
 use crate::probe::RemoteLoginProbe;
 use crate::repositories::{PushedSet, RepositoriesReport};
-use crate::service_identity::{ServiceIdentityReport, ServiceIdentitySource};
 
 /// A lock that a panicking test thread did not spoil: what it holds is still the fake's state.
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -658,25 +657,6 @@ impl PrerequisitesSink for FakePrerequisites {
     }
 }
 
-/// The services' identities, as a test sets them.
-#[derive(Default)]
-pub struct FakeServiceIdentities {
-    reports: Mutex<Vec<ServiceIdentityReport>>,
-}
-
-impl FakeServiceIdentities {
-    /// Sets what every later heartbeat reports.
-    pub fn set(&self, reports: Vec<ServiceIdentityReport>) {
-        *lock(&self.reports) = reports;
-    }
-}
-
-impl ServiceIdentitySource for FakeServiceIdentities {
-    fn reports(&self) -> Vec<ServiceIdentityReport> {
-        lock(&self.reports).clone()
-    }
-}
-
 /// The unix second the [`World`]'s clock starts at.
 pub const START_UNIX: u64 = 2_000_000_000;
 
@@ -720,10 +700,6 @@ pub struct World {
     /// The host prerequisites; the ports hold them only after [`World::keeping_prerequisites`].
     pub prerequisites: Arc<FakePrerequisites>,
     keeping_prerequisites: bool,
-    /// What the host's services' identities report; the ports hold it only after
-    /// [`World::keeping_service_identities`].
-    pub service_identities: Arc<FakeServiceIdentities>,
-    keeping_service_identities: bool,
 }
 
 impl Default for World {
@@ -761,8 +737,6 @@ impl World {
             keeping_operator_keys: false,
             prerequisites: Arc::default(),
             keeping_prerequisites: false,
-            service_identities: Arc::default(),
-            keeping_service_identities: false,
         }
     }
 
@@ -807,13 +781,6 @@ impl World {
         self
     }
 
-    /// The world of a host that keeps its services' identities: its ports hold
-    /// [`World::service_identities`], and its heartbeats carry them (it announces no feature for it).
-    pub fn keeping_service_identities(mut self) -> World {
-        self.keeping_service_identities = true;
-        self
-    }
-
     /// The loop announces `private-repository-v1` though the world holds no repository
     /// configuration: a daemon that reads private repositories another way (a Mac).
     pub fn reading_private_repositories(mut self) -> World {
@@ -853,9 +820,6 @@ impl World {
             prerequisites: self
                 .keeping_prerequisites
                 .then(|| Arc::clone(&self.prerequisites) as Arc<dyn PrerequisitesSink>),
-            service_identities: self
-                .keeping_service_identities
-                .then(|| Arc::clone(&self.service_identities) as Arc<dyn ServiceIdentitySource>),
         }
     }
 

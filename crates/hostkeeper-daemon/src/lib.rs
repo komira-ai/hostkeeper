@@ -77,12 +77,6 @@
 //! - [`prerequisites`]: the host prerequisites the coordinator sends (`prerequisites-v1`), made sure
 //!   of on the host and reported by state in every heartbeat; [`xcode_clt`] is the one there is,
 //!   Apple's Command Line Tools, looked for and installed headless on a Mac.
-//! - [`service_identity`]: the key and 8-hour certificate of each service whose entry asks for an
-//!   identity (`identity` of its manifest), kept in the identity directory (`--identity-dir`) by
-//!   `hostkeeper_enroll::ServiceIdentities` on a worker of its own and reported in every
-//!   heartbeat; [`service_account`] finds the account that owns the files
-//!   (the passwd file on Linux, `dscl` on a Mac); an uninstall removes the service's directory
-//!   ([`uninstall`]).
 //! - [`observer`]: what [`Daemon::status`] reports of a running service.
 //! - [`node`]: the host's enrollment and the heartbeat loop's link, as the loops last wrote them,
 //!   which [`Daemon::status`] reports besides the services.
@@ -159,8 +153,6 @@ pub mod rollback_floor;
 pub mod run_units;
 pub mod seed;
 pub mod selfupdate;
-pub mod service_account;
-pub mod service_identity;
 pub mod ssh_effective;
 pub mod ssh_files;
 pub mod ssh_host;

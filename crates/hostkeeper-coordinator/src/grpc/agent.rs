@@ -1,13 +1,11 @@
-//! `hostkeeper.agent.v1.Coordinator` over [`Coordinator`]: `Heartbeat`, `Enroll`, `Poll`,
-//! `Renew`, `IssueServiceCertificate` and `ListDeny`.
+//! `hostkeeper.agent.v1.Coordinator` over [`Coordinator`]: `Heartbeat`, `Enroll`, `Poll` and
+//! `Renew`.
 //!
 //! The adapter has no rule of its own. `Heartbeat` is turned into the JSON the frozen route
 //! reads ([`super::beat_map`]) and answered by the same code ([`crate::http::beat`]), with what
 //! it says of the host's trusted root, which the JSON has no key for, beside it
 //! ([`crate::trusted_root`]); `Enroll`,
-//! `Poll` and `Renew` are the handlers of [`crate::enrollment`], `IssueServiceCertificate` is
-//! [`Coordinator::issue_service_certificate`] and `ListDeny` is [`Enrollment::list_deny`], both
-//! with the peer's certificate as `Renew`. Who calls was settled by the
+//! `Poll` and `Renew` are the handlers of [`crate::enrollment`]. Who calls was settled by the
 //! router before the request was read ([`super::admit`]) and arrives in the request's
 //! extensions; a refusal is a status whose message is exactly one token of `CoordinatorRefusal`.
 
@@ -22,7 +20,7 @@ use super::Admitted;
 use super::beat_map;
 use super::refusal::token_status;
 use crate::enrollment::Enrollment;
-use crate::http::{BeatCaller, BeatRefused, Peer, PeerAddr, beat};
+use crate::http::{BeatCaller, BeatRefused, PeerAddr, beat};
 use crate::orders::Order;
 use crate::service::Coordinator;
 use crate::trusted_root::TrustedRootSaid;
@@ -48,15 +46,6 @@ fn response_of(answer: Answer, order: Option<Order>) -> proto::HeartbeatResponse
         facts: None,
         operator_keys: None,
         prerequisites: None,
-    }
-}
-
-/// The leaf of the client certificate the router found on the call: none for a call that
-/// presented none.
-fn peer_of<T>(request: &Request<T>) -> Peer {
-    match request.extensions().get::<Admitted>() {
-        Some(Admitted::Peer(peer)) => peer.clone(),
-        _ => None,
     }
 }
 
@@ -123,8 +112,6 @@ impl Api for AgentService {
                 .await;
             self.coordinator
                 .hear_prerequisites(&identity, request.get_ref());
-            self.coordinator
-                .hear_service_identities(&identity, request.get_ref());
         }
         let host_id = identity.host_id.clone();
         let facts = (!retiring)
@@ -180,31 +167,12 @@ impl Api for AgentService {
         &self,
         request: Request<proto::RenewRequest>,
     ) -> Result<Response<proto::RenewResponse>, Status> {
-        let peer = peer_of(&request);
+        let peer = match request.extensions().get::<Admitted>() {
+            Some(Admitted::Peer(peer)) => peer.clone(),
+            _ => None,
+        };
         self.enrollment()?
             .renew(peer.as_deref(), request.into_inner())
-            .map(Response::new)
-            .map_err(|why| why.status())
-    }
-
-    async fn issue_service_certificate(
-        &self,
-        request: Request<proto::IssueServiceCertificateRequest>,
-    ) -> Result<Response<proto::IssueServiceCertificateResponse>, Status> {
-        let peer = peer_of(&request);
-        self.coordinator
-            .issue_service_certificate(self.enrollment()?, peer.as_deref(), request.get_ref())
-            .map(Response::new)
-            .map_err(|why| why.status())
-    }
-
-    async fn list_deny(
-        &self,
-        request: Request<proto::ListDenyRequest>,
-    ) -> Result<Response<proto::ListDenyResponse>, Status> {
-        let peer = peer_of(&request);
-        self.enrollment()?
-            .list_deny(peer.as_deref())
             .map(Response::new)
             .map_err(|why| why.status())
     }

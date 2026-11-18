@@ -70,7 +70,6 @@ ui_files![
     "pages/home.js",
     "pages/hostgroups.js",
     "pages/host.js",
-    "host_identity.js",
     "pages/inventory.js",
     "pages/package.js",
     "pages/packages.js",

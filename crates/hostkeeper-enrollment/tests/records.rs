@@ -103,10 +103,6 @@ enum Defect {
     WideServing,
     /// What the host runs also clears the first serving heartbeat.
     WideRunning,
-    /// The identity approval also clears the first serving heartbeat.
-    WideIdentity,
-    /// Lists the deny rows backwards.
-    DenyIdsBackwards,
     /// A commit told to fail writes anyway.
     WritesWhenFailing,
     /// A commit with a record whose key does not parse writes the records before it.
@@ -197,15 +193,6 @@ impl Records for Broken {
                 .clone());
         }
         self.inner.host_ids()
-    }
-
-    fn deny_ids(&self) -> Result<Vec<HostId>, StoreError> {
-        self.up()?;
-        let mut ids = self.inner.deny_ids()?;
-        if self.defect == Defect::DenyIdsBackwards {
-            ids.reverse();
-        }
-        Ok(ids)
     }
 
     fn deny(&self, host: &HostId) -> Result<Option<pb::Deny>, StoreError> {
@@ -303,22 +290,6 @@ impl Records for Broken {
         self.inner.set_running(host, running)
     }
 
-    fn set_identity_approval(
-        &self,
-        host: &pb::Host,
-        approval: pb::IdentityApproval,
-    ) -> Result<(), StoreError> {
-        self.up()?;
-        if self.defect == Defect::WideIdentity {
-            let cleared = pb::Host {
-                first_serving_unix: None,
-                ..host.clone()
-            };
-            return self.inner.set_identity_approval(&cleared, approval);
-        }
-        self.inner.set_identity_approval(host, approval)
-    }
-
     fn set_duplicate(&self, host: &pb::Host) -> Result<(), StoreError> {
         self.up()?;
         if self.defect == Defect::WideMark {
@@ -387,8 +358,6 @@ fn the_records_suite_fails_against_records_that_break_each_clause() {
         (Defect::WideMark, Clause::HostMarks),
         (Defect::WideServing, Clause::HostMarks),
         (Defect::WideRunning, Clause::HostMarks),
-        (Defect::WideIdentity, Clause::HostMarks),
-        (Defect::DenyIdsBackwards, Clause::DenyIdsSorted),
         (Defect::WritesWhenFailing, Clause::FailedCommit),
         (Defect::KeepsBeforeUnkeyed, Clause::Unkeyed),
         (Defect::LockOnce, Clause::Lock),
@@ -419,7 +388,6 @@ fn the_records_suite_fails_against_records_that_break_each_clause() {
             Clause::Overwrite,
             Clause::RequestsInOrder,
             Clause::HostIdsSorted,
-            Clause::DenyIdsSorted,
             Clause::Serial,
             Clause::HostMarks,
             Clause::FailedCommit,
@@ -891,7 +859,6 @@ fn a_deny_whose_request_cannot_be_read_still_denies_the_host() {
             first_heartbeat_unix: None,
             first_serving_unix: None,
             running: None,
-            identity_approval: None,
         };
         let files = Files::new("records-orphan");
         let memory: Arc<dyn Records> = Arc::new(MemoryRecords::new());

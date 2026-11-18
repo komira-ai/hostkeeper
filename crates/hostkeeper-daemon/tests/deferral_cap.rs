@@ -98,7 +98,6 @@ fn a_retry_time_far_ahead_is_capped_at_an_hour_from_now() {
         remote_login_probe: None,
         operator_keys: None,
         prerequisites: None,
-        identity: None,
     };
     let mut heartbeater = links.heartbeater(&daemon);
 

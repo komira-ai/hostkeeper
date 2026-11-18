@@ -1,16 +1,14 @@
 // Host: one host's services, holds, marks and last update, the host-inventory record its
 // enrollment matched (linked to the Inventory page) with that record's data MACs, BMC MAC and
 // serial, when it enrolled, its certificate and its Sigstore trusted root as its last heartbeat
-// said them, its service identity (../host_identity.js, on the Certificate tab), and what an operator
-// may do to it. The page reads the time from `ctx.now()` (unix seconds), once per rendering, to say
-// how soon the certificate ends.
+// said them, and what an operator may do to it. The page reads the time from `ctx.now()` (unix
+// seconds), once per rendering, to say how soon the certificate ends.
 // Calls: Hosts.Get, then Services.List for the services assigned to the host (it is called even
 // when Hosts.Get fails, and each failure is shown as is), then, when a service is assigned to the
 // host, Audit.List of the host's entries, page by page, to mark a service whose last uninstall was
 // cancelled; on
 // a button, one of Hosts.Exclude, Hosts.Include, Hosts.Abort, Hosts.SetLabels, Services.Hold,
-// Services.Unhold and, after a confirm, Hosts.Retire; HostIdentity.Get of the host, and on the
-// "Approve identity" button, after a confirm, HostIdentity.Approve (../host_identity.js). HostGroups.List (every page) gives the groups
+// Services.Unhold and, after a confirm, Hosts.Retire. HostGroups.List (every page) gives the groups
 // the "Host group" dropdown offers, and HostGroups.Move, after a confirm, moves the host into the
 // group chosen, or into none when the blank is chosen; a host in no group is Unassigned and is ordered no package. Retire is offered when Hosts.Get fails too,
 // for an enrolled host the coordinator has not heard from since it started (a dead one).
@@ -32,7 +30,6 @@ import {
   h, action, allPages, checkbox, describeError, enumLabel, errorView, field, fmtUnix, list, pill, reasonProblem,
   scopeLabel, select, table, trimmed,
 } from "../view.js";
-import { identitySection } from "../host_identity.js";
 import { crumbs, hostState, layoutOf, layoutProblem, rackName, slotOf, slotOptions, subjectOf } from "../lab.js";
 import { loadSsh, sshPanel } from "../sshpanel.js";
 
@@ -591,10 +588,6 @@ export async function render(ctx) {
   const now = ctx.now();
   const agent = host.heartbeat && host.heartbeat.agent;
   const where = await placementSection(ctx, host, nodeId, () => repaint());
-  const identity = await identitySection(ctx, nodeId, host.heartbeat, {
-    get: () => ctx.api.hostIdentity.get({ nodeId }),
-    approve: (keySha256) => ctx.api.hostIdentity.approve({ nodeId, keySha256 }),
-  });
   const labelsForm = {
     labels: Object.entries(host.labels || {}).map(([k, v]) => `${k}=${v}`).join(", "),
   };
@@ -627,7 +620,7 @@ export async function render(ctx) {
     services: services.length === 0
       ? [h("p", { class: "quiet" }, "The host reports no service.")]
       : services.map((view) => serviceSection(ctx, nodeId, view)),
-    trust: [h("div", { class: "pair" }, certificate(host, now), trustedRoot(host)), identity],
+    trust: [h("div", { class: "pair" }, certificate(host, now), trustedRoot(host))],
     labels: [h("fieldset", { class: "card" },
       h("legend", {}, "Labels"),
       h("div", { class: "chips" }, Object.entries(host.labels || {}).map(([k, v]) => h("span", { class: "chip" }, `${k}=${v}`))),

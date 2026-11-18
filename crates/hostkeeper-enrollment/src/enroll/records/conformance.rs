@@ -38,14 +38,11 @@ pub enum Clause {
     RequestsInOrder,
     /// `host_ids` lists every host, sorted, and no record of another kind.
     HostIdsSorted,
-    /// `deny_ids` lists the host of every deny row, in any state, sorted, and no record of
-    /// another kind.
-    DenyIdsSorted,
     /// Serials start at [`FIRST_SERIAL`], go up by one, survive a reopen, and a reserving take
     /// writes the request with the serial taken and nothing else changed.
     Serial,
-    /// The first heartbeat, the first serving heartbeat, what the host runs, an identity approval
-    /// and the duplicate mark change that field of the host only.
+    /// The first heartbeat, the first serving heartbeat and the duplicate mark change that
+    /// field of the host only.
     HostMarks,
     /// A commit that fails before it writes leaves the records as they were.
     FailedCommit,
@@ -75,13 +72,12 @@ type Check = fn(&dyn Subject) -> Result<(), String>;
 /// Runs every clause, each against a subject of its own from `fresh`, and returns the ones
 /// broken, in the order of [`Clause`].
 pub fn run(fresh: &dyn Fn() -> Box<dyn Subject>) -> Vec<Failure> {
-    let clauses: [(Clause, Check); 11] = [
+    let clauses: [(Clause, Check); 10] = [
         (Clause::Empty, empty),
         (Clause::RoundTrip, round_trip),
         (Clause::Overwrite, overwrite),
         (Clause::RequestsInOrder, requests_in_order),
         (Clause::HostIdsSorted, host_ids_sorted),
-        (Clause::DenyIdsSorted, deny_ids_sorted),
         (Clause::Serial, serial),
         (Clause::HostMarks, host_marks),
         (Clause::FailedCommit, failed_commit),
@@ -190,16 +186,6 @@ fn host(name: &str, key: &KeyHash) -> pb::Host {
         first_heartbeat_unix: None,
         first_serving_unix: None,
         running: None,
-        identity_approval: None,
-    }
-}
-
-/// An operator's approval of the suite's key `n` for service identity.
-fn identity_approval(n: u8) -> pb::IdentityApproval {
-    pb::IdentityApproval {
-        key_hash: key(n).as_bytes().to_vec(),
-        approver: "ops".to_owned(),
-        approved_unix: 1_800_000_390,
     }
 }
 
@@ -232,7 +218,6 @@ fn every_kind() -> Vec<Record> {
             first_heartbeat_unix: Some(1_800_000_300),
             first_serving_unix: Some(1_800_000_360),
             running: Some(running("1.0", 1_800_000_380)),
-            identity_approval: Some(identity_approval(1)),
             host_group: "web".to_owned(),
             moving_from: Some("db".to_owned()),
             facts_generation: Some(4),
@@ -415,44 +400,6 @@ fn host_ids_sorted(subject: &dyn Subject) -> Result<(), String> {
     )
 }
 
-fn deny_ids_sorted(subject: &dyn Subject) -> Result<(), String> {
-    let records = subject.open();
-    // Records of other kinds are no deny rows, hosts among them.
-    let others: Vec<Record> = every_kind()
-        .into_iter()
-        .filter(|record| !matches!(record, Record::Deny(_)))
-        .collect();
-    records.commit(&others).map_err(failed("a commit"))?;
-    let listed = subject.open().deny_ids().map_err(failed("a list"))?;
-    expect(
-        listed.is_empty(),
-        format!("listed {listed:?} before any deny row was written"),
-    )?;
-    let mut wanted = Vec::new();
-    for (name, state) in [
-        ("web-10", pb::DenyState::Retired),
-        ("db-1", pb::DenyState::Retiring),
-        ("web-1-a", pb::DenyState::Cleared),
-        ("web-1", pb::DenyState::Retiring),
-    ] {
-        records
-            .commit(&[Record::Deny(pb::Deny {
-                schema: 1,
-                host_id: name.to_owned(),
-                state: state as i32,
-                cleared_by: Vec::new(),
-            })])
-            .map_err(failed("a commit"))?;
-        wanted.push(host_id(name)?);
-    }
-    wanted.sort();
-    let listed = subject.open().deny_ids().map_err(failed("a list"))?;
-    expect(
-        listed == wanted,
-        format!("listed {listed:?}, not {wanted:?}"),
-    )
-}
-
 fn serial(subject: &dyn Subject) -> Result<(), String> {
     let take = |records: &dyn Records, reserving: Option<&pb::Request>| {
         records.take_serial(reserving).map_err(failed("a serial"))
@@ -534,22 +481,13 @@ fn host_marks(subject: &dyn Subject) -> Result<(), String> {
     holds_all(&*subject.open(), &[Record::Host(newer.clone())])?;
     subject
         .open()
-        .set_identity_approval(&newer, identity_approval(1))
-        .map_err(failed("the identity approval"))?;
-    let approved = pb::Host {
-        identity_approval: Some(identity_approval(1)),
-        ..newer
-    };
-    holds_all(&*subject.open(), &[Record::Host(approved.clone())])?;
-    subject
-        .open()
-        .set_duplicate(&approved)
+        .set_duplicate(&newer)
         .map_err(failed("the duplicate mark"))?;
     holds_all(
         &*subject.open(),
         &[Record::Host(pb::Host {
             duplicate: true,
-            ..approved
+            ..newer
         })],
     )
 }

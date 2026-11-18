@@ -45,10 +45,6 @@ export interface Client {
     remove(request: hostkeeper_operator_v1.RemoveHostGroupRequest): Promise<hostkeeper_operator_v1.RemoveHostGroupResponse>;
     move(request: hostkeeper_operator_v1.MoveHostRequest): Promise<hostkeeper_operator_v1.MoveHostResponse>;
   };
-  readonly hostIdentity: {
-    get(request: hostkeeper_operator_v1.GetHostIdentityRequest): Promise<hostkeeper_operator_v1.GetHostIdentityResponse>;
-    approve(request: hostkeeper_operator_v1.ApproveHostIdentityRequest): Promise<hostkeeper_operator_v1.ApproveHostIdentityResponse>;
-  };
   readonly hosts: {
     list(request: hostkeeper_operator_v1.ListHostsRequest): Promise<hostkeeper_operator_v1.ListHostsResponse>;
     get(request: hostkeeper_operator_v1.GetHostRequest): Promise<hostkeeper_operator_v1.GetHostResponse>;

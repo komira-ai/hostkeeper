@@ -31,8 +31,7 @@
 // at most 16 KiB. Every bound is whole seconds: each step of a hook's `timeout_secs`
 // (`StepBounds`), `verify_deadline_secs`, `promotion_ceiling_secs` and each of
 // `installer_bounds`, which is 1 to 3600. A manifest holds at most 64 `run` entries, 256 `place`
-// entries, 64 params and 32 containers. A manifest's `identity_account` is set only with
-// `identity`.
+// entries, 64 params and 32 containers.
 // A `Repository`'s bounds are its fields' comments.
 //
 // Extending: add fields and messages; never renumber, rename, retype or remove one, and never
@@ -128,14 +127,6 @@ message Manifest {
   // The bounds of the installer's own steps. Required for every installer but
   // `hostkeeper-archive`.
   InstallerBounds installer_bounds = 9;
-  // The service wants an identity: on every host that runs this entry, while the host's group
-  // lists the service, the daemon keeps an 8-hour certificate for it from the coordinator's CA,
-  // naming the service and the host (docs/design/service-identity.md). Absent or false: none.
-  optional bool identity = 10;
-  // The account that owns the service's identity files (its key, certificate and CA bundle, each
-  // mode `0600`): 1 to 32 bytes of `[a-z0-9_-]`, a letter or `_` first; `root` when absent. Only
-  // with `identity`.
-  optional string identity_account = 11;
 }
 
 // The service's hook, with the contract of `crates/hostkeeper-hook`.

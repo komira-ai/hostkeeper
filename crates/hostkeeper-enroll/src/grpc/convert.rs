@@ -22,7 +22,6 @@ use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use tonic::Status;
 use x509_cert::der::pem::{LineEnding, encode_string};
 
-use crate::service_identity::IssueAnswer;
 use crate::wire::{
     EnrollAnswer, EnrollRequest, EnrollState, HostId, Issued, Poll, PollAnswer, Reason,
     RenewAnswer, RenewRequest, RequestId, TransportError,
@@ -166,36 +165,5 @@ pub(super) fn renew_answer(
         Err(status) => Reason::new(status.message())
             .map(RenewAnswer::Refused)
             .ok_or_else(|| status_error("Renew", &status)),
-    }
-}
-
-/// The request for a certificate of `service` for the key of `csr_der`.
-pub(super) fn issue_request(service: &str, csr_der: &[u8]) -> pb::IssueServiceCertificateRequest {
-    pb::IssueServiceCertificateRequest {
-        service: service.to_owned(),
-        csr_der: csr_der.to_vec(),
-    }
-}
-
-/// The answer to an `IssueServiceCertificate`: the certificate, the refusal a status carries (its
-/// message is one reason token), `UNIMPLEMENTED` from a coordinator without the call; any other
-/// status is a transport error.
-pub(super) fn issue_answer(
-    reply: Result<tonic::Response<pb::IssueServiceCertificateResponse>, Status>,
-) -> Result<IssueAnswer, TransportError> {
-    match reply {
-        Ok(response) => {
-            let issued = response.into_inner();
-            Ok(IssueAnswer::Issued {
-                cert_der: issued.certificate_der,
-                ca_bundle_pem: issued.ca_bundle_pem,
-            })
-        }
-        Err(status) if status.code() == tonic::Code::Unimplemented => {
-            Ok(IssueAnswer::Unimplemented)
-        }
-        Err(status) => Reason::new(status.message())
-            .map(IssueAnswer::Refused)
-            .ok_or_else(|| status_error("IssueServiceCertificate", &status)),
     }
 }

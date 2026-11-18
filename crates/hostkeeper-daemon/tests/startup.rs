@@ -13,9 +13,9 @@ use std::sync::Arc;
 
 use clap::Parser;
 use hostkeeper_daemon::cli::{
-    self, Cli, Command, DEFAULT_CONFIG, DEFAULT_FACTS_FILE, DEFAULT_IDENTITY_DIR,
-    DEFAULT_PACKAGE_LOCK_WAIT_SECS, DEFAULT_PACKAGES_DIR, DEFAULT_STATE_DIR, DaemonFlags,
-    EXIT_CONFIG, EXIT_FAILED, EXIT_LOCKED, MAX_PACKAGE_LOCK_WAIT_SECS, UNWIRED, Unwired,
+    self, Cli, Command, DEFAULT_CONFIG, DEFAULT_FACTS_FILE, DEFAULT_PACKAGE_LOCK_WAIT_SECS,
+    DEFAULT_PACKAGES_DIR, DEFAULT_STATE_DIR, DaemonFlags, EXIT_CONFIG, EXIT_FAILED, EXIT_LOCKED,
+    MAX_PACKAGE_LOCK_WAIT_SECS, UNWIRED, Unwired,
 };
 use hostkeeper_daemon::start::{self, LOCK_FILE, StartError, Started};
 use hostkeeper_link::{DEFAULT_HEARTBEAT_SECS, LoopFlags};
@@ -178,7 +178,6 @@ fn daemon_flag_defaults_are_the_documented_ones() {
             state_dir: DEFAULT_STATE_DIR.into(),
             packages_dir: DEFAULT_PACKAGES_DIR.into(),
             facts_file: DEFAULT_FACTS_FILE.into(),
-            identity_dir: DEFAULT_IDENTITY_DIR.into(),
             notify_systemd: false,
             ready_file: None,
             package_lock_wait_secs: DEFAULT_PACKAGE_LOCK_WAIT_SECS,
@@ -199,7 +198,6 @@ fn daemon_flag_defaults_are_the_documented_ones() {
         format!("`--state-dir` | `{DEFAULT_STATE_DIR}`"),
         format!("`--packages-dir` | `{DEFAULT_PACKAGES_DIR}`"),
         format!("`--facts-file` | `{DEFAULT_FACTS_FILE}`"),
-        format!("`--identity-dir` | `{DEFAULT_IDENTITY_DIR}`"),
         "`--notify-systemd` | off".to_owned(),
         format!("`--package-lock-wait-secs` | `{DEFAULT_PACKAGE_LOCK_WAIT_SECS}`"),
         format!("`--heartbeat-secs` | `{DEFAULT_HEARTBEAT_SECS}`"),

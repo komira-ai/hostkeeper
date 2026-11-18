@@ -627,67 +627,6 @@ again once the coordinator can write, and the retirement is finished and audited
 
 A retired host id is taken again only by an approval with `--replace true`.
 
-## Service identity
-
-A service whose release entry says `identity` in its manifest gets an 8-hour client certificate
-from the coordinator on every host that runs the entry, for the service's own proof of which host
-it runs on (`docs/design/service-identity.md`). The coordinator signs only when the host's group
-lists the service, no uninstall of it is ordered on the host, the entry it would order the host
-at the service's desired version says `identity`, and the host's key is approved for it:
-
-- A host you approved by hand (`enrollment approve`, which records your token's name as the
-  approver) is approved for it: its assurance is `operator`. An approval that names no approver
-  (written by a release that did not record one) counts as `auto`.
-- A host the coordinator approved itself, by an inventory record (audited
-  `enrollment.auto_approved`), has the assurance `auto` and gets no certificate (`identity_not_approved`)
-  until you approve its current key for identity. A new key (a replace, a re-enrollment) needs a new
-  approval; the approval of an older key counts for nothing.
-
-Read a host's assurance and its current key, then approve the key you checked:
-
-```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
-    host-identity get --node-id web-17
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
-    host-identity approve --node-id web-17 --key-sha256 <key-sha256> \
-    --reason "racked and checked on the console"
-```
-
-`get` answers the assurance (`operator` or `auto`), `key_sha256`, whether the coordinator signs
-for the host now (`allowed`: the assurance is `operator`, or its current key is approved, and the
-host is not retired), the approval with who made it and when, and whether the host is retired.
-`approve` is refused `key_mismatch` unless `--key-sha256` is the key the host holds now, and
-`denied` for a retired host. It is audited `identity_approve` under your token's name, with the
-host as the entry's node and `key <SHA-256>` and your reason as its reason; the entry is written
-before the approval, so a call whose entry cannot be written is `audit_unavailable` and changes
-nothing. No lock is held across the two writes, so an entry can record an approval that did not
-take effect: if the host's key changed or the host was retired between them, the approval is
-refused `key_mismatch` or `denied` after the entry was written. Approving a key approved already, or a host whose assurance is `operator`, changes nothing
-and writes no entry. Only an operator's token calls these; a CI token is `forbidden`.
-
-Every certificate the coordinator signs is audited `service_identity_issued` under `coordinator`,
-with the host as the entry's node, the service and `serial <n>` (never the CSR); a refusal writes
-nothing. Each takes a serial of the counter the host certificates use. The certificate is for
-client authentication only, names `service:<name>` and the host id, and is no host certificate:
-the coordinator refuses it on `Heartbeat`, `Renew`, `IssueServiceCertificate` and the repository
-route, and it reads only the deny list.
-
-### The deny list
-
-A relying party of the services' certificates (js-lease-server) asks the coordinator which hosts
-to refuse: `GET /v1/deny` on the heartbeat listener (the same listener the daemons use; with
-`--lan-listen`, its LAN listener too), over mutual TLS with a host certificate or a service
-certificate that is valid now, of a host that is not retired:
-
-```
-{"hostIds":["web-17","web-23"]}
-```
-
-These are the hosts with a deny row that is retiring or retired, sorted. A host retired a moment
-ago is in the list at once. A call with no certificate, or one that is neither, is 403
-`forbidden`; one of a retired host 403 `denied`. The gRPC call
-`hostkeeper.agent.v1.Coordinator/ListDeny` answers the same list.
-
 ## Enrolling a node again
 
 A node whose key no longer names a host (its host id was approved for another key, or the
@@ -762,38 +701,18 @@ FAILED_PRECONDITION, 3 on UNAUTHENTICATED and PERMISSION_DENIED, and 1 on the ot
 
 ## Refusals of the host's calls
 
-The daemon's `Enroll`, `Poll`, `Renew` and `IssueServiceCertificate` are refused with one of these tokens. The node logs an
+The daemon's `Enroll`, `Poll` and `Renew` are refused with one of these tokens. The node logs an
 `Enroll` or `Poll` refusal as `the coordinator could not be reached: <call> was answered with the
 status <code>: "<token>"` and a `Renew` refusal as `renewal refused: <token>`, and tries again
 every 5 seconds.
 
 | token | code | cause | fix |
 |---|---|---|---|
-| `forbidden` | PERMISSION_DENIED | a `Renew`, `IssueServiceCertificate` or `ListDeny` with no client certificate, or one the coordinator's CA did not issue to a host (a service certificate is none, but for `ListDeny`) | none on the node; check the coordinator's CA |
+| `forbidden` | PERMISSION_DENIED | a `Renew` with no client certificate, or one the coordinator's CA did not issue to a host | none on the node; check the coordinator's CA |
 | `pending_full` | RESOURCE_EXHAUSTED | an `Enroll` of a new request while the pending queue is full | approve waiting requests, or raise `--max-pending-enrollments` |
 | `key_not_p256` | INVALID_ARGUMENT | the request's key is not an ECDSA P-256 key | none from a hostkeeper daemon, which makes only P-256 keys |
 | `bad_csr` | INVALID_ARGUMENT | the CSR is over 4096 bytes, does not parse, is not signed by its own key, or its subject is not one `host:<id>` | none from a hostkeeper daemon; report it |
-| `denied` | PERMISSION_DENIED | a `Renew`, `IssueServiceCertificate` or `ListDeny` by a host an operator retired (`hosts retire`) | none on the node: it was retired; it comes back only under a new key, approved with `--replace true` |
+| `denied` | PERMISSION_DENIED | a `Renew` by a host an operator retired (`hosts retire`) | none on the node: it was retired; it comes back only under a new key, approved with `--replace true` |
 | `unknown_request` | NOT_FOUND | a `Poll` for a request the coordinator does not hold | restart the unit: the daemon posts its request again at its start |
 | `bad_signature` | UNAUTHENTICATED | a `Poll` whose signature does not verify, or whose nonce is not one the coordinator gave or was used | none: the daemon asks for a new nonce on its next try |
 | `renewal_not_allowed` | FAILED_PRECONDITION | an `Enroll` whose `renewal_of` names a host that is unknown, denied or certified for another key; a `Renew` for another key than the certificate's, by a host whose host id went to another key, or by a host marked duplicate (two machines heartbeating under one host id; no path of this build sets that mark) | the node's key no longer names a host: [enroll it again](#enrolling-a-node-again); only such an approval, with `--replace true`, clears a duplicate mark |
-| `service_not_assigned` | FAILED_PRECONDITION | an `IssueServiceCertificate` for a service the host's group does not list, that is being uninstalled from the host, or whose entry for the host does not say `identity` (docs/design/service-identity.md) | list the service in the host's group, or set `identity` in the manifest of its entry |
-| `identity_not_approved` | FAILED_PRECONDITION | an `IssueServiceCertificate` by a host the coordinator approved by an inventory record, whose current key no operator approved for identity | approve the key for identity: `HostIdentity.Approve`, naming the key's SHA-256 |
-| `invalid_service` | INVALID_ARGUMENT | an `IssueServiceCertificate` whose service is not a service name | none from a hostkeeper daemon; report it |
-| `store_failed` | UNAVAILABLE | an `IssueServiceCertificate` the coordinator could not record (its serial or its audit entry); nothing was issued | none: the daemon asks again |
-
-## Refusals of the host identity calls
-
-`HostIdentity` (`get`, `approve`) refuses with exactly one of these tokens, with the exit codes of
-[the operator calls](#refusals-of-the-operator-calls).
-
-| token | code | cause | fix |
-|---|---|---|---|
-| `unauthorized` | UNAUTHENTICATED | no bearer token, or one that is not an operator token | pass an operator token with `--token-file` |
-| `forbidden` | PERMISSION_DENIED | a CI token | use an operator token |
-| `invalid_request` | INVALID_ARGUMENT | a node id that is no host id, a key hash that is not 64 lower-case hex digits, or a reason that is not 1 to 256 bytes without a control character (`approve` may leave it out) | correct the field |
-| `unknown_host` | NOT_FOUND | no enrolled host has the node id, or enrollment is off (`--enrollment-dir` not given) | check the node id with `hkctl hosts list` |
-| `key_mismatch` | FAILED_PRECONDITION | `approve` names another key than the host's current one | take `key_sha256` from `get` again |
-| `denied` | FAILED_PRECONDITION | `approve` of a host an operator retired | a retired host comes back only under a new key, approved with `--replace true` |
-| `store_failed` | INTERNAL | the approval could not be read or written; nothing changed | read the coordinator's log and ask again |
-| `audit_unavailable` | UNAVAILABLE | the audit entry could not be written; nothing changed | free the disk of the audit file, then ask again |

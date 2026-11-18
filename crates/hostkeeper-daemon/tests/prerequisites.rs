@@ -99,7 +99,6 @@ fn host(
         remote_login_probe: None,
         operator_keys: None,
         prerequisites,
-        identity: None,
     };
     (links.heartbeater(&daemon), link)
 }

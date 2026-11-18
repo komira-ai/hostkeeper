@@ -51,7 +51,6 @@ use crate::prerequisites::{
 };
 use crate::probe::RemoteLoginProbe;
 use crate::repositories::{PushedSet, RepositoriesReport};
-use crate::service_identity::ServiceIdentityReport;
 use crate::wire_map::acknowledged;
 
 /// Why an order whose verb the daemon does not run, or that has none, is not run.
@@ -98,11 +97,6 @@ pub(crate) fn heartbeat(beat: &Heartbeat) -> Result<pb::HeartbeatRequest, Unsend
         remote_login_probe: beat.remote_login_probe.as_ref().map(remote_login_probe),
         operator_keys: beat.operator_keys.as_ref().map(keys_report),
         prerequisites: beat.prerequisites.as_ref().map(prerequisites_report),
-        service_identities: beat
-            .service_identities
-            .iter()
-            .map(identity_report)
-            .collect(),
     })
 }
 
@@ -222,15 +216,6 @@ fn prerequisite_state(state: &PrerequisiteState) -> pb::PrerequisiteState {
         failures: state.failures,
         next_try_unix: state.next_try_unix,
         seen_unix: state.seen_unix,
-    }
-}
-
-/// One service's identity as `service_identities`.
-fn identity_report(report: &ServiceIdentityReport) -> pb::ServiceIdentityReport {
-    pb::ServiceIdentityReport {
-        service: report.service.clone(),
-        not_after_unix: report.not_after_unix,
-        last_error: report.last_error.clone(),
     }
 }
 

@@ -150,19 +150,6 @@ message Host {
   // The generation of the host's facts, which a move, a change of its labels and an approval
   // raise; absent until its facts are first made. A renewal keeps it.
   optional uint64 facts_generation = 13;
-  // An operator's approval of this host's key for service identity
-  // (docs/design/service-identity.md); absent until one. It counts only while its `key_hash` is
-  // the host's. An approval writes the file anew without it.
-  optional IdentityApproval identity_approval = 14;
-}
-
-// An operator approved a host's key for service identity.
-message IdentityApproval {
-  // The SHA-256 of the SubjectPublicKeyInfo of the key approved.
-  bytes key_hash = 1;
-  // Who approved it: the operator's name.
-  string approver = 2;
-  uint64 approved_unix = 3;
 }
 
 // What a host runs, as its daemon said in a heartbeat the coordinator accepted.

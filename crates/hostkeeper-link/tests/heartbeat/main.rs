@@ -30,7 +30,6 @@ mod prerequisites;
 mod remote_login_probe;
 mod repositories;
 mod resend;
-mod service_identity;
 mod size;
 mod tls;
 mod typed_orders;

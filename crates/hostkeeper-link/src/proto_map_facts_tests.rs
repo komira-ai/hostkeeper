@@ -23,7 +23,6 @@ fn beat(platform: Platform) -> Heartbeat {
         operator_keys: None,
         ssh: None,
         prerequisites: None,
-        service_identities: Vec::new(),
     }
 }
 

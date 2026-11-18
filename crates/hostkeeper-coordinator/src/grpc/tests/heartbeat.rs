@@ -467,7 +467,6 @@ pub(super) fn proto_message(services: &[Svc]) -> proto::HeartbeatRequest {
         remote_login_probe: None,
         operator_keys: None,
         prerequisites: None,
-        service_identities: Vec::new(),
     }
 }
 

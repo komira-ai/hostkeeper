@@ -843,8 +843,6 @@ fn manifest(run: &[&str], health_url: Option<&str>) -> Manifest {
         health_url: health_url.map(str::to_owned),
         files: Vec::new(),
         params: Default::default(),
-        identity: false,
-        identity_account: None,
     }
 }
 

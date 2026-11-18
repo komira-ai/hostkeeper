@@ -27,7 +27,6 @@ export namespace hostkeeper_agent_v1 {
     operatorKeys?: hostkeeper_agent_v1.OperatorKeysReport;
     prerequisites?: hostkeeper_agent_v1.PrerequisitesReport;
     ssh?: hostkeeper_agent_v1.SshReport;
-    serviceIdentities?: hostkeeper_agent_v1.ServiceIdentityReport[];
   }
   export interface OperatorKeysRefusal { digest?: string; reason?: string; }
   export interface OperatorKeysReport { digest?: string; refused?: hostkeeper_agent_v1.OperatorKeysRefusal; failed?: string; }
@@ -65,7 +64,6 @@ export namespace hostkeeper_agent_v1 {
     installer?: string;
     drift?: hostkeeper_agent_v1.DriftReport;
   }
-  export interface ServiceIdentityReport { service?: string; notAfterUnix?: string; lastError?: string; }
   export interface SshReport { appliedGeneration?: string; state?: string; hostKeyFingerprints?: string[]; detail?: string; }
   export interface StepRun { name?: string; attempt?: number; }
   export type TrustedRootReason = "TRUSTED_ROOT_REASON_UNSPECIFIED" | "TRUSTED_ROOT_REASON_NONE" | "TRUSTED_ROOT_REASON_STALE" | "TRUSTED_ROOT_REASON_MISSING" | "TRUSTED_ROOT_REASON_UNPARSEABLE";

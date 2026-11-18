@@ -41,17 +41,14 @@ const REQUEST_COLUMNS: &str = "request_id, state, expired_unix, expired_after_se
 const HOST_COLUMNS: &str = "host_id, key_hash, machine_id, role, services, duplicate, first_heartbeat_unix, \
     first_serving_unix, host_group, moving_from, facts_generation";
 
-/// What a read of a host takes: the columns of `enrollment_hosts`, the running record
-/// (`enrollment_host_running`, migration `0006`) and the identity approval
-/// (`enrollment_host_identity`, migration `0022`) of the same host, which a host without one has
+/// What a read of a host takes: the columns of `enrollment_hosts` and the running record
+/// (`enrollment_host_running`, migration `0006`) of the same host, which a host without one has
 /// `NULL` for ([`host_of`] reads the columns of [`HOST_READ`]).
-const HOST_FROM: &str = "enrollment_hosts LEFT JOIN enrollment_host_running USING (host_id) \
-    LEFT JOIN enrollment_host_identity USING (host_id)";
+const HOST_FROM: &str = "enrollment_hosts LEFT JOIN enrollment_host_running USING (host_id)";
 
 /// The columns [`HOST_FROM`] gives, in the order [`host_of`] reads them.
 const HOST_READ: &str = "host_id, key_hash, machine_id, role, services, duplicate, \
-    first_heartbeat_unix, first_serving_unix, running, host_group, moving_from, facts_generation, \
-    identity_approval";
+    first_heartbeat_unix, first_serving_unix, running, host_group, moving_from, facts_generation";
 
 /// The columns of `enrollment_issued`.
 const ISSUED_COLUMNS: &str = "request_id, round, serial, host_id, not_after, certificate_der";
@@ -304,9 +301,8 @@ fn request_of(row: &Row) -> pb::Request {
 /// The host of a row of [`HOST_FROM`], its columns in [`HOST_READ`]' order.
 ///
 /// # Errors
-/// [`StoreError::Corrupt`] when the running record or the identity approval does not decode: a
-/// host is not read with either dropped, which the next heartbeat would write over without a
-/// trace, or which would make an approved host read as not approved.
+/// [`StoreError::Corrupt`] when the running record does not decode: a host is not read with
+/// its running record dropped, which the next heartbeat would write over without a trace.
 fn host_of(row: &Row) -> Result<pb::Host, StoreError> {
     let host_id: String = row.get(0);
     let running = match row.get::<_, Option<Vec<u8>>>(8) {
@@ -318,15 +314,6 @@ fn host_of(row: &Row) -> Result<pb::Host, StoreError> {
                 })?,
             )
         }
-        None => None,
-    };
-    let identity_approval = match row.get::<_, Option<Vec<u8>>>(12) {
-        Some(bytes) => Some(pb::IdentityApproval::decode(bytes.as_slice()).map_err(|e| {
-            StoreError::Corrupt {
-                path: at(&format!("enrollment_host_identity/{host_id}")),
-                reason: format!("the identity approval does not decode: {e}"),
-            }
-        })?),
         None => None,
     };
     Ok(pb::Host {
@@ -343,7 +330,6 @@ fn host_of(row: &Row) -> Result<pb::Host, StoreError> {
         host_group: row.get::<_, Option<String>>(9).unwrap_or_default(),
         moving_from: row.get(10),
         facts_generation: row.get::<_, Option<i64>>(11).map(unsigned),
-        identity_approval,
     })
 }
 
@@ -367,34 +353,11 @@ fn running_stmt(host: &pb::Host) -> Stmt {
     }
 }
 
-/// The statement that writes the identity approval of `host` over the one it has, or removes it
-/// when the host has none, so a host written without one (an approval) holds none.
-fn identity_stmt(host: &pb::Host) -> Stmt {
-    match &host.identity_approval {
-        Some(approval) => Stmt {
-            sql: "INSERT INTO enrollment_host_identity (host_id, identity_approval) \
-                  VALUES ($1, $2) \
-                  ON CONFLICT (host_id) DO UPDATE SET identity_approval = EXCLUDED.identity_approval"
-                .to_owned(),
-            params: vec![
-                Val::Text(host.host_id.clone()),
-                Val::Bytes(approval.encode_to_vec()),
-            ],
-        },
-        None => Stmt {
-            sql: "DELETE FROM enrollment_host_identity WHERE host_id = $1".to_owned(),
-            params: vec![Val::Text(host.host_id.clone())],
-        },
-    }
-}
-
-/// The statements that write `record`: its row, and for a host its running record and its
-/// identity approval.
+/// The statements that write `record`: its row, and for a host its running record.
 fn statements(record: &Record) -> Result<Vec<Stmt>, StoreError> {
     let mut out = vec![upsert(record)?];
     if let Record::Host(host) = record {
         out.push(running_stmt(host));
-        out.push(identity_stmt(host));
     }
     Ok(out)
 }
@@ -692,14 +655,6 @@ impl Records for PgRecords {
             .collect()
     }
 
-    fn deny_ids(&self) -> Result<Vec<HostId>, StoreError> {
-        self.copy()?
-            .deny
-            .keys()
-            .map(|id| HostId::parse(id).map_err(|_| StoreError::Unkeyed("deny")))
-            .collect()
-    }
-
     fn deny(&self, host: &HostId) -> Result<Option<pb::Deny>, StoreError> {
         Ok(self.copy()?.deny.get(host.as_str()).cloned())
     }
@@ -763,17 +718,6 @@ impl Records for PgRecords {
     fn set_running(&self, host: &pb::Host, running: pb::Running) -> Result<(), StoreError> {
         self.commit(&[Record::Host(pb::Host {
             running: Some(running),
-            ..host.clone()
-        })])
-    }
-
-    fn set_identity_approval(
-        &self,
-        host: &pb::Host,
-        approval: pb::IdentityApproval,
-    ) -> Result<(), StoreError> {
-        self.commit(&[Record::Host(pb::Host {
-            identity_approval: Some(approval),
             ..host.clone()
         })])
     }

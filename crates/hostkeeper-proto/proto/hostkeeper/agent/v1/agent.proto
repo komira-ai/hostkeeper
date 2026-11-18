@@ -1,7 +1,6 @@
 // hostkeeper.agent.v1: the heartbeat a host's daemon sends the coordinator, and the reply,
-// which carries at most one order; how a host gets and keeps its certificate: `Enroll`,
-// `Poll` and `Renew`; the certificates of the services it runs with an identity:
-// `IssueServiceCertificate`; and the hosts the coordinator denies: `ListDeny`.
+// which carries at most one order; and how a host gets and keeps its certificate: `Enroll`,
+// `Poll` and `Renew`.
 //
 // Served by: the coordinator, on its heartbeat listener (gRPC over TCP with TLS). The JSON
 // route `POST /v1/heartbeat` that kbf's agents speak is an adapter onto the same handler: its
@@ -16,10 +15,7 @@
 // (`agent`); no field of a heartbeat or a renewal says who the host is, so neither can speak for
 // another host. `Enroll` and `Poll` must not require a client certificate, because the host has
 // none yet: the caller is authenticated by the key it proves, the CSR's own signature and then the
-// signed challenge of `Poll`. `IssueServiceCertificate` needs mutual TLS with a host
-// certificate, as `Renew` does. `ListDeny` needs mutual TLS with a host certificate or a service
-// certificate of a host that is not denied: it is how a relying party that trusts the services'
-// certificates learns which hosts to refuse. A service certificate is refused on every other RPC.
+// signed challenge of `Poll`.
 //
 // Refusals: a gRPC status whose message is exactly one token of `CoordinatorRefusal`, written
 // as the value's name without the `COORDINATOR_REFUSAL_` prefix, in lower case (for example
@@ -93,15 +89,6 @@
 // it. The certificate fields of `PollResponse` are set only on ISSUED. Before the certificate's
 // half life the daemon sends `Renew` with a CSR for the key it holds.
 //
-// Service identity (docs/design/service-identity.md): for each service it runs whose entry's
-// manifest says `identity`, the daemon makes a P-256 key, keeps it, and sends
-// `IssueServiceCertificate` with the service's name and a CSR for that key; it asks again before
-// the certificate's half life. The coordinator signs only for a service the host's group lists
-// and does not uninstall from the host, whose entry for the host has `identity`, and only for a
-// host an operator approved by hand or approved for identity
-// (`hostkeeper.operator.v1.HostIdentity`). The certificate is 8 hours, client authentication
-// only, with the URI SAN `urn:hostkeeper:service:<name>` and the host id as its DNS SAN.
-//
 // Extending: add fields, messages, enum values and RPCs; never renumber, rename, retype or
 // remove one, and never reuse a number (the compatibility test in this crate refuses each).
 // A reader treats an enum value it does not know as UNSPECIFIED; none of the enums here is
@@ -124,12 +111,6 @@ service Coordinator {
   rpc Poll(PollRequest) returns (PollResponse);
   // Get a new certificate for the key the host holds, over mutual TLS with its current one.
   rpc Renew(RenewRequest) returns (RenewResponse);
-  // Get an 8-hour certificate for a service the host runs with an identity, for a key the host
-  // made for it, over mutual TLS with the host's certificate.
-  rpc IssueServiceCertificate(IssueServiceCertificateRequest) returns (IssueServiceCertificateResponse);
-  // The hosts the coordinator denies, over mutual TLS with a host or a service certificate.
-  // Changes nothing. The JSON route `GET /v1/deny` on the same listener answers the same.
-  rpc ListDeny(ListDenyRequest) returns (ListDenyResponse);
 }
 
 // Why the coordinator refused a heartbeat, an enrollment, a poll or a renewal. The token is the
@@ -162,18 +143,6 @@ enum CoordinatorRefusal {
   // `Enroll` whose `renewal_of` names a host that is unknown, revoked, or certified for another
   // key.
   COORDINATOR_REFUSAL_RENEWAL_NOT_ALLOWED = 9;
-  // FAILED_PRECONDITION: an `IssueServiceCertificate` for a service the host's group does not
-  // list, that the coordinator is uninstalling from the host, or whose entry for the host does
-  // not say `identity`.
-  COORDINATOR_REFUSAL_SERVICE_NOT_ASSIGNED = 10;
-  // FAILED_PRECONDITION: an `IssueServiceCertificate` by a host the coordinator approved by an
-  // inventory record, whose current key no operator has approved for identity.
-  COORDINATOR_REFUSAL_IDENTITY_NOT_APPROVED = 11;
-  // INVALID_ARGUMENT: an `IssueServiceCertificate` whose service is not a service name.
-  COORDINATOR_REFUSAL_INVALID_SERVICE = 12;
-  // UNAVAILABLE: an `IssueServiceCertificate` the coordinator could not record (its serial or its
-  // audit entry). Nothing was issued; asking again is safe.
-  COORDINATOR_REFUSAL_STORE_FAILED = 13;
 }
 
 message HeartbeatRequest {
@@ -265,26 +234,6 @@ message HeartbeatRequest {
   // that announces `ssh-v1`, read only over gRPC; absent from one that predates it. A report
   // that breaks a rule of `SshReport` is dropped and the coordinator keeps the last one it read.
   optional SshReport ssh = 13;
-  // The certificate the daemon holds for each installed service whose entry says `identity`, one
-  // entry each, at most 16, by service name, none twice. Sent in every heartbeat by a daemon that
-  // keeps them, announced by no feature (the list of features is full), read from every gRPC
-  // heartbeat; empty from a daemon that predates it. A list
-  // that breaks a rule is dropped and the coordinator keeps the last one it read, in memory, and
-  // shows it in `hostkeeper.operator.v1.Host.heartbeat`; nothing decides on it.
-  repeated ServiceIdentityReport service_identities = 17;
-}
-
-// What the daemon holds of one service's identity.
-message ServiceIdentityReport {
-  // The service.
-  string service = 1;
-  // The last second the installed certificate is valid; absent while none is installed.
-  optional uint64 not_after_unix = 2;
-  // Why the last try to get or install a certificate failed (a refusal token of the coordinator,
-  // a check the certificate failed, an account the host does not have), as the daemon words it:
-  // at most 256 bytes (a reader cuts a longer one at a character boundary). Absent once a try
-  // succeeds.
-  optional string last_error = 3;
 }
 
 // What a host's daemon did with the sshd access the coordinator sent (`SshAccess`).
@@ -1030,28 +979,4 @@ message RenewResponse {
   bytes certificate_der = 1;
   // The CA certificates, PEM.
   string ca_bundle_pem = 2;
-}
-
-// A service certificate, over mutual TLS with the host's certificate.
-message IssueServiceCertificateRequest {
-  // The service, which the host's group lists and whose entry says `identity`.
-  string service = 1;
-  // A CSR for the key the host made for the service, DER, at most 4096 bytes. Only its key is
-  // read: the coordinator names the subject.
-  bytes csr_der = 2;
-}
-
-message IssueServiceCertificateResponse {
-  // The certificate, DER, at most 8192 bytes: 8 hours, client authentication only, the URI SAN
-  // `urn:hostkeeper:service:<service>` and the host id as its DNS SAN.
-  bytes certificate_der = 1;
-  // The CA certificates, PEM.
-  string ca_bundle_pem = 2;
-}
-
-message ListDenyRequest {}
-
-message ListDenyResponse {
-  // Every host the coordinator denies (retiring or retired), sorted, none twice.
-  repeated string host_ids = 1;
 }

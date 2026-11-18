@@ -39,7 +39,7 @@ use clap::{Args, Parser, Subcommand};
 use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_enroll::{
-    Enroller, GrpcEnroll, IdentityDir, LinuxClaims, ManagedFile, OsEntropy, PkiDir, RenewalState,
+    Enroller, GrpcEnroll, LinuxClaims, ManagedFile, OsEntropy, PkiDir, RenewalState,
     Settings as EnrollSettings, SystemWallClock,
 };
 use hostkeeper_install::version::Owner;
@@ -74,7 +74,6 @@ use crate::real_packages::RealPackages;
 use crate::repositories;
 use crate::repository_push::Managed;
 use crate::selfupdate::binary_dir;
-use crate::service_identity::{identity_loop, identity_ports};
 use crate::start::{self, Settings, StartError};
 use crate::unix_clock::SystemUnixClock;
 use hostkeeper_install::announce::OsHost;
@@ -96,8 +95,6 @@ pub const DEFAULT_STATE_DIR: &str = "/var/lib/updater/state";
 pub const DEFAULT_PACKAGES_DIR: &str = "/var/lib/hostkeeper/packages";
 /// The default of `--facts-file`, on Linux and on a Mac.
 pub const DEFAULT_FACTS_FILE: &str = "/var/lib/hostkeeper/facts.json";
-/// The default identity directory (`--identity-dir`), on Linux and on a Mac.
-pub const DEFAULT_IDENTITY_DIR: &str = "/var/lib/hostkeeper/identity";
 /// The default of `--package-lock-wait-secs`: five minutes, the length of a usual unattended
 /// upgrade.
 pub const DEFAULT_PACKAGE_LOCK_WAIT_SECS: u64 = 300;
@@ -160,12 +157,6 @@ pub struct DaemonFlags {
     /// host id, host group, platform and labels, for the services that read them.
     #[arg(long, default_value = DEFAULT_FACTS_FILE)]
     pub facts_file: PathBuf,
-    /// The identity directory: for each service whose entry asks for an identity, a directory
-    /// holding its key, certificate and CA bundle, owned by the service's account. The root is
-    /// `root:root 0755`; a link there, or a root another user owns or others can write, is
-    /// refused.
-    #[arg(long, default_value = DEFAULT_IDENTITY_DIR)]
-    pub identity_dir: PathBuf,
     /// Tell systemd the daemon is ready (`READY=1` on the notify socket systemd sets for a unit
     /// of `Type=notify`) once its boot work is over.
     #[arg(long, conflicts_with = "ready_file")]
@@ -199,7 +190,6 @@ impl DaemonFlags {
             state_dir: self.state_dir.clone(),
             packages_dir: self.packages_dir.clone(),
             facts_file: self.facts_file.clone(),
-            identity: IdentityDir::host(&self.identity_dir),
             run_dir: Platform::host().run_dir,
             trusted_uid: 0,
             package_lock_wait_secs: self.package_lock_wait_secs,
@@ -395,9 +385,6 @@ async fn start_and_serve(
 ///   account's `authorized_keys` ([`OperatorKeys::at_host`]);
 /// - every host keeps the host prerequisites the coordinator sends, which a Mac installs and a
 ///   Linux host only reports ([`Prerequisites::at_host`]);
-/// - every host keeps a key and a certificate for each service whose entry asks for an identity
-///   in the identity directory, on a worker of its own, and every heartbeat reports them
-///   ([`identity_loop`], [`crate::service_identity`]);
 /// - when `files` names a console, the enrollment loop writes its issue file, naming the daemon
 ///   config's `coordinator`, and has the gettys redraw by running its agetty with `--reload` as
 ///   a child process, its output read to [`AGETTY_OUTPUT_CAP`] and bounded by
@@ -437,13 +424,6 @@ pub fn host_links(
     );
     let operator_keys = OperatorKeys::at_host(kind, log.clone());
     let prerequisites = Prerequisites::at_host(kind, log.clone());
-    let identity = identity_loop(
-        Arc::clone(daemon),
-        identity_ports(daemon, &files.pki),
-        crate::service_account::at_host(kind),
-        log.clone(),
-        stop.clone(),
-    );
     Links {
         enroller: Box::new(move || host_enroller(&endpoint, &pki, settings.clone(), kind)),
         link: Arc::new(link),
@@ -461,7 +441,6 @@ pub fn host_links(
         remote_login_probe: crate::remote_login_probe::at_host_start(kind),
         operator_keys: Some(Arc::new(operator_keys)),
         prerequisites: Some(Arc::new(prerequisites)),
-        identity: Some(identity),
     }
 }
 

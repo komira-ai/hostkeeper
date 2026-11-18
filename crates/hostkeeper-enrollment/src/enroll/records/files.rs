@@ -274,17 +274,6 @@ impl Records for FileRecords {
         Ok(ids)
     }
 
-    fn deny_ids(&self) -> Result<Vec<HostId>, StoreError> {
-        let mut ids: Vec<HostId> = self
-            .list(DENY)?
-            .iter()
-            .filter_map(|name| name.strip_suffix(".pb"))
-            .filter_map(|name| HostId::parse(name).ok())
-            .collect();
-        ids.sort();
-        Ok(ids)
-    }
-
     fn deny(&self, host: &HostId) -> Result<Option<pb::Deny>, StoreError> {
         self.load(&RecordKey::Deny(host.clone()), |m: &pb::Deny| m.schema)
     }
@@ -379,16 +368,6 @@ impl Records for FileRecords {
     fn set_running(&self, host: &pb::Host, running: pb::Running) -> Result<(), StoreError> {
         let mut host = host.clone();
         host.running = Some(running);
-        self.commit(&[Record::Host(host)])
-    }
-
-    fn set_identity_approval(
-        &self,
-        host: &pb::Host,
-        approval: pb::IdentityApproval,
-    ) -> Result<(), StoreError> {
-        let mut host = host.clone();
-        host.identity_approval = Some(approval);
         self.commit(&[Record::Host(host)])
     }
 

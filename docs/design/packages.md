@@ -400,8 +400,6 @@ message Manifest {                    // the installer is the entry's (Target.in
   string min_hostkeeper = 7;          // the oldest daemon that may install it
   repeated Container containers = 8;  // oci-image only: how to run the image
   InstallerBounds installer_bounds = 9;
-  optional bool identity = 10;           // the service wants a key and an 8-hour certificate on each host that runs it
-  optional string identity_account = 11; // the account that owns the identity files; only with identity; default root
 }
 message Hook {
   repeated string command = 1;        // a program in the staged tree and its leading arguments; empty: built-in steps
@@ -435,7 +433,6 @@ The service's name and version are the call's, not fields of the manifest, so th
 | `min_hostkeeper` | A manifest may use a field or installer a daemon does not know. A daemon older than this defers with `daemon_too_old`, as today, instead of misreading it |
 | `containers` | An OCI image has no units. The `oci-image` installer writes one unit per entry from a fixed template (section 5.2). Required for `oci-image`, refused for the others |
 | `installer_bounds` | The installer's steps run the format's own tools and scripts (a deb's `postinst`), which can hang. Each step needs a bound, as every hook step has one |
-| `identity`, `identity_account` | The service asks for an identity: the daemon makes its key on the host and the coordinator signs an 8-hour certificate for it ([service-identity.md](service-identity.md)). `identity_account` owns the identity files: 1 to 32 bytes of `[a-z0-9_-]`, the first a letter or `_`; set only with `identity` true; `root` when absent |
 
 ### 4.4 What the daemon checks before running anything
 

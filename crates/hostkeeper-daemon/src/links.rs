@@ -6,9 +6,8 @@
 //! presents, and a host with no certificate yet beats nothing: its loop says once what it waits
 //! for, and tries again every period.
 //!
-//! [`Links`] is everything the loops need besides the daemon. [`Links::start`] starts them, the
-//! enrollment loop first, then the heartbeat loop and then, when there is one, the service identity
-//! loop ([`crate::service_identity`]), each on a worker of its [`Dispatch`]; [`crate::start::serve`] calls
+//! [`Links`] is everything the two loops need besides the daemon. [`Links::start`] starts them,
+//! the enrollment loop first, each on a worker of its [`Dispatch`]; [`crate::start::serve`] calls
 //! it once the boot work is over and the readiness notice was sent, so neither loop runs while
 //! the boot pass does. The heartbeat loop works on the daemon through the four adapters of
 //! [`crate::link_adapters`] ([`Links::heartbeater`]). On a Linux host it also gives the repository
@@ -71,7 +70,6 @@ use crate::link_adapters::{
 use crate::node::NodeState;
 use crate::notify::Watchdog;
 use crate::repository_push::RepositoryPush;
-use crate::service_identity::IdentityLoop;
 use crate::ssh_files::SshPaths;
 use crate::ssh_host::{SshHost, SystemHost, Tools};
 use crate::ssh_host_mac::MacHost;
@@ -144,9 +142,6 @@ pub struct Links {
     /// heartbeat reports and a set the coordinator sends replaces. A daemon that has them
     /// announces `prerequisites-v1`.
     pub prerequisites: Option<Arc<dyn PrerequisitesSink>>,
-    /// The service identity loop ([`crate::service_identity`]): its worker is started as the third
-    /// of [`Links::start`], and its source is what every heartbeat reports. It announces no feature.
-    pub identity: Option<IdentityLoop>,
 }
 
 impl Links {
@@ -157,7 +152,6 @@ impl Links {
     pub fn start(self, daemon: &Arc<Daemon>) {
         let heartbeater = self.heartbeater(daemon);
         let Links {
-            identity,
             mut enroller,
             clock,
             log,
@@ -190,9 +184,6 @@ impl Links {
                 alive(&*watchdog, beat_log.as_ref());
             });
         }));
-        if let Some(identity) = identity {
-            dispatch.start(identity.worker);
-        }
     }
 
     /// The heartbeat loop over `daemon`: its executor, held halts, installed services and observer
@@ -237,7 +228,6 @@ impl Links {
                 operator_keys: self.operator_keys.clone(),
                 ssh: ssh_setup(PLATFORM, rustix::process::geteuid().as_raw(), &self.log),
                 prerequisites: self.prerequisites.clone(),
-                service_identities: self.identity.as_ref().map(|i| Arc::clone(&i.source)),
             },
         )
     }

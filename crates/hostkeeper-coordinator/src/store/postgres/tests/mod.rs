@@ -249,7 +249,6 @@ mod connect;
 mod coordinator;
 mod generations;
 mod host_groups;
-mod identity;
 mod layout;
 mod lost;
 mod reads;

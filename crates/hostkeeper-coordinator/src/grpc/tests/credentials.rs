@@ -283,7 +283,6 @@ async fn every_operator_method_admits_exactly_its_credential() {
             "Console",
             "Enrollment",
             "HostGroups",
-            "HostIdentity",
             "Hosts",
             "Layout",
             "Releases",

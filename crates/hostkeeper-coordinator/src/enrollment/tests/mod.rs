@@ -18,7 +18,6 @@ mod by_record_waits;
 mod contested;
 mod expiry;
 mod heartbeat;
-mod identity;
 mod inventory;
 mod inventory_approve;
 mod list;

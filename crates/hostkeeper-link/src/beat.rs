@@ -23,9 +23,7 @@
 //! ([`Heartbeat::prerequisites`], as `prerequisites`: a digest, a refusal and one state for each of
 //! at most 16 names held; only a name this release knows carries a version or a reason, so with
 //! the one it knows the report is a few hundred bytes and at most about 4 KiB) is counted and
-//! never dropped either. So is the services' identities report
-//! ([`Heartbeat::service_identities`], as `service_identities`: a service name, an end and a text
-//! of at most [`crate::MAX_IDENTITY_ERROR`] bytes each).
+//! never dropped either.
 
 use hostkeeper_config::names::{ServiceName, Version};
 pub use hostkeeper_proto::MAX_SERVICES_PER_HEARTBEAT;
@@ -38,7 +36,6 @@ use crate::ports::Drift;
 use crate::prerequisites::PrerequisitesReport;
 use crate::probe::RemoteLoginProbe;
 use crate::repositories::RepositoriesReport;
-use crate::service_identity::ServiceIdentityReport;
 
 /// The most bytes of a heartbeat: its JSON on the JSON route, its encoded message on the gRPC one.
 pub const MAX_HEARTBEAT_BYTES: usize = 16 * 1024;
@@ -432,9 +429,6 @@ pub struct Heartbeat {
     /// What the daemon holds of the host prerequisites and where each stands; none from a daemon
     /// that keeps none. Sent over gRPC only, and counted toward the bound on both.
     pub prerequisites: Option<PrerequisitesReport>,
-    /// What the daemon holds of each service's identity, sorted by service name; empty from a
-    /// daemon that keeps none. Sent over gRPC only, and counted toward the bound on both.
-    pub service_identities: Vec<ServiceIdentityReport>,
 }
 
 impl Heartbeat {
@@ -514,20 +508,6 @@ impl Heartbeat {
         }
         if let Some(report) = &self.prerequisites {
             beat.insert("prerequisites".to_owned(), prerequisites_json(report));
-        }
-        if !self.service_identities.is_empty() {
-            let reports: Vec<Value> = self
-                .service_identities
-                .iter()
-                .map(|report| {
-                    json!({
-                        "service": report.service,
-                        "not_after_unix": report.not_after_unix,
-                        "last_error": report.last_error,
-                    })
-                })
-                .collect();
-            beat.insert("service_identities".to_owned(), reports.into());
         }
         Value::Object(beat)
     }

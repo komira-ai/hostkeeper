@@ -31,10 +31,6 @@
 //!   answers which release this coordinator is, with no token read ([`crate::version_route`]):
 //!   CI waits on it before it sets a release a coordinator older than the release would refuse.
 //!
-//! The heartbeat surface also serves `GET /v1/deny` to a host's or a service's client certificate:
-//! `{"hostIds":[...]}`, the hosts the coordinator denies ([`deny`]), which a relying party of the
-//! services' certificates refuses.
-//!
 //! The heartbeat surface also serves `GET /repositories/<name>/{dists,pool}/<group>/<rest>` to the
 //! hosts of a group, the files of a private repository, which [`crate::grpc::route`] answers
 //! before a request comes here ([`crate::repository_serve`]).
@@ -76,7 +72,7 @@ use hyper::header::{AUTHORIZATION, CONTENT_TYPE};
 use hyper::{HeaderMap, Method, Request, Response, StatusCode};
 use serde::Serialize;
 
-use crate::enrollment::{Admission, CoordinatorRefusal, RpcError};
+use crate::enrollment::Admission;
 use crate::identity::Identity;
 use crate::ops::OperateError;
 use crate::orders::Order;
@@ -94,10 +90,6 @@ pub const CONVERGENCE_PATH: &str = "/v1/convergence";
 
 /// The path an operator posts an action to.
 pub const OPERATOR_PATH: &str = "/v1/operator";
-
-/// The path a relying party reads the hosts the coordinator denies from, on the heartbeat
-/// listener, with a host or a service certificate ([`crate::enrollment::Enrollment::list_deny`]).
-pub const DENY_PATH: &str = "/v1/deny";
 
 /// The path anyone that reaches the private listener reads the coordinator's own version from.
 pub const VERSION_PATH: &str = "/v1/version";
@@ -242,7 +234,6 @@ where
         (Surface::Heartbeat, Method::POST, HEARTBEAT_PATH) => {
             heartbeat(coordinator, peer, request, patience).await
         }
-        (Surface::Heartbeat, Method::GET, DENY_PATH) => deny(coordinator, peer),
         (Surface::Control, Method::POST, DESIRED_PATH) => {
             desired(coordinator, request, patience).await
         }
@@ -276,7 +267,7 @@ where
                 }
             }
         }
-        (Surface::Heartbeat, _, HEARTBEAT_PATH | DENY_PATH)
+        (Surface::Heartbeat, _, HEARTBEAT_PATH)
         | (
             Surface::Control,
             _,
@@ -425,27 +416,6 @@ where
     match beat(coordinator, caller, &bytes, None) {
         Ok((answer, _)) => json(StatusCode::OK, &answer),
         Err(why) => beat_refusal(why),
-    }
-}
-
-/// `GET /v1/deny`: the hosts the coordinator denies, as the JSON of `ListDenyResponse`
-/// (`{"hostIds":[...]}`), the answer of the gRPC `ListDeny` ([`crate::enrollment::Enrollment::list_deny`]).
-/// A caller that is no host's or service's is refused 403 `forbidden`, one whose host is denied 403
-/// `denied`; a coordinator without enrollment answers 503 `unavailable`.
-fn deny(coordinator: &Coordinator, peer: &Peer) -> Answer {
-    let Some(enrollment) = coordinator.enrollment() else {
-        return error(StatusCode::SERVICE_UNAVAILABLE, "unavailable");
-    };
-    match enrollment.list_deny(peer.as_deref()) {
-        Ok(listed) => json(
-            StatusCode::OK,
-            &serde_json::json!({ "hostIds": listed.host_ids }),
-        ),
-        Err(RpcError::Refused(CoordinatorRefusal::Forbidden)) => {
-            error(StatusCode::FORBIDDEN, "forbidden")
-        }
-        Err(RpcError::Refused(CoordinatorRefusal::Denied)) => error(StatusCode::FORBIDDEN, DENIED),
-        Err(_) => error(StatusCode::INTERNAL_SERVER_ERROR, "internal"),
     }
 }
 

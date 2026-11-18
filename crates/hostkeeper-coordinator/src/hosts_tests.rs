@@ -252,7 +252,6 @@ fn a_host_is_what_the_status_holds_of_it() {
             remote_login_probe: None,
             operator_keys: None,
             prerequisites: None,
-            service_identities: Vec::new(),
         }),
         labels: HashMap::from([("rack".to_owned(), "r1".to_owned())]),
         exclusions: vec![proto::Exclusion {

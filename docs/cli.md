@@ -393,35 +393,6 @@ nothing is uninstalled. Audited `host_move`.
 | `--host-group` | STRING | The group it moves into; empty for none (the host is ordered no package and keeps what it runs). |
 | `--reason` | STRING | Why; 1 to 256 bytes. |
 
-### `host-identity`
-
-The service `HostIdentity` of the package `hostkeeper.operator.v1`. A host's service identity: its assurance and an operator's approval of it.
-
-#### `hkctl host-identity get`
-
-`/hostkeeper.operator.v1.HostIdentity/Get`
-
-The host's assurance, the SHA-256 of its current key, and whether the coordinator signs
-certificates for its services with an identity. Changes nothing.
-
-| flag | value | meaning |
-|---|---|---|
-| `--node-id` | STRING | The host. |
-
-#### `hkctl host-identity approve`
-
-`/hostkeeper.operator.v1.HostIdentity/Approve`
-
-Approves the host's current key for service identity: refused unless `key_sha256` is the
-SHA-256 of the key the host holds now. Approving a key approved already, or a host whose
-assurance is `operator`, changes nothing and writes no audit entry.
-
-| flag | value | meaning |
-|---|---|---|
-| `--node-id` | STRING | The host. |
-| `--key-sha256` | STRING | The SHA-256 of the host's current key, as `Get` showed it. |
-| `--reason` | STRING | Why, for the audit entry; optional. |
-
 ### `hosts`
 
 The service `Hosts` of the package `hostkeeper.operator.v1`. The hosts the coordinator has heard from or enrolled, and what an operator decides about them.

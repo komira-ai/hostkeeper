@@ -122,7 +122,6 @@ use crate::ports::{
     RenewalSource, RepositorySink, ServiceObserver, ServiceRecords, Sleeper, SshSink, Tick,
     TrustedRootSource, UnixClock,
 };
-use crate::service_identity::ServiceIdentitySource;
 
 /// The period when the daemon is given none: 15 seconds.
 pub const DEFAULT_HEARTBEAT_SECS: NonZeroU64 = NonZeroU64::MIN.saturating_add(14);
@@ -196,10 +195,6 @@ pub struct Ports {
     /// The host prerequisites of the host's group; none on a host that keeps none, which then
     /// announces no `prerequisites-v1`, sends no report and is sent no set.
     pub prerequisites: Option<Arc<dyn PrerequisitesSink>>,
-    /// What the daemon holds of its services' identities; none on a host that keeps none, which
-    /// then sends no report. It announces no feature: a coordinator reads the report of every
-    /// heartbeat, and a feature name would count against the bound of the announced list.
-    pub service_identities: Option<Arc<dyn ServiceIdentitySource>>,
 }
 
 /// What one heartbeat came to.
@@ -572,11 +567,6 @@ impl Heartbeater {
             operator_keys: self.ports.operator_keys.as_ref().map(|sink| sink.report()),
             ssh: self.ports.ssh.as_ref().and_then(|sink| sink.report()),
             prerequisites: self.ports.prerequisites.as_ref().map(|sink| sink.report()),
-            service_identities: self
-                .ports
-                .service_identities
-                .as_ref()
-                .map_or_else(Vec::new, |source| source.reports()),
         })
     }
 

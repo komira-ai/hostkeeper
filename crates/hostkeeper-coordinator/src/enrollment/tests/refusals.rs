@@ -105,18 +105,6 @@ fn every_refusal_has_the_grpc_code_its_proto_comment_names() {
             Code::FailedPrecondition,
             "renewal_not_allowed",
         ),
-        (
-            R::ServiceNotAssigned,
-            Code::FailedPrecondition,
-            "service_not_assigned",
-        ),
-        (
-            R::IdentityNotApproved,
-            Code::FailedPrecondition,
-            "identity_not_approved",
-        ),
-        (R::InvalidService, Code::InvalidArgument, "invalid_service"),
-        (R::StoreFailed, Code::Unavailable, "store_failed"),
     ];
     let values: Vec<CoordinatorRefusal> = (1..=32)
         .filter_map(|n| CoordinatorRefusal::try_from(n).ok())

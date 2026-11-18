@@ -45,10 +45,6 @@ export function createClient(call) {
       remove: (request) => call("hostkeeper.operator.v1.HostGroups/Remove", request),
       move: (request) => call("hostkeeper.operator.v1.HostGroups/Move", request),
     }),
-    hostIdentity: Object.freeze({
-      get: (request) => call("hostkeeper.operator.v1.HostIdentity/Get", request),
-      approve: (request) => call("hostkeeper.operator.v1.HostIdentity/Approve", request),
-    }),
     hosts: Object.freeze({
       list: (request) => call("hostkeeper.operator.v1.Hosts/List", request),
       get: (request) => call("hostkeeper.operator.v1.Hosts/Get", request),

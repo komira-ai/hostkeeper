@@ -59,8 +59,6 @@ export namespace hostkeeper_operator_v1 {
   export type AlertSeverity = "ALERT_SEVERITY_UNSPECIFIED" | "ALERT_SEVERITY_CRITICAL" | "ALERT_SEVERITY_WARNING";
   export interface ApiTokenInfo { name?: string; source?: hostkeeper_operator_v1.ApiTokenSource; createdBy?: string; createdUnix?: string; }
   export type ApiTokenSource = "API_TOKEN_SOURCE_UNSPECIFIED" | "API_TOKEN_SOURCE_STORE" | "API_TOKEN_SOURCE_TOKENS_FILE";
-  export interface ApproveHostIdentityRequest { nodeId?: string; keySha256?: string; reason?: string; }
-  export interface ApproveHostIdentityResponse { nodeId?: string; approval?: hostkeeper_operator_v1.IdentityApprovalInfo; }
   export interface ApproveRequest {
     requestId?: string;
     keySha256?: string;
@@ -202,15 +200,6 @@ export namespace hostkeeper_operator_v1 {
   export interface GetAbmPublicKeyResponse { certificatePem?: string; fingerprintSha256?: string; created?: boolean; }
   export interface GetHostGroupRequest { hostGroup?: string; limit?: number; pageToken?: string; }
   export interface GetHostGroupResponse { hostGroup?: hostkeeper_operator_v1.HostGroupState; nodeIds?: string[]; nextPageToken?: string; }
-  export interface GetHostIdentityRequest { nodeId?: string; }
-  export interface GetHostIdentityResponse {
-    nodeId?: string;
-    assurance?: hostkeeper_operator_v1.HostAssurance;
-    keySha256?: string;
-    allowed?: boolean;
-    approval?: hostkeeper_operator_v1.IdentityApprovalInfo;
-    denied?: boolean;
-  }
   export interface GetHostRequest { nodeId?: string; }
   export interface GetHostResponse { host?: hostkeeper_operator_v1.Host; }
   export interface GetLayoutRequest {}
@@ -261,7 +250,6 @@ export namespace hostkeeper_operator_v1 {
     repositories?: hostkeeper_operator_v1.HostRepositories;
     hostGroup?: string;
   }
-  export type HostAssurance = "HOST_ASSURANCE_UNSPECIFIED" | "HOST_ASSURANCE_OPERATOR" | "HOST_ASSURANCE_AUTO";
   export interface HostCounts { missing?: number; absent?: number; excluded?: number; unmanaged?: number; deferred?: number; picked?: number; noTarget?: number; noBuildForHost?: number; installerDropped?: number; }
   export interface HostGroup { name?: string; packages?: string[]; policy?: hostkeeper_operator_v1.RolloutPolicy; }
   export interface HostGroupState { group?: hostkeeper_operator_v1.HostGroup; generation?: string; hosts?: number; packages?: hostkeeper_operator_v1.GroupPackage[]; }
@@ -284,7 +272,6 @@ export namespace hostkeeper_operator_v1 {
     stage?: number;
     order?: hostkeeper_operator_v1.CurrentOrder;
   }
-  export interface IdentityApprovalInfo { approver?: string; approvedUnix?: string; }
   export interface IncludeRequest { service?: string; nodeId?: string; }
   export interface IncludeResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export type InventoryMatch = "INVENTORY_MATCH_UNSPECIFIED" | "INVENTORY_MATCH_MATCHED" | "INVENTORY_MATCH_UNMATCHED" | "INVENTORY_MATCH_AMBIGUOUS";

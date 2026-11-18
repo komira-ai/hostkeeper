@@ -73,7 +73,6 @@ fn host(rig: &Rig, keys: Option<Arc<dyn OperatorKeysSink>>) -> (Heartbeater, Arc
         remote_login_probe: None,
         operator_keys: keys,
         prerequisites: None,
-        identity: None,
     };
     (links.heartbeater(&daemon), link)
 }

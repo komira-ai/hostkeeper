@@ -572,28 +572,3 @@ fn a_target_json_under_a_file_is_an_io_error_not_no_entry() {
     fs::write(&file, b"x").expect("write");
     assert!(matches!(read(&file), Err(TargetError::Io(_))));
 }
-
-/// Proves the entry's identity request becomes the manifest's: `identity` true with its account,
-/// and that an entry with neither field, or `identity` false, asks for none.
-/// Catches: an identity request dropped on the way from the sealed entry to the manifest, or an
-/// entry that never asked for one read as asking.
-#[test]
-fn an_entrys_identity_request_is_the_manifests() {
-    let dir = scratch("target-identity");
-    let asks = of(
-        dir.path(),
-        &with_manifest(|m| {
-            m.identity = Some(true);
-            m.identity_account = Some("jsagent".to_owned());
-        }),
-    )
-    .expect("read");
-    assert_eq!(
-        (asks.identity, asks.identity_account.as_deref()),
-        (true, Some("jsagent"))
-    );
-    for identity in [None, Some(false)] {
-        let none = of(dir.path(), &with_manifest(|m| m.identity = identity)).expect("read");
-        assert_eq!((none.identity, none.identity_account), (false, None));
-    }
-}

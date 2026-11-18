@@ -22,8 +22,7 @@ description = "The update coordinator: tells each host's updater which version t
 # update plan stands); beside the state file, the spent ids of CI's tokens and the lock that
 # keeps a second coordinator off these files.
 # With `--enrollment-dir` it is also the hosts' certificate authority (hostkeeper-enrollment): it
-# keeps the enrollment store and the CA key file, answers Enroll, Poll, Renew, IssueServiceCertificate
-# and ListDeny, and makes its
+# keeps the enrollment store and the CA key file, answers Enroll, Poll and Renew, and makes its
 # own server certificate.
 # It places hosts by host group and reads no rollout file. An operator is one of the named
 # tokens of `--tokens-file`.

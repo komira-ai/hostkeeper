@@ -29,9 +29,6 @@ use crate::{halt, verdict_file};
 /// the password policy and its revoked serials) in every answer until it reports its generation
 /// ([`crate::ssh_heartbeat`]); advertised always, and acted on only while the coordinator holds an
 /// SSH user CA.
-///
-/// No feature is advertised for service identity: the `service_identities` report of every gRPC
-/// heartbeat is read whatever the features it announces ([`crate::service_identity_report`]).
 pub const FEATURES: &[&str] = &[
     "deferred-v1",
     halt::FEATURE,

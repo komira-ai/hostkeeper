@@ -147,14 +147,6 @@ const REQUESTS: &[(&str, &str)] = &[
         r#"{"nodeId": "storage-1", "hostGroup": "storage", "reason": "rebuilt"}"#,
     ),
     (
-        "hostkeeper.operator.v1.HostIdentity/Approve",
-        r#"{"nodeId": "storage-1", "keySha256": "2222222222222222222222222222222222222222222222222222222222222222"}"#,
-    ),
-    (
-        "hostkeeper.operator.v1.HostIdentity/Get",
-        r#"{"nodeId": "storage-1"}"#,
-    ),
-    (
         "hostkeeper.operator.v1.Hosts/Abort",
         r#"{"nodeId": "storage-1", "service": "kbf", "reason": "stuck"}"#,
     ),

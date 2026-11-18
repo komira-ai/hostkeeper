@@ -9,14 +9,6 @@
 //! - `rpc`: `Enroll`, `Poll` and `Renew` of `hostkeeper.agent.v1.Coordinator` as handlers over
 //!   the protobuf messages, and [`call`], which answers one encoded call from a peer, refusing a
 //!   `Renew` without a client certificate before its body is read;
-//! - `identity`: service identity (`docs/design/service-identity.md`): the first and last checks of
-//!   `IssueServiceCertificate` and the certificate it signs ([`Enrollment::service_ask`],
-//!   [`Enrollment::issue_service`], audited `service_identity_issued`), `ListDeny`
-//!   ([`Enrollment::list_deny`]), and `HostIdentity.Get` and `Approve`
-//!   ([`Enrollment::identity_get`], [`Enrollment::identity_approve`], audited `identity_approve`).
-//!   [`call`] and [`Method`] serve the calls that need the enrollment alone, so they list neither
-//!   `IssueServiceCertificate`, which asks the coordinator which services are the host's
-//!   ([`crate::service_identity`]), nor `ListDeny`.
 //! - `refusal`: the one place an error of the store or the CA becomes a [`CoordinatorRefusal`]
 //!   (or [`RpcError::Internal`]), and the gRPC status of each;
 //! - `nonce`: the single-use nonces a `Poll` is signed over;
@@ -49,7 +41,6 @@ mod approve;
 mod by_record;
 mod expiry;
 pub(crate) mod groups;
-mod identity;
 mod list;
 pub(crate) mod nonce;
 mod refusal;
@@ -69,7 +60,6 @@ pub(crate) use approve::UNGROUPED_ROLE;
 pub use approve::{ACTION_APPROVE, ACTION_REFUSED, ACTION_REPLACE, Approved, token_of};
 pub use by_record::{ACTION_AUTO_APPROVED, ByRecord, INVENTORY_APPROVER, Waits};
 pub use expiry::DEFAULT_REQUEST_TTL_SECS;
-pub use identity::{ACTION_IDENTITY_APPROVE, ACTION_SERVICE_IDENTITY_ISSUED};
 pub use list::MAX_PENDING_PAGE;
 pub use nonce::{NONCE_BYTES, NONCES_PER_REQUEST, Nonces, Random, os_random};
 pub use refusal::{RpcError, refusal_of};

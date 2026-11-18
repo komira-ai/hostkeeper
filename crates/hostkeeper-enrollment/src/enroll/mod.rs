@@ -28,10 +28,6 @@
 //! - [`EnrollmentStore::deny`], [`EnrollmentStore::retire`], [`EnrollmentStore::report_live`]
 //!   and the questions the heartbeat path asks (`is_denied`, `is_retiring`, `is_duplicate`,
 //!   `renew_allowed`).
-//! - [`EnrollmentStore::approve_identity`] records an operator's approval of a host's key for
-//!   service identity, and [`EnrollmentStore::identity_state`], [`EnrollmentStore::identity_allowed`]
-//!   and [`EnrollmentStore::denied_hosts`] answer what the coordinator signs service
-//!   certificates by and which hosts a relying party refuses.
 //! - [`EnrollmentStore::held`] says what the store holds for a host id ([`HostHeld`]): nothing,
 //!   an approved host, or a deny row, whether or not the host was heard from since start.
 //!
@@ -44,7 +40,6 @@
 
 mod groups;
 mod hosts;
-mod identity;
 mod issue;
 mod mac_nonce;
 mod poll;
@@ -57,10 +52,6 @@ mod store;
 use std::io;
 use std::path::PathBuf;
 
-pub use identity::{
-    Assurance, HostIdentityState, INVENTORY_APPROVER, IdentityApproval, IdentityApproved,
-    IdentityError,
-};
 pub use issue::IssuedCertificate;
 pub use mac_nonce::{MAC_NONCE_VALID_SECS, MacNonceHash, MacNonceRefusal};
 pub use poll::{MAX_NONCE_BYTES, MIN_NONCE_BYTES, POLL_DOMAIN, poll_message};

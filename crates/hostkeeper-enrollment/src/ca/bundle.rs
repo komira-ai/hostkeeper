@@ -3,9 +3,7 @@
 //! A daemon config pins the CA by the SHA-256 of its certificate's DER (`ca_sha256`, design
 //! 4.1 and 5.7): [`CaBundle::sha256_hex`] is that value. A poll that finds the certificate made
 //! returns it with the host id and the CA certificate ([`PollBundle`]). A certificate a caller
-//! presents is read back as the host it names by [`CaBundle::host_certificate`], and a service
-//! certificate as the service and host it names by [`CaBundle::service_certificate`]
-//! ([`service`](crate::ca::service)).
+//! presents is read back as the host it names by [`CaBundle::host_certificate`].
 
 use x509_parser::prelude::{FromDer, X509Certificate};
 
@@ -62,11 +60,6 @@ impl CaBundle {
             .filter(|_| signed)
             .zip(P256Key::from_spki(certificate.public_key().raw).ok())
             .map(|(host_id, key)| HostCertificate { host_id, key })
-    }
-
-    /// The CA's public key, when its certificate is one of a P-256 key.
-    pub(crate) fn key(&self) -> Option<&P256Key> {
-        self.key.as_ref()
     }
 
     /// The CA certificate, DER.
