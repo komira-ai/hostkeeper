@@ -56,7 +56,6 @@ use crate::inventory::{InventoryMatch, match_claims};
 use crate::operator::Caller;
 use crate::service::Coordinator;
 
-#[cfg(test)]
 pub(crate) use device::Duplex;
 pub use device::{Dial, tcp_dial};
 pub(crate) use files::ConsoleFiles;

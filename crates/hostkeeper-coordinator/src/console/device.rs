@@ -18,8 +18,8 @@ use std::io::{self, Read, Write};
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures::FutureExt;
 use futures::future::BoxFuture;
+use futures::{FutureExt, TryStreamExt};
 use hostkeeper_console::bmc::{Bmc, BmcError, Step};
 use hostkeeper_console::bridge::Pipe;
 use hostkeeper_console::close::Close;
@@ -212,29 +212,35 @@ fn write_tool(mut input: Box<dyn Write + Send>, mut typed: mpsc::Receiver<Vec<u8
 /// The side of the bridge of a connection: one task reads it, one writes it, and the write side
 /// is shut down when the bridge hands on no more.
 fn carry_socket(stream: Box<dyn Duplex>) -> Reached {
-    let (mut read, mut write) = tokio::io::split(stream);
+    let (read, write) = tokio::io::split(stream);
     let (said, from) = mpsc::channel(1);
-    let (to, mut typed) = mpsc::channel::<Vec<u8>>(1);
+    let (to, typed) = mpsc::channel::<Vec<u8>>(1);
     let reading = tokio::spawn(async move {
-        let mut buffer = vec![0u8; READ_BYTES];
-        loop {
+        let reads = futures::stream::unfold(read, |mut read| async move {
+            let mut buffer = vec![0u8; READ_BYTES];
             match read.read(&mut buffer).await {
-                Ok(0) | Err(_) => return,
-                Ok(count) => {
-                    if said.send(buffer[..count].to_vec()).await.is_err() {
-                        return;
-                    }
-                }
+                Ok(count @ 1..) => Some((Ok(buffer[..count].to_vec()), read)),
+                _ => None,
             }
-        }
+        });
+        // The end of the connection, or a bridge that takes no more, ends the reads.
+        let _ = reads
+            .try_for_each(|bytes| {
+                let said = said.clone();
+                async move { said.send(bytes).await }
+            })
+            .await;
     });
     let writing = tokio::spawn(async move {
-        while let Some(bytes) = typed.recv().await {
-            if write.write_all(&bytes).await.is_err() {
-                return;
-            }
-        }
-        let _ = write.shutdown().await;
+        let typed = futures::stream::unfold(typed, |mut typed| async move {
+            typed.recv().await.map(|bytes| (Ok(bytes), typed))
+        });
+        // The end of the bridge's channel, or a write that fails, ends the writes.
+        let _ = typed
+            .try_fold(write, |mut write, bytes| async move {
+                write.write_all(&bytes).await.map(|()| write)
+            })
+            .await;
     });
     Reached {
         pipe: Pipe { from, to },

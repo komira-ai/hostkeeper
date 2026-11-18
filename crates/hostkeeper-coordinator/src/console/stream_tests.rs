@@ -333,7 +333,8 @@ async fn an_operators_close_ends_the_stream_with_its_code() {
     assert_eq!(live.open("bob", NODE), session_id(2));
 }
 
-/// Proves: a client that breaks the protocol (a frame with a reserved bit) closes the stream 1002
+/// Proves: a client whose connection drops with no close frame ends the stream `client_left`, its
+/// payload deactivated; a client that breaks the protocol (a frame with a reserved bit) closes the stream 1002
 /// `protocol_error`, and one that sends a message over 64 KiB closes it 1009 `message_too_big`,
 /// the payload deactivated either way; a ping is answered with its payload while the stream runs.
 ///
@@ -350,6 +351,15 @@ async fn a_client_that_breaks_the_protocol_is_closed_with_its_code() {
     client.raw(&raw_frame(0xc2, b"compressed")).await;
     client.closed(1002, "protocol_error").await;
     live.gone(NODE).await;
+    assert_eq!(asked(&live), activated_then_deactivated());
+
+    let live = Live::new("stream-dropped");
+    let _host = serial(&live);
+    let session = live.open("alice", NODE);
+    let client = live.attach(&session, ALICE).await;
+    drop(client);
+    live.gone(NODE).await;
+    assert!(live.last_reason().contains("cause=client_left;"));
     assert_eq!(asked(&live), activated_then_deactivated());
 
     let live = Live::new("stream-too-big");
@@ -393,7 +403,7 @@ async fn a_device_or_operator_gone_by_the_attach_closes_the_stream() {
     .expect("written");
     live.coordinator.console().files().reload();
     let (client, server) = tokio::io::duplex(1 << 16);
-    tokio::spawn(super::stream::serve(attached, server));
+    tokio::spawn(super::stream::serve(attached, Box::new(server)));
     let mut client = Client { stream: client };
     client.closed(4008, "token_revoked").await;
     live.gone(MAC).await;
@@ -531,7 +541,7 @@ async fn a_client_that_reads_nothing_is_cut_at_the_grace() {
     let mut mac = live.fixture.dials.connect();
     let attached = live.attach_unserved(MAC);
     let (mut client, server) = tokio::io::duplex(1024);
-    tokio::spawn(super::stream::serve(attached, server));
+    tokio::spawn(super::stream::serve(attached, Box::new(server)));
     let flooding = tokio::spawn(async move {
         let _ = mac.write_all(&vec![7u8; 256 * 1024]).await;
         mac

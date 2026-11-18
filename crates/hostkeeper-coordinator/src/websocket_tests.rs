@@ -307,3 +307,22 @@ async fn a_close_ends_the_stream_after_its_frame() {
     theirs.read_to_end(&mut all).await.expect("to the end");
     assert_eq!(all, vec![0x88, 2, 3, 232]);
 }
+
+/// Proves: a close frame carries its status and its reason, and a reason longer than the 123
+/// bytes a close frame holds is cut at the last character's edge at or before them: a reason of
+/// two-byte characters is cut to 122 bytes, not split.
+///
+/// Catches: a close frame longer than a control frame may be (which a browser treats as a broken
+/// connection), and a reason cut inside a character, which is not UTF-8.
+#[tokio::test]
+async fn a_close_reason_is_cut_at_a_characters_edge() {
+    let short = sent(async |outbox| outbox.close_with(4002, "bmc_sol_busy").await).await;
+    assert_eq!(
+        short,
+        [&[0x88, 14, 0x0f, 0xa2][..], b"bmc_sol_busy"].concat()
+    );
+    let long = "é".repeat(100);
+    let cut = sent(async |outbox| outbox.close_with(4001, &long).await).await;
+    assert_eq!(cut[..4], [0x88, 124, 0x0f, 0xa1]);
+    assert_eq!(cut[4..], "é".repeat(61).into_bytes()[..]);
+}

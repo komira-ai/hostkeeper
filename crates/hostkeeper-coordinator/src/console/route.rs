@@ -35,6 +35,8 @@ use hostkeeper_console::operators::Need;
 use hostkeeper_console::session::{AttachRefused, SessionId};
 use http_body_util::Full;
 use hyper::header::{CACHE_CONTROL, CONNECTION, HeaderMap, ORIGIN, UPGRADE};
+use hyper::http::request::Parts;
+use hyper::upgrade::OnUpgrade;
 use hyper::{Request, Response, StatusCode, Version};
 
 use super::Live;
@@ -84,9 +86,23 @@ fn bearer_of(headers: &HeaderMap) -> Option<String> {
 /// Answers a `GET` of the stream of the session `id` (the path after [`PREFIX`]): the refusal of
 /// the first check that fails, or the `101` whose stream is spawned.
 pub(crate) fn answer<B>(coordinator: &Coordinator, mut request: Request<B>, id: &str) -> Answer {
-    let headers = request.headers();
+    // Taken first and dropped by a refusal; the checks then read the request's parts, so that
+    // one copy of them is compiled whatever the request's body.
+    let upgrade = hyper::upgrade::on(&mut request);
+    let (parts, _) = request.into_parts();
+    answer_parts(coordinator, &parts, upgrade, id)
+}
+
+/// [`answer`] over the request's `parts`, with its `upgrade`.
+fn answer_parts(
+    coordinator: &Coordinator,
+    request: &Parts,
+    upgrade: OnUpgrade,
+    id: &str,
+) -> Answer {
+    let headers = &request.headers;
     let accept = match handshake(headers) {
-        Ok(accept) if request.version() == Version::HTTP_11 => accept,
+        Ok(accept) if request.version == Version::HTTP_11 => accept,
         _ => return error(StatusCode::BAD_REQUEST, "bad_request"),
     };
     if !offers(headers).any(|offer| offer == PROTOCOL) {
@@ -97,7 +113,7 @@ pub(crate) fn answer<B>(coordinator: &Coordinator, mut request: Request<B>, id: 
         return error(StatusCode::UNAUTHORIZED, "unauthorized");
     };
     let own_origin =
-        headers.contains_key(ORIGIN) && same_origin(headers, authority(headers, request.uri()));
+        headers.contains_key(ORIGIN) && same_origin(headers, authority(headers, &request.uri));
     if !own_origin {
         return error(StatusCode::FORBIDDEN, "bad_origin");
     }
@@ -112,11 +128,11 @@ pub(crate) fn answer<B>(coordinator: &Coordinator, mut request: Request<B>, id: 
     let Ok(id) = SessionId::parse(id) else {
         return error(StatusCode::NOT_FOUND, "no_session");
     };
-    let Some(Shared(shared)) = request.extensions().get::<Shared>().cloned() else {
+    let Some(Shared(shared)) = request.extensions.get::<Shared>().cloned() else {
         return error(StatusCode::INTERNAL_SERVER_ERROR, "internal");
     };
     let peer = request
-        .extensions()
+        .extensions
         .get::<PeerAddr>()
         .map(|PeerAddr(from)| *from);
     let attached = match attach(&shared, &id, name.as_str(), peer) {
@@ -125,14 +141,13 @@ pub(crate) fn answer<B>(coordinator: &Coordinator, mut request: Request<B>, id: 
         Err(AttachRefused::NotOpener) => return error(StatusCode::FORBIDDEN, "forbidden"),
         Err(AttachRefused::Attached) => return error(StatusCode::FORBIDDEN, "already_attached"),
     };
-    if let Some(patience) = request.extensions().get::<Patience>() {
+    if let Some(patience) = request.extensions.get::<Patience>() {
         patience.release();
     }
     let attached = Attached {
-        slot: request.extensions().get::<Hold>().cloned(),
+        slot: request.extensions.get::<Hold>().cloned(),
         ..attached
     };
-    let upgrade = hyper::upgrade::on(&mut request);
     tokio::spawn(run(attached, upgrade));
     Response::builder()
         .status(StatusCode::SWITCHING_PROTOCOLS)

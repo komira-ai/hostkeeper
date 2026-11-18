@@ -49,23 +49,23 @@ impl Coordinator {
         for (host, moved) in moved {
             table.sessions.observe(&host, moved, now);
         }
-        for (host, limit) in table.sessions.due(now) {
+        let due = table.sessions.due(now);
+        let limited = due.iter().filter_map(|(host, limit)| {
             let close = match limit {
                 Limit::Idle => Close::Idle,
                 Limit::Total => Close::TotalLimit,
             };
-            if let Some(live) = table.live.get(&host) {
-                live.stop(close, COORDINATOR);
-            }
-        }
-        for session in table.sessions.iter() {
-            let by = session.opened_by.as_str();
-            let entitled =
-                has_token(self, by) && self.console.files.grant(by, Need::Console).is_ok();
-            if !entitled && let Some(live) = table.live.get(&session.host_id) {
-                live.stop(Close::TokenRevoked, COORDINATOR);
-            }
-        }
+            table.live.get(host).map(|live| (live, close))
+        });
+        limited.for_each(|(live, close)| live.stop(close, COORDINATOR));
+        // Only an attached stream has an operator to lose: the live ones are looked at.
+        let revoked = table.live.iter().filter(|(host, _)| {
+            table.sessions.get(host).is_some_and(|session| {
+                let by = session.opened_by.as_str();
+                !(has_token(self, by) && self.console.files.grant(by, Need::Console).is_ok())
+            })
+        });
+        revoked.for_each(|(_, live)| live.stop(Close::TokenRevoked, COORDINATOR));
     }
 
     /// Closes every stream `coordinator_stopping` and waits until each has cleaned up, for

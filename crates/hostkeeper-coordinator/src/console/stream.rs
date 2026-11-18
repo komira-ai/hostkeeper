@@ -22,6 +22,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::TryStreamExt;
 use hostkeeper_console::bridge::{Ended, Moved, Pipe, bridge};
 use hostkeeper_console::close::Close;
 use hostkeeper_console::session::{Kind, Session};
@@ -31,6 +32,7 @@ use hyper_util::rt::TokioIo;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{mpsc, oneshot, watch};
 
+use super::Duplex;
 use super::Stop;
 use super::device::{End, Reached, deactivate, reach, stop_tool};
 use crate::listen::Hold;
@@ -91,7 +93,7 @@ impl Closing {
 /// The stream of an upgrade: waits for the connection, then serves it.
 pub(crate) async fn run(attached: Attached, upgrade: OnUpgrade) {
     match upgrade.await {
-        Ok(upgraded) => serve(attached, TokioIo::new(upgraded)).await,
+        Ok(upgraded) => serve(attached, Box::new(TokioIo::new(upgraded))).await,
         Err(why) => {
             tracing::debug!(%why, "a console stream's connection was not handed over");
             let closing = Closing {
@@ -105,11 +107,10 @@ pub(crate) async fn run(attached: Attached, upgrade: OnUpgrade) {
     }
 }
 
-/// The stream over `io`, a connection that speaks WebSocket from its first byte.
-pub(crate) async fn serve<S>(mut attached: Attached, io: S)
-where
-    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
-{
+/// The stream over `io`, a connection that speaks WebSocket from its first byte. One type of
+/// connection, the upgraded one in the coordinator and an in-memory one in the tests, so that
+/// one copy of the stream is compiled and measured.
+pub(crate) async fn serve(mut attached: Attached, io: Box<dyn Duplex>) {
     // The connection counts against its listener for as long as the stream serves it.
     let _slot = attached.slot.take();
     let (read, write) = tokio::io::split(io);
@@ -117,14 +118,19 @@ where
     let (typed, typed_rx) = mpsc::channel(1);
     let (told, verdict) = oneshot::channel();
     let reader = tokio::spawn(read_client(read, outbox.clone(), typed, told));
-    let (shown, mut shown_rx) = mpsc::channel::<Vec<u8>>(1);
+    let (shown, shown_rx) = mpsc::channel::<Vec<u8>>(1);
     let showing = outbox.clone();
     let mut writer = tokio::spawn(async move {
-        while let Some(bytes) = shown_rx.recv().await {
-            if showing.binary(&bytes).await.is_err() {
-                return;
-            }
-        }
+        let shown = futures::stream::unfold(shown_rx, |mut shown| async move {
+            shown.recv().await.map(|bytes| (Ok(bytes), shown))
+        });
+        // A client that takes no more ends the writes.
+        let _ = shown
+            .try_for_each(|bytes| {
+                let showing = showing.clone();
+                async move { showing.binary(&bytes).await }
+            })
+            .await;
     });
     let client = Pipe {
         from: typed_rx,
@@ -290,9 +296,9 @@ where
             Err(ReadError::Protocol(_)) => return Client::Bad(CLOSE_PROTOCOL, "protocol_error"),
             Err(ReadError::TooBig) => return Client::Bad(CLOSE_TOO_BIG, "message_too_big"),
         };
-        if typed.send(bytes).await.is_err() {
-            return Client::Gone;
-        }
+        // A stream that has ended takes no more: what is read is dropped until the reader is
+        // stopped with it.
+        let _ = typed.send(bytes).await;
     }
 }
 
@@ -305,13 +311,7 @@ fn finish(attached: &Attached, closing: &Closing) {
     {
         let mut table = coordinator.console.lock_table();
         table.sessions.remove(&session.id);
-        if table
-            .live
-            .get(&session.host_id)
-            .is_some_and(|live| live.id == session.id)
-        {
-            table.live.remove(&session.host_id);
-        }
+        table.live.retain(|_, live| live.id != session.id);
     }
     let attached_at = session
         .attachment
