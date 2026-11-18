@@ -126,6 +126,12 @@ export function createClient(call) {
       hold: (request) => call("hostkeeper.operator.v1.Services/Hold", request),
       unhold: (request) => call("hostkeeper.operator.v1.Services/Unhold", request),
     }),
+    ssh: Object.freeze({
+      signUserCert: (request) => call("hostkeeper.operator.v1.Ssh/SignUserCert", request),
+      hostKeys: (request) => call("hostkeeper.operator.v1.Ssh/HostKeys", request),
+      pinHostKeys: (request) => call("hostkeeper.operator.v1.Ssh/PinHostKeys", request),
+      revoke: (request) => call("hostkeeper.operator.v1.Ssh/Revoke", request),
+    }),
     users: Object.freeze({
       list: (request) => call("hostkeeper.operator.v1.Users/List", request),
       create: (request) => call("hostkeeper.operator.v1.Users/Create", request),

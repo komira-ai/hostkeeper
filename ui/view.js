@@ -56,7 +56,7 @@ export function deployDocLink(name, text, page, anchor) {
 
 const EVENTS = new Set([
   "change", "click", "input", "submit", "keydown", "pointerdown", "pointermove", "pointerup", "dragstart", "dragover",
-  "drop", "dragend", "dragleave", "scroll",
+  "drop", "dragend", "dragleave", "scroll", "paste",
 ]);
 // Two names that are not events of the element: `mounted` runs its handler once, when the tree is
 // in the document, and `resize` runs it each time the window is resized, both with the element as
@@ -198,6 +198,13 @@ export function mount(doc, root, tree) {
       windowListeners.push([view, "resize", listener]);
     }
   }
+}
+
+// Replaces what the live `element` shows with `tree`, without mounting a page again: the window's
+// listeners and the other elements stay as they are. The tree's `mounted` and `resize` hooks are
+// not run. A terminal draws its screen this way, many times a second.
+export function redraw(element, tree) {
+  element.replaceChildren(build(element.ownerDocument, tree, []));
 }
 
 // The words an operator reads for an error: the code and the refusal token, never more.

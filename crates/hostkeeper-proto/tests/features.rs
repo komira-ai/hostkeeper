@@ -23,6 +23,7 @@ fn feature_names() -> Vec<String> {
     out
 }
 
+/// Proves the features `agent.proto` names are exactly these, `operator-keys-v1` and `ssh-v1` among them.
 /// Proves the features `agent.proto` names are exactly these, `operator-keys-v1` and `prerequisites-v1` among them.
 /// Catches: a feature renamed, or named by the file without this test changing with it.
 #[test]
@@ -42,6 +43,7 @@ fn feature_names_are_pinned() {
             "prerequisites-v1",
             "private-repository-v1",
             "repositories-v1",
+            "ssh-v1",
             "target-v1",
             "verdict-acks-v1"
         ]

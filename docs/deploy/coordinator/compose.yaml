@@ -67,6 +67,9 @@ services:
       - --server-name
       - coordinator.example.com
     secrets: [hostkeeper-db-dsn]
+    # At least --ssh-drain-s (default 600 s) and a minute to write the closes of the tunnels it
+    # holds (docs/operations/ssh-ca.md, "Tunnels"). Raise it with that flag.
+    stop_grace_period: 11m
     volumes:
       # The CA key and its certificate, the server certificate and the marker, owned by 65532.
       - hostkeeper-coordinator:/var/lib/hostkeeper-coordinator

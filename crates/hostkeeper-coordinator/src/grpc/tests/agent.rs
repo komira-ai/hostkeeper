@@ -51,6 +51,7 @@ fn request(
     services: Vec<proto::ServiceBeat>,
 ) -> proto::HeartbeatRequest {
     proto::HeartbeatRequest {
+        ssh: None,
         installers: Vec::new(),
         repositories: None,
         platform: proto::Platform::LinuxArm64 as i32,

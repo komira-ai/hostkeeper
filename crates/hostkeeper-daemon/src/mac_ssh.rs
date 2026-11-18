@@ -1,7 +1,8 @@
 //! What a Mac needs besides the file before an operator can log in with the keys of
 //! [`crate::operator_keys`]: Remote Login on, and the login account allowed to use ssh. Run only on
 //! a Mac, and only when the set has keys (docs/design/ssh-through-coordinator.md, section 3, has
-//! the measurements). Each step looks first and changes only what is not so; every change is
+//! the measurements). The Remote Login step is also the one the sshd setup of a Mac runs
+//! ([`crate::ssh_host_mac::MacHost`]). Each step looks first and changes only what is not so; every change is
 //! logged.
 //!
 //! - Remote Login: `launchctl print system/com.openssh.sshd` exits 0 when sshd's job is loaded,
@@ -32,7 +33,7 @@ pub const DSEDITGROUP: &str = "/usr/sbin/dseditgroup";
 pub const ACCESS_GROUP: &str = "com.apple.access_ssh";
 
 /// What `dscl` says for a group record that does not exist: the error's name, and its number.
-const NO_RECORD: [&str; 2] = ["eDSRecordNotFound", "-14136"];
+pub(crate) const NO_RECORD: [&str; 2] = ["eDSRecordNotFound", "-14136"];
 
 /// Why a Mac could not be made ready for ssh.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -110,7 +111,7 @@ impl MacSsh {
             )));
         }
         log.line(&format!(
-            "operator keys: Remote Login turned on (launchctl enable and bootstrap of {SSHD_SERVICE})"
+            "ssh: Remote Login turned on (launchctl enable and bootstrap of {SSHD_SERVICE})"
         ));
         Ok(())
     }

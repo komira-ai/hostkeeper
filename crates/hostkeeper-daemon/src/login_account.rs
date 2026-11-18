@@ -29,7 +29,7 @@ pub const PASSWD: &str = "/etc/passwd";
 pub const FIRST_USER_UID: u32 = 501;
 
 /// The directory service's node of the local user records.
-const USERS: &str = "/Users";
+pub(crate) const USERS: &str = "/Users";
 
 /// The account the operator keys go to.
 #[derive(Clone, Debug, PartialEq, Eq)]

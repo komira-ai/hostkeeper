@@ -109,16 +109,17 @@ use hostkeeper_wire::wire::clip_renew_error;
 
 use crate::beat::{
     ANNOUNCED, FACTS, Feature, Features, Health, Heartbeat, Liveness, OPERATOR_KEYS, Observed,
-    PREREQUISITES, PRIVATE_REPOSITORY, Platform, REPOSITORIES, Renewal, ServiceFacts, fit,
+    PREREQUISITES, PRIVATE_REPOSITORY, Platform, REPOSITORIES, Renewal, SSH, ServiceFacts, fit,
 };
 use crate::deferral::{Book, Deferral};
 use crate::host_facts::PushedFacts;
+use crate::host_ssh::PushedSsh;
 use crate::names::Reason;
 use crate::order::{Acknowledged, Order, OrderRef, OrderResult, Outcome, Reply, Verb};
 use crate::ports::{
     CertSource, CertState, CoordinatorLink, Dispatch, FactsSink, HeldHalts, LinkError, Log,
     OperatorKeysSink, OrderSink, PrerequisitesSink, RecordedService, RemoteLoginProbeSource,
-    RenewalSource, RepositorySink, ServiceObserver, ServiceRecords, Sleeper, Tick,
+    RenewalSource, RepositorySink, ServiceObserver, ServiceRecords, Sleeper, SshSink, Tick,
     TrustedRootSource, UnixClock,
 };
 
@@ -188,6 +189,9 @@ pub struct Ports {
     /// The managed block of the login account's `authorized_keys`; none on a host that keeps
     /// none, which then announces no `operator-keys-v1`, sends no report and writes no keys.
     pub operator_keys: Option<Arc<dyn OperatorKeysSink>>,
+    /// The host's sshd setup; none on a host that has none (a Mac, for now), which then
+    /// announces no `ssh-v1`, reports nothing and sets nothing up.
+    pub ssh: Option<Arc<dyn SshSink>>,
     /// The host prerequisites of the host's group; none on a host that keeps none, which then
     /// announces no `prerequisites-v1`, sends no report and is sent no set.
     pub prerequisites: Option<Arc<dyn PrerequisitesSink>>,
@@ -561,6 +565,7 @@ impl Heartbeater {
                 .as_ref()
                 .and_then(|source| source.remote_login_probe()),
             operator_keys: self.ports.operator_keys.as_ref().map(|sink| sink.report()),
+            ssh: self.ports.ssh.as_ref().and_then(|sink| sink.report()),
             prerequisites: self.ports.prerequisites.as_ref().map(|sink| sink.report()),
         })
     }
@@ -569,7 +574,9 @@ impl Heartbeater {
     /// has a repository configuration to manage, `facts-v1` when it has a facts file, and
     /// `private-repository-v1` when it has a repository configuration or is told it reads
     /// private repositories, `operator-keys-v1` when it keeps operator keys, and
-    /// `prerequisites-v1` when it keeps host prerequisites.
+    /// `prerequisites-v1` when it keeps host prerequisites, and `ssh-v1` when it sets sshd up and
+    /// the coordinator's last reply advertised `ssh-v1`: a coordinator of a release before it reads
+    /// at most 16 names and drops a longer list whole, and a daemon with every port names 17.
     fn announced(&self) -> Vec<Feature> {
         let mut features = ANNOUNCED.to_vec();
         if self.ports.repositories.is_some() {
@@ -586,6 +593,9 @@ impl Heartbeater {
         }
         if self.ports.prerequisites.is_some() {
             features.push(PREREQUISITES);
+        }
+        if self.ports.ssh.is_some() && self.advertised.has(Feature::SshV1) {
+            features.push(SSH);
         }
         features
     }
@@ -650,10 +660,12 @@ impl Heartbeater {
             repositories,
             facts,
             operator_keys,
+            ssh,
             prerequisites,
         } = reply;
         self.advertised = Features::of(&features);
         let facts_held = self.write_facts(facts);
+        self.set_ssh_up(ssh);
         if let Some(set) = repositories
             && self.advertised.has(Feature::RepositoriesV1)
             && let Some(sink) = &self.ports.repositories
@@ -741,6 +753,17 @@ impl Heartbeater {
                 sink.apply(&facts)
             }
             _ => true,
+        }
+    }
+
+    /// Gives the host's SSH access of a reply to the [`SshSink`], when the reply advertises
+    /// `ssh-v1` and the host has a sink. It gates nothing: an order is acted on whatever came of
+    /// the setup. Access from a coordinator that did not advertise the feature is dropped.
+    fn set_ssh_up(&self, access: Option<PushedSsh>) {
+        if let (Some(access), Some(sink)) = (access, &self.ports.ssh)
+            && self.advertised.has(Feature::SshV1)
+        {
+            sink.apply(&access);
         }
     }
 

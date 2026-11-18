@@ -108,6 +108,19 @@ impl fmt::Debug for SessionId {
     }
 }
 
+/// An opaque handle on one session: it names the session in the table without being its cookie
+/// value, so a holder can ask whether the session still lives and cannot use it as a credential.
+/// A long-lived task that acts for a session (a UI terminal, `crate::ssh_terminal`) keeps this and
+/// not the cookie.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SessionKey([u8; 32]);
+
+impl fmt::Debug for SessionKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SessionKey(<redacted>)")
+    }
+}
+
 /// What a live session says about itself: the answer of `GET /v1/session` and what a request is
 /// checked against.
 #[derive(Clone, PartialEq, Eq)]
@@ -274,6 +287,39 @@ impl Sessions {
         }
         entry.last_used = entry.last_used.max(now);
         Some(entry.view.clone())
+    }
+
+    /// The handle of the session a cookie value names, whether or not one is live.
+    #[must_use]
+    pub fn key_of(id: &str) -> SessionKey {
+        SessionKey(id_hash(id))
+    }
+
+    /// Whether the session `key` names lives now: held, and not past its idle or absolute
+    /// deadline. It changes nothing: the idle deadline is not pushed out and an expired entry is
+    /// left for the next lookup to forget, so asking is no use of the session.
+    #[must_use]
+    pub fn is_live(&self, key: &SessionKey) -> bool {
+        let now = self.clock.now_unix();
+        self.table()
+            .get(&key.0)
+            .is_some_and(|entry| !self.expired(entry, now))
+    }
+
+    /// Pushes out the idle deadline of the session `key` names, as a request of its cookie does;
+    /// whether it lives.
+    pub fn touch(&self, key: &SessionKey) -> bool {
+        let now = self.clock.now_unix();
+        let mut table = self.table();
+        let Some(entry) = table.get_mut(&key.0) else {
+            return false;
+        };
+        if self.expired(entry, now) {
+            table.remove(&key.0);
+            return false;
+        }
+        entry.last_used = entry.last_used.max(now);
+        true
     }
 
     /// Clears the session's `must_change` (and its deadline): the user has chosen a new

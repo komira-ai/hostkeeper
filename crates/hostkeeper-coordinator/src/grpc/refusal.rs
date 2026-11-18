@@ -9,7 +9,7 @@
 use hostkeeper_proto::hostkeeper::operator::v1::{
     AlertsRefusal, ApiTokensRefusal, AuditRefusal, ConsoleRefusal, EnrollmentRefusal,
     HostGroupsRefusal, HostsRefusal, LayoutRefusal, ReleasesRefusal, RepositoriesRefusal,
-    RolloutsRefusal, ServicesRefusal, UsersRefusal,
+    RolloutsRefusal, ServicesRefusal, SshRefusal, UsersRefusal,
 };
 use tonic::{Code, Status};
 
@@ -270,6 +270,29 @@ pub(crate) fn layout(refusal: LayoutRefusal) -> Status {
         | LayoutRefusal::Capacity => Code::FailedPrecondition,
     };
     refused(code, refusal.as_str_name(), "LAYOUT_REFUSAL_")
+}
+
+/// The status of a refusal by `Ssh`.
+pub(crate) fn ssh(refusal: SshRefusal) -> Status {
+    let code = match refusal {
+        SshRefusal::Unspecified | SshRefusal::StoreFailed => Code::Internal,
+        SshRefusal::Unauthorized => Code::Unauthenticated,
+        SshRefusal::Forbidden | SshRefusal::NotPermitted => Code::PermissionDenied,
+        SshRefusal::InvalidRequest | SshRefusal::BadReason | SshRefusal::BadKey => {
+            Code::InvalidArgument
+        }
+        SshRefusal::UnknownHost | SshRefusal::UnknownCert => Code::NotFound,
+        SshRefusal::NotConfigured
+        | SshRefusal::HostNotLive
+        | SshRefusal::NoAddress
+        | SshRefusal::BadSerial
+        | SshRefusal::NotReported => Code::FailedPrecondition,
+        SshRefusal::TooManyTunnels => Code::ResourceExhausted,
+        SshRefusal::Draining | SshRefusal::DialFailed | SshRefusal::AuditUnavailable => {
+            Code::Unavailable
+        }
+    };
+    refused(code, refusal.as_str_name(), "SSH_REFUSAL_")
 }
 
 /// The status of a refusal by `Console`.

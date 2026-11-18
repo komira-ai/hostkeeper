@@ -54,9 +54,11 @@ use hostkeeper_enroll::{Enroller, RETRY_SECS};
 use hostkeeper_link::{
     CertSource, ClientIdentity, CoordinatorLink, Dispatch, GrpcLinkError, GrpcMtlsLink, Heartbeat,
     Heartbeater, JsonMtlsLink, LinkError, LoopConfig, NegotiatedLink, OperatorKeysSink, Platform,
-    Ports, PrerequisitesSink, RemoteLoginProbeSource, Reply, RepositorySink, Sleeper, StopFlag,
-    TcpDial, TcpTransport, Tick, UnixClock,
+    Ports, PrerequisitesSink, RemoteLoginProbeSource, Reply, RepositorySink, Sleeper, SshSink,
+    StopFlag, TcpDial, TcpTransport, Tick, UnixClock,
 };
+use hostkeeper_observe::ProcessRunner;
+use hostkeeper_observe::command::MAX_STDOUT;
 use hostkeeper_steps::Clock;
 
 use crate::console::ConsoleIssue;
@@ -68,6 +70,10 @@ use crate::link_adapters::{
 use crate::node::NodeState;
 use crate::notify::Watchdog;
 use crate::repository_push::RepositoryPush;
+use crate::ssh_files::SshPaths;
+use crate::ssh_host::{SshHost, SystemHost, Tools};
+use crate::ssh_host_mac::MacHost;
+use crate::ssh_setup::SshSetup;
 
 pub use hostkeeper_enroll::RenewalState;
 pub use hostkeeper_link::Log;
@@ -220,6 +226,7 @@ impl Links {
                 ))),
                 remote_login_probe: self.remote_login_probe.clone(),
                 operator_keys: self.operator_keys.clone(),
+                ssh: ssh_setup(PLATFORM, rustix::process::geteuid().as_raw(), &self.log),
                 prerequisites: self.prerequisites.clone(),
             },
         )
@@ -298,6 +305,34 @@ impl EnrollLoop<'_> {
 /// repository sink (the link's rule), which is when its mirror reads private repositories.
 pub const fn reads_private_repositories(platform: Platform) -> bool {
     matches!(platform, Platform::DarwinArm64)
+}
+
+/// Whether a daemon of `platform` sets sshd up to trust the coordinator's SSH user CA
+/// (`ssh-v1`): every platform's daemon does, a Linux one over systemd's or OpenRC's sshd and a
+/// Mac's over Remote Login (docs/design/ssh-through-coordinator.md, section 3).
+pub const fn sets_ssh_up(platform: Platform) -> bool {
+    matches!(
+        platform,
+        Platform::LinuxX86_64 | Platform::LinuxArm64 | Platform::DarwinArm64
+    )
+}
+
+/// The sshd setup of a daemon of `platform`, writing as `owner`: over the Linux host on Linux and
+/// over the Mac's ([`MacHost`]) on a Mac; none where [`sets_ssh_up`] is false.
+pub fn ssh_setup(platform: Platform, owner: u32, log: &Arc<dyn Log>) -> Option<Arc<dyn SshSink>> {
+    let runner = Arc::new(ProcessRunner::new(MAX_STDOUT));
+    let host: Arc<dyn SshHost> = match platform {
+        Platform::DarwinArm64 => Arc::new(MacHost::system(runner, Arc::clone(log))),
+        _ => Arc::new(SystemHost::new(runner, Tools::linux())),
+    };
+    sets_ssh_up(platform).then(|| {
+        Arc::new(SshSetup::new(
+            host,
+            SshPaths::linux(),
+            owner,
+            Arc::clone(log),
+        )) as Arc<dyn SshSink>
+    })
 }
 
 /// The platform this daemon was built for.

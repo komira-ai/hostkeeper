@@ -207,10 +207,25 @@ pub mod retry;
 pub mod rollouts;
 mod running;
 pub mod service;
+mod service_errors;
 pub(crate) mod service_put;
 pub(crate) mod service_repository;
 pub mod services;
 pub mod session;
+pub(crate) mod ssh_access;
+pub(crate) mod ssh_book;
+pub mod ssh_ca;
+pub(crate) mod ssh_cert;
+pub(crate) mod ssh_client;
+pub mod ssh_heartbeat;
+#[cfg(test)]
+mod ssh_host_tests;
+pub(crate) mod ssh_ledger;
+pub mod ssh_operators;
+pub mod ssh_sign;
+pub(crate) mod ssh_terminal;
+pub(crate) mod ssh_terminal_route;
+pub(crate) mod ssh_tunnel;
 pub mod stages;
 pub mod stamp;
 pub mod status;
@@ -224,6 +239,7 @@ pub mod verdict_file;
 pub mod verdicts;
 pub(crate) mod version_route;
 pub(crate) mod wait;
+pub(crate) mod websocket;
 pub(crate) mod write_record;
 
 #[cfg(test)]

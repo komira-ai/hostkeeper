@@ -16,6 +16,8 @@ A secret field (`(hostkeeper.secret)`) is never a flag: it is read with `--<fiel
 
 The answer, the gateway's JSON, goes to stdout or to `--response-file`; diagnostics go to stderr. A refusal prints `refused: <reason>` when its reason is a token of `[a-z0-9_]{1,64}`. A call refused `invalid_request` makes one more call, with no token, to the coordinator's `GET /v1/version?at_least=<this hkctl's release>`: when that says the coordinator is older (`409`, or `404` from a coordinator before the route), hkctl says so on stderr, with the coordinator's version when it gave one, and the reason it prints is `coordinator_older`; any other answer, or none, leaves `invalid_request`.
 
+Four commands are not gateway calls: they run `hkssh`, which ships beside hkctl (or is on the PATH). `hkctl ssh <host-id> [--identity FILE] [--reason TEXT] [-- ssh args]` gets a one-host SSH certificate and runs ssh to the host through the coordinator's tunnel (a word after `ssh` that is not a method of the service `ssh` is a host id). `hkctl ssh-proxy <host-id>` is the byte stream for `ProxyCommand hkctl --endpoint URL --ca-file PATH --token-file PATH ssh-proxy %h` in `~/.ssh/config`. `hkctl ssh-revoke --operator NAME | --serial N | --host <host-id>` revokes certificates. `hkctl ssh-status <host-id>` shows the host keys pinned for a host and the certificate held. They need --endpoint, --ca-file and --token-file, take no other credential, keep the key, the certificates and the pins in `$HOME/.hostkeeper/ssh`, and give hkssh the path of the token file, never the token.
+
 ## Global flags
 
 | flag | value | default | meaning |
@@ -1331,6 +1333,61 @@ heartbeat.
 | `--reason` | STRING |  |
 
 Through `--request` only: `scope` (hostkeeper.operator.v1.HoldScope).
+
+### `ssh`
+
+The service `Ssh` of the package `hostkeeper.operator.v1`. Access to the hosts' sshd through the coordinator. Each call is audited under the caller's name; `SignUserCert` as `ssh_cert_signed`, `Revoke` as `ssh_revoke`, `PinHostKeys` as `ssh_hostkey_pinned`, and `Tunnel` as `ssh_tunnel_open` and `ssh_tunnel_close`.
+
+#### `hkctl ssh sign-user-cert`
+
+`/hostkeeper.operator.v1.Ssh/SignUserCert`
+
+Signs an OpenSSH user certificate for the caller's public key, good for one host and for
+`--ssh-cert-ttl-s` seconds. Its principal is `hk-host-<host id>`, never a value of the
+request. No certificate is made when the audit entry cannot be written.
+
+| flag | value | meaning |
+|---|---|---|
+| `--public-key` | STRING | The caller's public key in `authorized_keys` syntax. |
+| `--reason` | STRING | Why, at most 200 printable ASCII characters; stored and audited, never in the certificate. |
+| `--host-id` | STRING | The host the certificate is for. |
+
+#### `hkctl ssh host-keys`
+
+`/hostkeeper.operator.v1.Ssh/HostKeys`
+
+The fingerprints of the sshd host keys pinned for a host: the set an operator pinned from
+what the host reported in its heartbeat, with `PinHostKeys`. Changes nothing.
+
+| flag | value | meaning |
+|---|---|---|
+| `--host-id` | STRING | The host whose pinned fingerprints are read. |
+
+#### `hkctl ssh pin-host-keys`
+
+`/hostkeeper.operator.v1.Ssh/PinHostKeys`
+
+Pins, as a set, exactly the host keys the host's last heartbeat reported, for a host, and
+answers as `HostKeys` does after. Refused with `not_reported` when `fingerprints` are not, as
+a set, what that heartbeat reported. Audited as `ssh_hostkey_pinned`. The operators file must
+permit the caller the host, as for `SignUserCert`.
+
+| flag | value | meaning |
+|---|---|---|
+| `--host-id` | STRING | The host whose host keys are pinned. |
+| `--fingerprints` | STRING | The fingerprints to pin, at most 8, each `SHA256:` and 43 base64 characters; exactly the set the host's last heartbeat reported. Repeat the flag for more. |
+
+#### `hkctl ssh revoke`
+
+`/hostkeeper.operator.v1.Ssh/Revoke`
+
+Revokes the certificates of an operator, or one certificate by serial. The serials reach the
+hosts in `SshAccess.revoked_serials`, and the operator's open tunnels close.
+
+| flag | value | meaning |
+|---|---|---|
+| `--operator` | STRING | The operator whose certificates are revoked; empty when `serial` names one. |
+| `--serial` | UINT64 | The certificate serial revoked; 0 when `operator` names one. |
 
 ### `users`
 

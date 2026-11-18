@@ -46,7 +46,7 @@ the rpm, and `hostkeeper-mdm` ships as its own tarball.
   (`hkctl releases set-desired ...` replaces `hostkeeper ctl releases set-desired ...`), with the same flag rules and
   the same exit codes.
 - The UI calls the API through a generated client (`ui/gen/client.js` with its TypeScript declarations
-  `ui/gen/client.d.ts`). `ui/calls.json` is derived from it, not kept by hand.
+  `ui/gen/client.d.ts` and one `ui/gen/<namespace>.d.ts` per proto package). `ui/calls.json` is derived from it, not kept by hand.
 - CI sets a desired version with `hkctl`. The reusable workflow `set-desired.yml` keeps its inputs and outputs; the
   wait is one call to a new method, `Releases.WaitConverged`, instead of a loop in a client.
 - The daemon serves nothing on the host. `hostkeeper admin` and its socket are gone (**Built**, K3: the daemon binds no
@@ -111,7 +111,7 @@ The operator API is the packages `hostkeeper.operator.v1` (services `Hosts`, `Re
 |---|---|---|---|
 | Rust (tonic) | `tonic_prost_build` in `hostkeeper-proto/build.rs` (**Built**) | the daemon's link, `pxe`, Rust tests | gRPC |
 | `hkctl` (bash) | the command table of `hostkeeper-proto/src/ctl.rs` and a new bash emitter (item G1) | operators, CI | JSON gateway over HTTPS |
-| `ui/gen/client.js` and `client.d.ts` | a new emitter over the same table (item G2) | the operator UI | JSON gateway, same origin |
+| `ui/gen/client.js`, `client.d.ts` and the `<namespace>.d.ts` files | a new emitter over the same table (item G2) | the operator UI | JSON gateway, same origin |
 
 The command table (`ctl.rs`, `ctl_gen.rs`, **Built**) already turns every unary RPC into a command with typed flags,
 secret inputs and help text, and refuses what it cannot express (a streaming RPC, a clash, a secret on a non-string
@@ -167,14 +167,16 @@ in `hostkeeper ctl` today (`crates/hostkeeper-ctl/build.rs` shows it on fixture 
 `ui/gen/client.js` is an ES module with one function per unary method of `hostkeeper.operator.v1`
 (`releases.setDesired(request)`), each a `POST` of canonical JSON to `/<package>.<Service>/<Method>` with the
 operator's token, through the `fetch` and token the UI injects (as `ui/api.js` does today, **Built**).
-`ui/gen/client.d.ts` declares each request and response as TypeScript types, from the same descriptors, with proto3
-JSON's names and enum spellings. Both files are checked in, because the UI is static files with no build step and the
+`ui/gen/client.d.ts` declares the `Client` and imports the types, which `ui/gen/<namespace>.d.ts` declares, one file per
+proto package (`hostkeeper_operator_v1.d.ts`) so that no file reaches the 1000 lines every file of `ui/` is held to; the
+types are each request and response, from the same descriptors, with proto3
+JSON's names and enum spellings. All of these files are checked in, because the UI is static files with no build step and the
 image copies `ui/` byte for byte (`cargo xtask release check-image-ui`, **Built**). A test regenerates them and fails on
 any difference.
 
 The repository runs no Node: the UI's tests run the real modules in `boa_engine` inside `cargo test`
 (`crates/hostkeeper-ui-tests`, **Built**). So the client is JavaScript plus declarations rather than `.ts` sources that
-need a compiler; `client.d.ts` is checked in a Rust test by a TypeScript parser crate from crates.io (item G2 picks it,
+need a compiler; the `.d.ts` files are checked in a Rust test by a TypeScript parser crate from crates.io (item G2 picks it,
 subject to `cargo deny`). `ui/api.js` keeps the error handling and the token rules and calls the generated functions;
 the pages call `api.<service>.<method>`. `ui/calls.json` becomes the list of generated functions the pages call, derived
 by the existing scanner (`call_sites`, **Built**) and checked against the real router as now (`real_router.rs`).

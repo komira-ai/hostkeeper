@@ -31,6 +31,7 @@ const PXE: &str = "hostkeeper-pxe";
 const PXE_PACKETS: &str = "hostkeeper-pxe-packets";
 const PROTO: &str = "hostkeeper-proto";
 const HKCTL: &str = "hostkeeper-hkctl";
+const HKSSH: &str = "hostkeeper-hkssh";
 const DAEMON: &str = "hostkeeper-daemon";
 const ENROLL: &str = "hostkeeper-enroll";
 const LINK: &str = "hostkeeper-link";
@@ -88,7 +89,7 @@ pub type Layer = (
 /// (`hostkeeper-release`), and is read by no crate. The coordinator serves the console through
 /// `hostkeeper-console`, and its tests script that crate's BMC tool port with the double of its
 /// feature `testing`.
-pub const LAYERS: [Layer; 30] = [
+pub const LAYERS: [Layer; 31] = [
     (BINARY, &[DAEMON], &[LAUNCHD]),
     (
         BOOTSTRAP,
@@ -114,6 +115,7 @@ pub const LAYERS: [Layer; 30] = [
     (ENROLLMENT, &[], &[]),
     (HELLO, &[], &[HOOK]),
     (HKCTL, &[PROTO], &[COORDINATOR, OIDC]),
+    (HKSSH, &[PROTO], &[]),
     (HOOK, &[], &[]),
     (INSTALL, &[CONFIG, LAUNCHD, PROTO, RELEASE, STEPS], &[]),
     (LAUNCHD, &[HOOK, OBSERVE, PLACED, STEPS], &[]),
