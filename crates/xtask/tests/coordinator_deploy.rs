@@ -101,7 +101,8 @@ fn pinned(reference: &str, name: &str) -> bool {
 /// service, optional behind the profile `postgres`, listening on loopback only, with its data on
 /// the named volume, the SQL files mounted read-only where the runbook runs them, and a health
 /// check of the role and database `init.sql` makes; the coordinator is a release's image by
-/// version and digest, never pulled, waits for a healthy Postgres only when it runs, and its
+/// version and digest, never pulled, stops with a grace of whole minutes that covers the tunnels'
+/// drain, waits for a healthy Postgres only when it runs, and its
 /// command starts `serve` on the connection-string secret with the marker on its local volume and
 /// names no file outside its mounts; and the secret `password.sql` reads is the one mounted into
 /// Postgres. The runbook runs exactly the SQL files of `sql/`.
@@ -180,6 +181,14 @@ fn the_compose_file_sets_no_environment_and_pins_both_images_by_digest() {
     let image = text(entry(coordinator, "image"));
     assert!(pinned(image, "hostkeeper-coordinator"), "{image}");
     assert_eq!(text(entry(coordinator, "pull_policy")), "never");
+    // A stop lets the SSH tunnels drain for --ssh-drain-s (600 by default) and write their
+    // closes: the grace is minutes, at least that.
+    let grace = text(entry(coordinator, "stop_grace_period"));
+    let minutes: u64 = grace
+        .strip_suffix('m')
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("stop_grace_period {grace} is not whole minutes"));
+    assert!(minutes * 60 >= 600 + 60, "{grace}");
     let waits = entry(entry(coordinator, "depends_on"), "postgres");
     assert_eq!(text(entry(waits, "condition")), "service_healthy");
     assert_eq!(text(entry(waits, "required")), "false");

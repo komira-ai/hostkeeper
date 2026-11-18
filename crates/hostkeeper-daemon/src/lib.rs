@@ -44,6 +44,9 @@
 //! - [`ipmi`]: the BMC a Linux host's enrollment claims ask for its MAC, over `/dev/ipmi0`.
 //! - [`mac`]: the real adapters of a Mac's package check (`getxattr`, `codesign`) and claims
 //!   (`ioreg`), over the process port of the launchd adapters.
+//! - [`ssh_host_mac`]: the Mac's host of the sshd setup that trusts the coordinator's SSH user CA:
+//!   the `Include` of `sshd_config`, the login user, the `com.apple.access_ssh` group and
+//!   Remote Login by `launchctl` (docs/design/ssh-through-coordinator.md, section 3).
 //! - [`prune`]: after a confirmed switch (an update that ends `Succeeded`, a force that moved
 //!   `current`), the service's version directories but `current` and `previous` are deleted,
 //!   under the lock the order already holds.
@@ -67,6 +70,10 @@
 //!   file) and reported by digest in every heartbeat; [`login_account`] finds the account (root on
 //!   Linux, a Mac's one local administrator) and, on a Mac, [`mac_ssh`] makes sure Remote Login is
 //!   on and the account may use ssh.
+//! - [`ssh_setup`]: the host's sshd, set up to trust the coordinator's SSH user CA from the access
+//!   the coordinator sends (`ssh-v1`), with [`ssh_files`] (the files and the record's checks),
+//!   [`ssh_effective`] (what `sshd -T` says and the lockout rules judge of it) and [`ssh_host`] (the
+//!   host's port and its real adapters, Linux's and [`ssh_host_mac`]'s).
 //! - [`prerequisites`]: the host prerequisites the coordinator sends (`prerequisites-v1`), made sure
 //!   of on the host and reported by state in every heartbeat; [`xcode_clt`] is the one there is,
 //!   Apple's Command Line Tools, looked for and installed headless on a Mac.
@@ -146,6 +153,11 @@ pub mod rollback_floor;
 pub mod run_units;
 pub mod seed;
 pub mod selfupdate;
+pub mod ssh_effective;
+pub mod ssh_files;
+pub mod ssh_host;
+pub mod ssh_host_mac;
+pub mod ssh_setup;
 pub mod stamp;
 pub mod start;
 pub mod target;

@@ -64,6 +64,8 @@
     { "function": "services.setRepository", "method": "hostkeeper.operator.v1.Services/SetRepository", "pages": ["packages"] },
     { "function": "services.unassign", "method": "hostkeeper.operator.v1.Services/Unassign", "pages": ["rollout"] },
     { "function": "services.unhold", "method": "hostkeeper.operator.v1.Services/Unhold", "pages": ["holds", "host", "package"] },
+    { "function": "ssh.hostKeys", "method": "hostkeeper.operator.v1.Ssh/HostKeys", "pages": ["host"] },
+    { "function": "ssh.pinHostKeys", "method": "hostkeeper.operator.v1.Ssh/PinHostKeys", "pages": ["host"] },
     { "function": "users.create", "method": "hostkeeper.operator.v1.Users/Create", "pages": ["users"] },
     { "function": "users.delete", "method": "hostkeeper.operator.v1.Users/Delete", "pages": ["users"] },
     { "function": "users.disable", "method": "hostkeeper.operator.v1.Users/Disable", "pages": ["users"] },

@@ -195,3 +195,48 @@ fn fetches_finds_each_call_of_fetch() {
         [(1, "`fetch(`"), (2, "`fetch(`")]
     );
 }
+
+#[test]
+fn a_socket_is_refused_in_every_file_but_the_entry_module() {
+    // Catches: the allowance for the one socket opener letting a `WebSocket` into a page, the data
+    // layer or any other module, letting a `ws://` or `wss://` address into any file the opener
+    // included, or letting any other needle through in the entry module.
+    let opens = "const s = new WebSocket(u);\nconst t = \"ws://example.com/x\";\nconst v = `wss://example.com/y`;";
+    for path in [
+        "pages/host_ssh.js",
+        "pages/host.js",
+        "api.js",
+        "app.js",
+        "view.js",
+        "x",
+    ] {
+        assert_eq!(
+            whats(&network_and_code(path, opens)),
+            [(1, "`WebSocket`"), (2, "`ws://`"), (3, "`wss://`")],
+            "{path}"
+        );
+    }
+    assert_eq!(
+        whats(&network_and_code(SOCKET_OPENER, opens)),
+        [(2, "`ws://`"), (3, "`wss://`")]
+    );
+    assert_eq!(SOCKET_OPENER, "main.js");
+    assert_eq!(
+        whats(&network_and_code(
+            SOCKET_OPENER,
+            "new WebSocket(u); el.innerHTML = s; eval(t); fetch(\"https://example.com/\");"
+        )),
+        [(1, "`https://`"), (1, "`eval(`"), (1, "`innerHTML`")]
+    );
+}
+
+#[test]
+fn sockets_finds_each_call_of_websocket() {
+    assert_eq!(
+        whats(&sockets(
+            "main.js",
+            "const a = new WebSocket(u);\nnew WebSocket /* c */ (v);\nMyWebSocket(w); WebSocket;"
+        )),
+        [(1, "`WebSocket(`"), (2, "`WebSocket(`")]
+    );
+}

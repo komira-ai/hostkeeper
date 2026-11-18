@@ -118,9 +118,7 @@ fn an_sshd_that_is_not_loaded_is_enabled_and_bootstrapped() {
     );
     assert_eq!(
         rig.log.lines(),
-        [
-            "operator keys: Remote Login turned on (launchctl enable and bootstrap of system/com.openssh.sshd)"
-        ]
+        ["ssh: Remote Login turned on (launchctl enable and bootstrap of system/com.openssh.sshd)"]
     );
 }
 

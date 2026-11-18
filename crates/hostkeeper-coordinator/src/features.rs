@@ -24,7 +24,11 @@ use crate::{halt, verdict_file};
 /// and the host is sent the operator keys of its host group until it reports their digest
 /// ([`crate::operator_keys`]). `prerequisites-v1`: the `prerequisites` report of a gRPC heartbeat
 /// is read, and the host is sent the host prerequisites of its host group until it reports their
-/// digest ([`crate::prerequisites`]).
+/// digest ([`crate::prerequisites`]). `ssh-v1`: the `ssh` report of a gRPC heartbeat is read, and
+/// the host is sent its sshd access (the CA public keys of its class, its principal and login user,
+/// the password policy and its revoked serials) in every answer until it reports its generation
+/// ([`crate::ssh_heartbeat`]); advertised always, and acted on only while the coordinator holds an
+/// SSH user CA.
 pub const FEATURES: &[&str] = &[
     "deferred-v1",
     halt::FEATURE,
@@ -37,6 +41,7 @@ pub const FEATURES: &[&str] = &[
     crate::repository_push::FEATURE,
     crate::facts::FEATURE,
     crate::operator_keys::FEATURE,
+    crate::ssh_heartbeat::FEATURE,
     crate::prerequisites::FEATURE,
 ];
 

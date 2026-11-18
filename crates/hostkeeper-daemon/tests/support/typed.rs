@@ -416,6 +416,7 @@ impl CoordinatorLink for GrpcInProcess {
             repositories: None,
             facts: None,
             operator_keys: None,
+            ssh: None,
             prerequisites: None,
         })
     }

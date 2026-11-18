@@ -29,6 +29,7 @@ use hostkeeper_config::names::{ServiceName, Version};
 pub use hostkeeper_proto::MAX_SERVICES_PER_HEARTBEAT;
 use serde_json::{Map, Value, json};
 
+use crate::host_ssh::SshReport;
 use crate::operator_keys::KeysReport;
 use crate::order::{DeferredReport, OrderResult};
 use crate::ports::Drift;
@@ -101,6 +102,11 @@ pub enum Feature {
     /// by a daemon with a sink for them ([`crate::OperatorKeysSink`]): the loop adds it
     /// ([`OPERATOR_KEYS`]).
     OperatorKeysV1,
+    /// `ssh-v1`: the daemon sets sshd up from the SSH access the coordinator sends
+    /// ([`crate::PushedSsh`]) and reports what came of it ([`Heartbeat::ssh`]). Like `facts-v1`
+    /// it is announced only by a daemon with an SSH sink ([`crate::SshSink`]): the loop adds it
+    /// ([`SSH`]).
+    SshV1,
     /// `prerequisites-v1`: the daemon makes sure of the host prerequisites the coordinator sends
     /// ([`crate::PushedPrerequisites`]) and reports where each stands
     /// ([`crate::PrerequisitesReport`]). Like `operator-keys-v1` it is announced only by a daemon
@@ -133,10 +139,12 @@ pub const REPOSITORIES: Feature = Feature::RepositoriesV1;
 pub const FACTS: Feature = Feature::FactsV1;
 /// The feature a daemon that reads private repositories announces after [`REPOSITORIES`].
 pub const PRIVATE_REPOSITORY: Feature = Feature::PrivateRepositoryV1;
-/// The feature a daemon with a [`crate::OperatorKeysSink`] announces last.
+/// The feature a daemon with a [`crate::OperatorKeysSink`] announces after [`PRIVATE_REPOSITORY`].
 pub const OPERATOR_KEYS: Feature = Feature::OperatorKeysV1;
 /// The feature a daemon with a [`crate::PrerequisitesSink`] announces after [`OPERATOR_KEYS`].
 pub const PREREQUISITES: Feature = Feature::PrerequisitesV1;
+/// The feature a daemon with an [`crate::SshSink`] announces last, after [`PREREQUISITES`].
+pub const SSH: Feature = Feature::SshV1;
 
 impl Feature {
     /// Its wire name.
@@ -157,6 +165,7 @@ impl Feature {
             Feature::FactsV1 => "facts-v1",
             Feature::PrivateRepositoryV1 => "private-repository-v1",
             Feature::OperatorKeysV1 => "operator-keys-v1",
+            Feature::SshV1 => "ssh-v1",
             Feature::PrerequisitesV1 => "prerequisites-v1",
         }
     }
@@ -171,6 +180,7 @@ impl Feature {
                 PRIVATE_REPOSITORY,
                 OPERATOR_KEYS,
                 PREREQUISITES,
+                SSH,
             ])
             .find(|feature| feature.as_str() == name)
     }
@@ -413,6 +423,9 @@ pub struct Heartbeat {
     /// What the managed block of the login account's `authorized_keys` holds; none from a daemon
     /// that keeps no operator keys. Sent over gRPC only, and counted toward the bound on both.
     pub operator_keys: Option<KeysReport>,
+    /// What the daemon's SSH setup came to; none from a daemon that has none. Sent over gRPC
+    /// only, and counted toward the bound on both.
+    pub ssh: Option<SshReport>,
     /// What the daemon holds of the host prerequisites and where each stands; none from a daemon
     /// that keeps none. Sent over gRPC only, and counted toward the bound on both.
     pub prerequisites: Option<PrerequisitesReport>,
@@ -480,6 +493,17 @@ impl Heartbeat {
             beat.insert(
                 "operator_keys".to_owned(),
                 json!({ "digest": report.digest, "refused": refused, "failed": report.failed }),
+            );
+        }
+        if let Some(report) = &self.ssh {
+            beat.insert(
+                "ssh".to_owned(),
+                json!({
+                    "applied_generation": report.applied_generation,
+                    "state": report.state,
+                    "host_key_fingerprints": report.host_key_fingerprints,
+                    "detail": report.detail,
+                }),
             );
         }
         if let Some(report) = &self.prerequisites {

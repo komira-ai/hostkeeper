@@ -19,7 +19,8 @@
 //! as unknown. The JSON route has no field for it. The installers go out as `installers`, and the
 //! JSON route has no field for them either, nor for a service's installer. The generation of the
 //! facts the daemon's facts file holds goes out as `facts_generation` when there is one; the
-//! JSON route has no field for it.
+//! JSON route has no field for it. The report of the daemon's sshd setup goes out as `ssh` when
+//! there is one; the JSON route has no field for it either.
 //!
 //! **In.** The advertised features the daemon knows, and the halt clear generations of the
 //! services the daemon could run (a name outside its grammar names none), in the order of the
@@ -40,6 +41,7 @@ use hostkeeper_wire::wire::{is_drift_version, is_service_name};
 
 use crate::beat::{AGENT_NAME, Feature, Health, Heartbeat, Platform, RootReason, ServiceFacts};
 use crate::host_facts::PushedFacts;
+use crate::host_ssh::{PushedSsh, SshReport};
 use crate::names::{OrderId, PackageDigest};
 use crate::operator_keys::{KeysReport, PushedKeys};
 use crate::order::{DeferredReport, Entry, Order, OrderResult, Outcome, Reply, Target, Verb};
@@ -67,6 +69,7 @@ pub(crate) fn heartbeat(beat: &Heartbeat) -> Result<pb::HeartbeatRequest, Unsend
         .map(service)
         .collect::<Result<Vec<pb::ServiceBeat>, Unsendable>>()?;
     Ok(pb::HeartbeatRequest {
+        ssh: beat.ssh.as_ref().map(ssh_report),
         installers: beat.installers.clone(),
         platform: platform(beat.platform).into(),
         agent: Some(pb::AgentInfo {
@@ -114,6 +117,38 @@ fn remote_login_probe(probe: &RemoteLoginProbe) -> pb::RemoteLoginProbe {
                 truncated: step.truncated,
             })
             .collect(),
+    }
+}
+
+/// The SSH report as `ssh`.
+fn ssh_report(report: &SshReport) -> pb::SshReport {
+    pb::SshReport {
+        applied_generation: report.applied_generation,
+        state: report.state.clone(),
+        host_key_fingerprints: report.host_key_fingerprints.clone(),
+        detail: report.detail.clone(),
+    }
+}
+
+/// The SSH access of an answer.
+fn pushed_ssh(access: pb::SshAccess) -> PushedSsh {
+    let pb::SshAccess {
+        generation,
+        enabled,
+        ca_public_keys,
+        login_user,
+        principal,
+        revoked_serials,
+        password_auth,
+    } = access;
+    PushedSsh {
+        generation,
+        enabled,
+        ca_public_keys,
+        login_user,
+        principal,
+        revoked_serials,
+        password_auth,
     }
 }
 
@@ -332,6 +367,7 @@ pub(crate) fn reply(response: pb::HeartbeatResponse) -> Mapped {
         repositories,
         facts,
         operator_keys,
+        ssh,
         prerequisites,
     } = response;
     let features = features
@@ -377,6 +413,7 @@ pub(crate) fn reply(response: pb::HeartbeatResponse) -> Mapped {
                 digest: set.digest,
                 keys: set.keys,
             }),
+            ssh: ssh.map(pushed_ssh),
             prerequisites: prerequisites.map(|set| PushedPrerequisites {
                 digest: set.digest,
                 names: set.names,

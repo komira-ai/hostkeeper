@@ -574,6 +574,7 @@ fn the_committed_privileged_yml_passes_and_holds_the_one_sudo() {
             "operator_keys_root".to_owned(),
             "self_update".to_owned(),
             "self_update_across_releases".to_owned(),
+            "ssh_root".to_owned(),
             "tierstore_shaped".to_owned(),
             "transient_unit".to_owned(),
             "unit_control".to_owned()

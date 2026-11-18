@@ -133,6 +133,7 @@ impl CoordinatorEnroll for InProcess {
         let reply = self
             .enrollment
             .enroll(pb::EnrollRequest {
+                host_key_fingerprints: Vec::new(),
                 csr_der: request.csr_der.clone(),
                 claims: Some(pb::Claims {
                     machine_id: claims.machine_id.clone().unwrap_or_default(),

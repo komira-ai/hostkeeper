@@ -228,6 +228,7 @@ fn a_host_is_what_the_status_holds_of_it() {
         live: true,
         last_heartbeat_unix: UNIX + 2_000,
         heartbeat: Some(agent::HeartbeatRequest {
+            ssh: None,
             installers: Vec::new(),
             repositories: None,
             platform: agent::Platform::LinuxX8664.into(),

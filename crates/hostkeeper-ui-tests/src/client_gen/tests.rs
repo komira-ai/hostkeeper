@@ -190,10 +190,12 @@ fn header() -> String {
 #[test]
 fn every_kind_of_field_is_declared_as_proto3_json_writes_it() {
     let client = emit(&things(), &fixture()).expect("the fixture generates");
-    let expected = format!(
+    let client_d_ts = format!(
         "{}{}",
         header(),
-        r#"// The types of `client.js`, in proto3 JSON; each is described in `crates/hostkeeper-proto/proto`.
+        r#"import type { hostkeeper_operator_v1 } from "./hostkeeper_operator_v1.js";
+
+// The types of `client.js`, in proto3 JSON; each is described in `crates/hostkeeper-proto/proto`.
 
 /** Sends `request` to `method` (`<package>.<Service>/<Method>`) and resolves to the reply. */
 export type Call = (method: string, request: object) => Promise<object>;
@@ -207,6 +209,12 @@ export interface Client {
 }
 
 export declare function createClient(call: Call): Client;
+"#
+    );
+    let operator_d_ts = format!(
+        "{}{}",
+        header(),
+        r#"import type { hostkeeper_other_v1 } from "./hostkeeper_other_v1.js";
 
 export namespace hostkeeper_operator_v1 {
   export interface Empty {}
@@ -263,12 +271,21 @@ export namespace hostkeeper_operator_v1 {
     | "LONG_ENUM_NAME_FOR_WRAPPING_PAST_THE_WIDTH_THIRD";
   export interface Tree { children?: hostkeeper_operator_v1.Tree[]; }
 }
-
-export namespace hostkeeper_other_v1 {
+"#
+    );
+    let other_d_ts = format!(
+        "{}{}",
+        header(),
+        r#"export namespace hostkeeper_other_v1 {
   export interface Far { x?: string; }
 }
 "#
     );
+    let expected = vec![
+        ("client.d.ts".to_owned(), client_d_ts),
+        ("hostkeeper_operator_v1.d.ts".to_owned(), operator_d_ts),
+        ("hostkeeper_other_v1.d.ts".to_owned(), other_d_ts),
+    ];
     assert_eq!(client.dts, expected);
 }
 
@@ -322,17 +339,19 @@ fn only_the_operator_package_is_in_the_client_and_services_keep_the_table_order(
     assert_eq!(found[1].method, "hostkeeper.operator.v1.Things/GetThing");
     let client = emit(&commands, &fixture()).expect("the agent command is left out");
     assert!(!client.js.contains("coordinator"), "{}", client.js);
-    assert!(!client.dts.contains("agent"), "{}", client.dts);
+    assert!(
+        !client
+            .dts
+            .iter()
+            .any(|(file, text)| file.contains("agent") || text.contains("agent"))
+    );
     assert!(
         client.js.contains("    }),\n    things: Object.freeze({\n"),
         "{}",
         client.js
     );
-    assert!(
-        client.dts.contains("  };\n  readonly things: {\n"),
-        "{}",
-        client.dts
-    );
+    let top = client.declarations("client.d.ts").expect("client.d.ts");
+    assert!(top.contains("  };\n  readonly things: {\n"), "{top}");
 }
 
 /// Catches a new RPC that needs a hand edit to reach the client: one more command is one more
@@ -342,24 +361,24 @@ fn a_new_rpc_appears_with_no_edit() {
     let before = emit(&things()[..1], &fixture()).expect("one command");
     let after = emit(&things(), &fixture()).expect("two commands");
     assert!(!before.js.contains("setLabels"), "{}", before.js);
-    assert!(!before.dts.contains("interface Empty"), "{}", before.dts);
+    let before_ns = before
+        .declarations("hostkeeper_operator_v1.d.ts")
+        .expect("ns");
+    assert!(!before_ns.contains("interface Empty"), "{before_ns}");
     assert!(
         after.js.contains("setLabels: (request) => call("),
         "{}",
         after.js
     );
+    let top = after.declarations("client.d.ts").expect("client.d.ts");
     assert!(
-        after
-            .dts
-            .contains("setLabels(request: hostkeeper_operator_v1.Empty)"),
-        "{}",
-        after.dts
+        top.contains("setLabels(request: hostkeeper_operator_v1.Empty)"),
+        "{top}"
     );
-    assert!(
-        after.dts.contains("export interface Empty {"),
-        "{}",
-        after.dts
-    );
+    let ns = after
+        .declarations("hostkeeper_operator_v1.d.ts")
+        .expect("ns");
+    assert!(ns.contains("export interface Empty {"), "{ns}");
 }
 
 /// Catches an empty table that makes a client that does not parse.
@@ -373,13 +392,13 @@ fn a_table_with_no_operator_command_makes_an_empty_client() {
         "{}",
         client.js
     );
+    assert_eq!(client.dts.len(), 1, "no types, no namespace files");
+    let top = client.declarations("client.d.ts").expect("client.d.ts");
     assert!(
-        client
-            .dts
-            .ends_with("export interface Client {\n}\n\nexport declare function createClient(call: Call): Client;\n"),
-        "{}",
-        client.dts
+        top.ends_with("export interface Client {\n}\n\nexport declare function createClient(call: Call): Client;\n"),
+        "{top}"
     );
+    assert!(!top.contains("import"), "{top}");
 }
 
 /// Catches a command whose message the descriptors do not hold, generated as an undeclared
@@ -524,9 +543,13 @@ fn hostkeeper_s_own_table_makes_one_function_per_operator_rpc() {
             "{function:?}"
         );
     }
-    assert!(
-        client
-            .dts
-            .contains("export namespace hostkeeper_agent_v1 {")
-    );
+    let names: Vec<&str> = client.dts.iter().map(|(file, _)| file.as_str()).collect();
+    assert_eq!(names[0], "client.d.ts");
+    let agent = client
+        .declarations("hostkeeper_agent_v1.d.ts")
+        .expect("the agent package is declared");
+    assert!(agent.contains("export namespace hostkeeper_agent_v1 {"));
+    for (file, text) in &client.dts {
+        assert!(text.starts_with(&header()), "{file} has no header");
+    }
 }
