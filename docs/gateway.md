@@ -12,7 +12,7 @@ the same checks; the gateway adds no rule of its own. Every command and request 
 
 One route per unary method of the `hostkeeper.operator.v1` services (`Hosts`, `Releases`,
 `Services`, `Enrollment`, `Audit`, `Alerts`, `Rollouts`, `Repositories`, `HostGroups`, `Users`,
-`ApiTokens`, `Layout`, `HostIdentity`):
+`ApiTokens`, `Layout`, `HostIdentity`, `Console`):
 
 ```
 POST /<package>.<Service>/<Method>
@@ -35,7 +35,7 @@ that fails one of those checks is `PERMISSION_DENIED` with the reason `csrf`, an
 who must still choose a new password is `PERMISSION_DENIED` `password_change_required`; a cookie
 that names no live session is no credential. A call with an `Authorization` header never has its
 cookie read, and the gRPC path never reads one. A method may be declared session-only: a bearer is
-refused it `PERMISSION_DENIED` `session_required`. None is now: the writes of the MDM setup were, and the `Mdm` service is no longer served (a call of it is `UNIMPLEMENTED`). `Users`, `ApiTokens`, `Layout` and `HostIdentity` take an operator only (a token
+refused it `PERMISSION_DENIED` `session_required`. None is now: the writes of the MDM setup were, and the `Mdm` service is no longer served (a call of it is `UNIMPLEMENTED`). `Users`, `ApiTokens`, `Layout`, `HostIdentity` and `Console` take an operator only (a token
 of the tokens file, a stored API token, or a session), and a bearer is resolved against the tokens file and the store's tokens
 in one pass (`docs/operations/coordinator-state.md`, "Users and API tokens"). `Releases.SetDesired` takes CI's
 OIDC token or an operator token; `Releases.Converge`, `Releases.WaitConverged` and

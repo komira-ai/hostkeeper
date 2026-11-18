@@ -107,6 +107,70 @@ The entries after `since_seq` that match every filter set, newest last. Changes 
 | `--newest` | true\|false | The newest `limit` matching entries after `since_seq`, oldest first, in place of the oldest; `next_seq` goes on from the newest of them. |
 | `--host-group` | STRING | Only entries about this host group (`AuditEntry.host_group`); a coordinator that does not hold host groups lists none. |
 
+### `console`
+
+The service `Console` of the package `hostkeeper.operator.v1`. A host's console. One session per host: a second `Open` of a host that has one is refused `console_busy`, and `List` names who holds it. Each call that acts is audited under the caller's name with the host as the entry's node: `console_open`, `console_close`, `power_action` and `boot_device_set`; a refusal of an operator named in the console operators file is audited as `console_denied` with its cause.
+
+#### `hkctl console open`
+
+`/hostkeeper.operator.v1.Console/Open`
+
+Opens a console session on a host: takes the host's one session slot and writes the audit
+line, without contacting the device. The session is then attached by a WebSocket at
+`/console/v1/stream/<session>` on the private listener, by the same operator name, within
+`expires_in_secs`; an unattached session ends after that.
+
+| flag | value | meaning |
+|---|---|---|
+| `--host-id` | STRING | The host's id. |
+| `--reason` | STRING | Why the console is opened; the audit line carries it. |
+
+#### `hkctl console power`
+
+`/hostkeeper.operator.v1.Console/Power`
+
+Reads or changes a Linux server's power through its BMC, after checking that the BMC at the
+host's address has the host's BMC MAC. Answered when the BMC has acknowledged the command;
+the host's own state follows later (`Hosts.Get`).
+
+| flag | value | meaning |
+|---|---|---|
+| `--host-id` | STRING | The host's id. |
+| `--action` | VALUE | The command. One of: status, on, off, soft, cycle, reset. |
+| `--reason` | STRING | Why; the audit line carries it. |
+
+#### `hkctl console set-boot-device`
+
+`/hostkeeper.operator.v1.Console/SetBootDevice`
+
+Sets the device a Linux server boots from through its BMC, after the same MAC check as
+`Power`, and answers with the boot flags the BMC holds afterwards, read back.
+
+| flag | value | meaning |
+|---|---|---|
+| `--host-id` | STRING | The host's id. |
+| `--device` | VALUE | The device to boot from. One of: pxe, disk, bios. |
+| `--persistent` | true\|false | Every boot from now on, not only the next one. |
+| `--efi` | true\|false | Boot in UEFI mode; a UEFI board may ignore the device otherwise. |
+| `--reason` | STRING | Why; the audit line carries it. |
+
+#### `hkctl console list`
+
+`/hostkeeper.operator.v1.Console/List`
+
+Every open console session, by host id. Changes nothing and is not audited.
+
+#### `hkctl console close`
+
+`/hostkeeper.operator.v1.Console/Close`
+
+Ends the console session of a host, whoever holds it. The closer's name is in the audit
+line.
+
+| flag | value | meaning |
+|---|---|---|
+| `--host-id` | STRING | The host whose session ends. |
+
 ### `enrollment`
 
 The service `Enrollment` of the package `hostkeeper.operator.v1`. The hosts waiting for an operator to approve their enrollment.

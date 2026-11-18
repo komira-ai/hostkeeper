@@ -7,9 +7,9 @@
 //! can never be refused with (`UNSPECIFIED`) is `INTERNAL`.
 
 use hostkeeper_proto::hostkeeper::operator::v1::{
-    AlertsRefusal, ApiTokensRefusal, AuditRefusal, EnrollmentRefusal, HostGroupsRefusal,
-    HostIdentityRefusal, HostsRefusal, LayoutRefusal, ReleasesRefusal, RepositoriesRefusal,
-    RolloutsRefusal, ServicesRefusal, UsersRefusal,
+    AlertsRefusal, ApiTokensRefusal, AuditRefusal, ConsoleRefusal, EnrollmentRefusal,
+    HostGroupsRefusal, HostIdentityRefusal, HostsRefusal, LayoutRefusal, ReleasesRefusal,
+    RepositoriesRefusal, RolloutsRefusal, ServicesRefusal, UsersRefusal,
 };
 use tonic::{Code, Status};
 
@@ -284,4 +284,30 @@ pub(crate) fn layout(refusal: LayoutRefusal) -> Status {
         | LayoutRefusal::Capacity => Code::FailedPrecondition,
     };
     refused(code, refusal.as_str_name(), "LAYOUT_REFUSAL_")
+}
+
+/// The status of a refusal by `Console`.
+pub(crate) fn console(refusal: ConsoleRefusal) -> Status {
+    let code = match refusal {
+        ConsoleRefusal::Unspecified => Code::Internal,
+        ConsoleRefusal::Unauthorized => Code::Unauthenticated,
+        ConsoleRefusal::Forbidden
+        | ConsoleRefusal::NoConsoleAccess
+        | ConsoleRefusal::PowerNotPermitted => Code::PermissionDenied,
+        ConsoleRefusal::InvalidRequest
+        | ConsoleRefusal::ReasonRequired
+        | ConsoleRefusal::ReasonTooLong => Code::InvalidArgument,
+        ConsoleRefusal::HostNotFound | ConsoleRefusal::NoSession => Code::NotFound,
+        ConsoleRefusal::NoAddress
+        | ConsoleRefusal::NoBmcMac
+        | ConsoleRefusal::AmbiguousRecord
+        | ConsoleRefusal::AddressMismatch
+        | ConsoleRefusal::BmcAuthFailed => Code::FailedPrecondition,
+        ConsoleRefusal::ConsoleBusy => Code::AlreadyExists,
+        ConsoleRefusal::TooManySessions => Code::ResourceExhausted,
+        ConsoleRefusal::DeviceUnreachable
+        | ConsoleRefusal::BmcBusy
+        | ConsoleRefusal::AuditUnavailable => Code::Unavailable,
+    };
+    refused(code, refusal.as_str_name(), "CONSOLE_REFUSAL_")
 }

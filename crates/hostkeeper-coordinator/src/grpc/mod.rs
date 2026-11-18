@@ -43,6 +43,7 @@ use hostkeeper_proto::hostkeeper::agent::v1::coordinator_server::CoordinatorServ
 use hostkeeper_proto::hostkeeper::operator::v1::alerts_server::AlertsServer;
 use hostkeeper_proto::hostkeeper::operator::v1::api_tokens_server::ApiTokensServer;
 use hostkeeper_proto::hostkeeper::operator::v1::audit_server::AuditServer;
+use hostkeeper_proto::hostkeeper::operator::v1::console_server::ConsoleServer;
 use hostkeeper_proto::hostkeeper::operator::v1::enrollment_server::EnrollmentServer;
 use hostkeeper_proto::hostkeeper::operator::v1::host_groups_server::HostGroupsServer;
 use hostkeeper_proto::hostkeeper::operator::v1::host_identity_server::HostIdentityServer;
@@ -68,6 +69,7 @@ use self::operator::{
     ServicesService,
 };
 use self::operator_accounts::{ApiTokensService, UsersService};
+use self::operator_console::ConsoleService;
 use self::operator_host_groups::HostGroupsService;
 use self::operator_host_identity::HostIdentityService;
 use self::operator_layout::LayoutService;
@@ -89,6 +91,7 @@ mod beat_map;
 pub(crate) mod gateway;
 pub(crate) mod operator;
 mod operator_accounts;
+mod operator_console;
 mod operator_host_groups;
 mod operator_host_identity;
 mod operator_layout;
@@ -140,6 +143,8 @@ const API_TOKENS: &str = "hostkeeper.operator.v1.ApiTokens";
 const LAYOUT: &str = "hostkeeper.operator.v1.Layout";
 /// The full name of the operator API's `HostIdentity`.
 const HOST_IDENTITY: &str = "hostkeeper.operator.v1.HostIdentity";
+/// The full name of the operator API's `Console`.
+const CONSOLE: &str = "hostkeeper.operator.v1.Console";
 
 /// The path of `Coordinator.Heartbeat`, which needs a client certificate that names a host.
 const HEARTBEAT: &str = "/hostkeeper.agent.v1.Coordinator/Heartbeat";
@@ -299,7 +304,7 @@ pub(crate) async fn admit_via(
             Surface::Control,
             Some(
                 HOSTS | RELEASES | SERVICES | ENROLLMENT | AUDIT | ALERTS | ROLLOUTS | REPOSITORIES
-                | HOST_GROUPS | USERS | API_TOKENS | LAYOUT | HOST_IDENTITY,
+                | HOST_GROUPS | USERS | API_TOKENS | LAYOUT | HOST_IDENTITY | CONSOLE,
             ),
         ) => Served::Operator,
         _ => return Err(Status::unimplemented("")),
@@ -519,6 +524,11 @@ where
         }
         Some(HOST_IDENTITY) => {
             let server = HostIdentityServer::new(HostIdentityService::new(coordinator))
+                .max_decoding_message_size(MAX_OPERATOR_BYTES);
+            call(server, request).await
+        }
+        Some(CONSOLE) => {
+            let server = ConsoleServer::new(ConsoleService::new(coordinator))
                 .max_decoding_message_size(MAX_OPERATOR_BYTES);
             call(server, request).await
         }

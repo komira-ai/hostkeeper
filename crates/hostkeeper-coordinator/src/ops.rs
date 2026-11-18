@@ -326,7 +326,9 @@ pub struct AuditEntry {
     /// `service_identity_issued`, and an operator's `identity_approve`; the MDM gate's
     /// `mdm_nonce_pushed`, `mdm_install_sent` and `mdm_baseline`, by `mdm-gate`; `state_imported`, by
     /// `coordinator`, the last row an earlier release's `import` wrote into the database; this
-    /// release writes none).
+    /// release writes none; the console's `console_open`, `console_close`, `console_denied`,
+    /// `power_action`, `boot_device_set` and `console_coordinator_start`, lines that change no
+    /// state and never enter the ring, [`OpsStore::append_audit_only`]).
     pub action: String,
     /// The service it concerned, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -939,6 +941,10 @@ impl OpsStore {
 mod pending;
 
 pub(crate) use pending::{Marker, unlanded};
+
+/// The store's audit-only append: a numbered line that changes no state.
+#[path = "ops_audit_only.rs"]
+mod audit_only;
 
 /// The store's hooks for tests: a clock, a writer and an appender put in, a rival writer's change
 /// made between a read and a change.

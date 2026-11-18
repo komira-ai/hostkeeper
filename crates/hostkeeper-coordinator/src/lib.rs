@@ -134,6 +134,7 @@ pub mod bake;
 pub mod canary;
 pub mod clear_record;
 pub mod config;
+pub(crate) mod console;
 pub mod converge;
 pub mod decide;
 pub mod defer;
@@ -251,6 +252,8 @@ mod audit_actions_tests;
 mod audit_file_tests;
 #[cfg(test)]
 mod audit_list_tests;
+#[cfg(test)]
+mod audit_only_tests;
 #[cfg(test)]
 mod audit_refusal_tests;
 #[cfg(test)]
