@@ -44,6 +44,7 @@ fn response_of(answer: Answer, order: Option<Order>) -> proto::HeartbeatResponse
         repositories: None,
         facts: None,
         operator_keys: None,
+        prerequisites: None,
     }
 }
 

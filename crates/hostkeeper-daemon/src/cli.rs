@@ -436,6 +436,7 @@ pub fn host_links(
         console,
         remote_login_probe: crate::remote_login_probe::at_host_start(kind),
         operator_keys: Some(Arc::new(operator_keys)),
+        prerequisites: None,
     }
 }
 
