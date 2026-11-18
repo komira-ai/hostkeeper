@@ -397,7 +397,7 @@ fn the_links_start_the_identity_loop_third_when_they_have_one() {
 /// service as the keeper last said and announces no feature for it (the list of features is full
 /// at the coordinator's bound), and one without reports none.
 #[test]
-fn the_heartbeat_announces_and_reports_the_identities_of_the_loop() {
+fn the_heartbeat_reports_the_identities_of_the_loop_and_announces_no_feature_for_them() {
     let refusal = Ok(IssueAnswer::Refused(
         Reason::new("denied").expect("a token"),
     ));
