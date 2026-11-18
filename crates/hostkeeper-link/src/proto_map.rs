@@ -44,6 +44,9 @@ use crate::names::{OrderId, PackageDigest};
 use crate::operator_keys::{KeysReport, PushedKeys};
 use crate::order::{DeferredReport, Entry, Order, OrderResult, Outcome, Reply, Target, Verb};
 use crate::ports::{Drift, Unsendable};
+use crate::prerequisites::{
+    PrerequisiteState, PrerequisiteStatus, PrerequisitesReport, PushedPrerequisites,
+};
 use crate::probe::RemoteLoginProbe;
 use crate::repositories::{PushedSet, RepositoriesReport};
 use crate::wire_map::acknowledged;
@@ -90,6 +93,7 @@ pub(crate) fn heartbeat(beat: &Heartbeat) -> Result<pb::HeartbeatRequest, Unsend
         facts_generation: beat.facts_generation,
         remote_login_probe: beat.remote_login_probe.as_ref().map(remote_login_probe),
         operator_keys: beat.operator_keys.as_ref().map(keys_report),
+        prerequisites: beat.prerequisites.as_ref().map(prerequisites_report),
     })
 }
 
@@ -141,6 +145,42 @@ fn keys_report(report: &KeysReport) -> pb::OperatorKeysReport {
                 reason: refusal.reason.clone(),
             }),
         failed: report.failed.clone(),
+    }
+}
+
+/// The report of the host prerequisites as `prerequisites`.
+fn prerequisites_report(report: &PrerequisitesReport) -> pb::PrerequisitesReport {
+    pb::PrerequisitesReport {
+        digest: report.digest.clone(),
+        refused: report
+            .refused
+            .as_ref()
+            .map(|refusal| pb::PrerequisitesRefusal {
+                digest: refusal.digest.clone(),
+                reason: refusal.reason.clone(),
+            }),
+        states: report.states.iter().map(prerequisite_state).collect(),
+    }
+}
+
+/// One prerequisite's state as a `PrerequisiteState`.
+fn prerequisite_state(state: &PrerequisiteState) -> pb::PrerequisiteState {
+    let status = match state.status {
+        PrerequisiteStatus::Pending => pb::PrerequisiteStatus::Pending,
+        PrerequisiteStatus::Present => pb::PrerequisiteStatus::Present,
+        PrerequisiteStatus::Installing => pb::PrerequisiteStatus::Installing,
+        PrerequisiteStatus::Failed => pb::PrerequisiteStatus::Failed,
+        PrerequisiteStatus::NotApplicable => pb::PrerequisiteStatus::NotApplicable,
+        PrerequisiteStatus::Unknown => pb::PrerequisiteStatus::Unknown,
+    };
+    pb::PrerequisiteState {
+        name: state.name.clone(),
+        status: status.into(),
+        version: state.version.clone(),
+        reason: state.reason.clone(),
+        failures: state.failures,
+        next_try_unix: state.next_try_unix,
+        seen_unix: state.seen_unix,
     }
 }
 
@@ -292,6 +332,7 @@ pub(crate) fn reply(response: pb::HeartbeatResponse) -> Mapped {
         repositories,
         facts,
         operator_keys,
+        prerequisites,
     } = response;
     let features = features
         .iter()
@@ -335,6 +376,10 @@ pub(crate) fn reply(response: pb::HeartbeatResponse) -> Mapped {
             operator_keys: operator_keys.map(|set| PushedKeys {
                 digest: set.digest,
                 keys: set.keys,
+            }),
+            prerequisites: prerequisites.map(|set| PushedPrerequisites {
+                digest: set.digest,
+                names: set.names,
             }),
         },
         dropped,
@@ -471,3 +516,7 @@ mod facts_tests;
 #[cfg(test)]
 #[path = "proto_map_keys_tests.rs"]
 mod keys_tests;
+
+#[cfg(test)]
+#[path = "proto_map_prerequisites_tests.rs"]
+mod prerequisites_tests;
