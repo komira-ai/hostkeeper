@@ -78,6 +78,21 @@ place the files the flags name:
   Each name is a host group name; a group holds at most 64 keys, each one line `<type> <base64>
   [comment]` of at most 4096 bytes, none twice. A key that breaks a rule refuses the start, naming
   the group and the key's place, never its text.
+- **Root's, readable by the group, no secret:** the optional `host-prerequisites-file`, the host
+  prerequisites of each host group (today only `xcode-command-line-tools`, which a Mac's daemon
+  installs as root). It holds no secret, so any regular file of at most 64 KiB is read. The
+  coordinator reads it again on the reload tick (`tls-reload-secs`), so a change reaches the hosts
+  with no restart; a file that is refused on that look leaves the sets in use. A host in a group the
+  file does not list is sent the empty set, which removes nothing from it. Its shape is one table
+  for each group:
+
+  ```toml
+  [host-groups."mac-build"]
+  prerequisites = ["xcode-command-line-tools"]
+  ```
+
+  Each table name is a host group name; a group holds at most 16 names, none twice, each one this release
+  knows. A name that breaks a rule refuses the start, naming the group and the name's place.
 - **Writable by the coordinator:** the state files and the CA's key, under
   `/var/lib/hostkeeper-coordinator`.
 

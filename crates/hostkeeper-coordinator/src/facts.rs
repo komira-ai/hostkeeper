@@ -191,8 +191,8 @@ impl Coordinator {
         })
     }
 
-    /// The group the enrollment record of the host `who` holds (which picks its facts and its
-    /// operator keys); else the role it holds; `who`'s
+    /// The group the enrollment record of the host `who` holds (which picks its facts, its
+    /// operator keys and its host prerequisites); else the role it holds; `who`'s
     /// own role when the coordinator has no enrollment or the store holds no record of the host
     /// (a certificate of the farm's CA). `None` when the store cannot be read: the next beat
     /// tries again.
@@ -218,7 +218,7 @@ impl Coordinator {
             Ok(Some(group)) => Some(group),
             Ok(None) => own(),
             Err(why) => {
-                tracing::warn!(host = %who.host_id, %why, "the host's group cannot be read; its facts and operator keys wait for the next heartbeat");
+                tracing::warn!(host = %who.host_id, %why, "the host's group cannot be read; its facts, operator keys and host prerequisites wait for the next heartbeat");
                 None
             }
         }
