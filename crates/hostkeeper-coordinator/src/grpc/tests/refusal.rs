@@ -4,9 +4,9 @@
 use std::fmt::Debug;
 
 use hostkeeper_proto::hostkeeper::operator::v1::{
-    AlertsRefusal, ApiTokensRefusal, AuditRefusal, EnrollmentRefusal, HostGroupsRefusal,
-    HostsRefusal, ReleasesRefusal, RepositoriesRefusal, RolloutsRefusal, ServicesRefusal,
-    SshRefusal, UsersRefusal,
+    AlertsRefusal, ApiTokensRefusal, AuditRefusal, ConsoleRefusal, EnrollmentRefusal,
+    HostGroupsRefusal, HostsRefusal, ReleasesRefusal, RepositoriesRefusal, RolloutsRefusal,
+    ServicesRefusal, SshRefusal, UsersRefusal,
 };
 use tonic::{Code, Status};
 
@@ -729,6 +729,96 @@ fn every_ssh_refusal_value_has_the_code_and_token_its_proto_comment_names() {
             (SshRefusal::NotReported, FailedPrecondition, "not_reported"),
         ],
         refusal::ssh,
+    );
+}
+
+/// Proves that each value of `ConsoleRefusal` becomes the status its proto comment names: the
+/// code of the comment and the value's name, without its prefix and in lower case, as the whole
+/// message; and that `UNSPECIFIED`, which no caller is refused with, is `INTERNAL`. A value the
+/// enum gains that the table lacks fails the test.
+///
+/// Catches: a console refusal with another code than its comment names (a busy console told as
+/// a failure of the request, an unreachable device as the caller's mistake), or a message that
+/// is more than the token.
+#[test]
+fn every_console_refusal_has_the_code_and_token_its_proto_comment_names() {
+    use Code::{
+        AlreadyExists, FailedPrecondition, Internal, InvalidArgument, NotFound, PermissionDenied,
+        ResourceExhausted, Unauthenticated, Unavailable,
+    };
+
+    assert_table(
+        &[
+            (ConsoleRefusal::Unspecified, Internal, "unspecified"),
+            (
+                ConsoleRefusal::Unauthorized,
+                Unauthenticated,
+                "unauthorized",
+            ),
+            (ConsoleRefusal::Forbidden, PermissionDenied, "forbidden"),
+            (
+                ConsoleRefusal::InvalidRequest,
+                InvalidArgument,
+                "invalid_request",
+            ),
+            (
+                ConsoleRefusal::ReasonRequired,
+                InvalidArgument,
+                "reason_required",
+            ),
+            (
+                ConsoleRefusal::ReasonTooLong,
+                InvalidArgument,
+                "reason_too_long",
+            ),
+            (
+                ConsoleRefusal::NoConsoleAccess,
+                PermissionDenied,
+                "no_console_access",
+            ),
+            (
+                ConsoleRefusal::PowerNotPermitted,
+                PermissionDenied,
+                "power_not_permitted",
+            ),
+            (ConsoleRefusal::HostNotFound, NotFound, "host_not_found"),
+            (ConsoleRefusal::NoAddress, FailedPrecondition, "no_address"),
+            (ConsoleRefusal::NoBmcMac, FailedPrecondition, "no_bmc_mac"),
+            (
+                ConsoleRefusal::AmbiguousRecord,
+                FailedPrecondition,
+                "ambiguous_record",
+            ),
+            (
+                ConsoleRefusal::AddressMismatch,
+                FailedPrecondition,
+                "address_mismatch",
+            ),
+            (ConsoleRefusal::ConsoleBusy, AlreadyExists, "console_busy"),
+            (
+                ConsoleRefusal::TooManySessions,
+                ResourceExhausted,
+                "too_many_sessions",
+            ),
+            (
+                ConsoleRefusal::DeviceUnreachable,
+                Unavailable,
+                "device_unreachable",
+            ),
+            (ConsoleRefusal::BmcBusy, Unavailable, "bmc_busy"),
+            (
+                ConsoleRefusal::BmcAuthFailed,
+                FailedPrecondition,
+                "bmc_auth_failed",
+            ),
+            (ConsoleRefusal::NoSession, NotFound, "no_session"),
+            (
+                ConsoleRefusal::AuditUnavailable,
+                Unavailable,
+                "audit_unavailable",
+            ),
+        ],
+        refusal::console,
     );
 }
 

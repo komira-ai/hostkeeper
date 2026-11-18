@@ -21,6 +21,13 @@ export function createClient(call) {
     audit: Object.freeze({
       list: (request) => call("hostkeeper.operator.v1.Audit/List", request),
     }),
+    console: Object.freeze({
+      open: (request) => call("hostkeeper.operator.v1.Console/Open", request),
+      power: (request) => call("hostkeeper.operator.v1.Console/Power", request),
+      setBootDevice: (request) => call("hostkeeper.operator.v1.Console/SetBootDevice", request),
+      list: (request) => call("hostkeeper.operator.v1.Console/List", request),
+      close: (request) => call("hostkeeper.operator.v1.Console/Close", request),
+    }),
     enrollment: Object.freeze({
       list: (request) => call("hostkeeper.operator.v1.Enrollment/List", request),
       approve: (request) => call("hostkeeper.operator.v1.Enrollment/Approve", request),

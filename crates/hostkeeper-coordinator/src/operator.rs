@@ -108,7 +108,8 @@ refusals!(
     UsersRefusal,
     ApiTokensRefusal,
     LayoutRefusal,
-    SshRefusal
+    SshRefusal,
+    ConsoleRefusal
 );
 
 changing!(

@@ -280,6 +280,7 @@ async fn every_operator_method_admits_exactly_its_credential() {
             "Alerts",
             "ApiTokens",
             "Audit",
+            "Console",
             "Enrollment",
             "HostGroups",
             "Hosts",

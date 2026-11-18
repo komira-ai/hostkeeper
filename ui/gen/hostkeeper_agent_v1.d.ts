@@ -8,13 +8,7 @@ export namespace hostkeeper_agent_v1 {
   export interface DeferredReport { target?: string; reason?: string; retryAfterSecs?: string; }
   export interface DriftReport { found?: string; recorded?: string; }
   export type FailureClass = "FAILURE_CLASS_UNSPECIFIED" | "FAILURE_CLASS_RELEASE" | "FAILURE_CLASS_ENVIRONMENT";
-  export type FailurePhase =
-    | "FAILURE_PHASE_UNSPECIFIED"
-    | "FAILURE_PHASE_BEFORE_COMMIT"
-    | "FAILURE_PHASE_GATE_RELEASE"
-    | "FAILURE_PHASE_GATE_ENVIRONMENT"
-    | "FAILURE_PHASE_AFTER_COMMIT"
-    | "FAILURE_PHASE_HALT";
+  export type FailurePhase = "FAILURE_PHASE_UNSPECIFIED" | "FAILURE_PHASE_BEFORE_COMMIT" | "FAILURE_PHASE_GATE_RELEASE" | "FAILURE_PHASE_GATE_ENVIRONMENT" | "FAILURE_PHASE_AFTER_COMMIT" | "FAILURE_PHASE_HALT";
   export type Health = "HEALTH_UNSPECIFIED" | "HEALTH_HEALTHY" | "HEALTH_UNHEALTHY" | "HEALTH_ABSENT";
   export interface HeartbeatRequest {
     platform?: hostkeeper_agent_v1.Platform;

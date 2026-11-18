@@ -21,6 +21,13 @@ export interface Client {
   readonly audit: {
     list(request: hostkeeper_operator_v1.ListAuditRequest): Promise<hostkeeper_operator_v1.ListAuditResponse>;
   };
+  readonly console: {
+    open(request: hostkeeper_operator_v1.OpenConsoleRequest): Promise<hostkeeper_operator_v1.OpenConsoleResponse>;
+    power(request: hostkeeper_operator_v1.ConsolePowerRequest): Promise<hostkeeper_operator_v1.ConsolePowerResponse>;
+    setBootDevice(request: hostkeeper_operator_v1.SetBootDeviceRequest): Promise<hostkeeper_operator_v1.SetBootDeviceResponse>;
+    list(request: hostkeeper_operator_v1.ListConsoleSessionsRequest): Promise<hostkeeper_operator_v1.ListConsoleSessionsResponse>;
+    close(request: hostkeeper_operator_v1.CloseConsoleRequest): Promise<hostkeeper_operator_v1.CloseConsoleResponse>;
+  };
   readonly enrollment: {
     list(request: hostkeeper_operator_v1.ListPendingRequest): Promise<hostkeeper_operator_v1.ListPendingResponse>;
     approve(request: hostkeeper_operator_v1.ApproveRequest): Promise<hostkeeper_operator_v1.ApproveResponse>;
