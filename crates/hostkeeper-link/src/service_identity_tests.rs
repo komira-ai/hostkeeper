@@ -23,6 +23,7 @@ fn beat(reports: Vec<ServiceIdentityReport>) -> Heartbeat {
         facts_generation: None,
         remote_login_probe: None,
         operator_keys: None,
+        prerequisites: None,
         service_identities: reports,
     }
 }

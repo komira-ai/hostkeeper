@@ -150,6 +150,16 @@ impl Farm {
         self
     }
 
+    /// The same farm over the host prerequisites `prerequisites`.
+    pub(super) fn with_host_prerequisites(
+        mut self,
+        prerequisites: crate::prerequisites::HostPrerequisites,
+    ) -> Self {
+        let coordinator = Arc::try_unwrap(self.coordinator).expect("the farm's one holder");
+        self.coordinator = Arc::new(coordinator.with_host_prerequisites(prerequisites));
+        self
+    }
+
     /// The operator clears the halt of `service`.
     fn clear_halt(&self, service: &str) {
         let body =
@@ -455,6 +465,7 @@ pub(super) fn proto_message(services: &[Svc]) -> proto::HeartbeatRequest {
         facts_generation: None,
         remote_login_probe: None,
         operator_keys: None,
+        prerequisites: None,
         service_identities: Vec::new(),
     }
 }

@@ -40,7 +40,9 @@
 //! only while the coordinator advertises [`Feature::FactsV1`], and before the order of the same
 //! reply. Its operator keys ([`PushedKeys`]) go to the daemon's [`OperatorKeysSink`], which writes
 //! the managed block of the login account's `authorized_keys`, only while the coordinator
-//! advertises [`Feature::OperatorKeysV1`].
+//! advertises [`Feature::OperatorKeysV1`]. Its host prerequisites ([`PushedPrerequisites`]) go to
+//! the daemon's [`PrerequisitesSink`], which makes sure of them on the host, only while the
+//! coordinator advertises [`Feature::PrerequisitesV1`].
 //!
 //! [`GrpcMtlsLink`] ([`grpc`]) is the same call over gRPC (`Coordinator.Heartbeat` of
 //! `hostkeeper.agent.v1`) and HTTP/2 on the same mutual TLS, reaching the coordinator through a
@@ -62,6 +64,7 @@ pub mod operator_keys;
 pub mod order;
 pub mod pki;
 pub mod ports;
+pub mod prerequisites;
 pub mod probe;
 mod proto_map;
 pub mod repositories;
@@ -95,9 +98,13 @@ pub use pki::PkiCertSource;
 pub use ports::{
     CertSource, CertState, ClientIdentity, ClockSleeper, CoordinatorLink, Dispatch, Drift,
     FactsSink, HeldHalts, Job, LinkError, Log, Observation, OperatorKeysSink, OrderSink,
-    RecordedService, RemoteLoginProbeSource, RenewalSource, ReplyFault, RepositorySink,
-    ServiceObserver, ServiceRecords, Sleeper, StopFlag, ThreadDispatch, Tick, TrustFault,
-    TrustedRootSource, UnixClock, Unsendable,
+    PrerequisitesSink, RecordedService, RemoteLoginProbeSource, RenewalSource, ReplyFault,
+    RepositorySink, ServiceObserver, ServiceRecords, Sleeper, StopFlag, ThreadDispatch, Tick,
+    TrustFault, TrustedRootSource, UnixClock, Unsendable,
+};
+pub use prerequisites::{
+    MAX_PREREQUISITE_REASON, MAX_PREREQUISITE_VERSION, PrerequisiteState, PrerequisiteStatus,
+    PrerequisitesRefusal, PrerequisitesReport, PushedPrerequisites,
 };
 pub use probe::{ProbeStep, RemoteLoginProbe};
 pub use repositories::{MAX_REFUSAL_REASON, PushedSet, RepositoriesReport, RepositoryRefusal};

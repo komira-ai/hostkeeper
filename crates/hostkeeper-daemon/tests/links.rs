@@ -93,6 +93,7 @@ fn links_with(
         console: None,
         remote_login_probe: None,
         operator_keys: None,
+        prerequisites: None,
         identity: None,
     }
 }

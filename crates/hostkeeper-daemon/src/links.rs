@@ -14,7 +14,8 @@
 //! [`crate::link_adapters`] ([`Links::heartbeater`]). On a Linux host it also gives the repository
 //! sets the coordinator pushes to [`crate::repository_push::RepositoryPush`]; on every host it
 //! gives the host's facts the coordinator sends to the facts file ([`FactsFile`]) and the operator keys
-//! it sends to the host's [`Links::operator_keys`].
+//! it sends to the host's [`Links::operator_keys`], and the host prerequisites it sends to the host's
+//! [`Links::prerequisites`].
 //!
 //! The watchdog: after each heartbeat, whatever it came to, the heartbeat loop tells the service
 //! manager it is alive ([`Links::watchdog`], `WATCHDOG=1` under systemd), and nothing else sends
@@ -54,8 +55,8 @@ use hostkeeper_enroll::{Enroller, RETRY_SECS};
 use hostkeeper_link::{
     CertSource, ClientIdentity, CoordinatorLink, Dispatch, GrpcLinkError, GrpcMtlsLink, Heartbeat,
     Heartbeater, JsonMtlsLink, LinkError, LoopConfig, NegotiatedLink, OperatorKeysSink, Platform,
-    Ports, RemoteLoginProbeSource, Reply, RepositorySink, Sleeper, StopFlag, TcpDial, TcpTransport,
-    Tick, UnixClock,
+    Ports, PrerequisitesSink, RemoteLoginProbeSource, Reply, RepositorySink, Sleeper, StopFlag,
+    TcpDial, TcpTransport, Tick, UnixClock,
 };
 use hostkeeper_steps::Clock;
 
@@ -133,6 +134,10 @@ pub struct Links {
     /// account's `authorized_keys`, which every heartbeat reports and a set the coordinator sends
     /// replaces. A daemon that has one announces `operator-keys-v1`.
     pub operator_keys: Option<Arc<dyn OperatorKeysSink>>,
+    /// The host prerequisites of the host's group ([`crate::prerequisites`]), which every
+    /// heartbeat reports and a set the coordinator sends replaces. A daemon that has them
+    /// announces `prerequisites-v1`.
+    pub prerequisites: Option<Arc<dyn PrerequisitesSink>>,
     /// The service identity loop ([`crate::service_identity`]): its worker is started as the third
     /// of [`Links::start`], and its source is what every heartbeat reports. A daemon that has one
     /// announces `service-identity-v1`.
@@ -225,6 +230,7 @@ impl Links {
                 ))),
                 remote_login_probe: self.remote_login_probe.clone(),
                 operator_keys: self.operator_keys.clone(),
+                prerequisites: self.prerequisites.clone(),
                 service_identities: self.identity.as_ref().map(|i| Arc::clone(&i.source)),
             },
         )

@@ -25,6 +25,7 @@ mod operator_keys;
 mod orders;
 mod pki;
 mod ports;
+mod prerequisites;
 mod remote_login_probe;
 mod repositories;
 mod resend;

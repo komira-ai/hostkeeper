@@ -109,7 +109,8 @@ use hostkeeper_wire::wire::clip_renew_error;
 
 use crate::beat::{
     ANNOUNCED, FACTS, Feature, Features, Health, Heartbeat, Liveness, OPERATOR_KEYS, Observed,
-    PRIVATE_REPOSITORY, Platform, REPOSITORIES, Renewal, SERVICE_IDENTITY, ServiceFacts, fit,
+    PREREQUISITES, PRIVATE_REPOSITORY, Platform, REPOSITORIES, Renewal, SERVICE_IDENTITY,
+    ServiceFacts, fit,
 };
 use crate::deferral::{Book, Deferral};
 use crate::host_facts::PushedFacts;
@@ -117,8 +118,9 @@ use crate::names::Reason;
 use crate::order::{Acknowledged, Order, OrderRef, OrderResult, Outcome, Reply, Verb};
 use crate::ports::{
     CertSource, CertState, CoordinatorLink, Dispatch, FactsSink, HeldHalts, LinkError, Log,
-    OperatorKeysSink, OrderSink, RecordedService, RemoteLoginProbeSource, RenewalSource,
-    RepositorySink, ServiceObserver, ServiceRecords, Sleeper, Tick, TrustedRootSource, UnixClock,
+    OperatorKeysSink, OrderSink, PrerequisitesSink, RecordedService, RemoteLoginProbeSource,
+    RenewalSource, RepositorySink, ServiceObserver, ServiceRecords, Sleeper, Tick,
+    TrustedRootSource, UnixClock,
 };
 use crate::service_identity::ServiceIdentitySource;
 
@@ -188,6 +190,9 @@ pub struct Ports {
     /// The managed block of the login account's `authorized_keys`; none on a host that keeps
     /// none, which then announces no `operator-keys-v1`, sends no report and writes no keys.
     pub operator_keys: Option<Arc<dyn OperatorKeysSink>>,
+    /// The host prerequisites of the host's group; none on a host that keeps none, which then
+    /// announces no `prerequisites-v1`, sends no report and is sent no set.
+    pub prerequisites: Option<Arc<dyn PrerequisitesSink>>,
     /// What the daemon holds of its services' identities; none on a host that keeps none, which
     /// then announces no `service-identity-v1` and sends no report.
     pub service_identities: Option<Arc<dyn ServiceIdentitySource>>,
@@ -561,6 +566,7 @@ impl Heartbeater {
                 .as_ref()
                 .and_then(|source| source.remote_login_probe()),
             operator_keys: self.ports.operator_keys.as_ref().map(|sink| sink.report()),
+            prerequisites: self.ports.prerequisites.as_ref().map(|sink| sink.report()),
             service_identities: self
                 .ports
                 .service_identities
@@ -572,7 +578,8 @@ impl Heartbeater {
     /// The features every heartbeat announces: [`ANNOUNCED`], `repositories-v1` when the host
     /// has a repository configuration to manage, `facts-v1` when it has a facts file, and
     /// `private-repository-v1` when it has a repository configuration or is told it reads
-    /// private repositories, and `operator-keys-v1` when it keeps operator keys.
+    /// private repositories, `operator-keys-v1` when it keeps operator keys, and
+    /// `prerequisites-v1` when it keeps host prerequisites.
     fn announced(&self) -> Vec<Feature> {
         let mut features = ANNOUNCED.to_vec();
         if self.ports.repositories.is_some() {
@@ -586,6 +593,9 @@ impl Heartbeater {
         }
         if self.ports.operator_keys.is_some() {
             features.push(OPERATOR_KEYS);
+        }
+        if self.ports.prerequisites.is_some() {
+            features.push(PREREQUISITES);
         }
         if self.ports.service_identities.is_some() {
             features.push(SERVICE_IDENTITY);
@@ -653,6 +663,7 @@ impl Heartbeater {
             repositories,
             facts,
             operator_keys,
+            prerequisites,
         } = reply;
         self.advertised = Features::of(&features);
         let facts_held = self.write_facts(facts);
@@ -667,6 +678,12 @@ impl Heartbeater {
             && let Some(sink) = &self.ports.operator_keys
         {
             sink.apply(&keys);
+        }
+        if let Some(set) = prerequisites
+            && self.advertised.has(Feature::PrerequisitesV1)
+            && let Some(sink) = &self.ports.prerequisites
+        {
+            sink.apply(&set);
         }
         let in_order = self.advertised.has(Feature::VerdictAcksV1);
         let mut counted_now = Vec::new();

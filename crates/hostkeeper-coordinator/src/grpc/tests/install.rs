@@ -43,6 +43,7 @@ fn installer_beat(services: &[(&str, &str)]) -> proto::HeartbeatRequest {
         facts_generation: None,
         remote_login_probe: None,
         operator_keys: None,
+        prerequisites: None,
         service_identities: Vec::new(),
     }
 }

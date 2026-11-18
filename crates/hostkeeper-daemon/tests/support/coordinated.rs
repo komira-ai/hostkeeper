@@ -344,6 +344,7 @@ impl CoordinatorLink for InProcess {
             repositories: None,
             facts: None,
             operator_keys: None,
+            prerequisites: None,
         })
     }
 }
@@ -400,6 +401,7 @@ impl Host {
             console: None,
             remote_login_probe: None,
             operator_keys: None,
+            prerequisites: None,
             identity: None,
         };
         Host {

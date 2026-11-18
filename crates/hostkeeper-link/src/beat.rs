@@ -19,7 +19,11 @@
 //! likewise. A Mac's Remote Login probe ([`Heartbeat::remote_login_probe`]) is counted too, and is
 //! the first optional fact dropped. The operator keys report ([`Heartbeat::operator_keys`], as
 //! `operator_keys`: a digest and two texts of at most [`crate::MAX_KEYS_REASON`] bytes each) is
-//! counted and never dropped: it is not in [`DROP_ORDER`]. So is the services' identities report
+//! counted and never dropped: it is not in [`DROP_ORDER`]. The host prerequisites report
+//! ([`Heartbeat::prerequisites`], as `prerequisites`: a digest, a refusal and one state for each of
+//! at most 16 names held; only a name this release knows carries a version or a reason, so with
+//! the one it knows the report is a few hundred bytes and at most about 4 KiB) is counted and
+//! never dropped either. So is the services' identities report
 //! ([`Heartbeat::service_identities`], as `service_identities`: a service name, an end and a text
 //! of at most [`crate::MAX_IDENTITY_ERROR`] bytes each).
 
@@ -30,6 +34,7 @@ use serde_json::{Map, Value, json};
 use crate::operator_keys::KeysReport;
 use crate::order::{DeferredReport, OrderResult};
 use crate::ports::Drift;
+use crate::prerequisites::PrerequisitesReport;
 use crate::probe::RemoteLoginProbe;
 use crate::repositories::RepositoriesReport;
 use crate::service_identity::ServiceIdentityReport;
@@ -99,6 +104,11 @@ pub enum Feature {
     /// by a daemon with a sink for them ([`crate::OperatorKeysSink`]): the loop adds it
     /// ([`OPERATOR_KEYS`]).
     OperatorKeysV1,
+    /// `prerequisites-v1`: the daemon makes sure of the host prerequisites the coordinator sends
+    /// ([`crate::PushedPrerequisites`]) and reports where each stands
+    /// ([`crate::PrerequisitesReport`]). Like `operator-keys-v1` it is announced only by a daemon
+    /// with a sink for them ([`crate::PrerequisitesSink`]): the loop adds it ([`PREREQUISITES`]).
+    PrerequisitesV1,
     /// `service-identity-v1`: the daemon keeps a key and an 8-hour certificate for each service
     /// whose entry asks for an identity, and reports them
     /// ([`Heartbeat::service_identities`]). Like `operator-keys-v1` it is announced only by a
@@ -134,7 +144,9 @@ pub const FACTS: Feature = Feature::FactsV1;
 pub const PRIVATE_REPOSITORY: Feature = Feature::PrivateRepositoryV1;
 /// The feature a daemon with a [`crate::OperatorKeysSink`] announces after [`ANNOUNCED`].
 pub const OPERATOR_KEYS: Feature = Feature::OperatorKeysV1;
-/// The feature a daemon with a [`crate::ServiceIdentitySource`] announces last.
+/// The feature a daemon with a [`crate::PrerequisitesSink`] announces after [`OPERATOR_KEYS`].
+pub const PREREQUISITES: Feature = Feature::PrerequisitesV1;
+/// The feature a daemon with a [`crate::ServiceIdentitySource`] announces after [`PREREQUISITES`].
 pub const SERVICE_IDENTITY: Feature = Feature::ServiceIdentityV1;
 
 impl Feature {
@@ -156,6 +168,7 @@ impl Feature {
             Feature::FactsV1 => "facts-v1",
             Feature::PrivateRepositoryV1 => "private-repository-v1",
             Feature::OperatorKeysV1 => "operator-keys-v1",
+            Feature::PrerequisitesV1 => "prerequisites-v1",
             Feature::ServiceIdentityV1 => "service-identity-v1",
         }
     }
@@ -169,6 +182,7 @@ impl Feature {
                 FACTS,
                 PRIVATE_REPOSITORY,
                 OPERATOR_KEYS,
+                PREREQUISITES,
                 SERVICE_IDENTITY,
             ])
             .find(|feature| feature.as_str() == name)
@@ -412,6 +426,9 @@ pub struct Heartbeat {
     /// What the managed block of the login account's `authorized_keys` holds; none from a daemon
     /// that keeps no operator keys. Sent over gRPC only, and counted toward the bound on both.
     pub operator_keys: Option<KeysReport>,
+    /// What the daemon holds of the host prerequisites and where each stands; none from a daemon
+    /// that keeps none. Sent over gRPC only, and counted toward the bound on both.
+    pub prerequisites: Option<PrerequisitesReport>,
     /// What the daemon holds of each service's identity, sorted by service name; empty from a
     /// daemon that keeps none. Sent over gRPC only, and counted toward the bound on both.
     pub service_identities: Vec<ServiceIdentityReport>,
@@ -480,6 +497,9 @@ impl Heartbeat {
                 "operator_keys".to_owned(),
                 json!({ "digest": report.digest, "refused": refused, "failed": report.failed }),
             );
+        }
+        if let Some(report) = &self.prerequisites {
+            beat.insert("prerequisites".to_owned(), prerequisites_json(report));
         }
         if !self.service_identities.is_empty() {
             let reports: Vec<Value> = self
@@ -586,4 +606,29 @@ pub fn fit(mut beat: Heartbeat) -> Result<Fitted, Oversize> {
     } else {
         Err(Oversize::Bytes { len })
     }
+}
+
+/// The host prerequisites report as the heartbeat's JSON counts it: the field names of the gRPC
+/// message, the status by its wire name.
+fn prerequisites_json(report: &PrerequisitesReport) -> Value {
+    let refused = report
+        .refused
+        .as_ref()
+        .map(|refusal| json!({ "digest": refusal.digest, "reason": refusal.reason }));
+    let states: Vec<Value> = report
+        .states
+        .iter()
+        .map(|state| {
+            json!({
+                "name": state.name,
+                "status": state.status.as_str(),
+                "version": state.version,
+                "reason": state.reason,
+                "failures": state.failures,
+                "next_try_unix": state.next_try_unix,
+                "seen_unix": state.seen_unix,
+            })
+        })
+        .collect();
+    json!({ "digest": report.digest, "refused": refused, "states": states })
 }

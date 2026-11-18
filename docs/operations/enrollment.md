@@ -648,7 +648,7 @@ Read a host's assurance and its current key, then approve the key you checked:
 hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     host-identity get --node-id web-17
 hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
-    host-identity approve --node-id web-17 --key-sha256 <key_sha256 from get> \
+    host-identity approve --node-id web-17 --key-sha256 <key-sha256> \
     --reason "racked and checked on the console"
 ```
 

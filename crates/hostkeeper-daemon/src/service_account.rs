@@ -4,8 +4,8 @@
 //!
 //! - Linux, under systemd and under OpenRC: the line of the passwd file whose name it is
 //!   ([`PasswdAccounts`]): its uid and gid.
-//! - macOS: the directory service, `dscl . -read /Users/<name> UniqueID PrimaryGroupID`, through
-//!   the same program port as the operator keys' account ([`DsclAccounts`]).
+//! - macOS: the directory service, `dscl . -read` of the account's record under the local `Users`
+//!   path, through the same program port as the operator keys' account ([`DsclAccounts`]).
 //!
 //! An account the host does not have, a name that is not an account name, and a file or a tool
 //! that cannot be read each give a reason, which is the service's reported error: nothing is

@@ -1,6 +1,6 @@
 //! What service identity adds to the wire (`docs/design/service-identity.md`), new since the
 //! committed baseline (`proto/compat/baseline.binpb`, the release before): `Manifest.identity`
-//! (10) and `Manifest.identity_account` (11), `HeartbeatRequest.service_identities` (16) with its
+//! (10) and `Manifest.identity_account` (11), `HeartbeatRequest.service_identities` (17) with its
 //! `ServiceIdentityReport`, the coordinator's `IssueServiceCertificate` and `ListDeny` RPCs and
 //! the `HostIdentity` service of the operator API. A reader of the release before keeps each
 //! field as one it does not know and writes it back byte for byte; this build reads what that
@@ -128,7 +128,7 @@ fn an_older_reader_keeps_a_manifests_identity_fields() {
 }
 
 /// Proves a heartbeat with identity reports reads in the release before with the platform and
-/// the features as written, keeps field 16 unknown, and writes it back byte for byte.
+/// the features as written, keeps field 17 unknown, and writes it back byte for byte.
 /// Catches: a heartbeat a coordinator of the release before refuses, reads other fields of
 /// differently, or writes back changed.
 #[test]
@@ -160,7 +160,7 @@ fn an_older_coordinator_keeps_a_heartbeats_identity_reports() {
         beat
     );
     let read = DynamicMessage::decode(beat_d, bytes.as_slice()).expect("decodes");
-    assert_eq!(unknown_numbers(&read), [16]);
+    assert_eq!(unknown_numbers(&read), [17]);
     assert_eq!(
         read.get_field_by_name("platform").as_deref(),
         Some(&Value::EnumNumber(agent::Platform::LinuxX8664.into()))

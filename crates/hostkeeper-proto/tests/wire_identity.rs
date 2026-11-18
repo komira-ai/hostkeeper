@@ -224,6 +224,6 @@ fn the_fields_of_service_identity_are_pinned() {
     let beat = fields_of(&pool, "hostkeeper.agent.v1.HeartbeatRequest");
     assert_eq!(
         beat.last(),
-        Some(&("service_identities".to_owned(), 16, "repeated"))
+        Some(&("service_identities".to_owned(), 17, "repeated"))
     );
 }

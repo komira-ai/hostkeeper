@@ -67,6 +67,9 @@
 //!   file) and reported by digest in every heartbeat; [`login_account`] finds the account (root on
 //!   Linux, a Mac's one local administrator) and, on a Mac, [`mac_ssh`] makes sure Remote Login is
 //!   on and the account may use ssh.
+//! - [`prerequisites`]: the host prerequisites the coordinator sends (`prerequisites-v1`), made sure
+//!   of on the host and reported by state in every heartbeat; [`xcode_clt`] is the one there is,
+//!   Apple's Command Line Tools, looked for and installed headless on a Mac.
 //! - [`service_identity`]: the key and 8-hour certificate of each service whose entry asks for an
 //!   identity (`identity` of its manifest), kept in the identity directory (`--identity-dir`) by
 //!   `hostkeeper_enroll::ServiceIdentities` on a worker of its own and reported in every
@@ -137,6 +140,7 @@ pub mod own_package;
 pub mod packaged;
 pub mod packages;
 pub mod place;
+pub mod prerequisites;
 pub mod prune;
 pub mod real_packages;
 pub mod refusal;
@@ -161,6 +165,7 @@ pub mod unix_clock;
 pub mod verb;
 pub mod verbs;
 pub mod watchers;
+pub mod xcode_clt;
 
 pub use boot::{BootError, BootReport, BootStep, Outcome, ServiceBoot, Stage};
 pub use executor::{

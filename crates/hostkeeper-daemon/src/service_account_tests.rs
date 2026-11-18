@@ -70,7 +70,7 @@ fn read(name: &str) -> Vec<String> {
     [
         ".",
         "-read",
-        &format!("/Users/{name}"),
+        &format!("{}/{name}", "/Users"),
         "UniqueID",
         "PrimaryGroupID",
     ]

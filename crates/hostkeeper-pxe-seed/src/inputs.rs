@@ -240,6 +240,13 @@ impl SerialConsole {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// GRUB's `serial --unit` for the port: `n` of a `ttyS<n>` (GRUB's unit `n` is the PC's
+    /// port COM`n+1`, which Linux names `ttyS<n>`). `None` for a `ttyAMA<n>`, which has no such
+    /// unit.
+    pub(crate) fn grub_unit(&self) -> Option<&str> {
+        self.0.strip_prefix("ttyS")
+    }
 }
 
 impl FromStr for SerialConsole {

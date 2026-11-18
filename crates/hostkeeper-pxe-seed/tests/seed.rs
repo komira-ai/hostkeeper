@@ -1,6 +1,7 @@
 //! The seed of a machine, against its goldens by exact equality: for each platform, with and
 //! without a role, with one SSH key and several, for each `--install-disk` form, with a serial
-//! console, and on a port other than 80 (network-install.md section 11, "Seed generator"). Each
+//! console (`ttyS1` with GRUB's serial terminal, an Arm `ttyAMA` port without), and on a port
+//! other than 80 (network-install.md section 11, "Seed generator"). Each
 //! user-data is also read back as YAML, and the whole list of its keys and values is asserted, so
 //! no field beyond the documented ones is in a seed.
 
@@ -246,8 +247,75 @@ fn each_install_disk_form_is_its_golden() {
     }
 }
 
+/// The GRUB defaults file of a seed: the content of its third `write_files` entry, read back as
+/// YAML.
+fn grub_defaults(user_data: &str) -> String {
+    scalars(user_data)
+        .into_iter()
+        .find(|(path, _)| path == ".autoinstall.user-data.write_files[2].content")
+        .map(|(_, value)| value)
+        .expect("a GRUB defaults file")
+}
+
+/// The fleet's serial console, COM2 = `ttyS1` (docs/design/console-broker.md, section 5.2), on
+/// x86-64: the installed kernel's `console=` and the getty on `ttyS1`, and GRUB's terminal on
+/// the console and on serial unit 1 at 115200 baud, so GRUB's menu shows over the BMC's serial
+/// console too.
+///
+/// Catches a seed that leaves GRUB's menu off the serial console, puts it on another unit or
+/// speed, or differs from its golden in any byte.
+#[test]
+#[expect(
+    non_snake_case,
+    reason = "named after the port, ttyS1, as the console design names this test"
+)]
+fn the_seed_writes_the_grub_serial_terminal_for_ttyS1() {
+    let mut build = Build::new(LinuxPlatform::X86_64);
+    build.console = Some("ttyS1".parse().expect("a serial port"));
+    let user_data = build.seed().user_data;
+    assert_eq!(
+        user_data,
+        include_str!("golden/user-data-serial-console.yaml")
+    );
+    assert_eq!(
+        grub_defaults(&user_data),
+        "GRUB_CMDLINE_LINUX=\"$GRUB_CMDLINE_LINUX console=tty0 console=ttyS1,115200n8\"\n\
+         GRUB_TERMINAL=\"console serial\"\n\
+         GRUB_SERIAL_COMMAND=\"serial --unit=1 --speed=115200\"\n"
+    );
+}
+
+/// GRUB's serial unit is the number of the `ttyS` port, at each end of its range and with two
+/// digits; a `ttyAMA` port gets the kernel's `console=` alone and no GRUB serial terminal.
+///
+/// Catches a unit fixed at 1 whatever the port, a unit cut to its first digit, or a GRUB serial
+/// command written for an Arm port, which has no GRUB unit.
+#[test]
+fn the_grub_serial_unit_is_the_ttys_number_and_a_ttyama_port_has_none() {
+    for (platform, port, grub) in [
+        (LinuxPlatform::X86_64, "ttyS0", Some("0")),
+        (LinuxPlatform::X86_64, "ttyS10", Some("10")),
+        (LinuxPlatform::X86_64, "ttyS99", Some("99")),
+        (LinuxPlatform::Arm64, "ttyAMA1", None),
+        (LinuxPlatform::Arm64, "ttyAMA12", None),
+    ] {
+        let mut build = Build::new(platform);
+        build.console = Some(port.parse().expect("a serial port"));
+        let mut want = format!(
+            "GRUB_CMDLINE_LINUX=\"$GRUB_CMDLINE_LINUX console=tty0 console={port},115200n8\"\n"
+        );
+        if let Some(unit) = grub {
+            want.push_str(&format!(
+                "GRUB_TERMINAL=\"console serial\"\n\
+                 GRUB_SERIAL_COMMAND=\"serial --unit={unit} --speed=115200\"\n"
+            ));
+        }
+        assert_eq!(grub_defaults(&build.seed().user_data), want, "{port}");
+    }
+}
+
 /// Catches a serial console that is not the installed kernel's `console=`, or whose getty is
-/// not enabled.
+/// not enabled, on an Arm port, whose GRUB defaults are the kernel's `console=` alone.
 #[test]
 fn a_serial_console_sets_the_kernel_console_and_enables_its_getty() {
     let mut build = Build::new(LinuxPlatform::Arm64);
@@ -255,7 +323,7 @@ fn a_serial_console_sets_the_kernel_console_and_enables_its_getty() {
     let user_data = build.seed().user_data;
     assert_eq!(
         user_data,
-        include_str!("golden/user-data-serial-console.yaml")
+        include_str!("golden/user-data-serial-console-arm64.yaml")
     );
     let added: Vec<(String, String)> = scalars(&user_data)
         .into_iter()

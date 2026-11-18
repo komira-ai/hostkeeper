@@ -208,6 +208,7 @@ fn the_heartbeat_json_has_the_wire_names() {
         facts_generation: None,
         remote_login_probe: None,
         operator_keys: None,
+        prerequisites: None,
         service_identities: Vec::new(),
     };
     let mut expected = serde_json::json!({

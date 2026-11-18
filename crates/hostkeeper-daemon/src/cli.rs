@@ -68,6 +68,7 @@ use crate::notify::{
 };
 use crate::observer::{OwnService, observer_with};
 use crate::operator_keys::OperatorKeys;
+use crate::prerequisites::Prerequisites;
 use crate::prune::{LayoutPrune, NoLockPoint};
 use crate::real_packages::RealPackages;
 use crate::repositories;
@@ -392,6 +393,8 @@ async fn start_and_serve(
 ///   after it is done reports it ([`crate::remote_login_probe::at_host_start`]);
 /// - every host keeps the operator keys the coordinator sends in the managed block of its login
 ///   account's `authorized_keys` ([`OperatorKeys::at_host`]);
+/// - every host keeps the host prerequisites the coordinator sends, which a Mac installs and a
+///   Linux host only reports ([`Prerequisites::at_host`]);
 /// - every host keeps a key and a certificate for each service whose entry asks for an identity
 ///   in the identity directory, on a worker of its own, and every heartbeat reports them
 ///   ([`identity_loop`], [`crate::service_identity`]);
@@ -433,6 +436,7 @@ pub fn host_links(
         log.clone(),
     );
     let operator_keys = OperatorKeys::at_host(kind, log.clone());
+    let prerequisites = Prerequisites::at_host(kind, log.clone());
     let identity = identity_loop(
         Arc::clone(daemon),
         identity_ports(daemon, &files.pki),
@@ -456,6 +460,7 @@ pub fn host_links(
         console,
         remote_login_probe: crate::remote_login_probe::at_host_start(kind),
         operator_keys: Some(Arc::new(operator_keys)),
+        prerequisites: Some(Arc::new(prerequisites)),
         identity: Some(identity),
     }
 }

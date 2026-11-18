@@ -433,7 +433,8 @@ const FIELDS: [(&str, &[(&str, u32)]); 39] = [
             ("facts_generation", 12),
             ("remote_login_probe", 14),
             ("operator_keys", 15),
-            ("service_identities", 16),
+            ("prerequisites", 16),
+            ("service_identities", 17),
         ],
     ),
     (
@@ -446,6 +447,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 39] = [
             ("repositories", 5),
             ("facts", 6),
             ("operator_keys", 7),
+            ("prerequisites", 8),
         ],
     ),
     (
@@ -769,6 +771,7 @@ fn wire_names_are_pinned() {
                 "mdm_tls_renewal_failed",
                 "mdm_dns_credential_rejected",
                 "mdm_identity_near_expiry",
+                "prerequisite_failed",
             ],
         ),
         (
