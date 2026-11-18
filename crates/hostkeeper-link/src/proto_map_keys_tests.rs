@@ -22,6 +22,7 @@ fn beat(report: Option<KeysReport>) -> Heartbeat {
         facts_generation: None,
         remote_login_probe: None,
         operator_keys: report,
+        service_identities: Vec::new(),
     }
 }
 

@@ -18,9 +18,15 @@
 //! The port is synchronous, so a [`GrpcEnroll`] owns a Tokio runtime on the current thread and
 //! blocks on it for each call. It must not be called, or dropped, from inside a Tokio runtime.
 //!
+//! [`GrpcIssuer`] is the [`ServiceCertIssuer`] port over the same client: it reads the coordinator's
+//! CA again for each call, refuses a coordinator whose CA is not the pinned one, and calls
+//! `IssueServiceCertificate` with the host's current certificate and key.
+//!
 //! `convert.rs` turns the messages into the port's types and back.
 
 mod convert;
+#[cfg(test)]
+mod issue_tests;
 mod probe;
 #[cfg(test)]
 mod server;
@@ -37,7 +43,9 @@ use tokio::runtime::Runtime;
 use tonic::codegen::http::Uri;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint, Identity};
 
+use crate::service_identity::{IssueAnswer, ServiceCertIssuer};
 use crate::store::CurrentPaths;
+use crate::verify::sha256_hex;
 use crate::wire::{
     CoordinatorEnroll, EnrollAnswer, EnrollRequest, Poll, PollAnswer, RenewAnswer, RenewRequest,
     TransportError,
@@ -271,5 +279,50 @@ impl CoordinatorEnroll for GrpcEnroll {
             .runtime
             .block_on(client.renew(convert::renew_request(request)));
         convert::renew_answer(reply, &request.host_id)
+    }
+}
+
+/// The coordinator's `IssueServiceCertificate`, over mutual TLS with the host's certificate, to a
+/// coordinator whose CA is the pinned one.
+#[derive(Debug)]
+pub struct GrpcIssuer {
+    enroll: GrpcEnroll,
+    /// The SHA-256 of the pinned CA, lower-case hex.
+    ca_sha256: String,
+}
+
+impl GrpcIssuer {
+    /// A client as [`GrpcEnroll::new`] makes one, for the coordinator whose CA has the SHA-256
+    /// `ca_sha256` (the daemon config's pin).
+    ///
+    /// # Errors
+    /// [`GrpcError`], as [`GrpcEnroll::new`].
+    pub fn new(
+        endpoint: &str,
+        current: CurrentPaths,
+        timeout: Duration,
+        ca_sha256: &str,
+    ) -> Result<GrpcIssuer, GrpcError> {
+        Ok(GrpcIssuer {
+            enroll: GrpcEnroll::new(endpoint, current, timeout)?,
+            ca_sha256: ca_sha256.to_owned(),
+        })
+    }
+}
+
+impl ServiceCertIssuer for GrpcIssuer {
+    fn issue(&mut self, service: &str, csr_der: &[u8]) -> Result<IssueAnswer, TransportError> {
+        let presented = sha256_hex(&self.enroll.presented_ca_der()?);
+        if presented != self.ca_sha256 {
+            return Err(TransportError(format!(
+                "the coordinator presents a CA whose SHA-256 is {presented}, not the pinned ca_sha256; nothing was sent"
+            )));
+        }
+        let mut client = self.enroll.client(Some(&self.enroll.current))?;
+        let reply = self
+            .enroll
+            .runtime
+            .block_on(client.issue_service_certificate(convert::issue_request(service, csr_der)));
+        convert::issue_answer(reply)
     }
 }

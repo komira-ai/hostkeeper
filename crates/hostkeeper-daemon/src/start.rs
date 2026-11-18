@@ -39,6 +39,7 @@ use std::sync::{Arc, Weak};
 
 use hostkeeper_config::daemon::{ConfigError, DaemonConfig};
 use hostkeeper_config::manifest::{BadHostkeeperVersion, HostkeeperVersion};
+use hostkeeper_enroll::IdentityDir;
 use hostkeeper_install::macos_pkg::signers::SignersError;
 use hostkeeper_install::repository::config::RepositoriesError;
 use hostkeeper_install::version::HostFs;
@@ -77,6 +78,8 @@ pub struct Settings {
     pub packages_dir: PathBuf,
     /// The host's facts file (`--facts-file`).
     pub facts_file: PathBuf,
+    /// The identity directory (`--identity-dir`): `root:root` on a host.
+    pub identity: IdentityDir,
     /// The run directory, the host platform's (`hostkeeper_launchd::Platform`'s `run_dir`):
     /// `/run` on Linux, `/var/run` on macOS.
     pub run_dir: PathBuf,
@@ -275,6 +278,7 @@ pub fn startup_notifying(
         state: settings.state_dir.clone(),
         packages: settings.packages_dir.clone(),
         facts: settings.facts_file.clone(),
+        identity: settings.identity.clone(),
     };
     let daemon = Arc::new(Daemon::new(config, dirs, ports, own_version));
     daemon.clear_policy_rc_d(&mut report);

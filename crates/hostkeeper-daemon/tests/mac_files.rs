@@ -12,6 +12,7 @@ use hostkeeper_daemon::cli::{self, EXIT_CONFIG, HostFiles};
 use hostkeeper_daemon::mac_files::{self, MacFilesError, Rendered};
 use hostkeeper_daemon::notify::NoNotifier;
 use hostkeeper_daemon::start::{Settings, StartError};
+use hostkeeper_enroll::IdentityDir;
 use hostkeeper_install::macos_pkg::signers;
 use hostkeeper_launchd::postinstall::{MANAGED_MACOS_PKG, MANAGED_STORES};
 use hostkeeper_launchd::{Platform, PlatformKind};
@@ -145,6 +146,7 @@ impl Mac {
             config,
             state_dir: self.root().join("state"),
             facts_file: packages.with_file_name("facts.json"),
+            identity: IdentityDir::host(&packages.with_file_name("identity")),
             packages_dir: packages,
             run_dir: self.root().join("run"),
             trusted_uid: me(),

@@ -79,6 +79,7 @@ pub(super) enum Seen {
     Enroll(pb::EnrollRequest),
     Poll(pb::PollRequest),
     Renew(pb::RenewRequest),
+    Issue(pb::IssueServiceCertificateRequest),
 }
 
 /// A call the service received, and the certificates the client presented in the handshake.
@@ -94,6 +95,7 @@ struct Shared {
     enroll: Mutex<VecDeque<Result<pb::EnrollResponse, Status>>>,
     poll: Mutex<VecDeque<Result<pb::PollResponse, Status>>>,
     renew: Mutex<VecDeque<Result<pb::RenewResponse, Status>>>,
+    issue: Mutex<VecDeque<Result<pb::IssueServiceCertificateResponse, Status>>>,
 }
 
 /// The nonce a well-behaved coordinator gives.
@@ -122,6 +124,12 @@ impl Double {
     /// The next `Renew` is answered with `answer`.
     pub fn script_renew(&self, answer: Result<pb::RenewResponse, Status>) {
         self.0.renew.lock().expect("script").push_back(answer);
+    }
+
+    /// The next `IssueServiceCertificate` is answered with `answer`; with none scripted, the
+    /// double answers as a coordinator that does not have the call.
+    pub fn script_issue(&self, answer: Result<pb::IssueServiceCertificateResponse, Status>) {
+        self.0.issue.lock().expect("script").push_back(answer);
     }
 
     fn record<T>(&self, request: &Request<T>, seen: Seen) {
@@ -212,11 +220,17 @@ impl Coordinator for Double {
 
     async fn issue_service_certificate(
         &self,
-        _request: Request<pb::IssueServiceCertificateRequest>,
+        request: Request<pb::IssueServiceCertificateRequest>,
     ) -> Result<Response<pb::IssueServiceCertificateResponse>, Status> {
-        Err(Status::unimplemented(
-            "this coordinator issues no service certificate",
-        ))
+        self.record(&request, Seen::Issue(request.get_ref().clone()));
+        let scripted = self.0.issue.lock().expect("script").pop_front();
+        scripted
+            .unwrap_or_else(|| {
+                Err(Status::unimplemented(
+                    "this coordinator issues no service certificate",
+                ))
+            })
+            .map(Response::new)
     }
 
     async fn list_deny(

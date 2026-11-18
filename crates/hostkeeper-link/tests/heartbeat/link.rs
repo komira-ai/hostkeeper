@@ -32,6 +32,7 @@ fn beat() -> Heartbeat {
         facts_generation: None,
         remote_login_probe: None,
         operator_keys: None,
+        service_identities: Vec::new(),
     }
 }
 

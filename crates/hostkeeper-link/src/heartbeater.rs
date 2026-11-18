@@ -109,7 +109,7 @@ use hostkeeper_wire::wire::clip_renew_error;
 
 use crate::beat::{
     ANNOUNCED, FACTS, Feature, Features, Health, Heartbeat, Liveness, OPERATOR_KEYS, Observed,
-    PRIVATE_REPOSITORY, Platform, REPOSITORIES, Renewal, ServiceFacts, fit,
+    PRIVATE_REPOSITORY, Platform, REPOSITORIES, Renewal, SERVICE_IDENTITY, ServiceFacts, fit,
 };
 use crate::deferral::{Book, Deferral};
 use crate::host_facts::PushedFacts;
@@ -120,6 +120,7 @@ use crate::ports::{
     OperatorKeysSink, OrderSink, RecordedService, RemoteLoginProbeSource, RenewalSource,
     RepositorySink, ServiceObserver, ServiceRecords, Sleeper, Tick, TrustedRootSource, UnixClock,
 };
+use crate::service_identity::ServiceIdentitySource;
 
 /// The period when the daemon is given none: 15 seconds.
 pub const DEFAULT_HEARTBEAT_SECS: NonZeroU64 = NonZeroU64::MIN.saturating_add(14);
@@ -187,6 +188,9 @@ pub struct Ports {
     /// The managed block of the login account's `authorized_keys`; none on a host that keeps
     /// none, which then announces no `operator-keys-v1`, sends no report and writes no keys.
     pub operator_keys: Option<Arc<dyn OperatorKeysSink>>,
+    /// What the daemon holds of its services' identities; none on a host that keeps none, which
+    /// then announces no `service-identity-v1` and sends no report.
+    pub service_identities: Option<Arc<dyn ServiceIdentitySource>>,
 }
 
 /// What one heartbeat came to.
@@ -557,6 +561,11 @@ impl Heartbeater {
                 .as_ref()
                 .and_then(|source| source.remote_login_probe()),
             operator_keys: self.ports.operator_keys.as_ref().map(|sink| sink.report()),
+            service_identities: self
+                .ports
+                .service_identities
+                .as_ref()
+                .map_or_else(Vec::new, |source| source.reports()),
         })
     }
 
@@ -577,6 +586,9 @@ impl Heartbeater {
         }
         if self.ports.operator_keys.is_some() {
             features.push(OPERATOR_KEYS);
+        }
+        if self.ports.service_identities.is_some() {
+            features.push(SERVICE_IDENTITY);
         }
         features
     }

@@ -343,6 +343,7 @@ fn a_reply_from_the_real_coordinator_maps_to_the_loops_reply() {
         facts_generation: None,
         remote_login_probe: None,
         operator_keys: None,
+        service_identities: Vec::new(),
     };
     assert_eq!(
         json.heartbeat(&farm.host.identity(), &beat),

@@ -46,6 +46,7 @@ use crate::order::{DeferredReport, Entry, Order, OrderResult, Outcome, Reply, Ta
 use crate::ports::{Drift, Unsendable};
 use crate::probe::RemoteLoginProbe;
 use crate::repositories::{PushedSet, RepositoriesReport};
+use crate::service_identity::ServiceIdentityReport;
 use crate::wire_map::acknowledged;
 
 /// Why an order whose verb the daemon does not run, or that has none, is not run.
@@ -90,7 +91,11 @@ pub(crate) fn heartbeat(beat: &Heartbeat) -> Result<pb::HeartbeatRequest, Unsend
         facts_generation: beat.facts_generation,
         remote_login_probe: beat.remote_login_probe.as_ref().map(remote_login_probe),
         operator_keys: beat.operator_keys.as_ref().map(keys_report),
-        service_identities: Vec::new(),
+        service_identities: beat
+            .service_identities
+            .iter()
+            .map(identity_report)
+            .collect(),
     })
 }
 
@@ -142,6 +147,15 @@ fn keys_report(report: &KeysReport) -> pb::OperatorKeysReport {
                 reason: refusal.reason.clone(),
             }),
         failed: report.failed.clone(),
+    }
+}
+
+/// One service's identity as `service_identities`.
+fn identity_report(report: &ServiceIdentityReport) -> pb::ServiceIdentityReport {
+    pb::ServiceIdentityReport {
+        service: report.service.clone(),
+        not_after_unix: report.not_after_unix,
+        last_error: report.last_error.clone(),
     }
 }
 

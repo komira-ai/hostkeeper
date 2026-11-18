@@ -126,7 +126,12 @@ impl HostKey {
     /// A PKCS#10 request (DER) for this key, with the subject [`REQUEST_SUBJECT`]
     /// (`CN=host:pending`): the CA names the host.
     pub(crate) fn csr_der(&self) -> Result<Vec<u8>, KeyError> {
-        let subject = Name::from_str(REQUEST_SUBJECT).map_err(encode_error)?;
+        self.csr_der_for(REQUEST_SUBJECT)
+    }
+
+    /// A PKCS#10 request (DER) for this key with the subject `subject` (an RFC 4514 string).
+    pub(crate) fn csr_der_for(&self, subject: &str) -> Result<Vec<u8>, KeyError> {
+        let subject = Name::from_str(subject).map_err(encode_error)?;
         let builder = RequestBuilder::new(subject).map_err(encode_error)?;
         let request = builder
             .build::<_, DerSignature>(&self.signing)

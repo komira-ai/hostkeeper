@@ -9,6 +9,7 @@ use std::path::Path;
 
 use hostkeeper_daemon::layout::ensure_state_dirs;
 use hostkeeper_daemon::start::{Settings, StartError};
+use hostkeeper_enroll::IdentityDir;
 use support::Scratch;
 
 fn mode(path: &Path) -> u32 {
@@ -21,6 +22,7 @@ fn settings(root: &Path) -> Settings {
         state_dir: root.join("var/lib/updater/state"),
         packages_dir: root.join("var/lib/hostkeeper/packages"),
         facts_file: root.join("var/lib/hostkeeper/facts.json"),
+        identity: IdentityDir::host(&root.join("var/lib/hostkeeper/identity")),
         run_dir: root.join("run"),
         trusted_uid: 0,
         package_lock_wait_secs: hostkeeper_daemon::cli::DEFAULT_PACKAGE_LOCK_WAIT_SECS,

@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::{ServiceName, Version};
+use hostkeeper_enroll::IdentityDir;
 use hostkeeper_hook::Verdict;
 use hostkeeper_install::Announcement;
 use hostkeeper_install::repository::Drift;
@@ -110,6 +111,9 @@ pub struct Dirs {
     pub packages: PathBuf,
     /// The host's facts file, which the heartbeat loop writes ([`crate::facts_file`]).
     pub facts: PathBuf,
+    /// The identity directory, one directory per service with an identity
+    /// ([`crate::service_identity`]), which an uninstall removes the service's from.
+    pub identity: IdentityDir,
 }
 
 /// What every verb works with.

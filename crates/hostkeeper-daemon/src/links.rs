@@ -6,8 +6,9 @@
 //! presents, and a host with no certificate yet beats nothing: its loop says once what it waits
 //! for, and tries again every period.
 //!
-//! [`Links`] is everything the two loops need besides the daemon. [`Links::start`] starts them,
-//! the enrollment loop first, each on a worker of its [`Dispatch`]; [`crate::start::serve`] calls
+//! [`Links`] is everything the loops need besides the daemon. [`Links::start`] starts them, the
+//! enrollment loop first, then the heartbeat loop and then, when there is one, the service identity
+//! loop ([`crate::service_identity`]), each on a worker of its [`Dispatch`]; [`crate::start::serve`] calls
 //! it once the boot work is over and the readiness notice was sent, so neither loop runs while
 //! the boot pass does. The heartbeat loop works on the daemon through the four adapters of
 //! [`crate::link_adapters`] ([`Links::heartbeater`]). On a Linux host it also gives the repository
@@ -67,6 +68,7 @@ use crate::link_adapters::{
 use crate::node::NodeState;
 use crate::notify::Watchdog;
 use crate::repository_push::RepositoryPush;
+use crate::service_identity::IdentityLoop;
 
 pub use hostkeeper_enroll::RenewalState;
 pub use hostkeeper_link::Log;
@@ -131,6 +133,10 @@ pub struct Links {
     /// account's `authorized_keys`, which every heartbeat reports and a set the coordinator sends
     /// replaces. A daemon that has one announces `operator-keys-v1`.
     pub operator_keys: Option<Arc<dyn OperatorKeysSink>>,
+    /// The service identity loop ([`crate::service_identity`]): its worker is started as the third
+    /// of [`Links::start`], and its source is what every heartbeat reports. A daemon that has one
+    /// announces `service-identity-v1`.
+    pub identity: Option<IdentityLoop>,
 }
 
 impl Links {
@@ -141,6 +147,7 @@ impl Links {
     pub fn start(self, daemon: &Arc<Daemon>) {
         let heartbeater = self.heartbeater(daemon);
         let Links {
+            identity,
             mut enroller,
             clock,
             log,
@@ -173,6 +180,9 @@ impl Links {
                 alive(&*watchdog, beat_log.as_ref());
             });
         }));
+        if let Some(identity) = identity {
+            dispatch.start(identity.worker);
+        }
     }
 
     /// The heartbeat loop over `daemon`: its executor, held halts, installed services and observer
@@ -215,6 +225,7 @@ impl Links {
                 ))),
                 remote_login_probe: self.remote_login_probe.clone(),
                 operator_keys: self.operator_keys.clone(),
+                service_identities: self.identity.as_ref().map(|i| Arc::clone(&i.source)),
             },
         )
     }

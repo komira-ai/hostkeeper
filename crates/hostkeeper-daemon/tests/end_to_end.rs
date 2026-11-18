@@ -178,6 +178,7 @@ fn first_beat() -> Heartbeat {
         facts_generation: None,
         remote_login_probe: None,
         operator_keys: None,
+        service_identities: Vec::new(),
     }
 }
 
@@ -208,6 +209,7 @@ fn without_executor(daemon: &Arc<Daemon>, links: &Links) -> Heartbeater {
             facts: None,
             remote_login_probe: None,
             operator_keys: None,
+            service_identities: None,
         },
     )
 }
@@ -230,6 +232,7 @@ fn links_over(link: Arc<dyn CoordinatorLink>, dispatch: &Arc<ManualDispatch>) ->
         console: None,
         remote_login_probe: None,
         operator_keys: None,
+        identity: None,
     }
 }
 

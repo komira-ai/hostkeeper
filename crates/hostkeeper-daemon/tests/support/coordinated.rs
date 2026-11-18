@@ -400,6 +400,7 @@ impl Host {
             console: None,
             remote_login_probe: None,
             operator_keys: None,
+            identity: None,
         };
         Host {
             heartbeater: links.heartbeater(&daemon),
