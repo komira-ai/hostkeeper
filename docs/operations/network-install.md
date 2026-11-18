@@ -255,7 +255,7 @@ key or a value the flag refuses stops `serve` and `prepare` with one line naming
   kernel reports as not rotational). Only that disk is written. See the disks of the board check.
 - `serial-console`: `ttyS<n>` or `ttyAMA<n>`: the installed system's kernel console and a getty
   on that port at 115200 baud, so the BMC's serial console shows the key hash; on a `ttyS<n>`
-  port GRUB's menu too (`GRUB_TERMINAL="console serial"`, `GRUB_SERIAL_COMMAND="serial --unit=<n>
+  port GRUB's output too (`GRUB_TERMINAL="console serial"`, `GRUB_SERIAL_COMMAND="serial --unit=<n>
   --speed=115200"`). Set `"ttyS1"` on every farm: the BMC's serial console (Serial over LAN) is
   the board's second serial port, COM2, which Linux names `ttyS1`, on every Linux server, a fleet
   rule and not a value per board model ([console-broker.md](../design/console-broker.md),

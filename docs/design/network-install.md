@@ -349,7 +349,7 @@ deb, writes `hostkeeper.toml`, and reboots. The daemon starts from the installed
   - With `--serial-console <port>` (`ttyS<n>` or `ttyAMA<n>`, at 115200 baud), the installed kernel's `console=` names
     that serial port and its serial getty is enabled, so the BMC's serial console shows the login prompt (section 7).
     On a `ttyS<n>` port GRUB's terminal is that port as well (`GRUB_TERMINAL="console serial"`,
-    `GRUB_SERIAL_COMMAND="serial --unit=<n> --speed=115200"`), so GRUB's menu shows there too. The farm's port is
+    `GRUB_SERIAL_COMMAND="serial --unit=<n> --speed=115200"`), so GRUB's output shows there too. The farm's port is
     `ttyS1`, COM2, on every Linux server (console-broker.md section 5.2); the runbook's install configuration sets it.
     On either kind of port a systemd drop-in, `serial-getty@<port>.service.d/99_hostkeeper.conf`, clears the stock
     getty's `ExecStart` and runs `agetty -o '-p -- \\u' 115200 - $TERM`: the stock `--keep-baud

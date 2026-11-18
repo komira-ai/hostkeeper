@@ -260,10 +260,10 @@ fn grub_defaults(user_data: &str) -> String {
 
 /// The fleet's serial console, COM2 = `ttyS1` (docs/design/console-broker.md, section 5.2), on
 /// x86-64: the installed kernel's `console=` and the getty on `ttyS1`, and GRUB's terminal on
-/// the console and on serial unit 1 at 115200 baud, so GRUB's menu shows over the BMC's serial
+/// the console and on serial unit 1 at 115200 baud, so GRUB's output shows over the BMC's serial
 /// console too.
 ///
-/// Catches a seed that leaves GRUB's menu off the serial console, puts it on another unit or
+/// Catches a seed that leaves GRUB's output off the serial console, puts it on another unit or
 /// speed, or differs from its golden in any byte.
 #[test]
 #[expect(
