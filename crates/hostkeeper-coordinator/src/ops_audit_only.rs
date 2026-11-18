@@ -21,15 +21,6 @@ use crate::audit_actions::AuditOnly;
 use crate::audit_file::AuditLine;
 use crate::store::Commit;
 
-// Its first caller is `Console/Open`, in the next step of docs/design/console-broker.md
-// (section 15, C2); until then the tests of this module are its only callers.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the console's calls that append audit-only lines land after it (console-broker.md, C2)"
-    )
-)]
 impl OpsStore {
     /// Appends the audit line of `action` by `by`, concerning the host `node_id` with `reason`,
     /// and answers it numbered.

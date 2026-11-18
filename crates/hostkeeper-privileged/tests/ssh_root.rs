@@ -636,9 +636,10 @@ fn a_stock_permit_root_login_no_is_reported_with_its_keyword() {
 
 /// Proves that a stock configuration with `AuthenticationMethods publickey,password` first in it
 /// is reported as `cert_login_not_possible` with `authenticationmethods` in the detail, and that
-/// none of the setup's files is written. `PasswordAuthentication yes` goes first with it: sshd's
-/// own `-t` refuses a list naming a method that is off, and a runner's image turns passwords off.
-/// Catches: an `applied` for a login where a certificate alone is not enough.
+/// none of the setup's files is written. Password logins are turned on first in the same file,
+/// since sshd's `-t` refuses a method list naming a method that is off, as the runner's stock
+/// configuration has it. Catches: an `applied` for a login where a certificate alone is not
+/// enough.
 #[test]
 fn a_stock_authentication_methods_with_a_password_is_reported_with_its_keyword() {
     let mut rig = Rig::new("ssh-root-am");

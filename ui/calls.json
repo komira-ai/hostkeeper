@@ -5,6 +5,8 @@
     { "function": "apiTokens.list", "method": "hostkeeper.operator.v1.ApiTokens/List", "pages": ["tokens"] },
     { "function": "apiTokens.revoke", "method": "hostkeeper.operator.v1.ApiTokens/Revoke", "pages": ["tokens"] },
     { "function": "audit.list", "method": "hostkeeper.operator.v1.Audit/List", "pages": ["audit", "host"] },
+    { "function": "console.power", "method": "hostkeeper.operator.v1.Console/Power", "pages": ["host"] },
+    { "function": "console.setBootDevice", "method": "hostkeeper.operator.v1.Console/SetBootDevice", "pages": ["host"] },
     { "function": "enrollment.addRecord", "method": "hostkeeper.operator.v1.Enrollment/AddRecord", "pages": ["inventory"] },
     { "function": "enrollment.approve", "method": "hostkeeper.operator.v1.Enrollment/Approve", "pages": ["enrollment"] },
     { "function": "enrollment.list", "method": "hostkeeper.operator.v1.Enrollment/List", "pages": ["enrollment"] },

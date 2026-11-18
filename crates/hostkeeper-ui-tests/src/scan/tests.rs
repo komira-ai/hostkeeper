@@ -197,6 +197,51 @@ fn fetches_finds_each_call_of_fetch() {
 }
 
 #[test]
+fn the_console_service_of_the_api_client_is_not_a_console_but_any_other_console_is() {
+    // Catches: the `console.` needle refusing a call of the operator API's Console service, and
+    // the exemption widening to a token logged through `console` (bare, on `window`, or behind a
+    // name that only ends in `api`).
+    assert!(
+        token_keepers(
+            "pages/host.js",
+            "await ctx.api.console.power({ hostId });\nawait api.console.setBootDevice(b);"
+        )
+        .is_empty()
+    );
+    let text = "console.log(token);\nwindow.console.log(token);\nxapi.console.log(token);\n\
+                console.log(ctx.api.console.power);";
+    let found = token_keepers("pages/x.js", text);
+    assert_eq!(
+        whats(&found),
+        [
+            (1, "`console.`"),
+            (2, "`console.`"),
+            (3, "`console.`"),
+            (4, "`console.`"),
+        ]
+    );
+}
+
+#[test]
+fn the_console_service_is_listed_in_calls_json_only_as_a_function_name() {
+    // Catches: `calls.json` refused for naming the Console service, and the exemption reaching
+    // another file or another place in `calls.json`.
+    let listed = "    { \"function\": \"console.power\", \"method\": \"x\" },";
+    assert!(token_keepers("calls.json", listed).is_empty());
+    assert_eq!(
+        whats(&token_keepers("pages/x.js", listed)),
+        [(1, "`console.`")]
+    );
+    assert_eq!(
+        whats(&token_keepers(
+            "calls.json",
+            "{ \"method\": \"console.log\" }"
+        )),
+        [(1, "`console.`")]
+    );
+}
+
+#[test]
 fn a_socket_is_refused_in_every_file_but_the_entry_module() {
     // Catches: the allowance for the one socket opener letting a `WebSocket` into a page, the data
     // layer or any other module, letting a `ws://` or `wss://` address into any file the opener
