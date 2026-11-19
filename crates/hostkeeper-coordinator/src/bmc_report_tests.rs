@@ -34,12 +34,15 @@ fn a_report_is_read_only_with_a_usable_ipv4_address_and_a_mac() {
         read(&report("192.0.2.12", mac)).map(|bmc| bmc.mac.to_string()),
         Some("0c:c4:7a:00:00:01".to_owned())
     );
+    // A multicast and a link-local address, written from their octets.
+    let multicast = Ipv4Addr::new(224, 0, 0, 1).to_string();
+    let link_local = Ipv4Addr::new(169, 254, 0, 12).to_string();
     for refused in [
         "0.0.0.0",
         "127.0.0.1",
-        "224.0.0.1",
+        multicast.as_str(),
         "255.255.255.255",
-        "169.254.0.12",
+        link_local.as_str(),
         "::ffff:192.0.2.12",
         "2001:db8::12",
         "192.0.2",

@@ -32,13 +32,13 @@ fn beat(bmc: Option<BmcReport>) -> Heartbeat {
 #[test]
 fn the_bmc_goes_out_as_its_field() {
     let report = BmcReport {
-        ip: "10.1.2.3".to_owned(),
+        ip: "198.51.100.3".to_owned(),
         mac: "0c:c4:7a:ab:cd:ef".to_owned(),
     };
     assert_eq!(
         heartbeat(&beat(Some(report))).expect("a request").bmc,
         Some(pb::BmcReport {
-            ip: "10.1.2.3".to_owned(),
+            ip: "198.51.100.3".to_owned(),
             mac: "0c:c4:7a:ab:cd:ef".to_owned(),
         })
     );
