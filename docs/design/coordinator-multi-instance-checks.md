@@ -1,8 +1,30 @@
 # The coordinator as N instances: measurements, model check, compatibility and tests
 
-Companion of [coordinator-multi-instance.md](coordinator-multi-instance.md) (the measurements of its section 7, and its sections
-14 and 15, moved here so that file stays under 1000 lines, R12). Section numbers are kept; "section n" in the text below refers
+Companion of [coordinator-multi-instance.md](coordinator-multi-instance.md) (the as-built choices of its section 4's M3, the
+measurements of its section 7, and its sections 14 and 15, moved here so that file stays under 1000 lines, R12). Section numbers are kept; "section n" in the text below refers
 to that document.
+
+## 4. The rest of M3, as built
+
+The choices the design's section 4 leaves open, as the code makes them (`store/postgres/pool.rs`, `writer.rs`, `instance.rs`,
+`migrate.rs`, `0022_instances.sql`, `config_database.rs`):
+
+- A write takes the session that has been free longest, so the sessions take turns. Any session found lost makes the whole
+  instance lost (every write refused at once, `/healthz` 503 `store_unreachable`) until the next heartbeat's revival, which runs
+  on every session's thread: a session that is up answers one `SELECT 1` and is kept, one that is gone, or found gone so, is
+  opened again with the shared lock and settles its own commit of unknown outcome. A writer whose thread is gone stops the
+  store for good at that revival.
+- The instance's row is made in the transaction that bumps the epoch at start (its id the database's `gen_random_uuid()`) and
+  upserted every `--instance-beat-secs` by a thread that holds the pool, not the store, and that a drop of the store joins; a
+  row that is gone is made again as it was. `listen` holds the heartbeat, private and LAN listeners' configured addresses. The
+  status page does not list the rows yet.
+- A migration rolled back by its lock timeout lets go of the runners' mutex for the pause, and the runner tries again from that
+  migration; after the last attempt the start is refused naming it. `--migrate-ddl-lock-timeout-ms` is 1 to 4999, below the
+  sessions' 5 s statement timeout, which would otherwise end the wait first as a failure the runner does not retry.
+- The lint's rule refuses, on a hot table the migration did not create, any `ALTER TABLE` action but `ADD COLUMN` with a type,
+  `NOT NULL`, a collation and a default with no function call or value function (a serial, generated, constrained or
+  referencing column included), an index build, and `CLUSTER`, `REINDEX` and `VACUUM`; a quoted or schema-qualified name is read
+  as the bare one, block comments are skipped, and the DDL of a dollar-quoted body is read where it starts.
 
 ## 7. The latency budget, measured (M1)
 
@@ -168,8 +190,10 @@ Tests, named (each asserts the behaviour in its name; the PR bodies list them by
   `gate_busy_answers_the_beat_with_no_new_order`.
 - Added by the second review (section 20, items 7 to 11): `two_starters_apply_each_migration_once` (two runners at once, a duplicate
   of the unlocked variant fails), `migration_ddl_gives_up_by_lock_timeout_instead_of_stalling_heartbeats` (a held gate
-  transaction, a DDL with `lock_timeout`: no beat statement waits longer than the timeout, injected clock not wall time),
-  `migration_lint_refuses_a_rewrite_of_a_hot_table` (negative case, T15), `cache_is_never_labelled_newer_than_its_content`,
+  transaction, a DDL with `lock_timeout`: no beat statement waits longer than the timeout, injected clock not wall time;
+  **Built** (M3) in `store/postgres/tests/migrate_ddl.rs` with a held transaction on a table in place of the gate, which is M4's,
+  and the beat shown let through while the holder is still open, no clock read),
+  `migration_lint_refuses_a_rewrite_of_a_hot_table` (negative case, T15; **Built** (M3) in `store/postgres/migrate_tests.rs`), `cache_is_never_labelled_newer_than_its_content`,
   `partial_fleet_in_quiet_window_raises_no_halt_and_reverts_nothing` (a failed-looking host set after a gap),
   `operator_halt_in_quiet_window_is_read_by_every_decision`, `old_task_accepts_until_the_drain_delay_ends` and
   `draining_task_answers_healthz_503_while_serving` (injected clock, T10), `drain_delay_config_is_refused_at_deploy_when_not_above_the_edge_check`,

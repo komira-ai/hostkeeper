@@ -133,12 +133,13 @@ pub(super) fn start_on_postgres(
 
 impl Farm {
     /// A coordinator on a database of its own, its clock at 2000 (past the quiet start), over the
-    /// store opened with `timeouts`; with `enrolled`, the enrollment store's records on the same
-    /// store.
+    /// store opened with `timeouts` and one writing session (so a session the test ends is the
+    /// only one that held the lock, which [`Farm::lock_is_free`] waits on; the pool has tests of
+    /// its own); with `enrolled`, the enrollment store's records on the same store.
     fn start(test: &str, timeouts: Timeouts, enrolled: bool) -> Farm {
         let database = TestDatabase::new();
         let (store, loaded) = database
-            .open_with(timeouts, "coordinator")
+            .open_tuned(timeouts, &super::pooled(1), "coordinator")
             .expect("the store opens");
         let mut rig = Rig::new(test);
         let marker = rig.dir.path().join("halt.marker");
@@ -215,12 +216,12 @@ impl Farm {
         }
         self.lock_is_free();
         self.store.revive();
-        self.store.on_writer(|_| ()).expect("the writer runs");
+        self.store.settle().expect("the writers run");
     }
 
     /// Waits until a revival the last heartbeat posted has run.
     fn revival_ran(&self) {
-        self.store.on_writer(|_| ()).expect("the writer runs");
+        self.store.settle().expect("the writers run");
     }
 
     fn lease(&self) -> (String, String) {
@@ -343,9 +344,7 @@ async fn a_lost_session_holds_orders_and_resumes_on_the_same_epoch() {
 async fn a_commit_that_landed_before_its_session_was_lost_is_taken_into_memory() {
     let farm = Farm::plain("pg-landed").seeded().await;
     let before = farm.rig.coordinator.ops().state();
-    farm.store
-        .on_writer(|writer| writer.fault = Some(Fault::LoseAfterCommit))
-        .expect("the writer runs");
+    farm.store.fault(Fault::LoseAfterCommit);
 
     assert_eq!(
         farm.rig.coordinator.exclude(&operator(), exclude("d1")),
@@ -385,9 +384,7 @@ async fn a_commit_that_landed_before_its_session_was_lost_is_taken_into_memory()
 async fn an_accounts_change_that_landed_before_its_session_was_lost_is_taken_into_memory() {
     let farm = Farm::plain("pg-accounts-landed").seeded().await;
     let held = crate::store::conformance_tests::rich_accounts();
-    farm.store
-        .on_writer(|writer| writer.fault = Some(Fault::LoseAfterCommit))
-        .expect("the writer runs");
+    farm.store.fault(Fault::LoseAfterCommit);
 
     let refused = farm.rig.coordinator.accounts().change(|_| Ok(held.clone()));
     assert!(refused.is_err(), "{refused:?}");
@@ -599,7 +596,10 @@ fn host_record(host: &str, role: &str) -> pb::Host {
 #[test]
 fn the_enrollment_copy_is_reloaded_after_a_commit_of_unknown_outcome() {
     let database = TestDatabase::new();
-    let (store, _) = database.open("records").expect("the store opens");
+    // One writing session: the one the fault ends is then the only one that held the lock.
+    let (store, _) = database
+        .open_options(&super::pooled(1), "records")
+        .expect("the store opens");
     let records = crate::store::postgres::PgRecords::over(&store).expect("the records");
     let key = |host: &str| HostId::parse(host).expect("a host id");
     records
@@ -620,9 +620,7 @@ fn the_enrollment_copy_is_reloaded_after_a_commit_of_unknown_outcome() {
         "the copy is not read again while every commit is known"
     );
 
-    store
-        .on_writer(|writer| writer.fault = Some(Fault::LoseAfterCommit))
-        .expect("the writer runs");
+    store.fault(Fault::LoseAfterCommit);
     let lost = records.commit(&[Record::Host(host_record("web-2", "storage"))]);
     assert!(lost.is_err(), "the commit's outcome is not known");
     let before = store.statements();
@@ -638,7 +636,7 @@ fn the_enrollment_copy_is_reloaded_after_a_commit_of_unknown_outcome() {
     );
     Holding::the_lock(&database).release();
     store.revive();
-    store.on_writer(|_| ()).expect("the writer runs");
+    store.settle().expect("the writers run");
     assert_eq!(store.health(), Health::Up);
 
     assert_eq!(

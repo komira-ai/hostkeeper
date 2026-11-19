@@ -12,8 +12,9 @@ use std::sync::{Arc, Mutex, Once, PoisonError};
 use postgres::{Client, NoTls};
 use tracing_subscriber::fmt::MakeWriter;
 
+use super::migrate::RETRY;
 use super::session::Session;
-use super::{Dsn, Postgres, TIMEOUTS, Timeouts};
+use super::{Dsn, Options, Postgres, TIMEOUTS, Timeouts};
 use crate::audit_file::UnixClock;
 use crate::store::Loaded;
 
@@ -153,9 +154,19 @@ impl TestDatabase {
         })
     }
 
-    /// The store opened on it, as a start opens it, holding the lock as `holder`.
+    /// The store opened on it, as a start opens it, holding the lock as `holder`, with the
+    /// default pool ([`options`]).
     pub(crate) fn open(&self, holder: &str) -> Result<(Postgres, Loaded), super::DatabaseError> {
         self.open_with(TIMEOUTS, holder)
+    }
+
+    /// [`TestDatabase::open`] with `options`.
+    pub(crate) fn open_options(
+        &self,
+        options: &Options,
+        holder: &str,
+    ) -> Result<(Postgres, Loaded), super::DatabaseError> {
+        self.open_tuned(TIMEOUTS, options, holder)
     }
 
     /// The store opened on a connection string of the test's own making.
@@ -163,7 +174,14 @@ impl TestDatabase {
         dsn: &Dsn,
         holder: &str,
     ) -> Result<(Postgres, Loaded), super::DatabaseError> {
-        Postgres::open_with(dsn, TIMEOUTS, holder, &unix(), Arc::new(|| SPENT_NOW))
+        Postgres::open_with(
+            dsn,
+            TIMEOUTS,
+            &options(),
+            holder,
+            &unix(),
+            Arc::new(|| SPENT_NOW),
+        )
     }
 
     /// [`TestDatabase::open`] with the bounded waits `timeouts`.
@@ -172,9 +190,20 @@ impl TestDatabase {
         timeouts: Timeouts,
         holder: &str,
     ) -> Result<(Postgres, Loaded), super::DatabaseError> {
+        self.open_tuned(timeouts, &options(), holder)
+    }
+
+    /// [`TestDatabase::open`] with the bounded waits `timeouts` and `options`.
+    pub(crate) fn open_tuned(
+        &self,
+        timeouts: Timeouts,
+        options: &Options,
+        holder: &str,
+    ) -> Result<(Postgres, Loaded), super::DatabaseError> {
         Postgres::open_with(
             &self.dsn(),
             timeouts,
+            options,
             holder,
             &unix(),
             Arc::new(|| SPENT_NOW),
@@ -225,6 +254,27 @@ pub(crate) const ID: &str = "00000000-0000-0000-0000-000000000001";
 /// The second CI's spent ids are judged by in the tests.
 pub(crate) const SPENT_NOW: u64 = 150;
 
+/// The options the tests open a store with: the flags' default pool and migration retry, and an
+/// instance's row upserted once an hour, so no upsert of it lands inside a test that counts the
+/// ledger's rows (the upserts are tested by a store of their own).
+pub(crate) fn options() -> Options {
+    Options {
+        pool: std::num::NonZeroUsize::new(4).expect("four is not zero"),
+        migrate: RETRY,
+        beat: std::time::Duration::from_secs(3600),
+        release: "test-release".to_owned(),
+        listen: "heartbeat=127.0.0.1:8443".to_owned(),
+    }
+}
+
+/// [`options`] with a pool of `pool` sessions.
+pub(crate) fn pooled(pool: usize) -> Options {
+    Options {
+        pool: std::num::NonZeroUsize::new(pool).expect("a pool of at least one"),
+        ..options()
+    }
+}
+
 /// The clock of the tests' audit lines and lease.
 pub(crate) fn unix() -> UnixClock {
     Arc::new(|| AT)
@@ -249,8 +299,11 @@ mod connect;
 mod coordinator;
 mod generations;
 mod host_groups;
+mod instance;
 mod layout;
 mod lost;
+mod migrate_ddl;
+mod pool;
 mod reads;
 mod records;
 mod records_errors;

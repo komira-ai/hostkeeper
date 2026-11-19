@@ -212,15 +212,13 @@ fn records_that_cannot_read_the_database_say_so_and_a_stale_copy_is_loaded_again
         .commit(&[Record::Host(host("h0"))])
         .expect_err("the writer is gone");
     store.revive();
-    store.on_writer(|_| ()).expect("the writer runs");
-    store
-        .on_writer(|w| w.fault = Some(Fault::LoseAfterCommit))
-        .expect("the fault is set");
+    store.settle().expect("the writers run");
+    store.fault(Fault::LoseAfterCommit);
     records
         .commit(&[Record::Host(host("h2"))])
         .expect_err("the answer is lost");
     store.revive();
-    store.on_writer(|_| ()).expect("the writer runs");
+    store.settle().expect("the writers run");
     records.request(&key).expect("the reader is made again");
     db.end_sessions();
     let stale = records

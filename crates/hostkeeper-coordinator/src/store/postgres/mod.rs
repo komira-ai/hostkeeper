@@ -5,16 +5,19 @@
 //! stay in place, unused, because a release before this one holds them and a format changes only
 //! by addition.
 //!
-//! - **The start** ([`Postgres::open`]): open the writing session, take the coordinator's
+//! - **The start** ([`Postgres::open`]): open a writing session, take the coordinator's
 //!   advisory lock shared without waiting (any number of coordinators hold it together; a session
 //!   holding it exclusively, a release before this one or an import, refuses the start), run the
-//!   migrations the database lacks, raise the epoch, and load everything. Nothing is read or
-//!   written before the lock is held. A database that is not up is a refusal, told from one that
-//!   refuses by SQLSTATE and I/O kind ([`DatabaseError`]).
-//! - **Writes** go through the one writing session, on its own thread ([`writer`]), in the order
-//!   the coordinator makes them. A commit compares the state before and after in memory and
-//!   writes only the rows that differ ([`rows`], [`state`]), with its audit rows, in one
-//!   transaction.
+//!   migrations the database lacks ([`migrate`]), raise the epoch and make this instance's row of
+//!   `instances` ([`instance`]), load everything, then open the rest of the pool's sessions, each
+//!   holding the lock shared too. Nothing is read or written before the lock is held. A database
+//!   that is not up is a refusal, told from one that refuses by SQLSTATE and I/O kind
+//!   ([`DatabaseError`]).
+//! - **Writes** go through the pool of writing sessions (`--database-pool`, [`pool`]), each on its
+//!   own thread ([`writer`]): a write takes a free session. A commit compares the state before and
+//!   after in memory and writes only the rows that differ ([`rows`], [`state`]), with its audit
+//!   rows, in one transaction; its caller holds its store's lock while it waits for it, so the
+//!   commits of one store land in the order the coordinator makes them.
 //! - **Reads** that are not decisions (`Audit.List`, the enrollment lists, the alerts' scans) run
 //!   on a second, read-only session, so a long list never holds a commit. They see committed rows
 //!   only.
@@ -28,8 +31,10 @@ mod at;
 mod dsn;
 mod generations;
 mod groups;
+mod instance;
 mod layout;
 pub(crate) mod migrate;
+mod pool;
 mod records;
 mod releases;
 mod repositories;
@@ -42,8 +47,10 @@ pub(crate) mod transfer;
 pub(crate) mod writer;
 
 use std::io;
-use std::sync::Arc;
+use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError, mpsc};
+use std::time::Duration;
 
 use hostkeeper_oidc::Clock;
 
@@ -51,6 +58,9 @@ pub use dsn::DsnError;
 pub(crate) use dsn::{Dsn, TIMEOUTS, Timeouts};
 pub(crate) use records::PgRecords;
 
+use self::instance::Instance;
+use self::migrate::Retry;
+use self::pool::Pool;
 use self::rows::{Stmt, Tables, Val, changes, laid_over};
 use self::session::{Fail, Session, Worker, describe, ends_session, not_up};
 use self::writer::{Link, State, Tx, WriteFail, Writer, try_lock_shared};
@@ -234,15 +244,36 @@ impl Landing {
     }
 }
 
+/// What a start of the store is given beside its connection string
+/// (`docs/design/coordinator-multi-instance.md`, section 12).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Options {
+    /// How many writing sessions the instance holds (`--database-pool`).
+    pub(crate) pool: NonZeroUsize,
+    /// How a migration waits for its locks, and how often it is tried again.
+    pub(crate) migrate: Retry,
+    /// How often this instance's row of `instances` is upserted (`--instance-beat-secs`).
+    pub(crate) beat: Duration,
+    /// The release this instance runs, for its row.
+    pub(crate) release: String,
+    /// The addresses this instance listens on, for its row.
+    pub(crate) listen: String,
+}
+
 struct Inner {
-    writer: Worker<Writer>,
+    writers: Arc<Pool>,
     reader: Worker<Reader>,
     link: Arc<Link>,
     #[cfg(test)]
     statements: Arc<AtomicU64>,
+    #[cfg(test)]
+    fault: writer::FaultSlot,
     last_seq: AtomicU64,
     epoch: u64,
     clock: Clock,
+    instance: Instance,
+    /// The thread that upserts the instance's row, and the sender whose drop stops it.
+    beat: Mutex<Option<(mpsc::Sender<()>, std::thread::JoinHandle<()>)>>,
 }
 
 /// The Postgres store: a handle shared by the three stores, CI's spent ids and the enrollment
@@ -251,6 +282,12 @@ struct Inner {
 pub(crate) struct Postgres {
     inner: Arc<Inner>,
 }
+
+/// What a write is refused with while a writing session is lost.
+const LOST: &str = "the database session is lost";
+
+/// What a write is refused with once a writer's thread is gone.
+const STOPPED: &str = "the writing session stopped";
 
 /// What a store refused because the database could not take the write, as a store that cannot
 /// write says it: refused `store_failed`.
@@ -400,27 +437,29 @@ pub(crate) fn run_all(tx: &mut Tx<'_>, statements: &[Stmt]) -> Result<(), postgr
 }
 
 impl Postgres {
-    /// Opens the store of `dsn` at start (section 5): the writing session, the lock, the
-    /// migrations, the epoch raised and recorded with `holder` and the time of `unix`, and the
-    /// state loaded, CI's spent ids past by `clock` left out. The read-only session is made when
-    /// a read first needs it.
+    /// Opens the store of `dsn` at start (section 5) with `options`: the writing sessions, the
+    /// lock, the migrations, the epoch raised and recorded with `holder` and the time of `unix`,
+    /// this instance's row, and the state loaded, CI's spent ids past by `clock` left out. The
+    /// read-only session is made when a read first needs it.
     ///
     /// # Errors
     /// [`DatabaseError`]: the database is not up, refused, holds the lock for another session,
     /// holds a newer schema, a migration failed, or the state does not load.
     pub(crate) fn open(
         dsn: &Dsn,
+        options: &Options,
         holder: &str,
         unix: &UnixClock,
         clock: Clock,
     ) -> Result<(Postgres, Loaded), DatabaseError> {
-        Postgres::open_with(dsn, TIMEOUTS, holder, unix, clock)
+        Postgres::open_with(dsn, TIMEOUTS, options, holder, unix, clock)
     }
 
     /// [`Postgres::open`] with the bounded waits `timeouts`.
     pub(crate) fn open_with(
         dsn: &Dsn,
         timeouts: Timeouts,
+        options: &Options,
         holder: &str,
         unix: &UnixClock,
         clock: Clock,
@@ -429,29 +468,69 @@ impl Postgres {
         let statements = Arc::new(AtomicU64::new(0));
         let now_unix = state::int(unix()).map_err(|e| DatabaseError::Load(e.to_string()))?;
         let spent_now = clock();
-        let holder = holder.to_owned();
         let opening = {
             let config = config.clone();
             let statements = Arc::clone(&statements);
+            let (options, holder) = (options.clone(), holder.to_owned());
             // The client must not run on a thread of the runtime the start runs in.
             std::thread::Builder::new()
                 .name("hk-store-open".to_owned())
-                .spawn(move || open_session(&config, statements, &holder, now_unix, spent_now))
+                .spawn(move || {
+                    open_sessions(&config, statements, &options, &holder, now_unix, spent_now)
+                })
                 .map_err(|e| DatabaseError::Refused(e.to_string()))?
         };
-        let (session, epoch, loaded, last) = opening
+        let Opened {
+            sessions,
+            epoch,
+            loaded,
+            last,
+            instance,
+        } = opening
             .join()
             .map_err(|_| DatabaseError::Load("the start of the store stopped".to_owned()))??;
-        let link = Arc::new(Link::default());
-        let writer = Writer::new(
-            config.clone(),
-            Arc::clone(&statements),
-            session,
-            Arc::clone(&link),
-        );
+        let link = Arc::new(Link::new(sessions.len()));
+        #[cfg(test)]
+        let fault = writer::FaultSlot::default();
+        let writers = sessions
+            .into_iter()
+            .map(|session| {
+                #[cfg_attr(not(test), expect(unused_mut, reason = "a test's fault is set on it"))]
+                let mut writer = Writer::new(
+                    config.clone(),
+                    Arc::clone(&statements),
+                    session,
+                    Arc::clone(&link),
+                );
+                #[cfg(test)]
+                {
+                    writer.fault = Arc::clone(&fault);
+                }
+                writer
+            })
+            .collect();
         let spawned = |e: io::Error| DatabaseError::Refused(e.to_string());
+        let writers = Arc::new(Pool::spawn("hk-store-writer", writers).map_err(spawned)?);
+        let (beat_stop, beat_stopped) = mpsc::channel();
+        let beating = {
+            let (writers, link, instance) =
+                (Arc::clone(&writers), Arc::clone(&link), instance.clone());
+            let every = options.beat;
+            // The thread holds the pool, not the store, so the store's last handle is never its
+            // own and a drop of the store has stopped and joined it before the sessions close.
+            std::thread::Builder::new()
+                .name("hk-store-instance".to_owned())
+                .spawn(move || {
+                    instance::beat_every(&beat_stopped, every, || {
+                        // A beat that is not written is the store's own alert (a lost
+                        // session), and the next beat writes the row.
+                        let _ = instance::beat(&writers, &link, &instance);
+                    });
+                })
+                .map_err(spawned)?
+        };
         let inner = Inner {
-            writer: Worker::spawn("hk-store-writer", writer).map_err(spawned)?,
+            writers,
             reader: Worker::spawn(
                 "hk-store-reader",
                 Reader {
@@ -464,17 +543,22 @@ impl Postgres {
             link,
             #[cfg(test)]
             statements,
+            #[cfg(test)]
+            fault,
             last_seq: AtomicU64::new(last),
             epoch: u64::try_from(epoch).unwrap_or_default(),
             clock,
+            instance,
+            beat: Mutex::new(Some((beat_stop, beating))),
         };
-        tracing::info!(epoch, "the database's lock is held, shared");
-        Ok((
-            Postgres {
-                inner: Arc::new(inner),
-            },
-            loaded,
-        ))
+        let inner = Arc::new(inner);
+        tracing::info!(
+            epoch,
+            sessions = options.pool.get(),
+            instance = %inner.instance.id,
+            "the database's lock is held, shared"
+        );
+        Ok((Postgres { inner }, loaded))
     }
 
     /// Runs `body` in one transaction of the writing session; at once [`WriteFail::Lost`] while
@@ -496,18 +580,7 @@ impl Postgres {
         change: Option<Owned>,
         body: impl FnOnce(&mut Tx<'_>) -> Result<R, postgres::Error> + Send + 'static,
     ) -> Result<R, WriteFail> {
-        if self.inner.link.state() != State::Up {
-            return Err(WriteFail::Lost("the database session is lost".to_owned()));
-        }
-        let answer = self
-            .inner
-            .writer
-            .call(move |writer| writer.transact(change, body));
-        answer.unwrap_or_else(|| {
-            // The writer's thread is gone: the store is lost for good, which the alert says.
-            self.inner.link.lose(None);
-            Err(WriteFail::Lost("the writing session stopped".to_owned()))
-        })
+        write_on(&self.inner.writers, &self.inner.link, change, body)
     }
 
     /// Runs `read` on the read-only session.
@@ -542,20 +615,46 @@ impl Postgres {
         self.inner.statements.load(Ordering::Relaxed)
     }
 
-    /// Runs `job` on the writer's thread: what a test reaches the writing session through.
+    /// Runs `job` on a writer's thread, the one a write would take: what a test reaches a
+    /// writing session through.
     #[cfg(test)]
     pub(crate) fn on_writer<R: Send + 'static>(
         &self,
         job: impl FnOnce(&mut Writer) -> R + Send + 'static,
     ) -> Option<R> {
-        self.inner.writer.call(job)
+        self.inner.writers.call(job)
     }
 
-    /// Stops the store's sessions, its lock released, though handles of it remain: what a test
-    /// does before it starts a store again on the same database.
+    /// Waits for the jobs handed to every writer so far, a revival among them: `None` when a
+    /// writer's thread is gone.
+    #[cfg(test)]
+    pub(crate) fn settle(&self) -> Option<()> {
+        self.inner.writers.call_each(|_| ()).map(drop)
+    }
+
+    /// How many writes have waited for a free writing session.
+    #[cfg(test)]
+    pub(crate) fn waited(&self) -> usize {
+        self.inner.writers.waited()
+    }
+
+    /// Makes the next commit of any writer meet `fault`.
+    #[cfg(test)]
+    pub(crate) fn fault(&self, fault: writer::Fault) {
+        *self
+            .inner
+            .fault
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(fault);
+    }
+
+    /// Stops the store's sessions, its lock released, and the upserts of its instance's row,
+    /// though handles of it remain: what a test does before it starts a store again on the same
+    /// database.
     #[cfg(test)]
     pub(crate) fn stop(&self) {
-        self.inner.writer.stop();
+        self.inner.stop_beat();
+        self.inner.writers.stop();
         self.inner.reader.stop();
     }
 
@@ -566,25 +665,63 @@ impl Postgres {
     }
 }
 
-/// Opens the writing session at start, on a thread of its own: the connect, the shared lock, the
-/// migrations, the epoch, the load. Answers the session, its epoch, the state, and the number of
-/// the newest audit row.
-fn open_session(
+/// Runs `body` in one transaction on a free session of `pool`, the change `change` handed back by
+/// a revival when its commit's outcome is not known; at once [`WriteFail::Lost`] while `link`
+/// says a session is lost or a writer's thread is gone.
+fn write_on<R: Send + 'static>(
+    pool: &Pool,
+    link: &Link,
+    change: Option<Owned>,
+    body: impl FnOnce(&mut Tx<'_>) -> Result<R, postgres::Error> + Send + 'static,
+) -> Result<R, WriteFail> {
+    match link.state() {
+        State::Up => {}
+        State::Stopped => return Err(WriteFail::Lost(STOPPED.to_owned())),
+        State::Lost | State::Reviving => return Err(WriteFail::Lost(LOST.to_owned())),
+    }
+    pool.call(move |writer| writer.transact(change, body))
+        .unwrap_or_else(|| {
+            // The writer's thread is gone: the store is lost for good, which the alert says.
+            link.stop();
+            Err(WriteFail::Lost(STOPPED.to_owned()))
+        })
+}
+
+/// What [`open_sessions`] opened.
+struct Opened {
+    /// The writing sessions, each holding the lock shared.
+    sessions: Vec<Session>,
+    epoch: i64,
+    loaded: Loaded,
+    /// The number of the newest audit row.
+    last: u64,
+    instance: Instance,
+}
+
+/// Opens the writing sessions at start, on a thread of its own: the connect, the shared lock, the
+/// migrations, the epoch and this instance's row, the load, then the rest of the pool's sessions,
+/// each with the shared lock.
+fn open_sessions(
     config: &postgres::Config,
     statements: Arc<AtomicU64>,
+    options: &Options,
     holder: &str,
     now_unix: i64,
     spent_now: u64,
-) -> Result<(Session, i64, Loaded, u64), DatabaseError> {
-    let mut session = Session::connect(config, statements, false)?;
+) -> Result<Opened, DatabaseError> {
     let refused = |e: postgres::Error| DatabaseError::Refused(describe(&e));
-    if !try_lock_shared(&mut session).map_err(refused)? {
-        return Err(DatabaseError::Locked);
-    }
+    let locked = |statements: &Arc<AtomicU64>| -> Result<Session, DatabaseError> {
+        let mut session = Session::connect(config, Arc::clone(statements), false)?;
+        if !try_lock_shared(&mut session).map_err(refused)? {
+            return Err(DatabaseError::Locked);
+        }
+        Ok(session)
+    };
+    let mut session = locked(&statements)?;
     let set =
         migrate::checked(&migrate::SHIPPED).map_err(|e| DatabaseError::Schema(e.to_string()))?;
-    let ran =
-        migrate::apply(&mut session, &set).map_err(|e| DatabaseError::Schema(e.to_string()))?;
+    let ran = migrate::apply_with(&mut session, &set, options.migrate, &mut std::thread::sleep)
+        .map_err(|e| DatabaseError::Schema(e.to_string()))?;
     if !ran.is_empty() {
         tracing::info!(?ran, "the database's migrations ran");
     }
@@ -595,6 +732,8 @@ fn open_session(
             &[&holder, &now_unix],
         )
         .map_err(refused)?;
+    let instance =
+        instance::start(&mut session, &options.release, &options.listen).map_err(refused)?;
     session.batch("COMMIT").map_err(refused)?;
     let epoch: i64 = row.get(0);
     let loaded =
@@ -604,19 +743,37 @@ fn open_session(
         .map_err(refused)?
         .get(0);
     let last = last.and_then(|n| u64::try_from(n).ok()).unwrap_or(0);
-    Ok((session, epoch, loaded, last))
+    let mut sessions = vec![session];
+    for _ in 1..options.pool.get() {
+        sessions.push(locked(&statements)?);
+    }
+    Ok(Opened {
+        sessions,
+        epoch,
+        loaded,
+        last,
+        instance,
+    })
 }
 
 impl Backend for Postgres {
     fn load(&self) -> Result<Loaded, BackendError> {
+        match self.inner.link.state() {
+            State::Up => {}
+            State::Stopped => return Err(unwritten(STOPPED)),
+            State::Lost | State::Reviving => return Err(unwritten(LOST)),
+        }
         let now = (self.inner.clock)();
         self.inner
-            .writer
+            .writers
             .call(move |writer| match writer.session() {
                 Some(session) => load_all(session, now),
-                None => Err(unwritten("the database session is lost")),
+                None => Err(unwritten(LOST)),
             })
-            .unwrap_or_else(|| Err(unwritten("the writing session stopped")))
+            .unwrap_or_else(|| {
+                self.inner.link.stop();
+                Err(unwritten(STOPPED))
+            })
     }
 
     fn commit(&self, change: &Commit<'_>) -> Result<(), BackendError> {
@@ -755,13 +912,14 @@ impl Backend for Postgres {
     fn health(&self) -> Health {
         match self.inner.link.state() {
             State::Up => Health::Up,
-            State::Lost | State::Reviving => Health::Lost,
+            State::Lost | State::Reviving | State::Stopped => Health::Lost,
         }
     }
 
     fn revive(&self) {
-        if self.inner.link.start_revival() {
-            self.inner.writer.post(Writer::revive);
+        if self.inner.link.start_revival() && !self.inner.writers.post_each(Writer::revive) {
+            // A writer whose thread is gone never runs the revival: the store is lost for good.
+            self.inner.link.stop();
         }
     }
 
@@ -796,10 +954,27 @@ impl Backend for Postgres {
     }
 }
 
+impl Inner {
+    /// Stops the thread that upserts the instance's row, and waits for it.
+    fn stop_beat(&self) {
+        let beat = self
+            .beat
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some((stop, thread)) = beat {
+            drop(stop);
+            // A panic of the thread was its own; it holds nothing the store needs.
+            let _ = thread.join();
+        }
+    }
+}
+
 impl Drop for Inner {
     fn drop(&mut self) {
-        // The writing session goes first, its lock freed before it closes ([`Writer`]'s drop).
-        self.writer.stop();
+        self.stop_beat();
+        // The writing sessions go first, their lock freed before they close ([`Writer`]'s drop).
+        self.writers.stop();
         self.reader.stop();
     }
 }
