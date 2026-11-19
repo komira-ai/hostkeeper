@@ -42,10 +42,10 @@ class Terminal {
     globalThis.made = this.made;
     globalThis.term = this;
   }
-  open(element) { this.made.opened.push(element.name); this.element.parentNode = element; }
+  open(element) { this.made.opened.push(element["name"]); this.element.parentNode = element; }
   loadAddon(addon) { this.made.addons += 1; addon.activate(this); }
   write(data) { this.made.written.push(typeof data === "string" ? { text: data } : { bytes: Array.from(data) }); }
-  onData(listener) { this.listeners.data.push(listener); return { dispose: () => { this.listeners.data = []; } }; }
+  onData(listener) { this.listeners["data"].push(listener); return { dispose: () => { this.listeners["data"] = []; } }; }
   onBinary(listener) { this.listeners.binary.push(listener); return { dispose: () => { this.listeners.binary = []; } }; }
   refresh(start, end) { this.made.refreshed.push([start, end]); }
   focus() { this.made.focuses += 1; }
