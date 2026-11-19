@@ -19,7 +19,7 @@ use super::Shared;
 use crate::graceful::Graceful;
 use crate::http::{Surface, handle};
 use crate::listen::tests::{connector, tls_material};
-use crate::listen::{CLIENT_PATIENCE, accept_each, connection};
+use crate::listen::{CLIENT_PATIENCE, accept_each, connection, connection_with};
 use crate::login::Login;
 use crate::login_support::{Seconds, counting, settings};
 use crate::service::Coordinator;
@@ -447,10 +447,12 @@ async fn the_listener_serves_the_upgrade_on_an_http1_connection() {
 /// Proves: an upgraded connection keeps its slot of the listener while its terminal lives: with a
 /// listener whose slots are two (one for the connection, one the accept loop holds for the next),
 /// after the `101` and a ping the terminal answers, the connection still holds its slot, and the
-/// slot is free once the terminal has ended.
+/// slot is free once the terminal has ended. The stop ([`Graceful::stop`]) told after the upgrade
+/// cuts nothing: the connection stays counted as open, the terminal still answers, and the wait
+/// for the open connections ends only once the terminal has.
 ///
 /// Catches: a listener that frees the slot of a connection at the upgrade, so that the sockets of
-/// terminals are not counted against its limit.
+/// terminals are not counted against its limit, and a stop that returns while a terminal is live.
 #[tokio::test]
 async fn an_upgraded_connection_holds_its_slot_until_the_terminal_ends() {
     let site = Site::new("route-slot", Kind::Ssh(Behavior::good()), None).await;
@@ -468,17 +470,19 @@ async fn an_upgraded_connection_holds_its_slot_until_the_terminal_ends() {
         }
     };
     let coordinator = Arc::clone(&site.rig.coordinator);
+    let graceful = Graceful::default();
     let accepting = tokio::spawn(accept_each(
         accept,
         Arc::clone(&slots),
-        Graceful::default(),
-        move |stream, _| {
-            connection(
+        graceful.clone(),
+        move |stream, graceful| {
+            connection_with(
                 stream,
-                source.clone(),
+                source.config(),
                 Surface::Control,
                 Arc::clone(&coordinator),
                 CLIENT_PATIENCE,
+                graceful,
             )
         },
     ));
@@ -495,10 +499,15 @@ async fn an_upgraded_connection_holds_its_slot_until_the_terminal_ends() {
         tokio::task::yield_now().await;
     }
     assert_eq!(slots.available_permits(), 0);
+    graceful.stop();
+    browser.raw(&client_frame(9, b"still")).await;
+    assert_eq!(browser.next().await, Sent::Pong(b"still".to_vec()));
+    assert_eq!(graceful.count(), 1, "the upgraded connection is still open");
     let wrong = site.hello(80, 24).replace(&site.csrf, "not-the-token");
     browser.text(&wrong).await;
     browser.closed("bad_request").await;
     // The slot comes back once the connection is over, and not before.
     let _freed = slots.acquire().await.expect("a slot");
+    graceful.closed().await;
     accepting.abort();
 }

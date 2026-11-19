@@ -138,18 +138,12 @@ impl Serving {
 }
 
 /// Waits for `stop` (the stop signal), then says on `serving` that the coordinator is
-/// draining, whatever `stop` answered, waits for `delay` and answers what `stop` answered. The
-/// health listener says `draining` from the stop until the process exits, and the coordinator's
-/// listeners keep accepting while `delay` runs, so an edge that has not yet seen the `503` (or the
-/// new instance that replaces this one) still reaches a coordinator that answers.
-pub(crate) async fn drain_on<T>(
-    stop: impl Future<Output = T>,
-    serving: Serving,
-    delay: impl Future<Output = ()>,
-) -> T {
+/// draining, whatever `stop` answered, and answers what it answered. The health listener says
+/// `draining` from then on, until the process exits; the drain delay that follows a good signal
+/// is the stop's (`config_stop.rs`).
+pub(crate) async fn drain_on<T>(stop: impl Future<Output = T>, serving: Serving) -> T {
     let stopped = stop.await;
     serving.drain();
-    delay.await;
     stopped
 }
 
@@ -181,7 +175,8 @@ pub(crate) fn verdict(coordinator: &Coordinator, serving: &Serving) -> Verdict {
 }
 
 /// The answer to a request of `method` for `path` (the path alone, with no query): the
-/// verdict for `GET` and `HEAD` of [`HEALTH_PATH`], and `404 not_found` for anything else. A
+/// liveness verdict ([`liveness`]) for `GET` and `HEAD` of [`HEALTH_PATH`], the readiness verdict
+/// ([`verdict`]) for `GET` and `HEAD` of [`READY_PATH`], and `404 not_found` for anything else. A
 /// `HEAD` is answered as a `GET`: the connection sends its head, with the `content-length` of the
 /// body, and leaves the body out.
 #[must_use]

@@ -47,10 +47,16 @@ where
     S: Future<Output = Result<Infallible, StartError>>,
 {
     let mut serving = pin!(serving);
-    // The sleep is made when the drain polls it, after the signal: its deadline counts from then.
-    let drained = health::drain_on(stop, health, async { tokio::time::sleep(delay).await });
-    match select(pin!(drained), serving.as_mut()).await {
+    match select(pin!(health::drain_on(stop, health)), serving.as_mut()).await {
         Either::Left((stopped, _)) => stopped?,
+        Either::Right((served, _)) => {
+            let Err(why) = served;
+            return Err(why);
+        }
+    }
+    // Made after the signal, so its deadline counts from the signal; the listeners serve on.
+    match select(pin!(tokio::time::sleep(delay)), serving.as_mut()).await {
+        Either::Left(((), _)) => {}
         Either::Right((served, _)) => {
             let Err(why) = served;
             return Err(why);

@@ -376,7 +376,8 @@ async fn a_coordinator_with_no_services_starts_and_grants_nothing() {
         tokio::task::yield_now().await;
         Ok(())
     };
-    let undelayed = with(&args, "--drain-delay-secs", "0");
+    let mut undelayed = args.clone();
+    undelayed.extend(["--drain-delay-secs".into(), "0".into()]);
     start(flags_of(undelayed), roots(), bind, stop)
         .await
         .expect("the start runs and stops cleanly");
@@ -512,7 +513,8 @@ async fn start_runs_until_stopped_and_says_why_it_ended() {
         tokio::task::yield_now().await;
         Ok(())
     };
-    let undelayed = with(&files.args(), "--drain-delay-secs", "0");
+    let mut undelayed = files.args();
+    undelayed.extend(["--drain-delay-secs".into(), "0".into()]);
     start(flags_of(undelayed), roots(), bind.clone(), stop)
         .await
         .expect("a stop is a clean end");

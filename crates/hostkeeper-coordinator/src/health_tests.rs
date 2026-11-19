@@ -258,8 +258,7 @@ async fn the_stop_drains_and_answers_what_it_answered() {
     let (stop, stopped) = oneshot::channel::<io::Result<()>>();
     let mut draining = std::pin::pin!(drain_on(
         async move { stopped.await.expect("sent") },
-        serving.clone(),
-        std::future::ready(())
+        serving.clone()
     ));
     assert!(futures::poll!(draining.as_mut()).is_pending());
     assert!(!serving.is_draining(), "drained before the stop");
@@ -271,47 +270,11 @@ async fn the_stop_drains_and_answers_what_it_answered() {
     let why = drain_on(
         async { Err::<(), _>(io::Error::other("no signal handler")) },
         failed.clone(),
-        std::future::ready(()),
     )
     .await
     .expect_err("the stop's failure");
     assert_eq!(why.to_string(), "no signal handler");
     assert!(failed.is_draining(), "a failed stop drains too");
-}
-
-/// Proves: [`drain_on`] marks the coordinator draining as soon as the stop resolves and then waits
-/// for the delay before it answers: while the delay runs the future is pending and the coordinator
-/// answers `503 draining`, and once the delay is over it answers what the stop answered.
-///
-/// Catches: a stop that ends the process at once (the edge has no time to see the `503` or the
-/// instance that replaces this one), and a delay that starts before the drain is told.
-#[tokio::test]
-async fn the_drain_waits_for_its_delay_and_says_draining_meanwhile() {
-    let fake = Fake::new();
-    let (rig, serving) = serving_on("health-drain-delay", &fake);
-    let (delay_over, delay) = oneshot::channel::<()>();
-    let mut draining = std::pin::pin!(drain_on(async { 7_u8 }, serving.clone(), async move {
-        delay.await.expect("sent")
-    }));
-    assert!(futures::poll!(draining.as_mut()).is_pending());
-    assert!(
-        serving.is_draining(),
-        "the delay runs after the drain is told"
-    );
-    assert_eq!(
-        get(&rig.coordinator, &serving).await,
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Bytes::from_static(b"draining")
-        ),
-        "draining while the delay runs"
-    );
-    delay_over.send(()).expect("sent");
-    assert_eq!(
-        draining.await,
-        7,
-        "the stop's answer once the delay is over"
-    );
 }
 
 /// Proves: `/healthz` is the process's liveness and `/readyz` its readiness, in every state:
@@ -410,7 +373,7 @@ async fn a_probe_answered_after_the_stop_is_told_draining() {
     let (mut across, server) = tokio::io::duplex(1);
     offer.send(server).expect("offered");
     across.write_all(b"GET ").await.expect("written");
-    drain_on(async {}, serving.clone(), std::future::ready(())).await;
+    drain_on(async {}, serving.clone()).await;
     let answer = exchange(&mut across, &head["GET ".len()..]).await;
     let (status, body) = answer.split_once("\r\n\r\n").expect("a head");
     assert!(
