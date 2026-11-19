@@ -340,16 +340,19 @@ impl Dispatch for ThreadDispatch {
     }
 }
 
-/// The halt generations the daemon holds, persisted beside the step records (design 10, "Held
-/// halt generation"), and shared with the executor and `clear_halt`.
+/// The halts the daemon holds, each under the halt generation persisted beside the step records
+/// while the halt stands (design 10, "Held halt generation"), shared with the executor and
+/// `clear_halt`.
 pub trait HeldHalts: Send + Sync {
-    /// The generation held for `service`; `0` when none is.
-    fn held(&self, service: &ServiceName) -> u64;
-    /// Raise the generation held for `service` to `generation`; never lowers it.
+    /// A reply named `generation` as the halt generation of `service`, and the reply before it
+    /// named `before` (0 when it named none; `None` for the first reply since the loop started):
+    /// a halt the daemon holds under no generation yet is held under `before`, or lifted when
+    /// `generation` is above it; one held under a smaller generation is lifted; a service that
+    /// holds no halt keeps no generation.
     ///
     /// # Errors
     /// The store does not take it; the loop logs it and the next reply tries again.
-    fn raise(&self, service: &ServiceName, generation: u64) -> io::Result<()>;
+    fn heard(&self, service: &ServiceName, before: Option<u64>, generation: u64) -> io::Result<()>;
     /// The halt the daemon holds of `service` now, which every heartbeat reports
     /// ([`crate::beat::LocalHalt`]); `None` while it holds none, or cannot tell.
     fn holding(&self, service: &ServiceName) -> Option<HeldHalt>;
@@ -363,8 +366,8 @@ pub struct HeldHalt {
     pub reason: Option<Reason>,
     /// The halt generation held.
     pub generation: u64,
-    /// When that generation was last written, in unix seconds; none when no generation is
-    /// written (it is 0), or the time cannot be read.
+    /// When that generation was written, in unix seconds; none when no generation is written
+    /// yet (it is 0), or the time cannot be read.
     pub written_unix: Option<u64>,
 }
 
