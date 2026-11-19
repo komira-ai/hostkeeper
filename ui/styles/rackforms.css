@@ -1,0 +1,174 @@
+/* The edit mode's controls on a rack (ui/rackforms.js): the "+ Add sled" and "+ Add device" buttons
+   above the cabinet, the height stepper in the rack's head, the grip on its bottom edge, and the form
+   above the racks that adds a sled or a device. The rack is hardware (dark in both themes); the form is
+   the page's own (its tokens). */
+
+.rack-adds {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin: 0 0 8px;
+}
+
+.rack-adds .rack-add-btn {
+  min-height: 32px;
+  padding: 0 8px;
+  border: 1px dashed #5a7186;
+  background: rgb(255 255 255 / 0.04);
+  color: var(--hw-ink);
+  font: 600 12px / 1 var(--mono);
+}
+
+.rack-adds .rack-add-btn:hover,
+.rack-adds .rack-add-btn.on {
+  border-style: solid;
+  border-color: var(--accent);
+  background: rgb(253 79 29 / 0.18);
+  color: #fff;
+}
+
+.rack-add-btn .plus {
+  font-size: 16px;
+  line-height: 1;
+}
+
+/* The height stepper: one U shorter, the height, one U taller, in one group. */
+.rack-size {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.rack-size label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  font-size: 11px;
+}
+
+.rack-size label select {
+  display: inline-block;
+  width: auto;
+  height: 26px;
+  margin: 0;
+  padding: 0 4px;
+  font: 12px var(--mono);
+}
+
+.rack-head .rack-size button.step {
+  width: 26px;
+  min-height: 26px;
+  padding: 0;
+  font: 600 15px / 1 var(--mono);
+}
+
+.rack-error {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-family: var(--font);
+  color: var(--ink);
+}
+
+/* The grip on the bottom edge of a rack: drag it down for more U, up for fewer. */
+.rack-grip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 100%;
+  min-height: 30px;
+  margin-top: 4px;
+  padding: 4px 0;
+  border: 1px dashed transparent;
+  border-radius: 0 0 6px 6px;
+  background: transparent;
+  color: var(--hw-dim);
+  font: 11px / 1 var(--mono);
+  cursor: ns-resize;
+  touch-action: none;
+}
+
+.rack-grip:hover,
+.rack-grip:focus-visible,
+.rack-grip.dragging {
+  border-color: var(--accent);
+  background: rgb(253 79 29 / 0.12);
+  color: #fff;
+}
+
+.rack-grip.dragging.cut {
+  border-color: var(--led-failed);
+  background: rgb(220 60 60 / 0.18);
+}
+
+.grip-bar {
+  width: 44px;
+  height: 4px;
+  border-radius: 2px;
+  background: currentColor;
+  opacity: 0.7;
+}
+
+/* The outline of the sled the open Add sled form would add. */
+.drop-ghost.preview {
+  border-style: dashed;
+  background: rgb(253 79 29 / 0.12);
+}
+
+/* The form: a titled panel above the racks, its fields in a row that wraps (one column on a phone). */
+.rack-form {
+  margin: 12px 0;
+  padding: 12px 16px;
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.rack-form h3 {
+  margin: 0 0 4px;
+  font-size: 16px;
+}
+
+.rack-form .preview {
+  margin: 0 0 8px;
+  color: var(--ink-2);
+}
+
+.rack-form .fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 4px 16px;
+}
+
+.rack-form .fields label {
+  flex: 0 1 auto;
+  min-width: 8rem;
+}
+
+.rack-form .fields label input,
+.rack-form .fields label select {
+  min-width: 8rem;
+}
+
+.rack-form .said {
+  margin: 4px 0 0;
+  color: var(--ink-2);
+}
+
+.rack-form .said:empty {
+  display: none;
+}
+
+@media (max-width: 899px) {
+  .rack-form .fields {
+    display: block;
+  }
+
+  .rack-form .fields label input,
+  .rack-form .fields label select {
+    max-width: none;
+  }
+}

@@ -53,9 +53,11 @@ function span(rack, sled) {
   return { "--r": rack.height - (sled.u + sled.height - 1) + 1, "--s": sled.height };
 }
 
-// The board of one rendering of the lab: `env` is `{layout, all, edit, state, ops, go, redraw}`,
+// The board of one rendering of the lab: `env` is `{layout, all, edit, state, ops, go, redraw, preview}`,
 // `all` the servers and switches joined with their places, `state` what survives a redraw
-// (`selected`, `target`, `drag`, `assign`, `ghosts`), `go(view, params)` the navigation.
+// (`selected`, `target`, `drag`, `assign`, `ghosts`), `go(view, params)` the navigation, and
+// `preview()` where the open Add sled or Add device form would put what it adds (the outline of the
+// sled, or the bay marked), or null.
 export function board(env) {
   const { layout, all, edit, state, ops } = env;
   const items = new Map();
@@ -80,9 +82,16 @@ export function board(env) {
     }
     return g;
   }
+  // Where the open Add sled form would put its sled in `rack`, drawn while nothing is dragged; null for none.
+  function resting(rack) {
+    const p = typeof env.preview === "function" ? env.preview() : null;
+    return p !== null && p.kind === "sled" && p.rack === rack.id
+      ? { start: p.u, height: p.height, fits: true, preview: true }
+      : null;
+  }
   function paint(rack, spot) {
     const g = ghostOf(rack);
-    const cls = spot === null ? "drop-ghost" : `drop-ghost on${spot.fits ? "" : " no"}`;
+    const cls = spot === null ? "drop-ghost" : `drop-ghost on${spot.fits ? "" : " no"}${spot.preview ? " preview" : ""}`;
     const vars = spot === null
       ? { "--r": 1, "--s": 1 }
       : span(rack, { u: spot.start, height: spot.height });
@@ -103,7 +112,7 @@ export function board(env) {
     const t = state.target;
     const spot = t !== null && t.kind === "sled" && t.rack === rack.id
       ? { start: t.u, height: sledOf(state.selected.id).height, fits: fitsAt(layout, rack.id, sledOf(state.selected.id).height, t.u, state.selected.id) }
-      : null;
+      : resting(rack);
     g.node = h("span", {
       class: "drop-ghost", "aria-hidden": "true", vars: { "--r": 1, "--s": 1 },
       on: { mounted: (e) => { g.el = e.currentTarget; } },
@@ -116,7 +125,7 @@ export function board(env) {
     for (const [id, g] of state.ghosts) {
       const rack = rackOf(id);
       if (rack !== undefined) {
-        paint(rack, null);
+        paint(rack, resting(rack));
       }
     }
   }
@@ -301,7 +310,9 @@ export function board(env) {
       return h("span", { class: "bay empty", "aria-hidden": "true" });
     }
     const address = `${sled.address}-S${slot}`;
-    const here = state.target !== null && state.target.kind === "slot" && state.target.sled === sled.id && state.target.slot === slot;
+    const shown = typeof env.preview === "function" ? env.preview() : null;
+    const here = (state.target !== null && state.target.kind === "slot" && state.target.sled === sled.id && state.target.slot === slot)
+      || (shown !== null && shown.kind === "slot" && shown.sled === sled.id && shown.slot === slot);
     const assigning = state.assign !== null && state.assign.sled === sled.id && state.assign.slot === slot;
     const drop = (e) => {
       if (e && e.preventDefault) {
@@ -443,7 +454,7 @@ export function board(env) {
                 const sled = sledOf(d.id);
                 const start = startFor(sled, u);
                 if (start === null) {
-                  paint(rack, null);
+                  paint(rack, resting(rack));
                   return;
                 }
                 e.preventDefault();
