@@ -6,7 +6,7 @@ read a set by `crates/hostkeeper-wire/src/prerequisites.rs`, and the wire
 `HeartbeatResponse.prerequisites` and `HeartbeatRequest.prerequisites` of `hostkeeper.agent.v1`
 (feature `prerequisites-v1`).
 
-Extended, in design only, by [`macos-xcode-versions.md`](macos-xcode-versions.md) section 2.3: the failure reason that says why `softwareupdate` offered no tools, and a look that finds the tools on disk without their receipt or in a selected Xcode. This document describes what is built.
+Extended, in design only, by [`maintenance-updates.md`](maintenance-updates.md) section 1.2: the failure reason that says why `softwareupdate` offered no tools, and a look that finds the tools on disk without their receipt or in a selected Xcode. This document describes what is built.
 
 The owner's direction: a Mac of the build farm must not need a person to type a command on it.
 Apple's Command Line Tools for Xcode (the compiler, the linker and the SDK every macOS build
