@@ -30,6 +30,7 @@ mod accounts;
 mod at;
 mod dsn;
 pub(crate) mod edit;
+mod fleet_rows;
 mod generations;
 mod groups;
 mod instance;
@@ -59,6 +60,7 @@ use hostkeeper_oidc::Clock;
 pub use dsn::DsnError;
 pub(crate) use dsn::{Dsn, TIMEOUTS, Timeouts};
 pub(crate) use edit::Open;
+pub(crate) use fleet_rows::Timing;
 pub(crate) use records::PgRecords;
 
 use self::instance::Instance;
@@ -68,6 +70,7 @@ use self::pool::Pool;
 use self::rows::{Stmt, Val, laid_over};
 use self::session::{Fail, Session, Worker, describe, ends_session, not_up};
 use self::writer::{Link, State, Tx, WriteFail, Writer, try_lock_shared};
+use super::beat::HostBeat;
 use super::{Backend, BackendError, Commit, Edit, Fresh, Health, Loaded, Part, Scope};
 use crate::accounts::Accounts;
 use crate::audit_file::{Actor, AuditLine, Detail, Logged, Query, UnixClock};
@@ -264,6 +267,10 @@ pub(crate) struct Options {
     /// How long an edit waits for the rollout gate and its parts' rows
     /// (`--operator-gate-wait-ms`); a heartbeat's never waits.
     pub(crate) gate_wait: Duration,
+    /// How old the stored beat of a host must be before a beat older by the host's clock is
+    /// believed (`--beat-reorder-secs`), and the quiet time a gap in the beats sets
+    /// (`--quiet-secs`) ([`fleet_rows`]).
+    pub(crate) fleet: fleet_rows::Timing,
 }
 
 struct Inner {
@@ -282,6 +289,8 @@ struct Inner {
     known: Arc<Known>,
     /// How long an edit waits for its locks (`--operator-gate-wait-ms`).
     gate_wait: Duration,
+    /// The times the beat statement of the fleet's rows reads ([`fleet_rows`]).
+    fleet: fleet_rows::Timing,
     /// What a test runs between the read of a part's version and the read of its rows.
     #[cfg(test)]
     between: Mutex<Option<parts::Between>>,
@@ -475,6 +484,7 @@ impl Postgres {
             instance,
             known: Arc::new(Known::of(versions)),
             gate_wait: options.gate_wait,
+            fleet: options.fleet,
             #[cfg(test)]
             between: Mutex::new(None),
             beat: Mutex::new(Some((beat_stop, beating))),
@@ -622,17 +632,29 @@ fn write_on<R: Send + 'static>(
     change: Option<Owned>,
     body: impl FnOnce(&mut Tx<'_>) -> Result<R, postgres::Error> + Send + 'static,
 ) -> Result<R, WriteFail> {
+    on_writer(pool, link, move |writer| writer.transact(change, body))
+}
+
+/// Runs `job` on a writer of `pool`, unless `link` says the store is lost: what [`write_on`] runs
+/// a transaction with, and a heartbeat its row's one statement ([`fleet_rows`]).
+///
+/// # Errors
+/// [`WriteFail`]: the job's, or [`WriteFail::Lost`] at once while the store is lost.
+fn on_writer<R: Send + 'static>(
+    pool: &Pool,
+    link: &Link,
+    job: impl FnOnce(&mut Writer) -> Result<R, WriteFail> + Send + 'static,
+) -> Result<R, WriteFail> {
     match link.state() {
         State::Up => {}
         State::Stopped => return Err(WriteFail::Lost(STOPPED.to_owned())),
         State::Lost | State::Reviving => return Err(WriteFail::Lost(LOST.to_owned())),
     }
-    pool.call(move |writer| writer.transact(change, body))
-        .unwrap_or_else(|| {
-            // The writer's thread is gone: the store is lost for good, which the alert says.
-            link.stop();
-            Err(WriteFail::Lost(STOPPED.to_owned()))
-        })
+    pool.call(job).unwrap_or_else(|| {
+        // The writer's thread is gone: the store is lost for good, which the alert says.
+        link.stop();
+        Err(WriteFail::Lost(STOPPED.to_owned()))
+    })
 }
 
 /// What [`open_sessions`] opened.
@@ -922,6 +944,10 @@ impl Backend for Postgres {
                 Vec::new()
             }
         }
+    }
+
+    fn keep_beat(&self, beat: HostBeat) {
+        fleet_rows::keep(self, beat);
     }
 
     fn reload(&self, part: Part) -> Result<Fresh, BackendError> {

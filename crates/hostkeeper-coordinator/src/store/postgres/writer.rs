@@ -423,6 +423,32 @@ impl Writer {
         WriteFail::Refused(why)
     }
 
+    /// Runs `statement`, one statement that commits on its own, outside a transaction and with no
+    /// row of `tx_ledger`: for a write that the next call makes again whatever became of this one
+    /// (a heartbeat's row, [`super::fleet_rows`]), so an outcome lost with the session is never
+    /// asked after. A failure that ends the session loses it, as a transaction's does.
+    ///
+    /// # Errors
+    /// [`WriteFail::Lost`]: the session is lost, or was lost by it; [`WriteFail::Refused`]: the
+    /// server refused it, and the session stays.
+    pub(crate) fn once<R>(
+        &mut self,
+        statement: impl FnOnce(&mut Session) -> Result<R, postgres::Error>,
+    ) -> Result<R, WriteFail> {
+        let Some(session) = self.session.as_mut() else {
+            return Err(WriteFail::Lost("the database session is lost".to_owned()));
+        };
+        statement(session).map_err(|e| {
+            let why = describe(&e);
+            if ends_session(&e) {
+                self.lose(&why, None);
+                WriteFail::Lost(why)
+            } else {
+                WriteFail::Refused(why)
+            }
+        })
+    }
+
     /// Runs `body` in one transaction, after inserting the transaction's row of `tx_ledger` (and
     /// deleting the rows older than [`LEDGER_KEEP_SECS`]), and commits it.
     ///
