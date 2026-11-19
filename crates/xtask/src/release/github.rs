@@ -368,10 +368,10 @@ impl<E: Exec> Verifier for Gh<E> {
         answers.pop().unwrap_or_else(|| Ok(Vec::new()))
     }
 
-    /// The commands of [`Verifier::verify`], one per ask, run through
-    /// [`Exec::spawn_each`] (side by side, by the process runner); each answer read as `verify`
-    /// reads it. The first runs alone: it fetches and caches the Sigstore trusted root, which
-    /// the others then read instead of each writing the cache at the same time.
+    /// The commands of [`Verifier::verify`], one per ask, all handed to [`Exec::spawn_each`] at
+    /// once; each answer read as `verify` reads it. The process runner runs them side by side,
+    /// each `gh` with a cache home of its own (`ports::spawn_side_by_side`): every `gh` fetches
+    /// and writes the Sigstore TUF metadata anew, so that none reads what another is writing.
     fn verify_each(&self, asks: &[Ask<'_>]) -> Vec<Result<Vec<Attestation>, PortError>> {
         let prepared: Vec<Result<Vec<String>, PortError>> = asks
             .iter()
@@ -382,12 +382,7 @@ impl<E: Exec> Verifier for Gh<E> {
             .filter_map(|args| args.as_ref().ok())
             .map(|args| ("gh".to_owned(), args.clone()))
             .collect();
-        let (first, rest) = runs.split_at(runs.len().min(1));
-        let mut ran = self
-            .exec
-            .spawn_each(first)
-            .into_iter()
-            .chain(self.exec.spawn_each(rest));
+        let mut ran = self.exec.spawn_each(&runs).into_iter();
         prepared
             .into_iter()
             .map(|args| {

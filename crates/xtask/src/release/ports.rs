@@ -8,6 +8,7 @@
 //! no test.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::contract::{Commit, Repo, Signer};
 
@@ -264,8 +265,8 @@ pub(crate) trait Exec {
     fn spawn(&self, program: &str, args: &[String]) -> std::io::Result<Ran>;
 
     /// Each run, a program and its arguments, answered in the order given. The default runs
-    /// them one after the other; the process runner runs them side by side
-    /// ([`spawn_side_by_side`]).
+    /// them one after the other; the process runner runs them side by side, each with a cache
+    /// home of its own ([`spawn_side_by_side`]).
     fn spawn_each(&self, runs: &[(String, Vec<String>)]) -> Vec<std::io::Result<Ran>> {
         runs.iter()
             .map(|(program, args)| self.spawn(program, args))
@@ -276,19 +277,61 @@ pub(crate) trait Exec {
 /// How many programs [`spawn_side_by_side`] runs at once.
 pub(crate) const SIDE_BY_SIDE: usize = 8;
 
-/// Each run through `exec`, at most `width` (at least one) at once, each on a thread of its
-/// own; the answers in the order of `runs`. A run whose thread panicked is an error.
-pub(crate) fn spawn_side_by_side<E: Exec + Sync>(
-    exec: &E,
+/// The environment variable the process runner sets to a run's cache home
+/// ([`spawn_side_by_side`]): `gh` keeps its Sigstore TUF metadata under `$XDG_CACHE_HOME/gh`.
+pub(crate) const CACHE_HOME: &str = "XDG_CACHE_HOME";
+
+/// The first number [`spawn_side_by_side`] tries for the directory of its cache homes.
+static NEXT_HOMES: AtomicU64 = AtomicU64::new(0);
+
+/// How many numbers the directory of the cache homes tries before the runs fail: far more than
+/// the stale directories of one process id a temporary directory holds, and few enough that a
+/// fault which makes every name look taken fails at once.
+const HOMES_ATTEMPTS: u64 = 1024;
+
+/// Each run started with `start(program, args, cache_home)`, at most `width` (at least one) at
+/// once, each on a thread of its own; the answers in the order of `runs`. A run whose thread
+/// panicked is an error.
+///
+/// Every run has a cache home of its own: the new, empty directory `<index>` in a new directory
+/// under `parent`, which is removed when the last run has ended. No two runs share a cache:
+/// `gh attestation verify` writes the Sigstore TUF metadata it fetches into its cache, every
+/// run anew, and two of them writing one cache at once fail each other (go-tuf reads each file
+/// back after writing it, and refuses one the other `gh` rewrote in between). When the
+/// directory of the homes cannot be made, every run is answered with that error and none is
+/// started; a home that cannot be made is that run's error.
+pub(crate) fn spawn_side_by_side<F>(
     runs: &[(String, Vec<String>)],
     width: usize,
-) -> Vec<std::io::Result<Ran>> {
-    let mut answers = Vec::with_capacity(runs.len());
-    for batch in runs.chunks(width.max(1)) {
-        std::thread::scope(|scope| {
-            let started: Vec<_> = batch
+    parent: &Path,
+    start: F,
+) -> Vec<std::io::Result<Ran>>
+where
+    F: Fn(&str, &[String], &Path) -> std::io::Result<Ran> + Sync,
+{
+    let stem = format!("xtask-cache-homes-{}", std::process::id());
+    let homes = match new_dir(parent, &stem, &NEXT_HOMES, HOMES_ATTEMPTS) {
+        Ok(base) => Removed(base),
+        Err(e) => {
+            let why = format!("make the cache homes under {}: {e}", parent.display());
+            return runs
                 .iter()
-                .map(|(program, args)| scope.spawn(move || exec.spawn(program, args)))
+                .map(|_| Err(std::io::Error::new(e.kind(), why.clone())))
+                .collect();
+        }
+    };
+    let start = &start;
+    let mut answers = Vec::with_capacity(runs.len());
+    for (first, batch) in (0..).step_by(width.max(1)).zip(runs.chunks(width.max(1))) {
+        std::thread::scope(|scope| {
+            let started: Vec<_> = (first..)
+                .zip(batch)
+                .map(|(index, (program, args))| {
+                    let home = homes.0.join(format!("{index}"));
+                    scope.spawn(move || {
+                        std::fs::create_dir(&home).and_then(|()| start(program, args, &home))
+                    })
+                })
                 .collect();
             answers.extend(started.into_iter().map(|run| {
                 run.join()
@@ -297,6 +340,40 @@ pub(crate) fn spawn_side_by_side<E: Exec + Sync>(
         });
     }
     answers
+}
+
+/// A directory removed, with everything in it, when this drops.
+struct Removed(std::path::PathBuf);
+
+impl Drop for Removed {
+    fn drop(&mut self) {
+        // One that cannot be removed is left behind; no later batch uses its name.
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// The new directory `parent/<stem>-<n>`, `n` taken from `next`, a fresh number for each try: a
+/// directory that already exists is passed over, never shared or emptied; any other error is
+/// returned, and so is `attempts` numbers all taken.
+fn new_dir(
+    parent: &Path,
+    stem: &str,
+    next: &AtomicU64,
+    attempts: u64,
+) -> std::io::Result<std::path::PathBuf> {
+    for _ in 0..attempts {
+        let path = parent.join(format!("{stem}-{}", next.fetch_add(1, Ordering::Relaxed)));
+        // `create_dir`, not `create_dir_all`: a directory that already exists is an error, so
+        // no batch ever shares one.
+        match std::fs::create_dir(&path) {
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            made => return made.map(|()| path),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        format!("no free directory {stem}-<n> in {attempts} numbers"),
+    ))
 }
 
 /// One run of a program that inherits nothing: its environment is exactly `env`, and it runs in
