@@ -70,10 +70,10 @@ fn the_first_serving_heartbeat_is_written_once_into_the_hosts_row() {
         ]]
     };
 
-    let statements = store.statements();
+    let commits = database.commits();
     let never = HostId::parse("web-9").expect("a host id");
     enrollment.note_serving(&never, NOW + 30).expect("noted");
-    assert_eq!(store.statements(), statements, "a host never approved");
+    assert_eq!(database.commits(), commits, "a host never approved");
     assert_eq!(row(), web_1(None, None));
 
     enrollment.note_heartbeat(&id, NOW + 50).expect("noted");
@@ -85,7 +85,7 @@ fn the_first_serving_heartbeat_is_written_once_into_the_hosts_row() {
     assert_eq!(store.statements(), written, "the second ran nothing");
     assert_eq!(row(), web_1(Some(NOW + 50), Some(NOW + 60)));
 
-    let again = EnrollmentStore::new(Arc::new(PgRecords::over(&store).expect("records")));
+    let again = EnrollmentStore::new(Arc::new(PgRecords::over(&store)));
     assert_eq!(
         again
             .enrolled_host(&id)
@@ -95,10 +95,10 @@ fn the_first_serving_heartbeat_is_written_once_into_the_hosts_row() {
         Some(NOW + 60),
         "read back from the column"
     );
-    let loaded = store.statements();
+    let loaded = database.commits();
     again.note_serving(&id, NOW + 120).expect("noted");
     assert_eq!(
-        store.statements(),
+        database.commits(),
         loaded,
         "a store made again writes nothing"
     );

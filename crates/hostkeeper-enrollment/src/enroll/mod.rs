@@ -7,8 +7,9 @@
 //!   the same request. A request claiming a machine id another request has, or a MAC bound to
 //!   an enrolled host, is a duplicate claim.
 //! - [`EnrollmentStore::approve`] is the operator's decision, as a plain function: the
-//!   operator names the key hash, and the host id is checked unique under the store lock that
-//!   records the approval. [`EnrollmentStore::approve_recorded`] is the same decision with who
+//!   operator names the key hash, and the host id is checked unique by the write that records
+//!   the approval, which lands only on the records its decision read.
+//!   [`EnrollmentStore::approve_recorded`] is the same decision with who
 //!   made it, when and why written into the approval, a `duplicate_claim` request refused
 //!   unless the decision replaces, and a Mac nonce checked and consumed in the same write.
 //! - [`EnrollmentStore::post`] refuses a new request while [`EnrollmentStore::max_pending`]
@@ -375,6 +376,12 @@ pub enum StoreError {
     /// is named. Nothing of the commit is written.
     #[error("a {0} record whose key does not parse is not kept")]
     Unkeyed(&'static str),
+    /// A write whose decision read the record at `path` found it changed by another writer
+    /// since ([`records::Seen`]): nothing of the write is written. The store decides again once
+    /// on what that writer left, so a caller sees this only when another writer changed a
+    /// record again in between.
+    #[error("{path} was changed by another writer since it was read: nothing is written")]
+    Raced { path: PathBuf },
 }
 
 /// Why a post was refused.

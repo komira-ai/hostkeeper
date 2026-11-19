@@ -77,7 +77,8 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   nothing, on any of them, until the next heartbeat's revival has opened every lost one again with
   the lock. Reads that are not decisions
   (`Audit.List`, the enrollment lists, the alerts' scans) run on a second, read-only session.
-  Decisions read memory: a heartbeat in the steady state runs no query.
+  Decisions read memory: a heartbeat in the steady state writes nothing. It reads its host's
+  enrollment and deny rows, fresh, so a deny another coordinator recorded is seen at once.
 - **The instances.** Each start makes a row of the `instances` table with an id of its own (random),
   the time it started and was last seen (the database's clock), its release, and the addresses of
   its listeners, and moves `seen_unix` on every `--instance-beat-secs` (default 5) while it runs,

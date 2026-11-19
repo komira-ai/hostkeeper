@@ -156,6 +156,7 @@ impl Link {
     }
 
     /// Whether a commit's outcome is not yet known.
+    #[cfg(test)]
     pub(crate) fn unsettled(&self) -> bool {
         self.lock().unsettled > 0
     }

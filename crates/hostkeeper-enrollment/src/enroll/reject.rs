@@ -48,7 +48,8 @@ impl RejectError {
 }
 
 impl EnrollmentStore {
-    /// Rejects the request `id` under the store's lock: a pending one (a duplicate claim
+    /// Rejects the request `id`, in a write that lands only on the request as read: a pending one
+    /// (a duplicate claim
     /// included), or one that expired undecided ([`Self::expire`], which a repost would make wait
     /// again), is marked denied; one denied without having been approved (rejected before) is
     /// answered as it is, with nothing written, so a repeat is told apart from the first call.
@@ -57,20 +58,26 @@ impl EnrollmentStore {
     /// [`RejectError::UnknownRequest`], [`RejectError::NotPending`] (approved, issued, or
     /// denied after an approval), [`RejectError::Store`].
     pub fn reject(&self, id: &KeyHash) -> Result<Rejection, RejectError> {
-        let _held = self.lock()?;
-        let mut row = self.load_request(id)?.ok_or(RejectError::UnknownRequest)?;
-        let first = match row.state {
-            RequestState::Pending | RequestState::DuplicateClaim | RequestState::Expired => true,
-            RequestState::Denied if row.pb.approved.is_none() => false,
-            state => return Err(RejectError::NotPending(state)),
-        };
-        if first {
-            row.set_state(RequestState::Denied);
-            self.commit(&[Record::Request(row.pb.clone())])?;
-        }
-        Ok(Rejection {
-            request: view(&row)?,
-            first,
+        self.decided(|| {
+            let mut seen = Vec::new();
+            let mut row = self
+                .saw_request(id, &mut seen)?
+                .ok_or(RejectError::UnknownRequest)?;
+            let first = match row.state {
+                RequestState::Pending | RequestState::DuplicateClaim | RequestState::Expired => {
+                    true
+                }
+                RequestState::Denied if row.pb.approved.is_none() => false,
+                state => return Err(RejectError::NotPending(state)),
+            };
+            if first {
+                row.set_state(RequestState::Denied);
+                self.commit(&seen, &[Record::Request(row.pb.clone())])?;
+            }
+            Ok(Rejection {
+                request: view(&row)?,
+                first,
+            })
         })
     }
 }
