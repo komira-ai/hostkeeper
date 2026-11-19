@@ -28,6 +28,7 @@ export namespace hostkeeper_agent_v1 {
     prerequisites?: hostkeeper_agent_v1.PrerequisitesReport;
     ssh?: hostkeeper_agent_v1.SshReport;
   }
+  export interface LocalHalt { reason?: string; generation?: string; ageSecs?: string; }
   export interface OperatorKeysRefusal { digest?: string; reason?: string; }
   export interface OperatorKeysReport { digest?: string; refused?: hostkeeper_agent_v1.OperatorKeysRefusal; failed?: string; }
   export type Outcome = "OUTCOME_UNSPECIFIED" | "OUTCOME_SUCCEEDED" | "OUTCOME_FAILED";
@@ -63,6 +64,7 @@ export namespace hostkeeper_agent_v1 {
     recordTry?: string;
     installer?: string;
     drift?: hostkeeper_agent_v1.DriftReport;
+    localHalt?: hostkeeper_agent_v1.LocalHalt;
   }
   export interface SshReport { appliedGeneration?: string; state?: string; hostKeyFingerprints?: string[]; detail?: string; }
   export interface StepRun { name?: string; attempt?: number; }

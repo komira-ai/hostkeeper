@@ -57,6 +57,7 @@ pub(crate) fn heartbeat(beat: &Heartbeat) -> Result<wire::Heartbeat, Unsendable>
         .map(service)
         .collect::<Result<Vec<ServiceBeat>, Unsendable>>()?;
     Ok(wire::Heartbeat {
+        local_halt: None,
         platform: platform(beat.platform),
         version: agent_version.clone(),
         health: wire::Health::Healthy,
@@ -101,6 +102,7 @@ fn service(facts: &ServiceFacts) -> Result<ServiceBeat, Unsendable> {
         None => None,
     };
     Ok(ServiceBeat {
+        local_halt: None,
         name: name.to_owned(),
         version: version(&facts.version)?,
         health: health(facts.health),

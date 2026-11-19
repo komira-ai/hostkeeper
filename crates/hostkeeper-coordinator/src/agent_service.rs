@@ -55,6 +55,7 @@ pub(crate) fn own_beat(services: &Services, beat: &mut Heartbeat) -> Option<Serv
             None
         }
         None => Some(ServiceBeat {
+            local_halt: None,
             name: agent.name.as_str().to_owned(),
             version: agent.version,
             health: Health::Healthy,

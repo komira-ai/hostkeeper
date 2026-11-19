@@ -493,6 +493,20 @@ message ServiceBeat {
   // again, whose install repairs it (`drift_repaired`). Read only over gRPC; a coordinator that
   // predates it skips it.
   DriftReport drift = 14;
+  // Present while the host holds a halt of the service: its step record ended in a halt, and it
+  // refuses every order of the service (`halted`) until a halt generation above `generation`
+  // comes. Read only over gRPC; a coordinator that predates it skips it.
+  LocalHalt local_halt = 15;
+}
+
+// A halt the host holds of a service, as `ServiceBeat.local_halt` reports it.
+message LocalHalt {
+  // The halt's reason, a token of 1 to 64 bytes of `[a-z0-9_]`; absent when it has none.
+  optional string reason = 1;
+  // The halt generation the host holds (its `held-halt` file); 0 when it holds none.
+  uint64 generation = 2;
+  // Seconds since the host last wrote that generation; absent when it has no such file.
+  optional uint64 age_secs = 3;
 }
 
 // A native package found at a version hostkeeper did not set. Each string is 1 to 128 bytes of

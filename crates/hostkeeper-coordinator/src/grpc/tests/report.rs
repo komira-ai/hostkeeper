@@ -110,7 +110,7 @@ fn mapped_host(host: ServiceHostStatus, members: Vec<Member>, ops: OpsState) -> 
     out.hosts.remove(0)
 }
 
-fn plain_host(b: Heartbeat) -> proto::ServiceHost {
+pub(super) fn plain_host(b: Heartbeat) -> proto::ServiceHost {
     mapped_host(
         svc_host("d1", "storage", b),
         Vec::new(),
@@ -740,6 +740,8 @@ fn every_rollout_hold_maps_to_its_proto_gate_reason() {
     use proto::GateReason as R;
     let cases = [
         (Some(Why::Gate(Gate::Halted)), R::Halted),
+        (Some(Why::Gate(Gate::HaltedHere)), R::HaltedHere),
+        (Some(Why::Gate(Gate::StaleHaltHere)), R::StaleHaltHere),
         (Some(Why::Gate(Gate::Held)), R::Held),
         (Some(Why::Gate(Gate::Bad)), R::Bad),
         (Some(Why::Gate(Gate::BelowMinVersion)), R::Unspecified),
@@ -881,6 +883,7 @@ fn full_heartbeat_maps_every_fact_into_the_service_beat() {
     assert_eq!(
         out.beat,
         Some(agent::ServiceBeat {
+            local_halt: None,
             installer: None,
             drift: None,
             name: "web".to_owned(),

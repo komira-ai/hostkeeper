@@ -129,6 +129,52 @@ pub(crate) fn clear_standing(marks: &mut ServiceOps) -> Option<Halt> {
     Some(halt)
 }
 
+/// What a `clear_halt` lifted ([`past_held`]).
+pub(crate) enum Lifted {
+    /// The halt that stood.
+    Standing(Halt),
+    /// No halt stood: only the halts hosts hold of their own.
+    Held,
+}
+
+/// Clears `marks` for a `clear_halt` while the highest generation a host reports holding a halt
+/// of the service under is `held` (`ServiceBeat.local_halt`; none when no host reports one):
+/// the standing halt as [`clear_standing`] does, and the generation then issued is one past
+/// both the last one issued and `held`. A host lifts its own halt only on a generation above
+/// the one it holds, which may be another coordinator's, above any this one issued (design
+/// 5.4); a clear that counted from its own last generation alone would never reach it. Answers
+/// what it lifted; `None`, and nothing changed, when no halt stood and no host holds one.
+pub(crate) fn past_held(marks: &mut ServiceOps, held: Option<u64>) -> Option<Lifted> {
+    let issued = marks.halt_generation.max(held.unwrap_or(0));
+    let lifted = match clear_standing(marks) {
+        Some(halt) => Lifted::Standing(halt),
+        None => held.map(|_| Lifted::Held)?,
+    };
+    marks.halt_generation = issued.saturating_add(1);
+    Some(lifted)
+}
+
+/// The `clear_halt` entry of what `by` lifted of `service` in `group`, with `reason`: a halt
+/// that stood names the host that raised it; one only hosts held names none.
+fn lifted_entry(
+    by: &str,
+    service: &str,
+    group: Option<&crate::host_groups::GroupName>,
+    lifted: &Lifted,
+    reason: &str,
+) -> AuditEntry {
+    match lifted {
+        Lifted::Standing(halt) => cleared(by, service, group, halt, reason),
+        Lifted::Held => {
+            let mut entry = AuditEntry::new(by, "clear_halt");
+            entry.service = Some(service.to_owned());
+            entry.host_group = group.map(ToString::to_string);
+            entry.reason = Some(reason.to_owned());
+            entry
+        }
+    }
+}
+
 /// The `clear_halt` entry of the halt `halt` of `service` that `by` cleared, with `reason`, in
 /// `group`.
 pub(crate) fn cleared(
@@ -194,7 +240,10 @@ pub(crate) fn label(text: &str) -> bool {
 /// host groups `groups` of the coordinator (none: a coordinator without groups). The caller has
 /// already checked who `by` is; the body is validated here before anything changes. A service is
 /// managed when the rollout file defines it or a group lists it, and a clear of a halt, with
-/// groups, clears the halt of every group that lists the service ([`clear_in_groups`]).
+/// groups, clears the halt of every group that lists the service ([`clear_in_groups`]). `held`
+/// answers the highest generation a host reports holding a halt of a service under, none when
+/// no host does: a clear issues a generation past it ([`past_held`]), and clears a service no
+/// halt of which stands while a host holds one.
 ///
 /// # Errors
 /// [`OperateError::Invalid`]: the body is no action, or names an unknown service, a bad node
@@ -203,6 +252,7 @@ pub(crate) fn operate(
     store: &OpsStore,
     services: &Services,
     groups: &HostGroups,
+    held: &dyn Fn(&str) -> Option<u64>,
     by: &str,
     body: &[u8],
 ) -> Result<AuditEntry, OperateError> {
@@ -277,6 +327,7 @@ pub(crate) fn operate(
         } => {
             let name = service(services, groups, &name)?.to_owned();
             let why = reason(&why)?;
+            let held = held(&name);
             if groups.is_empty() {
                 // Written first: a clear that cannot be written leaves the halt standing. The
                 // halt is the one standing when the change is made, under the writers' lock: one
@@ -284,25 +335,29 @@ pub(crate) fn operate(
                 // after that one would be cleared with the old report's acknowledgement.
                 store.decide_change::<OperateError>(Write::BeforeMemory, |state| {
                     let marks = state.services.entry(name.clone()).or_default();
-                    let halt = clear_standing(marks)
+                    let lifted = past_held(marks, held)
                         .ok_or(OperateError::Invalid("the service is not halted"))?;
-                    Ok(cleared(by, &name, None, &halt, &why))
+                    Ok(lifted_entry(by, &name, None, &lifted, &why))
                 })?
             } else {
-                clear_in_groups(store, groups, by, &name, &why)?
+                clear_in_groups(store, groups, held, by, &name, &why)?
             }
         }
     })
 }
 
 /// Clears the halt of `service` in every group of `groups` that lists it and has one standing, in
-/// one change, as [`clear_standing`] does, one entry for each group naming it. Answers the first.
+/// one change, as [`past_held`] does, one entry for each group naming it. Answers the first.
+/// While a host holds a halt of its own (`held`), every group that lists the service issues a
+/// generation past it: the highest is the fleet's, whichever group its host is in.
 ///
 /// # Errors
-/// [`OperateError::Invalid`] when no such group is halted; the store's error.
+/// [`OperateError::Invalid`] when no such group is halted and no host holds a halt; the store's
+/// error.
 fn clear_in_groups(
     store: &OpsStore,
     groups: &HostGroups,
+    held: Option<u64>,
     by: &str,
     service: &str,
     reason: &str,
@@ -310,8 +365,10 @@ fn clear_in_groups(
     let mut entries = store.decide_changes::<OperateError>(Write::BeforeMemory, |state| {
         let mut entries = Vec::new();
         for group in listing(groups, service) {
-            let halt = state.edit_marks_in(Some(&group), service, clear_standing);
-            entries.extend(halt.map(|halt| cleared(by, service, Some(&group), &halt, reason)));
+            let lifted = state.edit_marks_in(Some(&group), service, |m| past_held(m, held));
+            entries.extend(
+                lifted.map(|lifted| lifted_entry(by, service, Some(&group), &lifted, reason)),
+            );
         }
         if entries.is_empty() {
             return Err(OperateError::Invalid("the service is not halted"));
