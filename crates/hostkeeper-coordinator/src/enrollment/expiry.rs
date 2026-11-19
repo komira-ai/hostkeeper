@@ -8,8 +8,9 @@
 //! `request_expired`, once, under `coordinator`. The coordinator's reload tick runs it
 //! ([`crate::listen::reload_every`]), so a request expires at most one tick after its TTL.
 //!
-//! The store decides which requests a sweep expired under its lock, so two sweeps never audit
-//! one expiry. An entry that did not land (the audit write failed, or the coordinator stopped
+//! The store decides which requests a sweep expired by a write that lands only on the requests
+//! as read, so two sweeps, on one coordinator or two, never audit one expiry. An entry that did not
+//! land (the audit write failed, or the coordinator stopped
 //! between the store's write and the audit's) is written at the next start
 //! ([`Enrollment::audit_to`]): a request the store holds expired is audited again when the last
 //! entry the audit log holds for it is not its `request_expired`.

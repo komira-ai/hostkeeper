@@ -21,11 +21,12 @@
 //! approval is made, as the record's host id and role, bound to the SHA-256 of the request's key,
 //! with no service (a record names none), by [`INVENTORY_APPROVER`]; from a coordinator that
 //! holds host groups, in the record's group, whose name is then the role
-//! (`docs/design/hostgroups.md` section 1.2). The store checks again under
-//! its lock what an operator's approval is held to: a host id another key holds, a denied host id,
+//! (`docs/design/hostgroups.md` section 1.2). The store checks again, in
+//! the write that approves, what an operator's approval is held to: a host id another key holds, a
+//! denied host id,
 //! a duplicate claim and a request no longer pending each leave the request pending (logged, not
-//! audited, the record untouched). That one host per host id is what keeps two requests that
-//! race for one record from both using it.
+//! audited, the record untouched). That one host per host id, kept by that write on any number
+//! of coordinators, is what keeps two requests that race for one record from both using it.
 //!
 //! The audit entry (`enrollment.auto_approved`) and the mark that the record is used are one
 //! change of the ops file, made right after the store's write ([`record_auto_approval`]). When

@@ -4,8 +4,9 @@ Status: design, approved by the owner (2026-11-18), with the answers to its two 
 document: it is updated in the pull requests that build it. Tags as in [hostkeeper-design.md](hostkeeper-design.md): **Built**
 names code on `main` with a path, **Designed** means nothing implements it yet. Built so far: in section 4 the shared
 lock, the ledger, the migration runner's mutex (M3, komira-ai/hostkeeper#395), the pool of sessions, `instances`, the migrations'
-lock timeout and retry and the lint's hot-table rule (the rest of M3), with section 12's keys for those; and the models of
-section 14 (M2). Still Designed in section 4: `--migrate-wait-secs`, `--ledger-retry-secs` and the prune in a reload tick
+lock timeout and retry and the lint's hot-table rule (the rest of M3), with section 12's keys for those; the models of
+section 14 (M2); and in section 6 the enrollment's conditional writes, its fresh host and deny reads and the spent CI
+token ids decided by the insert (M5). Still Designed in section 4: `--migrate-wait-secs`, `--ledger-retry-secs` and the prune in a reload tick
 (#395 differs, below). Everything else is Designed. The
 measurements of M1 are taken (section 7).
 
@@ -554,6 +555,27 @@ decision (it reads rows, not caches), at most one beat for the converged path (w
 UI. Every transaction that writes rows of a part bumps its `state_versions` row, the deciding transaction included (the
 `ops` rows it writes: halts, plan progress).
 
+**Built** (M5: `hostkeeper-enrollment` `enroll/store.rs`, `enroll/records/mod.rs`; the coordinator's
+`store/postgres/records.rs`; tests `enroll/records/conformance.rs` clause `Checked`, `hostkeeper-enrollment/tests/raced.rs`,
+`store/postgres/tests/enrollment_races.rs`). Every write of the enrollment store carries what its decision read
+(`Seen`: the request, host, deny, issued or nonce row as read, or absent), and lands only when each is still so, else
+writes nothing and is refused `Raced`; the store then runs the decision again on what the other writer left, up to
+three runs (a decision makes at most two writes: issuance reserves a serial, then records the certificate), so the
+loser of two approvals of one request answers `not_pending` and the loser of two polls returns the one certificate
+recorded. Under Postgres the records take no lock in the process (`RecordsLock::none`), and in the writing
+transaction lock every row read or written by a transaction-scoped advisory lock on its key
+(`pg_advisory_xact_lock(RECORD_LOCK_CLASS, hashtext(key))`, in key order), read again `FOR UPDATE` and compare the
+rows read. Where this differs from the text below: a row that does not exist yet cannot be locked `FOR UPDATE`, so the
+key lock is what serializes two writers of a new host id or a new deny row, rather than the unique index alone; the
+whole row as read is the condition, not the state column alone; the `Copy` is gone rather than made a cache under an
+`enrollment` version (that version is `state_versions`', M4's), so a host's row and its deny row are read fresh at
+each read (decision 4 of section 19), by queries of their own on the read-only session until the heartbeat's one
+statement (M6) carries the deny row; `Renew`'s checks and its serial are one write (`renewal_serial`). The pending cap
+and the machine id and MAC of other requests and hosts, which a post reads as lists, are not part of the condition:
+two coordinators posting at one moment may each let one request past the cap or miss the other's claim of a machine
+id; an approval still checks its host id. The heartbeat's `heard`, `served` and `running` sets of a store, which only
+skip a write, stay per instance.
+
 **Enrollment.** `RecordsLock::in_process` (`records.rs`, `enroll/store.rs:124`) goes. Approve, reject, renew and expire become
 conditional writes in a transaction: `UPDATE enrollment_requests SET state='approved' WHERE request_id=$1 AND
 state='pending'` and zero rows means the other instance won; a host or request row is read `FOR UPDATE` when a check precedes the
@@ -578,7 +600,10 @@ audit number at open plus an in-memory raise, `facts.rs:100-115`) becomes a colu
 release before does, so every instance answers the same number and a flip does not refetch facts.
 
 **Spent CI tokens.** The insert's result (`ON CONFLICT DO NOTHING`, rows recorded) decides; the in-memory set is a cache that
-can only refuse earlier (`store/mod.rs:296`). No new table.
+can only refuse earlier (`store/mod.rs:296`). No new table. **Built** (M5: `store/mod.rs` `Spent::record`,
+`hostkeeper-oidc` `Verifier::spend`): an insert that records no row is answered `AlreadyExists`, which the verifier
+refuses `replayed` (before, `replay_cache_unavailable`) and then remembers; the cap of the memory
+(`MAX_REMEMBERED_JTIS`) is unchanged.
 
 ## 7. Latency budget
 
@@ -670,7 +695,7 @@ for the status page.
 | Pruning (`tx_ledger` is pruned in every transaction, section 4): expired `sessions`, old `login_failures`, `instances` not seen for a day, aged `fleet_orders` | none or per process | jobs `prune-*`: `DELETE ... WHERE ...`, idempotent |
 | TLS, tokens file, client CA reload (`listen.rs:402-441`) | per process | per instance, unchanged (the files are the same Swarm secrets); not claimed, because each instance must reload its own |
 | Server certificate renewal (`enrollment/mod.rs:220`) | per process | per instance, on its own tmpfs (section 10); not claimed |
-| Host certificate issuance (Enroll, Poll, Renew) | request-driven | not a loop: a transaction, `UPDATE enrollment_requests SET state='approved' WHERE request_id=$1 AND state='pending'`, serial from `take_serial` (one SQL statement); zero rows means another instance won and the caller reads its result |
+| Host certificate issuance (Enroll, Poll, Renew) | request-driven | not a loop: a transaction, `UPDATE enrollment_requests SET state='approved' WHERE request_id=$1 AND state='pending'`, serial from `take_serial` (one SQL statement); zero rows means another instance won and the caller reads its result. **Built** (M5, section 6): the write is conditional on the whole request row (and host, deny, issued rows) as read, and the decision runs again on a refusal |
 | Initial-admin file (`initial_admin.rs:480`) | adopts the file, audits `user_bootstrap`, deletes the file when expired | adoption is a conditional upsert keyed by the file's `id` (the "record already holds this id" rule exists today) with the audit row only when the upsert changed a row; a failed delete (`ENOENT` or read-only) counts as done. The volume stays mounted by every instance for this file alone (decided: keep it for now) |
 | Rollout driver, queue, halt evaluation | per heartbeat, in the fleet lock | per heartbeat, in the transaction of section 5.2 and the steps of 5.3; no loop. A stage that completes while no host beats is not advanced today either (`service.rs:595`); if a periodic advance is later wanted it is a job here that runs the same compare-and-set advance |
 | GitHub release polling | does not exist in the coordinator: CI pushes `Releases.SetDesired` with a GitHub OIDC token (`api.github.com` is read only by the `xtask` update tooling, not by the service) | nothing to run. If a poller is ever added to the coordinator it is one more `periodic_jobs` row whose effect is a conditional `SetDesired` |
@@ -882,7 +907,7 @@ the farm): the back-out is a stopgap while a fix ships.
 | M2 | Built: the models of section 14 (spec and Rust state-space test at N = 1, 2, 3), failing on the unlocked variants (`docs/design/models/`, `crates/hostkeeper-coordinator/tests/multi_instance_model/`) | M1 | M |
 | M3 | Built: by komira-ai/hostkeeper#395 the shared fence lock, the `tx_ledger` settle (`0019`), no `lease.commits` write, no deposed exit, the migration mutex, the session timeouts; then the pool of sessions (`store/postgres/pool.rs`), `instances` (`0022`, `instance.rs`), DDL `lock_timeout` with its bounded retry and the migration lint rule (`migrate.rs`). Still one instance | M2 | M |
 | M4 | Row-transaction edits and `state_versions` invalidation for desired, ops, accounts, layout, verdicts, with the row-lock order of section 6 and the one-snapshot reload rule; `rollout_gate` with `SKIP LOCKED` for beats and the operator wait; `audit_counter` and its start-time re-seed; `facts_generation` | M3 | L |
-| M5 | Enrollment: conditional writes, `FOR UPDATE`, fresh deny read; spent-token cache | M3 | M |
+| M5 | Built: enrollment's conditional writes (`Seen`, `enroll/store.rs` `decided`), the key locks and `FOR UPDATE` re-read of `store/postgres/records.rs`, host and deny rows read fresh, `Renew` in one write; the spent CI token id decided by the insert (section 6) | M3 | M |
 | M6 | The fleet in Postgres, without decisions: `fleet_*`, `cluster_quiet` and the gap rule, the ordered beat upsert, the in-SQL bake, the converged path | M4, M5 | M |
 | M7 | The deciding transaction and the steps of 5.3: gate, re-read of every input, `set_seq`/`set_for` and the start-time re-stamp, orders with the unique host index, compare-and-set stage advance, storage-first halts, rollback before delete, fail closed; the quiet rule gating verdicts and rollbacks as well as orders | M6 | L |
 | M8 | Sessions and login limiter; `periodic_jobs` and the claim; alerts, expiry, pruning and initial-admin made exactly-once | M3 | M |

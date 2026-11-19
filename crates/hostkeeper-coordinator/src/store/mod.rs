@@ -310,9 +310,14 @@ impl SpentJtis for Spent {
     }
 
     fn record(&self, jti: &str, until: u64) -> io::Result<()> {
+        // The backend's own refusal decides a replay: a database another coordinator spent the
+        // id in refuses it here, though this one's memory never held it.
         self.backend
             .spend(jti, until, (self.clock)())
-            .map_err(io::Error::other)
+            .map_err(|why| match why {
+                BackendError::Spent => io::Error::new(io::ErrorKind::AlreadyExists, why),
+                why => io::Error::other(why),
+            })
     }
 }
 

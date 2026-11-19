@@ -1,12 +1,19 @@
 //! Issuance from the store: one certificate per request id and round.
 //!
-//! The order of the writes is what makes it so. Under the store lock:
+//! The order of the writes is what makes it so. In one decision of the store
+//! ([`EnrollmentStore::decided`]):
 //!
 //! 1. a serial is taken and reserved in the request ([`Records::take_serial`](super::records::Records::take_serial)), unless the
 //!    request already holds one for this round;
 //! 2. the certificate is signed with that serial;
 //! 3. the certificate's record is written and the request marked issued, in one commit (the
 //!    files write the certificate first).
+//!
+//! Each write lands only when the request, its certificate's record and its host's deny row
+//! are as the decision read them. Of two coordinators issuing one request at once, the second
+//! to reserve finds the serial reserved and signs with it, and the second to record its
+//! certificate finds the first one's recorded and returns it, so both return the same bytes and
+//! one of them says it was the first.
 //!
 //! A crash before 3 leaves the reserved serial and no certificate: the retry signs again with
 //! the same serial, and the certificate signed before the crash was never written or returned.
@@ -15,7 +22,7 @@
 //! approval and issuance, one certificate, with one serial, is ever returned for a request id
 //! and round.
 
-use super::records::{Record, pb};
+use super::records::{Record, Seen, pb};
 use super::rows::corrupt;
 use super::store::EnrollmentStore;
 use super::{IssueError, RequestState};
@@ -34,8 +41,8 @@ pub struct IssuedCertificate {
     /// The certificate, DER: the same bytes on every call for one request id and round.
     pub certificate_der: Vec<u8>,
     /// The request became issued at this call: its certificate was signed now, or was signed
-    /// before a crash and is recorded issued now. Decided under the store's lock, so one call
-    /// per request and round says so.
+    /// before a crash and is recorded issued now. Decided by a write that lands only on the
+    /// request as read, so one call per request and round says so.
     pub first: bool,
 }
 
@@ -54,9 +61,18 @@ impl EnrollmentStore {
         signer: &dyn Signer,
         request_id: &KeyHash,
     ) -> Result<IssuedCertificate, IssueError> {
-        let _held = self.lock()?;
+        self.decided(|| self.issue_once(signer, request_id))
+    }
+
+    /// One decision of [`Self::issue`].
+    fn issue_once(
+        &self,
+        signer: &dyn Signer,
+        request_id: &KeyHash,
+    ) -> Result<IssuedCertificate, IssueError> {
+        let mut seen = Vec::new();
         let mut row = self
-            .load_request(request_id)?
+            .saw_request(request_id, &mut seen)?
             .ok_or(IssueError::UnknownRequest)?;
         if row.state == RequestState::Denied {
             return Err(IssueError::Denied);
@@ -69,19 +85,18 @@ impl EnrollmentStore {
         let host_id = row
             .host_id()?
             .ok_or(corrupt(&row.path, "an approved request names no host id"))?;
-        if self.denied(&host_id)? {
+        if self.saw_denied(&host_id, &mut seen)? {
             return Err(IssueError::Denied);
         }
         let round = row.pb.round;
         if let Some(issued) = self
-            .records()
-            .issued(request_id)?
+            .saw_issued(request_id, &mut seen)?
             .filter(|issued| issued.round == round)
         {
             let first = row.state != RequestState::Issued;
             if first {
                 row.set_state(RequestState::Issued);
-                self.commit(&[Record::Request(row.pb)])?;
+                self.commit(&seen, &[Record::Request(row.pb)])?;
             }
             return Ok(view(request_id, &host_id, issued, first));
         }
@@ -90,7 +105,10 @@ impl EnrollmentStore {
             return Err(corrupt(&row.path, reason).into());
         }
         if row.pb.serial == 0 {
-            row.pb.serial = self.records().take_serial(Some(&row.pb))?;
+            row.pb.serial = self.records().take_serial(&seen, Some(&row.pb))?;
+            // The request is now as reserved: what the certificate's commit expects of it.
+            seen.retain(|one| !matches!(one, Seen::Request(..)));
+            seen.push(Seen::Request(*request_id, Some(row.pb.clone())));
         }
         let certificate = signer.sign(&SignRequest {
             subject: Subject::Host(&host_id),
@@ -108,7 +126,10 @@ impl EnrollmentStore {
             not_after: certificate.not_after,
         };
         row.set_state(RequestState::Issued);
-        self.commit(&[Record::Issued(issued.clone()), Record::Request(row.pb)])?;
+        self.commit(
+            &seen,
+            &[Record::Issued(issued.clone()), Record::Request(row.pb)],
+        )?;
         Ok(view(request_id, &host_id, issued, true))
     }
 }

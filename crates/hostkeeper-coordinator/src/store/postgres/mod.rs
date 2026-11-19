@@ -597,12 +597,6 @@ impl Postgres {
             .unwrap_or_else(|| Err("the reading session stopped".to_owned()))
     }
 
-    /// Whether the writing session is up with no commit's outcome unknown: when what the tables
-    /// hold is what this coordinator committed.
-    pub(crate) fn settled_up(&self) -> bool {
-        self.inner.link.state() == State::Up && !self.inner.link.unsettled()
-    }
-
     /// Whether a commit's outcome is not yet known.
     #[cfg(test)]
     pub(crate) fn unsettled(&self) -> bool {
