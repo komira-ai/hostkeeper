@@ -15,6 +15,7 @@ export function socketAddress(location, path) {
   if (typeof path !== "string" || !PATHS.some((shape) => shape.test(path))) {
     throw new Error(`not a socket path: ${String(path)}`);
   }
-  const scheme = location.protocol === "https:" ? "wss:" : "ws:";
-  return `${scheme}//${location.host}${path}`;
+  const { protocol, host } = location;
+  const scheme = protocol === "https:" ? "wss:" : "ws:";
+  return `${scheme}//${host}${path}`;
 }

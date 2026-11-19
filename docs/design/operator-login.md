@@ -226,8 +226,9 @@ not. So the two credentials are handled differently, in one place, where `bearer
 of them stops the classic forged form post, and the header stops everything the other two let through (an old browser
 without `Sec-Fetch-Site`, a same-site sibling).
 
-**Headers.** The policy `default-src 'self'; frame-ancestors 'none'` stays as it is: the UI has no inline script and
-the form is plain. The login routes answer `Cache-Control: no-store`.
+**Headers.** The policy `default-src 'self'; frame-ancestors 'none'` stayed as it was for the login: the UI has no inline
+script and the form is plain. (The console's C5 later added `connect-src`, `style-src` and `img-src`; script is still
+`'self'` alone, [ui-serving.md](../ui-serving.md).) The login routes answer `Cache-Control: no-store`.
 
 ### 5.4 Failures and limits
 

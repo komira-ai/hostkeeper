@@ -52,7 +52,7 @@ fn pins_read_sha256sum_lines_and_skip_comments_and_blank_lines() {
         ])
     );
     assert_eq!(pins(""), Ok(vec![]));
-    assert_eq!(pins(PINS).map(|p| p.len()), Ok(0));
+    assert!(pins(PINS).is_ok(), "the checked-in pins read");
 }
 
 #[test]

@@ -257,10 +257,30 @@ fn only_the_entry_module_opens_a_socket_and_it_opens_exactly_one() {
     }
     let main = UiFile::named(SOCKET_OPENER).expect("main.js is held");
     assert_none(opener(main.path, main.text));
-    assert!(
-        main.text
-            .contains("import { socketAddress } from \"./socket_address.js\";"),
+    // The import is a line of its own, `socketAddress` is bound nowhere else in main.js, and the
+    // word `WebSocket` stands only in the one call (no alias such as `const W = WebSocket`).
+    let import = "import { socketAddress } from \"./socket_address.js\";";
+    assert_eq!(
+        main.text.lines().filter(|l| *l == import).count(),
+        1,
         "main.js takes socketAddress from socket_address.js"
+    );
+    for binding in [
+        "const socketAddress",
+        "let socketAddress",
+        "var socketAddress",
+        "function socketAddress",
+        "socketAddress =",
+        "const window",
+        "let window",
+        "var window",
+    ] {
+        assert!(!main.text.contains(binding), "main.js binds {binding}");
+    }
+    assert_eq!(
+        main.text.matches("WebSocket").count(),
+        1,
+        "main.js names WebSocket once"
     );
 }
 
