@@ -625,3 +625,7 @@ fn repository_files_are_written_first_byte_for_byte() {
     // Three files of five fields, the daemon config's five and the datasource file's four.
     assert_eq!(files.len(), 3 * 5 + 5 + 4);
 }
+
+/// The console runbook's move of an installed server to the serial baseline, against this seed.
+#[path = "seed/console_runbook.rs"]
+mod console_runbook;
