@@ -294,15 +294,21 @@ pub(super) fn with_session<R: Send + 'static>(
 }
 
 mod accounts;
+mod admin_rows;
+mod alert_rows;
 mod audit_only;
 mod connect;
+mod expiry_rows;
 mod coordinator;
 mod generations;
 mod host_groups;
 mod instance;
+mod jobs_rows;
 mod layout;
+mod login_rows;
 mod lost;
 mod migrate_ddl;
+mod periodic;
 mod pool;
 mod reads;
 mod records;
@@ -316,6 +322,8 @@ mod serve;
 mod service_repository;
 mod serving;
 mod session;
+mod sessions_and_jobs;
+mod shared_login;
 mod ssh;
 mod ssh_book;
 mod start;
