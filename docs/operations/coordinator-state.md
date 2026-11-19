@@ -79,6 +79,22 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   (`Audit.List`, the enrollment lists, the alerts' scans) run on a second, read-only session.
   Decisions read memory: a heartbeat in the steady state writes nothing. It reads its host's
   enrollment and deny rows, fresh, so a deny another coordinator recorded is seen at once.
+- **Edits, and the copies in memory.** Each change of the state (an operator's, CI's, or one the
+  coordinator makes itself) is one transaction that locks, after its row of `tx_ledger`, the row
+  of `rollout_gate` when it changes what a rollout decision reads (the desired state, the
+  operations state, the layout, the verdicts), then the row of each part of the state it changes
+  in `state_versions`, then the row of `audit_counter` when it writes audit lines; it reads afresh
+  any part another coordinator changed since this one read it, makes the change on that, writes the
+  rows that differ, and moves each part's version on. An edit waits for the gate at most
+  `--operator-gate-wait-ms` (default 30000), and is refused `store_failed` with nothing changed
+  when the wait runs out; a heartbeat's own write (its verdicts) never waits, and is made at a
+  later heartbeat when the gate is held. Audit lines are numbered by `audit_counter` in the order
+  their transactions commit, with no gap; each start sets it past the newest line, which a release
+  before this one numbered without it. Every request, a heartbeat among them, first reads the
+  parts' versions (one query on the read-only session) and reads again, in one snapshot, each part
+  whose version moved on; otherwise decisions and answers read memory. A host's facts generation
+  is `enrollment_hosts.facts_generation`, raised to the audit number of the change that changes
+  the host's facts, in its transaction.
 - **The instances.** Each start makes a row of the `instances` table with an id of its own (random),
   the time it started and was last seen (the database's clock), its release, and the addresses of
   its listeners, and moves `seen_unix` on every `--instance-beat-secs` (default 5) while it runs,
@@ -87,7 +103,7 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   row of a coordinator that stopped stays as it was last seen until the job `prune` deletes it, a
   day after it was last seen.
 - **Periodic jobs.** Every `--job-tick-secs` (default 5) a coordinator claims the periodic jobs that
-  are due, one statement over the `periodic_jobs` table (migration `0023`) that moves each claimed
+  are due, one statement over the `periodic_jobs` table (migration `0024`) that moves each claimed
   job's due time on by its period, so of all the coordinators on the database one runs a job in a
   period; a coordinator that stops after a claim loses that run, and the job is due again one
   period later for any of them. The periods are `--job-every NAME=SECS` (repeatable): `alerts`
@@ -470,7 +486,7 @@ A session that must change its password may call `/v1/password`, `/v1/logout` an
 A session also opens the UI's Remote SSH terminal, `GET /v1/ssh/terminal?host=<host id>` (a WebSocket upgrade, private listener only; `docs/operations/ssh-ca.md`, "Remote SSH from the UI"): the terminal's tunnels live as long as the session does, and what is typed in the terminal counts as use of it.
 
 Over the files sessions are kept in memory: a restart signs everyone out. Over a database they are rows of the `sessions`
-table (keyed by the SHA-256 of the cookie's id, never the id) and the failure counts rows of `login_failures` (migration `0023`):
+table (keyed by the SHA-256 of the cookie's id, never the id) and the failure counts rows of `login_failures` (migration `0024`):
 every coordinator on the database answers the same cookie and counts the same failures, and a restart or a deploy signs no one
 out; a session's last use is written at most every `--session-touch-secs` (default 30), so its idle deadline may count from up
 to that long before its last use. When the database cannot be reached no session is made or found and every name is told

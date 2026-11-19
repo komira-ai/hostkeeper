@@ -24,7 +24,7 @@ use crate::fleet::Fleet;
 use crate::holds::marks_of;
 use crate::macos_resolve;
 use crate::repositories::Registry;
-use crate::store::Health;
+use crate::store::{Health, Part};
 
 impl Coordinator {
     /// Whether the fleet's lock, which every decision and order is made under, is held now.
@@ -107,6 +107,24 @@ impl Coordinator {
         fleet
             .picks
             .keep_private(self.desired.with_repositories(Registry::private_channels));
+    }
+
+    /// Reads again each part of the state whose rows another coordinator changed since this one's
+    /// copy was read (`docs/design/coordinator-multi-instance.md`, section 6, "Invalidation"): one
+    /// read of the parts' versions, then each part that moved on, rows and version in one
+    /// snapshot. Called before every request is answered, a heartbeat among them, so an answer is
+    /// at most one request behind an edit another coordinator committed. A store one process owns
+    /// has nothing to read again.
+    pub(crate) fn refresh_caches(&self) {
+        for part in self.ops.backend().stale() {
+            match part {
+                Part::Desired => self.desired.refresh(),
+                Part::Ops => self.ops.refresh(),
+                Part::Accounts => self.accounts.refresh(),
+                Part::Layout => self.layout.refresh(),
+                Part::Verdicts => self.verdicts.refresh(),
+            }
+        }
     }
 
     /// Tends the store's link at a heartbeat at the coordinator's time `now`: asks a lost link to

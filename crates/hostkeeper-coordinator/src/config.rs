@@ -605,6 +605,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
     );
     let desired = DesiredStore::over(Arc::clone(&backend), loaded.desired).by_groups_only();
     let ops = OpsStore::over(Arc::clone(&backend), loaded.ops)
+        .with_facts(loaded.facts)
         .with_marker(marker)
         .with_record_window(record_window);
     let accounts = AccountStore::over(Arc::clone(&backend), loaded.accounts);

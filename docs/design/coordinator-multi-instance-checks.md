@@ -26,6 +26,48 @@ The choices the design's section 4 leaves open, as the code makes them (`store/p
   referencing column included), an index build, and `CLUSTER`, `REINDEX` and `VACUUM`; a quoted or schema-qualified name is read
   as the bare one, block comments are skipped, and the DDL of a dollar-quoted body is read where it starts.
 
+## 6. M4, as built
+
+The edits, versions, gate and counter of the design's section 6 as the code makes them (`store/edit.rs`,
+`store/postgres/edit.rs`, `store/postgres/parts.rs`, `0023_state_versions.sql`, and each store's edit: `ops_edit.rs`,
+`desired_edit.rs`, `verdict_file.rs`, `accounts.rs`, `layout.rs`), where the text leaves a choice open:
+
+- A store begins an edit of its scope under its writers' lock (`Backend::begin`); the scopes are constants, each with its lock
+  plan (`Scope::locks`). The transaction is held open on a writer of the pool while the store makes its change on its own
+  thread, so the stores' edit closures are unchanged and run on the parts read afresh under the locks. A part is read afresh
+  only when its version is not the one this instance's copy carries; the store keeps those versions, and a copy carries a
+  version from the moment the store takes it into memory.
+- The counter's row is the last lock, taken when the edit begins (`SELECT next ... FOR UPDATE`) rather than by an `UPDATE` as
+  the last write: a store numbers its entries before it commits (an entry's number is answered to the caller and names an
+  abort's order). It is held to the commit, so the numbers are dense and follow the commits, and a rolled-back edit leaves no
+  gap. Only an edit that writes audit lines takes it; a console line takes the counter alone (`Scope::AUDIT`).
+- A part's version moves on when the commit writes its rows; the ops part's also for a line of the ring of changes (an audit
+  line that is not audit-only), so the ring, and the hosts' facts generations, are read in the ops part's snapshot.
+- `--operator-gate-wait-ms` bounds every lock wait of an edit (the gate, the parts' rows, the counter): `lock_timeout` is set
+  to it, and `statement_timeout` to it plus a second, for those statements only. A wait that runs out refuses the edit
+  `store_failed` and keeps the session; a statement's own bounded wait still loses it.
+- A heartbeat's own write is the verdicts' (`Scope::VERDICTS`, `SKIP LOCKED`): refused at once while the gate is held or asked
+  for, and made again at the host's next beat. What else a heartbeat writes through the ops store (a halt on a threshold, a
+  stage entered, the last good version) waits for the gate as an operator's edit does until M7 moves it into the deciding
+  transaction.
+- A memory-first change (a halt, a bad mark, a pause, an abort) is made in an edit too while nothing is pending. One made while
+  a change is pending, or while no edit can be begun (the database lost, the gate not free in time), stands in memory as before
+  and lands at the next heartbeat's retry, its lines renumbered from the counter when another instance took their numbers. A
+  change staged in a transaction (a force) is refused while a change is pending, and the ops part is not read again while one
+  is. The marker file stays as it was.
+- Invalidation: `Coordinator::refresh_caches` before every request (`grpc::route`, which heartbeats, API calls and UI requests
+  all go through): one `SELECT` of `state_versions` on the read-only session, then each part that moved on in a `REPEATABLE
+  READ, READ ONLY` transaction, version first. While a writing session is lost it reads nothing, and a store whose writers'
+  lock a change holds (it may be waiting for the gate) is skipped, not waited for: the change reads the part afresh.
+- The `Backend` contract's commit without an edit is, over Postgres, an edit of every part (`Scope::WHOLE`); no store calls it.
+- The start sets the counter past the newest line after it loads and before it serves, in a statement of its own.
+- `facts_generation` is the column `0008` added (nullable, no default: a host with none answers 0), raised to the line's
+  number by the transaction of every audit line whose action changes a host's facts (`GREATEST`, so never lowered by it),
+  and read with the ops part. A host record the enrollment store writes is checked against the row its decision read (M5),
+  so one made before a raise is decided again on the raised row.
+- `rollout_gate`, `state_versions` and `audit_counter` are bookkeeping: an export neither writes nor counts them, and the
+  start after an import sets the counter past the imported lines.
+
 ## 7. The latency budget, measured (M1)
 
 Two places, kept apart in every row. **Live** is the deployment's Postgres service, read only: `SELECT`s and `SHOW`s run with
@@ -43,7 +85,7 @@ next version. A placed order is taken by the host at once and settled by its nex
 **50% stage** is `max_updating` set to half the hosts of the one role (`min_up` 0, `--live-rollouts` 1, `ORDER_AGE` 120 s). Two
 instances with four pool sessions each are 8 sessions. An **operator edit** is `decide(Wait::Operator { 30 000 ms })`: the gate
 `FOR UPDATE`, a reload of `desired`, `group_desired` and `halts`, then a halt raised or cleared on another service. That is the
-shape of section 6, and its SQL is not built yet (M4). The **operator's wait** is the time from its `BEGIN` to the moment the
+shape of section 6, built since in M4 (`store/postgres/edit.rs`, section 6 above). The **operator's wait** is the time from its `BEGIN` to the moment the
 gate is granted, so it includes the `BEGIN`, ledger and `set_config` round trips. The **hold** is the time from the grant to the
 return of `COMMIT`, seen by the client. Times are means, with p99 and max where the tail matters. The scratch host was shared
 (load average about 22 on 28 CPUs), so its tails carry that noise.
@@ -99,7 +141,7 @@ statement would cut. At 0.73 beats/s that is not a load, so none of section 7's 
 ## 8 and 9. M8, as built
 
 The choices sections 8 and 9 leave open, as the code makes them (`store/postgres/login_rows.rs`, `periodic.rs`,
-`alert_rows.rs`, `admin_rows.rs`, `0023_sessions_and_jobs.sql`, `session.rs`, `jobs.rs`, `alerts_rows.rs`,
+`alert_rows.rs`, `admin_rows.rs`, `0024_sessions_and_jobs.sql`, `session.rs`, `jobs.rs`, `alerts_rows.rs`,
 `initial_admin.rs`, `config_database.rs`):
 
 - Time is the database's `now()`, read in the statement that judges by it; the stores take a fixed second instead only in a
@@ -123,10 +165,11 @@ The choices sections 8 and 9 leave open, as the code makes them (`store/postgres
 - An end of sessions that the rows cannot take (a logout, a password change or reset, a user disabled or removed) is an
   error the caller answers (`store_unreachable`, `store_failed`), not a silent zero: the change itself stands, and making it
   again ends the sessions.
-- The audit's numbers are still the release's in-memory counter until M4's `audit_counter`, so an effect's audit line is
-  written by the coordinator whose conditional write won, after it, not in its transaction: the expiry's line after the
-  update (the start's re-audit of an expiry with no line stays the repair), the adoption's after the user's row. A stop
-  between the two loses that one line.
+- An effect's audit line is written by the coordinator whose conditional write won, after it, through the operations
+  store's own edit (M4's `audit_counter` numbers it), not in the write's transaction: the adoption's and the void's after
+  the user's row. A stop between the two loses that one line.
+- The initial-admin file's writes of a `users` row lock the `accounts` row of `state_versions` and move its version on when
+  they change the row, so every coordinator reads its copy of the accounts again (M4's rule of section 6).
 
 ## 14. The model check, before code
 
@@ -240,6 +283,13 @@ Tests, named (each asserts the behaviour in its name; the PR bodies list them by
   `expiry_on_two_tasks_expires_each_request_once` and the others of that file), `session_is_valid_on_the_other_task`,
   `login_failures_count_across_tasks`, `expiry_audits_each_request_once`, `alert_is_logged_once`.
 - `lost_session_orders_nothing_until_revived_and_settles_by_ledger` (replaces the `lease.commits` settle test).
+- **Built** (M4), against the service container, in `store/postgres/tests/`: `lock_order_has_no_cycle` (`edits.rs`: every
+  scope's lock plan is in the one order, and the transaction takes exactly that plan); `cache_is_never_labelled_newer_than_its_content`
+  (`reload.rs`, a commit made between the two reads by the store's own hook); `audit_numbers_follow_commit_order` and
+  `new_release_again_continues_audit_numbers_after_the_release_before_ran` (`numbers.rs`, two stores; the counter's re-seed,
+  the re-stamp being M7's); `beat_never_overtakes_a_queued_operator_edit`, `operator_halt_waits_for_one_holder_not_for_beats`
+  and `stalled_holder_is_terminated_and_gate_is_released` (`gate.rs`), with the operator's side of
+  `halt_raised_by_two_instances_is_one_generation_and_one_audit_line` as `a_halt_raised_on_two_instances_is_one_halt_and_one_audit_line`.
 - T5/T13: each test above has a failure case (the gate removed, the conditional write made unconditional).
 
 Coverage is judged per crate as always (T1); the pool, the ledger and the conditional writes are covered by the

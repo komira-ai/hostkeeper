@@ -9,7 +9,7 @@ use super::{SPENT_NOW, TestDatabase};
 use crate::desired;
 use crate::host_groups::tests::web;
 use crate::host_groups::{HostGroup, HostGroups};
-use crate::store::postgres::{load_all, migrate, records};
+use crate::store::postgres::{migrate, parts, records};
 use crate::store::{Backend, Commit};
 
 /// Proves: the release before this one (migrations `0001` to `0007`) is refused on a database
@@ -38,7 +38,7 @@ fn the_release_before_is_refused_on_a_database_with_0008() {
     );
     assert_eq!(
         db.rows("SELECT version FROM schema_version ORDER BY version"),
-        (1..=23)
+        (1..=24)
             .map(|n| vec![Some(n.to_string())])
             .collect::<Vec<_>>()
     );
@@ -93,7 +93,7 @@ fn this_release_reads_the_rows_of_the_release_before_as_naming_no_group() {
     assert_eq!(
         db.rows("SELECT version FROM schema_version ORDER BY version")
             .len(),
-        23
+        24
     );
 }
 
@@ -240,7 +240,9 @@ fn a_groups_rows_follow_its_commits() {
         (0, 0, 0)
     );
     store.stop();
-    let loaded = with_session(&db, |session| load_all(session, SPENT_NOW).expect("loads"));
+    let loaded = with_session(&db, |session| {
+        parts::load(session, SPENT_NOW).expect("loads").0
+    });
     assert_eq!(loaded.desired.host_groups, HostGroups::default());
 }
 
@@ -286,7 +288,9 @@ fn a_group_packages_mark_rows_follow_its_commits() {
     let marked = with(every_mark());
     commit(&loaded.ops, &marked);
     assert_eq!(counts(&db), [1, 1, 1, 1]);
-    let read = with_session(&db, |session| load_all(session, SPENT_NOW).expect("loads"));
+    let read = with_session(&db, |session| {
+        parts::load(session, SPENT_NOW).expect("loads").0
+    });
     assert_eq!(read.ops.host_groups, marked.host_groups);
     let web: crate::host_groups::GroupName = "web".parse().expect("a name");
     assert_eq!(
@@ -372,8 +376,8 @@ fn migration_0018_removes_the_group_all_and_makes_every_group_list_hostkeeper() 
     with_session(&db, |session| {
         let all = migrate::checked(&migrate::SHIPPED).expect("this release's set");
         assert_eq!(
-            migrate::apply(session, &all).expect("0018 to 0023 run"),
-            vec![18, 19, 20, 21, 22, 23]
+            migrate::apply(session, &all).expect("0018 to 0024 run"),
+            vec![18, 19, 20, 21, 22, 23, 24]
         );
     });
 

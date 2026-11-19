@@ -14,7 +14,7 @@ use super::coordinator::approved;
 use super::with_session;
 use super::{SPENT_NOW, TestDatabase};
 use crate::enrollment::tests::support::NOW;
-use crate::store::postgres::{PgRecords, load_all, migrate, records};
+use crate::store::postgres::{PgRecords, migrate, parts, records};
 
 fn runs(version: &str) -> HostRunning {
     HostRunning {
@@ -213,7 +213,7 @@ fn the_release_before_starts_on_a_database_with_0006_and_this_one_on_its() {
             migrate::apply(session, &before)
                 .expect_err("the release before is refused")
                 .to_string(),
-            load_all(session, SPENT_NOW).expect("the state reads"),
+            parts::load(session, SPENT_NOW).expect("the state reads").0,
         )
     });
     assert_eq!(
@@ -256,7 +256,7 @@ fn the_release_before_starts_on_a_database_with_0006_and_this_one_on_its() {
     store.stop();
     assert_eq!(
         older.rows("SELECT version FROM schema_version ORDER BY version"),
-        (1..=23)
+        (1..=24)
             .map(|n| vec![Some(n.to_string())])
             .collect::<Vec<_>>()
     );

@@ -1,4 +1,4 @@
-//! The alerts observed now as rows of `alerts` (migration `0023`;
+//! The alerts observed now as rows of `alerts` (migration `0024`;
 //! `docs/design/coordinator-multi-instance.md`, section 9, job `alerts`), so that of any number of
 //! coordinators exactly one logs an alert when it is first observed: the one whose insert made
 //! its row. An alert is its subject, six texts (the kind's log token, the service, the host, the

@@ -65,7 +65,7 @@ pub(crate) struct Migration {
 }
 
 /// The migrations this binary ships, in order.
-pub(crate) const SHIPPED: [(i32, &str, &str); 23] = [
+pub(crate) const SHIPPED: [(i32, &str, &str); 24] = [
     (1, "state", include_str!("migrations/0001_state.sql")),
     (
         2,
@@ -162,8 +162,13 @@ pub(crate) const SHIPPED: [(i32, &str, &str); 23] = [
     ),
     (
         23,
+        "state_versions",
+        include_str!("migrations/0023_state_versions.sql"),
+    ),
+    (
+        24,
         "sessions_and_jobs",
-        include_str!("migrations/0023_sessions_and_jobs.sql"),
+        include_str!("migrations/0024_sessions_and_jobs.sql"),
     ),
 ];
 

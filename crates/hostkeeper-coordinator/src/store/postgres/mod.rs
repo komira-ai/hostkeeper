@@ -31,12 +31,14 @@ pub(crate) mod admin_rows;
 pub(crate) mod alert_rows;
 mod at;
 mod dsn;
+pub(crate) mod edit;
 mod generations;
 mod groups;
 mod instance;
 mod layout;
 pub(crate) mod login_rows;
 pub(crate) mod migrate;
+pub(crate) mod parts;
 pub(crate) mod periodic;
 mod pool;
 mod records;
@@ -60,17 +62,18 @@ use hostkeeper_oidc::Clock;
 
 pub use dsn::DsnError;
 pub(crate) use dsn::{Dsn, TIMEOUTS, Timeouts};
+pub(crate) use edit::Open;
 pub(crate) use records::PgRecords;
 
 use self::instance::Instance;
 use self::migrate::Retry;
+use self::parts::Known;
 use self::pool::Pool;
-use self::rows::{Stmt, Tables, Val, changes, laid_over};
+use self::rows::{Stmt, Val, laid_over};
 use self::session::{Fail, Session, Worker, describe, ends_session, not_up};
 use self::writer::{Link, State, Tx, WriteFail, Writer, try_lock_shared};
-use super::{Backend, BackendError, Commit, Health, Loaded};
+use super::{Backend, BackendError, Commit, Edit, Fresh, Health, Loaded, Part, Scope};
 use crate::accounts::Accounts;
-use crate::audit_actions::AuditOnly;
 use crate::audit_file::{Actor, AuditLine, Detail, Logged, Query, UnixClock};
 use crate::desired::{self, StoreError};
 use crate::layout::Layout;
@@ -262,6 +265,9 @@ pub(crate) struct Options {
     pub(crate) release: String,
     /// The addresses this instance listens on, for its row.
     pub(crate) listen: String,
+    /// How long an edit waits for the rollout gate and its parts' rows
+    /// (`--operator-gate-wait-ms`); a heartbeat's never waits.
+    pub(crate) gate_wait: Duration,
 }
 
 struct Inner {
@@ -276,6 +282,13 @@ struct Inner {
     epoch: u64,
     clock: Clock,
     instance: Instance,
+    /// The version of each part this instance's copy of it carries.
+    known: Arc<Known>,
+    /// How long an edit waits for its locks (`--operator-gate-wait-ms`).
+    gate_wait: Duration,
+    /// What a test runs between the read of a part's version and the read of its rows.
+    #[cfg(test)]
+    between: Mutex<Option<parts::Between>>,
     /// The thread that upserts the instance's row, and the sender whose drop stops it.
     beat: Mutex<Option<(mpsc::Sender<()>, std::thread::JoinHandle<()>)>>,
 }
@@ -300,61 +313,6 @@ fn unwritten(why: &str) -> BackendError {
         path: state::place("database"),
         source: io::Error::other(why.to_owned()),
     }))
-}
-
-/// The state the writing session `session` holds, the spent ids past at `now` left out.
-fn load_all(session: &mut Session, now: u64) -> Result<Loaded, BackendError> {
-    let read = |session: &mut Session, tables: &[rows::Table]| -> Result<Tables, BackendError> {
-        let mut out = Tables::new();
-        for table in tables {
-            let rows = session
-                .query(&table.select(), &[])
-                .and_then(|rows| table.rows_of(&rows))
-                .map_err(|e| unwritten(&describe(&e)))?;
-            out.insert(table.name, rows);
-        }
-        Ok(out)
-    };
-    let desired = state::desired_of(&read(session, &state::DESIRED)?)?;
-    let mut ops = state::ops_of(&read(session, &state::OPS)?)?;
-    let verdicts = state::verdicts_of(&read(session, &state::VERDICTS)?)?;
-    let accounts = accounts::of_tables(&read(session, &accounts::TABLES)?)?;
-    let layout = layout::of_tables(&read(session, &layout::TABLES)?)?;
-    // The ring holds changes only: an audit-only line (the console's) stays out of it, as it
-    // does in memory ([`crate::ops::OpsStore::append_audit_only`]).
-    let audit_only: Vec<&str> = AuditOnly::ALL.iter().map(|only| only.as_str()).collect();
-    let ring = session
-        .query(
-            "SELECT seq, at_unix, by_name, action, service, node_id, reason, host_group FROM audit \
-             WHERE action <> ALL($2) ORDER BY seq DESC LIMIT $1",
-            &[&(AUDIT_RING as i64), &audit_only],
-        )
-        .map_err(|e| unwritten(&describe(&e)))?;
-    ops.audit = ring.iter().rev().map(|row| logged_of(row).entry).collect();
-    let now = state::int(now)?;
-    let spent = session
-        .query(
-            "SELECT jti, until_unix FROM spent_tokens WHERE until_unix > $1 ORDER BY jti",
-            &[&now],
-        )
-        .map_err(|e| unwritten(&describe(&e)))?
-        .iter()
-        .map(|row| {
-            let until: i64 = row.get(1);
-            (
-                row.get::<_, String>(0),
-                u64::try_from(until).unwrap_or_default(),
-            )
-        })
-        .collect();
-    Ok(Loaded {
-        desired,
-        ops,
-        verdicts,
-        accounts,
-        layout,
-        spent,
-    })
 }
 
 /// The audit line of a row of `audit`, its columns in their order (`host_group`, of migration
@@ -395,41 +353,6 @@ fn audit_insert(line: &AuditLine) -> Result<Stmt, StoreError> {
             Val::text_or_null(line.detail.host_group.as_deref()),
         ],
     })
-}
-
-/// The statements of `change`.
-fn statements(change: &Commit<'_>) -> Result<Vec<Stmt>, BackendError> {
-    let mut out = Vec::new();
-    if let Some((before, after)) = change.desired {
-        let (b, a) = (state::desired_rows(before)?, state::desired_rows(after)?);
-        out.extend(changes(&state::DESIRED, &b, &a));
-    }
-    if let Some((before, after)) = change.ops {
-        let (b, a) = (state::ops_rows(before)?, state::ops_rows(after)?);
-        out.extend(changes(&state::OPS, &b, &a));
-    }
-    if let Some((before, after)) = change.verdicts {
-        let (b, a) = (state::verdicts_rows(before)?, state::verdicts_rows(after)?);
-        out.extend(changes(&state::VERDICTS, &b, &a));
-    }
-    if let Some((before, after)) = change.accounts {
-        out.extend(changes(
-            &accounts::TABLES,
-            &accounts::rows(before),
-            &accounts::rows(after),
-        ));
-    }
-    if let Some((before, after)) = change.layout {
-        out.extend(changes(
-            &layout::TABLES,
-            &layout::rows(before),
-            &layout::rows(after),
-        ));
-    }
-    for line in change.audit {
-        out.push(audit_insert(line)?);
-    }
-    Ok(out)
 }
 
 /// Runs `statements` in `tx`, in order.
@@ -488,6 +411,7 @@ impl Postgres {
             sessions,
             epoch,
             loaded,
+            versions,
             last,
             instance,
         } = opening
@@ -553,6 +477,10 @@ impl Postgres {
             epoch: u64::try_from(epoch).unwrap_or_default(),
             clock,
             instance,
+            known: Arc::new(Known::of(versions)),
+            gate_wait: options.gate_wait,
+            #[cfg(test)]
+            between: Mutex::new(None),
             beat: Mutex::new(Some((beat_stop, beating))),
         };
         let inner = Arc::new(inner);
@@ -661,6 +589,32 @@ impl Postgres {
             self.inner.last_seq.fetch_max(last.seq, Ordering::Relaxed);
         }
     }
+
+    /// Runs `between` between the version and the rows of the next reload of a part: what a test
+    /// commits a change of the part in.
+    #[cfg(test)]
+    pub(crate) fn between_reads(&self, between: impl FnOnce() + Send + 'static) {
+        *self
+            .inner
+            .between
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(Box::new(between));
+    }
+
+    /// What the next reload runs between its two reads: nothing, unless a test set it.
+    fn between(&self) -> parts::Between {
+        #[cfg(test)]
+        if let Some(between) = self
+            .inner
+            .between
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+        {
+            return between;
+        }
+        Box::new(|| {})
+    }
 }
 
 /// Runs `body` in one transaction on a free session of `pool`, the change `change` handed back by
@@ -691,6 +645,8 @@ struct Opened {
     sessions: Vec<Session>,
     epoch: i64,
     loaded: Loaded,
+    /// The version of each part, read with `loaded` in one snapshot.
+    versions: std::collections::BTreeMap<Part, i64>,
     /// The number of the newest audit row.
     last: u64,
     instance: Instance,
@@ -734,8 +690,18 @@ fn open_sessions(
         instance::start(&mut session, &options.release, &options.listen).map_err(refused)?;
     session.batch("COMMIT").map_err(refused)?;
     let epoch: i64 = row.get(0);
-    let loaded =
-        load_all(&mut session, spent_now).map_err(|e| DatabaseError::Load(e.to_string()))?;
+    let (loaded, versions) =
+        parts::load(&mut session, spent_now).map_err(|e| DatabaseError::Load(e.to_string()))?;
+    // The counter set past the newest line before anything is served: a release before this one
+    // numbered its lines from `max(seq)` without it (`docs/design/coordinator-multi-instance.md`,
+    // section 6). Idempotent, never lowered, and serialized with every writer of lines by the row.
+    session
+        .execute(
+            "UPDATE audit_counter SET next = \
+             greatest(next, (SELECT coalesce(max(seq), 0) + 1 FROM audit))",
+            &[],
+        )
+        .map_err(refused)?;
     let last: Option<i64> = session
         .query_one("SELECT max(seq) FROM audit", &[])
         .map_err(refused)?
@@ -749,6 +715,7 @@ fn open_sessions(
         sessions,
         epoch,
         loaded,
+        versions,
         last,
         instance,
     })
@@ -765,7 +732,7 @@ impl Backend for Postgres {
         self.inner
             .writers
             .call(move |writer| match writer.session() {
-                Some(session) => load_all(session, now),
+                Some(session) => parts::load(session, now).map(|(loaded, _)| loaded),
                 None => Err(unwritten(LOST)),
             })
             .unwrap_or_else(|| {
@@ -774,23 +741,13 @@ impl Backend for Postgres {
             })
     }
 
+    /// A commit made without an edit: in an edit of every part ([`Scope::WHOLE`]), so its rows
+    /// move their parts' versions on as any edit's do.
     fn commit(&self, change: &Commit<'_>) -> Result<(), BackendError> {
-        let statements = statements(change)?;
-        if statements.is_empty() {
+        if edit::plan(change, Scope::WHOLE)?.0.is_empty() {
             return Ok(());
         }
-        match self.write_change(Some(Owned::of(change)), move |tx| run_all(tx, &statements)) {
-            Ok(()) => {
-                self.reserve(change.audit);
-                Ok(())
-            }
-            Err(WriteFail::Unknown { why, .. }) => {
-                // Its numbers stay taken, whether or not the revival finds it landed.
-                self.reserve(change.audit);
-                Err(unwritten(&why))
-            }
-            Err(fail) => Err(unwritten(fail.why())),
-        }
+        self.begin(Scope::WHOLE)?.commit_or(change, |_| Ok(()))
     }
 
     fn audit_page(&self, query: &Query<'_>) -> Result<Vec<Logged>, BackendError> {
@@ -949,6 +906,40 @@ impl Backend for Postgres {
     /// Migration `0003`'s columns of `desired` keep them.
     fn keeps_write_records(&self) -> bool {
         true
+    }
+
+    fn begin(&self, scope: Scope) -> Result<Edit, BackendError> {
+        edit::begin(self, scope)
+    }
+
+    fn stale(&self) -> Vec<Part> {
+        if self.inner.link.state() != State::Up {
+            return Vec::new();
+        }
+        match self.read(parts::versions) {
+            Ok(versions) => Part::ALL
+                .into_iter()
+                .filter(|part| versions.get(part).copied() != self.inner.known.get(*part))
+                .collect(),
+            Err(why) => {
+                tracing::debug!(%why, "the versions of the parts could not be read");
+                Vec::new()
+            }
+        }
+    }
+
+    fn reload(&self, part: Part) -> Result<Fresh, BackendError> {
+        let known = self.inner.known.get(part);
+        let between = self.between();
+        let reread = self
+            .read(move |session| parts::reread(session, part, known, between))
+            .map_err(|why| unwritten(&why))?;
+        let Some((version, raw)) = reread else {
+            return Ok(Fresh::default());
+        };
+        let fresh = raw.fresh()?;
+        self.inner.known.set(part, version);
+        Ok(fresh)
     }
 }
 

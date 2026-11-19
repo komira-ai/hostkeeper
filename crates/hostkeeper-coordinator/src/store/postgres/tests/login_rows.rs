@@ -1,4 +1,4 @@
-//! The sessions and the login limiter over their rows (`login_rows`, migration `0023`): the
+//! The sessions and the login limiter over their rows (`login_rows`, migration `0024`): the
 //! answers of the in-memory tables (`crate::session`) on the same scripts, the writes a lookup
 //! makes and does not make, and the answers when the database is lost.
 //!

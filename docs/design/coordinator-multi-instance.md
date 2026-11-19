@@ -5,10 +5,10 @@ document: it is updated in the pull requests that build it. Tags as in [hostkeep
 names code on `main` with a path, **Designed** means nothing implements it yet. Built so far: in section 4 the shared
 lock, the ledger, the migration runner's mutex (M3, komira-ai/hostkeeper#395), the pool of sessions, `instances`, the migrations'
 lock timeout and retry and the lint's hot-table rule (the rest of M3), with section 12's keys for those; sections 8 and 9 (M8); the models of
-section 14 (M2); and in section 6 the enrollment's conditional writes, its fresh host and deny reads and the spent CI
-token ids decided by the insert (M5). Still Designed in section 4: `--migrate-wait-secs`, `--ledger-retry-secs` and the prune in a reload tick
-(#395 differs, below). Everything else is Designed. The
-measurements of M1 are taken (section 7).
+section 14 (M2); in section 6 the enrollment's conditional writes, its fresh host and deny reads and the spent CI
+token ids decided by the insert (M5); section 6's edits, versions, reload, audit counter and facts generation and the gate of 5.2
+(M4; as built: the companion, section 6). Still Designed in section 4: `--migrate-wait-secs`, `--ledger-retry-secs` and the
+prune in a reload tick (#395 differs, below). Everything else is Designed. M1 is measured (section 7).
 
 It changes one decision of [coordinator-storage.md](coordinator-storage.md): that decision's section 5 ("the single writer: an
 advisory lock") and the sentence of its section 14 that a heartbeat costs no query. Section 7 of that document designs an
@@ -201,7 +201,7 @@ the same new migration, and one would fail on a duplicate object. The runner the
 | `fleet_orders(host_id, service, target, uninstall_id, at_unix, try)` | an outstanding order that holds a slot (today `orders`, `ORDER_AGE` 120 s); a unique index on `host_id` (one update at a time on a host) backs the gate | logged |
 | `fleet_tries`, `fleet_canaries`, `fleet_queued_orders(host_id, service, kind, order_id)`, `fleet_found`, `fleet_defers` | the other maps of `Fleet` (`fleet.rs:180-210`) | logged |
 | `cluster_quiet(id, until_unix)` | the start rule below | logged |
-| `rollout_gate(id)` | one row, never updated, only locked `FOR UPDATE` by every transaction that decides or edits a decision input (section 5.2) | logged |
+| `rollout_gate(id)` | one row, never updated, only locked `FOR UPDATE` by every transaction that decides or edits a decision input (section 5.2); **Built** (M4, `0023`) | logged |
 | `periodic_jobs(name, next_run_unix, last_run_unix, last_instance)` | the due time of each periodic job, advanced by whoever claims it (section 9) | logged |
 | `desired_seq` (sequence) and columns `set_seq`, `set_for` on `desired`/`group_desired` | the FIFO order of the queue (today `queue.rs:58`, per instance), and the version the `set_seq` was taken for (section 16, back-out) | logged |
 
@@ -507,7 +507,7 @@ sequenceDiagram
 
 ## 6. Everything else: row transactions and cache versions
 
-**Edits (desired, ops, accounts, layout, verdicts).** The in-memory copy becomes a read cache, and a write is:
+**Edits (desired, ops, accounts, layout, verdicts)** (**Built**, M4: `store/postgres/edit.rs`). The in-memory copy becomes a read cache, and a write is:
 
 ```
 BEGIN
@@ -638,7 +638,7 @@ considered (section 19, decision 6). M1 measured it: the operator's wait does no
 
 ## 8. Sessions and the login limiter
 
-**Built** (M8: `store/postgres/login_rows.rs`, `session.rs`, `0023_sessions_and_jobs.sql`; choices left open, such as the `login_gate` row lock, in [the
+**Built** (M8: `store/postgres/login_rows.rs`, `session.rs`, `0024_sessions_and_jobs.sql`; choices left open, such as the `login_gate` row lock, in [the
 companion](coordinator-multi-instance-checks.md), "8 and 9"). A table `sessions(id_sha256 bytea pk, username, csrf, created_unix, last_used_unix, serial)` (never the raw cookie id: the key is the SHA-256 the memory table uses), and `login_failures(name pk, failures, last_failure_unix, locked_until_unix)`. The idle and
 absolute deadlines and the cap on the number of sessions keep their rules, in SQL; `last_used_unix` is written at most once
 per 30 s per session. The cookie, its flags and the CSRF token do not change, so nothing browser-visible changes, and a
@@ -820,7 +820,7 @@ sequenceDiagram
 | `--session-touch-secs` | 30 | write of `last_used_unix` at most this often (Built, M8) |
 | `--beat-reorder-secs` | 30 | a beat older (by the host's `sent_unix`) than the stored one is dropped unless the stored row is older than this |
 | `--ledger-retry-secs` | 10 | how long an instance retries a transaction of unknown outcome, a deadlock or a serialization failure before it answers 503 |
-| `--operator-gate-wait-ms` | 30000 | how long an operator edit waits for the gate row (a heartbeat never waits: `SKIP LOCKED`); then it is refused `store_failed` |
+| `--operator-gate-wait-ms` | 30000 | how long an operator edit waits for the gate row (a heartbeat never waits: `SKIP LOCKED`); then it is refused `store_failed`. Built (M4) |
 | `--tx-idle-timeout-ms` | 5000 | `idle_in_transaction_session_timeout` of every pool session: the longest a silent instance holds the gate or a row lock |
 | `--statement-timeout-ms` | 5000 | `statement_timeout` of every pool session |
 | `--drain-delay-secs` | 15 | from SIGTERM, the old task answers 503 on `/healthz` but keeps accepting for this long; deploy-checked against the edge's DNS refresh and check interval x thresholds |
@@ -889,7 +889,7 @@ before: `docker service update --replicas 1 --update-order stop-first --image <r
 the new instances are stopped, runs its single-writer code on the same database (the audit counter and the sequences are ignored;
 its next audit number is `max(seq) + 1`), forgets the fleet and quiets 30 s. **Coming back to the new release** after that:
 its start (under the shared lock, so no release before is running) runs the two re-seeds: `audit_counter.next =
-greatest(next, max(seq) + 1)` (section 6), and the queue's. The release before changes a desired version without touching
+greatest(next, max(seq) + 1)` (section 6; Built, M4), and the queue's. The release before changes a desired version without touching
 `set_seq` or `set_for`, so a row whose `set_for` is not its current version, or whose `set_seq` is NULL, is *changed or
 unstamped*; those rows are given fresh numbers from `desired_seq` (first raised to `greatest(last, max(set_seq))`) in the
 order of the release before's own queue rule (`queue.rs:10-12` tie-breaks), under the gate. A NULL `set_seq` ranks before
@@ -905,11 +905,11 @@ the farm): the back-out is a stopgap while a fix ships.
 | M1 | Measured: the deployment read only, the rest on a scratch copy of the same version (section 7). Round trip on the socket, the gate's hold and the operator edit's wait under a 50% stage, how often a beat finds the gate busy, DDL lock wait of a migration against a running instance, `fleet_hosts` write cost at the real host count, `max_connections`, the Postgres version; a table in the companion document | none | S |
 | M2 | Built: the models of section 14 (spec and Rust state-space test at N = 1, 2, 3), failing on the unlocked variants (`docs/design/models/`, `crates/hostkeeper-coordinator/tests/multi_instance_model/`) | M1 | M |
 | M3 | Built: by komira-ai/hostkeeper#395 the shared fence lock, the `tx_ledger` settle (`0019`), no `lease.commits` write, no deposed exit, the migration mutex, the session timeouts; then the pool of sessions (`store/postgres/pool.rs`), `instances` (`0022`, `instance.rs`), DDL `lock_timeout` with its bounded retry and the migration lint rule (`migrate.rs`). Still one instance | M2 | M |
-| M4 | Row-transaction edits and `state_versions` invalidation for desired, ops, accounts, layout, verdicts, with the row-lock order of section 6 and the one-snapshot reload rule; `rollout_gate` with `SKIP LOCKED` for beats and the operator wait; `audit_counter` and its start-time re-seed; `facts_generation` | M3 | L |
+| M4 | Built: row-transaction edits and `state_versions` invalidation for desired, ops, accounts, layout, verdicts, with the row-lock order of section 6 and the one-snapshot reload rule (`store/edit.rs`, `store/postgres/edit.rs`, `parts.rs`, the stores' `*_edit.rs`, `0023_state_versions.sql`); `rollout_gate` with `SKIP LOCKED` for beats and the operator wait (`--operator-gate-wait-ms`); `audit_counter` and its start-time re-seed; `facts_generation` | M3 | L |
 | M5 | Built: enrollment's conditional writes (`Seen`, `enroll/store.rs` `decided`), the key locks and `FOR UPDATE` re-read of `store/postgres/records.rs`, host and deny rows read fresh, `Renew` in one write; the spent CI token id decided by the insert (section 6) | M3 | M |
 | M6 | The fleet in Postgres, without decisions: `fleet_*`, `cluster_quiet` and the gap rule, the ordered beat upsert, the in-SQL bake, the converged path | M4, M5 | M |
 | M7 | The deciding transaction and the steps of 5.3: gate, re-read of every input, `set_seq`/`set_for` and the start-time re-stamp, orders with the unique host index, compare-and-set stage advance, storage-first halts, rollback before delete, fail closed; the quiet rule gating verdicts and rollbacks as well as orders | M6 | L |
-| M8 | Built: sessions and login limiter (`store/postgres/login_rows.rs`); `periodic_jobs` and the claim (`periodic.rs`, `jobs.rs`); alerts, pruning and initial-admin made exactly-once (`alert_rows.rs`, `admin_rows.rs`), the expiry claimed as a job over M5's conditional write; migration `0023` | M3 | M |
+| M8 | Built: sessions and login limiter (`store/postgres/login_rows.rs`); `periodic_jobs` and the claim (`periodic.rs`, `jobs.rs`); alerts, pruning and initial-admin made exactly-once (`alert_rows.rs`, `admin_rows.rs`), the expiry claimed as a job over M5's conditional write; migration `0024` | M3 | M |
 | M9 | `--health-listen` and `--drain-delay-secs` (the old task keeps accepting while it answers 503); docs (`coordinator-state.md`, `rollout-plans.md`, `holds-and-force.md`, `enrollment.md`) updated; this document's tags turned to Built | M7, M8 | S |
 | M10 | Infrastructure (outside this repository): CA secret and config, tmpfs, edge health checks and Mac listener, `start-first` update at `replicas: 1`. The cutover of section 16 | M9 | M |
 | M11 | js-server's design and PRs in its repository, to the same leaderless rule | none | not sized |

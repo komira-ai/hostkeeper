@@ -194,6 +194,7 @@ impl Backend for Fake {
                 .iter()
                 .map(|(jti, until)| (jti.clone(), *until))
                 .collect(),
+            facts: None,
         })
     }
 

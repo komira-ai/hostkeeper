@@ -17,7 +17,7 @@ use crate::store::postgres::rows::Tables;
 use crate::store::postgres::session::Session;
 use crate::store::postgres::state;
 use crate::store::postgres::{Postgres, TIMEOUTS};
-use crate::store::{Commit, Loaded, Shared};
+use crate::store::{Loaded, Shared};
 use crate::testutil::Rig;
 
 /// A desired store over the Postgres store `store`, holding what it loaded.
@@ -34,15 +34,8 @@ fn commit_registry(
     ) -> Result<crate::repositories::Registry, crate::repositories::PutError>,
 ) {
     let staged = desired.stage_repositories(edit).expect("staged");
-    let part = staged.part().expect("a change");
-    staged
-        .backend()
-        .commit(&Commit {
-            desired: Some(part),
-            ..Commit::default()
-        })
-        .expect("committed");
-    staged.finish();
+    assert!(staged.part().is_some(), "a change");
+    desired.commit_staged(staged).expect("committed");
 }
 
 fn with_session<R: Send + 'static>(
@@ -382,7 +375,7 @@ fn the_release_before_starts_on_a_database_with_0007_and_this_one_on_its() {
     store.stop();
     assert_eq!(
         older.rows("SELECT version FROM schema_version ORDER BY version"),
-        (1..=23)
+        (1..=24)
             .map(|n| vec![Some(n.to_string())])
             .collect::<Vec<_>>()
     );

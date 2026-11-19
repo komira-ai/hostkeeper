@@ -6,10 +6,32 @@
 //! `initial_id`.
 
 use super::Postgres;
-use super::writer::WriteFail;
+use super::writer::{Tx, WriteFail};
 
 fn written<R>(done: Result<R, WriteFail>) -> Result<R, String> {
     done.map_err(|fail| fail.why().to_owned())
+}
+
+/// Runs the write `body` of the users' rows under the row of the part `accounts` in
+/// `state_versions` (`FOR UPDATE`, the one lock this transaction takes), and moves that part's
+/// version on when `body` changed a row, so that every coordinator reads its copy of the accounts
+/// again (section 6).
+fn on_accounts(
+    tx: &mut Tx<'_>,
+    body: impl FnOnce(&mut Tx<'_>) -> Result<u64, postgres::Error>,
+) -> Result<bool, postgres::Error> {
+    tx.query_one(
+        "SELECT version FROM state_versions WHERE part = 'accounts' FOR UPDATE",
+        &[],
+    )?;
+    let changed = body(tx)? == 1;
+    if changed {
+        tx.execute(
+            "UPDATE state_versions SET version = version + 1 WHERE part = 'accounts'",
+            &[],
+        )?;
+    }
+    Ok(changed)
 }
 
 /// The rows of the users a coordinator over a database adopts the initial-admin file into.
@@ -59,12 +81,14 @@ impl PgAdmin {
     ) -> Result<bool, String> {
         let (user, id) = (user.to_owned(), id.to_owned());
         written(self.store.write(move |tx| {
-            Ok(tx.execute(
-                "INSERT INTO users (name, record) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE \
-                 SET record = EXCLUDED.record \
-                 WHERE users.record->>'initial_id' IS DISTINCT FROM $3",
-                &[&user, &record, &id],
-            )? == 1)
+            on_accounts(tx, |tx| {
+                tx.execute(
+                    "INSERT INTO users (name, record) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE \
+                     SET record = EXCLUDED.record \
+                     WHERE users.record->>'initial_id' IS DISTINCT FROM $3",
+                    &[&user, &record, &id],
+                )
+            })
         }))
     }
 
@@ -77,13 +101,15 @@ impl PgAdmin {
     pub(crate) fn void(&self, user: &str, id: &str) -> Result<bool, String> {
         let (user, id) = (user.to_owned(), id.to_owned());
         written(self.store.write(move |tx| {
-            Ok(tx.execute(
-                "UPDATE users SET record = jsonb_set(record, '{initial_void}', 'true') \
-                 WHERE name = $1 AND record->>'initial_id' = $2 \
-                 AND record ? 'initial_expires_at' \
-                 AND NOT coalesce((record->>'initial_void')::boolean, false)",
-                &[&user, &id],
-            )? == 1)
+            on_accounts(tx, |tx| {
+                tx.execute(
+                    "UPDATE users SET record = jsonb_set(record, '{initial_void}', 'true') \
+                     WHERE name = $1 AND record->>'initial_id' = $2 \
+                     AND record ? 'initial_expires_at' \
+                     AND NOT coalesce((record->>'initial_void')::boolean, false)",
+                    &[&user, &id],
+                )
+            })
         }))
     }
 }

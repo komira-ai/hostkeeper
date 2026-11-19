@@ -1,8 +1,9 @@
 //! The flags of the Postgres store beside `--database-dsn-file`
 //! (`docs/design/coordinator-multi-instance.md`, section 12): the pool of writing sessions, how
 //! often this instance's row of `instances` is upserted, how a migration waits for its locks
-//! and is tried again, how often a session's last use is written, and how often the periodic
-//! jobs are claimed and each runs. Each has a default; with the file store none is read.
+//! and is tried again, how long an edit waits for the rollout gate, how often a session's last use
+//! is written, and how often the periodic jobs are claimed and each runs. Each has a default; with
+//! the file store none is read.
 
 use std::net::SocketAddr;
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
@@ -52,6 +53,12 @@ pub struct DatabaseFlags {
     /// back for want of a lock before it gives up and exits, naming the migration. At least 1.
     #[arg(long, value_name = "N", default_value = "6")]
     pub migrate_attempts: NonZeroU32,
+    /// With --database-dsn-file: how long, in milliseconds, an edit of the state (an operator's,
+    /// or CI's) waits for the rollout gate, which one decision or edit holds at a time, and for
+    /// the rows of the parts it edits; an edit still waiting then is refused `store_failed` with
+    /// nothing changed. A heartbeat's own write never waits for the gate. At least 1.
+    #[arg(long, value_name = "MS", default_value = "30000")]
+    pub operator_gate_wait_ms: NonZeroU64,
     /// With --database-dsn-file: the fewest seconds between two writes of a browser session's
     /// last use; a use inside them is not written, so a session's idle deadline may count from
     /// up to this long before its last use.
@@ -109,6 +116,7 @@ impl DatabaseFlags {
             beat: Duration::from_secs(self.instance_beat_secs.get()),
             release: release.to_owned(),
             listen: listen.to_owned(),
+            gate_wait: Duration::from_millis(self.operator_gate_wait_ms.get()),
         }
     }
 }

@@ -541,6 +541,47 @@ fn the_rows_write_only_when_their_condition_holds() {
     });
 }
 
+/// Proves: an adoption or a void that changes the user's row moves the version of the part
+/// `accounts` on by exactly one, in its transaction, and one that changes nothing leaves it, so
+/// every coordinator reads its copy of the accounts again after a change and only then.
+///
+/// Catches: a write of the users' rows that other coordinators' copies never see (no version
+/// moved), and one that makes every coordinator reload for nothing.
+#[test]
+fn a_change_of_the_users_row_moves_the_accounts_version_once() {
+    let db = TestDatabase::new();
+    let (store, _) = db.open("versions").expect("the store opens");
+    let rows = PgAdmin::new(store.clone());
+    let version = || db.rows("SELECT version::text FROM state_versions WHERE part = 'accounts'");
+    let at = |n: i64| vec![vec![Some(n.to_string())]];
+    let start: i64 = version()[0][0]
+        .as_deref()
+        .and_then(|v| v.parse().ok())
+        .expect("a version");
+    let record = serde_json::json!({
+        "hash": "h", "enabled": true, "must_change": true, "initial_id": "a",
+        "initial_expires_at": 5, "created_by": "coordinator", "created_at": 1
+    });
+    let (writing, adopted) = (rows.clone(), record.clone());
+    assert_eq!(
+        off_runtime(move || writing.adopt("admin", adopted, "a")),
+        Ok(true)
+    );
+    assert_eq!(version(), at(start + 1));
+    let writing = rows.clone();
+    assert_eq!(
+        off_runtime(move || writing.adopt("admin", record, "a")),
+        Ok(false)
+    );
+    assert_eq!(version(), at(start + 1), "an adoption that changed nothing");
+    let writing = rows.clone();
+    assert_eq!(off_runtime(move || writing.void("admin", "a")), Ok(true));
+    assert_eq!(version(), at(start + 2));
+    assert_eq!(off_runtime(move || rows.void("admin", "a")), Ok(false));
+    assert_eq!(version(), at(start + 2), "a void that changed nothing");
+    store.stop();
+}
+
 /// Proves: a coordinator whose memory does not hold the user (another coordinator adopted the file
 /// after it started) that finds the file expired voids the row, audits `initial_password_expired`
 /// once and deletes the file, and leaves its own memory without the user.

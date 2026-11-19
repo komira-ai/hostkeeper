@@ -13,9 +13,9 @@ struct Flags {
 }
 
 /// Proves: with none of the flags given, the store's options are the design's defaults (a pool of
-/// 4, a beat every 5 seconds, and the runner's lock timeout of 3000 ms with 6 attempts 5 seconds
-/// apart, which is [`RETRY`]), with the release and addresses given; each flag given is the option
-/// it names.
+/// 4, a beat every 5 seconds, the runner's lock timeout of 3000 ms with 6 attempts 5 seconds
+/// apart, which is [`RETRY`], and an edit's wait for the gate of 30000 ms), with the release and
+/// addresses given; each flag given is the option it names.
 ///
 /// Catches: a default that differs from the one the design and the help state, and a flag that is
 /// read into another option.
@@ -30,6 +30,7 @@ fn the_database_flags_default_to_the_design_and_each_sets_its_option() {
             beat: Duration::from_secs(5),
             release: "1.2.3".to_owned(),
             listen: "heartbeat=[::1]:1".to_owned(),
+            gate_wait: Duration::from_secs(30),
         }
     );
     let given = Flags::try_parse_from([
@@ -44,10 +45,13 @@ fn the_database_flags_default_to_the_design_and_each_sets_its_option() {
         "0",
         "--migrate-attempts",
         "1",
+        "--operator-gate-wait-ms",
+        "250",
     ])
     .expect("the flags parse");
     let options = given.database.options("r", "l");
     assert_eq!(options.pool.get(), 2);
+    assert_eq!(options.gate_wait, Duration::from_millis(250));
     assert_eq!(options.beat, Duration::from_secs(9));
     assert_eq!(
         options.migrate,
@@ -59,8 +63,9 @@ fn the_database_flags_default_to_the_design_and_each_sets_its_option() {
     );
 }
 
-/// Proves: a pool, a beat or a number of attempts of 0, and a lock timeout of 0 or of 5000 ms and
-/// more (not below the store's statement timeout), are refused when the flags are parsed.
+/// Proves: a pool, a beat, a number of attempts or a wait for the gate of 0, and a lock timeout of
+/// 0 or of 5000 ms and more (not below the store's statement timeout), are refused when the flags
+/// are parsed.
 ///
 /// Catches: a start with no writing session, a beat with no wait, a runner that never tries, and
 /// a lock timeout that the statement timeout ends first, so a busy table fails the start at once.
@@ -70,6 +75,7 @@ fn the_database_flags_refuse_what_cannot_run() {
         ("--database-pool", "0"),
         ("--instance-beat-secs", "0"),
         ("--migrate-attempts", "0"),
+        ("--operator-gate-wait-ms", "0"),
         ("--migrate-ddl-lock-timeout-ms", "0"),
         ("--migrate-ddl-lock-timeout-ms", "5000"),
     ] {

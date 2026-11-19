@@ -55,7 +55,7 @@ use crate::ops_file;
 use crate::registry::{Digest, IndexRecord, Registry, RegistryError, Release};
 use crate::releases::Release as Kept;
 use crate::services::Services;
-use crate::store::{BackendError, Commit, Files, Shared};
+use crate::store::{Files, Shared};
 use crate::write_record::{WriteAsk, WriteError, WriteId, WriteRecord};
 
 /// The most any count may be: a typo's order of magnitude, not a plan.
@@ -497,8 +497,11 @@ mod file;
 #[path = "desired_limits.rs"]
 mod limits;
 use limits::{read_max_updating, write_max_updating, write_min_up};
+#[path = "desired_edit.rs"]
+mod edit;
 #[path = "desired_groups.rs"]
 mod groups;
+pub(crate) use edit::Staged;
 pub(crate) use file::{encode, parse_file};
 
 /// Why the state file could not be read or written.
@@ -578,32 +581,6 @@ impl Staging {
             release: None,
             id: None,
         }
-    }
-}
-
-/// A desired state made and not yet in memory: what [`DesiredStore::stage`] answers, for a change
-/// that commits it with another part ([`crate::force`]). The store's writers wait while it lives.
-pub(crate) struct Staged<'a> {
-    store: &'a DesiredStore,
-    _writer: MutexGuard<'a, ()>,
-    pub(crate) before: Held,
-    pub(crate) after: Held,
-}
-
-impl Staged<'_> {
-    /// The backend the store commits to.
-    pub(crate) fn backend(&self) -> &Shared {
-        &self.store.backend
-    }
-
-    /// The part of a commit it is: none when it changes nothing.
-    pub(crate) fn part(&self) -> Option<(&Held, &Held)> {
-        (self.before != self.after).then_some((&self.before, &self.after))
-    }
-
-    /// Takes it into memory: its commit is durable.
-    pub(crate) fn finish(self) {
-        *self.store.lock() = self.after;
     }
 }
 
@@ -739,7 +716,7 @@ impl DesiredStore {
             release,
             id: ask.write_id.clone(),
         };
-        let staged = self.staged(service, desired, release, &keep);
+        let staged = self.staged(service, desired, release, &keep, false);
         self.admit(&staged.before, service, ask)?;
         let record = staged.after.records.get(service).cloned();
         self.commit_staged(staged)?;
@@ -787,33 +764,8 @@ impl DesiredStore {
         release: Option<(Version, Release)>,
         keep: &dyn Fn(&Version) -> bool,
     ) -> Result<Recorded, StoreError> {
-        let staged = self.staged(service, desired, Staging::digests(release), keep);
+        let staged = self.staged(service, desired, Staging::digests(release), keep, false);
         self.commit_staged(staged)
-    }
-
-    /// Commits `staged` and takes it into memory; nothing when it changes nothing.
-    fn commit_staged(&self, staged: Staged<'_>) -> Result<Recorded, StoreError> {
-        let Some(part) = staged.part() else {
-            return Ok(Recorded::Unchanged);
-        };
-        let commit = Commit {
-            desired: Some(part),
-            ..Commit::default()
-        };
-        match self
-            .backend
-            .commit(&commit)
-            .map_err(BackendError::into_store)
-        {
-            Ok(()) => {}
-            Err(e @ StoreError::NotSynced { .. }) => {
-                staged.finish();
-                return Err(e);
-            }
-            Err(e) => return Err(e),
-        }
-        staged.finish();
-        Ok(Recorded::Written)
     }
 
     /// The state [`Self::record`] would make, staged under the writers' lock and not committed:
@@ -827,27 +779,31 @@ impl DesiredStore {
         let release = desired
             .release()
             .map(|release| (desired.version.clone(), release));
-        self.staged(service, desired, Staging::digests(release), &keep)
+        self.staged(service, desired, Staging::digests(release), &keep, true)
     }
 
     /// The state with `desired` set for `service` and what `staging` records with it: its
     /// version's digest or index in the registry, its release beside it; over a backend that
-    /// keeps write records, with the service's record raised by one write of `staging`'s id.
+    /// keeps write records, with the service's record raised by one write of `staging`'s id. It
+    /// is staged to commit with the operations state when `with_ops`, and alone otherwise.
     fn staged(
         &self,
         service: &str,
         desired: Desired,
         staging: Staging,
         keep: &dyn Fn(&Version) -> bool,
+        with_ops: bool,
     ) -> Staged<'_> {
         let Staging {
             digests: release,
             release: kept,
             id,
         } = staging;
-        let writer = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
-        let before = self.lock().clone();
-        let mut after = before.clone();
+        let mut staged = match with_ops {
+            true => self.staging_with_ops(),
+            false => self.staging(),
+        };
+        let (before, after) = (&staged.before, &mut staged.after);
         if self.backend.keeps_write_records() {
             let record = before
                 .record_of(service)
@@ -864,12 +820,7 @@ impl DesiredStore {
             registry.record(&version, release, keep);
             after.digests.insert(service.to_owned(), registry);
         }
-        Staged {
-            store: self,
-            _writer: writer,
-            before,
-            after,
-        }
+        staged
     }
 
     /// `read` over the registry of package repositories now, without copying its keyrings.
@@ -910,16 +861,9 @@ impl DesiredStore {
         &self,
         edit: impl FnOnce(&crate::repositories::Registry) -> Result<crate::repositories::Registry, E>,
     ) -> Result<Staged<'_>, E> {
-        let writer = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
-        let before = self.lock().clone();
-        let mut after = before.clone();
-        after.repositories = edit(&before.repositories)?;
-        Ok(Staged {
-            store: self,
-            _writer: writer,
-            before,
-            after,
-        })
+        let mut staged = self.staging_with_ops();
+        staged.after.repositories = edit(&staged.before.repositories)?;
+        Ok(staged)
     }
 
     /// The release `version` of `service` was set with, if any.
