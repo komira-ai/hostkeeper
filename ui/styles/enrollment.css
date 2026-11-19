@@ -222,8 +222,24 @@
 
 .approve-row .replace {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 4px 8px;
+}
+
+/* "Replace the existing <host>" takes a line of its own, its explanation below it. */
+.approve-row .replace label.check {
+  flex-basis: 100%;
+}
+
+.approve-row .replace .note {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+/* The Sled slot can read "Keep its place, <address>": it gets room for the address. */
+.approve-row label:has(select[name="place-slot"]) {
+  grid-column: span 2;
 }
 
 .approve-row .decide {

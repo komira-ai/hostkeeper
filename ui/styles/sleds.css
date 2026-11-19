@@ -251,10 +251,6 @@ button.bay:focus-visible,
 }
 
 /* The panels of the edit mode that work on a sled or an item. */
-.add-sled {
-  align-items: flex-end;
-}
-
 .sled-panel .buttons,
 .item-panel .buttons,
 .assign-panel .buttons {

@@ -138,11 +138,14 @@ return { kept, reports: seen.reports };"#,
     );
 }
 
-/// Proves: a matched request says at which address its server stood before the wipe, and that it
-/// stays there unless another slot is chosen (the slot is among the choices, since it is the
-/// server's own); a refused placement is told in words and any other refusal by its token.
-/// Catches: a matched request that hides where its server stood, a taken slot shown as a bare
-/// token, and a refusal unrelated to the placement that is hidden.
+/// Proves: a matched request says at which address its server stood before the wipe and that
+/// approving keeps it there; the first choice is "Keep its place" (no placement sent) and the
+/// server's own slot is not offered as a new one (the coordinator judges a place before the
+/// approval, so it would refuse its own slot as taken); a refused placement is told in words naming
+/// the slot, and any other refusal by its token.
+/// Catches: a matched request that hides where its server stood, its own slot offered as a choice
+/// that the coordinator refuses as taken, a taken slot shown as a bare token, and a refusal unrelated
+/// to the placement that is hidden.
 #[test]
 fn a_matched_server_says_where_it_stands_and_a_refused_placement_is_told_in_words() {
     let mut ui = enrollment_ui(true);
@@ -173,14 +176,178 @@ return { text0, slots, reports: seen.reports };"#,
     let out = &out["out"];
     assert!(
         out["text0"].as_str().unwrap().contains(
-            "db-1 stands at C0-R0-R0-S0-S0, and stays there unless another slot is chosen."
+            "db-1 stands at C0-R0-R0-S0-S0, and approving it as db-1 keeps it there: no slot needs choosing. Choose another slot only to move it."
         ),
         "{out}"
     );
-    assert_eq!(out["slots"][1], "C0-R0-R0-S0-S0");
+    assert_eq!(
+        out["slots"],
+        json!([
+            "Keep its place, C0-R0-R0-S0-S0",
+            "C0-R0-R0-S1-S0",
+            "C0-R0-R0-S1-S1",
+            "C0-R1-R0-S0-S0"
+        ])
+    );
     assert_eq!(
         out["reports"],
-        json!(["That slot is taken.", "FAILED_PRECONDITION not_pending"])
+        json!([
+            "C0-R0-R0-S1-S0 is taken: choose another slot, or leave it unplaced.",
+            "FAILED_PRECONDITION not_pending"
+        ])
+    );
+}
+
+/// Proves: a re-enrollment of a placed server (a duplicate claim that matches the record of `db-1`,
+/// as a host rebuilt on a new disk sends) offers "Replace the existing db-1" by name and says what it
+/// does; its slot choice keeps db-1's place by default; approving without Replace is refused in words
+/// that name the choice; with Replace (after the confirm) the approval sends `replace` and no
+/// placement, and says db-1 keeps its place and, with no group chosen, the group the replaced host had
+/// (the coordinator keeps it); a slot db-1 holds, if sent, is refused naming db-1.
+/// Catches: the re-enrollment that failed with a bare "That slot is taken" because the form asked for
+/// a slot (the server's own) when none was needed, and a Replace path that does not say it keeps the
+/// rack placement.
+#[test]
+fn a_rebuilt_server_is_approved_by_replacing_the_existing_host_and_keeps_its_place() {
+    let ui = Ui::start();
+    let mut request = pending(true)["requests"][0].clone();
+    request["duplicateClaim"] = json!(true);
+    ui.reply(&m("Enrollment/List"), json!({"requests": [request]}));
+    ui.reply(
+        &m("HostGroups/List"),
+        json!({"hostGroups": [{"group": {"name": "storage"}}]}),
+    );
+    ui.reply(&m("Layout/Get"), layout());
+    ui.refuse(
+        &m("Enrollment/Approve"),
+        412,
+        "FAILED_PRECONDITION",
+        "placement_overlap",
+    );
+    ui.refuse(
+        &m("Enrollment/Approve"),
+        412,
+        "FAILED_PRECONDITION",
+        "duplicate_claim",
+    );
+    ui.reply(&m("Enrollment/Approve"), json!({"hostId": "db-1"}));
+    let mut ui = ui;
+    let out = ui.run(&page_driver(
+        "enrollment",
+        "{}",
+        "[true]",
+        r#"
+const says = text(named(tree, "replace-says")[0]);
+const keeps = text(named(tree, "keeps-place")[0]);
+const first = choices(tree, "place-slot", 0)[0];
+const own = choices(tree, "place-slot", 0).includes("C0-R0-R0-S0-S0");
+choose(tree, "place-slot", "sled-1:0", 0);
+await click(tree, "approve", 0);
+choose(tree, "place-slot", "", 0);
+await click(tree, "approve", 0);
+tick(tree, "replace", true, 0);
+await click(tree, "approve", 0);
+const box = nodes(tree).find((n) => n.tag === "label" && n.children.some((c) => c.attrs && c.attrs["name"] === "replace"));
+return { box: text(box).trim(), says, keeps, first, own, reports: seen.reports, questions: seen.questions.length };"#,
+    ));
+    let out = &out["out"];
+    assert_eq!(out["box"], "Replace the existing db-1");
+    assert_eq!(
+        out["says"],
+        "This request matches the record of db-1 and claims the machine id, key or a MAC of a host already enrolled, as db-1 rebuilt on a new disk does. Replacing approves it as db-1: the certificate of the host that holds db-1 is revoked, and db-1 keeps its host group (leave Host group as it is) and its place at C0-R0-R0-S0-S0."
+    );
+    assert_eq!(
+        out["keeps"],
+        "db-1 stands at C0-R0-R0-S0-S0, and approving it as db-1 keeps it there: no slot needs choosing. Choose another slot only to move it."
+    );
+    assert_eq!(out["first"], "Keep its place, C0-R0-R0-S0-S0");
+    assert_eq!(out["own"], false);
+    assert_eq!(
+        out["reports"],
+        json!([
+            "C0-R0-R0-S0-S0 is taken: db-1 stands on it. Choose another slot, or leave it unplaced.",
+            "This request claims the machine id, key or a MAC of a host already enrolled (a duplicate claim). If it is db-1 rebuilt, tick \"Replace the existing db-1\" to approve it in its place.",
+            "Approved db-1 in the host group the replaced host had (Unassigned if it had none), keeping its place at C0-R0-R0-S0-S0: the host gets its certificate at its next poll."
+        ])
+    );
+    assert_eq!(out["questions"], 1, "Replace asks first");
+    let approvals: Vec<Value> = bodies(&ui)
+        .into_iter()
+        .filter(|(method, _)| *method == m("Enrollment/Approve"))
+        .map(|(_, body)| body)
+        .collect();
+    assert_eq!(approvals.len(), 3);
+    assert_eq!(approvals[0]["placementSled"], "sled-1");
+    assert!(
+        approvals[1].get("placementSled").is_none(),
+        "{}",
+        approvals[1]
+    );
+    assert!(
+        approvals[1].get("replace").is_none_or(|r| r == false),
+        "{}",
+        approvals[1]
+    );
+    assert_eq!(approvals[2]["replace"], true);
+    assert!(
+        approvals[2].get("placementSled").is_none(),
+        "{}",
+        approvals[2]
+    );
+    assert!(
+        approvals[2].get("placementSlot").is_none(),
+        "{}",
+        approvals[2]
+    );
+}
+
+/// Proves: a duplicate claim whose record has a host group starts with no group chosen (Replace keeps
+/// the replaced host's group, and another is refused), a refusal for another group is told in words,
+/// and an approval under another host id than the record's does not claim to keep the record's place.
+/// Catches: the record's group preselected on the Replace path (`host_group_differs` as a bare token),
+/// and "keeping its place" said of a host the record's place does not belong to.
+#[test]
+fn replacing_keeps_the_group_and_claims_the_place_only_for_the_records_host_id() {
+    let ui = Ui::start();
+    let mut request = pending(true)["requests"][0].clone();
+    request["duplicateClaim"] = json!(true);
+    request["recordHostGroup"] = json!("storage");
+    ui.reply(&m("Enrollment/List"), json!({"requests": [request]}));
+    ui.reply(
+        &m("HostGroups/List"),
+        json!({"hostGroups": [{"group": {"name": "storage"}}]}),
+    );
+    ui.reply(&m("Layout/Get"), layout());
+    ui.refuse(
+        &m("Enrollment/Approve"),
+        412,
+        "FAILED_PRECONDITION",
+        "host_group_differs",
+    );
+    ui.reply(&m("Enrollment/Approve"), json!({"hostId": "db-2"}));
+    let mut ui = ui;
+    let out = ui.run(&page_driver(
+        "enrollment",
+        "{}",
+        "[true, true]",
+        r#"
+const group = chosen(tree, "host-group", 0);
+tick(tree, "replace", true, 0);
+choose(tree, "host-group", "storage", 0);
+await click(tree, "approve", 0);
+choose(tree, "host-group", "", 0);
+type(tree, "host-id", "db-2", 0);
+await click(tree, "approve", 0);
+return { group, reports: seen.reports };"#,
+    ));
+    let out = &out["out"];
+    assert_eq!(out["group"], "");
+    assert_eq!(
+        out["reports"],
+        json!([
+            "With Replace the host keeps the host group it is in: set Host group to Unassigned to keep it, and move it on the Host groups page if needed.",
+            "Approved db-2 in the host group the replaced host had (Unassigned if it had none): the host gets its certificate at its next poll."
+        ])
     );
 }
 
