@@ -101,7 +101,9 @@ impl Coordinator {
     /// which must be services this coordinator manages, or, from a coordinator that holds host
     /// groups, in the group it names, and as the host id it names or, for a request that
     /// matches one inventory record, that record's ([`Enrollment::approve`]), under the fleet's
-    /// lock; and assigns the services to the host ([`Coordinator::assign_host`]). The answer
+    /// lock; writes the host's inventory record from its claims when none matches it
+    /// ([`Coordinator::record_approved`]), and moves a place the layout gave the host to that
+    /// record; and assigns the services to the host ([`Coordinator::assign_host`]). The answer
     /// names the host id approved. The host gets its certificate at its next `Poll`, never in
     /// this answer.
     ///
@@ -137,8 +139,16 @@ impl Coordinator {
             {
                 return Err(EnrollmentRefusal::PlacementInvalid);
             }
-            let _fleet = self.lock_fleet();
-            enrollment.approve(by, request, &known, &records)?
+            let approved = {
+                let _fleet = self.lock_fleet();
+                let approved = enrollment.approve(by, request, &known, &records)?;
+                self.record_approved(approved.host_id.as_str());
+                approved
+            };
+            // Out of the fleet's lock: the layout's is taken before it. A host the approval left
+            // without a record keeps its place.
+            self.place_with_record(approved.host_id.as_str());
+            approved
         } else {
             self.approve_placed(by, enrollment, request, &known, &records)?
         };
@@ -157,7 +167,9 @@ impl Coordinator {
     /// same step: both are judged first (the placement against the layout as it is, under the
     /// layout's lock, which the approval runs inside), so a placement that cannot be made
     /// refuses the approval and nothing changes. The placement is of the inventory entry the
-    /// approved host id names, else of the host; it is audited as `layout_place`. A placement
+    /// approved host id names (the one the approval wrote from the host's claims, when none
+    /// matched it: a place the host held as itself goes to it), else of the host; it is audited
+    /// as `layout_place`. A placement
     /// the store then cannot write leaves the approval standing, logged: place the host from the
     /// lab view.
     fn approve_placed(
@@ -203,23 +215,40 @@ impl Coordinator {
             place(held, probe.clone())?;
             let approved = {
                 let _fleet = self.lock_fleet();
-                enrollment.approve(by, request.clone(), known, records)
+                let approved = enrollment.approve(by, request.clone(), known, records);
+                if let Ok(approved) = &approved {
+                    self.record_approved(approved.host_id.as_str());
+                }
+                approved
             };
             let approved = approved.map_err(|refusal| {
                 refused = Some(refusal);
                 LayoutError::Invalid(String::new())
             })?;
             let id = approved.host_id.to_string();
-            let kind = if records.iter().any(|record| record.host_id == id) {
-                Kind::Inventory
+            let recorded = self
+                .ops
+                .read(|state| state.inventory.iter().any(|record| record.host_id == id));
+            let host = Subject {
+                kind: Kind::Host,
+                id: id.clone(),
+            };
+            let (kind, from) = if recorded {
+                // A host placed as itself before it had a record (one approved again with
+                // `replace`) leaves that place for the record's.
+                let record = Subject {
+                    kind: Kind::Inventory,
+                    id: id.clone(),
+                };
+                (Kind::Inventory, held.with_place_moved(&host, &record))
             } else {
-                Kind::Host
+                (Kind::Host, Ok(None))
             };
             let subject = Subject { kind, id };
             let entry = Self::place_entry(by, &subject.key());
             let audited = self.ops.change(Write::BeforeMemory, entry, |_| {});
             done = Some(approved);
-            let made = place(held, subject)?;
+            let made = from.and_then(|from| place(from.as_ref().unwrap_or(held), subject))?;
             Ok((made.0, audited))
         });
         if let Some(refusal) = refused {

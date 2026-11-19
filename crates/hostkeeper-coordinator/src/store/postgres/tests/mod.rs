@@ -347,6 +347,7 @@ mod periodic;
 mod pool;
 mod queue_seq;
 mod reads;
+mod recorded;
 mod records;
 mod records_errors;
 mod releases;

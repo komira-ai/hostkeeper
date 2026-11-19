@@ -1,7 +1,7 @@
 //! `clear_halt`: a halt lifted only by a strictly greater halt generation, the halt record
-//! cleared before the generation is written, the generation kept across a restart and never
-//! lowered, a running step `busy`, and the heartbeat's halt generations lifting a halt the same
-//! way.
+//! cleared before the held-halt file is removed, the generation a halt is held under kept across
+//! a restart, nothing written for a service that holds no halt, a running step `busy`, and the
+//! heartbeat's halt generations lifting a halt the same way.
 
 mod support;
 mod support_apt;
@@ -101,9 +101,10 @@ fn clear_order(service: &str, generation: u64, order_try: u64) -> Order {
     }
 }
 
-/// Catches a comparison of `>=`, a generation written on a refusal, or a record not cleared:
-/// each row its own rig; a lifting row raises the file to its generation, turns the halt record
-/// into the `halt_cleared` deferral and lets the next order run; a refused row is
+/// Catches a comparison of `>=`, a generation written on a refusal, a record not cleared, or a
+/// held-halt file that outlives the halt: each row its own rig; a lifting row removes the file,
+/// turns the halt record into the `halt_cleared` deferral and lets the next order run; a refused
+/// row is
 /// `stale_halt_generation` and leaves the held-halt file and the record byte for byte as they
 /// were.
 #[test]
@@ -129,10 +130,7 @@ fn clear_halt_lifts_only_a_strictly_greater_generation() {
                     cleared: true,
                 };
                 assert_eq!(answer, Ok(lifted), "{row}");
-                assert_eq!(
-                    bytes(rig, HELD_HALT_FILE),
-                    Some(format!("{asked}\n").into_bytes())
-                );
+                assert_eq!(bytes(rig, HELD_HALT_FILE), None, "{row}");
                 assert_eq!(
                     rig.record("web").expect("the record").state,
                     cleared(),
@@ -159,28 +157,26 @@ fn clear_halt_lifts_only_a_strictly_greater_generation() {
     }
 }
 
-/// Catches a generation kept only in memory: lifted to 4, the daemon is dropped, and a new one
-/// on the same directories still refuses 4 and lifts 5.
+/// Catches a generation kept only in memory: a halt held under 3, the daemon is dropped, and a
+/// new one on the same directories still refuses 3 and lifts 4, which removes the file.
 #[test]
-fn clear_halt_generation_survives_a_restart() {
+fn the_generation_a_halt_is_held_under_survives_a_restart() {
     let farm = NativeHost::new("clear-restart");
     let rig = farm.rig();
-    let daemon = halted(&farm, 3);
-    assert!(daemon.clear_halt(&name("web"), 4).is_ok());
-    drop(daemon);
+    drop(halted(&farm, 3));
     let daemon = farm.daemon();
-    let refused = daemon.clear_halt(&name("web"), 4).expect_err("4 is held");
+    let refused = daemon.clear_halt(&name("web"), 3).expect_err("3 is held");
     assert_eq!(refused.refusal, Refusal::StaleHaltGeneration);
-    let lifted = daemon.clear_halt(&name("web"), 5).expect("5 lifts");
-    assert_eq!(lifted.generation, 5);
-    assert_eq!(bytes(rig, HELD_HALT_FILE), Some(b"5\n".to_vec()));
+    assert_eq!(bytes(rig, HELD_HALT_FILE), Some(b"3\n".to_vec()));
+    let lifted = daemon.clear_halt(&name("web"), 4).expect("4 lifts");
+    assert_eq!(lifted.generation, 4);
+    assert_eq!(bytes(rig, HELD_HALT_FILE), None);
 }
 
 /// Catches the two writes in the other order: a daemon that dies once the record's write is
-/// durable (the record store's crash gate) and before the generation is written holds the old
-/// generation, so the same `clear_halt` sent to the next daemon lifts the halt and writes the
-/// generation; with the generation written first, the resend would be stale and the record
-/// would decide alone.
+/// durable (the record store's crash gate) and before the held-halt file is removed keeps the
+/// file and no halt, so the same `clear_halt` sent to the next daemon removes it; with the file
+/// removed first, the halt would stand held under no generation.
 #[test]
 fn a_crash_between_clearing_the_record_and_writing_the_generation_is_lifted_by_the_resend() {
     let farm = NativeHost::new("clear-crash");
@@ -200,31 +196,18 @@ fn a_crash_between_clearing_the_record_and_writing_the_generation_is_lifted_by_t
     drop(dies);
 
     let daemon = farm.daemon();
+    assert_eq!(rig.record("web").expect("the record").state, cleared());
     let lifted = daemon
         .clear_halt(&name("web"), 4)
         .expect("the resend lifts");
-    assert_eq!(lifted.generation, 4);
-    assert_eq!(bytes(rig, HELD_HALT_FILE), Some(b"4\n".to_vec()));
+    let expected = Lifted {
+        generation: 4,
+        cleared: false,
+    };
+    assert_eq!(lifted, expected);
+    assert_eq!(bytes(rig, HELD_HALT_FILE), None);
     assert_eq!(rig.record("web").expect("the record").state, cleared());
     assert_eq!(daemon.order(&farm.update("web", "2.1.0", 3)), succeeded());
-}
-
-/// Catches a generation written when the record could be cleared and the generation could not:
-/// a held-halt file that cannot be written refuses `store_failed` after the record is cleared,
-/// leaving the held generation as it was, and the same `clear_halt` lifts once it can be.
-#[test]
-fn a_held_halt_that_cannot_be_written_refuses_and_the_resend_lifts() {
-    let farm = NativeHost::new("clear-unwritable");
-    let rig = farm.rig();
-    let daemon = halted(&farm, 0);
-    let blocker = rig.state.join("web").join(format!("{HELD_HALT_FILE}.tmp"));
-    fs::create_dir(&blocker).expect("a directory where the temporary file goes");
-    let refused = daemon.clear_halt(&name("web"), 1).expect_err("not written");
-    assert_eq!(refused.refusal, Refusal::StoreFailed);
-    assert_eq!(bytes(rig, HELD_HALT_FILE), None);
-    fs::remove_dir(&blocker).expect("removed");
-    assert!(daemon.clear_halt(&name("web"), 1).is_ok());
-    assert_eq!(bytes(rig, HELD_HALT_FILE), Some(b"1\n".to_vec()));
 }
 
 /// Catches `clear_halt` that ignores the service's lock: while an order of the service runs a
@@ -270,10 +253,10 @@ fn clear_halt_with_a_garbage_held_halt_file_names_the_error_and_lifts_nothing() 
     assert_eq!(bytes(rig, RECORD_FILE), record_before);
 }
 
-/// Catches a service that was never halted unable to take a generation: with no record and no
-/// held-halt file, generation 2 is lifted with nothing cleared, and the file reads 2.
+/// Catches a generation written for a service that holds no halt: with no record and no
+/// held-halt file, generation 2 is accepted with nothing cleared, and no file is written.
 #[test]
-fn clear_halt_without_a_halt_record_still_records_the_generation() {
+fn clear_halt_without_a_halt_record_writes_no_generation() {
     let rig = Rig::new("clear-no-halt");
     rig.add("web", "2.0.0");
     let daemon = rig.daemon();
@@ -283,7 +266,7 @@ fn clear_halt_without_a_halt_record_still_records_the_generation() {
         cleared: false,
     };
     assert_eq!(lifted, expected);
-    assert_eq!(bytes(&rig, HELD_HALT_FILE), Some(b"2\n".to_vec()));
+    assert_eq!(bytes(&rig, HELD_HALT_FILE), None);
     assert_eq!(bytes(&rig, RECORD_FILE), None);
 }
 
@@ -315,12 +298,16 @@ fn clear_halt_of_a_record_that_cannot_be_cleared_names_why_and_writes_nothing() 
 }
 
 /// Catches the coordinator's order not reaching `clear_halt`: the order lifts the halt and is
-/// answered with the record's `halt_cleared`; the same generation again is
+/// answered with the record's `halt_cleared`; on a halt held under 1, the same generation is
 /// `stale_halt_generation`.
 #[test]
 fn a_clear_halt_order_lifts_the_halt_and_a_stale_one_is_refused() {
     let farm = NativeHost::new("clear-order");
     let daemon = halted(&farm, 0);
+    // Its own host, kept for the whole test: a host dropped removes its directories, and with
+    // them the held-halt file the stale order is judged against.
+    let held_farm = NativeHost::new("clear-order-held");
+    let held = halted(&held_farm, 1);
     let lifted = Reply::Finished {
         verdict: Verdict::Deferred {
             retry_after_secs: None,
@@ -329,7 +316,7 @@ fn a_clear_halt_order_lifts_the_halt_and_a_stale_one_is_refused() {
         resent: false,
     };
     assert_eq!(daemon.order(&clear_order("web", 1, 1)), lifted);
-    let stale = daemon.order(&clear_order("web", 1, 2));
+    let stale = held.order(&clear_order("web", 1, 2));
     assert_eq!(
         stale.refusal(),
         Some(Refusal::StaleHaltGeneration),
@@ -337,23 +324,24 @@ fn a_clear_halt_order_lifts_the_halt_and_a_stale_one_is_refused() {
     );
 }
 
-/// Catches a halt generation from the heartbeat that raises the hold and leaves the halt record
-/// holding every order: the held-halt adapter of the heartbeat loop lifts the halt as
-/// `clear_halt` does, so the next order runs; a lower generation is not an error and changes
-/// nothing.
+/// Catches a halt generation from the heartbeat that leaves the halt record holding every
+/// order: the held-halt adapter of the heartbeat loop holds an unheld halt under the first
+/// generation it hears, then lifts it with a greater one as `clear_halt` does (record cleared,
+/// file removed), so the next order runs; a lower generation is not an error.
 #[test]
 fn a_halt_generation_from_the_heartbeat_lifts_the_halt_record() {
     let farm = NativeHost::new("clear-heartbeat");
     let rig = farm.rig();
     let daemon = Arc::new(halted(&farm, 0));
     let halts = DaemonHalts::new(Arc::clone(&daemon));
-    halts.raise(&name("web"), 2).expect("raised");
-    assert_eq!(halts.held(&name("web")), 2);
-    assert_eq!(rig.record("web").expect("the record").state, cleared());
-    halts
-        .raise(&name("web"), 1)
-        .expect("a lower generation is no error");
+    halts.heard(&name("web"), None, 2).expect("held under 2");
     assert_eq!(bytes(rig, HELD_HALT_FILE), Some(b"2\n".to_vec()));
+    halts
+        .heard(&name("web"), None, 1)
+        .expect("a lower generation is no error");
+    halts.heard(&name("web"), None, 3).expect("lifted by 3");
+    assert_eq!(rig.record("web").expect("the record").state, cleared());
+    assert_eq!(bytes(rig, HELD_HALT_FILE), None);
     assert_eq!(daemon.order(&farm.update("web", "2.1.0", 3)), succeeded());
 }
 

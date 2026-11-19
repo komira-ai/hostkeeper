@@ -21,10 +21,10 @@
 //!   entry); and its manifest read for the order's service and version and this daemon's
 //!   version. A failure is the verdict `Failed` before the commit with the reason the stage or
 //!   the loader gives, and nothing is written.
-//! - The standing halt: an order whose halt generation is greater than the held one raises the
-//!   held generation and clears a `Halt` record
-//!   ([`hostkeeper_steps::StepRunner::clear_halt`]); a lower or equal one leaves the hold as it
-//!   is, and the force goes on.
+//! - The standing halt: an order whose halt generation is greater than the held one lifts it as
+//!   `clear_halt` does: a `Halt` record cleared
+//!   ([`hostkeeper_steps::StepRunner::clear_halt`]), then the held-halt file removed; a lower or
+//!   equal one leaves the hold as it is, and the force goes on.
 //! - Steps 4 to 6 ([`locked`]): a post-success watcher of the service is stopped; an unfinished
 //!   hooked update in the record is flagged `forced` under the record lock and the unit of its
 //!   running step stopped by name (tried twice; then the verdict `Failed`, `unstopped`, and
@@ -62,6 +62,7 @@ use crate::locks::{Holder, Package, ServiceGuard};
 use crate::packages::PackageError;
 use crate::refusal::Refusal;
 use crate::verb::{Forced, HookedVerb, PackageDigest};
+use crate::verbs::clear_halt;
 use crate::verbs::update::{last_record, while_held};
 
 pub use crate::prune::ALERT_PRUNE;
@@ -235,7 +236,7 @@ fn fresh<'c>(
         Err(failed) => return failed,
     };
     let lifted = match order.halt_generation > held_halt {
-        true => lift_halt(ctx, service, order.halt_generation),
+        true => lift_halt(ctx, service),
         false => Ok(()),
     };
     if let Err(refused) = lifted {
@@ -380,16 +381,12 @@ fn package_class(error: &PackageError) -> ManifestClass {
     }
 }
 
-/// Lifts the standing halt of `service`: its held generation raised to `generation`, and a
-/// `Halt` record cleared, as `clear_halt` does.
-fn lift_halt(ctx: &Ctx, service: &ServiceName, generation: u64) -> Result<(), Reply> {
-    ctx.halts
-        .raise(service, generation)
-        .map_err(|error| Reply::refused(Refusal::StoreFailed, error))?;
-    ctx.runner(service)
-        .clear_halt()
-        .map_err(|error| Reply::refused(Refusal::StoreFailed, error))?;
-    Ok(())
+/// Lifts the standing halt of `service` as `clear_halt` does ([`clear_halt::lift`]): a `Halt`
+/// record cleared, then its held-halt file removed.
+fn lift_halt(ctx: &Ctx, service: &ServiceName) -> Result<(), Reply> {
+    clear_halt::lift(ctx, service)
+        .map(drop)
+        .map_err(|refused| Reply::refused(refused.refusal, refused.detail))
 }
 
 /// Steps 4 to 6, and the service's lock: a watcher of the service is stopped; then, until the

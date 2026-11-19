@@ -78,7 +78,7 @@ fn a_service_with_no_hold_reports_no_local_halt() {
     assert!(reported(&rig, 0, "x").is_some());
 }
 
-/// Proves a reply's halt generation at or below the held one raises nothing and the next beat
+/// Proves a reply's halt generation at or below the held one lifts nothing and the next beat
 /// still reports the hold.
 ///
 /// Catches: a stale generation from the coordinator lifting the halt the host holds, or hiding it
@@ -94,12 +94,12 @@ fn a_reply_generation_below_the_held_one_leaves_the_hold_reported() {
     let mut heartbeater = rig.heartbeater();
     heartbeater.beat_once();
     heartbeater.beat_once();
-    assert!(rig.world.halts.raises().is_empty());
+    assert_eq!(rig.world.halts.heard(), [("x".to_owned(), None, 3)]);
     assert_eq!(reported(&rig, 1, "x").expect("still held").generation, 15);
 }
 
-/// Proves a reply's halt generation above the held one is raised and the next beat reports no
-/// hold.
+/// Proves a reply's halt generation above the held one lifts the hold and the next beat reports
+/// none.
 ///
 /// Catches: a lifted halt still reported as held.
 #[test]
@@ -114,7 +114,7 @@ fn a_reply_generation_above_the_held_one_lifts_the_reported_hold() {
     heartbeater.beat_once();
     assert!(reported(&rig, 0, "x").is_some());
     heartbeater.beat_once();
-    assert_eq!(rig.world.halts.raises(), [("x".to_owned(), 16)]);
+    assert_eq!(rig.world.halts.heard(), [("x".to_owned(), None, 16)]);
     assert_eq!(reported(&rig, 1, "x"), None);
 }
 

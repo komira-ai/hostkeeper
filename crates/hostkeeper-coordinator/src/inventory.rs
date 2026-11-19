@@ -49,6 +49,11 @@
 //! ([`show_inventory`]), and `Enrollment.ListRecords` marks each record a host is enrolled
 //! against (`enrolled`), and lists only those, or only the others, when asked.
 //!
+//! An enrolled host no record matches is given one by the coordinator, from its claims: right
+//! after an operator approves it, and at the coordinator's start for one enrolled before
+//! (`inventory_enrolled.rs`). The record is added by `coordinator`, names no group and has no
+//! window, so it approves nothing.
+//!
 //! Apart from the match, each record says what the enrollment store holds for its host id
 //! (`host_held`, [`Coordinator::host_held`]): no host, an approved host, or a denied or retired
 //! one. It is read from the store by host id, so it holds after a restart and for a host never
@@ -105,6 +110,10 @@ mod window;
 /// `Enrollment.UpdateRecord`.
 #[path = "inventory_update.rs"]
 mod update;
+
+/// The record the coordinator writes for a host enrolled without one.
+#[path = "inventory_enrolled.rs"]
+mod enrolled;
 
 /// Whether `n` is zero: a window a record does not have is left out of the ops file.
 fn is_zero(n: &u64) -> bool {
@@ -650,6 +659,29 @@ pub fn show_match(
     }
 }
 
+/// Why `record` may not join `records`, if it may not: `record_exists` when one holds its host
+/// id, `record_conflict` when one holds one of its MACs or its serial (letters compared without
+/// case), `capacity` when they are [`MAX_RECORDS`].
+fn refused_beside(
+    records: &[InventoryRecord],
+    record: &InventoryRecord,
+) -> Option<proto::EnrollmentRefusal> {
+    if records.iter().any(|r| r.host_id == record.host_id) {
+        return Some(proto::EnrollmentRefusal::RecordExists);
+    }
+    let mac_taken = records
+        .iter()
+        .any(|r| r.macs().any(|held| record.macs().any(|new| new == held)));
+    let serial_taken = !record.serial.is_empty()
+        && records
+            .iter()
+            .any(|r| r.serial.eq_ignore_ascii_case(&record.serial));
+    if mac_taken || serial_taken {
+        return Some(proto::EnrollmentRefusal::RecordConflict);
+    }
+    (records.len() >= MAX_RECORDS).then_some(proto::EnrollmentRefusal::Capacity)
+}
+
 /// The page `limit` asks for: [`MAX_PAGE`] for 0 or for a limit above it.
 fn page_size(limit: u32) -> usize {
     match usize::try_from(limit) {
@@ -739,21 +771,8 @@ impl Coordinator {
         let mut enrolled = false;
         let done = self.ops.try_change(Write::BeforeMemory, audit, |state| {
             let records = &mut state.inventory;
-            if records.iter().any(|r| r.host_id == record.host_id) {
-                return Err(proto::EnrollmentRefusal::RecordExists);
-            }
-            let mac_taken = records
-                .iter()
-                .any(|r| r.macs().any(|held| record.macs().any(|new| new == held)));
-            let serial_taken = !record.serial.is_empty()
-                && records
-                    .iter()
-                    .any(|r| r.serial.eq_ignore_ascii_case(&record.serial));
-            if mac_taken || serial_taken {
-                return Err(proto::EnrollmentRefusal::RecordConflict);
-            }
-            if records.len() >= MAX_RECORDS {
-                return Err(proto::EnrollmentRefusal::Capacity);
+            if let Some(refusal) = refused_beside(records, &record) {
+                return Err(refusal);
             }
             let at = records.partition_point(|r| r.host_id < record.host_id);
             records.insert(at, record.clone());

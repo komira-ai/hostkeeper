@@ -130,6 +130,15 @@ the JSON heartbeat route; any other waits for the next heartbeat over gRPC.
   `Hosts.Retry` does, so the host is ordered the desired version once it reports the halt lifted;
   a report of the hook's own halt (phase `halt`) is not set aside and stands until `Hosts.Retry`.
   What is set aside is kept in memory only: after a coordinator restart, `Hosts.Retry` does it.
+- A host keeps a `held-halt` file of a service (`<state-dir>/<service>/held-halt`) only while it
+  holds a halt of that service. Every heartbeat reply names the generation of each service that
+  has one, to every host, after a clear of any host's halt; a host that holds no halt of the
+  service writes nothing. The first reply after a host's halt writes the generation it names, and
+  the halt is held under that one; the reply that names a greater one lifts it, and the file is
+  removed with it. A file a host is left with for a service that holds no halt (from a lift that
+  did not finish, or from a daemon before this rule, which wrote every generation it was told) is
+  removed by the next reply that names the service. Moving a `held-halt` file aside by hand is
+  not needed for a host that holds no halt.
 - `Hosts.Abort` queues an `abort` of a service for the host's next heartbeat. It takes no slot,
   is sent once, and only to a daemon that announced the `abort-v1` feature; an abort asked
   again while one is queued queues nothing more.
