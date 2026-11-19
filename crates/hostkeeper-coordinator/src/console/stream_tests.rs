@@ -572,3 +572,23 @@ async fn a_client_that_reads_nothing_is_cut_at_the_grace() {
     );
     flooding.abort();
 }
+
+/// Proves: for a Mac's screen session the coordinator reads and consumes nothing of the device's
+/// stream before it bridges: the RFB greeting the Mac writes before the client sends anything is
+/// the client's first binary message, byte for byte, and the client's reply reaches the Mac.
+///
+/// Catches: a stream that peeks at or swallows the Mac's greeting, which would break the
+/// browser's RFB handshake.
+#[tokio::test]
+async fn the_stream_is_bridged_from_the_first_byte_unread() {
+    let live = Live::new("stream-first-byte");
+    let mut mac = live.fixture.dials.connect();
+    let session = live.open("alice", MAC);
+    mac.write_all(b"RFB 003.008\n").await.expect("written");
+    let mut client = live.attach(&session, ALICE).await;
+    assert_eq!(client.output(12).await, b"RFB 003.008\n");
+    client.binary(b"RFB 003.008\n").await;
+    let mut got = vec![0u8; 12];
+    mac.read_exact(&mut got).await.expect("the client's bytes");
+    assert_eq!(got, b"RFB 003.008\n");
+}

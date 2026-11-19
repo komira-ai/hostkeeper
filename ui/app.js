@@ -23,6 +23,7 @@ import * as switchPage from "./pages/switch.js";
 import * as audit from "./pages/audit.js";
 import * as users from "./pages/users.js";
 import * as tokens from "./pages/tokens.js";
+import * as desktop from "./pages/desktop.js";
 
 // The side menu: groups of pages, each `[name, title, module, glyph]`. The page's `name` is the
 // name of its button (`page-<name>`); `glyph` names its icon (`view.js`), which is all the collapsed
@@ -53,6 +54,7 @@ const LINKED = [
   ["console", "Console", serialConsole, ""],
   ["package", "Package", pkg, "Package"],
   ["switch", "Switch", switchPage, ""],
+  ["desktop", "Desktop", desktop, ""],
 ];
 const PAGES = GROUPS.flatMap(([group, pages]) => pages.map(([name, title, page, glyph]) => [name, title, page, glyph, title]))
   .concat(SETTINGS.map(([name, title, page]) => [name, title, page, "", "Settings"]))
@@ -96,10 +98,12 @@ export function redirected(name, params) {
 // `openSocket(path, handlers, protocols)` opens a socket to `path` of the page's own origin,
 // offering the subprotocols `protocols` (`main.js` makes it, the one place that opens a socket),
 // and returns `{send, close, socket}`; `openTerminal(element, opened)` draws a terminal in
-// `element` on an opened socket and returns `{show, focus, dispose}`. A page that needs one finds
-// it as `ctx.openSocket` or `ctx.openTerminal`, which is absent when none was given.
+// `element` on an opened socket and returns `{show, focus, dispose}`; `viewScreen(element, opened,
+// events)` draws a Mac's screen in `element` from an opened socket (`screen.js`, over the vendored
+// noVNC) and returns `{sendCredentials, disconnect, focus}`. A page that needs one finds it as
+// `ctx.openSocket`, `ctx.openTerminal` or `ctx.viewScreen`, which is absent when none was given.
 // Returns the frame's controls, which the browser does not need.
-export function startApp({ doc, root, fetch, confirm, now, every, openSocket, openTerminal, prefs = NO_PREFS }) {
+export function startApp({ doc, root, fetch, confirm, now, every, openSocket, openTerminal, viewScreen, prefs = NO_PREFS }) {
   // The operator's look, kept in memory: the theme (`prefs.apply(theme)` shows it) and whether the
   // side menu is collapsed to icons.
   let theme = "system";
@@ -352,6 +356,7 @@ export function startApp({ doc, root, fetch, confirm, now, every, openSocket, op
       openSocket: typeof openSocket === "function"
         ? (path, handlers, protocols) => openSocket(path, handlers, protocols) : undefined,
       openTerminal: typeof openTerminal === "function" ? (element, opened) => openTerminal(element, opened) : undefined,
+      viewScreen: typeof viewScreen === "function" ? (element, opened, events) => viewScreen(element, opened, events) : undefined,
       now: () => now(),
       navigate,
       // Runs `run` once when this rendering of the page stops being the latest: the operator

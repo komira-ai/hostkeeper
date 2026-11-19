@@ -331,7 +331,12 @@ async fn a_change_that_raced_another_is_refused() {
     let id = bob.id.clone();
     world.login().when_hashed(move || {
         let coordinator = weak.upgrade().expect("the coordinator");
-        coordinator.login().expect("a sign-in").sessions.end(&id);
+        coordinator
+            .login()
+            .expect("a sign-in")
+            .sessions
+            .end(&id)
+            .expect("the session is ended");
     });
     let sent = world
         .send(bob.post("/v1/password", &change(PASSWORD, NEW_PASSWORD)))

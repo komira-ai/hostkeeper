@@ -5,8 +5,9 @@
 //! request that has waited for an operator longer than the request TTL
 //! (`--enrollment-request-ttl`, [`DEFAULT_REQUEST_TTL_SECS`] when not given) is expired by the
 //! store ([`hostkeeper_enrollment::enroll::EnrollmentStore::expire`]) and audited
-//! `request_expired`, once, under `coordinator`. The coordinator's reload tick runs it
-//! ([`crate::listen::reload_every`]), so a request expires at most one tick after its TTL.
+//! `request_expired`, once, under `coordinator`. Over files the coordinator's reload tick runs it
+//! ([`crate::listen::reload_every`]), so a request expires at most one tick after its TTL; over a
+//! database the claimed job `request-expiry` does ([`crate::jobs`]).
 //!
 //! The store decides which requests a sweep expired by a write that lands only on the requests
 //! as read, so two sweeps, on one coordinator or two, never audit one expiry. An entry that did not

@@ -198,7 +198,11 @@ reload tick (`--tls-reload-secs`), at the time its wall clock reads, so a reques
 one tick after its TTL; one that has waited exactly the TTL still waits. A duplicate claim expires
 like any waiting request; an approved, issued or denied one never does. Under the store's lock the
 request is marked expired, once, and audited `request_expired`; an expiry whose entry did not land
-is audited when the coordinator next starts, as an approval is.
+is audited when the coordinator next starts, as an approval is. Over a database the reload tick
+does not expire requests: the periodic job `request-expiry` does (`--job-every`, every 15 seconds by
+default, on one of the coordinators of the database); the store's write lands only on the requests
+as it read them, so two coordinators that both expire never audit one expiry twice
+([coordinator-state.md](operations/coordinator-state.md), "Periodic jobs").
 
 An expired request is unenrolled: `Approve` refuses it `not_pending`, it no longer counts toward
 `--max-pending-enrollments`, and `List` with `unenrolled` lists it (with `state` `UNENROLLED`,

@@ -1,0 +1,18 @@
+/* The Desktop page (ui/pages/desktop.js): the box the vendored noVNC viewer draws a Mac's screen in.
+   The viewer puts its own element and canvas inside and scales the screen down to the box; the box
+   is not shown until it does. */
+
+.desktop-screen {
+  box-sizing: border-box;
+  width: 100%;
+  height: 72vh;
+  margin: 12px 0 0;
+  overflow: hidden;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: #000;
+}
+
+.desktop-screen:empty {
+  display: none;
+}

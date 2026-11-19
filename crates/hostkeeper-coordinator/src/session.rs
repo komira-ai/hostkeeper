@@ -10,7 +10,7 @@
 //! each judged by the injected [`UnixClock`] with a saturating compare, so a clock that steps
 //! back lets a session live longer and never makes one with a past deadline. The table holds at
 //! most `--session-max-count` sessions; a new one past the cap drops the one least recently
-//! used. A restart ends every session, because nothing here is written anywhere.
+//! used. In memory, a restart ends every session, because nothing there is written anywhere.
 //!
 //! [`LoginLimiter`] counts consecutive failures per user name, locks a name that reaches
 //! `--login-max-failures` for `--login-lockout-secs`, and hands out the password-hash slots of
@@ -20,7 +20,12 @@
 //! from growing with every name a guesser tries; the table also holds at most
 //! `--login-max-tracked` names. Names are the canonical user key, which the caller makes.
 //!
-//! The flags that give these their settings are wired by the change that adds the login route.
+//! Over a database both keep their entries in its rows instead ([`Sessions::over`],
+//! [`LoginLimiter::over`], [`PgLoginRows`]), under the same rules, so that every coordinator on
+//! the database answers the same cookie and counts the same failures, and a restart signs nobody
+//! out (`docs/design/coordinator-multi-instance.md`, section 8). The hash slots stay this
+//! process's. When the rows cannot be reached the answers fail closed: no session is made or
+//! found, every name is told locked, and an end of sessions is an error its caller answers.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -35,6 +40,7 @@ use subtle::ConstantTimeEq;
 
 use crate::enrollment::Random;
 use crate::password::{HashSlot, HashSlots};
+use crate::store::postgres::login_rows::{PgLoginRows, StoredSession};
 
 /// The random bytes of a session id and of a CSRF token.
 const SECRET_BYTES: usize = 32;
@@ -87,6 +93,9 @@ pub enum SessionError {
     /// The operating system gave no random bytes.
     #[error("no random bytes for a session id")]
     NoRandom,
+    /// The database that holds the sessions could not be written.
+    #[error("the session rows are unavailable: {0}")]
+    Unavailable(String),
 }
 
 /// A session id: the value of the cookie. It is shown to the browser once and is not in any
@@ -174,6 +183,25 @@ pub struct Sessions {
     settings: SessionSettings,
     serial: AtomicU64,
     table: Mutex<BTreeMap<[u8; 32], Entry>>,
+    rows: Option<Arc<PgLoginRows>>,
+}
+
+/// The answer of the rows, or, when they could not be reached, `fallback` with the reason logged.
+fn unreachable<R>(what: &str, answer: Result<R, String>, fallback: R) -> R {
+    answer.unwrap_or_else(|why| {
+        tracing::error!(%why, what, "the login rows could not be reached");
+        fallback
+    })
+}
+
+/// The view of a session as its row holds it.
+fn view_of(stored: StoredSession) -> SessionView {
+    SessionView {
+        username: stored.username,
+        must_change: stored.must_change,
+        must_change_until: stored.must_change_until,
+        csrf: stored.csrf,
+    }
 }
 
 impl fmt::Debug for Sessions {
@@ -201,7 +229,15 @@ impl Sessions {
             },
             serial: AtomicU64::new(0),
             table: Mutex::new(BTreeMap::new()),
+            rows: None,
         }
+    }
+
+    /// The same table kept in `rows` instead of this process's memory.
+    #[must_use]
+    pub(crate) fn over(mut self, rows: Arc<PgLoginRows>) -> Self {
+        self.rows = Some(rows);
+        self
     }
 
     fn table(&self) -> MutexGuard<'_, BTreeMap<[u8; 32], Entry>> {
@@ -243,6 +279,17 @@ impl Sessions {
             must_change_until,
             csrf,
         };
+        if let Some(rows) = &self.rows {
+            let stored = StoredSession {
+                username: view.username.clone(),
+                csrf: view.csrf.clone(),
+                must_change,
+                must_change_until,
+            };
+            rows.create(&id_hash(&id), &stored)
+                .map_err(SessionError::Unavailable)?;
+            return Ok((SessionId(id), view));
+        }
         let mut table = self.table();
         table.retain(|_, entry| !self.expired(entry, now));
         if table.len() >= self.settings.max_count {
@@ -277,8 +324,11 @@ impl Sessions {
     /// ended or expired one (which is then forgotten).
     #[must_use]
     pub fn lookup(&self, id: &str) -> Option<SessionView> {
-        let now = self.clock.now_unix();
         let key = id_hash(id);
+        if let Some(rows) = &self.rows {
+            return unreachable("lookup", rows.lookup(&key, true), None).map(view_of);
+        }
+        let now = self.clock.now_unix();
         let mut table = self.table();
         let entry = table.get_mut(&key)?;
         if self.expired(entry, now) {
@@ -300,6 +350,9 @@ impl Sessions {
     /// left for the next lookup to forget, so asking is no use of the session.
     #[must_use]
     pub fn is_live(&self, key: &SessionKey) -> bool {
+        if let Some(rows) = &self.rows {
+            return unreachable("is_live", rows.lookup(&key.0, false), None).is_some();
+        }
         let now = self.clock.now_unix();
         self.table()
             .get(&key.0)
@@ -309,6 +362,9 @@ impl Sessions {
     /// Pushes out the idle deadline of the session `key` names, as a request of its cookie does;
     /// whether it lives.
     pub fn touch(&self, key: &SessionKey) -> bool {
+        if let Some(rows) = &self.rows {
+            return unreachable("touch", rows.lookup(&key.0, true), None).is_some();
+        }
         let now = self.clock.now_unix();
         let mut table = self.table();
         let Some(entry) = table.get_mut(&key.0) else {
@@ -325,6 +381,10 @@ impl Sessions {
     /// Clears the session's `must_change` (and its deadline): the user has chosen a new
     /// password. The session's view as it is now; None for an unknown, ended or expired one.
     pub fn clear_must_change(&self, id: &str) -> Option<SessionView> {
+        if let Some(rows) = &self.rows {
+            let cleared = rows.clear_must_change(&id_hash(id));
+            return unreachable("clear_must_change", cleared, None).map(view_of);
+        }
         let now = self.clock.now_unix();
         let mut table = self.table();
         let entry = table.get_mut(&id_hash(id))?;
@@ -337,31 +397,50 @@ impl Sessions {
     }
 
     /// Ends the session of a cookie value; whether there was one.
-    pub fn end(&self, id: &str) -> bool {
-        self.table().remove(&id_hash(id)).is_some()
+    ///
+    /// # Errors
+    /// [`SessionError::Unavailable`]: the rows that hold the session could not be written, so it
+    /// may still live; in memory it never fails.
+    pub fn end(&self, id: &str) -> Result<bool, SessionError> {
+        if let Some(rows) = &self.rows {
+            return rows.end(&id_hash(id)).map_err(SessionError::Unavailable);
+        }
+        Ok(self.table().remove(&id_hash(id)).is_some())
     }
 
     /// Ends every session of `username`, except the one `keep` names when it is given; how many
     /// ended. A disabled user, a password change or reset, and a user's removal end sessions
     /// this way.
-    pub fn end_user(&self, username: &str, keep: Option<&str>) -> usize {
+    ///
+    /// # Errors
+    /// [`SessionError::Unavailable`]: the rows that hold the sessions could not be written, so
+    /// they may still live; in memory it never fails.
+    pub fn end_user(&self, username: &str, keep: Option<&str>) -> Result<usize, SessionError> {
         let kept = keep.map(id_hash);
+        if let Some(rows) = &self.rows {
+            return rows
+                .end_user(username, kept.as_ref())
+                .map_err(SessionError::Unavailable);
+        }
         let mut table = self.table();
         let before = table.len();
         table.retain(|key, entry| entry.view.username != username || Some(*key) == kept);
-        before - table.len()
+        Ok(before - table.len())
     }
 
     /// How many sessions are held, expired ones not yet forgotten included.
     #[must_use]
     pub fn len(&self) -> usize {
+        if let Some(rows) = &self.rows {
+            return unreachable("len", rows.held(), 0);
+        }
         self.table().len()
     }
 
     /// Whether no session is held.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.table().is_empty()
+        self.len() == 0
     }
 }
 
@@ -401,6 +480,7 @@ pub struct LoginLimiter {
     settings: LimiterSettings,
     slots: HashSlots,
     counts: Mutex<BTreeMap<String, Count>>,
+    rows: Option<Arc<PgLoginRows>>,
 }
 
 impl fmt::Debug for LoginLimiter {
@@ -424,7 +504,15 @@ impl LoginLimiter {
             },
             slots,
             counts: Mutex::new(BTreeMap::new()),
+            rows: None,
         }
+    }
+
+    /// The same limiter counting in `rows` instead of this process's memory.
+    #[must_use]
+    pub(crate) fn over(mut self, rows: Arc<PgLoginRows>) -> Self {
+        self.rows = Some(rows);
+        self
     }
 
     fn counts(&self) -> MutexGuard<'_, BTreeMap<String, Count>> {
@@ -441,6 +529,10 @@ impl LoginLimiter {
     /// login route) canonicalises and checks the length before it calls the limiter.
     #[must_use]
     pub fn is_locked(&self, username: &str) -> bool {
+        if let Some(rows) = &self.rows {
+            // A count that cannot be read locks: no hash runs while the rows are away.
+            return unreachable("is_locked", rows.is_locked(username), true);
+        }
         let now = self.clock.now_unix();
         self.counts()
             .get(username)
@@ -467,6 +559,9 @@ impl LoginLimiter {
     /// A failure that arrives while the name is locked (a hash that was
     /// already running) is counted as a failure and does not move the lock.
     pub fn failed(&self, username: &str) -> Failure {
+        if let Some(rows) = &self.rows {
+            return unreachable("failed", rows.failed(username), Failure::Counted);
+        }
         let now = self.clock.now_unix();
         let lockout = self.settings.lockout_secs;
         let mut counts = self.counts();
@@ -510,12 +605,19 @@ impl LoginLimiter {
 
     /// A successful login of `username` clears its count and its lock.
     pub fn succeeded(&self, username: &str) {
+        if let Some(rows) = &self.rows {
+            unreachable("succeeded", rows.succeeded(username), ());
+            return;
+        }
         self.counts().remove(username);
     }
 
     /// How many names hold a count, for a test to see that old ones are forgotten.
     #[must_use]
     pub fn tracked(&self) -> usize {
+        if let Some(rows) = &self.rows {
+            return unreachable("tracked", rows.tracked(), 0);
+        }
         self.counts().len()
     }
 }

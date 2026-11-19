@@ -169,6 +169,16 @@ by their route and are not in the menu.
   refused the connection, or that it was lost. **Close** closes the socket. The page also shows the host page's Power and boot
   section and every open session (`Console.List`), each with a **Close** that asks first and calls `Console.Close`. A session
   that is not serial (a Mac's screen) is closed at once.
+- **Desktop** (`ui/pages/desktop.js`, reached from the Desktop link of Home's list of servers on the row of each host whose last
+  heartbeat says `PLATFORM_DARWIN_ARM64`; design: [console design](design/console-broker.md) sections 3 and 11.2): a Mac's screen
+  through the coordinator. The page names who holds the Mac's console (`Console.List`), with a **Close it** that asks first and
+  calls `Console.Close`. **Open the desktop** calls `Console.Open` with the host and a reason (as the Console page), opens one socket
+  to `/console/v1/stream/<session>` with the same two subprotocols, and in the socket's `open` handler hands it, open, to the vendored
+  noVNC viewer (`ui/screen.js`, `ctx.viewScreen`), which is never given an address. When the Mac asks for its login the page shows a
+  form for what it asks and hands what is typed to the viewer alone, keeping no copy of the password. A close is said in the Console
+  page's words; a refusal of the login by the Mac stays said when the viewer then closes the socket itself. **Close**, leaving the
+  page and signing out close it, and each end empties the screen box. An answer that is not a Mac's screen gives the session back
+  with `Console.Close`. The Mac's Power buttons are not on the page yet.
 - **Users** (`Users.List`; `Users.Create`, `Disable`, `Enable`, `ResetPassword` and `Delete` on a button): a table
   of the users with whether each is enabled, must change its password, who made it and when, its last sign-in and the
   second its temporary password stops working. Create takes a name; Create and Reset password show the temporary
@@ -216,7 +226,10 @@ by their route and are not in the menu.
 - Vendored libraries: third-party code lives under `ui/vendor/`, each file pinned by its SHA-256 in
   `crates/hostkeeper-ui-tests/vendor.sha256` (`sha256sum` lines, run in `ui/`), so a change to a vendored library is a change to
   that file; the scan fails for a vendored file with no pin or another digest, and for a pin with no file. It holds xterm.js 5.5.0
-  and its attach addon 0.11.0 (both MIT, unchanged from their npm packages, each with its licence file). The directory is exempt
+  and its attach addon 0.11.0 (both MIT, unchanged from their npm packages, each with its licence file), and noVNC 1.7.0
+  (`ui/vendor/novnc/`, MPL-2.0, with its bundled pako, MIT): `core/rfb.js` and the modules it imports, unchanged but for
+  `core/websock.js`, whose `open` (the library's one `new WebSocket(`) throws instead, marked in the file as changed; its
+  `LICENSE.txt`, `AUTHORS` and licence texts are the package's own. The app's 1000-line limit is for its own files. The directory is exempt
   from the scan's needles (minified code names licence URLs and `console.`), and is still refused, by the scan, inline script and
   handlers made from text, and any `WebSocket(` call: the libraries are handed the app's one socket, already open.
 - The files need no sign-in. The operator API the app calls still needs a session (with its CSRF

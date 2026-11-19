@@ -1,4 +1,4 @@
-//! The number a desired version is set under (`queue_seq`, migration `0025`): the queue of the
+//! The number a desired version is set under (`queue_seq`, migration `0026`): the queue of the
 //! services that wait for their turn follows it on every coordinator of one database, a commit
 //! takes one only for a version it sets or changes, and a start gives a number to the rows a
 //! release before wrote or changed, in the order of its queue.
@@ -368,16 +368,16 @@ fn set_seq_of_a_row_changed_by_the_release_before_is_restamped_in_queue_order() 
     store.stop();
 }
 
-/// Proves (B8, both ways, for `0025`): the release before's runner (migrations `0001` to `0024`)
+/// Proves (B8, both ways, for `0026`): the release before's runner (migrations `0001` to `0025`)
 /// accepts a database this release migrated and numbered rows in, runs nothing, and takes the
 /// coordinator's lock once this release has stopped; this release, started on a database the
-/// release before migrated and wrote groups and services into, runs `0025` and numbers those rows
+/// release before migrated and wrote groups and services into, runs `0026` and numbers those rows
 /// at start, the ungrouped service first, each with the version it was taken for.
 ///
-/// Catches: a `0025` marked `refuse`, which would turn a rollback into a restore, and a start on
+/// Catches: a `0026` marked `refuse`, which would turn a rollback into a restore, and a start on
 /// the release before's rows that leaves them with no number.
 #[test]
-fn the_release_before_runs_on_a_database_with_0025_and_this_one_on_its() {
+fn the_release_before_runs_on_a_database_with_0026_and_this_one_on_its() {
     let db = TestDatabase::new();
     let a = instance(&db, "this release");
     put(
@@ -387,7 +387,7 @@ fn the_release_before_runs_on_a_database_with_0025_and_this_one_on_its() {
     a.store.stop();
     assert_eq!(seq(&db, "g1/web"), 1);
     let (ran, locked) = with_session(&db, |session| {
-        let before = migrate::checked(&migrate::SHIPPED[..24]).expect("the release before's set");
+        let before = migrate::checked(&migrate::SHIPPED[..25]).expect("the release before's set");
         let ran = migrate::apply(session, &before).expect("the release before is accepted");
         (ran, try_lock(session).expect("a try"))
     });
@@ -399,7 +399,7 @@ fn the_release_before_runs_on_a_database_with_0025_and_this_one_on_its() {
 
     let old = TestDatabase::new();
     with_session(&old, |session| {
-        let before = migrate::checked(&migrate::SHIPPED[..24]).expect("the release before's set");
+        let before = migrate::checked(&migrate::SHIPPED[..25]).expect("the release before's set");
         migrate::apply(session, &before).expect("the release before migrates");
     });
     old.run(

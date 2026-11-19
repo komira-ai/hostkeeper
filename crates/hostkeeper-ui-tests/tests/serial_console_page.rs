@@ -886,7 +886,8 @@ return { navigations: seen.navigations };"#,
 
 /// Proves: Home's list of servers has a Console column: a Console link on the row of each host
 /// whose last heartbeat says Linux (either architecture), which opens the Console page of that
-/// host, and none for a Mac or a host that has not said its platform.
+/// host, and none for a Mac (whose row has the Desktop link instead, `desktop_page.rs`) or a host
+/// that has not said its platform.
 ///
 /// Catches: a Console offered for a Mac (which has no serial console) or for a host of unknown
 /// platform, and a link that opens another host's console.
@@ -930,7 +931,7 @@ export async function main() {
         json!([
             ["Server", "Console"],
             ["arm-1", "Console"],
-            ["mac-1", "-"],
+            ["mac-1", "Desktop"],
             ["new-1", "-"],
             ["x86-1", "Console"]
         ])

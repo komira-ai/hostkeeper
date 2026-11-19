@@ -104,7 +104,11 @@ from the coordinator, as root, with no command typed on it, is
 [docs/operations/host-prerequisites.md](docs/operations/host-prerequisites.md). Installing a new Linux machine
 from the farm LAN with `pxe`, and the router and board checks before the first one, is
 [docs/operations/network-install.md](docs/operations/network-install.md); its settings files
-are parsed with that program's own parser. A test (`crates/xtask/tests/enrollment_doc.rs`)
+are parsed with that program's own parser. Setting up the console (the network path to the BMCs,
+their DHCP reservations, the three console files, `ipmitool` beside the coordinator, the BMC and
+BIOS settings) and moving an installed server to the serial console baseline is
+[docs/operations/console.md](docs/operations/console.md); its file examples are read by the
+console's parsers and its hand step is held to the seed's own files and commands. A test (`crates/xtask/tests/enrollment_doc.rs`)
 reads every fenced `hkctl` line of every Markdown file but the design documents as hkctl reads
 it, against its command table and global flags, so a runbook's command cannot name a method, a
 flag or a value hkctl does not take.

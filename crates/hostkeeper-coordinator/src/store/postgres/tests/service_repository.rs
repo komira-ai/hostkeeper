@@ -167,7 +167,7 @@ fn the_release_before_runs_on_a_database_this_release_migrated() {
     assert_eq!(ran, Vec::<i32>::new());
     assert_eq!(
         db.rows("SELECT version FROM schema_version ORDER BY version"),
-        (1..=25)
+        (1..=26)
             .map(|n| vec![Some(n.to_string())])
             .collect::<Vec<_>>()
     );

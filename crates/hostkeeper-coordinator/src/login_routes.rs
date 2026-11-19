@@ -249,7 +249,11 @@ fn sign_out(coordinator: &Coordinator, login: &Login, parts: &Parts) -> Answer {
         Ok(held) => held,
         Err(refused) => return *refused,
     };
-    login.sessions.end(&held.id);
+    if let Err(why) = login.sessions.end(&held.id) {
+        // The session may still live: the browser is not told it has signed out.
+        tracing::error!(%why, "a logout could not end its session");
+        return Refused::Unreachable.answer();
+    }
     let mut entry = AuditEntry::new(&held.view.username, LOGOUT);
     entry.source = source_of(parts);
     if let Err(why) = coordinator.audit(entry) {
@@ -426,8 +430,9 @@ impl Coordinator {
         let mut entry = AuditEntry::new(name, LOGIN);
         entry.source = source;
         if let Err(why) = self.audit(entry) {
-            // A login that is not on the record gives no session: nobody has the id yet.
-            login.sessions.end(id.as_str());
+            // A login that is not on the record gives no session: nobody has the id yet. A row
+            // that could not be deleted holds an id nobody was given, and its deadlines end it.
+            let _ = login.sessions.end(id.as_str());
             tracing::error!(%why, "a login could not be audited");
             return Err(Refused::Internal);
         }
@@ -507,7 +512,15 @@ impl Coordinator {
             },
         )?;
         login.limiter.succeeded(name);
-        login.sessions.end_user(name, Some(&held.id));
+        login
+            .sessions
+            .end_user(name, Some(&held.id))
+            .map_err(|why| {
+                // The password changed; the other sessions may still live, and the user is told
+                // so the change can be made again, which ends them.
+                tracing::error!(%why, "a password change could not end the user's other sessions");
+                Refused::Unreachable
+            })?;
         if let Some(id) = &user.initial_id
             && let Some(file) = &self.initial_admin
             && let Err(why) = file.delete_if_adopted(name, id)
