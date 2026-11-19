@@ -77,6 +77,8 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   nothing, on any of them, until the next heartbeat's revival has opened every lost one again with
   the lock. Reads that are not decisions
   (`Audit.List`, the enrollment lists, the alerts' scans) run on a second, read-only session.
+  Decisions read memory: a heartbeat in the steady state writes nothing. It reads its host's
+  enrollment and deny rows, fresh, so a deny another coordinator recorded is seen at once.
 - **Edits, and the copies in memory.** Each change of the state (an operator's, CI's, or one the
   coordinator makes itself) is one transaction that locks, after its row of `tx_ledger`, the row
   of `rollout_gate` when it changes what a rollout decision reads (the desired state, the

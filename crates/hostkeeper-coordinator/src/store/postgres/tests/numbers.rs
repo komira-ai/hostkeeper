@@ -281,9 +281,9 @@ fn column(db: &TestDatabase) -> Option<String> {
 fn facts_generation_is_raised_with_the_change_and_answered_by_every_instance() {
     let db = TestDatabase::new();
     let a = instance(&db, "a");
-    let records = PgRecords::over(&a.store).expect("the records");
+    let records = PgRecords::over(&a.store);
     records
-        .commit(&[Record::Host(host(None))])
+        .commit(&[], &[Record::Host(host(None))])
         .expect("the host is approved");
     let b = instance(&db, "b");
     assert_eq!(b.ops.facts_generation("host-1"), 0);

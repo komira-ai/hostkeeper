@@ -297,8 +297,9 @@ pub fn clock() -> (Clock, Arc<AtomicU64>) {
 }
 
 /// Spent token ids kept in memory: a test's stand-in for the caller's file. Two verifiers given
-/// the same one stand for a caller before and after a restart. While [`Self::fail`] is set,
-/// recording fails.
+/// the same one stand for a caller before and after a restart, or for two callers sharing one
+/// record. An id it holds is refused ([`std::io::ErrorKind::AlreadyExists`]); while
+/// [`Self::fail`] is set, recording fails.
 #[derive(Default)]
 pub struct SpentInMemory {
     entries: Mutex<Vec<(String, u64)>>,
@@ -339,10 +340,17 @@ impl SpentJtis for SpentInMemory {
         if self.failing.load(Ordering::SeqCst) {
             return Err(std::io::Error::other("recording is made to fail"));
         }
-        self.entries
+        let mut entries = self
+            .entries
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push((jti.to_owned(), until));
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if entries.iter().any(|(held, _)| held == jti) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "the id is spent",
+            ));
+        }
+        entries.push((jti.to_owned(), until));
         Ok(())
     }
 }

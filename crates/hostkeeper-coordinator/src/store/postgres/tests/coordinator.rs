@@ -1,7 +1,7 @@
 //! A coordinator over the Postgres store, end to end in process (`docs/design/coordinator-storage.md`,
 //! sections 4.3 to 5 and 8): the desired state, the ops store and the verdicts over one store, a
 //! session that is lost and made again, the epoch another coordinator raised meanwhile, a commit
-//! whose outcome was not known, the alerts, and the enrollment records' copy.
+//! whose outcome was not known, the alerts, and the enrollment records read fresh.
 //!
 //! Every wait is a deterministic event: a revival is posted to the writer's thread, and a job
 //! queued after it runs after it; a server session that must not be taken is one a test client
@@ -24,7 +24,7 @@ use hostkeeper_wire::wire::{Heartbeat, ServiceReply};
 use super::{AT, TestDatabase, admin};
 use crate::desired::DesiredStore;
 use crate::enrollment::tests::support::{Files, FixedClock, HostKey, NOW};
-use crate::enrollment::{Enrollment, StoreAt, os_random, setup};
+use crate::enrollment::{Admission, Enrollment, StoreAt, os_random, setup};
 use crate::marks_support::{
     DB, NEW_DAEMON, WEB, ask, ask_typed, beat_of, force_request, operator, runs, services_with,
     set, update,
@@ -147,8 +147,7 @@ impl Farm {
         let mut coordinator = start_on_postgres(&rig, &store, loaded, &marker);
         let mut enrollment = None;
         if enrolled {
-            let records =
-                Arc::new(crate::store::postgres::PgRecords::over(&store).expect("records"));
+            let records = Arc::new(crate::store::postgres::PgRecords::over(&store));
             let files = Files::in_dir(&rig.dir);
             let started = setup(
                 Arc::new(RealFs),
@@ -592,24 +591,25 @@ fn host_record(host: &str, role: &str) -> pb::Host {
     }
 }
 
-/// Proves: the enrollment records' copy of the hosts is read from the tables again after a commit
-/// of unknown outcome, and not otherwise: a host row changed by hand is not seen by the copy
-/// while every commit is known, and is seen after a commit that landed with its session lost,
-/// which is also seen.
+/// Proves: the enrollment records read a host as the table holds it at every read: a host row
+/// changed by hand (as another coordinator would) is read changed at once, a commit of unknown
+/// outcome does not stop a read while the writing session is lost, and the host that commit
+/// wrote is read once it landed.
 ///
-/// Catches: a copy that goes on answering what it held when a commit may have changed the tables
-/// under it, or one that is read from the tables at every call (a heartbeat that runs a query).
+/// Catches: a host or deny row served from memory, which a write by another coordinator, or a
+/// commit of unknown outcome, would leave behind the table (a denied host still admitted, an
+/// approved one still refused).
 #[test]
-fn the_enrollment_copy_is_reloaded_after_a_commit_of_unknown_outcome() {
+fn the_enrollment_records_read_each_host_as_the_table_holds_it() {
     let database = TestDatabase::new();
     // One writing session: the one the fault ends is then the only one that held the lock.
     let (store, _) = database
         .open_options(&super::pooled(1), "records")
         .expect("the store opens");
-    let records = crate::store::postgres::PgRecords::over(&store).expect("the records");
+    let records = crate::store::postgres::PgRecords::over(&store);
     let key = |host: &str| HostId::parse(host).expect("a host id");
     records
-        .commit(&[Record::Host(host_record("web-1", "web"))])
+        .commit(&[], &[Record::Host(host_record("web-1", "web"))])
         .expect("committed");
     database
         .run("UPDATE enrollment_hosts SET role = 'by-hand' WHERE host_id = 'web-1'")
@@ -622,44 +622,28 @@ fn the_enrollment_copy_is_reloaded_after_a_commit_of_unknown_outcome() {
     };
     assert_eq!(
         role(&records, "web-1").as_deref(),
-        Some("web"),
-        "the copy is not read again while every commit is known"
+        Some("by-hand"),
+        "a change by another writer is read at once"
     );
 
     store.fault(Fault::LoseAfterCommit);
-    let lost = records.commit(&[Record::Host(host_record("web-2", "storage"))]);
+    let lost = records.commit(&[], &[Record::Host(host_record("web-2", "storage"))]);
     assert!(lost.is_err(), "the commit's outcome is not known");
-    let before = store.statements();
     assert_eq!(
-        role(&records, "web-1").as_deref(),
-        Some("web"),
-        "while the outcome is not known the copy is served as it is"
-    );
-    assert_eq!(
-        store.statements(),
-        before,
-        "and a heartbeat's read does not wait on the lost session"
+        role(&records, "web-2").as_deref(),
+        Some("storage"),
+        "a read does not wait on the lost session, and reads what landed"
     );
     Holding::the_lock(&database).release();
     store.revive();
     store.settle().expect("the writers run");
     assert_eq!(store.health(), Health::Up);
-
-    assert_eq!(
-        role(&records, "web-1").as_deref(),
-        Some("by-hand"),
-        "the copy is reloaded as the table holds it"
-    );
-    assert_eq!(
-        role(&records, "web-2").as_deref(),
-        Some("storage"),
-        "the host the lost commit wrote is there"
-    );
+    assert_eq!(role(&records, "web-1").as_deref(), Some("by-hand"));
 }
 
 /// An enrollment store over the records of `store`, with `host` approved.
 pub(super) fn approved(store: &Postgres, host: &str) -> (EnrollmentStore, HostId) {
-    let records = Arc::new(crate::store::postgres::PgRecords::over(store).expect("records"));
+    let records = Arc::new(crate::store::postgres::PgRecords::over(store));
     let enrollment = EnrollmentStore::new(records);
     let id = HostId::parse(host).expect("a host id");
     let key = HostKey::new();
@@ -696,8 +680,8 @@ pub(super) fn approved(store: &Postgres, host: &str) -> (EnrollmentStore, HostId
 
 /// Proves: the first heartbeat of an approved host is written once and the duplicate mark is
 /// written once: a second heartbeat runs no statement and leaves the time of the first, a store
-/// that knows nothing of the first still writes nothing, a second machine id marks the host
-/// duplicate in the table, and a third report of it runs no statement.
+/// that knows nothing of the first reads it and writes nothing, a second machine id marks the
+/// host duplicate in the table, and a third report of it writes nothing.
 ///
 /// Catches: a heartbeat that rewrites the host's row each time it comes, a first-heartbeat time
 /// replaced by a later one, or a duplicate mark written at every report.
@@ -713,21 +697,19 @@ fn the_first_heartbeat_and_the_duplicate_mark_are_written_once() {
         first(),
         [vec![Some((NOW + 60).to_string()), Some("f".to_owned())]]
     );
-    let other = EnrollmentStore::new(Arc::new(
-        crate::store::postgres::PgRecords::over(&store).expect("records"),
-    ));
+    let other = EnrollmentStore::new(Arc::new(crate::store::postgres::PgRecords::over(&store)));
     let statements = store.statements();
     enrollment.note_heartbeat(&id, NOW + 90).expect("noted");
     assert_eq!(store.statements(), statements, "the second ran nothing");
     assert_eq!(first()[0][0], Some((NOW + 60).to_string()));
 
+    let commits = database.commits();
     other.note_heartbeat(&id, NOW + 120).expect("noted");
-    assert_eq!(store.statements(), statements, "a store that knew nothing");
+    assert_eq!(database.commits(), commits, "a store that knew nothing");
     assert_eq!(first()[0][0], Some((NOW + 60).to_string()));
 
     assert!(!enrollment.report_live(&id, "m-1", NOW + 100).expect("live"));
-    let before_mark = store.statements();
-    assert_eq!(before_mark, statements, "one machine writes nothing");
+    assert_eq!(database.commits(), commits, "one machine writes nothing");
     assert!(enrollment.report_live(&id, "m-2", NOW + 101).expect("live"));
     assert_eq!(first()[0][1], Some("t".to_owned()));
     assert_eq!(
@@ -735,22 +717,23 @@ fn the_first_heartbeat_and_the_duplicate_mark_are_written_once() {
         Some((NOW + 60).to_string()),
         "the mark keeps the first heartbeat"
     );
-    let marked = store.statements();
-    assert!(marked > before_mark, "the mark was written");
+    let marked = database.commits();
+    assert_eq!(marked, commits + 1, "the mark was written");
     assert!(enrollment.report_live(&id, "m-2", NOW + 102).expect("live"));
     assert!(enrollment.report_live(&id, "m-1", NOW + 103).expect("live"));
-    assert_eq!(store.statements(), marked, "written once");
+    assert_eq!(database.commits(), marked, "written once");
 }
 
-/// Proves: a heartbeat in the steady state runs no query: once a host's first heartbeat is
-/// written, a coordinator over the database with enrollment answers a heartbeat of that host,
-/// and the enrollment's reads of it (role, denied, retiring, duplicate),
-/// without the store's sessions running one statement.
+/// Proves: a heartbeat in the steady state writes nothing: once a host's first heartbeat is
+/// written, a coordinator over the database with enrollment answers a heartbeat of that host
+/// with no write; and the host's deny row is read fresh: a deny row written by another
+/// coordinator (here by hand) refuses the host's next heartbeat at once, with no restart and no
+/// write of this one.
 ///
-/// Catches: a heartbeat that reads the database for what the store holds in memory, which would
-/// make every heartbeat of the fleet a query.
+/// Catches: a heartbeat that writes the host's row each time it comes, and a deny row served from
+/// a copy of what this coordinator wrote, which admits a host another coordinator retired.
 #[tokio::test]
-async fn a_heartbeat_in_the_steady_state_runs_no_query() {
+async fn a_heartbeat_in_the_steady_state_writes_nothing_and_reads_the_deny_row_fresh() {
     let farm = Farm::start("pg-steady", waits(), true).seeded().await;
     let enrollment = Arc::clone(farm.enrollment.as_ref().expect("enrollment"));
     let key = HostKey::new();
@@ -804,12 +787,21 @@ async fn a_heartbeat_in_the_steady_state_runs_no_query() {
         "the first heartbeat is written"
     );
 
-    let statements = farm.store.statements();
+    let commits = farm.database.commits();
     beat(&farm);
     assert_eq!(
-        farm.store.statements(),
-        statements,
-        "a heartbeat of a host already heard ran no statement"
+        farm.database.commits(),
+        commits,
+        "a heartbeat of a host already heard wrote nothing"
+    );
+    assert_eq!(farm.rig.coordinator.admission(&who), Admission::Admitted);
+    farm.database
+        .run("INSERT INTO enrollment_deny (host_id, state) VALUES ('d1', 2)")
+        .expect("denied by another coordinator");
+    assert_eq!(
+        farm.rig.coordinator.admission(&who),
+        Admission::Denied,
+        "the deny row is read at the next heartbeat"
     );
     let store = enrollment.store();
     let reads: Result<(bool, bool, bool, bool), EnrollmentError> = (|| {
@@ -820,10 +812,6 @@ async fn a_heartbeat_in_the_steady_state_runs_no_query() {
             store.host_role(&id)?.is_some(),
         ))
     })();
-    assert_eq!(reads.expect("the reads"), (false, false, false, true));
-    assert_eq!(
-        farm.store.statements(),
-        statements,
-        "the reads a heartbeat makes of the host ran no statement"
-    );
+    assert_eq!(reads.expect("the reads"), (true, false, false, true));
+    assert_eq!(farm.database.commits(), commits, "and wrote nothing");
 }

@@ -70,7 +70,7 @@ impl Fixture {
     pub(crate) fn on_postgres(name: &str) -> Fixture {
         let database = TestDatabase::new();
         let (store, _) = database.open("records").expect("the store opens");
-        let records = Arc::new(PgRecords::over(&store).expect("the records open"));
+        let records = Arc::new(PgRecords::over(&store));
         let enrollment = EnrollmentRig::over_records(&format!("{name}-enrollment"), records);
         Fixture {
             _database: Some((store, database)),
@@ -141,7 +141,7 @@ impl Fixture {
         );
         let enrollment = match &self._database {
             Some((store, _)) => {
-                let records = Arc::new(PgRecords::over(store).expect("the records open"));
+                let records = Arc::new(PgRecords::over(store));
                 let restarted = EnrollmentRig::over_records("restarted-enrollment", records);
                 let enrollment = Arc::clone(&restarted.enrollment);
                 self.enrollment = restarted;

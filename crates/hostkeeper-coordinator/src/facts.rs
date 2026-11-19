@@ -27,9 +27,9 @@
 //! coordinator reads the column with the labels, in the snapshot of the operations state, so all
 //! of them answer a host the same number and a host's beats, wherever they land, never ask for
 //! its facts again. A host no change raised is at 0; the first start that reads the column sends
-//! each such host its facts once. A record of the host the enrollment store writes replaces the
-//! row whole, the column with the generation its copy of the record holds; a coordinator's
-//! memory keeps the number it raised until it reads the operations state again.
+//! each such host its facts once. The enrollment store writes a host's record only while the row
+//! is still the one its decision read, so a record made before a raise is decided again on the
+//! raised row rather than written over it.
 //!
 //! A restart raises every host's generation to the base, so each host is resent its facts once;
 //! its daemon rewrites the file only on a change, and writes nothing. An approval whose audit

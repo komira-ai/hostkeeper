@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use hostkeeper_enrollment::enroll::records::conformance::{self, Clause, Subject};
 use hostkeeper_enrollment::enroll::records::{
-    FileRecords, MemoryRecords, Record, RecordKey, Records, RecordsLock, pb,
+    FileRecords, MemoryRecords, Record, RecordKey, Records, RecordsLock, Seen, pb,
 };
 use hostkeeper_enrollment::enroll::{
     ApprovalRecord, ApproveError, Claims, EnrollmentStore, FIRST_SERIAL, HostHeld, MacNonceHash,
@@ -109,6 +109,8 @@ enum Defect {
     KeepsBeforeUnkeyed,
     /// The lock is taken once only.
     LockOnce,
+    /// A write lands whatever became of the records its decision saw.
+    Unchecked,
     /// Every operation fails.
     Down,
 }
@@ -205,8 +207,13 @@ impl Records for Broken {
         self.inner.mac_nonce(hash)
     }
 
-    fn commit(&self, records: &[Record]) -> Result<(), StoreError> {
+    fn commit(&self, seen: &[Seen], records: &[Record]) -> Result<(), StoreError> {
         self.up()?;
+        let seen = if self.defect == Defect::Unchecked {
+            &[]
+        } else {
+            seen
+        };
         let failing =
             std::mem::take(&mut *self.failing.lock().unwrap_or_else(PoisonError::into_inner));
         let mut kept: Vec<Record> = records.to_vec();
@@ -230,7 +237,7 @@ impl Records for Broken {
                     .cloned()
                     .collect::<Vec<_>>();
                 if good.len() < kept.len() {
-                    self.inner.commit(&good)?;
+                    self.inner.commit(seen, &good)?;
                 }
             }
             _ => {}
@@ -245,24 +252,36 @@ impl Records for Broken {
         }
         if failing {
             if self.defect == Defect::WritesWhenFailing {
-                self.inner.commit(&kept)?;
+                self.inner.commit(seen, &kept)?;
             }
             return self.down();
         }
-        self.inner.commit(&kept)
+        self.inner.commit(seen, &kept)
     }
 
-    fn take_serial(&self, reserving: Option<&pb::Request>) -> Result<u64, StoreError> {
+    fn take_serial(
+        &self,
+        seen: &[Seen],
+        reserving: Option<&pb::Request>,
+    ) -> Result<u64, StoreError> {
         self.up()?;
         match self.defect {
             Defect::SameSerial => Ok(FIRST_SERIAL),
-            Defect::ForgetsReservation => self.inner.take_serial(None),
-            _ => self.inner.take_serial(reserving),
+            Defect::ForgetsReservation => self.inner.take_serial(seen, None),
+            Defect::Unchecked => self.inner.take_serial(&[], reserving),
+            _ => self.inner.take_serial(seen, reserving),
         }
     }
 
     fn set_first_heartbeat(&self, host: &pb::Host, at_unix: u64) -> Result<(), StoreError> {
         self.up()?;
+        if self.defect == Defect::Unchecked {
+            let heard = pb::Host {
+                first_heartbeat_unix: Some(at_unix),
+                ..host.clone()
+            };
+            return self.inner.commit(&[], &[Record::Host(heard)]);
+        }
         self.inner.set_first_heartbeat(host, at_unix)
     }
 
@@ -361,6 +380,7 @@ fn the_records_suite_fails_against_records_that_break_each_clause() {
         (Defect::WritesWhenFailing, Clause::FailedCommit),
         (Defect::KeepsBeforeUnkeyed, Clause::Unkeyed),
         (Defect::LockOnce, Clause::Lock),
+        (Defect::Unchecked, Clause::Checked),
     ];
     let suite = |defect: Defect| {
         conformance::run(&|| {
@@ -393,6 +413,7 @@ fn the_records_suite_fails_against_records_that_break_each_clause() {
             Clause::FailedCommit,
             Clause::Unkeyed,
             Clause::Lock,
+            Clause::Checked,
         ]
     );
     let failure = &suite(Defect::Down)[0];
@@ -801,7 +822,7 @@ fn the_files_let_a_nonce_mark_fail_quietly_only_after_its_own_approval() {
         let writes = u64::try_from(4 * records_before.len()).expect("small");
         files.fs.fail_at(files.fs.count() + writes + 1);
         let refused = records
-            .commit(&commit)
+            .commit(&[], &commit)
             .expect_err("the nonce's write fails");
         assert!(
             refused.to_string().contains("injected failure"),
@@ -816,7 +837,10 @@ fn the_files_let_a_nonce_mark_fail_quietly_only_after_its_own_approval() {
     // Its own approval before it: the commit stands, and the nonce loads consumed.
     files.fs.fail_at(files.fs.count() + 5);
     records
-        .commit(&[approval(&id, &hash), Record::MacNonce(nonce.clone())])
+        .commit(
+            &[],
+            &[approval(&id, &hash), Record::MacNonce(nonce.clone())],
+        )
         .expect("the approval stands");
     assert_eq!(
         records.mac_nonce(&hash).expect("read"),
@@ -828,7 +852,7 @@ fn the_files_let_a_nonce_mark_fail_quietly_only_after_its_own_approval() {
         ..nonce.clone()
     };
     records
-        .commit(&[Record::MacNonce(unconsumed)])
+        .commit(&[], &[Record::MacNonce(unconsumed)])
         .expect("write the nonce unmarked");
     assert_eq!(
         records.mac_nonce(&hash).expect("read"),
@@ -864,7 +888,7 @@ fn a_deny_whose_request_cannot_be_read_still_denies_the_host() {
         let memory: Arc<dyn Records> = Arc::new(MemoryRecords::new());
         for records in [files.open(), memory] {
             records
-                .commit(&[Record::Host(orphan.clone())])
+                .commit(&[], &[Record::Host(orphan.clone())])
                 .expect("write the host");
             let store = EnrollmentStore::new(records.clone());
             let web = host_id("web-1");

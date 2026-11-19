@@ -91,11 +91,15 @@ of it is `UNIMPLEMENTED`), its JSON gateway, the private listener's JSON routes 
 On the database store (`--database-dsn-file`) the enrollment store is the tables
 `enrollment_requests`, `enrollment_issued`, `enrollment_hosts`, `enrollment_deny`,
 `enrollment_serial` and `mac_nonces` (which nothing writes now), one column per field of the messages below, and an approval
-(the host, the request, the deny row cleared) is one transaction. The
-store's lock is its in-process mutex; the database's advisory lock keeps other coordinators off.
-The heartbeat's reads (a host's key, role and host group, its deny row, its duplicate mark) come from a copy of
-the hosts and the deny rows in memory, loaded at start and changed after each commit, so a
-heartbeat runs no query; the first heartbeat time and the duplicate mark are each written once.
+(the host, the request, the deny row cleared) is one transaction. Several coordinators may share
+the database, and no lock in a process keeps them apart: each write carries the rows its decision
+read, and in its transaction locks each row it read or writes (a row not there yet too), reads the
+ones it read again `FOR UPDATE`, and writes nothing when another coordinator changed one since.
+The decision then runs again on what that one left, so of two approvals of one request the second
+is refused `not_pending`, and of two polls of one approved request both get the one certificate
+recorded. The heartbeat's reads (a host's key, role and host group, its deny row, its duplicate
+mark) read the tables at each heartbeat, so a host another coordinator denied is refused at its
+next heartbeat; the first heartbeat time and the duplicate mark are each written once.
 An enrollment change's audit row is the coordinator's second transaction, as its second write is
 on the files: when it fails, the change stands, the failure is logged, and the next start audits
 it.
