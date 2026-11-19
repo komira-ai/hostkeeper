@@ -72,6 +72,7 @@ pub fn idle_links() -> Links {
         period: DEFAULT_HEARTBEAT_SECS,
         dispatch: Arc::new(ManualDispatch::default()),
         stop: StopFlag::default(),
+        bmc: None,
     }
 }
 

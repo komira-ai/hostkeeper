@@ -39,6 +39,7 @@
 //! store's lock file). The records are the messages of
 //! `proto/hostkeeper/enrollment/store/v1/store.proto` ([`records::pb`]).
 
+mod bmc;
 mod groups;
 mod hosts;
 mod issue;
@@ -53,6 +54,7 @@ mod store;
 use std::io;
 use std::path::PathBuf;
 
+pub use bmc::{BMC_REMEMBERED_SECS, HostBmc, KeptBmc};
 pub use issue::IssuedCertificate;
 pub use mac_nonce::{MAC_NONCE_VALID_SECS, MacNonceHash, MacNonceRefusal};
 pub use poll::{MAX_NONCE_BYTES, MIN_NONCE_BYTES, POLL_DOMAIN, poll_message};
@@ -297,6 +299,9 @@ pub struct EnrolledHost {
     /// When the coordinator accepted the heartbeat `running` was last written from, unix
     /// seconds; `None` with it.
     pub running_unix: Option<u64>,
+    /// The host's BMC as its daemon last reported it ([`EnrollmentStore::note_bmc`]); `None`
+    /// until a heartbeat after the approval carries one.
+    pub bmc: Option<KeptBmc>,
 }
 
 /// The host group of an enrolled host, as its host record keeps it ([`EnrollmentStore::membership`],

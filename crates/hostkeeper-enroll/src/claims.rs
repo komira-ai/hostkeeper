@@ -11,6 +11,9 @@
 //! [`LinuxClaims::with_ipmi`]; [`LinuxClaims::host`] alone has none, so its BMC MAC claim is
 //! absent.
 //!
+//! The daemon's heartbeat reads the BMC's address the same way ([`bmc_lan`]): parameter 3 of the
+//! channel that gave the MAC ([`parse_lan_ip`]).
+//!
 //! On a Mac the claims are the serial number and the platform UUID that `ioreg` reports.
 //!
 //! Claims help an operator recognise a machine. They are not proof and authorise nothing: an
@@ -24,6 +27,7 @@
 
 use std::fs;
 use std::io;
+use std::net::Ipv4Addr;
 use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -154,6 +158,9 @@ const NO_ADDRESS: &str = "00:00:00:00:00:00";
 /// The LAN configuration parameter that holds the BMC's MAC address.
 pub const LAN_MAC_PARAMETER: u8 = 5;
 
+/// The LAN configuration parameter that holds the BMC's IPv4 address.
+pub const LAN_IP_PARAMETER: u8 = 3;
+
 /// The channels asked for the BMC's MAC, in order: IPMI's channel numbers 1 to 11 (0 is the
 /// primary IPMB, 12 and up are reserved or special).
 pub const LAN_CHANNELS: RangeInclusive<u8> = 1..=11;
@@ -180,6 +187,46 @@ pub fn parse_lan_mac(response: &[u8]) -> Option<String> {
     }
     let octets: Vec<String> = mac.iter().map(|byte| format!("{byte:02x}")).collect();
     Some(octets.join(":"))
+}
+
+/// The IPv4 address in `response`, a response to `Get LAN Configuration Parameters` for
+/// parameter 3: exactly a completion code of 0, the parameter revision and four bytes. Any other
+/// response is `None`, and so is an address no BMC can be reached at: `0.0.0.0` (a channel with
+/// no address yet), a loopback, link-local, multicast or broadcast address.
+pub fn parse_lan_ip(response: &[u8]) -> Option<Ipv4Addr> {
+    let [0, _revision, a, b, c, d] = *response else {
+        return None;
+    };
+    let ip = Ipv4Addr::new(a, b, c, d);
+    let unusable = ip.is_unspecified()
+        || ip.is_loopback()
+        || ip.is_link_local()
+        || ip.is_multicast()
+        || ip.is_broadcast();
+    (!unusable).then_some(ip)
+}
+
+/// A BMC's LAN settings, read from the BMC through the [`Ipmi`] port.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BmcLan {
+    /// Its IPv4 address.
+    pub ip: Ipv4Addr,
+    /// Its MAC address, as [`parse_lan_mac`] writes it.
+    pub mac: String,
+}
+
+/// The BMC's LAN settings: the MAC of the first channel of [`LAN_CHANNELS`] that answers with one
+/// (as the BMC MAC claim takes it), and the address of that same channel. `None` when no channel
+/// gives a MAC, or the channel that does gives no usable address ([`parse_lan_ip`]): a MAC of one
+/// channel is never paired with the address of another.
+pub fn bmc_lan(ipmi: &dyn Ipmi) -> Option<BmcLan> {
+    let (channel, mac) = LAN_CHANNELS.into_iter().find_map(|channel| {
+        let response = ipmi.lan_parameter(channel, LAN_MAC_PARAMETER).ok()?;
+        Some((channel, parse_lan_mac(&response)?))
+    })?;
+    let response = ipmi.lan_parameter(channel, LAN_IP_PARAMETER).ok()?;
+    let ip = parse_lan_ip(&response)?;
+    Some(BmcLan { ip, mac })
 }
 
 /// The BMC's MAC: the first channel of [`LAN_CHANNELS`] that answers with one. A channel that

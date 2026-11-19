@@ -58,6 +58,7 @@ fn beat(platform: Platform, services: Vec<ServiceFacts>) -> Heartbeat {
         operator_keys: None,
         ssh: None,
         prerequisites: None,
+        bmc: None,
     }
 }
 
@@ -281,6 +282,7 @@ fn a_heartbeat_with_every_fact_maps_to_the_request_field_for_field() {
             remote_login_probe: None,
             operator_keys: None,
             prerequisites: None,
+            bmc: None,
         }
     );
 }

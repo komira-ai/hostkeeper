@@ -14,16 +14,17 @@ use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_steps::{BootId, BootIdError, Clock};
 
 use crate::beat::{Health, Heartbeat, Liveness, Platform, Renewal, TrustedRootFacts};
+use crate::bmc::BmcReport;
 use crate::heartbeater::{DEFAULT_HEARTBEAT_SECS, Heartbeater, LoopConfig, Ports};
 use crate::host_facts::PushedFacts;
 use crate::host_ssh::{PushedSsh, SshReport};
 use crate::operator_keys::{KeysReport, PushedKeys};
 use crate::order::{Order, OrderRef, OrderResult, Outcome, Reply};
 use crate::ports::{
-    CertSource, CertState, ClientIdentity, CoordinatorLink, Dispatch, FactsSink, HeldHalt,
-    HeldHalts, Job, LinkError, Log, Observation, OperatorKeysSink, OrderSink, PrerequisitesSink,
-    RecordedService, RemoteLoginProbeSource, RenewalSource, RepositorySink, ServiceObserver,
-    ServiceRecords, Sleeper, SshSink, Tick, TrustedRootSource, UnixClock,
+    BmcSource, CertSource, CertState, ClientIdentity, CoordinatorLink, Dispatch, FactsSink,
+    HeldHalt, HeldHalts, Job, LinkError, Log, Observation, OperatorKeysSink, OrderSink,
+    PrerequisitesSink, RecordedService, RemoteLoginProbeSource, RenewalSource, RepositorySink,
+    ServiceObserver, ServiceRecords, Sleeper, SshSink, Tick, TrustedRootSource, UnixClock,
 };
 use crate::prerequisites::{PrerequisitesReport, PushedPrerequisites};
 use crate::probe::RemoteLoginProbe;
@@ -489,6 +490,24 @@ impl RemoteLoginProbeSource for FakeProbe {
     }
 }
 
+/// The host's BMC, as a test sets it: none until [`FakeBmc::set`].
+#[derive(Default)]
+pub struct FakeBmc {
+    report: Mutex<Option<BmcReport>>,
+}
+
+impl FakeBmc {
+    pub fn set(&self, report: Option<BmcReport>) {
+        *lock(&self.report) = report;
+    }
+}
+
+impl BmcSource for FakeBmc {
+    fn bmc(&self) -> Option<BmcReport> {
+        lock(&self.report).clone()
+    }
+}
+
 /// The host's repository configuration, as a test sets it: it holds the report a test gives it,
 /// records every set it is given, and lists the installers a test gives it.
 #[derive(Default)]
@@ -715,6 +734,8 @@ pub struct World {
     /// A Mac's Remote Login probe; the ports hold it only after [`World::probing`].
     pub probe: Arc<FakeProbe>,
     probing: bool,
+    /// The host's BMC, which the ports always hold: it reports none until it is set.
+    pub bmc: Arc<FakeBmc>,
     /// The managed block of operator keys; the ports hold it only after
     /// [`World::keeping_operator_keys`].
     pub operator_keys: Arc<FakeOperatorKeys>,
@@ -755,6 +776,7 @@ impl World {
             private: false,
             probe: Arc::default(),
             probing: false,
+            bmc: Arc::default(),
             operator_keys: Arc::default(),
             keeping_operator_keys: false,
             prerequisites: Arc::default(),
@@ -842,6 +864,7 @@ impl World {
             prerequisites: self
                 .keeping_prerequisites
                 .then(|| Arc::clone(&self.prerequisites) as Arc<dyn PrerequisitesSink>),
+            bmc: Some(Arc::clone(&self.bmc) as Arc<dyn BmcSource>),
         }
     }
 

@@ -42,6 +42,8 @@
 //!   check of the host's platform ([`adapters::Adapters::for_platform`]: systemd on Linux,
 //!   launchd on macOS), and the claims of its enrollment.
 //! - [`ipmi`]: the BMC a Linux host's enrollment claims ask for its MAC, over `/dev/ipmi0`.
+//! - [`bmc`]: the BMC's address and MAC a Linux host's heartbeats report, read over the same
+//!   device every ten minutes.
 //! - [`mac`]: the real adapters of a Mac's package check (`getxattr`, `codesign`) and claims
 //!   (`ioreg`), over the process port of the launchd adapters.
 //! - [`ssh_host_mac`]: the Mac's host of the sshd setup that trusts the coordinator's SSH user CA:
@@ -104,6 +106,7 @@
 pub mod adapters;
 pub mod archive_versions;
 pub mod authorized_keys;
+pub mod bmc;
 pub mod boot;
 pub mod builtin;
 pub mod checks;

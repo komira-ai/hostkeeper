@@ -253,6 +253,15 @@ impl Bmc<'_> {
             .ok_or(BmcError::Failed(Step::BootFlags))
     }
 
+    /// Whether a call would reach the host's BMC at the address: a session in which the BMC's MAC
+    /// is read and compared with the record's, and nothing else is sent.
+    ///
+    /// # Errors
+    /// [`BmcError`]: [`BmcError::AddressMismatch`] for another MAC, or the session's own error.
+    pub fn check(&self) -> Result<(), BmcError> {
+        self.checked().map(drop)
+    }
+
     /// An open session in which the BMC's MAC was read and equals the record's.
     pub(crate) fn checked(&self) -> Result<Box<dyn Shell>, BmcError> {
         let mut shell = self.open()?;

@@ -32,19 +32,17 @@ pub struct ConsoleFlags {
     /// Who may use the console: a TOML file with an `[[operator]]` table for each, with its `name`
     /// (a name of the tokens file) and `power` (true unless false: may also call `Console.Power`
     /// and `Console.SetBootDevice`). No secret: any regular file of at most 64 KiB. Needs
-    /// --console-targets-file and --console-bmc-credential-file. Read again every
-    /// --tls-reload-secs. Default: nobody has console access, and the other two files are not
-    /// read.
-    #[arg(
-        long,
-        value_name = "FILE",
-        requires_all = ["console_targets_file", "console_bmc_credential_file"]
-    )]
+    /// --console-bmc-credential-file. Read again every --tls-reload-secs. Default: nobody has
+    /// console access, and the other two files are not read.
+    #[arg(long, value_name = "FILE", requires = "console_bmc_credential_file")]
     pub console_operators_file: Option<PathBuf>,
-    /// The address of each BMC and Mac: a TOML file with a `[[target]]` table for each, with its
+    /// An address for a BMC or a Mac: a TOML file with a `[[target]]` table for each, with its
     /// `mac` (a BMC's MAC, as the host's inventory record names it, or a Mac's data MAC) and its
     /// `address` (an IP address or a DNS name, no port). No secret: any regular file of at most
-    /// 1 MiB. Read again every --tls-reload-secs.
+    /// 1 MiB. Read again every --tls-reload-secs. Optional: a BMC it names is reached at its
+    /// address alone; any other BMC at the address its host's daemon reports, then at the one the
+    /// coordinator's neighbour table holds for its MAC. A Mac is reached only at the address it
+    /// names.
     #[arg(long, value_name = "FILE")]
     pub console_targets_file: Option<PathBuf>,
     /// The one user and password of every BMC: a TOML file of `user` and `password`; mode 0600 or
@@ -133,12 +131,11 @@ impl ConsoleFlags {
     pub fn console(&self) -> Result<Console, ConsoleFilesError> {
         let files = match (
             &self.console_operators_file,
-            &self.console_targets_file,
             &self.console_bmc_credential_file,
         ) {
-            (Some(operators), Some(targets), Some(credential)) => ConsoleFiles::read(Paths {
+            (Some(operators), Some(credential)) => ConsoleFiles::read(Paths {
                 operators: operators.clone(),
-                targets: targets.clone(),
+                targets: self.console_targets_file.clone(),
                 credential: credential.clone(),
             })?,
             _ => ConsoleFiles::default(),

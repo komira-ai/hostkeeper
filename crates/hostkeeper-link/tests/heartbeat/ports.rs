@@ -133,6 +133,7 @@ fn the_loop_dials_only_the_coordinator_link_port() {
     }
     let expected = [
         "beat.rs",
+        "bmc.rs",
         "deferral.rs",
         "dial.rs",
         "fetch.rs",
@@ -151,6 +152,7 @@ fn the_loop_dials_only_the_coordinator_link_port() {
         "prerequisites.rs",
         "probe.rs",
         "proto_map.rs",
+        "proto_map_bmc_tests.rs",
         "proto_map_facts_tests.rs",
         "proto_map_keys_tests.rs",
         "proto_map_local_halt_tests.rs",

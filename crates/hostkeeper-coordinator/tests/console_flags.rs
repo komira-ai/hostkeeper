@@ -1,6 +1,6 @@
 //! `hostkeeper-coordinator serve --console-*`: the console's files and the BMC tool's settings.
-//! The operators file needs the targets and credential files beside it; a valid set starts the
-//! coordinator with them, a broken file refuses the start naming its flag, and the BMC tool's
+//! The operators file needs the credential file beside it, and the targets file is optional; a
+//! valid set starts the coordinator with them, a broken file refuses the start naming its flag, and the BMC tool's
 //! settings reach the console. Driven in-process through `config::{Cli, build}`; nothing binds a
 //! socket and no tool is run.
 
@@ -154,21 +154,28 @@ fn the_stream_limits_have_their_defaults_and_flags() {
     }
 }
 
-/// Proves: the operators file without the targets file or the credential file is a usage error,
-/// naming the flag that is missing.
+/// Proves: the operators file without the credential file is a usage error naming it, with or
+/// without the targets file; the operators and credential files without the targets file start
+/// the coordinator with them in use and no targets file (every BMC's address is then found).
 ///
-/// Catches: a console that grants access and has no address or credential to act with.
+/// Catches: a console that grants access and has no credential to act with, and a targets file
+/// still required although the addresses are found without it.
 #[test]
-fn the_operators_file_needs_the_other_two() {
+fn the_operators_file_needs_the_credential_file_and_not_the_targets_file() {
     let files = Files::new("console-flags-requires");
-    for (targets, credential, missing) in [
-        (None, Some(CREDENTIAL), "--console-targets-file"),
-        (Some(TARGETS), None, "--console-bmc-credential-file"),
-    ] {
-        let args = args_with(&files, Some(OPERATORS), targets, credential);
+    for targets in [Some(TARGETS), None] {
+        let args = args_with(&files, Some(OPERATORS), targets, None);
         let refused = Cli::try_parse_from(args).expect_err("refused");
-        assert!(refused.to_string().contains(missing), "{refused}");
+        let said = refused.to_string();
+        assert!(said.contains("--console-bmc-credential-file"), "{said}");
     }
+    let files = Files::new("console-flags-no-targets");
+    let args = args_with(&files, Some(OPERATORS), None, Some(CREDENTIAL));
+    let parts = build_given(&flags_of(args)).expect("the start");
+    let shown = format!("{:?}", parts.coordinator.console());
+    assert!(shown.contains("operators.toml"), "{shown}");
+    assert!(shown.contains("bmc.toml"), "{shown}");
+    assert!(shown.contains("targets: None"), "{shown}");
 }
 
 /// Proves: a broken file refuses the start with its flag's error, and a credential file open to

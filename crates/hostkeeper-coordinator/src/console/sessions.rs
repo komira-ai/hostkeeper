@@ -92,6 +92,7 @@ impl Coordinator {
                 Kind::Serial => self.console.quiet.as_secs(),
                 Kind::Screen => 0,
             },
+            address: Some(device.first.to_proto()),
         })
     }
 

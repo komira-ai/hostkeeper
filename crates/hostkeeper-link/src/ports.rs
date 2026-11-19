@@ -12,6 +12,7 @@ use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_steps::Clock;
 
 use crate::beat::{Health, Heartbeat, Liveness, Oversize, Renewal, TrustedRootFacts};
+use crate::bmc::BmcReport;
 use crate::host_facts::PushedFacts;
 use crate::host_ssh::{PushedSsh, SshReport};
 use crate::names::Reason;
@@ -165,6 +166,12 @@ pub trait RenewalSource: Send + Sync {
 /// that keeps no root.
 pub trait TrustedRootSource: Send + Sync {
     fn trusted_root(&self) -> Option<TrustedRootFacts>;
+}
+
+/// The host's BMC, as the daemon read it from the BMC, read at every heartbeat: none from a host
+/// with no BMC it can read.
+pub trait BmcSource: Send + Sync {
+    fn bmc(&self) -> Option<BmcReport>;
 }
 
 /// The Remote Login probe a Mac's daemon ran at its start, read at every heartbeat: none until it

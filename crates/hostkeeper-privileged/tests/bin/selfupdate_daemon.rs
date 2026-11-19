@@ -450,6 +450,7 @@ fn file_links(
         period,
         dispatch: Arc::new(ThreadDispatch),
         stop,
+        bmc: None,
     }
 }
 
