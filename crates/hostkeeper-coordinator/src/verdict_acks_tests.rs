@@ -234,6 +234,7 @@ fn listing(entry: ServiceBeat, extra: Option<ServiceBeat>) -> Heartbeat {
 
 fn web(running: &str, last: Option<&Heartbeat>) -> ServiceBeat {
     ServiceBeat {
+        local_halt: None,
         name: "web".to_owned(),
         version: Version::parse(running).expect("a version"),
         health: hostkeeper_wire::wire::Health::Healthy,

@@ -22,6 +22,7 @@ mod host_facts;
 mod host_ssh;
 mod kbf;
 mod link;
+mod local_halt;
 mod operator_keys;
 mod orders;
 mod pki;

@@ -1,12 +1,95 @@
-# The coordinator as N instances: model check, compatibility and tests
+# The coordinator as N instances: measurements, model check, compatibility and tests
 
-Companion of [coordinator-multi-instance.md](coordinator-multi-instance.md) (sections 14 and 15 of it, moved here so that file
-stays under 1000 lines, R12). Section numbers are kept; "section n" in the text below refers to that document.
+Companion of [coordinator-multi-instance.md](coordinator-multi-instance.md) (the measurements of its section 7, and its sections
+14 and 15, moved here so that file stays under 1000 lines, R12). Section numbers are kept; "section n" in the text below refers
+to that document.
+
+## 7. The latency budget, measured (M1)
+
+Two places, kept apart in every row. **Live** is the deployment's Postgres service, read only: `SELECT`s and `SHOW`s run with
+`default_transaction_read_only = on`, `pgbench` with a script of `SELECT 1;` (no table), and `pg_test_fsync` writing its own
+temporary file outside the data directory. Nothing was written to the live database and no setting was changed. **Scratch** is a
+Postgres 17.10 container (the image of the same version and build) with the live server's non-default settings
+(`max_connections` 200, `shared_buffers` 128MB, `synchronous_commit` on, no TCP listener), on a unix socket, with the schema
+the coordinator's migrations make, including `0020_fleet.sql` of the stack (komira-ai/hostkeeper#403 and #404). A measurement
+program drives that stack's own code: `fleet_rows::beat` (the beat statement of section 5.2) and `rollout::decide` with
+`rollout::admit` (the gate with `SKIP LOCKED`, then the admission). It is an ignored test module run by hand and is not
+committed. **Inferred** rows are arithmetic on measured rows, and they say which ones.
+
+Each beat of the program does what a deciding beat does: the beat statement, then `decide(Wait::Beat, admit)` for the host's
+next version. A placed order is taken by the host at once and settled by its next beat, so the stage never runs out of work. The
+**50% stage** is `max_updating` set to half the hosts of the one role (`min_up` 0, `--live-rollouts` 1, `ORDER_AGE` 120 s). Two
+instances with four pool sessions each are 8 sessions. An **operator edit** is `decide(Wait::Operator { 30 000 ms })`: the gate
+`FOR UPDATE`, a reload of `desired`, `group_desired` and `halts`, then a halt raised or cleared on another service. That is the
+shape of section 6, and its SQL is not built yet (M4). The **operator's wait** is the time from its `BEGIN` to the moment the
+gate is granted, so it includes the `BEGIN`, ledger and `set_config` round trips. The **hold** is the time from the grant to the
+return of `COMMIT`, seen by the client. Times are means, with p99 and max where the tail matters. The scratch host was shared
+(load average about 22 on 28 CPUs), so its tails carry that noise.
+
+The scratch WAL is on tmpfs for every row unless the row says "local disk". That leaves out the commit's flush, and the live
+disk's flush is then added from its own measurement. A cross-check on the local disk agrees: its flush is 4.9 ms, and the gate's
+hold there is 4.7 ms against 0.54 ms on tmpfs.
+
+| Quantity | Value | Where | Command or query |
+|---|---|---|---|
+| Postgres version | 17.10 (Debian 17.10-1.pgdg13+1); `transaction_timeout` exists (set to 0) | live | `SELECT version()`; `SHOW transaction_timeout` |
+| `max_connections` | 200, `superuser_reserved_connections` 3; the coordinator's role has no connection limit (`rolconnlimit` -1) | live | `SHOW max_connections`; `SHOW superuser_reserved_connections`; `SELECT rolname, rolconnlimit FROM pg_roles` |
+| Connections in use | 24 on the server, 2 of them the coordinator's (both idle) | live, one sample | `SELECT datname, usename, state, count(*) FROM pg_stat_activity GROUP BY 1, 2, 3` |
+| Connections N instances need | 2 instances x (`--database-pool` 4 + 1 reader) = 10, against 173 free (200 - 3 reserved - 24 in use) | inferred from the two rows above | section 4, "Sessions" |
+| Enrolled hosts (the real host count) | 11 (none denied) | live | `SELECT count(*) FROM hostkeeper.enrollment_hosts`; `SELECT count(*) FROM hostkeeper.enrollment_deny` |
+| Round trip on the socket, `SELECT 1` | 7 to 9 us (simple and prepared protocol, 3 runs of 20 000 each) | live | `pgbench -n -M simple\|prepared -f <SELECT 1;> -t 20000 -c 1 -h <socket directory>` |
+| Same, scratch | 9 to 10 us (`pgbench`); 17 to 26 us through the coordinator's client (`Session::query_one`, which parses and binds on every call) | scratch | as above; the program, 2000 calls |
+| Commit flush (8 kB `fdatasync`, the server's `wal_sync_method`) | 0.84 ms | live disk | `pg_test_fsync -s 2` |
+| Same, scratch | 4.9 ms | scratch, local disk | `pg_test_fsync -s 2` |
+| Write load of the server today | 3.7 kB/s of WAL, 3.5 WAL flushes/s, 70 commits/s (0.22/s in the coordinator's database) | live, over 120 s | two samples of `pg_stat_wal` (`wal_bytes`, `wal_sync`) and `pg_stat_database` (`xact_commit`) |
+| Beat statement, converged (no decision), `fleet_hosts` unlogged | 0.43 ms at 11 hosts, 0.34 ms at 500; 30 to 38 B of WAL per beat and no flush | scratch | the program, 1100 and 5000 beats, `pg_wal_lsn_diff` around them |
+| Same, `fleet_hosts` and `fleet_bakes` logged | 0.35 ms (tmpfs) and 8.0 ms (local disk) at 11 hosts; 368 to 430 B of WAL and one flush per beat | scratch | the same after `ALTER TABLE ... SET LOGGED` |
+| Same, logged, on the live disk | about 1.2 ms per beat (0.35 + 0.84) | inferred | the two rows above |
+| `fleet_hosts` write cost at 4 beats per host per minute | 11 hosts: 0.73 beats/s, so logged is 270 B/s of WAL and 0.73 flushes/s (+7% WAL and +21% flushes on the server today), and unlogged is 22 B/s with no flush. 500 hosts: logged 14 kB/s and 33 flushes/s | inferred | beats/s (hosts x 4 / 60) x WAL per beat (368 B logged, 30 B unlogged at 11 hosts; 430 B logged at 500), against the live write load row |
+| HOT updates and size | 100% of `fleet_hosts` updates were HOT, 98.9 to 99.4% of `fleet_bakes`; `fleet_hosts` 90 kB at 11 hosts, 0.9 to 1.1 MB at 500 | scratch | `pg_stat_user_tables` (`n_tup_upd`, `n_tup_hot_upd`), `pg_total_relation_size` |
+| The gap rule's `max(seen_unix)` | 45 to 69 us at 11 hosts, 58 to 71 us at 500 (the whole round trip, unlogged and logged) | scratch | the program, 2000 runs of `SELECT coalesce(max(seen_unix), 0) FROM fleet_hosts` |
+| Gate hold, 50% stage, real rate | 0.54 ms mean, p99 1.6 ms (11 hosts); 0.99 ms mean, p99 4.2 ms (500 hosts) | scratch | the program, every host beating every 15 s for 180 s, 2 instances x 4 sessions, an operator edit every 5 s |
+| Same, on the live disk | about 1.4 ms mean at 11 hosts (0.54 + 0.84) | inferred | the rows above |
+| Gate hold, saturated (8 sessions beating back to back) | 0.73 ms mean, p99 1.3 ms; 1230 decisions/s through the gate (11 hosts); 0.84 ms, p99 1.8 ms (500 hosts) | scratch | the program, 60 s |
+| Gate capacity on the live disk, against the demand | about 700 decisions/s (1 / 1.4 ms) against 0.73 deciding beats/s at 11 hosts (0.1% busy) and 33/s at 500 (5%) | inferred | the rows above, if every beat took the deciding path |
+| Beats that found the gate busy, 50% stage, real rate | 0 of 133 (11 hosts); 7 of 5985, 0.12% (500 hosts); 0 of 5985 at 500 hosts with no operator edits | scratch | the real-rate runs, with and without operator edits |
+| Same, saturated | 89 to 90% with or without operator edits (11 and 500 hosts): the gate is the bottleneck at about 11 000 beats/s, 15 000 times the real 0.73/s at 11 hosts | scratch | the saturated runs |
+| Operator edit's wait for the gate, 50% stage | real rate: 0.73 ms mean, max 1.6 ms (11 hosts); 0.74 ms, max 2.7 ms (500 hosts). Saturated: 0.77 ms, p99 2.1 ms (11); 0.96 ms, p99 3.9 ms, max 11.6 ms (500). On the local disk, saturated: 1.7 ms, p99 8.5 ms | scratch | the same runs; the default wait it is bounded by is 30 000 ms |
+| Heartbeat's database time (beat statement + gate attempt), with and without operator edits | real rate, 11 hosts: 1.84 ms with and 2.06 ms without. Real rate, 500 hosts: 2.6 ms, p99 8.0 ms with, and 2.1 ms, p99 4.4 ms without; the beat statement, which never touches the gate, accounts for about half of the mean gap and most of the p99 gap (p99 4.4 against 1.6 ms), so the gap is the shared host's noise. Saturated: p99 1.72 against 1.73 ms (11 hosts) and 2.06 against 2.15 ms (500) | scratch | paired runs, `M1_OPS` 1 and 0 |
+| DDL of a migration against a running instance (`ALTER TABLE ... ADD COLUMN` with `SET LOCAL lock_timeout = '3000ms'`, on `fleet_orders`, `fleet_hosts`, `rollout_gate`, 20 each) | lock wait and catalog change together: 0.45 to 1.5 ms mean, max 12.5 ms (tmpfs, saturated, 11 and 500 hosts); 6 ms mean, max 20 ms on the local disk. None of the 180 runs (60 per scenario: tmpfs at 11 and at 500 hosts, local disk at 11) reached the 3000 ms lock timeout | scratch | the program, a fourth session running the DDL every 250 ms under the saturated load |
+| Beats stalled behind a waiting DDL | the beat statement's max rose from 5.4 ms to 38 ms (tmpfs) and the heartbeat's from 24 ms to 83 ms (local disk), for the moments a DDL waited; the heartbeat's p99 about doubled (1.7 to 3.7 ms on tmpfs, 2.9 to 6.1 ms on the local disk) | scratch | the DDL runs against the saturated runs |
+
+**Verdict for section 19, decision 6.** No: the operator edit's wait under a 50% stage does not show in the heartbeat's latency.
+A beat never waits for the gate (`SKIP LOCKED`). The paired runs with and without operator edits give the same heartbeat times when saturated, and at the real rate
+the 11-host run with edits was the faster one. At 500 hosts most of the p99 gap is in the beat statement, which takes no gate.
+So the gap is the noise of the shared host. An edit's only effect on beats is a
+beat that finds the gate busy and decides 15 s later: 0 of 133 at the real host count, 7 of 5985 at 500 hosts. The one gate row
+stays the granularity, and no per-service row is needed.
+
+**Verdict for decision 4.** At the real host count the WAL cost of a logged `fleet_hosts` does not matter: 270 B/s and 0.73
+flushes/s on a server that writes 3.7 kB/s and flushes 3.5 times a second. So by decision 4, `fleet_hosts` is logged. A logged
+beat waits for one flush, about 0.84 ms on the live disk, which is noise against a 15 s heartbeat.
+
+**Converged path against section 7's bound.** The beat statement alone is 0.34 to 0.45 ms on the scratch copy, at the edge of
+"a few hundred microseconds". Most of it is the client's parse and plan of the statement on every call, which a prepared
+statement would cut. At 0.73 beats/s that is not a load, so none of section 7's fallbacks is taken.
 
 ## 14. The model check, before code
 
 The protocol to check is the deciding transaction, the conditional writes and the periodic claim, not the SQL. Two tools, one
-idea each:
+idea each, as first designed; what was built (M2) is one of them, below.
+
+**Built** (M2: `docs/design/models/coordinator-multi-instance.md`, the spec, and
+`crates/hostkeeper-coordinator/tests/multi_instance_model/`, the test, `cargo test -p hostkeeper-coordinator --test
+multi_instance_model`). The model is the Rust state-space test of the second item, split into twelve small models (`orders`,
+`operator`, `steps`, `quiet`, `ledger`, `beats`, `reload`, `audit`, `periodic`, `migrate`, `locks`, `drain`), each searched over
+every interleaving of its statements at N = 1, 2 and 3, with one test per invariant. The spec is not TLA+: it is a document whose
+tables (every invariant with its model, every variant with the invariant it breaks and the smallest N at which it does, every
+model's bound) the test reads and holds to the models in both directions, so the spec is checked by the same test run that CI
+already runs, and no second tool (TLC needs Java, and B9 lets a pull request run only build and unit tests) is needed. What the
+models found is in the spec's section "What the models found"; one of them changed section 11 of the design (panic mode at the
+edge can engage for a few seconds during the drain delay, with no refused connection). The first item below is kept as it was
+designed, for the record of what the models cover.
 
 - **A model of the protocol** (TLA+/PlusCal, `docs/design/models/` in the PR that builds M2; run by an `xtask` verb outside
   the PR gate, since TLC needs Java and B9 allows only build and unit tests with coverage). The number of instances is a

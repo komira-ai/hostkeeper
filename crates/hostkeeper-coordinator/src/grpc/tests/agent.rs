@@ -38,14 +38,14 @@ fn entry(name: &str, version: &str) -> proto::ServiceBeat {
     }
 }
 
-fn agent(name: &str, version: &str) -> Option<proto::AgentInfo> {
+pub(super) fn agent(name: &str, version: &str) -> Option<proto::AgentInfo> {
     Some(proto::AgentInfo {
         name: name.to_owned(),
         version: version.to_owned(),
     })
 }
 
-fn request(
+pub(super) fn request(
     agent: Option<proto::AgentInfo>,
     features: &[&str],
     services: Vec<proto::ServiceBeat>,
@@ -71,7 +71,7 @@ fn request(
 }
 
 /// The single service entry of `service` as JSON, among the entries of an agent heartbeat.
-fn service_json(service: proto::ServiceBeat) -> Value {
+pub(super) fn service_json(service: proto::ServiceBeat) -> Value {
     let request = request(agent("hostkeeper-daemon", "1.0"), &[], vec![service]);
     json_of(&request, None)["services"][0].clone()
 }
@@ -200,6 +200,7 @@ fn a_service_entry_is_the_json_entry_of_its_facts() {
         json!({"name": "svc", "version": "1.0"})
     );
     let full = proto::ServiceBeat {
+        local_halt: None,
         installer: None,
         drift: None,
         name: "svc".to_owned(),

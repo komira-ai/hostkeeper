@@ -69,6 +69,7 @@ fn an_install_runs_for_a_service_the_host_does_not_list_and_its_verdict_is_sent_
                 ..rig.world.link.beats()[1].services[0].clone()
             },
             ServiceFacts {
+                local_halt: None,
                 name: service("web"),
                 version: version("2.0"),
                 health: Health::Absent,

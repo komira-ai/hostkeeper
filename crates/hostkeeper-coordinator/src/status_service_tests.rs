@@ -34,6 +34,7 @@ fn announcing(mut top: Heartbeat, services: &[(&str, &str)]) -> Heartbeat {
         services
             .iter()
             .map(|(name, running)| ServiceBeat {
+                local_halt: None,
                 name: (*name).to_owned(),
                 version: version(running),
                 health: Health::Healthy,

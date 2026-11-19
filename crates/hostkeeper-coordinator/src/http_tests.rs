@@ -21,6 +21,7 @@ mod extras;
 mod features;
 mod halt;
 mod legacy;
+mod local_halt;
 mod login;
 mod operator;
 mod password;

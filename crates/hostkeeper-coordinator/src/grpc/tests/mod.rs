@@ -24,6 +24,7 @@ mod hosts;
 mod install;
 mod limits;
 mod listeners;
+mod local_halt;
 mod operator;
 mod operator_desired;
 mod operator_keys;

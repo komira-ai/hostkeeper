@@ -38,6 +38,7 @@ fn recorded_body(file: &str, step: usize) -> String {
 /// A service at `at`, healthy, with nothing else to say but what the observer saw.
 fn facts(name: &str, at: &str) -> ServiceFacts {
     ServiceFacts {
+        local_halt: None,
         name: service(name),
         version: version(at),
         health: Health::Healthy,
@@ -341,6 +342,7 @@ fn largest(ids: &[usize; 16], reasons: &[usize; 16]) -> Heartbeat {
             done.class = Some(hostkeeper_hook::Class::Environment);
             done.reason = Some(reason(&"r".repeat(64)));
             ServiceFacts {
+                local_halt: None,
                 name: service(&name),
                 version: version(&longest),
                 health: Health::Unhealthy,

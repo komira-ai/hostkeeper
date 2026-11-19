@@ -158,6 +158,7 @@ fn first_beat() -> Heartbeat {
         agent_version: Version::from(OWN),
         features: ANNOUNCED.to_vec(),
         services: vec![ServiceFacts {
+            local_halt: None,
             name: ServiceName::new(SERVICE).expect("a service"),
             version: Version::new(BEFORE).expect("a version"),
             health: Health::Healthy,
