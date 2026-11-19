@@ -374,6 +374,7 @@ impl Backend for Files {
             accounts: self.load_accounts()?,
             layout: self.load_layout()?,
             spent: self.load_spent(),
+            facts: None,
         })
     }
 

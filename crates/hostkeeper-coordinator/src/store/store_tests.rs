@@ -363,3 +363,27 @@ fn the_marker_lists_every_pending_change_before_each_commit() {
         "{why}"
     );
 }
+
+/// Proves: a backend one process owns (the in-memory store, the files) begins edits that hold
+/// nothing, read nothing afresh and number no line themselves, finds no part behind, and has
+/// nothing to read again for any part.
+///
+/// Catches: a store over the files or in memory that a request makes read its part again, or
+/// whose edits take numbers of their own over the ones the store makes.
+#[test]
+fn a_backend_one_process_owns_has_no_part_to_read_again() {
+    let dir = scratch("one-process");
+    let files = Files::default().with_desired(&dir.path().join("desired.json"), Some(LEGACY));
+    for backend in [&Fake::new() as &dyn Backend, &files] {
+        let mut edit = backend.begin(super::Scope::OPS).expect("an edit");
+        assert!(!edit.holds());
+        assert_eq!(edit.next_seq(), None);
+        assert!(edit.take_ops().is_none());
+        assert!(backend.stale().is_empty());
+        for part in super::Part::ALL {
+            let fresh = backend.reload(part).expect("nothing to read");
+            assert!(fresh.desired.is_none() && fresh.ops.is_none() && fresh.verdicts.is_none());
+            assert!(fresh.accounts.is_none() && fresh.layout.is_none());
+        }
+    }
+}

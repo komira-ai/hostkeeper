@@ -4,7 +4,7 @@
 //! operations state's marks ([`crate::ops::OpsStore::decide_changes_with`]).
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, PoisonError};
+use std::sync::Arc;
 
 use hostkeeper_wire::version::Version;
 
@@ -117,9 +117,8 @@ impl DesiredStore {
         keep: &[Version],
         ask: &WriteAsk,
     ) -> Result<Staged<'_>, WriteError> {
-        let writer = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
-        let before = self.lock().clone();
-        let mut after = before.clone();
+        let mut staged = self.staging_with_ops();
+        let after = &mut staged.after;
         for group in after
             .host_groups
             .0
@@ -154,12 +153,7 @@ impl DesiredStore {
             registry.record(&desired.version, release, keeps);
             after.digests.insert(package.to_owned(), registry);
         }
-        Ok(Staged {
-            store: self,
-            _writer: writer,
-            before,
-            after,
-        })
+        Ok(staged)
     }
 
     /// How the writes of `package` in the group `name` are recorded: its generation, the version
@@ -193,10 +187,9 @@ impl DesiredStore {
         package: &str,
         version: &Version,
     ) -> Result<Recorded, StoreError> {
-        let writer = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
-        let before = self.lock().clone();
-        let mut after = before.clone();
-        let wanted = after
+        let mut staged = self.staging();
+        let wanted = staged
+            .after
             .host_groups
             .0
             .get_mut(name)
@@ -206,12 +199,7 @@ impl DesiredStore {
             wanted.generation = wanted.generation.saturating_add(1);
             wanted.write_id = None;
         });
-        self.commit_staged(Staged {
-            store: self,
-            _writer: writer,
-            before,
-            after,
-        })
+        self.commit_staged(staged)
     }
 
     /// This store, placing hosts by host group whether or not it holds a group yet: with none
@@ -240,17 +228,9 @@ impl DesiredStore {
         &self,
         edit: impl FnOnce(&HostGroups) -> Result<(HostGroups, T), E>,
     ) -> Result<(Staged<'_>, T), E> {
-        let writer = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
-        let before = self.lock().clone();
-        let mut after = before.clone();
-        let (groups, made) = edit(&before.host_groups)?;
-        after.host_groups = groups;
-        let staged = Staged {
-            store: self,
-            _writer: writer,
-            before,
-            after,
-        };
+        let mut staged = self.staging_with_ops();
+        let (groups, made) = edit(&staged.before.host_groups)?;
+        staged.after.host_groups = groups;
         Ok((staged, made))
     }
 }

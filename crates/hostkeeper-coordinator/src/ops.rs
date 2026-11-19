@@ -93,9 +93,7 @@ use serde::{Deserialize, Serialize};
 use crate::assignment::ServiceAssignments;
 #[cfg(doc)]
 use crate::audit_file::AuditLog;
-use crate::audit_file::{
-    AuditLine, DEFAULT_ROTATION, Logged, Query, Rotation, UnixClock, wall_clock,
-};
+use crate::audit_file::{DEFAULT_ROTATION, Logged, Query, Rotation, UnixClock, wall_clock};
 use crate::desired::{Staged, StoreError};
 use crate::facts::Generations;
 use crate::force::ForceRecord;
@@ -104,7 +102,7 @@ use crate::host_groups::GroupsMarks;
 use crate::inventory::{InventoryRecord, RecordWindow};
 use crate::ops_file;
 use crate::rollouts::Rollout;
-use crate::store::{BackendError, Commit, Fake, Files, Shared, commit_across};
+use crate::store::{BackendError, Fake, Files, Shared};
 use crate::trusted_publishers::TrustedPublisher;
 
 pub use crate::operate::OperateError;
@@ -645,6 +643,17 @@ impl OpsStore {
         self.generations.of(node_id)
     }
 
+    /// The store with the facts generations `facts` as loaded, over a backend that keeps them:
+    /// every other host's is 0 ([`crate::facts`]). Over one that keeps none, each host's starts at
+    /// the newest audit number.
+    #[must_use]
+    pub(crate) fn with_facts(mut self, facts: Option<crate::store::Facts>) -> Self {
+        if let Some(facts) = facts {
+            self.generations = Generations::kept(facts);
+        }
+        self
+    }
+
     /// The store with `marker` as the file it lists its pending changes in.
     #[must_use]
     pub(crate) fn with_marker(mut self, marker: PathBuf) -> Self {
@@ -789,105 +798,6 @@ impl OpsStore {
         entries.swap_remove(0)
     }
 
-    /// [`Self::decide_changes`] in the order `order`, the desired state `staged` committed with
-    /// it when there is one.
-    fn audited_changes<E: From<OpsError>>(
-        &self,
-        order: Order,
-        staged: Option<Staged<'_>>,
-        edit: impl FnOnce(&mut OpsState) -> Result<Vec<AuditEntry>, E>,
-    ) -> Result<Vec<AuditEntry>, E> {
-        if order == Order::StorageFirst {
-            return self.stored_first(staged, edit);
-        }
-        let (entries, committed) = self.held_first(edit)?;
-        match committed {
-            // A raise stands when only its audit line failed, as it always has; the line is
-            // committed with it later.
-            Ok(()) | Err(OpsError::AuditUnavailable(_)) => Ok(entries),
-            Err(why) => Err(why.into()),
-        }
-    }
-
-    /// A storage-first change: what is pending committed first, so that no change is committed
-    /// ahead of an earlier one, then the change (with the desired state `staged`, if any), and
-    /// memory only once it is committed.
-    fn stored_first<E: From<OpsError>>(
-        &self,
-        staged: Option<Staged<'_>>,
-        edit: impl FnOnce(&mut OpsState) -> Result<Vec<AuditEntry>, E>,
-    ) -> Result<Vec<AuditEntry>, E> {
-        let _writer = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
-        #[cfg(test)]
-        self.interleaved();
-        let before = self.state();
-        let mut next = before.clone();
-        let mut entries = edit(&mut next)?;
-        self.flush()?;
-        let lines = self.numbered(&mut next, &mut entries);
-        let commit = Commit {
-            desired: staged.as_ref().and_then(Staged::part),
-            ops: Some((&before, &next)),
-            audit: &lines,
-            ..Commit::default()
-        };
-        match &staged {
-            Some(staged) => commit_across(staged.backend(), &self.backend, &commit),
-            None => self.backend.commit(&commit),
-        }
-        .map_err(OpsError::from)?;
-        *self.lock() = next;
-        self.generations.raise(&entries);
-        if let Some(staged) = staged {
-            staged.finish();
-        }
-        entries.iter().for_each(announce);
-        Ok(entries)
-    }
-
-    /// A memory-first change: in memory, then held pending under the marker and committed. Answers
-    /// the entries and how the commit went; a commit that failed leaves the change pending.
-    fn held_first<E>(
-        &self,
-        edit: impl FnOnce(&mut OpsState) -> Result<Vec<AuditEntry>, E>,
-    ) -> Result<(Vec<AuditEntry>, Result<(), OpsError>), E> {
-        let _writer = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
-        #[cfg(test)]
-        self.interleaved();
-        let before = self.state();
-        let mut next = before.clone();
-        let mut entries = edit(&mut next)?;
-        let lines = self.numbered(&mut next, &mut entries);
-        *self.lock() = next;
-        entries.iter().for_each(announce);
-        self.hold(before, lines);
-        let committed = self.flush();
-        if let Err(why) = &committed {
-            tracing::error!(
-                alert = "halt",
-                %why,
-                "a change stands in memory and is not yet written: its commit is tried again at every heartbeat and before the next change"
-            );
-        }
-        Ok((entries, committed))
-    }
-
-    /// Numbers `entries` on from the newest number in memory or in storage, puts them in the
-    /// ring of `next`, and answers their audit lines, stamped now.
-    fn numbered(&self, next: &mut OpsState, entries: &mut [AuditEntry]) -> Vec<AuditLine> {
-        let ringed = next.audit.last().map_or(0, |last| last.seq);
-        let mut seq = self.backend.last_seq().max(ringed);
-        for entry in entries.iter_mut() {
-            seq += 1;
-            entry.seq = seq;
-        }
-        next.audit.extend(entries.iter().cloned());
-        let surplus = next.audit.len().saturating_sub(AUDIT_RING);
-        next.audit.drain(..surplus);
-        let at = (self.unix)();
-        entries.iter().map(|e| AuditLine::of(e, at)).collect()
-    }
-
     /// The page `query` asks for, from the backend: the audit files, read without reading them
     /// whole ([`AuditLog::page`]), for a store over a file.
     ///
@@ -944,6 +854,10 @@ pub(crate) use pending::{Marker, unlanded};
 /// The store's audit-only append: a numbered line that changes no state.
 #[path = "ops_audit_only.rs"]
 mod audit_only;
+
+/// The store's changes as edits of the backend: storage first, memory first, and the numbering.
+#[path = "ops_edit.rs"]
+mod edit;
 
 /// The store's hooks for tests: a clock, a writer and an appender put in, a rival writer's change
 /// made between a read and a change.

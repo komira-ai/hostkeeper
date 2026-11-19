@@ -55,7 +55,7 @@ fn holder(db: &TestDatabase) -> Client {
 }
 
 /// Waits until a session of `db` waits for a lock with a query that contains `text`.
-fn seen_waiting(db: &TestDatabase, text: &str) {
+pub(super) fn seen_waiting(db: &TestDatabase, text: &str) {
     let (name, like) = (db.name().to_owned(), format!("%{text}%"));
     off_runtime(move || {
         let mut watcher = admin(None);

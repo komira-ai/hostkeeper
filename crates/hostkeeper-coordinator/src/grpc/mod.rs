@@ -595,7 +595,9 @@ fn is_grpc(headers: &HeaderMap) -> bool {
 /// gateway's ([`gateway::answer`]), and any other method of such a path is a 405. On the
 /// heartbeat listener a path under `/repositories/` is a private repository's
 /// ([`crate::repository_serve`]), whose body is streamed. Everything else is a JSON route ([`handle`]). A body that has not arrived whole after `patience` is a
-/// bad request, or a deadline exceeded for gRPC. Once it is answered, the held waits read again.
+/// bad request, or a deadline exceeded for gRPC. Before it is answered, the parts of the state
+/// another coordinator changed are read again ([`Coordinator::refresh_caches`]); once it is
+/// answered, the held waits read again.
 pub async fn route<B>(
     coordinator: &Arc<Coordinator>,
     surface: Surface,
@@ -608,6 +610,7 @@ where
     B::Data: Send,
     B::Error: Into<BoxError> + Send + 'static,
 {
+    coordinator.refresh_caches();
     let answered = if request.version() == Version::HTTP_2 && is_grpc(request.headers()) {
         grpc(coordinator, surface, peer, request, patience)
             .await

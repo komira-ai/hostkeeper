@@ -14,7 +14,7 @@ use hostkeeper_enrollment::enroll::records::Snapshot;
 
 use super::session::{Session, describe};
 use super::writer::try_lock;
-use super::{DatabaseError, Dsn, Timeouts, load_all, logged_of, migrate, records};
+use super::{DatabaseError, Dsn, Timeouts, logged_of, migrate, parts, records};
 use crate::audit_file::AuditLine;
 use crate::store::Loaded;
 
@@ -28,7 +28,9 @@ const MOVE_TIMEOUTS: Timeouts = Timeouts {
 };
 
 /// Every table that holds state, in the order an export counts them; `imports` is the import's
-/// own record, and the bookkeeping (`schema_version`, `lease`, `enrollment_serial`) is not here.
+/// own record, and the bookkeeping (`schema_version`, `lease`, `enrollment_serial`, and
+/// `rollout_gate`, `state_versions` and `audit_counter` of `0023`) is not here: a start sets the
+/// audit counter past the newest line, an imported one among them.
 pub(crate) const STATE_TABLES: [&str; 45] = [
     "desired",
     "desired_digests",
@@ -138,7 +140,7 @@ fn audit_all(session: &mut Session) -> Result<Vec<AuditLine>, DatabaseError> {
 /// Everything `session` holds, read by the readers a start uses, CI's spent ids past at `now`
 /// left out.
 fn read_moved(session: &mut Session, now: u64) -> Result<Moved, DatabaseError> {
-    let loaded = load_all(session, now).map_err(|e| DatabaseError::Load(e.to_string()))?;
+    let loaded = parts::load_here(session, now).map_err(|e| DatabaseError::Load(e.to_string()))?;
     let audit = audit_all(session)?;
     let records = records::read_all(session)
         .map_err(|e| refused(&e))?

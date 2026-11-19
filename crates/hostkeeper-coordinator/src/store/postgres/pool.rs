@@ -6,7 +6,7 @@
 
 use std::collections::VecDeque;
 use std::io;
-use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
 use super::session::Worker;
 use super::writer::Writer;
@@ -29,8 +29,20 @@ struct Taken<'a> {
 
 impl Drop for Taken<'_> {
     fn drop(&mut self) {
-        self.pool.free().push_back(self.index);
-        self.pool.freed.notify_one();
+        self.pool.give_back(self.index);
+    }
+}
+
+/// A writer taken from the pool for an edit ([`super::edit`]), given back when the lease is
+/// dropped: the edit's job runs on it, and its caller talks to the job while it holds the lease.
+pub(crate) struct Lease {
+    pool: Arc<Pool>,
+    index: usize,
+}
+
+impl Drop for Lease {
+    fn drop(&mut self) {
+        self.pool.give_back(self.index);
     }
 }
 
@@ -59,28 +71,54 @@ impl Pool {
         self.free.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// The writer that has been free longest, taken, waiting while none is.
+    fn take(&self) -> usize {
+        let mut free = self.free();
+        loop {
+            if let Some(index) = free.pop_front() {
+                return index;
+            }
+            #[cfg(test)]
+            self.waited
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            free = self
+                .freed
+                .wait(free)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+
+    /// Gives the writer `index` back.
+    fn give_back(&self, index: usize) {
+        self.free().push_back(index);
+        self.freed.notify_one();
+    }
+
     /// Runs `job` on the writer that has been free longest, waiting while none is, and waits for
     /// its answer; `None` when that writer's thread is gone.
     pub(crate) fn call<R: Send + 'static>(
         &self,
         job: impl FnOnce(&mut Writer) -> R + Send + 'static,
     ) -> Option<R> {
-        let taken = {
-            let mut free = self.free();
-            loop {
-                if let Some(index) = free.pop_front() {
-                    break Taken { pool: self, index };
-                }
-                #[cfg(test)]
-                self.waited
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                free = self
-                    .freed
-                    .wait(free)
-                    .unwrap_or_else(PoisonError::into_inner);
-            }
+        let taken = Taken {
+            pool: self,
+            index: self.take(),
         };
         self.writers[taken.index].call(job)
+    }
+
+    /// Takes the writer that has been free longest for an edit, waiting while none is, and hands
+    /// it `job` without waiting for it: false when that writer's thread is gone. The writer is
+    /// the edit's until the lease is dropped.
+    pub(crate) fn lease(
+        pool: &Arc<Pool>,
+        job: impl FnOnce(&mut Writer) + Send + 'static,
+    ) -> Option<Lease> {
+        let lease = Lease {
+            pool: Arc::clone(pool),
+            index: pool.take(),
+        };
+        pool.writers[lease.index].post(job).then_some(lease)
     }
 
     /// Hands `job` to every writer, behind the jobs each has already, without waiting: false when
