@@ -277,6 +277,35 @@ impl Tx<'_> {
     ) -> Result<Vec<postgres::Row>, postgres::Error> {
         self.session.query(sql, params)
     }
+
+    /// Runs statements that take no parameters and return nothing.
+    ///
+    /// # Errors
+    /// The client's error.
+    pub(crate) fn batch(&mut self, sql: &str) -> Result<(), postgres::Error> {
+        self.session.batch(sql)
+    }
+
+    /// The session itself, for a reader of a part's rows inside the transaction.
+    pub(crate) fn session(&mut self) -> &mut Session {
+        self.session
+    }
+}
+
+/// Why the body of a transaction stopped before its commit.
+#[derive(Debug)]
+pub(crate) enum Halt {
+    /// A statement failed: the session stays for a refusal, and is lost otherwise.
+    Pg(postgres::Error),
+    /// The body refused, for the reason given, after a statement the server refused or before
+    /// any: the transaction is rolled back and the session stays.
+    Refuse(String),
+}
+
+impl From<postgres::Error> for Halt {
+    fn from(e: postgres::Error) -> Halt {
+        Halt::Pg(e)
+    }
 }
 
 /// Takes the coordinator's advisory lock on `session` shared, without waiting: false when a
@@ -375,7 +404,12 @@ impl Writer {
             self.lose(&why, None);
             return WriteFail::Lost(why);
         }
-        // The session is there: a statement of it failed.
+        self.refused(why)
+    }
+
+    /// A transaction refused for `why`, its session still there: rolled back, and the session
+    /// lost when even that fails.
+    fn refused(&mut self, why: String) -> WriteFail {
         let rolled_back = self
             .session
             .as_mut()
@@ -398,6 +432,19 @@ impl Writer {
         &mut self,
         change: Option<Owned>,
         body: impl FnOnce(&mut Tx<'_>) -> Result<R, postgres::Error>,
+    ) -> Result<R, WriteFail> {
+        self.transact_naming(|tx| Ok((body(tx)?, change)))
+    }
+
+    /// [`Writer::transact`] of a body that says what change it made, for a revival to hand back
+    /// when the commit's outcome is not known, and that may refuse ([`Halt::Refuse`]) without
+    /// losing the session.
+    ///
+    /// # Errors
+    /// [`WriteFail`], as [`Writer::transact`]; a body's refusal is [`WriteFail::Refused`].
+    pub(crate) fn transact_naming<R>(
+        &mut self,
+        body: impl FnOnce(&mut Tx<'_>) -> Result<(R, Option<Owned>), Halt>,
     ) -> Result<R, WriteFail> {
         let Some(session) = self.session.as_mut() else {
             return Err(WriteFail::Lost("the database session is lost".to_owned()));
@@ -423,9 +470,10 @@ impl Writer {
         let mut tx = Tx {
             session: &mut *session,
         };
-        let answer = match body(&mut tx) {
-            Ok(answer) => answer,
-            Err(e) => return Err(self.failed(&e)),
+        let (answer, change) = match body(&mut tx) {
+            Ok(answered) => answered,
+            Err(Halt::Pg(e)) => return Err(self.failed(&e)),
+            Err(Halt::Refuse(why)) => return Err(self.refused(why)),
         };
         #[cfg(test)]
         let fault = self
