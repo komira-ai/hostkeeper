@@ -71,7 +71,7 @@ fn every_run_is_answered_in_the_order_given_whatever_the_width() {
     for width in [0, 1, 3, 7, SIDE_BY_SIDE, 20] {
         let parent = scratch("order");
         let exec = Echo::default();
-        let answers = spawn_side_by_side(&runs(7), width, &parent, |program, args, _home| {
+        let answers = spawn_side_by_side(&runs(7), width, &parent, |program, args, _env| {
             exec.spawn(program, args)
         });
         assert_eq!(stdouts(answers), want, "width {width}");
@@ -90,12 +90,18 @@ fn every_run_is_answered_in_the_order_given_whatever_the_width() {
 #[test]
 fn every_run_has_a_new_empty_cache_home_of_its_own_removed_after_the_last_run() {
     // Catches: two `gh` sharing one Sigstore TUF cache (each rewriting the metadata the other
-    // reads back, so that its verifier fails to start), a home that already holds another run's
-    // files, a run of a later batch given a home of an earlier one, or the homes left behind.
+    // reads back, so that its verifier fails to start), a run started without `XDG_CACHE_HOME`
+    // set to its home, a home that already holds another run's files, a run of a later batch
+    // given a home of an earlier one, or the homes left behind.
     let parent = scratch("homes");
     std::fs::write(parent.join("kept"), b"x").expect("a file of the parent's own");
     let homes = Mutex::new(Vec::new());
-    let answers = spawn_side_by_side(&runs(7), 3, &parent, |program, args, home| {
+    let answers = spawn_side_by_side(&runs(7), 3, &parent, |program, args, env| {
+        // The whole environment the run is started with on top of this process's: its cache
+        // home as `XDG_CACHE_HOME`, which is where `gh` keeps its TUF cache, and nothing else.
+        let [("XDG_CACHE_HOME", home)] = env else {
+            panic!("the environment of a run: {env:?}");
+        };
         assert_eq!(entries(home), Vec::<String>::new(), "{}", home.display());
         // What `gh` leaves in its cache home: a later run must not see it.
         std::fs::write(home.join("root.json"), args.join(" ")).expect("write the cache");
@@ -167,7 +173,7 @@ fn a_run_whose_thread_panicked_is_an_error_and_the_others_are_answered() {
     list[1].0 = "panic".to_owned();
     let parent = scratch("panic");
     let exec = Echo::default();
-    let answers = spawn_side_by_side(&list, 2, &parent, |program, args, _home| {
+    let answers = spawn_side_by_side(&list, 2, &parent, |program, args, _env| {
         exec.spawn(program, args)
     });
     assert_eq!(answers.len(), 3);

@@ -277,9 +277,9 @@ pub(crate) trait Exec {
 /// How many programs [`spawn_side_by_side`] runs at once.
 pub(crate) const SIDE_BY_SIDE: usize = 8;
 
-/// The environment variable the process runner sets to a run's cache home
-/// ([`spawn_side_by_side`]): `gh` keeps its Sigstore TUF metadata under `$XDG_CACHE_HOME/gh`.
-pub(crate) const CACHE_HOME: &str = "XDG_CACHE_HOME";
+/// The environment variable [`spawn_side_by_side`] gives each run its cache home in
+/// (`gh` keeps its Sigstore TUF metadata under `$XDG_CACHE_HOME/gh`).
+const CACHE_HOME: &str = "XDG_CACHE_HOME";
 
 /// The first number [`spawn_side_by_side`] tries for the directory of its cache homes.
 static NEXT_HOMES: AtomicU64 = AtomicU64::new(0);
@@ -289,9 +289,10 @@ static NEXT_HOMES: AtomicU64 = AtomicU64::new(0);
 /// fault which makes every name look taken fails at once.
 const HOMES_ATTEMPTS: u64 = 1024;
 
-/// Each run started with `start(program, args, cache_home)`, at most `width` (at least one) at
-/// once, each on a thread of its own; the answers in the order of `runs`. A run whose thread
-/// panicked is an error.
+/// Each run started with `start(program, args, env)`, at most `width` (at least one) at once,
+/// each on a thread of its own; the answers in the order of `runs`. A run whose thread panicked
+/// is an error. `env` is what `start` sets in the run's environment, on top of this process's:
+/// exactly `[(CACHE_HOME, <the run's cache home>)]`.
 ///
 /// Every run has a cache home of its own: the new, empty directory `<index>` in a new directory
 /// under `parent`, which is removed when the last run has ended. No two runs share a cache:
@@ -307,7 +308,7 @@ pub(crate) fn spawn_side_by_side<F>(
     start: F,
 ) -> Vec<std::io::Result<Ran>>
 where
-    F: Fn(&str, &[String], &Path) -> std::io::Result<Ran> + Sync,
+    F: Fn(&str, &[String], &[(&str, &Path)]) -> std::io::Result<Ran> + Sync,
 {
     let stem = format!("xtask-cache-homes-{}", std::process::id());
     let homes = match new_dir(parent, &stem, &NEXT_HOMES, HOMES_ATTEMPTS) {
@@ -329,7 +330,8 @@ where
                 .map(|(index, (program, args))| {
                     let home = homes.0.join(format!("{index}"));
                     scope.spawn(move || {
-                        std::fs::create_dir(&home).and_then(|()| start(program, args, &home))
+                        std::fs::create_dir(&home)
+                            .and_then(|()| start(program, args, &[(CACHE_HOME, &home)]))
                     })
                 })
                 .collect();
