@@ -531,7 +531,7 @@ pub struct OpsStore {
     current: Mutex<OpsState>,
     /// Held across a whole change, so that writers wait for each other and not readers:
     /// `current` is only locked to read or to swap, never across the backend's commit.
-    writing: Mutex<()>,
+    writing: crate::store::Writers,
     backend: Shared,
     /// The generation of each host's facts ([`crate::facts`]).
     generations: Generations,
@@ -624,7 +624,7 @@ impl OpsStore {
     pub(crate) fn over(backend: Shared, state: OpsState) -> Self {
         Self {
             current: Mutex::new(state),
-            writing: Mutex::new(()),
+            writing: crate::store::Writers::default(),
             generations: Generations::from(backend.last_seq()),
             backend,
             unix: wall_clock(),
@@ -847,7 +847,7 @@ impl OpsStore {
 
 /// The store's changes in memory and not yet committed, their retry and their marker.
 #[path = "ops_pending.rs"]
-mod pending;
+pub(crate) mod pending;
 
 pub(crate) use pending::{Marker, unlanded};
 

@@ -19,9 +19,11 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use super::accounts;
 use super::layout;
+use super::queue_seq;
 use super::rows::{Table, Tables};
 use super::session::{Session, describe};
 use super::state;
+use super::writer::State;
 use super::{logged_of, unwritten};
 use crate::audit_actions::AuditOnly;
 use crate::ops::{AUDIT_RING, AuditEntry};
@@ -69,6 +71,8 @@ pub(crate) struct Raw {
     tables: Tables,
     ring: Vec<AuditEntry>,
     facts: Facts,
+    /// For the desired part, the numbers its versions were set under ([`super::queue_seq`]).
+    seqs: BTreeMap<(Option<String>, String), i64>,
 }
 
 /// The tables of `part`.
@@ -96,11 +100,16 @@ pub(crate) fn raw(session: &mut Session, part: Part) -> Result<Raw, postgres::Er
         Part::Ops => (ring(session)?, facts(session)?),
         _ => (Vec::new(), Facts::new()),
     };
+    let seqs = match part {
+        Part::Desired => queue_seq::read(session)?,
+        _ => BTreeMap::new(),
+    };
     Ok(Raw {
         part,
         tables,
         ring,
         facts,
+        seqs,
     })
 }
 
@@ -145,7 +154,11 @@ impl Raw {
         let tables = &self.tables;
         let mut fresh = Fresh::default();
         match self.part {
-            Part::Desired => fresh.desired = Some(state::desired_of(tables)?),
+            Part::Desired => {
+                let mut held = state::desired_of(tables)?;
+                held.seqs = self.seqs;
+                fresh.desired = Some(held);
+            }
             Part::Ops => {
                 let mut ops = state::ops_of(tables)?;
                 ops.audit = self.ring;
@@ -298,4 +311,38 @@ fn loaded_of(read: Read) -> Result<(Loaded, BTreeMap<Part, i64>), BackendError> 
         })
         .collect();
     Ok((loaded, versions))
+}
+
+impl super::Postgres {
+    /// [`Backend::stale`]: the parts whose versions moved on from this coordinator's copies.
+    pub(super) fn stale_parts(&self) -> Vec<Part> {
+        if self.inner.link.state() != State::Up {
+            return Vec::new();
+        }
+        match self.read(versions) {
+            Ok(versions) => Part::ALL
+                .into_iter()
+                .filter(|part| versions.get(part).copied() != self.inner.known.get(*part))
+                .collect(),
+            Err(why) => {
+                tracing::debug!(%why, "the versions of the parts could not be read");
+                Vec::new()
+            }
+        }
+    }
+
+    /// [`Backend::reload`] of `part`.
+    pub(super) fn reload_part(&self, part: Part) -> Result<Fresh, BackendError> {
+        let known = self.inner.known.get(part);
+        let between = self.between();
+        let reread = self
+            .read(move |session| reread(session, part, known, between))
+            .map_err(|why| unwritten(&why))?;
+        let Some((version, raw)) = reread else {
+            return Ok(Fresh::default());
+        };
+        let fresh = raw.fresh()?;
+        self.inner.known.set(part, version);
+        Ok(fresh)
+    }
 }

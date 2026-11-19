@@ -343,10 +343,14 @@ fn ring(lines: &[AuditLine]) -> Vec<AuditEntry> {
         .collect()
 }
 
+/// What `backend` loads, without the numbers of the queue a database keeps beside the desired
+/// state (`set_seq`, which no other backend keeps): the parts every backend holds alike.
 fn loaded(backend: &Shared) -> Result<Loaded, String> {
-    backend
+    let mut loaded = backend
         .load()
-        .map_err(|why| format!("the load failed: {why}"))
+        .map_err(|why| format!("the load failed: {why}"))?;
+    loaded.desired.seqs.clear();
+    Ok(loaded)
 }
 
 fn every_line(backend: &Shared) -> Result<Vec<u64>, String> {

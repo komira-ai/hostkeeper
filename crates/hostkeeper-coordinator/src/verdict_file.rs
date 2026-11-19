@@ -238,6 +238,16 @@ impl VerdictFile {
             .map_err(verdicts_error)
     }
 
+    /// Takes `held`, the verdicts a heartbeat's decision read afresh under the gate, into memory.
+    pub(crate) fn take_decided(&self, held: Held) {
+        *self.held() = held;
+    }
+
+    /// The verdicts in memory, which a decision that does not land puts back.
+    pub(crate) fn copy(&self) -> Held {
+        self.held().clone()
+    }
+
     /// Reads the verdicts again when the backend's rows moved on since memory's copy was read
     /// (`docs/design/coordinator-multi-instance.md`, section 6, "Invalidation"); not while a
     /// change holds them, which reads the part afresh itself.

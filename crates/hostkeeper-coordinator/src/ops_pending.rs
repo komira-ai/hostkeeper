@@ -275,7 +275,7 @@ impl OpsStore {
         if !self.halt_unwritten() {
             return;
         }
-        let _writer = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
+        let _writer = self.writing.lock();
         {
             // The marker is written again before each try: one removed by hand, or not made,
             // is there while the change is not committed.
@@ -324,7 +324,7 @@ impl OpsStore {
     /// row by row; its audit lines are no longer pending. A commit that did not land leaves both
     /// as they are (section 4.4).
     pub(crate) fn take_landed(&self, landing: &Landing) {
-        let _writer = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
+        let _writer = self.writing.lock();
         let Some(taken) = landing.ops_over(&self.state()) else {
             return;
         };
@@ -336,5 +336,48 @@ impl OpsStore {
         pending.lines.retain(|line| !landed.contains(&line.seq));
         drop(pending);
         *self.lock() = taken;
+    }
+}
+
+/// The operations state and facts generations before a heartbeat's decision, which a decision
+/// that does not land puts back.
+pub(crate) struct Checkpoint {
+    state: OpsState,
+    facts: crate::store::Facts,
+}
+
+impl OpsStore {
+    /// Takes the writers' lock for a heartbeat's decision, before the decision asks for the gate:
+    /// the store's changes inside the decision take it again on the same thread.
+    pub(crate) fn hold_writers(&self) -> crate::store::Writing<'_> {
+        self.writing.lock()
+    }
+
+    /// Takes the operations state and facts generations a heartbeat's decision read afresh under
+    /// the gate into memory.
+    pub(crate) fn take_decided(&self, state: OpsState, facts: crate::store::Facts) {
+        *self.lock() = state;
+        self.generations.replace(facts);
+    }
+
+    /// The state in memory before a heartbeat's decision, which [`Self::rewind`] puts back.
+    pub(crate) fn checkpoint(&self) -> Checkpoint {
+        Checkpoint {
+            state: self.state(),
+            facts: self.generations.copied(),
+        }
+    }
+
+    /// Puts back the state of `checkpoint`, taken before a heartbeat's decision that did not land:
+    /// none of its changes is in the rows, so none stays in memory or pending, and the marker of
+    /// a change the decision held pending is removed. A decision is made only while nothing is
+    /// pending.
+    pub(crate) fn rewind(&self, checkpoint: Checkpoint) {
+        *self.lock() = checkpoint.state;
+        self.generations.replace(checkpoint.facts);
+        let mut pending = self.pending_lock();
+        pending.base = None;
+        pending.lines.clear();
+        self.unmark(&mut pending);
     }
 }

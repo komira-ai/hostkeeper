@@ -3,8 +3,8 @@
 //! answers ([`super::Backend::keep_beat`]), so whichever instance hears a host's next beat finds
 //! the host's row, its bakes and its outstanding orders where the last one left them.
 //!
-//! Nothing here decides. The heartbeat is still decided over the fleet in memory
-//! ([`crate::fleet::Fleet`]); the rows are what the deciding transaction will read.
+//! Nothing here decides. The rows are what the heartbeat's deciding transaction reads under the
+//! gate ([`super::decision`]).
 
 use hostkeeper_wire::identity::Identity;
 use hostkeeper_wire::wire::{Health, Heartbeat};

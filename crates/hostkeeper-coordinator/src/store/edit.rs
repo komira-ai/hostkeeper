@@ -16,6 +16,7 @@
 use std::collections::BTreeMap;
 
 use super::postgres::Open;
+use super::postgres::decide::Joined;
 use super::{BackendError, Commit};
 use crate::accounts::Accounts;
 use crate::desired;
@@ -132,6 +133,15 @@ impl Scope {
         wait: Wait::Beat,
     };
 
+    /// A heartbeat's decision (`docs/design/coordinator-multi-instance.md`, section 5.2): every
+    /// part a decision reads and may write, with its audit lines, under the gate it never waits
+    /// for. The layout is read by no decision and written by none.
+    pub(crate) const DECIDE: Scope = Scope {
+        parts: &[Part::Desired, Part::Ops, Part::Verdicts],
+        audited: true,
+        wait: Wait::Beat,
+    };
+
     /// An audit line that changes no state (the console's).
     pub(crate) const AUDIT: Scope = Scope {
         parts: &[],
@@ -149,13 +159,14 @@ impl Scope {
 
     /// Every scope an edit is begun with: what the lock order is checked over.
     #[cfg(test)]
-    pub(crate) const ALL: [Scope; 8] = [
+    pub(crate) const ALL: [Scope; 9] = [
         Scope::DESIRED,
         Scope::OPS,
         Scope::DESIRED_AND_OPS,
         Scope::ACCOUNTS,
         Scope::LAYOUT,
         Scope::VERDICTS,
+        Scope::DECIDE,
         Scope::AUDIT,
         Scope::WHOLE,
     ];
@@ -207,6 +218,8 @@ pub(crate) struct Edit {
     fresh: Fresh,
     next_seq: Option<u64>,
     open: Option<Open>,
+    /// The heartbeat's decision this edit is made in, when its thread holds one.
+    joined: Option<Joined>,
 }
 
 impl Edit {
@@ -223,12 +236,23 @@ impl Edit {
             fresh,
             next_seq,
             open: Some(open),
+            joined: None,
+        }
+    }
+
+    /// An edit made in the heartbeat's decision `joined`, its first audit line numbered
+    /// `next_seq`: it holds the decision's locks and reads nothing afresh.
+    pub(crate) fn joined(joined: Joined, next_seq: Option<u64>) -> Edit {
+        Edit {
+            next_seq,
+            joined: Some(joined),
+            ..Edit::default()
         }
     }
 
     /// Whether it holds a transaction: while it does, the store makes no other write.
     pub(crate) fn holds(&self) -> bool {
-        self.open.is_some()
+        self.open.is_some() || self.joined.is_some()
     }
 
     /// The number its first audit line takes: none over a backend that numbers no lines itself.
@@ -280,9 +304,10 @@ impl Edit {
         change: &Commit<'_>,
         passing: impl FnOnce(&Commit<'_>) -> Result<(), BackendError>,
     ) -> Result<(), BackendError> {
-        match self.open {
-            Some(open) => open.commit(change),
-            None => passing(change),
+        match (self.open, self.joined) {
+            (Some(open), _) => open.commit(change),
+            (None, Some(joined)) => joined.commit(change),
+            (None, None) => passing(change),
         }
     }
 }

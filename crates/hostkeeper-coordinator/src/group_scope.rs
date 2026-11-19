@@ -283,18 +283,24 @@ impl Coordinator {
             .keys()
             .map(|name| (name, self.desired.group_desireds(name)))
             .collect();
+        let seqs: BTreeMap<&GroupName, BTreeMap<String, i64>> = groups
+            .0
+            .keys()
+            .map(|name| (name, self.desired.group_set_seqs(name)))
+            .collect();
         self.ops.read(|state| {
             groups
                 .0
                 .iter()
                 .flat_map(|(name, group)| {
-                    let wants = &wants[name];
+                    let (wants, seqs) = (&wants[name], &seqs[name]);
                     group.packages.iter().filter_map(|package| {
                         let def = package_def(name, group, &self.services, state, package)?;
                         Some(Entry {
                             want: wants.get(package).cloned(),
                             def,
                             at_unix: group.at_unix,
+                            set_seq: seqs.get(package).copied(),
                         })
                     })
                 })

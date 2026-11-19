@@ -7,11 +7,15 @@
 //! that a decision for a host of one group sees the rollouts of the packages of every other group
 //! ([`crate::live::live_elsewhere`]).
 //!
-//! The order is the time the coordinator first saw a desired version, kept in memory; among
-//! entries first seen together (after a restart every one of them) it is the group's last change
-//! (`at_unix`), then the group's name, the package's place in the group's list, and its name.
-//! Nothing new is stored, so an older release reads the same data. A coordinator that places by
-//! the rollout file (no groups) keeps no queue: it counts its services' live rollouts alone.
+//! The order is, first, the number the desired version was set under (`set_seq`), taken from the
+//! database's sequence in the transaction that set it, so every coordinator on the database
+//! orders alike (`docs/design/coordinator-multi-instance.md`, section 5.2); a row with no number
+//! ranks before every numbered one. Among entries with the same number, or none (every entry
+//! over the files), it is the time the coordinator first saw a desired version, kept in memory;
+//! among entries first seen together (after a restart every one of them) it is the group's last
+//! change (`at_unix`), then the group's name, the package's place in the group's list, and its
+//! name. A coordinator that places by the rollout file (no groups) keeps no queue: it counts its
+//! services' live rollouts alone.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
@@ -31,6 +35,9 @@ pub(crate) struct Entry {
     pub(crate) want: Option<Desired>,
     /// The group's last change, in Unix seconds: the order of entries first seen together.
     pub(crate) at_unix: u64,
+    /// The number the desired version was set under, taken from the database's sequence in the
+    /// transaction that set it; none over the files and for a row not yet numbered.
+    pub(crate) set_seq: Option<i64>,
 }
 
 impl Entry {
@@ -58,10 +65,10 @@ pub(crate) struct Cluster {
     stamps: BTreeMap<(String, String, String), Duration>,
 }
 
-/// Where an entry stands in the queue: when its desired version was first seen; the group's last
-/// change; the group's name; its place in the group's list (the earlier listed first); and the
-/// package's name.
-type Order = (Duration, u64, String, i64, String);
+/// Where an entry stands in the queue: the number its desired version was set under (none before
+/// every number); when it was first seen; the group's last change; the group's name; its place in
+/// the group's list (the earlier listed first); and the package's name.
+pub(crate) type Order = (Option<i64>, Duration, u64, String, i64, String);
 
 impl Cluster {
     /// Whether the cluster holds no entry: a fleet nothing built a snapshot for.
@@ -99,9 +106,11 @@ impl Cluster {
         self.stamps.get(&entry.key()).copied().unwrap_or_default()
     }
 
-    fn order(&self, entry: &Entry) -> Order {
+    /// Where `entry` stands in the queue: the smaller, the earlier.
+    pub(crate) fn order(&self, entry: &Entry) -> Order {
         let key = entry.key();
         (
+            entry.set_seq,
             self.stamp_of(entry),
             entry.at_unix,
             key.0,

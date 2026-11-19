@@ -71,7 +71,8 @@ fn spend(store: &Postgres, jti: &str) -> Result<u64, WriteFail> {
     })
 }
 
-/// Proves: every session of a pool of three holds the coordinator's lock shared, so the release
+/// Proves: every session of a pool of three, and the session of heartbeats' decisions, holds the
+/// coordinator's lock shared, so the release
 /// before this one (an exclusive taker) is refused while the store runs; once the store is dropped
 /// no session holds it and the exclusive taker has it at once.
 ///
@@ -82,7 +83,11 @@ fn every_pool_session_holds_the_lock_shared_and_the_release_before_is_refused() 
     let db = TestDatabase::new();
     let store = open_named(&db, 3, "pool-locks");
     let mut client = db.client();
-    assert_eq!(shared_holders(&mut client), 3);
+    assert_eq!(
+        shared_holders(&mut client),
+        4,
+        "three and the decisions' own"
+    );
     assert!(!exclusive_taken(&mut client));
     drop(store);
     assert_eq!(shared_holders(&mut client), 0);
@@ -203,7 +208,8 @@ fn one_lost_session_stops_every_write_until_the_pool_is_revived() {
     let ended: bool = client
         .query_one(
             "SELECT pg_terminate_backend((SELECT pid FROM pg_stat_activity \
-             WHERE application_name = $1 AND datname = current_database() LIMIT 1))",
+             WHERE application_name = $1 AND datname = current_database() \
+             ORDER BY backend_start LIMIT 1))",
             &[&name],
         )
         .expect("one session is ended")
@@ -235,7 +241,11 @@ fn one_lost_session_stops_every_write_until_the_pool_is_revived() {
     store.revive();
     store.settle().expect("the writers run");
     assert_eq!(store.health(), Health::Up);
-    assert_eq!(shared_holders(&mut client), 3);
+    assert_eq!(
+        shared_holders(&mut client),
+        4,
+        "three and the decisions' own"
+    );
     for n in 0..3 {
         spend(&store, &format!("after-{n}")).expect("each session writes again");
     }

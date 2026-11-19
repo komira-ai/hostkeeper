@@ -26,8 +26,8 @@
 //!   service whose version the beat reports running is done, and its row is deleted. An
 //!   uninstall's is not: it ends at its verdict, which the deciding transaction reads.
 //!
-//! Every time is the database's `now()`; none is the coordinator's. Nothing here decides, and no
-//! decision reads the rows yet.
+//! Every time is the database's `now()`; none is the coordinator's. Nothing here decides: the
+//! heartbeat's deciding transaction reads the rows under the gate ([`super::decide`]).
 
 use super::session::Session;
 use super::writer::WriteFail;

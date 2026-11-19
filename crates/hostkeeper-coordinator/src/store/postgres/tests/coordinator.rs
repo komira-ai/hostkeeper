@@ -112,8 +112,26 @@ pub(super) fn start_on_postgres(
         hostkeeper_oidc::testkit::config_text(hostkeeper_oidc::testkit::STATIC_ISSUER)
     );
     let backend: Shared = Arc::new(store.clone());
+    // The repository the tests' sets name, in the rows as an operator's add leaves it: a desired
+    // state read again from the rows (a heartbeat's decision reads it afresh) still holds it.
+    let mut seeded = loaded.desired.clone();
+    if seeded.repositories == crate::repositories::Registry::default() {
+        let kept = crate::repositories::Kept {
+            repository: crate::repositories_support::komira_added(1),
+            generation: 0,
+        };
+        seeded
+            .repositories
+            .entries
+            .insert(kept.repository.name.clone(), kept);
+        let change = crate::store::Commit {
+            desired: Some((&loaded.desired, &seeded)),
+            ..crate::store::Commit::default()
+        };
+        backend.commit(&change).expect("the repository is added");
+    }
     Rig::start_over(
-        DesiredStore::over(Arc::clone(&backend), loaded.desired),
+        DesiredStore::over(Arc::clone(&backend), seeded),
         &rig.clock,
         &list,
     )
@@ -181,6 +199,11 @@ impl Farm {
     /// `web` and `db` desired at 2.0 (1.0 registered before), and `d1` heard at 1.0 at 2100.
     pub(super) async fn seeded(self) -> Farm {
         ask(&self.rig, "d1", DAEMON, daemon("1.0"));
+        // The first beat found the fleet's rows empty, a gap: its quiet time ends, as time
+        // passing would end it.
+        self.database
+            .run("UPDATE cluster_quiet SET until_unix = 0")
+            .expect("the quiet time ends");
         for service in [WEB, DB] {
             set(&self.rig, service, "1.0", 1).await;
             set(&self.rig, service, "2.0", 2).await;

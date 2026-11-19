@@ -242,6 +242,7 @@ fn entry(_group: &str, want: Option<&str>) -> Entry {
                 .expect("a desired state")
         }),
         at_unix: 0,
+        set_seq: None,
     }
 }
 

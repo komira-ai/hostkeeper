@@ -28,6 +28,7 @@
 
 mod accounts;
 mod at;
+pub(crate) mod decide;
 mod dsn;
 pub(crate) mod edit;
 mod fleet_rows;
@@ -38,6 +39,7 @@ mod layout;
 pub(crate) mod migrate;
 pub(crate) mod parts;
 mod pool;
+mod queue_seq;
 mod records;
 mod releases;
 mod repositories;
@@ -71,6 +73,7 @@ use self::rows::{Stmt, Val, laid_over};
 use self::session::{Fail, Session, Worker, describe, ends_session, not_up};
 use self::writer::{Link, State, Tx, WriteFail, Writer, try_lock_shared};
 use super::beat::HostBeat;
+use super::decision::StageClaim;
 use super::{Backend, BackendError, Commit, Edit, Fresh, Health, Loaded, Part, Scope};
 use crate::accounts::Accounts;
 use crate::audit_file::{Actor, AuditLine, Detail, Logged, Query, UnixClock};
@@ -291,6 +294,8 @@ struct Inner {
     gate_wait: Duration,
     /// The times the beat statement of the fleet's rows reads ([`fleet_rows`]).
     fleet: fleet_rows::Timing,
+    /// The heartbeat's decision a thread holds open, which that thread's edits join.
+    deciding: decide::Seat,
     /// What a test runs between the read of a part's version and the read of its rows.
     #[cfg(test)]
     between: Mutex<Option<parts::Between>>,
@@ -483,6 +488,7 @@ impl Postgres {
             clock,
             instance,
             known: Arc::new(Known::of(versions)),
+            deciding: decide::Seat::default(),
             gate_wait: options.gate_wait,
             fleet: options.fleet,
             #[cfg(test)]
@@ -707,6 +713,7 @@ fn open_sessions(
     let instance =
         instance::start(&mut session, &options.release, &options.listen).map_err(refused)?;
     session.batch("COMMIT").map_err(refused)?;
+    queue_seq::restamp(&mut session).map_err(refused)?;
     let epoch: i64 = row.get(0);
     let (loaded, versions) =
         parts::load(&mut session, spent_now).map_err(|e| DatabaseError::Load(e.to_string()))?;
@@ -725,8 +732,9 @@ fn open_sessions(
         .map_err(refused)?
         .get(0);
     let last = last.and_then(|n| u64::try_from(n).ok()).unwrap_or(0);
+    // The pool's sessions, and one more for heartbeats' decisions ([`pool::Pool`]).
     let mut sessions = vec![session];
-    for _ in 1..options.pool.get() {
+    for _ in 0..options.pool.get() {
         sessions.push(locked(&statements)?);
     }
     Ok(Opened {
@@ -931,19 +939,7 @@ impl Backend for Postgres {
     }
 
     fn stale(&self) -> Vec<Part> {
-        if self.inner.link.state() != State::Up {
-            return Vec::new();
-        }
-        match self.read(parts::versions) {
-            Ok(versions) => Part::ALL
-                .into_iter()
-                .filter(|part| versions.get(part).copied() != self.inner.known.get(*part))
-                .collect(),
-            Err(why) => {
-                tracing::debug!(%why, "the versions of the parts could not be read");
-                Vec::new()
-            }
-        }
+        self.stale_parts()
     }
 
     fn keep_beat(&self, beat: HostBeat) {
@@ -951,17 +947,15 @@ impl Backend for Postgres {
     }
 
     fn reload(&self, part: Part) -> Result<Fresh, BackendError> {
-        let known = self.inner.known.get(part);
-        let between = self.between();
-        let reread = self
-            .read(move |session| parts::reread(session, part, known, between))
-            .map_err(|why| unwritten(&why))?;
-        let Some((version, raw)) = reread else {
-            return Ok(Fresh::default());
-        };
-        let fresh = raw.fresh()?;
-        self.inner.known.set(part, version);
-        Ok(fresh)
+        self.reload_part(part)
+    }
+
+    fn decide(&self) -> Result<super::Opened, BackendError> {
+        decide::open(self)
+    }
+
+    fn claim_stage(&self, claim: &StageClaim<'_>) -> Result<bool, BackendError> {
+        decide::claim(self, claim)
     }
 }
 

@@ -265,7 +265,9 @@ async fn the_write_id_and_the_replaced_state_come_back_in_the_record() {
             text("2"),
             text("ci-2"),
             text("1.0"),
-            text(r#"{"storage": 2}"#)
+            // As the state holds it once read from the rows (the set before stamped the queue's
+            // number, so the part is read again): the format's `frontend` named, as answered.
+            text(r#"{"storage": 2, "frontend": 0}"#)
         ]]
     );
 

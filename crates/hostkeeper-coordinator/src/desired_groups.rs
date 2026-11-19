@@ -51,6 +51,17 @@ impl DesiredStore {
         self.lock().host_groups.0.get(name).cloned()
     }
 
+    /// The number each desired version of the group `name` was set under, by package: none for a
+    /// package with no number, and nothing over the files ([`crate::queue`] orders by them).
+    pub(crate) fn group_set_seqs(&self, name: &GroupName) -> BTreeMap<String, i64> {
+        let held = self.lock();
+        held.seqs
+            .iter()
+            .filter(|((group, _), _)| group.as_deref() == Some(name.as_str()))
+            .map(|((_, package), seq)| (package.clone(), *seq))
+            .collect()
+    }
+
     /// The desired state of `package` in the group `name` ([`projected`]); none for a package the
     /// group has no desired version for.
     pub(crate) fn group_desired(&self, name: &GroupName, package: &str) -> Option<Desired> {
