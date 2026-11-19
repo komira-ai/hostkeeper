@@ -127,6 +127,7 @@ fn run(
 /// runners' lock while it pauses; and a half-applied migration.
 #[test]
 fn migration_ddl_gives_up_by_lock_timeout_instead_of_stalling_heartbeats() {
+    super::logging();
     let db = migrated();
     let mut holding = holder(&db);
     let (set, next) = with_fixture();
@@ -179,6 +180,7 @@ fn migration_ddl_gives_up_by_lock_timeout_instead_of_stalling_heartbeats() {
 
     let ran = runner.join().expect("the runner's thread");
     assert_eq!(ran.expect("the second attempt applies it"), vec![next]);
+    assert!(super::logged("it is tried again"), "the retry is logged");
     assert!(pauses.try_recv().is_err(), "one pause only");
     assert_eq!(
         db.rows("SELECT lock_timeout FROM m_seen"),

@@ -474,11 +474,11 @@ impl Writer {
                 Err(e) => self.lose(&describe(&e), None),
             }
         }
-        let (unknown, begun) = match self.unknown.as_ref() {
-            Some(unknown) => (Some(unknown.id.clone()), Some(unknown.begun)),
-            None => (None, None),
-        };
-        match self.reopen(unknown.as_deref(), begun) {
+        let unknown = self
+            .unknown
+            .as_ref()
+            .map(|unknown| (unknown.id.clone(), unknown.begun));
+        match self.reopen(unknown.as_ref().map(|(id, begun)| (id.as_str(), *begun))) {
             Ok(Revived::Up(session, landed)) => {
                 let settled = self.unknown.take().map(|unknown| Settled {
                     id: unknown.id,
@@ -511,7 +511,7 @@ impl Writer {
     /// there is none to settle. The settle inserts the id again: no row inserted means the first
     /// insert committed (the insert waited for it while it was in progress), a row inserted means
     /// the transaction never committed and now cannot.
-    fn reopen(&mut self, unknown: Option<&str>, begun: Option<i64>) -> Result<Revived, String> {
+    fn reopen(&mut self, unknown: Option<(&str, i64)>) -> Result<Revived, String> {
         let mut session = Session::connect(&self.config, Arc::clone(&self.statements), false)
             .map_err(|fail| match fail {
                 Fail::Pg(e) => describe(&e),
@@ -522,7 +522,7 @@ impl Writer {
         }
         let landed = match unknown {
             None => None,
-            Some(id) if too_old(&mut session, begun)? => {
+            Some((id, begun)) if too_old(&mut session, begun)? => {
                 // The ledger may have purged the row of a commit that landed, so a missing row
                 // proves nothing: only a row that is there is an answer.
                 let found: i64 = session
@@ -541,7 +541,7 @@ impl Writer {
                 }
                 Some(true)
             }
-            Some(id) => {
+            Some((id, _)) => {
                 let inserted = session
                     .execute(
                         "INSERT INTO tx_ledger (id, at_unix) \
@@ -559,10 +559,7 @@ impl Writer {
 
 /// Whether a transaction that began at `begun` is as old as the ledger's retention, by the
 /// database's clock.
-fn too_old(session: &mut Session, begun: Option<i64>) -> Result<bool, String> {
-    let Some(begun) = begun else {
-        return Ok(false);
-    };
+fn too_old(session: &mut Session, begun: i64) -> Result<bool, String> {
     let now: i64 = session
         .query_one("SELECT extract(epoch FROM now())::bigint", &[])
         .map_err(|e| describe(&e))?
@@ -574,4 +571,46 @@ enum Revived {
     /// The session is back; whether the transaction waiting to be settled landed.
     Up(Box<Session>, Option<bool>),
     Held,
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::*;
+
+    /// Proves: a link of two writers is up until a session is lost; a revival is asked for once
+    /// and not again while a writer has yet to run it; the store is up as soon as no session is
+    /// lost, though a writer has yet to report; a revival that brought nothing back leaves it
+    /// lost for the next one; and once a writer's thread is gone the store is stopped for good,
+    /// asking for no revival, lost sessions or not.
+    ///
+    /// Catches: a second revival posted over one under way (two reopens of one session), a store
+    /// that waits for every writer before it is up, and a stopped store that keeps reviving.
+    #[test]
+    fn the_link_counts_lost_sessions_and_revivals_of_the_pool() {
+        let link = Link::new(2);
+        assert_eq!(link.state(), State::Up);
+        assert!(!link.start_revival(), "nothing is lost");
+        link.lose(true, false);
+        assert_eq!(link.state(), State::Lost);
+        assert!(link.start_revival());
+        assert_eq!(link.state(), State::Reviving);
+        assert!(!link.start_revival(), "one revival at a time");
+        link.revived(false, None);
+        link.revived(false, None);
+        assert_eq!(link.state(), State::Lost, "nothing came back");
+        assert!(link.start_revival());
+        link.revived(true, None);
+        assert_eq!(
+            link.state(),
+            State::Up,
+            "up before the other writer reports"
+        );
+        link.revived(false, None);
+
+        link.lose(true, true);
+        assert!(link.unsettled());
+        link.stop();
+        assert_eq!(link.state(), State::Stopped);
+        assert!(!link.start_revival(), "a stopped store is not revived");
+    }
 }

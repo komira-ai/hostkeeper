@@ -563,8 +563,10 @@ fn migration_lint_refuses_a_rewrite_of_a_hot_table() {
 /// one (a number, a string, a boolean, an empty array, `NOT NULL`, a collation, `IF NOT EXISTS`,
 /// several such columns in one statement), anything on a hot table the same migration creates (its
 /// index, its constraint), a new table that references a hot one, every statement on a table that
-/// is not hot (a name that only starts like one among them), and the words of comments and quoted
-/// text; and every migration this build ships passes it.
+/// is not hot (a name that only starts like one among them, a `VACUUM` or `REINDEX` of another
+/// table), the words of comments and quoted text, a lone `/`, and text the lexer runs off the end
+/// of (a block comment or a quoted name left open, an `ALTER TABLE IF EXISTS` naming nothing);
+/// and every migration this build ships passes it.
 ///
 /// Catches: a rule so wide that the additive migrations it is meant to let through (the next
 /// columns of the fleet's tables, and the migration that creates them) are refused.
@@ -586,6 +588,11 @@ fn the_hot_table_rule_takes_a_constant_column_and_what_the_migration_creates() {
         "ALTER TABLE fleet_orders_old SET LOGGED; CREATE INDEX ON fleet_hosts_archive (a);",
         "-- ALTER TABLE fleet_orders SET LOGGED\nSELECT 'CREATE INDEX ON fleet_orders';",
         "/* ALTER TABLE fleet_orders SET LOGGED; /* CLUSTER fleet_hosts; */ */ SELECT 1;",
+        "SELECT 4 / 2;",
+        "VACUUM audit; REINDEX TABLE audit;",
+        "ALTER TABLE IF EXISTS",
+        "SELECT 1; /* a comment left open",
+        "SELECT \"a name left open",
         "DO $$ BEGIN CREATE TABLE fleet_orders (a int); CREATE INDEX ON fleet_orders (a); END $$;",
         "",
     ] {

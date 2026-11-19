@@ -522,12 +522,9 @@ impl Postgres {
                 .name("hk-store-instance".to_owned())
                 .spawn(move || {
                     instance::beat_every(&beat_stopped, every, || {
-                        if let Err(fail) = instance::beat(&writers, &link, &instance) {
-                            tracing::debug!(
-                                why = fail.why(),
-                                "the instance's row was not upserted"
-                            );
-                        }
+                        // A beat that is not written is the store's own alert (a lost
+                        // session), and the next beat writes the row.
+                        let _ = instance::beat(&writers, &link, &instance);
                     });
                 })
                 .map_err(spawned)?

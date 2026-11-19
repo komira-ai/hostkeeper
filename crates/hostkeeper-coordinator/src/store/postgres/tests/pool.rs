@@ -268,3 +268,21 @@ fn a_writer_whose_thread_is_gone_stops_the_store_at_the_next_revival() {
         "database:database: the writing session stopped"
     );
 }
+
+/// Proves: a load that takes a writer whose thread is gone, on a store that still says it is up,
+/// stops the store and says the writing session stopped.
+///
+/// Catches: a load that answers as lost (and so asks for revivals) when no revival can help.
+#[test]
+fn a_load_that_finds_its_writer_gone_stops_the_store() {
+    let db = TestDatabase::new();
+    let store = open_named(&db, 1, "pool-load");
+    let gone: Option<()> = store.on_writer(|_| panic!("a job of the writer panics"));
+    assert!(gone.is_none(), "the writer's thread is gone");
+    assert_eq!(store.health(), Health::Up, "no write has found it yet");
+    assert_eq!(
+        store.load().expect_err("stopped").to_string(),
+        "database:database: the writing session stopped"
+    );
+    assert_eq!(store.health(), Health::Lost);
+}
