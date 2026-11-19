@@ -86,6 +86,10 @@ pub struct ConsoleFlags {
     /// it the stream closes `mac_unreachable_or_asleep` (4012).
     #[arg(long, default_value_t = 5, value_parser = clap::value_parser!(u64).range(1..=60))]
     pub console_connect_timeout_s: u64,
+    /// How long the Console page waits for a serial console's first byte before it says that no
+    /// output came yet and that the host's serial port must be ttyS1, in seconds.
+    #[arg(long, default_value_t = 10, value_parser = clap::value_parser!(u64).range(1..=3600))]
+    pub console_quiet_s: u64,
 }
 
 impl ConsoleFlags {
@@ -146,6 +150,7 @@ impl ConsoleFlags {
             settings,
             Sessions::new(self.bounds()),
         )
-        .with_dial(tcp_dial(SCREEN_SHARING_PORT, self.connect_timeout())))
+        .with_dial(tcp_dial(SCREEN_SHARING_PORT, self.connect_timeout()))
+        .with_quiet(Duration::from_secs(self.console_quiet_s)))
     }
 }

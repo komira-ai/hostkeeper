@@ -118,6 +118,40 @@ async fn a_revoked_operator_loses_its_stream() {
     live.gone(MAC).await;
 }
 
+/// Proves: on the sweep, a stream attached with a browser's session is held to that session and
+/// not to a token: it stays while the session lives though its user has no token at all, and
+/// closes 4008 `token_revoked`, its payload deactivated, once the session has ended (sign-out).
+///
+/// Catches: a console opened from the web UI cut at the first sweep for lack of a token, and one
+/// that outlives the sign-out of the browser that holds it.
+#[tokio::test]
+async fn a_stream_attached_with_a_session_lives_and_dies_with_that_session() {
+    let live = Live::signed_in("sweep-session");
+    live.keep_tokens(&[("bob", BOB), ("carol", CAROL)]);
+    let _host = live
+        .fixture
+        .tool
+        .sol_session(&[NODE_BMC_ANSWER, " 01 00 00\n", INFO]);
+    live.fixture.tool.session(&[NODE_BMC_ANSWER, ""]);
+    let serial = live.open("alice", NODE);
+    let browser = live.browser("alice", false);
+    let mut client = live.attach_browser(&serial, &browser).await;
+    live.coordinator.console_sweep();
+    live.coordinator.console_sweep();
+    live.sign_out(&browser.0);
+    live.coordinator.console_sweep();
+    client.closed(4008, "token_revoked").await;
+    live.gone(NODE).await;
+    assert!(
+        live.fixture
+            .tool
+            .seen()
+            .contains(&hostkeeper_console::scripted::Seen::Ask(
+                "sol deactivate".to_owned()
+            ))
+    );
+}
+
 /// Proves: the sweep ends a session not attached in its window and writes its close line, with no
 /// `Console` call needed to notice it.
 ///

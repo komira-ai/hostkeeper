@@ -620,7 +620,11 @@ impl Tunnels {
 
 /// Whether the credential a tunnel of `operator` runs under is still good: for a token, that the
 /// operator has one; for a session, that the session lives (asked without using it).
-fn credential_holds(coordinator: &Coordinator, operator: &str, credential: Credential) -> bool {
+pub(crate) fn credential_holds(
+    coordinator: &Coordinator,
+    operator: &str,
+    credential: Credential,
+) -> bool {
     match credential {
         Credential::Token => has_token(coordinator, operator),
         Credential::Session(key) => coordinator

@@ -380,7 +380,8 @@ export function bootReport(nodeId, reply) {
 // Power and boot: the host's BMC, reached by the coordinator, never by the browser. Every button
 // needs a reason, asks first (the confirm is a courtesy; the coordinator decides) and is audited.
 // No refresh follows: the host's state changes slowly, and the answer says what the BMC reported.
-function powerSection(ctx, nodeId) {
+// The Console page (`serialconsole.js`) shows the same section beside its terminal.
+export function powerSection(ctx, nodeId) {
   const form = { reason: "", device: "BOOT_DEVICE_DISK", persistent: false, efi: false };
   const needReason = (run) => async () => {
     if (trimmed(form.reason) === "") {

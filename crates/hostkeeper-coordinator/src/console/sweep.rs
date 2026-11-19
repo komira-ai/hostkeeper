@@ -5,8 +5,10 @@
 //! its window (its `console_close` by `coordinator`); tells the table the bytes each stream has
 //! carried, so a stream that carried none for `--console-idle-s` closes `idle` (4005), and one
 //! attached for `--console-total-s` closes `total_limit` (4006); and closes `token_revoked`
-//! (4008) each stream whose operator has no token any more, or whom the console operators file no
-//! longer names, both as re-read on the `--tls-reload-secs` tick.
+//! (4008) each stream whose credential is gone (its operator has no token any more, or, for a
+//! stream attached with a browser's session, that session ended by sign-out or expiry), or whose
+//! operator the console operators file no longer names, the files as re-read on the
+//! `--tls-reload-secs` tick.
 //!
 //! At stop, every stream closes `coordinator_stopping` (4010), and the stop waits for their
 //! clean-up (each serial console's payload deactivated, each close line written), for
@@ -27,7 +29,7 @@ use hostkeeper_console::session::Limit;
 use crate::audit_actions::AuditOnly;
 use crate::reconcile::COORDINATOR;
 use crate::service::Coordinator;
-use crate::ssh_tunnel::has_token;
+use crate::ssh_tunnel::credential_holds;
 
 /// How often the sweep runs.
 pub(crate) const SWEEP_EVERY: Duration = Duration::from_secs(5);
@@ -59,10 +61,11 @@ impl Coordinator {
         });
         limited.for_each(|(live, close)| live.stop(close, COORDINATOR));
         // Only an attached stream has an operator to lose: the live ones are looked at.
-        let revoked = table.live.iter().filter(|(host, _)| {
+        let revoked = table.live.iter().filter(|(host, live)| {
             table.sessions.get(host).is_some_and(|session| {
                 let by = session.opened_by.as_str();
-                !(has_token(self, by) && self.console.files.grant(by, Need::Console).is_ok())
+                !(credential_holds(self, by, live.credential)
+                    && self.console.files.grant(by, Need::Console).is_ok())
             })
         });
         revoked.for_each(|(_, live)| live.stop(Close::TokenRevoked, COORDINATOR));
