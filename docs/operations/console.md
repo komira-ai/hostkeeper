@@ -325,7 +325,9 @@ on **one server at a time**.
 
 5. **Reboot it from its own shell, and watch the boot on the Console.** Open the host's Console
    (web app, or `hkctl console open` and a WebSocket client) first: the session is the BMC's and
-   stays attached through the reboot. Then `sudo systemctl reboot` on the server. Do not
+   stays attached through the reboot. Do not reboot a server whose BMC nobody can reach at that
+   moment (no Console, no BMC credential): a server that does not come back, or stops in its
+   shutdown or in the firmware, can then only be found at the machine. Then `sudo systemctl reboot` on the server. Do not
    power-cycle it through the BMC to speed it up: a shutdown can take minutes while storage
    services stop, and a cycle cuts it. What to see, in order: the firmware's output if BIOS
    redirection is on ([The BMC and the BIOS](#the-bmc-and-the-bios)); the kernel's lines; the
