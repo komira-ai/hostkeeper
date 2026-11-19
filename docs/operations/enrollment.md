@@ -639,6 +639,16 @@ mutual TLS with the certificate it holds, for the same key; no operator is invol
 logs `renewed the certificate of host:<id> (generation <n>)` and the coordinator `renewed a host
 certificate`. A refused renewal is logged on the node as `renewal refused: <token>`.
 
+A certificate that is not what the CA issues now is renewed at the daemon's first step instead of
+at half its life, the same way: one whose DNS names are not exactly the host id (issued before
+the CA named the host by a DNS name), or whose extended key usage is not `clientAuth` alone. A
+daemon update restarts the daemon, so such a host gets the new certificate within seconds of it,
+with no operator step. Each generation is renewed early once per daemon start: a coordinator that
+answers with the same older profile, or refuses, is asked again only at half life or at the next
+start. A certificate of another CA than the daemon's pinned `ca_sha256`, or one without
+`clientAuth`, cannot authenticate `Renew`: the daemon returns with its key as an expired host does
+(`renewal_of`, below), and that request waits for an operator's approval.
+
 Every heartbeat also says when the host's certificate ends, why its last enrollment or renewal
 step failed (until a step succeeds), and the host's own clock. `hkctl hosts get
 --node-id <id>` answers the first two as `cert_not_after_unix` and `last_renew_error`, and
