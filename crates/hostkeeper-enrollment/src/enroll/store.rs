@@ -68,6 +68,10 @@ pub struct EnrollmentStore {
     /// the same takes neither the lock nor a read ([`EnrollmentStore::note_running`]); an
     /// approval of the host takes it out.
     pub(super) running: Mutex<BTreeMap<HostId, HostRunning>>,
+    /// Per host, the BMC its host record is known to hold and when it was, so a heartbeat that
+    /// reports the same soon after takes neither the lock nor a read ([`EnrollmentStore::note_bmc`]); an approval of the host
+    /// takes it out.
+    pub(super) bmcs: Mutex<BTreeMap<HostId, (super::HostBmc, u64)>>,
 }
 
 impl std::fmt::Debug for EnrollmentStore {
@@ -142,6 +146,7 @@ impl EnrollmentStore {
             heard: Mutex::new(BTreeSet::new()),
             served: Mutex::new(BTreeSet::new()),
             running: Mutex::new(BTreeMap::new()),
+            bmcs: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -865,6 +870,10 @@ impl EnrollmentStore {
             .unwrap_or_else(PoisonError::into_inner)
             .remove(host);
         self.running
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(host);
+        self.bmcs
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .remove(host);

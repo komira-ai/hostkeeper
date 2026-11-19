@@ -207,6 +207,7 @@ fn running(version: &str, at_unix: u64) -> pb::Running {
             installer: "deb".to_owned(),
         }],
         at_unix,
+        bmc: None,
     }
 }
 

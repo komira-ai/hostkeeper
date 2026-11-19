@@ -2,9 +2,10 @@
 //! start and again on the tick that looks at the TLS files (`--tls-reload-secs`,
 //! [`crate::listen::reload_every`]).
 //!
-//! The operators file grants access, and needs the targets file and the BMC credential file
-//! beside it (the flags say so): with no operators file, nobody has console access and the other
-//! two are not read. A file that breaks a rule refuses the start; on a later tick it is logged
+//! The operators file grants access, and needs the BMC credential file beside it (the flags say
+//! so): with no operators file, nobody has console access and the other two are not read. The
+//! targets file is optional: without it no address is configured, and every BMC is reached at the
+//! address its host's daemon reports ([`super::address`]). A file that breaks a rule refuses the start; on a later tick it is logged
 //! as a warning, naming its flag, and the one read before stays in use. A token revoked from the
 //! tokens file loses console access with it, since every call is made by a valid token's name.
 
@@ -35,8 +36,8 @@ pub enum ConsoleFilesError {
 pub struct Paths {
     /// `--console-operators-file`.
     pub operators: PathBuf,
-    /// `--console-targets-file`.
-    pub targets: PathBuf,
+    /// `--console-targets-file`, if given.
+    pub targets: Option<PathBuf>,
     /// `--console-bmc-credential-file`.
     pub credential: PathBuf,
 }
@@ -44,7 +45,7 @@ pub struct Paths {
 /// What a call may use once its operator is granted access: the targets and the credential as
 /// read last.
 pub(crate) struct Grant {
-    /// The address of each device, by MAC.
+    /// The address of each device the targets file names, by MAC; none without the file.
     pub(crate) targets: Arc<Targets>,
     /// The one BMC credential.
     pub(crate) credential: Arc<BmcCredential>,
@@ -79,7 +80,7 @@ impl ConsoleFiles {
     /// [`ConsoleFilesError`]: a file is refused.
     pub fn read(paths: Paths) -> Result<Self, ConsoleFilesError> {
         let loaded = Loaded {
-            targets: Arc::new(Targets::read(&paths.targets)?),
+            targets: Arc::new(read_targets(paths.targets.as_deref())?),
             credential: Arc::new(BmcCredential::read(&paths.credential)?),
             operators: Operators::read(&paths.operators)?,
         };
@@ -104,7 +105,7 @@ impl ConsoleFiles {
             Ok(_) => {}
             Err(why) => tracing::warn!(%why, "the console operators file was not read again"),
         }
-        match Targets::read(&paths.targets) {
+        match read_targets(paths.targets.as_deref()) {
             Ok(targets) if targets != *loaded.targets => {
                 loaded.targets = Arc::new(targets);
                 tracing::info!("the console targets file changed: its targets are in use");
@@ -149,6 +150,11 @@ impl ConsoleFiles {
             credential: Arc::clone(&loaded.credential),
         })
     }
+}
+
+/// The targets of the file at `path`; none without one.
+fn read_targets(path: Option<&std::path::Path>) -> Result<Targets, TargetsError> {
+    path.map_or_else(|| Ok(Targets::default()), Targets::read)
 }
 
 #[cfg(test)]

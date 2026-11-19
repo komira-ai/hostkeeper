@@ -101,6 +101,7 @@ fn host(rig: &Rig, live: Option<&Path>) -> (Arc<Daemon>, Heartbeater, Arc<FakeLi
         remote_login_probe: None,
         operator_keys: None,
         prerequisites: None,
+        bmc: None,
     };
     let heartbeater = links.heartbeater(&daemon);
     (daemon, heartbeater, link)

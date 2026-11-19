@@ -135,6 +135,7 @@ pub mod audit_actions;
 pub(crate) mod audit_file;
 pub mod backup;
 pub mod bake;
+mod bmc_report;
 pub mod canary;
 pub mod clear_record;
 pub mod config;

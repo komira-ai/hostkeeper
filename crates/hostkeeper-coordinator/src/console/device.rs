@@ -2,7 +2,8 @@
 //! 11.1, 11.2 and 12): how the coordinator reaches a host's console after the upgrade, and how
 //! the device's bytes become one side of the bridge ([`hostkeeper_console::bridge::Pipe`]).
 //!
-//! - A Linux server: Serial over LAN through its BMC ([`Bmc::activate_sol`]), the BMC's commands
+//! - A Linux server: Serial over LAN through its BMC ([`Bmc::activate_sol`]), at each of the BMC's
+//!   addresses in turn until one answers ([`super::address`]), the BMC's commands
 //!   serialized with the power calls' while the session is being set up (not while it is used:
 //!   power must work beside an open console). The tool's standard output and input are carried
 //!   by two threads of their own, since they block.
@@ -20,7 +21,7 @@ use std::time::Duration;
 
 use futures::future::BoxFuture;
 use futures::{FutureExt, TryStreamExt};
-use hostkeeper_console::bmc::{Bmc, BmcError, Step};
+use hostkeeper_console::bmc::{BmcError, Step};
 use hostkeeper_console::bridge::Pipe;
 use hostkeeper_console::close::Close;
 use hostkeeper_console::ipmi::{Activated, Ending, ToolText};
@@ -31,7 +32,8 @@ use hostkeeper_wire::HostId;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc;
 
-use super::{Device, serialized};
+use super::address::through_addresses;
+use super::serialized;
 use crate::service::Coordinator;
 
 /// The most bytes of one read of a device, and so of one message to the browser.
@@ -105,36 +107,38 @@ pub(crate) async fn reach(
         .parse::<HostId>()
         .map_err(|_| hostkeeper_proto::hostkeeper::operator::v1::ConsoleRefusal::InvalidRequest)
         .and_then(|host| coordinator.console_device(&host, &grant.targets, serial));
-    let Device { mac, address, .. } = found.map_err(|refusal| {
+    let device = found.map_err(|refusal| {
         tracing::warn!(host_id = %session.host_id, refusal = refusal.as_str_name(), "a console's device could not be found at its attach");
         Close::DeviceUnreachable
     })?;
     if !serial {
-        let stream = (coordinator.console.dial)(address)
+        // A Mac's one address, from the targets file.
+        let stream = (coordinator.console.dial)(device.first.address)
             .await
             .map_err(|why| dial_failure(&why))?;
         return Ok(carry_socket(stream));
     }
     let shared = Arc::clone(coordinator);
     let host_id = session.host_id.clone();
+    let id = host_id.clone();
     let activated = tokio::task::spawn_blocking(move || {
         let console = &shared.console;
-        let gate = console.bmc(mac);
+        let gate = console.bmc(device.mac);
         let _serial = serialized(console, &gate);
-        Bmc {
-            tool: console.tool.as_ref(),
-            address: &address,
-            credential: &grant.credential,
-            settings: &console.settings,
-            mac,
-        }
-        .activate_sol()
+        let (credential, mac) = (&grant.credential, device.mac);
+        through_addresses(
+            &host_id,
+            device.addresses(),
+            |address| console.bmc_at(address, credential, mac).check(),
+            |address| console.bmc_at(address, credential, mac).activate_sol(),
+        )
+        .map(|(activated, _)| activated)
     })
     .await;
     // A task that did not finish ran a tool that did not answer as it must.
     let activated = activated.unwrap_or(Err(BmcError::Failed(Step::Start)));
     activated.map(carry_tool).map_err(|why| {
-        tracing::info!(%host_id, cause = %why, "a serial console was not activated");
+        tracing::info!(host_id = %id, cause = %why, "a serial console was not activated");
         Close::from(why)
     })
 }
@@ -150,19 +154,19 @@ pub(crate) async fn deactivate(coordinator: &Arc<Coordinator>, session: &Session
         // a revoked operator's payload is deactivated too.
         let grant = console.files.devices().ok_or("no console files")?;
         let host = host_id.parse::<HostId>().map_err(|_| "a host id")?;
-        let Device { mac, address, .. } = shared
+        let device = shared
             .console_device(&host, &grant.targets, true)
             .map_err(|refusal| refusal.as_str_name())?;
-        let gate = console.bmc(mac);
+        let gate = console.bmc(device.mac);
         let _serial = serialized(console, &gate);
-        Bmc {
-            tool: console.tool.as_ref(),
-            address: &address,
-            credential: &grant.credential,
-            settings: &console.settings,
-            mac,
-        }
-        .deactivate_sol()
+        let (credential, mac) = (&grant.credential, device.mac);
+        through_addresses(
+            &host_id,
+            device.addresses(),
+            |address| console.bmc_at(address, credential, mac).check(),
+            |address| console.bmc_at(address, credential, mac).deactivate_sol(),
+        )
+        .map(drop)
         .map_err(|_| "the BMC")
     })
     .await;

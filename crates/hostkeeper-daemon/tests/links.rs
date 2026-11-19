@@ -100,6 +100,7 @@ fn links_with(
         remote_login_probe: None,
         operator_keys: None,
         prerequisites: None,
+        bmc: None,
     }
 }
 

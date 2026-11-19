@@ -43,6 +43,7 @@ impl HostRunning {
                 })
                 .collect(),
             at_unix,
+            bmc: None,
         }
     }
 
@@ -115,7 +116,12 @@ impl EnrollmentStore {
             let kept = row.pb.running.as_ref().map(HostRunning::of_pb);
             let said = running.keeping_installers_of(kept.as_ref());
             if kept.as_ref() != Some(&said) {
-                self.records().set_running(&row.pb, said.to_pb(now))?;
+                // The BMC its daemon reported is kept: it is not what the host runs.
+                let record = pb::Running {
+                    bmc: row.pb.running.as_ref().and_then(|r| r.bmc.clone()),
+                    ..said.to_pb(now)
+                };
+                self.records().set_running(&row.pb, record)?;
             }
             known().insert(host.clone(), running.clone());
             Ok(())

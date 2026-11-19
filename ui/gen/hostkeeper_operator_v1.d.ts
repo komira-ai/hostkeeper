@@ -101,9 +101,11 @@ export namespace hostkeeper_operator_v1 {
   export interface CloseConsoleResponse {}
   export interface ConfirmEnrollmentRequest { serial?: string; }
   export interface ConfirmEnrollmentResponse { serial?: string; expiresUnix?: string; }
+  export interface ConsoleAddress { address?: string; source?: hostkeeper_operator_v1.ConsoleAddressSource; stale?: boolean; reportedUnix?: string; }
+  export type ConsoleAddressSource = "CONSOLE_ADDRESS_SOURCE_UNSPECIFIED" | "CONSOLE_ADDRESS_SOURCE_TARGETS_FILE" | "CONSOLE_ADDRESS_SOURCE_HEARTBEAT" | "CONSOLE_ADDRESS_SOURCE_NEIGHBOR_TABLE";
   export type ConsoleKind = "CONSOLE_KIND_UNSPECIFIED" | "CONSOLE_KIND_SERIAL" | "CONSOLE_KIND_SCREEN";
   export interface ConsolePowerRequest { hostId?: string; action?: hostkeeper_operator_v1.PowerAction; reason?: string; }
-  export interface ConsolePowerResponse { state?: hostkeeper_operator_v1.PowerState; sent?: hostkeeper_operator_v1.PowerAction; }
+  export interface ConsolePowerResponse { state?: hostkeeper_operator_v1.PowerState; sent?: hostkeeper_operator_v1.PowerAction; address?: hostkeeper_operator_v1.ConsoleAddress; }
   export interface ConsoleSession { hostId?: string; kind?: hostkeeper_operator_v1.ConsoleKind; openedBy?: string; openedUnix?: string; attached?: boolean; reason?: string; }
   export interface ConvergeRequest { service?: string; hostGroup?: string; }
   export interface ConvergeResponse { convergence?: hostkeeper_operator_v1.Convergence; }
@@ -455,7 +457,7 @@ export namespace hostkeeper_operator_v1 {
   export interface NetworkDevice { id?: string; name?: string; role?: hostkeeper_operator_v1.NetworkRole; consoleHost?: string; consoleDevice?: string; managementMac?: string; notes?: string; }
   export type NetworkRole = "NETWORK_ROLE_UNSPECIFIED" | "NETWORK_ROLE_BMC" | "NETWORK_ROLE_DATA";
   export interface OpenConsoleRequest { hostId?: string; reason?: string; }
-  export interface OpenConsoleResponse { kind?: hostkeeper_operator_v1.ConsoleKind; session?: string; expiresInSecs?: string; quietSecs?: string; }
+  export interface OpenConsoleResponse { kind?: hostkeeper_operator_v1.ConsoleKind; session?: string; expiresInSecs?: string; quietSecs?: string; address?: hostkeeper_operator_v1.ConsoleAddress; }
   export interface OpenRecordRequest { hostId?: string; approveUntilUnix?: string; approveForSecs?: string; reason?: string; }
   export interface OpenRecordResponse { record?: hostkeeper_operator_v1.InventoryRecord; entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface PauseRequest { service?: string; reason?: string; hostGroup?: string; }
@@ -636,7 +638,7 @@ export namespace hostkeeper_operator_v1 {
     hostGroup?: string;
   }
   export interface SetBootDeviceRequest { hostId?: string; device?: hostkeeper_operator_v1.BootDevice; persistent?: boolean; efi?: boolean; reason?: string; }
-  export interface SetBootDeviceResponse { device?: hostkeeper_operator_v1.BootDevice; persistent?: boolean; efi?: boolean; }
+  export interface SetBootDeviceResponse { device?: hostkeeper_operator_v1.BootDevice; persistent?: boolean; efi?: boolean; address?: hostkeeper_operator_v1.ConsoleAddress; }
   export interface SetDesiredRequest {
     service?: string;
     desired?: hostkeeper_operator_v1.DesiredState;

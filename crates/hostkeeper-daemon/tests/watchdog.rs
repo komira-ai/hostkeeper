@@ -126,6 +126,7 @@ fn links(
         remote_login_probe: None,
         operator_keys: None,
         prerequisites: None,
+        bmc: None,
     };
     (links, jobs)
 }

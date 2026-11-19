@@ -1,5 +1,8 @@
-//! The console targets file (`--console-targets-file`, `docs/design/console-broker.md` decision
-//! D8 and section 9.2): the address the coordinator dials for each device, by the device's MAC.
+//! The console targets file (`--console-targets-file`, optional, `docs/design/console-broker.md`
+//! decision D8 and section 9.2): an address the coordinator dials for a device, by the device's
+//! MAC. A BMC it names is dialled at that address alone (an override); any other BMC at the
+//! address its host's daemon reports or the coordinator's neighbour table holds. A Mac is dialled
+//! only at the address it names.
 //!
 //! ```toml
 //! [[target]]
@@ -19,8 +22,7 @@
 //! most 253 bytes in all, whose last label is not a number: no digits alone and no `0x` and hex
 //! digits, which a resolver reads as an IPv4 address in an old form, `0300.0.2.1` as 192.0.2.1), with
 //! no port: the port is the device's (623 for a
-//! BMC, 5900 for a Mac). Addresses are DHCP reservations, so the file is written once beside the
-//! inventory. A MAC and an address are each named once. The inventory record is not changed: a
+//! BMC, 5900 for a Mac). A MAC and an address are each named once. The inventory record is not changed: a
 //! field added there would be refused by the release before (rule B8).
 
 use std::collections::BTreeMap;

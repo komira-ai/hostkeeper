@@ -34,6 +34,7 @@ fn beat() -> Heartbeat {
         operator_keys: None,
         ssh: None,
         prerequisites: None,
+        bmc: None,
     }
 }
 

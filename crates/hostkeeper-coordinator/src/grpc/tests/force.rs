@@ -43,6 +43,7 @@ fn daemon_beat(features: &[&str]) -> proto::HeartbeatRequest {
         remote_login_probe: None,
         operator_keys: None,
         prerequisites: None,
+        bmc: None,
     }
 }
 

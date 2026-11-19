@@ -660,3 +660,29 @@ fn actions_and_devices_have_their_names() {
     assert_eq!(devices, ["pxe", "disk", "bios"]);
     assert_eq!(PowerAction::Status.acknowledgement(), "");
 }
+
+/// Proves: a check opens one session, reads the MAC and sends nothing else, and says whether the
+/// BMC there has the record's MAC: another MAC is `address_mismatch`, no session the error that
+/// names why.
+///
+/// Catches: a check that sends a command after the MAC read (the coordinator checks every address
+/// of a BMC before it calls one), and one that passes a BMC with another MAC.
+#[test]
+fn a_check_reads_the_mac_and_sends_nothing_else() {
+    let fixture = Fixture::new();
+    fixture.tool.session(&[MAC_ANSWER]);
+    assert_eq!(fixture.bmc().check(), Ok(()));
+    let asked: Vec<Seen> = fixture
+        .tool
+        .seen()
+        .into_iter()
+        .filter(|seen| matches!(seen, Seen::Ask(_)))
+        .collect();
+    assert_eq!(asked, [Seen::Ask(MAC_READ.to_owned())]);
+    fixture.tool.session(&[OTHER_MAC_ANSWER]);
+    assert_eq!(fixture.bmc().check(), Err(BmcError::AddressMismatch));
+    fixture.tool.end_at_start(NO_SESSION);
+    fixture.tool.end_at_start(NO_SESSION);
+    assert_eq!(fixture.bmc().check(), Err(BmcError::Unreachable));
+    assert_eq!(fixture.tool.unused(), 0);
+}

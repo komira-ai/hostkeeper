@@ -32,16 +32,19 @@
 //! How a host is found: by its enrollment (`host_not_found` for a host not enrolled, or denied),
 //! then the one inventory record its claims match (`ambiguous_record` for more than one). A Mac is
 //! a host whose claims carry a Mac serial: its device is its screen, at the address the targets
-//! file gives one of its record's data MACs. Any other host is a Linux server: its device is its
-//! BMC, at the address of its record's BMC MAC (`no_bmc_mac` without one, and for a Mac's power).
-//! A MAC the targets file does not list is `no_address`.
+//! file gives one of its record's data MACs (`no_address` when it gives none). Any other host is a
+//! Linux server: its device is its BMC, whose MAC is its record's BMC MAC (`no_bmc_mac` without
+//! one, and for a Mac's power), at the addresses [`address`] finds for it, tried in turn
+//! (`no_address` when none is known).
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
+use hostkeeper_console::bmc::Bmc;
 use hostkeeper_console::bridge::Moved;
 use hostkeeper_console::close::Close;
+use hostkeeper_console::credential::BmcCredential;
 use hostkeeper_console::ipmi::{Settings, Tool};
 use hostkeeper_console::operators::{Denied, Need};
 use hostkeeper_console::reason::MAX_REASON_BYTES;
@@ -59,6 +62,7 @@ use crate::ops::AuditBy;
 use crate::service::Coordinator;
 use crate::tokens::Operator;
 
+pub use address::{Neighbors, PROC_NET_ARP, arp_table};
 pub(crate) use device::Duplex;
 pub use device::{Dial, tcp_dial};
 pub(crate) use files::ConsoleFiles;
@@ -67,6 +71,7 @@ pub use flags::ConsoleFlags;
 pub use ipmitool::Ipmitool;
 pub(crate) use sweep::{drained, sweep_every};
 
+mod address;
 mod device;
 mod files;
 mod flags;
@@ -81,6 +86,8 @@ mod sweep;
 pub(crate) mod attach_support;
 #[cfg(test)]
 mod device_tests;
+#[cfg(test)]
+mod discovery_tests;
 #[cfg(test)]
 mod owner_tests;
 #[cfg(test)]
@@ -188,6 +195,8 @@ pub struct Console {
     /// waits on it.
     ended: tokio::sync::Notify,
     dial: Dial,
+    /// The coordinator's neighbour table, a BMC's last address source.
+    neighbors: Neighbors,
     /// How long the page waits for a serial console's first byte (`--console-quiet-s`), which
     /// `Open` tells it.
     quiet: Duration,
@@ -228,7 +237,8 @@ impl std::fmt::Debug for Console {
 
 impl Console {
     /// The console over `files`, running `tool` as `settings` say, with the empty `sessions`,
-    /// dialling a Mac's Screen Sharing port within [`DEFAULT_CONNECT_TIMEOUT`].
+    /// dialling a Mac's Screen Sharing port within [`DEFAULT_CONNECT_TIMEOUT`], and looking a BMC
+    /// up in the host's neighbour table at [`PROC_NET_ARP`].
     #[must_use]
     pub fn new(
         files: ConsoleFiles,
@@ -246,6 +256,7 @@ impl Console {
             }),
             ended: tokio::sync::Notify::new(),
             dial: tcp_dial(SCREEN_SHARING_PORT, DEFAULT_CONNECT_TIMEOUT),
+            neighbors: arp_table(std::path::Path::new(PROC_NET_ARP)),
             quiet: DEFAULT_QUIET,
             bmcs: Mutex::new(BTreeMap::new()),
             random: os_random(),
@@ -264,6 +275,13 @@ impl Console {
     #[must_use]
     pub fn with_dial(mut self, dial: Dial) -> Self {
         self.dial = dial;
+        self
+    }
+
+    /// The same console looking a BMC's MAC up in `neighbors`.
+    #[must_use]
+    pub fn with_neighbors(mut self, neighbors: Neighbors) -> Self {
+        self.neighbors = neighbors;
         self
     }
 
@@ -289,6 +307,22 @@ impl Console {
 
     fn lock_table(&self) -> MutexGuard<'_, Table> {
         self.table.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The BMC whose MAC must be `mac`, at `address`, reached with `credential`.
+    fn bmc_at<'a>(
+        &'a self,
+        address: &'a Address,
+        credential: &'a BmcCredential,
+        mac: MacAddress,
+    ) -> Bmc<'a> {
+        Bmc {
+            tool: self.tool.as_ref(),
+            address,
+            credential,
+            settings: &self.settings,
+            mac,
+        }
     }
 
     /// The lock of the BMC whose MAC is `mac`, held while a call sends it commands.
@@ -321,7 +355,17 @@ fn serialized<'a>(console: &Console, gate: &'a Mutex<()>) -> MutexGuard<'a, ()> 
 struct Device {
     kind: Kind,
     mac: MacAddress,
-    address: Address,
+    /// Where it is: the address to try first.
+    first: address::Found,
+    /// The addresses to try after it, in turn.
+    more: Vec<address::Found>,
+}
+
+impl Device {
+    /// Where it is, in the order to try.
+    fn addresses(&self) -> impl Iterator<Item = &address::Found> {
+        std::iter::once(&self.first).chain(&self.more)
+    }
 }
 
 impl Coordinator {
@@ -371,7 +415,8 @@ impl Coordinator {
     /// server, which a Mac has not.
     ///
     /// # Errors
-    /// `store_failed`, `host_not_found`, `ambiguous_record`, `no_bmc_mac` or `no_address`.
+    /// `store_failed`, `host_not_found`, `ambiguous_record`, `no_bmc_mac` or `no_address`: no
+    /// address is known.
     fn console_device(
         &self,
         host_id: &HostId,
@@ -403,17 +448,20 @@ impl Coordinator {
             return Ok(Device {
                 kind: Kind::Screen,
                 mac,
-                address,
+                first: address::Found::of(address, address::Source::TargetsFile),
+                more: Vec::new(),
             });
         }
         let mac = record
             .and_then(|record| MacAddress::parse(&record.bmc_mac).ok())
             .ok_or(Refusal::NoBmcMac)?;
-        let address = targets.address_of(&mac).ok_or(Refusal::NoAddress)?.clone();
+        let mut addresses = self.bmc_addresses(host_id, &host, mac, targets).into_iter();
+        let first = addresses.next().ok_or(Refusal::NoAddress)?;
         Ok(Device {
             kind: Kind::Serial,
             mac,
-            address,
+            first,
+            more: addresses.collect(),
         })
     }
 

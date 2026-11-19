@@ -3,6 +3,7 @@
 // the descriptors make, and writes the current text beside its test binary.
 export namespace hostkeeper_agent_v1 {
   export interface AgentInfo { name?: string; version?: string; }
+  export interface BmcReport { ip?: string; mac?: string; }
   export interface Claims { machineId?: string; dmiSerial?: string; productUuid?: string; addresses?: string[]; macSerial?: string; platformUuid?: string; bmcMac?: string; }
   export type CommitState = "COMMIT_STATE_UNSPECIFIED" | "COMMIT_STATE_UNCOMMITTED" | "COMMIT_STATE_COMMITTED";
   export interface DeferredReport { target?: string; reason?: string; retryAfterSecs?: string; }
@@ -27,6 +28,7 @@ export namespace hostkeeper_agent_v1 {
     operatorKeys?: hostkeeper_agent_v1.OperatorKeysReport;
     prerequisites?: hostkeeper_agent_v1.PrerequisitesReport;
     ssh?: hostkeeper_agent_v1.SshReport;
+    bmc?: hostkeeper_agent_v1.BmcReport;
   }
   export interface LocalHalt { reason?: string; generation?: string; ageSecs?: string; }
   export interface OperatorKeysRefusal { digest?: string; reason?: string; }

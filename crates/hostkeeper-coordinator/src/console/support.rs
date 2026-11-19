@@ -1,8 +1,9 @@
 //! What the console's tests share: a coordinator over its own enrollment and an ops store on the
 //! fake, with a Linux server and a Mac enrolled against their records, the console's three files,
-//! the scripted BMC tool, and session ids drawn from a counter.
+//! the scripted BMC tool, a neighbour table the test fills, and session ids drawn from a counter.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
+use std::net::IpAddr;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -12,13 +13,15 @@ use futures::FutureExt;
 use hostkeeper_console::ipmi::Settings;
 use hostkeeper_console::scripted::Scripted;
 use hostkeeper_console::session::{Bounds, Sessions};
+use hostkeeper_enrollment::names::MacAddress;
+use hostkeeper_proto::hostkeeper::agent::v1 as agent;
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_testkit::Scratch;
 
 use super::Console;
 use super::files::{ConsoleFiles, Paths};
 use crate::enrollment::tests::support::{HostKey, Rig as EnrollmentRig, enroll_request};
-use crate::marks_support::{NEW_DAEMON, ask, beat_of, operator, start};
+use crate::marks_support::{NEW_DAEMON, ask, beat_of, operator, start, who};
 use crate::operator::Caller;
 use crate::ops::{AuditEntry, OpsState, OpsStore};
 use crate::store::Fake;
@@ -53,6 +56,27 @@ pub(crate) struct Fixture {
     pub(crate) tool: Scripted,
     pub(crate) files: Paths,
     pub(crate) dials: Dials,
+    pub(crate) neighbors: NeighborTable,
+}
+
+/// The neighbour table double: the address of each MAC a test put in it.
+#[derive(Clone, Default)]
+pub(crate) struct NeighborTable(Arc<Mutex<BTreeMap<MacAddress, IpAddr>>>);
+
+impl NeighborTable {
+    /// The table holds `ip` for `mac`.
+    pub(crate) fn put(&self, mac: &str, ip: &str) {
+        self.0.lock().expect("lock").insert(
+            MacAddress::parse(mac).expect("a MAC"),
+            ip.parse().expect("an address"),
+        );
+    }
+
+    /// The lookup of the console.
+    pub(crate) fn lookup(&self) -> super::Neighbors {
+        let table = self.clone();
+        Arc::new(move |mac| table.0.lock().expect("lock").get(mac).copied())
+    }
 }
 
 /// The dial double: each dial of a Mac takes the next scripted outcome, and is recorded; with
@@ -129,7 +153,10 @@ impl Fixture {
         let files = write_files(&rig.dir, OPERATORS);
         let tool = Scripted::new();
         let dials = Dials::default();
-        let console = console(&files, &tool, max, window).with_dial(dials.dial());
+        let neighbors = NeighborTable::default();
+        let console = console(&files, &tool, max, window)
+            .with_dial(dials.dial())
+            .with_neighbors(neighbors.lookup());
         let fixture = Self {
             rig,
             enrollment,
@@ -137,6 +164,7 @@ impl Fixture {
             tool,
             files,
             dials,
+            neighbors,
         };
         fixture.record(NODE, &[NODE_DATA], NODE_BMC, "");
         fixture.record(MAC, &[MAC_DATA], "", MAC_SERIAL);
@@ -154,6 +182,36 @@ impl Fixture {
     /// As [`Self::with`], with the default bounds.
     pub(crate) fn new(name: &str) -> Self {
         Self::with(name, 8, Duration::from_secs(30))
+    }
+
+    /// As [`Self::new`], with no targets file: every BMC's address is found.
+    pub(crate) fn without_targets(name: &str) -> Self {
+        let mut fixture = Self::new(name);
+        fixture.files.targets = None;
+        let console = console(&fixture.files, &fixture.tool, 8, Duration::from_secs(30))
+            .with_dial(fixture.dials.dial())
+            .with_neighbors(fixture.neighbors.lookup());
+        let coordinator = std::mem::replace(
+            &mut fixture.rig.coordinator,
+            start(&fixture.rig.dir, &fixture.rig.clock, ""),
+        );
+        fixture.rig.coordinator = coordinator.with_console(console);
+        fixture
+    }
+
+    /// A heartbeat of `host` over gRPC, answered now, that reports its BMC at `ip` with `mac`.
+    pub(crate) fn report_bmc(&self, host: &str, ip: &str, mac: &str) {
+        ask(&self.rig, host, "storage", beat_of(NEW_DAEMON, Vec::new()));
+        let request = agent::HeartbeatRequest {
+            bmc: Some(agent::BmcReport {
+                ip: ip.to_owned(),
+                mac: mac.to_owned(),
+            }),
+            ..agent::HeartbeatRequest::default()
+        };
+        self.rig
+            .coordinator
+            .hear_bmc(&who(host, "storage"), &request);
     }
 
     /// Records `host` with `data`, `bmc` and `serial`.
@@ -237,6 +295,16 @@ impl Fixture {
     }
 }
 
+/// The answer's account of `address`, found in the targets file.
+pub(crate) fn file_address(address: &str) -> proto::ConsoleAddress {
+    proto::ConsoleAddress {
+        address: address.to_owned(),
+        source: proto::ConsoleAddressSource::TargetsFile.into(),
+        stale: false,
+        reported_unix: 0,
+    }
+}
+
 /// One expected line of [`Fixture::lines`].
 pub(crate) fn line(
     by: &str,
@@ -266,7 +334,7 @@ pub(crate) fn write_files(dir: &Scratch, operators: &str) -> Paths {
     );
     Paths {
         operators: put("console-operators.toml", operators, 0o644),
-        targets: put("console-targets.toml", &targets, 0o644),
+        targets: Some(put("console-targets.toml", &targets, 0o644)),
         credential: put(
             "bmc.toml",
             &format!("user = \"ADMIN\"\npassword = \"{PASSWORD}\"\n"),

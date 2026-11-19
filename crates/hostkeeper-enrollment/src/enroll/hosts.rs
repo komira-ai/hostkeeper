@@ -13,7 +13,7 @@ use std::sync::PoisonError;
 use super::records::{Record, Seen};
 use super::rows::{DenyState, HostRow, claims_of_pb, corrupt};
 use super::store::{EnrollmentStore, LIVE_WINDOW_SECS};
-use super::{EnrolledHost, HostHeld, HostRunning, RequestState, StoreError};
+use super::{EnrolledHost, HostHeld, HostRunning, KeptBmc, RequestState, StoreError};
 use crate::names::{HostId, KeyHash, Role};
 
 impl EnrollmentStore {
@@ -158,6 +158,12 @@ impl EnrollmentStore {
             moving_from: row.pb.moving_from.clone(),
             running: row.pb.running.as_ref().map(HostRunning::of_pb),
             running_unix: row.pb.running.as_ref().map(|r| r.at_unix),
+            bmc: row
+                .pb
+                .running
+                .as_ref()
+                .and_then(|r| r.bmc.as_ref())
+                .and_then(KeptBmc::of_pb),
         }))
     }
 
