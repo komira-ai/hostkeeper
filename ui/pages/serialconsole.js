@@ -96,7 +96,7 @@ export function quietSecsOf(reply) {
 // the quiet note and the terminal.
 function consoleSection(ctx, nodeId, sessions) {
   const form = { reason: "" };
-  const view = { phase: "idle", notice: "", quiet: false, conn: null, viewer: null };
+  const view = { phase: "idle", notice: "", quiet: false, conn: null, viewer: null, left: false };
   let head = null;
   let box = null;
 
@@ -143,6 +143,7 @@ function consoleSection(ctx, nodeId, sessions) {
   // Leaving the page (another page, a sign-out, the session ending) closes the console at once.
   if (typeof ctx.onLeave === "function") {
     ctx.onLeave(() => {
+      view.left = true;
       if (view.conn !== null) {
         end("You left the page, so the session closed.");
       }
@@ -236,6 +237,12 @@ function consoleSection(ctx, nodeId, sessions) {
       return undefined;
     }
     const csrf = getCsrf();
+    if (view.left) {
+      // The operator left the page while the session opened: nobody would see it, so it is
+      // closed at once instead of attached.
+      await ctx.api.console.close({ hostId: nodeId }).catch(() => undefined);
+      return undefined;
+    }
     if (reply.kind !== "CONSOLE_KIND_SERIAL" || csrf === null) {
       // The session is not one this page can show (a Mac's screen), or the sign-in ended while it
       // opened: it is closed at once instead of left to its window.
@@ -257,6 +264,7 @@ function consoleSection(ctx, nodeId, sessions) {
       view.conn !== null
         ? action(ctx, "Close", "close-console", async () => {
           end("You closed the session.");
+          await sessions.load();
           return undefined;
         })
         : action(ctx, "Open the console", "open-console", open, { class: "primary" }),

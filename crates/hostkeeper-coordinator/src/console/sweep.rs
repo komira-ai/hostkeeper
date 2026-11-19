@@ -29,7 +29,7 @@ use hostkeeper_console::session::Limit;
 use crate::audit_actions::AuditOnly;
 use crate::reconcile::COORDINATOR;
 use crate::service::Coordinator;
-use crate::ssh_tunnel::credential_holds;
+use crate::ssh_tunnel::{Credential, credential_holds};
 
 /// How often the sweep runs.
 pub(crate) const SWEEP_EVERY: Duration = Duration::from_secs(5);
@@ -43,13 +43,19 @@ impl Coordinator {
         let now = (self.clock)();
         let mut table = self.console.lock_table();
         self.end_unattached(&mut table.sessions, now);
-        let moved: Vec<(String, u64)> = table
-            .live
-            .iter()
-            .map(|(host, live)| (host.clone(), live.moved.total()))
-            .collect();
-        for (host, moved) in moved {
-            table.sessions.observe(&host, moved, now);
+        let table = &mut *table;
+        for (host, live) in &mut table.live {
+            let moved = live.moved.total();
+            table.sessions.observe(host, moved, now);
+            // A console in use keeps the browser's sign-in it attached with alive, as the
+            // requests of that sign-in would: a byte that crossed since the last sweep uses it.
+            // A session that has ended is not brought back.
+            if moved != live.used_at {
+                live.used_at = moved;
+                if let (Credential::Session(key), Some(login)) = (live.credential, self.login()) {
+                    login.sessions.touch(&key);
+                }
+            }
         }
         let due = table.sessions.due(now);
         let limited = due.iter().filter_map(|(host, limit)| {

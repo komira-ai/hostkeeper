@@ -693,9 +693,9 @@ return { status: status(), sockets: seen.sockets.length };"#,
     );
 }
 
-/// Proves: Close closes the socket once and says so; what the closed socket does afterwards (a
-/// message, a close with a reason) changes nothing; and Open the console after it opens a new
-/// socket and a new terminal, the old one ended.
+/// Proves: Close closes the socket once, says so and reads the open sessions again; what the
+/// closed socket does afterwards (a message, a close with a reason) changes nothing; and Open the
+/// console after it opens a new socket and a new terminal, the old one ended.
 ///
 /// Catches: a Close that leaves the socket open, and a late close of an old console shown over
 /// the next one.
@@ -734,6 +734,18 @@ return { closed, late, sockets: seen.sockets.length, terminals: seen.terminals.l
     assert_eq!(out["terminals"], json!(2));
     assert_eq!(out["firstDisposed"], json!(1));
     assert_eq!(out["secondSame"], json!(true));
+    assert_eq!(
+        ui.methods(),
+        [
+            m("Console/List"),
+            m("Console/Open"),
+            m("Console/List"),
+            m("Console/List"),
+            m("Console/Open"),
+            m("Console/List")
+        ],
+        "Close reads the open sessions again"
+    );
 }
 
 /// Proves: when the page is drawn again (a status line, a power button's answer), the terminal
@@ -927,4 +939,26 @@ export async function main() {
         out["navigations"],
         json!([{"name": "console", "params": {"nodeId": "x86-1"}}])
     );
+}
+
+/// Proves: when the operator leaves the page while Console.Open is on its way, the session it
+/// opened is closed at once with Console.Close of the host, and no socket or terminal is made.
+///
+/// Catches: a console attached by a page nobody sees any more, holding the host's one session
+/// until the coordinator's idle limit.
+#[test]
+fn leaving_while_the_console_opens_closes_the_session() {
+    let mut ui = ui_with(1);
+    ui.reply(&m("Console/Close"), json!({}));
+    let out = run(
+        &mut ui,
+        r#"
+ctx.api = Object.assign({}, ctx.api, { console: Object.assign({}, ctx.api.console, {
+  open: async () => { leave(); return { kind: "CONSOLE_KIND_SERIAL", session: "ab", quietSecs: "10" }; },
+}) });
+await open("boot");
+return { sockets: seen.sockets.length, terminals: seen.terminals.length };"#,
+    );
+    assert_eq!(out["out"], json!({"sockets": 0, "terminals": 0}));
+    assert_eq!(ui.methods(), [m("Console/List"), m("Console/Close")]);
 }

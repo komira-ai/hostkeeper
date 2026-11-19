@@ -145,6 +145,9 @@ pub(crate) struct Live {
     /// What the stream attached with, which the sweep holds it to: an operator token, or the
     /// browser's signed-in session.
     pub(crate) credential: crate::ssh_tunnel::Credential,
+    /// The bytes it had carried at the last sweep that saw it carry any: a browser's session is
+    /// used, as a request of its sign-in uses it, by each sweep that finds more.
+    pub(crate) used_at: u64,
 }
 
 impl Live {

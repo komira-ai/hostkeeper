@@ -242,6 +242,7 @@ pub(crate) fn attach(
             stop,
             moved: Arc::clone(&moved),
             credential,
+            used_at: 0,
         },
     );
     Ok(Attached {
