@@ -10,7 +10,9 @@ use std::time::Duration;
 use hostkeeper_oidc::{Refusal, Verified, Verifier};
 use hostkeeper_wire::identity::SanPrefixes;
 use hostkeeper_wire::version::Version;
-use hostkeeper_wire::wire::{Answer, Heartbeat, ORDER_FEATURE, ServiceReply, VerdictAck};
+use hostkeeper_wire::wire::{
+    Answer, Heartbeat, ORDER_FEATURE, ServiceReply, UpdateResult, VerdictAck,
+};
 use serde::Serialize;
 
 use crate::accounts::AccountStore;
@@ -801,9 +803,48 @@ impl Coordinator {
     /// [`OperateError`].
     pub(crate) fn operate_as(&self, by: &str, body: &[u8]) -> Result<AuditEntry, OperateError> {
         let groups = self.desired.host_groups();
-        let entry = crate::operate::operate(&self.ops, &self.services, &groups, by, body)?;
+        let held = |service: &str| self.held_halt(service);
+        let entry = crate::operate::operate(&self.ops, &self.services, &groups, &held, by, body)?;
+        if let ("clear_halt", Some(service)) = (entry.action.as_str(), &entry.service) {
+            self.set_aside_halted(service);
+        }
         self.reconcile();
         Ok(entry)
+    }
+
+    /// The highest generation a host the fleet keeps reports holding a halt of `service` under
+    /// (`ServiceBeat.local_halt`); none when no host does.
+    fn held_halt(&self, service: &str) -> Option<u64> {
+        let fleet = self.lock_fleet();
+        fleet
+            .occupants_of(service)
+            .filter_map(|(_, host)| host.beat.local_halt.as_ref())
+            .map(|halt| halt.generation)
+            .max()
+    }
+
+    /// After a clear of `service`: sets aside the `halted` refusal each host that holds a halt of
+    /// it of its own last reported ([`hostkeeper_wire::wire::UpdateResult::is_halted_refusal`]),
+    /// as `Hosts.Retry` does ([`Fleet::set_aside`]). The refusal says the host's halt refused the
+    /// order, not that the host failed the version, so once the generation the clear issued lifts
+    /// the halt the host is ordered the version again, without the `failed_here` the refusal
+    /// would hold it at. A report of the halt phase is not one: it stands until `Hosts.Retry`.
+    fn set_aside_halted(&self, service: &str) {
+        let mut fleet = self.lock_fleet();
+        let refused: Vec<hostkeeper_wire::HostId> = fleet
+            .occupants_of(service)
+            .filter(|(_, host)| host.beat.local_halt.is_some())
+            .filter(|(_, host)| {
+                host.beat
+                    .last_update
+                    .as_ref()
+                    .is_some_and(UpdateResult::is_halted_refusal)
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in &refused {
+            fleet.set_aside(service, id);
+        }
     }
 
     /// Stops counting the hosts of a service they no longer belong to (what they said is kept

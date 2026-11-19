@@ -31,9 +31,9 @@ use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_enroll::RenewalState;
 use hostkeeper_hook::{Class, Phase, Verdict};
 use hostkeeper_link::{
-    Drift, Health, HeldHalts, Liveness, Observation, Order, OrderId, OrderRef, OrderResult,
-    OrderSink, Outcome, Reason, RecordedService, Renewal, RenewalSource, ServiceObserver,
-    ServiceRecords, Target, TrustedRootFacts, TrustedRootSource, Verb,
+    Drift, Health, HeldHalt, HeldHalts, Liveness, Observation, Order, OrderId, OrderRef,
+    OrderResult, OrderSink, Outcome, Reason, RecordedService, Renewal, RenewalSource,
+    ServiceObserver, ServiceRecords, Target, TrustedRootFacts, TrustedRootSource, Verb,
 };
 use hostkeeper_observe::{ServiceState, VersionView, beat_health};
 use hostkeeper_proto::hostkeeper::agent::v1 as wire;
@@ -261,6 +261,31 @@ impl HeldHalts for DaemonHalts {
             Err(refused) if refused.refusal == Refusal::StaleHaltGeneration => Ok(()),
             Err(refused) => Err(io::Error::other(refused.detail)),
         }
+    }
+
+    /// The halt the service's step record ended in, under the generation the store holds, and
+    /// when that generation was written. `None` while the record holds no halt, and while the
+    /// record or the store cannot be read: the executor then refuses the service's orders under
+    /// that name (`record_unreadable`, `halt_unreadable`), which the verdict reports.
+    fn holding(&self, service: &ServiceName) -> Option<HeldHalt> {
+        let ctx = self.daemon.ctx();
+        let Ok(Loaded::Current(record)) = ctx.store(service).load() else {
+            return None;
+        };
+        let State::Finished {
+            verdict: Verdict::Halt,
+            reason,
+        } = record.state
+        else {
+            return None;
+        };
+        Some(HeldHalt {
+            reason: reason
+                .as_deref()
+                .and_then(|reason| Reason::new(reason).ok()),
+            generation: ctx.halts.get(service).ok()?,
+            written_unix: ctx.halts.written_unix(service),
+        })
     }
 }
 

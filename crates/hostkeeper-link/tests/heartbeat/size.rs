@@ -15,6 +15,7 @@ fn required(name: &str, detail_len: usize) -> ServiceFacts {
     let mut result = verdict(&update("o-1", 1, name, "2.0"), Outcome::Failed);
     result.detail = Some("d".repeat(detail_len));
     ServiceFacts {
+        local_halt: None,
         name: service(name),
         version: version("1.0"),
         health: Health::Healthy,

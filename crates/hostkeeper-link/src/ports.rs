@@ -350,6 +350,22 @@ pub trait HeldHalts: Send + Sync {
     /// # Errors
     /// The store does not take it; the loop logs it and the next reply tries again.
     fn raise(&self, service: &ServiceName, generation: u64) -> io::Result<()>;
+    /// The halt the daemon holds of `service` now, which every heartbeat reports
+    /// ([`crate::beat::LocalHalt`]); `None` while it holds none, or cannot tell.
+    fn holding(&self, service: &ServiceName) -> Option<HeldHalt>;
+}
+
+/// A halt the daemon holds of a service: the service's step record ended in a halt, and every
+/// order of it is refused until a halt generation above `generation` comes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HeldHalt {
+    /// The halt's reason; none when the record names none, or one that is no token.
+    pub reason: Option<Reason>,
+    /// The halt generation held.
+    pub generation: u64,
+    /// When that generation was last written, in unix seconds; none when no generation is
+    /// written (it is 0), or the time cannot be read.
+    pub written_unix: Option<u64>,
 }
 
 /// Unix seconds, for the retry time of a deferral, which must outlive a restart and so cannot be

@@ -27,6 +27,7 @@ fn digest() -> String {
 
 fn facts(service: &str, at: &str) -> ServiceFacts {
     ServiceFacts {
+        local_halt: None,
         name: name(service),
         version: version(at),
         health: Health::Healthy,

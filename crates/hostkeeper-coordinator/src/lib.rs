@@ -343,6 +343,8 @@ mod group_incident_tests;
 #[cfg(test)]
 mod group_install_order_tests;
 #[cfg(test)]
+mod group_local_halt_tests;
+#[cfg(test)]
 mod group_marks_tests;
 #[cfg(test)]
 mod group_retry_tests;

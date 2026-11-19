@@ -15,6 +15,7 @@ fn v(text: &str) -> crate::version::Version {
 #[test]
 fn a_heartbeat_is_written_and_read_in_one_spelling() {
     let busy = Heartbeat {
+        local_halt: None,
         platform: Platform::DarwinArm64,
         version: v("0.1.7+g0123456789ab-3"),
         health: Health::Unhealthy,

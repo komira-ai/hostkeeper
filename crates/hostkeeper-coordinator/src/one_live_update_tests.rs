@@ -337,6 +337,7 @@ fn who(host: &str) -> Identity {
 /// `top`, also running `other` at `running`, updating it to `to` when given.
 fn with_other(mut top: Heartbeat, running: &str, to: Option<&str>) -> Heartbeat {
     top.services = Some(vec![ServiceBeat {
+        local_halt: None,
         name: "other".to_owned(),
         version: version(running),
         health: Health::Healthy,
