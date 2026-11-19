@@ -53,6 +53,7 @@ ui_files![
     "app.js",
     "bytes.js",
     "lab.js",
+    "health.js",
     "sleds.js",
     "sledpanels.js",
     "rackforms.js",

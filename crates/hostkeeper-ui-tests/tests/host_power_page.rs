@@ -29,6 +29,7 @@ fn drawn() -> Vec<(String, Value)> {
         (m("HostGroups/List"), json!({})),
         (m("Ssh/HostKeys"), json!({"hostId": "node-02"})),
         (m("Layout/Get"), json!({})),
+        (m("Alerts/List"), json!({})),
     ]
 }
 

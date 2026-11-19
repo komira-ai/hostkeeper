@@ -923,7 +923,7 @@ export async function main() {
   const tree = await render(ctx);
   const links = nodes(tree).filter((n) => n.attrs.name === "open-console");
   await links[1].on.click();
-  return { table: rows(tree).map((r) => [r[0], r[6]]), navigations: seen.navigations };
+  return { table: rows(tree).map((r) => [r[0], r[7]]), navigations: seen.navigations };
 }"#,
     );
     assert_eq!(

@@ -12,6 +12,7 @@
 // pure function of the replies it is given.
 
 import { ApiError } from "./api.js";
+import { isDegraded, reasonsOf } from "./health.js";
 import { h, list } from "./view.js";
 
 const KIND_HOST = "LAYOUT_SUBJECT_KIND_HOST";
@@ -193,11 +194,13 @@ export function isMac(host) {
 // Every server the lab knows, joined with its place: one for each enrolled host (its entry's
 // place when an entry matches it, else its own), one for each inventory entry no host is enrolled
 // against (pending), and one for each placement whose host or entry is gone (offline, `gone`).
-// A server is `{key, kind, id, name, state, group, version, host, linux, mac, placement}`; `host` is
-// the node id when a host is enrolled, `linux` whether that host's last heartbeat said it is a Linux
-// server (which has a serial Console), `mac` whether it said it is a Mac (which has a Desktop),
-// `placement` the placement or null.
-export function serversOf(layout, hosts, records) {
+// A server is `{key, kind, id, name, state, why, group, version, host, linux, mac, placement}`;
+// `host` is the node id when a host is enrolled, `linux` whether that host's last heartbeat said it
+// is a Linux server (which has a serial Console), `mac` whether it said it is a Mac (which has a
+// Desktop), `placement` the placement or null. `why` is the short words of every reason the host
+// is not healthy (`health.js`, from the host and the alerts of Alerts.List that name it, `alerts`,
+// empty when they were not read), and a live host with one is `failed`.
+export function serversOf(layout, hosts, records, alerts = []) {
   const placed = new Map(layout.placements.map((p) => [p.key, p]));
   const seen = new Set();
   const out = [];
@@ -208,12 +211,14 @@ export function serversOf(layout, hosts, records) {
   const entries = new Set(records.map((r) => r.hostId));
   for (const host of hosts) {
     const entry = host.inventoryRecordId || (entries.has(host.nodeId) ? host.nodeId : "");
+    const reasons = reasonsOf(host, alerts);
     take({
       key: entry === "" ? `host:${host.nodeId}` : `inventory:${entry}`,
       kind: entry === "" ? "host" : "inventory",
       id: entry === "" ? host.nodeId : entry,
       name: host.nodeId,
-      state: hostState(host),
+      state: isDegraded(host, reasons) ? "failed" : hostState(host),
+      why: Array.from(new Set(reasons.map(({ group }) => group))),
       group: host.hostGroup || "",
       version: versionOf(host),
       host: host.nodeId,
@@ -225,7 +230,7 @@ export function serversOf(layout, hosts, records) {
     if (!seen.has(`inventory:${record.hostId}`)) {
       take({
         key: `inventory:${record.hostId}`, kind: "inventory", id: record.hostId, name: record.hostId,
-        state: "pending", group: record.hostGroup || "", version: "", host: null, linux: false, mac: false,
+        state: "pending", why: [], group: record.hostGroup || "", version: "", host: null, linux: false, mac: false,
       });
     }
   }
@@ -233,7 +238,7 @@ export function serversOf(layout, hosts, records) {
   for (const p of layout.placements) {
     if (!seen.has(p.key) && !gear.has(p.key)) {
       take({
-        key: p.key, kind: p.kind, id: p.id, name: p.id, state: "offline", group: "", version: "",
+        key: p.key, kind: p.kind, id: p.id, name: p.id, state: "offline", why: [], group: "", version: "",
         host: p.kind === "host" ? p.id : null, linux: false, mac: false, gone: true,
       });
     }

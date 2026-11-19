@@ -93,6 +93,10 @@ pub const REQUESTS: &[(&str, &str)] = &[
         r#"{"nodeId": "storage-1", "reason": "board failed"}"#,
     ),
     (
+        "hostkeeper.operator.v1.Hosts/Retry",
+        r#"{"nodeId": "storage-1", "service": "kbf"}"#,
+    ),
+    (
         "hostkeeper.operator.v1.Hosts/SetLabels",
         r#"{"nodeId": "storage-1", "labels": {"rack": "r1"}}"#,
     ),

@@ -3,7 +3,9 @@
 // opens its racks as front elevations side by side in a strip that scrolls (wheel, drag and arrow
 // keys, arrow buttons and one rack at a time on a phone, with the number of the rack in view and
 // a fade at an end that has more); a click on a server opens its host page. Above the floor plan,
-// the conditions that need a person as one compact strip; below it, the servers not placed yet.
+// the conditions that need a person as one compact strip, then the degraded hosts: how many, with
+// their reasons grouped (`health.js`), each host a link to its page; below it, the servers not
+// placed yet. A server's row says, under Why, every reason its host is not healthy, in short.
 // `list` (true) shows every server in one compact list instead of the floor plan.
 // Breadcrumbs: Lab > Row > Rack > Host.
 //
@@ -25,7 +27,8 @@
 // `edit` (true) the edit mode, `list` (true) the list of servers in place of the floor plan, with a
 // Console link on the row of each Linux server (the Console page) and a Desktop link on the row of
 // each Mac (the Desktop page).
-// Calls: Hosts.List, Releases.Status and Alerts.List as the Fleet page made them, then Layout.Get
+// Calls: Hosts.List, Releases.Status and Alerts.List as the Fleet page made them (Alerts.List also
+// gives the reasons of the degraded hosts that name them; the hosts' own reports give the rest), then Layout.Get
 // and Enrollment.ListRecords (the lab is shown without them when they fail, and says so); on a
 // button, Layout.PutName, AddRow, RemoveRow, PutRack, RemoveRack, PutSled, RemoveSled, Place or Unplace.
 
@@ -38,6 +41,7 @@ import {
   subjectOf, usedU, worstState,
 } from "../lab.js";
 import { ApiError } from "../api.js";
+import { fleetHealth } from "../health.js";
 import { board, tip } from "../sleds.js";
 import { assignPanel, pick, selectionPanel } from "../sledpanels.js";
 import {
@@ -75,6 +79,29 @@ function alertsStrip(reply, failure) {
         h("span", { class: "said" }, alert.message || ""),
         h("small", {}, `since ${fmtUnix(alert.firstObservedUnix)}`));
     })));
+}
+
+// The degraded hosts of the fleet: their count, then each reason with the hosts that have it, most
+// hosts first, each host a link to its page. `alerts` is the list of Alerts.List, empty when it
+// could not be read (`unread`): then the count is of the hosts' own reports, and the strip says so.
+function degradedStrip(ctx, hosts, alerts, unread) {
+  const { degraded, groups } = fleetHealth(hosts, alerts);
+  const partial = unread ? h("small", { name: "degraded-partial" }, "(from the hosts' own reports: the alerts were not read)") : null;
+  if (degraded.length === 0) {
+    return h("div", { class: `alert-strip ${unread ? "warn" : "none"}`, role: "status", name: "degraded" },
+      h("span", { class: `sev ${unread ? "warn" : "ok"}`, "aria-hidden": "true" }), "No host is degraded.", partial);
+  }
+  const link = (nodeId) => h("button", {
+    type: "button", class: "linklike", name: "open-degraded",
+    on: { click: () => ctx.navigate("host", { nodeId }) },
+  }, nodeId);
+  return h("div", { class: "alert-strip bad", role: "status", name: "degraded" },
+    h("strong", { class: "alert-count" }, `Degraded hosts (${degraded.length})`),
+    partial,
+    h("ul", {}, groups.map((group) => h("li", { class: "alert", name: "degraded-reason" },
+      h("strong", {}, group.label),
+      h("small", {}, `${group.hosts.length} ${group.hosts.length === 1 ? "host" : "hosts"}:`),
+      group.hosts.map(link)))));
 }
 
 // Every host of Hosts.List, a page (at most 256 hosts) at a time.
@@ -132,6 +159,7 @@ function serversList(ctx, layout, servers, state, redraw) {
         on: { click: () => (s.host !== null ? ctx.navigate("host", { nodeId: s.host }) : ctx.navigate("inventory", { record: s.id })) },
       }, s.name)),
     h("td", {}, pill(s.state, STATES.find(([x]) => x === s.state)[1])),
+    h("td", { name: "why" }, s.why.join("; ") || "-"),
     h("td", { class: "mono" }, s.placement === null ? "-" : s.placement.address),
     h("td", {}, s.placement === null ? "Unplaced" : `${rackName(layout, s.placement.rack)}, U${s.placement.u}`),
     h("td", {}, s.group || "-"),
@@ -150,7 +178,7 @@ function serversList(ctx, layout, servers, state, redraw) {
   };
   return [
     h("div", { class: "buttons" }, input, h("button", { type: "button", name: "apply-filter", on: { click: apply } }, "Filter")),
-    table(["Server", "State", "Address", "Where", "Group", "Version", "Console"], rows),
+    table(["Server", "State", "Why", "Address", "Where", "Group", "Version", "Console"], rows),
   ];
 }
 
@@ -653,7 +681,7 @@ function lab(app, data, state) {
             h("h3", {}, `Servers (${here.length})`),
             here.length === 0
               ? h("p", { class: "empty" }, "No server stands in this rack yet.")
-              : table(["Server", "Address", "U", "State", "Group", "Version"], here.map((s) => h("tr", {},
+              : table(["Server", "Address", "U", "State", "Why", "Group", "Version"], here.map((s) => h("tr", {},
                 h("td", {}, h("button", {
                   type: "button", class: "linklike", name: "open-host",
                   on: { click: () => (s.host !== null ? app.navigate("host", { nodeId: s.host }) : app.navigate("inventory", { record: s.id })) },
@@ -661,6 +689,7 @@ function lab(app, data, state) {
                 h("td", { class: "mono" }, s.placement.address),
                 h("td", {}, `U${s.placement.u}`),
                 h("td", {}, pill(s.state, STATES.find(([x]) => x === s.state)[1])),
+                h("td", { name: "why" }, s.why.join("; ") || "-"),
                 h("td", {}, s.group || "-"),
                 h("td", {}, s.version || "-"))))),
           network.length === 0 ? null : h("div", { class: "rack-hosts" },
@@ -693,6 +722,7 @@ function lab(app, data, state) {
       head(title),
       renameCluster(),
       data.alerts,
+      data.degraded,
       data.failure !== null
         ? h("p", { class: "error", role: "alert" }, `The lab could not be read: ${describeError(data.failure)}`)
         : [summary(), stateStrip(servers, false),
@@ -728,10 +758,15 @@ export async function render(ctx) {
   } catch (error) {
     failure = error;
   }
-  const servers = serversOf(layout, hosts, records);
+  const alertList = list(alerts, "alerts");
+  const servers = serversOf(layout, hosts, records, alertList);
   const inside = Boolean(ctx.params.row || ctx.params.rack);
   const notes = inside || status.quiet !== true
     ? null
     : h("p", { class: "note" }, "The coordinator is in its quiet start: it orders nothing yet.");
-  return lab(ctx, { layout, servers, failure, notes, alerts: inside ? null : alertsStrip(alerts, alertFailure) }, makeState());
+  return lab(ctx, {
+    layout, servers, failure, notes,
+    alerts: inside ? null : alertsStrip(alerts, alertFailure),
+    degraded: inside ? null : degradedStrip(ctx, hosts, alertList, alertFailure !== null),
+  }, makeState());
 }
