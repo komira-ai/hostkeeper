@@ -1,12 +1,18 @@
 # Scheduled maintenance updates
 
-Status: design, for the owner's ruling. No code. Facts about this repository were read on `main` at the commit this document lands on top
+Status: design. No code. The owner's answers of 2026-11-19 are in: the Mac's update account (section 5.5) and the first-class Linux path
+(the one-button update of section 4.2) are decided; **Xcode is on hold** (sections 1.1 and 2 are options until it is decided). Facts about this repository were read on `main` at the commit this document lands on top
 of; facts about komira-ai/jobscheduler and komira-ai/kbf were read on their `main` and are marked as theirs. **Built** marks what exists
 (with its path), **New** what this design adds, **[V]** a claim to verify before building on it.
 
 The owner's request (2026-11-19): "I want us to get updates regularly but I also don't want us to blow up ongoing work. The ideal scenario
 is I get a notification in hostkeeper that updates are needed, and then I schedule updates, which would drain all work on the host, do the
 update, and put it back in service."
+
+The owner's answers on this design (2026-11-19): a Linux host that needs a kernel or security update or a restart is shown so, for the
+host and the fleet ("kernel update, restart needed"), and **one button** drains it, updates it, reboots it if needed, checks it and puts it
+back; the Mac's administrator account goes in a root-only file hostkeeper reads for the update call; Xcode should always be the latest,
+and how it is fetched is being researched.
 
 ## What changes for the operator
 
@@ -19,10 +25,11 @@ host's kernel and security packages, move when a person logs in and moves them, 
 1. Every daemon reports, in its heartbeat, what its host runs (OS version and build, running and newest installed kernel, the Xcodes in
    `/Applications`) and what is due: macOS updates `softwareupdate` lists, Linux security and kernel updates, a reboot the host already
    needs, and an Xcode its group wants that it lacks.
-2. The web UI shows a **notice**: per host ("macOS 26.1 to 26.2, restart"; "kernel 6.8.0-50 to 6.8.0-52, reboot"; "Xcode 26.2 wanted")
-   and for the fleet (a strip on Home: "Updates due on 7 hosts in 2 groups").
-3. The operator presses **Schedule** on a host, a group or a selection, and picks when: **now**, **a time window** (start and end), and
-   how many hosts of each group at once (**a rolling batch of N**, default 1).
+2. The web UI shows a **notice**: per host ("kernel update, restart needed"; "12 security updates"; "macOS 26.1 to 26.2, restart";
+   "Xcode 26.2 wanted") and for the fleet (a strip on Home: "Updates due on 7 hosts in 2 groups").
+3. The operator presses **Update** on a host, or on a group's notice: one button, which starts now with the group's defaults. **Schedule**
+   is the same with choices: on a host, a group or a selection, **now** or **a time window** (start and end), and how many hosts of each
+   group at once (**a rolling batch of N**, default 1).
 4. Each host in turn: downloads and stages the update while it still serves, is **cordoned in js-agent**, **drains** (running jobs end on
    their own; no deadline unless the operator set one), applies the update, reboots if it needs to, is **checked**, and is **uncordoned**.
    The UI shows each host's step, and links the Console (Linux) or Desktop (Mac) page while it reboots.
@@ -44,13 +51,17 @@ checks below and the report of section 4.1.
 | `macos` | Mac | `sw_vers` (version, build); `softwareupdate --list` (each label, its version, whether it says `Action: restart`) | `softwareupdate` lists a macOS update. A major upgrade is listed but never due by default (group setting `macos_major`, section 3) |
 | `xcode` | Mac | each `/Applications/Xcode*.app/Contents/version.plist` (`CFBundleShortVersionString`, `ProductBuildVersion`); `xcode-select -p` | the group's wanted Xcodes (section 2) name one the host lacks, or the default the group names is not `xcode-select`'s |
 | `linux` | Linux | apt: `apt-get update`, then a simulated upgrade, split by origin into security and other; dnf: `dnf updateinfo list --security` and `dnf check-update`; apk: `apk version -l '<'`. The kernel: `uname -r` against the newest installed kernel | a security update or a newer kernel package is available (group setting `linux_scope`: `security` by default, or `all`) |
-| `reboot` | Linux | `/run/reboot-required` (apt), `needs-restarting -r` (dnf), the newest kernel under `/lib/modules` against `uname -r` | the host needs a reboot it has not had |
+| `reboot` | Linux | `/run/reboot-required` (apt); `needrestart -b` where installed (its kernel status, and the services running old libraries); `needs-restarting -r` (dnf); the newest kernel under `/lib/modules` against `uname -r` | the host needs a reboot it has not had: a newer kernel installed but not running, or the distribution says so. A run of `reboot` alone has nothing to install: it drains, reboots, checks and puts back |
 
 Packages hostkeeper itself installs must not move in an OS upgrade. apt holds them (`apt-mark hold`, Built:
 `docs/design/packages-repositories.md`). dnf and apk have no such hold today, so the maintenance hook excludes them by name (dnf
 `--exclude`, apk by pinning each in `/etc/apk/world` as `name=version`) **[V]**, and the due list leaves them out on every platform.
 
-### 1.1 How hostkeeper learns that a new Xcode exists
+### 1.1 How hostkeeper learns that a new Xcode exists (on hold)
+
+This section and section 2 describe one option, kept until the owner decides how Xcode is fetched (section 9). The owner wants the latest
+Xcode, always kept up to date, without hostkeeper vending the `.xip` itself; the options are in section 2.4. The rest of the design does
+not depend on which is chosen: whatever brings a new Xcode, it is installed in a host's turn, drained, side by side (section 6).
 
 A host cannot see a new Xcode: `softwareupdate` does not list it, and the App Store's copy is not the one we install (section 2.2). So the
 **coordinator** reads Apple's developer releases feed (`https://developer.apple.com/news/releases/rss/releases.rss`) once a day (New:
@@ -59,9 +70,9 @@ newer than every entry of the Xcode store (section 2.1) raises the warning alert
 it"). That is the notice; it does not make an update due. The feed's URL is a flag (`--xcode-feed-url`, empty turns the job off), and a
 failed fetch is a log line, retried the next day, never an alert. Beta and release-candidate entries are not offered.
 
-## 2. Xcode: the one human step, and the install
+## 2. Xcode: options for the download and the install (on hold)
 
-### 2.1 Download: a person, once per Xcode release
+### 2.1 Option A: a person downloads, the coordinator stores
 
 A `.xip` is downloaded from Apple's developer site by a signed-in Apple Account, with two-factor sign-in. Automating that sign-in means
 keeping an Apple Account's password and second factor on a machine, and is unreliable (tools that try, such as `xcodes`, break on
@@ -80,10 +91,10 @@ multiple computers at the same time". A coordinator that serves the `.xip` only 
 narrowest reading we can build; whether it is allowed is counsel's call. Without that sign-off the fallback is the same flow with the
 store on one farm Mac's read-only share, or a person copying the `.xip` to each Mac.
 
-### 2.2 Why not Apple Business's device-assigned App Store Xcode
+### 2.2 Option B: Apple Business's device-assigned App Store Xcode
 
 Apple Business can assign the App Store's Xcode to devices (device licences, no Apple Account on the Mac), and its built-in device
-management installs it. Its limits rule it out as the main path:
+management installs it. It gives the latest Xcode with no person, which is what the owner asked for; its limits, as read so far:
 
 - **One Xcode, the newest.** The App Store offers only the current release, so a version cannot be pinned, an older one cannot be
   installed again, and two cannot sit side by side.
@@ -92,8 +103,9 @@ management installs it. Its limits rule it out as the main path:
 - **No hook for us.** The coordinator has no MDM since its removal (`docs/design/coordinator-mdm.md`); Apple Business's settings are edited
   by hand in Apple Business, so hostkeeper could neither time the install nor see its result except by reading the disk afterwards.
 
-It stays usable as a convenience **[V]**: if Apple Business installs the App Store's Xcode, the daemon reports it like any Xcode, and the operator
-can add the matching `.xip` to the store to install it side by side as `Xcode-<version>.app`. Nothing in this design depends on it.
+A way around the first two **[V]**: keep App Store updates off for Xcode, let Apple Business install the newest into its fixed path in `/Applications`, and in
+the host's drained turn copy it to `Xcode-<version>.app`. Whether Apple Business then installs it again, and whether a copy keeps working
+after the App Store's copy moves on, is unverified.
 
 ### 2.3 The install (in the maintenance hook, section 5.2)
 
@@ -107,6 +119,16 @@ can add the matching `.xip` to the store to install it side by side as `Xcode-<v
 
 `<version>` is `CFBundleShortVersionString` (`26.2`, `26.1.1`). Two builds with one version are refused when added to the store
 (`xcode_version_taken`), so on our hosts a version names one build.
+
+### 2.4 The choice
+
+| Option | Latest, unattended | Pins a version, side by side | A person | Open |
+|---|---|---|---|---|
+| A. `.xip` into the coordinator's store | no: a person per release | yes | one download per release | the licence on serving the `.xip` |
+| B. Apple Business, App Store | yes | only with the copy of 2.2 | none | the copy, and timing to a drained host |
+| C. A tool signed in with an Apple Account (`xcodes` and the like) | yes | yes | none, until its sign-in breaks | an Apple Account's password and second factor kept on a machine |
+
+Which one, or a mix, is the owner's decision after the research the owner asked for (section 9, question 2).
 
 ## 3. The group's settings
 
@@ -140,7 +162,11 @@ heartbeat's 16 KiB and stored for free in the host's last beat (Built: `fleet_ho
 
 - **Home** shows the fleet notice: the warning alert `updates_due` (New), one per group with due hosts ("Updates due on 4 hosts of
   `mac-build`"), linking the Maintenance page. It is a notice, not a page: it never pages, and stands while something is due.
-- **Host page** gains an **Updates** tab: the facts, each due item, the Xcodes, the last look, and **Schedule** for this host.
+- **Host page** shows the due items in its header ("kernel update, restart needed") and gains an **Updates** tab: the facts, each due
+  item, the Xcodes, the last look, and the **Update** and **Schedule** buttons for this host.
+- **Update** (one button, on the host page, on a host's row of the Maintenance page and on a group's notice): a run of everything due, on
+  that host or every due host of the group, now, with the group's batch and drain settings. It asks once to confirm ("drains, updates,
+  restarts if needed, puts back"), takes a reason, and calls `Maintenance.Schedule` like the form.
 - **Maintenance page** (New, `ui/pages/maintenance.js`, in the Manage menu): per group, the hosts and what is due; the Xcode store; the
   runs, each with its hosts and their step (waiting, staging, draining since, applying, rebooting, checking, putting back, done, deferred,
   halted), refreshed by `ctx.every`. A rebooting host links its **Console** (Linux, Serial over LAN, Built: `ui/pages/serialconsole.js`)
@@ -245,8 +271,16 @@ drain was never asked for is never held.
 - **Linux.** apt: `apt-get install --only-upgrade` of the security packages and the kernel (`linux_scope = security`) or `apt-get
   dist-upgrade` (`all`), non-interactive, keeping existing configuration files; dnf: `dnf upgrade --security` or `dnf upgrade`; apk:
   `apk upgrade`. The package lock is waited for as the installers wait today (Built: `--package-lock-wait-secs`).
-- **macOS.** `softwareupdate --install <label> --restart`, with the label `--list` named, after the download step 1 made. On Apple silicon an OS update needs
-  a volume owner's authorisation (`--user` and `--stdinpass`); how hostkeeper gets it is Question 1.
+- **macOS.** `softwareupdate --install <label> --restart --user <account> --stdinpass`, with the label `--list` named, after the download
+  step 1 made. On Apple silicon an OS update needs an administrator's authorisation, and the owner decided how it is given (2026-11-19):
+  the Mac's administrator account, its name and password, is in a root-only file, `/Library/Application Support/hostkeeper/update-account`
+  (root's, mode 0600; the daemon refuses another owner or mode). The bootstrap writes it from its settings (New keys beside the farm
+  values, `docs/design/mac-bootstrap.md`), or a person does. The daemon reads it only for this call and passes the password on the
+  program's standard input: never in arguments, a log line, a heartbeat or an error.
+  **Threat model.** The account and password are the same on every Mac and are not meant to be a secret; the owner said so. What guards
+  the update is hostkeeper's own authorisation: the call runs only for a `maintain` order, which the coordinator sends to an enrolled host
+  over mutual TLS, for a run an authenticated operator scheduled (audited). Reading the file gains a local user nothing they could not be
+  told.
 - **Xcode.** Section 2.3. Xcode alone needs no reboot.
 
 When a run has both `macos` and `xcode`, macOS goes first (a new Xcode can need a newer macOS), then the reboot, then Xcode, in the same
@@ -317,17 +351,18 @@ Each is one pull request in this repository unless the table says otherwise, wit
 | MU3 | Coordinator and UI, read only: the report kept and shown (`Hosts.Get`, the Updates tab), `updates_due`, the Maintenance page's due list | MU2 |
 | MU4 | Hook contract: `[hook] drain` and `resume` in the manifest and the release manifest, the step runner running them, the conformance checks | MU1 |
 | MU5 | Daemon: the `maintain` order, the run record, the maintenance hook for Linux (apt, dnf, apk, reboot), stage-drain-apply-reboot-check-put back across a reboot | MU2, MU4 |
-| MU6 | Coordinator: runs, the migration, `Schedule`, `Cancel`, `RetryHost`, `PutBack`, the rules of 5.1 in `decide()` (serving count, window, batch, packages leaving a host in its turn out of a stage), `maintenance_halted`, `maintenance_not_back` and silence while rebooting (no `silent_host` before `return_secs`); the Schedule form and run view | MU3, MU5 |
-| MU7 | Xcode: the store (`--xcode-dir`, `hkctl xcode`, upload), the fetch route for enrolled Macs, the hook's install and removal (2.3), the `xcode-feed` job and `xcode_release` | MU6, J2 and K1 deployed, Question 2 |
-| MU8 | macOS: `softwareupdate` in the maintenance hook, with the authorisation Question 1 settles | MU6, Question 1 |
+| MU6 | Coordinator: runs, the migration, `Schedule`, `Cancel`, `RetryHost`, `PutBack`, the rules of 5.1 in `decide()` (serving count, window, batch, packages leaving a host in its turn out of a stage), `maintenance_halted`, `maintenance_not_back` and silence while rebooting (no `silent_host` before `return_secs`); the Update button, the Schedule form and the run view | MU3, MU5 |
+| MU7 | Xcode, by the option the owner chooses (2.4): for option A the store, the fetch route, the hook's install and removal (2.3), the `xcode-feed` job and `xcode_release` | MU6, J2 and K1 deployed, question 2 |
+| MU8 | macOS: `softwareupdate` in the maintenance hook with the update account file (5.5), and the bootstrap's keys that write it | MU6 |
 | MU9 | `docs/operations/maintenance.md`: the runbook (the Xcode download, scheduling, a halted host) | MU7, MU8 |
 | J1 | komira-ai/jobscheduler: js-agent `drain`, `resume`, the hold file | MU4 |
 | J2 | komira-ai/jobscheduler: the `xcode` probe re-read in `resume` | J1 |
 | K1 | komira-ai/kbf: `xcode` required on a Mac action; `kbf-mac-provision` without Xcode items on hostkeeper hosts | J2 |
 
 MU1 lands first (interfaces before code). MU2 and MU4 go in parallel; Linux maintenance (MU5, MU6) works end to end before any Mac work,
-with J1 deployed. MU7 waits for J2 and K1, because without them an Xcode change could serve a cached result across Xcodes (section 6).
-MU7 and MU8 wait for the owner's answers.
+with J1 deployed: the one-button Linux update (a kernel or security update, or a restart) is the first thing the build delivers. MU8
+follows. MU7 waits for J2 and K1, because without them an Xcode change could serve a cached result across Xcodes (section 6), and for the
+owner's Xcode decision.
 
 **Tests the build must prove**, each over fakes (fake programs answering `softwareupdate`, `apt-get`, `dnf`, `apk`, `xip`, `xcodebuild`;
 a fake hook; a clock the test sets; injected heartbeats), none timing anything: a due item appears and clears; a host in a package update
@@ -335,19 +370,22 @@ is given no maintenance and the reverse; the window starts no host before or aft
 never has N + 1 hosts between staging and done in a group; no host is taken when fewer than `min_serving + 1` hosts serve, a draining or
 halted host never counting; a group of one is taken only when the Schedule says so; a failed step runs no `resume` and no `rollback`, and
 the hold file keeps the host cordoned across a restart; js-agent with a hold file refuses a lease before its cordon is placed; a drain
-deadline puts the host back unchanged; a full disk defers at stage; a macOS-and-Xcode run reboots after macOS and installs Xcode after the
+deadline puts the host back unchanged; a `reboot`-only run (a kernel installed but not running) installs nothing and reboots; Update starts
+the same run as a Schedule of everything due, now; the update account file of another owner or mode is refused, and its password never
+appears in an argument or a log line (asserted by exact equality); a full disk defers at stage; a macOS-and-Xcode run reboots after macOS and installs Xcode after the
 reboot; `verify` fails on each wrong fact; a host silent past `return_secs` raises `maintenance_not_back` and not before; Put back and
 Retry do what section 4.2 says; a host in its turn is left out of a package stage and given no package order; an older daemon is sent no
 `maintain` order; a coordinator restart does not start an order twice.
 
 ## 9. Questions for the owner
 
-1. **How a Mac authorises a macOS update.** On Apple silicon `softwareupdate` installs an OS update only with a volume owner's password
+1. **How a Mac authorises a macOS update. Decided (2026-11-19): (a)**, with the threat model of section 5.5. The question as asked: on Apple silicon `softwareupdate` installs an OS update only with a volume owner's password
    (`--user`, `--stdinpass`), unless a device management service with the bootstrap token orders it. Options: (a) each Mac keeps its
    administrator's password in a root-only file that hostkeeper reads only for that call, written once per Mac by a person; (b) Apple
    Business's built-in management enforces the target version (a setting made by hand in Apple Business, at Apple's moment, not the
    drained host's) **[V]** whether it can; (c) macOS stays manual and hostkeeper only drains and puts back around it. **Recommendation:
-   (a)**, the only one hostkeeper can time to a drained host; it puts one secret per Mac on the Mac, which the threat model must accept.
-2. **Where the `.xip` lives** (section 2.1). Recommendation: the coordinator's Xcode store, serving only its enrolled Macs, after counsel
-   reads the licence; until then the per-Mac copy.
-3. **`linux_scope` default.** Recommendation: `security` (security updates and the kernel), as asked; `all` is one setting away.
+   (a)**, the only one hostkeeper can time to a drained host.
+2. **How Xcode is fetched: on hold.** The owner wants the latest Xcode, always kept up to date, and does not see why hostkeeper should
+   vend the `.xip`. The options are in section 2.4; the answer follows research into what CI providers, device management services and
+   tools such as `xcodes` do. MU7 waits for it.
+3. **`linux_scope` default.** Kept: `security` (security updates and the kernel); `all` is one setting away.
