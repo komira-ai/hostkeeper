@@ -172,7 +172,7 @@ impl Live {
             .expect("a sign-in")
             .sessions
             .end(id);
-        assert!(ended);
+        assert_eq!(ended, Ok(true));
     }
 
     /// Attaches to `session` as the browser of the session `browser` (its cookie value and CSRF

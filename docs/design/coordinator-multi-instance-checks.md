@@ -1,7 +1,7 @@
 # The coordinator as N instances: measurements, model check, compatibility and tests
 
 Companion of [coordinator-multi-instance.md](coordinator-multi-instance.md) (the as-built choices of its section 4's M3, of
-its section 5's M6 and of its section 6's M4, the measurements of its section 7, and its sections 14 and 15, moved here so that file stays under 1000 lines, R12). Section numbers are kept; "section n" in the text below refers
+its section 5's M6, of its section 6's M4 and of its sections 8 and 9's M8, the measurements of its section 7, and its sections 14 and 15, moved here so that file stays under 1000 lines, R12). Section numbers are kept; "section n" in the text below refers
 to that document.
 
 ## 4. The rest of M3, as built
@@ -172,6 +172,39 @@ beat waits for one flush, about 0.84 ms on the live disk, which is noise against
 **Converged path against section 7's bound.** The beat statement alone is 0.34 to 0.45 ms on the scratch copy, at the edge of
 "a few hundred microseconds". Most of it is the client's parse and plan of the statement on every call, which a prepared
 statement would cut. At 0.73 beats/s that is not a load, so none of section 7's fallbacks is taken.
+
+## 8 and 9. M8, as built
+
+The choices sections 8 and 9 leave open, as the code makes them (`store/postgres/login_rows.rs`, `periodic.rs`,
+`alert_rows.rs`, `admin_rows.rs`, `0025_sessions_and_jobs.sql`, `session.rs`, `jobs.rs`, `alerts_rows.rs`,
+`initial_admin.rs`, `config_database.rs`):
+
+- Time is the database's `now()`, read in the statement that judges by it; the stores take a fixed second instead only in a
+  test, so a deadline replays.
+- The two writes that read many rows, making a session against `--session-max-count` and counting a failure against
+  `--login-max-tracked`, lock a row of a table of their own, `login_gate` (rows `sessions` and `login_failures`, never
+  updated), `FOR UPDATE` as their first statement: a row lock, as section 3 allows, not an advisory lock. Every other
+  session or limiter statement touches one row. The rows add `must_change` and `must_change_until` to the columns section 8
+  lists, which the session's view needs.
+- A lookup reads the row on the read-only session and writes only when it must: a conditional delete of an expired row, a
+  conditional move of `last_used_unix` when it is at least `--session-touch-secs` old. When the rows cannot be reached the
+  login fails closed: no session is made or found, and every name is locked.
+- `periodic_jobs` has no period column: the claim is given each job's period from `--job-every`, as section 9's `$period`. One
+  job `prune` (the key of section 12) does every prune in one transaction; an order of `fleet_orders` is aged, and pruned,
+  once `ORDER_AGE` has passed since it was given, the age at which every reader already takes its slot as free.
+- The alerts' rows are keyed by the whole subject (six texts); only the job `alerts` writes them. `Alerts.List` reads them
+  for each alert's first observed second (now for one the job has not noted yet) and writes and logs nothing; a write or
+  read that fails falls back to this coordinator's memory, so the alert of a lost database is still logged.
+- The request expiry's effect is M5's conditional write (the store's write lands only on the requests as read); M8 makes
+  its scan the job `request-expiry`, and the reload tick expires nothing over a database.
+- An end of sessions that the rows cannot take (a logout, a password change or reset, a user disabled or removed) is an
+  error the caller answers (`store_unreachable`, `store_failed`), not a silent zero: the change itself stands, and making it
+  again ends the sessions.
+- An effect's audit line is written by the coordinator whose conditional write won, after it, through the operations
+  store's own edit (M4's `audit_counter` numbers it), not in the write's transaction: the adoption's and the void's after
+  the user's row. A stop between the two loses that one line.
+- The initial-admin file's writes of a `users` row lock the `accounts` row of `state_versions` and move its version on when
+  they change the row, so every coordinator reads its copy of the accounts again (M4's rule of section 6).
 
 ## 14. The model check, before code
 
