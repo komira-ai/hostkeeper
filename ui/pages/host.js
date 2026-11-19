@@ -18,18 +18,25 @@
 // a required reason and with no refresh: the host's state changes slowly.
 // The Remote SSH tab is `sshpanel.js`: Ssh.HostKeys is called when the page is read, and on a button
 // Ssh.PinHostKeys (after a confirm); its terminal is a socket from `ctx.openSocket`.
+// Alerts.List is called last when the page is read, for the alerts that name the host; when it
+// fails, the page says so and shows the reasons the host's own report gives. On a button of a
+// reason, after a confirm, Releases.ClearHalt (with the reason typed) or Hosts.Retry.
 //
 // The page is a status header (name, status LED and word, role, group, what it runs, the last
-// heartbeat, and a small elevation of the rack it stands in), then tabs (Overview, Services,
+// heartbeat, and a small elevation of the rack it stands in), then, when the host is not healthy,
+// why: every reason (`health.js`) in plain words, with when it began and the one action that fixes
+// it (Clear halt, Retry update), and for a js-agent taint what hostkeeper holds of it; then tabs (Overview, Services,
 // Certificate, Labels, Placement, Host group, Remote SSH, Power and boot; every panel is in the page, the stylesheet shows the
 // chosen one, and the choice is kept across a refresh of the same host), then the danger zone,
-// which holds Retire. The status says "degraded" for a live host whose service is unhealthy or whose
-// last update failed; the lab's state alone would call it healthy.
+// which holds Retire. The status says "degraded" for a live host with any reason: a service of it
+// unhealthy, halted or whose last update failed, or an alert that names it; the lab's state alone
+// would call it healthy.
 
 import {
   h, action, allPages, checkbox, describeError, enumLabel, errorView, field, fmtUnix, list, pill, reasonProblem,
   scopeLabel, select, table, trimmed,
 } from "../view.js";
+import { isDegraded, reasonsOf } from "../health.js";
 import { crumbs, hostState, layoutOf, layoutProblem, rackName, slotOf, slotOptions, subjectOf } from "../lab.js";
 import { loadSsh, sshPanel } from "../sshpanel.js";
 
@@ -44,12 +51,13 @@ function plain(text) {
   return typeof text === "string" ? text.replace(/_/g, " ") : text;
 }
 
-// The status a host header shows: the lab's state, but a host whose service reports unhealthy or
-// whose last update failed is `degraded`, never `healthy`. `[word, tone]`.
-export function statusOf(host) {
+// The status a host header shows: the lab's state, but a live host with a reason (`reasons`, of
+// `health.js`) or whose service reports unhealthy in its last heartbeat is `degraded`, never
+// `healthy` or `updating`. `[word, tone]`.
+export function statusOf(host, reasons = []) {
   const state = hostState(host);
   const heart = host.heartbeat && list(host.heartbeat, "services").some((s) => s.health === "HEALTH_UNHEALTHY");
-  if (state === "failed" || (state === "healthy" && heart)) {
+  if (state === "failed" || (state === "healthy" && heart) || isDegraded(host, reasons)) {
     return ["degraded", "bad"];
   }
   return [state, { healthy: "ok", updating: "info", offline: "bad", pending: "muted" }[state]];
@@ -538,6 +546,104 @@ function inventoryFacts(ctx, host) {
   ];
 }
 
+// When a reason began, in words: the time and whose clock it is, or that it was not reported.
+function sinceWords(reason) {
+  const when = fmtUnix(reason.since);
+  return when === "-" ? "Since: not reported." : `Since ${when} (${reason.sinceIs}).`;
+}
+
+// What hostkeeper holds of a js-agent's taint: the hook's halt reason, what the agent said and the
+// hook's last log lines. The hook tells hostkeeper no check and no run id, so they are said to be
+// not reported rather than left out. No action of hostkeeper clears a taint yet: it is cleared on
+// the host, and then the halt (or the failed update) is cleared here.
+function taintFacts(reason) {
+  const then = reason.fix === "clear-halt" ? "Clear halt" : "Retry update";
+  return h("div", { class: "taint", name: "taint" },
+    kv([
+      ["Taint", "the agent is tainted (its update hook reports the reason tainted)"],
+      ["Finding", reason.taint.said || "-"],
+      ["Check", "not reported to hostkeeper"],
+      ["Run id", "not reported to hostkeeper"],
+    ]),
+    reason.taint.log.length === 0 ? null : h("pre", { class: "log" }, reason.taint.log.map((line) => `${line}\n`)),
+    h("p", { class: "note" },
+      `Clear taint: hostkeeper has no action that clears a taint yet. Clear it on the host, then press ${then} here.`));
+}
+
+// The words under a reason no button fixes.
+const NO_BUTTON = {
+  unhealthy: "Nothing to press here: the service itself says it is unhealthy. Its Services tab has its last update and the actions on it.",
+  prerequisite: "Nothing to press here: the host's daemon tries again by itself, at the next try the message names.",
+  alert: "Nothing to press here: the coordinator's words above say what to do.",
+};
+
+// The one action that fixes `reason`: Clear halt (Releases.ClearHalt of its service, with the
+// reason typed in `form`, after a confirm, since it lifts the service's halt on every host), Retry
+// update (Hosts.Retry of the host and its service, after a confirm), or the words of why there is
+// no button.
+function fixOf(ctx, nodeId, reason, form) {
+  const service = reason.service;
+  if (reason.fix === "clear-halt") {
+    return action(ctx, `Clear halt of ${service}`, `clear-halt-${service}`, async () => {
+      const typed = trimmed(form.reason);
+      if (typed === "") {
+        return "Give a reason first.";
+      }
+      const problem = reasonProblem(typed);
+      if (problem) {
+        return problem;
+      }
+      const taint = reason.taint === null ? ""
+        : ` The agent on ${nodeId} is still tainted: its update hook may halt again until the taint is cleared on the host.`;
+      if (!ctx.confirm(`Clear the halt of ${service}? It lifts the halt on every host of ${service}, not only ${nodeId}; they are ordered again as its update plan and holds let them.${taint}`)) {
+        return "Not cleared.";
+      }
+      await ctx.api.releases.clearHalt({ service, reason: typed });
+      ctx.refresh();
+      return `Cleared the halt of ${service}.`;
+    }, { class: "primary" });
+  }
+  if (reason.fix === "retry") {
+    return action(ctx, `Retry update of ${service}`, `retry-${service}`, async () => {
+      if (!ctx.confirm(`Retry the update of ${service} on ${nodeId}? Its failed report is set aside, and it is ordered the desired version again when its update plan and holds let it.`)) {
+        return "Not retried.";
+      }
+      const reply = await ctx.api.hosts.retry({ nodeId, service });
+      ctx.refresh();
+      const failedAt = reply.setAside && typeof reply.setAside["target"] === "string" ? ` to ${reply.setAside["target"]}` : "";
+      return reply.entry
+        ? `Set aside the failed update of ${service}${failedAt}: ${nodeId} may be ordered it again from its next heartbeat; its Services tab says what its gate waits for.`
+        : `The failed update of ${service}${failedAt} was set aside already: its Services tab says what ${nodeId}'s gate waits for.`;
+    }, { class: "primary" });
+  }
+  return h("p", { class: "note" }, NO_BUTTON[reason.kind]);
+}
+
+// Why the host is not healthy: each reason in plain words, when it began, what was said of it, a
+// taint's facts, and its action; one Reason field (`form.reason`, kept across a change of tab)
+// serves every Clear halt. Nothing when there is no reason and the alerts were read.
+// `alertsFailure` is the error of Alerts.List, or null.
+function healthSection(ctx, nodeId, reasons, alertsFailure, form) {
+  if (reasons.length === 0 && alertsFailure === null) {
+    return null;
+  }
+  return h("section", { class: "health card", name: "health" },
+    h("h3", {}, reasons.length === 0 ? "Alerts" : `Why ${nodeId} is not healthy`),
+    alertsFailure === null ? null : h("p", { class: "warning", role: "alert" },
+      `The alerts were not read (${describeError(alertsFailure)}): only what the host itself reported is shown.`),
+    reasons.some((reason) => reason.fix === "clear-halt")
+      ? field("Reason (for Clear halt)", "health-reason", form, "reason", { maxlength: 256 })
+      : null,
+    reasons.length === 0 ? null : h("ul", { class: "reasons" }, reasons.map((reason) => h("li", {
+      class: `reason ${reason.tone}`, name: "reason",
+    },
+    h("strong", {}, reason.title),
+    reason.said === null ? null : h("p", { class: "said" }, reason.said),
+    h("p", { class: "since" }, sinceWords(reason)),
+    reason.taint === null ? null : taintFacts(reason),
+    fixOf(ctx, nodeId, reason, form)))));
+}
+
 function chooser(ctx) {
   const form = { nodeId: "" };
   return h("section", { class: "page" },
@@ -589,10 +695,19 @@ export async function render(ctx) {
   const now = ctx.now();
   const agent = host.heartbeat && host.heartbeat.agent;
   const where = await placementSection(ctx, host, nodeId, () => repaint());
+  let alerts = [];
+  let alertsFailure = null;
+  try {
+    alerts = list(await ctx.api.alerts.list({}), "alerts");
+  } catch (error) {
+    alertsFailure = error;
+  }
+  const reasons = reasonsOf(host, alerts);
+  const healthForm = { reason: "" };
   const labelsForm = {
     labels: Object.entries(host.labels || {}).map(([k, v]) => `${k}=${v}`).join(", "),
   };
-  const [stateWord, stateTone] = statusOf(host);
+  const [stateWord, stateTone] = statusOf(host, reasons);
   const services = list(host, "services");
   const certWord = certState(host.certNotAfterUnix, now);
   const rootWord = rootState(host.trustedRootReason);
@@ -679,6 +794,7 @@ export async function render(ctx) {
               .filter(([, v]) => typeof v === "string" && v !== "")
               .map(([k, v]) => h("span", { class: "meta" }, h("small", {}, k), v)))),
         where.mini),
+      healthSection(ctx, nodeId, reasons, alertsFailure, healthForm),
       h("nav", { class: "tabs", "aria-label": "host sections" },
         tabs.map(([id, label, tone]) => h("button", {
           type: "button", name: `tab-${id}`, class: `tab${chosen.tab === id ? " on" : ""}`,

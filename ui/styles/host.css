@@ -474,3 +474,41 @@
   }
 
 }
+
+/* Why the host is not healthy: one card under the header, a line per reason with a bar of its tone. */
+
+.hostpage .health {
+  margin: 0 0 14px;
+  border-left: 3px solid var(--bad);
+}
+
+.health .reasons {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.health .reason {
+  padding: 8px 12px;
+  border-left: 3px solid var(--bad);
+}
+
+.health .reason.warn {
+  border-left-color: var(--warn);
+}
+
+.health .reason p {
+  margin: 4px 0;
+}
+
+.health .since {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.health .taint {
+  margin: 8px 0;
+}

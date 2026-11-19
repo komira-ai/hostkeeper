@@ -54,7 +54,12 @@ by their route and are not in the menu.
   state and its name, a blank panel over a free run of U; a click on a server opens its host page, and hover says its name, group,
   version and state. A click on a rack's head opens that rack with its servers in a table. Breadcrumbs lead back
   (`Lab > Row > Rack > Host`). Below the floor plan: the servers not placed yet (the Unplaced list), the alerts of `Alerts.List`
-  and a table of every host. **Edit layout** shows the controls: rename the cluster, add a row (the next number), add a rack to a
+  and a table of every host. Under the alerts, the degraded hosts: how many, and each reason with the hosts that have it (most
+  hosts first), each host a link to its page. A live host is degraded when it has a reason: an alert of `Alerts.List` that names
+  it and says it is not healthy (a halt, a duplicate identity, a failed canary, a silent host, a trusted root, a failed
+  prerequisite; an operator's hold, an abandon or an approval that waits is no reason), or a service of it halted, unhealthy or
+  whose last update failed; it is drawn `failed`, and its row says why under Why. When `Alerts.List` fails, the count is of the
+  hosts' own reports, and says so. **Edit layout** shows the controls: rename the cluster, add a row (the next number), add a rack to a
   row (its height from a list, 42 U by default), resize, move to another row or remove a rack, remove a row, and move a server by
   picking it up (or dragging it) and putting it on a free U of a rack, or taking it out of its rack. A row or a rack that still
   holds servers is not removed, and the page names them. A refusal is told in words. An empty lab says so and offers "Add a row".
@@ -64,6 +69,16 @@ by their route and are not in the menu.
   All four are choices from the layout, the U position only among the free slots of the rack for that height; Row's first choice,
   Unplaced, places nothing. The placement is sent with the approval, which is refused whole when the slot is taken.
 - **Host** (Placement): where the host stands, and the same four choices to place or move it (Place, Move) and Unplace.
+- **Host** (why it is not healthy): under the header, every reason the host is not healthy in plain words, with the time it
+  began (by the coordinator's clock for an alert, the host's for a failed update) and the one action that fixes it: **Clear halt**
+  (`Releases.ClearHalt` of the service, with a reason typed once for the section; it lifts the service's halt on every host, and
+  the question says so), **Retry update** (`Hosts.Retry` of the host and the service; the host is ordered the version again
+  when its update plan and holds let it), or words saying why there is no button (a
+  failed prerequisite, which the host's daemon tries again by itself; a service that reports itself unhealthy; another alert).
+  For a js-agent taint (a halt report with the reason `tainted`) it shows what the agent said and the hook's last log lines; the
+  hook tells hostkeeper no check and no run id, so they read "not reported to hostkeeper", and since hostkeeper has no action
+  that clears a taint, the page says to clear it on the host first. `Alerts.List` is the page's last read; when it fails, the
+  page says so and shows the reasons the host's own report gives.
 
 ## What the pages do for services
 
