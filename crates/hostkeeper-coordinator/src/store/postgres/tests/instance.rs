@@ -53,10 +53,10 @@ fn number(text: &Option<String>) -> i64 {
 fn each_start_makes_its_instance_row_and_a_beat_moves_it_on() {
     let db = TestDatabase::new();
     let (first, _) = db
-        .open_options(&running("r1", "heartbeat=10.0.0.1:8443"), "first")
+        .open_options(&running("r1", "heartbeat=192.0.2.1:8443"), "first")
         .expect("the first starts");
     let (second, _) = db
-        .open_options(&running("r2", "heartbeat=10.0.0.2:8443"), "second")
+        .open_options(&running("r2", "heartbeat=192.0.2.2:8443"), "second")
         .expect("the second starts");
     assert_ne!(first.instance().id, second.instance().id);
     assert_eq!(
@@ -68,7 +68,7 @@ fn each_start_makes_its_instance_row_and_a_beat_moves_it_on() {
         started[..2],
         [
             Some("r1".to_owned()),
-            Some("heartbeat=10.0.0.1:8443".to_owned())
+            Some("heartbeat=192.0.2.1:8443".to_owned())
         ]
     );
     assert_eq!(started[2], started[3], "seen at its start");

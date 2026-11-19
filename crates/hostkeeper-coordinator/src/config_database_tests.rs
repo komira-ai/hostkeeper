@@ -88,15 +88,15 @@ fn the_database_flags_refuse_what_cannot_run() {
 fn the_listen_addresses_name_each_listener() {
     let at = |text: &str| text.parse::<SocketAddr>().expect("an address");
     assert_eq!(
-        listen_of(at("10.0.0.1:8443"), at("127.0.0.1:8444"), None),
-        "heartbeat=10.0.0.1:8443 private=127.0.0.1:8444"
+        listen_of(at("192.0.2.1:8443"), at("127.0.0.1:8444"), None),
+        "heartbeat=192.0.2.1:8443 private=127.0.0.1:8444"
     );
     assert_eq!(
         listen_of(
-            at("10.0.0.1:8443"),
+            at("192.0.2.1:8443"),
             at("127.0.0.1:8444"),
             Some(at("[::]:8447"))
         ),
-        "heartbeat=10.0.0.1:8443 private=127.0.0.1:8444 lan=[::]:8447"
+        "heartbeat=192.0.2.1:8443 private=127.0.0.1:8444 lan=[::]:8447"
     );
 }
