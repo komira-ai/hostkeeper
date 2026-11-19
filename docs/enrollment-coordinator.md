@@ -172,6 +172,17 @@ certificate is made at the host's next `Poll`, never answered here. With `replac
 earlier key no longer names the host: a certificate of it is not admitted at the heartbeat, and
 it cannot renew.
 
+An approval of a request no record matches is followed, in the same call, by the host's record,
+written from the claims of the request (a Mac's serial; the universally administered data MACs
+among its addresses, at most 16; its BMC MAC), added by `coordinator`, with no host group and no
+window, so it approves nothing; and a place the lab layout gave the host as itself moves to that
+record. The coordinator writes the same record at each start for every enrolled host no record
+matches. Each record is one change of the ops file, audited `record_add` by `coordinator`, made
+only when, on the records that change is applied to, no record matches the host and none holds
+its host id, a MAC or its serial; so each is written once, on any number of coordinators. A
+record that cannot be written leaves the approval standing (logged). See
+[operations/enrollment.md](operations/enrollment.md#a-host-approved-without-a-record).
+
 Each approval is audited `enroll_approve` (`enroll_replace` with `replace`) under the operator's
 token name, with the request id, the group (`group web`, and the entry's `host_group`) and the
 claims; each refused one
@@ -269,7 +280,9 @@ no MDM at the coordinator: the coordinator's own MDM, which gave a Mac a one-tim
 approved it by an allowlist of serials, was removed (2026-11-14), and Macs come to the coordinator
 through the bootstrap package of Apple Business device management
 (`docs/operations/mac-bootstrap.md`, `docs/design/mac-bootstrap.md`). A serial a Mac claims is its
-own word, as any claim is: what approves it is an operator's click or a record's window.
+own word, as any claim is: what approves it is an operator's click or a record's window. A Mac
+approved by a click with no record that holds its serial gets one, written by the coordinator
+from its serial (Approving a request, above).
 
 An `Enroll` that carries a `mac_nonce` (a daemon of an earlier release does, when its managed
 preferences hold one) is read as any other: the field is ignored, the request is pending, and

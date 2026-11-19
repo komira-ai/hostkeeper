@@ -4,7 +4,10 @@ How one server becomes a host the coordinator manages: the operator enters its r
 inventory, and the node boots, asks for a certificate and is enrolled. Entering the record is the
 approval: there is no approve step for a server that matches its record
 ([The record is the approval](#the-record-is-the-approval)). A request that does not match (the Enrollment page says "Not in inventory."), or
-that needs a second look, waits for an operator to [approve](#approve) it by hand. The
+that needs a second look, waits for an operator to [approve](#approve) it by hand; the
+coordinator then writes the host's record from what it claimed, unless the records refuse it
+([A host approved without a record](#a-host-approved-without-a-record)), and the Inventory page
+lists every enrolled host, with its record or without one. The
 coordinator's side (its flags, its CA, its state files) is
 [enrollment-coordinator.md](../enrollment-coordinator.md); every command, flag and exit code of
 `hkctl` is [cli.md](../cli.md).
@@ -43,7 +46,8 @@ in proxy mode refuses a record whose platform disagrees with the firmware's arch
 optional and for a Linux server only: `darwin_arm64` is refused `invalid_request`, and a Mac's record
 has none. `list-records` shows it; the Inventory page does not (see below).
 
-The answer is the record as kept, with `added_by` (the token's name). A second record of the same
+The answer is the record as kept, with `added_by` (the token's name; `coordinator` for a record
+the coordinator wrote for a host approved without one, below). A second record of the same
 host id is refused `record_exists`; a record with a MAC or a serial that another record holds is
 refused `record_conflict`. To change a record's data MACs, BMC MAC or notes, call `update-record`: it sets
 those three and changes nothing else of the record (its host group, serial, platform, window and use stay), checks
@@ -94,11 +98,52 @@ reads one record by host id: list the records and find it. The coordinator keeps
 
 The console's Inventory page is one table with four fields per server: Server name, BMC MAC, Data MAC and
 Notes. It lists the records, adds a server in its last row, edits a row's MACs and notes (`update-record`) and
-removes a row (`remove-record`, after a confirmation). A MAC is typed in any common spelling (`aa:bb:..`,
+removes a row (`remove-record`, after a confirmation). Beside a server's name it says `enrolled` when a host
+is enrolled against the record, `recorded at enrollment` for a record the coordinator wrote, and `no data
+MAC` for a record that holds none (a Mac's record written from its claims holds only its serial: add the
+Mac's data MAC with Edit). On its first page it also lists every enrolled host no record matches, one row
+each, `enrolled, no record`, with nothing to edit: a host whose claims gave no record (below), or one
+that matches several. The page reads the hosts with `hosts list`; when that is refused it says so
+above the table, and those hosts are not shown. A MAC is typed in any common spelling (`aa:bb:..`,
 `AA-BB-..`, `aabb.ccdd.eeff`, twelve digits) and sent in the one spelling, and a field that is wrong is marked
 under itself. A host group, role, serial, platform and window are not shown there and an edit never changes them; set them
 with `hkctl enrollment add-record`. A server added on the page names no host group, so it approves no request by itself: its
 name and MACs match a pending request on the Enrollment page, which an operator approves there.
+
+### A host approved without a record
+
+When an operator approves a request that no record matches (a Mac that came through the bootstrap
+package and whose serial no record holds, or a server approved before its record was entered),
+the coordinator writes the host's record itself, right after the approval, from what the host
+claimed when it enrolled: its host id, a Mac's serial, the data MACs among its claimed addresses
+that are universally administered (a bridge's or a virtual machine's made-up MAC is left out), at
+most 16, and its BMC MAC. The record is added by `coordinator` (`added_by`, a name no token may
+take) with the notes `Recorded at enrollment from the host's claims.` (for a Mac, `...: a Mac
+(darwin-arm64).`), and is audited `record_add` by `coordinator`, its reason starting `at
+enrollment, from the host's claims`. It names no host group and has no window, so it approves
+nothing: a second key that claims the same serial or MAC waits for an operator, as one that
+matches a closed record does. Its platform is left unstated (a record states one only for a
+Linux server's network install). Edit it as any record (`update-record`), to add a Mac's data MAC
+or a server's BMC MAC.
+
+No record is written when a record already matches the host (one, or several), when a record
+holds its host id, one of its MACs or its serial (the approval stands; fix the records and add
+the host's own), when the inventory holds 10000 records, when the host claimed neither a Mac
+serial nor such a MAC, or when a Mac's claimed serial is not one a record may hold (1 to 64 of
+letters, digits, `.`, `_` and `-`). The Inventory page lists each such host as `enrolled, no
+record`, and a host the layout places as itself keeps that place.
+
+Each start of the coordinator does the same for every enrolled host no record matches, so a host
+approved before the coordinator wrote records at an approval is recorded at the next start, its
+audit reason starting `at the coordinator's start, for a host enrolled without one`. A host that
+has its record writes nothing at a start, so a start writes each record once, also on several
+coordinators over one database. A record removed for a host that is still enrolled is written
+again at the next start: retire the host (`hosts retire`) to take it out of the inventory.
+
+A host the lab layout places as itself (`host:<id>`, the place of a host with no record) has that
+place moved to the record of its host id (`inventory:<id>`) once one is written, on the same sled
+and slot, audited `layout_place` by `coordinator`: the lab view shows a host whose host id a record
+holds at the record's place. A host left without a record keeps its place.
 
 ## The record is the approval
 
@@ -440,7 +485,8 @@ A server that matches an open record needs no approval ([The record is the
 approval](#the-record-is-the-approval)). Approve by hand a request that waits: one that matches
 no record or several, is outside its record's window, matches a used record, is contested, a
 duplicate claim or a renewal, or whose record names no host group. Approving by hand does not
-mark a record used. An approval names the request and its key hash, and may name the host's
+mark a record used. Approving a request no record matches writes the host's record from its
+claims ([A host approved without a record](#a-host-approved-without-a-record)). An approval names the request and its key hash, and may name the host's
 group and a reason. The group, when named, must be one the coordinator holds
 (`unknown_host_group`), and is not taken from the record: the record's group is shown, not
 applied. `--role` is accepted as an alias of `--host-group` for older scripts and is read as the

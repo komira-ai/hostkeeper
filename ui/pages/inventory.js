@@ -1,15 +1,21 @@
 // Inventory: the servers the operator built, one table of four fields each: Server name, BMC MAC,
 // Data MAC and Notes. Nothing else of a record is shown or sent (its role, host group, serial,
 // platform, window and the rest stay as the coordinator keeps them). The table has a row per
-// record, with Edit and Remove, and a last row to add a server. Calls: Enrollment.ListRecords;
-// on Add, Enrollment.AddRecord; on Save, Enrollment.UpdateRecord, which changes the record's
-// MACs and notes and nothing else of it; on Remove, Enrollment.RemoveRecord, after a confirm.
-// The page's `edit` parameter names the record whose row is open for editing, `pageToken` the
-// page, and `record` (the Host page's link) marks that record's row. A row whose server has an
-// enrolled host says so beside its name (`enrolled`, from ListRecords).
+// record, with Edit and Remove, and a last row to add a server. Calls: Enrollment.ListRecords and
+// Hosts.List; on Add, Enrollment.AddRecord; on Save, Enrollment.UpdateRecord, which changes the
+// record's MACs and notes and nothing else of it; on Remove, Enrollment.RemoveRecord, after a
+// confirm. The page's `edit` parameter names the record whose row is open for editing,
+// `pageToken` the page, and `record` (the Host page's link) marks that record's row. Beside a
+// row's name: `enrolled` when its server has an enrolled host (from ListRecords); `recorded at
+// enrollment` when the coordinator wrote the record from the host's claims (added by
+// `coordinator`); `no data MAC` when the record holds none (a Mac's record from its claims holds
+// only its serial). Every enrolled host no record matches (Hosts.List: enrolled, no
+// `inventoryRecordId`) has a row of its own on the first page, `enrolled, no record`, with no
+// buttons: the page never leaves an enrolled host out. When the hosts cannot be listed the page
+// says so.
 
 import {
-  h, action, allPages, area, errorView, field, reasonProblem, select, table, trimmed,
+  h, action, allPages, area, describeError, errorView, field, reasonProblem, select, table, trimmed,
 } from "../view.js";
 import {
   CONSOLE_DEVICES, NETWORK_ROLES, consoleWords, gearOf, layoutOf, layoutProblem, rackName,
@@ -144,9 +150,26 @@ function enrolledNote(record) {
   return h("small", { name: "enrolled-note" }, host === "" || host === record.hostId ? " enrolled" : ` enrolled as ${host}`);
 }
 
+// The added_by of a record the coordinator wrote from an enrolled host's claims.
+const COORDINATOR = "coordinator";
+
+// What a row says of how complete its record is, beside the server name: "recorded at
+// enrollment" for one the coordinator wrote, "no data MAC" for one that holds none; null for
+// neither.
+function recordNote(record) {
+  const words = [];
+  if (record.addedBy === COORDINATOR) {
+    words.push("recorded at enrollment");
+  }
+  if ((record.dataMacs || []).length === 0) {
+    words.push("no data MAC");
+  }
+  return words.length === 0 ? null : h("small", { name: "record-note" }, ` ${words.join(", ")}`);
+}
+
 function recordRow(ctx, record, chosen, address) {
   return h("tr", chosen ? { "aria-current": "true" } : {},
-    h("td", {}, record.hostId, enrolledNote(record)),
+    h("td", {}, record.hostId, enrolledNote(record), recordNote(record)),
     h("td", {}, record.bmcMac || "-"),
     h("td", {}, (record.dataMacs || []).join(", ") || "-"),
     h("td", {}, record.notes ? h("pre", {}, record.notes) : "-"),
@@ -164,6 +187,28 @@ function recordRow(ctx, record, chosen, address) {
         ctx.refresh();
         return `Removed ${record.hostId}.`;
       }, { class: "danger" })));
+}
+
+// The row of an enrolled host no record matches: its name and a note, its address, nothing to edit.
+function unrecordedRow(host, address) {
+  return h("tr", { name: "unrecorded" },
+    h("td", {}, host.nodeId, h("small", { name: "unrecorded-note" }, " enrolled, no record")),
+    h("td", {}, "-"),
+    h("td", {}, "-"),
+    h("td", {}, "-"),
+    h("td", { class: "mono", name: "address" }, address),
+    h("td", { class: "row-actions" }));
+}
+
+// The enrolled hosts no record matches, by node id, or `{ failed }` when the hosts cannot be listed.
+async function unrecordedHosts(ctx) {
+  try {
+    const hosts = await allPages((token) => ctx.api.hosts.list(token === "" ? {} : { pageToken: token }), "hosts");
+    return hosts.filter((host) => Number(host.enrolledUnix || 0) > 0 && !host.inventoryRecordId)
+      .sort((a, b) => (a.nodeId < b.nodeId ? -1 : 1));
+  } catch (error) {
+    return { failed: error };
+  }
 }
 
 function editRow(ctx, record, address) {
@@ -245,10 +290,17 @@ async function renderServers(ctx) {
   const rows = records.map((record) => (record.hostId === param("edit")
     ? editRow(ctx, record, addressWords(layout, `inventory:${record.hostId}`))
     : recordRow(ctx, record, record.hostId === param("record"), addressWords(layout, `inventory:${record.hostId}`))));
+  // The enrolled hosts no record matches, once, on the first page.
+  const unrecorded = pageToken === "" ? await unrecordedHosts(ctx) : [];
+  const hostRows = Array.isArray(unrecorded)
+    ? unrecorded.map((host) => unrecordedRow(host, addressWords(layout, `host:${host.nodeId}`)))
+    : [];
   return h("section", { class: "page inventory" },
     h("h2", {}, "Inventory"),
     h("p", { class: "note" }, "The servers you built: each with its name, BMC MAC, data MAC and notes, and its address once it stands on a sled."),
-    table(["Server name", "BMC MAC", "Data MAC", "Notes", "Address", ""], rows.concat([addRow(ctx)])),
+    Array.isArray(unrecorded) ? null : h("p", { class: "note", role: "alert", name: "hosts-failed" },
+      `The enrolled hosts could not be listed, so a host without a record is not shown here: ${describeError(unrecorded.failed)}`),
+    table(["Server name", "BMC MAC", "Data MAC", "Notes", "Address", ""], rows.concat(hostRows, [addRow(ctx)])),
     h("div", { class: "buttons" },
       pageToken === "" ? null : h("button", {
         type: "button", name: "first-page", on: { click: () => ctx.navigate("inventory", {}) },
