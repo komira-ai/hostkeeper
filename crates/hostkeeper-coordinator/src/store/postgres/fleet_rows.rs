@@ -35,6 +35,9 @@ use super::{Postgres, on_writer};
 use crate::fleet::DOWN_AFTER;
 use crate::store::beat::HostBeat;
 
+/// The longest quiet time the beat statement sets, in seconds: `u32::MAX`, about 136 years.
+pub(crate) const MAX_QUIET_SECS: i64 = 4_294_967_295;
+
 /// The times of the beat statement, in seconds (section 12 of the design).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Timing {
@@ -49,13 +52,15 @@ pub(crate) struct Timing {
 }
 
 impl Timing {
-    /// The times of `--beat-reorder-secs` and `--quiet-secs`, with [`DOWN_AFTER`].
+    /// The times of `--beat-reorder-secs` and `--quiet-secs`, with [`DOWN_AFTER`]. A quiet time
+    /// past [`MAX_QUIET_SECS`] is that many seconds, more than a century: the statement adds it to
+    /// the database's clock in a `bigint`, which a larger one would overflow at every gap.
     pub(crate) fn of(reorder_secs: u64, quiet_secs: u64) -> Timing {
         let secs = |secs: u64| i64::try_from(secs).unwrap_or(i64::MAX);
         Timing {
             down_after: secs(DOWN_AFTER.as_secs()),
             reorder: secs(reorder_secs),
-            quiet: secs(quiet_secs),
+            quiet: secs(quiet_secs).min(MAX_QUIET_SECS),
         }
     }
 }

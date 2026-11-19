@@ -16,7 +16,8 @@ struct Flags {
 /// 4, a beat every 5 seconds, the runner's lock timeout of 3000 ms with 6 attempts 5 seconds
 /// apart, which is [`RETRY`], an edit's wait for the gate of 30000 ms, and a beat older by its
 /// host's clock believed once the stored one is 30 seconds old), with the release, addresses and
-/// quiet time given; each flag given is the option it names.
+/// quiet time given; each flag given is the option it names, and a quiet time too long for the
+/// database's clock to add is the longest it takes.
 ///
 /// Catches: a default that differs from the one the design and the help state, and a flag that is
 /// read into another option.
@@ -59,6 +60,11 @@ fn the_database_flags_default_to_the_design_and_each_sets_its_option() {
     .expect("the flags parse");
     let options = given.database.options("r", "l", 30);
     assert_eq!(options.fleet.reorder, 44);
+    let longest = given.database.options("r", "l", u64::MAX);
+    assert_eq!(
+        longest.fleet.quiet, 4_294_967_295,
+        "a quiet time past u32 is u32's largest"
+    );
     assert_eq!(options.pool.get(), 2);
     assert_eq!(options.gate_wait, Duration::from_millis(250));
     assert_eq!(options.beat, Duration::from_secs(9));

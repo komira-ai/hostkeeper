@@ -22,7 +22,7 @@ use crate::bake::Bake;
 use crate::marks_support::ask;
 use crate::store::beat::{HostBeat, ServiceSaid};
 use crate::store::postgres::TIMEOUTS;
-use crate::store::postgres::fleet_rows::{Timing, beat};
+use crate::store::postgres::fleet_rows::{MAX_QUIET_SECS, Timing, beat};
 use crate::store::postgres::migrate;
 use crate::store::postgres::session::Session;
 use crate::store::postgres::writer::{WriteFail, try_lock};
@@ -384,7 +384,8 @@ fn each_service_of_a_beat_has_its_own_bake() {
 /// Proves: a beat that finds `fleet_hosts` empty, or its newest row exactly `DOWN_AFTER` (45)
 /// seconds old, raises `cluster_quiet.until_unix` to the beat's moment plus the quiet time (30);
 /// one that finds a row 44 seconds old leaves it; the time is never lowered, even by a gap whose
-/// quiet ends sooner than the one stored.
+/// quiet ends sooner than the one stored; the longest quiet time a flag can give is set whole,
+/// with no overflow of the database's clock.
 ///
 /// Catches: a quiet rule that misses a first start or a gap (a partial fleet would then be judged
 /// down host by host), one that quiets a fleet that is beating, and one that shortens a quiet time
@@ -424,6 +425,30 @@ fn a_gap_in_the_beats_sets_the_quiet_time() {
         &quiet_left,
     );
     assert_eq!(left(row), 1000, "never lowered");
+
+    let longest = Timing::of(30, u64::MAX);
+    session.batch("BEGIN").expect("begin");
+    session
+        .batch(&format!("UPDATE fleet_hosts SET seen_unix = {NOW} - 100"))
+        .expect("a gap");
+    assert!(
+        beat(
+            &mut session,
+            &host("h1", 100, Vec::new()),
+            HEARD_BY,
+            &longest
+        )
+        .expect("no overflow")
+    );
+    let left_now: i64 = session
+        .query_one(&quiet_left, &[])
+        .expect("the quiet")
+        .get(0);
+    session.batch("COMMIT").expect("commit");
+    assert_eq!(
+        left_now, MAX_QUIET_SECS,
+        "the longest quiet time is set, not an overflow"
+    );
 }
 
 /// Proves: two sessions writing beats of one host at once are applied one after the other, the

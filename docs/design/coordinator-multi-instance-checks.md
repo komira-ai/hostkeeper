@@ -58,7 +58,8 @@ choice open. No decision reads the rows: the heartbeat is still decided over the
   the admission's read of the deny row (M5), and this statement. Folding the first two into it needs the heartbeat's admission
   moved after its message is read (the gRPC route admits a caller before the message is decoded), a change of the heartbeat's
   path M7 makes anyway; a round trip is 7 to 26 us (section 7).
-- `--beat-reorder-secs` is 1 to 44, below `DOWN_AFTER`.
+- `--beat-reorder-secs` is 1 to 44, below `DOWN_AFTER`; a `--quiet-secs` longer than `u32::MAX` seconds is that long in the statement, which adds it to
+  the database's clock in a `bigint`.
 
 ## 6. M4, as built
 
