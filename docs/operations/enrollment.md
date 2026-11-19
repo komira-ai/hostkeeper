@@ -513,6 +513,19 @@ hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <tok
 Without `--replace` none of these is changed. For a renewal, `--replace` lifts only
 `duplicate_claim`: a renewal is approved under the host id it renews, and no other.
 
+**Several coordinators.** Over the database store ([coordinator-state.md](coordinator-state.md#several-coordinators-on-one-database))
+any coordinator may take the call, and the enrollment store keeps no copy that could be stale. An
+approval, a rejection, a renewal, an expiry and the issue of a certificate are each one conditional
+write in a transaction: it lands only when the request, host, deny and certificate rows its
+decision read are still as they were read, and otherwise writes nothing and decides again on what
+the other writer left (`store/postgres/records.rs`, `enroll/store.rs` of `hostkeeper-enrollment`).
+So when two coordinators are asked to approve one request at once, one approves it and the other
+answers `not_pending`; the host's polls on either return the one certificate recorded, so a round
+of enrollment issues one certificate. A deny row is read fresh at
+each heartbeat and renewal, so a host retired through one coordinator is refused `denied` by all of
+them from the commit. Over the files one process holds the store behind its lock, and the same
+decisions are made one after the other.
+
 ## Reject
 
 A rejection names the request, and a reason if you give one (1 to 256 bytes; it may be left
@@ -691,13 +704,15 @@ and a host whose request is already pending is still answered. The refused daemo
 refusal once and posts again every 5 seconds, so it gets in when a place frees. An approval or a
 [rejection](#reject) frees a pending request's place, and so does its expiry. A request no
 operator approves within `--enrollment-request-ttl` (72 hours by default) of when the coordinator
-first received it expires at the next reload tick, and its host is unenrolled: it is audited
+first received it expires and its host is unenrolled (over the files at the next reload tick, `--tls-reload-secs`; over the database in the claimed job `request-expiry`, run every 15 seconds by one coordinator of those serving, [coordinator-state.md](coordinator-state.md#the-database-store)): it is audited
 `request_expired`, it is no longer approved (`not_pending`), and it is listed with
 `enrollment list --unenrolled true` with the reason and when it expired. The host's poll still
 answers pending; once its daemon restarts and posts the same key again, the request waits again,
 from that post; reject an expired request to keep its key out. Reject the requests nobody will
 approve; a queue that still fills needs a larger `--max-pending-enrollments` or a shorter
-`--enrollment-request-ttl`, set at the coordinator's next start.
+`--enrollment-request-ttl`, set at the coordinator's next start. Over the database the limit is
+checked against the requests each coordinator reads when it posts, not inside the write: two
+coordinators receiving new requests at one moment may each let one past the cap.
 
 ## Refusals of the operator calls
 

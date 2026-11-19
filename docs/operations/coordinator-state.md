@@ -1,6 +1,9 @@
 # The coordinator's state: where it is, backing it up and restoring it
 
-The coordinator keeps its durable state in one of two stores, chosen by the flags of `serve`:
+The coordinator keeps its durable state in one of two stores, chosen by the flags of `serve`. The
+file store is for one process: its lock keeps a second coordinator off the same files. The database
+store may be shared by several coordinators at once ([Several coordinators](#several-coordinators-on-one-database)
+below):
 
 - **The file store**: files named by three flags, `--state-file`, `--ops-file` (by default the state
   file's name with `.ops` added) and, when it is the hosts' CA, `--enrollment-dir`.
@@ -77,9 +80,8 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   nothing, on any of them, until the next heartbeat's revival has opened every lost one again with
   the lock. Reads that are not decisions
   (`Audit.List`, the enrollment lists, the alerts' scans) run on a second, read-only session.
-  Decisions read memory: a heartbeat in the steady state writes only its host's rows of the fleet
-  (below). It reads its host's enrollment and deny rows, fresh, so a deny another coordinator
-  recorded is seen at once.
+  A heartbeat is decided in one transaction, and its host's enrollment and deny rows are read
+  fresh ("A heartbeat's decision", below), so a deny another coordinator recorded is seen at once.
 - **The fleet's rows.** Every heartbeat a coordinator answers is kept, in one statement on a writing
   session and outside a transaction, in the tables of migration `0024`: the host's row of
   `fleet_hosts` (the heartbeat as read, the database's time it was heard, the host's own clock in
@@ -90,9 +92,22 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   `--beat-reorder-secs` old (default 30, 1 to 44): two coordinators can receive one host's
   heartbeats out of order. When the newest row of `fleet_hosts` is 45 seconds old or older, or
   there is none (a database restart, an outage, a first start), the statement raises
-  `cluster_quiet.until_unix` to `--quiet-secs` past its moment. No decision reads these rows yet: a
-  heartbeat is decided over the coordinator's memory as before, and one whose row cannot be
-  written is answered all the same (`a beat is not kept` in the log).
+  `cluster_quiet.until_unix` to `--quiet-secs` past its moment. A heartbeat whose row cannot be
+  written is answered all the same (`a beat is not kept` in the log). The decision reads these
+  rows (next bullet).
+- **A heartbeat's decision.** Over the database a heartbeat is decided in one transaction
+  (`store/postgres/decide.rs`, `store/decision.rs`). It takes the row of `rollout_gate` without
+  waiting: a gate held, or asked for by an operator's edit that waits, leaves the host told
+  nothing new until its next heartbeat. Under the gate it reads again every part another
+  coordinator changed since this one read it, and the fleet's rows, so the decision is the same
+  whichever coordinator hears the host. The halts, the stages entered, the marks and rollbacks
+  it makes, and the orders it gives (each written against the row as read) are written in that
+  transaction, and a decision that cannot be made or committed gives no order: the host keeps
+  what it runs and asks again. The quiet time after a start is read from `cluster_quiet`, so it
+  holds for the whole database and not for one process. The services waiting for their turn to
+  roll are ordered by `desired.set_seq` and `group_desired.set_seq`, taken in the transaction
+  that sets a version, so every coordinator orders them alike. Over the files there is one
+  process, nothing to take, and the heartbeat is decided over the fleet in its memory.
 - **Edits, and the copies in memory.** Each change of the state (an operator's, CI's, or one the
   coordinator makes itself) is one transaction that locks, after its row of `tx_ledger`, the row
   of `rollout_gate` when it changes what a rollout decision reads (the desired state, the
@@ -254,6 +269,45 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   ([docs/deploy/coordinator](../deploy/coordinator/README.md)) dumps it every six hours and keeps a
   week of dumps; its runbook has the one-time setup, the restore (into an empty database, then the
   serial counter moved on) and the monthly restore drill.
+
+## Several coordinators on one database
+
+Any number of coordinators may serve on one database (`docs/design/coordinator-multi-instance.md`).
+There is no leader: each takes the lock shared, each decides inside a transaction, and any of them
+answers any host or operator.
+
+- **What is shared.** Everything the database store holds ([above](#the-database-store)): the desired
+  state, the operators' changes, the fleet's rows and the decisions over them, the enrollment
+  records and the deny rows, the users, the sessions and the limiter's failure counts, the periodic
+  jobs and the audit log. A change one coordinator commits is read by the others at their next
+  request, by the versions of `state_versions`. What a coordinator keeps in memory is a copy that
+  it reads again when that version moves, or a cache that can only refuse earlier (the spent CI
+  token ids).
+- **What a restart or a deploy does.** It signs no operator out (the sessions are rows), loses no
+  halt, plan position or queue place, and leaves each periodic job to the other coordinators. The
+  files of the file store are one process's: a restart there signs everyone out ("The sign-in",
+  below) and the lock refuses a second coordinator.
+- **What stays per coordinator.** Its listeners, its row of `instances`, its console and SSH
+  tunnels, the counts `clock_skew_beats` and the heartbeats' skip sets of the enrollment store,
+  and its server certificate. The listeners one coordinator serves are its own: a
+  console stream or a tunnel lives on the coordinator that opened it.
+- **What is not built.** The edge's health checks, the start-first update and the Mac listener
+  through the edge are not in this repository: the deploy runs one coordinator and replaces it
+  stop-first ([../deploy/coordinator-health.md](../deploy/coordinator-health.md), section 17 of the design).
+
+### Stopping, and the two health routes
+
+`--health-listen` answers two routes, `/healthz` (the process is alive) and `/readyz` (the
+coordinator takes traffic now), and `--drain-delay-secs` (default 15) says how long a stopping
+coordinator keeps serving after it is told to stop; both are the same over either store
+([../deploy/coordinator-health.md](../deploy/coordinator-health.md)). From SIGTERM or SIGINT
+`/readyz` answers 503 `draining` at once and `/healthz` stays 200, every listener keeps accepting
+for the delay, and then the listeners accept no more, the open connections finish, held
+`Releases.WaitConverged` calls are answered, and the process exits 0 once no connection is open.
+`/readyz` also answers 503 `store_unreachable` while a database session is lost ("A lost session",
+above), where `/healthz` stays 200: the process is alive, and a restart would not bring the database
+back. The delay and the container's `stop_grace_period` are checked once at deploy, by the person
+who deploys, against the edge's values; the coordinator does not read them at run time.
 
 ## Moving from the database to the files
 

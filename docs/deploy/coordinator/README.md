@@ -95,7 +95,9 @@ interface is taken as given, and `--lan-listen` and `--health-listen` are checke
 The coordinator gets no compose `healthcheck`: compose runs one inside the container, which has
 no shell or client. To probe it from the machine, add `--health-listen` with a loopback address
 (for example `127.0.0.1:9100`) to the command, and point the machine's monitoring at
-`GET /healthz` ([coordinator-health.md](../coordinator-health.md)).
+`GET /healthz`; `GET /readyz` is the edge's check and says `draining` from SIGTERM on
+([coordinator-health.md](../coordinator-health.md)). A wildcard `--health-listen` needs
+`--health-listen-wildcard` and belongs in a network namespace of its own, not on the host's network.
 
 The local volume, `/var/lib/hostkeeper-coordinator` in the container, holds the CA key
 (`ca.key`) and its certificate (`ca.key.cert`), the server certificate file (`server.pem`) and the

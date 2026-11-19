@@ -222,18 +222,20 @@ Docker `HEALTHCHECK` or a compose `healthcheck` could only run the coordinator b
 such as `healthcheck`. That is the kind of plumbing verb this design removes, so there is none. Health is exposed as a
 route, and the probe runs outside the container:
 
-- **A health listener.** `serve --health-listen <loopback address:port>` binds one more listener, plain HTTP, that
-  answers only `GET /healthz` (and `HEAD`) and 404 to everything else, with no authentication and no TLS. `serve`
-  refuses an address that is not loopback (`127.0.0.0/8` or `::1`), as it refuses a wildcard for `--private-listen`
-  unless `--private-listen-wildcard` is given (`crates/hostkeeper-coordinator/src/config_listen.rs`, **Built**), so
-  nothing off the machine reaches it. Without the
-  flag there is no such listener, as today.
-- **What it says.** `200` with the body `ok` when every listener the flags name is bound and serving, the store is
-  open and, with the Postgres store, this coordinator holds the single-writer lock (coordinator-storage.md section 5);
-  `503` with one reason token otherwise (`store_unreachable`, `not_writer`, `starting`, and `draining` from SIGTERM
-  or SIGINT until the process exits, ahead of the others). The body is that token and
-  nothing else: no version, no host, no count. It reads memory only and writes no audit line. The listener has the
-  same limits as the others (handshake, head, connection count; `listen.rs`, **Built**).
+- **A health listener.** `serve --health-listen <address:port>` binds one more listener, plain HTTP, that
+  answers `GET` and `HEAD` of `/healthz` (liveness) and `/readyz` (readiness) and 404 to everything else, with no
+  authentication and no TLS. `serve` takes a loopback address (`127.0.0.0/8` or `::1`) or the address of one
+  interface, and refuses a wildcard unless `--health-listen-wildcard` is given, as it does for `--private-listen`
+  (`crates/hostkeeper-coordinator/src/config_listen.rs`, **Built**). Without the flag there is no such listener, as
+  today.
+- **What it says.** `/healthz` is `503 starting` until every listener the flags name is bound, then `200 ok` for
+  good, also while the database's link is lost and while the coordinator drains. `/readyz` is `200 ok` when every
+  listener is bound, the store takes writes and the coordinator is not draining; else `503` with one token:
+  `draining` (from SIGTERM or SIGINT until the process exits), `starting` or `store_unreachable`, in that order. The
+  body is that token and nothing else: no version, no host, no count. It reads memory only and writes no audit line.
+  The listener has the same limits as the others (head, connection count; `listen.rs`, **Built**). From the signal
+  the coordinator serves for `--drain-delay-secs` (default 15), then ends its connections and exits; see
+  [coordinator-health.md](../deploy/coordinator-health.md) and coordinator-multi-instance.md section 11.
 - **Who probes it.** The deployment, from outside the container: the coordinator runs on the host's network
   (coordinator-storage.md section 9), so a probe on the same machine reaches the loopback listener, for example an
   orchestrator's HTTP probe or the machine's own monitoring. The compose file gets no `healthcheck` for the coordinator,
@@ -916,7 +918,7 @@ switches to the generated client in one pull request, with its tests.
 | S2a | Stage 2: `OLDEST_READER = R1`, the hand-over follow-on, the probe call and its plumbing deleted, the fallback files removed at start; the pin of X1 moved to R1 | R1 converged | the re-pointed and new device tests of 4.5, Linux and Mac; X1 pinned to R1 |
 | S2b | Stage 2: the package unit, the bootstrap unit, the plist and the postinstall (4.1) | S1b released | `crates/xtask/tests/packaging/{unit_file,daemon_flags,self_update}.rs`, `check-macos-pkg` and `crates/hostkeeper-launchd/tests/{plist,postinstall}.rs` on the new texts; the bootstrap-unit and pkg device tests of 4.5 |
 | S3 | Stage 3: `OLDEST_READER = R2`; delete `self-update-protocol`, `self-update-fallback`, `self-update-seed` (and the linked unit's line that calls it), `mac-config`, `update-hook` and its five step words, `--admin-socket`, `SELF_UPDATE_PROTOCOL`, `fallback.rs`, `selfunits.rs` and their texts; the pin of X1 moved to R2; the runbook of 4.1 | R2 converged | `crates/hostkeeper/tests/binary.rs`: each deleted verb and the flag exit 2; X1 pinned to R2; every device test of 4.5. **Built** (S3): see the **Built** notes of 4.1 to 4.5 |
-| H1 | The coordinator's `--health-listen` and `GET /healthz` (2.7); docs/deploy and coordinator-storage.md's **Health** bullet | none | coordinator tests on the router in process: `200 ok` serving; `503` with `store_unreachable`, `not_writer` and `starting` on the fake store; 404 for any other path and for `POST`; a non-loopback address and a wildcard refused at start by name; no listener without the flag; the packaging test still holds the Dockerfile to no `HEALTHCHECK` and no default arguments |
+| H1 | The coordinator's `--health-listen` and `GET /healthz` and `GET /readyz` (2.7); docs/deploy and coordinator-storage.md's **Health** bullet | none | coordinator tests on the router in process: `200 ok` serving; `503` with `store_unreachable` and `starting` on the fake store; 404 for any other path and for `POST`; a wildcard refused at start by name unless `--health-listen-wildcard` is given; no listener without the flag; the packaging test still holds the Dockerfile to no `HEALTHCHECK` and no default arguments |
 | N1 | The `pxe` package and its `prepare` step; `hostkeeper-pxe` out of the deb and rpm; network-install.md and its runbook. **Built** (6.1) | G1 | `cargo xtask release deb --service pxe` tests (shape, unit, manifest, targets); `crates/hostkeeper-pxe/tests/unit_file.rs` (the golden unit and the program's parser); a privileged install, assign and unassign of the `pxe` package under systemd; the `fetch` tests re-pointed at `prepare` |
 | M1 | The `mdm` package: build-time fetch against `pins.txt`, hook steps, units, `bin/mdm` with the `push-cert` and `dep` verbs | G1 | the `install`, `tls`, `verify`, `push_cert` and `dep` tests re-pointed at the package's program; the package tests |
 | M2 | Delete `hostkeeper-mdm` and its release assets | M1, MIGRATION.md's move done | release contract tests without the MDM asset |
@@ -948,5 +950,5 @@ floor); S2a waits for the farm.
 | PXE and MDM | Service packages | Root services on one host, which the container cannot be and the daemon should not be. |
 | `pxe` only while installing | Assign for an install, unassign after | The foreground rule of network-install.md, through the API that already exists. |
 | MDM Apple actions | Verbs of the `mdm` package's program, run by root on the MDM host | They read and write root-owned files there; an API method would widen what an operator token reaches. |
-| The coordinator's health check | A loopback-only `/healthz` listener probed from outside the container; no `HEALTHCHECK`, no verb | The image has no shell or client, and a `healthcheck` verb is the plumbing this design removes. |
+| The coordinator's health check | A `/healthz` and `/readyz` listener on loopback or one interface's address, probed from outside the container; no `HEALTHCHECK`, no verb | The image has no shell or client, and a `healthcheck` verb is the plumbing this design removes. |
 | backup and restore | Deleted by C9 with `import` and `export` | The database's own tools replace them; restore cannot be an API call. |

@@ -79,7 +79,7 @@ plan: its stages with their sizes and hosts, each host `waiting`, `updating`, `b
 | `paused` | an operator paused the plan (by whom, and why, is shown) |
 | `halted` | the package is halted, or the desired version is marked bad |
 | `rollout_elsewhere` | another service's rollout is live (see `--live-rollouts` below) |
-| `quiet` | the coordinator was started recently and has not heard the fleet |
+| `quiet` | the coordinator was started recently and has not heard the fleet, or (on the database store) the fleet's beats had a gap, or the database's link is lost |
 | `manual_advance` | the next stage is `manual`: it waits for `Rollouts.Advance` |
 | `failed_host` | a host of the current stage failed the desired version |
 | `below_min_up` | ordering the next host would leave fewer hosts of its group up than `min_up` |
@@ -148,8 +148,10 @@ version: it stands across a new desired version, a coordinator restart and a new
 a live rollout, so with the default `--live-rollouts 1` it keeps the other services waiting.
 
 A Pause is written memory first, like a halt: it stands even when its audit line cannot be
-appended (the failure is logged as an error and the entry stays in the ring `Releases.Status`
-shows). An Advance and a Resume need their audit line.
+appended or its commit fails (the failure is logged as an error and the entry stays in the ring
+`Releases.Status` shows; on the database store the change stands in memory, is committed again at
+each heartbeat, and is listed in the file of `--halt-marker-file` until it lands). An Advance and
+a Resume need their audit line.
 
 | Call | Refused when |
 |---|---|
@@ -199,9 +201,12 @@ their desired versions were set, and the coordinator orders them in that order: 
 is held (`rollout_elsewhere`, the status names the services ahead as `QUEUED` and gives the
 plan's `queue_position`) even when the earlier one has no host updating at the moment. A service
 that nothing can order (halted, at a version marked bad, paused, held by a failed host, waiting for an Advance or for `min_up`, or whose
-hosts that have not started all defer) takes no place in the queue. The order is kept in memory;
-after a coordinator restart the services that were waiting queue by their group's last change,
-then by group and package name. A rollout that is live is never held by the others. A rollout is live when one of its hosts runs an update (updating,
+hosts that have not started all defer) takes no place in the queue. On the database store the order is the number each desired version was set under
+(`desired.set_seq` and `group_desired.set_seq`, taken from the sequence `desired_seq` in the
+transaction that sets it, `store/postgres/queue_seq.rs`), so every coordinator on the database
+queues the services alike and a restart changes nothing. Over the files the order is kept in
+memory; after a coordinator restart the services that were waiting queue by their group's last
+change, then by group and package name. A rollout that is live is never held by the others. A rollout is live when one of its hosts runs an update (updating,
 its promotion pending, or under an order) or bakes the desired version, or when its plan has
 started a host and still has one to order (a paused plan and one waiting for an Advance are live).
 A failed host does not make its service live: it still counts against its own group's
@@ -233,6 +238,41 @@ On the database store ([coordinator-state.md](coordinator-state.md#the-database-
 position is the row of the (group, package) in the table `group_rollouts` and the hosts recorded done are rows of
 `group_rollout_done`, read back at start the same way. While the database's session is lost the
 coordinator is quiet: no stage is entered and no host is ordered until the session is back.
+
+## More than one coordinator on the database
+
+On the database store several coordinators can answer heartbeats at once. They share one plan,
+because the plan is rows and each heartbeat is decided over them
+(`store/postgres/decide.rs`, `store/decision.rs`, `service_decide.rs`):
+
+- A heartbeat is decided in one transaction under the rollout gate. It reads the desired state,
+  the operations state and the fleet's rows (`fleet_hosts`, `fleet_bakes`, `fleet_orders`) afresh,
+  decides over them, and writes its changes and the orders that differ from the rows read, then
+  commits. Two coordinators never decide at the same time. A beat that finds the gate held is
+  answered with no new order, and the host asks again at its next heartbeat.
+- The stage a decision enters is first claimed by a compare-and-set on the plan's row
+  (`rollouts.rs`): of two coordinators that reach the same stage, one enters it and writes the
+  `rollout_advance` entry, and the other finds the stage entered and writes nothing.
+- The queue of [Across services](#across-services---live-rollouts) is ordered by `set_seq`, the
+  same on every coordinator.
+- A halt, a version marked bad and the rollback to the last good version that a decision makes are
+  written in that decision's transaction, so every coordinator reads the same halt at its next
+  decision.
+- The `quiet` rule is read from the rows. When the newest `seen_unix` of `fleet_hosts` is 45
+  seconds old or older, or there is no row (a database restart, an outage, a first start),
+  `cluster_quiet.until_unix` is raised to `--quiet-secs` past that beat, once for the whole
+  cluster (`store/postgres/fleet_rows.rs`). Once a coordinator has read the rows it judges `quiet`
+  by them and not by its own start.
+- It fails closed. When the database cannot be reached, a change stands in memory and is not yet
+  committed, or the decision's write or commit fails, the decision is rolled back and the host is
+  answered with no new order; it keeps what it runs and asks again. No halt, rollback or stage is
+  decided meanwhile, and `Alerts.List` shows `store_unreachable` while the link is lost.
+- An operator's `Pause`, `Resume`, `Advance`, hold and force are changes of the same rows
+  under the same gate (an edit waits for the gate), so they reach every coordinator: each reads the
+  changed part before it next decides.
+
+Over the files one process holds the lock and decides over its own memory, as before; none of the
+above applies.
 
 ## Force, holds and abort
 
