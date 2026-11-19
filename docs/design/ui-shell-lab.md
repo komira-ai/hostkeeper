@@ -42,7 +42,7 @@ MDM setup), Fleet a table of hosts. After: a side menu, and Home a picture of th
   run of U; hover says name, group, version, state; a click opens the host page. **Rack**: one rack larger, and a table of its
   servers. Breadcrumbs `Lab > Row > Rack > Host` (none on the floor plan itself). Above the floor plan: the alerts as one compact strip
   (toned by the worst alert; "No alerts" when there are none). Below it: the servers not placed, a quiet line of outlined chips. A
-  Floor / List switch (`list` in the page's params) shows every server in one compact list (server, state, where, group, version) in
+  Floor / List switch (`list` in the page's params) shows every server in one compact list (server, state, why, where, group, version) in
   place of the floor plan; the Fleet page's table of hosts is gone from Home. A rack footprint is a small elevation (a block per
   server in the colour of its state); the strip of racks shows "Rack n of m" for the rack at its left edge, two arrow buttons, fades
   at an end with more beyond, snaps to a rack, and fits a rack's height to the viewport; a phone shows one rack at a time.
@@ -50,7 +50,9 @@ MDM setup), Fleet a table of hosts. After: a side menu, and Home a picture of th
   group, what it runs, the last heartbeat, and a small elevation of the rack the host stands in with its U lit, or "Unplaced"), then
   tabs (Overview, Services, Certificate, Labels, Placement, Host group, Remote SSH; a dot on Services or Certificate when something needs
   attention; the tab chosen is kept across a refresh of the same host), then Retire alone in a red-bordered danger zone at the bottom.
-  The state is `degraded`, not `healthy`, for a live host whose service reports unhealthy or whose last update failed.
+  The state is `degraded`, not `healthy` or `updating`, for a live host with any reason (`ui/health.js`): an alert of
+  `Alerts.List` that names it and says it is not healthy, or a service of it halted, unhealthy or whose last update failed. Under the header, each reason
+  in plain words with the time it began and its one action (Clear halt, Retry update), or why there is none.
 - Edit layout (a toggle on Home) shows the controls: rename the cluster, add a row (the next number), add a rack to a row (height
   from a list, 42 U by default), resize, move to another row, remove. A sled is what goes in a rack (docs/design/rack-sleds.md): **Add
   sled** asks Size (1 to 60 U from a list), Slots (1 to 8) and U location (only where that size fits); a sled is resized, moved

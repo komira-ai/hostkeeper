@@ -339,16 +339,25 @@ return { rows: rows(tree), big: cls(tree, "rack").map((n) => n.attrs.class) };"#
     assert_eq!(
         out["rows"],
         json!([
-            ["Server", "Address", "U", "State", "Group", "Version"],
+            ["Server", "Address", "U", "State", "Why", "Group", "Version"],
             [
                 "db-1",
                 "C0-R0-R0-S0-S0",
                 "U1",
                 "updating",
+                "-",
                 "storage",
                 "1.4.0"
             ],
-            ["web-1", "C0-R0-R0-S1-S0", "U41", "healthy", "web", "1.4.0"],
+            [
+                "web-1",
+                "C0-R0-R0-S1-S0",
+                "U41",
+                "healthy",
+                "-",
+                "web",
+                "1.4.0"
+            ],
         ])
     );
     assert_eq!(out["big"], json!(["rack big"]));
