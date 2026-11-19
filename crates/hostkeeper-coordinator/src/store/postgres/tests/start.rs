@@ -78,17 +78,30 @@ fn a_database_with_rows_this_build_cannot_read_refuses_the_start() {
 fn a_start_reads_its_clock_and_loads_the_spent_ids_still_standing() {
     let db = TestDatabase::new();
     let far: UnixClock = Arc::new(|| u64::MAX);
-    let error = Postgres::open_with(&db.dsn(), TIMEOUTS, "far", &far, Arc::new(|| SPENT_NOW))
-        .err()
-        .expect("the clock is refused");
+    let error = Postgres::open_with(
+        &db.dsn(),
+        TIMEOUTS,
+        &super::options(),
+        "far",
+        &far,
+        Arc::new(|| SPENT_NOW),
+    )
+    .err()
+    .expect("the clock is refused");
     assert!(matches!(error, DatabaseError::Load(_)));
     assert_eq!(
         error.to_string(),
         "database:counter: 18446744073709551615 is above the largest counter the database keeps"
     );
 
-    let (store, _) = Postgres::open(&db.dsn(), "near", &unix(), Arc::new(|| SPENT_NOW))
-        .expect("the store opens");
+    let (store, _) = Postgres::open(
+        &db.dsn(),
+        &super::options(),
+        "near",
+        &unix(),
+        Arc::new(|| SPENT_NOW),
+    )
+    .expect("the store opens");
     store.spend("past", SPENT_NOW, 1).expect("an id");
     store.spend("standing", SPENT_NOW + 1, 1).expect("an id");
     store.stop();

@@ -1,8 +1,8 @@
 //! A lost writing session, its revival, and what a commit of unknown outcome turned out to be.
 //!
 //! A test makes the loss by ending the store's sessions at the server (or, for a commit that is
-//! in flight, a fault the writer meets at its `COMMIT`), and waits for a revival by running a job
-//! on the writer's own thread behind it: the revival runs there, so the job returns after it.
+//! in flight, a fault a writer meets at its `COMMIT`), and waits for a revival by running a job
+//! on every writer's own thread behind it: the revival runs there, so the job returns after it.
 
 use super::{TestDatabase, admin, off_runtime};
 use crate::store::conformance_tests::{lines, rich_ops};
@@ -12,9 +12,26 @@ use crate::store::{Backend, BackendError, Commit, Health};
 
 const LOST: &str = "database:database: the database session is lost";
 
-/// Waits for the jobs handed to the writer so far, a revival among them.
+/// Waits for the jobs handed to every writer so far, a revival among them.
 fn settle(store: &Postgres) {
-    store.on_writer(|_| ()).expect("the writer runs");
+    store.settle().expect("the writers run");
+}
+
+/// The database's clock now, in seconds.
+fn database_now(db: &TestDatabase) -> i64 {
+    db.rows("SELECT extract(epoch FROM now())::bigint")[0][0]
+        .as_deref()
+        .and_then(|now| now.parse().ok())
+        .expect("the database's clock")
+}
+
+/// Makes a writer of `store` lose its session while the `COMMIT` of transaction `id`, begun at
+/// `begun`, was in flight.
+fn lose_unknown(store: &Postgres, id: &str, begun: i64) {
+    let id = id.to_owned();
+    store
+        .on_writer(move |w| w.lose_unknown(&id, begun))
+        .expect("the writer runs");
 }
 
 fn line(store: &Postgres, seq: u64) -> Result<(), BackendError> {
@@ -94,9 +111,7 @@ fn a_commit_that_landed_but_was_not_answered_is_settled_as_landed() {
     super::logging();
     let db = TestDatabase::new();
     let (store, _) = db.open("landed").expect("the store opens");
-    store
-        .on_writer(|w| w.fault = Some(Fault::LoseAfterCommit))
-        .expect("the fault is set");
+    store.fault(Fault::LoseAfterCommit);
     let held = lines(1, 2);
     let before = Default::default();
     let after = rich_ops();
@@ -211,7 +226,7 @@ fn settled_behind_a_transaction_in_progress(commit: bool) -> bool {
             "BEGIN; INSERT INTO hostkeeper.tx_ledger (id, at_unix) VALUES ('{id}', 1)"
         ))
         .expect("the transaction is in progress");
-    store.inner.link.lose(Some((id.clone(), None)));
+    lose_unknown(&store, &id, database_now(&db));
     store.revive();
     let name = db.name().to_owned();
     let mut watcher = db.client();
@@ -279,8 +294,7 @@ fn a_commit_older_than_the_ledger_keeps_is_not_settled_as_not_landed() {
     let db = TestDatabase::new();
     let (store, _) = db.open("old").expect("the store opens");
     let id = "00000000-0000-0000-0000-0000000000aa";
-    store.inner.link.lose(Some((id.to_owned(), None)));
-    store.inner.link.begun(1);
+    lose_unknown(&store, id, 1);
     store.revive();
     settle(&store);
     assert_eq!(store.health(), Health::Lost);
@@ -355,10 +369,11 @@ fn a_revival_that_cannot_be_made_is_tried_again() {
     ));
 
     // The ledger cannot be written, and a commit waits to be settled in it.
-    store.inner.link.lose(Some((
-        "00000000-0000-0000-0000-000000000001".to_owned(),
-        None,
-    )));
+    lose_unknown(
+        &store,
+        "00000000-0000-0000-0000-000000000001",
+        database_now(&db),
+    );
     db.run("ALTER TABLE tx_ledger RENAME TO tx_ledger_away")
         .expect("the table is moved");
     store.revive();
@@ -434,7 +449,10 @@ fn a_refused_statement_keeps_the_session_and_writes_nothing() {
 fn a_stopped_store_answers_that_its_sessions_stopped() {
     super::logging();
     let db = TestDatabase::new();
-    let (store, _) = db.open("stopped").expect("the store opens");
+    // One writer, so the one a call takes is the one the failed commit lost.
+    let (store, _) = db
+        .open_options(&super::pooled(1), "stopped")
+        .expect("the store opens");
     db.end_sessions();
     assert!(line(&store, 1).is_err());
     let direct = store

@@ -47,8 +47,15 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   with the file store); the enrollment store is the database's.
 - **The start.** `serve` opens one session, takes the coordinator's advisory lock of the database
   shared and without waiting (several coordinators hold it together), runs the migrations the database lacks (each in its own transaction, recorded in
-  `schema_version`), raises the lease's epoch, and loads the state. Nothing is read or written
-  before the lock is held. It refuses to start, naming why, when:
+  `schema_version`), raises the lease's epoch, makes its row of the `instances` table, loads the
+  state, and opens the rest of its writing sessions (`--database-pool`, below), each holding the
+  lock shared too. Nothing is read or written before the lock is held. Each migration runs with
+  `lock_timeout` set to `--migrate-ddl-lock-timeout-ms` (default 3000, 1 to 4999): a statement of it
+  that waits longer for a lock, behind a running coordinator's transaction, rolls the whole migration
+  back, so the running coordinator's statements queued behind it wait no longer than that. The start
+  then lets go of the migrations' lock, waits `--migrate-retry-secs` (default 5) and tries again from
+  that migration, `--migrate-attempts` times in all (default 6). It refuses to start, naming why,
+  when:
   - the database is not up (`the database is not up: ...`): nothing listens, or it is starting up.
     The supervisor starts the coordinator again; the code has no wait loop;
   - the server refuses (`the database refused the coordinator: ...`): a login, a database that is
@@ -59,12 +66,24 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   - the database holds a migration this release does not know, and that migration says older
     releases must not run on it: `the database's schema is newer than this coordinator (migration
     <n>, <name>)`;
-  - a migration fails: it is rolled back whole, and the start names it.
-- **The writing session.** Every write goes through the one session that holds the lock. Each
-  transaction first inserts its row of the `tx_ledger` table, which names it if its commit is lost.
-  A coordinator that lost its session commits nothing until it has the lock again. Reads that are not decisions
+  - a migration fails: it is rolled back whole, and the start names it;
+  - a migration could not have its locks at any of its attempts: `migration <n> (<name>) could not
+    have its locks within its lock timeout in <attempts> attempts, each rolled back: ...`.
+- **The writing sessions.** Every write goes through one of the coordinator's writing sessions
+  (`--database-pool`, default 4, at least 1), each holding the lock: a write takes a free session,
+  and waits only while every one is busy. A Postgres that serves N coordinators needs N x
+  (`--database-pool` + 1) connections. Each transaction first inserts its row of the `tx_ledger`
+  table, which names it if its commit is lost. A coordinator that lost any of its sessions commits
+  nothing, on any of them, until the next heartbeat's revival has opened every lost one again with
+  the lock. Reads that are not decisions
   (`Audit.List`, the enrollment lists, the alerts' scans) run on a second, read-only session.
   Decisions read memory: a heartbeat in the steady state runs no query.
+- **The instances.** Each start makes a row of the `instances` table with an id of its own (random),
+  the time it started and was last seen (the database's clock), its release, and the addresses of
+  its listeners, and moves `seen_unix` on every `--instance-beat-secs` (default 5) while it runs,
+  making the row again if it is gone. It says which coordinators serve on the database and since
+  when (`SELECT * FROM hostkeeper.instances ORDER BY seen_unix DESC`); no decision reads it, and the
+  row of a coordinator that stopped stays as it was last seen.
 - **Generations and write ids.** The database keeps, with each service's desired state, its
   generation (one more for every accepted set, a set identical to the state held included, and a
   force), the write id of the last set (`hkctl releases set-desired --write-id`, 1 to
