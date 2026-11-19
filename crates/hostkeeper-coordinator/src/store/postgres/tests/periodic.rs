@@ -301,13 +301,15 @@ fn a_job_not_in_the_claimers_list_is_not_claimed() {
 
 /// Proves: the job `prune` deletes the sessions past their idle (at the second) or absolute
 /// deadline, the failure counts the limiter forgot (not locked, last failure a lockout ago) and
-/// the instances unseen for a day (not the one seen exactly a day ago), counts each, and keeps
-/// live sessions, locked and recent failures and instances seen inside the day.
+/// the instances unseen for a day (not the one seen exactly a day ago) and the orders aged out
+/// (`ORDER_AGE` or more since given, not one a second younger), counts each, and keeps live
+/// sessions, locked and recent failures, instances seen inside the day and live orders.
 ///
-/// Catches: a prune that deletes a live session, a lock or a running instance, one that keeps what
-/// is past its deadline, and a boundary second judged the wrong way.
+/// Catches: a prune that deletes a live session, a lock, a running instance or an order that still
+/// holds its slot, one that keeps what is past its deadline, and a boundary second judged the
+/// wrong way.
 #[test]
-fn prune_deletes_expired_sessions_forgotten_failures_and_instances_unseen_for_a_day() {
+fn prune_deletes_expired_sessions_forgotten_failures_unseen_instances_and_aged_orders() {
     let (db, stores) = stores(1);
     let now = 10_000_000_u64;
     let (_now, at) = clock(now);
@@ -349,13 +351,21 @@ fn prune_deletes_expired_sessions_forgotten_failures_and_instances_unseen_for_a_
         ))
         .expect("an instance");
     }
+    for (host, at) in [("young", n - 119), ("aged", n - 120), ("old", n - 5000)] {
+        db.run(&format!(
+            "INSERT INTO fleet_orders (host_id, service, target, at_unix, try) \
+             VALUES ('{host}', 'web', '1.0', {at}, 1)"
+        ))
+        .expect("an order");
+    }
     let pruned = jobs.prune().expect("prunes");
     assert_eq!(
         pruned,
         Pruned {
             sessions: 2,
             login_failures: 2,
-            instances: 1
+            instances: 1,
+            fleet_orders: 2
         }
     );
     let column = |sql: &str| -> Vec<String> {
@@ -371,6 +381,11 @@ fn prune_deletes_expired_sessions_forgotten_failures_and_instances_unseen_for_a_
     assert_eq!(
         column("SELECT name FROM login_failures ORDER BY name"),
         ["locked-old", "recent"]
+    );
+    assert_eq!(
+        column("SELECT host_id FROM fleet_orders ORDER BY host_id"),
+        ["young"],
+        "an order is freed once ORDER_AGE has passed since it was given"
     );
     assert_eq!(
         column("SELECT id::text FROM instances WHERE id::text LIKE '00000000%' ORDER BY id"),

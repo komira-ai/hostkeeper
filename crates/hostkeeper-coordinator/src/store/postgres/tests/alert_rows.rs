@@ -1,4 +1,4 @@
-//! The alerts' rows (migration `0024`; `docs/design/coordinator-multi-instance.md`, section 9, job
+//! The alerts' rows (migration `0025`; `docs/design/coordinator-multi-instance.md`, section 9, job
 //! `alerts`): of any number of coordinators that observe the same alerts, the one whose insert
 //! made an alert's row logs it, and a row that no observation finds is forgotten.
 //!

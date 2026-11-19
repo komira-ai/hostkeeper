@@ -77,8 +77,22 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   nothing, on any of them, until the next heartbeat's revival has opened every lost one again with
   the lock. Reads that are not decisions
   (`Audit.List`, the enrollment lists, the alerts' scans) run on a second, read-only session.
-  Decisions read memory: a heartbeat in the steady state writes nothing. It reads its host's
-  enrollment and deny rows, fresh, so a deny another coordinator recorded is seen at once.
+  Decisions read memory: a heartbeat in the steady state writes only its host's rows of the fleet
+  (below). It reads its host's enrollment and deny rows, fresh, so a deny another coordinator
+  recorded is seen at once.
+- **The fleet's rows.** Every heartbeat a coordinator answers is kept, in one statement on a writing
+  session and outside a transaction, in the tables of migration `0024`: the host's row of
+  `fleet_hosts` (the heartbeat as read, the database's time it was heard, the host's own clock in
+  it and the instance that heard it), a row of `fleet_bakes` for each service the heartbeat names
+  (the healthy beats in a row at one version, the bake of `docs/design/host-updates.md`), and the
+  removal of the host's row of `fleet_orders` for a service whose ordered version it reports. A
+  heartbeat older by its host's clock than the one stored is dropped unless the stored one is
+  `--beat-reorder-secs` old (default 30, 1 to 44): two coordinators can receive one host's
+  heartbeats out of order. When the newest row of `fleet_hosts` is 45 seconds old or older, or
+  there is none (a database restart, an outage, a first start), the statement raises
+  `cluster_quiet.until_unix` to `--quiet-secs` past its moment. No decision reads these rows yet: a
+  heartbeat is decided over the coordinator's memory as before, and one whose row cannot be
+  written is answered all the same (`a beat is not kept` in the log).
 - **Edits, and the copies in memory.** Each change of the state (an operator's, CI's, or one the
   coordinator makes itself) is one transaction that locks, after its row of `tx_ledger`, the row
   of `rollout_gate` when it changes what a rollout decision reads (the desired state, the
@@ -103,7 +117,7 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   row of a coordinator that stopped stays as it was last seen until the job `prune` deletes it, a
   day after it was last seen.
 - **Periodic jobs.** Every `--job-tick-secs` (default 5) a coordinator claims the periodic jobs that
-  are due, one statement over the `periodic_jobs` table (migration `0024`) that moves each claimed
+  are due, one statement over the `periodic_jobs` table (migration `0025`) that moves each claimed
   job's due time on by its period, so of all the coordinators on the database one runs a job in a
   period; a coordinator that stops after a claim loses that run, and the job is due again one
   period later for any of them. The periods are `--job-every NAME=SECS` (repeatable): `alerts`
@@ -112,8 +126,8 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   back is logged again; the `alert=` lines are in the logs of the service, not of one instance);
   `request-expiry` (default 15) expires the enrollment requests no operator approved in time, by
   a write that lands only on the requests as read, and audits each `request_expired` once; `prune` (default 3600) deletes
-  the expired sessions, the failure counts the limiter forgot and the `instances` rows not seen
-  for a day. Over files the alerts are observed every 15 seconds and the requests expire at the
+  the expired sessions, the failure counts the limiter forgot, the `instances` rows not seen
+  for a day and the orders of `fleet_orders` that aged out (120 seconds after they were given). Over files the alerts are observed every 15 seconds and the requests expire at the
   `--tls-reload-secs` tick, as before. `SELECT * FROM hostkeeper.periodic_jobs` shows each job's
   next due time and the instance that ran it last.
 - **Generations and write ids.** The database keeps, with each service's desired state, its
@@ -486,7 +500,7 @@ A session that must change its password may call `/v1/password`, `/v1/logout` an
 A session also opens the UI's Remote SSH terminal, `GET /v1/ssh/terminal?host=<host id>` (a WebSocket upgrade, private listener only; `docs/operations/ssh-ca.md`, "Remote SSH from the UI"): the terminal's tunnels live as long as the session does, and what is typed in the terminal counts as use of it.
 
 Over the files sessions are kept in memory: a restart signs everyone out. Over a database they are rows of the `sessions`
-table (keyed by the SHA-256 of the cookie's id, never the id) and the failure counts rows of `login_failures` (migration `0024`):
+table (keyed by the SHA-256 of the cookie's id, never the id) and the failure counts rows of `login_failures` (migration `0025`):
 every coordinator on the database answers the same cookie and counts the same failures, and a restart or a deploy signs no one
 out; a session's last use is written at most every `--session-touch-secs` (default 30), so its idle deadline may count from up
 to that long before its last use. When the database cannot be reached no session is made or found and every name is told

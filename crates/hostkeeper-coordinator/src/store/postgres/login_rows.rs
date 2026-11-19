@@ -1,4 +1,4 @@
-//! The operator's browser sessions and the login limiter as rows of migration `0024`
+//! The operator's browser sessions and the login limiter as rows of migration `0025`
 //! (`docs/design/coordinator-multi-instance.md`, section 8), with the rules of
 //! [`crate::session`]: the same deadlines, the same caps, the same counts, so that a cookie made
 //! by one coordinator is answered by any, a failed login counts once however many coordinators

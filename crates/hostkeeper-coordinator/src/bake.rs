@@ -46,9 +46,7 @@ impl Bake {
     /// (`None`) for any other beat.
     #[must_use]
     pub fn after(before: Option<&Self>, beat: &Heartbeat, now: Duration) -> Option<Self> {
-        let counts =
-            beat.health == Health::Healthy && beat.updating.is_none() && !beat.promotion_pending;
-        counts.then(|| Self {
+        counts(beat).then(|| Self {
             target: beat.version.clone(),
             beats: before
                 .filter(|b| b.target == beat.version)
@@ -57,6 +55,13 @@ impl Bake {
             at: now,
         })
     }
+}
+
+/// Whether `beat` counts toward a bake: healthy, not updating and not waiting for a promotion. A
+/// function of the beat alone, so the fleet's rows count it as the fleet in memory does
+/// ([`crate::store::beat`]).
+pub(crate) fn counts(beat: &Heartbeat) -> bool {
+    beat.health == Health::Healthy && beat.updating.is_none() && !beat.promotion_pending
 }
 
 /// The version each host ran, per service, when the coordinator first heard it since it started,

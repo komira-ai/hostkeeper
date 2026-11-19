@@ -134,7 +134,9 @@ pub(super) fn open_store(
         flags.private_listen,
         flags.lan_listen,
     );
-    let options = flags.database.options(crate::stamp::version(), &listen);
+    let options = flags
+        .database
+        .options(crate::stamp::version(), &listen, flags.quiet_secs);
     let (store, loaded) = Postgres::open(
         &dsn,
         &options,

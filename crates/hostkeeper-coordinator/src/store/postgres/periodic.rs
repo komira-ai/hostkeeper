@@ -99,6 +99,23 @@ pub(crate) fn prune_instances(tx: &mut Tx<'_>, at: Option<i64>) -> Result<u64, p
     )
 }
 
+/// Deletes the orders of `fleet_orders` that have aged out ([`crate::fleet::ORDER_AGE`] or
+/// more since they were given): every reader already takes them as freed slots, so deleting one
+/// without the gate frees nothing a decision holds (section 5.2); how many went.
+///
+/// # Errors
+/// The client's error.
+pub(crate) fn prune_orders(tx: &mut Tx<'_>, at: Option<i64>) -> Result<u64, postgres::Error> {
+    let age = i64::try_from(crate::fleet::ORDER_AGE.as_secs()).unwrap_or(i64::MAX);
+    tx.execute(
+        &format!(
+            "DELETE FROM fleet_orders WHERE at_unix <= {} - $2",
+            now_of(1)
+        ),
+        &[&at, &age],
+    )
+}
+
 /// What one run of the job `prune` deleted.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Pruned {
@@ -108,6 +125,8 @@ pub(crate) struct Pruned {
     pub(crate) login_failures: u64,
     /// Rows of instances not seen for a day.
     pub(crate) instances: u64,
+    /// Orders that aged out.
+    pub(crate) fleet_orders: u64,
 }
 
 /// The periodic jobs of a coordinator over a database.
@@ -192,8 +211,8 @@ impl PgJobs {
         )
     }
 
-    /// The job `prune`: expired sessions, forgotten failure counts and instances unseen for a
-    /// day deleted, in one transaction. The ledger of transactions is pruned by every
+    /// The job `prune`: expired sessions, forgotten failure counts, instances unseen for a day and
+    /// aged orders deleted, in one transaction. The ledger of transactions is pruned by every
     /// transaction already, and the audit is append-only.
     ///
     /// # Errors
@@ -206,6 +225,7 @@ impl PgJobs {
                 sessions: ended,
                 login_failures: forgotten,
                 instances: prune_instances(tx, at)?,
+                fleet_orders: prune_orders(tx, at)?,
             })
         }))
     }

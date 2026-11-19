@@ -30,6 +30,7 @@ use crate::orders::Order;
 use crate::reconcile::reconcile;
 use crate::services::{ServiceDef, Services};
 use crate::status::host_status;
+use crate::store::beat::HostBeat;
 use crate::tokens::OperatorTokens;
 use crate::ui::UiDir;
 use crate::verdict_file::{self, VerdictFile};
@@ -504,6 +505,9 @@ impl Coordinator {
         if self.legacy_for(&beat).is_none() && beat.services.is_none() {
             return Err(HeartbeatRefused);
         }
+        // Kept in the fleet's rows before the fleet's lock is taken: no decision reads them yet.
+        let kept = HostBeat::of(&who, &beat, self.legacy_for(&beat));
+        self.ops.backend().keep_beat(kept);
         let turn = self.turn_of(&who.host_id, machine_id);
         let asked = beat.agent_features.clone();
         // The fleet's lock is taken before the host's group is read: a `HostGroups.Move` of the
