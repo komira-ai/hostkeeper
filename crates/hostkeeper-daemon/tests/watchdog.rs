@@ -122,6 +122,7 @@ fn links(
         renewal: hostkeeper_enroll::RenewalState::default(),
         watchdog,
         console: None,
+        identity: None,
         remote_login_probe: None,
         operator_keys: None,
         prerequisites: None,
