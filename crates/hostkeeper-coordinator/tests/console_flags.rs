@@ -83,6 +83,7 @@ fn the_console_files_and_settings_start_the_coordinator() {
     let parts = build_given(&flags_of(args)).expect("the start");
     let shown = format!("{:?}", parts.coordinator.console());
     assert!(shown.contains("paths: None"), "{shown}");
+    assert!(shown.contains("quiet: 10s"), "{shown}");
     assert!(
         shown.contains("cipher: 3, privilege: User, timeout_secs: 1, retries: 2"),
         "{shown}"
@@ -90,7 +91,7 @@ fn the_console_files_and_settings_start_the_coordinator() {
 }
 
 /// Proves: the session bounds and the dial's timeout have the design's defaults (8 sessions, 30
-/// seconds to attach, 30 minutes idle, 8 hours in all, 5 seconds to connect to a Mac), each flag
+/// seconds to attach, 30 minutes idle, 8 hours in all, 5 seconds to connect to a Mac, 10 seconds of quiet before the page says no output came), each flag
 /// sets its own, and the bounds reach the console; a value outside a flag's range is a usage
 /// error.
 ///
@@ -111,6 +112,7 @@ fn the_stream_limits_have_their_defaults_and_flags() {
         }
     );
     assert_eq!(flags.console.connect_timeout(), Duration::from_secs(5));
+    assert_eq!(flags.console.console_quiet_s, 10);
     let mut args = files.args();
     for arg in [
         "--console-max-sessions",
@@ -123,6 +125,8 @@ fn the_stream_limits_have_their_defaults_and_flags() {
         "3600",
         "--console-connect-timeout-s",
         "9",
+        "--console-quiet-s",
+        "3600",
     ] {
         args.push(arg.into());
     }
@@ -134,11 +138,14 @@ fn the_stream_limits_have_their_defaults_and_flags() {
         shown.contains("bounds: Bounds { max: 2, window: 7s, idle: 60s, total: 3600s }"),
         "{shown}"
     );
+    assert!(shown.contains("quiet: 3600s"), "{shown}");
     for (flag, value) in [
         ("--console-idle-s", "0"),
         ("--console-total-s", "0"),
         ("--console-connect-timeout-s", "0"),
         ("--console-connect-timeout-s", "61"),
+        ("--console-quiet-s", "0"),
+        ("--console-quiet-s", "3601"),
     ] {
         let mut args = files.args();
         args.push(flag.into());
@@ -215,6 +222,7 @@ fn the_help_names_the_console_flags() {
         "--console-idle-s",
         "--console-total-s",
         "--console-connect-timeout-s",
+        "--console-quiet-s",
     ] {
         assert!(text.contains(flag), "{flag}");
     }

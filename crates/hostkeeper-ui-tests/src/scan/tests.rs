@@ -300,6 +300,23 @@ fn the_opener_holds_one_websocket_call_to_the_address_socket_address_builds() {
 }
 
 #[test]
+fn the_opener_may_offer_the_pages_subprotocols_as_its_second_argument() {
+    // Catches: an opener that cannot offer a console session's subprotocols, which the stream
+    // refuses to open without.
+    for call in [
+        "new WebSocket(socketAddress(window.location, path), protocols);",
+        "new WebSocket(socketAddress(window.location, path) ,protocols);",
+        "new WebSocket(\n  socketAddress(window.location, path),\n  protocols\n);",
+    ] {
+        assert!(opener(SOCKET_OPENER, call).is_empty(), "{call}");
+    }
+    assert_eq!(
+        SOCKET_PROTOCOLS, "protocols",
+        "the second argument main.js writes"
+    );
+}
+
+#[test]
 fn a_second_websocket_in_the_opener_is_refused() {
     // Catches: a second socket in the one file allowed to open one, whatever its address, and an
     // opener with no socket at all.
@@ -327,7 +344,12 @@ fn a_socket_address_built_any_other_way_is_refused() {
         "`${scheme}//${host}${path}`",
         "url",
         "socketAddress(otherLocation, path)",
-        "socketAddress(window.location, path), protocols",
+        "socketAddress(window.location, path), url",
+        "socketAddress(window.location, path), protocols, more",
+        "socketAddress(window.location, path), [protocols]",
+        "socketAddress(window.location, path) protocols",
+        "socketAddress(window.location, path),",
+        "protocols, socketAddress(window.location, path)",
         "socketAddress(window.location, `/x/${path}`)",
         "socketAddress(window.location, (path))",
         "",

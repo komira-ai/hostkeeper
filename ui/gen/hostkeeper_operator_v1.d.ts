@@ -444,7 +444,7 @@ export namespace hostkeeper_operator_v1 {
   export interface NetworkDevice { id?: string; name?: string; role?: hostkeeper_operator_v1.NetworkRole; consoleHost?: string; consoleDevice?: string; managementMac?: string; notes?: string; }
   export type NetworkRole = "NETWORK_ROLE_UNSPECIFIED" | "NETWORK_ROLE_BMC" | "NETWORK_ROLE_DATA";
   export interface OpenConsoleRequest { hostId?: string; reason?: string; }
-  export interface OpenConsoleResponse { kind?: hostkeeper_operator_v1.ConsoleKind; session?: string; expiresInSecs?: string; }
+  export interface OpenConsoleResponse { kind?: hostkeeper_operator_v1.ConsoleKind; session?: string; expiresInSecs?: string; quietSecs?: string; }
   export interface OpenRecordRequest { hostId?: string; approveUntilUnix?: string; approveForSecs?: string; reason?: string; }
   export interface OpenRecordResponse { record?: hostkeeper_operator_v1.InventoryRecord; entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface PauseRequest { service?: string; reason?: string; hostGroup?: string; }

@@ -88,6 +88,10 @@ impl Coordinator {
             kind: proto_kind(device.kind).into(),
             session,
             expires_in_secs: sessions.window().as_secs(),
+            quiet_secs: match device.kind {
+                Kind::Serial => self.console.quiet.as_secs(),
+                Kind::Screen => 0,
+            },
         })
     }
 
