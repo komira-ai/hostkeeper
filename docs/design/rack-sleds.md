@@ -83,7 +83,10 @@ Sled { id sled-<n>, rack, u (lowest U, 1 is the bottom), height_u 1..60, slots 1
   shrink takes U off the top; one that would cut a sled is refused before any call, under the rack, naming the sled, where it stands, what
   is on it and the least height the rack can have. Each resize is one `PutRack`.
 - **Assigning**: click an empty bay, pick from the unplaced items (servers and switches); Unassign on an item. Enrollment approval offers
-  Host group and an optional "Sled slot" (the free slots by address, e.g. C0-R0-R0-S2-S0); no height or U.
+  Host group and an optional "Sled slot" (the free slots by address, e.g. C0-R0-R0-S2-S0); no height or U. A matched server that already
+  stands on a sled keeps its place by default ("Keep its place, <address>", no placement sent: the place belongs to the record) and its
+  own slot is not offered as a new one (the coordinator judges a place before the approval, so it would refuse it as taken). A duplicate
+  claim that matches one record (a host rebuilt on a new disk) offers "Replace the existing <host>", which keeps its group and place.
 - **Drag and drop in Edit layout**: drag a sled up or down its rack or to another rack (everything on it moves; only where it fits, the
   target outline shows, a refusal otherwise); drag an item between slots or from the Unplaced tray onto an empty slot. Keyboard: select a
   sled or item, arrow keys move it, Enter drops; a Move... dialog does the same. Each move is one `PutSled` or `Place` call; the screen

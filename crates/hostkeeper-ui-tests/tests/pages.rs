@@ -731,11 +731,11 @@ return { absent, offered, kept, second: chosen(tree, "host-group", 1) };
             "FAILED_PRECONDITION key_mismatch",
             "FAILED_PRECONDITION not_pending",
             "ALREADY_EXISTS host_id_taken",
-            "FAILED_PRECONDITION duplicate_claim",
+            "This request claims the machine of a host already enrolled (a duplicate claim): tick Replace to approve it in that host's place.",
             "FAILED_PRECONDITION denied",
             "Approved web-7 into host group web: the host gets its certificate at its next poll.",
             "Not approved.",
-            "Approved web-3 as Unassigned (it is ordered no package until it is put in a host group): the host gets its certificate at its next poll.",
+            "Approved web-3 in its own host group: the host gets its certificate at its next poll.",
         ])
     );
     assert_eq!(seen["refreshes"], 2, "a refused approval refreshes nothing");

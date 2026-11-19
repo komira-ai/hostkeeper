@@ -63,7 +63,9 @@ MDM setup), Fleet a table of hosts. After: a side menu, and Home a picture of th
   holds items, is not removed: the page names them. A refusal (`overlap`, `out_of_rack`, ...) is told in words. An empty lab says so
   and offers "Add a row". Rows and racks are labelled from 0 (their number less one) until the layout numbers them so.
 - Enrollment: the approval form gets one Sled slot (a dropdown of the free slots by address, e.g. C0-R0-R0-S2-S0, first choice
-  "Unplaced"). No free text and no height, row, rack or U. Placement is optional; an approval with none lands the host in Unplaced.
+  "Unplaced", or "Keep its place, <address>" for a matched server that already stands on a sled, whose own slot is not offered again).
+  No free text and no height, row, rack or U. Placement is optional; an approval with none lands the host in Unplaced, or leaves a
+  matched server where it stands. A duplicate claim that matches one record offers "Replace the existing <host>" by name.
   Approve stores the placement (`placement_sled`, `placement_slot`) in the same step.
   Each pending request is one compact card (`ui/styles/enrollment.css`): the inventory match, one small table of the key facts (a
   renewal or a nonce only when there is one), then one row of controls (Host id, Host group with "No group", Sled slot)
