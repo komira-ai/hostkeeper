@@ -88,6 +88,7 @@ const UI_SHARED_JS: &[&str] = &[
     "ui/lab.js",
     "ui/sleds.js",
     "ui/sledpanels.js",
+    "ui/rackforms.js",
     "ui/pages/rollout.js",
     "ui/pages/release.js",
     "ui/pages/holds.js",
