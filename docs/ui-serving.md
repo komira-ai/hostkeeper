@@ -205,7 +205,8 @@ by their route and are not in the menu.
   inline script. No answer of the coordinator carries an `Access-Control-*` header.
 - The one socket: the app opens one kind of WebSocket, to its own origin, in exactly one place, `ui/main.js`, which builds
   `ctx.openSocket(path, handlers, protocols)` and hands it to the pages as it hands them `fetch`; `ctx.openTerminal(element,
-  opened)`, also built there, hands the opened socket to the vendored terminal, so no library is given an address. Its address comes from
+  opened)` (`ui/terminal_port.js`, handed over there too) hands the opened socket to the vendored terminal's attach addon, so no
+  library is given an address. Its address comes from
   `socketAddress` (`ui/socket_address.js`): the page's own host, over TLS when the page is, and a path of one of two fixed shapes, the
   Remote SSH terminal's (`/v1/ssh/terminal?host=<host id>`) and a console session's stream
   (`/console/v1/stream/<session id of 64 lower-case hex digits>`); any other path is refused before a socket is made. The scan of the
