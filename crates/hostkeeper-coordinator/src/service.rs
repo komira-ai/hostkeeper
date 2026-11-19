@@ -30,6 +30,7 @@ use crate::orders::Order;
 use crate::reconcile::reconcile;
 use crate::services::{ServiceDef, Services};
 use crate::status::host_status;
+use crate::store::beat::HostBeat;
 use crate::tokens::OperatorTokens;
 use crate::ui::UiDir;
 use crate::verdict_file::{self, VerdictFile};
@@ -134,6 +135,8 @@ pub struct Coordinator {
     ui: Option<UiDir>,
     /// The alerts the last observation found ([`crate::alerts`]).
     pub(crate) alerts: crate::alerts::Book,
+    /// The periodic jobs claimed over a database ([`crate::jobs`]); none over files.
+    pub(crate) jobs: Option<Arc<crate::jobs::Jobs>>,
     /// The held `Releases.WaitConverged` calls ([`crate::wait`]).
     pub(crate) waits: crate::wait::Waits,
     /// What each host's daemon last reported of its repositories ([`crate::repository_push`]).
@@ -213,6 +216,7 @@ impl Coordinator {
             enrollment: None,
             ui: None,
             alerts: crate::alerts::Book::default(),
+            jobs: None,
             waits: crate::wait::Waits::default(),
             repository_reports: crate::repository_push::Reports::default(),
             operator_keys: crate::operator_keys::OperatorKeys::default(),
@@ -501,6 +505,9 @@ impl Coordinator {
         if self.legacy_for(&beat).is_none() && beat.services.is_none() {
             return Err(HeartbeatRefused);
         }
+        // Kept in the fleet's rows before the fleet's lock is taken: no decision reads them yet.
+        let kept = HostBeat::of(&who, &beat, self.legacy_for(&beat));
+        self.ops.backend().keep_beat(kept);
         let turn = self.turn_of(&who.host_id, machine_id);
         let asked = beat.agent_features.clone();
         // The fleet's lock is taken before the host's group is read: a `HostGroups.Move` of the

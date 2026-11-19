@@ -1,7 +1,7 @@
 # The coordinator as N instances: measurements, model check, compatibility and tests
 
-Companion of [coordinator-multi-instance.md](coordinator-multi-instance.md) (the as-built choices of its section 4's M3, the
-measurements of its section 7, and its sections 14 and 15, moved here so that file stays under 1000 lines, R12). Section numbers are kept; "section n" in the text below refers
+Companion of [coordinator-multi-instance.md](coordinator-multi-instance.md) (the as-built choices of its section 4's M3, of
+its section 5's M6, of its section 6's M4 and of its sections 8 and 9's M8, the measurements of its section 7, and its sections 14 and 15, moved here so that file stays under 1000 lines, R12). Section numbers are kept; "section n" in the text below refers
 to that document.
 
 ## 4. The rest of M3, as built
@@ -25,6 +25,41 @@ The choices the design's section 4 leaves open, as the code makes them (`store/p
   `NOT NULL`, a collation and a default with no function call or value function (a serial, generated, constrained or
   referencing column included), an index build, and `CLUSTER`, `REINDEX` and `VACUUM`; a quoted or schema-qualified name is read
   as the bare one, block comments are skipped, and the DDL of a dollar-quoted body is read where it starts.
+
+## 5. M6, as built
+
+The fleet's rows of the design's sections 5.1 and 5.2 as the code makes them (`0024_fleet.sql`, `store/postgres/fleet_rows.rs`,
+`store/beat.rs`, `Writer::once` in `store/postgres/writer.rs`, the call in `Coordinator::answer`), where the text leaves a
+choice open. No decision reads the rows: the heartbeat is still decided over the fleet in memory.
+
+- `0024` makes `fleet_hosts` (logged, `fillfactor` 50, by M1), `fleet_bakes` (unlogged), `fleet_orders` (its primary key the
+  host) and `cluster_quiet` (one row, 0). `fleet_hosts` has no `running` or `repo_report` yet: nothing writes them until a
+  reader moves to the rows, and a column added then with no default is what the hot-table rule lets a migration do.
+  `fleet_tries`, `fleet_canaries`, `fleet_queued_orders`, `fleet_found` and `fleet_defers` are made by M7, which first writes
+  them; their columns are the decisions'. `fleet_orders` has no writer before M7, so until then the release of slots frees
+  nothing in a running coordinator; its tests insert orders by hand.
+- The statement runs for every heartbeat `Coordinator::answer` takes, before the fleet's lock, through
+  `Backend::keep_beat` (a backend one process owns keeps nothing). A denied host's beat is refused before it, and a retiring
+  host's is read for its final report only, so neither is kept. It runs on a writing session of the pool outside a transaction
+  (`Writer::once`), with no row of `tx_ledger`: a beat whose session is lost mid-statement is never settled, and the host's
+  next beat writes the row again. A failure that ends the session loses the store, as any write's does; a refused statement is
+  logged (`a beat is not kept`) and the heartbeat answered all the same.
+- Every time is the database's `now()` (principle 2); the coordinator's clock is not read. The gap is a newest `seen_unix`
+  at or before `now() - DOWN_AFTER`, which is `is_live` false, and a beat dropped as older still runs the gap rule.
+- `beat` holds the heartbeat as the coordinator read it, the JSON of `hostkeeper_wire` that both routes read (the gRPC route
+  maps its message to it), not the message's bytes. The services kept are the legacy service's top level, then the beat's list;
+  an entry of the list named as the legacy service is left out (the reader refuses a list that names a service twice).
+- The bake counts a beat by `bake::counts`, the function `Bake::after` reads; `beats` is an `integer` that stops at its
+  largest value, where `Bake::after` stops at `u32`'s (a definition bakes at most 100 beats). A slot is released for an
+  update or install order (no `uninstall_id`) whose version the applied beat reports and not as an absent copy. The other ends
+  of an order in `Fleet` (the beat shows it updating, a deferral, a failure, a refusal of the try) and the aged rows are the
+  deciding transaction's (M7).
+- The converged path is three round trips, not one: the request's read of the versions (M4, `Coordinator::refresh_caches`),
+  the admission's read of the deny row (M5), and this statement. Folding the first two into it needs the heartbeat's admission
+  moved after its message is read (the gRPC route admits a caller before the message is decoded), a change of the heartbeat's
+  path M7 makes anyway; a round trip is 7 to 26 us (section 7).
+- `--beat-reorder-secs` is 1 to 44, below `DOWN_AFTER`; a `--quiet-secs` longer than `u32::MAX` seconds is that long in the statement, which adds it to
+  the database's clock in a `bigint`.
 
 ## 6. M4, as built
 
@@ -138,6 +173,39 @@ beat waits for one flush, about 0.84 ms on the live disk, which is noise against
 "a few hundred microseconds". Most of it is the client's parse and plan of the statement on every call, which a prepared
 statement would cut. At 0.73 beats/s that is not a load, so none of section 7's fallbacks is taken.
 
+## 8 and 9. M8, as built
+
+The choices sections 8 and 9 leave open, as the code makes them (`store/postgres/login_rows.rs`, `periodic.rs`,
+`alert_rows.rs`, `admin_rows.rs`, `0025_sessions_and_jobs.sql`, `session.rs`, `jobs.rs`, `alerts_rows.rs`,
+`initial_admin.rs`, `config_database.rs`):
+
+- Time is the database's `now()`, read in the statement that judges by it; the stores take a fixed second instead only in a
+  test, so a deadline replays.
+- The two writes that read many rows, making a session against `--session-max-count` and counting a failure against
+  `--login-max-tracked`, lock a row of a table of their own, `login_gate` (rows `sessions` and `login_failures`, never
+  updated), `FOR UPDATE` as their first statement: a row lock, as section 3 allows, not an advisory lock. Every other
+  session or limiter statement touches one row. The rows add `must_change` and `must_change_until` to the columns section 8
+  lists, which the session's view needs.
+- A lookup reads the row on the read-only session and writes only when it must: a conditional delete of an expired row, a
+  conditional move of `last_used_unix` when it is at least `--session-touch-secs` old. When the rows cannot be reached the
+  login fails closed: no session is made or found, and every name is locked.
+- `periodic_jobs` has no period column: the claim is given each job's period from `--job-every`, as section 9's `$period`. One
+  job `prune` (the key of section 12) does every prune in one transaction; an order of `fleet_orders` is aged, and pruned,
+  once `ORDER_AGE` has passed since it was given, the age at which every reader already takes its slot as free.
+- The alerts' rows are keyed by the whole subject (six texts); only the job `alerts` writes them. `Alerts.List` reads them
+  for each alert's first observed second (now for one the job has not noted yet) and writes and logs nothing; a write or
+  read that fails falls back to this coordinator's memory, so the alert of a lost database is still logged.
+- The request expiry's effect is M5's conditional write (the store's write lands only on the requests as read); M8 makes
+  its scan the job `request-expiry`, and the reload tick expires nothing over a database.
+- An end of sessions that the rows cannot take (a logout, a password change or reset, a user disabled or removed) is an
+  error the caller answers (`store_unreachable`, `store_failed`), not a silent zero: the change itself stands, and making it
+  again ends the sessions.
+- An effect's audit line is written by the coordinator whose conditional write won, after it, through the operations
+  store's own edit (M4's `audit_counter` numbers it), not in the write's transaction: the adoption's and the void's after
+  the user's row. A stop between the two loses that one line.
+- The initial-admin file's writes of a `users` row lock the `accounts` row of `state_versions` and move its version on when
+  they change the row, so every coordinator reads its copy of the accounts again (M4's rule of section 6).
+
 ## 14. The model check, before code
 
 The protocol to check is the deciding transaction, the conditional writes and the periodic claim, not the SQL. Two tools, one
@@ -222,7 +290,9 @@ Tests, named (each asserts the behaviour in its name; the PR bodies list them by
   Added by the review of this document: `acknowledged_halt_is_not_outrun_by_an_order_of_the_other_task`,
   `acknowledged_hold_and_desired_change_are_read_by_the_next_decision`, `unknown_outcome_commit_lands_once_by_retry`
   (including the old backend still committing), `stale_beat_does_not_overwrite_a_newer_one`,
-  `bake_in_sql_matches_bake_after`, `order_slot_is_freed_when_the_applied_beat_reports_the_target`,
+  `bake_in_sql_matches_bake_after`, `order_slot_is_freed_when_the_applied_beat_reports_the_target` (these three **Built**
+  (M6) in `store/postgres/tests/fleet_rows.rs`, with the gap rule's own test, the reorder window, two sessions writing one
+  host's beats, and the B8 test of `0024` both ways),
   `no_order_after_a_gap_in_beats_until_quiet_ends` (clean database restart, outage over `DOWN_AFTER`, back-out then
   new cutover), `lock_order_has_no_cycle`.
   Added by the leaderless decision: `stage_advance_by_racing_instances_is_one_advance_and_one_audit_line`,

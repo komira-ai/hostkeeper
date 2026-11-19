@@ -167,6 +167,7 @@ pub mod initial_admin;
 pub(crate) mod install_order;
 pub(crate) mod intents;
 pub mod inventory;
+pub(crate) mod jobs;
 pub mod jti_file;
 pub mod layout;
 pub mod listen;

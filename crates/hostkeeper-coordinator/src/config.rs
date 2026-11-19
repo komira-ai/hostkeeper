@@ -68,9 +68,7 @@ use hostkeeper_wire::identity::{
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::accounts::AccountStore;
-use crate::alerts::{
-    DEFAULT_CERT_WINDOW_SECS, DEFAULT_SILENT_HOST_SECS, OBSERVE_EVERY, observe_every,
-};
+use crate::alerts::{DEFAULT_CERT_WINDOW_SECS, DEFAULT_SILENT_HOST_SECS};
 use crate::audit_file::wall_clock;
 use crate::backup::{Backup, Report, Restore, backup, restore};
 use crate::desired::DesiredStore;
@@ -110,7 +108,7 @@ mod config_file;
 /// The flags of the Postgres store beside `--database-dsn-file`.
 #[path = "config_database.rs"]
 mod database;
-pub use database::DatabaseFlags;
+pub use database::{DatabaseFlags, JobEvery};
 
 pub use error::StartError;
 
@@ -596,6 +594,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         records,
         ledger,
         book,
+        database,
     } = state::open_store(flags, legacy, lock, &oidc_clock)?;
     let verifier = Verifier::new(
         oidc.clone(),
@@ -646,8 +645,8 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
             Duration::from_secs(flags.repository_discover_secs),
             flags.repository_descriptor_max_bytes,
         );
-    coordinator = state::with_initial_admin(coordinator, flags)?;
-    coordinator = state::with_login(coordinator, flags)?;
+    coordinator = state::with_initial_admin(coordinator, flags, database.as_ref())?;
+    coordinator = state::with_login(coordinator, flags, database.as_ref())?;
     coordinator = ssh::attach(coordinator, flags, ledger, book, &os_random())?;
     let store = match (&flags.enrollment_dir, records) {
         (Some(dir), _) => Some(StoreAt::Dir(dir)),
@@ -822,7 +821,7 @@ where
     let console = parts.coordinator.console().files().clone();
     let enrollment = parts.coordinator.enrollment().cloned();
     let coordinator = parts.coordinator;
-    let observing = observe_every(Arc::clone(&coordinator), OBSERVE_EVERY);
+    let observing = crate::jobs::periodic(Arc::clone(&coordinator));
     let adopting = watch_every(Arc::clone(&coordinator), parts.reload);
     // The tunnels' poll, which closes the ones that must close; it waits for ever without tunnels.
     let polling = run_poll(Arc::clone(&coordinator));
@@ -844,8 +843,9 @@ where
         serve(heartbeat, for_heartbeat, CLIENT_PATIENCE, MAX_CONNECTIONS),
         serve(control, for_control, CLIENT_PATIENCE, MAX_CONNECTIONS),
     );
+    let expire = !coordinator.claims_jobs();
     let reloading = reload_every(
-        enrollment,
+        enrollment.map(|enrollment| (enrollment, expire)),
         vec![parts.heartbeat_tls, parts.control_tls],
         tokens,
         operator_keys,

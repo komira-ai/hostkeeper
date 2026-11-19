@@ -58,6 +58,7 @@ export const NOW = 1800000000;
 export function recorder(client, params, answers, now) {
   const seen = {
     reports: [], refreshes: 0, navigations: [], questions: [], shown: [], repeats: [], sockets: [], terminals: [],
+    viewers: [],
   };
   const left = (answers || []).slice();
   const leavers = [];
@@ -110,6 +111,23 @@ export function recorder(client, params, answers, now) {
         dispose() {
           terminal.disposes += 1;
         },
+      };
+    },
+    // A screen viewer the test watches: each call is kept in `seen.viewers` with the element it
+    // draws in (`element`), the socket's record (`socket`) and the `events` it may tell (the test
+    // calls `events.connect()` and the rest); the credentials sent are kept and the disconnects
+    // counted.
+    viewScreen(element, opened, events) {
+      const viewer = { element, socket: opened.socket, events, credentials: [], disconnects: 0 };
+      seen.viewers.push(viewer);
+      return {
+        sendCredentials(creds) {
+          viewer.credentials.push(creds);
+        },
+        disconnect() {
+          viewer.disconnects += 1;
+        },
+        focus() {},
       };
     },
     onLeave(run) {

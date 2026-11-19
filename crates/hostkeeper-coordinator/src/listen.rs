@@ -472,12 +472,14 @@ pub(crate) async fn connection_with<S>(
 
 /// Looks at everything that is re-read while the coordinator runs, every `interval`, for as long
 /// as the future is polled: with `enrollment`, its server certificate file, made again when it
-/// is due or names other names than the flags ([`Enrollment::renew_server`]), and its requests, expired once they waited longer than
-/// the request TTL ([`Enrollment::expire_requests`]); then the TLS files of `sources`, the
+/// is due or names other names than the flags ([`Enrollment::renew_server`]), and, when its
+/// `bool` says so, its requests, expired once they waited longer than the request TTL
+/// ([`Enrollment::expire_requests`]; over a database the claimed job `request-expiry` does it
+/// instead, [`crate::jobs`]); then the TLS files of `sources`, the
 /// tokens file of `tokens`, the operator keys file of `operator_keys`, the host prerequisites
 /// file of `prerequisites` and the console's files of `console`. It never returns.
 pub async fn reload_every(
-    enrollment: Option<Arc<Enrollment>>,
+    enrollment: Option<(Arc<Enrollment>, bool)>,
     sources: Vec<TlsSource>,
     tokens: OperatorTokens,
     operator_keys: OperatorKeys,
@@ -491,7 +493,8 @@ pub async fn reload_every(
     loop {
         ticks.tick().await;
         reload_all(
-            enrollment.as_ref(),
+            enrollment.as_ref().map(|(enrollment, _)| enrollment),
+            enrollment.as_ref().is_some_and(|(_, expire)| *expire),
             &sources,
             &tokens,
             &operator_keys,
@@ -502,12 +505,13 @@ pub async fn reload_every(
     }
 }
 
-/// One look of the tick: the server certificate of `enrollment` is renewed when it is due and
-/// its requests older than the request TTL expire, then each TLS source reloads (so a renewed
+/// One look of the tick: the server certificate of `enrollment` is renewed when it is due and,
+/// with `expire`, its requests older than the request TTL expire, then each TLS source reloads (so a renewed
 /// file is served from this look on), then the tokens file, the operator keys file, the host
 /// prerequisites file and the console's files are read again.
 pub(crate) async fn reload_all(
     enrollment: Option<&Arc<Enrollment>>,
+    expire: bool,
     sources: &[TlsSource],
     tokens: &OperatorTokens,
     operator_keys: &OperatorKeys,
@@ -519,7 +523,9 @@ pub(crate) async fn reload_all(
         // File reads, a key, a serial from the store and file writes: off the runtime's threads.
         let _ = tokio::task::spawn_blocking(move || {
             enrollment.renew_server();
-            enrollment.expire_requests();
+            if expire {
+                enrollment.expire_requests();
+            }
         })
         .await;
     }

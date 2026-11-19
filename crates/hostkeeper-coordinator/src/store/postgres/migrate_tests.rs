@@ -4,7 +4,7 @@ use super::*;
 
 /// The SHA-256 of each shipped migration file, in hex. A shipped migration is never edited: a
 /// change is a migration of its own, so these only grow.
-const PINNED: [(i32, &str, &str); 23] = [
+const PINNED: [(i32, &str, &str); 25] = [
     (
         1,
         "state",
@@ -120,6 +120,16 @@ const PINNED: [(i32, &str, &str); 23] = [
         "state_versions",
         "b248d6568a19dd7384516ce3e37eb4a713b3aaa4e7d7e87369d17672ba3f4e16",
     ),
+    (
+        24,
+        "fleet",
+        "bd9d822bd667f88e359273243a6e8a6fbc03da70ec7b9b43061549957ff479c2",
+    ),
+    (
+        25,
+        "sessions_and_jobs",
+        "75e794e319188aaa9a3f1f90d56e91a11d7bc4de3f90238387f706073ef49a5c",
+    ),
 ];
 
 fn hex(bytes: &[u8]) -> String {
@@ -143,10 +153,10 @@ fn what(statement: &str) -> String {
 /// names are exactly [(1, "state"), (2, "first_serving"), (3, "generations"), (4, "releases"),
 /// (5, "mdm_devices"), (6, "host_running"), (7, "repositories"), (8, "host_groups"),
 /// (9, "service_repository"), (10, "accounts"), (11, "mdm"),
-/// (12, "mdm_setup"), (13, "host_group_all"), (14, "trusted_publishers"), (15, "lab_layout"), (16, "lab_devices"), (17, "lab_sleds"), (18, "remove_host_group_all"), (19, "tx_ledger"), (20, "ssh_certs"), (21, "ssh_tunnels"), (22, "instances"), (23, "state_versions")], each file's
+/// (12, "mdm_setup"), (13, "host_group_all"), (14, "trusted_publishers"), (15, "lab_layout"), (16, "lab_devices"), (17, "lab_sleds"), (18, "remove_host_group_all"), (19, "tx_ledger"), (20, "ssh_certs"), (21, "ssh_tunnels"), (22, "instances"), (23, "state_versions"), (24, "fleet"), (25, "sessions_and_jobs")], each file's
 /// SHA-256 is the pinned one, and every one passes the header rule, the lint and the numbering;
 /// the first three and `host_groups` say older releases must not run on them, and `releases`,
-/// `mdm_devices`, `host_running`, `repositories`, `service_repository`, `accounts`, `mdm`, `mdm_setup`, `host_group_all`, `trusted_publishers`, `lab_layout`, `lab_devices`, `lab_sleds`, `remove_host_group_all`, `tx_ledger`, `ssh_certs`, `ssh_tunnels`, `instances` and `state_versions` that
+/// `mdm_devices`, `host_running`, `repositories`, `service_repository`, `accounts`, `mdm`, `mdm_setup`, `host_group_all`, `trusted_publishers`, `lab_layout`, `lab_devices`, `lab_sleds`, `remove_host_group_all`, `tx_ledger`, `ssh_certs`, `ssh_tunnels`, `instances`, `state_versions`, `fleet` and `sessions_and_jobs` that
 /// they may (an older release never reads any of those tables).
 ///
 /// Catches: an edit to a shipped migration (a database that ran the old text would differ from
@@ -179,7 +189,9 @@ fn the_shipped_migrations_are_unchanged() {
             (20, "ssh_certs"),
             (21, "ssh_tunnels"),
             (22, "instances"),
-            (23, "state_versions")
+            (23, "state_versions"),
+            (24, "fleet"),
+            (25, "sessions_and_jobs")
         ]
     );
     let hashes: Vec<(i32, &str, String)> = SHIPPED
@@ -220,6 +232,8 @@ fn the_shipped_migrations_are_unchanged() {
             (21, "ssh_tunnels", OlderReleases::MayRun),
             (22, "instances", OlderReleases::MayRun),
             (23, "state_versions", OlderReleases::MayRun),
+            (24, "fleet", OlderReleases::MayRun),
+            (25, "sessions_and_jobs", OlderReleases::MayRun),
         ]
     );
 }

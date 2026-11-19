@@ -161,6 +161,7 @@ async fn one_look_of_the_tick_reads_the_tokens_file_again() {
     tokens_file(&path, second);
     reload_all(
         None,
+        true,
         &[],
         &tokens,
         &OperatorKeys::default(),
@@ -189,6 +190,7 @@ async fn one_look_of_the_tick_reads_the_operator_keys_file_again() {
     file(dir.path(), &group("build", &second));
     reload_all(
         None,
+        true,
         &[],
         &OperatorTokens::none(),
         &keys,
@@ -216,6 +218,7 @@ async fn one_look_of_the_tick_reads_the_host_prerequisites_file_again() {
     file(dir.path(), &group("build", &["xcode-command-line-tools"]));
     reload_all(
         None,
+        true,
         &[],
         &OperatorTokens::none(),
         &OperatorKeys::default(),
@@ -859,6 +862,7 @@ async fn one_look_of_the_tick_reads_the_console_files_again() {
     crate::console::support::write_files(&dir, "[[operator]]\nname = \"bob\"\n");
     reload_all(
         None,
+        true,
         &[],
         &OperatorTokens::none(),
         &OperatorKeys::default(),

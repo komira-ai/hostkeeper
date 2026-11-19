@@ -3,6 +3,10 @@
 import { startApp } from "./app.js";
 import { socketAddress } from "./socket_address.js";
 import { openTerminal } from "./terminal_port.js";
+import { screenViewer } from "./screen.js";
+// The vendored remote desktop viewer (`vendor/novnc/`, pinned by SHA-256): noVNC's `RFB`, which
+// `screenViewer` (`screen.js`) builds on an open socket.
+import RFB from "./vendor/novnc/core/rfb.js";
 // The vendored terminal (`vendor/`, pinned by SHA-256): each file, run as a module, sets one name on
 // the global object, `Terminal` and `AttachAddon`, which `openTerminal` (`terminal_port.js`) reads.
 import "./vendor/xterm/xterm.js";
@@ -27,7 +31,7 @@ const prefs = {
 // message (a string for text, a Uint8Array for binary) and `handlers.close({code, reason})` when it has
 // closed, for any reason, with the close frame's code and reason (1006 and "" when there was none). A
 // text or a Uint8Array goes out through `send`, the other way round. `socket` is the open socket
-// itself, which only `openTerminal` (`terminal_port.js`) takes.
+// itself, which only `openTerminal` (`terminal_port.js`) and `viewScreen` (`screen.js`) take.
 function openSocket(path, handlers, protocols) {
   const socket = new WebSocket(socketAddress(window.location, path), protocols);
   socket.binaryType = "arraybuffer";
@@ -47,6 +51,7 @@ startApp({
   confirm: (question) => window.confirm(question),
   openSocket,
   openTerminal,
+  viewScreen: screenViewer(RFB),
   now: () => Math.floor(Date.now() / 1000),
   prefs,
   every: (run, milliseconds) => {

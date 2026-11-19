@@ -290,6 +290,7 @@ pub(crate) fn options() -> Options {
         release: "test-release".to_owned(),
         listen: "heartbeat=127.0.0.1:8443".to_owned(),
         gate_wait: std::time::Duration::from_secs(30),
+        fleet: super::Timing::of(30, 30),
     }
 }
 
@@ -320,20 +321,26 @@ pub(super) fn with_session<R: Send + 'static>(
 }
 
 mod accounts;
+mod admin_rows;
+mod alert_rows;
 mod audit_only;
 mod connect;
 mod coordinator;
 mod copies;
 mod edits;
 mod enrollment_races;
+mod fleet_rows;
 mod gate;
 mod generations;
 mod host_groups;
 mod instance;
+mod jobs_rows;
 mod layout;
+mod login_rows;
 mod lost;
 mod migrate_ddl;
 mod numbers;
+mod periodic;
 mod pool;
 mod reads;
 mod records;
@@ -341,6 +348,7 @@ mod records_errors;
 mod releases;
 mod reload;
 mod repositories;
+mod revocation;
 mod running;
 mod schema;
 pub(crate) mod seed;
@@ -348,6 +356,8 @@ mod serve;
 mod service_repository;
 mod serving;
 mod session;
+mod sessions_and_jobs;
+mod shared_login;
 mod ssh;
 mod ssh_book;
 mod start;

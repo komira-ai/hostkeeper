@@ -1,8 +1,10 @@
 //! The flags of the Postgres store beside `--database-dsn-file`
 //! (`docs/design/coordinator-multi-instance.md`, section 12): the pool of writing sessions, how
 //! often this instance's row of `instances` is upserted, how a migration waits for its locks
-//! and is tried again, and how long an edit waits for the rollout gate. Each has a default; with
-//! the file store none is read.
+//! and is tried again, how long an edit waits for the rollout gate, when a heartbeat older by
+//! its host's clock than the one stored is believed, how often a session's last use is written,
+//! and how often the periodic jobs are claimed and each runs. Each has a default; with the file
+//! store none is read.
 
 use std::net::SocketAddr;
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
@@ -10,13 +12,19 @@ use std::time::Duration;
 
 use clap::Args;
 
-use crate::store::postgres::Options;
 use crate::store::postgres::migrate::Retry;
+use crate::store::postgres::periodic::{ALERTS, JOBS, PRUNE, REQUEST_EXPIRY};
+use crate::store::postgres::{Options, Timing};
 
 /// The most milliseconds `--migrate-ddl-lock-timeout-ms` takes: below the statement timeout of
 /// every session of the store (5 seconds), which would end a longer wait first and fail the start
 /// instead of rolling the migration back to try again.
 const MAX_DDL_LOCK_TIMEOUT_MS: u64 = 4999;
+
+/// The bound `--beat-reorder-secs` stays below: the seconds of silence after which a host is down
+/// ([`crate::fleet::DOWN_AFTER`]), so a host whose clock stepped back is believed again before it
+/// would count as down.
+const MAX_BEAT_REORDER_SECS: u64 = crate::fleet::DOWN_AFTER.as_secs();
 
 /// The flags of the Postgres store.
 #[derive(Clone, Debug, Args)]
@@ -57,12 +65,66 @@ pub struct DatabaseFlags {
     /// nothing changed. A heartbeat's own write never waits for the gate. At least 1.
     #[arg(long, value_name = "MS", default_value = "30000")]
     pub operator_gate_wait_ms: NonZeroU64,
+    /// With --database-dsn-file: the fewest seconds between two writes of a browser session's
+    /// last use; a use inside them is not written, so a session's idle deadline may count from
+    /// up to this long before its last use.
+    #[arg(long, value_name = "SECS", default_value_t = 30)]
+    pub session_touch_secs: u64,
+    /// With --database-dsn-file: how often, in seconds, this coordinator claims the periodic
+    /// jobs that are due. At least 1.
+    #[arg(long, value_name = "SECS", default_value = "5")]
+    pub job_tick_secs: NonZeroU64,
+    /// With --database-dsn-file: the period of a periodic job, NAME=SECS, one of `alerts`
+    /// (default 15), `request-expiry` (default 15) and `prune` (default 3600); SECS at least 1.
+    /// Repeatable; a later one for the same job wins.
+    #[arg(long, value_name = "NAME=SECS", value_parser = job_every)]
+    pub job_every: Vec<JobEvery>,
+    /// With --database-dsn-file: how old, in seconds, the stored heartbeat of a host must be
+    /// before a heartbeat that its host's clock says is older replaces it. A heartbeat reaches the
+    /// database through any coordinator, so two can arrive out of order; the older one is dropped,
+    /// unless the host's clock stepped back and the stored one is this old. 1 to 44, below the 45
+    /// seconds of silence after which a host is down.
+    #[arg(
+        long,
+        value_name = "SECS",
+        default_value_t = 30,
+        value_parser = clap::value_parser!(u64).range(1..MAX_BEAT_REORDER_SECS)
+    )]
+    pub beat_reorder_secs: u64,
+}
+
+/// A period of `--job-every`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct JobEvery {
+    /// The job.
+    pub name: &'static str,
+    /// Its period.
+    pub secs: NonZeroU64,
+}
+
+/// The default period of each job.
+const JOB_DEFAULTS: [(&str, u64); 3] = [(ALERTS, 15), (REQUEST_EXPIRY, 15), (PRUNE, 3600)];
+
+/// Parses `NAME=SECS` of `--job-every`.
+fn job_every(text: &str) -> Result<JobEvery, String> {
+    let (name, secs) = text
+        .split_once('=')
+        .ok_or_else(|| format!("{text:?} is not NAME=SECS"))?;
+    let name = JOBS
+        .into_iter()
+        .find(|job| *job == name)
+        .ok_or_else(|| format!("no job is named {name:?}: one of {}", JOBS.join(", ")))?;
+    let secs = secs
+        .parse::<NonZeroU64>()
+        .map_err(|_| format!("{secs:?} is not a number of seconds of at least 1"))?;
+    Ok(JobEvery { name, secs })
 }
 
 impl DatabaseFlags {
-    /// The store's options of these flags, for an instance that runs `release` and listens on
-    /// `listen`.
-    pub(crate) fn options(&self, release: &str, listen: &str) -> Options {
+    /// The store's options of these flags, for an instance that runs `release`, listens on
+    /// `listen` and holds decisions back for `quiet_secs` (`--quiet-secs`) after a gap in the
+    /// heartbeats.
+    pub(crate) fn options(&self, release: &str, listen: &str, quiet_secs: u64) -> Options {
         Options {
             pool: self.database_pool,
             migrate: Retry {
@@ -74,7 +136,31 @@ impl DatabaseFlags {
             release: release.to_owned(),
             listen: listen.to_owned(),
             gate_wait: Duration::from_millis(self.operator_gate_wait_ms.get()),
+            fleet: Timing::of(self.beat_reorder_secs, quiet_secs),
         }
+    }
+}
+
+impl DatabaseFlags {
+    /// Every job with its period in seconds: the default, or the last `--job-every` of it.
+    pub(crate) fn job_periods(&self) -> Vec<(String, i64)> {
+        JOB_DEFAULTS
+            .iter()
+            .map(|(name, secs)| {
+                let secs = self
+                    .job_every
+                    .iter()
+                    .rev()
+                    .find(|every| every.name == *name)
+                    .map_or(*secs, |every| every.secs.get());
+                ((*name).to_owned(), i64::try_from(secs).unwrap_or(i64::MAX))
+            })
+            .collect()
+    }
+
+    /// How often the jobs are claimed.
+    pub(crate) fn job_tick(&self) -> Duration {
+        Duration::from_secs(self.job_tick_secs.get())
     }
 }
 
