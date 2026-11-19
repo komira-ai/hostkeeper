@@ -177,17 +177,26 @@ function versionOf(host) {
   return own !== undefined && typeof own.installedVersion === "string" ? own.installedVersion : "";
 }
 
-// Whether a host is a Mac, as its last heartbeat said its platform: its console is its screen
-// (the Desktop link), not a serial port.
+// Whether a host's last heartbeat said it runs Linux (on either architecture); a host that has
+// not sent one is not known to.
+export function isLinux(host) {
+  const platform = host.heartbeat && typeof host.heartbeat.platform === "string" ? host.heartbeat.platform : "";
+  return platform.startsWith("PLATFORM_LINUX_");
+}
+
+// Whether a host's last heartbeat said it is a Mac: its console is its screen (the Desktop page),
+// not a serial port. A host that has not sent one is not known to be.
 export function isMac(host) {
-  return (host.heartbeat || {}).platform === "PLATFORM_DARWIN_ARM64";
+  return Boolean(host.heartbeat) && host.heartbeat.platform === "PLATFORM_DARWIN_ARM64";
 }
 
 // Every server the lab knows, joined with its place: one for each enrolled host (its entry's
 // place when an entry matches it, else its own), one for each inventory entry no host is enrolled
 // against (pending), and one for each placement whose host or entry is gone (offline, `gone`).
-// A server is `{key, kind, id, name, state, group, version, host, placement}`; `host` is the node
-// id when a host is enrolled, `placement` the placement or null.
+// A server is `{key, kind, id, name, state, group, version, host, linux, mac, placement}`; `host` is
+// the node id when a host is enrolled, `linux` whether that host's last heartbeat said it is a Linux
+// server (which has a serial Console), `mac` whether it said it is a Mac (which has a Desktop),
+// `placement` the placement or null.
 export function serversOf(layout, hosts, records) {
   const placed = new Map(layout.placements.map((p) => [p.key, p]));
   const seen = new Set();
@@ -208,6 +217,7 @@ export function serversOf(layout, hosts, records) {
       group: host.hostGroup || "",
       version: versionOf(host),
       host: host.nodeId,
+      linux: isLinux(host),
       mac: isMac(host),
     });
   }
@@ -215,7 +225,7 @@ export function serversOf(layout, hosts, records) {
     if (!seen.has(`inventory:${record.hostId}`)) {
       take({
         key: `inventory:${record.hostId}`, kind: "inventory", id: record.hostId, name: record.hostId,
-        state: "pending", group: record.hostGroup || "", version: "", host: null, mac: false,
+        state: "pending", group: record.hostGroup || "", version: "", host: null, linux: false, mac: false,
       });
     }
   }
@@ -224,7 +234,7 @@ export function serversOf(layout, hosts, records) {
     if (!seen.has(p.key) && !gear.has(p.key)) {
       take({
         key: p.key, kind: p.kind, id: p.id, name: p.id, state: "offline", group: "", version: "",
-        host: p.kind === "host" ? p.id : null, gone: true, mac: false,
+        host: p.kind === "host" ? p.id : null, linux: false, mac: false, gone: true,
       });
     }
   }

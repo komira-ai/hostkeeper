@@ -19,6 +19,7 @@
 //! state holds is removed; any other refuses the start, and so does a marker that lists nothing
 //! this build reads (the empty marker of the release before, which marked a halt only).
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -30,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use super::{OpsError, OpsState, OpsStore, UNWRITTEN_LOG_EVERY};
 use crate::audit_file::AuditLine;
 use crate::desired::{StoreError, write_whole};
-use crate::store::{Commit, Health, Landing, Shared};
+use crate::store::{Commit, Edit, Health, Landing, Scope, Shared};
 
 /// The changes in memory and not yet committed.
 #[derive(Debug, Default)]
@@ -145,14 +146,37 @@ impl OpsStore {
         pending.marked = true;
     }
 
-    /// Commits what is pending, if anything is, and removes the marker once nothing is. Called
-    /// under the writers' lock.
+    /// Whether a change is in memory and not yet committed.
+    pub(super) fn pending_changes(&self) -> bool {
+        let pending = self.pending_lock();
+        pending.base.is_some() || !pending.lines.is_empty()
+    }
+
+    /// Commits what is pending, if anything is, in an edit of its own, and removes the marker once
+    /// nothing is. Called under the writers' lock.
     ///
     /// # Errors
     /// [`OpsError`]: the commit failed; the changes stay pending.
     pub(super) fn flush(&self) -> Result<(), OpsError> {
+        if !self.pending_changes() {
+            self.unmark(&mut self.pending_lock());
+            return Ok(());
+        }
+        let edit = self.backend.begin(Scope::OPS)?;
+        self.commit_pending(edit)
+    }
+
+    /// Commits what is pending through `edit`, the lines numbered from its first number when it
+    /// has one, and removes the marker once nothing is. Memory keeps its copy: when the edit
+    /// found the rows changed by another coordinator, only the rows the pending changes made
+    /// differ are written, and memory is read again once nothing is pending.
+    ///
+    /// # Errors
+    /// [`OpsError`]: the commit failed; the changes stay pending.
+    pub(super) fn commit_pending(&self, edit: Edit) -> Result<(), OpsError> {
         let mut pending = self.pending_lock();
         if pending.base.is_some() || !pending.lines.is_empty() {
+            self.renumber(&mut pending, edit.next_seq());
             let current = self.state();
             let base = pending.base.clone().unwrap_or_else(|| current.clone());
             let commit = Commit {
@@ -160,7 +184,10 @@ impl OpsStore {
                 audit: &pending.lines,
                 ..Commit::default()
             };
-            match self.backend.commit(&commit).map_err(OpsError::from) {
+            match edit
+                .commit_or(&commit, |commit| self.backend.commit(commit))
+                .map_err(OpsError::from)
+            {
                 Ok(()) => {
                     *pending = Pending {
                         marked: pending.marked,
@@ -184,6 +211,36 @@ impl OpsStore {
         }
         self.unmark(&mut pending);
         Ok(())
+    }
+
+    /// Numbers the pending lines on from `first`, the audit counter's number, when they were
+    /// numbered otherwise (made while no edit could be begun, after a commit whose numbers turned
+    /// out free, or another coordinator took them meanwhile), and the entries of the ring that are
+    /// theirs with them, so the numbers stay dense and in the order of the commits. The caller of
+    /// the change and its log line had the number it was made under; the move is logged with both.
+    fn renumber(&self, pending: &mut Pending, first: Option<u64>) {
+        let Some(first) =
+            first.filter(|first| pending.lines.first().is_some_and(|line| line.seq != *first))
+        else {
+            return;
+        };
+        tracing::warn!(
+            alert = "halt",
+            made = ?pending.lines.iter().map(|line| line.seq).collect::<Vec<_>>(),
+            first,
+            "changes made while no edit could be begun are written under the audit counter's numbers"
+        );
+        let moved: BTreeMap<u64, u64> = pending
+            .lines
+            .iter_mut()
+            .zip(first..)
+            .map(|(line, seq)| (std::mem::replace(&mut line.seq, seq), seq))
+            .collect();
+        for entry in &mut self.lock().audit {
+            if let Some(seq) = moved.get(&entry.seq) {
+                entry.seq = *seq;
+            }
+        }
     }
 
     /// Removes the marker, when it is on disk. One that cannot be removed is logged and stays

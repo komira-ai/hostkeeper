@@ -81,9 +81,6 @@ yaml.org
 # (`repositories.discover`, the function and the generated client's table): `discover` is a word
 # the IANA list delegates as a top-level domain. A name, not a host.
 =repositories.discover
-# The operator API's call `Console.Open` as the web app's client and its calls list name it
-# (`console.open`): `open` is a word the IANA list delegates as a top-level domain. A name, not a host.
-=console.open
 
 # The SVG namespace URI every diagram under docs/design/diagrams declares; a namespace name, not a host the code reaches.
 =www.w3.org
@@ -167,8 +164,9 @@ fleetdm.com
 =developer.godaddy.com
 
 # Not sites: property names of the web app's JavaScript (ui/lab.js, ui/pages/home.js, ui/pages/host.js,
-# ui/pages/enrollment.js, ui/pages/inventory_switch.js, ui/pages/switch.js) and the call `layout.place`
-# of the generated client, whose last word is also a top-level domain. Exact names only.
+# ui/pages/enrollment.js, ui/pages/inventory_switch.js, ui/pages/switch.js) and the calls `layout.place`
+# and `console.open` of the generated client (in ui/calls.json), whose last word is also a top-level
+# domain. Exact names only.
 =body.name
 =ctx.params.id
 =d.id
@@ -188,6 +186,7 @@ fleetdm.com
 =host.live
 =layout.name
 =layout.place
+=console.open
 =p.id
 =p.subject.id
 =r.id

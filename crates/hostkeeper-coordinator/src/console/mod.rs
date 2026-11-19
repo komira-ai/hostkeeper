@@ -11,13 +11,12 @@
 //!   the device; a session nothing attaches to ends at the end of its window
 //!   (`--console-attach-s`).
 //! - `GET /console/v1/stream/<session>` ([`route`], row C4): the WebSocket that attaches to a
-//!   session, with the operator's bearer, or a browser session's cookie and its CSRF token, in
-//!   its subprotocol (row C6 added the session); after the upgrade, [`stream`] contacts the
+//!   session, with the bearer, or a browser's session cookie and CSRF token, in its subprotocol; after the upgrade, [`stream`] contacts the
 //!   device (Serial over LAN through the BMC tool for a Linux server, Screen Sharing's TCP port
 //!   for a Mac, [`device`]) and bridges it until either end ends, a limit or a close stops it, and
 //!   cleans up (the payload deactivated, one close line).
 //! - [`sweep`]: the tick that ends unattached sessions, closes attached ones at their idle and
-//!   total limits or when their operator's token or entry is gone, the drain at stop and the
+//!   total limits or when their operator's token (or browser session) or entry is gone, the drain at stop and the
 //!   start line.
 //!
 //! Who may call: an operator's token (a CI token is `forbidden`, no token `unauthorized`) whose
@@ -110,6 +109,10 @@ pub const DEFAULT_TOTAL: Duration = Duration::from_secs(8 * 60 * 60);
 /// (`--console-connect-timeout-s`).
 pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// The default time the Console page waits for a serial console's first byte before it says that
+/// no output came yet (`--console-quiet-s`).
+pub const DEFAULT_QUIET: Duration = Duration::from_secs(10);
+
 /// The TCP port of a Mac's Screen Sharing (RFB).
 pub const SCREEN_SHARING_PORT: u16 = 5900;
 
@@ -139,6 +142,12 @@ pub(crate) struct Live {
     pub(crate) stop: tokio::sync::watch::Sender<Option<Stop>>,
     /// The bytes it has carried, which the sweep tells the table.
     pub(crate) moved: Arc<Moved>,
+    /// What the stream attached with, which the sweep holds it to: an operator token, or the
+    /// browser's signed-in session.
+    pub(crate) credential: crate::ssh_tunnel::Credential,
+    /// The bytes it had carried at the last sweep that saw it carry any: a browser's session is
+    /// used, as a request of its sign-in uses it, by each sweep that finds more.
+    pub(crate) used_at: u64,
 }
 
 impl Live {
@@ -174,6 +183,9 @@ pub struct Console {
     /// waits on it.
     ended: tokio::sync::Notify,
     dial: Dial,
+    /// How long the page waits for a serial console's first byte (`--console-quiet-s`), which
+    /// `Open` tells it.
+    quiet: Duration,
     bmcs: Mutex<BTreeMap<MacAddress, Arc<Mutex<()>>>>,
     random: Random,
     /// Told when a call finds its BMC's lock held and waits for it: a test's progress event.
@@ -204,6 +216,7 @@ impl std::fmt::Debug for Console {
             .field("files", &self.files)
             .field("settings", &self.settings)
             .field("bounds", &self.lock_table().sessions.bounds())
+            .field("quiet", &self.quiet)
             .finish_non_exhaustive()
     }
 }
@@ -228,6 +241,7 @@ impl Console {
             }),
             ended: tokio::sync::Notify::new(),
             dial: tcp_dial(SCREEN_SHARING_PORT, DEFAULT_CONNECT_TIMEOUT),
+            quiet: DEFAULT_QUIET,
             bmcs: Mutex::new(BTreeMap::new()),
             random: os_random(),
             #[cfg(test)]
@@ -245,6 +259,13 @@ impl Console {
     #[must_use]
     pub fn with_dial(mut self, dial: Dial) -> Self {
         self.dial = dial;
+        self
+    }
+
+    /// The same console telling the page to wait `quiet` for a serial console's first byte.
+    #[must_use]
+    pub fn with_quiet(mut self, quiet: Duration) -> Self {
+        self.quiet = quiet;
         self
     }
 

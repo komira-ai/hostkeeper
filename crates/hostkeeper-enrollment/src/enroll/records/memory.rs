@@ -3,7 +3,10 @@
 //! A commit is all or nothing, as a database transaction is: every record of it is written, or,
 //! when it fails, none. Every call of the [`Records`] port but [`Records::place`] is one numbered
 //! operation, counted from 1, and the one numbered [`MemoryRecords::fail_at`] fails and changes
-//! nothing, so a test can stop the store at any call as a lost database would.
+//! nothing, so a test can stop the store at any call as a lost database would. A write checks
+//! what its decision saw ([`Seen`]) under the same mutex it writes under, and
+//! [`MemoryRecords::interleave`] runs another writer's decision just before that check, so a test
+//! can put another process's write between a decision's reads and its own write.
 
 use std::collections::BTreeMap;
 use std::io;
@@ -11,7 +14,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use super::{Record, RecordKey, Records, RecordsLock, pb};
+use super::{Record, RecordKey, Records, RecordsLock, Seen, pb};
 use crate::enroll::mac_nonce::MacNonceHash;
 use crate::enroll::{FIRST_SERIAL, StoreError};
 use crate::names::{HostId, KeyHash};
@@ -24,9 +27,35 @@ struct Held {
     next_serial: Option<u64>,
 }
 
+/// Another writer's decisions, each run before one write of these records checks what it saw,
+/// and whether one is running (its own writes run none).
+#[derive(Default)]
+struct Interleaved(Vec<Box<dyn FnOnce() + Send>>, bool);
+
+impl std::fmt::Debug for Interleaved {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} interleaved", self.0.len())
+    }
+}
+
 impl Held {
     fn get(&self, key: &RecordKey) -> Option<&Record> {
         self.records.get(key)
+    }
+
+    /// Checks that every record of `seen` is as seen.
+    fn checked(
+        &self,
+        seen: &[Seen],
+        place: impl Fn(&RecordKey) -> PathBuf,
+    ) -> Result<(), StoreError> {
+        for one in seen {
+            let key = one.key();
+            if self.get(&key).cloned() != one.record() {
+                return Err(StoreError::Raced { path: place(&key) });
+            }
+        }
+        Ok(())
     }
 }
 
@@ -37,6 +66,7 @@ pub struct MemoryRecords {
     held: Mutex<Held>,
     count: AtomicU64,
     fail_at: AtomicU64,
+    interleaved: Mutex<Interleaved>,
 }
 
 impl MemoryRecords {
@@ -48,6 +78,39 @@ impl MemoryRecords {
     /// Fails the operation numbered `n` (counted from 1 since this was made); 0 fails nothing.
     pub fn fail_at(&self, n: u64) {
         self.fail_at.store(n, Ordering::SeqCst);
+    }
+
+    /// Runs `write`, another writer's decision through these same records, just before the
+    /// next write (a commit, a serial taken or a host mark) checks what its own decision saw: a
+    /// test's way to put another coordinator's write between a decision's reads and its write.
+    /// Each call is run before one write, in the order of the calls, and none before a write
+    /// `write` itself makes; what `write` does counts as it would at any time.
+    pub fn interleave(&self, write: impl FnOnce() + Send + 'static) {
+        self.interleaved
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .0
+            .push(Box::new(write));
+    }
+
+    /// Runs the next interleaved write, if any and none is running, with no lock of these
+    /// records held.
+    fn run_interleaved(&self) {
+        let interleaved = || {
+            self.interleaved
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+        };
+        let next = {
+            let mut held = interleaved();
+            let next = (!held.1 && !held.0.is_empty()).then(|| held.0.remove(0));
+            held.1 |= next.is_some();
+            next
+        };
+        if let Some(write) = next {
+            write();
+            interleaved().1 = false;
+        }
     }
 
     /// How many operations were asked for so far, the failed one included.
@@ -152,18 +215,24 @@ impl Records for MemoryRecords {
         )
     }
 
-    fn commit(&self, records: &[Record]) -> Result<(), StoreError> {
+    fn commit(&self, seen: &[Seen], records: &[Record]) -> Result<(), StoreError> {
         let keys = records
             .iter()
             .map(Record::key)
             .collect::<Result<Vec<RecordKey>, StoreError>>()?;
+        self.run_interleaved();
         let mut held = self.step("commit")?;
+        held.checked(seen, |key| self.place(key))?;
         held.records
             .extend(keys.into_iter().zip(records.iter().cloned()));
         Ok(())
     }
 
-    fn take_serial(&self, reserving: Option<&pb::Request>) -> Result<u64, StoreError> {
+    fn take_serial(
+        &self,
+        seen: &[Seen],
+        reserving: Option<&pb::Request>,
+    ) -> Result<u64, StoreError> {
         let reserving = reserving
             .map(|request| {
                 Record::Request(request.clone())
@@ -171,7 +240,9 @@ impl Records for MemoryRecords {
                     .map(|key| (key, request))
             })
             .transpose()?;
+        self.run_interleaved();
         let mut held = self.step("serial")?;
+        held.checked(seen, |key| self.place(key))?;
         let next = held.next_serial.unwrap_or(FIRST_SERIAL);
         held.next_serial = Some(next + 1);
         if let Some((key, request)) = reserving {
@@ -183,26 +254,30 @@ impl Records for MemoryRecords {
     }
 
     fn set_first_heartbeat(&self, host: &pb::Host, at_unix: u64) -> Result<(), StoreError> {
+        let seen = Seen::of_host(host)?;
         let mut host = host.clone();
         host.first_heartbeat_unix = Some(at_unix);
-        self.commit(&[Record::Host(host)])
+        self.commit(&[seen], &[Record::Host(host)])
     }
 
     fn set_first_serving(&self, host: &pb::Host, at_unix: u64) -> Result<(), StoreError> {
+        let seen = Seen::of_host(host)?;
         let mut host = host.clone();
         host.first_serving_unix = Some(at_unix);
-        self.commit(&[Record::Host(host)])
+        self.commit(&[seen], &[Record::Host(host)])
     }
 
     fn set_running(&self, host: &pb::Host, running: pb::Running) -> Result<(), StoreError> {
+        let seen = Seen::of_host(host)?;
         let mut host = host.clone();
         host.running = Some(running);
-        self.commit(&[Record::Host(host)])
+        self.commit(&[seen], &[Record::Host(host)])
     }
 
     fn set_duplicate(&self, host: &pb::Host) -> Result<(), StoreError> {
+        let seen = Seen::of_host(host)?;
         let mut host = host.clone();
         host.duplicate = true;
-        self.commit(&[Record::Host(host)])
+        self.commit(&[seen], &[Record::Host(host)])
     }
 }

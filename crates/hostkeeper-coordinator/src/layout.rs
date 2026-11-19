@@ -35,7 +35,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use serde::{Deserialize, Serialize};
 
 use crate::desired::StoreError;
-use crate::store::{BackendError, Commit, Fake, Files, Landing, Shared};
+use crate::store::{BackendError, Commit, Edit, Fake, Files, Landing, Part, Scope, Shared};
 
 /// The most rows the layout holds.
 pub const MAX_ROWS: usize = 64;
@@ -780,15 +780,30 @@ impl LayoutStore {
         edit: impl FnOnce(&Layout) -> Result<(Layout, T), LayoutError>,
     ) -> Result<T, LayoutError> {
         let mut held = self.held();
+        let opened = self.begin(&mut held)?;
         let (next, found) = edit(&held)?;
-        self.commit_change(&mut held, next)?;
+        self.commit_change(&mut held, opened, next)?;
         Ok(found)
     }
 
-    /// Commits `next`, the result of an edit of `held`, and puts it in `held`.
+    /// Begins the edit of a change of the layout ([`Scope::LAYOUT`]), and takes into `held` what
+    /// it read afresh.
+    ///
+    /// # Errors
+    /// [`LayoutError::Io`]: no edit can be begun now; nothing changed.
+    fn begin(&self, held: &mut Layout) -> Result<Edit, LayoutError> {
+        let mut edit = self.backend.begin(Scope::LAYOUT).map_err(layout_error)?;
+        if let Some(fresh) = edit.take_layout() {
+            *held = fresh;
+        }
+        Ok(edit)
+    }
+
+    /// Commits `next`, the result of an edit of `held`, through `opened`, and puts it in `held`.
     fn commit_change(
         &self,
         held: &mut MutexGuard<'_, Layout>,
+        opened: Edit,
         next: Layout,
     ) -> Result<(), LayoutError> {
         if next == **held {
@@ -798,12 +813,36 @@ impl LayoutStore {
             layout: Some((&**held, &next)),
             ..Commit::default()
         };
-        self.backend.commit(&commit).map_err(|why| match why {
-            BackendError::Layout(why) => why,
-            other => LayoutError::Io(other.into_store()),
-        })?;
+        opened
+            .commit_or(&commit, |commit| self.backend.commit(commit))
+            .map_err(layout_error)?;
         **held = next;
         Ok(())
+    }
+
+    /// Reads the layout again when the backend's rows moved on since memory's copy was read
+    /// (`docs/design/coordinator-multi-instance.md`, section 6, "Invalidation"); not while a
+    /// change holds it, which reads the part afresh itself.
+    pub(crate) fn refresh(&self) {
+        let Ok(mut held) = self.held.try_lock() else {
+            return;
+        };
+        match self.backend.reload(Part::Layout) {
+            Ok(fresh) => {
+                if let Some(fresh) = fresh.layout {
+                    *held = fresh;
+                }
+            }
+            Err(why) => tracing::warn!(%why, "the layout could not be read again"),
+        }
+    }
+}
+
+/// The backend's error as the layout's own.
+fn layout_error(why: BackendError) -> LayoutError {
+    match why {
+        BackendError::Layout(why) => why,
+        other => LayoutError::Io(other.into_store()),
     }
 }
 

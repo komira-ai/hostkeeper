@@ -59,6 +59,7 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
                 kind: op::ConsoleKind::Screen.into(),
                 session: "ab".repeat(32),
                 expires_in_secs: 30,
+                quiet_secs: 10,
             }),
         ),
         (

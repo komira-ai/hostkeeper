@@ -4,8 +4,7 @@
 // keys, arrow buttons and one rack at a time on a phone, with the number of the rack in view and
 // a fade at an end that has more); a click on a server opens its host page. Above the floor plan,
 // the conditions that need a person as one compact strip; below it, the servers not placed yet.
-// `list` (true) shows every server in one compact list instead of the floor plan; a Mac's row there
-// has a Desktop link, which opens the Mac's Desktop page (its screen).
+// `list` (true) shows every server in one compact list instead of the floor plan.
 // Breadcrumbs: Lab > Row > Rack > Host.
 //
 // The layout is the coordinator's own small model (rows, racks numbered in their row and as many U
@@ -20,7 +19,9 @@
 // a refusal is told in words. A rack that holds sleds, or a sled that holds items, is not removed.
 //
 // Params: `row` (a row id) shows that row's racks, `rack` (a rack id) one rack with its hosts,
-// `edit` (true) the edit mode, `list` (true) the list of servers in place of the floor plan.
+// `edit` (true) the edit mode, `list` (true) the list of servers in place of the floor plan, with a
+// Console link on the row of each Linux server (the Console page) and a Desktop link on the row of
+// each Mac (the Desktop page).
 // Calls: Hosts.List, Releases.Status and Alerts.List as the Fleet page made them, then Layout.Get
 // and Enrollment.ListRecords (the lab is shown without them when they fail, and says so); on a
 // button, Layout.PutName, AddRow, RemoveRow, PutRack, RemoveRack, PutSled, RemoveSled, Place or Unplace.
@@ -93,15 +94,25 @@ export function matches(server, text) {
   return server.name.toLowerCase().includes(want) || address === want || address.startsWith(`${want}-`);
 }
 
-// The console link of a server's row: Desktop for a Mac (its screen); "-" for any other.
+// The console link of a server's row: Console for a Linux server (its serial port), Desktop for a
+// Mac (its screen), "-" for any other.
 function consoleLink(ctx, server) {
-  if (server.host === null || server.mac !== true) {
+  if (server.host === null) {
     return "-";
   }
-  return h("button", {
-    type: "button", class: "linklike", name: "open-desktop",
-    on: { click: () => ctx.navigate("desktop", { nodeId: server.host }) },
-  }, "Desktop");
+  if (server.linux) {
+    return h("button", {
+      type: "button", class: "linklike", name: "open-console",
+      on: { click: () => ctx.navigate("console", { nodeId: server.host }) },
+    }, "Console");
+  }
+  if (server.mac) {
+    return h("button", {
+      type: "button", class: "linklike", name: "open-desktop",
+      on: { click: () => ctx.navigate("desktop", { nodeId: server.host }) },
+    }, "Desktop");
+  }
+  return "-";
 }
 
 // The list view: every server in one compact table, with its address and where it stands, under a

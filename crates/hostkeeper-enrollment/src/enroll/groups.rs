@@ -49,23 +49,26 @@ impl EnrollmentStore {
 
     /// Puts `host` in the group `to` records, moving from the group it names or not moving,
     /// and answers what the host's record held before, so that a caller whose other write fails
-    /// can write it back. One commit of the host's record; decided under the store's lock.
+    /// can write it back. One commit of the host's record, which lands only on the host record
+    /// and deny row as read.
     ///
     /// # Errors
     /// [`StoreError::UnknownHost`] for a host id never approved, or denied; [`StoreError`] when
     /// a record cannot be read or written.
     pub fn set_membership(&self, host: &HostId, to: Membership) -> Result<Membership, StoreError> {
-        let _held = self.lock()?;
-        let unknown = || StoreError::UnknownHost(host.clone());
-        let row = self.load_host(host)?.ok_or_else(unknown)?;
-        if self.denied(host)? {
-            return Err(unknown());
-        }
-        let before = Membership::of(&row.pb);
-        let mut pb = row.pb;
-        pb.host_group = to.host_group;
-        pb.moving_from = to.moving_from;
-        self.commit(&[Record::Host(pb)])?;
-        Ok(before)
+        self.decided(|| {
+            let mut seen = Vec::new();
+            let unknown = || StoreError::UnknownHost(host.clone());
+            let row = self.saw_host(host, &mut seen)?.ok_or_else(unknown)?;
+            if self.saw_denied(host, &mut seen)? {
+                return Err(unknown());
+            }
+            let before = Membership::of(&row.pb);
+            let mut pb = row.pb;
+            pb.host_group.clone_from(&to.host_group);
+            pb.moving_from.clone_from(&to.moving_from);
+            self.commit(&seen, &[Record::Host(pb)])?;
+            Ok(before)
+        })
     }
 }

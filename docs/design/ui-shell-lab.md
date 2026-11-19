@@ -124,7 +124,7 @@ approval asks for no placement); `hkctl` gets the verbs from the generated comma
 
 ## 4. The frame in the code
 
-- `ui/app.js`: `GROUPS` (the menu), `LINKED` (pages with no entry: Home, Host, the three release pages), `ROUTES` (an old route and the page
+- `ui/app.js`: `GROUPS` (the menu), `LINKED` (pages with no entry: Home, Host, Console, Package, Switch), `ROUTES` (an old route and the page
   it lands on: `fleet` is `home`; `navigate(old, params)` resolves through it), the frame (side, scrim, top bar, collapse, drawer, theme
   port `prefs.apply`).
 - `ui/lab.js`: the model the views share (layout, servers joined with hosts and inventory entries, states, free U for a sled height,
@@ -136,7 +136,7 @@ approval asks for no placement); `hkctl` gets the verbs from the generated comma
   cells, the cursor, SGR colours mapped to 16, the scroll region, the alternate screen, the modes the page reads), `ui/terminal_render.js`
   (the model as `pre`, `div` and `span` elements with class names, drawn by `ui/styles/terminal.css`) and `ui/terminal_keys.js` (a key or
   a paste as the bytes a shell reads). The socket is the one thing the page is handed that it cannot make: `ctx.openSocket(path,
-  handlers, csrf)` (the third argument, a console stream's CSRF token for its subprotocol, came with the console's Desktop page) is built in `ui/main.js`, the only file that names a WebSocket, and the scan refuses the word in every other file.
+  handlers, protocols)` is built in `ui/main.js`, the only file that names a WebSocket, and the scan refuses the word in every other file.
 - `ui/view.js`: `redraw(element, tree)` (replaces one live element's children, as the terminal draws its screen), the `paste` event,
   `pill`, the `vars` of an element (custom properties), `aria-*`, `draggable`, `tabindex`, and the events the strip and the
   drag use. `ui/app.css` (tokens, frame, components) and `ui/lab.css` (the lab) are two files so that each stays under 1000 lines.
@@ -156,7 +156,9 @@ approval asks for no placement); `hkctl` gets the verbs from the generated comma
   out), the placement on the approval and on the Host page (choices that fit, calls, refusals), and the mounting of custom properties.
   The Remote SSH tab runs against a fake socket the test drives message by message (no clock): the pin state and the pin, the socket's path
   and first message, binary keys and pastes, the drawn screen, every cause in words, a close with no cause, Close; the terminal model, the
-  key encoder and the renderer are tested on byte inputs and exact screens.
+  key encoder and the renderer are tested on byte inputs and exact screens. The Console page
+  (`crates/hostkeeper-ui-tests/tests/serial_console_page.rs`) runs against a fake socket and a fake terminal the same way, its quiet
+  note against ticks the test runs itself.
 - Report: `docs/report/hostkeeper.html` draws the shell (wide and narrow, light and dark), the lab at each level and the edit mode, and the
   placement fields of the approval and the Host page; its test checks each UI string against the page modules.
 

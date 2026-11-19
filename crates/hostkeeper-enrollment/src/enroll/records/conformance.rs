@@ -10,7 +10,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use super::{Record, Records, pb};
+use super::{Record, Records, Seen, pb};
 use crate::enroll::mac_nonce::MacNonceHash;
 use crate::enroll::{FIRST_SERIAL, StoreError};
 use crate::names::{HostId, KeyHash};
@@ -51,6 +51,12 @@ pub enum Clause {
     Unkeyed,
     /// The lock can be taken, and taken again once released.
     Lock,
+    /// A write lands only when every record its decision saw is as seen ([`Seen`]): a commit of
+    /// a record of each kind seen absent, or seen as it is, lands; one whose record was written
+    /// where it was seen absent or changed since it was seen, a serial taken and a host marked
+    /// over a record changed since, are refused [`StoreError::Raced`] and write nothing, and the
+    /// refused serial is not taken.
+    Checked,
 }
 
 /// A clause broken, and how.
@@ -72,7 +78,7 @@ type Check = fn(&dyn Subject) -> Result<(), String>;
 /// Runs every clause, each against a subject of its own from `fresh`, and returns the ones
 /// broken, in the order of [`Clause`].
 pub fn run(fresh: &dyn Fn() -> Box<dyn Subject>) -> Vec<Failure> {
-    let clauses: [(Clause, Check); 10] = [
+    let clauses: [(Clause, Check); 11] = [
         (Clause::Empty, empty),
         (Clause::RoundTrip, round_trip),
         (Clause::Overwrite, overwrite),
@@ -83,6 +89,7 @@ pub fn run(fresh: &dyn Fn() -> Box<dyn Subject>) -> Vec<Failure> {
         (Clause::FailedCommit, failed_commit),
         (Clause::Unkeyed, unkeyed),
         (Clause::Lock, lock),
+        (Clause::Checked, checked),
     ];
     clauses
         .into_iter()
@@ -319,7 +326,7 @@ fn round_trip(subject: &dyn Subject) -> Result<(), String> {
     let wanted = every_kind();
     subject
         .open()
-        .commit(&wanted)
+        .commit(&[], &wanted)
         .map_err(failed("the commit"))?;
     holds_all(&*subject.open(), &wanted)
 }
@@ -327,7 +334,7 @@ fn round_trip(subject: &dyn Subject) -> Result<(), String> {
 fn overwrite(subject: &dyn Subject) -> Result<(), String> {
     let records = subject.open();
     let first = every_kind();
-    records.commit(&first).map_err(failed("the commit"))?;
+    records.commit(&[], &first).map_err(failed("the commit"))?;
     let second = vec![
         Record::Request(request(1, pb::RequestState::Denied)),
         Record::Host(host("web-1", &key(2))),
@@ -339,7 +346,7 @@ fn overwrite(subject: &dyn Subject) -> Result<(), String> {
         }),
     ];
     records
-        .commit(&second)
+        .commit(&[], &second)
         .map_err(failed("the second commit"))?;
     holds_all(&*subject.open(), &second)
 }
@@ -367,7 +374,7 @@ fn requests_in_order(subject: &dyn Subject) -> Result<(), String> {
     // One commit per request, in an order that is not the ids'.
     for (_, request) in &all {
         records
-            .commit(&[Record::Request(request.clone())])
+            .commit(&[], &[Record::Request(request.clone())])
             .map_err(failed("a commit"))?;
     }
     all.sort_by_key(|(id, _)| *id);
@@ -384,11 +391,11 @@ fn host_ids_sorted(subject: &dyn Subject) -> Result<(), String> {
         .into_iter()
         .filter(|record| !matches!(record, Record::Host(_)))
         .collect();
-    records.commit(&others).map_err(failed("a commit"))?;
+    records.commit(&[], &others).map_err(failed("a commit"))?;
     let mut wanted = Vec::new();
     for name in ["web-10", "db-1", "web-1-a", "web-1"] {
         records
-            .commit(&[Record::Host(host(name, &key(1)))])
+            .commit(&[], &[Record::Host(host(name, &key(1)))])
             .map_err(failed("a commit"))?;
         wanted.push(host_id(name)?);
     }
@@ -402,14 +409,16 @@ fn host_ids_sorted(subject: &dyn Subject) -> Result<(), String> {
 
 fn serial(subject: &dyn Subject) -> Result<(), String> {
     let take = |records: &dyn Records, reserving: Option<&pb::Request>| {
-        records.take_serial(reserving).map_err(failed("a serial"))
+        records
+            .take_serial(&[], reserving)
+            .map_err(failed("a serial"))
     };
     let first = take(&*subject.open(), None)?;
     let second = take(&*subject.open(), None)?;
     let pending = request(3, pb::RequestState::Approved);
     let records = subject.open();
     records
-        .commit(&[Record::Request(pending.clone())])
+        .commit(&[], &[Record::Request(pending.clone())])
         .map_err(failed("a commit"))?;
     let third = take(&*records, Some(&pending))?;
     let fourth = take(&*subject.open(), None)?;
@@ -442,7 +451,7 @@ fn host_marks(subject: &dyn Subject) -> Result<(), String> {
         ..host("web-1", &key(1))
     };
     records
-        .commit(&[Record::Host(plain.clone())])
+        .commit(&[], &[Record::Host(plain.clone())])
         .map_err(failed("a commit"))?;
     records
         .set_first_heartbeat(&plain, 1_800_000_400)
@@ -495,14 +504,14 @@ fn host_marks(subject: &dyn Subject) -> Result<(), String> {
 fn failed_commit(subject: &dyn Subject) -> Result<(), String> {
     let records = subject.open();
     let before = vec![Record::Host(host("web-1", &key(1)))];
-    records.commit(&before).map_err(failed("a commit"))?;
+    records.commit(&[], &before).map_err(failed("a commit"))?;
     subject.fail_next_commit();
     let refused = vec![
         Record::Host(host("web-1", &key(2))),
         Record::Request(request(2, pb::RequestState::Pending)),
     ];
     expect(
-        records.commit(&refused).is_err(),
+        records.commit(&[], &refused).is_err(),
         "the commit told to fail succeeded".to_owned(),
     )?;
     let reopened = subject.open();
@@ -533,7 +542,7 @@ fn unkeyed(subject: &dyn Subject) -> Result<(), String> {
         }),
     ];
     for record in bad {
-        let refused = records.commit(&[good.clone(), record.clone()]);
+        let refused = records.commit(&[], &[good.clone(), record.clone()]);
         expect(
             matches!(refused, Err(StoreError::Unkeyed(_))),
             format!("a commit of {record:?} answered {refused:?}"),
@@ -544,12 +553,12 @@ fn unkeyed(subject: &dyn Subject) -> Result<(), String> {
         request_id: vec![3],
         ..request(3, pb::RequestState::Approved)
     };
-    let refused = records.take_serial(Some(&unkeyed));
+    let refused = records.take_serial(&[], Some(&unkeyed));
     expect(
         matches!(refused, Err(StoreError::Unkeyed(_))),
         format!("a serial reserved in an unkeyed request answered {refused:?}"),
     )?;
-    let first = records.take_serial(None).map_err(failed("a serial"))?;
+    let first = records.take_serial(&[], None).map_err(failed("a serial"))?;
     expect(
         first == FIRST_SERIAL,
         format!("a refused reservation took a serial: the next is {first}"),
@@ -561,4 +570,116 @@ fn lock(subject: &dyn Subject) -> Result<(), String> {
     drop(records.lock().map_err(failed("the lock"))?);
     drop(records.lock().map_err(failed("the lock again"))?);
     Ok(())
+}
+
+/// What a decision that read `record` (`present`) or found its key empty saw.
+fn seen_of(record: &Record, present: bool) -> Result<Seen, String> {
+    Ok(match record {
+        Record::Request(m) => Seen::Request(key_of(&m.request_id)?, present.then(|| m.clone())),
+        Record::Issued(m) => Seen::Issued(key_of(&m.request_id)?, present.then(|| m.clone())),
+        Record::Host(m) => Seen::Host(host_id(&m.host_id)?, present.then(|| m.clone())),
+        Record::Deny(m) => Seen::Deny(host_id(&m.host_id)?, present.then(|| m.clone())),
+        Record::MacNonce(m) => {
+            Seen::MacNonce(hash_of(&m.nonce_sha256)?, present.then(|| m.clone()))
+        }
+    })
+}
+
+/// `record` with one field changed, as another writer would write it.
+fn changed(record: &Record) -> Record {
+    match record.clone() {
+        Record::Request(m) => Record::Request(pb::Request {
+            serial: m.serial + 1,
+            ..m
+        }),
+        Record::Issued(m) => Record::Issued(pb::Issued {
+            serial: m.serial + 1,
+            ..m
+        }),
+        Record::Host(m) => Record::Host(pb::Host {
+            role: format!("{}-changed", m.role),
+            ..m
+        }),
+        Record::Deny(m) => Record::Deny(pb::Deny {
+            state: pb::DenyState::Retired as i32,
+            ..m
+        }),
+        Record::MacNonce(m) => Record::MacNonce(pb::MacNonce {
+            issued_unix: m.issued_unix + 1,
+            ..m
+        }),
+    }
+}
+
+/// `Err(why)` unless `answer` is a refusal for a record changed since it was seen.
+fn raced<T: fmt::Debug>(what: &str, answer: Result<T, StoreError>) -> Result<(), String> {
+    expect(
+        matches!(answer, Err(StoreError::Raced { .. })),
+        format!("{what} answered {answer:?}"),
+    )
+}
+
+fn checked(subject: &dyn Subject) -> Result<(), String> {
+    let records = subject.open();
+    // Written beside each refused record: a refusal writes none of it.
+    let bystander = Record::Request(request(5, pb::RequestState::Pending));
+    for record in every_kind() {
+        let after = changed(&record);
+        let (absent, seen) = (seen_of(&record, false)?, seen_of(&record, true)?);
+        records
+            .commit(std::slice::from_ref(&absent), std::slice::from_ref(&record))
+            .map_err(failed("a commit of a record seen absent"))?;
+        raced(
+            &format!("a commit of {record:?} seen absent, written since"),
+            records.commit(&[absent], &[after.clone(), bystander.clone()]),
+        )?;
+        records
+            .commit(std::slice::from_ref(&seen), std::slice::from_ref(&after))
+            .map_err(failed("a commit of a record as seen"))?;
+        raced(
+            &format!("a commit over {record:?}, changed since"),
+            records.commit(&[seen], &[record.clone(), bystander.clone()]),
+        )?;
+        holds_all(&*subject.open(), std::slice::from_ref(&after))?;
+    }
+    let host = host("db-1", &key(2));
+    let newer = changed(&Record::Host(host.clone()));
+    records
+        .commit(&[], &[Record::Host(host.clone()), newer.clone()])
+        .map_err(failed("a commit"))?;
+    let stale = [seen_of(&Record::Host(host.clone()), true)?];
+    let first = records.take_serial(&[], None).map_err(failed("a serial"))?;
+    raced(
+        "a serial taken over a host changed since",
+        records.take_serial(&stale, None),
+    )?;
+    let reserving = request(6, pb::RequestState::Approved);
+    raced(
+        "a serial reserved over a host changed since",
+        records.take_serial(&stale, Some(&reserving)),
+    )?;
+    let next = records.take_serial(&[], None).map_err(failed("a serial"))?;
+    expect(
+        next == first + 1,
+        format!("a refused serial was taken: {first} then {next}"),
+    )?;
+    raced(
+        "a first heartbeat of a host changed since",
+        records.set_first_heartbeat(&host, 1_800_000_400),
+    )?;
+    raced(
+        "a first serving heartbeat of a host changed since",
+        records.set_first_serving(&host, 1_800_000_460),
+    )?;
+    raced(
+        "what a host changed since runs",
+        records.set_running(&host, running("1.0", 1_800_000_480)),
+    )?;
+    raced(
+        "the duplicate mark of a host changed since",
+        records.set_duplicate(&host),
+    )?;
+    let reopened = subject.open();
+    holds_all(&*reopened, &[newer])?;
+    holds_none(&*reopened, &[bystander, Record::Request(reserving)])
 }

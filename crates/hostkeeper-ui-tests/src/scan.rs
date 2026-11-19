@@ -15,8 +15,7 @@
 //! - [`sockets`]: a call of `WebSocket`, which only the entry module may make, once (it builds the
 //!   one function, `openSocket`, that pages are given as `ctx.openSocket`, as they are given `fetch`),
 //!   and [`opener`], what that one call must look like: its address is `socketAddress`'s, which is
-//!   the page's own host and a path of a fixed shape, and its subprotocols `socketProtocols`'s
-//!   (`ui/socket_address.js`);
+//!   the page's own host and a path of a fixed shape (`ui/socket_address.js`);
 //! - [`vendored_code`]: what a vendored library (a file under [`crate::vendor::VENDOR_DIR`]) is
 //!   held to instead of all of the above: no inline script or handler made from text and no
 //!   `WebSocket(` call. [`scan_file`] picks a file's rules by its directory.
@@ -293,12 +292,24 @@ pub fn sockets(path: &str, text: &str) -> Vec<Finding> {
     needles(path, text, &["WebSocket("])
 }
 
-/// The one argument list [`SOCKET_OPENER`]'s `WebSocket(` call may have: the address
+/// The first argument of [`SOCKET_OPENER`]'s `WebSocket(` call: the address
 /// `ui/socket_address.js` builds from the page's own location and the path asked for, which it
-/// refuses unless the path has one of its fixed shapes, and the subprotocols it builds from the
-/// path (for a console stream, its own and the sign-in's CSRF token; none for any other).
-pub const SOCKET_ADDRESS: &str =
-    "socketAddress(window.location, path), socketProtocols(path, csrf)";
+/// refuses unless the path has one of its fixed shapes.
+pub const SOCKET_ADDRESS: &str = "socketAddress(window.location, path)";
+
+/// The only second argument that call may have: the subprotocols the page offers (a console
+/// session's name and its CSRF offer), never an address.
+pub const SOCKET_PROTOCOLS: &str = "protocols";
+
+/// Whether `argument` (a call's arguments, trimmed) is [`SOCKET_ADDRESS`] alone or followed by
+/// `, ` and [`SOCKET_PROTOCOLS`].
+fn opener_arguments(argument: &str) -> bool {
+    argument == SOCKET_ADDRESS
+        || argument
+            .strip_prefix(SOCKET_ADDRESS)
+            .and_then(|rest| rest.trim_start().strip_prefix(','))
+            .is_some_and(|rest| rest.trim() == SOCKET_PROTOCOLS)
+}
 
 /// The text between the `(` that opens at `open` in `text` and the `)` that closes it, trimmed,
 /// or `None` when it is never closed.
@@ -320,9 +331,9 @@ fn argument(text: &str, open: usize) -> Option<&str> {
 }
 
 /// What [`SOCKET_OPENER`] must hold: exactly one `WebSocket(` call, and that call's arguments are
-/// [`SOCKET_ADDRESS`] (so the socket goes to the page's own host, at a path of a fixed shape).
-/// One finding for a file with no call, one for each call past the first and one for each call
-/// with another argument.
+/// [`SOCKET_ADDRESS`] (so the socket goes to the page's own host, at a path of a fixed shape),
+/// alone or with [`SOCKET_PROTOCOLS`] after it. One finding for a file with no call, one for each
+/// call past the first and one for each call with other arguments.
 pub fn opener(path: &str, text: &str) -> Vec<Finding> {
     let mut out = Vec::new();
     let mut seen = 0usize;
@@ -336,7 +347,7 @@ pub fn opener(path: &str, text: &str) -> Vec<Finding> {
         if seen > 1 {
             out.push(finding(path, line, "a second `WebSocket(` call"));
         }
-        if argument(text, text.len() - rest.len()) != Some(SOCKET_ADDRESS) {
+        if !argument(text, text.len() - rest.len()).is_some_and(opener_arguments) {
             out.push(finding(
                 path,
                 line,

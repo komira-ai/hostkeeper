@@ -184,8 +184,8 @@ fn the_beat_loop_runs_until_it_is_stopped() {
 /// Proves (B8, both ways, for `0022`): the release before's runner (migrations `0001` to `0021`)
 /// accepts a database this release made its row of `instances` in, runs nothing, and leaves the
 /// row, and the release before takes the coordinator's lock exclusively once this release has
-/// stopped; this release, started on a database the release before migrated, runs `0022` alone
-/// and makes its row.
+/// stopped; this release, started on a database the release before migrated, runs `0022` (and
+/// the migrations after it) and makes its row.
 ///
 /// Catches: a `0022` marked `refuse`, which would turn a rollback into a restore, and a release
 /// that does not bring the release before's database up to `instances`.
@@ -217,7 +217,7 @@ fn the_release_before_runs_on_a_database_with_0022_and_this_one_on_its() {
     let (store, _) = old.open("this release").expect("this release starts on it");
     assert_eq!(
         old.rows("SELECT max(version) FROM schema_version"),
-        vec![vec![Some("22".to_owned())]]
+        vec![vec![Some(migrate::SHIPPED.len().to_string())]]
     );
     assert_eq!(
         old.rows("SELECT count(*) FROM instances"),

@@ -75,7 +75,7 @@ fn the_servers_list_shows_a_host_of_the_coordinators_own_reply() {
             [
                 "Server", "State", "Address", "Where", "Group", "Version", "Console"
             ],
-            ["s1", "healthy", "-", "Unplaced", "-", "1.0", "-"],
+            ["s1", "healthy", "-", "Unplaced", "-", "1.0", "Console"],
         ])
     );
 }

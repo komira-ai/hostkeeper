@@ -36,7 +36,8 @@ token, in memory, and sends it in the `X-HK-CSRF` header of each API call. Reloa
 the coordinator for the session again, so a reload does not sign you out. A first sign-in, or a
 sign-in with a temporary password an admin set, shows only the form for choosing a new password.
 Sign out ends the session on the coordinator. The host page's Remote SSH terminal speaks to the coordinator over one WebSocket to the same origin
-(`/v1/ssh/terminal`, `docs/operations/ssh-ca.md`), which `connect-src 'self'` allows.
+(`/v1/ssh/terminal`, `docs/operations/ssh-ca.md`), and so does the Console page (`/console/v1/stream/<session>`), which
+`connect-src 'self'` allows. Signing out, or leaving the page, closes either.
 
 ## The frame and the lab
 
@@ -155,17 +156,29 @@ by their route and are not in the menu.
   `no_pin`, `host_key_mismatch`, `auth_refused`, `shell_refused`, `bad_request` and `exit`); a socket that closes without it says so.
   **Close** closes the socket. The terminal has no resize (it is always 120 by 36) and keeps the last 200 lines that scrolled off.
   A proxy in front of the private listener must pass WebSocket upgrades on that path.
-- **Desktop** (`ui/pages/desktop.js`, reached by the **Desktop** link of a Mac's row in the Lab's list, a host whose last heartbeat
-  said `PLATFORM_DARWIN_ARM64`; design: [console design](design/console-broker.md) sections 3 and 11.2): a Mac's screen through the
-  coordinator. The page names who holds the Mac's console (`Console.List`), with a **Close it** that asks first and sends
-  `Console.Close`. **Open the desktop** needs a reason (1 to 256 bytes, no control character), sends `Console.Open`, then opens one
-  socket to `/console/v1/stream/<session>` of the page's own origin, offering `hostkeeper.console.v1` and `csrf.<the session's CSRF
-  token>` as its subprotocols (the coordinator checks the token beside the session's cookie and selects `hostkeeper.console.v1`
-  alone). In the socket's `open` handler the open socket is handed to the vendored noVNC viewer (`ui/screen.js`), which is never
-  given an address. When the Mac asks for its login the page shows a form for what it asks and hands what is typed to the viewer
-  only, keeping no copy of the password. Every close of the stream is shown in words (`ui/console_words.js`, one sentence per close
-  token of the coordinator). **Close**, leaving the page and signing out close the socket. An answer that is not a Mac's screen gives
-  the session back with `Console.Close`. The Mac's Power buttons are not on the page yet.
+- **Console** (`ui/pages/serialconsole.js`, reached from the Console link of Home's list of servers on the row of each host whose
+  last heartbeat says Linux; design: [console design](design/console-broker.md)): a Linux server's serial port (COM2, `ttyS1`)
+  through its BMC's Serial over LAN. **Open the console** calls `Console.Open` with the host and the operator's reason (required,
+  1 to 256 bytes, no control character), then opens one socket to `/console/v1/stream/<session>`, offering the subprotocols
+  `hostkeeper.console.v1` and `csrf.<the session's CSRF token>` (the browser sends its sign-in as for every call; the coordinator
+  answers with the first name alone), and hands that socket, open, to the vendored terminal (xterm.js with its attach addon,
+  `ui/vendor/`), which writes the host's bytes and sends what the operator types; the page sends one carriage return so that a
+  waiting login prompt is drawn again. When no byte has come for the session's `quietSecs` (the coordinator's
+  `--console-quiet-s`, 10 by default), the page says "No output yet: the host's serial port must be ttyS1." A close is said in
+  words from its reason token (every close code of the console design's section 12); a close with none says the coordinator
+  refused the connection, or that it was lost. **Close** closes the socket. The page also shows the host page's Power and boot
+  section and every open session (`Console.List`), each with a **Close** that asks first and calls `Console.Close`. A session
+  that is not serial (a Mac's screen) is closed at once.
+- **Desktop** (`ui/pages/desktop.js`, reached from the Desktop link of Home's list of servers on the row of each host whose last
+  heartbeat says `PLATFORM_DARWIN_ARM64`; design: [console design](design/console-broker.md) sections 3 and 11.2): a Mac's screen
+  through the coordinator. The page names who holds the Mac's console (`Console.List`), with a **Close it** that asks first and
+  calls `Console.Close`. **Open the desktop** calls `Console.Open` with the host and a reason (as the Console page), opens one socket
+  to `/console/v1/stream/<session>` with the same two subprotocols, and in the socket's `open` handler hands it, open, to the vendored
+  noVNC viewer (`ui/screen.js`, `ctx.viewScreen`), which is never given an address. When the Mac asks for its login the page shows a
+  form for what it asks and hands what is typed to the viewer alone, keeping no copy of the password. A close is said in the Console
+  page's words; a refusal of the login by the Mac stays said when the viewer then closes the socket itself. **Close**, leaving the
+  page and signing out close it, and each end empties the screen box. An answer that is not a Mac's screen gives the session back
+  with `Console.Close`. The Mac's Power buttons are not on the page yet.
 - **Users** (`Users.List`; `Users.Create`, `Disable`, `Enable`, `ResetPassword` and `Delete` on a button): a table
   of the users with whether each is enabled, must change its password, who made it and when, its last sign-in and the
   second its temporary password stops working. Create takes a name; Create and Reset password show the temporary
@@ -197,31 +210,28 @@ by their route and are not in the menu.
   `Content-Security-Policy: default-src 'self'; connect-src 'self'; frame-ancestors 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data:`.
   Script comes only from the app's own origin: no inline script and no `eval`. `connect-src 'self'` lets the page reach its own
   origin, a `wss:` socket to its own host and port included. Inline style and `data:` images are for the console's vendored
-  libraries (the terminal draws its cells with inline style, the remote desktop its cursor and JPEG rectangles as `data:`
+  libraries (the Console page's terminal, xterm.js, draws its cells with inline style, the remote desktop its cursor and JPEG rectangles as `data:`
   images; [console design](design/console-broker.md), section 8.2); the app's own files still use neither inline style nor
   inline script. No answer of the coordinator carries an `Access-Control-*` header.
 - The one socket: the app opens one kind of WebSocket, to its own origin, in exactly one place, `ui/main.js`, which builds
-  `ctx.openSocket(path, handlers, csrf)` and hands it to the pages as it hands them `fetch`; its `open` handler is given the open
-  socket, which a console page hands to its viewer, and its `close` handler the close frame's code and reason. Its address comes from
+  `ctx.openSocket(path, handlers, protocols)` and hands it to the pages as it hands them `fetch`; `ctx.openTerminal(element,
+  opened)` (`ui/terminal_port.js`, handed over there too) hands the opened socket to the vendored terminal's attach addon, so no
+  library is given an address. Its address comes from
   `socketAddress` (`ui/socket_address.js`): the page's own host, over TLS when the page is, and a path of one of two fixed shapes, the
   Remote SSH terminal's (`/v1/ssh/terminal?host=<host id>`) and a console session's stream
   (`/console/v1/stream/<session id of 64 lower-case hex digits>`); any other path is refused before a socket is made. The scan of the
   sources (`crates/hostkeeper-ui-tests/src/scan.rs`) refuses `WebSocket` in every other file of the app and a `ws://` or `wss://`
-  address in every file, and holds `main.js` to one `WebSocket(` call, whose arguments are
-  `socketAddress(window.location, path), socketProtocols(path, csrf)`. `socketProtocols` offers nothing for the Remote SSH terminal
-  (its first message carries the CSRF token) and, for a console stream, `hostkeeper.console.v1` and `csrf.<token>`, refusing a
-  stream without a token of base64url characters; the token is in no address.
+  address in every file, and holds `main.js` to one `WebSocket(` call, whose arguments are `socketAddress(window.location, path)`, alone or followed by
+  `protocols` (the subprotocols the page offers).
 - Vendored libraries: third-party code lives under `ui/vendor/`, each file pinned by its SHA-256 in
   `crates/hostkeeper-ui-tests/vendor.sha256` (`sha256sum` lines, run in `ui/`), so a change to a vendored library is a change to
-  that file; the scan fails for a vendored file with no pin or another digest, and for a pin with no file. The directory is exempt
-  from the scan's needles (minified code names licence URLs and `console.`), and is still refused, by the scan, inline script and
-  handlers made from text, and any `WebSocket(` call: the libraries are handed the app's one socket, already open. The app's
-  1000-line limit is for its own files; a vendored file is the library's text. The one library vendored is noVNC 1.7.0
+  that file; the scan fails for a vendored file with no pin or another digest, and for a pin with no file. It holds xterm.js 5.5.0
+  and its attach addon 0.11.0 (both MIT, unchanged from their npm packages, each with its licence file), and noVNC 1.7.0
   (`ui/vendor/novnc/`, MPL-2.0, with its bundled pako, MIT): `core/rfb.js` and the modules it imports, unchanged but for
-  `core/websock.js`, whose `open` (the library's one `new WebSocket(`) throws instead and is marked as changed in the file;
-  `LICENSE.txt`, `AUTHORS` and the licence texts are the package's own. The entry module imports it; the pages are run against a fake viewer, and its socket layer
-  (`core/websock.js`) is run by a test of its own. The repository's hygiene lint skips exactly the vendored files a pin names (a
-  library's authors' addresses and licence URLs are its own text); a file under `ui/vendor/` with no pin is linted.
+  `core/websock.js`, whose `open` (the library's one `new WebSocket(`) throws instead, marked in the file as changed; its
+  `LICENSE.txt`, `AUTHORS` and licence texts are the package's own. The app's 1000-line limit is for its own files. The directory is exempt
+  from the scan's needles (minified code names licence URLs and `console.`), and is still refused, by the scan, inline script and
+  handlers made from text, and any `WebSocket(` call: the libraries are handed the app's one socket, already open.
 - The files need no sign-in. The operator API the app calls still needs a session (with its CSRF
   header) or an operator token on every call.
 

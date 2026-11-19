@@ -308,15 +308,16 @@ fn assert_shape(message: MessageDescriptor, value: &Value, what: &str) {
 
 impl Ui {
     /// An engine with every module of the app and the kit, and a gateway with nothing scripted.
-    /// The vendored libraries (`ui/vendor/`) are not loaded: no page imports one (the entry module
-    /// hands the viewer to the app, and a test hands the pages a fake), so no driver links one.
+    /// The vendored libraries are not loaded: they draw into a real document, which the engine
+    /// has not, and a page reaches them only through its context (`ctx.openTerminal`), which a
+    /// test fakes.
     pub fn start() -> Ui {
         Ui::start_with(&[], &[])
     }
 
     /// [`Ui::start`], with the vendored modules `vendored` (paths under `ui/`) loaded too, and the
     /// test modules `extra` (each a path under `test/` and its text), for a test that runs a
-    /// vendored module itself.
+    /// vendored module of no document itself.
     pub fn start_with(vendored: &[&str], extra: &[(&str, &'static str)]) -> Ui {
         let loader = Rc::new(MapModuleLoader::new());
         let mut context = Context::builder()

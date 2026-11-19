@@ -528,7 +528,9 @@ that lowers it needs storage first. They are kept, with storage now the database
   heartbeat's enrollment reads (`host_role_for`, `is_denied`, `is_retiring`, `is_duplicate`), which read files today,
   read an in-memory copy of the hosts and the deny rows, loaded at start and changed only after a commit returns Ok, so
   a heartbeat costs no query. After a commit of unknown outcome (below) the copy is loaded again from the tables before
-  the next heartbeat is answered.
+  the next heartbeat is answered. (Superseded by [coordinator-multi-instance.md](coordinator-multi-instance.md),
+  section 6, "Enrollment": the copy is gone and these rows are read fresh; the store lock is replaced by a check of
+  what each decision read, in the transaction that writes.)
 - **A commit of unknown outcome.** A session lost while `COMMIT` was in flight may or may not have committed. Every
   transaction first inserts a row of `tx_ledger` (migration `0019`, `id uuid`), so it has an id before its `COMMIT`.
   After the reconnect of section 5 the store settles the lost commit by inserting the same id again with `ON CONFLICT

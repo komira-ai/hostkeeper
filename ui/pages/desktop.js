@@ -9,7 +9,7 @@
 //
 // One desktop per page: a second Open while one is open sends nothing. Leaving the page (another
 // page, a sign-out, the page drawn again) closes it; so do the Close button and the coordinator,
-// whose close code the page shows in words (`console_words.js`).
+// whose close code the page shows in the Console page's words (`closeWords` of `serialconsole.js`).
 //
 // Params: `nodeId`, the Mac's host id.
 // Calls: Console.List when the page is read (who holds the Mac's console, with a Close for it);
@@ -18,7 +18,7 @@
 
 import { h, action, describeError, field, fmtUnix, list, reasonProblem, redraw, trimmed } from "../view.js";
 import { getCsrf } from "../session.js";
-import { closeWords } from "../console_words.js";
+import { PROTOCOL, closeWords } from "./serialconsole.js";
 
 // The path of a console session's stream.
 const STREAM = "/console/v1/stream/";
@@ -210,28 +210,31 @@ export async function render(ctx) {
     }
     try {
       conn.socket = ctx.openSocket(`${STREAM}${reply.session}`, {
-        open: (socket) => {
-          if (live()) {
+        open: () => {
+          if (live() && conn.viewer === null) {
             conn.opened = true;
             view.phase = "connecting";
             view.notice = "Connected to the coordinator; waiting for the Mac.";
-            conn.viewer = ctx.viewScreen(screen, socket, viewerEvents(conn));
+            conn.viewer = ctx.viewScreen(screen, conn.socket, viewerEvents(conn));
             paintHead();
           }
         },
-        close: (code, why) => {
+        // The viewer reads the stream itself; the page takes no message.
+        message: () => {},
+        close: (closed) => {
           if (live()) {
+            const code = closed && typeof closed.code === "number" ? closed.code : 1006;
+            const why = closed && typeof closed.reason === "string" ? closed.reason : "";
             view.conn = null;
             view.phase = "ended";
             view.asks = [];
             form.password = "";
-            const token = typeof why === "string" ? why : "";
-            view.notice = token === "" && conn.said !== null ? conn.said : closeWords(code, why, conn.opened);
+            view.notice = why === "" && conn.said !== null ? conn.said : closeWords(code, why, conn.opened);
             clearScreen();
             paintHead();
           }
         },
-      }, csrf);
+      }, [PROTOCOL, `csrf.${csrf}`]);
     } catch (error) {
       // The opener refused the session's path: the coordinator's answer is not a session id.
       view.conn = null;

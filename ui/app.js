@@ -13,6 +13,7 @@ import { changeView, signInView, wordsFor } from "./signin.js";
 import { h, describeError, errorView, icon, mount } from "./view.js";
 import * as home from "./pages/home.js";
 import * as host from "./pages/host.js";
+import * as serialConsole from "./pages/serialconsole.js";
 import * as packages from "./pages/packages.js";
 import * as pkg from "./pages/package.js";
 import * as hostgroups from "./pages/hostgroups.js";
@@ -43,16 +44,17 @@ const SETTINGS = [
   ["audit", "Audit", audit],
 ];
 // The pages that are reached by a link and not by the menu, each `[name, title, module, crumb]`:
-// Home, a host of the lab view, a package, which the Packages page opens, and a Mac's Desktop,
-// which the Desktop link of the lab's list opens. The crumb is the top bar's one line of where the
-// page is; Home and the host page have their own breadcrumbs (Lab > Row > Rack > Host) and so
-// none here.
+// Home, a host of the lab view, a Linux server's Console (the Console link of Home's list), and a
+// package, which the Packages page opens. The crumb is the top bar's one line of where the page
+// is; Home, the host page and the Console have their own breadcrumbs (Lab > Row > Rack > Host)
+// and so none here.
 const LINKED = [
   ["home", "Lab", home, ""],
   ["host", "Host", host, ""],
+  ["console", "Console", serialConsole, ""],
   ["package", "Package", pkg, "Package"],
   ["switch", "Switch", switchPage, ""],
-  ["desktop", "Desktop", desktop, "Desktop"],
+  ["desktop", "Desktop", desktop, ""],
 ];
 const PAGES = GROUPS.flatMap(([group, pages]) => pages.map(([name, title, page, glyph]) => [name, title, page, glyph, title]))
   .concat(SETTINGS.map(([name, title, page]) => [name, title, page, "", "Settings"]))
@@ -93,14 +95,15 @@ export function redirected(name, params) {
 // yes-or-no question to the operator (the browser's confirm), `now` the time in unix seconds
 // and `every` (`(run, milliseconds)` to a function that stops it) the repeating of a call a page
 // asks for, each injected so tests can fake them; without `every` a page's repeat never runs.
-// `openSocket(path, handlers, csrf)` opens a socket to `path` of the page's own origin (`main.js`
-// makes it, the one place that opens a socket; a console stream offers the sign-in's CSRF token
-// `csrf` in its subprotocol) and returns `{send, close}`; a page that needs one finds it as
-// `ctx.openSocket`, which is absent when none was given. `viewScreen(target, socket, events)` draws
-// a Mac's screen from an open socket (`screen.js`, over the vendored noVNC); a page finds it as
-// `ctx.viewScreen`, absent when none was given.
+// `openSocket(path, handlers, protocols)` opens a socket to `path` of the page's own origin,
+// offering the subprotocols `protocols` (`main.js` makes it, the one place that opens a socket),
+// and returns `{send, close, socket}`; `openTerminal(element, opened)` draws a terminal in
+// `element` on an opened socket and returns `{show, focus, dispose}`; `viewScreen(element, opened,
+// events)` draws a Mac's screen in `element` from an opened socket (`screen.js`, over the vendored
+// noVNC) and returns `{sendCredentials, disconnect, focus}`. A page that needs one finds it as
+// `ctx.openSocket`, `ctx.openTerminal` or `ctx.viewScreen`, which is absent when none was given.
 // Returns the frame's controls, which the browser does not need.
-export function startApp({ doc, root, fetch, confirm, now, every, openSocket, viewScreen, prefs = NO_PREFS }) {
+export function startApp({ doc, root, fetch, confirm, now, every, openSocket, openTerminal, viewScreen, prefs = NO_PREFS }) {
   // The operator's look, kept in memory: the theme (`prefs.apply(theme)` shows it) and whether the
   // side menu is collapsed to icons.
   let theme = "system";
@@ -350,8 +353,10 @@ export function startApp({ doc, root, fetch, confirm, now, every, openSocket, vi
       api,
       params: at.params,
       confirm: (question) => confirm(question) === true,
-      openSocket: typeof openSocket === "function" ? (path, handlers, csrf) => openSocket(path, handlers, csrf) : undefined,
-      viewScreen: typeof viewScreen === "function" ? (target, socket, events) => viewScreen(target, socket, events) : undefined,
+      openSocket: typeof openSocket === "function"
+        ? (path, handlers, protocols) => openSocket(path, handlers, protocols) : undefined,
+      openTerminal: typeof openTerminal === "function" ? (element, opened) => openTerminal(element, opened) : undefined,
+      viewScreen: typeof viewScreen === "function" ? (element, opened, events) => viewScreen(element, opened, events) : undefined,
       now: () => now(),
       navigate,
       // Runs `run` once when this rendering of the page stops being the latest: the operator

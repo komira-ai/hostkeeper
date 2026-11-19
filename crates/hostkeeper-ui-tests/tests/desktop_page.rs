@@ -1,6 +1,6 @@
 //! The Desktop page of a Mac (`ui/pages/desktop.js`), its link in the lab's list, the viewer's
 //! adapter over noVNC (`ui/screen.js`) and the words for a console stream's close
-//! (`ui/console_words.js`), run in the JavaScript engine against the fake gateway, a fake socket
+//! (`closeWords` of `ui/pages/serialconsole.js`), run in the JavaScript engine against the fake gateway, a fake socket
 //! and a fake viewer. Nothing here waits on a clock: the test opens, closes and speaks for the
 //! socket and the viewer itself.
 
@@ -63,8 +63,7 @@ const OPEN: &str = r#"
 typeIn("desktop-reason", "  look at the login window  ");
 await press("open-desktop");
 const socket = seen.sockets[0];
-const channel = { the: "open socket" };
-socket.handlers.open(channel);
+socket.handlers.open();
 await settle();
 "#;
 
@@ -134,10 +133,10 @@ export async function main() {
             ],
             ["mac-1", "healthy", "-", "Unplaced", "-", "-", "Desktop"],
             ["new-1", "pending", "-", "Unplaced", "-", "-", "-"],
-            ["web-1", "healthy", "-", "Unplaced", "-", "-", "-"],
+            ["web-1", "healthy", "-", "Unplaced", "-", "-", "Console"],
         ])
     );
-    assert_eq!(out["links"], json!(1));
+    assert_eq!(out["links"], json!(1), "one Desktop link");
     assert_eq!(
         out["navigations"],
         json!([{"name": "desktop", "params": {"nodeId": "mac-1"}}])
@@ -194,14 +193,14 @@ fn the_csrf_goes_only_in_the_subprotocol() {
     let out = run(
         &mut ui,
         &format!(
-            "{OPEN}\nreturn {{ path: socket.path, csrf: socket.csrf, sent: socket.sent, sockets: seen.sockets.length }};"
+            "{OPEN}\nreturn {{ path: socket.path, protocols: socket.protocols, sent: socket.sent, sockets: seen.sockets.length }};"
         ),
     );
     assert_eq!(
         out,
         json!({
             "path": format!("/console/v1/stream/{SESSION}"),
-            "csrf": CSRF,
+            "protocols": ["hostkeeper.console.v1", format!("csrf.{CSRF}")],
             "sent": [],
             "sockets": 1,
         })
@@ -237,13 +236,12 @@ typeIn("desktop-reason", "look");
 await press("open-desktop");
 const before = seen.viewers.length;
 const socket = seen.sockets[0];
-const channel = { the: "open socket" };
-socket.handlers.open(channel);
+socket.handlers.open();
 await settle();
 const viewer = seen.viewers[0];
-const once = { sameSocket: viewer.socket === channel, onScreen: viewer.element === screen };
+const once = { sameSocket: viewer.socket === socket, onScreen: viewer.element === screen };
 const offered = has("open-desktop");
-socket.handlers.open(channel);
+socket.handlers.open();
 await settle();
 return { before, once, offered, viewers: seen.viewers.length, sockets: seen.sockets.length,
          close: has("close-desktop"), status: status() };"#,
@@ -254,7 +252,7 @@ return { before, once, offered, viewers: seen.viewers.length, sockets: seen.sock
             "before": 0,
             "once": {"sameSocket": true, "onScreen": true},
             "offered": false,
-            "viewers": 2,
+            "viewers": 1,
             "sockets": 1,
             "close": true,
             "status": "Connected to the coordinator; waiting for the Mac.",
@@ -280,7 +278,7 @@ fn a_close_code_shows_its_reason() {
     );
     let out = Ui::start().run(&format!(
         r#"
-import {{ CLOSES, closeWords }} from "./console_words.js";
+import {{ CLOSES, closeWords }} from "./pages/serialconsole.js";
 const tokens = {tokens};
 export async function main() {{
   return {{
@@ -307,9 +305,9 @@ const closeWith = async (code, reason, opens) => {
   await press("open-desktop");
   const socket = seen.sockets[seen.sockets.length - 1];
   if (opens) {
-    socket.handlers.open({});
+    socket.handlers.open();
   }
-  socket.handlers.close(code, reason);
+  socket.handlers.close({ code, reason });
   await settle();
   said.push({ status: status(), reopen: has("open-desktop") });
 };
@@ -322,10 +320,10 @@ return said;"#,
     assert_eq!(
         out,
         json!([
-            {"status": "Screen Sharing is off on the Mac: it refused the connection.", "reopen": true},
-            {"status": "The console closed (4999 something_new).", "reopen": true},
-            {"status": "The connection to the coordinator closed without saying why.", "reopen": true},
-            {"status": "The coordinator did not accept the connection. Your sign-in may have ended: sign in again and retry.", "reopen": true},
+            {"status": "The Mac refused the connection: Screen Sharing is off.", "reopen": true},
+            {"status": "The console ended (4999 something_new).", "reopen": true},
+            {"status": "The connection to the coordinator was lost.", "reopen": true},
+            {"status": "The coordinator did not accept the connection. Your sign-in may have ended: sign in again and open the console again.", "reopen": true},
         ])
     );
 }
@@ -437,11 +435,11 @@ fn a_host_that_is_not_a_mac_gives_the_session_back() {
             "[]",
             r#"
 const real = ctx.openSocket;
-ctx.openSocket = (path, handlers, csrf) => {
+ctx.openSocket = (path, handlers, protocols) => {
   if (!/^\/console\/v1\/stream\/[0-9a-f]{64}$/.test(path)) {
     throw new Error(`not a socket path: ${path}`);
   }
-  return real(path, handlers, csrf);
+  return real(path, handlers, protocols);
 };
 typeIn("desktop-reason", "look");
 await press("open-desktop");
@@ -614,10 +612,10 @@ export async function main() {
   const viewers = [];
   const app = startApp({
     doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000,
-    openSocket: (path, handlers, csrf) => {
-      const socket = { path, handlers, csrf, closes: 0 };
+    openSocket: (path, handlers, protocols) => {
+      const socket = { path, handlers, protocols, closes: 0 };
       sockets.push(socket);
-      return { send: () => {}, close: () => { socket.closes += 1; } };
+      return { send: () => {}, close: () => { socket.closes += 1; }, socket: {} };
     },
     viewScreen: () => {
       const viewer = { disconnects: 0 };
@@ -632,7 +630,7 @@ export async function main() {
     fire(domNamed(doc.root, "desktop-reason"), "input", { target: { value: "look" } });
     fire(domNamed(doc.root, "open-desktop"), "click", {});
     await settle();
-    sockets[sockets.length - 1].handlers.open({});
+    sockets[sockets.length - 1].handlers.open();
     await settle();
   };
   await open();
@@ -645,7 +643,7 @@ export async function main() {
   fire(domNamed(doc.root, "sign-out"), "click", {});
   await settle();
   const signedOut = { closes: sockets[1].closes, disconnects: viewers[1].disconnects };
-  return { stayed, leftPage, beforeSignOut, signedOut, csrf: sockets.map((s) => s.csrf), opened: sockets.length };
+  return { stayed, leftPage, beforeSignOut, signedOut, protocols: sockets.map((s) => s.protocols[1]), opened: sockets.length };
 }"#,
     );
     assert_eq!(
@@ -655,7 +653,7 @@ export async function main() {
             "leftPage": {"closes": 1, "disconnects": 1},
             "beforeSignOut": {"closes": 0, "disconnects": 0},
             "signedOut": {"closes": 1, "disconnects": 1},
-            "csrf": [CSRF, CSRF],
+            "protocols": [format!("csrf.{CSRF}"), format!("csrf.{CSRF}")],
             "opened": 2,
         })
     );
@@ -691,7 +689,7 @@ export async function main() {
   const told = [];
   const target = { element: true };
   const socket = { open: true };
-  const viewer = screenViewer(FakeRFB)(target, socket, {
+  const viewer = screenViewer(FakeRFB)(target, { socket, send() {}, close() {} }, {
     connect: () => told.push(["connect"]),
     credentials: (types) => told.push(["credentials", types]),
     securityFailure: (reason) => told.push(["securityFailure", reason]),
@@ -824,7 +822,7 @@ const once = async (close) => {
   typeIn("desktop-reason", "look");
   await press("open-desktop");
   const socket = seen.sockets[seen.sockets.length - 1];
-  socket.handlers.open({});
+  socket.handlers.open();
   await settle();
   draw();
   const viewer = seen.viewers[seen.viewers.length - 1];
@@ -834,8 +832,8 @@ const once = async (close) => {
   await close(socket);
   return { status: status(), drawn, left: screen.children.length };
 };
-const byViewer = await once(async (socket) => { socket.handlers.close(1006, ""); await settle(); });
-const byCoordinator = await once(async (socket) => { socket.handlers.close(4005, "idle"); await settle(); });
+const byViewer = await once(async (socket) => { socket.handlers.close({ code: 1006, reason: "" }); await settle(); });
+const byCoordinator = await once(async (socket) => { socket.handlers.close({ code: 4005, reason: "idle" }); await settle(); });
 const byOperator = await once(async () => { await press("close-desktop"); });
 return { byViewer, byCoordinator, byOperator };"#,
     );
@@ -843,7 +841,7 @@ return { byViewer, byCoordinator, byOperator };"#,
         out,
         json!({
             "byViewer": {"status": "The Mac refused the login: Authentication failed", "drawn": 1, "left": 0},
-            "byCoordinator": {"status": "Nothing crossed the console for the idle limit, so the coordinator closed it.", "drawn": 1, "left": 0},
+            "byCoordinator": {"status": "Nothing crossed the console for too long, so it was closed.", "drawn": 1, "left": 0},
             "byOperator": {"status": "You closed the desktop.", "drawn": 1, "left": 0},
         })
     );

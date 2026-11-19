@@ -6,16 +6,15 @@
 //! it, as the path it points at, and is not followed: a link may point at a path that exists only
 //! on a host (the overlay's console issue link points into `/run`). The deny list of internal repository
 //! names ([`DENIED_FILE`]) is not scanned, because its job is to hold the digests of those
-//! names. The licence text ([`LICENCE_FILE`]) and the Sigstore trusted root ([`TRUSTED_ROOT_FILE`])
+//! names. The vendored files of the web app (`ui/vendor/`, each named in [`VENDOR_PINS_FILE`]) are
+//! not scanned either: each is a third-party library's file kept byte for byte as its authors
+//! published it (minified code whose property names read as host names), and a change to one is a
+//! change of its SHA-256 pin, which `cargo test -p hostkeeper-ui-tests --test sources` holds; a
+//! file under `ui/vendor/` with no pin is scanned. The licence text ([`LICENCE_FILE`]) and the Sigstore trusted root ([`TRUSTED_ROOT_FILE`])
 //! are scanned by every rule but the date rule, because each is verbatim third-party text with
 //! its authors' dates; so are the pin lines of the pinned Debian packages (`.github/debs/*.toml`),
 //! each a package's version and path as Canonical's signed index spells them. Test sources that need a text a
 //! rule refuses build it from pieces at run time, so that this directory passes its own lint.
-//! The vendored third-party files of the web app that a pin line of [`VENDOR_PINS_FILE`] names
-//! are not scanned: each is a library's published text (its authors' addresses, its licence
-//! URLs, its own dotted names), held byte for byte to the SHA-256 that line pins by
-//! `cargo test -p hostkeeper-ui-tests --test sources`, so a change to one is a reviewed change to
-//! the pins file, which is scanned. A file under `ui/vendor/` that no pin names is scanned.
 
 mod links;
 mod retired;
@@ -40,33 +39,12 @@ use tlds::{FILE_SUFFIXES, IANA_TEXT, PRIVATE_TLDS, is_tld, parse_tlds};
 const DENIED_FILE: &str = "crates/xtask/tests/hygiene/denied_repositories.sha256";
 const DENIED_TEXT: &str = include_str!("denied_repositories.sha256");
 const PUBLIC_TEXT: &str = include_str!("public_domains.txt");
-/// The pins of the web app's vendored files (`sha256sum` lines run in `ui/`), as a path from the
-/// repository root, and its text.
+/// The pins of the web app's vendored files (`sha256sum` lines run in `ui/`): the files of
+/// [`VENDOR_DIR`] it names are not scanned.
 const VENDOR_PINS_FILE: &str = "crates/hostkeeper-ui-tests/vendor.sha256";
 const VENDOR_PINS_TEXT: &str = include_str!("../../../hostkeeper-ui-tests/vendor.sha256");
-
-/// The paths, from the repository root, that the pin lines of `pins` name: a line of 64 lower-case
-/// hex digits, two spaces and a path below `vendor/` (under `ui/`). Comments, blank lines and any
-/// other line name nothing.
-fn vendored_pinned(pins: &str) -> HashSet<String> {
-    pins.lines()
-        .filter_map(|line| line.split_once("  "))
-        .filter(|(digest, _)| {
-            digest.len() == 64
-                && digest
-                    .bytes()
-                    .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
-        })
-        .filter_map(|(_, path)| path.strip_prefix("vendor/"))
-        .filter(|rest| {
-            !rest.is_empty()
-                && !rest
-                    .split('/')
-                    .any(|part| part.is_empty() || part == "." || part == "..")
-        })
-        .map(|rest| format!("ui/vendor/{rest}"))
-        .collect()
-}
+/// The web app's vendored directory, as a path from the repository root.
+const VENDOR_DIR: &str = "ui/vendor/";
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -94,9 +72,16 @@ fn tracked_files(root: &Path) -> Vec<String> {
     paths
 }
 
-/// The paths the lint reads: all but the deny list and the vendored files a pin of `pinned`
-/// ([`vendored_pinned`]) names. The licence text is read, by every rule but the date rule.
-fn scanned(paths: Vec<String>, pinned: &HashSet<String>) -> Vec<String> {
+/// The paths the lint reads: all but the deny list and the vendored files `pins` (the text of
+/// [`VENDOR_PINS_FILE`]) names. The licence text is read, by every rule but the date rule.
+fn scanned(paths: Vec<String>, pins: &str) -> Vec<String> {
+    let pinned: HashSet<String> = pins
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .filter_map(|line| line.split_once("  "))
+        .map(|(_, path)| format!("ui/{path}"))
+        .filter(|path| path.starts_with(VENDOR_DIR))
+        .collect();
     paths
         .into_iter()
         .filter(|p| p != DENIED_FILE && !pinned.contains(p))
@@ -204,14 +189,7 @@ fn hygiene_lint_passes_the_tree() {
     );
     let lists = real_lists();
     let mut found = Vec::new();
-    let pinned = vendored_pinned(VENDOR_PINS_TEXT);
-    for path in &pinned {
-        assert!(
-            paths.contains(path),
-            "{VENDOR_PINS_FILE} pins {path}, which git does not track"
-        );
-    }
-    for (path, text) in texts(&root, scanned(paths, &pinned)) {
+    for (path, text) in texts(&root, scanned(paths, VENDOR_PINS_TEXT)) {
         found.extend(reasons(lint(&path, &text, &lists)));
     }
     assert!(
@@ -800,6 +778,46 @@ fn hygiene_lint_reads_the_licence_text_for_everything_but_dates() {
 }
 
 #[test]
+fn hygiene_lint_skips_only_the_pinned_vendored_files() {
+    // Catches: a vendored file read by the rules (its minified names read as hosts), and the
+    // exemption reaching a file under ui/vendor/ with no pin, a pinned path outside ui/vendor/, a
+    // file of another directory whose name merely starts the same, or a comment line of the pins.
+    let digest = "0".repeat(64);
+    let pins =
+        format!("# vendor/lib/in-comment.js\n{digest}  vendor/lib/a.js\n{digest}  pages/home.js\n");
+    let paths = [
+        "ui/vendor/lib/a.js",
+        "ui/vendor/lib/unpinned.js",
+        "ui/vendor/lib/in-comment.js",
+        "ui/pages/home.js",
+        "ui/vendorx/lib/a.js",
+        "crates/x/vendor/lib/a.js",
+    ]
+    .map(String::from)
+    .to_vec();
+    assert_eq!(
+        scanned(paths, &pins),
+        [
+            "ui/vendor/lib/unpinned.js",
+            "ui/vendor/lib/in-comment.js",
+            "ui/pages/home.js",
+            "ui/vendorx/lib/a.js",
+            "crates/x/vendor/lib/a.js",
+        ]
+    );
+    assert!(
+        repo_root().join(VENDOR_PINS_FILE).is_file(),
+        "{VENDOR_PINS_FILE} does not exist"
+    );
+    assert!(
+        VENDOR_PINS_TEXT
+            .lines()
+            .any(|line| line.ends_with("  vendor/xterm/xterm.js")),
+        "the pins name the vendored terminal"
+    );
+}
+
+#[test]
 fn hygiene_lint_skips_the_deny_list_file_and_it_holds_only_digests() {
     // Catches: the deny list being scanned (its digests are not names, but a plaintext name
     // added there by mistake would then be flagged in the one place it must not be named), a
@@ -809,7 +827,7 @@ fn hygiene_lint_skips_the_deny_list_file_and_it_holds_only_digests() {
         .map(String::from)
         .to_vec();
     assert_eq!(
-        scanned(paths, &HashSet::new()),
+        scanned(paths, VENDOR_PINS_TEXT),
         ["Cargo.toml", LICENCE_FILE, "docs/a.md"]
     );
     assert!(
@@ -956,49 +974,4 @@ fn hygiene_lint_reads_the_trusted_root_for_everything_but_dates() {
             format!("{TRUSTED_ROOT_FILE}:2: {}", host_reason(&host)),
         ]
     );
-}
-
-#[test]
-fn hygiene_lint_skips_only_the_vendored_files_a_pin_names() {
-    // Catches: the exemption reaching a file no pin names (one under ui/vendor/ added without a
-    // pin, the app's own files, the pins file itself), a pin line that names a path outside
-    // ui/vendor/ or climbs out of it with `..`, a comment read as a pin, and a malformed digest.
-    let digest = "0".repeat(64);
-    let pins = format!(
-        "# vendor/lib/comment.js\n\
-         {digest}  vendor/lib/a.js\n\
-         {digest}  pages/home.js\n\
-         {digest}  vendor/../main.js\n\
-         {digest}  vendor/\n\
-         {short}  vendor/lib/short.js\n\
-         {upper}  vendor/lib/upper.js\n",
-        short = "0".repeat(63),
-        upper = "A".repeat(64),
-    );
-    let pinned = vendored_pinned(&pins);
-    assert_eq!(pinned, HashSet::from(["ui/vendor/lib/a.js".to_owned()]));
-    let paths = [
-        "ui/vendor/lib/a.js",
-        "ui/vendor/lib/b.js",
-        "ui/vendor/lib/comment.js",
-        "ui/pages/home.js",
-        "ui/main.js",
-        VENDOR_PINS_FILE,
-    ]
-    .map(String::from)
-    .to_vec();
-    assert_eq!(
-        scanned(paths, &pinned),
-        [
-            "ui/vendor/lib/b.js",
-            "ui/vendor/lib/comment.js",
-            "ui/pages/home.js",
-            "ui/main.js",
-            VENDOR_PINS_FILE,
-        ]
-    );
-    // The real pins name the vendored files, and the pins file itself is scanned.
-    let real = vendored_pinned(VENDOR_PINS_TEXT);
-    assert!(real.contains("ui/vendor/novnc/core/rfb.js"));
-    assert!(!real.contains(VENDOR_PINS_FILE));
 }

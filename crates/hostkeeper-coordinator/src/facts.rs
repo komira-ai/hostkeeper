@@ -10,13 +10,26 @@
 //!
 //! # The generation
 //!
-//! Nothing new is stored. A host's generation ([`Generations`]) is the audit number of the
-//! newest change that raised it, else the number of the last audit entry when the ops store was
-//! opened. The changes that raise it are the ones that change what the facts say: `set_labels`,
+//! A host's generation ([`Generations`]) is the audit number of the newest change that raised
+//! it. The changes that raise it are the ones that change what the facts say: `set_labels`,
 //! `enroll_approve`, `enroll_replace`, `enrollment.auto_approved` and `host_move` (a host moved
 //! into another group, [`crate::host_move`]), each for the entry's node. All are storage-first, and the generation is raised only once the change is committed
-//! and in memory ([`crate::ops::OpsStore`]), so a number a host was ever given is durable and the
-//! next start's base is at least it: the generation never goes back, across restarts either.
+//! and in memory ([`crate::ops::OpsStore`]).
+//!
+//! Over the files and the in-memory store nothing new is stored: a host no change raised since
+//! the ops store was opened is at the number of the last audit entry then, so a number a host was
+//! ever given is durable and the next start's base is at least it: the generation never goes
+//! back, across restarts either.
+//!
+//! Over Postgres the generation is the host's `enrollment_hosts.facts_generation`
+//! (`docs/design/coordinator-multi-instance.md`, section 6): the transaction that commits a
+//! raising change raises the column to the change's audit number ([`raises`]), and every
+//! coordinator reads the column with the labels, in the snapshot of the operations state, so all
+//! of them answer a host the same number and a host's beats, wherever they land, never ask for
+//! its facts again. A host no change raised is at 0; the first start that reads the column sends
+//! each such host its facts once. The enrollment store writes a host's record only while the row
+//! is still the one its decision read, so a record made before a raise is decided again on the
+//! raised row rather than written over it.
 //!
 //! A restart raises every host's generation to the base, so each host is resent its facts once;
 //! its daemon rewrites the file only on a change, and writes nothing. An approval whose audit
@@ -57,6 +70,7 @@ use crate::host_move::ACTION_MOVE;
 use crate::identity::Identity;
 use crate::ops::AuditEntry;
 use crate::service::Coordinator;
+use crate::store::Facts;
 
 /// The feature a daemon announces to be sent the facts file's content and to report the
 /// generation of what it wrote; the coordinator advertises it ([`crate::service::FEATURES`]).
@@ -66,7 +80,7 @@ pub const FEATURE: &str = "facts-v1";
 const ACTION_SET_LABELS: &str = "set_labels";
 
 /// Whether an audit entry of `action` changes what a host's facts say.
-fn raises(action: &str) -> bool {
+pub(crate) fn raises(action: &str) -> bool {
     [
         ACTION_SET_LABELS,
         ACTION_APPROVE,
@@ -116,6 +130,21 @@ impl Generations {
             base,
             raised: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    /// The generations a backend keeps (`enrollment_hosts.facts_generation`), as read with the
+    /// labels they go with: `facts`, and 0 for every other host. Every coordinator on the
+    /// database answers the same number.
+    pub(crate) fn kept(facts: Facts) -> Self {
+        Self {
+            base: 0,
+            raised: Mutex::new(facts),
+        }
+    }
+
+    /// Replaces the generations with `facts`, read again with the labels they go with.
+    pub(crate) fn replace(&self, facts: Facts) {
+        *self.raised.lock().unwrap_or_else(PoisonError::into_inner) = facts;
     }
 
     /// Notes the committed entries `entries`: each that changes what a host's facts say raises

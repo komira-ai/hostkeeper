@@ -130,6 +130,17 @@ impl TestDatabase {
         })
     }
 
+    /// How many write transactions the stores over it have committed (and not yet purged): each
+    /// inserts its row of `tx_ledger` first, and a read inserts none. What a test counts to say
+    /// that a call wrote nothing, whatever it read.
+    pub(crate) fn commits(&self) -> u64 {
+        self.rows("SELECT count(*) FROM tx_ledger")
+            .first()
+            .and_then(|row| row.first().cloned().flatten())
+            .and_then(|count| count.parse().ok())
+            .expect("a count")
+    }
+
     /// The rows `sql` answers, each as text, beside the store.
     pub(crate) fn rows(&self, sql: &str) -> Vec<Vec<Option<String>>> {
         let (name, sql) = (self.name.clone(), sql.to_owned());
@@ -223,6 +234,20 @@ impl TestDatabase {
                     &[&name],
                 )
                 .expect("the sessions are ended");
+            // A backend told to end ends a moment later: wait until none is left, so the next
+            // use of a store's session finds it gone.
+            while client
+                .query_one(
+                    "SELECT count(*) FROM pg_stat_activity WHERE datname = $1 \
+                     AND pid <> pg_backend_pid()",
+                    &[&name],
+                )
+                .expect("the sessions are counted")
+                .get::<_, i64>(0)
+                > 0
+            {
+                std::thread::yield_now();
+            }
         });
     }
 }
@@ -254,9 +279,9 @@ pub(crate) const ID: &str = "00000000-0000-0000-0000-000000000001";
 /// The second CI's spent ids are judged by in the tests.
 pub(crate) const SPENT_NOW: u64 = 150;
 
-/// The options the tests open a store with: the flags' default pool and migration retry, and an
-/// instance's row upserted once an hour, so no upsert of it lands inside a test that counts the
-/// ledger's rows (the upserts are tested by a store of their own).
+/// The options the tests open a store with: the flags' default pool, migration retry and wait for
+/// the gate, and an instance's row upserted once an hour, so no upsert of it lands inside a test
+/// that counts the ledger's rows (the upserts are tested by a store of their own).
 pub(crate) fn options() -> Options {
     Options {
         pool: std::num::NonZeroUsize::new(4).expect("four is not zero"),
@@ -264,6 +289,7 @@ pub(crate) fn options() -> Options {
         beat: std::time::Duration::from_secs(3600),
         release: "test-release".to_owned(),
         listen: "heartbeat=127.0.0.1:8443".to_owned(),
+        gate_wait: std::time::Duration::from_secs(30),
     }
 }
 
@@ -297,17 +323,23 @@ mod accounts;
 mod audit_only;
 mod connect;
 mod coordinator;
+mod copies;
+mod edits;
+mod enrollment_races;
+mod gate;
 mod generations;
 mod host_groups;
 mod instance;
 mod layout;
 mod lost;
 mod migrate_ddl;
+mod numbers;
 mod pool;
 mod reads;
 mod records;
 mod records_errors;
 mod releases;
+mod reload;
 mod repositories;
 mod running;
 mod schema;

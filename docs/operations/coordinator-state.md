@@ -77,7 +77,24 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   nothing, on any of them, until the next heartbeat's revival has opened every lost one again with
   the lock. Reads that are not decisions
   (`Audit.List`, the enrollment lists, the alerts' scans) run on a second, read-only session.
-  Decisions read memory: a heartbeat in the steady state runs no query.
+  Decisions read memory: a heartbeat in the steady state writes nothing. It reads its host's
+  enrollment and deny rows, fresh, so a deny another coordinator recorded is seen at once.
+- **Edits, and the copies in memory.** Each change of the state (an operator's, CI's, or one the
+  coordinator makes itself) is one transaction that locks, after its row of `tx_ledger`, the row
+  of `rollout_gate` when it changes what a rollout decision reads (the desired state, the
+  operations state, the layout, the verdicts), then the row of each part of the state it changes
+  in `state_versions`, then the row of `audit_counter` when it writes audit lines; it reads afresh
+  any part another coordinator changed since this one read it, makes the change on that, writes the
+  rows that differ, and moves each part's version on. An edit waits for the gate at most
+  `--operator-gate-wait-ms` (default 30000), and is refused `store_failed` with nothing changed
+  when the wait runs out; a heartbeat's own write (its verdicts) never waits, and is made at a
+  later heartbeat when the gate is held. Audit lines are numbered by `audit_counter` in the order
+  their transactions commit, with no gap; each start sets it past the newest line, which a release
+  before this one numbered without it. Every request, a heartbeat among them, first reads the
+  parts' versions (one query on the read-only session) and reads again, in one snapshot, each part
+  whose version moved on; otherwise decisions and answers read memory. A host's facts generation
+  is `enrollment_hosts.facts_generation`, raised to the audit number of the change that changes
+  the host's facts, in its transaction.
 - **The instances.** Each start makes a row of the `instances` table with an id of its own (random),
   the time it started and was last seen (the database's clock), its release, and the addresses of
   its listeners, and moves `seen_unix` on every `--instance-beat-secs` (default 5) while it runs,

@@ -53,10 +53,20 @@ export const NOW = 1800000000;
 
 // A page context over `client` that records what the page does. `answers` are the operator's
 // replies to the page's questions, in order; a question beyond them is answered no. Its clock
-// reads `now` (NOW when absent).
+// reads `now` (NOW when absent). `leave()` runs what the page asked to have run when it is left
+// (`ctx.onLeave`), as the app does when the operator goes to another page or signs out.
 export function recorder(client, params, answers, now) {
-  const seen = { reports: [], refreshes: 0, navigations: [], questions: [], shown: [], repeats: [], sockets: [], viewers: [] };
+  const seen = {
+    reports: [], refreshes: 0, navigations: [], questions: [], shown: [], repeats: [], sockets: [], terminals: [],
+    viewers: [],
+  };
   const left = (answers || []).slice();
+  const leavers = [];
+  const leave = () => {
+    for (const run of leavers.splice(0)) {
+      run();
+    }
+  };
   const ctx = {
     api: client,
     params: params || {},
@@ -67,12 +77,13 @@ export function recorder(client, params, answers, now) {
     now() {
       return now === undefined ? NOW : now;
     },
-    // A socket the test drives: nothing arrives by itself. The test calls `handlers.open(socket)`,
-    // `handlers.message(frame)` (a string, or a Uint8Array) and `handlers.close(code, reason)`
-    // itself; the CSRF token the page gave for the subprotocol is kept in `csrf` (null when none),
-    // what the page sends in `sent` (`{text}` or `{bytes}`), and each `close()` is counted.
-    openSocket(path, handlers, csrf) {
-      const socket = { path, handlers, csrf: csrf === undefined ? null : csrf, sent: [], closes: 0 };
+    // A socket the test drives: nothing arrives by itself. The test calls `handlers.open()`,
+    // `handlers.message(frame)` (a string, or a Uint8Array) and `handlers.close(closed)` itself;
+    // what the page sends is kept in `sent` (`{text}` or `{bytes}`), each `close()` is counted, and
+    // the subprotocols offered are kept in `protocols` (null when none). The record itself is the
+    // opened socket's `socket`, what the app hands a terminal.
+    openSocket(path, handlers, protocols) {
+      const socket = { path, handlers, protocols: protocols === undefined ? null : protocols, sent: [], closes: 0 };
       seen.sockets.push(socket);
       return {
         send(data) {
@@ -81,13 +92,33 @@ export function recorder(client, params, answers, now) {
         close() {
           socket.closes += 1;
         },
+        socket,
       };
     },
-    // A viewer the test watches: each call is kept in `seen.viewers` with the element (`element`) and the socket
-    // it was given and the events it may tell (`events.connect()` and the rest, which the test
-    // calls); the credentials sent and the disconnects are kept and counted.
-    viewScreen(target, socket, events) {
-      const viewer = { element: target, socket, events, credentials: [], disconnects: 0 };
+    // A terminal that records what the page does with it: the socket it was given (`socket`, the
+    // socket's record), the `name` of each element it was put in (`into`), and its focuses and
+    // disposals.
+    openTerminal(element, opened) {
+      const terminal = { socket: opened.socket, into: [element.attributes["name"]], focuses: 0, disposes: 0 };
+      seen.terminals.push(terminal);
+      return {
+        show(into) {
+          terminal.into.push(into.attributes["name"]);
+        },
+        focus() {
+          terminal.focuses += 1;
+        },
+        dispose() {
+          terminal.disposes += 1;
+        },
+      };
+    },
+    // A screen viewer the test watches: each call is kept in `seen.viewers` with the element it
+    // draws in (`element`), the socket's record (`socket`) and the `events` it may tell (the test
+    // calls `events.connect()` and the rest); the credentials sent are kept and the disconnects
+    // counted.
+    viewScreen(element, opened, events) {
+      const viewer = { element, socket: opened.socket, events, credentials: [], disconnects: 0 };
       seen.viewers.push(viewer);
       return {
         sendCredentials(creds) {
@@ -98,6 +129,9 @@ export function recorder(client, params, answers, now) {
         },
         focus() {},
       };
+    },
+    onLeave(run) {
+      leavers.push(run);
     },
     navigate(name, to) {
       seen.navigations.push({ name, params: to || {} });
@@ -121,7 +155,7 @@ export function recorder(client, params, answers, now) {
       };
     },
   };
-  return { ctx, seen };
+  return { ctx, seen, leave };
 }
 
 // Every element of a view tree, depth first.
