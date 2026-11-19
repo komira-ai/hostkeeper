@@ -1,5 +1,6 @@
-//! The held halt generation: persisted, never lowered, never read as 0 when it is not a number,
-//! and written so that a crash leaves it absent or whole.
+//! The held halt generation: persisted, never lowered while it is kept, removed when its halt is
+//! lifted, never read as 0 when it is not a number, and written so that a crash leaves it absent
+//! or whole.
 
 mod support;
 
@@ -113,4 +114,35 @@ fn a_held_halt_that_cannot_be_read_or_written_is_an_error() {
         .raise(&web(), 1)
         .expect_err("not a directory");
     assert!(matches!(error, HaltError::Io { .. }), "{error}");
+}
+
+/// Catches a removed generation that reads back, a missing file read as a generation, or a file
+/// that cannot be removed reported as removed: `read` tells no file from a written 0; a removed
+/// file reads `None` and 0, and removing it again is no error; a directory in the file's place is
+/// an error naming the service, and stays.
+#[test]
+fn a_held_halt_is_read_as_written_or_absent_and_removed() {
+    let scratch = Scratch::new("halt-remove");
+    let state = scratch.path().join("state");
+    let store = HaltStore::new(&state);
+    assert_eq!(store.read(&web()).expect("no file"), None);
+    store.raise(&web(), 7).expect("written");
+    assert_eq!(store.read(&web()).expect("the file"), Some(7));
+    store.remove(&web()).expect("removed");
+    assert_eq!(store.read(&web()).expect("no file"), None);
+    assert_eq!(store.get(&web()).expect("no file"), 0);
+    assert!(!state.join("web").join(HELD_HALT_FILE).exists());
+    store.remove(&web()).expect("no file is no error");
+
+    let in_the_way = state.join("api").join(HELD_HALT_FILE);
+    fs::create_dir_all(&in_the_way).expect("a directory in the way");
+    let api = ServiceName::new("api").expect("a service name");
+    let error = store.remove(&api).expect_err("a directory");
+    assert!(
+        error
+            .to_string()
+            .starts_with("the held halt generation of api cannot be read or written: "),
+        "{error}"
+    );
+    assert!(in_the_way.is_dir());
 }

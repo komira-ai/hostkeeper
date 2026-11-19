@@ -73,7 +73,7 @@ fn features_announced_are_the_eleven_names_and_a_behaviour_needs_the_reply_to_ad
     assert_eq!(shown.outcome, Outcome::Failed);
     assert_eq!(shown.phase, Some(Phase::BeforeCommit));
     assert_eq!(old.deferred, None);
-    assert!(rig.world.halts.raises().is_empty());
+    assert!(rig.world.halts.heard().is_empty());
     assert_eq!(rig.world.dispatch.pending(), 0);
     assert_eq!(rig.world.orders.orders(), [order]);
 

@@ -12,7 +12,7 @@
 //!   last verdict, and how each service is now;
 //! - [`OrderSink`] and [`Dispatch`]: the executor, run on a worker the dispatcher starts, so
 //!   the loop keeps beating while a step runs;
-//! - [`HeldHalts`]: the persisted halt generations;
+//! - [`HeldHalts`]: the halts the host holds, and the generation each is held under;
 //! - [`RenewalSource`]: what the enrollment loop last said of the host's certificate;
 //! - [`TrustedRootSource`]: the daemon's report of the Sigstore trusted root it checks packages
 //!   with;
