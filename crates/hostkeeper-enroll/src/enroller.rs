@@ -3,12 +3,27 @@
 //!
 //! What a step does depends on the pki directory and on the wall clock:
 //!
-//! | `current`                         | step                                                    |
-//! |-----------------------------------|---------------------------------------------------------|
-//! | none                              | enroll with the pending key (made first when missing)   |
-//! | valid, before the middle of it    | nothing ([`Outcome::Idle`])                             |
-//! | valid, from the middle of it on   | `Renew`, signed by the key the host holds               |
-//! | expired (past `not_after`)        | enroll again with the same key, `renewal_of` the host   |
+//! | `current`                                   | step                                          |
+//! |---------------------------------------------|-----------------------------------------------|
+//! | none                                        | enroll with the pending key (made first when missing) |
+//! | not of the pinned CA, or not for client authentication | enroll again with the same key, `renewal_of` the host |
+//! | expired (past `not_after`)                  | enroll again with the same key, `renewal_of` the host |
+//! | valid, not as the CA issues it now          | `Renew` at once, signed by the key the host holds |
+//! | valid, before the middle of it              | nothing ([`Outcome::Idle`])                   |
+//! | valid, from the middle of it on             | `Renew`, signed by the key the host holds     |
+//!
+//! The rows are tried in this order. "Not as the CA issues it now" is a certificate whose DNS
+//! names are not exactly the host id, or whose extended key usage is not client authentication
+//! alone (`verify.rs`): one issued before this daemon's version of the CA's profile. It is renewed
+//! at the first step (so at daemon start) and at any later step, but once per generation: a
+//! generation this enroller stored, or whose renewal the coordinator refused, is not renewed
+//! early again, since the coordinator would answer the same (one that still issues the older
+//! profile); it renews at the middle of its validity as any other. A daemon started again asks
+//! once more. A certificate of another CA than the pinned one, or without client authentication,
+//! cannot authenticate a `Renew`, so the host returns with its key as an expired host does, and
+//! that request waits for an operator's approval. One whose subject does not name a host or that
+//! certifies another key than the one stored beside it is not the host's
+//! ([`Error::Corrupt`]).
 //!
 //! The order of the checks before anything is sent, for every step that talks to the
 //! coordinator: first the coordinator's CA, against the pinned `ca_sha256` (a mismatch is
@@ -31,8 +46,6 @@ use std::path::PathBuf;
 
 use hostkeeper_config::daemon::Sha256Hex;
 use hostkeeper_steps::Clock;
-use x509_cert::Certificate;
-use x509_cert::der::DecodePem;
 
 use crate::claims::{ClaimsError, ClaimsSource};
 use crate::key::{Entropy, HostKey, KeyError};
@@ -40,7 +53,7 @@ use crate::managed::{MacNonce, ManagedPreferences, read_nonce};
 use crate::renewal::RenewalState;
 use crate::store::{KeyFrom, Store, StoreError, StoreLock, Stored};
 use crate::validity::{self, WallClock};
-use crate::verify::{self, Refusal};
+use crate::verify::{self, Refusal, Verified};
 use crate::wire::{
     CoordinatorEnroll, EnrollRequest, EnrollState, HostId, Issued, NONCE_MAX, NONCE_MIN, Poll,
     PollAnswer, Reason, RenewAnswer, RenewRequest, RequestId, TransportError, poll_message,
@@ -169,6 +182,19 @@ struct Held {
     not_before: u64,
     not_after: u64,
     key: HostKey,
+    fit: Fit,
+}
+
+/// How the current generation's certificate stands against what the coordinator's CA issues now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Fit {
+    /// It passes every check of `verify.rs` and is as the CA issues it now.
+    AsIssued,
+    /// It passes every check of `verify.rs` but is not as the CA issues it now: renewed early.
+    Unlike,
+    /// It names this host and certifies its key, but is not of the pinned CA or not for client
+    /// authentication, so it cannot authenticate a renewal: returned with `renewal_of`.
+    Return,
 }
 
 /// The poll's answer, once it is neither an error nor a denial.
@@ -190,6 +216,10 @@ pub struct Enroller {
     returning: Option<HostId>,
     /// The SHA-256 of the last Mac nonce this process posted, so each is posted once.
     nonce_posted: Option<[u8; 32]>,
+    /// The generation the coordinator last answered for: the one this enroller last stored, or
+    /// the one whose renewal it refused. That generation is not renewed early for being unlike
+    /// what the CA issues now ([`Fit::Unlike`]).
+    answered: Option<u64>,
     _lock: StoreLock,
 }
 
@@ -204,6 +234,7 @@ impl Enroller {
             posted: None,
             returning: None,
             nonce_posted: None,
+            answered: None,
             _lock: lock,
         })
     }
@@ -214,12 +245,12 @@ impl Enroller {
             return self.enroll(None);
         };
         let wall = &*self.ports.wall;
-        if validity::expired(wall, held.not_after) {
-            self.enroll(Some(held))
-        } else if validity::renewal_due(wall, held.not_before, held.not_after) {
-            self.renew(held)
-        } else {
-            Ok(Outcome::Idle)
+        match held.fit {
+            Fit::Return => self.enroll(Some(held)),
+            _ if validity::expired(wall, held.not_after) => self.enroll(Some(held)),
+            Fit::Unlike if self.answered != Some(held.number) => self.renew(held),
+            _ if validity::renewal_due(wall, held.not_before, held.not_after) => self.renew(held),
+            _ => Ok(Outcome::Idle),
         }
     }
 
@@ -263,6 +294,9 @@ impl Enroller {
 
     fn read_enrollment(&self) -> Result<Enrollment, Error> {
         if let Some(held) = self.held()? {
+            if held.fit == Fit::Return {
+                return Err(Error::Corrupt(held.number));
+            }
             return Ok(Enrollment::Enrolled {
                 host_id: held.host_id,
                 not_after: held.not_after,
@@ -427,7 +461,10 @@ impl Enroller {
             csr_der: held.key.csr_der()?,
         };
         match self.ports.coordinator.renew(&request)? {
-            RenewAnswer::Refused(reason) => Err(Error::RenewRefused(reason)),
+            RenewAnswer::Refused(reason) => {
+                self.answered = Some(held.number);
+                Err(Error::RenewRefused(reason))
+            }
             RenewAnswer::Issued(issued) => {
                 let from = KeyFrom::Generation(held.number);
                 let identity = self.store(&issued, &held.key, from, Some(&held.host_id))?;
@@ -459,6 +496,7 @@ impl Enroller {
                 _ => return Err(error.into()),
             },
         };
+        self.answered = Some(stored.number);
         Ok(Identity {
             host_id: verified.host_id,
             generation: stored.number,
@@ -471,28 +509,39 @@ impl Enroller {
     }
 }
 
-/// A stored generation as a certificate of this host and its key; `None` when it is not one:
-/// the certificate must pass every check of `verify.rs` but the validity window (an expired
-/// generation is still the host's, for `renewal_of`) against its own CA bundle and the pin, for
-/// the key stored beside it.
+/// A stored generation as a certificate of this host and its key; `None` when it is not one.
+/// Its subject must name a host and it must certify the key stored beside it
+/// ([`verify::certifies`]). One that also passes every check of `verify.rs` but the validity
+/// window (an expired generation is still the host's, for `renewal_of`) against its own CA bundle
+/// and the pin is [`Fit::AsIssued`] or [`Fit::Unlike`]; one refused only for its CA or for client
+/// authentication is [`Fit::Return`]; any other refusal is `None`.
 fn read_held(stored: Stored, pin: &str) -> Option<Held> {
-    let cert = Certificate::from_pem(stored.cert_pem.as_bytes()).ok()?;
-    let host_id = verify::common_name(&cert)?
-        .strip_prefix("host:")?
-        .to_owned();
     let key = HostKey::from_pkcs8(&stored.key_der).ok()?;
+    let (host_id, (not_before, not_after)) = verify::certifies(&stored.cert_pem, &key)?;
     let issued = Issued {
-        host_id,
+        host_id: host_id.as_str().to_owned(),
         cert_pem: stored.cert_pem,
         ca_bundle_pem: stored.ca_pem,
     };
-    let verified = verify::check(&issued, &key, pin, None).ok()?;
+    let fit = match verify::check(&issued, &key, pin, None) {
+        Ok(Verified {
+            as_issued: true, ..
+        }) => Fit::AsIssued,
+        Ok(Verified {
+            as_issued: false, ..
+        }) => Fit::Unlike,
+        Err(
+            Refusal::NoPinnedCa | Refusal::Issuer | Refusal::NotSignedByCa | Refusal::NoClientAuth,
+        ) => Fit::Return,
+        Err(_) => return None,
+    };
     Some(Held {
         number: stored.number,
-        host_id: verified.host_id,
-        not_before: verified.not_before,
-        not_after: verified.not_after,
+        host_id,
+        not_before,
+        not_after,
         key,
+        fit,
     })
 }
 

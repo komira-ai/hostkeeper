@@ -5,8 +5,9 @@
 //! then posts an enrollment request to the coordinator, whose CA it first checks against the
 //! `ca_sha256` of its daemon config. It polls with a nonce signed by the key until an operator
 //! approves the request, checks the certificate it receives and stores it as a numbered generation
-//! under `/etc/updater/pki/`. It renews at half life, and a host that was offline past expiry
-//! returns through a new request marked `renewal_of` with the same key.
+//! under `/etc/updater/pki/`. It renews at half life, or at once when the certificate is not what
+//! the CA issues now, and a host that was offline past expiry (or holds a certificate that cannot
+//! authenticate a renewal) returns through a new request marked `renewal_of` with the same key.
 //!
 //! Everything outside the crate is a port, so tests touch nothing of the host:
 //!
