@@ -817,6 +817,9 @@ where
     let adopting = watch_every(Arc::clone(&coordinator), parts.reload);
     // The tunnels' poll, which closes the ones that must close; it waits for ever without tunnels.
     let polling = run_poll(Arc::clone(&coordinator));
+    // Every console session open before this start ended with the one that held it.
+    coordinator.console_started();
+    let sweeping = crate::console::sweep_every(Arc::clone(&coordinator));
     // Without a LAN listener, a future that never finishes stands in for it.
     let serving_lan = match lan {
         Some(lan) => Either::Left(serve(
@@ -843,7 +846,10 @@ where
     );
     let all = together(
         together(serving, serving_lan),
-        together(reloading, together(observing, together(adopting, polling))),
+        together(
+            reloading,
+            together(observing, together(adopting, together(polling, sweeping))),
+        ),
     );
     // On the heap: the futures together are too large for a stack of a test's thread.
     match Box::pin(all).await {}
@@ -890,7 +896,11 @@ where
     match select(pin!(stop), pin!(serving)).await {
         // The tunnels end on their own, or are closed after --ssh-drain-s, while the listeners
         // go on serving (the health listener says `draining`).
-        Either::Left((Ok(()), serving)) => ssh::drained(&coordinator, serving).await,
+        // The console's streams close and clean up first.
+        Either::Left((Ok(()), mut serving)) => {
+            crate::console::drained(&coordinator, serving.as_mut()).await?;
+            ssh::drained(&coordinator, serving).await
+        }
         Either::Left((Err(why), _)) => Err(StartError::from(why)),
         Either::Right((served, _)) => {
             let Err(why) = served;

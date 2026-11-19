@@ -1,14 +1,23 @@
-//! The coordinator's `Console` calls of `hostkeeper.operator.v1` (`docs/design/console-broker.md`,
-//! row C2 of section 15): a Linux server's power and boot device through its BMC, and the console
-//! sessions a WebSocket is to attach to.
+//! The coordinator's `Console` calls of `hostkeeper.operator.v1` and the console's WebSocket
+//! (`docs/design/console-broker.md`, rows C2 and C4 of section 15): a Linux server's power and boot
+//! device through its BMC, the console sessions, and the streams attached to them (a Linux
+//! server's serial port over Serial over LAN, a Mac's Screen Sharing).
 //!
 //! - [`Coordinator::console_power`] and [`Coordinator::console_set_boot_device`]
 //!   ([`power`]): one session of the BMC tool each, after the check that the BMC at the host's
 //!   address has the host's BMC MAC, and serialized per BMC.
 //! - [`Coordinator::console_open`], [`Coordinator::console_list`] and
 //!   [`Coordinator::console_close`] ([`sessions`]): the one session per host, without contacting
-//!   the device. Nothing attaches to a session yet (the WebSocket route is the step after this
-//!   one, C4), so a session ends unattached at the end of its window (`--console-attach-s`).
+//!   the device; a session nothing attaches to ends at the end of its window
+//!   (`--console-attach-s`).
+//! - `GET /console/v1/stream/<session>` ([`route`], row C4): the WebSocket that attaches to a
+//!   session, with the bearer in its subprotocol; after the upgrade, [`stream`] contacts the
+//!   device (Serial over LAN through the BMC tool for a Linux server, Screen Sharing's TCP port
+//!   for a Mac, [`device`]) and bridges it until either end ends, a limit or a close stops it, and
+//!   cleans up (the payload deactivated, one close line).
+//! - [`sweep`]: the tick that ends unattached sessions, closes attached ones at their idle and
+//!   total limits or when their operator's token or entry is gone, the drain at stop and the
+//!   start line.
 //!
 //! Who may call: an operator's token (a CI token is `forbidden`, no token `unauthorized`) whose
 //! name the console operators file lists (`no_console_access` otherwise, and with no file);
@@ -30,10 +39,12 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
+use hostkeeper_console::bridge::Moved;
+use hostkeeper_console::close::Close;
 use hostkeeper_console::ipmi::{Settings, Tool};
 use hostkeeper_console::operators::{Denied, Need};
 use hostkeeper_console::reason::MAX_REASON_BYTES;
-use hostkeeper_console::session::{Kind, Sessions};
+use hostkeeper_console::session::{Bounds, Kind, SessionId, Sessions};
 use hostkeeper_console::targets::Address;
 use hostkeeper_enrollment::names::MacAddress;
 use hostkeeper_proto::hostkeeper::operator::v1::ConsoleRefusal as Refusal;
@@ -45,23 +56,40 @@ use crate::inventory::{InventoryMatch, match_claims};
 use crate::operator::Caller;
 use crate::service::Coordinator;
 
+pub(crate) use device::Duplex;
+pub use device::{Dial, tcp_dial};
 pub(crate) use files::ConsoleFiles;
 pub use files::ConsoleFilesError;
 pub use flags::ConsoleFlags;
 pub use ipmitool::Ipmitool;
+pub(crate) use sweep::{drained, sweep_every};
 
+mod device;
 mod files;
 mod flags;
 mod ipmitool;
 mod power;
+pub(crate) mod route;
 mod sessions;
+mod stream;
+mod sweep;
 
+#[cfg(test)]
+pub(crate) mod attach_support;
+#[cfg(test)]
+mod device_tests;
 #[cfg(test)]
 mod power_tests;
 #[cfg(test)]
+mod route_tests;
+#[cfg(test)]
 mod sessions_tests;
 #[cfg(test)]
+mod stream_tests;
+#[cfg(test)]
 pub(crate) mod support;
+#[cfg(test)]
+mod sweep_tests;
 #[cfg(test)]
 mod tests;
 
@@ -71,13 +99,80 @@ pub const DEFAULT_MAX_SESSIONS: usize = 8;
 /// The default window in which a session must be attached (`--console-attach-s`).
 pub const DEFAULT_ATTACH: Duration = Duration::from_secs(30);
 
-/// The console's state: its files, the BMC tool and how it is run, the sessions, and one lock per
-/// BMC that serializes the commands sent to it.
+/// The default time an attached stream may carry no byte either way (`--console-idle-s`).
+pub const DEFAULT_IDLE: Duration = Duration::from_secs(30 * 60);
+
+/// The default time a stream may stay attached (`--console-total-s`).
+pub const DEFAULT_TOTAL: Duration = Duration::from_secs(8 * 60 * 60);
+
+/// The default time the connection to a Mac's Screen Sharing may take
+/// (`--console-connect-timeout-s`).
+pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The TCP port of a Mac's Screen Sharing (RFB).
+pub const SCREEN_SHARING_PORT: u16 = 5900;
+
+/// The default bounds of the sessions.
+#[must_use]
+pub const fn default_bounds() -> Bounds {
+    Bounds {
+        max: DEFAULT_MAX_SESSIONS,
+        window: DEFAULT_ATTACH,
+        idle: DEFAULT_IDLE,
+        total: DEFAULT_TOTAL,
+    }
+}
+
+/// Why a stream is stopped from outside it, and by whom: an operator's name, or `coordinator`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Stop {
+    pub(crate) close: Close,
+    pub(crate) by: String,
+}
+
+/// A stream attached to a session, as the sessions table knows it.
+pub(crate) struct Live {
+    /// The session's id: the stream's end removes this session and no later one of the host.
+    pub(crate) id: SessionId,
+    /// Stops the stream; the first cause sent is the one it closes with.
+    pub(crate) stop: tokio::sync::watch::Sender<Option<Stop>>,
+    /// The bytes it has carried, which the sweep tells the table.
+    pub(crate) moved: Arc<Moved>,
+}
+
+impl Live {
+    /// Stops the stream with `close` by `by`, unless it was stopped already.
+    pub(crate) fn stop(&self, close: Close, by: &str) {
+        self.stop.send_if_modified(|stop| {
+            let first = stop.is_none();
+            if first {
+                *stop = Some(Stop {
+                    close,
+                    by: by.to_owned(),
+                });
+            }
+            first
+        });
+    }
+}
+
+/// The sessions, and the streams attached to them, by host id; one lock for both.
+pub(crate) struct Table {
+    pub(crate) sessions: Sessions,
+    pub(crate) live: BTreeMap<String, Live>,
+}
+
+/// The console's state: its files, the BMC tool and how it is run, the sessions and their
+/// streams, how a Mac is dialled, and one lock per BMC that serializes the commands sent to it.
 pub struct Console {
     files: ConsoleFiles,
     tool: Arc<dyn Tool>,
     settings: Settings,
-    sessions: Mutex<Sessions>,
+    table: Mutex<Table>,
+    /// Told each time a session leaves the table, once its close line is written: the drain
+    /// waits on it.
+    ended: tokio::sync::Notify,
+    dial: Dial,
     bmcs: Mutex<BTreeMap<MacAddress, Arc<Mutex<()>>>>,
     random: Random,
     /// Told when a call finds its BMC's lock held and waits for it: a test's progress event.
@@ -97,7 +192,7 @@ impl Default for Console {
                 &settings,
             )),
             settings,
-            Sessions::new(DEFAULT_MAX_SESSIONS, DEFAULT_ATTACH),
+            Sessions::new(default_bounds()),
         )
     }
 }
@@ -107,12 +202,14 @@ impl std::fmt::Debug for Console {
         f.debug_struct("Console")
             .field("files", &self.files)
             .field("settings", &self.settings)
+            .field("bounds", &self.lock_table().sessions.bounds())
             .finish_non_exhaustive()
     }
 }
 
 impl Console {
-    /// The console over `files`, running `tool` as `settings` say, with the empty `sessions`.
+    /// The console over `files`, running `tool` as `settings` say, with the empty `sessions`,
+    /// dialling a Mac's Screen Sharing port within [`DEFAULT_CONNECT_TIMEOUT`].
     #[must_use]
     pub fn new(
         files: ConsoleFiles,
@@ -124,7 +221,12 @@ impl Console {
             files,
             tool,
             settings,
-            sessions: Mutex::new(sessions),
+            table: Mutex::new(Table {
+                sessions,
+                live: BTreeMap::new(),
+            }),
+            ended: tokio::sync::Notify::new(),
+            dial: tcp_dial(SCREEN_SHARING_PORT, DEFAULT_CONNECT_TIMEOUT),
             bmcs: Mutex::new(BTreeMap::new()),
             random: os_random(),
             #[cfg(test)]
@@ -136,6 +238,13 @@ impl Console {
     #[must_use]
     pub fn files(&self) -> &ConsoleFiles {
         &self.files
+    }
+
+    /// The same console dialling a Mac with `dial`.
+    #[must_use]
+    pub fn with_dial(mut self, dial: Dial) -> Self {
+        self.dial = dial;
+        self
     }
 
     /// The same console drawing session ids from `random`.
@@ -151,8 +260,8 @@ impl Console {
         *self.waits.lock().unwrap_or_else(PoisonError::into_inner) = Some(waits);
     }
 
-    fn lock_sessions(&self) -> MutexGuard<'_, Sessions> {
-        self.sessions.lock().unwrap_or_else(PoisonError::into_inner)
+    fn lock_table(&self) -> MutexGuard<'_, Table> {
+        self.table.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// The lock of the BMC whose MAC is `mac`, held while a call sends it commands.

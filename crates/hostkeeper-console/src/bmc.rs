@@ -19,6 +19,8 @@
 //! is followed by one run with `-v`, which opens a session and sends no command, and whose text
 //! names a refused credential ([`BmcError::AuthFailed`]); anything else is
 //! [`BmcError::Unreachable`]. The tool's text is in no error.
+//!
+//! A host's serial console over Serial over LAN, in the same way, is [`crate::sol`].
 
 use hostkeeper_enrollment::names::MacAddress;
 
@@ -170,6 +172,8 @@ pub enum Step {
     BootDevice,
     /// [`BOOT_FLAGS_READ`].
     BootFlags,
+    /// [`crate::sol::PAYLOAD_STATUS`].
+    PayloadStatus,
 }
 
 /// Why a call to a BMC did not do what it was asked. The text is the refusal's token and holds
@@ -188,6 +192,9 @@ pub enum BmcError {
     /// The BMC at the address has another MAC than the host's record; nothing was sent to it.
     #[error("address_mismatch")]
     AddressMismatch,
+    /// Another holder has the BMC's Serial over LAN payload, or took it from this session.
+    #[error("bmc_sol_busy")]
+    SolBusy,
     /// The tool could not be started, or an answer at this step could not be read or did not
     /// acknowledge the command.
     #[error("bmc_failed at {0:?}")]
@@ -247,7 +254,7 @@ impl Bmc<'_> {
     }
 
     /// An open session in which the BMC's MAC was read and equals the record's.
-    fn checked(&self) -> Result<Box<dyn Shell>, BmcError> {
+    pub(crate) fn checked(&self) -> Result<Box<dyn Shell>, BmcError> {
         let mut shell = self.open()?;
         let octets =
             parse_mac(&ask(shell.as_mut(), MAC_READ)?).ok_or(BmcError::Failed(Step::MacRead))?;
@@ -285,12 +292,12 @@ impl Bmc<'_> {
 }
 
 /// `command`'s answer in `shell`.
-fn ask(shell: &mut dyn Shell, command: &str) -> Result<String, BmcError> {
+pub(crate) fn ask(shell: &mut dyn Shell, command: &str) -> Result<String, BmcError> {
     shell.ask(command).map_err(of_shell)
 }
 
 /// The error of a run of the tool that gave no answer.
-fn of_shell(why: ShellError) -> BmcError {
+pub(crate) fn of_shell(why: ShellError) -> BmcError {
     match why {
         ShellError::Start => BmcError::Failed(Step::Start),
         ShellError::Deadline => BmcError::Unreachable,
@@ -301,7 +308,7 @@ fn of_shell(why: ShellError) -> BmcError {
 /// The error the tool's standard error names, if it names one: no free session (measured, section
 /// 17.3), or a credential the BMC refused (the texts of the RMCP+ handshake's refusals, which the
 /// tool prints with `-v`).
-fn named(text: &ToolText) -> Option<BmcError> {
+pub(crate) fn named(text: &ToolText) -> Option<BmcError> {
     let text = text.as_str().to_ascii_lowercase();
     let refused = [
         "unauthorized name",
@@ -353,7 +360,7 @@ fn parse_mac(answer: &str) -> Option<[u8; 6]> {
 }
 
 /// Whether `word` is two hex digits.
-fn is_hex_byte(word: &str) -> bool {
+pub(crate) fn is_hex_byte(word: &str) -> bool {
     word.len() == 2 && word.bytes().all(|c| c.is_ascii_hexdigit())
 }
 
@@ -391,4 +398,4 @@ fn parse_boot_flags(answer: &str) -> Option<BootFlags> {
 
 #[cfg(test)]
 #[path = "bmc_tests.rs"]
-mod tests;
+pub(crate) mod tests;
