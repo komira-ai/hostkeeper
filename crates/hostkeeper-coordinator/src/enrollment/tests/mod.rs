@@ -24,6 +24,7 @@ mod list;
 mod nonces;
 mod open_record;
 mod operator;
+mod recorded;
 mod records_groups;
 mod refusals;
 mod reject;

@@ -37,6 +37,16 @@ const DB1_APPROVED: u64 = NOW + 4_321;
 const WEB9_APPROVED: u64 = NOW + 5_000;
 const AMB1_APPROVED: u64 = NOW + 6_000;
 
+/// Who approves a host of the fixture.
+#[derive(Clone, Copy)]
+enum Approver {
+    /// The operator, through the coordinator, which records a host no record matches.
+    Coordinator,
+    /// The operator, through a release before that: the enrollment store's approval alone,
+    /// which records nothing.
+    ReleaseBefore,
+}
+
 /// A coordinator of `web` and `db`, past its quiet start, over its own enrollment.
 struct Fixture {
     enrollment: EnrollmentRig,
@@ -75,6 +85,19 @@ impl Fixture {
     /// A key that posted from machine `machine`, claiming `addresses` and the BMC MAC `bmc`,
     /// approved by the operator as `host` (empty: the record's) at `at`, then heard from.
     fn enroll(&self, machine: &str, addresses: &[&str], bmc: &str, host: &str, at: u64) -> HostKey {
+        self.enroll_by(machine, addresses, bmc, host, at, Approver::Coordinator)
+    }
+
+    /// [`Self::enroll`], approved by `approver`.
+    fn enroll_by(
+        &self,
+        machine: &str,
+        addresses: &[&str],
+        bmc: &str,
+        host: &str,
+        at: u64,
+        approver: Approver,
+    ) -> HostKey {
         let key = HostKey::new();
         let mut request = enroll_request(&key, machine);
         let claims = request.claims.as_mut().expect("claims");
@@ -83,24 +106,33 @@ impl Fixture {
         let posted = self.enrollment.enrollment.enroll(request).expect("posted");
         assert_eq!(posted.state, EnrollState::Pending as i32);
         self.enrollment.clock.set(at);
-        let approved = self
-            .rig
-            .coordinator
-            .enrollment_approve(
-                &operator(),
-                proto::ApproveRequest {
-                    request_id: key.key_hash().to_hex(),
-                    key_sha256: key.key_hash().to_hex(),
-                    host_id: host.to_owned(),
-                    role: "storage".to_owned(),
-                    reason: "built today".to_owned(),
-                    ..proto::ApproveRequest::default()
-                },
-            )
-            .expect("approved");
+        let approval = proto::ApproveRequest {
+            request_id: key.key_hash().to_hex(),
+            key_sha256: key.key_hash().to_hex(),
+            host_id: host.to_owned(),
+            role: "storage".to_owned(),
+            reason: "built today".to_owned(),
+            ..proto::ApproveRequest::default()
+        };
+        let approved = match approver {
+            Approver::Coordinator => {
+                self.rig
+                    .coordinator
+                    .enrollment_approve(&operator(), approval)
+                    .expect("approved")
+                    .host_id
+            }
+            Approver::ReleaseBefore => self
+                .enrollment
+                .enrollment
+                .approve("operator", approval, &|_| true, &[])
+                .expect("approved")
+                .host_id
+                .to_string(),
+        };
         ask(
             &self.rig,
-            &approved.host_id,
+            &approved,
             "storage",
             beat_of(NEW_DAEMON, Vec::new()),
         );
@@ -108,7 +140,8 @@ impl Fixture {
     }
 
     /// The records `db-1` to `db-5`; `db-1` enrolled by MAC, `web-9` enrolled matching no
-    /// record, and `amb-1` enrolled matching both `db-4` and `db-5`.
+    /// record (approved by a release before the coordinator wrote a record at an approval, and
+    /// not recorded by a start since), and `amb-1` enrolled matching both `db-4` and `db-5`.
     fn seeded(name: &str) -> Fixture {
         let fixture = Fixture::new(name);
         fixture.record("db-1", &DB1_DATA, DB1_BMC, DB1_SERIAL);
@@ -123,7 +156,14 @@ impl Fixture {
             "",
             DB1_APPROVED,
         );
-        fixture.enroll("m-9", &[WEB9_DATA], "", "web-9", WEB9_APPROVED);
+        fixture.enroll_by(
+            "m-9",
+            &[WEB9_DATA],
+            "",
+            "web-9",
+            WEB9_APPROVED,
+            Approver::ReleaseBefore,
+        );
         fixture.enroll("m-a", &[DB4_DATA, DB5_DATA], "", "amb-1", AMB1_APPROVED);
         fixture
     }

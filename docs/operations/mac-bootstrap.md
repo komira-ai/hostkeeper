@@ -30,8 +30,10 @@ hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <tok
     enrollment add-record --host-id mac-03 --host-group build --serial <serial>
 ```
 
-or leave it to an operator's click on the Enrollment page when the request arrives. A re-imaged
-Mac needs the click with `--replace true` (the old key holds the host id).
+or leave it to an operator's click on the Enrollment page when the request arrives: the coordinator
+then writes the Mac's record from its serial, added by `coordinator`, so the Mac is listed in the
+inventory ([enrollment.md](enrollment.md#a-host-approved-without-a-record)). A re-imaged Mac needs
+the click with `--replace true` (the old key holds the host id).
 
 ## What happens, and where to look
 
