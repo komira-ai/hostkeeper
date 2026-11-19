@@ -18,6 +18,15 @@
 //!
 //! [`verify`] is [`check`] and the validity window on the wall clock.
 //!
+//! A certificate that passes [`check`] is also compared with the host client certificate the CA
+//! issues now (design 4.4, `crates/hostkeeper-enrollment/src/ca/issue.rs`), in
+//! [`Verified::as_issued`]: its DNS names are exactly one, the host id (a certificate issued
+//! before the CA named the host by a DNS name has none), and its extended key usage is client
+//! authentication alone. A difference refuses nothing; the enroller renews such a certificate at
+//! once (`enroller.rs`). Its URI name is not compared: its prefix is the coordinator's setting.
+//! [`certifies`] is what a stored certificate that fails [`check`] must still pass to be returned
+//! with `renewal_of`: its subject names this host and it certifies the key the host holds.
+//!
 //! The CA of design section 4.4 issues host certificates itself, with a P-256 key, so a
 //! certificate is checked against the pinned CA directly; there is no intermediate.
 
@@ -26,12 +35,14 @@ use p256::ecdsa::{DerSignature, VerifyingKey};
 use p256::pkcs8::DecodePublicKey;
 use sha2::{Digest, Sha256};
 use x509_cert::Certificate;
+use x509_cert::der::oid::ObjectIdentifier;
 use x509_cert::der::oid::db::rfc5280::{
     ID_CE_BASIC_CONSTRAINTS, ID_CE_EXT_KEY_USAGE, ID_CE_KEY_USAGE, ID_KP_CLIENT_AUTH,
 };
 use x509_cert::der::oid::db::rfc5912::ECDSA_WITH_SHA_256;
 use x509_cert::der::{DecodePem, Encode};
-use x509_cert::ext::pkix::{BasicConstraints, ExtendedKeyUsage, KeyUsage};
+use x509_cert::ext::pkix::name::GeneralName;
+use x509_cert::ext::pkix::{BasicConstraints, ExtendedKeyUsage, KeyUsage, SubjectAltName};
 
 use crate::key::HostKey;
 use crate::validity::{self, WallClock};
@@ -78,6 +89,8 @@ pub(crate) struct Verified {
     pub host_id: HostId,
     pub not_before: u64,
     pub not_after: u64,
+    /// It is as the CA issues a host certificate now; see the module documentation.
+    pub as_issued: bool,
 }
 
 /// The lower-case hex SHA-256 of `bytes`.
@@ -149,17 +162,55 @@ pub(crate) fn check(
     if common_name(&leaf).as_deref() != Some(subject.as_str()) {
         return Err(Refusal::Subject(subject));
     }
-    check_usage(&leaf)?;
+    let purposes = check_usage(&leaf)?;
+    let as_issued = as_issued(&leaf, &host_id, &purposes);
     let (not_before, not_after) = window(&leaf);
     Ok(Verified {
         host_id,
         not_before,
         not_after,
+        as_issued,
     })
 }
 
-/// The certificate is an end entity for client authentication; see the module documentation.
-fn check_usage(leaf: &Certificate) -> Result<(), Refusal> {
+/// `leaf`, a certificate of `host_id` whose extended key usage is `purposes`, is as the CA
+/// issues it now: its DNS names are exactly the host id, and `purposes` is client authentication
+/// alone. A subject alternative name that does not decode names no DNS name.
+fn as_issued(leaf: &Certificate, host_id: &HostId, purposes: &[ObjectIdentifier]) -> bool {
+    let names = leaf
+        .tbs_certificate()
+        .get_extension::<SubjectAltName>()
+        .ok()
+        .flatten()
+        .map_or_else(Vec::new, |(_, names)| names.0);
+    let dns: Vec<&str> = names
+        .iter()
+        .filter_map(|name| match name {
+            GeneralName::DnsName(dns) => Some(dns.as_str()),
+            _ => None,
+        })
+        .collect();
+    dns == [host_id.as_str()] && purposes == [ID_KP_CLIENT_AUTH]
+}
+
+/// The host `cert_pem` names, and its validity window, when it is one PEM certificate whose
+/// subject is exactly `host:<id>` for a valid host id and it certifies `key`; `None` otherwise.
+/// Nothing else is checked: this is what a stored certificate that fails [`check`] for its issuer
+/// or its usage must pass to be returned with `renewal_of`.
+pub(crate) fn certifies(cert_pem: &str, key: &HostKey) -> Option<(HostId, (u64, u64))> {
+    let leaf = Certificate::from_pem(cert_pem.as_bytes()).ok()?;
+    let spki = leaf
+        .tbs_certificate()
+        .subject_public_key_info()
+        .to_der()
+        .ok()?;
+    let host_id = HostId::new(common_name(&leaf)?.strip_prefix("host:")?)?;
+    (spki == key.spki_der()).then(|| (host_id, window(&leaf)))
+}
+
+/// The certificate is an end entity for client authentication (see the module documentation);
+/// the purposes of its extended key usage.
+fn check_usage(leaf: &Certificate) -> Result<Vec<ObjectIdentifier>, Refusal> {
     let tbs = leaf.tbs_certificate();
     // An extension that does not decode, or appears twice, refuses as its check would.
     let constraints = tbs
@@ -189,10 +240,10 @@ fn check_usage(leaf: &Certificate) -> Result<(), Refusal> {
     let usage = tbs
         .get_extension::<ExtendedKeyUsage>()
         .map_err(|_| Refusal::NoClientAuth)?;
-    if !usage.is_some_and(|(_, usage)| usage.0.contains(&ID_KP_CLIENT_AUTH)) {
-        return Err(Refusal::NoClientAuth);
+    match usage {
+        Some((_, usage)) if usage.0.contains(&ID_KP_CLIENT_AUTH) => Ok(usage.0),
+        _ => Err(Refusal::NoClientAuth),
     }
-    Ok(())
 }
 
 /// The SHA-256 of the certificate's DER.
@@ -220,7 +271,7 @@ fn signed_by(leaf: &Certificate, ca: &Certificate) -> bool {
 }
 
 /// The subject's common name when the subject is that one attribute and nothing else.
-pub(crate) fn common_name(cert: &Certificate) -> Option<String> {
+fn common_name(cert: &Certificate) -> Option<String> {
     let subject = cert.tbs_certificate().subject();
     let name = subject.common_name().ok().flatten().map(String::from);
     (subject.iter().count() == 1).then_some(name).flatten()

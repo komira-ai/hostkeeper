@@ -67,9 +67,12 @@ the network.
   usage, and refuses only a critical extension it does not know; the DNS name is a non-critical
   subject alternative name, so it installs and uses the new certificate as before. Every reader in
   the coordinator identifies a host by its `CN` and key, not by the SANs.
-- A certificate issued before this change has no DNS name until the host renews it, at half its
-  life (3.5 days by default). A relying server that requires the DNS name refuses such a host
-  until then.
+- A certificate issued before this change has no DNS name until the host renews it. A daemon of
+  this change or later renews such a certificate at its first step, not at half its life, so the
+  update that brings it (which restarts the daemon) also brings the DNS name, once the
+  coordinator issues it (a release updates the coordinator before it sets the daemons' version). A
+  relying server that requires the DNS name refuses such a host until then. The same holds for an
+  extended key usage other than `clientAuth` alone (`crates/hostkeeper-enroll/src/enroller.rs`).
 
 ## 4. What this replaces
 
