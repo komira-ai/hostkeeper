@@ -14,7 +14,7 @@
 use std::fmt;
 
 use super::StoreError;
-use super::records::{Record, pb};
+use super::records::{Record, Seen, pb};
 use super::rows::SCHEMA;
 use super::store::EnrollmentStore;
 use crate::names::KeyHash;
@@ -100,35 +100,40 @@ impl EnrollmentStore {
         hash: &MacNonceHash,
         now: u64,
     ) -> Result<bool, StoreError> {
-        let _held = self.lock()?;
-        if self.records().mac_nonce(hash)?.is_some() {
-            return Ok(false);
-        }
-        let nonce = pb::MacNonce {
-            schema: SCHEMA,
-            nonce_sha256: hash.as_bytes().to_vec(),
-            serial: serial.to_owned(),
-            issued_unix: now,
-            consumed_by: Vec::new(),
-            request_id: request.as_bytes().to_vec(),
-        };
-        self.commit(&[Record::MacNonce(nonce)])?;
-        Ok(true)
+        self.decided(|| {
+            if self.records().mac_nonce(hash)?.is_some() {
+                return Ok(false);
+            }
+            let nonce = pb::MacNonce {
+                schema: SCHEMA,
+                nonce_sha256: hash.as_bytes().to_vec(),
+                serial: serial.to_owned(),
+                issued_unix: now,
+                consumed_by: Vec::new(),
+                request_id: request.as_bytes().to_vec(),
+            };
+            self.commit(&[Seen::MacNonce(*hash, None)], &[Record::MacNonce(nonce)])?;
+            Ok(true)
+        })
     }
 
     /// Whether the nonce of SHA-256 `hash` approves the request `request`, claiming `serial`,
     /// at `now`: its file, or the refusal, checked in this order: unknown, expired, used, wrong
     /// serial, wrong request. A nonce that names no request (written before the field) is not
     /// checked for it; one whose request field is not a key hash approves no request. The
-    /// caller holds the store's lock and consumes it in the approval it writes.
+    /// caller decides in [`EnrollmentStore::decided`] and consumes it in the approval it writes;
+    /// the nonce read is noted in `seen`.
     pub(super) fn mac_nonce_verdict(
         &self,
         hash: &MacNonceHash,
         request: &KeyHash,
         serial: &str,
         now: u64,
+        seen: &mut Vec<Seen>,
     ) -> Result<Result<pb::MacNonce, MacNonceRefusal>, StoreError> {
-        let Some(nonce) = self.records().mac_nonce(hash)? else {
+        let nonce = self.records().mac_nonce(hash)?;
+        seen.push(Seen::MacNonce(*hash, nonce.clone()));
+        let Some(nonce) = nonce else {
             return Ok(Err(MacNonceRefusal::Unknown));
         };
         if now.saturating_sub(nonce.issued_unix) > MAC_NONCE_VALID_SECS {

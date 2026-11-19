@@ -203,7 +203,9 @@ Tests, named (each asserts the behaviour in its name; the PR bodies list them by
 - Return after a back-out (the old-release-on-new-data test extended with the new release again after it):
   `new_release_again_continues_audit_numbers_after_the_release_before_ran` and
   `set_seq_of_a_row_changed_by_the_release_before_is_restamped_in_queue_order`.
-- `denied_host_is_refused_by_the_other_task`, `one_request_is_approved_once`, `session_is_valid_on_the_other_task`,
+- `denied_host_is_refused_by_the_other_task`, `one_request_is_approved_once` (**Built**, M5, in
+  `store/postgres/tests/enrollment_races.rs`, with `one_certificate_is_issued_per_round_by_two_tasks`,
+  `expiry_on_two_tasks_expires_each_request_once` and the others of that file), `session_is_valid_on_the_other_task`,
   `login_failures_count_across_tasks`, `expiry_audits_each_request_once`, `alert_is_logged_once`.
 - `lost_session_orders_nothing_until_revived_and_settles_by_ledger` (replaces the `lease.commits` settle test).
 - T5/T13: each test above has a failure case (the gate removed, the conditional write made unconditional).

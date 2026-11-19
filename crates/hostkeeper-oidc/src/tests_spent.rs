@@ -1,5 +1,6 @@
 //! The spent `jti`s the caller keeps ([`super::SpentJtis`]): what a verifier made over them
-//! refuses, what it drops when it is made, and what it does when an id cannot be recorded.
+//! refuses, what it drops when it is made, what it does when an id cannot be recorded, and when
+//! the record answers that another verifier spent it.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -115,4 +116,27 @@ async fn an_id_that_cannot_be_recorded_refuses_the_token_and_spends_nothing() {
         .await
         .expect("accepted once recorded");
     assert_eq!(verifier.verify(&token).await, Err(Refusal::Replayed));
+}
+
+/// Proves: an id another verifier over the same record spent after this one was made, which this
+/// one's memory never held, is refused `replayed` because the record refuses it, not
+/// `replay_cache_unavailable`; and this verifier then remembers it, refusing it again without
+/// asking the record (here made to fail).
+///
+/// Catches: a replay accepted because the memory that decides it is one coordinator's while the
+/// record is shared, a record's refusal of a spent id answered as the record being down, or a
+/// memory that never learns what the record refused.
+#[tokio::test]
+async fn an_id_spent_through_another_verifier_is_refused_as_replayed_and_remembered() {
+    let spent = SpentInMemory::holding(Vec::new());
+    let (first, second) = (over(&spent), over(&spent));
+    let token = token_with("spent-elsewhere");
+    first.verify(&token).await.expect("the first use");
+    assert_eq!(second.verify(&token).await, Err(Refusal::Replayed));
+    spent.fail(true);
+    assert_eq!(second.verify(&token).await, Err(Refusal::Replayed));
+    assert_eq!(
+        spent.entries(),
+        [("spent-elsewhere".to_owned(), NOW + 300 + LEEWAY_SECS)]
+    );
 }

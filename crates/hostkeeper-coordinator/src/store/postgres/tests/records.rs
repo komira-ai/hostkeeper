@@ -22,7 +22,7 @@ impl Subject for OnPostgres {
         let mut live = self.live.lock().unwrap_or_else(PoisonError::into_inner);
         let store =
             live.get_or_insert_with(|| self.database.open("records").expect("the store opens").0);
-        Arc::new(PgRecords::over(store).expect("the records open"))
+        Arc::new(PgRecords::over(store))
     }
 
     fn fail_next_commit(&self) {

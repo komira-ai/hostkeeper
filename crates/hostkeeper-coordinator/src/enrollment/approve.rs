@@ -9,7 +9,8 @@
 //! another pending request matches is `record_contested` ([`Enrollment::contests`]), whatever
 //! the approval names and even when it replaces: the operator rejects all but one first. A request that matches no record, or several,
 //! is approved as the host id named, which it must name. Then it calls the store's
-//! [`EnrollmentStore::approve_recorded`], which checks again under its lock: the request is
+//! [`EnrollmentStore::approve_recorded`], which checks again in the write that records it: the
+//! request is
 //! pending, not a `duplicate_claim` unless the approval replaces, the host id is not held by
 //! another key nor denied unless it replaces. That one write records the approval with the
 //! host id, role, services (the host's first assignment), host group, approver, time and reason;
@@ -22,7 +23,7 @@
 //! the host is enrolled in no group, under the placeholder role [`UNGROUPED_ROLE`], and
 //! is ordered no package until `HostGroups.Move`; the reason is optional. It names no services (`services_retired`): the group decides what
 //! the host runs. A renewal, or a `replace` of a host in a group, keeps that group: naming
-//! another is `host_group_differs`, checked by the store under its lock. A coordinator that
+//! another is `host_group_differs`, checked by the store in the same write. A coordinator that
 //! holds none approves by role and services, as before groups, and refuses a `host_group`
 //! (`unknown_host_group`).
 //!
@@ -491,7 +492,7 @@ impl Enrollment {
     }
 
     /// The request `request_id` names, when it exists and `key_sha256` is its key's hash
-    /// (compared in constant time). The store checks both again under its lock.
+    /// (compared in constant time). The store checks both again in the write that approves.
     fn pending_for(
         &self,
         request_id: &KeyHash,

@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use prost::Message;
 
-use super::{Record, RecordKey, Records, RecordsLock, pb};
+use super::{Record, RecordKey, Records, RecordsLock, Seen, pb};
 use crate::enroll::mac_nonce::MacNonceHash;
 use crate::enroll::rows::{HostRow, RequestRow, SCHEMA, corrupt, deny_state};
 use crate::enroll::{FIRST_SERIAL, StoreError};
@@ -227,6 +227,21 @@ impl FileRecords {
     }
 }
 
+impl FileRecords {
+    /// Checks that every record of `seen` is as seen. The store holds the `flock` while it
+    /// decides and writes, so no other process writes in between and this finds them so.
+    fn check(&self, seen: &[Seen]) -> Result<(), StoreError> {
+        for one in seen {
+            if !one.holds(self)? {
+                return Err(StoreError::Raced {
+                    path: self.place(&one.key()),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
 impl Records for FileRecords {
     fn lock(&self) -> Result<RecordsLock, StoreError> {
         let path = self.dir.join(LOCK_FILE);
@@ -294,11 +309,12 @@ impl Records for FileRecords {
         }))
     }
 
-    fn commit(&self, records: &[Record]) -> Result<(), StoreError> {
+    fn commit(&self, seen: &[Seen], records: &[Record]) -> Result<(), StoreError> {
         let keys = records
             .iter()
             .map(Record::key)
             .collect::<Result<Vec<RecordKey>, StoreError>>()?;
+        self.check(seen)?;
         for (at, (record, key)) in records.iter().zip(&keys).enumerate() {
             let approved = match (record, key) {
                 (Record::MacNonce(nonce), RecordKey::MacNonce(hash)) => {
@@ -326,7 +342,11 @@ impl Records for FileRecords {
         Ok(())
     }
 
-    fn take_serial(&self, reserving: Option<&pb::Request>) -> Result<u64, StoreError> {
+    fn take_serial(
+        &self,
+        seen: &[Seen],
+        reserving: Option<&pb::Request>,
+    ) -> Result<u64, StoreError> {
         let reserving = reserving
             .map(|request| {
                 Record::Request(request.clone())
@@ -334,6 +354,7 @@ impl Records for FileRecords {
                     .map(|key| (key, request))
             })
             .transpose()?;
+        self.check(seen)?;
         let path = self.place(&RecordKey::Serial);
         let next = self
             .read(&path)?
@@ -354,27 +375,31 @@ impl Records for FileRecords {
     }
 
     fn set_first_heartbeat(&self, host: &pb::Host, at_unix: u64) -> Result<(), StoreError> {
+        let seen = Seen::of_host(host)?;
         let mut host = host.clone();
         host.first_heartbeat_unix = Some(at_unix);
-        self.commit(&[Record::Host(host)])
+        self.commit(&[seen], &[Record::Host(host)])
     }
 
     fn set_first_serving(&self, host: &pb::Host, at_unix: u64) -> Result<(), StoreError> {
+        let seen = Seen::of_host(host)?;
         let mut host = host.clone();
         host.first_serving_unix = Some(at_unix);
-        self.commit(&[Record::Host(host)])
+        self.commit(&[seen], &[Record::Host(host)])
     }
 
     fn set_running(&self, host: &pb::Host, running: pb::Running) -> Result<(), StoreError> {
+        let seen = Seen::of_host(host)?;
         let mut host = host.clone();
         host.running = Some(running);
-        self.commit(&[Record::Host(host)])
+        self.commit(&[seen], &[Record::Host(host)])
     }
 
     fn set_duplicate(&self, host: &pb::Host) -> Result<(), StoreError> {
+        let seen = Seen::of_host(host)?;
         let mut host = host.clone();
         host.duplicate = true;
-        self.commit(&[Record::Host(host)])
+        self.commit(&[seen], &[Record::Host(host)])
     }
 }
 

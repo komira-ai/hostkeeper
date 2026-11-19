@@ -1,23 +1,33 @@
 //! The enrollment store's records in the database ([`Records`], section 3.6): one table per kind
 //! of record, one column per field of its message, so an export writes the same messages back.
 //!
-//! Writes go through the writing session, each commit one transaction. Reads that are not
-//! decisions go to the read-only session. The heartbeat's reads (a host's row, its deny row, the
-//! host ids) are served from an in-memory copy of the hosts and the deny rows, loaded at start and
-//! changed only after a commit returns Ok, so a heartbeat in the steady state runs no query. After
-//! a commit of unknown outcome the copy is loaded again from the tables before it answers again.
+//! Every read goes to the read-only session, fresh: a host's row and its deny row too, so a deny
+//! or an approval another coordinator committed is seen at the next read, with no copy kept in
+//! memory (docs/design/coordinator-multi-instance.md, section 6 and decision 4 of section 19).
 //!
-//! Under Postgres the store's lock is its in-process mutex alone ([`RecordsLock::in_process`]):
-//! the advisory lock keeps other processes off.
+//! Every write is one transaction of a writing session, and takes no lock in the process
+//! ([`RecordsLock::none`]): several coordinators decide side by side on one database. A write
+//! carries what its decision read ([`Seen`]), and in its transaction, before it writes anything:
+//!
+//! 1. takes a transaction-scoped advisory lock ([`RECORD_LOCK_CLASS`]) on every record it saw or
+//!    writes, in the order of their keys, so two writes of one record, or a write and a decision
+//!    that read the record, run one after the other, and a record that is not there yet is
+//!    locked too (a row lock cannot hold a row that does not exist);
+//! 2. reads every record it saw again, `FOR UPDATE`, and compares it with what was seen: when
+//!    one differs (another writer committed it in between) it writes nothing and is refused
+//!    [`StoreError::Raced`];
+//! 3. writes its records.
+//!
+//! Every writer of these tables takes the lock of each record it writes, so the read of step 2
+//! is what the next write of that record will overwrite: the decision and its write are one
+//! step for every other writer, as they were under the one writer's mutex before.
 
-use std::collections::BTreeMap;
 use std::fmt;
 use std::io;
 use std::path::PathBuf;
-use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use hostkeeper_enrollment::enroll::records::{
-    Record, RecordKey, Records, RecordsLock, Snapshot, pb,
+    Record, RecordKey, Records, RecordsLock, Seen, Snapshot, pb,
 };
 use hostkeeper_enrollment::enroll::{FIRST_SERIAL, MacNonceHash, StoreError};
 use hostkeeper_enrollment::names::{HostId, KeyHash};
@@ -26,8 +36,13 @@ use prost::Message as _;
 
 use super::rows::{Stmt, Val};
 use super::session::Session;
-use super::writer::WriteFail;
+use super::writer::Tx;
 use super::{Postgres, run_all};
+
+/// The class of the transaction-scoped advisory locks a write takes on the records it saw or
+/// writes (`pg_advisory_xact_lock(class, hashtext(place))`): a class of its own, so no record's
+/// lock is the coordinator's store lock or its migrations'.
+pub(crate) const RECORD_LOCK_CLASS: i32 = 0x686b_6572;
 
 /// The columns of `enrollment_requests`, in the order its rows are read and written.
 const REQUEST_COLUMNS: &str = "request_id, state, expired_unix, expired_after_secs, posted_unix, \
@@ -62,19 +77,9 @@ const NONCE_COLUMNS: &str = "nonce_sha256, serial, issued_unix, consumed_by, req
 /// The value every record kept here carries in its `schema`, which only a file needs.
 const SCHEMA: u32 = 1;
 
-/// The heartbeat's copy of the hosts and the deny rows.
-#[derive(Debug, Default)]
-struct Copy {
-    hosts: BTreeMap<String, pb::Host>,
-    deny: BTreeMap<String, pb::Deny>,
-    /// Whether a commit of unknown outcome may have changed the tables since the copy was made.
-    stale: bool,
-}
-
 /// The enrollment store's records in the database.
 pub(crate) struct PgRecords {
     store: Postgres,
-    copy: Mutex<Copy>,
 }
 
 impl fmt::Debug for PgRecords {
@@ -469,118 +474,149 @@ pub(super) fn writes(snapshot: &Snapshot) -> Result<Vec<Stmt>, StoreError> {
     Ok(out)
 }
 
-/// The copy of the hosts and the deny rows, read from the tables.
-fn copy_of(store: &Postgres) -> Result<Copy, StoreError> {
-    store
-        .read(|session| {
-            let hosts: Result<BTreeMap<String, pb::Host>, StoreError> = session
-                .query(&format!("SELECT {HOST_READ} FROM {HOST_FROM}"), &[])?
-                .iter()
-                .map(|row| host_of(row).map(|host| (host.host_id.clone(), host)))
-                .collect();
-            let deny = session
-                .query(&format!("SELECT {DENY_COLUMNS} FROM enrollment_deny"), &[])?
-                .iter()
-                .map(|row| {
-                    let deny = deny_of(row);
-                    (deny.host_id.clone(), deny)
-                })
-                .collect();
-            Ok(hosts.map(|hosts| Copy {
-                hosts,
-                deny,
-                stale: false,
-            }))
-        })
-        .map_err(|why| failed(at("enrollment_hosts"), &why))?
+/// What the database holds of the record `seen` names, read in `tx` `FOR UPDATE`, as a record;
+/// `None` when it is absent.
+///
+/// The outer error is the client's; the inner one a running record that does not decode.
+fn now_held(
+    tx: &mut Tx<'_>,
+    seen: &Seen,
+) -> Result<Result<Option<Record>, StoreError>, postgres::Error> {
+    Ok(Ok(match seen {
+        Seen::Request(id, _) => tx
+            .query_opt(
+                &format!(
+                    "SELECT {REQUEST_COLUMNS} FROM enrollment_requests WHERE request_id = $1 \
+                     FOR UPDATE"
+                ),
+                &[&id.as_bytes().as_slice()],
+            )?
+            .map(|row| Record::Request(request_of(&row))),
+        Seen::Issued(id, _) => tx
+            .query_opt(
+                &format!(
+                    "SELECT {ISSUED_COLUMNS} FROM enrollment_issued WHERE request_id = $1 \
+                     FOR UPDATE"
+                ),
+                &[&id.as_bytes().as_slice()],
+            )?
+            .map(|row| Record::Issued(issued_of(&row))),
+        Seen::Host(host, _) => {
+            let row = tx.query_opt(
+                &format!(
+                    "SELECT {HOST_READ} FROM {HOST_FROM} WHERE host_id = $1 \
+                     FOR UPDATE OF enrollment_hosts"
+                ),
+                &[&host.as_str()],
+            )?;
+            match row.as_ref().map(host_of).transpose() {
+                Ok(host) => host.map(Record::Host),
+                Err(corrupt) => return Ok(Err(corrupt)),
+            }
+        }
+        Seen::Deny(host, _) => tx
+            .query_opt(
+                &format!(
+                    "SELECT {DENY_COLUMNS} FROM enrollment_deny WHERE host_id = $1 FOR UPDATE"
+                ),
+                &[&host.as_str()],
+            )?
+            .map(|row| Record::Deny(deny_of(&row))),
+        Seen::MacNonce(hash, _) => tx
+            .query_opt(
+                &format!(
+                    "SELECT {NONCE_COLUMNS} FROM mac_nonces WHERE nonce_sha256 = $1 FOR UPDATE"
+                ),
+                &[&hash.as_bytes().as_slice()],
+            )?
+            .map(|row| Record::MacNonce(nonce_of(&row))),
+    }))
 }
 
 impl PgRecords {
-    /// The records of `store`, the heartbeat's copy loaded from its tables.
-    ///
-    /// # Errors
-    /// [`StoreError`]: the copy cannot be read.
-    pub(crate) fn over(store: &Postgres) -> Result<PgRecords, StoreError> {
-        Ok(PgRecords {
-            copy: Mutex::new(copy_of(store)?),
+    /// The records of `store`.
+    pub(crate) fn over(store: &Postgres) -> PgRecords {
+        PgRecords {
             store: store.clone(),
-        })
-    }
-
-    /// The copy, loaded again first when a commit of unknown outcome may have changed the tables
-    /// and that outcome is settled. While the writing session is lost or the outcome is not yet
-    /// known, the copy is served as it is and stays marked: a heartbeat never waits for a
-    /// reconnect, and never takes rows read before the commit it waits on was settled.
-    fn copy(&self) -> Result<MutexGuard<'_, Copy>, StoreError> {
-        let mut copy = self.copy.lock().unwrap_or_else(PoisonError::into_inner);
-        if copy.stale && self.store.settled_up() {
-            *copy = copy_of(&self.store)?;
         }
-        Ok(copy)
     }
 
-    /// Runs the statements of `records`, and `then` in the same transaction; on Ok the copy takes
-    /// the hosts and the deny rows among them.
+    /// Runs, in one transaction: the locks of every record of `seen` and `records`, in the order
+    /// of their keys; the check that every record of `seen` is as seen; the statements of
+    /// `records`; and `then`. A record seen otherwise writes nothing and answers
+    /// [`StoreError::Raced`] at its place.
     fn write<R: Send + 'static>(
         &self,
+        seen: &[Seen],
         records: &[Record],
-        then: impl FnOnce(&mut super::writer::Tx<'_>) -> Result<R, postgres::Error> + Send + 'static,
+        then: impl FnOnce(&mut Tx<'_>) -> Result<R, postgres::Error> + Send + 'static,
     ) -> Result<R, StoreError> {
         let mut statements = Vec::with_capacity(records.len());
+        let mut keys = Vec::with_capacity(seen.len() + records.len());
         for record in records {
-            record.key()?;
+            keys.push(record.key()?);
             statements.extend(self::statements(record)?);
         }
-        let place = records
+        keys.extend(seen.iter().map(Seen::key));
+        keys.sort();
+        keys.dedup();
+        let locks: Vec<String> = keys
+            .iter()
+            .map(|key| self.place(key).display().to_string())
+            .collect();
+        let place = keys
             .first()
-            .and_then(|record| record.key().ok())
-            .map_or_else(|| self.place(&RecordKey::Serial), |key| self.place(&key));
+            .map_or_else(|| self.place(&RecordKey::Serial), |key| self.place(key));
+        let mut seen = seen.to_vec();
+        seen.sort_by_key(Seen::key);
+        let places: Vec<PathBuf> = seen.iter().map(|one| self.place(&one.key())).collect();
         let answer = self.store.write(move |tx| {
+            // One statement takes them all, in the order of the keys. Two keys whose places
+            // hash alike share a lock: that only serializes them, and the server breaks the
+            // deadlock such a pair could make by refusing one write.
+            tx.execute(
+                "SELECT pg_advisory_xact_lock($1, hashtext(place)) \
+                 FROM unnest($2::text[]) WITH ORDINALITY AS keys (place, n) ORDER BY n",
+                &[&RECORD_LOCK_CLASS, &locks],
+            )?;
+            for (one, place) in seen.iter().zip(places) {
+                match now_held(tx, one)? {
+                    Ok(held) if held == one.record() => {}
+                    Ok(_) => return Ok(Err(StoreError::Raced { path: place })),
+                    Err(corrupt) => return Ok(Err(corrupt)),
+                }
+            }
             run_all(tx, &statements)?;
-            then(tx)
+            then(tx).map(Ok)
         });
-        let mut copy = self.copy.lock().unwrap_or_else(PoisonError::into_inner);
         match answer {
-            Ok(answer) => {
-                for record in records {
-                    match record {
-                        Record::Host(host) => {
-                            copy.hosts.insert(host.host_id.clone(), host.clone());
-                        }
-                        Record::Deny(deny) => {
-                            copy.deny.insert(deny.host_id.clone(), deny.clone());
-                        }
-                        _ => {}
-                    }
-                }
-                Ok(answer)
-            }
-            Err(fail) => {
-                if matches!(fail, WriteFail::Unknown { .. }) {
-                    copy.stale = true;
-                }
-                Err(failed(place, fail.why()))
-            }
+            Ok(answer) => answer,
+            Err(fail) => Err(failed(place, fail.why())),
         }
     }
 
     /// Reads one row of `sql` by its key `key`, made by `of`.
-    fn one<T: Send + 'static>(
+    fn one<T: Send + 'static, K: postgres::types::ToSql + Sync + Send + 'static>(
         &self,
         place: PathBuf,
         sql: String,
-        key: Vec<u8>,
+        key: K,
         of: fn(&Row) -> T,
     ) -> Result<Option<T>, StoreError> {
         self.store
             .read(move |session| Ok(session.query_opt(&sql, &[&key])?.as_ref().map(of)))
             .map_err(|why| failed(place, &why))
     }
+
+    /// Writes `host`, which the store loaded, as `changed` makes it, when it is still as loaded.
+    fn mark(&self, host: &pb::Host, changed: pb::Host) -> Result<(), StoreError> {
+        self.commit(&[Seen::of_host(host)?], &[Record::Host(changed)])
+    }
 }
 
 impl Records for PgRecords {
     fn lock(&self) -> Result<RecordsLock, StoreError> {
-        Ok(RecordsLock::in_process())
+        Ok(RecordsLock::none())
     }
 
     fn place(&self, key: &RecordKey) -> PathBuf {
@@ -644,19 +680,38 @@ impl Records for PgRecords {
     }
 
     fn host(&self, host: &HostId) -> Result<Option<pb::Host>, StoreError> {
-        Ok(self.copy()?.hosts.get(host.as_str()).cloned())
+        let place = self.place(&RecordKey::Host(host.clone()));
+        let sql = format!("SELECT {HOST_READ} FROM {HOST_FROM} WHERE host_id = $1");
+        self.one(place, sql, host.to_string(), host_of)?.transpose()
     }
 
     fn host_ids(&self) -> Result<Vec<HostId>, StoreError> {
-        self.copy()?
-            .hosts
-            .keys()
+        // A host id's order is its bytes', as the files list them, whatever the collation.
+        let ids = self
+            .store
+            .read(|session| {
+                Ok(session
+                    .query(
+                        "SELECT host_id FROM enrollment_hosts ORDER BY host_id COLLATE \"C\"",
+                        &[],
+                    )?
+                    .iter()
+                    .map(|row| row.get::<_, String>(0))
+                    .collect::<Vec<_>>())
+            })
+            .map_err(|why| failed(at("enrollment_hosts"), &why))?;
+        ids.iter()
             .map(|id| HostId::parse(id).map_err(|_| StoreError::Unkeyed("host")))
             .collect()
     }
 
     fn deny(&self, host: &HostId) -> Result<Option<pb::Deny>, StoreError> {
-        Ok(self.copy()?.deny.get(host.as_str()).cloned())
+        self.one(
+            self.place(&RecordKey::Deny(host.clone())),
+            format!("SELECT {DENY_COLUMNS} FROM enrollment_deny WHERE host_id = $1"),
+            host.to_string(),
+            deny_of,
+        )
     }
 
     fn mac_nonce(&self, hash: &MacNonceHash) -> Result<Option<pb::MacNonce>, StoreError> {
@@ -668,11 +723,15 @@ impl Records for PgRecords {
         )
     }
 
-    fn commit(&self, records: &[Record]) -> Result<(), StoreError> {
-        self.write(records, |_| Ok(()))
+    fn commit(&self, seen: &[Seen], records: &[Record]) -> Result<(), StoreError> {
+        self.write(seen, records, |_| Ok(()))
     }
 
-    fn take_serial(&self, reserving: Option<&pb::Request>) -> Result<u64, StoreError> {
+    fn take_serial(
+        &self,
+        seen: &[Seen],
+        reserving: Option<&pb::Request>,
+    ) -> Result<u64, StoreError> {
         // The request is written whole, then given the serial taken, in the same transaction.
         let reserved = match reserving {
             Some(request) => {
@@ -682,7 +741,7 @@ impl Records for PgRecords {
             }
             None => None,
         };
-        let next = self.write(&[], move |tx| {
+        let next = self.write(seen, &[], move |tx| {
             let taken: i64 = tx
                 .query_one(
                     "UPDATE enrollment_serial SET next = next + 1 RETURNING next - 1",
@@ -702,30 +761,42 @@ impl Records for PgRecords {
     }
 
     fn set_first_heartbeat(&self, host: &pb::Host, at_unix: u64) -> Result<(), StoreError> {
-        self.commit(&[Record::Host(pb::Host {
-            first_heartbeat_unix: Some(at_unix),
-            ..host.clone()
-        })])
+        self.mark(
+            host,
+            pb::Host {
+                first_heartbeat_unix: Some(at_unix),
+                ..host.clone()
+            },
+        )
     }
 
     fn set_first_serving(&self, host: &pb::Host, at_unix: u64) -> Result<(), StoreError> {
-        self.commit(&[Record::Host(pb::Host {
-            first_serving_unix: Some(at_unix),
-            ..host.clone()
-        })])
+        self.mark(
+            host,
+            pb::Host {
+                first_serving_unix: Some(at_unix),
+                ..host.clone()
+            },
+        )
     }
 
     fn set_running(&self, host: &pb::Host, running: pb::Running) -> Result<(), StoreError> {
-        self.commit(&[Record::Host(pb::Host {
-            running: Some(running),
-            ..host.clone()
-        })])
+        self.mark(
+            host,
+            pb::Host {
+                running: Some(running),
+                ..host.clone()
+            },
+        )
     }
 
     fn set_duplicate(&self, host: &pb::Host) -> Result<(), StoreError> {
-        self.commit(&[Record::Host(pb::Host {
-            duplicate: true,
-            ..host.clone()
-        })])
+        self.mark(
+            host,
+            pb::Host {
+                duplicate: true,
+                ..host.clone()
+            },
+        )
     }
 }

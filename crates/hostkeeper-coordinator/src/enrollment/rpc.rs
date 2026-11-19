@@ -14,8 +14,8 @@
 //! `coordinator` ([`Enrollment::audit_to`]): a new request (`enroll_requested`; a repost of a
 //! request is not one, even one that marks it `duplicate_claim`, which the store alerts on),
 //! its certificate's first issue (`enroll_issued`, once per request and round, as the store
-//! decides under its lock), a renewal (`cert_renewed`) and a request that expired
-//! (`request_expired`, `expiry`). The entry names the host when there
+//! decides by a write that lands only on the request as read), a renewal (`cert_renewed`) and a
+//! request that expired (`request_expired`, `expiry`). The entry names the host when there
 //! is one, and its reason holds the request id, the round and the serial: never the CSR, a key,
 //! a nonce or a signature.
 
@@ -313,15 +313,16 @@ impl Enrollment {
             .map_err(rpc_error)?
             .key()
             .clone();
-        if key != current.key
-            || !self
-                .store
-                .renew_allowed(&host, &key.key_hash())
-                .map_err(rpc_error)?
-        {
+        if key != current.key {
             return Err(refused(CoordinatorRefusal::RenewalNotAllowed));
         }
-        let serial = self.store.allocate_serial().map_err(rpc_error)?;
+        // The checks again and the serial in one write: a deny, a duplicate mark or a new key
+        // another coordinator records in between refuses the renewal.
+        let serial = self
+            .store
+            .renewal_serial(&host, &key.key_hash())
+            .map_err(rpc_error)?
+            .ok_or(refused(CoordinatorRefusal::RenewalNotAllowed))?;
         let certificate = self
             .ca
             .issue_host(&host, &key, self.store.host_validity_secs(), serial)
