@@ -219,8 +219,9 @@ by their route and are not in the menu.
   1000-line limit is for its own files; a vendored file is the library's text. The one library vendored is noVNC 1.7.0
   (`ui/vendor/novnc/`, MPL-2.0, with its bundled pako, MIT): `core/rfb.js` and the modules it imports, unchanged but for
   `core/websock.js`, whose `open` (the library's one `new WebSocket(`) throws instead and is marked as changed in the file;
-  `LICENSE.txt`, `AUTHORS` and the licence texts are the package's own. The entry module imports it; no test loads it (the pages
-  are run against a fake viewer).
+  `LICENSE.txt`, `AUTHORS` and the licence texts are the package's own. The entry module imports it; the pages are run against a fake viewer, and its socket layer
+  (`core/websock.js`) is run by a test of its own. The repository's hygiene lint skips exactly the vendored files a pin names (a
+  library's authors' addresses and licence URLs are its own text); a file under `ui/vendor/` with no pin is linted.
 - The files need no sign-in. The operator API the app calls still needs a session (with its CSRF
   header) or an operator token on every call.
 

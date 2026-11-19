@@ -57,10 +57,20 @@ export async function render(ctx) {
   const view = { phase: "idle", notice: "", conn: null, asks: [] };
   let head = null;
   let screen = null;
+  // Whether a Console.Open is on its way and not answered yet.
+  let asking = false;
 
   const paintHead = () => {
     if (head !== null) {
       redraw(head, h("div", {}, headTree()));
+    }
+  };
+
+  // Takes the viewer's elements out of the page: the viewer removes them only from the element it
+  // was given, which a page mounted again has replaced.
+  const clearScreen = () => {
+    if (screen !== null) {
+      screen.replaceChildren();
     }
   };
 
@@ -80,6 +90,7 @@ export async function render(ctx) {
         conn.socket.close();
       }
     }
+    clearScreen();
     paintHead();
   };
 
@@ -115,6 +126,9 @@ export async function render(ctx) {
       securityFailure: (reason) => {
         if (live()) {
           view.notice = reason === "" ? "The Mac refused the login." : `The Mac refused the login: ${reason}`;
+          // The viewer closes the socket itself after a refused login: that close carries no word
+          // of the coordinator's, and the Mac's refusal stays what the page says.
+          conn.said = view.notice;
           paintHead();
         }
       },
@@ -136,6 +150,11 @@ export async function render(ctx) {
     if (view.conn !== null) {
       return "A desktop is already open.";
     }
+    if (asking) {
+      // An Open the operator closed before it was answered is given back by host when it is: a
+      // second one now could be the session given back.
+      return "The coordinator has not answered the last Open yet.";
+    }
     if (typeof ctx.openSocket !== "function" || typeof ctx.viewScreen !== "function") {
       return "This page cannot open a desktop.";
     }
@@ -151,16 +170,19 @@ export async function render(ctx) {
     if (csrf === null) {
       return "Sign in again to open a desktop.";
     }
-    const conn = { socket: null, viewer: null, opened: false };
+    const conn = { socket: null, viewer: null, opened: false, said: null };
     const live = () => view.conn === conn;
     view.conn = conn;
     view.phase = "opening";
     view.notice = "Asking the coordinator for a session.";
     paintHead();
+    clearScreen();
     let reply;
+    asking = true;
     try {
       reply = await ctx.api.console.open({ hostId: nodeId, reason });
     } catch (error) {
+      asking = false;
       if (live()) {
         view.conn = null;
         view.phase = "ended";
@@ -172,8 +194,10 @@ export async function render(ctx) {
     if (!live()) {
       // The operator left or closed while the coordinator answered.
       await giveBack();
+      asking = false;
       return undefined;
     }
+    asking = false;
     if (reply.kind !== "CONSOLE_KIND_SCREEN" || screen === null) {
       view.conn = null;
       view.phase = "ended";
@@ -201,7 +225,9 @@ export async function render(ctx) {
             view.phase = "ended";
             view.asks = [];
             form.password = "";
-            view.notice = closeWords(code, why, conn.opened);
+            const token = typeof why === "string" ? why : "";
+            view.notice = token === "" && conn.said !== null ? conn.said : closeWords(code, why, conn.opened);
+            clearScreen();
             paintHead();
           }
         },

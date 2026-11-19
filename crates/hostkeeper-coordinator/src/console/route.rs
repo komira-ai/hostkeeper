@@ -98,7 +98,7 @@ fn bearer_of(headers: &HeaderMap) -> Option<String> {
 }
 
 /// The token of the first `csrf.` offer of `headers`, unless it is longer than [`MAX_CSRF`].
-fn csrf_of(headers: &HeaderMap) -> Option<&str> {
+pub(super) fn csrf_of(headers: &HeaderMap) -> Option<&str> {
     offers(headers)
         .find_map(|offer| offer.strip_prefix(CSRF))
         .filter(|token| token.len() <= MAX_CSRF)

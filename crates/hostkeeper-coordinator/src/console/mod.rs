@@ -11,7 +11,8 @@
 //!   the device; a session nothing attaches to ends at the end of its window
 //!   (`--console-attach-s`).
 //! - `GET /console/v1/stream/<session>` ([`route`], row C4): the WebSocket that attaches to a
-//!   session, with the bearer in its subprotocol; after the upgrade, [`stream`] contacts the
+//!   session, with the operator's bearer, or a browser session's cookie and its CSRF token, in
+//!   its subprotocol (row C6 added the session); after the upgrade, [`stream`] contacts the
 //!   device (Serial over LAN through the BMC tool for a Linux server, Screen Sharing's TCP port
 //!   for a Mac, [`device`]) and bridges it until either end ends, a limit or a close stops it, and
 //!   cleans up (the payload deactivated, one close line).

@@ -32,9 +32,6 @@ boa_engine.workspace = true
 bytes.workspace = true
 clap.workspace = true
 hostkeeper-coordinator = { path = "../hostkeeper-coordinator" }
-# `tests/desktop_page.rs`: the reason tokens the coordinator closes a console stream with, which
-# the page has words for.
-hostkeeper-console = { path = "../hostkeeper-console" }
 hostkeeper-oidc = { path = "../hostkeeper-oidc", features = ["testkit"] }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
 http-body-util.workspace = true

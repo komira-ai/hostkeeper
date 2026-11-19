@@ -136,7 +136,7 @@ approval asks for no placement); `hkctl` gets the verbs from the generated comma
   cells, the cursor, SGR colours mapped to 16, the scroll region, the alternate screen, the modes the page reads), `ui/terminal_render.js`
   (the model as `pre`, `div` and `span` elements with class names, drawn by `ui/styles/terminal.css`) and `ui/terminal_keys.js` (a key or
   a paste as the bytes a shell reads). The socket is the one thing the page is handed that it cannot make: `ctx.openSocket(path,
-  handlers)` is built in `ui/main.js`, the only file that names a WebSocket, and the scan refuses the word in every other file.
+  handlers, csrf)` (the third argument, a console stream's CSRF token for its subprotocol, came with the console's Desktop page) is built in `ui/main.js`, the only file that names a WebSocket, and the scan refuses the word in every other file.
 - `ui/view.js`: `redraw(element, tree)` (replaces one live element's children, as the terminal draws its screen), the `paste` event,
   `pill`, the `vars` of an element (custom properties), `aria-*`, `draggable`, `tabindex`, and the events the strip and the
   drag use. `ui/app.css` (tokens, frame, components) and `ui/lab.css` (the lab) are two files so that each stays under 1000 lines.

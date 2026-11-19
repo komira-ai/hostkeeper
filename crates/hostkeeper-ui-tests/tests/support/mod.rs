@@ -311,6 +311,13 @@ impl Ui {
     /// The vendored libraries (`ui/vendor/`) are not loaded: no page imports one (the entry module
     /// hands the viewer to the app, and a test hands the pages a fake), so no driver links one.
     pub fn start() -> Ui {
+        Ui::start_with(&[], &[])
+    }
+
+    /// [`Ui::start`], with the vendored modules `vendored` (paths under `ui/`) loaded too, and the
+    /// test modules `extra` (each a path under `test/` and its text), for a test that runs a
+    /// vendored module itself.
+    pub fn start_with(vendored: &[&str], extra: &[(&str, &'static str)]) -> Ui {
         let loader = Rc::new(MapModuleLoader::new());
         let mut context = Context::builder()
             .module_loader(loader.clone())
@@ -318,10 +325,13 @@ impl Ui {
             .expect("the engine starts");
         let mut modules: Vec<(String, &str)> = UI_FILES
             .iter()
-            .filter(|f| f.is_script() && !f.is_vendored())
+            .filter(|f| f.is_script() && (!f.is_vendored() || vendored.contains(&f.path)))
             .map(|f| (format!("ui/{}", f.path), f.text))
             .collect();
         modules.push(("test/kit.js".to_owned(), KIT));
+        for (path, text) in extra {
+            modules.push((format!("test/{path}"), *text));
+        }
         for (path, text) in modules {
             let source = Source::from_bytes(text).with_path(Path::new(&path));
             let module = Module::parse(source, None, &mut context)

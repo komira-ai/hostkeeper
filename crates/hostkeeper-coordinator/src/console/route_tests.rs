@@ -882,3 +882,33 @@ async fn the_csrf_is_in_no_log_line() {
         assert!(!text.contains(secret), "{text}");
     }
 }
+
+/// Proves: the route reads a `csrf.` offer of up to 256 bytes (the most the web app's opener
+/// sends: `ui/socket_address.js`) and no longer one, and only the first `csrf.` offer.
+///
+/// Catches: a limit off by one against the opener's, which would refuse a token the app sends,
+/// or read one longer than any the coordinator draws.
+#[test]
+fn a_csrf_offer_is_read_up_to_256_bytes_and_only_the_first() {
+    use hyper::header::{HeaderMap, HeaderValue};
+    let headers = |offers: &str| {
+        let mut map = HeaderMap::new();
+        map.insert(
+            "sec-websocket-protocol",
+            HeaderValue::from_str(offers).expect("a header value"),
+        );
+        map
+    };
+    let longest = "a".repeat(256);
+    let too_long = "a".repeat(257);
+    let read = headers(&format!("hostkeeper.console.v1, csrf.{longest}"));
+    assert_eq!(super::route::csrf_of(&read), Some(longest.as_str()));
+    let refused = headers(&format!("hostkeeper.console.v1, csrf.{too_long}"));
+    assert_eq!(super::route::csrf_of(&refused), None);
+    let two = headers("csrf.first, csrf.second");
+    assert_eq!(super::route::csrf_of(&two), Some("first"));
+    assert_eq!(
+        super::route::csrf_of(&headers("hostkeeper.console.v1")),
+        None
+    );
+}

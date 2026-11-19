@@ -2319,7 +2319,6 @@ dependencies = [
  "boa_engine",
  "bytes",
  "clap",
- "hostkeeper-console",
  "hostkeeper-coordinator",
  "hostkeeper-oidc",
  "hostkeeper-proto",

@@ -83,11 +83,11 @@ export function recorder(client, params, answers, now) {
         },
       };
     },
-    // A viewer the test watches: each call is kept in `seen.viewers` with the element and the socket
+    // A viewer the test watches: each call is kept in `seen.viewers` with the element (`element`) and the socket
     // it was given and the events it may tell (`events.connect()` and the rest, which the test
     // calls); the credentials sent and the disconnects are kept and counted.
     viewScreen(target, socket, events) {
-      const viewer = { target, socket, events, credentials: [], disconnects: 0 };
+      const viewer = { element: target, socket, events, credentials: [], disconnects: 0 };
       seen.viewers.push(viewer);
       return {
         sendCredentials(creds) {

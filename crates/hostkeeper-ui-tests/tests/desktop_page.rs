@@ -6,7 +6,6 @@
 
 mod support;
 
-use hostkeeper_console::close::Close;
 use serde_json::{Value, json};
 use support::Ui;
 use support::pages::{bodies, m};
@@ -68,6 +67,25 @@ const channel = { the: "open socket" };
 socket.handlers.open(channel);
 await settle();
 "#;
+
+/// The source of the console's close causes (`hostkeeper_console::close::Close`), read as text:
+/// this crate does not depend on the console's.
+const CLOSE_RS: &str = include_str!("../../hostkeeper-console/src/close.rs");
+
+/// The reason tokens `Close::token` returns, in its order: each `=> "<token>",` arm of that
+/// function.
+fn close_tokens() -> Vec<String> {
+    let body = CLOSE_RS
+        .split_once("pub const fn token(self)")
+        .expect("close.rs has Close::token")
+        .1;
+    let body = body.split_once("\n    }\n").expect("Close::token ends").0;
+    body.lines()
+        .filter_map(|line| line.trim().split_once("=> \""))
+        .filter_map(|(_, rest)| rest.strip_suffix("\","))
+        .map(str::to_owned)
+        .collect()
+}
 
 /// The methods the page sent, in order.
 fn methods(ui: &Ui) -> Vec<String> {
@@ -223,7 +241,7 @@ const channel = { the: "open socket" };
 socket.handlers.open(channel);
 await settle();
 const viewer = seen.viewers[0];
-const once = { sameSocket: viewer.socket === channel, onScreen: viewer.target === screen };
+const once = { sameSocket: viewer.socket === channel, onScreen: viewer.element === screen };
 const offered = has("open-desktop");
 socket.handlers.open(channel);
 await settle();
@@ -245,7 +263,7 @@ return { before, once, offered, viewers: seen.viewers.length, sockets: seen.sock
 }
 
 /// Proves: the page shows the coordinator's reason for every way a stream closes: each token of
-/// the coordinator's (`Close::ALL`) and the protocol closes (`device_closed`, `protocol_error`,
+/// the coordinator's (`Close::token`, read from its source) and the protocol closes (`device_closed`, `protocol_error`,
 /// `message_too_big`) has its own sentence; a token the page does not know is shown with its code;
 /// a close with no token says whether the stream had opened. A closed desktop can be opened again.
 ///
@@ -254,7 +272,7 @@ return { before, once, offered, viewers: seen.viewers.length, sockets: seen.sock
 /// ended.
 #[test]
 fn a_close_code_shows_its_reason() {
-    let mut tokens: Vec<String> = Close::ALL.iter().map(|c| c.token().to_owned()).collect();
+    let mut tokens = close_tokens();
     tokens.extend(
         ["device_closed", "protocol_error", "message_too_big"]
             .iter()
@@ -273,6 +291,8 @@ export async function main() {{
         tokens = json!(tokens)
     ));
     assert_eq!(out, json!({"missing": [], "extra": []}));
+    // The 13 causes of `Close::token` (4001 to 4013) and the three protocol closes.
+    assert_eq!(tokens.len(), 16, "{tokens:?}");
 
     let mut ui = ui_with(opened());
     ui.reply(&m("Console/Open"), opened());
@@ -657,7 +677,7 @@ export async function main() {
   const built = [];
   class FakeRFB {
     constructor(target, socket) {
-      this.target = target;
+      this.element = target;
       this.socket = socket;
       this.listeners = {};
       this.calls = [];
@@ -689,7 +709,7 @@ export async function main() {
   viewer.focus();
   viewer.disconnect();
   return {
-    built: built.length, target: rfb.target === target, socket: rfb.socket === socket,
+    built: built.length, target: rfb.element === target, socket: rfb.socket === socket,
     scale: rfb.scaleViewport, resize: rfb.resizeSession, told, calls: rfb.calls,
   };
 }"#,
@@ -713,5 +733,166 @@ export async function main() {
                 ["disconnect"],
             ],
         })
+    );
+}
+
+/// What a browser gives noVNC's `core/websock.js` when it loads: a `window` whose `console` the
+/// library's logging binds, and `WebSocket`'s four ready states. Imported ahead of the library.
+const BROWSER_STUB: &str = r#"
+const quiet = { debug() {}, info() {}, warn() {}, error() {} };
+globalThis.window = { console: quiet, Error };
+globalThis.console = quiet;
+globalThis.WebSocket = { CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3 };
+"#;
+
+/// Proves: the vendored noVNC socket layer (`core/websock.js`, with the one change this repository
+/// made to it) refuses to open a socket from an address (`open` throws, naming the open socket it
+/// wants instead), and attaches to a socket already open: it reads the open socket's state, takes
+/// its binary messages into its queue byte for byte and hands its close (with the close frame's
+/// code) to its owner. This is the path `RFB` takes when the Desktop page gives it the open socket.
+///
+/// Catches: a re-vendored library whose `open` makes a socket again (the scan refuses only the
+/// call's text), and an attach that no longer takes a socket handed over open.
+#[test]
+fn the_vendored_socket_layer_refuses_an_address_and_attaches_an_open_socket() {
+    let mut ui = Ui::start_with(
+        &[
+            "vendor/novnc/core/websock.js",
+            "vendor/novnc/core/util/logging.js",
+        ],
+        &[("browser_stub.js", BROWSER_STUB)],
+    );
+    let out = ui.run(
+        r#"
+import "../test/browser_stub.js";
+import Websock from "./vendor/novnc/core/websock.js";
+export async function main() {
+  const ws = new Websock();
+  let refused = null;
+  try {
+    ws.open("wss://coordinator.example/console/v1/stream/x", ["hostkeeper.console.v1"]);
+  } catch (e) {
+    refused = e.message;
+  }
+  const said = [];
+  ws.on("open", () => said.push("open"));
+  ws.on("message", () => said.push(`message ${ws.rQlen()}`));
+  ws.on("close", (e) => said.push(`close ${e.code}`));
+  const channel = {
+    send() {}, close() {}, binaryType: "blob", onerror: null, onmessage: null, onopen: null,
+    protocol: "hostkeeper.console.v1", readyState: 1,
+  };
+  ws.attach(channel);
+  const state = ws.readyState;
+  channel.onmessage({ data: new Uint8Array([82, 70, 66, 32]).buffer });
+  const greeting = ws.rQshiftStr(4);
+  channel.onclose({ code: 4011, reason: "mac_screen_sharing_off" });
+  return { refused, state, binaryType: channel.binaryType, greeting, said };
+}"#,
+    );
+    assert_eq!(
+        out,
+        json!({
+            // `Websock` and `open` joined by a dot, which the hygiene lint would read as a host.
+            "refused": format!("{}.open is not available: hand RFB an open socket", "Websock"),
+            "state": "open",
+            "binaryType": "arraybuffer",
+            "greeting": "RFB ",
+            "said": ["message 4", "close 4011"],
+        })
+    );
+}
+
+/// Proves: when the viewer ends the stream itself after the Mac refused the login (its close
+/// carries no word of the coordinator's), the page keeps saying the Mac refused it; a close the
+/// coordinator gives a reason still says that reason; and each end takes the viewer's elements
+/// out of the screen box, whichever side ended it, so a new desktop does not draw beside a stale
+/// one.
+///
+/// Catches: the Mac's refusal replaced by "closed without saying why", and the last frame left on
+/// the page after the desktop ended.
+#[test]
+fn a_refused_login_stays_said_and_an_ended_desktop_leaves_no_screen() {
+    let mut ui = ui_with(opened());
+    ui.reply(&m("Console/Open"), opened());
+    ui.reply(&m("Console/Open"), opened());
+    let out = run(
+        &mut ui,
+        r#"
+const draw = () => screen.appendChild({ nodeType: 1, attributes: {}, children: [], listeners: {} });
+const once = async (close) => {
+  typeIn("desktop-reason", "look");
+  await press("open-desktop");
+  const socket = seen.sockets[seen.sockets.length - 1];
+  socket.handlers.open({});
+  await settle();
+  draw();
+  const viewer = seen.viewers[seen.viewers.length - 1];
+  viewer.events.securityFailure("Authentication failed");
+  await settle();
+  const drawn = screen.children.length;
+  await close(socket);
+  return { status: status(), drawn, left: screen.children.length };
+};
+const byViewer = await once(async (socket) => { socket.handlers.close(1006, ""); await settle(); });
+const byCoordinator = await once(async (socket) => { socket.handlers.close(4005, "idle"); await settle(); });
+const byOperator = await once(async () => { await press("close-desktop"); });
+return { byViewer, byCoordinator, byOperator };"#,
+    );
+    assert_eq!(
+        out,
+        json!({
+            "byViewer": {"status": "The Mac refused the login: Authentication failed", "drawn": 1, "left": 0},
+            "byCoordinator": {"status": "Nothing crossed the console for the idle limit, so the coordinator closed it.", "drawn": 1, "left": 0},
+            "byOperator": {"status": "You closed the desktop.", "drawn": 1, "left": 0},
+        })
+    );
+}
+
+/// Proves: an Open the operator closed before the coordinator answered blocks a second Open until
+/// it is answered; its session is then given back with `Console.Close` for the host and no socket is
+/// opened for it; after that a new Open goes through.
+///
+/// Catches: a late answer to an abandoned Open whose give-back (by host) ends the session a second
+/// Open took meanwhile, and a socket opened for a session the operator closed.
+#[test]
+fn an_open_closed_before_its_answer_is_given_back_before_another_open() {
+    let mut ui = Ui::start();
+    ui.reply(&m("Console/List"), json!({}));
+    ui.hold(&m("Console/Open"), 200, &opened().to_string());
+    ui.reply(&m("Console/Close"), json!({}));
+    ui.reply(&m("Console/Open"), opened());
+    let out = run(
+        &mut ui,
+        r#"
+typeIn("desktop-reason", "look");
+await press("open-desktop");
+await press("close-desktop");
+typeIn("desktop-reason", "look");
+await press("open-desktop");
+const blocked = seen.reports.slice();
+gatewayRelease("hostkeeper.operator.v1.Console/Open");
+await settle();
+const afterAnswer = seen.sockets.length;
+typeIn("desktop-reason", "look");
+await press("open-desktop");
+return { blocked, afterAnswer, sockets: seen.sockets.length };"#,
+    );
+    assert_eq!(
+        out,
+        json!({
+            "blocked": ["The coordinator has not answered the last Open yet."],
+            "afterAnswer": 0,
+            "sockets": 1,
+        })
+    );
+    assert_eq!(
+        methods(&ui),
+        [
+            m("Console/List"),
+            m("Console/Open"),
+            m("Console/Close"),
+            m("Console/Open")
+        ]
     );
 }
