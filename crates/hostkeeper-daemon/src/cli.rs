@@ -393,6 +393,8 @@ async fn start_and_serve(
 ///   account's `authorized_keys` ([`OperatorKeys::at_host`]);
 /// - every host keeps the host prerequisites the coordinator sends, which a Mac installs and a
 ///   Linux host only reports ([`Prerequisites::at_host`]);
+/// - every heartbeat of a Linux host reports its BMC's address and MAC, read through
+///   `/dev/ipmi0` ([`crate::bmc::at_host`]);
 /// - when `files` names a console, the enrollment loop writes its issue file, naming the daemon
 ///   config's `coordinator`, and has the gettys redraw by running its agetty with `--reload` as
 ///   a child process, its output read to [`AGETTY_OUTPUT_CAP`] and bounded by
@@ -439,11 +441,13 @@ pub fn host_links(
     );
     let operator_keys = OperatorKeys::at_host(kind, log.clone());
     let prerequisites = Prerequisites::at_host(kind, log.clone());
+    let clock: Arc<dyn hostkeeper_link::UnixClock> = Arc::new(SystemUnixClock);
     Links {
         enroller: Box::new(move || host_enroller(&endpoint, &pki, settings.clone(), kind)),
         link: Arc::new(link),
         certs,
-        clock: Arc::new(SystemUnixClock),
+        bmc: crate::bmc::at_host(kind, Arc::clone(&clock)),
+        clock,
         log,
         sleeper: Box::new(ClockSleeper::new(Arc::clone(&ctx.clock), stop.clone())),
         enroll_sleeper: Box::new(ClockSleeper::new(Arc::clone(&ctx.clock), stop.clone())),

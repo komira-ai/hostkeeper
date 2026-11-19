@@ -45,6 +45,7 @@ fn installer_beat(services: &[(&str, &str)]) -> proto::HeartbeatRequest {
         remote_login_probe: None,
         operator_keys: None,
         prerequisites: None,
+        bmc: None,
     }
 }
 

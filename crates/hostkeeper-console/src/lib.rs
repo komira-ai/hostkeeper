@@ -3,8 +3,8 @@
 //!
 //! - [`operators`]: the console operators file (`--console-operators-file`, decision D9), who may
 //!   open a console and who may also change power and the boot device. No file means nobody.
-//! - [`targets`]: the console targets file (`--console-targets-file`, decision D8), the address
-//!   of each BMC and Mac by its MAC.
+//! - [`targets`]: the console targets file (`--console-targets-file`, decision D8), optional: an
+//!   address that overrides for a BMC, and a Mac's address, by MAC.
 //! - [`credential`]: the one BMC user and password (`--console-bmc-credential-file`, decision
 //!   D5), a secret file, held in a type that prints nothing of it.
 //! - [`reason`]: the reason of a console audit line, the operator's and the session's details,

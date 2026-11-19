@@ -7,7 +7,10 @@ use hostkeeper_console::scripted::Seen;
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::ConsoleRefusal as Refusal;
 
-use super::support::{Fixture, MAC, NODE, NODE_BMC_ANSWER, PASSWORD, caller, line, write_files};
+use super::support::{
+    Fixture, MAC, NODE, NODE_BMC_ADDRESS, NODE_BMC_ANSWER, PASSWORD, caller, file_address, line,
+    write_files,
+};
 use crate::operator::Caller;
 use crate::store::audit_failure;
 
@@ -77,6 +80,7 @@ fn power_writes_one_audit_line_with_actor_host_and_action() {
         Ok(proto::ConsolePowerResponse {
             state: proto::PowerState::On.into(),
             sent: proto::PowerAction::Cycle.into(),
+            address: Some(file_address(NODE_BMC_ADDRESS)),
         })
     );
     assert_eq!(
@@ -124,6 +128,7 @@ fn cycle_on_an_off_host_answers_on() {
         Ok(proto::ConsolePowerResponse {
             state: proto::PowerState::Off.into(),
             sent: proto::PowerAction::On.into(),
+            address: Some(file_address(NODE_BMC_ADDRESS)),
         })
     );
 }
@@ -156,6 +161,7 @@ fn the_boot_flags_are_read_back_into_the_answer() {
             device: proto::BootDevice::Disk.into(),
             persistent: false,
             efi: true,
+            address: Some(file_address(NODE_BMC_ADDRESS)),
         })
     );
     assert_eq!(
@@ -163,7 +169,10 @@ fn the_boot_flags_are_read_back_into_the_answer() {
             &caller("alice"),
             &boot(proto::BootDevice::Pxe, false, false)
         ),
-        Ok(proto::SetBootDeviceResponse::default())
+        Ok(proto::SetBootDeviceResponse {
+            address: Some(file_address(NODE_BMC_ADDRESS)),
+            ..proto::SetBootDeviceResponse::default()
+        })
     );
     assert_eq!(
         fixture.tool.seen()[2],

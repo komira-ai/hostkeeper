@@ -192,6 +192,7 @@ fn beat(services: Vec<ServiceFacts>) -> Heartbeat {
         operator_keys: None,
         ssh: None,
         prerequisites: None,
+        bmc: None,
     }
 }
 

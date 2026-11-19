@@ -14,6 +14,8 @@
 //! - `store.rs`: the pki directory: lock, schema, ownership, crash recovery and pruning;
 //! - `host.rs`: the key, the entropy and the Linux claims over temporary trees;
 //! - `bmc.rs`: the BMC MAC claim of a Linux host, read through the IPMI port;
+//! - `bmc_lan.rs`: the BMC's address and MAC the daemon's heartbeat reports, read through the
+//!   same port;
 //! - `mac.rs`: the claims of a Mac, read from `ioreg` output, and a request refused without them;
 //! - `nonce.rs`: the Mac nonce of the managed preferences, posted once for the host's own
 //!   request, and every file that posts nothing more;
@@ -24,6 +26,7 @@
 
 mod acceptance;
 mod bmc;
+mod bmc_lan;
 mod coordinator;
 mod enrollment;
 mod faults;

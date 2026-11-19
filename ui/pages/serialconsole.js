@@ -76,7 +76,7 @@ const REFUSALS = {
   no_console_access: "You are not named in the coordinator's console operators file, so you cannot open one.",
   console_busy: "Someone already holds this host's console: see the open sessions below.",
   too_many_sessions: "The coordinator holds as many console sessions as it allows. Close one and try again.",
-  no_address: "The coordinator's console targets file gives no address for this host's BMC.",
+  no_address: "No address is known for this host's BMC: its host never reported one, and the coordinator's neighbour table and console targets file have none.",
   host_not_found: "The coordinator knows no host of this id.",
   audit_unavailable: "The coordinator could not write the audit entry. Nothing was done; try again.",
 };

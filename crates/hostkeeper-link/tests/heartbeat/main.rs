@@ -7,6 +7,7 @@
 //! code over in-memory streams; `dial` is the test of the blocking transport's socket, on the
 //! loopback address with a port the system chose; `waits` plays the loop's waits from a script.
 
+mod bmc;
 mod certs;
 mod clear_record;
 mod coordinator;

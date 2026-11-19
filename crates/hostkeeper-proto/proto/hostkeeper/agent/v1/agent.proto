@@ -234,6 +234,24 @@ message HeartbeatRequest {
   // that announces `ssh-v1`, read only over gRPC; absent from one that predates it. A report
   // that breaks a rule of `SshReport` is dropped and the coordinator keeps the last one it read.
   optional SshReport ssh = 13;
+  // The address and the MAC of the host's BMC, as the daemon reads them from the BMC itself
+  // through the host's IPMI device, in-band and with no BMC credential (a Linux daemon running as
+  // root on a host with a BMC). The coordinator reaches the BMC for the console at this address
+  // and still checks there that the BMC has the host's BMC MAC. Sent in every heartbeat by a
+  // daemon that has read one, read only over gRPC; absent from any other daemon and from one that
+  // predates it. A report that breaks a rule of `BmcReport` is dropped and the coordinator keeps
+  // the last one it read; a heartbeat without one leaves the one kept as it is.
+  optional BmcReport bmc = 17;
+}
+
+// The LAN settings of a host's BMC, as the daemon read them from the BMC (Get LAN Configuration
+// Parameters, parameters 3 and 5 of the first LAN channel that has a MAC).
+message BmcReport {
+  // The BMC's IPv4 address, dotted decimal (`192.0.2.12`); never `0.0.0.0`, a loopback,
+  // link-local, multicast or broadcast address.
+  string ip = 1;
+  // The BMC's MAC address, six pairs of lower-case hex digits split by `:`; never all zeros.
+  string mac = 2;
 }
 
 // What a host's daemon did with the sshd access the coordinator sent (`SshAccess`).

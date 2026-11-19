@@ -2,11 +2,12 @@
 //! 11.4 and 12): a Linux server's power and boot device through its BMC.
 //!
 //! Each call is checked in this order: the caller and the operators file (not audited), the
-//! request (not audited), the entry's `power`, the host and its BMC's address; then the BMC's lock
-//! is taken, so that commands to one BMC run one after the other; then the audit line is written
-//! (`power_action` with the action, `boot_device_set` with the device and its options); then the
-//! BMC is called ([`hostkeeper_console::bmc::Bmc`]). A refusal after the first two is audited as
-//! `console_denied`.
+//! request (not audited), the entry's `power`, the host and its BMC's addresses; then the BMC's
+//! lock is taken, so that commands to one BMC run one after the other; then the audit line is
+//! written (`power_action` with the action, `boot_device_set` with the device and its options);
+//! then the BMC is called ([`hostkeeper_console::bmc::Bmc`]) at each of its addresses in turn
+//! until one answers ([`super::address`]). The answer says at which address, and where it was
+//! found. A refusal after the first two is audited as `console_denied`.
 
 use hostkeeper_console::bmc::PowerState;
 use hostkeeper_console::bmc::{Bmc, BmcError, BootDevice, BootFlags, BootRequest, PowerAction};
@@ -16,7 +17,8 @@ use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::ConsoleRefusal as Refusal;
 use hostkeeper_wire::HostId;
 
-use super::{Device, denied, host_id, required_reason, serialized};
+use super::address::through_addresses;
+use super::{denied, host_id, required_reason, serialized};
 use crate::audit_actions::AuditOnly;
 use crate::operator::Caller;
 use crate::service::Coordinator;
@@ -43,7 +45,7 @@ impl Coordinator {
         let answer = self.through_bmc(by, &host, AuditOnly::PowerAction, &reason, &details, {
             move |bmc| bmc.power(action)
         });
-        let answer = answer.map_err(|cause| match cause {
+        let (answer, address) = answer.map_err(|cause| match cause {
             Failure::Logged(refusal) => refusal,
             Failure::Denied(refusal) => refuse(refusal),
         })?;
@@ -54,6 +56,7 @@ impl Coordinator {
             }
             .into(),
             sent: proto_action(answer.sent).into(),
+            address: Some(address),
         })
     }
 
@@ -88,7 +91,7 @@ impl Coordinator {
         let flags = self.through_bmc(by, &host, AuditOnly::BootDeviceSet, &reason, &details, {
             move |bmc| bmc.set_boot_device(wanted)
         });
-        let flags: BootFlags = flags.map_err(|cause| match cause {
+        let (flags, address): (BootFlags, _) = flags.map_err(|cause| match cause {
             Failure::Logged(refusal) => refusal,
             Failure::Denied(refusal) => refuse(refusal),
         })?;
@@ -99,12 +102,14 @@ impl Coordinator {
                 .into(),
             persistent: flags.persistent,
             efi: flags.efi,
+            address: Some(address),
         })
     }
 
     /// Runs `call` on the BMC of `host` for `by`, after the entry's `power`, the host's device
     /// and the audit line of `action` with the operator's `reason` and `details`, holding the
-    /// BMC's lock from before the line to the end of the call.
+    /// BMC's lock from before the line to the end of the call; at each of the BMC's addresses in
+    /// turn until one answers, which the answer names.
     fn through_bmc<T>(
         &self,
         by: &str,
@@ -112,16 +117,17 @@ impl Coordinator {
         action: AuditOnly,
         reason: &str,
         details: &[(&str, &str)],
-        call: impl FnOnce(&Bmc<'_>) -> Result<T, BmcError>,
-    ) -> Result<T, Failure> {
+        call: impl Fn(&Bmc<'_>) -> Result<T, BmcError>,
+    ) -> Result<(T, proto::ConsoleAddress), Failure> {
         let grant = self
             .console
             .files
             .grant(by, Need::Power)
             .map_err(|why| Failure::Denied(denied(why)))?;
-        let Device { mac, address, .. } = self
+        let device = self
             .console_device(host, &grant.targets, true)
             .map_err(Failure::Denied)?;
+        let mac = device.mac;
         let gate = self.console.bmc(mac);
         let _serial = serialized(&self.console, &gate);
         self.console_audit(
@@ -131,14 +137,16 @@ impl Coordinator {
             &audit_reason(reason, details),
         )
         .map_err(Failure::Logged)?;
-        let bmc = Bmc {
-            tool: self.console.tool.as_ref(),
-            address: &address,
-            credential: &grant.credential,
-            settings: &self.console.settings,
-            mac,
-        };
-        call(&bmc).map_err(|why| Failure::Denied(refusal_of(host, why)))
+        let console = &self.console;
+        let answered = through_addresses(
+            host.as_str(),
+            device.addresses(),
+            |address| console.bmc_at(address, &grant.credential, mac).check(),
+            |address| call(&console.bmc_at(address, &grant.credential, mac)),
+        );
+        answered
+            .map(|(answer, found)| (answer, found.to_proto()))
+            .map_err(|why| Failure::Denied(refusal_of(host, why)))
     }
 }
 

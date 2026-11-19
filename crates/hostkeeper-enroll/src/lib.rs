@@ -38,8 +38,9 @@ mod verify;
 mod wire;
 
 pub use claims::{
-    ClaimsError, ClaimsSource, Ioreg, Ipmi, LAN_CHANNELS, LAN_MAC_PARAMETER, LinuxClaims,
-    MacClaims, MacIds, parse_ioreg, parse_lan_mac,
+    BmcLan, ClaimsError, ClaimsSource, Ioreg, Ipmi, LAN_CHANNELS, LAN_IP_PARAMETER,
+    LAN_MAC_PARAMETER, LinuxClaims, MacClaims, MacIds, bmc_lan, parse_ioreg, parse_lan_ip,
+    parse_lan_mac,
 };
 pub use enroller::{
     Enroller, Enrollment, Error, Identity, NOT_ENROLLED, Outcome, Ports, ProtocolError, RETRY_SECS,

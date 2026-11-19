@@ -23,12 +23,14 @@
 //! ([`Heartbeat::prerequisites`], as `prerequisites`: a digest, a refusal and one state for each of
 //! at most 16 names held; only a name this release knows carries a version or a reason, so with
 //! the one it knows the report is a few hundred bytes and at most about 4 KiB) is counted and
-//! never dropped either.
+//! never dropped either. The host's BMC ([`Heartbeat::bmc`], as `bmc`: an address and a MAC) is
+//! counted and never dropped.
 
 use hostkeeper_config::names::{ServiceName, Version};
 pub use hostkeeper_proto::MAX_SERVICES_PER_HEARTBEAT;
 use serde_json::{Map, Value, json};
 
+use crate::bmc::BmcReport;
 use crate::host_ssh::SshReport;
 use crate::names::Reason;
 use crate::operator_keys::KeysReport;
@@ -471,6 +473,10 @@ pub struct Heartbeat {
     /// What the daemon holds of the host prerequisites and where each stands; none from a daemon
     /// that keeps none. Sent over gRPC only, and counted toward the bound on both.
     pub prerequisites: Option<PrerequisitesReport>,
+    /// The host's BMC as the daemon read it; none from a daemon that has read none (a host with no
+    /// BMC, a daemon that is not root, a Mac). Sent over gRPC only, and counted toward the bound
+    /// on both.
+    pub bmc: Option<BmcReport>,
 }
 
 impl Heartbeat {
@@ -550,6 +556,9 @@ impl Heartbeat {
         }
         if let Some(report) = &self.prerequisites {
             beat.insert("prerequisites".to_owned(), prerequisites_json(report));
+        }
+        if let Some(report) = &self.bmc {
+            beat.insert("bmc".to_owned(), report.to_json());
         }
         Value::Object(beat)
     }

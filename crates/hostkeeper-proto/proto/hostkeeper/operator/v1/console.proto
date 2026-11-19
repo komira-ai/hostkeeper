@@ -80,7 +80,10 @@ enum ConsoleRefusal {
   CONSOLE_REFUSAL_POWER_NOT_PERMITTED = 7;
   // NOT_FOUND: no host has the id.
   CONSOLE_REFUSAL_HOST_NOT_FOUND = 8;
-  // FAILED_PRECONDITION: the console targets file gives no address for the host's MAC.
+  // FAILED_PRECONDITION: no address is known for the host's device: for a Linux server, the
+  // console targets file names none for its BMC MAC, its daemon never reported its BMC
+  // (`hostkeeper.agent.v1.HeartbeatRequest.bmc`) and the coordinator's neighbour table has no
+  // entry for the MAC; for a Mac, the console targets file names none of its data MACs.
   CONSOLE_REFUSAL_NO_ADDRESS = 9;
   // FAILED_PRECONDITION: `Power` or `SetBootDevice` of a host whose inventory record has no BMC
   // MAC; a Mac has none.
@@ -88,13 +91,14 @@ enum ConsoleRefusal {
   // FAILED_PRECONDITION: more than one inventory record matches the host.
   CONSOLE_REFUSAL_AMBIGUOUS_RECORD = 11;
   // FAILED_PRECONDITION: the BMC at the host's address reports another MAC than the host's
-  // record. Nothing was sent to it.
+  // record, at every address known for it. Nothing was sent to it.
   CONSOLE_REFUSAL_ADDRESS_MISMATCH = 12;
   // ALREADY_EXISTS: `Open` of a host that already has a session; `List` names its holder.
   CONSOLE_REFUSAL_CONSOLE_BUSY = 13;
   // RESOURCE_EXHAUSTED: `Open` when the coordinator holds as many sessions as it allows.
   CONSOLE_REFUSAL_TOO_MANY_SESSIONS = 14;
-  // UNAVAILABLE: the device did not answer at the host's address.
+  // UNAVAILABLE: the device did not answer at the host's address (for a BMC, at any address
+  // known for it).
   CONSOLE_REFUSAL_DEVICE_UNREACHABLE = 15;
   // UNAVAILABLE: the BMC has no free session. Asking again later may succeed.
   CONSOLE_REFUSAL_BMC_BUSY = 16;
@@ -175,6 +179,36 @@ message OpenConsoleResponse {
   // For a serial session, how many seconds without a byte from the host the page waits before it
   // says no output came yet (the coordinator's `--console-quiet-s`); 0 for a screen session.
   uint64 quiet_secs = 4;
+  // The address the attach dials first, as known when the session was opened. Absent from a
+  // coordinator that predates it.
+  optional ConsoleAddress address = 5;
+}
+
+// Where the coordinator found the address of a host's device.
+enum ConsoleAddressSource {
+  CONSOLE_ADDRESS_SOURCE_UNSPECIFIED = 0;
+  // The console targets file names it for the device's MAC: it overrides every other source.
+  CONSOLE_ADDRESS_SOURCE_TARGETS_FILE = 1;
+  // The host's daemon reported it in a heartbeat (`hostkeeper.agent.v1.HeartbeatRequest.bmc`).
+  CONSOLE_ADDRESS_SOURCE_HEARTBEAT = 2;
+  // The coordinator's own neighbour (ARP) table holds an entry for the device's MAC.
+  CONSOLE_ADDRESS_SOURCE_NEIGHBOR_TABLE = 3;
+}
+
+// An address the coordinator dials for a host's device, and where it found it. Before every
+// command to a BMC, the coordinator checks at the address that the BMC has the host's BMC MAC.
+message ConsoleAddress {
+  // An IP address or a DNS name, with no port.
+  string address = 1;
+  // Where it was found.
+  ConsoleAddressSource source = 2;
+  // A heartbeat's address while the host is not heartbeating (no heartbeat in the last 45
+  // seconds that this coordinator knows of): the BMC's DHCP lease may have moved since, so it
+  // may be stale. Then the neighbour table is tried after it. Always false for another source.
+  bool stale = 3;
+  // For a heartbeat's address, when the coordinator first accepted a heartbeat that reported
+  // it, in unix seconds; 0 for another source.
+  uint64 reported_unix = 4;
 }
 
 message ConsolePowerRequest {
@@ -192,6 +226,8 @@ message ConsolePowerResponse {
   // The command sent: the one asked for, but `on` for `cycle` of a host that was off, and
   // `status` when nothing was sent.
   PowerAction sent = 2;
+  // The address of the BMC that answered. Absent from a coordinator that predates it.
+  optional ConsoleAddress address = 3;
 }
 
 message SetBootDeviceRequest {
@@ -212,6 +248,8 @@ message SetBootDeviceResponse {
   BootDevice device = 1;
   bool persistent = 2;
   bool efi = 3;
+  // The address of the BMC that answered. Absent from a coordinator that predates it.
+  optional ConsoleAddress address = 4;
 }
 
 // An open console session as `List` tells it. The session's id is never in it.

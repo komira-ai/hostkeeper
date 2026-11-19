@@ -46,6 +46,7 @@ fn host(rig: &Rig) -> (Heartbeater, Arc<FakeLink>, Arc<RecordingLog>) {
         remote_login_probe: None,
         operator_keys: None,
         prerequisites: None,
+        bmc: None,
     };
     (links.heartbeater(&daemon), link, log)
 }
