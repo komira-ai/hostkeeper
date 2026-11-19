@@ -58,9 +58,15 @@ impl Coordinator {
 /// jobs it claims every tick ([`run_claimed`]), else the alerts observed every
 /// [`OBSERVE_EVERY`]. It never returns.
 pub async fn periodic(coordinator: Arc<Coordinator>) -> Infallible {
-    let Some(jobs) = coordinator.jobs.clone() else {
-        return observe_every(coordinator, OBSERVE_EVERY).await;
-    };
+    match coordinator.jobs.clone() {
+        Some(jobs) => claim_every(coordinator, jobs).await,
+        None => observe_every(coordinator, OBSERVE_EVERY).await,
+    }
+}
+
+/// Claims and runs the due jobs of `jobs` at each of their ticks ([`run_claimed`]); the first
+/// tick is at once. It never returns.
+async fn claim_every(coordinator: Arc<Coordinator>, jobs: Arc<Jobs>) -> Infallible {
     let mut ticks = tokio::time::interval(jobs.tick);
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
