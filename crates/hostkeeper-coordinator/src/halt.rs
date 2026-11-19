@@ -86,6 +86,7 @@ use crate::host_groups::GroupName;
 use crate::identity::Identity;
 use crate::membership::{self, Standing};
 use crate::operate::{clear_standing, cleared};
+use crate::ops::AuditBy;
 use crate::ops::{AuditEntry, Halt, HaltAck, HaltOrigin, OpsError, OpsState, OpsStore, Write};
 use crate::services::{ServiceDef, Services};
 
@@ -404,7 +405,7 @@ pub(crate) fn raise_by_operator<E: From<OpsError>>(
     ops: &OpsStore,
     service: &str,
     target: &Version,
-    by: &str,
+    by: &(impl AuditBy + ?Sized),
     reason: &str,
     already: E,
 ) -> Result<AuditEntry, E> {
@@ -442,7 +443,7 @@ pub(crate) fn raise_by_operator_in<E: From<OpsError>>(
     ops: &OpsStore,
     service: &str,
     targets: &[(GroupName, Version)],
-    by: &str,
+    by: &(impl AuditBy + ?Sized),
     reason: &str,
     already: E,
 ) -> Result<Vec<AuditEntry>, E> {
@@ -508,7 +509,7 @@ pub(crate) fn lift_by_setter(
     group: Option<&GroupName>,
     service: &str,
     version: &Version,
-    actor: &str,
+    actor: &(impl AuditBy + ?Sized),
     set_by: &str,
 ) -> Result<Lifted, OpsError> {
     let lifted = ops.decide_change(Write::BeforeMemory, |state| {
@@ -528,7 +529,7 @@ pub(crate) fn lift(
     group: Option<&GroupName>,
     service: &str,
     version: &Version,
-    actor: &str,
+    actor: &(impl AuditBy + ?Sized),
     set_by: &str,
 ) -> Option<AuditEntry> {
     let mut marks = state.marks_in(group, service);

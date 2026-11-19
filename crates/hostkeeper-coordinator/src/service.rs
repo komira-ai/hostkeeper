@@ -24,6 +24,7 @@ use crate::halt;
 use crate::identity::Identity;
 use crate::layout::LayoutStore;
 use crate::membership::{Standing, standing};
+use crate::ops::AuditBy;
 use crate::ops::{AuditEntry, OperateError, OpsStore};
 use crate::order_terms::Terms;
 use crate::orders::Order;
@@ -776,7 +777,7 @@ impl Coordinator {
     /// [`OperateError`].
     pub fn operate(&self, bearer: Option<&str>, body: &[u8]) -> Result<AuditEntry, OperateError> {
         let by = self.operator(bearer)?;
-        self.operate_as(by.as_str(), body)
+        self.operate_as(&by, body)
     }
 
     /// [`Self::operate`] for the operator `by`, whom the transport has already identified: by a
@@ -784,7 +785,11 @@ impl Coordinator {
     ///
     /// # Errors
     /// [`OperateError`].
-    pub(crate) fn operate_as(&self, by: &str, body: &[u8]) -> Result<AuditEntry, OperateError> {
+    pub(crate) fn operate_as(
+        &self,
+        by: &(impl AuditBy + ?Sized),
+        body: &[u8],
+    ) -> Result<AuditEntry, OperateError> {
         let groups = self.desired.host_groups();
         let held = |service: &str| self.held_halt(service);
         let entry = crate::operate::operate(&self.ops, &self.services, &groups, &held, by, body)?;

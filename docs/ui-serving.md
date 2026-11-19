@@ -186,10 +186,11 @@ by their route and are not in the menu.
   only and is not in the status line, so a reload of the page or the list never shows it again). Disable, Reset password
   and Delete ask to confirm first, as each ends the user's sessions. The coordinator refuses to disable or delete the last
   enabled user and to reset the password of the user who asks; the page shows the refusal as the API gives it.
-- **API tokens** (`ApiTokens.List`; `Create` and `Revoke` on a button): each token's name, source, maker and time. Create
-  takes a name and shows the token once, as Users does a password. Revoke asks first and is offered for the tokens of the
+- **API tokens** (`ApiTokens.List`; `Create` and `Revoke` on a button): each token's name, source, owner, maker and time. Create
+  takes a name, makes a token owned by the signed-in user and shows it once, as Users does a password. Revoke asks first and is offered for the tokens of the
   store only: a token of the tokens file is marked read-only, and the page says it is removed by editing that file.
-- Each action is one API call, and the Audit page shows it by the signed-in user's name or the token's name. A refused call
+- Each action is one API call, and the Audit page shows it by the signed-in user's name, by an API token's owner with the token in
+  `api_token`, or by a tokens file token's name. A refused call
   shows the API's code and reason as they are.
 
 ## What is served

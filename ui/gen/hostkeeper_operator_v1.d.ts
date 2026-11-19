@@ -57,7 +57,7 @@ export namespace hostkeeper_operator_v1 {
     | "ALERT_KIND_MDM_IDENTITY_NEAR_EXPIRY"
     | "ALERT_KIND_PREREQUISITE_FAILED";
   export type AlertSeverity = "ALERT_SEVERITY_UNSPECIFIED" | "ALERT_SEVERITY_CRITICAL" | "ALERT_SEVERITY_WARNING";
-  export interface ApiTokenInfo { name?: string; source?: hostkeeper_operator_v1.ApiTokenSource; createdBy?: string; createdUnix?: string; }
+  export interface ApiTokenInfo { name?: string; source?: hostkeeper_operator_v1.ApiTokenSource; createdBy?: string; createdUnix?: string; owner?: string; }
   export type ApiTokenSource = "API_TOKEN_SOURCE_UNSPECIFIED" | "API_TOKEN_SOURCE_STORE" | "API_TOKEN_SOURCE_TOKENS_FILE";
   export interface ApproveRequest {
     requestId?: string;
@@ -79,7 +79,18 @@ export namespace hostkeeper_operator_v1 {
   export interface AssignResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface AssignedHost { nodeId?: string; role?: string; installedVersion?: string; minVersion?: string; holds?: hostkeeper_operator_v1.HoldMark[]; }
   export interface Assignment { role?: string; host?: string; removed?: boolean; }
-  export interface AuditEntry { seq?: string; by?: hostkeeper_operator_v1.Actor; action?: string; service?: string; nodeId?: string; reason?: string; atUnix?: string; byName?: string; hostGroup?: string; }
+  export interface AuditEntry {
+    seq?: string;
+    by?: hostkeeper_operator_v1.Actor;
+    action?: string;
+    service?: string;
+    nodeId?: string;
+    reason?: string;
+    atUnix?: string;
+    byName?: string;
+    hostGroup?: string;
+    apiToken?: string;
+  }
   export type BootDevice = "BOOT_DEVICE_UNSPECIFIED" | "BOOT_DEVICE_PXE" | "BOOT_DEVICE_DISK" | "BOOT_DEVICE_BIOS";
   export interface Canary { count?: number; }
   export interface ClearHaltRequest { service?: string; reason?: string; }
@@ -109,7 +120,7 @@ export namespace hostkeeper_operator_v1 {
     installerDropped?: string[];
   }
   export type ConvergenceState = "CONVERGENCE_STATE_UNSPECIFIED" | "CONVERGENCE_STATE_CONVERGED" | "CONVERGENCE_STATE_BLOCKED" | "CONVERGENCE_STATE_HALTED" | "CONVERGENCE_STATE_IN_PROGRESS";
-  export interface CreateApiTokenRequest { name?: string; }
+  export interface CreateApiTokenRequest { name?: string; owner?: string; }
   export interface CreateApiTokenResponse { token?: hostkeeper_operator_v1.ApiTokenInfo; secret?: string; }
   export interface CreatePushRequestRequest { email?: string; submit?: boolean; }
   export interface CreatePushRequestResponse { csrPem?: string; encryptionCertificatePem?: string; submitted?: boolean; }

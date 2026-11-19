@@ -56,7 +56,7 @@ nothing.
 
 ### `api-tokens`
 
-The service `ApiTokens` of the package `hostkeeper.operator.v1`. The tokens a script calls with. A token acts as the operator it is named for and cannot sign in. Each mutating call is audited under the caller's name, with the token as the entry's subject: `api_token_create` and `api_token_revoke`.
+The service `ApiTokens` of the package `hostkeeper.operator.v1`. The tokens a script calls with. A token made here belongs to a user, its owner, and acts as that user: every check of who may do what (the console's operators file among them) reads the owner's name, and the audit records the owner as `by` and the token as `api_token`. A token cannot sign in. Revoking it, or disabling or deleting its owner, refuses it from the next call; deleting the owner also removes their tokens. A token of the tokens file has no owner and acts as the operator it is named for. Each mutating call is audited under the caller's name, with the token as the entry's subject: `api_token_create` and `api_token_revoke`.
 
 #### `hkctl api-tokens list`
 
@@ -75,6 +75,7 @@ once: the coordinator keeps its SHA-256 only.
 | flag | value | meaning |
 |---|---|---|
 | `--name` | STRING | The new token's name. |
+| `--owner` | STRING | The user the token belongs to and acts as; absent, the caller (a user, or the owner of the caller's token). A name that is no user's is `unknown_owner`. |
 
 #### `hkctl api-tokens revoke`
 

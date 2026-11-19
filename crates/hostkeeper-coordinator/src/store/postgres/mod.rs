@@ -330,7 +330,7 @@ fn unwritten(why: &str) -> BackendError {
 }
 
 /// The audit line of a row of `audit`, its columns in their order (`host_group`, of migration
-/// `0008`, last).
+/// `0008`, then `api_token`, of `0027`).
 fn logged_of(row: &postgres::Row) -> Logged {
     let unsigned = |i: usize| u64::try_from(row.get::<_, i64>(i)).unwrap_or_default();
     AuditLine {
@@ -345,6 +345,7 @@ fn logged_of(row: &postgres::Row) -> Logged {
             reason: row.get(6),
             subject: None,
             source: None,
+            api_token: row.get(8),
         },
     }
     .into_logged()
@@ -353,8 +354,9 @@ fn logged_of(row: &postgres::Row) -> Logged {
 /// The statement that writes the audit line `line`.
 fn audit_insert(line: &AuditLine) -> Result<Stmt, StoreError> {
     Ok(Stmt {
-        sql: "INSERT INTO audit (seq, at_unix, by_name, action, service, node_id, reason, host_group) \
-              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"
+        sql: "INSERT INTO audit \
+              (seq, at_unix, by_name, action, service, node_id, reason, host_group, api_token) \
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"
             .to_owned(),
         params: vec![
             Val::Int(state::int(line.seq)?),
@@ -365,6 +367,7 @@ fn audit_insert(line: &AuditLine) -> Result<Stmt, StoreError> {
             Val::text_or_null(line.detail.node_id.as_deref()),
             Val::text_or_null(line.detail.reason.as_deref()),
             Val::text_or_null(line.detail.host_group.as_deref()),
+            Val::text_or_null(line.detail.api_token.as_deref()),
         ],
     })
 }
@@ -799,8 +802,8 @@ impl Backend for Postgres {
         ];
         let order = if query.newest { "DESC" } else { "ASC" };
         let sql = format!(
-            "SELECT seq, at_unix, by_name, action, service, node_id, reason, host_group FROM audit \
-             WHERE seq > $1 \
+            "SELECT seq, at_unix, by_name, action, service, node_id, reason, host_group, api_token \
+             FROM audit WHERE seq > $1 \
              AND ($2::text IS NULL OR CASE $2::text WHEN 'operator' \
                   THEN by_name NOT IN ('coordinator', 'ci') ELSE by_name = $2::text END) \
              AND ($3::text IS NULL OR by_name = $3::text) \
@@ -837,8 +840,8 @@ impl Backend for Postgres {
                 .read(move |session| {
                     Ok(session
                         .query(
-                            "SELECT seq, at_unix, by_name, action, service, node_id, reason, host_group \
-                             FROM audit WHERE seq > $1 ORDER BY seq LIMIT 1024",
+                            "SELECT seq, at_unix, by_name, action, service, node_id, reason, \
+                             host_group, api_token FROM audit WHERE seq > $1 ORDER BY seq LIMIT 1024",
                             &[&after],
                         )?
                         .iter()

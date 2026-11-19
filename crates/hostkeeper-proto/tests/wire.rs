@@ -576,6 +576,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 39] = [
             ("at_unix", 7),
             ("by_name", 8),
             ("host_group", 9),
+            ("api_token", 10),
         ],
     ),
     (

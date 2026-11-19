@@ -20,6 +20,7 @@ use hostkeeper_proto::hostkeeper::operator::v1::{EnrollmentRefusal, HostsRefusal
 use super::Enrollment;
 use super::approve::claims_summary;
 use crate::operator::optional_reason;
+use crate::ops::AuditBy;
 use crate::ops::AuditEntry;
 
 /// The audit action of a rejection.
@@ -27,7 +28,11 @@ pub const ACTION_REJECT: &str = "enroll_reject";
 
 /// The audit entry of the rejection by `by` of `request`, for `why` if the operator gave one:
 /// about the host a renewal renews, its reason the request id and the claims.
-fn reject_entry(by: &str, request: &RequestView, why: Option<String>) -> AuditEntry {
+fn reject_entry(
+    by: &(impl AuditBy + ?Sized),
+    request: &RequestView,
+    why: Option<String>,
+) -> AuditEntry {
     let mut entry = AuditEntry::new(by, ACTION_REJECT);
     entry.node_id = request.renewal_of.as_ref().map(HostId::to_string);
     let said = format!(
@@ -65,7 +70,7 @@ impl Enrollment {
     /// changes, and nothing is audited.
     pub fn reject(
         &self,
-        by: &str,
+        by: &(impl AuditBy + ?Sized),
         request: &proto::RejectRequest,
     ) -> Result<Option<AuditEntry>, EnrollmentRefusal> {
         let id = hostkeeper_enrollment::names::KeyHash::from_hex(&request.request_id)

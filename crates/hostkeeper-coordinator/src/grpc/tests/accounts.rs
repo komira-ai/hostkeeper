@@ -87,20 +87,37 @@ async fn a_session_makes_users_and_tokens_under_its_own_name() {
     );
 }
 
-/// Proves: a stored token is a bearer of the gateway under its name: it calls `Users` and
-/// `ApiTokens` as a token of the tokens file does, the audit names it, a revoked token is
-/// refused 401 `unauthorized`, and the tokens file's token still calls.
+/// Proves: a token of the tokens file makes a token for the user it names (`owner`), and with no
+/// owner named is refused 400 `unknown_owner`, as it is no user; the stored token is a bearer of
+/// the gateway acting as its owner: it calls `Users` and `ApiTokens` as a token of the tokens file
+/// does, the audit names the owner as `by` and the token as `api_token` (in memory and in
+/// `Audit.List`'s `byName` and `apiToken`), a revoked token is refused 401 `unauthorized`, and the
+/// tokens file's token still calls.
 #[tokio::test]
-async fn a_stored_token_calls_the_gateway_until_it_is_revoked() {
+async fn a_stored_token_calls_the_gateway_as_its_owner_until_it_is_revoked() {
     let world = World::new("gateway-accounts-bearer");
-    let made = world
+    let ownerless = world
         .send(bearer_post(
             OPERATOR,
             &format!("{TOKENS}/Create"),
             r#"{"name":"robot"}"#,
         ))
+        .await;
+    assert_eq!(ownerless.status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        ownerless.json(),
+        refusal("FAILED_PRECONDITION", "unknown_owner")
+    );
+    let made = world
+        .send(bearer_post(
+            OPERATOR,
+            &format!("{TOKENS}/Create"),
+            r#"{"name":"robot","owner":"alice"}"#,
+        ))
         .await
         .json();
+    assert_eq!(made["token"]["owner"], json!("alice"));
+    assert_eq!(made["token"]["createdBy"], json!("operator"));
     let secret = made["secret"].as_str().expect("a secret").to_owned();
     let created = world
         .send(bearer_post(
@@ -132,18 +149,41 @@ async fn a_stored_token_calls_the_gateway_until_it_is_revoked() {
         json!("operator"),
         "the tokens file's token is listed and still calls"
     );
-    let by: Vec<(String, String)> = world
-        .said()
+    let by: Vec<(String, String, Option<String>)> = world
+        .audit()
         .into_iter()
-        .map(|(by, action, _, _)| (by, action))
+        .map(|entry| (entry.by, entry.action, entry.api_token))
         .collect();
+    let robot = || Some("robot".to_owned());
     assert_eq!(
         by,
         [
-            ("operator".to_owned(), "api_token_create".to_owned()),
-            ("robot".to_owned(), "user_create".to_owned()),
-            ("robot".to_owned(), "api_token_revoke".to_owned()),
+            ("operator".to_owned(), "api_token_create".to_owned(), None),
+            ("alice".to_owned(), "user_create".to_owned(), robot()),
+            ("alice".to_owned(), "api_token_revoke".to_owned(), robot()),
         ]
+    );
+    let listed = world
+        .send(bearer_post(
+            OPERATOR,
+            "/hostkeeper.operator.v1.Audit/List",
+            "{}",
+        ))
+        .await;
+    assert_eq!(listed.status, StatusCode::OK, "{listed:?}");
+    let entries: Vec<(Value, Value)> = listed.json()["entries"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .map(|entry| (entry["byName"].clone(), entry["apiToken"].clone()))
+        .collect();
+    assert!(
+        entries.contains(&(json!("alice"), json!("robot"))),
+        "{entries:?}"
+    );
+    assert!(
+        entries.contains(&(json!("operator"), Value::Null)),
+        "{entries:?}"
     );
 }
 

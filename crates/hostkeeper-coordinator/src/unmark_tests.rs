@@ -108,6 +108,7 @@ async fn unmark_bad_undoes_mark_bad_and_is_audited() {
             at_unix: None,
             by_name: Some("operator".to_owned()),
             host_group: None,
+            api_token: None,
         })
     );
     assert_eq!(

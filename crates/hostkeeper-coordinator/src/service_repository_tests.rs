@@ -105,6 +105,7 @@ fn audited(seq: u64, service: &str, reason: &str) -> AuditEntry {
         reason: Some(reason.to_owned()),
         subject: None,
         source: None,
+        api_token: None,
     }
 }
 
@@ -460,7 +461,9 @@ async fn deploy_from(farm: &Farm, channel: &str, at: &str) -> Result<(), SetErro
     farm.world
         .coordinator()
         .set_desired_in(
-            &Setter::Operator("operator"),
+            &Setter::Operator(&crate::tokens::Operator::named(
+                "operator".parse().expect("a token name"),
+            )),
             body.to_string().as_bytes(),
             &WriteAsk::default(),
             Some(targets_of(vec![repository_entry("cfg-alpha", channel)])),
@@ -548,7 +551,9 @@ async fn a_set_of_a_role_placed_service_is_judged_by_the_repository_it_was_given
         farm.world
             .coordinator()
             .set_desired_with(
-                &Setter::Operator("operator"),
+                &Setter::Operator(&crate::tokens::Operator::named(
+                    "operator".parse().expect("a token name"),
+                )),
                 body.as_bytes(),
                 &WriteAsk::default(),
                 release(),

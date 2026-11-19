@@ -57,6 +57,7 @@ use super::groups::group_in;
 use crate::host_groups::HostGroups;
 use crate::inventory::{InventoryMatch, InventoryRecord, match_claims};
 use crate::operator::optional_reason;
+use crate::ops::AuditBy;
 use crate::ops::{AuditEntry, OpsStore, Write};
 
 /// The role the store records for a host approved in no group: a host in a group has the group's
@@ -416,7 +417,7 @@ impl Enrollment {
     /// Audits that `by` was refused `refusal` approving `request_id` (when it was one).
     pub(super) fn audit_refused(
         &self,
-        by: &str,
+        by: &(impl AuditBy + ?Sized),
         refusal: EnrollmentRefusal,
         request_id: Option<&KeyHash>,
         host_id: Option<&HostId>,
@@ -447,7 +448,7 @@ impl Enrollment {
     /// audited `enroll_approve_refused`, and nothing else changes.
     pub fn approve(
         &self,
-        by: &str,
+        by: &(impl AuditBy + ?Sized),
         request: proto::ApproveRequest,
         known: &dyn Fn(&str) -> bool,
         inventory: &[InventoryRecord],
@@ -473,7 +474,7 @@ impl Enrollment {
             pending.map_err(|refusal| refused(refusal, asked.host_id.as_ref()))?;
         let checked = asked.decided(host_id);
         let record = ApprovalRecord {
-            approver: by.to_owned(),
+            approver: by.by_name().to_owned(),
             approved_unix: self.clock.now_unix(),
             reason: checked.reason.clone(),
             mac_nonce: None,

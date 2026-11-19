@@ -543,7 +543,9 @@ async fn a_version_set_with_targets_is_installed_from_the_release_kept() {
     farm.world
         .coordinator()
         .set_desired_in(
-            &crate::service::ci_calls::Setter::Operator("operator"),
+            &crate::service::ci_calls::Setter::Operator(&crate::tokens::Operator::named(
+                "operator".parse().expect("a token name"),
+            )),
             br#"{"service":"db","version":"2.0"}"#,
             &crate::write_record::WriteAsk::default(),
             Some(native),

@@ -226,6 +226,7 @@ pub(crate) fn rich_accounts() -> Accounts {
     let token = |name: &str, fill: char| ApiToken {
         name: name.to_owned(),
         sha256: fill.to_string().repeat(64),
+        owner: "zed".to_owned(),
         created_by: "zed".to_owned(),
         created_at: 1_800_000_100,
     };
@@ -374,8 +375,7 @@ fn all_or_nothing(subject: &dyn Subject) -> Outcome {
     };
     live.commit(&first)
         .map_err(|why| format!("the first commit failed: {why}"))?;
-    let second_desired = desired_at("2.0", 'b');
-    let second_lines = lines(3, 3);
+    let (second_desired, second_lines) = (desired_at("2.0", 'b'), lines(3, 3));
     let mut second_ops = rich_ops();
     second_ops.audit = ring(&lines(1, 3));
     subject.failing(true);

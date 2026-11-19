@@ -98,6 +98,7 @@ fn audited(seq: u64, action: &str, service: &str, reason: &str) -> AuditEntry {
         reason: Some(reason.to_owned()),
         subject: None,
         source: None,
+        api_token: None,
     }
 }
 

@@ -79,6 +79,7 @@ pub use window::{
 use crate::enrollment::groups::{group_in, held_in};
 use crate::host_groups::HostGroups;
 use crate::operator::{Caller, entry_proto, valid_reason};
+use crate::ops::AuditBy;
 use crate::ops::{AuditEntry, Write};
 use crate::service::Coordinator;
 
@@ -541,7 +542,7 @@ fn macs_of(
 /// of them, as the module says, or none; without, a role or none.
 fn record_of(
     request: proto::AddRecordRequest,
-    by: &str,
+    by: &(impl AuditBy + ?Sized),
     at_unix: u64,
     window: &RecordWindow,
     held: Option<&HostGroups>,
@@ -594,7 +595,7 @@ fn record_of(
         bmc_mac,
         serial,
         notes,
-        by: by.to_owned(),
+        by: by.by_name().to_owned(),
         at_unix,
         approve_until_unix,
         used: None,

@@ -45,6 +45,7 @@ use crate::session::SessionKey;
 use crate::ssh_book::{Book, Cause, Closing, OpenRefused, Opened, Opening};
 use crate::ssh_operators::{Operators, Target};
 use crate::ssh_sign::{Signing, class_of};
+use crate::tokens::{Operator, TokenName};
 use crate::wait::ConnectionHold;
 
 /// The most bytes of one `data` frame, either way.
@@ -109,10 +110,13 @@ pub(crate) enum Event {
 
 /// What the operator of a tunnel is acting under, which the poll holds the tunnel to: the tunnel
 /// ends `token_revoked` when this is gone.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Credential {
-    /// An operator token (`hkssh`): the operator must still have one.
+    /// A token of the tokens file (`hkssh`): the operator must still have one.
     Token,
+    /// An API token, by name (`hkssh`): it must still be stored, and its owner, the operator,
+    /// still an enabled user.
+    ApiToken(TokenName),
     /// A signed-in session (the UI's terminal, `crate::ssh_terminal`): the session must still be
     /// live. The operator may hold no token at all.
     Session(SessionKey),
@@ -334,7 +338,7 @@ impl Tunnels {
                 id: *id,
                 operator: entry.operator.clone(),
                 host_id: entry.host_id.clone(),
-                credential: entry.credential,
+                credential: entry.credential.clone(),
             })
             .collect();
         (held, registry.recorded.iter().copied().collect())
@@ -544,7 +548,7 @@ impl Tunnels {
                 host_id,
                 credential,
             } = tunnel;
-            if !credential_holds(coordinator, operator, *credential) {
+            if !credential_holds(coordinator, operator, credential) {
                 self.stop(*id, Cause::TokenRevoked);
             } else if let Ok(operators) = &operators
                 && !permitted(coordinator, ssh, operators, operator, host_id)
@@ -618,27 +622,36 @@ impl Tunnels {
     }
 }
 
-/// Whether the credential a tunnel of `operator` runs under is still good: for a token, that the
-/// operator has one; for a session, that the session lives (asked without using it).
-pub(crate) fn credential_holds(
-    coordinator: &Coordinator,
-    operator: &str,
-    credential: Credential,
-) -> bool {
-    match credential {
-        Credential::Token => has_token(coordinator, operator),
-        Credential::Session(key) => coordinator
-            .login()
-            .is_some_and(|login| login.sessions.is_live(&key)),
+impl Credential {
+    /// What a bearer of `operator` calls under: its API token, or a token of the tokens file.
+    pub(crate) fn of_bearer(operator: &Operator) -> Self {
+        operator
+            .api_token()
+            .and_then(|token| token.parse().ok())
+            .map_or(Self::Token, Self::ApiToken)
     }
 }
 
-/// Whether the operator `name` has a token: one of the tokens file, or an API token.
-pub(crate) fn has_token(coordinator: &Coordinator, name: &str) -> bool {
-    coordinator.tokens().has_name(name)
-        || coordinator
-            .accounts()
-            .read(|accounts| accounts.token(name).is_some())
+/// Whether the credential a tunnel of `operator` runs under is still good: for a token of the
+/// tokens file, that the file still names the operator; for an API token, that it is still
+/// stored and still acts as the operator (its owner is still an enabled user); for a session, that
+/// the session lives (asked without using it).
+pub(crate) fn credential_holds(
+    coordinator: &Coordinator,
+    operator: &str,
+    credential: &Credential,
+) -> bool {
+    match credential {
+        Credential::Token => coordinator.tokens().has_name(operator),
+        Credential::ApiToken(token) => coordinator.accounts().read(|accounts| {
+            accounts
+                .acting_owner(token.as_str())
+                .is_some_and(|owner| owner.name == operator)
+        }),
+        Credential::Session(key) => coordinator
+            .login()
+            .is_some_and(|login| login.sessions.is_live(key)),
+    }
 }
 
 /// Whether the operators file as read (`operators`) lists `operator` and permits it the host

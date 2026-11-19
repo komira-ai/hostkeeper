@@ -74,7 +74,9 @@ async fn ci_sets(rig: &Rig, body: &Value, targets: Option<Targets>) -> Answer {
 async fn operator_sets(rig: &Rig, body: &Value, targets: Option<Targets>) -> Answer {
     rig.coordinator
         .set_desired_with(
-            &Setter::Operator(OPERATOR_NAME),
+            &Setter::Operator(&crate::tokens::Operator::named(
+                OPERATOR_NAME.parse().expect("a token name"),
+            )),
             body.to_string().as_bytes(),
             &WriteAsk::default(),
             targets,

@@ -22,14 +22,14 @@ fn one(text: &str) -> Vec<Vec<Option<String>>> {
 }
 
 /// The columns of every table of the database but those of `0025`, and but what `0026` adds
-/// (`fleet_tries` and two columns of `desired` and `group_desired`; its own test holds them), as
-/// text, sorted.
+/// (`fleet_tries` and two columns of `desired` and `group_desired`) and `0027` (a column of
+/// `audit`; each has its own test), as text, sorted.
 fn old_columns(db: &TestDatabase) -> Vec<Vec<Option<String>>> {
     db.rows(&format!(
         "SELECT table_name, column_name, data_type, is_nullable, column_default \
          FROM information_schema.columns WHERE table_schema = current_schema() \
          AND table_name NOT IN ({}) \
-         AND table_name <> 'fleet_tries' AND column_name NOT IN ('set_seq', 'set_for') \
+         AND table_name <> 'fleet_tries' AND column_name NOT IN ('set_seq', 'set_for', 'api_token') \
          ORDER BY 1, 2",
         TABLES.map(|name| format!("'{name}'")).join(", ")
     ))
@@ -38,7 +38,7 @@ fn old_columns(db: &TestDatabase) -> Vec<Vec<Option<String>>> {
 /// Proves (B8, both ways, for `0025`): the release before's runner (migrations `0001` to `0024`)
 /// accepts a database this release made its session, job and alert tables in, runs nothing, and
 /// leaves them, and takes the coordinator's lock once this release stopped; this release, started
-/// on a database the release before migrated, runs `0025` (and `0026` after it) and makes the tables, with
+/// on a database the release before migrated, runs `0025` (and `0026` and `0027` after it) and makes the tables, with
 /// `login_gate` holding its two rows, while the lock refuses the release before.
 ///
 /// Catches: a `0025` marked `refuse`, which would turn a rollback into a restore, a release that
@@ -82,12 +82,12 @@ fn the_release_before_runs_on_a_database_with_0025_and_this_one_on_its() {
     let (store, _) = old.open("this release").expect("this release starts on it");
     assert_eq!(
         old.rows("SELECT max(version) FROM schema_version"),
-        one("26")
+        one("27")
     );
     assert_eq!(
         old.rows("SELECT version FROM schema_version WHERE version > 24 ORDER BY version"),
-        [one("25"), one("26")].concat(),
-        "0025 ran, and 0026 after it"
+        [one("25"), one("26"), one("27")].concat(),
+        "0025 ran, and 0026 and 0027 after it"
     );
     for table in TABLES {
         assert_eq!(

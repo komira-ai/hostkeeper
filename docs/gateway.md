@@ -30,7 +30,8 @@ metadata, and the token is checked before the body is read. A browser that has s
 (`docs/operations/coordinator-state.md`, "The sign-in") sends its session cookie instead, with the
 header `X-HK-CSRF` set to the session's CSRF token, an `Origin` that is the listener's own (when it
 sends one), `Sec-Fetch-Site: same-origin` (when it sends one) and `Content-Type: application/json`;
-the call is then made as the signed-in user, who is `by` in the audit as a token's name is. A call
+the call is then made as the signed-in user, who is `by` in the audit as a token's name is (an API token's
+call is made as its owner, with the token as the entry's `api_token`). A call
 that fails one of those checks is `PERMISSION_DENIED` with the reason `csrf`, and one from a user
 who must still choose a new password is `PERMISSION_DENIED` `password_change_required`; a cookie
 that names no live session is no credential. A call with an `Authorization` header never has its

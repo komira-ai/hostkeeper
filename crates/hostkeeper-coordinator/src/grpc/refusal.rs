@@ -246,6 +246,7 @@ pub(crate) fn api_tokens(refusal: ApiTokensRefusal) -> Status {
         ApiTokensRefusal::NameTaken => Code::AlreadyExists,
         ApiTokensRefusal::UnknownToken => Code::NotFound,
         ApiTokensRefusal::AuditUnavailable => Code::Unavailable,
+        ApiTokensRefusal::UnknownOwner => Code::FailedPrecondition,
     };
     refused(code, refusal.as_str_name(), "API_TOKENS_REFUSAL_")
 }

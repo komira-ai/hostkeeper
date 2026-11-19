@@ -458,7 +458,9 @@ pub fn hostkeeper_at(version: &str) -> Target {
 
 /// What `Hosts.Get` says of `service` on `host-1`.
 pub fn on_host(coordinator: &Coordinator, service: &str) -> Option<HostService> {
-    let operator = Caller::Operator("operator".parse().expect("a token name"));
+    let operator = Caller::Operator(hostkeeper_coordinator::tokens::Operator::named(
+        "operator".parse().expect("a token name"),
+    ));
     let request = GetHostRequest {
         node_id: "host-1".to_owned(),
     };

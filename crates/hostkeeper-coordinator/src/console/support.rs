@@ -109,7 +109,9 @@ impl Dials {
 
 /// The caller `name`.
 pub(crate) fn caller(name: &str) -> Caller {
-    Caller::Operator(name.parse().expect("a token name"))
+    Caller::Operator(crate::tokens::Operator::named(
+        name.parse().expect("a token name"),
+    ))
 }
 
 impl Fixture {

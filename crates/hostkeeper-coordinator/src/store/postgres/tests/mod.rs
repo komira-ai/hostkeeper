@@ -323,6 +323,7 @@ pub(super) fn with_session<R: Send + 'static>(
 mod accounts;
 mod admin_rows;
 mod alert_rows;
+mod audit_api_token;
 mod audit_only;
 mod connect;
 mod coordinator;

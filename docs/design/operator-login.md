@@ -329,6 +329,19 @@ token is created. An API token acts as the operator named by its name; it can ca
 the existing tokens can call every operator method, and that is the same "every operator is equal" rule. A token
 cannot log in: the login route reads passwords only.
 
+**Changed (Built, tokens with owners).** An API token belongs to a user, its owner: the user `ApiTokens.Create`'s
+`owner` names (any user; refused `unknown_owner` for a name that is no user's), or else the caller (a signed-in user,
+or the owner of the caller's token; a token of the tokens file must name an owner). The token acts as its owner:
+`Coordinator::operator` resolves it to `Operator { name: owner, api_token: Some(token) }`, so every check of who may
+do what (the console operators file, the SSH operators file, a reset of one's own password) reads the owner's name,
+and the audit records the owner as `by` and the token as the entry's `api_token` (the file's `detail.api_token`, the
+`audit` table's column of migration `0027`, `AuditEntry.api_token` of `Audit.List`, and an SSH certificate's issue
+line). A token whose owner is disabled is refused from that call on, and works again once the owner is enabled;
+deleting the owner removes their tokens, each audited `api_token_revoke` with the reason `owner deleted`. A console
+stream or SSH tunnel attached with a token closes `token_revoked` at the next sweep or poll once the token is revoked
+or its owner disabled. A stored record written before owners (no `owner` key) reads as owned by its `created_by`.
+A token of the tokens file has no owner and acts as the operator it is named for, as before.
+
 Names are one namespace for users and tokens, because the audit's `by` is the name and `alice` must not mean two
 things. A token or user named like an existing one is refused, and the files' own check (no duplicate names) covers
 the tokens file side.
@@ -350,10 +363,11 @@ build ignores both, and the existing `Audit.List` filters work unchanged.
 | `user_bootstrap` | `coordinator` | the user | a file was adopted (section 4) |
 | `initial_password_expired` | `coordinator` | the user | the hour passed |
 | `user_create`, `user_disable`, `user_enable`, `user_delete` | the admin | the user | `Users` calls |
-| `api_token_create`, `api_token_revoke` | the admin | the token | `ApiTokens` calls |
+| `api_token_create`, `api_token_revoke` | the admin | the token | `ApiTokens` calls; a create's reason is `owner <name>`, a revoke made by deleting the owner's `owner deleted` |
 
 Every other operator call is audited as today, `by` the user's name or the token's, so "who did that" has the same
-answer for a person and for a script. A password, a hash, a session id and a token are never in an entry, and a
+answer for a person and for a script. A call made with an API token is by its owner, with the token in `api_token`
+(section 7.2), so a person and their scripts are one `by`. A password, a hash, a session id and a token are never in an entry, and a
 failure's audit text does not say which part was wrong. `Actor::of(by)` already maps any other name to Operator.
 
 ## 9. Migration from the tokens file

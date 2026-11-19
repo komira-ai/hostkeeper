@@ -19,6 +19,7 @@ use hostkeeper_wire::HostId;
 use super::{Device, denied, host_id, required_reason, serialized};
 use crate::audit_actions::AuditOnly;
 use crate::operator::Caller;
+use crate::ops::AuditBy;
 use crate::service::Coordinator;
 
 impl Coordinator {
@@ -107,7 +108,7 @@ impl Coordinator {
     /// BMC's lock from before the line to the end of the call.
     fn through_bmc<T>(
         &self,
-        by: &str,
+        by: &(impl AuditBy + ?Sized),
         host: &HostId,
         action: AuditOnly,
         reason: &str,
@@ -117,7 +118,7 @@ impl Coordinator {
         let grant = self
             .console
             .files
-            .grant(by, Need::Power)
+            .grant(by.by_name(), Need::Power)
             .map_err(|why| Failure::Denied(denied(why)))?;
         let Device { mac, address, .. } = self
             .console_device(host, &grant.targets, true)

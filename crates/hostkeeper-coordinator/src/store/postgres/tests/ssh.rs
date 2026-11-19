@@ -16,6 +16,7 @@ fn issue<'a>(operator: &'a str, host: &'a str, ttl_secs: u64) -> Issue<'a> {
         fingerprint: "SHA256:abc",
         ttl_secs,
         reason: "to look at \"a log\"",
+        api_token: None,
     }
 }
 

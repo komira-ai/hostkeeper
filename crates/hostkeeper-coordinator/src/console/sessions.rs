@@ -24,6 +24,7 @@ use hostkeeper_proto::hostkeeper::operator::v1::ConsoleRefusal as Refusal;
 use super::{host_id, required_reason};
 use crate::audit_actions::AuditOnly;
 use crate::operator::Caller;
+use crate::ops::AuditBy;
 use crate::reconcile::COORDINATOR;
 use crate::service::Coordinator;
 
@@ -78,7 +79,7 @@ impl Coordinator {
             id,
             host_id: host.to_string(),
             kind: device.kind,
-            opened_by: by.to_owned(),
+            opened_by: by.name().to_owned(),
             opened_unix: self.ops.unix_now(),
             opened_at: now,
             reason,
@@ -164,7 +165,7 @@ impl Coordinator {
     /// with the stream's `more` details after the others; best effort.
     pub(super) fn closed(
         &self,
-        by: &str,
+        by: &(impl AuditBy + ?Sized),
         session: &Session,
         cause: &str,
         ended_unix: u64,

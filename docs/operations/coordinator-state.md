@@ -594,10 +594,13 @@ call both, and the audit's `by` is the name of whichever called. A CI token is r
   user's audit rows stay. `Users.List` tells each user's name, whether it is enabled and must change its password, who made it and
   when, when it last signed in and until when a temporary password works; never a hash.
 - `ApiTokens.Create` takes a name and makes a token of 32 random bytes, `hkt_` and 43 base64url characters (the prefix lets a secret
-  scanner find a leaked one), which the answer carries once; the store holds its SHA-256, the creator and the time. The token is
-  an operator's bearer under its name from then on, and `ApiTokens.Revoke` ends that. A token cannot sign in: the login route
+  scanner find a leaked one), which the answer carries once; the store holds its SHA-256, its owner, the creator and the time. The
+  owner is the user `owner` names, or else the caller (a token of the tokens file must name one; a name that is no user's is
+  `unknown_owner`). The token is an operator's bearer acting as its owner from then on: every check reads the owner's name, and
+  the audit is by the owner with the token as `api_token`. `ApiTokens.Revoke` ends it, and so does disabling the owner (until the
+  owner is enabled again) or deleting them, which removes their tokens. A token cannot sign in: the login route
   reads passwords only. `ApiTokens.List` tells each token's name, whether it comes from the store or the tokens file, and for a
-  stored one who made it and when; tokens of the tokens file are read-only, and removing one means editing the file, which
+  stored one its owner and who made it and when; tokens of the tokens file are read-only, and removing one means editing the file, which
   `Revoke` answers `unknown_token` for.
 - A bearer is looked up in the tokens file and in the store in one pass, each compared in constant time. Users and tokens share one
   name space, the tokens file's names in it: a name that is already a user's, a stored token's or the tokens file's is

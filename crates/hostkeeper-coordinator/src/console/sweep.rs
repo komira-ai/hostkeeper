@@ -52,8 +52,8 @@ impl Coordinator {
             // A session that has ended is not brought back.
             if moved != live.used_at {
                 live.used_at = moved;
-                if let (Credential::Session(key), Some(login)) = (live.credential, self.login()) {
-                    login.sessions.touch(&key);
+                if let (Credential::Session(key), Some(login)) = (&live.credential, self.login()) {
+                    login.sessions.touch(key);
                 }
             }
         }
@@ -70,7 +70,7 @@ impl Coordinator {
         let revoked = table.live.iter().filter(|(host, live)| {
             table.sessions.get(host).is_some_and(|session| {
                 let by = session.opened_by.as_str();
-                !(credential_holds(self, by, live.credential)
+                !(credential_holds(self, by, &live.credential)
                     && self.console.files.grant(by, Need::Console).is_ok())
             })
         });

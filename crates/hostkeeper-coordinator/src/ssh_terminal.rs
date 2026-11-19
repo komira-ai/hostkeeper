@@ -54,7 +54,7 @@ use crate::session::{SessionKey, SessionView};
 use crate::ssh_client::{self, OpenError, Output, bridge, key_from_seed};
 use crate::ssh_sign::refusal_token;
 use crate::ssh_tunnel::{Credential, MAX_FRAME, QUEUE};
-use crate::tokens::TokenName;
+use crate::tokens::{Operator, TokenName};
 use crate::websocket::{CLOSE_NORMAL, Message, Outbox, ReadError, Reader, Writer};
 
 /// The reason the terminal's certificate is signed for.
@@ -345,7 +345,7 @@ where
     if !touch(&coordinator, &session) {
         return Some("token_revoked".to_owned());
     }
-    let caller = Caller::Operator(operator);
+    let caller = Caller::Operator(Operator::named(operator));
     let pinned = match pinned_keys(&coordinator, &caller, &host).await {
         Ok(pinned) => pinned,
         Err(cause) => return Some(cause),

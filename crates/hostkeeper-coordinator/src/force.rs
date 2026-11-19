@@ -55,12 +55,13 @@ use crate::fleet::Fleet;
 use crate::holds::marks_of;
 use crate::host_groups::GroupName;
 use crate::operator::{Caller, entry_proto, valid_reason};
-use crate::ops::{AuditEntry, HaltAck, OpsError, OpsState, OpsStore, Write};
+use crate::ops::{AuditBy, AuditEntry, HaltAck, OpsError, OpsState, OpsStore, Write};
 use crate::picks::Pick;
 use crate::registry::{Digest, IndexRecord, Release};
 use crate::releases::Release as Stored;
 use crate::service::{Coordinator, kept};
 use crate::services::{ServiceDef, Services};
+use crate::tokens::Operator;
 
 /// The feature a daemon announces to be sent a `force`. The coordinator advertises it too
 /// ([`crate::service::FEATURES`]): a daemon runs a force only while the reply advertises it.
@@ -258,7 +259,7 @@ struct Forcing<'a> {
     service: &'a str,
     version: &'a Version,
     release: &'a Release,
-    by: &'a str,
+    by: &'a Operator,
     reason: &'a str,
     targets: &'a ForceTargets,
     include_held: bool,
@@ -334,7 +335,7 @@ impl Forcing<'_> {
                 version: version.clone(),
                 generation: marks.force_generation,
                 reason: self.reason.to_owned(),
-                by: self.by.to_owned(),
+                by: self.by.name().to_owned(),
                 digest: match self.release {
                     Release::Package(digest) => digest.clone(),
                     Release::Index(record) => record.digest.clone(),
@@ -419,7 +420,7 @@ pub(crate) fn end_by_setter(
     ops: &OpsStore,
     service: &str,
     version: &Version,
-    actor: &str,
+    actor: &(impl AuditBy + ?Sized),
     set_by: &str,
 ) -> Result<bool, OpsError> {
     let ended = ops.decide_change(Write::BeforeMemory, |state| {
@@ -440,7 +441,7 @@ pub(crate) fn end(
     group: Option<&crate::host_groups::GroupName>,
     service: &str,
     version: &Version,
-    actor: &str,
+    actor: &(impl AuditBy + ?Sized),
     set_by: &str,
 ) -> Option<AuditEntry> {
     let ends =
@@ -558,7 +559,7 @@ impl Coordinator {
         tracing::warn!(
             service = %def.name,
             %version,
-            by,
+            by = by.name(),
             ordered = plan.ordered.len(),
             "a force was ordered: it passes the update plan and the bake"
         );

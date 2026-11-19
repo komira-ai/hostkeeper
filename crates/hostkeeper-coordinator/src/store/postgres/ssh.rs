@@ -119,6 +119,7 @@ impl Ledger for PgLedger {
         let host_id = issue.host_id.to_owned();
         let fingerprint = issue.fingerprint.to_owned();
         let reason = issue.reason.to_owned();
+        let api_token = issue.api_token.map(str::to_owned);
         let ttl = issue.ttl_secs;
         self.store
             .write(move |tx| {
@@ -141,6 +142,7 @@ impl Ledger for PgLedger {
                 )?;
                 let again = Issue {
                     operator: &operator,
+                    api_token: api_token.as_deref(),
                     host_id: &host_id,
                     fingerprint: &fingerprint,
                     ttl_secs: ttl,

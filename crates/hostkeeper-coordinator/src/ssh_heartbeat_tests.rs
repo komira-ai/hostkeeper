@@ -67,6 +67,7 @@ fn revoked(world: &World, host: &str) -> u64 {
             fingerprint: "SHA256:x",
             ttl_secs: 3600,
             reason: "",
+            api_token: None,
         })
         .expect("signed");
     world

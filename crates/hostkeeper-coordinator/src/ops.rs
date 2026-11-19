@@ -103,6 +103,7 @@ use crate::inventory::{InventoryRecord, RecordWindow};
 use crate::ops_file;
 use crate::rollouts::Rollout;
 use crate::store::{BackendError, Fake, Files, Shared};
+use crate::tokens::Operator;
 use crate::trusted_publishers::TrustedPublisher;
 
 pub use crate::operate::OperateError;
@@ -306,7 +307,8 @@ pub struct ServiceOps {
 pub struct AuditEntry {
     /// Its number: one more than the entry before it, for the life of the file.
     pub seq: u64,
-    /// Who made it: the name of the operator's token (`operator` for `--operator-token-file`),
+    /// Who made it: the operator's name (a signed-in user, the owner of the API token in
+    /// [`Self::api_token`], or a token of the tokens file; `operator` for `--operator-token-file`),
     /// `coordinator` for the coordinator's own changes, `ci` for CI's, `mdm-nonce` for a Mac's
     /// approval by its nonce, `mdm-gate` for the MDM gate's.
     pub by: String,
@@ -349,15 +351,55 @@ pub struct AuditEntry {
     /// the ops file's ring.
     #[serde(skip)]
     pub source: Option<String>,
+    /// The API token the operator `by` called with, by name, when it called with one: `by` is
+    /// then the token's owner. Kept like `subject`: not in the ops file's ring.
+    #[serde(skip)]
+    pub api_token: Option<String>,
+}
+
+/// Who an audit entry is by: a name (`coordinator`, `ci`, an operator's), or an [`Operator`],
+/// whose name is `by` and whose API token is the entry's `api_token`.
+pub trait AuditBy {
+    /// The name the entry is by.
+    fn by_name(&self) -> &str;
+    /// The API token the entry records, if any.
+    fn by_token(&self) -> Option<&str>;
+}
+
+impl AuditBy for str {
+    fn by_name(&self) -> &str {
+        self
+    }
+    fn by_token(&self) -> Option<&str> {
+        None
+    }
+}
+
+impl AuditBy for String {
+    fn by_name(&self) -> &str {
+        self
+    }
+    fn by_token(&self) -> Option<&str> {
+        None
+    }
+}
+
+impl AuditBy for Operator {
+    fn by_name(&self) -> &str {
+        self.name()
+    }
+    fn by_token(&self) -> Option<&str> {
+        self.api_token()
+    }
 }
 
 impl AuditEntry {
     /// An entry by `by` for `action`; the store numbers it.
     #[must_use]
-    pub fn new(by: &str, action: &str) -> Self {
+    pub fn new(by: &(impl AuditBy + ?Sized), action: &str) -> Self {
         Self {
             seq: 0,
-            by: by.to_owned(),
+            by: by.by_name().to_owned(),
             action: action.to_owned(),
             service: None,
             node_id: None,
@@ -365,6 +407,7 @@ impl AuditEntry {
             reason: None,
             subject: None,
             source: None,
+            api_token: by.by_token().map(str::to_owned),
         }
     }
 }

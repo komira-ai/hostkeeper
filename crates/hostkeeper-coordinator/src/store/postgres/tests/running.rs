@@ -256,7 +256,7 @@ fn the_release_before_starts_on_a_database_with_0006_and_this_one_on_its() {
     store.stop();
     assert_eq!(
         older.rows("SELECT version FROM schema_version ORDER BY version"),
-        (1..=26)
+        (1..=27)
             .map(|n| vec![Some(n.to_string())])
             .collect::<Vec<_>>()
     );

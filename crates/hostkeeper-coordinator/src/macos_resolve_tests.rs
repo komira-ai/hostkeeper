@@ -226,7 +226,9 @@ async fn a_mac_is_picked_the_resolved_entry_only_if_its_daemon_reads_the_coordin
             let body = format!(r#"{{"service":"web","version":"{version}"}}"#);
             rig.coordinator
                 .set_desired_with(
-                    &crate::service::ci_calls::Setter::Operator("alice"),
+                    &crate::service::ci_calls::Setter::Operator(&crate::tokens::Operator::named(
+                        "alice".parse().expect("a token name"),
+                    )),
                     body.as_bytes(),
                     &crate::write_record::WriteAsk::default(),
                     Some(targets),

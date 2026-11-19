@@ -10,6 +10,7 @@ use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 
 use crate::halt;
 use crate::operator::{entry_proto, valid_reason};
+use crate::ops::AuditBy;
 use crate::service::Coordinator;
 
 type Refusal = proto::ReleasesRefusal;
@@ -21,7 +22,7 @@ impl Coordinator {
     /// As [`Self::halt`], and `not_in_host_group` for a package no group lists.
     pub(crate) fn halt_in_groups(
         &self,
-        by: &str,
+        by: &(impl AuditBy + ?Sized),
         request: proto::HaltRequest,
     ) -> Result<proto::HaltResponse, Refusal> {
         let service = self

@@ -55,6 +55,8 @@ pub(crate) fn chain_hash(prev: &[u8], line: &Line) -> [u8; 32] {
 /// A certificate to be signed, as the ledger records it before it exists.
 pub(crate) struct Issue<'a> {
     pub(crate) operator: &'a str,
+    /// The API token the operator called with, if any: the line's detail names it.
+    pub(crate) api_token: Option<&'a str>,
     pub(crate) host_id: &'a str,
     pub(crate) fingerprint: &'a str,
     pub(crate) ttl_secs: u64,
@@ -101,12 +103,15 @@ pub(crate) fn signed_detail(serial: u64, issue: &Issue<'_>, expires_unix: u64) -
         key_fingerprint: &'a str,
         expires_unix: u64,
         reason: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        api_token: Option<&'a str>,
     }
     json(&Signed {
         serial,
         key_fingerprint: issue.fingerprint,
         expires_unix,
         reason: issue.reason,
+        api_token: issue.api_token,
     })
 }
 

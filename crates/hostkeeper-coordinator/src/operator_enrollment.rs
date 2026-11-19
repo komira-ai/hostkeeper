@@ -56,6 +56,7 @@ use crate::inventory::show_match;
 use crate::layout::{Kind, Layout, LayoutError, Subject};
 use crate::operator::{Caller, entry_proto};
 use crate::operator_layout::placement_of;
+use crate::ops::AuditBy;
 use crate::ops::Write;
 use crate::service::Coordinator;
 
@@ -161,7 +162,7 @@ impl Coordinator {
     /// lab view.
     fn approve_placed(
         &self,
-        by: &str,
+        by: &(impl AuditBy + ?Sized),
         enrollment: &Enrollment,
         request: proto::ApproveRequest,
         known: &dyn Fn(&str) -> bool,
@@ -280,7 +281,13 @@ impl Coordinator {
     /// ([`Coordinator::assign_host`]). The approval checked the host id, the role and the
     /// services by the same rules; an assignment refused is logged and leaves the approval
     /// standing.
-    fn assign_approved(&self, by: &str, host_id: &str, role: &str, services: &[String]) {
+    fn assign_approved(
+        &self,
+        by: &(impl AuditBy + ?Sized),
+        host_id: &str,
+        role: &str,
+        services: &[String],
+    ) {
         let assigned = host_id
             .parse::<HostId>()
             .ok()
