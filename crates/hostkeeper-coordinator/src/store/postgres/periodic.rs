@@ -71,13 +71,13 @@ pub(crate) fn claim(
         &format!(
             "WITH t AS (SELECT {} AS now), \
              want AS (SELECT * FROM unnest($1::text[], $2::bigint[]) AS w(name, period)), \
-             due AS (SELECT j.name FROM periodic_jobs j, t \
-                     WHERE j.name IN (SELECT name FROM want) AND j.next_run_unix <= t.now \
-                     ORDER BY j.next_run_unix, j.name FOR UPDATE OF j SKIP LOCKED) \
-             UPDATE periodic_jobs j SET next_run_unix = t.now + want.period, \
-               last_run_unix = t.now, last_instance = $3 \
-             FROM due, want, t WHERE j.name = due.name AND want.name = j.name \
-             RETURNING j.name",
+             due AS (SELECT j.\"name\" FROM periodic_jobs j, t \
+                     WHERE j.\"name\" IN (SELECT name FROM want) AND j.next_run_unix <= t.\"now\" \
+                     ORDER BY j.next_run_unix, j.\"name\" FOR UPDATE OF j SKIP LOCKED) \
+             UPDATE periodic_jobs j SET next_run_unix = t.\"now\" + want.period, \
+               last_run_unix = t.\"now\", last_instance = $3 \
+             FROM due, want, t WHERE j.\"name\" = due.\"name\" AND want.\"name\" = j.\"name\" \
+             RETURNING j.\"name\"",
             now_of(4)
         ),
         &[&names, &periods, &instance, &at],

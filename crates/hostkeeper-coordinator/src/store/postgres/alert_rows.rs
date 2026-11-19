@@ -35,15 +35,15 @@ pub(crate) fn note(
     tx.execute(
         &format!(
             "DELETE FROM alerts a WHERE NOT EXISTS (SELECT 1 FROM {FOUND} \
-             WHERE (u.kind, u.service, u.host, u.version, u.request, u.other_host) = \
-                   (a.kind, a.service, a.host, a.version, a.request, a.other_host))"
+             WHERE (u.kind, u.service, u.\"host\", u.version, u.request, u.other_host) = \
+                   (a.kind, a.service, a.\"host\", a.version, a.request, a.other_host))"
         ),
         &[&kind, &service, &host, &version, &request, &other],
     )?;
     let made = tx.query(
         &format!(
             "INSERT INTO alerts (kind, service, host, version, request, other_host, first_unix) \
-             SELECT DISTINCT u.kind, u.service, u.host, u.version, u.request, u.other_host, \
+             SELECT DISTINCT u.kind, u.service, u.\"host\", u.version, u.request, u.other_host, \
                $7::bigint FROM {FOUND} \
              ON CONFLICT DO NOTHING \
              RETURNING kind, service, host, version, request, other_host"
