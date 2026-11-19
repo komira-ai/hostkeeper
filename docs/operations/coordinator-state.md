@@ -473,7 +473,8 @@ table (keyed by the SHA-256 of the cookie's id, never the id) and the failure co
 every coordinator on the database answers the same cookie and counts the same failures, and a restart or a deploy signs no one
 out; a session's last use is written at most every `--session-touch-secs` (default 30), so its idle deadline may count from up
 to that long before its last use. When the database cannot be reached no session is made or found and every name is told
-locked. Sessions end 30 minutes after their last use, or 12 hours after the login. The flags, each with its default from the
+locked; a logout or a password change that cannot end its sessions answers 503 `store_unreachable`, and a user's disable,
+removal or password reset `store_failed` (the change stands; making it again ends them). Sessions end 30 minutes after their last use, or 12 hours after the login. The flags, each with its default from the
 start:
 
 | Flag | Default | Meaning |

@@ -613,10 +613,10 @@ considered (section 19, decision 6). M1 measured it: the operator's wait does no
 
 ## 8. Sessions and the login limiter
 
-**Built** (M8: `store/postgres/login_rows.rs`, `session.rs`, `0023_sessions_and_jobs.sql`; choices left open, such as the
-`login_gate` row lock, in [the companion](coordinator-multi-instance-checks.md), "8 and 9"). `session.rs` said "a restart ends every session, because nothing is written anywhere". Designed: a table `sessions(id_sha256
-bytea pk, user, csrf, created_unix, last_used_unix, serial)` (never the raw cookie id: the key is the SHA-256 the memory table
-uses now, `session.rs:163`), and `login_failures(name pk, failures, last_failure_unix, locked_until_unix)`. The idle and
+**Built** (M8: `store/postgres/login_rows.rs`, `session.rs`, `0023_sessions_and_jobs.sql`; the choices left open, such as
+the `login_gate` row lock and the columns `must_change`, `must_change_until`, in [the
+companion](coordinator-multi-instance-checks.md), "8 and 9"). A table `sessions(id_sha256 bytea pk, username, csrf,
+created_unix, last_used_unix, serial)` (never the raw cookie id: the key is the SHA-256 the memory table uses), and `login_failures(name pk, failures, last_failure_unix, locked_until_unix)`. The idle and
 absolute deadlines and the cap on the number of sessions keep their rules, in SQL; `last_used_unix` is written at most once
 per 30 s per session. The cookie, its flags and the CSRF token do not change, so nothing browser-visible changes, and a
 deploy no longer signs anyone out. Argon2id hashing stays per instance (`password.rs:320`, a CPU bound).

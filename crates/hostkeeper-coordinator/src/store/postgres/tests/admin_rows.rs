@@ -540,3 +540,34 @@ fn the_rows_write_only_when_their_condition_holds() {
         );
     });
 }
+
+/// Proves: a coordinator whose memory does not hold the user (another coordinator adopted the file
+/// after it started) that finds the file expired voids the row, audits `initial_password_expired`
+/// once and deletes the file, and leaves its own memory without the user.
+///
+/// Catches: a void applied to an account this coordinator never held (a user made out of
+/// nothing), and a void of the row that goes unaudited because the memory had no user.
+#[test]
+fn an_expiry_voided_for_a_user_this_coordinator_does_not_hold_leaves_its_memory_alone() {
+    let db = TestDatabase::new();
+    let dir = scratch("admin-rows-memory");
+    let now = Arc::new(AtomicU64::new(NOW));
+    put(&file(&dir), "file-1", "admin", NOW + 100);
+    let first = Side::start(&db, &file(&dir), &now, 3600);
+    assert_eq!(first.looked().expect("looked"), Outcome::Adopted);
+    // Started after the adoption, so that its audit numbering follows the first's, but holding
+    // no account: what a coordinator that read the users before the adoption holds.
+    let mut second = Side::start(&db, &file(&dir), &now, 3600);
+    let backend: Shared = Arc::new(second.store.clone());
+    second.accounts = AccountStore::over(backend, crate::accounts::Accounts::default());
+    assert_eq!(second.accounts.snapshot().user("admin"), None);
+
+    now.store(NOW + 100, Ordering::SeqCst);
+    assert_eq!(second.looked().expect("looked"), Outcome::Expired);
+    assert!(!file(&dir).exists());
+    assert_eq!(audited(&db, EXPIRED), 1);
+    assert_eq!(row(&db, "admin")[1], text("true"));
+    assert_eq!(second.accounts.snapshot().user("admin"), None);
+    first.store.stop();
+    second.store.stop();
+}

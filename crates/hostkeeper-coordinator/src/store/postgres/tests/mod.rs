@@ -315,6 +315,7 @@ mod records;
 mod records_errors;
 mod releases;
 mod repositories;
+mod revocation;
 mod running;
 mod schema;
 pub(crate) mod seed;

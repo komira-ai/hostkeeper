@@ -3,6 +3,8 @@
 //! ways. Nothing here reads a clock.
 
 use super::{TestDatabase, with_session};
+use crate::store::postgres::admin_rows::PgAdmin;
+use crate::store::postgres::alert_rows::PgAlerts;
 use crate::store::postgres::migrate;
 use crate::store::postgres::writer::{LOCK_KEY, try_lock};
 
@@ -189,4 +191,39 @@ fn the_tables_of_0023_are_new_and_the_release_before_reads_none_of_them() {
         ]],
         "the release before leaves this release's rows"
     );
+}
+
+/// Proves: the row-backed tables print themselves without their store: `PgAdmin` and `PgAlerts`
+/// as their names with `..`, `PgLoginRows` with its session and limiter rules (the touch interval
+/// 30, the cap 10, the deadlines and the failure count it was given), and `PgJobs` with its
+/// periods.
+///
+/// Catches: a debug text that leaks the store's connections, and one that hides the rules a
+/// failure report needs.
+#[test]
+fn the_row_tables_print_their_rules_and_not_their_store() {
+    let db = TestDatabase::new();
+    let (store, _) = db.open("debug").expect("the store opens");
+    let login = super::periodic::login_rows_of(&store);
+    let (_, clock) = super::periodic::clock(1);
+    let jobs = super::periodic::jobs_of(&db, &store, super::periodic::periods(), &clock);
+    assert_eq!(
+        format!("{:?}", PgAdmin::new(store.clone())),
+        "PgAdmin { .. }"
+    );
+    assert_eq!(
+        format!("{:?}", PgAlerts::new(store.clone())),
+        "PgAlerts { .. }"
+    );
+    assert_eq!(
+        format!("{login:?}"),
+        "PgLoginRows { sessions: SessionRules { idle_secs: 100, max_secs: 1000, max_count: 10, \
+         touch_secs: 30 }, limiter: LimiterRules { max_failures: 3, lockout_secs: 60, \
+         max_tracked: 10 }, .. }"
+    );
+    assert_eq!(
+        format!("{jobs:?}"),
+        "PgJobs { periods: [(\"alerts\", 15), (\"request-expiry\", 15), (\"prune\", 3600)], .. }"
+    );
+    store.stop();
 }

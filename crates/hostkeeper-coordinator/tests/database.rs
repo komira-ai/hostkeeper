@@ -519,3 +519,90 @@ fn a_serve_holds_its_pool_and_makes_its_instance_row() {
         assert_eq!(exit_code(wrong), ExitCode::from(2), "{flag} {value}");
     }
 }
+
+/// Proves: a serve over the database started with `--initial-admin-file` adopts the file's user
+/// once into the `users` row (the file's id, the duty to change the password, a hash and never the
+/// password) and audits `user_bootstrap` once; a second serve on the same database with the same
+/// file finds it adopted: the row is as it was and the audit holds no second entry; the user is
+/// read back from the row at the second start.
+///
+/// Catches: a database start that ignores the file, one that adopts at every start (a new hash
+/// and an audit entry each time), and one that keeps the user in memory only.
+#[test]
+fn a_serve_over_the_database_adopts_the_initial_admin_file_once() {
+    let files = Files::new("database-initial-admin");
+    let database = Database::new();
+    let mut args = database_args(&files, &database);
+    let valid_until = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("after 1970")
+        .as_secs()
+        + 600;
+    files.put(
+        "initial-admin.toml",
+        &format!(
+            "id = \"file-1\"\nuser = \"admin\"\npassword = \"k7Pq9xWm3Rt5Vb2NcH8dZs4F\"\n\
+             valid_until = {valid_until}\n"
+        ),
+        0o400,
+    );
+    args.extend(flags(&[
+        ("--initial-admin-file", &path(&files, "initial-admin.toml")),
+        ("--password-memory-kib", "8"),
+        ("--password-iterations", "1"),
+    ]));
+    let row = |database: &Database| {
+        in_schema(database)
+            .query(
+                "SELECT record->>'initial_id', record->>'hash', record->>'must_change' \
+                 FROM users WHERE name = 'admin'",
+                &[],
+            )
+            .expect("the users row")
+            .iter()
+            .map(|row| {
+                (
+                    row.get::<_, Option<String>>(0),
+                    row.get::<_, Option<String>>(1),
+                    row.get::<_, Option<String>>(2),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let audited = |database: &Database| -> i64 {
+        in_schema(database)
+            .query_one(
+                "SELECT count(*) FROM audit WHERE action = 'user_bootstrap'",
+                &[],
+            )
+            .expect("the audit table")
+            .get(0)
+    };
+
+    let parts = start(args.clone());
+    let held = parts.coordinator.accounts().snapshot();
+    assert!(held.user("admin").is_some_and(|admin| admin.must_change));
+    let rows = row(&database);
+    assert_eq!(rows.len(), 1);
+    let (id, hash, must_change) = rows[0].clone();
+    assert_eq!(id.as_deref(), Some("file-1"));
+    assert!(hash.is_some_and(|hash| hash.starts_with("$argon2id$v=19$m=8,t=1,p=1$")));
+    assert_eq!(must_change.as_deref(), Some("true"));
+    assert_eq!(audited(&database), 1);
+    drop(parts);
+    database.lock_is_free();
+
+    let parts = start(args);
+    assert_eq!(row(&database), rows, "the row is as it was");
+    assert_eq!(audited(&database), 1, "the second start audits nothing");
+    assert!(
+        parts
+            .coordinator
+            .accounts()
+            .snapshot()
+            .user("admin")
+            .is_some_and(|admin| admin.initial_id.as_deref() == Some("file-1")),
+        "the user is read back from the row"
+    );
+    drop(parts);
+}

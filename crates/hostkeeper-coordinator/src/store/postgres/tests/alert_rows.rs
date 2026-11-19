@@ -393,3 +393,81 @@ fn note_returns_first_unix_of_held_rows_and_marks_only_new_ones() {
     assert_eq!(held(&db), Vec::<Vec<String>>::new());
     store.stop();
 }
+
+/// What `coordinator` answers `Alerts.List` with, as halts by service and first observed second,
+/// asked on a thread of its own: the blocking client does not run on a test's runtime thread.
+fn listed(coordinator: &Coordinator) -> Vec<(String, u64)> {
+    std::thread::scope(|scope| {
+        scope
+            .spawn(|| {
+                coordinator
+                    .list_alerts(&operator(), proto::ListAlertsRequest {})
+                    .expect("listed")
+                    .alerts
+                    .into_iter()
+                    .filter(|alert| alert.kind == crate::alerts::Kind::Halt.proto() as i32)
+                    .map(|alert| (alert.service, alert.first_observed_unix))
+                    .collect()
+            })
+            .join()
+            .expect("joined")
+    })
+}
+
+/// Proves: over rows, `Alerts.List` writes and logs nothing: an alert the job has not noted is
+/// answered with the second of the list, no row is made and no `alert=` line is logged; once the
+/// job's observation has noted them, a list on another coordinator answers the rows' first second
+/// and not its own clock's; and a list on a coordinator that derives fewer alerts (one halt
+/// cleared) deletes no row.
+///
+/// Catches: a list that notes the alerts (a row made, or logged, by a read), a list that answers
+/// its own clock for an alert the database holds, and a list that forgets the rows of alerts it
+/// does not derive.
+#[tokio::test]
+async fn alerts_list_over_rows_writes_and_logs_nothing() {
+    let pair = Pair::start("alerts-list-rows", "9.4271.5", AT + 500).await;
+    let second = AT + 500;
+    assert_eq!(
+        listed(&pair.second),
+        [("db".to_owned(), second), ("web".to_owned(), second)],
+        "not noted yet: the list's own second"
+    );
+    assert_eq!(pair.rows(), Vec::<Vec<Option<String>>>::new());
+    assert_eq!(pair.logged(), 0);
+
+    observe(pair.first());
+    assert_eq!(pair.logged(), 2);
+    assert_eq!(
+        listed(&pair.second),
+        [("db".to_owned(), AT), ("web".to_owned(), AT)],
+        "the first observer's second, from the rows"
+    );
+    assert_eq!(pair.logged(), 2, "a list logs nothing");
+
+    let body = format!(r#"{{"action":"clear_halt","service":"{WEB}","reason":"disk replaced"}}"#);
+    pair.first()
+        .operate(Some(crate::testutil::OPERATOR), body.as_bytes())
+        .expect("the halt is cleared");
+    assert_eq!(listed(pair.first()), [("db".to_owned(), AT)]);
+    assert_eq!(pair.rows().len(), 2, "a list deletes no row");
+    assert_eq!(pair.logged(), 2);
+    pair.stop();
+}
+
+/// Proves: when the alert rows cannot be read (the reader's sessions are gone), `Alerts.List`
+/// still answers every alert, from an observation made by this coordinator with its own clock,
+/// and the rows it could not read are still not written.
+///
+/// Catches: a list that fails, or answers nothing, while the database is away, and a list that
+/// answers an alert it derived with no first second.
+#[tokio::test]
+async fn alerts_list_falls_back_to_an_observation_when_the_rows_cannot_be_read() {
+    let pair = Pair::start("alerts-list-lost", "9.4271.6", AT + 500).await;
+    pair.farm.database.end_sessions();
+    assert_eq!(
+        listed(pair.first()),
+        [("db".to_owned(), AT), ("web".to_owned(), AT)]
+    );
+    assert_eq!(pair.rows(), Vec::<Vec<Option<String>>>::new());
+    pair.stop();
+}

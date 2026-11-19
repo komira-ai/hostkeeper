@@ -96,6 +96,32 @@ impl PgAlerts {
         PgAlerts { store }
     }
 
+    /// The first observed second of each of `found` that has a row, read on the read-only
+    /// session: nothing is written.
+    ///
+    /// # Errors
+    /// Why the rows could not be read.
+    pub(crate) fn firsts(&self, found: Vec<Key>) -> Result<Vec<Option<u64>>, String> {
+        let held = self.store.read(|session| {
+            Ok(session
+                .query(
+                    "SELECT kind, service, host, version, request, other_host, first_unix \
+                     FROM alerts",
+                    &[],
+                )?
+                .iter()
+                .map(|row| (key_of(row), row.get::<_, i64>(6)))
+                .collect::<std::collections::BTreeMap<Key, i64>>())
+        })?;
+        Ok(found
+            .iter()
+            .map(|key| {
+                held.get(key)
+                    .map(|first| u64::try_from(*first).unwrap_or_default())
+            })
+            .collect())
+    }
+
     /// [`note`] in one transaction.
     ///
     /// # Errors

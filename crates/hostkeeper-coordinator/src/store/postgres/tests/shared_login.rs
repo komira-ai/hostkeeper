@@ -231,13 +231,13 @@ fn session_is_valid_on_the_other_task() {
         "the database's second, not the test clock's 1000"
     );
 
-    assert_eq!(a.end_user("carol", Some(kept.as_str())), 1);
+    assert_eq!(a.end_user("carol", Some(kept.as_str())), Ok(1));
     assert_eq!(b.lookup(other.as_str()), None, "ended for both");
     assert!(b.lookup(kept.as_str()).is_some(), "the one named stays");
-    assert_eq!(b.end_user("carol", None), 1);
+    assert_eq!(b.end_user("carol", None), Ok(1));
     assert_eq!(a.lookup(kept.as_str()), None);
-    assert!(a.end(dave.as_str()));
-    assert!(!b.end(dave.as_str()), "there was none to end");
+    assert_eq!(a.end(dave.as_str()), Ok(true));
+    assert_eq!(b.end(dave.as_str()), Ok(false), "there was none to end");
     assert!(a.is_empty() && b.is_empty());
     stop(stores);
 }

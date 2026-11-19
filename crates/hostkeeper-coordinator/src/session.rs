@@ -25,7 +25,7 @@
 //! the database answers the same cookie and counts the same failures, and a restart signs nobody
 //! out (`docs/design/coordinator-multi-instance.md`, section 8). The hash slots stay this
 //! process's. When the rows cannot be reached the answers fail closed: no session is made or
-//! found, and every name is told locked.
+//! found, every name is told locked, and an end of sessions is an error its caller answers.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -397,25 +397,35 @@ impl Sessions {
     }
 
     /// Ends the session of a cookie value; whether there was one.
-    pub fn end(&self, id: &str) -> bool {
+    ///
+    /// # Errors
+    /// [`SessionError::Unavailable`]: the rows that hold the session could not be written, so it
+    /// may still live; in memory it never fails.
+    pub fn end(&self, id: &str) -> Result<bool, SessionError> {
         if let Some(rows) = &self.rows {
-            return unreachable("end", rows.end(&id_hash(id)), false);
+            return rows.end(&id_hash(id)).map_err(SessionError::Unavailable);
         }
-        self.table().remove(&id_hash(id)).is_some()
+        Ok(self.table().remove(&id_hash(id)).is_some())
     }
 
     /// Ends every session of `username`, except the one `keep` names when it is given; how many
     /// ended. A disabled user, a password change or reset, and a user's removal end sessions
     /// this way.
-    pub fn end_user(&self, username: &str, keep: Option<&str>) -> usize {
+    ///
+    /// # Errors
+    /// [`SessionError::Unavailable`]: the rows that hold the sessions could not be written, so
+    /// they may still live; in memory it never fails.
+    pub fn end_user(&self, username: &str, keep: Option<&str>) -> Result<usize, SessionError> {
         let kept = keep.map(id_hash);
         if let Some(rows) = &self.rows {
-            return unreachable("end_user", rows.end_user(username, kept.as_ref()), 0);
+            return rows
+                .end_user(username, kept.as_ref())
+                .map_err(SessionError::Unavailable);
         }
         let mut table = self.table();
         let before = table.len();
         table.retain(|key, entry| entry.view.username != username || Some(*key) == kept);
-        before - table.len()
+        Ok(before - table.len())
     }
 
     /// How many sessions are held, expired ones not yet forgotten included.

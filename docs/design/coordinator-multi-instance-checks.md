@@ -115,9 +115,15 @@ The choices sections 8 and 9 leave open, as the code makes them (`store/postgres
 - `periodic_jobs` has no period column: the claim is given each job's period from `--job-every`, as section 9's `$period`. One
   job `prune` (the key of section 12) does every prune in one transaction. `fleet_orders` does not exist before M6, so it is
   not pruned yet.
-- The alerts' rows are keyed by the whole subject (six texts). `Alerts.List` observes as the tick does, so the coordinator
-  whose insert made a row logs it, whichever path it took; a write that fails falls back to this coordinator's memory, so the
-  alert of a lost database is still logged.
+- The alerts' rows are keyed by the whole subject (six texts); only the job `alerts` writes them. `Alerts.List` reads them
+  for each alert's first observed second (now for one the job has not noted yet) and writes and logs nothing; a write or
+  read that fails falls back to this coordinator's memory, so the alert of a lost database is still logged.
+- A request's expiry is not a state of its own here: the conditional update is `SET expired_unix = now, expired_after_secs =
+  ttl WHERE state IN (1, 2) AND expired_unix = 0 AND now - posted_unix > ttl RETURNING ...` (`PgRecords::expire_waiting`),
+  through the enrollment records' port, so the files keep their locked sweep.
+- An end of sessions that the rows cannot take (a logout, a password change or reset, a user disabled or removed) is an
+  error the caller answers (`store_unreachable`, `store_failed`), not a silent zero: the change itself stands, and making it
+  again ends the sessions.
 - The audit's numbers are still the release's in-memory counter until M4's `audit_counter`, so an effect's audit line is
   written by the coordinator whose conditional write won, after it, not in its transaction: the expiry's line after the
   update (the start's re-audit of an expiry with no line stays the repair), the adoption's after the user's row. A stop

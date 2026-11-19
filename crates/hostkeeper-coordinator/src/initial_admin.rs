@@ -373,11 +373,10 @@ impl InitialAdmin {
             // The row first: of the coordinators that look at once, the one whose write changed
             // it audits, and the others find it adopted.
             let next = adopt(&held, &file, hash.clone(), now)?;
+            // As the accounts' rows hold a user (`store/postgres/accounts.rs`).
             let record = next
                 .user(&file.user)
-                .map(serde_json::to_value)
-                .transpose()
-                .map_err(|e| InitialAdminError::Rows(e.to_string()))?
+                .and_then(|user| serde_json::to_value(user).ok())
                 .unwrap_or_default();
             let made = rows
                 .adopt(&file.user, record, &file.id)

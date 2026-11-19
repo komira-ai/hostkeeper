@@ -28,7 +28,8 @@
 //! - `reject`: `Enrollment.Reject` ([`Enrollment::reject`]), and the deny row `Hosts.Retire`
 //!   writes ([`Enrollment::deny_host`]);
 //! - `expiry`: a request no operator approved within the request TTL expires
-//!   ([`Enrollment::expire_requests`], run by the reload tick), audited `request_expired`;
+//!   ([`Enrollment::expire_requests`], run by the reload tick over files and by the claimed job
+//!   `request-expiry` over a database, [`crate::jobs`]), audited `request_expired`;
 //!
 //! The heartbeat path asks [`Enrollment::identity_of`] who a certificate the CA issued names,
 //! [`Enrollment::admission`] whether its host is denied, retiring or neither,

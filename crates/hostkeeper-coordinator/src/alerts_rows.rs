@@ -14,6 +14,33 @@ impl Book {
         self.rows = Some(rows);
         self
     }
+
+    /// The alerts `find` finds, for a list: over rows, each with the first observed second its
+    /// row holds (now for one with no row yet), nothing written or logged; without rows, or when
+    /// they cannot be read, an observation ([`Book::observe_with`]).
+    pub(super) fn list_with<E>(
+        &self,
+        find: impl FnOnce() -> Result<(Vec<Alert>, u64), E>,
+    ) -> Result<Vec<Observed>, E> {
+        let Some(rows) = &self.rows else {
+            return self.observe_with(find);
+        };
+        let (alerts, unix) = find()?;
+        match rows.firsts(alerts.iter().map(key).collect()) {
+            Ok(firsts) => Ok(alerts
+                .into_iter()
+                .zip(firsts)
+                .map(|(alert, first)| Observed {
+                    alert,
+                    first_unix: first.unwrap_or(unix),
+                })
+                .collect()),
+            Err(why) => {
+                tracing::warn!(%why, "the alert rows could not be read: the alerts are observed by this coordinator");
+                self.observe_with(|| Ok((alerts, unix)))
+            }
+        }
+    }
 }
 
 /// The key of `alert`'s subject in the rows.

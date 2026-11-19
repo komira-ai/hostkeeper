@@ -186,13 +186,13 @@ impl Pair {
     fn end(&self, id: &str) -> bool {
         let (a, b) = (self.mem.end(id), self.pg.end(id));
         assert_eq!(a, b, "end");
-        b
+        b.expect("the rows are up")
     }
 
     fn end_user(&self, user: &str, keep: Option<&str>) -> usize {
         let (a, b) = (self.mem.end_user(user, keep), self.pg.end_user(user, keep));
         assert_eq!(a, b, "end_user");
-        b
+        b.expect("the rows are up")
     }
 
     fn len(&self) -> usize {
@@ -638,8 +638,18 @@ fn a_lost_database_fails_the_login_closed() {
     assert!(!sessions.is_live(&key));
     assert!(!sessions.touch(&key));
     assert_eq!(sessions.clear_must_change(id.as_str()), None);
-    assert!(!sessions.end(id.as_str()));
-    assert_eq!(sessions.end_user("alice", None), 0);
+    assert_eq!(
+        sessions.end(id.as_str()),
+        Err(SessionError::Unavailable(
+            "the writing session stopped".to_owned()
+        ))
+    );
+    assert_eq!(
+        sessions.end_user("alice", None),
+        Err(SessionError::Unavailable(
+            "the writing session stopped".to_owned()
+        ))
+    );
     assert_eq!(sessions.len(), 0);
     assert!(sessions.is_empty());
 
@@ -695,5 +705,65 @@ fn numbers_past_the_columns_saturate_and_a_negative_one_reads_as_zero() {
         .expect("set");
     let seen = sessions.lookup(id.as_str()).expect("live");
     assert_eq!(seen.must_change_until, Some(0));
+    rig.stop();
+}
+
+/// Makes the writes of `DELETE` or `UPDATE` (`events`) on the sessions fail, as a database that
+/// reads but refuses a write does.
+fn refuse(rig: &Rig, events: &str) {
+    rig.db
+        .run(&format!(
+            "CREATE FUNCTION refuse() RETURNS trigger LANGUAGE plpgsql AS \
+             $$BEGIN RAISE EXCEPTION 'refused by the test'; END$$; \
+             CREATE TRIGGER refuse BEFORE {events} ON sessions FOR EACH ROW EXECUTE FUNCTION refuse()"
+        ))
+        .expect("the trigger is made");
+}
+
+/// The SHA-256 of a session id, as the rows key it.
+fn key_of(id: &str) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(id.as_bytes()).into()
+}
+
+/// Proves: when the database reads but refuses writes, a lookup of an expired session whose
+/// forgetting is refused answers the write's error (the server's text of the refusal) and the
+/// session table answers none for it (it fails closed, and the row stays); a lookup of a live
+/// session that is due a touch whose update is refused answers the error too, and the table answers
+/// none; with `push` false neither write is tried.
+///
+/// Catches: a lookup that answers a session it could not forget or touch, and one that swallows
+/// the write's failure.
+#[test]
+fn a_lookup_whose_forget_or_touch_is_refused_fails_closed() {
+    super::logging();
+    let rig = Rig::new();
+    let settings = sessions_of(100, 1000, 10);
+    let rows = rig.rows(settings, LimiterSettings::default(), 10);
+    let sessions = Sessions::new(
+        settings,
+        Arc::new(Seconds(rig.now.clone())),
+        counting_from(1),
+    )
+    .over(rows.clone());
+    let (id, _) = sessions.create("alice", false, None).expect("made");
+    let key = key_of(id.as_str());
+    refuse(&rig, "DELETE OR UPDATE");
+    let text = |why: Result<_, String>| why.map(|found: Option<_>| found.is_some());
+
+    // Live and due (20 seconds since its use, touched every 10): the update is refused.
+    rig.set(START + 20);
+    let refused = "ERROR: refused by the test (SQLSTATE P0001)";
+    assert_eq!(text(rows.lookup(&key, true)), Err(refused.to_owned()));
+    assert_eq!(sessions.lookup(id.as_str()), None);
+    assert_eq!(text(rows.lookup(&key, false)), Ok(true));
+    assert_eq!(rig.last_used(), [START.to_string()]);
+
+    // Expired: the delete is refused.
+    rig.set(START + 100);
+    assert_eq!(text(rows.lookup(&key, true)), Err(refused.to_owned()));
+    assert_eq!(sessions.lookup(id.as_str()), None);
+    assert_eq!(text(rows.lookup(&key, false)), Ok(false));
+    assert_eq!(rig.column("SELECT username FROM sessions"), ["alice"]);
     rig.stop();
 }
