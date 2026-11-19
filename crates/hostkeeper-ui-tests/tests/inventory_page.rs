@@ -8,11 +8,13 @@ use serde_json::{Value, json};
 use support::Ui;
 use support::pages::{assert_shows, bodies, m, page_driver, shown};
 
-/// What the page sent, but its reads of the layout (which only give each server its address).
+/// What the page sent, but its reads of the layout (which only give each server its address) and
+/// of the hosts (which only give the rows of the enrolled hosts no record matches; the tests of
+/// those rows read them).
 fn sent(ui: &Ui) -> Vec<(String, Value)> {
     bodies(ui)
         .into_iter()
-        .filter(|(method, _)| *method != m("Layout/Get"))
+        .filter(|(method, _)| *method != m("Layout/Get") && *method != m("Hosts/List"))
         .collect()
 }
 
@@ -38,9 +40,10 @@ fn inventory_page_shows_exactly_four_fields_in_one_table() {
     // when the server stands on no sled) and an empty one for the buttons, a row per record with those four fields and Edit and Remove, a last
     // row to add a server with an input for each of the four fields, and nothing of a record's
     // other fields: not its role, host group, serial, platform, window, state, who added it, nor
-    // whether it is enrolled.
+    // whether it is enrolled; a record that holds no data MAC says so beside its name.
     let mut ui = Ui::start();
     ui.reply(&m("Enrollment/ListRecords"), records_reply());
+    ui.reply(&m("Hosts/List"), json!({}));
     let out = ui.run(&page_driver(
         "inventory",
         "{}",
@@ -67,7 +70,7 @@ return {
                 "-",
                 "Edit Remove"
             ],
-            ["mac-1", "-", "-", "-", "-", "Edit Remove"],
+            ["mac-1 no data MAC", "-", "-", "-", "-", "Edit Remove"],
             ["web-1", "-", "0c:c4:7a:00:00:31", "-", "-", "Edit Remove"],
             ["", "", "", "", "-", "Add"],
         ])
@@ -440,10 +443,10 @@ fn inventory_page_pages_marks_a_linked_record_and_says_when_it_cannot_load() {
 await click(tree, "next-page");
 await click(tree, "first-page");
 return nodes(tree).filter((n) => n.tag === "tr" && n.attrs["aria-current"] === "true")
-  .map((n) => text(n.children[0]));
+  .map((n) => text(n.children[0]).replace(/\s+/g, " "));
 "#,
     ));
-    assert_eq!(out["out"], json!(["mac-1"]));
+    assert_eq!(out["out"], json!(["mac-1 no data MAC"]));
     assert_eq!(
         out["seen"]["navigations"],
         json!([
@@ -544,5 +547,168 @@ return { remove: classes("remove-record"), edit: classes("edit-record"), add: cl
     assert_eq!(
         out["out"],
         json!({"remove": ["danger", "danger", "danger"], "edit": ["", "", ""], "add": ["primary"]})
+    );
+}
+
+/// The records of [`inventory_page_lists_every_enrolled_host_and_flags_its_record`]: a Mac's
+/// record the coordinator wrote from its claims (its serial, no data MAC), and a server's an
+/// operator added.
+fn recorded_reply() -> Value {
+    json!({"records": [
+        {"hostId": "mac-1", "serial": "C02X1", "addedBy": "coordinator",
+         "notes": "Recorded at enrollment from the host's claims: a Mac (darwin-arm64).",
+         "enrolled": true, "enrolledHostId": "mac-1"},
+        {"hostId": "web-1", "dataMacs": ["0c:c4:7a:00:00:31"], "addedBy": "alice-token",
+         "enrolled": true, "enrolledHostId": "web-1"},
+    ]})
+}
+
+#[test]
+fn inventory_page_lists_every_enrolled_host_and_flags_its_record() {
+    // Proves: every enrolled host no record matches (enrolled, no `inventoryRecordId`) has a row
+    // of its own on the first page, by node id, after the records and before the add row, saying
+    // "enrolled, no record", with its address from the layout and no button; the hosts are read
+    // over every page of `Hosts.List`; a host that is heard but not enrolled, and an enrolled host
+    // a record matches, get no such row; a record the coordinator wrote says "recorded at
+    // enrollment" and, holding no data MAC, "no data MAC". A later page lists no host and reads
+    // none.
+    // Catches: the bootstrap Macs missing from the inventory because they have no record, a host
+    // listed twice (as its record and as itself), and a record written at enrollment that looks
+    // complete.
+    let mut ui = Ui::start();
+    ui.reply(&m("Enrollment/ListRecords"), recorded_reply());
+    ui.reply(
+        &m("Hosts/List"),
+        json!({"hosts": [
+            {"nodeId": "mac-1", "enrolledUnix": "1800000000", "inventoryRecordId": "mac-1"},
+            {"nodeId": "mac-3", "enrolledUnix": "1800000300"},
+            {"nodeId": "updater-1", "live": true},
+         ],
+         "nextPageToken": "updater-1"}),
+    );
+    ui.reply(
+        &m("Hosts/List"),
+        json!({"hosts": [{"nodeId": "mac-2", "enrolledUnix": "1800000200", "inventoryRecordId": ""}]}),
+    );
+    ui.reply(
+        &m("Layout/Get"),
+        json!({"rows": [{"id": "row-1"}],
+               "racks": [{"id": "rack-1", "row": "row-1", "heightU": 10}],
+               "sleds": [{"id": "sled-1", "rack": "rack-1", "u": 3, "heightU": 1, "address": "C0-R0-R0-S0"}],
+               "placements": [{"subject": {"kind": "LAYOUT_SUBJECT_KIND_HOST", "id": "mac-3"},
+                               "rack": "rack-1", "u": 3, "heightU": 1, "sled": "sled-1",
+                               "address": "C0-R0-R0-S0-S0"}]}),
+    );
+    let out = ui.run(&page_driver(
+        "inventory",
+        "{}",
+        "[]",
+        r#"
+return {
+  rows: rows(tree),
+  unrecorded: named(tree, "unrecorded").map((n) => nodes(n).filter((c) => c.tag === "button").length),
+};
+"#,
+    ));
+    assert_eq!(
+        out["out"]["rows"],
+        json!([
+            ["Server name", "BMC MAC", "Data MAC", "Notes", "Address", ""],
+            [
+                "mac-1 enrolled recorded at enrollment, no data MAC",
+                "-",
+                "-",
+                "Recorded at enrollment from the host's claims: a Mac (darwin-arm64).",
+                "-",
+                "Edit Remove"
+            ],
+            [
+                "web-1 enrolled",
+                "-",
+                "0c:c4:7a:00:00:31",
+                "-",
+                "-",
+                "Edit Remove"
+            ],
+            ["mac-2 enrolled, no record", "-", "-", "-", "-", ""],
+            [
+                "mac-3 enrolled, no record",
+                "-",
+                "-",
+                "-",
+                "C0-R0-R0-S0-S0",
+                ""
+            ],
+            ["", "", "", "", "-", "Add"],
+        ])
+    );
+    assert_eq!(out["out"]["unrecorded"], json!([0, 0]));
+    let hosts: Vec<Value> = bodies(&ui)
+        .into_iter()
+        .filter(|(method, _)| *method == m("Hosts/List"))
+        .map(|(_, body)| body)
+        .collect();
+    assert_eq!(hosts, [json!({}), json!({"pageToken": "updater-1"})]);
+
+    let mut later = Ui::start();
+    later.reply(&m("Enrollment/ListRecords"), recorded_reply());
+    let out = later.run(&page_driver(
+        "inventory",
+        r#"{ pageToken: "a" }"#,
+        "[]",
+        "return rows(tree).map((row) => row[0]);",
+    ));
+    assert_eq!(
+        out["out"],
+        json!([
+            "Server name",
+            "mac-1 enrolled recorded at enrollment, no data MAC",
+            "web-1 enrolled",
+            ""
+        ])
+    );
+    assert!(
+        bodies(&later)
+            .iter()
+            .all(|(method, _)| *method != m("Hosts/List")),
+        "a later page reads no host"
+    );
+}
+
+#[test]
+fn inventory_page_says_when_the_enrolled_hosts_cannot_be_listed() {
+    // Proves: when `Hosts.List` is refused, the page still shows every record and says, in one
+    // line, that the enrolled hosts could not be listed, so a host without a record is not shown,
+    // with the refusal's code and token.
+    // Catches: a refused host list read as "every host has a record", which hides the hosts the
+    // page exists to show.
+    let mut ui = Ui::start();
+    ui.reply(&m("Enrollment/ListRecords"), recorded_reply());
+    ui.refuse(&m("Hosts/List"), 500, "INTERNAL", "store_failed");
+    let out = ui.run(&page_driver(
+        "inventory",
+        "{}",
+        "[]",
+        r#"
+return {
+  note: named(tree, "hosts-failed").map((n) => text(n)),
+  names: rows(tree).map((row) => row[0]),
+};
+"#,
+    ));
+    assert_eq!(
+        out["out"]["note"],
+        json!([
+            "The enrolled hosts could not be listed, so a host without a record is not shown here: INTERNAL store_failed"
+        ])
+    );
+    assert_eq!(
+        out["out"]["names"],
+        json!([
+            "Server name",
+            "mac-1 enrolled recorded at enrollment, no data MAC",
+            "web-1 enrolled",
+            ""
+        ])
     );
 }

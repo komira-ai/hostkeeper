@@ -116,7 +116,7 @@ fn a_halt_held_above_the_coordinators_generation_is_reported_and_its_generation_
     };
     assert_eq!(holding(&daemon), Some(expected.clone()));
     DaemonHalts::new(Arc::clone(&daemon))
-        .raise(&name("web"), 3)
+        .heard(&name("web"), None, 3)
         .expect("a lower generation is no error");
     assert_eq!(holding(&daemon), Some(expected));
     let refused = daemon.order(&farm.update("web", "2.1.0", 3));
@@ -124,7 +124,7 @@ fn a_halt_held_above_the_coordinators_generation_is_reported_and_its_generation_
 }
 
 /// Proves: the generation a coordinator's clear issues past the held one (16 over 15) lifts the
-/// halt: the loop reads no halt any more, the generation held is 16, and the next order runs.
+/// halt: the loop reads no halt any more, the held-halt file is gone, and the next order runs.
 ///
 /// Catches: a hold whose report outlives the halt, which would keep the coordinator holding a
 /// host that takes orders again.
@@ -133,9 +133,9 @@ fn a_generation_past_the_held_one_lifts_the_halt_and_its_report() {
     let farm = NativeHost::new("local-halt-lifted");
     let daemon = Arc::new(halted(&farm, 15));
     let halts = DaemonHalts::new(Arc::clone(&daemon));
-    halts.raise(&name("web"), 16).expect("raised");
+    halts.heard(&name("web"), None, 16).expect("lifted");
     assert_eq!(holding(&daemon), None);
-    assert_eq!(halts.held(&name("web")), 16);
+    assert!(!farm.rig().state.join("web").join(HELD_HALT_FILE).exists());
     let ran = daemon.order(&farm.update("web", "2.1.0", 3));
     assert!(
         matches!(
@@ -158,11 +158,11 @@ fn a_current_halt_stands_until_a_newer_generation() {
     let farm = NativeHost::new("local-halt-current");
     let daemon = Arc::new(halted(&farm, 3));
     let halts = DaemonHalts::new(Arc::clone(&daemon));
-    halts.raise(&name("web"), 3).expect("no error");
+    halts.heard(&name("web"), None, 3).expect("no error");
     assert_eq!(holding(&daemon).map(|held| held.generation), Some(3));
     let refused = daemon.order(&farm.update("web", "2.1.0", 3));
     assert_eq!(refused.refusal(), Some(Refusal::Halted), "{refused:?}");
-    halts.raise(&name("web"), 4).expect("raised");
+    halts.heard(&name("web"), None, 4).expect("lifted");
     assert_eq!(holding(&daemon), None);
 }
 

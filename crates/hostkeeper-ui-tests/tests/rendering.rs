@@ -42,12 +42,23 @@ fn the_servers_list_shows_each_host_in_its_own_row() {
         rows(&mut ui, "home", "{ list: true }"),
         json!([
             [
-                "Server", "State", "Address", "Where", "Group", "Version", "Console"
+                "Server", "State", "Why", "Address", "Where", "Group", "Version", "Console"
             ],
-            ["clone-1", "pending", "-", "Unplaced", "-", "1.4.0", "-"],
-            ["new-1", "pending", "-", "Unplaced", "-", "-", "-"],
-            ["web-1", "updating", "-", "Unplaced", "-", "1.4.0", "-"],
-            ["web-2", "pending", "-", "Unplaced", "-", "1.3.0", "-"],
+            [
+                "clone-1", "pending", "-", "-", "Unplaced", "-", "1.4.0", "-"
+            ],
+            ["new-1", "pending", "-", "-", "Unplaced", "-", "-", "-"],
+            ["web-1", "updating", "-", "-", "Unplaced", "-", "1.4.0", "-"],
+            [
+                "web-2",
+                "pending",
+                "api unhealthy",
+                "-",
+                "Unplaced",
+                "-",
+                "1.3.0",
+                "-"
+            ],
         ])
     );
 }
@@ -73,9 +84,9 @@ fn the_servers_list_shows_a_host_of_the_coordinators_own_reply() {
         rows(&mut ui, "home", "{ list: true }"),
         json!([
             [
-                "Server", "State", "Address", "Where", "Group", "Version", "Console"
+                "Server", "State", "Why", "Address", "Where", "Group", "Version", "Console"
             ],
-            ["s1", "healthy", "-", "Unplaced", "-", "1.0", "Console"],
+            ["s1", "healthy", "-", "-", "Unplaced", "-", "1.0", "Console"],
         ])
     );
 }
@@ -399,9 +410,9 @@ fn a_reply_from_a_newer_coordinator_still_renders() {
         fleet,
         json!([
             [
-                "Server", "State", "Address", "Where", "Group", "Version", "Console"
+                "Server", "State", "Why", "Address", "Where", "Group", "Version", "Console"
             ],
-            ["web-1", "pending", "-", "Unplaced", "-", "1.4.0", "-"],
+            ["web-1", "pending", "-", "-", "Unplaced", "-", "1.4.0", "-"],
         ])
     );
     assert_eq!(

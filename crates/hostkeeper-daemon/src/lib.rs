@@ -55,7 +55,7 @@
 //! - [`prune`]: after a confirmed switch (an update that ends `Succeeded`, a force that moved
 //!   `current`), the service's version directories but `current` and `previous` are deleted,
 //!   under the lock the order already holds.
-//! - [`halt`]: the held halt generation of each service, persisted, never lowered.
+//! - [`halt`]: the generation a halt of each service is held under, persisted while the halt stands.
 //! - [`hook_log`]: what the host's step launcher kept of a hook's standard error, as lines of the
 //!   daemon's log under the step's unit.
 //! - [`packages`]: the port that fetches a `macos-pkg` entry's `.pkg` by its pin,

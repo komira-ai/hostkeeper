@@ -267,37 +267,45 @@ impl Dispatch for ManualDispatch {
     }
 }
 
-/// A held-halt store in memory: monotone like the daemon's, with every raise recorded, and the
-/// halts it holds, each lifted by a raise above its generation as the daemon's is.
+/// A held-halt store in memory, judged as the daemon's is: a halt held under no generation is
+/// held under the generation the reply before named (the one heard when none came before), or
+/// lifted when the one heard is above it; one held under a generation is lifted by a greater
+/// one; and a service with no halt keeps no generation; with every generation the loop handed
+/// over recorded, with the one before it.
 #[derive(Default)]
 pub struct FakeHalts {
     held: Mutex<BTreeMap<String, u64>>,
-    raises: Mutex<Vec<(String, u64)>>,
+    heard: Mutex<Vec<(String, Option<u64>, u64)>>,
     failing: AtomicBool,
     halts: Mutex<BTreeMap<String, HeldHalt>>,
     asked: AtomicU64,
 }
 
 impl FakeHalts {
-    /// Sets the held generation of `service`, as another writer of the store (the executor,
-    /// `clear_halt`) would.
-    pub fn set(&self, service: &ServiceName, generation: u64) {
-        lock(&self.held).insert(service.as_str().to_owned(), generation);
-    }
-
-    /// From now on a raise fails, or no longer does.
+    /// From now on a generation is not taken, or is again.
     pub fn fail(&self, failing: bool) {
         self.failing.store(failing, Ordering::SeqCst);
     }
 
-    /// The raises the loop asked for, by service name and generation, in order.
-    pub fn raises(&self) -> Vec<(String, u64)> {
-        lock(&self.raises).clone()
+    /// The generations the loop handed over, by service name, with the one the reply before
+    /// named, in order.
+    pub fn heard(&self) -> Vec<(String, Option<u64>, u64)> {
+        lock(&self.heard).clone()
     }
 
-    /// `service` holds a halt from now on, under `halt.generation`, which is also the one held.
+    /// The generation `service` is held under; `None` when none is kept.
+    pub fn held(&self, service: &ServiceName) -> Option<u64> {
+        lock(&self.held).get(service.as_str()).copied()
+    }
+
+    /// `service` holds a halt from now on, under `halt.generation`, or under none yet when it is
+    /// 0 (a halt no reply has named a generation for).
     pub fn halt(&self, service: &ServiceName, halt: HeldHalt) {
-        self.set(service, halt.generation);
+        let mut held = lock(&self.held);
+        match halt.generation {
+            0 => held.remove(service.as_str()),
+            generation => held.insert(service.as_str().to_owned(), generation),
+        };
         lock(&self.halts).insert(service.as_str().to_owned(), halt);
     }
 
@@ -308,21 +316,31 @@ impl FakeHalts {
 }
 
 impl HeldHalts for FakeHalts {
-    fn held(&self, service: &ServiceName) -> u64 {
-        lock(&self.held).get(service.as_str()).copied().unwrap_or(0)
-    }
-
-    fn raise(&self, service: &ServiceName, generation: u64) -> io::Result<()> {
-        lock(&self.raises).push((service.as_str().to_owned(), generation));
+    fn heard(&self, service: &ServiceName, before: Option<u64>, generation: u64) -> io::Result<()> {
+        let name = service.as_str().to_owned();
+        lock(&self.heard).push((name.clone(), before, generation));
         if self.failing.load(Ordering::SeqCst) {
             return Err(io::Error::from(io::ErrorKind::PermissionDenied));
         }
         let mut held = lock(&self.held);
-        let entry = held.entry(service.as_str().to_owned()).or_insert(0);
-        if generation > *entry {
-            lock(&self.halts).remove(service.as_str());
+        let mut halts = lock(&self.halts);
+        let Some(halt) = halts.get_mut(&name) else {
+            held.remove(&name);
+            return Ok(());
+        };
+        let kept = held.get(&name).copied();
+        match kept.or(before) {
+            Some(bar) if generation > bar => {
+                halts.remove(&name);
+                held.remove(&name);
+            }
+            bar if kept.is_none() => {
+                let bar = bar.unwrap_or(generation);
+                halt.generation = bar;
+                held.insert(name, bar);
+            }
+            _ => {}
         }
-        *entry = (*entry).max(generation);
         Ok(())
     }
 

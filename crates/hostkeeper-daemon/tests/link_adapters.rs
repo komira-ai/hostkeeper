@@ -16,6 +16,7 @@ use hostkeeper_daemon::link_adapters::{
 };
 use hostkeeper_daemon::testing::spawn;
 use hostkeeper_daemon::verb::{Forced, Hooked, NO_TRY, PackageDigest as WireDigest, Unhooked};
+use hostkeeper_daemon::verbs::clear_halt::Heard;
 use hostkeeper_daemon::{Refusal, Reply, Verb as Decoded};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
 use hostkeeper_link::{
@@ -750,12 +751,12 @@ fn a_running_order_is_answered_busy() {
     }
 }
 
-/// Catches a halt generation raised into a store of its own, a lower one lowering the hold or
-/// failing, and a forced order unable to read what the loop raised: a generation raised through
-/// the adapter is what the daemon's store and the adapter read back; a lower one is `Ok` and
-/// changes nothing (the file included); a force whose generation is below it lifts nothing and
-/// is not refused for it; and a force above it lifts the halt and raises the hold, which the
-/// adapter reads back.
+/// Catches a halt generation kept in a store of its own, a lower one lowering the hold or
+/// failing, and a forced order unable to read what the loop wrote: the first generation a reply
+/// names after the halt is the one the halt is held under, in the daemon's store and its file; a
+/// lower one, and the same one again, are `Ok` and change nothing; a force whose generation is
+/// below it lifts nothing and is not refused for it; and a force above it lifts the halt and
+/// removes the file.
 #[test]
 fn a_halt_generation_in_a_reply_is_the_one_a_force_reads() {
     let apt = AptRig::new("link-halts");
@@ -773,71 +774,55 @@ fn a_halt_generation_in_a_reply_is_the_one_a_force_reads() {
             ..plain(&halted, Outcome::Failed)
         }
     );
-    assert_eq!(halts.held(&service), 0);
+    assert_eq!(daemon.ctx().halts.read(&service).ok(), Some(None));
 
-    halts.raise(&service, 5).expect("raise to 5");
+    halts.heard(&service, None, 5).expect("held under 5");
     assert_eq!(daemon.ctx().halts.get(&service).ok(), Some(5));
-    assert_eq!(halts.held(&service), 5);
 
     halts
-        .raise(&service, 2)
+        .heard(&service, None, 2)
         .expect("a lower generation is not an error");
-    halts.raise(&service, 5).expect("the same generation again");
+    halts
+        .heard(&service, None, 5)
+        .expect("the same generation again");
     assert_eq!(daemon.ctx().halts.get(&service).ok(), Some(5));
-    assert_eq!(halts.held(&service), 5);
     let file = rig.state.join(WEB).join("held-halt");
-    assert_eq!(fs::read_to_string(file).expect("the file"), "5\n");
+    assert_eq!(fs::read_to_string(&file).expect("the file"), "5\n");
 
     assert_eq!(daemon.order(&forced(&apt, "3.0.0", 2, 4)), succeeded());
-    assert_eq!(halts.held(&service), 5);
+    assert_eq!(daemon.ctx().halts.get(&service).ok(), Some(5));
     assert_eq!(daemon.order(&forced(&apt, "4.0.0", 3, 6)), succeeded());
-    assert_eq!(daemon.ctx().halts.get(&service).ok(), Some(6));
-    assert_eq!(halts.held(&service), 6);
+    assert_eq!(daemon.ctx().halts.read(&service).ok(), Some(None));
+    assert!(!file.exists());
 }
 
-/// Catches a store that cannot be read being read as no halt, or a raise on it that lifts or
-/// hides the fault: a held-halt file of garbage or a directory in its place holds every
-/// generation (so the loop raises nothing above it) and refuses a raise with the store's own
-/// text, leaving the file as it was; a service directory that cannot be made refuses a raise
-/// with the store's text; and a service with no file holds 0.
+/// Catches a store that cannot be read being read as no halt and its file removed, or the fault
+/// logged at every heartbeat: a held-halt file of garbage, a directory in its place and a service
+/// directory that is a dangling link are each left as they are by a reply's generation, which is
+/// no error (the executor refuses the service's orders `halt_unreadable` until it reads).
 #[test]
-fn a_store_that_cannot_be_read_or_written_holds_every_generation_and_refuses_a_raise() {
+fn a_store_that_cannot_be_read_is_left_as_it_is_by_a_reply() {
     let rig = Rig::new("link-halts-bad");
-    let halts = DaemonHalts::new(Arc::new(rig.daemon()));
+    let daemon = Arc::new(rig.daemon());
+    let halts = DaemonHalts::new(Arc::clone(&daemon));
     let garbage = rig.state.join("web");
     fs::create_dir_all(&garbage).expect("the service's directory");
     fs::write(garbage.join("held-halt"), "seven\n").expect("the garbage");
-    assert_eq!(halts.held(&name("web")), u64::MAX);
-    let error = halts.raise(&name("web"), 9).expect_err("a garbage file");
-    assert_eq!(
-        error.to_string(),
-        "the held halt generation of web is not a number: \"seven\\n\""
-    );
+    let in_the_way = rig.state.join("api").join("held-halt");
+    fs::create_dir_all(&in_the_way).expect("a directory in the way");
+    let dangling = rig.state.join("db");
+    std::os::unix::fs::symlink("nowhere", &dangling).expect("a dangling link");
+    for service in ["web", "api", "db"] {
+        halts.heard(&name(service), None, 9).expect("no error");
+        let judged = daemon.heard_halt(&name(service), Some(1), 9);
+        assert_eq!(judged, Ok(Heard::Unchanged), "{service}");
+    }
     assert_eq!(
         fs::read_to_string(garbage.join("held-halt")).expect("the file"),
         "seven\n"
     );
-
-    fs::create_dir_all(rig.state.join("api").join("held-halt")).expect("a directory in the way");
-    assert_eq!(halts.held(&name("api")), u64::MAX);
-    let error = halts.raise(&name("api"), 1).expect_err("a directory");
-    assert!(
-        error
-            .to_string()
-            .starts_with("the held halt generation of api cannot be read or written: "),
-        "{error}"
-    );
-
-    std::os::unix::fs::symlink("nowhere", rig.state.join("db")).expect("a dangling link");
-    assert_eq!(halts.held(&name("db")), 0);
-    let error = halts.raise(&name("db"), 1).expect_err("no directory");
-    assert!(
-        error
-            .to_string()
-            .starts_with("the held halt generation of db cannot be read or written: "),
-        "{error}"
-    );
-    assert_eq!(halts.held(&name("other")), 0);
+    assert!(in_the_way.is_dir());
+    assert!(fs::symlink_metadata(&dangling).is_ok() & !dangling.exists());
 }
 
 /// An entry of the release message with every field of the artifact set.

@@ -37,9 +37,9 @@
 //! 6. From the reply: the advertised features replace the last ones; a verdict whose service,
 //!    order id and try the reply acknowledges is not sent again, and the step records are told
 //!    ([`ServiceRecords::acknowledged`]), so a record that keeps it to report stops; with
-//!    `halt-v1`, a halt
-//!    generation newer than the held one is raised in [`HeldHalts`]; and the order goes to the
-//!    executor. A repository set of the reply goes to the [`RepositorySink`] first of all, when
+//!    `halt-v1`, every halt
+//!    generation of the reply goes to [`HeldHalts`] with the one the reply before named, which
+//!    judges them against the halts the host holds; and the order goes to the executor. A repository set of the reply goes to the [`RepositorySink`] first of all, when
 //!    the reply advertises `repositories-v1` and the host has a sink (the sink's own checks are
 //!    its to make); a set from a coordinator that did not advertise the feature is dropped.
 //!    The host's facts of the reply go to the [`FactsSink`] next, before anything else of the
@@ -229,6 +229,9 @@ pub struct Heartbeater {
     book: Book,
     /// The features of the last reply.
     advertised: Features,
+    /// The halt generations of the last `halt-v1` reply, by service (one it did not name was 0);
+    /// none before the first since the loop started.
+    halts_before: Option<BTreeMap<String, u64>>,
     /// The verdicts not yet acknowledged, by service, oldest first, one per order id and try.
     pending: BTreeMap<String, Vec<OrderResult>>,
     /// The verdicts acknowledged, by service, the last [`ACKED_KEPT`] of them: a step record
@@ -257,6 +260,7 @@ impl Heartbeater {
             ports,
             book,
             advertised: Features::default(),
+            halts_before: None,
             pending: BTreeMap::new(),
             acked: BTreeMap::new(),
             started: BTreeMap::new(),
@@ -735,9 +739,19 @@ impl Heartbeater {
             }
         }
         if self.advertised.has(Feature::HaltV1) {
+            let before = self.halts_before.take();
             for (service, generation) in &halt_generations {
-                self.raise_halt(service, *generation);
+                let named = before
+                    .as_ref()
+                    .map(|before| before.get(service.as_str()).copied().unwrap_or(0));
+                self.heard_halt(service, named, *generation);
             }
+            self.halts_before = Some(
+                halt_generations
+                    .into_iter()
+                    .map(|(service, generation)| (service.as_str().to_owned(), generation))
+                    .collect(),
+            );
         }
         if let Some(order) = order {
             if facts_held || matches!(order.verb, Verb::Abort(_)) {
@@ -777,14 +791,12 @@ impl Heartbeater {
         }
     }
 
-    /// Raises the held halt generation of `service` to `generation` when it is newer: an equal
-    /// or older one lifts nothing. The held value is read from the store each time, never kept.
-    fn raise_halt(&self, service: &ServiceName, generation: u64) {
-        if generation > self.ports.halts.held(service)
-            && let Err(e) = self.ports.halts.raise(service, generation)
-        {
+    /// Hands the halt generation `generation` of `service`, and the one the reply before named
+    /// (`before`), to the store, which alone judges what they do to a halt the host holds.
+    fn heard_halt(&self, service: &ServiceName, before: Option<u64>, generation: u64) {
+        if let Err(e) = self.ports.halts.heard(service, before, generation) {
             self.log(&format!(
-                "error: halt generation {generation} of {service} is not written: {e}"
+                "error: halt generation {generation} of {service} is not taken: {e}"
             ));
         }
     }

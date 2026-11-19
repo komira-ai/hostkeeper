@@ -700,6 +700,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
                 extra_roots: vec![enrollment.ca_bundle().certificate_der().to_vec()],
             };
             coordinator = coordinator.with_enrollment(Arc::new(enrollment));
+            coordinator.record_unrecorded();
             let served = TlsFiles {
                 cert: server_cert.clone(),
                 key: server_cert.clone(),

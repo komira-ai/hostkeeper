@@ -243,7 +243,8 @@ return {
 #[test]
 fn inventory_has_a_kind_switch_and_the_server_kind_is_the_servers_page() {
     // Proves: the Inventory page of the app shows Server and Switch, the chosen one pressed; with no
-    // kind it is the page of the servers (its four-field table, no call for the layout); a click on
+    // kind it is the page of the servers (its four-field table; its calls the records, the hosts
+    // and the layout, once each); a click on
     // Switch goes to the same page with kind switch, and on Server back to it with no kind.
     // Catches: a server entry that gained a field or a call, or a kind that is not kept in the page's
     // parameters.
@@ -277,10 +278,17 @@ return { before, rows: rows(tree)[0], titles: nodes(tree).filter((n) => n.tag ==
             {"name": "inventory", "params": {}}
         ])
     );
+    let mut calls: Vec<String> = bodies(&ui).into_iter().map(|(method, _)| method).collect();
+    calls.sort();
     assert_eq!(
-        bodies(&ui).len(),
-        2,
-        "the servers page asks for the records and the layout (for the addresses) only"
+        calls,
+        [
+            m("Enrollment/ListRecords"),
+            m("Hosts/List"),
+            m("Layout/Get")
+        ],
+        "the servers page asks for the records, the hosts (for the enrolled hosts no record \
+         matches) and the layout (for the addresses) only"
     );
 }
 

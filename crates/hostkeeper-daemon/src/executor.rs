@@ -44,7 +44,7 @@ use crate::selfupdate::{self, Restart};
 use crate::verb::{HookedVerb, Verb};
 use crate::verbs;
 use crate::verbs::abort::Aborted;
-use crate::verbs::clear_halt::Lifted;
+use crate::verbs::clear_halt::{Heard, Lifted};
 use crate::verbs::force::SELF_SERVICE;
 use crate::watchers::{STOPPED, SlicedClock, WatchEnd, Watchers, Yielding};
 
@@ -739,6 +739,17 @@ impl Daemon {
     /// strictly above the one it is held under.
     pub fn clear_halt(&self, service: &ServiceName, generation: u64) -> Result<Lifted, Refused> {
         verbs::clear_halt::clear_halt(&self.ctx, service, generation)
+    }
+
+    /// A heartbeat reply named `generation` as the halt generation of `service`, after `before`
+    /// in the reply before it ([`verbs::clear_halt::heard`]).
+    pub fn heard_halt(
+        &self,
+        service: &ServiceName,
+        before: Option<u64>,
+        generation: u64,
+    ) -> Result<Heard, Refused> {
+        verbs::clear_halt::heard(&self.ctx, service, before, generation)
     }
 
     /// One verb. A step that could not be stopped is an alert (`unstoppable_unit`): its service

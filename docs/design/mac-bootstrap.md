@@ -86,6 +86,7 @@ sequenceDiagram
         Co->>Co: approve in the record's host group (enrollment.auto_approved)
     else no record
         Op->>Co: Enrollment.Approve {request, key_sha256, host_group}
+        Co->>Co: write the Mac's inventory record from its serial (record_add by coordinator)
     end
     D->>Co: Poll (unsigned, then signed with the key)
     Co-->>D: 7-day host certificate
@@ -150,7 +151,10 @@ Unchanged code, as [operations/enrollment.md](../operations/enrollment.md) "The 
 - **Inventory record by serial.** `hkctl enrollment add-record --host-id mac-03 --host-group build --serial <serial>`. A record that names a group is
   the approval, for a window (24 hours by default, 7 days at most) and once; the request must match exactly one record and no other pending request
   may contest it. The coordinator approves it itself, in the record's group, and audits `enrollment.auto_approved`.
-- **An operator** on the Enrollment page or `hkctl enrollment approve`, naming the key's hash and the `host_group`.
+- **An operator** on the Enrollment page or `hkctl enrollment approve`, naming the key's hash and the `host_group`. The coordinator then writes
+  the Mac's inventory record from its serial, added by `coordinator`, with no group and no window, so the Mac is listed in the inventory and the
+  record approves nothing ([operations/enrollment.md](../operations/enrollment.md#a-host-approved-without-a-record)); a Mac approved so before
+  this is recorded at the coordinator's next start.
 
 **What is lost against MDM, plainly.** The MDM nonce path proved the serial through Apple (ABM table, supervision, `EnrolledViaDEP`). Without MDM the
 serial is a claim the Mac makes about itself; anyone on the lab LAN who knows a serial can post a request that claims it. The record's window and its
