@@ -304,7 +304,10 @@ fn clear_halt_of_a_record_that_cannot_be_cleared_names_why_and_writes_nothing() 
 fn a_clear_halt_order_lifts_the_halt_and_a_stale_one_is_refused() {
     let farm = NativeHost::new("clear-order");
     let daemon = halted(&farm, 0);
-    let held = halted(&NativeHost::new("clear-order-held"), 1);
+    // Its own host, kept for the whole test: a host dropped removes its directories, and with
+    // them the held-halt file the stale order is judged against.
+    let held_farm = NativeHost::new("clear-order-held");
+    let held = halted(&held_farm, 1);
     let lifted = Reply::Finished {
         verdict: Verdict::Deferred {
             retry_after_secs: None,
