@@ -1,8 +1,8 @@
-// The panels of the Home page's edit mode that work on sleds: Add sled (size, slots, U location),
-// the panel of the sled or item picked up (Resize, Move..., Remove, Unassign) and the list of the
-// unplaced items offered for an empty bay. Each choice is made from a list the layout holds, never
-// typed but for a sled's label; the U locations offered are only those where the size fits. A button
-// makes one operation of `ops` (the page's: one call, and the page is read again).
+// The panels of the Home page's edit mode that work on sleds: the panel of the sled or item picked up
+// (Resize, Move..., Remove, Unassign) and the list of the unplaced items offered for an empty bay (Add
+// sled and Add device are the forms of `rackforms.js`). Each choice is made from a list the layout
+// holds, never typed but for a sled's label; the U locations offered are only those where the size
+// fits. A button makes one operation of `ops` (the page's: one call, and the page is read again).
 
 import { h, action, field } from "./view.js";
 import {
@@ -25,35 +25,6 @@ export function pick(name, state, key, options, label, after) {
     },
   };
   return h("label", {}, label, control);
-}
-
-// Add sled, for the racks in view: the rack (when there is more than one), the size in U, the slots
-// and the U location, only where that size fits in the rack chosen.
-export function addSledPanel(env) {
-  const { app, layout, state, ops, racks, redraw } = env;
-  if (racks.length === 0) {
-    return null;
-  }
-  const form = state.newSled;
-  if (!racks.some((r) => r.id === form.rack)) {
-    form.rack = racks[0].id;
-  }
-  const starts = freeSledStarts(layout, form.rack, Number(form.height));
-  if (!starts.includes(Number(form.u))) {
-    form.u = starts.length > 0 ? String(starts[0]) : "";
-  }
-  return h("div", { class: "buttons add-sled" },
-    racks.length > 1 ? pick("new-sled-rack", form, "rack", racks.map((r) => [r.id, rackName(layout, r.id)]), "Rack", redraw) : null,
-    pick("new-sled-height", form, "height", SLED_HEIGHTS.map((n) => [n, `${n}U`]), "Size", redraw),
-    pick("new-sled-slots", form, "slots", SLED_SLOTS.map((n) => [n, String(n)]), "Slots", null),
-    pick("new-sled-u", form, "u", starts.map((u) => [u, `U${u}`]), "U location", null),
-    action(app, "Add sled", "add-sled", async () => {
-      if (form.u === "") {
-        return `No U of ${rackName(layout, form.rack)} has room for a sled ${form.height}U high.`;
-      }
-      return ops.addSled(form.rack, Number(form.height), Number(form.slots), Number(form.u));
-    }, { class: "primary" }),
-    starts.length === 0 ? h("span", { class: "note" }, "No room for that size in this rack.") : null);
 }
 
 // The panel of a picked sled: its address and place, what stands on it (each with Unassign), Resize

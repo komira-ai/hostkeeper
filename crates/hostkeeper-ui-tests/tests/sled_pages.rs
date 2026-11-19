@@ -104,25 +104,27 @@ fn sent(ui: &Ui, method: &str) -> Vec<Value> {
         .collect()
 }
 
-/// Proves: Add sled asks Size (1 to 60 U from a list), Slots (1 to 8, default 1) and U location, and
-/// offers only the U where that size fits in the rack chosen (rack 0 has one free U, rack 1 has
-/// U3, U5 and U7 to 10); Add sled sends one PutSled with no id, the rack, the U, the size and the
-/// slots; a size that fits nowhere sends nothing and says so.
+/// Proves: Add sled (the + of a rack) asks Height (1 to 60 U from a list), Slots (1 to 8, default 1)
+/// and Position, and offers only the U where that height fits in its rack (rack 0 has one free U, rack
+/// 1 has U3, U5 and U7 to 10); Add sled sends one PutSled with no id, the rack, the U, the height and
+/// the slots; a height that fits nowhere sends nothing and says so in the form.
 /// Catches: a U offered where the sled would overlap another or pass the top, a typed size, and an
 /// add that sends the old height-and-U placement.
 #[test]
 fn add_sled_sends_size_slots_and_u_and_offers_only_the_u_where_it_fits() {
-    let mut ui = start(1);
+    let mut ui = start(2);
     let out = home(
         &mut ui,
         r#"{ row: "row-1", edit: true }"#,
         r#"
-const sizes = choices(tree, "new-sled-height", 0);
-const slots = choices(tree, "new-sled-slots", 0);
-const firstSlots = chosen(tree, "new-sled-slots", 0);
-const starts1 = choices(tree, "new-sled-u", 0);
-choose(tree, "new-sled-rack", "rack-2", 0);
+await click(tree, "add-sled-open", 0);
 let now = last();
+const sizes = choices(now, "new-sled-height", 0);
+const slots = choices(now, "new-sled-slots", 0);
+const firstSlots = chosen(now, "new-sled-slots", 0);
+const starts1 = choices(now, "new-sled-u", 0);
+await click(now, "add-sled-open", 1);
+now = last();
 const starts1b = choices(now, "new-sled-u", 0);
 choose(now, "new-sled-height", "3", 0);
 now = last();
@@ -130,12 +132,15 @@ const starts3 = choices(now, "new-sled-u", 0);
 choose(now, "new-sled-slots", "2", 0);
 choose(now, "new-sled-u", "7", 0);
 await click(now, "add-sled", 0);
-choose(now, "new-sled-rack", "rack-1", 0);
+now = await render(ctx);
+const said = words(named(now, "rack-form-said")[0]);
+await click(now, "add-sled-open", 0);
 now = last();
 const none = choices(now, "new-sled-u", 0);
 await click(now, "add-sled", 0);
+const error = words(named(last(), "rack-form-error")[0]);
 return { sizes: [sizes[0], sizes[59], sizes.length], slots: [slots[0], slots[7], slots.length], firstSlots,
-         starts1, starts1b, starts3, none, reports: seen.reports, refreshes: seen.refreshes };"#,
+         starts1, starts1b, starts3, none, said, error, reports: seen.reports, refreshes: seen.refreshes };"#,
     );
     assert_eq!(out["sizes"], json!(["1U", "60U", 60]));
     assert_eq!(out["slots"], json!(["1", "8", 8]));
@@ -145,15 +150,20 @@ return { sizes: [sizes[0], sizes[59], sizes.length], slots: [slots[0], slots[7],
         out["starts1b"],
         json!(["U3", "U5", "U7", "U8", "U9", "U10"])
     );
-    assert_eq!(out["starts3"], json!(["U7", "U8"]));
+    assert_eq!(out["starts3"], json!(["U7-9", "U8-10"]));
     assert_eq!(out["none"], json!([]));
     assert_eq!(out["refreshes"], 1);
     assert_eq!(
+        out["said"],
+        "Added a 3U sled with 2 slots at Row 0 / Rack 1, U7-9."
+    );
+    assert_eq!(
+        out["error"],
+        "No U of Row 0 / Rack 0 has room for a sled 3U high: pick a smaller height, or make the rack taller."
+    );
+    assert_eq!(
         out["reports"],
-        json!([
-            "A sled 3U high with 2 slots is added at Row 0 / Rack 1, U7.",
-            "No U of Row 0 / Rack 0 has room for a sled 3U high."
-        ])
+        json!(["Added a 3U sled with 2 slots at Row 0 / Rack 1, U7-9."])
     );
     assert_eq!(
         sent(&ui, "Layout/PutSled"),
@@ -677,10 +687,10 @@ return { head: all[0], web1: all.find((r) => r[0] === "web-1"), one, byName };"#
     assert_eq!(
         out["head"],
         json!([
-            "Server", "State", "Address", "Where", "Group", "Version", "Console"
+            "Server", "State", "Why", "Address", "Where", "Group", "Version", "Console"
         ])
     );
-    assert_eq!(out["web1"][2], "C0-R0-R0-S0-S0");
+    assert_eq!(out["web1"][3], "C0-R0-R0-S0-S0");
     assert_eq!(out["one"], json!(["mac-studio-1"]));
     assert_eq!(out["byName"], json!(["nuc-1"]));
 }

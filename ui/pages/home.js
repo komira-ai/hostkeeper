@@ -3,7 +3,9 @@
 // opens its racks as front elevations side by side in a strip that scrolls (wheel, drag and arrow
 // keys, arrow buttons and one rack at a time on a phone, with the number of the rack in view and
 // a fade at an end that has more); a click on a server opens its host page. Above the floor plan,
-// the conditions that need a person as one compact strip; below it, the servers not placed yet.
+// the conditions that need a person as one compact strip, then the degraded hosts: how many, with
+// their reasons grouped (`health.js`), each host a link to its page; below it, the servers not
+// placed yet. A server's row says, under Why, every reason its host is not healthy, in short.
 // `list` (true) shows every server in one compact list instead of the floor plan.
 // Breadcrumbs: Lab > Row > Rack > Host.
 //
@@ -12,17 +14,21 @@
 // `lab.js` reads it, `sleds.js` draws the sleds. A hostkeeper
 // runs one lab; the cluster has a name, shown on top and renamed in the edit mode. The edit mode
 // (`Edit layout`, `edit` in the page's params) adds the controls: add a row, add a rack (its height
-// from a list), resize, move to another row and remove a rack or a row, rename the cluster, add a sled
-// (its size in U, its slots and the U where it fits), resize, move (by dragging it to a free U, or the
-// arrow keys, or Move...) and remove a sled, and assign a server or a switch to an empty bay (click it, or
-// drag the item there) or unassign it. Every change is one call of `Layout` and the page read again;
-// a refusal is told in words. A rack that holds sleds, or a sled that holds items, is not removed.
+// from a list), move to another row and remove a rack or a row, rename the cluster; on each rack
+// "+ Add sled" and "+ Add device" (each opens one form above the racks, titled with what it adds and
+// where, that keeps its inputs after an add: `rackforms.js`), its height as a stepper and a grip on its
+// bottom edge to drag (a shrink that would cut a sled is refused, naming it); resize, move (by dragging
+// it to a free U, or the arrow keys, or Move...) and remove a sled, and assign a server or a switch to an
+// empty bay (click it, or drag the item there) or unassign it. Every change is one call of `Layout` and
+// the page read again; a refusal is told in words. A rack that holds sleds, or a sled that holds items,
+// is not removed.
 //
 // Params: `row` (a row id) shows that row's racks, `rack` (a rack id) one rack with its hosts,
 // `edit` (true) the edit mode, `list` (true) the list of servers in place of the floor plan, with a
 // Console link on the row of each Linux server (the Console page) and a Desktop link on the row of
 // each Mac (the Desktop page).
-// Calls: Hosts.List, Releases.Status and Alerts.List as the Fleet page made them, then Layout.Get
+// Calls: Hosts.List, Releases.Status and Alerts.List as the Fleet page made them (Alerts.List also
+// gives the reasons of the degraded hosts that name them; the hosts' own reports give the rest), then Layout.Get
 // and Enrollment.ListRecords (the lab is shown without them when they fail, and says so); on a
 // button, Layout.PutName, AddRow, RemoveRow, PutRack, RemoveRack, PutSled, RemoveSled, Place or Unplace.
 
@@ -30,13 +36,17 @@ import {
   h, action, allPages, describeError, enumLabel, errorView, field, fmtUnix, list, pill, table, trimmed,
 } from "../view.js";
 import {
-  DEFAULT_RACK_HEIGHT, RACK_HEIGHTS, STATES, consoleWords, counts, crumbs, gearOf, inRack,
+  RACK_HEIGHTS, STATES, consoleWords, counts, crumbs, gearOf, inRack,
   layoutOf, layoutProblem, rackName, racksOf, roleWords, rowName, serversOf, shownNumber, sledsIn, stripPosition,
   subjectOf, usedU, worstState,
 } from "../lab.js";
 import { ApiError } from "../api.js";
+import { fleetHealth } from "../health.js";
 import { board, tip } from "../sleds.js";
-import { addSledPanel, assignPanel, pick, selectionPanel } from "../sledpanels.js";
+import { assignPanel, pick, selectionPanel } from "../sledpanels.js";
+import {
+  formPreview, makeDrafts, rackAdds, rackError, rackForm, rackStepper, resizeGrip,
+} from "../rackforms.js";
 
 // How far an arrow key scrolls the rack strip when the width of a rack is not known: one rack's
 // width, in the browser's pixels; and the gap between two racks of the strip (the stylesheet's).
@@ -69,6 +79,29 @@ function alertsStrip(reply, failure) {
         h("span", { class: "said" }, alert.message || ""),
         h("small", {}, `since ${fmtUnix(alert.firstObservedUnix)}`));
     })));
+}
+
+// The degraded hosts of the fleet: their count, then each reason with the hosts that have it, most
+// hosts first, each host a link to its page. `alerts` is the list of Alerts.List, empty when it
+// could not be read (`unread`): then the count is of the hosts' own reports, and the strip says so.
+function degradedStrip(ctx, hosts, alerts, unread) {
+  const { degraded, groups } = fleetHealth(hosts, alerts);
+  const partial = unread ? h("small", { name: "degraded-partial" }, "(from the hosts' own reports: the alerts were not read)") : null;
+  if (degraded.length === 0) {
+    return h("div", { class: `alert-strip ${unread ? "warn" : "none"}`, role: "status", name: "degraded" },
+      h("span", { class: `sev ${unread ? "warn" : "ok"}`, "aria-hidden": "true" }), "No host is degraded.", partial);
+  }
+  const link = (nodeId) => h("button", {
+    type: "button", class: "linklike", name: "open-degraded",
+    on: { click: () => ctx.navigate("host", { nodeId }) },
+  }, nodeId);
+  return h("div", { class: "alert-strip bad", role: "status", name: "degraded" },
+    h("strong", { class: "alert-count" }, `Degraded hosts (${degraded.length})`),
+    partial,
+    h("ul", {}, groups.map((group) => h("li", { class: "alert", name: "degraded-reason" },
+      h("strong", {}, group.label),
+      h("small", {}, `${group.hosts.length} ${group.hosts.length === 1 ? "host" : "hosts"}:`),
+      group.hosts.map(link)))));
 }
 
 // Every host of Hosts.List, a page (at most 256 hosts) at a time.
@@ -126,6 +159,7 @@ function serversList(ctx, layout, servers, state, redraw) {
         on: { click: () => (s.host !== null ? ctx.navigate("host", { nodeId: s.host }) : ctx.navigate("inventory", { record: s.id })) },
       }, s.name)),
     h("td", {}, pill(s.state, STATES.find(([x]) => x === s.state)[1])),
+    h("td", { name: "why" }, s.why.join("; ") || "-"),
     h("td", { class: "mono" }, s.placement === null ? "-" : s.placement.address),
     h("td", {}, s.placement === null ? "Unplaced" : `${rackName(layout, s.placement.rack)}, U${s.placement.u}`),
     h("td", {}, s.group || "-"),
@@ -144,7 +178,7 @@ function serversList(ctx, layout, servers, state, redraw) {
   };
   return [
     h("div", { class: "buttons" }, input, h("button", { type: "button", name: "apply-filter", on: { click: apply } }, "Filter")),
-    table(["Server", "State", "Address", "Where", "Group", "Version", "Console"], rows),
+    table(["Server", "State", "Why", "Address", "Where", "Group", "Version", "Console"], rows),
   ];
 }
 
@@ -156,14 +190,18 @@ function stateStrip(servers, placedOnly) {
 }
 
 // The page's own state across redraws that read nothing: what is picked up, dragged or being assigned
-// in the edit mode, the choices of the forms, and the filter of the list.
+// in the edit mode, the choices of the sled and item panels, and the filter of the list.
 function makeState() {
   return {
     selected: null, target: null, drag: null, assign: null, moving: false, ghosts: new Map(), filter: "",
-    newSled: { rack: "", height: "1", slots: "1", u: "" }, resize: null, move: null,
-    name: null, newRackHeight: String(DEFAULT_RACK_HEIGHT),
+    resize: null, move: null, name: null,
   };
 }
+
+// The edit mode's forms on the racks (`rackforms.js`): what is open and what the operator chose, kept
+// across the page's refreshes (an add reads the page again) so that a form keeps its inputs. Leaving
+// the edit mode closes the form.
+const drafts = makeDrafts();
 
 // The names of the servers standing in the racks `racks`, as a sentence part.
 function standing(servers, racks) {
@@ -186,6 +224,20 @@ function lab(app, data, state) {
   const canPlace = edit && Boolean(app.params.row || app.params.rack);
   const go = (params) => app.navigate("home", Object.assign({}, params, edit ? { edit: true } : {}));
   const redraw = () => app.show(view());
+  if (!edit) {
+    drafts.opened = null;
+    drafts.rackError = null;
+  }
+  // The racks the view draws, which the open form must be about to be shown (set by `view`).
+  let inView = [];
+  const forms = {
+    app, layout, all, drafts, redraw,
+    calls: {
+      putRack: (body) => app.api.layout.putRack(body),
+      putSled: (body) => app.api.layout.putSled(body),
+      place: (body) => app.api.layout.place(body),
+    },
+  };
 
   // One change of the layout: `call()` makes it, the page is read again and `said` tells what was
   // done; a refusal is told in words and the page stays as it is.
@@ -253,16 +305,6 @@ function lab(app, data, state) {
     },
   };
   Object.assign(ops, {
-    // Adds an empty sled of `slots` slots, `height` U high, with its lowest U at `u` of `rackId`.
-    async addSled(rackId, height, slots, u) {
-      try {
-        await app.api.layout.putSled({ id: "", rack: rackId, u, heightU: height, slots, label: "", reason: "add sled" });
-      } catch (error) {
-        return layoutProblem(error);
-      }
-      done(`A sled ${height}U high with ${slots} ${slots === 1 ? "slot" : "slots"} is added at ${rackName(layout, rackId)}, U${u}.`);
-      return undefined;
-    },
     // Gives the sled `id` the size, slots and label (its place stays).
     async resizeSled(id, height, slots, label) {
       const sled = layout.sleds.find((x) => x.id === id);
@@ -290,12 +332,15 @@ function lab(app, data, state) {
       return undefined;
     },
   });
-  const sleds = board({ layout, all, edit, state, ops, go: (view2, params) => app.navigate(view2, params), redraw });
+  const sleds = board({
+    layout, all, edit, state, ops, go: (view2, params) => app.navigate(view2, params), redraw,
+    preview: () => formPreview(drafts, inView),
+  });
 
-  // The head of a rack: its number, U in use and, in the edit mode, resize, move and remove.
+  // The head of a rack: its number, U in use and, in the edit mode, its height, move and remove.
   function rackHead(rack) {
     const used = usedU(layout, rack.id);
-    const form = { height: String(rack.height), row: rack.row };
+    const form = { row: rack.row };
     // On the strip the rack's number opens the rack alone; on the rack's own page it is only a label.
     const opens = !app.params.rack;
     const head = [
@@ -310,12 +355,8 @@ function lab(app, data, state) {
     if (!edit) {
       return h("div", { class: "rack-head" }, head);
     }
-    const heights = Array.from(new Set(RACK_HEIGHTS.concat([rack.height]))).sort((a, b) => b - a);
     return h("div", { class: "rack-head edit" }, head,
-      pick("rack-height", form, "height", heights.map((n) => [n, `${n}U`]), "Height"),
-      change("Resize", "resize-rack", () => app.api.layout.putRack({
-        id: rack.id, row: rack.row, heightU: Number(form.height), reason: "resize",
-      }), () => `${rackName(layout, rack.id)} is now ${form.height}U.`),
+      rackStepper(forms, rack),
       layout.rows.length > 1
         ? pick("rack-row", form, "row", layout.rows.map((r) => [r.id, rowName(layout, r.id)]), "Row")
         : null,
@@ -340,11 +381,15 @@ function lab(app, data, state) {
       }, { class: "danger" }));
   }
 
-  // One rack: head and elevation.
+  // One rack: head and elevation; in the edit mode, its + buttons above, the grip on its bottom edge
+  // and why its last resize was refused.
   function rackColumn(rack, big) {
-    return h("div", { class: `rack${big ? " big" : ""}`, role: "group", "aria-label": rackName(layout, rack.id) },
+    return h("div", { class: `rack${big ? " big" : ""}${edit ? " editing" : ""}`, role: "group", "aria-label": rackName(layout, rack.id) },
       rackHead(rack),
-      h("div", { class: "cabinet" }, sleds.elevation(rack, big)));
+      edit ? rackError(forms, rack) : null,
+      edit ? rackAdds(forms, rack) : null,
+      h("div", { class: "cabinet" }, sleds.elevation(rack, big)),
+      edit ? resizeGrip(forms, rack) : null);
   }
 
   // The racks of a row as a strip: it scrolls by wheel, touch, dragging the background, the arrow
@@ -589,17 +634,18 @@ function lab(app, data, state) {
       h("span", { class: "foot-use" }, `${used}/${rack.height}U`));
   }
 
-  // The controls that add to the racks in view: a rack to the row (below) and, in a row or a rack, a sled.
-  function addSled(racks) {
-    return addSledPanel({ app, layout, state, ops, racks, redraw });
+  // The form that adds to one of the racks in view, opened by its + (`rackforms.js`).
+  function addTo(racks) {
+    inView = racks;
+    return edit ? rackForm(forms, racks) : null;
   }
 
-  // Adds a rack to the row, at a height chosen from the list.
+  // Adds a rack to the row, at a height chosen from the list (kept after the add).
   function addRack(rowId) {
     return h("div", { class: "buttons" },
-      pick("new-rack-height", state, "newRackHeight", RACK_HEIGHTS.map((n) => [n, `${n}U`]), "Height of the new rack"),
+      pick("new-rack-height", drafts, "newRackHeight", RACK_HEIGHTS.map((n) => [n, `${n}U`]), "Height of the new rack"),
       change("Add rack", "add-rack", () => app.api.layout.putRack({
-        row: rowId, heightU: Number(state.newRackHeight), reason: "add rack",
+        row: rowId, heightU: Number(drafts.newRackHeight), reason: "add rack",
       }), "A rack is added."));
   }
 
@@ -628,14 +674,14 @@ function lab(app, data, state) {
       const network = inRack(gear, rackAt.id);
       return h("section", { class: "page lab" },
         head(`${rowName(layout, rowAt.id)} / Rack ${shownNumber(rackAt.number)}`),
-        edit ? addSled([rackAt]) : null,
+        addTo([rackAt]),
         moving(),
         h("div", { class: "rack-solo" }, rackColumn(rackAt, true),
           h("div", { class: "rack-hosts" },
             h("h3", {}, `Servers (${here.length})`),
             here.length === 0
               ? h("p", { class: "empty" }, "No server stands in this rack yet.")
-              : table(["Server", "Address", "U", "State", "Group", "Version"], here.map((s) => h("tr", {},
+              : table(["Server", "Address", "U", "State", "Why", "Group", "Version"], here.map((s) => h("tr", {},
                 h("td", {}, h("button", {
                   type: "button", class: "linklike", name: "open-host",
                   on: { click: () => (s.host !== null ? app.navigate("host", { nodeId: s.host }) : app.navigate("inventory", { record: s.id })) },
@@ -643,6 +689,7 @@ function lab(app, data, state) {
                 h("td", { class: "mono" }, s.placement.address),
                 h("td", {}, `U${s.placement.u}`),
                 h("td", {}, pill(s.state, STATES.find(([x]) => x === s.state)[1])),
+                h("td", { name: "why" }, s.why.join("; ") || "-"),
                 h("td", {}, s.group || "-"),
                 h("td", {}, s.version || "-"))))),
           network.length === 0 ? null : h("div", { class: "rack-hosts" },
@@ -664,7 +711,7 @@ function lab(app, data, state) {
         head(`${title} / ${rowName(layout, rowAt.id)}`),
         stateStrip(servers, true),
         edit ? addRack(rowAt.id) : null,
-        edit ? addSled(racks) : null,
+        addTo(racks),
         moving(),
         racks.length === 0
           ? h("p", { class: "empty" }, "This row has no rack yet.")
@@ -675,6 +722,7 @@ function lab(app, data, state) {
       head(title),
       renameCluster(),
       data.alerts,
+      data.degraded,
       data.failure !== null
         ? h("p", { class: "error", role: "alert" }, `The lab could not be read: ${describeError(data.failure)}`)
         : [summary(), stateStrip(servers, false),
@@ -710,10 +758,15 @@ export async function render(ctx) {
   } catch (error) {
     failure = error;
   }
-  const servers = serversOf(layout, hosts, records);
+  const alertList = list(alerts, "alerts");
+  const servers = serversOf(layout, hosts, records, alertList);
   const inside = Boolean(ctx.params.row || ctx.params.rack);
   const notes = inside || status.quiet !== true
     ? null
     : h("p", { class: "note" }, "The coordinator is in its quiet start: it orders nothing yet.");
-  return lab(ctx, { layout, servers, failure, notes, alerts: inside ? null : alertsStrip(alerts, alertFailure) }, makeState());
+  return lab(ctx, {
+    layout, servers, failure, notes,
+    alerts: inside ? null : alertsStrip(alerts, alertFailure),
+    degraded: inside ? null : degradedStrip(ctx, hosts, alertList, alertFailure !== null),
+  }, makeState());
 }
