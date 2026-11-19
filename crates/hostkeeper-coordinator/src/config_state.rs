@@ -120,7 +120,19 @@ pub(super) fn open_store(
         .server_names
         .first()
         .map_or("coordinator", String::as_str);
-    let (store, loaded) = Postgres::open(&dsn, holder, &wall_clock(), Arc::clone(oidc_clock))?;
+    let listen = super::database::listen_of(
+        flags.heartbeat_listen,
+        flags.private_listen,
+        flags.lan_listen,
+    );
+    let options = flags.database.options(crate::stamp::version(), &listen);
+    let (store, loaded) = Postgres::open(
+        &dsn,
+        &options,
+        holder,
+        &wall_clock(),
+        Arc::clone(oidc_clock),
+    )?;
     if let Some(numbers) = listed {
         settle_in_database(&store, marker, &numbers)?;
     }
