@@ -152,9 +152,9 @@ pub(super) fn start_on_postgres(
 
 impl Farm {
     /// A coordinator on a database of its own, its clock at 2000 (past the quiet start), over the
-    /// store opened with `timeouts` and one writing session (so a session the test ends is the
-    /// only one that held the lock, which [`Farm::lock_is_free`] waits on; the pool has tests of
-    /// its own); with `enrolled`, the enrollment store's records on the same store.
+    /// store opened with `timeouts` and a pool of one writing session (beside the session of
+    /// heartbeats' decisions; the pool has tests of its own); with `enrolled`, the enrollment
+    /// store's records on the same store.
     fn start(test: &str, timeouts: Timeouts, enrolled: bool) -> Farm {
         let database = TestDatabase::new();
         let (store, loaded) = database
@@ -237,6 +237,9 @@ impl Farm {
         if self.store.health() == Health::Up {
             return;
         }
+        // The sessions a loss left up (the decisions' one, which the test did not use) are ended
+        // too, so the lock is free once every backend is gone; the revival opens each again.
+        self.database.end_sessions();
         self.lock_is_free();
         self.store.revive();
         self.store.settle().expect("the writers run");
@@ -625,7 +628,7 @@ fn host_record(host: &str, role: &str) -> pb::Host {
 #[test]
 fn the_enrollment_records_read_each_host_as_the_table_holds_it() {
     let database = TestDatabase::new();
-    // One writing session: the one the fault ends is then the only one that held the lock.
+    // A pool of one writing session, the one the fault ends, beside the decisions' own.
     let (store, _) = database
         .open_options(&super::pooled(1), "records")
         .expect("the store opens");
@@ -657,7 +660,20 @@ fn the_enrollment_records_read_each_host_as_the_table_holds_it() {
         Some("storage"),
         "a read does not wait on the lost session, and reads what landed"
     );
-    Holding::the_lock(&database).release();
+    // The lost writer's backend is gone once only the decisions' session holds the lock: a
+    // progress event the server shows, not a time.
+    let holders = |database: &TestDatabase| {
+        database
+            .rows(&format!(
+                "SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND objid = {LOCK_KEY}::bigint \
+                 % 4294967296 AND granted AND database = \
+                 (SELECT oid FROM pg_database WHERE datname = current_database())"
+            ))
+            .len()
+    };
+    while holders(&database) > 1 {
+        std::thread::yield_now();
+    }
     store.revive();
     store.settle().expect("the writers run");
     assert_eq!(store.health(), Health::Up);

@@ -461,7 +461,7 @@ fn a_database_that_holds_sealed_mdm_secrets_starts_without_their_key() {
 }
 
 /// Proves: `serve --database-pool 2` holds the coordinator's lock on exactly two writing sessions
-/// (the default 4 on four), and each start makes its row of `instances` with this build's release
+/// and the one of heartbeats' decisions (the default 4 on four and that one), and each start makes its row of `instances` with this build's release
 /// (`hostkeeper-coordinator --version`'s) and the addresses of its heartbeat and private listeners;
 /// `--database-pool 0`, a `--migrate-ddl-lock-timeout-ms` of 0 or of 5000 (not below the
 /// store's statement timeout) and a `--beat-reorder-secs` of 0 or of 45 (not below the silence after
@@ -489,11 +489,11 @@ fn a_serve_holds_its_pool_and_makes_its_instance_row() {
     let mut pooled = args.clone();
     pooled.extend(flags(&[("--database-pool", "2")]));
     let parts = start(pooled);
-    assert_eq!(shared(), 2);
+    assert_eq!(shared(), 3);
     drop(parts);
     database.lock_is_free();
     let parts = start(args.clone());
-    assert_eq!(shared(), 4, "the default pool");
+    assert_eq!(shared(), 5, "the default pool and the decisions' session");
     drop(parts);
 
     let rows: Vec<(String, String)> = in_schema(&database)

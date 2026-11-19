@@ -61,10 +61,11 @@ impl Fleet {
     /// rows', and the tries no longer outstanding the highest of memory's and the rows'. An order
     /// memory held that the rows do not is no longer outstanding: its try is kept as one the next
     /// order numbers past. A row that does not read (a host id or a version this build cannot
-    /// parse) is left out.
-    pub(crate) fn take_rows(&mut self, rows: &Rows, now: Duration) {
+    /// parse) is left out; the order rows it kept are answered, the only ones a decision may
+    /// write back over ([`Self::writes_since`]): a row a newer release wrote is never ended by it.
+    pub(crate) fn take_rows(&mut self, rows: &Rows, now: Duration) -> Vec<OrderRow> {
         let at = |unix: i64| placed(unix, now, rows.now_unix);
-        let mut orders = BTreeMap::new();
+        let (mut orders, mut kept) = (BTreeMap::new(), Vec::new());
         for row in &rows.orders {
             let (Ok(host), Ok(target)) =
                 (row.host_id.parse::<HostId>(), Version::parse(&row.target))
@@ -78,6 +79,7 @@ impl Fleet {
                 order_try: try_of(row.order_try),
             };
             orders.insert((host, row.service.clone()), order);
+            kept.push(row.clone());
         }
         let gone: Vec<_> = self
             .orders
@@ -112,6 +114,7 @@ impl Fleet {
             *given = (*given).max(try_of(row.order_try));
         }
         self.shared.quiet_until = Some(at(rows.quiet_until));
+        kept
     }
 
     /// Whether the row of `host`, which another coordinator heard, changed since this fleet took
@@ -145,17 +148,26 @@ impl Fleet {
         now: Duration,
         now_unix: i64,
     ) -> Writes {
+        // A row's time placed before the coordinator's start is its start: written back, it keeps
+        // the row's own time, so an order is never made younger by the round trip.
         let held: Vec<OrderRow> = self
             .orders
             .iter()
             .filter(|(_, order)| now.saturating_sub(order.at) < ORDER_AGE)
-            .map(|((host, service), order)| OrderRow {
-                host_id: host.as_str().to_owned(),
-                service: service.clone(),
-                target: order.target.to_string(),
-                uninstall_id: order.uninstall.clone(),
-                at_unix: unplaced(order.at, now, now_unix),
-                order_try: i64::try_from(order.order_try).unwrap_or(i64::MAX),
+            .map(|((host, service), order)| {
+                let at_unix = read
+                    .iter()
+                    .find(|was| was.host_id == host.as_str() && was.service == *service)
+                    .filter(|was| placed(was.at_unix, now, now_unix) == order.at)
+                    .map_or_else(|| unplaced(order.at, now, now_unix), |was| was.at_unix);
+                OrderRow {
+                    host_id: host.as_str().to_owned(),
+                    service: service.clone(),
+                    target: order.target.to_string(),
+                    uninstall_id: order.uninstall.clone(),
+                    at_unix,
+                    order_try: i64::try_from(order.order_try).unwrap_or(i64::MAX),
+                }
             })
             .collect();
         let mut writes = Writes::default();

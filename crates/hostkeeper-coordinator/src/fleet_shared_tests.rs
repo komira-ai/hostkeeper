@@ -52,7 +52,8 @@ fn a_rows_time_is_placed_on_the_coordinators_clock_and_back() {
 /// that does not read is left out.
 /// Catches: a fleet that keeps an order another coordinator's beat ended (its slot held for
 /// good), forgets the try of an order it dropped (the host refuses the next order as stale), or
-/// fails on a row it cannot parse.
+/// fails on a row it cannot parse, or answers that row as read (a decision would then end an
+/// order a newer release gave).
 #[test]
 fn the_rows_orders_bakes_and_tries_become_the_fleets() {
     let now = secs(1000);
@@ -92,7 +93,12 @@ fn the_rows_orders_bakes_and_tries_become_the_fleets() {
             order_try: 9,
         },
     ];
-    fleet.take_rows(&read, now);
+    let kept = fleet.take_rows(&read, now);
+    assert_eq!(
+        kept,
+        [order("h1", "2.0", 10, 3)],
+        "only the rows it read are answered"
+    );
     let given = fleet.outstanding("web", &id("h1"), now);
     assert_eq!(
         given.map(|o| (o.order_try, o.target)),
@@ -216,4 +222,20 @@ fn a_hosts_row_is_taken_in_once_until_it_changes() {
     assert!(!fleet.row_is_new("h1", 10, 9, "a"));
     assert!(fleet.row_is_new("h1", 25, 24, "a"));
     assert!(fleet.row_is_new("h1", 25, 24, "b"));
+}
+
+/// Proves: an order row older than the coordinator's own start, taken in and left as it was, is
+/// written back as nothing: its time is the row's own, not the start it was placed at.
+/// Catches: a decision that makes every old order younger at each beat after a restart (an
+/// order that should age out kept, and its row rewritten every beat).
+#[test]
+fn an_order_older_than_the_coordinators_start_keeps_its_own_time() {
+    let now = secs(5);
+    let mut fleet = Fleet::new(Duration::ZERO, QUIET_START);
+    let read = fleet.take_rows(&rows(vec![order("h1", "2.0", 60, 3)]), now);
+    let sent = fleet.sent_tries();
+    assert_eq!(
+        fleet.writes_since(&read, &sent, now, NOW_UNIX),
+        Writes::default()
+    );
 }

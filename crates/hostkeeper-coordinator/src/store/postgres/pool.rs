@@ -20,6 +20,8 @@ pub(crate) struct Pool {
     free: Mutex<VecDeque<usize>>,
     /// The decisions' writer, while no decision holds it.
     deciding: Mutex<Option<usize>>,
+    /// What a decision waiting for its writer is told by when the writer comes back.
+    returned: Condvar,
     freed: Condvar,
     /// How many calls have waited for a free writer: what a test sees a call wait by.
     #[cfg(test)]
@@ -56,7 +58,7 @@ impl Drop for Lease {
                     .deciding
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner) = Some(self.index);
-                self.pool.freed.notify_all();
+                self.pool.returned.notify_one();
             }
             false => self.pool.give_back(self.index),
         }
@@ -80,6 +82,7 @@ impl Pool {
             writers,
             free: Mutex::new((0..count.saturating_sub(1)).collect()),
             deciding: Mutex::new(count.checked_sub(1)),
+            returned: Condvar::new(),
             freed: Condvar::new(),
             #[cfg(test)]
             waited: std::sync::atomic::AtomicUsize::new(0),
@@ -111,7 +114,7 @@ impl Pool {
     fn give_back(&self, index: usize) {
         self.free().push_back(index);
         // A decision's wait for its own writer shares the condition.
-        self.freed.notify_all();
+        self.freed.notify_one();
     }
 
     /// Runs `job` on the writer that has been free longest, waiting while none is, and waits for
@@ -153,7 +156,7 @@ impl Pool {
                 break index;
             }
             free = pool
-                .freed
+                .returned
                 .wait(free)
                 .unwrap_or_else(PoisonError::into_inner);
         };

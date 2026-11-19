@@ -65,7 +65,7 @@ pub(super) enum Mode<'a> {
 /// A heartbeat's decision under way, with what it puts back if it does not land.
 pub(super) struct Deciding<'a> {
     decision: Box<Decision>,
-    /// The orders it read.
+    /// The orders it read and took in (a row this build cannot read is never written over).
     read: Vec<OrderRow>,
     /// The tries no longer outstanding when it took the rows in.
     sent: BTreeMap<(HostId, String), u64>,
@@ -211,11 +211,11 @@ impl Coordinator {
         }
         self.refresh_marks(fleet);
         let rows = decision.rows().clone();
-        fleet.take_rows(&rows, now);
+        let read = fleet.take_rows(&rows, now);
         self.take_in_hosts(fleet, &rows, now);
         Mode::Deciding(Box::new(Deciding {
             decision,
-            read: rows.orders,
+            read,
             sent: fleet.sent_tries(),
             desired: self.desired.copy(),
             ops: self.ops.checkpoint(),

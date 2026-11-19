@@ -255,6 +255,16 @@ pub(crate) struct Loaded {
     pub(crate) facts: Option<Facts>,
 }
 
+#[cfg(test)]
+impl Loaded {
+    /// The same, without the queue's numbers a database keeps beside the desired state
+    /// (`set_seq`, a database's alone): what every backend holds alike.
+    pub(crate) fn alike(mut self) -> Loaded {
+        self.desired.seqs.clear();
+        self
+    }
+}
+
 /// Why a backend did not load or commit: the error of the part it failed on, as the store of that
 /// part has always said it.
 #[derive(Debug, thiserror::Error)]

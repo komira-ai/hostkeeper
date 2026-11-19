@@ -160,7 +160,7 @@ async fn two_coordinators_never_exceed_max_updating() {
             let barrier = &barrier;
             let one = s.spawn(move || race(a, barrier, ["s1", "s2", "s3", "s4"]));
             let other = s.spawn(move || race(b, barrier, ["s4", "s3", "s2", "s1"]));
-            one.join().unwrap_or(0) + other.join().unwrap_or(0)
+            one.join().expect("a racer ends") + other.join().expect("a racer ends")
         });
         let orders = pair.orders();
         assert!(orders.len() <= 1, "one slot: {orders:?}");
