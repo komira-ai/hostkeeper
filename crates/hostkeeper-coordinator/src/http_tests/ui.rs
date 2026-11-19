@@ -244,6 +244,33 @@ async fn ui_dir_unset_serves_nothing() {
     }
 }
 
+/// Proves: the policy every answer of the file server carries is exactly the string the console
+/// design measured in two browsers (`docs/design/console-broker.md`, section 17.5), whole.
+///
+/// Catches: a directive dropped or loosened (`'unsafe-inline'` or `'unsafe-eval'` for script, a
+/// `connect-src` that names another origin, `data:` beyond images), one added, and the header
+/// carrying something other than the constant.
+#[tokio::test]
+async fn the_csp_string_is_pinned_whole() {
+    assert_eq!(
+        CONTENT_SECURITY_POLICY,
+        "default-src 'self'; connect-src 'self'; frame-ancestors 'none'; \
+         style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+    );
+    let site = site("ui-csp");
+    for path in ["/ui/", "/ui/missing.js"] {
+        let (_, headers, _) = on_private(&site.rig, "GET", path).await;
+        assert_eq!(
+            header(&headers, "content-security-policy"),
+            Some(
+                "default-src 'self'; connect-src 'self'; frame-ancestors 'none'; \
+                 style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+            ),
+            "{path}"
+        );
+    }
+}
+
 /// Catches: a security header missing, the wrong content type, or a body on `HEAD`: `GET /ui/`
 /// (and with a query) is `index.html` as HTML with the four headers and its length; `HEAD /ui/`
 /// has the same headers and length and no body; each extension of the table is served with

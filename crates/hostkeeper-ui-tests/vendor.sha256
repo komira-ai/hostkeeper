@@ -1,0 +1,4 @@
+# The files of ui/vendor/, each with its SHA-256: `sha256sum` output, run in ui/ (64 lower-case hex
+# digits, two spaces, the path under ui/). Every file under ui/vendor/ has a line here and every line
+# names a file there (`cargo test -p hostkeeper-ui-tests --test sources`), so a change to a vendored
+# library is a change to this file. Above each library's lines: its name, version and licence.

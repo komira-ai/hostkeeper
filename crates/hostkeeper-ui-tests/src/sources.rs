@@ -19,6 +19,11 @@ impl UiFile {
     pub fn is_script(&self) -> bool {
         self.path.ends_with(".js")
     }
+
+    /// Whether the file is part of a vendored library (under `ui/vendor/`).
+    pub fn is_vendored(&self) -> bool {
+        crate::vendor::is_vendored(self.path)
+    }
 }
 
 macro_rules! ui_files {
@@ -51,6 +56,7 @@ ui_files![
     "sledpanels.js",
     "openpgp.js",
     "main.js",
+    "socket_address.js",
     "session.js",
     "signin.js",
     "view.js",
@@ -92,5 +98,11 @@ mod tests {
         let html = UiFile::named("index.html").expect("index.html is held");
         assert!(!html.is_script());
         assert_eq!(UiFile::named("pages/missing.js"), None);
+        assert!(!api.is_vendored());
+        let vendored = UiFile {
+            path: "vendor/lib/lib.js",
+            text: "",
+        };
+        assert!(vendored.is_vendored());
     }
 }

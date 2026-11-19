@@ -14,7 +14,9 @@
 //! - [`derived_calls`], [`calls_json`] and [`listed_calls`]: `ui/calls.json`, the list of those
 //!   functions with their methods and the pages that call them, derived from the source;
 //! - [`scan`]: what the sources must never contain (token storage, logging, a URL of another
-//!   origin, an inline script or handler, markup built from text).
+//!   origin, an inline script or handler, markup built from text, a socket outside the one opener);
+//! - [`vendor`]: the third-party libraries under `ui/vendor/`, each file pinned by its SHA-256 and
+//!   held to a scan of its own.
 //!
 //! The tests under `tests/` also run the app's data layer and pages in a JavaScript engine
 //! against a fake gateway, and send each call of `ui/calls.json` to the real coordinator, built
@@ -26,6 +28,7 @@ pub mod client_gen;
 mod lexis;
 pub mod scan;
 mod sources;
+pub mod vendor;
 
 pub use calls::{
     CallSite, DeriveError, ListError, Listed, ScanError, UnknownCall, call_sites, calls_json,

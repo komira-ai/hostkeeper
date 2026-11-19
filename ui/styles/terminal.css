@@ -1,7 +1,8 @@
 /* The terminal of the host page's Remote SSH tab (ui/terminal.js draws into it). The 16 colours are
    named by class (tf0 to tf15 for the text, tb0 to tb15 for the ground); tfd and tbd are the
    default ground and text colours swapped, which inverse video of a default colour is. No style
-   attribute is used anywhere, so the content security policy stays default-src 'self'. */
+   attribute is used anywhere in the app's own sources (the scan of the sources holds it), although
+   the content security policy allows inline style for the console's vendored terminal. */
 
 .termbox {
   --t-ground: #0c1219;

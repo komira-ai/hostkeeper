@@ -36,7 +36,7 @@ token, in memory, and sends it in the `X-HK-CSRF` header of each API call. Reloa
 the coordinator for the session again, so a reload does not sign you out. A first sign-in, or a
 sign-in with a temporary password an admin set, shows only the form for choosing a new password.
 Sign out ends the session on the coordinator. The host page's Remote SSH terminal speaks to the coordinator over one WebSocket to the same origin
-(`/v1/ssh/terminal`, `docs/operations/ssh-ca.md`), which `default-src 'self'` allows.
+(`/v1/ssh/terminal`, `docs/operations/ssh-ca.md`), which `connect-src 'self'` allows.
 
 ## The frame and the lab
 
@@ -150,7 +150,7 @@ by their route and are not in the menu.
   origin (over TLS), sends `{csrf, cols, rows}` first (the session's CSRF token and a terminal of 120 by 36), then keystrokes and
   pastes as binary messages; the host's output comes back as binary messages and is drawn by the app's own terminal (`ui/terminal.js`,
   `ui/terminal_render.js`, `ui/terminal_keys.js`; no third-party code), into elements classed by `ui/styles/terminal.css`, so no inline
-  style or script is used and the policy above stays as it is. The coordinator's `status` messages show how far it has got and its last
+  style or script is used. The coordinator's `status` messages show how far it has got and its last
   message, `closed`, gives the cause, which the tab shows in words (every refusal of `SshRefusal`, every close cause of a tunnel,
   `no_pin`, `host_key_mismatch`, `auth_refused`, `shell_refused`, `bad_request` and `exit`); a socket that closes without it says so.
   **Close** closes the socket. The terminal has no resize (it is always 120 by 36) and keeps the last 200 lines that scrolled off.
@@ -183,12 +183,24 @@ by their route and are not in the menu.
 - Each file is read from disk on each request; nothing is cached in memory.
 - Every answer carries `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`,
   `Referrer-Policy: no-referrer` and
-  `Content-Security-Policy: default-src 'self'; frame-ancestors 'none'`. No answer of the
-  coordinator carries an `Access-Control-*` header.
-- The one socket: the app opens a socket in exactly one place, `ui/main.js`, which builds `ctx.openSocket(path, handlers)` from the
-  page's own host and hands it to the pages as it hands them `fetch`. The scan of the sources
-  (`crates/hostkeeper-ui-tests/src/scan.rs`) refuses `WebSocket` in every other file and a `ws://` or `wss://` address in every file, and holds
-  `main.js` to one `WebSocket(` call.
+  `Content-Security-Policy: default-src 'self'; connect-src 'self'; frame-ancestors 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data:`.
+  Script comes only from the app's own origin: no inline script and no `eval`. `connect-src 'self'` lets the page reach its own
+  origin, a `wss:` socket to its own host and port included. Inline style and `data:` images are for the console's vendored
+  libraries (the terminal draws its cells with inline style, the remote desktop its cursor and JPEG rectangles as `data:`
+  images; [console design](design/console-broker.md), section 8.2); the app's own files still use neither inline style nor
+  inline script. No answer of the coordinator carries an `Access-Control-*` header.
+- The one socket: the app opens one kind of WebSocket, to its own origin, in exactly one place, `ui/main.js`, which builds
+  `ctx.openSocket(path, handlers)` and hands it to the pages as it hands them `fetch`. Its address comes from
+  `socketAddress` (`ui/socket_address.js`): the page's own host, over TLS when the page is, and a path of one of two fixed shapes, the
+  Remote SSH terminal's (`/v1/ssh/terminal?host=<host id>`) and a console session's stream
+  (`/console/v1/stream/<session id of 64 lower-case hex digits>`); any other path is refused before a socket is made. The scan of the
+  sources (`crates/hostkeeper-ui-tests/src/scan.rs`) refuses `WebSocket` in every other file of the app and a `ws://` or `wss://`
+  address in every file, and holds `main.js` to one `WebSocket(` call, whose argument is `socketAddress(window.location, path)`.
+- Vendored libraries: third-party code lives under `ui/vendor/`, each file pinned by its SHA-256 in
+  `crates/hostkeeper-ui-tests/vendor.sha256` (`sha256sum` lines, run in `ui/`), so a change to a vendored library is a change to
+  that file; the scan fails for a vendored file with no pin or another digest, and for a pin with no file. The directory is exempt
+  from the scan's needles (minified code names licence URLs and `console.`), and is still refused, by the scan, inline script and
+  handlers made from text, and any `WebSocket(` call: the libraries are handed the app's one socket, already open.
 - The files need no sign-in. The operator API the app calls still needs a session (with its CSRF
   header) or an operator token on every call.
 
