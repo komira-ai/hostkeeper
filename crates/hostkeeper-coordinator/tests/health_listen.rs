@@ -72,7 +72,7 @@ fn a_wildcard_health_address_needs_its_opt_in_and_one_interface_does_not() {
         "127.255.0.1:9",
         "[::1]:9",
         "[::ffff:127.0.0.1]:9",
-        "10.0.1.7:8446",
+        "198.51.100.7:8446",
         "192.0.2.1:9",
         "[2001:db8::1]:9",
     ] {
