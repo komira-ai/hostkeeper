@@ -12,17 +12,22 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use hostkeeper_config::daemon::Sha256Hex;
 use hostkeeper_daemon::cli::{HostFiles, host_enroller, host_links, image_of};
+use hostkeeper_daemon::host_identity::{
+    CERT_FILE, HostIdentity, IDENTITY_KEPT, IDENTITY_NOT_KEPT, IdentityOwner, KEY_FILE,
+};
+use hostkeeper_daemon::identity_group::{IDENTITY_GROUP, IdentityGroup};
 use hostkeeper_daemon::links::{Links, NO_ENROLLMENT};
 use hostkeeper_daemon::testing::{Ending, FakeNotifier, Log, Notice, Signal};
 use hostkeeper_daemon::unix_clock::SystemUnixClock;
-use hostkeeper_daemon::{NoWatchdog, start};
+use hostkeeper_daemon::{Daemon, NoWatchdog, start};
 use hostkeeper_enroll::{
     CoordinatorEnroll, EnrollAnswer, EnrollRequest, LinuxClaims, OsEntropy, PkiDir, Poll,
     PollAnswer, RenewAnswer, RenewRequest, Settings as EnrollSettings, SystemWallClock,
     TransportError,
 };
-use hostkeeper_launchd::PlatformKind;
-use hostkeeper_link::testing::{FakeLink, RecordingLog, ScriptedSleeper};
+use hostkeeper_launchd::{FakeLaunchctl, PlatformKind};
+use hostkeeper_link::ClientIdentity;
+use hostkeeper_link::testing::{FakeCerts, FakeLink, RecordingLog, ScriptedSleeper};
 use hostkeeper_link::{
     CertSource, CertState, DEFAULT_HEARTBEAT_SECS, Dispatch, Job, StopFlag, Tick, UnixClock,
 };
@@ -91,6 +96,7 @@ fn links_with(
         renewal: hostkeeper_enroll::RenewalState::default(),
         watchdog: Box::new(NoWatchdog),
         console: None,
+        identity: None,
         remote_login_probe: None,
         operator_keys: None,
         prerequisites: None,
@@ -249,6 +255,224 @@ fn the_enrollment_loop_runs_its_enroller_until_it_is_told_to_stop() {
     );
 }
 
+/// The coordinator of the identity tests: it cannot be reached; at its call number `k` it makes
+/// the host's pair `k` (certificate `cert k`, key `key k`) what the certificate source gives, notes
+/// what the identity directory held when it was called, and at the call number `stop_at` it tells
+/// the loop to stop.
+struct StepsOf {
+    calls: usize,
+    stop_at: usize,
+    certs: Arc<FakeCerts>,
+    certificate: PathBuf,
+    held: Arc<std::sync::Mutex<Vec<Option<String>>>>,
+    stop: StopFlag,
+}
+
+impl CoordinatorEnroll for StepsOf {
+    fn presented_ca_der(&mut self) -> Result<Vec<u8>, TransportError> {
+        self.held
+            .lock()
+            .expect("the notes")
+            .push(std::fs::read_to_string(&self.certificate).ok());
+        self.calls += 1;
+        let k = self.calls;
+        self.certs.set(CertState::Enrolled(ClientIdentity::new(
+            format!("cert {k}").into_bytes(),
+            format!("key {k}").into_bytes(),
+        )));
+        if k == self.stop_at {
+            self.stop.stop();
+        }
+        Err(TransportError("down".to_owned()))
+    }
+
+    fn enroll(&mut self, _request: &EnrollRequest) -> Result<EnrollAnswer, TransportError> {
+        Err(TransportError("not asked".to_owned()))
+    }
+
+    fn poll(&mut self, _poll: &Poll) -> Result<PollAnswer, TransportError> {
+        Err(TransportError("not asked".to_owned()))
+    }
+
+    fn renew(&mut self, _request: &RenewRequest) -> Result<RenewAnswer, TransportError> {
+        Err(TransportError("not asked".to_owned()))
+    }
+}
+
+/// A certificate source that notes, at each read, whether the daemon's node holds an enrollment.
+struct SeesNode {
+    inner: Arc<FakeCerts>,
+    daemon: Arc<Daemon>,
+    saw: Arc<std::sync::Mutex<Vec<bool>>>,
+}
+
+impl hostkeeper_link::CertSource for SeesNode {
+    fn current(&self) -> CertState {
+        self.saw
+            .lock()
+            .expect("the notes")
+            .push(self.daemon.ctx().node.enrollment().is_some());
+        self.inner.current()
+    }
+}
+
+/// What [`three_steps`] saw: the identity directory's certificate as each step began, the log, the
+/// identity directory, whether the node held an enrollment at each read of the copy's source, and
+/// the rig.
+struct Ran {
+    notes: Vec<Option<String>>,
+    lines: Vec<String>,
+    dir: PathBuf,
+    node_held: Vec<bool>,
+    _rig: Rig,
+}
+
+/// Runs the enrollment loop for three steps with an identity copy in `identity_dir`, whose
+/// certificate source the coordinator of [`StepsOf`] sets at each step.
+fn three_steps(name: &str, prepare: impl FnOnce(&Path)) -> Ran {
+    let rig = Rig::new(name);
+    let daemon = Arc::new(rig.daemon());
+    let stop = StopFlag::default();
+    let root = rig.scratch.path();
+    let identity_dir = root.join("identity");
+    prepare(&identity_dir);
+    let certs = Arc::new(FakeCerts::new(CertState::NotEnrolled {
+        waiting_for: PathBuf::from("current"),
+    }));
+    let held = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let saw = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let claims = root.join("no-claims");
+    let ports = hostkeeper_enroll::Ports {
+        coordinator: Box::new(StepsOf {
+            calls: 0,
+            stop_at: 3,
+            certs: Arc::clone(&certs),
+            certificate: identity_dir.join(CERT_FILE),
+            held: Arc::clone(&held),
+            stop: stop.clone(),
+        }),
+        store: Box::new(PkiDir::new(&root.join("pki"))),
+        claims: Box::new(LinuxClaims::new(&claims, &claims, &claims, &claims)),
+        entropy: Box::new(OsEntropy),
+        wall: Box::new(SystemWallClock),
+        clock: Box::new(hostkeeper_link::testing::FakeClock::new(0, 0)),
+        managed: None,
+    };
+    let settings = EnrollSettings {
+        ca_sha256: pin(),
+        image: "image-1".to_owned(),
+    };
+    let group_file = root.join("group");
+    let gid = rustix::process::getegid().as_raw();
+    std::fs::write(&group_file, format!("{IDENTITY_GROUP}:x:{gid}:\n")).expect("the group file");
+    let group = IdentityGroup::in_group_file(
+        IDENTITY_GROUP,
+        group_file,
+        Box::new(FakeLaunchctl::new()),
+        PlatformKind::Linux,
+    );
+    let me = rustix::process::geteuid().as_raw();
+    let log = Arc::new(RecordingLog::default());
+    let (dispatch, jobs) = handed();
+    let links = Links {
+        stop: stop.clone(),
+        identity: Some(HostIdentity::new(
+            Arc::new(SeesNode {
+                inner: certs,
+                daemon: Arc::clone(&daemon),
+                saw: Arc::clone(&saw),
+            }),
+            identity_dir.clone(),
+            group,
+            IdentityOwner { uid: me, gid },
+        )),
+        ..links_with(
+            open_once(settings, ports),
+            Arc::new(NotedCerts(Log::default())),
+            Arc::clone(&log),
+            dispatch,
+        )
+    };
+    links.start(&daemon);
+    let started = Ending::default();
+    started.over("links.start returned");
+    let enrollment = jobs.wait(&started).expect("the enrollment loop");
+    enrollment();
+    let notes = held.lock().expect("the notes").clone();
+    let node_held = saw.lock().expect("the notes").clone();
+    Ran {
+        notes,
+        lines: log.lines(),
+        dir: identity_dir,
+        node_held,
+        _rig: rig,
+    }
+}
+
+/// Catches an identity copy that is not made after every step of the enrollment loop (only at
+/// the end, only at the first step, or never): the copy of the pair of step `k` is in place by the
+/// time step `k + 1` begins, and the last step's pair is there when the loop ends. The copy is
+/// logged once.
+#[test]
+fn the_enrollment_loop_makes_the_identity_copy_after_each_step() {
+    let Ran {
+        notes,
+        lines,
+        dir,
+        _rig,
+        ..
+    } = three_steps("links-identity", |_| {});
+    assert_eq!(
+        notes,
+        [None, Some("cert 1".to_owned()), Some("cert 2".to_owned())]
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join(CERT_FILE)).expect("host.crt"),
+        "cert 3"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join(KEY_FILE)).expect("host.key"),
+        "key 3"
+    );
+    let down = "the coordinator could not be reached: down".to_owned();
+    assert_eq!(lines, [down, format!("{IDENTITY_KEPT}{}", dir.display())]);
+}
+
+/// Catches an identity copy made before the node holds the step's enrollment, which would let a
+/// slow group tool delay what the node shows: the node holds an enrollment at every read the copy
+/// makes of its source.
+#[test]
+fn the_node_holds_the_enrollment_before_the_identity_copy_is_made() {
+    let ran = three_steps("links-identity-node", |_| {});
+    assert_eq!(ran.node_held, [true, true, true]);
+}
+
+/// Catches an identity copy whose failure reaches the enroller: the identity directory is a link,
+/// which the copy refuses, and the loop still makes its three steps; the failure is logged once.
+#[test]
+fn a_failed_identity_copy_does_not_stop_the_enrollment_loop() {
+    let Ran {
+        notes,
+        lines,
+        dir,
+        _rig,
+        ..
+    } = three_steps("links-identity-fail", |dir| {
+        let elsewhere = dir.with_file_name("elsewhere");
+        std::fs::create_dir(&elsewhere).expect("the target");
+        std::os::unix::fs::symlink(&elsewhere, dir).expect("the link");
+    });
+    assert_eq!(notes.len(), 3, "three steps were made");
+    let down = "the coordinator could not be reached: down".to_owned();
+    assert_eq!(
+        lines,
+        [
+            down,
+            format!("{IDENTITY_NOT_KEPT}{} is not a directory", dir.display())
+        ]
+    );
+}
+
 /// A daemon config's coordinator address that `GrpcEnroll` does not dial.
 const NO_ENDPOINT: &str = "https://coordinator.example/a/path";
 
@@ -334,6 +558,7 @@ fn the_host_links_read_the_pki_directory_and_log_through_the_daemon() {
         }
     );
     assert!(links.clock.unix_secs() > 0);
+    assert!(links.identity.is_some(), "the host keeps the identity copy");
     let before = rig.clock.mono_secs();
     assert_eq!(links.sleeper.sleep(5), Tick::Beat);
     assert_eq!(

@@ -7,14 +7,17 @@ certificate (`Poll`) and renews it while it is valid (`Renew`). Why it is shaped
 the store are the crate `hostkeeper-enrollment`; the coordinator's side is the module
 `crates/hostkeeper-coordinator/src/enrollment/`.
 
-A host certificate names its host as `CN=host:<id>` and carries one subjectAltName, the URI of
-the fixed host role `host`: the coordinator's `--host-role-uri-prefix` (by default
-`urn:hostkeeper:host-role:`) followed by `host`, so `urn:hostkeeper:host-role:host`. That role
+A host certificate names its host as `CN=host:<id>` and carries two subjectAltNames, not
+critical: the URI of the fixed host role `host`, the coordinator's `--host-role-uri-prefix` (by
+default `urn:hostkeeper:host-role:`) followed by `host`, so `urn:hostkeeper:host-role:host`, and
+one DNS name, the host id, which a server that trusts this CA reads the host from
+([docs/design/host-identity.md](design/host-identity.md)); its extended key usage is `clientAuth`
+alone. A certificate issued before the DNS name existed has none until the host renews it. The role
 means nothing and is the same for every host: the coordinator reads who a host is from its host
 id and its key, and which host group it is in from its enrollment record
 ([docs/design/hostgroups.md](design/hostgroups.md) section 1.2), never from its certificate. A
 certificate issued by a release before names no host role and keeps working until it is renewed,
-read for its host id alone; its renewal carries the URI.
+read for its host id alone; its renewal carries the URI and the DNS name.
 
 The handlers of `Enroll`, `Poll` and `Renew` are built here. The heartbeat listener serves them
 as gRPC calls of `hostkeeper.agent.v1.Coordinator` (`crates/hostkeeper-coordinator/src/grpc/`),

@@ -3,7 +3,7 @@
 //! | | host client certificate | coordinator server certificate |
 //! |---|---|---|
 //! | subject | `CN=host:<id>`, the approved id | `CN=hostkeeper coordinator` |
-//! | subjectAltName | one URI: the fixed host role, [`HOST_ROLE`] after the host-role prefix | the DNS names and IP addresses asked for |
+//! | subjectAltName | a URI, the fixed host role ([`HOST_ROLE`] after the host-role prefix), then one DNS name, the host id; non-critical, as the subject is not empty | the DNS names and IP addresses asked for |
 //! | extended key usage | `clientAuth` only | `serverAuth` only |
 //! | key usage | `digitalSignature` | `digitalSignature` |
 //! | basic constraints | `CA:FALSE` | `CA:FALSE` |
@@ -25,6 +25,7 @@
 use std::net::IpAddr;
 use std::sync::Arc;
 
+use rcgen::string::Ia5String;
 use rcgen::{
     BasicConstraints, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa,
     Issuer, KeyPair, KeyUsagePurpose, PublicKeyData, SanType, SerialNumber, SignatureAlgorithm,
@@ -313,17 +314,17 @@ pub(crate) fn ca_params() -> CertificateParams {
     params
 }
 
-/// A host's client certificate, naming its host role by `host_role_uri`: nothing of the request
-/// is copied but its key.
+/// A host's client certificate, naming its host role by `host_role_uri` and the host by its id as
+/// a DNS name: nothing of the request is copied but its key.
 fn host_params(host_id: &HostId, host_role_uri: &str) -> Result<CertificateParams, SignError> {
-    let uri = rcgen::string::Ia5String::try_from(host_role_uri)
+    let uri = Ia5String::try_from(host_role_uri)
         .map_err(|_| SignError::BadHostRoleUri(host_role_uri.to_owned()))?;
     let mut params = CertificateParams::default();
     params.distinguished_name = common_name(&format!("host:{host_id}"));
     params.is_ca = IsCa::ExplicitNoCa;
     params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
     params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
-    params.subject_alt_names = vec![SanType::URI(uri)];
+    params.subject_alt_names = vec![SanType::URI(uri), dns_name(host_id.as_str())?];
     Ok(params)
 }
 

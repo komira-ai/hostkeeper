@@ -181,7 +181,12 @@ systemd it is ready. Only then does it start its two loops, the enrollment loop 
 enrollment loop gets the host's certificate from the coordinator (a P-256 key made on the host,
 a request an operator approves, renewal at half life) and keeps it under `/etc/updater/pki`; the
 heartbeat loop reads the certificate under that directory's `current` link at every heartbeat,
-and while there is none it says once what it waits for and sends nothing. It then runs the
+and while there is none it says once what it waits for and sends nothing. After every step the
+enrollment loop also keeps a copy of the current certificate and key at
+`/var/lib/hostkeeper/identity/` (`host.crt`, `host.key`) for the services of the host, readable by
+the group `hostkeeper-identity`, which the daemon makes when the host has none (see
+[docs/design/host-identity.md](docs/design/host-identity.md) and the "Host identity" section of
+[docs/operations/enrollment.md](docs/operations/enrollment.md)). It then runs the
 loops, until an update of hostkeeper itself asks it to exit so that its unit starts the
 new binary. This build fetches, verifies and unpacks packages, runs each step of a hook in a
 transient systemd unit of its own (the hook's standard error goes to the daemon's journal, under
