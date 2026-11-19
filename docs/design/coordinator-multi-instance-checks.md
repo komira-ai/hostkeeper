@@ -1,7 +1,7 @@
 # The coordinator as N instances: measurements, model check, compatibility and tests
 
-Companion of [coordinator-multi-instance.md](coordinator-multi-instance.md) (the as-built choices of its section 4's M3, the
-measurements of its section 7, and its sections 14 and 15, moved here so that file stays under 1000 lines, R12). Section numbers are kept; "section n" in the text below refers
+Companion of [coordinator-multi-instance.md](coordinator-multi-instance.md) (the as-built choices of its section 4's M3 and of
+its sections 8 and 9's M8, the measurements of its section 7, and its sections 14 and 15, moved here so that file stays under 1000 lines, R12). Section numbers are kept; "section n" in the text below refers
 to that document.
 
 ## 4. The rest of M3, as built
@@ -95,6 +95,33 @@ beat waits for one flush, about 0.84 ms on the live disk, which is noise against
 **Converged path against section 7's bound.** The beat statement alone is 0.34 to 0.45 ms on the scratch copy, at the edge of
 "a few hundred microseconds". Most of it is the client's parse and plan of the statement on every call, which a prepared
 statement would cut. At 0.73 beats/s that is not a load, so none of section 7's fallbacks is taken.
+
+## 8 and 9. M8, as built
+
+The choices sections 8 and 9 leave open, as the code makes them (`store/postgres/login_rows.rs`, `periodic.rs`,
+`alert_rows.rs`, `admin_rows.rs`, `records.rs`, `0023_sessions_and_jobs.sql`, `session.rs`, `jobs.rs`, `alerts_rows.rs`,
+`initial_admin.rs`, `config_database.rs`):
+
+- Time is the database's `now()`, read in the statement that judges by it; the stores take a fixed second instead only in a
+  test, so a deadline replays.
+- The two writes that read many rows, making a session against `--session-max-count` and counting a failure against
+  `--login-max-tracked`, lock a row of a table of their own, `login_gate` (rows `sessions` and `login_failures`, never
+  updated), `FOR UPDATE` as their first statement: a row lock, as section 3 allows, not an advisory lock. Every other
+  session or limiter statement touches one row. The rows add `must_change` and `must_change_until` to the columns section 8
+  lists, which the session's view needs.
+- A lookup reads the row on the read-only session and writes only when it must: a conditional delete of an expired row, a
+  conditional move of `last_used_unix` when it is at least `--session-touch-secs` old. When the rows cannot be reached the
+  login fails closed: no session is made or found, and every name is locked.
+- `periodic_jobs` has no period column: the claim is given each job's period from `--job-every`, as section 9's `$period`. One
+  job `prune` (the key of section 12) does every prune in one transaction. `fleet_orders` does not exist before M6, so it is
+  not pruned yet.
+- The alerts' rows are keyed by the whole subject (six texts). `Alerts.List` observes as the tick does, so the coordinator
+  whose insert made a row logs it, whichever path it took; a write that fails falls back to this coordinator's memory, so the
+  alert of a lost database is still logged.
+- The audit's numbers are still the release's in-memory counter until M4's `audit_counter`, so an effect's audit line is
+  written by the coordinator whose conditional write won, after it, not in its transaction: the expiry's line after the
+  update (the start's re-audit of an expiry with no line stays the repair), the adoption's after the user's row. A stop
+  between the two loses that one line.
 
 ## 14. The model check, before code
 

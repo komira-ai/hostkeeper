@@ -4,8 +4,8 @@ Status: design, approved by the owner (2026-11-18), with the answers to its two 
 document: it is updated in the pull requests that build it. Tags as in [hostkeeper-design.md](hostkeeper-design.md): **Built**
 names code on `main` with a path, **Designed** means nothing implements it yet. Built so far: in section 4 the shared
 lock, the ledger, the migration runner's mutex (M3, komira-ai/hostkeeper#395), the pool of sessions, `instances`, the migrations'
-lock timeout and retry and the lint's hot-table rule (the rest of M3), with section 12's keys for those; and the models of
-section 14 (M2). Still Designed in section 4: `--migrate-wait-secs`, `--ledger-retry-secs` and the prune in a reload tick
+lock timeout and retry and the lint's hot-table rule (the rest of M3), with section 12's keys for those; sections 8 and 9
+(M8); and the models of section 14 (M2). Still Designed in section 4: `--migrate-wait-secs`, `--ledger-retry-secs` and the prune in a reload tick
 (#395 differs, below). Everything else is Designed. The
 measurements of M1 are taken (section 7).
 
@@ -613,7 +613,8 @@ considered (section 19, decision 6). M1 measured it: the operator's wait does no
 
 ## 8. Sessions and the login limiter
 
-`session.rs` says "a restart ends every session, because nothing is written anywhere". Designed: a table `sessions(id_sha256
+**Built** (M8: `store/postgres/login_rows.rs`, `session.rs`, `0023_sessions_and_jobs.sql`; choices left open, such as the
+`login_gate` row lock, in [the companion](coordinator-multi-instance-checks.md), "8 and 9"). `session.rs` said "a restart ends every session, because nothing is written anywhere". Designed: a table `sessions(id_sha256
 bytea pk, user, csrf, created_unix, last_used_unix, serial)` (never the raw cookie id: the key is the SHA-256 the memory table
 uses now, `session.rs:163`), and `login_failures(name pk, failures, last_failure_unix, locked_until_unix)`. The idle and
 absolute deadlines and the cap on the number of sessions keep their rules, in SQL; `last_used_unix` is written at most once
@@ -639,7 +640,8 @@ sequenceDiagram
 
 ## 9. Periodic work without a leader
 
-Two kinds. **Effects** (an audit line, an alert line, an expiry, an adoption) are made exactly once by a conditional write, on
+**Built** (M8: `store/postgres/periodic.rs`, `jobs.rs`, `alert_rows.rs`, `records.rs` (`expire_waiting`), `admin_rows.rs`;
+`fleet_orders`, M6's, is not pruned yet; where the code differs, the companion's "8 and 9" is the record). Two kinds. **Effects** (an audit line, an alert line, an expiry, an adoption) are made exactly once by a conditional write, on
 any number of instances. **Scans** (the work that finds those effects) are claimed per job by advancing a due time, so that
 N instances do not all scan at once. Correctness rests on the conditional write; the claim only saves work, and a lost claim
 costs one period.
@@ -793,7 +795,7 @@ sequenceDiagram
 | `--instance-beat-secs` | 5 | `instances.seen_unix` |
 | `--health-listen` | none | readiness address on `cp-hk` |
 | `--cache-nodes-ttl-ms` | 1000 | per-instance cache of read-only parts of the fleet, if section 7 needs it |
-| `--session-touch-secs` | 30 | write of `last_used_unix` at most this often |
+| `--session-touch-secs` | 30 | write of `last_used_unix` at most this often (Built, M8) |
 | `--beat-reorder-secs` | 30 | a beat older (by the host's `sent_unix`) than the stored one is dropped unless the stored row is older than this |
 | `--ledger-retry-secs` | 10 | how long an instance retries a transaction of unknown outcome, a deadlock or a serialization failure before it answers 503 |
 | `--operator-gate-wait-ms` | 30000 | how long an operator edit waits for the gate row (a heartbeat never waits: `SKIP LOCKED`); then it is refused `store_failed` |
@@ -803,8 +805,8 @@ sequenceDiagram
 | `--migrate-wait-secs` | 60 | how long a starter waits for the migration lock |
 | `--migrate-ddl-lock-timeout-ms` | 3000 | `lock_timeout` of a migration transaction: a DDL that cannot get its lock rolls the migration back |
 | `--migrate-retry-secs`, `--migrate-attempts` | 5, 6 | the wait between and number of attempts of a rolled-back migration before the instance exits |
-| `--job-tick-secs` | 5 | how often an instance claims due periodic jobs (section 9) |
-| `--job-every name=secs` (repeatable) | `alerts=15`, `request-expiry=15`, `prune=3600` | the period of each periodic job |
+| `--job-tick-secs` | 5 | how often an instance claims due periodic jobs (section 9; Built, M8) |
+| `--job-every name=secs` (repeatable) | `alerts=15`, `request-expiry=15`, `prune=3600` | the period of each periodic job (Built, M8) |
 | `--connection-max-age-secs` | 300 | a server-side maximum age of an agent connection, besides TCP keep-alive |
 | existing: `--quiet-secs` (floor in `config.rs:512`), `--tls-reload-secs` | unchanged | the cluster's quiet rule uses `--quiet-secs` |
 
@@ -885,7 +887,7 @@ the farm): the back-out is a stopgap while a fix ships.
 | M5 | Enrollment: conditional writes, `FOR UPDATE`, fresh deny read; spent-token cache | M3 | M |
 | M6 | The fleet in Postgres, without decisions: `fleet_*`, `cluster_quiet` and the gap rule, the ordered beat upsert, the in-SQL bake, the converged path | M4, M5 | M |
 | M7 | The deciding transaction and the steps of 5.3: gate, re-read of every input, `set_seq`/`set_for` and the start-time re-stamp, orders with the unique host index, compare-and-set stage advance, storage-first halts, rollback before delete, fail closed; the quiet rule gating verdicts and rollbacks as well as orders | M6 | L |
-| M8 | Sessions and login limiter; `periodic_jobs` and the claim; alerts, expiry, pruning and initial-admin made exactly-once | M3 | M |
+| M8 | Built: sessions and login limiter (`store/postgres/login_rows.rs`); `periodic_jobs` and the claim (`periodic.rs`, `jobs.rs`); alerts, expiry, pruning and initial-admin made exactly-once (`alert_rows.rs`, `records.rs`, `admin_rows.rs`), migration `0023` | M3 | M |
 | M9 | `--health-listen` and `--drain-delay-secs` (the old task keeps accepting while it answers 503); docs (`coordinator-state.md`, `rollout-plans.md`, `holds-and-force.md`, `enrollment.md`) updated; this document's tags turned to Built | M7, M8 | S |
 | M10 | Infrastructure (outside this repository): CA secret and config, tmpfs, edge health checks and Mac listener, `start-first` update at `replicas: 1`. The cutover of section 16 | M9 | M |
 | M11 | js-server's design and PRs in its repository, to the same leaderless rule | none | not sized |

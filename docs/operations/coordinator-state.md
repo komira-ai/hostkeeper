@@ -83,7 +83,22 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   its listeners, and moves `seen_unix` on every `--instance-beat-secs` (default 5) while it runs,
   making the row again if it is gone. It says which coordinators serve on the database and since
   when (`SELECT * FROM hostkeeper.instances ORDER BY seen_unix DESC`); no decision reads it, and the
-  row of a coordinator that stopped stays as it was last seen.
+  row of a coordinator that stopped stays as it was last seen until the job `prune` deletes it, a
+  day after it was last seen.
+- **Periodic jobs.** Every `--job-tick-secs` (default 5) a coordinator claims the periodic jobs that
+  are due, one statement over the `periodic_jobs` table (migration `0023`) that moves each claimed
+  job's due time on by its period, so of all the coordinators on the database one runs a job in a
+  period; a coordinator that stops after a claim loses that run, and the job is due again one
+  period later for any of them. The periods are `--job-every NAME=SECS` (repeatable): `alerts`
+  (default 15) observes the alerts, and the coordinator whose insert into the `alerts` table made
+  an alert's row logs its `alert=` line, once (a cleared alert's row is deleted, so one that comes
+  back is logged again; the `alert=` lines are in the logs of the service, not of one instance);
+  `request-expiry` (default 15) expires the enrollment requests no operator approved in time, by
+  one conditional update, and audits each `request_expired` once; `prune` (default 3600) deletes
+  the expired sessions, the failure counts the limiter forgot and the `instances` rows not seen
+  for a day. Over files the alerts are observed every 15 seconds and the requests expire at the
+  `--tls-reload-secs` tick, as before. `SELECT * FROM hostkeeper.periodic_jobs` shows each job's
+  next due time and the instance that ran it last.
 - **Generations and write ids.** The database keeps, with each service's desired state, its
   generation (one more for every accepted set, a set identical to the state held included, and a
   force), the write id of the last set (`hkctl releases set-desired --write-id`, 1 to
@@ -407,6 +422,13 @@ The coordinator reads it at start and on every `--tls-reload-secs`, by its own w
   cannot write after the entry repeats the entry at the next look. Expiry is in the same order (void, audit, delete), and a
   file already gone when it is deleted counts as deleted.
 
+Over a database every coordinator reads the same file (the volume is mounted by each), and what it asks for is written once:
+the user's row is written unless it holds the file's `id` already, and only the coordinator whose write changed the row audits
+`user_bootstrap` (the row first, then the entry); a coordinator that finds the `id` in the row does nothing, without hashing.
+At expiry the void is written unless the row is void already, and audited by the coordinator that voided it; a file whose `id`
+the user's row does not hold is audited by the coordinator whose delete removed the file; a delete that finds the file gone, or
+its volume read-only, counts as done.
+
 A file that asks for a `valid_until` further than `--initial-password-secs` (default 3600, at most 3600) past the clock, a
 password under the policy, a bad mode or a text this build cannot read is refused naming the flag: at start the coordinator does
 not start, and on a tick it is logged as a warning and nothing changes. The file is deleted when it has expired, and when the
@@ -446,8 +468,13 @@ A session that must change its password may call `/v1/password`, `/v1/logout` an
 
 A session also opens the UI's Remote SSH terminal, `GET /v1/ssh/terminal?host=<host id>` (a WebSocket upgrade, private listener only; `docs/operations/ssh-ca.md`, "Remote SSH from the UI"): the terminal's tunnels live as long as the session does, and what is typed in the terminal counts as use of it.
 
-Sessions are kept in memory: a restart signs everyone out. They end 30 minutes after their last use, or 12 hours after the
-login. The flags, each with its default from the start:
+Over the files sessions are kept in memory: a restart signs everyone out. Over a database they are rows of the `sessions`
+table (keyed by the SHA-256 of the cookie's id, never the id) and the failure counts rows of `login_failures` (migration `0023`):
+every coordinator on the database answers the same cookie and counts the same failures, and a restart or a deploy signs no one
+out; a session's last use is written at most every `--session-touch-secs` (default 30), so its idle deadline may count from up
+to that long before its last use. When the database cannot be reached no session is made or found and every name is told
+locked. Sessions end 30 minutes after their last use, or 12 hours after the login. The flags, each with its default from the
+start:
 
 | Flag | Default | Meaning |
 | --- | --- | --- |

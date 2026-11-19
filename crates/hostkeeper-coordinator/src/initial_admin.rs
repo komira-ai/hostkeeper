@@ -472,7 +472,7 @@ impl InitialAdmin {
 
     /// [`InitialAdmin::expire`] over rows, judged by the rows and not by this coordinator's copy
     /// of the accounts: the void is a conditional write, audited by the coordinator it voided
-    /// for; a file whose `id` the user's row does not hold is audited by the coordinator whose
+    /// for, before the file is deleted; a file whose `id` the user's row does not hold is audited by the coordinator whose
     /// delete removed it; a row that holds the `id` and was not voided now (its password was
     /// changed, or another coordinator voided it) is not audited. A delete that finds the file
     /// gone, or the volume read-only, counts as done.
@@ -487,10 +487,15 @@ impl InitialAdmin {
         let voided = rows
             .void(&file.user, &file.id)
             .map_err(InitialAdminError::Rows)?;
-        if voided && void {
-            accounts.change(|held| {
-                held.with_user_edited(&file.user, |user| user.initial_void = true)
-            })?;
+        if voided {
+            // Audited before the delete: the next look finds the row void and does not audit, so
+            // an entry left for after a delete that fails would be lost.
+            audit(ops, INITIAL_PASSWORD_EXPIRED, &file.user)?;
+            if void {
+                accounts.change(|held| {
+                    held.with_user_edited(&file.user, |user| user.initial_void = true)
+                })?;
+            }
         }
         let mine = !voided && self.adopted_in_rows(file)?;
         let removed = match std::fs::remove_file(&self.path) {
@@ -505,7 +510,7 @@ impl InitialAdmin {
             }
             Err(e) => return Err(InitialAdminError::Delete(e.kind())),
         };
-        if voided || (!mine && removed) {
+        if !voided && !mine && removed {
             audit(ops, INITIAL_PASSWORD_EXPIRED, &file.user)?;
         }
         Ok(Outcome::Expired)

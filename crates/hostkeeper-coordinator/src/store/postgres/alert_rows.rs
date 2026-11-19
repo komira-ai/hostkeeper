@@ -50,7 +50,7 @@ pub(crate) fn note(
         ),
         &[&kind, &service, &host, &version, &request, &other, &at_unix],
     )?;
-    let made: Vec<Key> = made.iter().map(key_of).collect();
+    let mut made: std::collections::BTreeSet<Key> = made.iter().map(key_of).collect();
     let held = tx.query(
         "SELECT kind, service, host, version, request, other_host, first_unix FROM alerts",
         &[],
@@ -60,7 +60,8 @@ pub(crate) fn note(
     Ok(found
         .iter()
         .map(|key| {
-            let made = made.contains(key);
+            // A subject found twice is new once.
+            let made = made.remove(key);
             (first.get(key).copied().unwrap_or(at_unix), made)
         })
         .collect())
