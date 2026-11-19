@@ -128,6 +128,46 @@ fn a_signing_is_a_certificate_row_and_an_audit_row_at_the_servers_time() {
     );
 }
 
+/// Proves: a signing asked by an operator calling with an API token is recorded by the operator
+/// (the token's owner) with the token named last in the audit row's detail, the row chained like
+/// any other; a signing with none has no `api_token` key.
+///
+/// Catches: a database ledger that drops the token the in-memory one keeps, so the live store's
+/// SSH audit cannot say which of a person's tokens asked for a certificate.
+#[test]
+fn a_signing_made_with_an_api_token_names_the_token_in_its_audit_row() {
+    let db = TestDatabase::new();
+    let (store, _) = db.open("coordinator").expect("the store opens");
+    let ledger = PgLedger::new(store.clone());
+    let with_token = Issue {
+        api_token: Some("alice-bot"),
+        ..issue("alice", "node-07", 3600)
+    };
+    let first = ledger.issue(&with_token).expect("signed");
+    ledger
+        .issue(&issue("alice", "node-08", 60))
+        .expect("signed");
+    let lines = audit(&db);
+    assert_eq!(lines.len(), 2);
+    assert_eq!(
+        (lines[0].line.by.as_str(), lines[0].line.action),
+        ("alice", "ssh_cert_signed")
+    );
+    assert_eq!(
+        lines[0].line.detail,
+        format!(
+            "{{\"serial\":1,\"key_fingerprint\":\"SHA256:abc\",\"expires_unix\":{},\"reason\":\"to look at \\\"a log\\\"\",\"api_token\":\"alice-bot\"}}",
+            first.issued_unix + 3600
+        )
+    );
+    assert!(
+        !lines[1].line.detail.contains("api_token"),
+        "{}",
+        lines[1].line.detail
+    );
+    assert_eq!(lines[0].hash, chain_hash(&GENESIS, &lines[0].line));
+}
+
 /// Proves: each audit row holds the hash of the row before it (the first, 32 zero bytes) and its
 /// own hash by `chain_hash` over its content, across signings, a revocation and a refusal's
 /// line, so a deleted or edited row would break the chain after it.
