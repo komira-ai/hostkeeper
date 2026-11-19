@@ -34,6 +34,7 @@ use crate::layout::{Layout, LayoutError};
 use crate::ops::{OpsError, OpsState};
 use crate::verdict_file::{self, VerdictsError};
 
+pub(crate) mod beat;
 mod edit;
 mod fake;
 mod files;
@@ -151,6 +152,15 @@ pub(crate) trait Backend: Send + Sync {
     fn reload(&self, part: Part) -> Result<Fresh, BackendError> {
         let _ = part;
         Ok(Fresh::default())
+    }
+
+    /// Keeps `beat`, a heartbeat this coordinator answers, in the fleet's rows of a backend other
+    /// coordinators share (`docs/design/coordinator-multi-instance.md`, section 5.2): the host's
+    /// row, unless the beat is older than the one stored, with its bakes and the orders its report
+    /// settles. Nothing over a backend one process owns, whose fleet is the one in memory. A beat
+    /// that cannot be kept is logged and answered all the same: no decision reads the rows yet.
+    fn keep_beat(&self, beat: beat::HostBeat) {
+        let _ = beat;
     }
 }
 

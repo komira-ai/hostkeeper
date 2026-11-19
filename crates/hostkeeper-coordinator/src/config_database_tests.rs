@@ -14,8 +14,9 @@ struct Flags {
 
 /// Proves: with none of the flags given, the store's options are the design's defaults (a pool of
 /// 4, a beat every 5 seconds, the runner's lock timeout of 3000 ms with 6 attempts 5 seconds
-/// apart, which is [`RETRY`], and an edit's wait for the gate of 30000 ms), with the release and
-/// addresses given; each flag given is the option it names.
+/// apart, which is [`RETRY`], an edit's wait for the gate of 30000 ms, and a beat older by its
+/// host's clock believed once the stored one is 30 seconds old), with the release, addresses and
+/// quiet time given; each flag given is the option it names.
 ///
 /// Catches: a default that differs from the one the design and the help state, and a flag that is
 /// read into another option.
@@ -23,7 +24,7 @@ struct Flags {
 fn the_database_flags_default_to_the_design_and_each_sets_its_option() {
     let defaults = Flags::try_parse_from(["serve"]).expect("no flag is needed");
     assert_eq!(
-        defaults.database.options("1.2.3", "heartbeat=[::1]:1"),
+        defaults.database.options("1.2.3", "heartbeat=[::1]:1", 40),
         Options {
             pool: NonZeroUsize::new(4).expect("four"),
             migrate: RETRY,
@@ -31,6 +32,11 @@ fn the_database_flags_default_to_the_design_and_each_sets_its_option() {
             release: "1.2.3".to_owned(),
             listen: "heartbeat=[::1]:1".to_owned(),
             gate_wait: Duration::from_secs(30),
+            fleet: Timing {
+                down_after: 45,
+                reorder: 30,
+                quiet: 40,
+            },
         }
     );
     let given = Flags::try_parse_from([
@@ -47,9 +53,12 @@ fn the_database_flags_default_to_the_design_and_each_sets_its_option() {
         "1",
         "--operator-gate-wait-ms",
         "250",
+        "--beat-reorder-secs",
+        "44",
     ])
     .expect("the flags parse");
-    let options = given.database.options("r", "l");
+    let options = given.database.options("r", "l", 30);
+    assert_eq!(options.fleet.reorder, 44);
     assert_eq!(options.pool.get(), 2);
     assert_eq!(options.gate_wait, Duration::from_millis(250));
     assert_eq!(options.beat, Duration::from_secs(9));
@@ -63,12 +72,15 @@ fn the_database_flags_default_to_the_design_and_each_sets_its_option() {
     );
 }
 
-/// Proves: a pool, a beat, a number of attempts or a wait for the gate of 0, and a lock timeout of
-/// 0 or of 5000 ms and more (not below the store's statement timeout), are refused when the flags
-/// are parsed.
+/// Proves: a pool, a beat, a number of attempts or a wait for the gate of 0, a lock timeout of 0
+/// or of 5000 ms and more (not below the store's statement timeout), and a reorder time of 0 or of
+/// 45 seconds and more (not below the silence after which a host is down), are refused when the
+/// flags are parsed.
 ///
 /// Catches: a start with no writing session, a beat with no wait, a runner that never tries, and
-/// a lock timeout that the statement timeout ends first, so a busy table fails the start at once.
+/// a lock timeout that the statement timeout ends first, so a busy table fails the start at once;
+/// and a reorder time that drops no beat, or that keeps a host whose clock stepped back unbelieved
+/// until it counts as down.
 #[test]
 fn the_database_flags_refuse_what_cannot_run() {
     for (flag, value) in [
@@ -78,6 +90,8 @@ fn the_database_flags_refuse_what_cannot_run() {
         ("--operator-gate-wait-ms", "0"),
         ("--migrate-ddl-lock-timeout-ms", "0"),
         ("--migrate-ddl-lock-timeout-ms", "5000"),
+        ("--beat-reorder-secs", "0"),
+        ("--beat-reorder-secs", "45"),
     ] {
         assert!(
             Flags::try_parse_from(["serve", flag, value]).is_err(),
