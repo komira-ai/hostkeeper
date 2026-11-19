@@ -410,7 +410,7 @@ fn hot_refused(sql: &str) -> Option<(&'static str, String)> {
 
 /// The negative fixtures of the hot-table rule: each statement, on a table of [`HOT_TABLES`] that
 /// the migration did not create, with what it is and the table, as the lint names them.
-const HOT_FIXTURES: [(&str, &str, &str); 20] = [
+const HOT_FIXTURES: [(&str, &str, &str); 23] = [
     (
         "ALTER TABLE fleet_orders ADD COLUMN c uuid DEFAULT gen_random_uuid();",
         "a column with more than a type, NOT NULL and a constant default added to",
@@ -507,6 +507,21 @@ const HOT_FIXTURES: [(&str, &str, &str); 20] = [
         "state_versions",
     ),
     ("VACUUM FULL rollout_gate;", "a rewrite of", "rollout_gate"),
+    (
+        "ALTER /* a note */ TABLE fleet_orders ADD COLUMN c uuid DEFAULT gen_random_uuid();",
+        "a column with more than a type, NOT NULL and a constant default added to",
+        "fleet_orders",
+    ),
+    (
+        "CREATE /* outer /* nested; */ still a comment */ INDEX ON fleet_hosts (seen_unix);",
+        "an index build on",
+        "fleet_hosts",
+    ),
+    (
+        "DO $$ BEGIN ALTER TABLE fleet_orders ALTER COLUMN c TYPE bigint; END $$;",
+        "a change other than ADD COLUMN of",
+        "fleet_orders",
+    ),
 ];
 
 /// Proves (the negative fixtures of the migration lint's hot-table rule): on a table of
@@ -514,7 +529,8 @@ const HOT_FIXTURES: [(&str, &str, &str); 20] = [
 /// that is not a constant (a function, a value function such as `CURRENT_TIMESTAMP`), a serial or
 /// generated column, a column with a constraint, any other `ALTER TABLE` action (one among several
 /// is enough), an index build and a rewrite (`CLUSTER`, `REINDEX`, `VACUUM FULL`), whatever the
-/// spelling of the table's name (its schema before it, quoted, `ONLY`, `IF EXISTS`, any case); each
+/// spelling of the table's name (its schema before it, quoted, `ONLY`, `IF EXISTS`, any case), with
+/// a block comment (nested) between its words, or inside a dollar-quoted `DO` body; each
 /// by what it is and the table, and a shipped set with one of them after it is refused at start
 /// with the text that names the migration and the table.
 ///
@@ -569,6 +585,8 @@ fn the_hot_table_rule_takes_a_constant_column_and_what_the_migration_creates() {
         "CREATE INDEX audit_at ON audit (at_unix); ALTER TABLE audit ALTER COLUMN by_name SET NOT NULL;",
         "ALTER TABLE fleet_orders_old SET LOGGED; CREATE INDEX ON fleet_hosts_archive (a);",
         "-- ALTER TABLE fleet_orders SET LOGGED\nSELECT 'CREATE INDEX ON fleet_orders';",
+        "/* ALTER TABLE fleet_orders SET LOGGED; /* CLUSTER fleet_hosts; */ */ SELECT 1;",
+        "DO $$ BEGIN CREATE TABLE fleet_orders (a int); CREATE INDEX ON fleet_orders (a); END $$;",
         "",
     ] {
         assert_eq!(hot_refused(sql), None, "{sql}");

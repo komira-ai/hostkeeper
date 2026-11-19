@@ -278,12 +278,11 @@ impl<S: Send + 'static> Worker<S> {
         answered.recv().ok()
     }
 
-    /// Hands `job` to the worker's thread without waiting for it. A worker that is gone drops it.
-    pub(crate) fn post(&self, job: impl FnOnce(&mut S) + Send + 'static) {
-        if let Some(jobs) = self.sender() {
-            // A thread that is gone has nothing to run it on.
-            let _ = jobs.send(Box::new(job));
-        }
+    /// Hands `job` to the worker's thread without waiting for it: false when the worker is gone,
+    /// which drops it.
+    pub(crate) fn post(&self, job: impl FnOnce(&mut S) + Send + 'static) -> bool {
+        self.sender()
+            .is_some_and(|jobs| jobs.send(Box::new(job)).is_ok())
     }
 
     /// Stops the thread once the jobs handed to it have run, and waits for it: its state, and

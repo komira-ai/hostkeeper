@@ -203,7 +203,7 @@ fn one_lost_session_stops_every_write_until_the_pool_is_revived() {
     let ended: bool = client
         .query_one(
             "SELECT pg_terminate_backend((SELECT pid FROM pg_stat_activity \
-             WHERE application_name = $1 LIMIT 1))",
+             WHERE application_name = $1 AND datname = current_database() LIMIT 1))",
             &[&name],
         )
         .expect("one session is ended")
@@ -239,4 +239,32 @@ fn one_lost_session_stops_every_write_until_the_pool_is_revived() {
     for n in 0..3 {
         spend(&store, &format!("after-{n}")).expect("each session writes again");
     }
+}
+
+/// Proves: a writer whose thread is gone (a job of it panicked) is found by the next revival,
+/// which cannot hand it the revival: the store is then stopped for good, and every write and load
+/// says the writing session stopped, instead of waiting for ever on a revival that never ends.
+///
+/// Catches: a pool whose dead writer leaves the store "being revived" for ever, so no later
+/// heartbeat asks for a revival and the alert says the database is unreachable.
+#[test]
+fn a_writer_whose_thread_is_gone_stops_the_store_at_the_next_revival() {
+    super::logging();
+    let db = TestDatabase::new();
+    let store = open_named(&db, 2, "pool-dead");
+    let gone: Option<()> = store.on_writer(|_| panic!("a job of the writer panics"));
+    assert!(gone.is_none(), "the writer's thread is gone");
+    db.end_sessions();
+    assert!(matches!(spend(&store, "lost"), Err(WriteFail::Lost(_))));
+    assert_eq!(store.health(), Health::Lost);
+    store.revive();
+    assert_eq!(store.health(), Health::Lost);
+    assert_eq!(
+        spend(&store, "after").expect_err("stopped").why(),
+        "the writing session stopped"
+    );
+    assert_eq!(
+        store.load().expect_err("stopped").to_string(),
+        "database:database: the writing session stopped"
+    );
 }

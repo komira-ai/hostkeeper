@@ -4,12 +4,11 @@
 //! No test reads a clock: a beat is called by the test, or the loop is run with no wait between
 //! beats and ended by its stop channel or by the beat.
 
-use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
 
 use super::{TestDatabase, options, with_session};
-use crate::store::postgres::instance::{beat_every, beat_weak};
+use crate::store::postgres::instance::beat_every;
 use crate::store::postgres::migrate;
 use crate::store::postgres::writer::{LOCK_KEY, try_lock};
 use crate::store::postgres::{Options, Postgres};
@@ -99,22 +98,46 @@ fn each_start_makes_its_instance_row_and_a_beat_moves_it_on() {
     assert_eq!(row(&db, &first)[..3], started[..3], "made again as it was");
 }
 
-/// Proves: one beat of the store's thread upserts its row while the store is there, answers that
-/// it goes on while the store is lost (nothing written, no panic), and answers that it stops once
-/// the store is dropped.
+/// Proves: the store's own thread upserts the row (with no wait between beats here, so the test
+/// waits for the row to move, not for a time), a drop of the store stops and joins the thread
+/// before it returns (no session of it holds the coordinator's lock once the drop is over), and a
+/// beat while the store is lost is refused at once and writes nothing.
 ///
-/// Catches: a thread that keeps the store alive or beats a dropped store, and one that stops for
-/// good at a lost session instead of beating again once the store is back.
+/// Catches: a thread that never beats, one that keeps the store (and its lock) alive past its last
+/// handle, and a beat that waits on a lost session.
 #[test]
-fn the_instance_thread_beats_while_the_store_lives() {
+fn the_instance_thread_beats_until_the_store_is_dropped() {
     let db = TestDatabase::new();
-    let (store, _) = db.open("beating").expect("the store opens");
+    let beating = Options {
+        beat: Duration::ZERO,
+        ..options()
+    };
+    let (store, _) = db
+        .open_options(&beating, "beating")
+        .expect("the store opens");
     db.run("UPDATE instances SET seen_unix = 1")
         .expect("its seen time is set back");
-    let weak = Arc::downgrade(&store.inner);
-    assert!(beat_weak(&weak));
-    assert_ne!(row(&db, &store)[3].as_deref(), Some("1"), "the beat landed");
+    let mut looks = 0;
+    while row(&db, &store)[3].as_deref() == Some("1") {
+        looks += 1;
+        assert!(looks < 100_000, "the thread never beat");
+        std::thread::yield_now();
+    }
+    drop(store);
+    let mut client = db.client();
+    let taken: bool = client
+        .query_one("SELECT pg_try_advisory_lock($1)", &[&LOCK_KEY])
+        .expect("a try")
+        .get(0);
+    assert!(
+        taken,
+        "the drop let go of every session's lock before it returned"
+    );
+    client
+        .batch_execute("SELECT pg_advisory_unlock_all()")
+        .expect("the lock is let go");
 
+    let (store, _) = db.open("lost").expect("the store opens again");
     db.end_sessions();
     assert!(
         store.beat_instance().is_err(),
@@ -123,42 +146,38 @@ fn the_instance_thread_beats_while_the_store_lives() {
     assert_eq!(store.health(), Health::Lost);
     db.run("UPDATE instances SET seen_unix = 1")
         .expect("its seen time is set back");
-    assert!(beat_weak(&weak), "a lost store is beaten again later");
+    assert_eq!(
+        store.beat_instance().expect_err("refused at once").why(),
+        "the database session is lost"
+    );
     assert_eq!(row(&db, &store)[3].as_deref(), Some("1"), "nothing written");
-
-    drop(store);
-    assert!(!beat_weak(&weak), "a dropped store ends the thread");
 }
 
-/// Proves: the loop calls its beat after each wait until the beat answers false; it calls none
-/// when it is told to stop before its first wait ends, and none when its stop channel is dropped.
+/// Proves: the loop calls its beat after each wait until it is told to stop, and calls none when
+/// it is told to stop before its first wait ends, or when its stop channel is dropped.
 ///
-/// Catches: a loop that beats once its store is gone, or that outlives the store that stops it.
+/// Catches: a loop that beats after its store has stopped it, or never ends.
 #[test]
-fn the_beat_loop_runs_until_it_is_stopped_or_its_store_is_gone() {
-    let (_stop, stopped) = mpsc::channel::<()>();
+fn the_beat_loop_runs_until_it_is_stopped() {
+    let (stop, stopped) = mpsc::channel::<()>();
     let mut beats = 0;
     beat_every(&stopped, Duration::ZERO, || {
         beats += 1;
-        beats < 3
+        if beats == 3 {
+            stop.send(()).expect("told to stop");
+        }
     });
-    assert_eq!(beats, 3, "until the beat answers false");
+    assert_eq!(beats, 3, "until it is told to stop");
 
     let (stop, stopped) = mpsc::channel();
     stop.send(()).expect("told to stop");
     let mut beaten = false;
-    beat_every(&stopped, Duration::ZERO, || {
-        beaten = true;
-        true
-    });
+    beat_every(&stopped, Duration::ZERO, || beaten = true);
     assert!(!beaten, "told to stop: no beat");
 
     let (stop, stopped) = mpsc::channel::<()>();
     drop(stop);
-    beat_every(&stopped, Duration::ZERO, || {
-        beaten = true;
-        true
-    });
+    beat_every(&stopped, Duration::ZERO, || beaten = true);
     assert!(!beaten, "its stop dropped: no beat");
 }
 
@@ -181,7 +200,10 @@ fn the_release_before_runs_on_a_database_with_0022_and_this_one_on_its() {
         (ran, try_lock(session).expect("a try"))
     });
     assert_eq!(ran, Vec::<i32>::new());
-    assert!(locked, "the release before has the lock once this release stopped");
+    assert!(
+        locked,
+        "the release before has the lock once this release stopped"
+    );
     assert_eq!(
         db.rows("SELECT count(*) FROM instances"),
         vec![vec![Some("1".to_owned())]]
@@ -206,6 +228,9 @@ fn the_release_before_runs_on_a_database_with_0022_and_this_one_on_its() {
         .query_one("SELECT pg_try_advisory_lock($1)", &[&LOCK_KEY])
         .expect("a try")
         .get(0);
-    assert!(!taken, "the release before is refused while this release runs");
+    assert!(
+        !taken,
+        "the release before is refused while this release runs"
+    );
     drop(store);
 }

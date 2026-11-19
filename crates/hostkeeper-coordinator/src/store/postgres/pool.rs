@@ -83,11 +83,16 @@ impl Pool {
         self.writers[taken.index].call(job)
     }
 
-    /// Hands `job` to every writer, behind the jobs each has already, without waiting.
-    pub(crate) fn post_each(&self, job: fn(&mut Writer)) {
-        for writer in &self.writers {
-            writer.post(job);
-        }
+    /// Hands `job` to every writer, behind the jobs each has already, without waiting: false when
+    /// a writer's thread is gone (a job of it panicked), which then never runs it.
+    pub(crate) fn post_each(&self, job: fn(&mut Writer)) -> bool {
+        // Every writer is handed the job, so none is skipped after one that is gone.
+        let delivered = self
+            .writers
+            .iter()
+            .filter(|writer| writer.post(job))
+            .count();
+        delivered == self.writers.len()
     }
 
     /// Runs `job` on every writer, behind the jobs each has already, and waits for each answer:

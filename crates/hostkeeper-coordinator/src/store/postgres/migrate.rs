@@ -251,8 +251,8 @@ pub(crate) fn checked(
     Ok(out)
 }
 
-/// The statements of `sql`, each a list of its upper-cased words: comments and quoted text
-/// dropped, a quoted name kept as a word and a name with its schema (`a.b`) as one word, the
+/// The statements of `sql`, each a list of its upper-cased words: comments (`--` and nested
+/// `/* */`) and quoted text dropped, a quoted name kept as a word and a name with its schema (`a.b`) as one word, the
 /// bodies of dollar-quoted text kept as words of their own statements, so a function body is
 /// read too.
 fn statements(sql: &str) -> Vec<Vec<String>> {
@@ -273,6 +273,26 @@ fn statements(sql: &str) -> Vec<Vec<String>> {
                 for c in chars.by_ref() {
                     if c == '\n' {
                         break;
+                    }
+                }
+            }
+            // A block comment, nested as the server nests them, separates words and is not read.
+            '/' if chars.peek() == Some(&'*') => {
+                flush(&mut word, &mut current);
+                chars.next();
+                let mut depth = 1_usize;
+                while depth > 0 {
+                    match (chars.next(), chars.peek()) {
+                        (Some('*'), Some('/')) => {
+                            chars.next();
+                            depth -= 1;
+                        }
+                        (Some('/'), Some('*')) => {
+                            chars.next();
+                            depth += 1;
+                        }
+                        (Some(_), _) => {}
+                        (None, _) => break,
                     }
                 }
             }
@@ -479,7 +499,13 @@ fn is_constraint(word: &str) -> bool {
 /// when `sql` did not create it: what it is, and the table. `None` when there is none.
 pub(crate) fn hot(sql: &str) -> Option<(&'static str, String)> {
     let words = statements(sql);
-    let created: Vec<&str> = words
+    // Every statement from each of its words on: the DDL of a dollar-quoted body (`DO $$ BEGIN
+    // ALTER TABLE ...`) is read where it starts, not only as a statement's first words.
+    let starts: Vec<&[String]> = words
+        .iter()
+        .flat_map(|w| (0..w.len()).map(move |at| &w[at..]))
+        .collect();
+    let created: Vec<&str> = starts
         .iter()
         .filter(|w| w.first().map(String::as_str) == Some("CREATE"))
         .filter_map(|w| {
@@ -491,7 +517,7 @@ pub(crate) fn hot(sql: &str) -> Option<(&'static str, String)> {
         word.and_then(|t| hot_table(t))
             .filter(|table| !created.contains(table))
     };
-    for statement in &words {
+    for statement in starts {
         let first = statement.first().map(String::as_str);
         let second = statement.get(1).map(String::as_str);
         match (first, second) {
@@ -584,7 +610,7 @@ pub(crate) struct Retry {
 pub(crate) const RETRY: Retry = Retry {
     lock_timeout: Duration::from_millis(3000),
     pause: Duration::from_secs(5),
-    attempts: NonZeroU32::new(6).expect("six is not zero"),
+    attempts: NonZeroU32::MIN.saturating_add(5),
 };
 
 /// The rows of `schema_version`, in order: none on a fresh database.

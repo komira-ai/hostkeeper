@@ -261,7 +261,7 @@ pub(crate) struct Options {
 }
 
 struct Inner {
-    writers: Pool,
+    writers: Arc<Pool>,
     reader: Worker<Reader>,
     link: Arc<Link>,
     #[cfg(test)]
@@ -272,8 +272,8 @@ struct Inner {
     epoch: u64,
     clock: Clock,
     instance: Instance,
-    /// Dropped to stop the thread that upserts the instance's row.
-    beat_stop: Mutex<Option<mpsc::Sender<()>>>,
+    /// The thread that upserts the instance's row, and the sender whose drop stops it.
+    beat: Mutex<Option<(mpsc::Sender<()>, std::thread::JoinHandle<()>)>>,
 }
 
 /// The Postgres store: a handle shared by the three stores, CI's spent ids and the enrollment
@@ -510,9 +510,30 @@ impl Postgres {
             })
             .collect();
         let spawned = |e: io::Error| DatabaseError::Refused(e.to_string());
+        let writers = Arc::new(Pool::spawn("hk-store-writer", writers).map_err(spawned)?);
         let (beat_stop, beat_stopped) = mpsc::channel();
+        let beating = {
+            let (writers, link, instance) =
+                (Arc::clone(&writers), Arc::clone(&link), instance.clone());
+            let every = options.beat;
+            // The thread holds the pool, not the store, so the store's last handle is never its
+            // own and a drop of the store has stopped and joined it before the sessions close.
+            std::thread::Builder::new()
+                .name("hk-store-instance".to_owned())
+                .spawn(move || {
+                    instance::beat_every(&beat_stopped, every, || {
+                        if let Err(fail) = instance::beat(&writers, &link, &instance) {
+                            tracing::debug!(
+                                why = fail.why(),
+                                "the instance's row was not upserted"
+                            );
+                        }
+                    });
+                })
+                .map_err(spawned)?
+        };
         let inner = Inner {
-            writers: Pool::spawn("hk-store-writer", writers).map_err(spawned)?,
+            writers,
             reader: Worker::spawn(
                 "hk-store-reader",
                 Reader {
@@ -531,17 +552,9 @@ impl Postgres {
             epoch: u64::try_from(epoch).unwrap_or_default(),
             clock,
             instance,
-            beat_stop: Mutex::new(Some(beat_stop)),
+            beat: Mutex::new(Some((beat_stop, beating))),
         };
         let inner = Arc::new(inner);
-        let weak = Arc::downgrade(&inner);
-        let every = options.beat;
-        std::thread::Builder::new()
-            .name("hk-store-instance".to_owned())
-            .spawn(move || {
-                instance::beat_every(&beat_stopped, every, || instance::beat_weak(&weak))
-            })
-            .map_err(spawned)?;
         tracing::info!(
             epoch,
             sessions = options.pool.get(),
@@ -570,20 +583,7 @@ impl Postgres {
         change: Option<Owned>,
         body: impl FnOnce(&mut Tx<'_>) -> Result<R, postgres::Error> + Send + 'static,
     ) -> Result<R, WriteFail> {
-        match self.inner.link.state() {
-            State::Up => {}
-            State::Stopped => return Err(WriteFail::Lost(STOPPED.to_owned())),
-            State::Lost | State::Reviving => return Err(WriteFail::Lost(LOST.to_owned())),
-        }
-        let answer = self
-            .inner
-            .writers
-            .call(move |writer| writer.transact(change, body));
-        answer.unwrap_or_else(|| {
-            // The writer's thread is gone: the store is lost for good, which the alert says.
-            self.inner.link.stop();
-            Err(WriteFail::Lost(STOPPED.to_owned()))
-        })
+        write_on(&self.inner.writers, &self.inner.link, change, body)
     }
 
     /// Runs `read` on the read-only session.
@@ -666,6 +666,28 @@ impl Postgres {
             self.inner.last_seq.fetch_max(last.seq, Ordering::Relaxed);
         }
     }
+}
+
+/// Runs `body` in one transaction on a free session of `pool`, the change `change` handed back by
+/// a revival when its commit's outcome is not known; at once [`WriteFail::Lost`] while `link`
+/// says a session is lost or a writer's thread is gone.
+fn write_on<R: Send + 'static>(
+    pool: &Pool,
+    link: &Link,
+    change: Option<Owned>,
+    body: impl FnOnce(&mut Tx<'_>) -> Result<R, postgres::Error> + Send + 'static,
+) -> Result<R, WriteFail> {
+    match link.state() {
+        State::Up => {}
+        State::Stopped => return Err(WriteFail::Lost(STOPPED.to_owned())),
+        State::Lost | State::Reviving => return Err(WriteFail::Lost(LOST.to_owned())),
+    }
+    pool.call(move |writer| writer.transact(change, body))
+        .unwrap_or_else(|| {
+            // The writer's thread is gone: the store is lost for good, which the alert says.
+            link.stop();
+            Err(WriteFail::Lost(STOPPED.to_owned()))
+        })
 }
 
 /// What [`open_sessions`] opened.
@@ -898,8 +920,9 @@ impl Backend for Postgres {
     }
 
     fn revive(&self) {
-        if self.inner.link.start_revival() {
-            self.inner.writers.post_each(Writer::revive);
+        if self.inner.link.start_revival() && !self.inner.writers.post_each(Writer::revive) {
+            // A writer whose thread is gone never runs the revival: the store is lost for good.
+            self.inner.link.stop();
         }
     }
 
@@ -935,14 +958,18 @@ impl Backend for Postgres {
 }
 
 impl Inner {
-    /// Stops the thread that upserts the instance's row.
+    /// Stops the thread that upserts the instance's row, and waits for it.
     fn stop_beat(&self) {
-        drop(
-            self.beat_stop
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .take(),
-        );
+        let beat = self
+            .beat
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some((stop, thread)) = beat {
+            drop(stop);
+            // A panic of the thread was its own; it holds nothing the store needs.
+            let _ = thread.join();
+        }
     }
 }
 

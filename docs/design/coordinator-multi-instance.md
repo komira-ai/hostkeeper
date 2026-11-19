@@ -2,9 +2,11 @@
 
 Status: design, approved by the owner (2026-11-18), with the answers to its two open questions in section 19. A living
 document: it is updated in the pull requests that build it. Tags as in [hostkeeper-design.md](hostkeeper-design.md): **Built**
-names code on `main` with a path, **Designed** means nothing implements it yet. Built so far: section 4 (the shared
-lock, the ledger, the migration runner's mutex, the pool of sessions, `instances`, the migrations' lock timeout and retry,
-and the migration lint's rule for hot tables), the keys of section 12 those use, and the models of section 14 (M2); everything else is Designed. The
+names code on `main` with a path, **Designed** means nothing implements it yet. Built so far: in section 4 the shared
+lock, the ledger, the migration runner's mutex (M3, komira-ai/hostkeeper#395), the pool of sessions, `instances`, the migrations'
+lock timeout and retry and the lint's hot-table rule (the rest of M3), with section 12's keys for those; and the models of
+section 14 (M2). Still Designed in section 4: `--migrate-wait-secs`, `--ledger-retry-secs` and the prune in a reload tick
+(#395 differs, below). Everything else is Designed. The
 measurements of M1 are taken (section 7).
 
 It changes one decision of [coordinator-storage.md](coordinator-storage.md): that decision's section 5 ("the single writer: an
@@ -121,20 +123,9 @@ then a start bumps `lease.epoch` and `holder` once in a transaction of its own; 
 (statement 5 s, lock 3 s, idle in transaction equal to the statement's), not the flags of section 12, and a lost commit is
 settled once, at the revival, with no retry window.
 
-**Built** (M3, the rest: `store/postgres/pool.rs`, `writer.rs`, `instance.rs`, `migrate.rs`, migration `0022_instances.sql`,
-`config_database.rs`): the pool of sessions, `instances`, each migration's `lock_timeout` with its bounded retry, and the lint
-rule, as the paragraphs below say, with these choices where the text leaves them open. A write takes the session that has been free longest,
-so the sessions take turns; any session found lost makes the whole instance lost (every write refused at once, `/healthz`
-503) until the next heartbeat's revival, which runs on every session's thread: a session that is up answers one `SELECT 1`
-and is kept, a session that is gone, or found gone so, is opened again with the shared lock and settles its own commit of
-unknown outcome. The instance's row is made in the transaction that bumps the epoch at start (its id the database's
-`gen_random_uuid()`) and upserted on a thread of its own every `--instance-beat-secs`, made again as it was if it is gone;
-`listen` holds the heartbeat, private and LAN listeners' addresses as configured. The status page does not list the rows yet.
-A migration rolled back by its lock timeout lets go of the runners' mutex for the pause, then the runner tries again from that
-migration; after the last attempt the start is refused naming it (`ApplyError::Busy`). The lint's rule refuses, on a hot table
-the migration did not create, any `ALTER TABLE` action but `ADD COLUMN` with a type, `NOT NULL`, a collation and a default with
-no function call or value function (a serial, generated, constrained or referencing column included), an index build, and
-`CLUSTER`, `REINDEX` and `VACUUM`; a quoted or schema-qualified name is read as the bare one.
+**Built** (M3, the rest: `store/postgres/pool.rs`, `writer.rs`, `instance.rs`, `migrate.rs`, `0022_instances.sql`,
+`config_database.rs`): the pool, `instances`, each migration's `lock_timeout` with its retry, and the lint rule, as below; the
+choices this text leaves open are in [the companion](coordinator-multi-instance-checks.md), section 4.
 
 **Designed.** The lock is only a fence between releases: every new instance holds it at once, it elects nobody and no decision
 reads it, and it exists because the release before takes the key exclusively. An instance takes the same key in **shared** mode, `pg_try_advisory_lock_shared(LOCK_KEY)`, on each of its sessions.
