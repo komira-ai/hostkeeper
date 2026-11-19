@@ -26,10 +26,11 @@ use hostkeeper_release::grammar::is_repository_name;
 use hostkeeper_release::registry;
 
 use crate::operator::{Caller, entry_proto, valid_reason};
-use crate::ops::AuditEntry;
+use crate::ops::{AuditBy, AuditEntry};
 use crate::repositories::{Kept, PutError, Registry, platforms_of, put_reason, remove_reason};
 use crate::repository_credential;
 use crate::service::Coordinator;
+use crate::tokens::Operator;
 
 /// The refusal a rule of the registry makes of a `Put`: a keyring's is `keyring_invalid`.
 fn entry_refusal(why: &registry::EntryError) -> Refusal {
@@ -68,7 +69,7 @@ fn served(descriptor: &Descriptor, private: bool) -> Vec<String> {
 }
 
 /// An audit entry by `by` for `action`, about no service, with `reason`.
-fn entry(by: &str, action: &str, reason: String) -> AuditEntry {
+fn entry(by: &(impl AuditBy + ?Sized), action: &str, reason: String) -> AuditEntry {
     let mut entry = AuditEntry::new(by, action);
     entry.reason = Some(reason);
     entry
@@ -181,7 +182,7 @@ impl Coordinator {
     /// one, the registry's write and the audit entry `repository_put`, one commit.
     fn put_entry(
         &self,
-        by: &str,
+        by: &Operator,
         why: &str,
         repository: Repository,
     ) -> Result<proto::PutRepositoryResponse, Refusal> {

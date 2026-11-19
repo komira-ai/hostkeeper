@@ -12,10 +12,12 @@ use tokio::net::TcpStream;
 
 use super::tests::{Client, INSTANCE, Rig, caller, frame, limits, open, secs, until_close};
 use super::{CLOSE_GRACE, Credential, Event, NoSlot, Outgoing, Tunnels};
-use crate::accounts::ApiToken;
+use crate::accounts::{ApiToken, User};
+use crate::operator::Caller;
 use crate::ssh_book::{Book, Cause, Opening, close_detail};
 use crate::ssh_ledger::{Ledger, Revocation};
 use crate::ssh_sign::tests::OPERATORS;
+use crate::tokens::Operator;
 
 /// Proves: the slots of an instance: `max_tunnels` of them are given and the next is refused
 /// `Full`; a slot that is dropped is given again; a slot given counts as held for the drain, and
@@ -155,7 +157,8 @@ async fn until_close_after_opened(out: &mut Outgoing) -> String {
 }
 
 /// Proves: the poll stops a tunnel `token_revoked` when its operator has no token (a token of the
-/// tokens file, or an API token, keeps it), `not_permitted` when the operators file no longer
+/// tokens file keeps it) or the API token it was opened with is revoked, or no longer acts as the
+/// operator because its owner was disabled (an API token whose owner is enabled keeps it), `not_permitted` when the operators file no longer
 /// lists the operator, no longer permits the host or lists a host that is no longer enrolled, and `revoked` when its certificate was revoked; a tunnel of an operator whose
 /// file entry and token stand is left; and it asks the book with this instance's own ids and
 /// three times the poll period as the stale time.
@@ -167,20 +170,41 @@ async fn the_poll_stops_the_tunnels_that_are_no_longer_allowed() {
     let mut rig = Rig::new("tunnel-poll", |_| {}).await;
     // bob has no token: the first poll stops his tunnel.
     let mut bob = rig.tunnel("bob", "node-08").await;
-    // carol holds an API token, and then does not.
+    // carol is a user with two API tokens: the tunnel of one ends when that token is revoked; the
+    // tunnel she then opens with the other ends when she is disabled (erin is a user too, so
+    // carol is not the last enabled one).
     rig.coordinator
         .accounts()
         .change(|accounts| {
-            accounts.with_token(ApiToken {
-                name: "carol".to_owned(),
-                sha256: "0".repeat(64),
+            let user = |name: &str| User {
+                name: name.to_owned(),
+                hash: "$argon2id$v=19$m=1,t=1,p=1$c2FsdA$aGFzaA".to_owned(),
+                enabled: true,
+                created_by: "operator".to_owned(),
+                ..User::default()
+            };
+            let token = |name: &str, owner: &str, fill: char| ApiToken {
+                name: name.to_owned(),
+                sha256: fill.to_string().repeat(64),
+                owner: owner.to_owned(),
                 created_by: "operator".to_owned(),
                 created_at: 1,
-            })
+            };
+            accounts
+                .with_user(user("carol"))?
+                .with_user(user("erin"))?
+                .with_token(token("carol-bot", "carol", '0'))?
+                .with_token(token("carol-ops", "carol", '1'))
         })
-        .expect("an API token");
+        .expect("two users, and two API tokens of carol's");
+    let by_token = |owner: &str, token: &str| {
+        Caller::Operator(Operator::by_token(
+            owner.parse().expect("a name"),
+            token.parse().expect("a name"),
+        ))
+    };
     rig.hear("nuc");
-    let mut carol = rig.tunnel("carol", "nuc").await;
+    let mut carol = rig.tunnel_as(by_token("carol", "carol-bot"), "nuc").await;
     let mut kept = rig.tunnel("operator", "node-07").await;
     rig.poll().await;
     assert_eq!(rig.closed(bob.id).await, Cause::TokenRevoked);
@@ -194,11 +218,27 @@ async fn the_poll_stops_the_tunnels_that_are_no_longer_allowed() {
 
     rig.coordinator
         .accounts()
-        .change(|accounts| accounts.without_token("carol"))
+        .change(|accounts| accounts.without_token("carol-bot"))
         .expect("the token is removed");
     rig.poll().await;
     assert_eq!(rig.closed(carol.id).await, Cause::TokenRevoked);
     assert_eq!(until_close(&mut carol.out).await.1, "token_revoked");
+
+    let mut ops = rig.tunnel_as(by_token("carol", "carol-ops"), "nuc").await;
+    rig.poll().await;
+    assert_eq!(
+        rig.tunnels.count(),
+        2,
+        "carol's other token holds its tunnel"
+    );
+
+    rig.coordinator
+        .accounts()
+        .change(|accounts| accounts.with_enabled("carol", false))
+        .expect("carol is disabled");
+    rig.poll().await;
+    assert_eq!(rig.closed(ops.id).await, Cause::TokenRevoked);
+    assert_eq!(until_close(&mut ops.out).await.1, "token_revoked");
 
     // The file lists no one for the host any more.
     std::fs::write(

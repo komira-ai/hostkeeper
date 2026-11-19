@@ -8,7 +8,7 @@
 //! [`crate::ops::OpsStore::append_audit_only`], which takes their action as an [`AuditOnly`], and
 //! stay out of the ring that `/v1/status` shows.
 
-use crate::ops::AuditEntry;
+use crate::ops::{AuditBy, AuditEntry};
 
 /// A successful login, by the user.
 pub const LOGIN: &str = "login";
@@ -150,7 +150,7 @@ impl AuditOnly {
 
 /// The entry of `action` by `by` concerning `subject`.
 #[must_use]
-pub fn about(by: &str, action: &str, subject: &str) -> AuditEntry {
+pub fn about(by: &(impl AuditBy + ?Sized), action: &str, subject: &str) -> AuditEntry {
     let mut entry = AuditEntry::new(by, action);
     entry.subject = Some(subject.to_owned());
     entry
@@ -158,7 +158,7 @@ pub fn about(by: &str, action: &str, subject: &str) -> AuditEntry {
 
 /// The entry of `action` by `by` that came from the peer `source`.
 #[must_use]
-pub fn from_peer(by: &str, action: &str, source: &str) -> AuditEntry {
+pub fn from_peer(by: &(impl AuditBy + ?Sized), action: &str, source: &str) -> AuditEntry {
     let mut entry = AuditEntry::new(by, action);
     entry.source = Some(source.to_owned());
     entry

@@ -5,7 +5,7 @@
 //!
 //! ```toml
 //! [[operator]]
-//! name = "alice"                 # the name of the operator's token
+//! name = "alice"                 # a user (and each API token they own) or a tokens file token
 //! classes = ["fleet", "mac-build"]  # host classes (`fleet`, `control-plane`) or host groups
 //! hosts = ["node-07"]            # host ids
 //! ```

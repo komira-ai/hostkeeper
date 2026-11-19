@@ -161,7 +161,9 @@ async fn a_set_naming_a_missing_group_all_is_refused_like_any_missing_group() {
             farm.world
                 .coordinator()
                 .set_desired_in(
-                    &Setter::Operator("operator"),
+                    &Setter::Operator(&crate::tokens::Operator::named(
+                        "operator".parse().expect("a token name"),
+                    )),
                     body.to_string().as_bytes(),
                     &WriteAsk::default(),
                     None,

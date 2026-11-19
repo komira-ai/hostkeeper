@@ -94,7 +94,9 @@ fn change(current: &str, new: &str) -> String {
 }
 
 fn operator(name: &str) -> Caller {
-    Caller::Operator(name.parse().expect("a name"))
+    Caller::Operator(crate::tokens::Operator::named(
+        name.parse().expect("a name"),
+    ))
 }
 
 /// Proves: a logout whose session cannot be deleted answers 503 `store_unreachable` with no

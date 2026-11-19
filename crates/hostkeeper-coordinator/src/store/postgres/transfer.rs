@@ -124,8 +124,8 @@ fn migrated(session: &mut Session) -> Result<(), DatabaseError> {
 fn audit_all(session: &mut Session) -> Result<Vec<AuditLine>, DatabaseError> {
     Ok(session
         .query(
-            "SELECT seq, at_unix, by_name, action, service, node_id, reason, host_group FROM audit \
-             ORDER BY seq",
+            "SELECT seq, at_unix, by_name, action, service, node_id, reason, host_group, api_token \
+             FROM audit ORDER BY seq",
             &[],
         )
         .map_err(|e| refused(&e))?

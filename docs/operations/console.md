@@ -116,8 +116,9 @@ on that look is logged, naming its flag, and the one read before stays in use. A
 the start stops the coordinator, naming its flag and never its path.
 
 **Who may use the console** (`console-operators-file`; root's, readable by the coordinator's group,
-no secret). One `[[operator]]` for each name that may use it: a user's name for the web app's
-sign-in, or a token's name of the tokens file for `hkctl`. `power` is true unless the entry says
+no secret). One `[[operator]]` for each name that may use it: a user's name, for the web app's
+sign-in and for every API token that user owns (an API token is checked as its owner, never under
+its own name), or a token's name of the tokens file for `hkctl`. `power` is true unless the entry says
 false; an operator with `power = false` may open, list and close consoles but not change power or
 the boot device (`power_not_permitted`). A name that is not in the file has no console access
 (`no_console_access`).

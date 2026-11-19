@@ -38,7 +38,7 @@ fn the_release_before_is_refused_on_a_database_with_0008() {
     );
     assert_eq!(
         db.rows("SELECT version FROM schema_version ORDER BY version"),
-        (1..=26)
+        (1..=27)
             .map(|n| vec![Some(n.to_string())])
             .collect::<Vec<_>>()
     );
@@ -93,7 +93,7 @@ fn this_release_reads_the_rows_of_the_release_before_as_naming_no_group() {
     assert_eq!(
         db.rows("SELECT version FROM schema_version ORDER BY version")
             .len(),
-        26
+        27
     );
 }
 
@@ -376,8 +376,8 @@ fn migration_0018_removes_the_group_all_and_makes_every_group_list_hostkeeper() 
     with_session(&db, |session| {
         let all = migrate::checked(&migrate::SHIPPED).expect("this release's set");
         assert_eq!(
-            migrate::apply(session, &all).expect("0018 to 0026 run"),
-            vec![18, 19, 20, 21, 22, 23, 24, 25, 26]
+            migrate::apply(session, &all).expect("0018 to 0027 run"),
+            vec![18, 19, 20, 21, 22, 23, 24, 25, 26, 27]
         );
     });
 

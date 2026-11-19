@@ -368,6 +368,7 @@ pub(crate) fn operator_entry(
         reason: Some(reason.to_owned()),
         subject: None,
         source: None,
+        api_token: None,
     }
 }
 
@@ -384,5 +385,6 @@ pub(crate) fn cancelled(seq: u64, group: &str, service: &str, node: &str) -> Aud
         reason: None,
         subject: None,
         source: None,
+        api_token: None,
     }
 }

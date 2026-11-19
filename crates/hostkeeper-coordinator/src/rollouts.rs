@@ -371,7 +371,7 @@ impl Coordinator {
         let mut fleet = self.lock_fleet();
         let audit = entry(by, "rollout_pause", &def.name, why.clone());
         let pause = Pause {
-            by: by.to_owned(),
+            by: by.name().to_owned(),
             reason: why,
         };
         let done = self.ops.decide_change(Write::AfterMemory, |state| {

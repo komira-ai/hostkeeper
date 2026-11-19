@@ -53,7 +53,7 @@ the lists of the operator's entry, is refused `not_permitted`, and the refusal i
 
 ```toml
 [[operator]]
-name = "alice"                      # the name of the operator's token
+name = "alice"                      # the operator: a user (also for each API token they own) or a tokens file token
 classes = ["fleet", "mac-build"]    # host classes (fleet, control-plane) or host groups
 hosts = ["node-07"]                 # host ids
 ```

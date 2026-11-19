@@ -32,6 +32,7 @@ use crate::group_scope::package_def;
 use crate::holds::marks_of;
 use crate::host_groups::GroupName;
 use crate::operator::{entry_proto, hold_proto};
+use crate::ops::AuditBy;
 use crate::ops::{AuditEntry, OpsState, Write};
 use crate::service::Coordinator;
 
@@ -63,7 +64,7 @@ impl Coordinator {
     /// `audit_unavailable`.
     pub(super) fn set_group_min_version(
         &self,
-        by: &str,
+        by: &(impl AuditBy + ?Sized),
         package: &str,
         role: &str,
         version: Option<Version>,

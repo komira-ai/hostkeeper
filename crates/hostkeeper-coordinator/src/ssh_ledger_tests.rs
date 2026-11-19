@@ -29,6 +29,7 @@ fn issue<'a>(operator: &'a str, host: &'a str, ttl_secs: u64) -> Issue<'a> {
         fingerprint: "SHA256:abc",
         ttl_secs,
         reason: "a \"quoted\" reason",
+        api_token: None,
     }
 }
 
@@ -82,7 +83,8 @@ fn the_chain_hash_is_pinned_by_values_made_outside_the_code() {
 }
 
 /// Proves: the details of the lines are JSON objects with these exact keys and values, the
-/// reason's quotes escaped, a revocation by operator and by serial each its own, and a refusal's
+/// reason's quotes escaped, a certificate's issue made with an API token naming the token last
+/// (and one made without none), a revocation by operator and by serial each its own, and a refusal's
 /// line holds its token only.
 ///
 /// Catches: a reason that breaks out of its string, and a line that names a secret.
@@ -91,6 +93,14 @@ fn the_details_are_json_objects_with_the_reason_escaped() {
     assert_eq!(
         signed_detail(7, &issue("alice", "node-07", 60), AT + 60),
         "{\"serial\":7,\"key_fingerprint\":\"SHA256:abc\",\"expires_unix\":1800000060,\"reason\":\"a \\\"quoted\\\" reason\"}"
+    );
+    let with_token = Issue {
+        api_token: Some("alice-bot"),
+        ..issue("alice", "node-07", 60)
+    };
+    assert_eq!(
+        signed_detail(7, &with_token, AT + 60),
+        "{\"serial\":7,\"key_fingerprint\":\"SHA256:abc\",\"expires_unix\":1800000060,\"reason\":\"a \\\"quoted\\\" reason\",\"api_token\":\"alice-bot\"}"
     );
     assert_eq!(
         revoke_detail(Revocation::Operator("alice"), 2),

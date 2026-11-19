@@ -55,7 +55,7 @@ use crate::service::Coordinator;
 use crate::session::Sessions;
 use crate::ssh_terminal_route::Shared;
 use crate::ssh_tunnel::Credential;
-use crate::tokens::TokenName;
+use crate::tokens::{Operator, TokenName};
 use crate::websocket::handshake;
 
 /// The path every stream is below: the session's id follows it.
@@ -105,8 +105,8 @@ fn csrf_of(headers: &HeaderMap) -> Option<&str> {
 
 /// What the client acts under, before its origin is checked.
 enum Who {
-    /// An operator's token, by its name.
-    Token(TokenName),
+    /// An operator's token: one of the tokens file, or an API token acting as its owner.
+    Token(Operator),
     /// A signed-in session.
     Session(Held),
 }
@@ -169,9 +169,12 @@ fn answer_parts(
         return error(StatusCode::FORBIDDEN, "bad_origin");
     }
     let (name, credential) = match who {
-        Who::Token(name) => (name, Credential::Token),
+        Who::Token(operator) => (operator.name().to_owned(), Credential::of_bearer(&operator)),
         Who::Session(held) => match session_operator(&held, headers) {
-            Ok(name) => (name, Credential::Session(Sessions::key_of(&held.id))),
+            Ok(name) => (
+                name.as_str().to_owned(),
+                Credential::Session(Sessions::key_of(&held.id)),
+            ),
             Err(code) => return error(StatusCode::FORBIDDEN, code),
         },
     };

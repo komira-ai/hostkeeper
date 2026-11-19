@@ -28,7 +28,9 @@ use crate::testutil::{OPERATOR, Rig};
 type Said = (String, String, Option<String>, Option<String>);
 
 pub(super) fn operator(name: &str) -> Caller {
-    Caller::Operator(name.parse().expect("a name"))
+    Caller::Operator(crate::tokens::Operator::named(
+        name.parse().expect("a name"),
+    ))
 }
 
 pub(super) fn said(by: &str, action: &str, subject: &str) -> Said {
@@ -49,6 +51,16 @@ fn create(name: &str) -> proto::CreateUserRequest {
 pub(super) fn token(name: &str) -> proto::CreateApiTokenRequest {
     proto::CreateApiTokenRequest {
         name: name.to_owned(),
+        owner: None,
+    }
+}
+
+/// A request for the token `name` owned by `alice`: what a caller who is no user (a token of the
+/// tokens file) asks for.
+fn owned_by_alice(name: &str) -> proto::CreateApiTokenRequest {
+    proto::CreateApiTokenRequest {
+        owner: Some("alice".to_owned()),
+        ..token(name)
     }
 }
 
@@ -190,7 +202,7 @@ async fn a_user_cannot_be_made_under_a_name_that_is_not_free() {
     let world = World::new("accounts-create-names");
     world
         .coordinator
-        .api_tokens_create(&operator("ops"), &token("robot"))
+        .api_tokens_create(&operator("ops"), &owned_by_alice("robot"))
         .expect("a token");
     let before = world.coordinator.accounts().snapshot();
     let long = "a".repeat(33);
@@ -521,7 +533,7 @@ async fn an_unknown_name_is_refused_and_nothing_is_written() {
         "a token of the tokens file is removed by editing the file"
     );
     assert_eq!(
-        c.operator(Some(OPERATOR)).expect("still one").as_str(),
+        c.operator(Some(OPERATOR)).expect("still one").name(),
         "operator"
     );
     assert!(c.accounts().snapshot() == before);
@@ -751,7 +763,7 @@ async fn a_store_or_an_audit_that_cannot_write_refuses_the_change() {
         U::StoreFailed
     );
     assert_eq!(
-        c.api_tokens_create(&operator("ops"), &token("robot"))
+        c.api_tokens_create(&operator("ops"), &owned_by_alice("robot"))
             .expect_err("refused"),
         T::StoreFailed
     );
@@ -763,7 +775,7 @@ async fn a_store_or_an_audit_that_cannot_write_refuses_the_change() {
         U::AuditUnavailable
     );
     assert_eq!(
-        c.api_tokens_create(&operator("ops"), &token("robot"))
+        c.api_tokens_create(&operator("ops"), &owned_by_alice("robot"))
             .expect_err("refused"),
         T::AuditUnavailable
     );
@@ -796,7 +808,7 @@ async fn a_coordinator_without_a_sign_in_makes_no_password_or_token() {
         U::StoreFailed
     );
     assert_eq!(
-        c.api_tokens_create(&operator("ops"), &token("robot"))
+        c.api_tokens_create(&operator("ops"), &owned_by_alice("robot"))
             .expect_err("refused"),
         T::StoreFailed
     );
@@ -840,7 +852,7 @@ async fn no_random_bytes_make_no_password_and_no_token() {
         U::StoreFailed
     );
     assert_eq!(
-        c.api_tokens_create(&operator("ops"), &token("robot"))
+        c.api_tokens_create(&operator("ops"), &owned_by_alice("robot"))
             .expect_err("refused"),
         T::StoreFailed
     );

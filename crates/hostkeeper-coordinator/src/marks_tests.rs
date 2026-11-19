@@ -792,7 +792,7 @@ async fn every_new_operator_method_refuses_a_ci_token_and_no_token() {
     assert_eq!(ops_bytes(&rig), before);
 
     match rig.coordinator.caller(Some(OPERATOR)).await {
-        Caller::Operator(name) => assert_eq!(name.as_str(), "operator"),
+        Caller::Operator(name) => assert_eq!(name.name(), "operator"),
         other => panic!("the operator token is {other:?}"),
     }
     for bearer in [Some("not-a-token"), None] {

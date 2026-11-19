@@ -94,7 +94,9 @@ async fn operator_set(rig: &Rig, version: &str, n: u8) -> Result<(), SetError> {
     let body = json!({"service": WEB, "version": version});
     rig.coordinator
         .set_desired_with(
-            &Setter::Operator("operator"),
+            &Setter::Operator(&crate::tokens::Operator::named(
+                "operator".parse().expect("a token name"),
+            )),
             body.to_string().as_bytes(),
             &WriteAsk::default(),
             Some(native_targets(WEB, n)),

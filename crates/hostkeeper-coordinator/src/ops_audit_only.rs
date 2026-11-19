@@ -20,6 +20,7 @@ use std::io;
 use super::{AuditEntry, OpsError, OpsStore, announce};
 use crate::audit_actions::AuditOnly;
 use crate::audit_file::AuditLine;
+use crate::ops::AuditBy;
 use crate::store::{Commit, Scope};
 
 impl OpsStore {
@@ -34,7 +35,7 @@ impl OpsStore {
     pub(crate) fn append_audit_only(
         &self,
         action: AuditOnly,
-        by: &str,
+        by: &(impl AuditBy + ?Sized),
         node_id: Option<&str>,
         reason: Option<&str>,
     ) -> Result<AuditEntry, OpsError> {

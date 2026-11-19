@@ -1,4 +1,4 @@
-//! The audit's `subject` and `source`, and the login actions: the exact lines the file holds, and
+//! The audit's `subject`, `source` and `api_token`, and the login actions: the exact lines the file holds, and
 //! a reader of the release before.
 
 use std::fs;
@@ -10,6 +10,7 @@ use crate::audit_actions::{self, AuditOnly, about, from_peer};
 use crate::audit_file::{self, AuditLine};
 use crate::ops::{AuditEntry, OpsStore, Write};
 use crate::testutil::scratch;
+use crate::tokens::Operator;
 
 const AT: u64 = 1_800_000_000;
 
@@ -94,8 +95,8 @@ fn a_line_with_subject_and_source_reads_back_and_the_release_before_reads_it() {
     assert_eq!(old.detail.reason.as_deref(), Some("new hire"));
 }
 
-/// Proves: a line the release before wrote, with no `subject` or `source`, reads as an entry
-/// with neither.
+/// Proves: a line the release before wrote, with no `subject`, `source` or `api_token`, reads as
+/// an entry with none of them.
 ///
 /// Catches: a new key that is required of an old file.
 #[test]
@@ -105,7 +106,54 @@ fn a_line_without_subject_or_source_reads_with_neither() {
     let entry = line.into_logged().entry;
     assert_eq!(entry.subject, None);
     assert_eq!(entry.source, None);
+    assert_eq!(entry.api_token, None);
     assert_eq!(entry.service.as_deref(), Some("kbf"));
+}
+
+/// Proves: an entry made by an operator calling with an API token is a line by the owner with
+/// `api_token` the last key of `detail`, by exact equality; it reads back with the token, and the
+/// release before reads it, keeping its own keys; the ops file's ring, which the release before
+/// reads strictly, holds no `api_token`.
+///
+/// Catches: a token dropped from the file store's audit, the token named as the actor, and a ring
+/// the release before would refuse after a rollback.
+#[test]
+fn a_line_made_with_an_api_token_is_by_the_owner_and_names_the_token_last() {
+    let dir = scratch("audit-api-token");
+    let file = dir.path().join("ops.json");
+    let store = OpsStore::open(&file)
+        .expect("opened")
+        .with_unix(Arc::new(|| AT));
+    let alice = Operator::by_token(
+        "alice".parse().expect("a name"),
+        "alice-bot".parse().expect("a name"),
+    );
+    let mut entry = AuditEntry::new(&alice, "exclude");
+    entry.node_id = Some("s1".to_owned());
+    entry.reason = Some("disk".to_owned());
+    store
+        .change(Write::BeforeMemory, entry, |_| {})
+        .expect("a change");
+    let text = fs::read_to_string(audit_file::path_of(&file)).expect("read");
+    assert_eq!(
+        text,
+        concat!(
+            r#"{"seq":1,"at_unix":1800000000,"by":"alice","action":"exclude","detail":"#,
+            r#"{"node_id":"s1","reason":"disk","api_token":"alice-bot"}}"#,
+            "\n"
+        )
+    );
+    let back: AuditLine = serde_json::from_str(text.trim_end()).expect("read back");
+    assert_eq!(
+        back.into_logged().entry.api_token.as_deref(),
+        Some("alice-bot")
+    );
+    let old: PreviousLine = serde_json::from_str(text.trim_end()).expect("the release before");
+    assert_eq!((old.seq, old.by.as_str()), (1, "alice"));
+    assert_eq!(old.detail.reason.as_deref(), Some("disk"));
+    let ring = fs::read_to_string(&file).expect("the ops file");
+    assert!(ring.contains("\"by\": \"alice\""), "{ring}");
+    assert!(!ring.contains("api_token"), "{ring}");
 }
 
 /// Proves: the actions of the design's audit table are these exact strings, one for each.

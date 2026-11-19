@@ -19,8 +19,9 @@
 //!   total limits or when their operator's token (or browser session) or entry is gone, the drain at stop and the
 //!   start line.
 //!
-//! Who may call: an operator's token (a CI token is `forbidden`, no token `unauthorized`) whose
-//! name the console operators file lists (`no_console_access` otherwise, and with no file);
+//! Who may call: an operator (a CI token is `forbidden`, no token `unauthorized`) whose name the
+//! console operators file lists (`no_console_access` otherwise, and with no file): a signed-in
+//! user's, a tokens file token's, or the owner's of an API token, never the API token's own;
 //! `Power` and `SetBootDevice` also need the entry's `power` (`power_not_permitted`). A refusal of
 //! an operator the file lists is audited as `console_denied` with its cause, but for a request
 //! that is malformed (`invalid_request`, `reason_required`, `reason_too_long`) and for one whose
@@ -57,7 +58,9 @@ use crate::audit_actions::AuditOnly;
 use crate::enrollment::nonce::{Random, os_random};
 use crate::inventory::{InventoryMatch, match_claims};
 use crate::operator::Caller;
+use crate::ops::AuditBy;
 use crate::service::Coordinator;
+use crate::tokens::Operator;
 
 pub use address::{Neighbors, PROC_NET_ARP, arp_table};
 pub(crate) use device::Duplex;
@@ -85,6 +88,8 @@ pub(crate) mod attach_support;
 mod device_tests;
 #[cfg(test)]
 mod discovery_tests;
+#[cfg(test)]
+mod owner_tests;
 #[cfg(test)]
 mod power_tests;
 #[cfg(test)]
@@ -159,13 +164,13 @@ pub(crate) struct Live {
 
 impl Live {
     /// Stops the stream with `close` by `by`, unless it was stopped already.
-    pub(crate) fn stop(&self, close: Close, by: &str) {
+    pub(crate) fn stop(&self, close: Close, by: &(impl AuditBy + ?Sized)) {
         self.stop.send_if_modified(|stop| {
             let first = stop.is_none();
             if first {
                 *stop = Some(Stop {
                     close,
-                    by: by.to_owned(),
+                    by: by.by_name().to_owned(),
                 });
             }
             first
@@ -378,11 +383,16 @@ impl Coordinator {
         &self.console
     }
 
-    /// The name of `caller` once the operators file lets it make a call that needs `need`.
+    /// The operator `caller` is once the operators file lets its name (an API token's owner's)
+    /// make a call that needs `need`.
     ///
     /// # Errors
     /// `unauthorized`, `forbidden`, `no_console_access` or `power_not_permitted`.
-    fn console_operator<'c>(&self, caller: &'c Caller, need: Need) -> Result<&'c str, Refusal> {
+    fn console_operator<'c>(
+        &self,
+        caller: &'c Caller,
+        need: Need,
+    ) -> Result<&'c Operator, Refusal> {
         self.console_grant(caller, need).map(|(by, _)| by)
     }
 
@@ -395,9 +405,9 @@ impl Coordinator {
         &self,
         caller: &'c Caller,
         need: Need,
-    ) -> Result<(&'c str, files::Grant), Refusal> {
+    ) -> Result<(&'c Operator, files::Grant), Refusal> {
         let by = caller.operator()?;
-        let grant = self.console.files.grant(by, need).map_err(denied)?;
+        let grant = self.console.files.grant(by.name(), need).map_err(denied)?;
         Ok((by, grant))
     }
 
@@ -462,7 +472,7 @@ impl Coordinator {
     fn console_audit(
         &self,
         action: AuditOnly,
-        by: &str,
+        by: &(impl AuditBy + ?Sized),
         host_id: Option<&str>,
         reason: &str,
     ) -> Result<(), Refusal> {
@@ -479,7 +489,7 @@ impl Coordinator {
     /// operator's `reason` and the `call`; best effort: a line that cannot be written is logged.
     fn console_denied(
         &self,
-        by: &str,
+        by: &(impl AuditBy + ?Sized),
         host_id: &HostId,
         call: &str,
         reason: &str,

@@ -635,21 +635,21 @@ fn the_legacy_single_token_flag_is_one_token_named_operator() {
     let c = &parts.coordinator;
     assert_eq!(
         c.operator(Some(OPERATOR))
-            .map(|name| name.as_str().to_owned()),
+            .map(|name| name.name().to_owned()),
         Ok("operator".to_owned())
     );
     assert_eq!(
         c.operator(Some("operator"))
-            .map(|name| name.as_str().to_owned()),
+            .map(|name| name.name().to_owned()),
         Err(Unauthorized)
     );
     assert_eq!(
         c.operator(Some(&OPERATOR[1..]))
-            .map(|name| name.as_str().to_owned()),
+            .map(|name| name.name().to_owned()),
         Err(Unauthorized)
     );
     assert_eq!(
-        c.operator(None).map(|name| name.as_str().to_owned()),
+        c.operator(None).map(|name| name.name().to_owned()),
         Err(Unauthorized)
     );
     let entry = c
@@ -681,7 +681,7 @@ fn a_tokens_file_gives_each_token_its_name_and_is_read_again() {
     ]);
     let parts = build_given(&flags_of(args.clone())).expect("a start");
     let c = &parts.coordinator;
-    let name = |token: &str| c.operator(Some(token)).map(|name| name.as_str().to_owned());
+    let name = |token: &str| c.operator(Some(token)).map(|name| name.name().to_owned());
     assert_eq!(name(alice), Ok("alice".to_owned()));
     assert_eq!(name(bob), Ok("bob".to_owned()));
     assert_eq!(name(OPERATOR), Err(Unauthorized));

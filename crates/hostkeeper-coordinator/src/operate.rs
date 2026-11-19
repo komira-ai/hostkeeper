@@ -9,6 +9,7 @@ use serde::Deserialize;
 
 use crate::group_reach::listing;
 use crate::host_groups::HostGroups;
+use crate::ops::AuditBy;
 use crate::ops::{
     AuditEntry, Exclusion, Halt, HaltAck, HostOps, MAX_EXCLUDED, MAX_HOSTS, MAX_LABEL_BYTES,
     MAX_LABELS, MAX_REASON_BYTES, OpsError, OpsStore, ServiceOps, Write,
@@ -157,7 +158,7 @@ pub(crate) fn past_held(marks: &mut ServiceOps, held: Option<u64>) -> Option<Lif
 /// The `clear_halt` entry of what `by` lifted of `service` in `group`, with `reason`: a halt
 /// that stood names the host that raised it; one only hosts held names none.
 fn lifted_entry(
-    by: &str,
+    by: &(impl AuditBy + ?Sized),
     service: &str,
     group: Option<&crate::host_groups::GroupName>,
     lifted: &Lifted,
@@ -178,7 +179,7 @@ fn lifted_entry(
 /// The `clear_halt` entry of the halt `halt` of `service` that `by` cleared, with `reason`, in
 /// `group`.
 pub(crate) fn cleared(
-    by: &str,
+    by: &(impl AuditBy + ?Sized),
     service: &str,
     group: Option<&crate::host_groups::GroupName>,
     halt: &Halt,
@@ -253,7 +254,7 @@ pub(crate) fn operate(
     services: &Services,
     groups: &HostGroups,
     held: &dyn Fn(&str) -> Option<u64>,
-    by: &str,
+    by: &(impl AuditBy + ?Sized),
     body: &[u8],
 ) -> Result<AuditEntry, OperateError> {
     let action: Action = serde_json::from_slice(body)
@@ -358,7 +359,7 @@ fn clear_in_groups(
     store: &OpsStore,
     groups: &HostGroups,
     held: Option<u64>,
-    by: &str,
+    by: &(impl AuditBy + ?Sized),
     service: &str,
     reason: &str,
 ) -> Result<AuditEntry, OperateError> {

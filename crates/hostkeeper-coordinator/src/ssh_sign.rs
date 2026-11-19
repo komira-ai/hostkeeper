@@ -161,7 +161,8 @@ impl Coordinator {
         caller: &Caller,
         request: &proto::SignUserCertRequest,
     ) -> Result<proto::SignUserCertResponse, Refusal> {
-        let operator = caller.operator().map_err(Refusal::from)?;
+        let acting = caller.operator().map_err(Refusal::from)?;
+        let operator = acting.name();
         let ssh = self.ssh.as_ref().ok_or(Refusal::NotConfigured)?;
         let host_id = hostkeeper_enrollment::names::HostId::parse(&request.host_id)
             .map_err(|_| Refusal::InvalidRequest)?;
@@ -205,6 +206,7 @@ impl Coordinator {
             .ledger
             .issue(&Issue {
                 operator,
+                api_token: acting.api_token(),
                 host_id,
                 fingerprint: &parsed.fingerprint,
                 ttl_secs: ssh.ttl_secs,
@@ -252,7 +254,7 @@ impl Coordinator {
         caller: &Caller,
         request: &proto::RevokeRequest,
     ) -> Result<proto::RevokeResponse, Refusal> {
-        let by = caller.operator().map_err(Refusal::from)?;
+        let by = caller.operator().map_err(Refusal::from)?.name();
         let ssh = self.ssh.as_ref().ok_or(Refusal::NotConfigured)?;
         if !ssh.operators().lists(by) {
             ssh.refused(by, "", Refusal::NotPermitted);

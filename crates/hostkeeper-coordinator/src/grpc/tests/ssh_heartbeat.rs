@@ -76,6 +76,7 @@ async fn a_grpc_heartbeat_is_answered_the_access_until_the_daemon_reports_it() {
             fingerprint: "SHA256:x",
             ttl_secs: 3600,
             reason: "",
+            api_token: None,
         },
     )
     .expect("signed");
