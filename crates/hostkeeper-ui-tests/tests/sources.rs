@@ -362,7 +362,10 @@ fn every_file_under_ui_is_scanned() {
 
 #[test]
 fn ui_files_stay_under_1000_lines() {
-    for file in UI_FILES {
+    // A vendored file is the library's own text, pinned by its digest (vendor.sha256), and is not
+    // split: noVNC's core/rfb.js is one module of over 3000 lines. Every file of the app's own is
+    // held to the limit.
+    for file in UI_FILES.iter().filter(|f| !f.is_vendored()) {
         assert!(
             file.text.lines().count() < 1000,
             "{} is too long",
