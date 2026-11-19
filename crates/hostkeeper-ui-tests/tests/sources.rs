@@ -6,8 +6,10 @@ use std::path::Path;
 use hostkeeper_proto::ctl::COMMANDS;
 use hostkeeper_ui_tests::client_gen::functions;
 use hostkeeper_ui_tests::scan::{
-    Finding, fetches, inline_code, network_and_code, sockets, token_keepers,
+    Finding, SOCKET_OPENER, fetches, inline_code, network_and_code, opener, scan_file, sockets,
+    token_keepers, vendored_code,
 };
+use hostkeeper_ui_tests::vendor::{PINS, pins, unpinned};
 use hostkeeper_ui_tests::{
     CallSite, UI_FILES, UiFile, UnknownCall, call_sites, check_calls, descriptor_methods,
     listed_calls,
@@ -197,7 +199,7 @@ fn ui_source_never_stores_or_leaks_the_token() {
         .map(|f| f.line)
         .collect();
     assert_eq!(found, (1..=8).collect::<Vec<_>>());
-    for file in UI_FILES {
+    for file in app_files() {
         assert_none(token_keepers(file.path, file.text));
     }
 }
@@ -214,7 +216,7 @@ fn ui_source_loads_nothing_from_the_network_and_runs_no_inline_script() {
     let js = "el.innerHTML = reply.reason;\neval(text);\nnew Function(text);\nel.onclick = go;";
     assert_eq!(network_and_code("pages/x.js", js).len(), 3);
     assert_eq!(inline_code("pages/x.js", js).len(), 1);
-    for file in UI_FILES {
+    for file in app_files() {
         assert_none(network_and_code(file.path, file.text));
         assert_none(inline_code(file.path, file.text));
     }
@@ -223,7 +225,7 @@ fn ui_source_loads_nothing_from_the_network_and_runs_no_inline_script() {
 #[test]
 fn only_the_data_layer_and_the_entry_module_call_fetch() {
     // Catches: a page that talks to the network on its own, past the data layer.
-    for file in UI_FILES {
+    for file in app_files() {
         let found = fetches(file.path, file.text);
         match file.path {
             "api.js" | "main.js" => assert_eq!(found.len(), 1, "{}", file.path),
@@ -234,21 +236,80 @@ fn only_the_data_layer_and_the_entry_module_call_fetch() {
 
 #[test]
 fn only_the_entry_module_opens_a_socket_and_it_opens_exactly_one() {
-    // Catches: a page or the data layer that opens a socket of its own, past the injected
-    // `ctx.openSocket`, and an entry module that opens none or more than the one.
+    // Catches: a page, the data layer or a vendored library that opens a socket of its own, past
+    // the injected `ctx.openSocket`, an entry module that opens none or more than the one, and a
+    // socket whose address is not `socketAddress`'s (the page's own host, a path of a fixed
+    // shape). A vendored library may name `WebSocket` (to check what it is handed) and never call it.
+    assert_eq!(SOCKET_OPENER, "main.js");
     for file in UI_FILES {
         let found = sockets(file.path, file.text);
         match file.path {
             "main.js" => assert_eq!(found.len(), 1, "{}", file.path),
             _ => assert_none(found),
         }
-        if file.path != "main.js" {
+        if file.path != "main.js" && !file.is_vendored() {
             assert!(
                 !file.text.contains("WebSocket"),
                 "{} names WebSocket: only main.js does",
                 file.path
             );
         }
+    }
+    let main = UiFile::named(SOCKET_OPENER).expect("main.js is held");
+    assert_none(opener(main.path, main.text));
+    assert!(
+        main.text
+            .contains("import { socketAddress } from \"./socket_address.js\";"),
+        "main.js takes socketAddress from socket_address.js"
+    );
+}
+
+/// Every file of the app but the vendored libraries.
+fn app_files() -> impl Iterator<Item = &'static UiFile> {
+    UI_FILES.iter().filter(|f| !f.is_vendored())
+}
+
+#[test]
+fn every_ui_file_passes_the_scan_of_its_directory() {
+    // Catches: a file of the app, or a vendored one, that holds what its directory's rules refuse.
+    for file in UI_FILES {
+        assert_none(scan_file(file.path, file.text));
+    }
+}
+
+#[test]
+fn vendored_files_match_their_pinned_digests() {
+    // Catches: a vendored library changed, added or removed without the change to its pins, and
+    // pins that do not read. The checks are first shown to find each in a list that holds it.
+    let pinned = pins(PINS).unwrap_or_else(|e| panic!("{e}"));
+    assert_none(unpinned(UI_FILES, &pinned));
+    let changed = [UiFile {
+        path: "vendor/lib/lib.js",
+        text: "changed",
+    }];
+    let held =
+        pins("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  vendor/lib/lib.js")
+            .expect("one pin reads");
+    assert_eq!(unpinned(&changed, &held).len(), 1);
+    assert_eq!(unpinned(&changed, &[]).len(), 1);
+    assert_eq!(unpinned(&[], &held).len(), 1);
+}
+
+#[test]
+fn no_vendored_file_calls_new_websocket() {
+    // Catches: a vendored library that would open a socket of its own (it is handed the app's one
+    // socket, open), or that holds inline script or a handler made from text. The check is first
+    // shown to find a call in a vendored text that holds one.
+    assert_eq!(
+        vendored_code(
+            "vendor/lib/websock.js",
+            "open(uri, protocols) { this.attach(new WebSocket(uri, protocols)); }"
+        )
+        .len(),
+        1
+    );
+    for file in UI_FILES.iter().filter(|f| f.is_vendored()) {
+        assert_none(vendored_code(file.path, file.text));
     }
 }
 

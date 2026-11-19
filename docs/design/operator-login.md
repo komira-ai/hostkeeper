@@ -64,7 +64,8 @@ All of this is **Built** and was read from `main`.
   `Caller::Ci` or `Caller::Anonymous`, and every operator call takes its audit `by` from the name.
 - **The UI** (`ui.rs`, `ui/`). A static file server for `/ui/`: it parses no token, holds no state, and its header
   says "no cookie and no session". Every answer carries `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`,
-  `Referrer-Policy: no-referrer` and the policy `default-src 'self'; frame-ancestors 'none'`; there are no
+  `Referrer-Policy: no-referrer` and the policy `default-src 'self'; frame-ancestors 'none'` (since the console's C5, with
+  `connect-src`, `style-src` and `img-src` added, [ui-serving.md](../ui-serving.md)); there are no
   `Access-Control-*` headers. The page keeps the token in `ui/session.js` and `ui/api.js` posts JSON to
   `/<package>.<Service>/<Method>` with `Authorization: Bearer`.
 - **Listeners.** The private listener (TLS, one interface) serves the operator API, the gateway and `/ui/`; the
