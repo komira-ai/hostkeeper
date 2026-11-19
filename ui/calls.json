@@ -1,6 +1,6 @@
 {
   "calls": [
-    { "function": "alerts.list", "method": "hostkeeper.operator.v1.Alerts/List", "pages": ["home"] },
+    { "function": "alerts.list", "method": "hostkeeper.operator.v1.Alerts/List", "pages": ["home", "host"] },
     { "function": "apiTokens.create", "method": "hostkeeper.operator.v1.ApiTokens/Create", "pages": ["tokens"] },
     { "function": "apiTokens.list", "method": "hostkeeper.operator.v1.ApiTokens/List", "pages": ["tokens"] },
     { "function": "apiTokens.revoke", "method": "hostkeeper.operator.v1.ApiTokens/Revoke", "pages": ["tokens"] },
@@ -28,6 +28,7 @@
     { "function": "hosts.include", "method": "hostkeeper.operator.v1.Hosts/Include", "pages": ["host"] },
     { "function": "hosts.list", "method": "hostkeeper.operator.v1.Hosts/List", "pages": ["home", "inventory", "package", "release", "rollout"] },
     { "function": "hosts.retire", "method": "hostkeeper.operator.v1.Hosts/Retire", "pages": ["host"] },
+    { "function": "hosts.retry", "method": "hostkeeper.operator.v1.Hosts/Retry", "pages": ["host"] },
     { "function": "hosts.setLabels", "method": "hostkeeper.operator.v1.Hosts/SetLabels", "pages": ["host"] },
     { "function": "layout.addRow", "method": "hostkeeper.operator.v1.Layout/AddRow", "pages": ["home"] },
     { "function": "layout.get", "method": "hostkeeper.operator.v1.Layout/Get", "pages": ["enrollment", "home", "host", "inventory", "switch"] },
@@ -41,7 +42,7 @@
     { "function": "layout.removeRow", "method": "hostkeeper.operator.v1.Layout/RemoveRow", "pages": ["home"] },
     { "function": "layout.removeSled", "method": "hostkeeper.operator.v1.Layout/RemoveSled", "pages": ["home"] },
     { "function": "layout.unplace", "method": "hostkeeper.operator.v1.Layout/Unplace", "pages": ["home", "host", "inventory"] },
-    { "function": "releases.clearHalt", "method": "hostkeeper.operator.v1.Releases/ClearHalt", "pages": ["package", "rollout"] },
+    { "function": "releases.clearHalt", "method": "hostkeeper.operator.v1.Releases/ClearHalt", "pages": ["host", "package", "rollout"] },
     { "function": "releases.converge", "method": "hostkeeper.operator.v1.Releases/Converge", "pages": ["package", "rollout"] },
     { "function": "releases.force", "method": "hostkeeper.operator.v1.Releases/Force", "pages": ["rollout"] },
     { "function": "releases.getRelease", "method": "hostkeeper.operator.v1.Releases/GetRelease", "pages": ["package", "release"] },
