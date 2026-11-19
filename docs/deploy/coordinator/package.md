@@ -107,10 +107,12 @@ place the files the flags name:
   The user is 1 to 16 bytes of printable ASCII with no space, and the password 1 to 20 bytes of
   printable ASCII, a space allowed; these are the most IPMI 2.0 takes.
 - **Root's, readable by the group, no secret:** the optional `console-operators-file`, which token
-  names may use the console, and `console-targets-file`, the address of each BMC by its MAC. The
-  operators file needs the targets file and the credential file beside it (`serve` refuses it
-  without them); with no operators file nobody has console access and the other two are not read.
-  The coordinator reads all three again on the reload tick (`tls-reload-secs`); a file that is
+  names may use the console, and the optional `console-targets-file`, an address that overrides
+  for a BMC by its MAC (every other BMC is reached at the address its host's daemon reports, then
+  at the one the coordinator's neighbour table holds: [console.md](../../operations/console.md#each-bmcs-address)).
+  The operators file needs the credential file beside it (`serve` refuses it without); with no
+  operators file nobody has console access and the other two are not read.
+  The coordinator reads each again on the reload tick (`tls-reload-secs`); a file that is
   refused on that look leaves the one in use, and a file refused at the start stops the
   coordinator, naming its flag and never its path. The operators file names tokens of the tokens
   file; `power = false` allows opening a console but not power or boot-device calls:
@@ -124,8 +126,8 @@ place the files the flags name:
   power = false
   ```
 
-  The targets file gives the address of a BMC by the BMC MAC of its inventory record, an IP address
-  or a name, with no port (the BMC's is 623):
+  The targets file, when given, gives the address of a BMC by the BMC MAC of its inventory record,
+  an IP address or a name, with no port (the BMC's is 623), and of a Mac by one of its data MACs:
 
   ```toml
   [[target]]

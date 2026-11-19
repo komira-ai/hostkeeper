@@ -385,7 +385,7 @@ async fn a_client_that_breaks_the_protocol_is_closed_with_its_code() {
 async fn a_device_or_operator_gone_by_the_attach_closes_the_stream() {
     let live = Live::new("stream-no-target");
     let session = live.open("alice", MAC);
-    std::fs::write(&live.fixture.files.targets, "").expect("emptied");
+    std::fs::write(live.fixture.files.targets.as_ref().expect("given"), "").expect("emptied");
     live.coordinator.console().files().reload();
     let mut client = live.attach(&session, ALICE).await;
     client.closed(4001, "device_unreachable").await;
@@ -519,7 +519,7 @@ async fn a_deactivation_that_cannot_be_made_still_ends_the_session() {
         .sol_session(&[NODE_BMC_ANSWER, " 01 00 00\n", INFO]);
     let session = live.open("alice", NODE);
     let mut client = live.attach(&session, ALICE).await;
-    std::fs::write(&live.fixture.files.targets, "").expect("emptied");
+    std::fs::write(live.fixture.files.targets.as_ref().expect("given"), "").expect("emptied");
     live.coordinator.console().files().reload();
     client.raw(&client_frame(8, &1000u16.to_be_bytes())).await;
     client.closed(1000, "client_left").await;

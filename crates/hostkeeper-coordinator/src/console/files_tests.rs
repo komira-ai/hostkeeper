@@ -45,8 +45,9 @@ fn a_reload_takes_a_changed_file_and_keeps_the_last_good_one() {
     files.reload();
     assert!(files.grant("alice", Need::Power).is_ok());
     write_files(&dir, "[[operator]]\nname = \"carol\"\n");
+    let targets = paths.targets.clone().expect("a targets file");
     std::fs::write(
-        &paths.targets,
+        &targets,
         "[[target]]\nmac = \"0c:c4:7a:00:00:01\"\naddress = \"192.0.2.99\"\n",
     )
     .expect("written");
@@ -61,7 +62,7 @@ fn a_reload_takes_a_changed_file_and_keeps_the_last_good_one() {
         grant.targets.address_of(&bmc).map(ToString::to_string),
         Some("192.0.2.99".to_owned())
     );
-    for path in [&paths.operators, &paths.targets, &paths.credential] {
+    for path in [&paths.operators, &targets, &paths.credential] {
         std::fs::write(path, "not toml [").expect("broken");
     }
     files.reload();
@@ -80,9 +81,10 @@ fn a_reload_takes_a_changed_file_and_keeps_the_last_good_one() {
 fn a_broken_file_refuses_the_start_naming_its_flag() {
     let dir = scratch("console-files-start");
     let paths = write_files(&dir, OPERATORS);
+    let targets = paths.targets.clone().expect("a targets file");
     let flags = [
         (&paths.operators, "--console-operators-file"),
-        (&paths.targets, "--console-targets-file"),
+        (&targets, "--console-targets-file"),
         (&paths.credential, "--console-bmc-credential-file"),
     ];
     for (path, flag) in flags {
@@ -92,4 +94,28 @@ fn a_broken_file_refuses_the_start_naming_its_flag() {
         assert!(refused.to_string().starts_with(flag), "{refused}");
         std::fs::write(path, good).expect("restored");
     }
+}
+
+/// Proves: without a targets file the files are read, the grant's targets name no MAC, and a
+/// reload reads none (a file of that name written later is not read: the flag names none).
+///
+/// Catches: a console that needs a targets file to start, and one that reads a targets file it
+/// was not given.
+#[test]
+fn without_a_targets_file_no_address_is_configured() {
+    let dir = scratch("console-files-no-targets");
+    let mut paths = write_files(&dir, OPERATORS);
+    let written = paths.targets.take().expect("a targets file");
+    let files = ConsoleFiles::read(paths).expect("read");
+    let bmc = hostkeeper_enrollment::names::MacAddress::parse("0c:c4:7a:00:00:01").expect("a MAC");
+    let grant = files.grant("alice", Need::Power).expect("alice");
+    assert_eq!(grant.targets.address_of(&bmc), None);
+    std::fs::write(
+        &written,
+        "[[target]]\nmac = \"0c:c4:7a:00:00:01\"\naddress = \"192.0.2.99\"\n",
+    )
+    .expect("written");
+    files.reload();
+    let grant = files.grant("alice", Need::Power).expect("alice");
+    assert_eq!(grant.targets.address_of(&bmc), None);
 }

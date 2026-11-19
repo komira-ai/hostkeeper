@@ -122,6 +122,10 @@ impl Api for AgentService {
             retiring,
         };
         let (answer, order) = beat(&self.coordinator, caller, &bytes, root).map_err(beat_status)?;
+        // The BMC is kept with what the host runs, which the heartbeat has just recorded.
+        if !retiring {
+            self.coordinator.hear_bmc(&identity, request.get_ref());
+        }
         // The sets are made once the heartbeat is taken (a retiring host's is refused, so it is
         // sent none): the host's announced features are the ones this heartbeat said.
         let mut response = response_of(answer, order);

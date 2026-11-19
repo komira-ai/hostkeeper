@@ -12,6 +12,7 @@ mod approve_placement;
 mod approve_refusals;
 mod approve_ungrouped;
 mod audit;
+mod bmc;
 mod by_record;
 mod by_record_repair;
 mod by_record_waits;

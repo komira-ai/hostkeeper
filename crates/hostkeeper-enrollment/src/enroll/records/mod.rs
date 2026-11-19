@@ -60,11 +60,6 @@ pub mod pb {
 
 /// One record a commit writes.
 #[derive(Clone, Debug, PartialEq)]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "a commit holds a handful of records, built and dropped at once; boxing the request \
-              would add an allocation and a dereference at every use for no memory that matters"
-)]
 pub enum Record {
     /// Kept under its `request_id`.
     Request(pb::Request),
@@ -121,11 +116,6 @@ impl Record {
 /// A record as a decision read it, by its key: `None` when it was absent. A write given it lands
 /// only when the record still is so ([`Records::commit`]).
 #[derive(Clone, Debug, PartialEq)]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "a decision notes a handful of records, built and dropped with it, as `Record`'s \
-              variants are; boxing the request would add an allocation at every read"
-)]
 pub enum Seen {
     Request(KeyHash, Option<pb::Request>),
     Issued(KeyHash, Option<pb::Issued>),

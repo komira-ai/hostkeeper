@@ -27,6 +27,7 @@ fn beat(report: Option<PrerequisitesReport>) -> Heartbeat {
         operator_keys: None,
         prerequisites: report,
         ssh: None,
+        bmc: None,
     }
 }
 

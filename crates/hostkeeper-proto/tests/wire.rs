@@ -413,7 +413,7 @@ const RPCS: [(&str, &[&str]); 7] = [
 
 /// The fields of the heartbeat, enrollment, abort, retire, clear-record, audit and force-report
 /// messages, pinned by name and number.
-const FIELDS: [(&str, &[(&str, u32)]); 39] = [
+const FIELDS: [(&str, &[(&str, u32)]); 40] = [
     (
         "hostkeeper.agent.v1.HeartbeatRequest",
         &[
@@ -433,8 +433,10 @@ const FIELDS: [(&str, &[(&str, u32)]); 39] = [
             ("remote_login_probe", 14),
             ("operator_keys", 15),
             ("prerequisites", 16),
+            ("bmc", 17),
         ],
     ),
+    ("hostkeeper.agent.v1.BmcReport", &[("ip", 1), ("mac", 2)]),
     (
         "hostkeeper.agent.v1.HeartbeatResponse",
         &[

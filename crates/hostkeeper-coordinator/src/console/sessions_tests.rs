@@ -6,7 +6,9 @@ use std::time::Duration;
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::ConsoleRefusal as Refusal;
 
-use super::support::{Fixture, MAC, NODE, caller, line, session_id};
+use super::support::{
+    Fixture, MAC, NODE, NODE_BMC_ADDRESS, caller, file_address, line, session_id,
+};
 use crate::operator::Caller;
 use crate::store::audit_failure;
 
@@ -80,6 +82,7 @@ fn an_open_session_is_listed_and_audited_without_contacting_the_device() {
             session: session_id(1),
             expires_in_secs: 30,
             quiet_secs: 10,
+            address: Some(file_address(NODE_BMC_ADDRESS)),
         })
     );
     let screen = coordinator.console_open(&caller("alice"), &open(MAC, "login stuck"));

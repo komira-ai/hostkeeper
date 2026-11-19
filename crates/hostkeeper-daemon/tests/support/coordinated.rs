@@ -406,6 +406,7 @@ impl Host {
             remote_login_probe: None,
             operator_keys: None,
             prerequisites: None,
+            bmc: None,
         };
         Host {
             heartbeater: links.heartbeater(&daemon),

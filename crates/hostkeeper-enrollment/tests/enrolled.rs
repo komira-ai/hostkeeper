@@ -67,6 +67,7 @@ fn enrolled(host: &str, machine: &str, at: u64) -> EnrolledHost {
         moving_from: None,
         running: None,
         running_unix: None,
+        bmc: None,
     }
 }
 

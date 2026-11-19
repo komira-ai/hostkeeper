@@ -6,6 +6,7 @@ mod acks;
 mod adapters;
 mod agent;
 mod alerts;
+mod bmc;
 mod console;
 mod cookie_separation;
 mod credentials;

@@ -160,6 +160,22 @@ message Running {
   repeated RunningService services = 3;
   // When the coordinator accepted the heartbeat this was last written from, in unix seconds.
   uint64 at_unix = 4;
+  // The host's BMC, as its daemon last reported it (`HeartbeatRequest.bmc`); absent until a
+  // heartbeat carries one. Rewritten when the address or the MAC changes; a rewrite of what the
+  // host runs keeps it. A release before it does not read it, and drops it when it rewrites
+  // this record; a report within ten minutes writes it again.
+  optional RunningBmc bmc = 5;
+}
+
+// The BMC a host's daemon reported.
+message RunningBmc {
+  // Its IP address, as the coordinator read it from the report.
+  string ip = 1;
+  // Its MAC, `aa:bb:cc:dd:ee:ff`.
+  string mac = 2;
+  // When the coordinator accepted the heartbeat that first reported this address and MAC, in
+  // unix seconds.
+  uint64 at_unix = 3;
 }
 
 // One service a host runs.

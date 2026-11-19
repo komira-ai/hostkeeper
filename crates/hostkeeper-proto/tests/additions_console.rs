@@ -1,7 +1,10 @@
 //! What the console adds to the wire, new since the committed baseline
 //! (`proto/compat/baseline.binpb`, the release before): the `Console` service of the operator API
-//! with its messages, `ConsoleRefusal`, `ConsoleKind`, `PowerAction`, `PowerState` and
-//! `BootDevice` (`proto/hostkeeper/operator/v1/console.proto`, docs/design/console-broker.md).
+//! with its messages, `ConsoleRefusal`, `ConsoleKind`, `PowerAction`, `PowerState`,
+//! `BootDevice` and `ConsoleAddressSource` (`proto/hostkeeper/operator/v1/console.proto`,
+//! docs/design/console-broker.md). The fields that name a BMC's address in the answers, added
+//! after the console shipped, are tested against the release that shipped it in
+//! `additions_bmc.rs`.
 //!
 //! Nothing existing changed: the release before knows none of them, a reader of it that meets one
 //! of the new messages keeps every byte, and this build reads what that release wrote (a message of
@@ -43,6 +46,16 @@ fn session() -> op::ConsoleSession {
     }
 }
 
+/// An address with every field set.
+fn address() -> op::ConsoleAddress {
+    op::ConsoleAddress {
+        address: "192.0.2.12".to_owned(),
+        source: op::ConsoleAddressSource::Heartbeat.into(),
+        stale: true,
+        reported_unix: 1_000,
+    }
+}
+
 /// One message of each type the console added, every field set, by full name.
 fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
     vec![
@@ -60,6 +73,7 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
                 session: "ab".repeat(32),
                 expires_in_secs: 30,
                 quiet_secs: 10,
+                address: Some(address()),
             }),
         ),
         (
@@ -75,6 +89,7 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
             round_trip(&op::ConsolePowerResponse {
                 state: op::PowerState::Off.into(),
                 sent: op::PowerAction::On.into(),
+                address: Some(address()),
             }),
         ),
         (
@@ -93,7 +108,12 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
                 device: op::BootDevice::Disk.into(),
                 persistent: true,
                 efi: true,
+                address: Some(address()),
             }),
+        ),
+        (
+            "hostkeeper.operator.v1.ConsoleAddress",
+            round_trip(&address()),
         ),
         (
             "hostkeeper.operator.v1.ConsoleSession",
@@ -133,7 +153,7 @@ fn the_console_messages_are_new_and_an_older_reader_keeps_their_bytes() {
         .expect("a message of the release before");
     assert_eq!(blind.fields().count(), 0);
     let messages = new_messages();
-    assert_eq!(messages.len(), 11);
+    assert_eq!(messages.len(), 12);
     for (name, bytes) in messages {
         assert!(older.get_message_by_name(name).is_none(), "{name} is new");
         let read = DynamicMessage::decode(blind.clone(), bytes.as_slice()).expect("decodes");
@@ -145,6 +165,7 @@ fn the_console_messages_are_new_and_an_older_reader_keeps_their_bytes() {
         "PowerAction",
         "PowerState",
         "BootDevice",
+        "ConsoleAddressSource",
     ] {
         assert!(
             older

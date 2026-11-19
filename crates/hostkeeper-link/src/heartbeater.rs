@@ -118,8 +118,8 @@ use crate::host_ssh::PushedSsh;
 use crate::names::Reason;
 use crate::order::{Acknowledged, Order, OrderRef, OrderResult, Outcome, Reply, Verb};
 use crate::ports::{
-    CertSource, CertState, CoordinatorLink, Dispatch, FactsSink, HeldHalts, LinkError, Log,
-    OperatorKeysSink, OrderSink, PrerequisitesSink, RecordedService, RemoteLoginProbeSource,
+    BmcSource, CertSource, CertState, CoordinatorLink, Dispatch, FactsSink, HeldHalts, LinkError,
+    Log, OperatorKeysSink, OrderSink, PrerequisitesSink, RecordedService, RemoteLoginProbeSource,
     RenewalSource, RepositorySink, ServiceObserver, ServiceRecords, Sleeper, SshSink, Tick,
     TrustedRootSource, UnixClock,
 };
@@ -196,6 +196,8 @@ pub struct Ports {
     /// The host prerequisites of the host's group; none on a host that keeps none, which then
     /// announces no `prerequisites-v1`, sends no report and is sent no set.
     pub prerequisites: Option<Arc<dyn PrerequisitesSink>>,
+    /// The host's BMC; none on a host whose daemon reads none (a Mac), which then sends none.
+    pub bmc: Option<Arc<dyn BmcSource>>,
 }
 
 /// What one heartbeat came to.
@@ -577,6 +579,7 @@ impl Heartbeater {
             operator_keys: self.ports.operator_keys.as_ref().map(|sink| sink.report()),
             ssh: self.ports.ssh.as_ref().and_then(|sink| sink.report()),
             prerequisites: self.ports.prerequisites.as_ref().map(|sink| sink.report()),
+            bmc: self.ports.bmc.as_ref().and_then(|source| source.bmc()),
         })
     }
 

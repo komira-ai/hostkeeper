@@ -13,8 +13,8 @@ The parts, and where each is set up:
 | Part | Section |
 |---|---|
 | The coordinator's host reaches every BMC on UDP 623 | [The network path](#the-network-path) |
-| Each BMC keeps one address | [DHCP reservations](#dhcp-reservations) |
-| Who may use the console, each BMC's address, the one BMC credential | [The three files](#the-three-files) |
+| The coordinator finds each BMC's address, which DHCP may move | [Each BMC's address](#each-bmcs-address) |
+| Who may use the console, the one BMC credential, an address that overrides | [The three files](#the-three-files) |
 | The coordinator can run `ipmitool` | [`ipmitool` beside the coordinator](#ipmitool-beside-the-coordinator) |
 | The BMC carries the serial port at 115.2 kbit/s, and the firmware's screens reach it | [The BMC and the BIOS](#the-bmc-and-the-bios) |
 | The installed system's console, GRUB and login prompt are on `ttyS1` at 115200 baud | [Moving a server to the serial baseline](#moving-a-server-to-the-serial-baseline) |
@@ -28,8 +28,8 @@ from its file, and never put on a command line, in a repository or in a log.
 
 ## The network path
 
-The coordinator dials each BMC itself, on UDP 623 (RMCP+), at the address the targets file gives
-for it. **Default: direct.** The coordinator's host has an address on the lab LAN that the BMCs
+The coordinator dials each BMC itself, on UDP 623 (RMCP+), at the address it finds for it
+([Each BMC's address](#each-bmcs-address)). **Default: direct.** The coordinator's host has an address on the lab LAN that the BMCs
 are on, so no route, router host or tailnet rule is needed. The operator's browser reaches the
 coordinator over the tailnet as for every other page; the BMCs are never exposed to it.
 
@@ -59,40 +59,58 @@ ACL** (the design, section 9.1).
 3. The tailnet policy grants **only the coordinator's tag** the BMCs' addresses on UDP 623: one
    rule from `tag:<coordinator>` to `<bmc-range>:623`, and no rule that grants any other member
    the subnet. A rule that does exposes every BMC to anyone who holds the shared password, with no
-   coordinator check and no audit line. DHCP reservations in one contiguous block keep the rule
-   to one range.
+   coordinator check and no audit line. The rule names the range the lab's DHCP server gives the
+   BMCs. Through the route, the coordinator's neighbour table holds no BMC: a BMC whose host
+   never reported its address is `no_address` unless the targets file names it.
 
-## DHCP reservations
+## Each BMC's address
 
-The coordinator stores no address: the targets file maps each BMC's MAC to its address, written
-once. The BMCs take their addresses by DHCP (`IP Address Source: DHCP Address` in `ipmitool lan
-print 1`), so each one needs a reservation at the lab's DHCP server, or its lease may move.
+The lab's DHCP server cannot reserve an address, so a BMC's lease may move: the coordinator finds
+each BMC's address rather than being told it once. A BMC is known by its MAC, the `bmcMac` of the
+host's inventory record (`hkctl enrollment list-records`); a host whose record has none is
+`no_bmc_mac`: add the record's BMC MAC ([enrollment.md](enrollment.md)).
 
-1. Find each BMC's MAC: it is the `bmcMac` of the host's inventory record (`hkctl enrollment
-   list-records`, below), and on the host itself, as root, `ipmitool lan print 1` names it as
-   `MAC Address` (in-band, over `/dev/ipmi0`, which needs no BMC credential).
+```sh
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    enrollment list-records
+```
 
-   ```sh
-   hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
-       enrollment list-records
-   ```
+The coordinator tries these addresses, in order, until a BMC answers at one:
 
-2. At the DHCP server (the lab's router), reserve one address for each BMC MAC. Reserve the
-   BMCs in one contiguous block, which the route's rule of the alternative needs.
-3. Write each MAC and address into the targets file (below).
+1. **The targets file**, when it names the BMC's MAC: its address alone, an override, for a BMC
+   whose host runs no hostkeeper daemon (or one an operator pins). Optional; see
+   [The three files](#the-three-files).
+2. **The host's own report.** The hostkeeper daemon on each Linux server, as root, reads its
+   BMC's address and MAC from the BMC itself, in-band over `/dev/ipmi0` with no credential (what
+   `ipmitool lan print 1` shows as `IP Address` and `MAC Address`), at its start and every ten
+   minutes, and reports them in its heartbeats. The coordinator keeps the last report with the
+   host's enrollment, so every coordinator on the same database has it, after a restart too. A
+   report of another MAC than the record's `bmcMac` is not used. While the host is not
+   heartbeating (no heartbeat for 45 seconds, as when it is off or hung, the reason to open its
+   console), this is the address it last reported, and it may be stale: the answer says so.
+3. **The coordinator's neighbour table** (`/proc/net/arp` of the coordinator's host), when it
+   holds a complete entry for the BMC's MAC at another address. Nothing is probed to fill it: it
+   holds a BMC the coordinator's host spoke to within the last few minutes.
 
-A lease that moved anyway is caught, not obeyed: before every command the coordinator reads the
-MAC of the BMC at the address and compares it with the record's `bmcMac`; a difference is
-`address_mismatch`, and nothing is sent. Fix the reservation or the targets file. A host whose
-record has no `bmcMac` is `no_bmc_mac`: add the record's BMC MAC (enrollment.md).
+With none of them the host is `no_address`. Each answer of `hkctl console power`,
+`set-boot-device` and `open` names the address and where it came from: `address` with `source`
+`CONSOLE_ADDRESS_SOURCE_TARGETS_FILE`, `_HEARTBEAT` (with `stale` true while the host is not
+heartbeating, and `reported_unix`) or `_NEIGHBOR_TABLE`.
+
+An address is never trusted for what is at it: before every command the coordinator reads the MAC
+of the BMC at the address and compares it with the record's `bmcMac`. A difference sends nothing
+there, and the next address is tried; at the last one the call is `address_mismatch`, or
+`device_unreachable` when a BMC did not answer at one of them. A host that heartbeats again
+reports its BMC's new address within ten minutes.
 
 ## The three files
 
-The console is off until the coordinator is given all three files. Each is a flag of `serve`,
-written as a key of `serve.toml` ([package.md](../deploy/coordinator/package.md#the-flags-servetoml)):
-`console-operators-file`, `console-targets-file` and `console-bmc-credential-file`. The operators
-file needs the other two beside it (`serve` refuses it without them); with no operators file
-nobody has console access and the other two are not read. The coordinator reads all three again
+The console is off until the coordinator is given the operators file and the credential file; the
+targets file is optional. Each is a flag of `serve`, written as a key of `serve.toml`
+([package.md](../deploy/coordinator/package.md#the-flags-servetoml)): `console-operators-file`,
+`console-targets-file` and `console-bmc-credential-file`. The operators file needs the credential
+file beside it (`serve` refuses it without); with no operators file nobody has console access and
+the other two are not read. The coordinator reads all three again
 on the reload tick (`tls-reload-secs`): a change takes effect with no restart, and a file refused
 on that look is logged, naming its flag, and the one read before stays in use. A file refused at
 the start stops the coordinator, naming its flag and never its path.
@@ -114,9 +132,14 @@ name = "bob"
 power = false
 ```
 
-**Each BMC's address** (`console-targets-file`; root's, readable by the group, no secret). One
-`[[target]]` for each BMC: `mac` is the BMC MAC of the host's inventory record, and `address` the
-reserved IP address or a DNS name, with no port (a BMC's is 623).
+**An address that overrides** (`console-targets-file`; optional; root's, readable by the group, no
+secret). Leave it out unless a BMC's address cannot be found
+([Each BMC's address](#each-bmcs-address)): a BMC whose host runs no daemon, or a coordinator
+reached through the route of the alternative. One `[[target]]` for each such BMC: `mac` is the
+BMC MAC of the host's inventory record, and `address` an IP address or a DNS name, with no port (a
+BMC's is 623). A BMC the file names is reached at that address alone, so an address that moved is
+`address_mismatch` until the file is fixed. A Mac's screen is reached only at the address this file
+gives one of its data MACs.
 
 ```toml
 # /etc/hostkeeper-coordinator/console-targets.toml
@@ -170,21 +193,22 @@ sudo ipmitool user enable <id>
 A wrong user or password is `bmc_auth_failed`, with no text of the tool in the answer; fix the
 file, and the next reload tick takes it.
 
-**Then** add the three keys to `serve.toml`, beside the defaults that need no key
-(`console-ipmitool`, `console-ipmi-cipher` 3, `console-ipmi-privilege` `administrator`,
-`console-ipmi-timeout-s` 1, `console-ipmi-retries` 2, `console-attach-s` 30,
+**Then** add the keys to `serve.toml` (`console-targets-file` only if you wrote one), beside the
+defaults that need no key (`console-ipmitool`, `console-ipmi-cipher` 3, `console-ipmi-privilege`
+`administrator`, `console-ipmi-timeout-s` 1, `console-ipmi-retries` 2, `console-attach-s` 30,
 `console-max-sessions` 8, `console-idle-s` 1800, `console-total-s` 28800,
 `console-connect-timeout-s` 5, `console-quiet-s` 10; [package.md](../deploy/coordinator/package.md)
 says what each does), and restart the coordinator once:
 
 ```toml
 console-operators-file = "/etc/hostkeeper-coordinator/console-operators.toml"
-console-targets-file = "/etc/hostkeeper-coordinator/console-targets.toml"
 console-bmc-credential-file = "/etc/hostkeeper-coordinator/console-bmc-credential.toml"
 ```
 
-In the container of the image ([README.md](../deploy/coordinator/README.md)), the three files are
-mounted read-only and named by their paths in the container, as its other files are.
+In the container of the image ([README.md](../deploy/coordinator/README.md)), the files are
+mounted read-only and named by their paths in the container, as its other files are. The
+neighbour table the coordinator reads is its network namespace's: with the container on the
+host's network it is the host's, otherwise it holds no BMC.
 
 ## `ipmitool` beside the coordinator
 
@@ -376,7 +400,8 @@ With the host down, run `sol deactivate` from the coordinator's host instead, as
 | A prompt at the first Enter, then nothing or NUL bytes | The stock getty moved the port to 9600. The getty's drop-in, step 3. |
 | The kernel and the login, but nothing of the firmware | BIOS console redirection to COM2 is off. [The BMC and the BIOS](#the-bmc-and-the-bios). |
 | `device_unreachable` (4001) on every BMC | The coordinator's host is off the lab LAN, or the route of the alternative is down. [The network path](#the-network-path). |
-| `address_mismatch` (4009) | The BMC at the targets file's address is another one. [DHCP reservations](#dhcp-reservations). |
+| `address_mismatch` (4009) | The BMC at every address found for the host is another one: a targets file entry that is out of date, or a record whose `bmcMac` is not the BMC's. [Each BMC's address](#each-bmcs-address). |
+| `no_address` | No address is known for the BMC: its host never reported one (its daemon is not running as root, or the host has been down since before it first did) and the neighbour table has none. Power the host from the BMC's own page, or name the BMC in the targets file. [Each BMC's address](#each-bmcs-address). |
 | `bmc_auth_failed` (4004) | The credential file's user or password is not the BMC's. [The three files](#the-three-files). |
 | `bmc_sol_busy` (4002) | Someone holds the BMC's SOL session, or one was left behind. [A Serial over LAN session left behind](#a-serial-over-lan-session-left-behind). |
 | `bmc_busy` (4003) | The BMC's 16 sessions are taken; one a client left is freed by the BMC within a minute. |

@@ -99,6 +99,10 @@ pub(crate) fn heartbeat(beat: &Heartbeat) -> Result<pb::HeartbeatRequest, Unsend
         remote_login_probe: beat.remote_login_probe.as_ref().map(remote_login_probe),
         operator_keys: beat.operator_keys.as_ref().map(keys_report),
         prerequisites: beat.prerequisites.as_ref().map(prerequisites_report),
+        bmc: beat.bmc.as_ref().map(|report| pb::BmcReport {
+            ip: report.ip.clone(),
+            mac: report.mac.clone(),
+        }),
     })
 }
 
@@ -576,3 +580,7 @@ mod prerequisites_tests;
 #[cfg(test)]
 #[path = "proto_map_local_halt_tests.rs"]
 mod local_halt_tests;
+
+#[cfg(test)]
+#[path = "proto_map_bmc_tests.rs"]
+mod bmc_tests;
