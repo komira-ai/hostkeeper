@@ -1755,6 +1755,7 @@ dependencies = [
  "hostkeeper-wire",
  "serde",
  "thiserror",
+ "tokio",
  "toml",
 ]
 

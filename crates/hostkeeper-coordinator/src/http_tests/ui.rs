@@ -212,6 +212,8 @@ async fn answered(rig: &Rig, surface: Surface, peer: &Peer) -> BTreeSet<String> 
             if code != StatusCode::NOT_FOUND && code != StatusCode::METHOD_NOT_ALLOWED {
                 let route = if path.starts_with(PREFIX) {
                     "/ui/*"
+                } else if path.starts_with(crate::console::route::PREFIX) {
+                    "/console/v1/stream/*"
                 } else {
                     path.as_str()
                 };

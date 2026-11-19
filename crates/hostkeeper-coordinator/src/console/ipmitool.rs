@@ -7,8 +7,15 @@
 //! answered as a device that did not answer. A session ends when it is dropped: its standard input
 //! is closed after `exit`, which ends the tool and its session with the BMC, and a child still
 //! running at the deadline after that is killed.
+//!
+//! An activation (`sol activate`, [`Tool::activate`]) is a run of its own with no prompt and no
+//! deadline, handed over at once as its standard input and output; its end, or the drop of its
+//! end, kills the child at once (an `exit` would be typed at the host) and answers its standard
+//! error. The coordinator then deactivates the payload in a session of its own.
 
+use std::ffi::OsStr;
 use std::io::{Read, Write};
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
@@ -16,7 +23,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use hostkeeper_console::ipmi::{
-    Invocation, PASSWORD_VARIABLE, PROMPT, Settings, Shell, ShellError, Tool, ToolText,
+    Activated, Invocation, PASSWORD_VARIABLE, PROMPT, Settings, Shell, ShellError, Tool, ToolText,
 };
 
 /// The most bytes of the tool's standard error kept.
@@ -39,10 +46,14 @@ impl Ipmitool {
         }
     }
 
-    /// The command of `invocation`: the program with its arguments, its environment holding the
-    /// password alone, and its three streams on pipes.
+    /// The command of `invocation`: the program with its escape byte (`-e`, one raw byte) when it
+    /// has one, then its arguments, its environment holding the password alone, and its three
+    /// streams on pipes.
     pub(crate) fn command(&self, invocation: &Invocation<'_>) -> Command {
         let mut command = Command::new(&self.program);
+        if let Some(escape) = invocation.escape() {
+            command.arg("-e").arg(OsStr::from_bytes(&[escape]));
+        }
         command
             .args(invocation.args())
             .env_clear()
@@ -68,6 +79,72 @@ impl Tool for Ipmitool {
     fn open(&self, invocation: &Invocation<'_>) -> Result<Box<dyn Shell>, ShellError> {
         Process::start(self.command(invocation), self.deadline).map(|p| Box::new(p) as _)
     }
+
+    fn activate(&self, invocation: &Invocation<'_>) -> Result<Activated, ShellError> {
+        activated(self.command(invocation))
+    }
+}
+
+/// Starts `command` and hands it over as its streams, as the module says.
+///
+/// # Errors
+/// [`ShellError::Start`]: it could not be started.
+pub(crate) fn activated(mut command: Command) -> Result<Activated, ShellError> {
+    let mut child = command.spawn().map_err(|_| ShellError::Start)?;
+    let (Some(input), Some(output), stderr) =
+        (child.stdin.take(), child.stdout.take(), child.stderr.take())
+    else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(ShellError::Start);
+    };
+    let mut running = Running {
+        child,
+        errors: Some(errors_of(stderr)),
+    };
+    Ok(Activated {
+        input: Box::new(input),
+        output: Box::new(output),
+        end: Box::new(move || running.stop()),
+    })
+}
+
+/// A child handed over as streams: killed when it is stopped or dropped.
+struct Running {
+    child: Child,
+    errors: Option<JoinHandle<String>>,
+}
+
+impl Running {
+    /// Kills the child, if it still runs, and answers its standard error.
+    fn stop(&mut self) -> ToolText {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let text = self
+            .errors
+            .take()
+            .map(JoinHandle::join)
+            .and_then(Result::ok);
+        ToolText::new(text.unwrap_or_default())
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// A thread that keeps the first [`MAX_ERROR_BYTES`] of `stderr`, until it ends.
+fn errors_of(stderr: Option<std::process::ChildStderr>) -> JoinHandle<String> {
+    thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stderr.into_iter().for_each(|stderr| {
+            let _ = stderr.take(MAX_ERROR_BYTES).read_to_end(&mut bytes);
+        });
+        String::from_utf8_lossy(&bytes).into_owned()
+    })
 }
 
 /// A running tool.
@@ -101,14 +178,7 @@ impl Process {
                 }
             });
         });
-        let stderr = child.stderr.take();
-        let errors = thread::spawn(move || {
-            let mut bytes = Vec::new();
-            stderr.into_iter().for_each(|stderr| {
-                let _ = stderr.take(MAX_ERROR_BYTES).read_to_end(&mut bytes);
-            });
-            String::from_utf8_lossy(&bytes).into_owned()
-        });
+        let errors = errors_of(child.stderr.take());
         let mut process = Self {
             stdin: child.stdin.take(),
             child,

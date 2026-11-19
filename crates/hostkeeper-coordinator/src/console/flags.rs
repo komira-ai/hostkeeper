@@ -7,10 +7,10 @@ use std::time::Duration;
 
 use clap::{Args, ValueEnum};
 use hostkeeper_console::ipmi::{Privilege, Settings};
-use hostkeeper_console::session::Sessions;
+use hostkeeper_console::session::{Bounds, Sessions};
 
 use super::files::{ConsoleFiles, ConsoleFilesError, Paths};
-use super::{Console, Ipmitool};
+use super::{Console, Ipmitool, SCREEN_SHARING_PORT, tcp_dial};
 
 /// Where the BMC tool is, by default.
 pub const DEFAULT_IPMITOOL: &str = "/usr/bin/ipmitool";
@@ -70,9 +70,22 @@ pub struct ConsoleFlags {
     /// How long a console session waits to be attached, in seconds.
     #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..=600))]
     pub console_attach_s: u64,
-    /// The most console sessions at once.
+    /// The most console sessions at once, attached or not: each WebSocket attached to a session
+    /// counts against it.
     #[arg(long, default_value_t = 8, value_parser = clap::value_parser!(u64).range(1..=256))]
     pub console_max_sessions: u64,
+    /// How long an attached console stream may carry no byte either way before it closes
+    /// (`idle`, 4005), in seconds.
+    #[arg(long, default_value_t = 1800, value_parser = clap::value_parser!(u64).range(1..=86_400))]
+    pub console_idle_s: u64,
+    /// How long a console stream may stay attached before it closes (`total_limit`, 4006), in
+    /// seconds.
+    #[arg(long, default_value_t = 28_800, value_parser = clap::value_parser!(u64).range(1..=604_800))]
+    pub console_total_s: u64,
+    /// How long the connection to a Mac's Screen Sharing (TCP 5900) may take, in seconds; past
+    /// it the stream closes `mac_unreachable_or_asleep` (4012).
+    #[arg(long, default_value_t = 5, value_parser = clap::value_parser!(u64).range(1..=60))]
+    pub console_connect_timeout_s: u64,
 }
 
 impl ConsoleFlags {
@@ -89,6 +102,24 @@ impl ConsoleFlags {
             timeout_secs: self.console_ipmi_timeout_s,
             retries: self.console_ipmi_retries,
         }
+    }
+
+    /// The bounds of the sessions: `--console-max-sessions`, `--console-attach-s`,
+    /// `--console-idle-s` and `--console-total-s`.
+    #[must_use]
+    pub fn bounds(&self) -> Bounds {
+        Bounds {
+            max: usize::try_from(self.console_max_sessions).unwrap_or(usize::MAX),
+            window: Duration::from_secs(self.console_attach_s),
+            idle: Duration::from_secs(self.console_idle_s),
+            total: Duration::from_secs(self.console_total_s),
+        }
+    }
+
+    /// How long the dial of a Mac's Screen Sharing may take (`--console-connect-timeout-s`).
+    #[must_use]
+    pub fn connect_timeout(&self) -> Duration {
+        Duration::from_secs(self.console_connect_timeout_s)
     }
 
     /// The console the flags make, its files read now.
@@ -109,12 +140,12 @@ impl ConsoleFlags {
             _ => ConsoleFiles::default(),
         };
         let settings = self.settings();
-        let max = usize::try_from(self.console_max_sessions).unwrap_or(usize::MAX);
         Ok(Console::new(
             files,
             Arc::new(Ipmitool::new(&self.console_ipmitool, &settings)),
             settings,
-            Sessions::new(max, Duration::from_secs(self.console_attach_s)),
-        ))
+            Sessions::new(self.bounds()),
+        )
+        .with_dial(tcp_dial(SCREEN_SHARING_PORT, self.connect_timeout())))
     }
 }
