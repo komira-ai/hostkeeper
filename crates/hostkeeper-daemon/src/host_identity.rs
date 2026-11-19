@@ -44,7 +44,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use hostkeeper_link::{CertSource, CertState, ClientIdentity, Log};
-use rustix::fs::{AtFlags, CWD, Mode, OFlags};
+use rustix::fs::{AtFlags, CWD, Mode, OFlags, RawMode};
 use rustix::io::Errno;
 
 use crate::identity_group::IdentityGroup;
@@ -303,7 +303,7 @@ fn make_parents(dir: &Path) -> io::Result<()> {
         std::fs::DirBuilder::new()
             .mode(PARENT_MODE_AT_CREATION)
             .create(made)?;
-        rustix::fs::chmod(made, Mode::from_raw_mode(PARENT_MODE))?;
+        rustix::fs::chmod(made, Mode::from_raw_mode(PARENT_MODE as RawMode))?;
     }
     Ok(())
 }
@@ -313,7 +313,7 @@ fn settle(dir: &File, want: Want) -> io::Result<()> {
     let meta = dir.metadata()?;
     fchown(dir, Some(want.uid), Some(want.gid))?;
     if meta.mode() & 0o7777 != want.mode {
-        rustix::fs::fchmod(dir, Mode::from_raw_mode(want.mode))?;
+        rustix::fs::fchmod(dir, Mode::from_raw_mode(want.mode as RawMode))?;
     }
     Ok(())
 }
@@ -367,7 +367,7 @@ fn replace(dir: &File, name: &str, bytes: &[u8], want: Want) -> io::Result<()> {
         name: &temporary_name,
     };
     fchown(&file, Some(want.uid), Some(want.gid))?;
-    rustix::fs::fchmod(&file, Mode::from_raw_mode(want.mode))?;
+    rustix::fs::fchmod(&file, Mode::from_raw_mode(want.mode as RawMode))?;
     file.write_all(bytes)?;
     file.sync_all()?;
     rustix::fs::renameat(dir, &temporary_name, dir, name)?;
