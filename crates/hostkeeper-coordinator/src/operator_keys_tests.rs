@@ -677,7 +677,9 @@ async fn a_host_of_an_unlisted_group_or_of_none_is_sent_the_empty_set() {
         services: Vec::new(),
         ..approval(&key, "s1")
     };
-    let caller = crate::operator::Caller::Operator("operator".parse().expect("a token name"));
+    let caller = crate::operator::Caller::Operator(crate::tokens::Operator::named(
+        "operator".parse().expect("a token name"),
+    ));
     rig.coordinator
         .enrollment_approve(&caller, request)
         .expect("approved");
@@ -791,7 +793,9 @@ async fn a_host_whose_record_cannot_be_read_is_sent_nothing_for_that_heartbeat()
         .enrollment
         .enroll(enroll_request(&host_key, "machine-1"))
         .expect("enrolled");
-    let caller = crate::operator::Caller::Operator("operator".parse().expect("a token name"));
+    let caller = crate::operator::Caller::Operator(crate::tokens::Operator::named(
+        "operator".parse().expect("a token name"),
+    ));
     rig.coordinator
         .enrollment_approve(&caller, approval(&host_key, "s1"))
         .expect("approved");

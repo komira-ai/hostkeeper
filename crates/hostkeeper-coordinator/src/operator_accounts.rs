@@ -22,7 +22,12 @@
 //! once.
 //!
 //! [`Coordinator::operator`] resolves a bearer against the tokens file and the store's tokens in
-//! one constant-time pass ([`crate::tokens::OperatorTokens::name_of_among`]).
+//! one constant-time pass ([`crate::tokens::OperatorTokens::name_of_among`]). An API token belongs
+//! to a user, its owner: the one `ApiTokens.Create` names, or else the caller. It acts as that user
+//! while the user is enabled, so every check of what the operator may do reads the owner's name
+//! and the audit records the owner as `by`, the token as `api_token`. A disabled owner's tokens
+//! are refused until the owner is enabled again; deleting the owner removes their tokens, each
+//! audited `api_token_revoke`.
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -40,7 +45,7 @@ use crate::operator::Caller;
 use crate::ops::{AuditEntry, OpsError};
 use crate::ops_file::digest;
 use crate::service::{Coordinator, Unauthorized};
-use crate::tokens::TokenName;
+use crate::tokens::{Bearer, Operator, TokenName};
 
 /// The characters of a temporary password: letters and digits but `0`, `1`, `I`, `O` and `l`.
 const ALPHABET: &[u8; 57] = b"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
@@ -115,6 +120,7 @@ fn stored_info(token: &ApiToken) -> proto::ApiTokenInfo {
         source: proto::ApiTokenSource::Store.into(),
         created_by: token.created_by.clone(),
         created_unix: token.created_at,
+        owner: token.owner.clone(),
     }
 }
 
@@ -147,6 +153,7 @@ impl Stopped {
             Self::Audit(why) => why.into(),
             Self::Accounts(AccountsError::Taken(_)) => TokenRefusal::NameTaken,
             Self::Accounts(AccountsError::NoToken(_)) => TokenRefusal::UnknownToken,
+            Self::Accounts(AccountsError::NoUser(_)) => TokenRefusal::UnknownOwner,
             Self::Accounts(why) => {
                 tracing::error!(%why, "a change of the API tokens was not written: nothing changed");
                 TokenRefusal::StoreFailed
@@ -156,33 +163,44 @@ impl Stopped {
 }
 
 impl Coordinator {
-    /// The name of the operator token in `bearer`: the token is compared by its SHA-256 in
-    /// constant time with each token of the tokens file and each API token of the store. CI's
-    /// token is no operator token and an operator token is no CI token.
+    /// The operator the token in `bearer` acts as: the token is compared by its SHA-256 in
+    /// constant time with each token of the tokens file and each API token of the store. A token
+    /// of the tokens file acts as its own name; an API token as its owner, while the owner is an
+    /// enabled user, and is refused otherwise. CI's token is no operator token and an operator
+    /// token is no CI token.
     ///
     /// # Errors
-    /// [`Unauthorized`]: no bearer, or not a token.
-    pub fn operator(&self, bearer: Option<&str>) -> Result<TokenName, Unauthorized> {
+    /// [`Unauthorized`]: no bearer, not a token, or an API token whose owner is disabled or gone.
+    pub fn operator(&self, bearer: Option<&str>) -> Result<Operator, Unauthorized> {
         bearer
             .and_then(|presented| {
                 self.accounts().read(|accounts| {
                     let stored = accounts
                         .tokens()
                         .map(|token| (token.name.as_str(), token.sha256.as_str()));
-                    self.tokens.name_of_among(presented, stored)
+                    match self.tokens.name_of_among(presented, stored)? {
+                        Bearer::File(name) => Some(Operator::named(name)),
+                        Bearer::Stored(token) => {
+                            let owner = accounts.acting_owner(token.as_str())?;
+                            let owner = owner.name.parse().ok()?;
+                            Some(Operator::by_token(owner, token))
+                        }
+                    }
                 })
             })
             .ok_or(Unauthorized)
     }
 
-    /// Makes the change `edit` of the accounts, audited as `entry` first.
+    /// Makes the change `edit` of the accounts, audited as `entries` first, in order.
     fn change_accounts(
         &self,
-        entry: AuditEntry,
+        entries: impl IntoIterator<Item = AuditEntry>,
         edit: impl Fn(&Accounts) -> Result<Accounts, AccountsError>,
     ) -> Result<(), Stopped> {
         edit(&self.accounts().snapshot()).map_err(Stopped::Accounts)?;
-        self.audit(entry).map_err(Stopped::Audit)?;
+        for entry in entries {
+            self.audit(entry).map_err(Stopped::Audit)?;
+        }
         self.accounts().change(edit).map_err(Stopped::Accounts)
     }
 
@@ -266,11 +284,11 @@ impl Coordinator {
             enabled: true,
             must_change: true,
             initial_expires_at: Some(now.saturating_add(login.temporary_secs())),
-            created_by: by.to_owned(),
+            created_by: by.name().to_owned(),
             created_at: now,
             ..User::default()
         };
-        self.change_accounts(about(by, USER_CREATE, name.as_str()), |held| {
+        self.change_accounts([about(by, USER_CREATE, name.as_str())], |held| {
             held.with_user(user.clone())
         })
         .map_err(Stopped::user)?;
@@ -289,7 +307,7 @@ impl Coordinator {
         action: &str,
     ) -> Result<Option<proto::UserInfo>, UserRefusal> {
         let by = caller.operator()?;
-        self.change_accounts(about(by, action, name), |held| {
+        self.change_accounts([about(by, action, name)], |held| {
             held.with_enabled(name, enabled)
         })
         .map_err(Stopped::user)?;
@@ -339,7 +357,7 @@ impl Coordinator {
     ) -> Result<proto::ResetPasswordResponse, UserRefusal> {
         let by = caller.operator()?;
         let name = request.name.as_str();
-        if by == name {
+        if by.name() == name {
             return Err(UserRefusal::OwnPassword);
         }
         let login = self.signing().ok_or(UserRefusal::StoreFailed)?;
@@ -348,7 +366,7 @@ impl Coordinator {
         let adopted = self
             .accounts()
             .read(|accounts| accounts.user(name).and_then(|user| user.initial_id.clone()));
-        self.change_accounts(about(by, PASSWORD_RESET, name), |held| {
+        self.change_accounts([about(by, PASSWORD_RESET, name)], |held| {
             held.with_user_edited(name, |user| {
                 user.hash.clone_from(&hash);
                 user.must_change = true;
@@ -370,7 +388,9 @@ impl Coordinator {
         })
     }
 
-    /// `Users.Delete`: the user is removed and their sessions end. Audited as `user_delete`.
+    /// `Users.Delete`: the user is removed with the API tokens they own, and their sessions end.
+    /// Audited as `user_delete`, then `api_token_revoke` for each of their tokens, with the reason
+    /// `owner deleted`.
     ///
     /// # Errors
     /// `unauthorized`, `forbidden`, `unknown_user`, `last_enabled`, `store_failed`,
@@ -382,7 +402,15 @@ impl Coordinator {
     ) -> Result<proto::DeleteUserResponse, UserRefusal> {
         let by = caller.operator()?;
         let name = request.name.as_str();
-        self.change_accounts(about(by, USER_DELETE, name), |held| held.without_user(name))
+        let mut entries = vec![about(by, USER_DELETE, name)];
+        self.accounts().read(|accounts| {
+            entries.extend(accounts.tokens_of(name).map(|token| {
+                let mut entry = about(by, API_TOKEN_REVOKE, &token.name);
+                entry.reason = Some("owner deleted".to_owned());
+                entry
+            }));
+        });
+        self.change_accounts(entries, |held| held.without_user(name))
             .map_err(Stopped::user)?;
         self.end_sessions(name)?;
         Ok(proto::DeleteUserResponse {})
@@ -416,12 +444,15 @@ impl Coordinator {
         Ok(proto::ListApiTokensResponse { tokens })
     }
 
-    /// `ApiTokens.Create`: a token, which is in the answer and nowhere else. Audited as
-    /// `api_token_create`.
+    /// `ApiTokens.Create`: a token, which is in the answer and nowhere else, owned by the user the
+    /// request names or else by the caller (the caller's own name: a signed-in user's, or the
+    /// owner's of the caller's token). Audited as `api_token_create`, with the owner in the reason.
     ///
     /// # Errors
-    /// `unauthorized`, `forbidden`, `invalid_request` (the name), `name_taken`, `store_failed`
-    /// (the store, no random bytes, or a token that is another's), `audit_unavailable`.
+    /// `unauthorized`, `forbidden`, `invalid_request` (the name), `name_taken`, `unknown_owner`
+    /// (the owner is no user: one named, or a caller that is a token of the tokens file),
+    /// `store_failed` (the store, no random bytes, or a token that is another's),
+    /// `audit_unavailable`.
     pub fn api_tokens_create(
         &self,
         caller: &Caller,
@@ -435,6 +466,13 @@ impl Coordinator {
         if self.tokens.has_name(name.as_str()) {
             return Err(TokenRefusal::NameTaken);
         }
+        let owner = request.owner.as_deref().unwrap_or(by.name());
+        if self
+            .accounts()
+            .read(|accounts| accounts.user(owner).is_none())
+        {
+            return Err(TokenRefusal::UnknownOwner);
+        }
         let login = self.signing().ok_or(TokenRefusal::StoreFailed)?;
         let secret = new_secret(login).ok_or(TokenRefusal::StoreFailed)?;
         let sha256 = digest(secret.as_bytes());
@@ -445,13 +483,14 @@ impl Coordinator {
         let token = ApiToken {
             name: name.as_str().to_owned(),
             sha256,
-            created_by: by.to_owned(),
+            owner: owner.to_owned(),
+            created_by: by.name().to_owned(),
             created_at: login.now(),
         };
-        self.change_accounts(about(by, API_TOKEN_CREATE, name.as_str()), |held| {
-            held.with_token(token.clone())
-        })
-        .map_err(Stopped::token)?;
+        let mut entry = about(by, API_TOKEN_CREATE, name.as_str());
+        entry.reason = Some(format!("owner {owner}"));
+        self.change_accounts([entry], |held| held.with_token(token.clone()))
+            .map_err(Stopped::token)?;
         Ok(proto::CreateApiTokenResponse {
             token: Some(stored_info(&token)),
             secret,
@@ -470,7 +509,7 @@ impl Coordinator {
     ) -> Result<proto::RevokeApiTokenResponse, TokenRefusal> {
         let by = caller.operator()?;
         let name = request.name.as_str();
-        self.change_accounts(about(by, API_TOKEN_REVOKE, name), |held| {
+        self.change_accounts([about(by, API_TOKEN_REVOKE, name)], |held| {
             held.without_token(name)
         })
         .map_err(Stopped::token)?;
@@ -478,6 +517,9 @@ impl Coordinator {
     }
 }
 
+#[cfg(test)]
+#[path = "operator_accounts_owner_tests.rs"]
+mod owner_tests;
 #[cfg(test)]
 #[path = "operator_accounts_tests.rs"]
 mod tests;

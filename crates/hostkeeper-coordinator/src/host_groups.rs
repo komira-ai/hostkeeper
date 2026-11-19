@@ -350,7 +350,8 @@ pub(crate) struct HostGroup {
     pub(crate) policy: Policy,
     /// Raised by every change of the group; at least 1.
     pub(crate) generation: u64,
-    /// Who made the last change: the name of the operator's token, or `migration`.
+    /// Who made the last change: the operator's name (an API token's owner, or a tokens file
+    /// token's own name), or `migration`.
     pub(crate) by: String,
     /// When, in unix seconds.
     pub(crate) at_unix: u64,

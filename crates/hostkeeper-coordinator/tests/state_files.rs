@@ -527,8 +527,9 @@ async fn an_update_plan_position_is_written_within_kbfs_readers(readers: &Reader
         reason: "waiting for the maintainers".to_owned(),
         host_group: String::new(),
     };
-    let by =
-        hostkeeper_coordinator::operator::Caller::Operator("operator".parse().expect("a name"));
+    let by = hostkeeper_coordinator::operator::Caller::Operator(
+        hostkeeper_coordinator::tokens::Operator::named("operator".parse().expect("a name")),
+    );
     rig.coordinator.rollout_pause(&by, pause).expect("paused");
     check_ops(&rig, readers);
     assert_eq!(

@@ -692,6 +692,7 @@ impl World for MemoryWorld {
                 fingerprint: "SHA256:abc",
                 ttl_secs,
                 reason: "",
+                api_token: None,
             })
             .expect("issued")
             .serial

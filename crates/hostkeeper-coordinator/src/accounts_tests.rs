@@ -33,6 +33,7 @@ fn token(name: &str, fill: char) -> ApiToken {
     ApiToken {
         name: name.to_owned(),
         sha256: fill.to_string().repeat(64),
+        owner: "alice".to_owned(),
         created_by: "alice".to_owned(),
         created_at: 1_800_000_100,
     }
@@ -146,7 +147,7 @@ fn a_hash_that_is_not_a_phc_string_is_refused() {
 /// Catches: one secret that answers to two names, or a digest no bearer can ever match.
 #[test]
 fn a_token_digest_is_64_lowercase_hex_digits_and_belongs_to_one_token() {
-    let held = Accounts::default()
+    let held = with(&["alice"])
         .with_token(token("ci-ops", 'a'))
         .expect("a token");
     for bad in [
@@ -296,6 +297,7 @@ fn the_file_holds_exactly_the_records_below_and_reads_back() {
   "tokens": {{
     "ci-ops": {{
       "sha256": "{}",
+      "owner": "alice",
       "created_by": "alice",
       "created_at": 1800000100
     }}

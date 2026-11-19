@@ -293,7 +293,9 @@ fn approve_for(rig: &Rig, key: &HostKey, host: &str, role: &str, replace: bool) 
         replace,
         ..approval(key, host)
     };
-    let caller = crate::operator::Caller::Operator("operator".parse().expect("a token name"));
+    let caller = crate::operator::Caller::Operator(crate::tokens::Operator::named(
+        "operator".parse().expect("a token name"),
+    ));
     rig.coordinator
         .enrollment_approve(&caller, request)
         .expect("approved");

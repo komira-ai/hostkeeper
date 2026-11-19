@@ -237,7 +237,9 @@ pub(crate) fn who(host: &str, role_name: &str) -> Identity {
 
 /// The operator, with the token named `operator`.
 pub(crate) fn operator() -> Caller {
-    Caller::Operator("operator".parse().expect("a token name"))
+    Caller::Operator(crate::tokens::Operator::named(
+        "operator".parse().expect("a token name"),
+    ))
 }
 
 /// The reply to a heartbeat of `host` (role `role`) over a transport that carries typed orders,

@@ -167,7 +167,9 @@ fn request(host: &str, key: &str, reason: &str) -> proto::SignUserCertRequest {
 }
 
 fn named(name: &str) -> Caller {
-    Caller::Operator(name.parse().expect("a token name"))
+    Caller::Operator(crate::tokens::Operator::named(
+        name.parse().expect("a token name"),
+    ))
 }
 
 /// The line of a ledger line's token, as the refusal wrote it.
@@ -235,6 +237,64 @@ fn the_operator_the_file_lists_gets_a_certificate_for_one_host_that_the_ca_signe
     );
     assert_eq!(row.reason, "look at a log");
     assert_eq!(principal("node-07"), "hk-host-node-07");
+}
+
+/// Proves: an operator calling with an API token gets the certificate as the token's owner: the
+/// operators file is read for the owner's name (a token named like a listed operator, owned by one
+/// it does not list, is refused, and its refusal's line is by the owner), the key id and the
+/// ledger's row name the owner, and the issue's line names the token as `api_token`.
+///
+/// Catches: a certificate signed for the token's name, an operators file read for the token's
+/// name, and a ledger that cannot tell which of a person's tokens asked.
+#[test]
+fn a_token_gets_a_certificate_as_its_owner_and_the_line_names_the_token() {
+    let world = world("ssh-sign-token", Some(OPERATORS), Tune::default());
+    let by_token = |owner: &str, token: &str| {
+        Caller::Operator(crate::tokens::Operator::by_token(
+            owner.parse().expect("a name"),
+            token.parse().expect("a name"),
+        ))
+    };
+    let answer = world
+        .coordinator
+        .ssh_sign_user_cert(
+            &by_token("operator", "ops-laptop"),
+            &request("node-07", ED25519_KEY, "look at a log"),
+        )
+        .expect("signed");
+    assert_eq!(answer.key_id, "operator/1");
+    assert_eq!(world.ledger.certs()[&1].operator, "operator");
+    let issued: Vec<(String, String)> = world
+        .ledger
+        .audit()
+        .into_iter()
+        .filter(|row| row.line.action == crate::ssh_ledger::CERT_SIGNED)
+        .map(|row| (row.line.by, row.line.detail))
+        .collect();
+    assert_eq!(issued.len(), 1, "{issued:?}");
+    assert_eq!(issued[0].0, "operator");
+    assert!(
+        issued[0].1.ends_with(",\"api_token\":\"ops-laptop\"}"),
+        "{issued:?}"
+    );
+    assert_eq!(
+        world
+            .coordinator
+            .ssh_sign_user_cert(
+                &by_token("dave", "bob"),
+                &request("node-08", ED25519_KEY, "")
+            )
+            .err(),
+        Some(Refusal::NotPermitted)
+    );
+    assert_eq!(
+        denied(&world),
+        [(
+            "dave".to_owned(),
+            Some("node-08".to_owned()),
+            "{\"why\":\"not_permitted\"}".to_owned()
+        )]
+    );
 }
 
 /// Proves: the ledger is asked before the key signs: the order of the two is the ledger's write,

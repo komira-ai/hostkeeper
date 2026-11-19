@@ -34,7 +34,7 @@ use crate::assignment::{self as rules, Change, Entry, Known, MAX_ENTRIES, NotAss
 use crate::fleet::Fleet;
 use crate::holds::{holding, marks_of};
 use crate::operator::{Caller, entry_proto, hold_proto};
-use crate::ops::{AuditEntry, OpsState, Write};
+use crate::ops::{AuditBy, AuditEntry, OpsState, Write};
 use crate::service::Coordinator;
 use crate::services::ServiceDef;
 
@@ -72,7 +72,13 @@ fn min_scope_of(scope: Option<min_version::Scope>) -> Result<Scope, Refusal> {
 }
 
 /// An audit entry by `by` for `action` about `def` in `scope`, its reason the scope and `more`.
-fn audited(by: &str, action: &str, def: &ServiceDef, scope: &Scope, more: &str) -> AuditEntry {
+fn audited(
+    by: &(impl AuditBy + ?Sized),
+    action: &str,
+    def: &ServiceDef,
+    scope: &Scope,
+    more: &str,
+) -> AuditEntry {
     let mut entry = AuditEntry::new(by, action);
     entry.service = Some(def.name.clone());
     entry.reason = Some(format!("{}{more}", scope.describe()));
@@ -224,7 +230,7 @@ impl Coordinator {
     /// `invalid_request` (past [`MAX_ENTRIES`]), `store_failed`.
     pub fn assign_host(
         &self,
-        by: &str,
+        by: &(impl AuditBy + ?Sized),
         host_id: &HostId,
         role: Option<&RoleName>,
         services: &[String],
@@ -243,7 +249,7 @@ impl Coordinator {
     fn assign_in(
         &self,
         fleet: &mut Fleet,
-        by: &str,
+        by: &(impl AuditBy + ?Sized),
         node_id: &str,
         role: &str,
         defs: Vec<&ServiceDef>,

@@ -233,6 +233,7 @@ async fn an_operator_set_writes_the_state_ci_would_and_one_audit_entry() {
             at_unix,
             by_name: Some("operator".to_owned()),
             host_group: None,
+            api_token: None,
         }]
     );
 }

@@ -20,6 +20,7 @@ use crate::group_reach::Reached;
 use crate::group_scope::group_services;
 use crate::holds::marks_of;
 use crate::operator::{entry_proto, valid_reason};
+use crate::ops::AuditBy;
 use crate::ops::Write;
 use crate::reconcile::entry;
 use crate::service::Coordinator;
@@ -52,7 +53,7 @@ impl Coordinator {
     /// As [`Self::rollout_advance`], and `ambiguous_host_group`, `not_in_host_group`.
     pub(super) fn advance_in_groups(
         &self,
-        by: &str,
+        by: &(impl AuditBy + ?Sized),
         request: proto::AdvanceRequest,
     ) -> Result<proto::AdvanceResponse, Refusal> {
         let service = self
@@ -107,7 +108,7 @@ impl Coordinator {
     /// As [`Self::rollout_pause`], and `not_in_host_group`.
     pub(super) fn pause_in_groups(
         &self,
-        by: &str,
+        by: &(impl AuditBy + ?Sized),
         request: proto::PauseRequest,
     ) -> Result<proto::PauseResponse, Refusal> {
         let service = self
@@ -121,7 +122,7 @@ impl Coordinator {
         let state = self.ops.state();
         let reached = self.reach(&groups, &state, &service, &request.host_group)?;
         let pause = Pause {
-            by: by.to_owned(),
+            by: by.by_name().to_owned(),
             reason: why.clone(),
         };
         let done = self.ops.decide_changes(Write::AfterMemory, |ops| {
@@ -161,7 +162,7 @@ impl Coordinator {
     /// As [`Self::rollout_resume`], and `ambiguous_host_group`, `not_in_host_group`.
     pub(super) fn resume_in_groups(
         &self,
-        by: &str,
+        by: &(impl AuditBy + ?Sized),
         request: proto::ResumeRequest,
     ) -> Result<proto::ResumeResponse, Refusal> {
         let service = self

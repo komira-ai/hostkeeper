@@ -150,7 +150,7 @@ impl Coordinator {
         caller: &Caller,
         request: &proto::HostKeysRequest,
     ) -> Result<proto::HostKeysResponse, Refusal> {
-        let operator = caller.operator().map_err(Refusal::from)?;
+        let operator = caller.operator().map_err(Refusal::from)?.name();
         let (ssh, tunnels) = self.ssh_tunnels().ok_or(Refusal::NotConfigured)?;
         let reached = self
             .ssh_reach(ssh, operator, &request.host_id)
@@ -168,7 +168,7 @@ impl Coordinator {
         caller: &Caller,
         request: &proto::PinHostKeysRequest,
     ) -> Result<proto::HostKeysResponse, Refusal> {
-        let operator = caller.operator().map_err(Refusal::from)?;
+        let operator = caller.operator().map_err(Refusal::from)?.name();
         let (ssh, tunnels) = self.ssh_tunnels().ok_or(Refusal::NotConfigured)?;
         if request.fingerprints.len() > MAX_PINNED
             || !request.fingerprints.iter().all(|f| fingerprint_ok(f))
@@ -209,7 +209,10 @@ impl Coordinator {
         frames: impl Stream<Item = Result<proto::TunnelFrame, Status>> + Send + 'static,
         hold: Option<ConnectionHold>,
     ) -> Result<Outgoing, Refusal> {
-        self.ssh_tunnel_open_as(caller, Credential::Token, frames, hold)
+        let credential = caller
+            .operator()
+            .map_or(Credential::Token, Credential::of_bearer);
+        self.ssh_tunnel_open_as(caller, credential, frames, hold)
             .await
     }
 
@@ -226,7 +229,7 @@ impl Coordinator {
         frames: impl Stream<Item = Result<proto::TunnelFrame, Status>> + Send + 'static,
         hold: Option<ConnectionHold>,
     ) -> Result<Outgoing, Refusal> {
-        let operator = caller.operator().map_err(Refusal::from)?;
+        let operator = caller.operator().map_err(Refusal::from)?.name();
         let (ssh, tunnels) = self.ssh_tunnels().ok_or(Refusal::NotConfigured)?;
         if tunnels.draining() {
             return Err(Refusal::Draining);

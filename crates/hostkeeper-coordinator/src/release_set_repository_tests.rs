@@ -20,7 +20,9 @@ async fn set(rig: &Rig, version: &str, targets: Option<Targets>) -> Result<(), S
     let body = json!({"service": WEB, "version": version, "min_up": {"storage": 0, "frontend": 0}});
     rig.coordinator
         .set_desired_with(
-            &Setter::Operator("alice"),
+            &Setter::Operator(&crate::tokens::Operator::named(
+                "alice".parse().expect("a token name"),
+            )),
             body.to_string().as_bytes(),
             &WriteAsk::default(),
             targets,

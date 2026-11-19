@@ -84,6 +84,7 @@ use crate::identity::Identity;
 use crate::operator::Caller;
 use crate::repository_serve::{PREFIX, serve};
 use crate::service::{CiRefused, Coordinator, MAX_BEARER_BYTES};
+use crate::tokens::Operator;
 use crate::wait::CallLimit;
 
 pub(crate) mod agent;
@@ -382,7 +383,7 @@ fn session_call(
         .parse()
         .ok()
         .map(|name| Admitted::Operator {
-            caller: Caller::Operator(name),
+            caller: Caller::Operator(Operator::named(name)),
         }))
 }
 

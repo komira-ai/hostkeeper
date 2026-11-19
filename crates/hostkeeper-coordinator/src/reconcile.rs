@@ -18,7 +18,7 @@ use crate::converge::State;
 use crate::desired::{Desired, DesiredStore, StoreError};
 use crate::fleet::Fleet;
 use crate::membership::{Standing, standing};
-use crate::ops::{AuditEntry, OpsError, OpsState, OpsStore, ServiceOps, Write};
+use crate::ops::{AuditBy, AuditEntry, OpsError, OpsState, OpsStore, ServiceOps, Write};
 use crate::service::convergence_of;
 use crate::services::ServiceDef;
 
@@ -279,7 +279,12 @@ enum Failed {
     Desired(#[from] StoreError),
 }
 
-pub(crate) fn entry(by: &str, action: &str, service: &str, reason: String) -> AuditEntry {
+pub(crate) fn entry(
+    by: &(impl AuditBy + ?Sized),
+    action: &str,
+    service: &str,
+    reason: String,
+) -> AuditEntry {
     let mut entry = AuditEntry::new(by, action);
     entry.service = Some(service.to_owned());
     entry.reason = Some(reason);

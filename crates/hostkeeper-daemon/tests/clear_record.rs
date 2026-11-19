@@ -277,7 +277,9 @@ fn the_order_is_taken_by_a_daemon_whose_record_of_the_service_does_not_read() {
 
     host.beat();
     assert_eq!(host.ordered(), [None]);
-    let operator = Caller::Operator("operator".parse().expect("a token name"));
+    let operator = Caller::Operator(hostkeeper_coordinator::tokens::Operator::named(
+        "operator".parse().expect("a token name"),
+    ));
     let request = ClearRecordRequest {
         node_id: "host-1".to_owned(),
         service: "web".to_owned(),

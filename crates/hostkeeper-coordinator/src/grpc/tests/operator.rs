@@ -201,6 +201,7 @@ fn audit(
         at_unix: None,
         by_name: Some("operator".to_owned()),
         host_group: None,
+        api_token: None,
     })
 }
 
@@ -763,7 +764,7 @@ async fn a_call_is_from_the_operator_the_router_admitted_and_from_no_one_otherwi
     let operator = as_operator(&world.coordinator, ()).await;
     assert!(matches!(
         caller_of(&operator),
-        Caller::Operator(name) if name.as_str() == "operator"
+        Caller::Operator(name) if name.name() == "operator"
     ));
 
     let unadmitted = Request::new(());

@@ -38,6 +38,7 @@ fn audit_entry(action: &str) -> op::AuditEntry {
         at_unix: Some(1_800_000_000),
         by_name: Some("alice".to_owned()),
         host_group: None,
+        api_token: None,
     }
 }
 

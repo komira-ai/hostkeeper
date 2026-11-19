@@ -213,6 +213,7 @@ fn status_lists_every_service_in_name_order_with_the_top_level_facts() {
             at_unix: None,
             by_name: Some("alice".to_owned()),
             host_group: None,
+            api_token: None,
         }]
     );
 }

@@ -559,7 +559,9 @@ async fn a_version_set_with_targets_is_forced_as_its_release() {
     farm.world
         .coordinator()
         .set_desired_in(
-            &crate::service::ci_calls::Setter::Operator("operator"),
+            &crate::service::ci_calls::Setter::Operator(&crate::tokens::Operator::named(
+                "operator".parse().expect("a token name"),
+            )),
             body.to_string().as_bytes(),
             &crate::write_record::WriteAsk::default(),
             Some(crate::releases_tests::targets("db")),

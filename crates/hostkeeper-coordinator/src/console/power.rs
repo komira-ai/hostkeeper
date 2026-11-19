@@ -21,6 +21,7 @@ use super::address::through_addresses;
 use super::{denied, host_id, required_reason, serialized};
 use crate::audit_actions::AuditOnly;
 use crate::operator::Caller;
+use crate::ops::AuditBy;
 use crate::service::Coordinator;
 
 impl Coordinator {
@@ -112,7 +113,7 @@ impl Coordinator {
     /// turn until one answers, which the answer names.
     fn through_bmc<T>(
         &self,
-        by: &str,
+        by: &(impl AuditBy + ?Sized),
         host: &HostId,
         action: AuditOnly,
         reason: &str,
@@ -122,7 +123,7 @@ impl Coordinator {
         let grant = self
             .console
             .files
-            .grant(by, Need::Power)
+            .grant(by.by_name(), Need::Power)
             .map_err(|why| Failure::Denied(denied(why)))?;
         let device = self
             .console_device(host, &grant.targets, true)

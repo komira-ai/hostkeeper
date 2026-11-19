@@ -162,9 +162,10 @@ impl Coordinator {
             Setter::Ci(verified) => self.ci_admits(verified, &service)?,
             Setter::Operator(_) => None,
         };
-        let (actor, set_by) = match setter {
-            Setter::Ci(verified) => (crate::reconcile::CI, verified.job_workflow_ref.clone()),
-            Setter::Operator(name) => (*name, format!("operator token {name}")),
+        let actor = setter;
+        let set_by = match setter {
+            Setter::Ci(verified) => verified.job_workflow_ref.clone(),
+            Setter::Operator(operator) => format!("operator token {}", operator.name()),
         };
         let reason = reason_of(setter, &desired, release.as_deref());
         // The fleet's lock is held to the end of the set, as for a set of a service: the groups
@@ -242,8 +243,9 @@ impl Coordinator {
                 groups = groups.len(),
                 "desired state set by CI"
             ),
-            Setter::Operator(name) => tracing::info!(
-                token = %name,
+            Setter::Operator(operator) => tracing::info!(
+                operator = operator.name(),
+                token = operator.api_token(),
                 %service,
                 groups = groups.len(),
                 "desired state set by an operator"

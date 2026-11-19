@@ -402,7 +402,7 @@ async fn a_caller_that_is_no_operator_may_not_hold() {
     assert!(matches!(ci, Caller::Ci), "{ci:?}");
     assert!(matches!(anonymous, Caller::Anonymous), "{anonymous:?}");
     assert!(
-        matches!(&named, Caller::Operator(name) if name.as_str() == "operator"),
+        matches!(&named, Caller::Operator(name) if name.name() == "operator"),
         "{named:?}"
     );
 

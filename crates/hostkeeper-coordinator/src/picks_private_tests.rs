@@ -49,7 +49,9 @@ async fn set(rig: &Rig, version: &str, targets: Targets) {
     );
     rig.coordinator
         .set_desired_with(
-            &Setter::Operator("alice"),
+            &Setter::Operator(&crate::tokens::Operator::named(
+                "alice".parse().expect("a token name"),
+            )),
             body.as_bytes(),
             &WriteAsk::default(),
             Some(targets),

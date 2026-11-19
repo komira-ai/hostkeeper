@@ -119,8 +119,8 @@ pub(crate) fn raw(session: &mut Session, part: Part) -> Result<Raw, postgres::Er
 fn ring(session: &mut Session) -> Result<Vec<AuditEntry>, postgres::Error> {
     let audit_only: Vec<&str> = AuditOnly::ALL.iter().map(|only| only.as_str()).collect();
     let rows = session.query(
-        "SELECT seq, at_unix, by_name, action, service, node_id, reason, host_group FROM audit \
-         WHERE action <> ALL($2) ORDER BY seq DESC LIMIT $1",
+        "SELECT seq, at_unix, by_name, action, service, node_id, reason, host_group, api_token \
+         FROM audit WHERE action <> ALL($2) ORDER BY seq DESC LIMIT $1",
         &[&(AUDIT_RING as i64), &audit_only],
     )?;
     Ok(rows.iter().rev().map(|row| logged_of(row).entry).collect())

@@ -45,7 +45,7 @@ use crate::host_group_proto::{body_proto, policy_of};
 use crate::host_groups::{GroupName, HostGroup, ListError, check_packages};
 use crate::inventory::unreadable;
 use crate::operator::{Caller, entry_proto, valid_reason};
-use crate::ops::{AuditEntry, OpsState};
+use crate::ops::{AuditBy, AuditEntry, OpsState};
 use crate::service::Coordinator;
 
 /// The most groups or hosts one page of `List` or `Get` holds.
@@ -69,7 +69,12 @@ fn list_refusal(why: ListError) -> Refusal {
 }
 
 /// An audit entry by `by` for `action` about the group `name`, with `reason`.
-fn entry(by: &str, action: &str, name: &GroupName, reason: String) -> AuditEntry {
+fn entry(
+    by: &(impl AuditBy + ?Sized),
+    action: &str,
+    name: &GroupName,
+    reason: String,
+) -> AuditEntry {
     let mut entry = AuditEntry::new(by, action);
     entry.host_group = Some(name.to_string());
     entry.reason = Some(reason);
@@ -322,7 +327,7 @@ impl Coordinator {
                 generation: old
                     .as_ref()
                     .map_or(1, |group| group.generation.saturating_add(1)),
-                by: by.to_owned(),
+                by: by.by_name().to_owned(),
                 at_unix: now,
                 desired: old
                     .iter()

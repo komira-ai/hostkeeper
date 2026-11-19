@@ -286,7 +286,9 @@ fn an_abort_the_coordinator_queues_stops_the_live_update_and_its_halt_is_reporte
     };
     gate.entered(&worker).expect("the held step is entered");
 
-    let operator = Caller::Operator("operator".parse().expect("a token name"));
+    let operator = Caller::Operator(hostkeeper_coordinator::tokens::Operator::named(
+        "operator".parse().expect("a token name"),
+    ));
     let queued = coordinator
         .abort(
             &operator,

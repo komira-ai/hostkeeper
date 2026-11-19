@@ -100,3 +100,41 @@ fn the_lists_post_an_empty_request_and_an_answered_password_is_printed_once() {
     assert_eq!(ran.stdout.matches("Abcdefghjkmnpqrstuvwxyz2").count(), 1);
     assert_eq!(ran.stderr, "");
 }
+
+/// Proves: `api-tokens create --name ... --owner ...` posts to `ApiTokens/Create` a body of exactly
+/// the name and the owner, and exits 0; with `--owner` left out, the body holds no `owner`, so the
+/// coordinator makes the caller the owner.
+///
+/// Catches: an `--owner` flag the script drops, renames or sends empty, which would make every
+/// token a tokens-file caller makes refused `unknown_owner`, or owned by the wrong person.
+#[test]
+fn api_tokens_create_posts_the_owner_it_is_given() {
+    for (words, body) in [
+        (
+            &[
+                "api-tokens",
+                "create",
+                "--name",
+                "laptop",
+                "--owner",
+                "erin",
+            ][..],
+            "{\"name\":\"laptop\",\"owner\":\"erin\"}",
+        ),
+        (
+            &["api-tokens", "create", "--name", "laptop"][..],
+            "{\"name\":\"laptop\"}",
+        ),
+    ] {
+        let rig = Rig::new("accounts-owner");
+        rig.reply(200, "{}");
+        let ran = rig.run(Script::Real, &call(&rig, words), b"", &[]);
+        assert_eq!((ran.code, ran.stderr.as_str()), (0, ""), "{words:?}");
+        let (url, posted_body) = posted(&rig);
+        assert_eq!(
+            url,
+            "https://127.0.0.1:1/hostkeeper.operator.v1.ApiTokens/Create"
+        );
+        assert_eq!(posted_body, body, "{words:?}");
+    }
+}

@@ -238,6 +238,7 @@ pub(crate) fn entry_of(seq: u64, action: &str, reason: &str) -> proto::AuditEntr
         at_unix: None,
         by_name: Some("operator".to_owned()),
         host_group: None,
+        api_token: None,
     }
 }
 

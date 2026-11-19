@@ -57,6 +57,7 @@ async function view(ctx, shown) {
     return h("tr", {},
       h("td", {}, name),
       h("td", {}, sourceLabel(token.source)),
+      h("td", {}, token.owner || "-"),
       h("td", {}, token.createdBy || "-"),
       h("td", {}, fmtUnix(token.createdUnix)),
       h("td", {}, token.source === STORE
@@ -75,12 +76,12 @@ async function view(ctx, shown) {
     secret,
     h("h2", {}, "API tokens"),
     h("p", { class: "note" },
-      "A token is for a script: it acts as the operator it is named for and cannot sign in. Make one for each script, so the audit says which one acted."),
+      "A token is for a script: it belongs to you and acts as you, and cannot sign in. Every check reads its owner's name, and the audit names the owner and the token, so make one for each script. Disabling or deleting the owner ends it."),
     fromFile
       ? h("p", { class: "note" }, "A token of the tokens file cannot be revoked here: edit that file on the coordinator to remove it.")
       : null,
     h("h3", {}, `Tokens (${tokens.length})`),
-    tokens.length === 0 ? h("p", {}, "No token.") : table(["Name", "Source", "Made by", "Made at", ""], rows),
+    tokens.length === 0 ? h("p", {}, "No token.") : table(["Name", "Source", "Owner", "Made by", "Made at", ""], rows),
     h("fieldset", {},
       h("legend", {}, "Make a token"),
       field("Name (lower-case letters, digits and -)", "token-name", form, "entry", { maxlength: 32 }),

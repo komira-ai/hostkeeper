@@ -32,6 +32,7 @@ fn line(seq: u64) -> AuditLine {
             service: Some("kbf".to_owned()),
             node_id: Some(format!("s{seq}")),
             reason: None,
+            api_token: None,
         },
     }
 }

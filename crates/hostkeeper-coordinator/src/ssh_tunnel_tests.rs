@@ -299,6 +299,7 @@ impl Rig {
                 fingerprint: "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
                 ttl_secs: 3600,
                 reason: "",
+                api_token: None,
             })
             .expect("a certificate")
             .serial
@@ -347,8 +348,14 @@ impl Rig {
     /// A tunnel of `operator` to `host` that is open: the certificate made, the connection
     /// accepted, and the relay running.
     pub(crate) async fn tunnel(&mut self, operator: &str, host: &str) -> Live {
-        let serial = self.cert(operator, host);
-        let caller = caller(operator);
+        self.tunnel_as(caller(operator), host).await
+    }
+
+    /// A tunnel of `caller` to `host` that is open, as [`Self::tunnel`]: `caller` may call with an
+    /// API token, which the tunnel is then held to.
+    pub(crate) async fn tunnel_as(&mut self, caller: Caller, host: &str) -> Live {
+        let operator = caller.operator().expect("an operator").name().to_owned();
+        let serial = self.cert(&operator, host);
         let (answer, client) = self.try_open(&caller, open(host, serial)).await;
         let mut out = answer.expect("the tunnel is opened");
         let (socket, _) = self.listener.accept().await.expect("the host is dialled");
@@ -429,7 +436,9 @@ pub(crate) struct Live {
 }
 
 pub(crate) fn caller(name: &str) -> Caller {
-    Caller::Operator(name.parse().expect("a token name"))
+    Caller::Operator(crate::tokens::Operator::named(
+        name.parse().expect("a token name"),
+    ))
 }
 
 pub(crate) fn secs(n: u64) -> Duration {

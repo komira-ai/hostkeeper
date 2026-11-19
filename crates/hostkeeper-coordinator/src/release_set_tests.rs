@@ -74,7 +74,9 @@ async fn ci_sets(rig: &Rig, body: &Value, targets: Option<Targets>) -> Answer {
 async fn operator_sets(rig: &Rig, body: &Value, targets: Option<Targets>) -> Answer {
     rig.coordinator
         .set_desired_with(
-            &Setter::Operator(OPERATOR_NAME),
+            &Setter::Operator(&crate::tokens::Operator::named(
+                OPERATOR_NAME.parse().expect("a token name"),
+            )),
             body.to_string().as_bytes(),
             &WriteAsk::default(),
             targets,
@@ -239,6 +241,45 @@ async fn a_set_without_targets_is_audited_as_before() {
                 OPERATOR_NAME.to_owned(),
                 format!("1.2 with release index {index_digest}")
             ),
+        ]
+    );
+}
+
+/// Proves: a set made by an operator calling with an API token is audited by the token's owner,
+/// with the token as the entry's `api_token`; a set by the operator signed in (or a tokens file
+/// token) carries none.
+///
+/// Catches: a desired-state set whose audit drops the calling token, or names the token as the
+/// actor, so a person's scripts cannot be told apart from the person in the release history.
+#[tokio::test]
+async fn a_set_made_with_an_api_token_is_audited_by_its_owner_with_the_token() {
+    let rig = Rig::new("release-set-audit-token");
+    let by_token = crate::tokens::Operator::by_token(
+        "erin".parse().expect("a name"),
+        "erin-bot".parse().expect("a name"),
+    );
+    rig.coordinator
+        .set_desired_with(
+            &Setter::Operator(&by_token),
+            body("1.0").to_string().as_bytes(),
+            &WriteAsk::default(),
+            None,
+        )
+        .await
+        .expect("set with a token");
+    operator_sets(&rig, &body("1.1"), None)
+        .await
+        .expect("set without one");
+    let sets: Vec<(String, Option<String>)> = audit(&rig)
+        .into_iter()
+        .filter(|entry| entry.action == "set_desired")
+        .map(|entry| (entry.by, entry.api_token))
+        .collect();
+    assert_eq!(
+        sets,
+        [
+            ("erin".to_owned(), Some("erin-bot".to_owned())),
+            (OPERATOR_NAME.to_owned(), None),
         ]
     );
 }

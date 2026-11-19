@@ -269,7 +269,7 @@ async fn a_session_only_method_refuses_a_bearer_and_serves_a_session() {
     let served = admit(session, LIST, only).await.expect("admitted");
     assert!(matches!(
         served,
-        Admitted::Operator { caller: Caller::Operator(ref name) } if name.as_str() == "alice"
+        Admitted::Operator { caller: Caller::Operator(ref name) } if name.name() == "alice"
     ));
     assert!(admit(bearer(OPERATOR), INCLUDE, only).await.is_ok());
     let ci = admit(bearer(&ci_token()), CONVERGE, &[CONVERGE])

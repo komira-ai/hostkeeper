@@ -149,7 +149,9 @@ impl Farm {
         self.world
             .coordinator()
             .set_desired_in(
-                &Setter::Operator("operator"),
+                &Setter::Operator(&crate::tokens::Operator::named(
+                    "operator".parse().expect("a token name"),
+                )),
                 body.to_string().as_bytes(),
                 &WriteAsk::default(),
                 targets,

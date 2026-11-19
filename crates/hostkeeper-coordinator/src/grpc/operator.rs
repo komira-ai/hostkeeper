@@ -392,9 +392,10 @@ impl ReleasesApi for ReleasesService {
             Some(Admitted::Ci(verified)) => Some(verified.clone()),
             _ => None,
         };
-        let (ci, operator) = match (ci, caller_of(&request).operator()) {
-            (Some(verified), _) => (Some(verified), String::new()),
-            (None, Ok(name)) => (None, name.to_owned()),
+        let caller = caller_of(&request);
+        let setter = match (&ci, caller.operator()) {
+            (Some(verified), _) => Setter::Ci(verified),
+            (None, Ok(operator)) => Setter::Operator(operator),
             (None, Err(_)) => {
                 return Err(refusal::releases(proto::ReleasesRefusal::Unauthorized));
             }
@@ -406,10 +407,6 @@ impl ReleasesApi for ReleasesService {
         let targets = (!targets.is_empty()).then_some(targets);
         let host_group = std::mem::take(&mut message.host_group);
         let (body, ask) = desired_body(message).map_err(refusal::releases)?;
-        let setter = match &ci {
-            Some(verified) => Setter::Ci(verified),
-            None => Setter::Operator(&operator),
-        };
         let (set, record) = self
             .coordinator
             .set_desired_in(&setter, &body, &ask, targets, &host_group)

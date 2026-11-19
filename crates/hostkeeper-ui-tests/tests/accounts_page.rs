@@ -367,8 +367,8 @@ fn the_users_page_says_why_it_could_not_load() {
 fn three_tokens() -> Value {
     json!({"tokens": [
         {"name": "ops", "source": "API_TOKEN_SOURCE_TOKENS_FILE"},
-        {"name": "build-script", "source": "API_TOKEN_SOURCE_STORE", "createdBy": "admin",
-         "createdUnix": "1800000000"},
+        {"name": "build-script", "source": "API_TOKEN_SOURCE_STORE", "owner": "carol",
+         "createdBy": "admin", "createdUnix": "1800000000"},
         {"name": "odd", "createdBy": "admin"},
     ]})
 }
@@ -392,16 +392,17 @@ return rows(tree);
     assert_eq!(
         out["out"],
         json!([
-            ["Name", "Source", "Made by", "Made at", ""],
-            ["ops", "tokens file (read-only)", "-", "-", ""],
+            ["Name", "Source", "Owner", "Made by", "Made at", ""],
+            ["ops", "tokens file (read-only)", "-", "-", "-", ""],
             [
                 "build-script",
                 "store",
+                "carol",
                 "admin",
                 "2027-01-15 08:00:00 UTC",
                 "Revoke"
             ],
-            ["odd", "-", "admin", "-", ""],
+            ["odd", "-", "-", "admin", "-", ""],
         ])
     );
     assert_shows(
@@ -410,6 +411,7 @@ return rows(tree);
             "Tokens (3)",
             "edit that file on the coordinator to remove it",
             "cannot sign in",
+            "acts as you",
         ],
     );
 }
