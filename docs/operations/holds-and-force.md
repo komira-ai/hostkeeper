@@ -114,6 +114,21 @@ the JSON heartbeat route; any other waits for the next heartbeat over gRPC.
   and a halt another host also reported stay until `ClearHalt`.
   The alert's message names the group; groups whose halt has the same service, host and version are
   one alert that names them all.
+- A host can hold a halt of a service of its own: its step record of the service ended in a halt,
+  and it refuses every order of the service (`halted`) until it is told a halt generation above the
+  one in its `held-halt` file. Its heartbeat reports that halt (`ServiceBeat.local_halt`: the
+  reason, the generation it holds and how long ago that generation was written), and `Hosts.Get`
+  and `Releases.Status` show it in the host's beat. With no halt of the coordinator standing, the
+  host's gate reason is `halted_here`, or `stale_halt_here` when the generation it holds is above
+  any this coordinator has issued (a generation of the coordinator it heard before, which no
+  generation this one counts up to will reach); never `failed_here`. `Releases.ClearHalt` of the
+  service lifts it: it is accepted while any host reports such a halt, even with no halt standing
+  (the `clear_halt` entry then names no host), and the generation it issues is one past both the
+  service's last one and the highest a host reports holding, so every such host lifts its halt at
+  its next heartbeat. The clear also sets aside each such host's `halted` refusal, as
+  `Hosts.Retry` does, so the host is ordered the desired version once it reports the halt lifted;
+  a report of the hook's own halt (phase `halt`) is not set aside and stands until `Hosts.Retry`.
+  What is set aside is kept in memory only: after a coordinator restart, `Hosts.Retry` does it.
 - `Hosts.Abort` queues an `abort` of a service for the host's next heartbeat. It takes no slot,
   is sent once, and only to a daemon that announced the `abort-v1` feature; an abort asked
   again while one is queued queues nothing more.

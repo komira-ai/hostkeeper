@@ -118,6 +118,23 @@ impl ConsoleFiles {
         }
     }
 
+    /// The targets and the credential as read last, whoever asks: for the coordinator's own
+    /// clean-up after a stream, which runs even when its operator lost access. `None` with no
+    /// files.
+    pub(crate) fn devices(&self) -> Option<Grant> {
+        let given = self.given.as_ref()?;
+        let loaded = given.1.read().unwrap_or_else(PoisonError::into_inner);
+        Some(Grant {
+            targets: Arc::clone(&loaded.targets),
+            credential: Arc::clone(&loaded.credential),
+        })
+    }
+
+    /// Whether the files are given: without them nobody has console access.
+    pub(crate) fn given(&self) -> bool {
+        self.given.is_some()
+    }
+
     /// What the operator `name` may use for a call that needs `need`.
     ///
     /// # Errors

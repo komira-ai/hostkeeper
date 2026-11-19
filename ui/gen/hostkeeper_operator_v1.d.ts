@@ -195,7 +195,9 @@ export namespace hostkeeper_operator_v1 {
     | "GATE_REASON_INSTALLER_DROPPED"
     | "GATE_REASON_INSTALL_ORDER"
     | "GATE_REASON_MOVING"
-    | "GATE_REASON_UNINSTALL_ORDER";
+    | "GATE_REASON_UNINSTALL_ORDER"
+    | "GATE_REASON_HALTED_HERE"
+    | "GATE_REASON_STALE_HALT_HERE";
   export interface GetAbmPublicKeyRequest {}
   export interface GetAbmPublicKeyResponse { certificatePem?: string; fingerprintSha256?: string; created?: boolean; }
   export interface GetHostGroupRequest { hostGroup?: string; limit?: number; pageToken?: string; }

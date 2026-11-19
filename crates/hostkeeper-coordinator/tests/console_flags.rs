@@ -89,6 +89,64 @@ fn the_console_files_and_settings_start_the_coordinator() {
     );
 }
 
+/// Proves: the session bounds and the dial's timeout have the design's defaults (8 sessions, 30
+/// seconds to attach, 30 minutes idle, 8 hours in all, 5 seconds to connect to a Mac), each flag
+/// sets its own, and the bounds reach the console; a value outside a flag's range is a usage
+/// error.
+///
+/// Catches: a limit flag that parses and is not used, or that takes 0 (a stream closed at once).
+#[test]
+fn the_stream_limits_have_their_defaults_and_flags() {
+    use std::time::Duration;
+
+    let files = Files::new("console-flags-limits");
+    let flags = flags_of(files.args());
+    assert_eq!(
+        flags.console.bounds(),
+        hostkeeper_console::session::Bounds {
+            max: 8,
+            window: Duration::from_secs(30),
+            idle: Duration::from_secs(1_800),
+            total: Duration::from_secs(28_800),
+        }
+    );
+    assert_eq!(flags.console.connect_timeout(), Duration::from_secs(5));
+    let mut args = files.args();
+    for arg in [
+        "--console-max-sessions",
+        "2",
+        "--console-attach-s",
+        "7",
+        "--console-idle-s",
+        "60",
+        "--console-total-s",
+        "3600",
+        "--console-connect-timeout-s",
+        "9",
+    ] {
+        args.push(arg.into());
+    }
+    let flags = flags_of(args.clone());
+    assert_eq!(flags.console.connect_timeout(), Duration::from_secs(9));
+    let parts = build_given(&flags).expect("the start");
+    let shown = format!("{:?}", parts.coordinator.console());
+    assert!(
+        shown.contains("bounds: Bounds { max: 2, window: 7s, idle: 60s, total: 3600s }"),
+        "{shown}"
+    );
+    for (flag, value) in [
+        ("--console-idle-s", "0"),
+        ("--console-total-s", "0"),
+        ("--console-connect-timeout-s", "0"),
+        ("--console-connect-timeout-s", "61"),
+    ] {
+        let mut args = files.args();
+        args.push(flag.into());
+        args.push(value.into());
+        assert!(Cli::try_parse_from(args).is_err(), "{flag} {value}");
+    }
+}
+
 /// Proves: the operators file without the targets file or the credential file is a usage error,
 /// naming the flag that is missing.
 ///
@@ -154,6 +212,9 @@ fn the_help_names_the_console_flags() {
         "--console-ipmi-retries",
         "--console-attach-s",
         "--console-max-sessions",
+        "--console-idle-s",
+        "--console-total-s",
+        "--console-connect-timeout-s",
     ] {
         assert!(text.contains(flag), "{flag}");
     }

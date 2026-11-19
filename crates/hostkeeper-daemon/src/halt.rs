@@ -13,6 +13,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::UNIX_EPOCH;
 
 use hostkeeper_config::names::ServiceName;
 
@@ -86,6 +87,19 @@ impl HaltStore {
                 service: service.to_string(),
                 text,
             })
+    }
+
+    /// When the generation of `service` was last written, in unix seconds (the file's
+    /// modification time, which [`HaltStore::raise`] sets); `None` when none is written, or the
+    /// time cannot be read or is before 1970.
+    pub fn written_unix(&self, service: &ServiceName) -> Option<u64> {
+        let modified = fs::metadata(self.dir(service).join(HELD_HALT_FILE))
+            .and_then(|meta| meta.modified())
+            .ok()?;
+        modified
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .map(|since| since.as_secs())
     }
 
     /// Raises the generation of `service` to `generation`, durably; the same generation again

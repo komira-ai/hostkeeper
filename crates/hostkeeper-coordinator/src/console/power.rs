@@ -155,7 +155,8 @@ enum Failure {
 fn refusal_of(host: &HostId, why: BmcError) -> Refusal {
     match why {
         BmcError::Unreachable => Refusal::DeviceUnreachable,
-        BmcError::Busy => Refusal::BmcBusy,
+        // A power call opens no payload; were a BMC to say so, it is a BMC with no room.
+        BmcError::Busy | BmcError::SolBusy => Refusal::BmcBusy,
         BmcError::AuthFailed => Refusal::BmcAuthFailed,
         BmcError::AddressMismatch => Refusal::AddressMismatch,
         BmcError::Failed(step) => {

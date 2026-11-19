@@ -158,6 +158,7 @@ fn first_beat() -> Heartbeat {
         agent_version: Version::from(OWN),
         features: ANNOUNCED.to_vec(),
         services: vec![ServiceFacts {
+            local_halt: None,
             name: ServiceName::new(SERVICE).expect("a service"),
             version: Version::new(BEFORE).expect("a version"),
             health: Health::Healthy,
@@ -232,6 +233,7 @@ fn links_over(link: Arc<dyn CoordinatorLink>, dispatch: &Arc<ManualDispatch>) ->
         renewal: hostkeeper_enroll::RenewalState::default(),
         watchdog: Box::new(hostkeeper_daemon::NoWatchdog),
         console: None,
+        identity: None,
         remote_login_probe: None,
         operator_keys: None,
         prerequisites: None,

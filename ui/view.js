@@ -28,9 +28,9 @@ const ATTRIBUTES = new Set([
   "x", "y", "x1", "y1", "x2", "y2", "width", "height", "rx", "points", "focusable",
 ]);
 // Numbers the page hands its stylesheet, as custom properties of the element (`--row`, `--span`).
-// They are set through the element's style object, which a content security policy of
-// `default-src 'self'` allows (a `style` attribute it does not), and only a finite number under a
-// name of lower-case letters and dashes is accepted.
+// They are set through the element's style object, which any content security policy allows (only a
+// `style` attribute needs `'unsafe-inline'`; the app's own sources have none, which the scan of the
+// sources holds), and only a finite number under a name of lower-case letters and dashes is accepted.
 const CUSTOM_PROPERTY = /^--[a-z][a-z-]*$/;
 // Set as properties, not attributes: what the element shows now.
 const PROPERTIES = new Set(["checked", "disabled", "selected", "value"]);

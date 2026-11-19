@@ -1,8 +1,10 @@
 # The routes the private listener answers, one `METHOD path` a line; `/ui/*` is `/ui/` and every
-# path below it, answered only when `--ui-dir` is given. A route added or removed changes this
+# path below it, answered only when `--ui-dir` is given; `/console/v1/stream/*` is the WebSocket of
+# a console session, its id after the prefix. A route added or removed changes this
 # list in the same change (`the_private_route_set_is_the_committed_one` in `ui.rs` beside it). The four
 # sign-in routes (`/v1/login`, `/v1/logout`, `/v1/password`, `/v1/session`) and the terminal's
 # upgrade (`/v1/ssh/terminal`) are answered only by a coordinator that has a sign-in.
+GET /console/v1/stream/*
 GET /ui/*
 GET /v1/convergence
 GET /v1/session

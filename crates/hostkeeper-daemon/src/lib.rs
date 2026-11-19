@@ -47,6 +47,9 @@
 //! - [`ssh_host_mac`]: the Mac's host of the sshd setup that trusts the coordinator's SSH user CA:
 //!   the `Include` of `sshd_config`, the login user, the `com.apple.access_ssh` group and
 //!   Remote Login by `launchctl` (docs/design/ssh-through-coordinator.md, section 3).
+//! - [`host_identity`]: the host's certificate and key, kept after every step of the enrollment
+//!   loop at `/var/lib/hostkeeper/identity` for the group `hostkeeper-identity`
+//!   ([`identity_group`]), for the services of the host (docs/design/host-identity.md).
 //! - [`prune`]: after a confirmed switch (an update that ends `Succeeded`, a force that moved
 //!   `current`), the service's version directories but `current` and `previous` are deleted,
 //!   under the lock the order already holds.
@@ -114,6 +117,8 @@ mod files;
 pub mod halt;
 pub mod handover;
 pub mod hook_log;
+pub mod host_identity;
+pub mod identity_group;
 pub mod installed;
 pub mod installers;
 pub mod ipmi;

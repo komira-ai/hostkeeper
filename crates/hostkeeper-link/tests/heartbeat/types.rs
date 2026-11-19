@@ -181,6 +181,7 @@ fn the_heartbeat_json_has_the_wire_names() {
         agent_version: version("0.9.0"),
         features: vec![Feature::DeferredV1],
         services: vec![ServiceFacts {
+            local_halt: None,
             name: service("x"),
             version: version("1.0"),
             health: Health::Absent,

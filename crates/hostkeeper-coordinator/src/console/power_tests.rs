@@ -93,6 +93,7 @@ fn power_writes_one_audit_line_with_actor_host_and_action() {
         [
             Seen::Open {
                 args: bmc_args(),
+                escape: None,
                 password: PASSWORD.to_owned(),
             },
             Seen::Ask(MAC_READ.to_owned()),

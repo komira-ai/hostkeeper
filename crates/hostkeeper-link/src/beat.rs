@@ -30,9 +30,10 @@ pub use hostkeeper_proto::MAX_SERVICES_PER_HEARTBEAT;
 use serde_json::{Map, Value, json};
 
 use crate::host_ssh::SshReport;
+use crate::names::Reason;
 use crate::operator_keys::KeysReport;
 use crate::order::{DeferredReport, OrderResult};
-use crate::ports::Drift;
+use crate::ports::{Drift, HeldHalt};
 use crate::prerequisites::PrerequisitesReport;
 use crate::probe::RemoteLoginProbe;
 use crate::repositories::RepositoriesReport;
@@ -315,6 +316,44 @@ pub struct ServiceFacts {
     /// only (`ServiceBeat.drift`): the JSON route is frozen and has no field for it, but the bound
     /// counts it on both, as it counts the installers.
     pub drift: Option<Drift>,
+    /// The halt the host holds of the service ([`LocalHalt`]); none while it holds none. Sent
+    /// over gRPC only (`ServiceBeat.local_halt`), and counted toward the bound on both, as the
+    /// drift is.
+    pub local_halt: Option<LocalHalt>,
+}
+
+/// A halt the host holds of a service, as the heartbeat reports it: the coordinator shows the
+/// host halted with this cause, and tells a generation it has never issued as stale.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalHalt {
+    /// The halt's reason; none when it has none.
+    pub reason: Option<Reason>,
+    /// The halt generation the host holds: only a greater one lifts the halt.
+    pub generation: u64,
+    /// Seconds since that generation was written; none when it is not written, or the time of
+    /// the write cannot be read.
+    pub age_secs: Option<u64>,
+}
+
+impl LocalHalt {
+    /// The report of `held` at `now`, in unix seconds; a write stamped after `now` is 0
+    /// seconds old.
+    pub fn at(held: HeldHalt, now: u64) -> LocalHalt {
+        LocalHalt {
+            reason: held.reason,
+            generation: held.generation,
+            age_secs: held.written_unix.map(|written| now.saturating_sub(written)),
+        }
+    }
+
+    /// The report as JSON, with the wire's names.
+    pub fn to_json(&self) -> Value {
+        json!({
+            "reason": self.reason.as_ref().map(Reason::as_str),
+            "generation": self.generation,
+            "age_secs": self.age_secs,
+        })
+    }
 }
 
 impl ServiceFacts {
@@ -337,6 +376,9 @@ impl ServiceFacts {
                 "drift".to_owned(),
                 json!({ "found": drift.found, "recorded": drift.recorded }),
             );
+        }
+        if let (Some(halt), Some(map)) = (&self.local_halt, facts.as_object_mut()) {
+            map.insert("local_halt".to_owned(), halt.to_json());
         }
         facts
     }

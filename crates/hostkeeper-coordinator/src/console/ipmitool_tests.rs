@@ -1,7 +1,8 @@
 //! The real BMC tool's process, run over this test binary as its child: the binary stands in for
 //! `ipmitool shell`, and the ignored helper tests below are what it is asked to run.
 
-use std::io::{BufRead, Write};
+use std::io::{BufRead, Read, Write};
+use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
@@ -12,7 +13,7 @@ use hostkeeper_console::ipmi::{
 };
 use hostkeeper_console::targets::Address;
 
-use super::{Ipmitool, Process, deadline};
+use super::{Ipmitool, Process, activated, deadline};
 
 const LONG: Duration = Duration::from_secs(60);
 
@@ -99,6 +100,113 @@ fn child_prompts_then_hangs() {
     loop {
         std::thread::park();
     }
+}
+
+/// Catches nothing itself: an activation, which prints a banner and from then on echoes every
+/// byte of its input as it comes, until it reads `q`, when it says on its standard error that the
+/// BMC closed the session and ends.
+#[test]
+#[ignore = "the child process of the shell tests of this module; run only by them"]
+fn child_activates_sol() {
+    let mut out = std::io::stdout();
+    let _ = out.write_all(BANNER);
+    let _ = out.flush();
+    let mut stdin = std::io::stdin().lock();
+    let mut byte = [0u8; 1];
+    while stdin.read_exact(&mut byte).is_ok() {
+        if byte[0] == b'q' {
+            let _ = std::io::stderr().write_all(b"SOL session closed by BMC\n");
+            std::process::exit(1);
+        }
+        let _ = out.write_all(&byte);
+        let _ = out.flush();
+    }
+    std::process::exit(0);
+}
+
+/// The banner of [`child_activates_sol`].
+const BANNER: &[u8] = b"[SOL Session operational.  Use \xff? for help]\n";
+
+/// Reads from `output` until `count` bytes came.
+fn read_count(output: &mut dyn Read, count: usize) -> Vec<u8> {
+    let mut all = vec![0u8; count];
+    output.read_exact(&mut all).expect("read");
+    all
+}
+
+/// Reads from `output` until it has printed `needle` (the test harness prints its own lines
+/// first).
+fn read_past(output: &mut dyn Read, needle: &[u8]) {
+    let mut all = Vec::new();
+    while !all.ends_with(needle) {
+        all.extend(read_count(output, 1));
+    }
+}
+
+/// Proves: an activation is the tool's raw streams from its start, with no prompt waited for:
+/// what is written reaches it and what it prints is read; when the tool ends on its own its
+/// output ends and the end answers its standard error; ending one whose tool still runs kills it
+/// at once (its output ends), sending it nothing (no `exit`), and so does dropping the end
+/// uncalled.
+///
+/// Catches: an activation whose output is lost or buffered, a tool left running after its stream
+/// ended or its end was dropped, and an `exit` typed at the host.
+#[test]
+fn an_activated_tool_is_its_streams_and_its_end_kills_it() {
+    let run = activated(helper("child_activates_sol")).expect("activated");
+    let hostkeeper_console::ipmi::Activated {
+        mut input,
+        mut output,
+        end,
+    } = run;
+    read_past(output.as_mut(), BANNER);
+    input.write_all(b"hi").expect("written");
+    input.flush().expect("flushed");
+    assert_eq!(read_count(output.as_mut(), 2), b"hi");
+    input.write_all(b"q").expect("written");
+    input.flush().expect("flushed");
+    assert_eq!(output.read(&mut [0u8; 8]).expect("the end"), 0);
+    assert_eq!(end().as_str(), "SOL session closed by BMC\n");
+
+    let run = activated(helper("child_activates_sol")).expect("activated");
+    let hostkeeper_console::ipmi::Activated {
+        input,
+        mut output,
+        end,
+    } = run;
+    read_past(output.as_mut(), BANNER);
+    assert_eq!(end().as_str(), "");
+    assert_eq!(output.read(&mut [0u8; 8]).expect("the end"), 0);
+    drop(input);
+
+    let run = activated(helper("child_activates_sol")).expect("activated");
+    let hostkeeper_console::ipmi::Activated {
+        input,
+        mut output,
+        end,
+    } = run;
+    read_past(output.as_mut(), BANNER);
+    drop(end);
+    assert_eq!(output.read(&mut [0u8; 8]).expect("the end"), 0);
+    drop(input);
+}
+
+/// Proves: an activation of a tool that cannot be started, or that is not on pipes, is a start
+/// failure, and the second's child is not left running.
+///
+/// Catches: an activation reported on a tool that never ran, or whose streams are not the
+/// coordinator's.
+#[test]
+fn a_tool_that_cannot_start_or_has_no_pipes_is_not_activated() {
+    let missing = Ipmitool::new(Path::new("/nonexistent/ipmitool"), &Settings::default());
+    let credential =
+        BmcCredential::parse("user = \"ADMIN\"\npassword = \"pw\"\n").expect("a credential");
+    let address = Address::Ip("192.0.2.12".parse().expect("an address"));
+    let invocation = Invocation::sol(&address, &credential, &Settings::default());
+    assert_eq!(missing.activate(&invocation).err(), Some(ShellError::Start));
+    let mut unpiped = helper("child_activates_sol");
+    unpiped.stdin(std::process::Stdio::null());
+    assert_eq!(activated(unpiped).err(), Some(ShellError::Start));
 }
 
 /// Proves: the first prompt opens the session and what came before it is dropped; each command
@@ -201,6 +309,36 @@ fn the_credential_is_in_the_childs_environment_and_not_in_argv() {
     assert_eq!(
         envs,
         [(PASSWORD_VARIABLE.to_owned(), Some("s3cret pass".to_owned()))]
+    );
+}
+
+/// Proves: a run that activates Serial over LAN starts with `-e` and the one raw byte 0xff, then
+/// the invocation's arguments, which end in `sol activate` and not `shell`.
+///
+/// Catches: an activation with the default escape `~`, which any client's `~.` after a newline
+/// would use to end the session, and an escape byte written as text (`0xff`, `ÿ`).
+#[test]
+fn the_escape_byte_is_one_raw_byte_before_the_arguments() {
+    let tool = Ipmitool::new(Path::new("/usr/bin/ipmitool"), &Settings::default());
+    let credential =
+        BmcCredential::parse("user = \"ADMIN\"\npassword = \"pw\"\n").expect("a credential");
+    let address = Address::Ip("192.0.2.12".parse().expect("an address"));
+    let invocation = Invocation::sol(&address, &credential, &Settings::default());
+    let command = tool.command(&invocation);
+    let args: Vec<Vec<u8>> = command
+        .get_args()
+        .map(|arg| arg.as_bytes().to_vec())
+        .collect();
+    assert_eq!(args[..2], [b"-e".to_vec(), vec![0xff]]);
+    let rest: Vec<Vec<u8>> = invocation
+        .args()
+        .iter()
+        .map(|arg| arg.as_bytes().to_vec())
+        .collect();
+    assert_eq!(args[2..], rest);
+    assert_eq!(
+        rest[rest.len() - 2..],
+        [b"sol".to_vec(), b"activate".to_vec()]
     );
 }
 

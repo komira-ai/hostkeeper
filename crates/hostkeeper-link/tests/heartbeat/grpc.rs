@@ -161,6 +161,7 @@ pub(crate) fn grpc_link(
 /// A service at `at`, healthy, with nothing else to say.
 fn facts(name: &str, at: &str) -> ServiceFacts {
     ServiceFacts {
+        local_halt: None,
         name: service(name),
         version: version(at),
         health: Health::Healthy,

@@ -32,7 +32,7 @@ use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
 use tonic::{Code, Status};
 
-use super::{CLIENT_PATIENCE, Remote, WriteDeadline, carry, connection, reload_all};
+use super::{CLIENT_PATIENCE, Patience, Remote, WriteDeadline, carry, connection, reload_all};
 use crate::http::{PeerAddr, STATUS_PATH, Surface};
 use crate::operator_keys::OperatorKeys;
 use crate::operator_keys::tests::{file, group, key};
@@ -64,6 +64,27 @@ async fn a_write_the_peer_does_not_take_times_out_after_the_patience() {
     let late = Pin::new(&mut io).poll_write(&mut cx, b"efgh");
     let late = late.map(|written| written.map_err(|why| why.kind()));
     assert_eq!(late, Poll::Ready(Err(io::ErrorKind::TimedOut)));
+}
+
+/// Catches: a console stream's connection cut at the patience while its browser does not read:
+/// once the connection is released, a write that makes no progress waits for as long as it
+/// takes, and goes on when the peer reads.
+#[tokio::test(start_paused = true)]
+async fn a_released_connection_is_not_held_to_the_patience() {
+    let (near, mut far) = tokio::io::duplex(4);
+    let patience = Patience::default();
+    let mut io = WriteDeadline::released_by(near, PATIENCE, patience.clone());
+    patience.release();
+    let mut cx = Context::from_waker(noop_waker_ref());
+    let first = Pin::new(&mut io).poll_write(&mut cx, b"abcd");
+    assert!(matches!(first, Poll::Ready(Ok(4))));
+    assert!(Pin::new(&mut io).poll_write(&mut cx, b"efgh").is_pending());
+    tokio::time::advance(PATIENCE * 10).await;
+    assert!(Pin::new(&mut io).poll_write(&mut cx, b"efgh").is_pending());
+    let mut got = [0u8; 4];
+    far.read_exact(&mut got).await.expect("read");
+    let late = Pin::new(&mut io).poll_write(&mut cx, b"efgh");
+    assert!(matches!(late, Poll::Ready(Ok(4))));
 }
 
 /// Catches: the deadline running from the first byte of a long response instead of from the

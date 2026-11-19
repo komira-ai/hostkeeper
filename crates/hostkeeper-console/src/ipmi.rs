@@ -10,10 +10,18 @@
 //! too late, after the session is open). Nothing in this module prints either: an [`Invocation`]
 //! and a [`ToolText`] print redacted.
 //!
+//! A Serial over LAN session is not a shell: after the checks of a shell session, the coordinator
+//! runs `ipmitool ... sol activate` as a run of its own ([`Invocation::sol`], [`Tool::activate`]),
+//! handed over as its raw streams, what is written reaching the host's serial port and what the
+//! tool prints coming from it. When the payload's session ends for any cause the tool exits, so
+//! what a client sends never reaches a prompt that takes commands. It is started with the escape
+//! byte [`SOL_ESCAPE`] (`-e`, decision D6 and section 17.3), which UTF-8 never contains.
+//!
 //! [`Tool`] is the port: the coordinator's implementation starts the process, and
 //! [`crate::scripted`] is the double the tests script.
 
 use std::fmt;
+use std::io::{Read, Write};
 
 use crate::credential::BmcCredential;
 use crate::targets::Address;
@@ -23,6 +31,10 @@ pub const PROMPT: &str = "ipmitool> ";
 
 /// The environment variable `-E` reads the password from.
 pub const PASSWORD_VARIABLE: &str = "IPMI_PASSWORD";
+
+/// The escape byte of a Serial over LAN session (`-e`): 0xff, which UTF-8 never contains, so no
+/// browser terminal sends it, and the bridge drops it from any client's input.
+pub const SOL_ESCAPE: u8 = 0xff;
 
 /// The privilege level the session asks for (`-L`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -77,6 +89,7 @@ impl Default for Settings {
 /// shows neither the arguments (the user name is among them) nor the password.
 pub struct Invocation<'a> {
     args: Vec<String>,
+    escape: Option<u8>,
     credential: &'a BmcCredential,
 }
 
@@ -113,13 +126,37 @@ impl<'a> Invocation<'a> {
             args.push("-v".to_owned());
         }
         args.push("shell".to_owned());
-        Self { args, credential }
+        Self {
+            args,
+            escape: None,
+            credential,
+        }
     }
 
-    /// The tool's arguments, after the program.
+    /// The run that activates Serial over LAN at `address` as `credential`, run as `settings` say:
+    /// `sol activate` in place of `shell`, with the escape byte [`SOL_ESCAPE`].
+    #[must_use]
+    pub fn sol(address: &Address, credential: &'a BmcCredential, settings: &Settings) -> Self {
+        let mut invocation = Self::new(address, credential, settings, false);
+        invocation.args.pop();
+        invocation
+            .args
+            .extend(["sol".to_owned(), "activate".to_owned()]);
+        invocation.escape = Some(SOL_ESCAPE);
+        invocation
+    }
+
+    /// The tool's arguments, after the program and the escape byte.
     #[must_use]
     pub fn args(&self) -> &[String] {
         &self.args
+    }
+
+    /// The escape byte, which `-e` gives as one raw byte before [`Self::args`], when the run
+    /// activates Serial over LAN.
+    #[must_use]
+    pub fn escape(&self) -> Option<u8> {
+        self.escape
     }
 
     /// The password, for the value of [`PASSWORD_VARIABLE`] in the tool's environment and for
@@ -172,8 +209,16 @@ pub enum ShellError {
     Ended(ToolText),
 }
 
-/// The BMC tool: one session per call of [`Tool::open`].
+/// The BMC tool: one session per call of [`Tool::open`] or [`Tool::activate`].
 pub trait Tool: Send + Sync {
+    /// Starts the tool as `invocation` (one of [`Invocation::sol`]) says and hands it over as its
+    /// raw streams at once: whether its session opened is told by what it prints, and its end by
+    /// the end of its output and what it wrote to its standard error.
+    ///
+    /// # Errors
+    /// [`ShellError::Start`]: it could not be started.
+    fn activate(&self, invocation: &Invocation<'_>) -> Result<Activated, ShellError>;
+
     /// Starts the tool as `invocation` says and waits for its first prompt, which comes once its
     /// session with the BMC is open.
     ///
@@ -190,6 +235,22 @@ pub trait Shell {
     /// # Errors
     /// [`ShellError`]: no prompt came in time, or the program ended.
     fn ask(&mut self, command: &str) -> Result<String, ShellError>;
+}
+
+/// What ends an [`Activated`] run: the program is stopped at once, sent nothing more, and answers
+/// what it wrote to its standard error. Dropped without being called, it stops the program too.
+pub type Ending = Box<dyn FnOnce() -> ToolText + Send>;
+
+/// A run of the tool handed over as its raw streams.
+pub struct Activated {
+    /// The tool's standard input: what is written reaches the device.
+    pub input: Box<dyn Write + Send>,
+    /// The tool's standard output: what the device sends, and the end of the stream (a read of 0
+    /// bytes) once the program ended.
+    pub output: Box<dyn Read + Send>,
+    /// Stops the program, if it still runs, and answers its standard error. Never `exit`: on an
+    /// activated run that would be a line typed at the host.
+    pub end: Ending,
 }
 
 #[cfg(test)]

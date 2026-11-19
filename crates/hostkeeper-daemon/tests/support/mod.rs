@@ -65,6 +65,7 @@ pub fn idle_links() -> Links {
         renewal: RenewalState::default(),
         watchdog: Box::new(hostkeeper_daemon::NoWatchdog),
         console: None,
+        identity: None,
         remote_login_probe: None,
         operator_keys: None,
         prerequisites: None,

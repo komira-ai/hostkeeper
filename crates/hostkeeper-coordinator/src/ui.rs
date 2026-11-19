@@ -40,8 +40,13 @@ pub(crate) const PREFIX: &str = "/ui/";
 pub(crate) const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
 
 /// The `Content-Security-Policy` of every answer: the page loads only what its own origin
-/// serves, and no other page may frame it.
-pub(crate) const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; frame-ancestors 'none'";
+/// serves and connects only to it (`connect-src 'self'`, which takes in a `wss:` socket to the
+/// page's own host and port), no other page may frame it, and two allowances for the vendored
+/// console libraries (`docs/design/console-broker.md`, section 8.2): inline style, which the
+/// terminal draws its cells with (`style-src`), and `data:` images, which the remote desktop
+/// draws its cursor and JPEG rectangles with (`img-src`). Script stays `'self'` alone: no inline
+/// script, no `eval`.
+pub(crate) const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; connect-src 'self'; frame-ancestors 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data:";
 
 /// The extensions served, and the content type of each. Matched exactly: `INDEX.HTML` is not
 /// found.

@@ -190,6 +190,7 @@ pub fn update_result(result: &OrderResult) -> UpdateResult {
 
 pub fn service_beat(facts: &ServiceFacts) -> ServiceBeat {
     ServiceBeat {
+        local_halt: None,
         name: facts.name.as_str().to_owned(),
         version: wire_version(facts.version.as_str()),
         health: wire_health(facts.health),
@@ -210,6 +211,7 @@ pub fn service_beat(facts: &ServiceFacts) -> ServiceBeat {
 /// The loop's heartbeat as the coordinator reads it: every service, and the features announced.
 pub fn wire_beat(beat: &Heartbeat) -> wire::Heartbeat {
     wire::Heartbeat {
+        local_halt: None,
         platform: hostkeeper_wire::Platform::parse(beat.platform.as_str()).expect("a platform"),
         version: wire_version(beat.agent_version.as_str()),
         health: wire::Health::Healthy,
@@ -400,6 +402,7 @@ impl Host {
             renewal: hostkeeper_enroll::RenewalState::default(),
             watchdog: Box::new(hostkeeper_daemon::NoWatchdog),
             console: None,
+            identity: None,
             remote_login_probe: None,
             operator_keys: None,
             prerequisites: None,

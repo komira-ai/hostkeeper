@@ -65,6 +65,7 @@ fn act(store: &OpsStore, body: &str) -> Result<AuditEntry, crate::ops::OperateEr
         store,
         &kbf_services(),
         &crate::host_groups::HostGroups::default(),
+        &|_| None,
         "operator",
         body.as_bytes(),
     )

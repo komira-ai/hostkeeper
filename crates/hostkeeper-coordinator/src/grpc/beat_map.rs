@@ -119,6 +119,16 @@ fn facts(entry: &proto::ServiceBeat) -> Map<String, Value> {
             }),
         );
     }
+    if let Some(halt) = &entry.local_halt {
+        object.insert(
+            "local_halt".to_owned(),
+            json!({
+                "reason": halt.reason,
+                "generation": halt.generation,
+                "age_secs": halt.age_secs,
+            }),
+        );
+    }
     object
 }
 

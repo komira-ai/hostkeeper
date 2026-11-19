@@ -341,8 +341,9 @@ fn an_older_reader_keeps_what_operators_are_shown() {
         .get_enum_by_name("hostkeeper.operator.v1.GateReason")
         .expect("the reasons");
     // 34 to 36 are `INSTALL_ORDER`, `MOVING` and `UNINSTALL_ORDER`, which the host groups add
-    // (tests/additions_host_groups.rs).
-    assert_eq!(now_reasons.values().map(|v| v.number()).max(), Some(36));
+    // (tests/additions_host_groups.rs); 37 and 38 are `HALTED_HERE` and `STALE_HALT_HERE`
+    // (tests/additions_local_halt.rs).
+    assert_eq!(now_reasons.values().map(|v| v.number()).max(), Some(38));
 
     let convergence = op::Convergence {
         desired: Some("2.0".to_owned()),

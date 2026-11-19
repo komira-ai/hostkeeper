@@ -75,7 +75,9 @@ Look: the komira palette as CSS tokens (`ui/app.css`: the ink `#0B0B0A`, the acc
 mode), system fonts, light and dark by `prefers-color-scheme` and the toggle; the lab hardware (`ui/lab.css`) stays graphite in both
 themes with thin accent lines and a glow on hover. No image, no web font, no runtime CDN, no build step; the layout is HTML and
 CSS grid, a position handed to the stylesheet as a custom property (`--r`, `--s`) set through the element's style object, which the
-content security policy `default-src 'self'` allows (a `style` attribute it does not). `prefers-reduced-motion` turns the pulse and
+content security policy allows whatever its `style-src` (a `style` attribute only with `'unsafe-inline'`, which the policy has
+for the console's vendored terminal, [console-broker.md](console-broker.md) section 8.2; the app's own sources still
+hold none, which the scan of the sources checks). `prefers-reduced-motion` turns the pulse and
 the smooth scroll off. A state is never a colour alone: the pill, the plate and the tooltip carry its word.
 
 ## 2. Data model (the coordinator)
