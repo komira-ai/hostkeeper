@@ -81,8 +81,8 @@ export async function main() {{
 }
 
 /// A reason as an array, in the order of its fields.
-const FIELDS: &str = r#"const shape = (r) => [r.kind, r.group, r.title, r.said, r.since === undefined ? null : r.since,
-  r.sinceIs, r.tone, r.service, r.fix, r.taint];"#;
+const FIELDS: &str = r#"const shape = ({ kind, group, title, said, since, sinceIs, tone, service, fix, taint }) => [kind, group, title, said, since === undefined ? null : since,
+  sinceIs, tone, service, fix, taint];"#;
 
 #[test]
 fn a_hosts_reasons_are_its_alerts_then_its_services_each_with_its_fix() {
@@ -449,7 +449,7 @@ await click(tree, "clear-halt-js-agent");
 await click(tree, "clear-halt-js-agent");
 await click(tree, "clear-halt-js-agent");"#,
     ));
-    let question = "Clear the halt of js-agent? It lifts the halt on every host of js-agent, not only node-07, and they are ordered again. The agent on node-07 is still tainted: its update hook may halt again until the taint is cleared on the host.";
+    let question = "Clear the halt of js-agent? It lifts the halt on every host of js-agent, not only node-07; they are ordered again as its update plan and holds let them. The agent on node-07 is still tainted: its update hook may halt again until the taint is cleared on the host.";
     assert_eq!(
         out["seen"]["reports"],
         json!([
@@ -483,7 +483,8 @@ await click(tree, "clear-halt-js-agent");"#,
 fn retry_asks_first_and_says_whether_the_failed_report_was_set_aside_now_or_before() {
     // Asserts: a no sends nothing; a yes sends Retry of node-07 and tierstore, refreshes and says
     // the failed update to 3.1.0 is set aside; a second Retry answered with no audit entry says it
-    // was set aside already. The question names the host and the service.
+    // was set aside already, and a refused one is reported with no refresh. The question names
+    // the host and the service and promises no order the gate may not give.
     // Catches: Retry sent for another host or service, an answer that claims a retry the
     // coordinator did not write.
     let ui = host_ui(&mixed(), Some(mixed_alerts()));
@@ -496,12 +497,14 @@ fn retry_asks_first_and_says_whether_the_failed_report_was_set_aside_now_or_befo
         &m("Hosts/Retry"),
         json!({"setAside": {"target": "3.1.0", "orderTry": "2"}}),
     );
+    ui.refuse(&m("Hosts/Retry"), 403, "PERMISSION_DENIED", "forbidden");
     let mut ui = ui;
     let out = ui.run(&page_driver(
         "host",
         r#"{ nodeId: "node-07" }"#,
-        "[false, true, true]",
+        "[false, true, true, true]",
         r#"
+await click(tree, "retry-tierstore");
 await click(tree, "retry-tierstore");
 await click(tree, "retry-tierstore");
 await click(tree, "retry-tierstore");"#,
@@ -510,14 +513,15 @@ await click(tree, "retry-tierstore");"#,
         out["seen"]["reports"],
         json!([
             "Not retried.",
-            "Set aside the failed update of tierstore to 3.1.0: node-07 is ordered it again at its next heartbeat.",
-            "The failed update of tierstore to 3.1.0 was set aside already: node-07 is ordered it again at its next heartbeat.",
+            "Set aside the failed update of tierstore to 3.1.0: node-07 may be ordered it again from its next heartbeat; its Services tab says what its gate waits for.",
+            "The failed update of tierstore to 3.1.0 was set aside already: its Services tab says what node-07's gate waits for.",
+            "PERMISSION_DENIED forbidden",
         ])
     );
-    let question = "Retry the update of tierstore on node-07? Its failed report is set aside, and it is ordered the desired version again at its next heartbeat.";
+    let question = "Retry the update of tierstore on node-07? Its failed report is set aside, and it is ordered the desired version again when its update plan and holds let it.";
     assert_eq!(
         out["seen"]["questions"],
-        json!([question, question, question])
+        json!([question, question, question, question])
     );
     assert_eq!(out["seen"]["refreshes"], json!(2));
     let sent: Vec<_> = bodies(&ui)
@@ -525,10 +529,7 @@ await click(tree, "retry-tierstore");"#,
         .filter(|(method, _)| *method == m("Hosts/Retry"))
         .collect();
     let body = json!({"nodeId": "node-07", "service": "tierstore"});
-    assert_eq!(
-        sent,
-        [(m("Hosts/Retry"), body.clone()), (m("Hosts/Retry"), body)]
-    );
+    assert_eq!(sent, vec![(m("Hosts/Retry"), body); 3]);
 }
 
 #[test]
@@ -644,7 +645,7 @@ fn home_ui(hosts: &Value, alerts: Option<&Value>) -> Ui {
 }
 
 /// The driver's view of Home: the degraded hosts strip (its count and each group's line), the
-/// list's rows, and where a click on the first host of the strip goes.
+/// list's rows, and where a click on the last host link of the strip goes.
 const HOME: &str = r#"
 const strip = nodes(tree).find((n) => n.attrs["name"] === "degraded");
 const groups = nodes(strip).filter((n) => n.attrs["name"] === "degraded-reason").map((li) => text(li));
@@ -713,7 +714,8 @@ fn home_counts_the_degraded_hosts_groups_their_reasons_and_each_row_says_why() {
 fn home_says_no_host_is_degraded_and_without_the_alerts_counts_from_the_hosts_own_reports() {
     // Asserts: a fleet of healthy hosts reads "No host is degraded."; when Alerts.List fails, the
     // count still holds the hosts whose own report is bad (node-01, node-02, node-04) and not the
-    // Macs, whose only reason is an alert.
+    // Macs, whose only reason is an alert, and says the count is of the hosts' own reports (and
+    // so does "No host is degraded." then).
     // Catches: a failed Alerts.List that empties the fleet view, or a healthy fleet shown red.
     let healthy = json!([live(
         "node-05",
@@ -726,8 +728,9 @@ fn home_says_no_host_is_degraded_and_without_the_alerts_counts_from_the_hosts_ow
     let (hosts, _) = fleet();
     let mut ui = home_ui(&hosts, None);
     let out = ui.run(&page_driver("home", "{ list: true }", "[]", HOME));
+    let partial = "(from the hosts' own reports: the alerts were not read)";
     assert!(
-        super_text(&out).contains("Degraded hosts (3)"),
+        super_text(&out).contains(&format!("Degraded hosts (3) {partial}")),
         "{}",
         super_text(&out)
     );
@@ -738,6 +741,183 @@ fn home_says_no_host_is_degraded_and_without_the_alerts_counts_from_the_hosts_ow
             "js-agent update failed: fetch_failed 1 host: node-02",
             "tierstore halted: draining 1 host: node-01",
             "tierstore unhealthy 1 host: node-01",
+        ])
+    );
+}
+
+#[test]
+fn home_without_the_alerts_does_not_say_no_host_is_degraded_plainly() {
+    // Asserts: with Alerts.List failed and no host degraded by its own report, the strip says
+    // "No host is degraded." with the note that the alerts were not read, in the warn tone.
+    // Catches: a fleet view that reports all clear when it could not read the alerts.
+    let healthy = json!([live(
+        "node-05",
+        json!([{"service": "kbf", "health": "HEALTH_HEALTHY"}])
+    )]);
+    let mut ui = home_ui(&healthy, None);
+    let out = ui.run(&page_driver(
+        "home",
+        "{ list: true }",
+        "[]",
+        r#"
+const strip = nodes(tree).find((n) => n.attrs["name"] === "degraded");
+return { text: text(strip).trim(), class: strip.attrs["class"] };"#,
+    ));
+    assert_eq!(
+        out["out"],
+        json!({"text": "No host is degraded. (from the hosts' own reports: the alerts were not read)",
+               "class": "alert-strip warn"})
+    );
+}
+
+#[test]
+fn operator_state_alerts_are_no_reason_and_a_failed_canary_stands_for_its_failed_update() {
+    // Asserts: alerts that name a host but are an operator's state or wait for one (held on a bad
+    // version, excluded with abandon, waiting for approval, a duplicate claim) give no reason, so
+    // the host is not degraded; a failed canary alert is a critical reason of its service, in the
+    // coordinator's words, and the canary's failed update is not offered Retry beside it.
+    // Catches: a healthy host under an operator's hold counted degraded, a canary shown twice.
+    let host = live(
+        "web-4",
+        json!([{"service": "api", "gateReason": "GATE_REASON_BAD",
+                "lastUpdate": {"target": "1.3.0", "outcome": "OUTCOME_FAILED", "reason": "verify_failed"}}]),
+    );
+    let state = |kind: &str| {
+        alert(
+            kind,
+            "WARNING",
+            "web-4",
+            "api",
+            "operator state",
+            "1799990000",
+        )
+    };
+    let out = pure(&format!(
+        "{FIELDS}\nconst others = {};\nconst canary = {};\nconst host = {host};\nconst none = {{ nodeId: \"web-4\", live: true, lastHeartbeatUnix: \"1800000000\" }};\nreturn {{ others: health.reasonsOf(none, others).length, degraded: health.isDegraded(none, health.reasonsOf(none, others)), canary: health.reasonsOf(host, canary).map(shape) }};",
+        json!([
+            state("HELD_ON_BAD_VERSION"),
+            state("ABANDONED_WHILE_UPDATING"),
+            state("WAITING_FOR_OPERATOR"),
+            state("DUPLICATE_CLAIM_PENDING")
+        ]),
+        json!([alert(
+            "FAILED_CANARY",
+            "CRITICAL",
+            "web-4",
+            "api",
+            "web-4, a canary of api, failed 1.3.0",
+            "1799990000"
+        )]),
+    ));
+    assert_eq!(out["others"], json!(0));
+    assert_eq!(out["degraded"], json!(false));
+    assert_eq!(
+        out["canary"],
+        json!([[
+            "alert",
+            "failed canary: api",
+            "failed canary (api)",
+            "web-4, a canary of api, failed 1.3.0",
+            "1799990000",
+            "first seen by the coordinator",
+            "bad",
+            "api",
+            null,
+            null
+        ]])
+    );
+}
+
+#[test]
+fn a_halts_facts_come_only_from_its_halt_report() {
+    // Asserts: a halt alert, or a halt the host holds of its own, whose service's last update is
+    // another failure (a fetch that failed, even one whose reason reads tainted) says no check, no
+    // taint and no time of that update: the alert's words and time, or nothing reported.
+    // Catches: "halted by the check fetch_failed", or a taint panel under a halt it did not cause.
+    let other = |service: &str, gate: &str, reason: &str| {
+        json!({"service": service, "gateReason": gate,
+               "lastUpdate": {"target": "2.0", "outcome": "OUTCOME_FAILED", "phase": "FAILURE_PHASE_BEFORE_COMMIT",
+                              "reason": reason, "detail": "unrelated", "startedUnix": "1799991000"}})
+    };
+    let host = live(
+        "node-09",
+        json!([
+            other("a", "GATE_REASON_HALTED", "fetch_failed"),
+            other("b", "GATE_REASON_HALTED_HERE", "tainted")
+        ]),
+    );
+    let alerts = json!([alert(
+        "HALT",
+        "CRITICAL",
+        "node-09",
+        "a",
+        "a is halted at 2.0 by an operator",
+        "1799990100"
+    )]);
+    let out = pure(&format!(
+        "{FIELDS}\nreturn health.reasonsOf({host}, {alerts}).map(shape);"
+    ));
+    assert_eq!(
+        out,
+        json!([
+            [
+                "halt",
+                "a halted",
+                "a is halted",
+                "a is halted at 2.0 by an operator",
+                "1799990100",
+                "first seen by the coordinator",
+                "bad",
+                "a",
+                "clear-halt",
+                null
+            ],
+            [
+                "halt",
+                "b halted",
+                "b is halted on this host: the host holds a halt of its own",
+                null,
+                null,
+                "started on the host",
+                "bad",
+                "b",
+                "clear-halt",
+                null
+            ],
+        ])
+    );
+}
+
+#[test]
+fn a_taint_on_a_failed_update_with_no_halt_says_to_retry_after_clearing_it() {
+    // Asserts: a failed update whose reason is tainted and whose halt is cleared (the gate says
+    // FAILED_HERE) shows the taint's facts with no log lines and "-" for a finding the hook did
+    // not give, and says to press Retry update once the taint is cleared on the host.
+    // Catches: a taint note that sends the operator to a Clear halt the page does not offer.
+    let host = live(
+        "node-04",
+        json!([{"service": "js-agent", "gateReason": "GATE_REASON_FAILED_HERE",
+                "lastUpdate": {"target": "0.1.250", "outcome": "OUTCOME_FAILED", "phase": "FAILURE_PHASE_HALT",
+                               "reason": "tainted", "startedUnix": "1799992000"}}]),
+    );
+    let mut ui = host_ui(&host, Some(json!({})));
+    let out = ui.run(&page_driver(
+        "host",
+        r#"{ nodeId: "node-04" }"#,
+        "[]",
+        SECTION,
+    ));
+    assert_eq!(
+        out["out"]["items"],
+        json!([{"title": "The update of js-agent to 0.1.250 failed: tainted",
+                "since": "Since 2027-01-15 05:46:40 UTC (started on the host).", "buttons": ["retry-js-agent"]}])
+    );
+    assert_eq!(out["out"]["taint"][1], json!(["Finding", "-"]));
+    assert_eq!(out["out"]["log"], json!([]));
+    assert_eq!(
+        out["out"]["notes"],
+        json!([
+            "Clear taint: hostkeeper has no action that clears a taint yet. Clear it on the host, then press Retry update here."
         ])
     );
 }

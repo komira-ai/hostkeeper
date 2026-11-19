@@ -51,7 +51,7 @@ MDM setup), Fleet a table of hosts. After: a side menu, and Home a picture of th
   tabs (Overview, Services, Certificate, Labels, Placement, Host group, Remote SSH; a dot on Services or Certificate when something needs
   attention; the tab chosen is kept across a refresh of the same host), then Retire alone in a red-bordered danger zone at the bottom.
   The state is `degraded`, not `healthy` or `updating`, for a live host with any reason (`ui/health.js`): an alert of
-  `Alerts.List` that names it, or a service of it halted, unhealthy or whose last update failed. Under the header, each reason
+  `Alerts.List` that names it and says it is not healthy, or a service of it halted, unhealthy or whose last update failed. Under the header, each reason
   in plain words with the time it began and its one action (Clear halt, Retry update), or why there is none.
 - Edit layout (a toggle on Home) shows the controls: rename the cluster, add a row (the next number), add a rack to a row (height
   from a list, 42 U by default), resize, move to another row, remove. A sled is what goes in a rack (docs/design/rack-sleds.md): **Add

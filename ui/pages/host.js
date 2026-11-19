@@ -595,7 +595,7 @@ function fixOf(ctx, nodeId, reason, form) {
       }
       const taint = reason.taint === null ? ""
         : ` The agent on ${nodeId} is still tainted: its update hook may halt again until the taint is cleared on the host.`;
-      if (!ctx.confirm(`Clear the halt of ${service}? It lifts the halt on every host of ${service}, not only ${nodeId}, and they are ordered again.${taint}`)) {
+      if (!ctx.confirm(`Clear the halt of ${service}? It lifts the halt on every host of ${service}, not only ${nodeId}; they are ordered again as its update plan and holds let them.${taint}`)) {
         return "Not cleared.";
       }
       await ctx.api.releases.clearHalt({ service, reason: typed });
@@ -605,15 +605,15 @@ function fixOf(ctx, nodeId, reason, form) {
   }
   if (reason.fix === "retry") {
     return action(ctx, `Retry update of ${service}`, `retry-${service}`, async () => {
-      if (!ctx.confirm(`Retry the update of ${service} on ${nodeId}? Its failed report is set aside, and it is ordered the desired version again at its next heartbeat.`)) {
+      if (!ctx.confirm(`Retry the update of ${service} on ${nodeId}? Its failed report is set aside, and it is ordered the desired version again when its update plan and holds let it.`)) {
         return "Not retried.";
       }
       const reply = await ctx.api.hosts.retry({ nodeId, service });
       ctx.refresh();
       const failedAt = reply.setAside && typeof reply.setAside["target"] === "string" ? ` to ${reply.setAside["target"]}` : "";
       return reply.entry
-        ? `Set aside the failed update of ${service}${failedAt}: ${nodeId} is ordered it again at its next heartbeat.`
-        : `The failed update of ${service}${failedAt} was set aside already: ${nodeId} is ordered it again at its next heartbeat.`;
+        ? `Set aside the failed update of ${service}${failedAt}: ${nodeId} may be ordered it again from its next heartbeat; its Services tab says what its gate waits for.`
+        : `The failed update of ${service}${failedAt} was set aside already: its Services tab says what ${nodeId}'s gate waits for.`;
     }, { class: "primary" });
   }
   return h("p", { class: "note" }, NO_BUTTON[reason.kind]);

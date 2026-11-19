@@ -77,12 +77,13 @@ function alertsStrip(reply, failure) {
 
 // The degraded hosts of the fleet: their count, then each reason with the hosts that have it, most
 // hosts first, each host a link to its page. `alerts` is the list of Alerts.List, empty when it
-// could not be read (the alerts strip says so); the hosts' own reports are read all the same.
-function degradedStrip(ctx, hosts, alerts) {
+// could not be read (`unread`): then the count is of the hosts' own reports, and the strip says so.
+function degradedStrip(ctx, hosts, alerts, unread) {
   const { degraded, groups } = fleetHealth(hosts, alerts);
+  const partial = unread ? h("small", { name: "degraded-partial" }, "(from the hosts' own reports: the alerts were not read)") : null;
   if (degraded.length === 0) {
-    return h("div", { class: "alert-strip none", role: "status", name: "degraded" },
-      h("span", { class: "sev ok", "aria-hidden": "true" }), "No host is degraded.");
+    return h("div", { class: `alert-strip ${unread ? "warn" : "none"}`, role: "status", name: "degraded" },
+      h("span", { class: `sev ${unread ? "warn" : "ok"}`, "aria-hidden": "true" }), "No host is degraded.", partial);
   }
   const link = (nodeId) => h("button", {
     type: "button", class: "linklike", name: "open-degraded",
@@ -90,6 +91,7 @@ function degradedStrip(ctx, hosts, alerts) {
   }, nodeId);
   return h("div", { class: "alert-strip bad", role: "status", name: "degraded" },
     h("strong", { class: "alert-count" }, `Degraded hosts (${degraded.length})`),
+    partial,
     h("ul", {}, groups.map((group) => h("li", { class: "alert", name: "degraded-reason" },
       h("strong", {}, group.label),
       h("small", {}, `${group.hosts.length} ${group.hosts.length === 1 ? "host" : "hosts"}:`),
@@ -747,6 +749,6 @@ export async function render(ctx) {
   return lab(ctx, {
     layout, servers, failure, notes,
     alerts: inside ? null : alertsStrip(alerts, alertFailure),
-    degraded: inside ? null : degradedStrip(ctx, hosts, alertList),
+    degraded: inside ? null : degradedStrip(ctx, hosts, alertList, alertFailure !== null),
   }, makeState());
 }

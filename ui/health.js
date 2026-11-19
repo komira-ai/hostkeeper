@@ -12,7 +12,9 @@
 // `fix` the action; `taint` null, or `{said, log}` for a taint.
 //
 // The reasons come from two places, so that what one says is never lost to the other:
-// - every alert of Alerts.List that names the host (`hostId`), and
+// - every alert of Alerts.List of a kind that says the host is not healthy (a halt, a duplicate
+//   identity, a failed canary, a silent host, a trusted root, a failed prerequisite) that names
+//   the host (`hostId`), and
 // - the host's own services as Hosts.Get or Hosts.List answers them: a halt the host holds or
 //   reported, a failed last update, a service that reports itself unhealthy.
 // A halt alert and the failed halt report of the same host and service are one reason. A failed
@@ -53,11 +55,28 @@ function failed(last) {
   return Boolean(last) && last.outcome === "OUTCOME_FAILED";
 }
 
+// The halt report of a service's view: its last update when that failed in the halt phase, else
+// null. Only this report says the halt's check, detail, start and taint; another failed update
+// says nothing of the halt.
+function haltReport(view) {
+  return view !== undefined && failed(view.lastUpdate) && view.lastUpdate.phase === "FAILURE_PHASE_HALT"
+    ? view.lastUpdate : null;
+}
+
+// The kinds of alert that say a host is not healthy. The others that name a host are an
+// operator's state or wait for an operator (a hold on a bad version, an exclusion with abandon, an
+// enrollment or a renewal waiting for approval): the alerts strip shows them, and they are no
+// reason here. A kind this page does not know is no reason either.
+const HEALTH_ALERTS = [
+  "ALERT_KIND_HALT", "ALERT_KIND_DUPLICATE", "ALERT_KIND_FAILED_CANARY", "ALERT_KIND_SILENT_HOST",
+  "ALERT_KIND_TRUSTED_ROOT", "ALERT_KIND_PREREQUISITE_FAILED",
+];
+
 // A halt of `service` that stands for the host. `alert` is the halt alert that names the host, or
 // null when none does (the host holds the halt of its own, or the halt it reported is the
 // service's while the alert names another host); `view` the host's view of the service, if any.
 function haltReason(service, view, alert) {
-  const last = view && failed(view.lastUpdate) ? view.lastUpdate : null;
+  const last = haltReport(view);
   const check = last === null ? null : given(last.reason);
   const here = view !== undefined && HALTED_HERE.includes(view.gateReason);
   return {
@@ -136,19 +155,24 @@ function alertReason(alert) {
 }
 
 // Every reason `host` (a `Host` of Hosts.Get or Hosts.List) is not healthy, given the alerts of
-// Alerts.List (`alerts`, a list; empty when they could not be read): first the alerts that name
-// the host, in the coordinator's order, then the reasons of its services, by the host's order of
+// Alerts.List (`alerts`, a list; empty when they could not be read): first the alerts of a health
+// kind (HEALTH_ALERTS) that name the host, in the coordinator's order, then the reasons of its services, by the host's order of
 // them. For each service, at most one of: a halt (a halt alert naming the host, a halt the host
 // holds of its own, or a failed report of the halt phase while the service is halted), else a
-// failed update; and, apart, unhealthy when it says so.
+// failed update unless a failed canary alert names the host and the service; and, apart,
+// unhealthy when it says so.
 export function reasonsOf(host, alerts) {
   const id = given(host.nodeId);
   const views = new Map(list(host, "services").map((view) => [view.service, view]));
   const out = [];
   const halted = new Set();
+  const canaries = new Set();
   for (const alert of id === null ? [] : alerts) {
-    if (alert.hostId !== id) {
+    if (alert.hostId !== id || !HEALTH_ALERTS.includes(alert.kind)) {
       continue;
+    }
+    if (alert.kind === "ALERT_KIND_FAILED_CANARY") {
+      canaries.add(alert.service);
     }
     if (alert.kind === "ALERT_KIND_HALT" && given(alert.service) !== null) {
       halted.add(alert.service);
@@ -160,9 +184,10 @@ export function reasonsOf(host, alerts) {
   for (const view of views.values()) {
     const last = view.lastUpdate;
     const haltStands = HALTED_HERE.includes(view.gateReason)
-      || (view.gateReason === "GATE_REASON_HALTED" && failed(last) && last.phase === "FAILURE_PHASE_HALT");
-    if (halted.has(view.service)) {
-      // The halt alert above is this service's reason.
+      || (view.gateReason === "GATE_REASON_HALTED" && haltReport(view) !== null);
+    if (halted.has(view.service) || (canaries.has(view.service) && !haltStands)) {
+      // The halt alert above is this service's reason, or the failed canary alert is: the
+      // version it failed is marked bad, so no Retry orders it again.
     } else if (haltStands) {
       out.push(haltReason(view.service, view, null));
     } else if (failed(last)) {
