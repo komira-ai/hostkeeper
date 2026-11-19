@@ -30,7 +30,7 @@ The choices the design's section 4 leaves open, as the code makes them (`store/p
 
 The fleet's rows of the design's sections 5.1 and 5.2 as the code makes them (`0024_fleet.sql`, `store/postgres/fleet_rows.rs`,
 `store/beat.rs`, `Writer::once` in `store/postgres/writer.rs`, the call in `Coordinator::answer`), where the text leaves a
-choice open. No decision reads the rows: the heartbeat is still decided over the fleet in memory.
+choice open. M6 made the rows and no decision read them; M7 decides from them (section 5.3).
 
 - `0024` makes `fleet_hosts` (logged, `fillfactor` 50, by M1), `fleet_bakes` (unlogged), `fleet_orders` (its primary key the
   host) and `cluster_quiet` (one row, 0). `fleet_hosts` has no `running` or `repo_report` yet: nothing writes them until a
@@ -61,6 +61,55 @@ choice open. No decision reads the rows: the heartbeat is still decided over the
 - `--beat-reorder-secs` is 1 to 44, below `DOWN_AFTER`; a `--quiet-secs` longer than `u32::MAX` seconds is that long in the statement, which adds it to
   the database's clock in a `bigint`.
 
+## 5.3 M7, as built
+
+The deciding transaction and the steps of the design's sections 5.2 and 5.3 as the code makes them (`store/decision.rs`,
+`store/postgres/decide.rs`, `store/writers.rs`, `service_decide.rs`, `fleet_shared.rs`, `rollouts.rs`'s claim,
+`store/postgres/queue_seq.rs`, `0026_decisions.sql`), where the text leaves a choice open:
+
+- Every heartbeat over Postgres is decided in the transaction; the converged path that takes no gate is not built (a
+  latency optimisation, B20). The transaction is an edit of the scope `DECIDE`: the gate with `SKIP LOCKED`, the rows of
+  `desired`, `ops` and `verdicts`, then the audit counter. The layout is not among them: no decision reads it.
+- The decision runs on a writing session of its own, one more than `--database-pool` (an instance holds the pool, that
+  session and the reader): a write the deciding thread makes outside the decision (an enrollment record, what a host runs)
+  takes a session of the pool and never waits for the one its decision holds.
+- The heartbeat takes the desired and the operations stores' writers' locks (in that order, as every change does) before it
+  asks for the gate, so no thread holds the gate while it waits for a lock a thread waiting for the gate holds; the lock is
+  re-entrant on its thread (`store/writers.rs`), and a store's change made on the deciding thread is an edit **joined** to
+  the decision: no locks of its own, its rows and audit lines written in the decision's transaction as it is made.
+- Under the gate the parts this coordinator's copy is older than are taken into memory; the fleet in memory becomes a cache
+  of the rows: its orders, bakes and quiet time are the rows', its tries no longer outstanding the highest of both, and each
+  beat another instance heard last (and changed since) is noted as this instance notes its own. A beat noted from a row has
+  no trusted-root word (that is the hearing instance's).
+- At its end the decision writes the orders that differ from those it read: an ended or aged one deleted if still as read
+  (a beat may have freed it), a replaced one changed only if still as read, a new one inserted only if its host holds none
+  (`ON CONFLICT (host_id) DO NOTHING`): any other answer refuses the decision. The try of an order that ended goes to
+  `fleet_tries` as the highest of its host and service.
+- A stage entered by a heartbeat is claimed first: `UPDATE ... SET entered WHERE version AND entered = <as read>` on
+  `rollouts` or `group_rollouts`, or, at a version with no plan row yet, none there; a claim not taken writes no stage
+  and no line. An operator's `Advance` is unchanged (an edit under the gate on the part read afresh).
+- A halt, a bad mark and the rollback are the stores' changes made in the decision, under the ops (and desired) rows'
+  locks held from the read to the commit: no second decider can read "not halted" in between, so no row compare-and-set
+  is added for them. The rollback's line is the `mark_bad` line written in the same transaction; no new audit action.
+- A decision that does not land (a write refused, the commit failed or of unknown outcome) puts the stores' memory back as it
+  was after the fresh parts were taken in, clears anything it left pending, forgets the parts' versions, and answers the
+  host nothing. A change pending in memory (its commit and its retry at this beat failed) holds back every decision.
+- A beat that finds the gate busy, a lost store, or a decision that fails is answered with no order in the reply's usual
+  shape, not a new status: the host keeps what it runs and asks again at its next beat (no wire change).
+- Over Postgres the quiet time is the rows' (`cluster_quiet`), read in every decision; a coordinator's own start no longer
+  quiets the fleet. It holds back orders, stage entries, the last good version, bad marks and rollbacks; a host's own
+  halt report and an operator's halt are not held back. The code has no "did not come back" deadline, so no
+  `effective_at` is needed.
+- `set_seq`/`set_for` are in no table descriptor: written only by the stamping statements of a desired commit (a new or
+  changed version takes `nextval`, idempotent by `set_for IS DISTINCT FROM`), read with the desired part into memory
+  (`Held.seqs`, never in the files' JSON); a commit that stamped forgets the part's version, so the next request reads it
+  again. The queue orders by `set_seq` first (none before any), then the old keys. The start-time re-stamp runs under the
+  gate before the load: ungrouped rows first by name, then groups by `at_unix`, name, list position and package name,
+  above every number taken; a second start changes nothing.
+- Not built, per instance still: `fleet_canaries`, `fleet_queued_orders` (an operator's abort or clear-record reaches its
+  host through the instance that queued it), `fleet_found` and `fleet_defers` (rebuilt from the beats noted). One instance
+  serves until M10 changes the deploy.
+
 ## 6. M4, as built
 
 The edits, versions, gate and counter of the design's section 6 as the code makes them (`store/edit.rs`,
@@ -83,8 +132,8 @@ The edits, versions, gate and counter of the design's section 6 as the code make
   `store_failed` and keeps the session; a statement's own bounded wait still loses it.
 - A heartbeat's own write is the verdicts' (`Scope::VERDICTS`, `SKIP LOCKED`): refused at once while the gate is held or asked
   for, and made again at the host's next beat. What else a heartbeat writes through the ops store (a halt on a threshold, a
-  stage entered, the last good version) waits for the gate as an operator's edit does until M7 moves it into the deciding
-  transaction.
+  stage entered, the last good version) waited for the gate as an operator's edit does; M7 makes it in the deciding
+  transaction (section 5.3).
 - A memory-first change (a halt, a bad mark, a pause, an abort) is made in an edit too while nothing is pending. One made while
   a change is pending, or while no edit can be begun (the database lost, the gate not free in time), stands in memory as before
   and lands at the next heartbeat's retry, its lines renumbered from the counter when another instance took their numbers. A
@@ -327,6 +376,16 @@ Tests, named (each asserts the behaviour in its name; the PR bodies list them by
   the re-stamp being M7's); `beat_never_overtakes_a_queued_operator_edit`, `operator_halt_waits_for_one_holder_not_for_beats`
   and `stalled_holder_is_terminated_and_gate_is_released` (`gate.rs`), with the operator's side of
   `halt_raised_by_two_instances_is_one_generation_and_one_audit_line` as `a_halt_raised_on_two_instances_is_one_halt_and_one_audit_line`.
+- **Built** (M7), against the service container, in `store/postgres/tests/`: `deciding.rs` (two coordinators):
+  `two_coordinators_never_exceed_max_updating`, `stage_advance_by_racing_instances_is_one_advance_and_one_audit_line`,
+  `halt_raised_by_two_instances_is_one_generation_and_one_audit_line`, `acknowledged_halt_and_desired_change_are_read_by_the_other_coordinators_next_decision`,
+  `order_after_crash_is_returned_again`, `gate_busy_answers_the_beat_with_no_new_order`, `partial_fleet_in_quiet_window_raises_no_halt_and_reverts_nothing`,
+  `database_unreachable_orders_nothing` (no new status: section 5.3), `a_decision_that_does_not_land_orders_nothing_and_keeps_nothing`,
+  `a_change_not_yet_in_the_rows_holds_back_every_decision`; `decide.rs` (the store): `one_host_never_has_two_orders`,
+  `a_stage_is_claimed_by_a_compare_and_set_on_the_plans_row` and the others of that file; `queue_seq.rs`:
+  `queue_follows_set_seq_on_both_tasks`, `set_seq_of_a_row_changed_by_the_release_before_is_restamped_in_queue_order` and
+  the B8 test of `0026` both ways. `rollback_is_committed_before_the_uninstall_is_ordered` is not a test of its own: the
+  gate serializes the two decisions, which the tests above show for orders and halts.
 - T5/T13: each test above has a failure case (the gate removed, the conditional write made unconditional).
 
 Coverage is judged per crate as always (T1); the pool, the ledger and the conditional writes are covered by the

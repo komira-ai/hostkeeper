@@ -166,6 +166,8 @@ mod groups;
 pub use groups::Marks;
 #[path = "fleet_retry.rs"]
 pub mod retry;
+#[path = "fleet_shared.rs"]
+pub(crate) mod shared;
 
 /// Every host the coordinator has heard from since it started.
 #[derive(Clone, Debug)]
@@ -227,6 +229,8 @@ pub struct Fleet {
     /// Every package of every group and its desired state, as of the last take of the lock: the
     /// rollouts one service waits for, across groups ([`crate::queue`]).
     cluster: crate::queue::Cluster,
+    /// What it took in of the fleet's rows of a store other coordinators share ([`shared`]).
+    shared: shared::Shared,
 }
 
 impl Fleet {
@@ -260,6 +264,7 @@ impl Fleet {
             facts: crate::facts::Reported::default(),
             remote_login_probes: crate::remote_login_probe::Probes::default(),
             cluster: crate::queue::Cluster::default(),
+            shared: shared::Shared::default(),
         }
     }
 
@@ -312,11 +317,15 @@ impl Fleet {
         })
     }
 
-    /// Whether the coordinator orders nothing at `now`: within the quiet start (the `quiet` of
-    /// [`Self::new`] after the coordinator's start), or while the store's link is lost.
+    /// Whether the coordinator orders nothing at `now`: while the store's link is lost, and within
+    /// the quiet time: after a gap in the fleet's beats as the rows say it once they were read
+    /// ([`shared`]), else the quiet start (the `quiet` of [`Self::new`] after the start).
     #[must_use]
     pub fn is_quiet(&self, now: Duration) -> bool {
-        self.store_lost || now < self.started.saturating_add(self.quiet)
+        self.store_lost
+            || self
+                .quiet_by_rows(now)
+                .unwrap_or(now < self.started.saturating_add(self.quiet))
     }
 
     /// The try of the next order of `service` for the host `id`: one past the highest try any

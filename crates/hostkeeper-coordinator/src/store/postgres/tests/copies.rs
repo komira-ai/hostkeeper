@@ -116,6 +116,10 @@ fn an_edit_of_any_stale_part_is_made_on_the_rows() {
     );
     label(&a.ops, "host-2", "rack", "r2");
     assert_eq!(labels(&a.ops.state()).len(), 2);
+    // a's set of db took a number for its version, which a's copy does not hold: the desired part
+    // is read again, and then no part is behind.
+    assert_eq!(a.store.stale(), [Part::Desired]);
+    a.desired.refresh();
     assert_eq!(a.store.stale(), []);
 }
 

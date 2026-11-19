@@ -31,6 +31,7 @@ use postgres::error::SqlState;
 
 use super::parts::{self, Known};
 use super::pool::{Lease, Pool};
+use super::queue_seq;
 use super::rows::{Stmt, Val, changes};
 use super::session::describe;
 use super::writer::{Halt, State, Tx, WriteFail, Writer};
@@ -58,13 +59,13 @@ enum Answer {
     Done(Result<BTreeMap<Part, i64>, WriteFail>),
 }
 
-/// What an edit read under its locks.
-struct Opening {
-    fresh: Fresh,
+/// What an edit, or a heartbeat's decision, read under its locks.
+pub(super) struct Opening {
+    pub(super) fresh: Fresh,
     /// The version of each part, as read under its lock, and whether this coordinator's copy
     /// of it was older.
-    read: BTreeMap<Part, (i64, bool)>,
-    next_seq: Option<u64>,
+    pub(super) read: BTreeMap<Part, (i64, bool)>,
+    pub(super) next_seq: Option<u64>,
 }
 
 /// What the caller sends to be committed.
@@ -94,6 +95,10 @@ pub(crate) struct Open {
 /// [`BackendError`]: the store is lost, its locks were not free in time, or a heartbeat's edit
 /// found the gate held; nothing is held.
 pub(super) fn begin(store: &Postgres, scope: Scope) -> Result<Edit, BackendError> {
+    // On the thread of a heartbeat's decision the edit is the decision's.
+    if let Some(line) = super::decide::seated(store) {
+        return super::decide::join(store, line, scope);
+    }
     let inner = &store.inner;
     match inner.link.state() {
         State::Up => {}
@@ -173,7 +178,7 @@ fn waited_out(e: &postgres::Error) -> bool {
 
 /// Takes the locks of `scope` in their order, each waiting at most `wait`, and reads afresh each
 /// part whose version is not the one in `known`.
-fn open(
+pub(super) fn open(
     tx: &mut Tx<'_>,
     scope: Scope,
     known: &BTreeMap<Part, Option<i64>>,
@@ -268,8 +273,17 @@ fn absorb(fresh: &mut Fresh, part: Fresh) {
 /// Writes `planned`: its rows, then the version of each part it wrote, then the counter.
 fn write(tx: &mut Tx<'_>, planned: &Planned) -> Result<BTreeMap<Part, i64>, Halt> {
     run_all(tx, &planned.statements)?;
+    settle(tx, &planned.bumps, planned.next)
+}
+
+/// Moves on the version of each part of `bumps`, and the counter to `next` when there is one.
+pub(super) fn settle(
+    tx: &mut Tx<'_>,
+    bumps: &BTreeSet<Part>,
+    next: Option<i64>,
+) -> Result<BTreeMap<Part, i64>, Halt> {
     let mut bumped = BTreeMap::new();
-    for part in &planned.bumps {
+    for part in bumps {
         let version: i64 = tx
             .query_one(
                 "UPDATE state_versions SET version = version + 1 WHERE part = $1 \
@@ -279,7 +293,7 @@ fn write(tx: &mut Tx<'_>, planned: &Planned) -> Result<BTreeMap<Part, i64>, Halt
             .get(0);
         bumped.insert(*part, version);
     }
-    if let Some(next) = planned.next {
+    if let Some(next) = next {
         tx.execute("UPDATE audit_counter SET next = $1 WHERE id = 1", &[&next])?;
     }
     Ok(bumped)
@@ -307,7 +321,9 @@ pub(crate) fn plan(
     };
     if let Some((before, after)) = change.desired {
         let (b, a) = (state::desired_rows(before)?, state::desired_rows(after)?);
-        part(Part::Desired, changes(&state::DESIRED, &b, &a));
+        let mut written = changes(&state::DESIRED, &b, &a);
+        written.extend(queue_seq::stamps(before, after));
+        part(Part::Desired, written);
     }
     if let Some((before, after)) = change.ops {
         let (b, a) = (state::ops_rows(before)?, state::ops_rows(after)?);
@@ -398,6 +414,13 @@ impl Open {
                     if !stale || self.taken.contains(&part) {
                         known.set(part, version);
                     }
+                }
+                // The numbers it took are in the rows, not in memory: read the part again.
+                if change
+                    .desired
+                    .is_some_and(|(b, a)| queue_seq::stamped(b, a))
+                {
+                    known.forget(Part::Desired);
                 }
                 self.store.reserve(change.audit);
                 Ok(())

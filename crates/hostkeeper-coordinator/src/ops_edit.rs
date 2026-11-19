@@ -21,7 +21,6 @@
 
 use std::io;
 use std::path::PathBuf;
-use std::sync::PoisonError;
 
 use super::{AUDIT_RING, AuditEntry, OpsError, OpsState, OpsStore, Order, announce};
 use crate::audit_file::AuditLine;
@@ -48,7 +47,7 @@ impl OpsStore {
     /// made, and may be waiting for the gate) is not waited for: the change reads its part
     /// afresh, and the next request reads again what is still behind.
     pub(crate) fn refresh(&self) {
-        let Ok(_writer) = self.writing.try_lock() else {
+        let Some(_writer) = self.writing.try_lock() else {
             return;
         };
         if self.pending_changes() {
@@ -109,7 +108,7 @@ impl OpsStore {
         staged: Option<Staged<'_>>,
         edit: impl FnOnce(&mut OpsState) -> Result<Vec<AuditEntry>, E>,
     ) -> Result<Vec<AuditEntry>, E> {
-        let _writer = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
+        let _writer = self.writing.lock();
         #[cfg(test)]
         self.interleaved();
         let mut tx = self.opened(staged.is_some())?;
@@ -153,7 +152,7 @@ impl OpsStore {
         &self,
         edit: impl FnOnce(&mut OpsState) -> Result<Vec<AuditEntry>, E>,
     ) -> Result<(Vec<AuditEntry>, Result<(), OpsError>), E> {
-        let _writer = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
+        let _writer = self.writing.lock();
         #[cfg(test)]
         self.interleaved();
         // With nothing pending the change is made in an edit, on the state as the backend holds

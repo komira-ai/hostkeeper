@@ -341,9 +341,13 @@ fn a_release_costs_one_row_and_an_unchanged_commit_costs_nothing() {
             )
             .expect("a plain set");
     });
+    // A set takes a number for its version that the coordinator's copy reads again before the
+    // next one: not part of what a set costs.
+    desired.refresh();
     let with = statements_of(&store, || {
         set_with(&desired, "2.0", Release::new(targets(), None));
     });
+    desired.refresh();
     let again = statements_of(&store, || {
         set_with(&desired, "2.0", Release::new(targets(), None));
     });

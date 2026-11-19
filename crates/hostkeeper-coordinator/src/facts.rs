@@ -147,6 +147,14 @@ impl Generations {
         *self.raised.lock().unwrap_or_else(PoisonError::into_inner) = facts;
     }
 
+    /// The generations raised, as [`Self::replace`] takes them back.
+    pub(crate) fn copied(&self) -> Facts {
+        self.raised
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
     /// Notes the committed entries `entries`: each that changes what a host's facts say raises
     /// that host's generation to its number.
     pub(crate) fn raise(&self, entries: &[AuditEntry]) {

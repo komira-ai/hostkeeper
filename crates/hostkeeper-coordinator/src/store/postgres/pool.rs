@@ -11,10 +11,17 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use super::session::Worker;
 use super::writer::Writer;
 
-/// The writers and which of them are free.
+/// The writers and which of them are free. The last writer is kept for heartbeats' decisions
+/// ([`super::decide`]): a decision holds it to its end, and a write the deciding thread makes
+/// meanwhile (a record of the enrollment, what a host runs) takes one of the others, so it never
+/// waits for the writer its own decision holds. A coordinator decides one heartbeat at a time.
 pub(crate) struct Pool {
     writers: Vec<Worker<Writer>>,
     free: Mutex<VecDeque<usize>>,
+    /// The decisions' writer, while no decision holds it.
+    deciding: Mutex<Option<usize>>,
+    /// What a decision waiting for its writer is told by when the writer comes back.
+    returned: Condvar,
     freed: Condvar,
     /// How many calls have waited for a free writer: what a test sees a call wait by.
     #[cfg(test)]
@@ -38,16 +45,29 @@ impl Drop for Taken<'_> {
 pub(crate) struct Lease {
     pool: Arc<Pool>,
     index: usize,
+    /// Whether it is the decisions' writer.
+    deciding: bool,
 }
 
 impl Drop for Lease {
     fn drop(&mut self) {
-        self.pool.give_back(self.index);
+        match self.deciding {
+            true => {
+                *self
+                    .pool
+                    .deciding
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner) = Some(self.index);
+                self.pool.returned.notify_one();
+            }
+            false => self.pool.give_back(self.index),
+        }
     }
 }
 
 impl Pool {
-    /// A pool of `writers`, each on a thread of its own named after `name`.
+    /// A pool of `writers`, each on a thread of its own named after `name`, the last kept for
+    /// heartbeats' decisions.
     ///
     /// # Errors
     /// A thread could not be made.
@@ -60,7 +80,9 @@ impl Pool {
             .collect::<io::Result<Vec<_>>>()?;
         Ok(Pool {
             writers,
-            free: Mutex::new((0..count).collect()),
+            free: Mutex::new((0..count.saturating_sub(1)).collect()),
+            deciding: Mutex::new(count.checked_sub(1)),
+            returned: Condvar::new(),
             freed: Condvar::new(),
             #[cfg(test)]
             waited: std::sync::atomic::AtomicUsize::new(0),
@@ -91,6 +113,7 @@ impl Pool {
     /// Gives the writer `index` back.
     fn give_back(&self, index: usize) {
         self.free().push_back(index);
+        // A decision's wait for its own writer shares the condition.
         self.freed.notify_one();
     }
 
@@ -117,6 +140,34 @@ impl Pool {
         let lease = Lease {
             pool: Arc::clone(pool),
             index: pool.take(),
+            deciding: false,
+        };
+        pool.writers[lease.index].post(job).then_some(lease)
+    }
+
+    /// [`Self::lease`] of the decisions' writer, waiting while another decision holds it.
+    pub(crate) fn lease_deciding(
+        pool: &Arc<Pool>,
+        job: impl FnOnce(&mut Writer) + Send + 'static,
+    ) -> Option<Lease> {
+        let mut free = pool.deciding.lock().unwrap_or_else(PoisonError::into_inner);
+        let index = loop {
+            if let Some(index) = free.take() {
+                break index;
+            }
+            #[cfg(test)]
+            pool.waited
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            free = pool
+                .returned
+                .wait(free)
+                .unwrap_or_else(PoisonError::into_inner);
+        };
+        drop(free);
+        let lease = Lease {
+            pool: Arc::clone(pool),
+            index,
+            deciding: true,
         };
         pool.writers[lease.index].post(job).then_some(lease)
     }

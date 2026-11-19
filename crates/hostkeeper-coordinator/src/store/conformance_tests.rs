@@ -346,6 +346,7 @@ fn ring(lines: &[AuditLine]) -> Vec<AuditEntry> {
 fn loaded(backend: &Shared) -> Result<Loaded, String> {
     backend
         .load()
+        .map(Loaded::alike)
         .map_err(|why| format!("the load failed: {why}"))
 }
 

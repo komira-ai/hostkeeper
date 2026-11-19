@@ -16,7 +16,6 @@
 //! ([`Scope::AUDIT`]): it takes neither the gate nor a part.
 
 use std::io;
-use std::sync::PoisonError;
 
 use super::{AuditEntry, OpsError, OpsStore, announce};
 use crate::audit_actions::AuditOnly;
@@ -39,7 +38,7 @@ impl OpsStore {
         node_id: Option<&str>,
         reason: Option<&str>,
     ) -> Result<AuditEntry, OpsError> {
-        let _writer = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
+        let _writer = self.writing.lock();
         self.flush().map_err(unavailable)?;
         let mut entry = AuditEntry::new(by, action.as_str());
         entry.node_id = node_id.map(str::to_owned);

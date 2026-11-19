@@ -17,8 +17,6 @@
 //! (another coordinator committed a change of it since this request read it), memory takes the
 //! rows and the change is refused, to be made again on them ([`Staged::stale`]).
 
-use std::sync::{MutexGuard, PoisonError};
-
 use super::{DesiredStore, Held, Recorded, StoreError};
 use crate::store::{BackendError, Commit, Edit, Part, Scope, Shared};
 
@@ -27,7 +25,7 @@ use crate::store::{BackendError, Commit, Edit, Part, Scope, Shared};
 /// and the edit it was staged in, if any, holds what it locks until it is committed or dropped.
 pub(crate) struct Staged<'a> {
     store: &'a DesiredStore,
-    _writer: MutexGuard<'a, ()>,
+    _writer: crate::store::Writing<'a>,
     edit: Option<Result<Edit, BackendError>>,
     pub(crate) before: Held,
     pub(crate) after: Held,
@@ -67,7 +65,7 @@ impl DesiredStore {
     /// there, with nothing changed yet: memory takes the desired state the edit read afresh
     /// first. An edit that cannot be begun is kept as its error, which the commit answers.
     pub(super) fn staging(&self) -> Staged<'_> {
-        let writer = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
+        let writer = self.writing.lock();
         let mut edit = self.backend.begin(Scope::DESIRED);
         if let Some(held) = edit.as_mut().ok().and_then(Edit::take_desired) {
             *self.lock() = held;
@@ -78,13 +76,13 @@ impl DesiredStore {
     /// A change staged under the writers' lock on memory, to commit with the operations state
     /// in the edit the ops store begins.
     pub(super) fn staging_with_ops(&self) -> Staged<'_> {
-        let writer = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
+        let writer = self.writing.lock();
         self.staged_from(writer, None)
     }
 
     fn staged_from<'a>(
         &'a self,
-        writer: MutexGuard<'a, ()>,
+        writer: crate::store::Writing<'a>,
         edit: Option<Result<Edit, BackendError>>,
     ) -> Staged<'a> {
         let before = self.lock().clone();
@@ -129,7 +127,7 @@ impl DesiredStore {
     /// read (`docs/design/coordinator-multi-instance.md`, section 6, "Invalidation"); not while a
     /// change holds the writers' lock, which reads the part afresh itself.
     pub(crate) fn refresh(&self) {
-        let Ok(_writer) = self.writing.try_lock() else {
+        let Some(_writer) = self.writing.try_lock() else {
             return;
         };
         match self.backend.reload(Part::Desired) {
@@ -140,5 +138,29 @@ impl DesiredStore {
             }
             Err(why) => tracing::warn!(%why, "the desired state could not be read again"),
         }
+    }
+}
+
+impl DesiredStore {
+    /// Takes the writers' lock for a heartbeat's decision, before the decision asks for the gate:
+    /// the store's changes inside the decision take it again on the same thread.
+    pub(crate) fn hold_writers(&self) -> crate::store::Writing<'_> {
+        self.writing.lock()
+    }
+
+    /// Takes `held`, the desired state a heartbeat's decision read afresh under the gate, into
+    /// memory.
+    pub(crate) fn take_decided(&self, held: Held) {
+        *self.lock() = held;
+    }
+
+    /// The desired state in memory, which a decision that does not land puts back.
+    pub(crate) fn copy(&self) -> Held {
+        self.lock().clone()
+    }
+
+    /// Puts back `held`, the desired state before a heartbeat's decision that did not land.
+    pub(crate) fn rewind(&self, held: Held) {
+        *self.lock() = held;
     }
 }

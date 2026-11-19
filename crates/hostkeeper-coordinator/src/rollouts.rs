@@ -38,6 +38,7 @@ use crate::reconcile::{COORDINATOR, entry};
 use crate::service::Coordinator;
 use crate::services::ServiceDef;
 use crate::stages::{Advance, HostState, PlanStage, View, Wait, first_entered, reach};
+use crate::store::decision::StageClaim;
 
 /// Where the update plan of a service stands, as the ops store keeps it. Every field is left out
 /// when it holds nothing.
@@ -161,6 +162,30 @@ pub(crate) fn advance(
         entered(&def.name, &view),
     );
     audit.host_group = group.map(ToString::to_string);
+    // The compare-and-set of the stage (section 5.3 of the multi-instance design): the plan's row
+    // moves on only from the stage this decision read it at, so two coordinators that reached
+    // the same stage enter it once, and write one line.
+    let claim = StageClaim {
+        group: audit.host_group.as_deref(),
+        service,
+        version: want.version.as_str(),
+        from: kept_now
+            .as_ref()
+            .filter(|kept| kept.version.as_ref() == Some(&want.version))
+            .map(|kept| u64::from(kept.entered)),
+        to: u64::from(record.entered),
+    };
+    match ops.backend().claim_stage(&claim) {
+        Ok(true) => {}
+        Ok(false) => {
+            tracing::info!(service = %def.name, "another coordinator entered the plan's stage first");
+            return;
+        }
+        Err(why) => {
+            tracing::error!(service = %def.name, %why, "the plan's next stage was not claimed");
+            return;
+        }
+    }
     match ops.change(Write::BeforeMemory, audit, |state| {
         state.set_rollout_in(group, &def.name, record);
     }) {

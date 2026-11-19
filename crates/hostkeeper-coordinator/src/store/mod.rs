@@ -35,12 +35,16 @@ use crate::ops::{OpsError, OpsState};
 use crate::verdict_file::{self, VerdictsError};
 
 pub(crate) mod beat;
+pub(crate) mod decision;
 mod edit;
 mod fake;
 mod files;
 pub(crate) mod postgres;
+mod writers;
 
+pub(crate) use decision::{Decision, Opened};
 pub(crate) use edit::{Edit, Facts, Fresh, Lock, Part, Scope, Wait};
+pub(crate) use writers::{Writers, Writing};
 
 pub(crate) use fake::Fake;
 #[cfg(test)]
@@ -158,9 +162,33 @@ pub(crate) trait Backend: Send + Sync {
     /// coordinators share (`docs/design/coordinator-multi-instance.md`, section 5.2): the host's
     /// row, unless the beat is older than the one stored, with its bakes and the orders its report
     /// settles. Nothing over a backend one process owns, whose fleet is the one in memory. A beat
-    /// that cannot be kept is logged and answered all the same: no decision reads the rows yet.
+    /// that cannot be kept is logged and answered all the same: the decision that follows reads
+    /// the rows as they are.
     fn keep_beat(&self, beat: beat::HostBeat) {
         let _ = beat;
+    }
+
+    /// Opens a heartbeat's decision ([`decision`]): over a backend other coordinators share, a
+    /// transaction that holds the gate and the decision's parts and has read them and the fleet's
+    /// rows afresh; [`Opened::Alone`] over a backend one process owns.
+    ///
+    /// # Errors
+    /// [`BackendError`]: the decision cannot be made now (the store is lost, a read failed);
+    /// nothing is held, and the heartbeat is ordered nothing.
+    fn decide(&self) -> Result<Opened, BackendError> {
+        Ok(Opened::Alone)
+    }
+
+    /// Claims the stage of `claim` in the decision this thread holds (section 5.3, "Advance a
+    /// stage"): true when the plan's row was where the decision read it and now stands at the new
+    /// stage, false when another decision moved it first. True outside a decision and over a
+    /// backend one process owns.
+    ///
+    /// # Errors
+    /// [`BackendError`]: the claim failed, which ends the decision.
+    fn claim_stage(&self, claim: &decision::StageClaim<'_>) -> Result<bool, BackendError> {
+        let _ = claim;
+        Ok(true)
     }
 }
 
@@ -225,6 +253,16 @@ pub(crate) struct Loaded {
     pub(crate) spent: Vec<(String, u64)>,
     /// The hosts' facts generations, over a backend that keeps them ([`crate::facts`]).
     pub(crate) facts: Option<Facts>,
+}
+
+#[cfg(test)]
+impl Loaded {
+    /// The same, without the queue's numbers a database keeps beside the desired state
+    /// (`set_seq`, a database's alone): what every backend holds alike.
+    pub(crate) fn alike(mut self) -> Loaded {
+        self.desired.seqs.clear();
+        self
+    }
 }
 
 /// Why a backend did not load or commit: the error of the part it failed on, as the store of that

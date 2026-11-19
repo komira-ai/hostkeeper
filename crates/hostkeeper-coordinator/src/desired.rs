@@ -479,6 +479,10 @@ pub(crate) struct Held {
     /// The host groups and their desired versions ([`crate::host_groups`]), in the state file
     /// under `host_groups` only while one is held.
     pub(crate) host_groups: crate::host_groups::HostGroups,
+    /// The number each desired version was set under (`desired.set_seq`, `group_desired.set_seq`),
+    /// by (group, service): the group is none for an ungrouped service. Kept only over a backend
+    /// that numbers them, and never in the state file; a row with no number is not listed.
+    pub(crate) seqs: BTreeMap<(Option<String>, String), i64>,
 }
 
 impl Held {
@@ -553,7 +557,7 @@ pub struct DesiredStore {
     current: Mutex<Held>,
     /// Held across a whole replacement, so that writers wait for each other and not readers:
     /// `current` is only locked to read or to swap, never across the backend's commit.
-    writing: Mutex<()>,
+    writing: crate::store::Writers,
     /// Whether hosts are placed by host group even while no group is held
     /// ([`DesiredStore::by_groups_only`]).
     by_groups: bool,
@@ -617,7 +621,7 @@ impl DesiredStore {
         Self {
             backend,
             current: Mutex::new(held),
-            writing: Mutex::new(()),
+            writing: crate::store::Writers::default(),
             by_groups: false,
         }
     }
@@ -901,7 +905,7 @@ impl DesiredStore {
     /// memory, with what memory changed since laid over it (`docs/design/coordinator-storage.md`,
     /// section 4.4).
     pub(crate) fn take_landed(&self, landing: &crate::store::Landing) {
-        let _writer = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
+        let _writer = self.writing.lock();
         let taken = landing.desired_over(&self.lock());
         if let Some(taken) = taken {
             *self.lock() = taken;

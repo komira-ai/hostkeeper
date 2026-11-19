@@ -421,3 +421,35 @@ async fn an_entry_at_its_default_reads_as_absent() {
         b.coordinator.ops().marks(WEB)
     );
 }
+
+/// Proves: over a store one process owns, decided in memory, an operator's abort queued while the
+/// store's link is lost is not sent until the link is back, and then it is, before any update.
+/// Catches: an operator's order delivered while the store cannot record what it did (over
+/// Postgres a lost store decides nothing at all; over memory the order waits all the same).
+#[tokio::test]
+async fn an_abort_queued_while_the_store_is_lost_waits_for_the_link() {
+    let fake = Fake::new();
+    let rig = farm("orders-abort-lost", &fake).await;
+    rig.coordinator
+        .abort(
+            &operator(),
+            proto::AbortRequest {
+                service: WEB.to_owned(),
+                node_id: "d1".to_owned(),
+                reason: "stop it".to_owned(),
+            },
+        )
+        .expect("the abort is queued");
+    fake.set_health(crate::store::Health::Lost);
+    let (reply, order) = crate::marks_support::ask_typed(&rig, "d1", DAEMON, daemon("1.0"));
+    assert_eq!(
+        (reply, order),
+        (hostkeeper_wire::wire::ServiceReply::Nothing, None)
+    );
+    fake.set_health(crate::store::Health::Up);
+    let (_, order) = crate::marks_support::ask_typed(&rig, "d1", DAEMON, daemon("1.0"));
+    assert!(
+        matches!(order, Some(crate::orders::Order::Abort { .. })),
+        "the abort goes first once the link is back: {order:?}"
+    );
+}

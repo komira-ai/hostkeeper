@@ -9,9 +9,12 @@ use hostkeeper_wire::wire::ServiceReply;
 
 use crate::decide::{Gate, Why};
 use crate::group_decision_support::{Farm, policy};
+use crate::group_scope::GroupScope;
 use crate::live::{Why as LiveWhy, live_elsewhere};
 use crate::marks_support::update;
 use crate::ops::{Halt, HaltOrigin};
+use crate::queue::{Cluster, Entry};
+use crate::services::ServiceDef;
 use crate::testutil::{id, version};
 
 const NOTHING: ServiceReply = ServiceReply::Nothing;
@@ -339,4 +342,86 @@ fn basis_of_first(
     let all = coordinator.desired_for(&basis.services);
     live_elsewhere(&basis.services, &all, "web", fleet, now)
         .map(|held| held.into_iter().map(|(name, _)| name).collect())
+}
+
+fn queued(group: &str, package: &str, at_unix: u64, set_seq: Option<i64>) -> Entry {
+    let mut def = ServiceDef::new(package, &[]);
+    def.scope = Some(GroupScope {
+        group: group.parse().expect("a group name"),
+        live_rollouts: None,
+        max_updating: 1,
+    });
+    Entry {
+        def,
+        want: None,
+        at_unix,
+        set_seq,
+    }
+}
+
+/// The entries as `group/package`, first in line of `cluster` first.
+fn line(cluster: &Cluster, entries: &[Entry]) -> Vec<String> {
+    let mut sorted: Vec<&Entry> = entries.iter().collect();
+    sorted.sort_by_key(|entry| cluster.order(entry));
+    sorted
+        .iter()
+        .map(|entry| format!("{}/{}", entry.def.group().expect("a group"), entry.def.name))
+        .collect()
+}
+
+/// Proves: the number a desired version was set under is the first key of the queue: an entry with
+/// a lower number is ahead of one with a higher number whatever the group's last change, the
+/// group's name or the first-seen stamp say, an entry with no number is ahead of every numbered
+/// one, and entries with the same number fall to the group's last change, then the group's name.
+///
+/// Catches: a queue that orders by what each coordinator saw first, so that two coordinators on
+/// one database disagree, or one that puts a row no release numbered behind the numbered ones.
+#[test]
+fn the_number_a_version_was_set_under_leads_the_queue() {
+    let entries = [
+        queued("a", "late", 100, Some(9)),
+        queued("z", "early", 900, Some(3)),
+        queued("m", "none", 500, None),
+        queued("c", "same", 50, Some(9)),
+        queued("b", "same", 100, Some(9)),
+    ];
+    let seen = Cluster::default().refreshed(entries.to_vec(), Duration::from_secs(1));
+    assert_eq!(
+        line(&seen, &entries),
+        ["m/none", "z/early", "c/same", "a/late", "b/same"]
+    );
+    // Seen first, the entry with the highest number is still behind the lower ones.
+    let first = Cluster::default().refreshed(entries[..1].to_vec(), Duration::from_secs(1));
+    let seen = first.refreshed(entries.to_vec(), Duration::from_secs(2));
+    assert_eq!(
+        line(&seen, &entries),
+        ["m/none", "z/early", "a/late", "c/same", "b/same"],
+        "equal numbers fall to the stamp, the lower numbers stay ahead of it"
+    );
+}
+
+/// Proves: over the files, where no entry has a number, the queue is what it always was: the
+/// first-seen stamp, then the group's last change, the group's name, the package's place in its
+/// group's list and its name.
+///
+/// Catches: a first key that reorders a coordinator no database numbers for.
+#[test]
+fn without_numbers_the_queue_is_the_one_it_was() {
+    let mut listed_later = queued("b", "web", 100, None);
+    listed_later.def.priority = 1;
+    let mut listed_earlier = queued("b", "zed", 100, None);
+    listed_earlier.def.priority = 2;
+    let entries = [
+        queued("a", "web", 300, None),
+        listed_later,
+        listed_earlier,
+        queued("c", "web", 200, None),
+    ];
+    let seen = Cluster::default().refreshed(entries[..1].to_vec(), Duration::from_secs(1));
+    let seen = seen.refreshed(entries.to_vec(), Duration::from_secs(2));
+    assert_eq!(
+        line(&seen, &entries),
+        ["a/web", "b/zed", "b/web", "c/web"],
+        "the entry seen first, then the group's last change, then the earlier listed"
+    );
 }
