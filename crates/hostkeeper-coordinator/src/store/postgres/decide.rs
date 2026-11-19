@@ -512,9 +512,12 @@ impl Open {
     /// Records that the caller took `part`, read afresh, into memory: its copy now carries the
     /// version read under the lock.
     pub(crate) fn taken(&mut self, part: Part) {
-        if let Some((version, _)) = self.read.get(&part) {
-            self.store.inner.known.set(part, *version);
-        }
+        let known = &self.store.inner.known;
+        // Every part of the decision's scope was read under its lock.
+        self.read
+            .get(&part)
+            .iter()
+            .for_each(|(version, _)| known.set(part, *version));
     }
 
     /// Writes `writes` and commits. Each part written carries its new version once the commit
@@ -566,12 +569,7 @@ impl Open {
 
 impl Drop for Open {
     fn drop(&mut self) {
-        let mut seat = locked(&self.store.inner.deciding);
-        if seat
-            .as_ref()
-            .is_some_and(|(_, line)| Arc::ptr_eq(line, &self.line))
-        {
-            *seat = None;
-        }
+        // The seat is this decision's: one thread holds one decision at a time.
+        locked(&self.store.inner.deciding).take_if(|(_, line)| Arc::ptr_eq(line, &self.line));
     }
 }

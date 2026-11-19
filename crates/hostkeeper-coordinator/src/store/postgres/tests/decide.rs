@@ -370,3 +370,44 @@ fn a_decision_that_cannot_read_or_reach_the_database_holds_nothing() {
     );
     assert!(a.store.decide().is_err(), "the store is lost");
 }
+
+/// Proves: a desired change made in a decision (a rollback's, which writes no audit line) lands
+/// with the decision and takes its queue number there; the coordinator's copy of the desired state
+/// is then read again (its number is the rows'), while its ops copy, unchanged, is not.
+/// Catches: a desired change of a decision committed apart from it, or a copy labelled current
+/// although the commit stamped a number memory does not hold.
+#[test]
+fn a_desired_change_in_a_decision_lands_with_it_and_is_read_again() {
+    let db = TestDatabase::new();
+    let a = instance(&db, "a");
+    let decision = deciding(&a);
+    a.desired
+        .set("web", crate::testutil::desired("2.0", 1, 1))
+        .expect("set in the decision");
+    decision.finish(&Writes::default()).expect("it lands");
+    assert_eq!(
+        db.rows("SELECT version, set_seq IS NOT NULL FROM desired WHERE service = 'web'"),
+        [[Some("2.0".to_owned()), Some("t".to_owned())]]
+    );
+    assert_eq!(a.store.stale(), [Part::Desired], "the copy is read again");
+}
+
+/// Proves: a second decision on one store waits for the decisions' session the first holds, and
+/// opens once the first ends.
+/// Catches: two decisions sharing one session (their writes in one transaction), or a second
+/// that never wakes.
+#[test]
+fn a_second_decision_waits_for_the_decisions_session() {
+    let db = TestDatabase::new();
+    let a = instance(&db, "a");
+    let first = deciding(&a);
+    std::thread::scope(|s| {
+        let second = s.spawn(|| matches!(a.store.decide(), Ok(Opened::Deciding(_))));
+        // A progress event, not a time: the second is counted as waiting.
+        while a.store.waited() == 0 {
+            std::thread::yield_now();
+        }
+        drop(first);
+        assert_eq!(second.join().ok(), Some(true));
+    });
+}

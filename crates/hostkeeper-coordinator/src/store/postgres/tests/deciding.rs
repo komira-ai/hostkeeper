@@ -184,12 +184,19 @@ fn race(task: &Task, barrier: &Barrier, hosts: [&str; 4]) -> usize {
 }
 
 /// Proves: a beat that finds the gate held is told nothing new and writes no order; the next beat,
-/// with the gate free, is ordered.
+/// with the gate free, is ordered, a row of another coordinator's that does not read left out.
 /// Catches: a beat that waits for the gate (every beat of the fleet behind one hold), or one
 /// that orders without it.
 #[tokio::test(flavor = "multi_thread")]
 async fn gate_busy_answers_the_beat_with_no_new_order() {
     let pair = Pair::new("", "storage", &["s1"]).await;
+    // A row another coordinator wrote that this build cannot read is left out.
+    pair.database
+        .run(
+            "INSERT INTO fleet_hosts (host_id, role, beat, seen_unix, sent_unix, instance) \
+             VALUES ('s9', 'storage', '\\x6e6f74206a736f6e', 1, 1, 'another')",
+        )
+        .expect("an unreadable row");
     let holder = Holding::start(&pair.database, HOLD_GATE, "COMMIT");
     assert_eq!(
         ask(&pair.a.rig, "s1", "storage", running("1.0")),

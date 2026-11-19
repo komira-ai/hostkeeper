@@ -155,6 +155,9 @@ impl Pool {
             if let Some(index) = free.take() {
                 break index;
             }
+            #[cfg(test)]
+            pool.waited
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             free = pool
                 .returned
                 .wait(free)
