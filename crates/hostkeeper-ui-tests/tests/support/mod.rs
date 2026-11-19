@@ -308,6 +308,9 @@ fn assert_shape(message: MessageDescriptor, value: &Value, what: &str) {
 
 impl Ui {
     /// An engine with every module of the app and the kit, and a gateway with nothing scripted.
+    /// The vendored libraries are not loaded: they draw into a real document, which the engine
+    /// has not, and a page reaches them only through its context (`ctx.openTerminal`), which a
+    /// test fakes.
     pub fn start() -> Ui {
         let loader = Rc::new(MapModuleLoader::new());
         let mut context = Context::builder()
@@ -316,7 +319,7 @@ impl Ui {
             .expect("the engine starts");
         let mut modules: Vec<(String, &str)> = UI_FILES
             .iter()
-            .filter(|f| f.is_script())
+            .filter(|f| f.is_script() && !f.is_vendored())
             .map(|f| (format!("ui/{}", f.path), f.text))
             .collect();
         modules.push(("test/kit.js".to_owned(), KIT));

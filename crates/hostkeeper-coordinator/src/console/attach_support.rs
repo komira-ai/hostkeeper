@@ -21,6 +21,8 @@ use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 
 use super::support::{Fixture, caller};
 use crate::http::{PeerAddr, Surface, handle};
+use crate::login::Login;
+use crate::login_support::{COOKIE, Seconds, counting, settings};
 use crate::service::Coordinator;
 use crate::ssh_terminal_route::Shared;
 use crate::tokens::OperatorTokens;
@@ -67,6 +69,15 @@ pub(crate) struct Live {
 impl Live {
     /// The fixture `name` with at most `max` sessions, each attached within `window`.
     pub(crate) fn with(name: &str, max: usize, window: Duration) -> Self {
+        Self::build(name, max, window, false)
+    }
+
+    /// [`Self::new`] on a coordinator that has a sign-in, whose sessions a browser attaches with.
+    pub(crate) fn signed_in(name: &str) -> Self {
+        Self::build(name, 8, Duration::from_secs(30), true)
+    }
+
+    fn build(name: &str, max: usize, window: Duration, sign_in: bool) -> Self {
         let mut fixture = Fixture::with(name, max, window);
         let tokens_path = fixture.rig.dir.path().join("tokens.toml");
         let live = [("alice", ALICE), ("bob", BOB), ("carol", CAROL)];
@@ -76,6 +87,11 @@ impl Live {
             crate::marks_support::start(&fixture.rig.dir, &fixture.rig.clock, ""),
         );
         coordinator.tokens = OperatorTokens::from_file(&tokens_path).expect("tokens");
+        if sign_in {
+            let clock = Arc::new(Seconds(fixture.rig.clock.clone()));
+            let login = Login::new(settings(), clock, counting()).expect("a sign-in");
+            coordinator = coordinator.with_login(login);
+        }
         Self {
             fixture,
             coordinator: Arc::new(coordinator),
@@ -135,6 +151,43 @@ impl Live {
         client
     }
 
+    /// A session of the signed-in `user` (which must change its password when `must_change`):
+    /// its cookie value and CSRF token.
+    pub(crate) fn browser(&self, user: &str, must_change: bool) -> (String, String) {
+        let (id, view) = self
+            .coordinator
+            .login()
+            .expect("a sign-in")
+            .sessions
+            .create(user, must_change, None)
+            .expect("a session");
+        (id.as_str().to_owned(), view.csrf().to_owned())
+    }
+
+    /// Ends the session whose cookie value is `id`.
+    pub(crate) fn sign_out(&self, id: &str) {
+        let ended = self
+            .coordinator
+            .login()
+            .expect("a sign-in")
+            .sessions
+            .end(id);
+        assert!(ended);
+    }
+
+    /// Attaches to `session` as the browser of the session `browser` (its cookie value and CSRF
+    /// token): the client of the stream, once its `101` came.
+    pub(crate) async fn attach_browser(
+        &self,
+        session: &str,
+        browser: &(String, String),
+    ) -> Client<DuplexStream> {
+        let mut stream = self.connection();
+        let head = send(&mut stream, &upgrade(session, &browser_headers(browser))).await;
+        assert!(head.starts_with("HTTP/1.1 101 "), "{head}");
+        Client { stream }
+    }
+
     /// Attaches to `session` with `token`: the client of the stream, once its `101` came.
     pub(crate) async fn attach(&self, session: &str, token: &str) -> Client<DuplexStream> {
         let mut stream = self.connection();
@@ -148,7 +201,14 @@ impl Live {
     pub(crate) fn attach_unserved(&self, host: &str) -> super::stream::Attached {
         let id = self.open("alice", host);
         let id = hostkeeper_console::session::SessionId::parse(&id).expect("an id");
-        super::route::attach(&self.coordinator, &id, "alice", None).expect("attached")
+        super::route::attach(
+            &self.coordinator,
+            &id,
+            "alice",
+            crate::ssh_tunnel::Credential::Token,
+            None,
+        )
+        .expect("attached")
     }
 
     /// Waits until the session of `host` has left the table and its close line is written.
@@ -212,6 +272,22 @@ pub(crate) fn good_headers(token: &str) -> Vec<(&'static str, String)> {
             format!("hostkeeper.console.v1, bearer.{}", encoded(token)),
         ),
     ]
+}
+
+/// The headers of a good attach of a browser from `https://hk.test`: the session cookie of
+/// `browser` (its cookie value and CSRF token), and the CSRF token as a subprotocol.
+pub(crate) fn browser_headers(browser: &(String, String)) -> Vec<(&'static str, String)> {
+    let (id, csrf) = browser;
+    let mut headers: Vec<_> = good_headers(ALICE)
+        .into_iter()
+        .filter(|(name, _)| *name != "Sec-WebSocket-Protocol")
+        .collect();
+    headers.push(("Cookie", format!("{COOKIE}={id}")));
+    headers.push((
+        "Sec-WebSocket-Protocol",
+        format!("hostkeeper.console.v1, csrf.{csrf}"),
+    ));
+    headers
 }
 
 /// The request of an attach to `session` with `headers`.

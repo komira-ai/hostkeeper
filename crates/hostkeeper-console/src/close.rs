@@ -28,7 +28,8 @@ pub enum Close {
     /// 4007: an operator closed the session (`Console/Close`).
     ClosedByOperator,
     /// 4008: the token of the operator who opened the session is gone, or the console operators
-    /// file no longer names it.
+    /// file no longer names it; for a stream attached with a browser's session, also when that
+    /// session ended (sign-out, expiry).
     TokenRevoked,
     /// 4009: the BMC at the host's address reports another MAC than the host's record.
     AddressMismatch,

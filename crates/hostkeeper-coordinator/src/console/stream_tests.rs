@@ -394,8 +394,14 @@ async fn a_device_or_operator_gone_by_the_attach_closes_the_stream() {
 
     let live = Live::new("stream-no-entry");
     let session = live.open("alice", MAC);
-    let attached =
-        super::route::attach(&live.coordinator, &parse(&session), "alice", None).expect("attached");
+    let attached = super::route::attach(
+        &live.coordinator,
+        &parse(&session),
+        "alice",
+        crate::ssh_tunnel::Credential::Token,
+        None,
+    )
+    .expect("attached");
     std::fs::write(
         &live.fixture.files.operators,
         "[[operator]]\nname = \"bob\"\n",

@@ -1,0 +1,36 @@
+/* The Console page (ui/pages/serialconsole.js): the serial console beside the host's Power and boot
+   section and the open sessions. The terminal in .consolebox is the vendored xterm.js, which draws
+   itself with its own stylesheet (vendor/xterm/xterm.css) and inline style; this file only gives
+   it its place. */
+
+.consolepage {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.consoleside {
+  display: grid;
+  gap: 16px;
+}
+
+.consolebox {
+  box-sizing: border-box;
+  max-width: 100%;
+  margin: 12px 0 0;
+  padding: 8px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: #000;
+}
+
+.consolebox:empty {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .consolepage {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

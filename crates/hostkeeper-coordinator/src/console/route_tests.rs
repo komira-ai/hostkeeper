@@ -8,11 +8,14 @@ use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::{Method, Request, StatusCode, Version};
 
-use super::attach_support::{ALICE, BOB, CAROL, Live, encoded, good_headers, send, upgrade};
+use super::attach_support::{
+    ALICE, BOB, CAROL, Live, browser_headers, encoded, good_headers, send, upgrade,
+};
 use super::support::{MAC, NODE, caller};
 use crate::http::{Surface, handle};
 use crate::testutil::Log;
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
+use tokio::io::AsyncWriteExt as _;
 
 const PATIENCE: Duration = Duration::from_secs(10);
 
@@ -625,4 +628,298 @@ async fn a_connection_that_is_not_handed_over_ends_its_session() {
     );
     assert!(live.last_reason().contains("cause=not_upgraded;"));
     assert_eq!(live.fixture.dials.dialled(), Vec::<String>::new());
+}
+
+/// `browser_headers(browser)` without the headers named `without`, and with `extra`.
+fn browser_changed(
+    browser: &(String, String),
+    without: &[&str],
+    extra: &[(&'static str, &str)],
+) -> Vec<(&'static str, String)> {
+    let mut headers: Vec<_> = browser_headers(browser)
+        .into_iter()
+        .filter(|(name, _)| !without.contains(name))
+        .collect();
+    headers.extend(
+        extra
+            .iter()
+            .map(|(name, value)| (*name, (*value).to_owned())),
+    );
+    headers
+}
+
+/// Asks with `headers` over a served connection: the head and body of the answer.
+async fn asked(live: &Live, session: &str, headers: &[(&'static str, String)]) -> String {
+    let mut stream = live.connection();
+    send(&mut stream, &upgrade(session, headers)).await
+}
+
+/// Checks that `answered` is the refusal `status` with `code`, carrying no subprotocol and none of
+/// the `secrets`.
+fn assert_refused(label: &str, answered: &str, status: StatusCode, code: &str, secrets: &[&str]) {
+    let line = format!("HTTP/1.1 {} ", status.as_u16());
+    assert!(answered.starts_with(&line), "{label}: {answered}");
+    assert!(
+        answered.ends_with(&format!("\r\n\r\n{}", error(code))),
+        "{label}: {answered}"
+    );
+    assert!(
+        !answered
+            .to_ascii_lowercase()
+            .contains("sec-websocket-protocol"),
+        "{label}: {answered}"
+    );
+    for secret in secrets {
+        assert!(!answered.contains(secret), "{label}: {answered}");
+    }
+}
+
+/// Proves: a signed-in browser (a session cookie of the session's opener, and its CSRF token as a
+/// `csrf.` subprotocol, no bearer) attaches: the `101` selects only `hostkeeper.console.v1`,
+/// carries neither the CSRF token nor the cookie, and the stream carries the device's bytes.
+///
+/// Catches: a console the web UI cannot attach to, and a CSRF token echoed as the selected
+/// subprotocol.
+#[tokio::test]
+async fn a_signed_in_browser_attaches_with_its_session_and_csrf_offer() {
+    let live = Live::signed_in("route-browser");
+    let mut mac = live.fixture.dials.connect();
+    let session = live.open("alice", MAC);
+    let browser = live.browser("alice", false);
+    let mut stream = live.connection();
+    let head = send(&mut stream, &upgrade(&session, &browser_headers(&browser))).await;
+    assert!(
+        head.starts_with("HTTP/1.1 101 Switching Protocols\r\n"),
+        "{head}"
+    );
+    let lower = head.to_ascii_lowercase();
+    assert!(
+        lower.contains("\r\nsec-websocket-protocol: hostkeeper.console.v1\r\n"),
+        "{head}"
+    );
+    assert_eq!(lower.matches("sec-websocket-protocol").count(), 1, "{head}");
+    assert!(
+        !head.contains(&browser.1) && !head.contains(&browser.0),
+        "{head}"
+    );
+    let mut client = super::attach_support::Client { stream };
+    mac.write_all(b"hi").await.expect("written");
+    assert_eq!(client.output(2).await, b"hi");
+}
+
+/// Proves: a browser's session without a `csrf.` offer, with a different one (of the same length,
+/// of another length, and longer than any token) or with the offer of another session is 403
+/// `csrf` with no subprotocol and none of the secrets in the answer, and leaves the session
+/// unattached, so the correct attach that follows is a `101`.
+///
+/// Catches: a cross-site page that rides the cookie to attach a console, and a refusal that
+/// echoes the offered token.
+#[tokio::test]
+async fn a_browser_without_the_right_csrf_offer_is_refused_and_not_attached() {
+    let live = Live::signed_in("route-csrf");
+    let _mac = live.fixture.dials.connect();
+    let session = live.open("alice", MAC);
+    let browser = live.browser("alice", false);
+    let other = live.browser("alice", false);
+    let mut same_length = browser.1.clone();
+    same_length.replace_range(..1, if browser.1.starts_with('A') { "B" } else { "A" });
+    let too_long = format!("hostkeeper.console.v1, csrf.{}", "A".repeat(16 * 1024 + 1));
+    let offers = [
+        ("none", "hostkeeper.console.v1".to_owned()),
+        (
+            "another of the same length",
+            format!("hostkeeper.console.v1, csrf.{same_length}"),
+        ),
+        (
+            "a prefix of it",
+            format!("hostkeeper.console.v1, csrf.{}", &browser.1[..10]),
+        ),
+        (
+            "another session's",
+            format!("hostkeeper.console.v1, csrf.{}", other.1),
+        ),
+        ("one too long", too_long),
+    ];
+    for (label, offer) in offers {
+        let headers = browser_changed(
+            &browser,
+            &["Sec-WebSocket-Protocol"],
+            &[("Sec-WebSocket-Protocol", &offer)],
+        );
+        let answered = asked(&live, &session, &headers).await;
+        assert_refused(
+            label,
+            &answered,
+            StatusCode::FORBIDDEN,
+            "csrf",
+            &[&browser.1, &browser.0, &other.1],
+        );
+    }
+    assert!(
+        live.coordinator
+            .console
+            .lock_table()
+            .sessions
+            .get(MAC)
+            .is_some_and(|session| session.attachment.is_none())
+    );
+    let _client = live.attach_browser(&session, &browser).await;
+}
+
+/// Proves: a browser's session is held to the checks after its credential, in order: from another
+/// origin it is 403 `bad_origin` (before its CSRF offer is looked at); one whose password must
+/// change is 403 `password_change_required`; one of a user whose name is no token name is 403
+/// `forbidden`; one of a user the operators file does not name is 403 `no_console_access`; one
+/// of another user than the session's opener is 403 `forbidden`, leaving the session for its
+/// opener. None carries a subprotocol or a secret.
+///
+/// Catches: a console attached from a foreign page, by a user that must change its password, or
+/// by a user other than the one that opened it.
+#[tokio::test]
+async fn a_browser_session_is_held_to_origin_password_name_and_opener() {
+    let live = Live::signed_in("route-browser-checks");
+    let _mac = live.fixture.dials.connect();
+    let session = live.open("alice", MAC);
+    let alice = live.browser("alice", false);
+    let must_change = live.browser("alice", true);
+    let stranger = live.browser("Not A Name", false);
+    let carol = live.browser("carol", false);
+    let bob = live.browser("bob", false);
+    let foreign = browser_changed(
+        &alice,
+        &["Origin", "Sec-WebSocket-Protocol"],
+        &[
+            ("Origin", "https://evil.test"),
+            ("Sec-WebSocket-Protocol", "hostkeeper.console.v1"),
+        ],
+    );
+    let cases = [
+        (
+            "another origin",
+            foreign,
+            StatusCode::FORBIDDEN,
+            "bad_origin",
+        ),
+        (
+            "a password to change",
+            browser_headers(&must_change),
+            StatusCode::FORBIDDEN,
+            "password_change_required",
+        ),
+        (
+            "a name that is no token name",
+            browser_headers(&stranger),
+            StatusCode::FORBIDDEN,
+            "forbidden",
+        ),
+        (
+            "a user the operators file lacks",
+            browser_headers(&carol),
+            StatusCode::FORBIDDEN,
+            "no_console_access",
+        ),
+        (
+            "another user than the opener",
+            browser_headers(&bob),
+            StatusCode::FORBIDDEN,
+            "forbidden",
+        ),
+    ];
+    for (label, headers, status, code) in cases {
+        let answered = asked(&live, &session, &headers).await;
+        assert_refused(
+            label,
+            &answered,
+            status,
+            code,
+            &[&alice.0, &alice.1, &must_change.1, &bob.1, &carol.1],
+        );
+    }
+    let _client = live.attach_browser(&session, &alice).await;
+}
+
+/// Proves: a `bearer.` offer is the credential and the cookie is not read: a bearer that is no
+/// operator's token is 401 `unauthorized` though a live session's cookie and CSRF offer are
+/// there; with no bearer, a cookie of no live session (unknown, or a session that was ended), no
+/// cookie at all, and a cookie beside an `Authorization` header are 401 `unauthorized` too; and a
+/// valid bearer beside a live session's cookie attaches as a token.
+///
+/// Catches: a session that rescues a bad token, and a bearer that needs the CSRF token.
+#[tokio::test]
+async fn a_bearer_offer_is_read_before_the_cookie_and_no_credential_is_401() {
+    let live = Live::signed_in("route-browser-order");
+    let _mac = live.fixture.dials.connect();
+    let session = live.open("alice", MAC);
+    let browser = live.browser("alice", false);
+    let ended = live.browser("alice", false);
+    live.sign_out(&ended.0);
+    let bogus = format!(
+        "hostkeeper.console.v1, csrf.{}, bearer.{}",
+        browser.1,
+        encoded("no-such-token-0123456789abcdef")
+    );
+    let unknown = ("cookie", "__Host-hk_session=unknown".to_owned());
+    let cases = [
+        (
+            "an invalid bearer beside a live session",
+            browser_changed(
+                &browser,
+                &["Sec-WebSocket-Protocol"],
+                &[("Sec-WebSocket-Protocol", &bogus)],
+            ),
+        ),
+        ("an ended session", browser_headers(&ended)),
+        (
+            "an unknown cookie",
+            browser_changed(&browser, &["Cookie"], &[("Cookie", &unknown.1)]),
+        ),
+        ("no cookie", browser_changed(&browser, &["Cookie"], &[])),
+        (
+            "an Authorization header beside the cookie",
+            browser_changed(
+                &browser,
+                &[],
+                &[("Authorization", &format!("Bearer {ALICE}"))],
+            ),
+        ),
+    ];
+    for (label, headers) in cases {
+        let answered = asked(&live, &session, &headers).await;
+        assert_refused(
+            label,
+            &answered,
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+            &[&browser.0, &browser.1],
+        );
+    }
+    let with_both = browser_changed(
+        &browser,
+        &["Sec-WebSocket-Protocol"],
+        &[(
+            "Sec-WebSocket-Protocol",
+            &format!("hostkeeper.console.v1, bearer.{}", encoded(ALICE)),
+        )],
+    );
+    let head = asked(&live, &session, &with_both).await;
+    assert!(head.starts_with("HTTP/1.1 101 "), "{head}");
+}
+
+/// Proves: on a coordinator with no sign-in a cookie is no credential: with or without a `csrf.`
+/// offer, no bearer is 401 `unauthorized`.
+///
+/// Catches: a cookie read where no sign-in exists.
+#[tokio::test]
+async fn a_coordinator_with_no_sign_in_takes_no_cookie() {
+    let live = Live::new("route-no-sign-in");
+    let session = live.open("alice", MAC);
+    let browser = ("some-session".to_owned(), "some-csrf".to_owned());
+    let answered = asked(&live, &session, &browser_headers(&browser)).await;
+    assert_refused(
+        "no sign-in",
+        &answered,
+        StatusCode::UNAUTHORIZED,
+        "unauthorized",
+        &[],
+    );
 }

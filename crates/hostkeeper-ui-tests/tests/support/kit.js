@@ -53,10 +53,19 @@ export const NOW = 1800000000;
 
 // A page context over `client` that records what the page does. `answers` are the operator's
 // replies to the page's questions, in order; a question beyond them is answered no. Its clock
-// reads `now` (NOW when absent).
+// reads `now` (NOW when absent). `leave()` runs what the page asked to have run when it is left
+// (`ctx.onLeave`), as the app does when the operator goes to another page or signs out.
 export function recorder(client, params, answers, now) {
-  const seen = { reports: [], refreshes: 0, navigations: [], questions: [], shown: [], repeats: [], sockets: [] };
+  const seen = {
+    reports: [], refreshes: 0, navigations: [], questions: [], shown: [], repeats: [], sockets: [], terminals: [],
+  };
   const left = (answers || []).slice();
+  const leavers = [];
+  const leave = () => {
+    for (const run of leavers.splice(0)) {
+      run();
+    }
+  };
   const ctx = {
     api: client,
     params: params || {},
@@ -68,10 +77,12 @@ export function recorder(client, params, answers, now) {
       return now === undefined ? NOW : now;
     },
     // A socket the test drives: nothing arrives by itself. The test calls `handlers.open()`,
-    // `handlers.message(frame)` (a string, or a Uint8Array) and `handlers.close()` itself; what the
-    // page sends is kept in `sent` (`{text}` or `{bytes}`), and each `close()` is counted.
-    openSocket(path, handlers) {
-      const socket = { path, handlers, sent: [], closes: 0 };
+    // `handlers.message(frame)` (a string, or a Uint8Array) and `handlers.close(closed)` itself;
+    // what the page sends is kept in `sent` (`{text}` or `{bytes}`), each `close()` is counted, and
+    // the subprotocols offered are kept in `protocols` (null when none). The record itself is the
+    // opened socket's `socket`, what the app hands a terminal.
+    openSocket(path, handlers, protocols) {
+      const socket = { path, handlers, protocols: protocols === undefined ? null : protocols, sent: [], closes: 0 };
       seen.sockets.push(socket);
       return {
         send(data) {
@@ -80,7 +91,29 @@ export function recorder(client, params, answers, now) {
         close() {
           socket.closes += 1;
         },
+        socket,
       };
+    },
+    // A terminal that records what the page does with it: the socket it was given (`socket`, the
+    // socket's record), the `name` of each element it was put in (`into`), and its focuses and
+    // disposals.
+    openTerminal(element, opened) {
+      const terminal = { socket: opened.socket, into: [element.attributes["name"]], focuses: 0, disposes: 0 };
+      seen.terminals.push(terminal);
+      return {
+        show(into) {
+          terminal.into.push(into.attributes["name"]);
+        },
+        focus() {
+          terminal.focuses += 1;
+        },
+        dispose() {
+          terminal.disposes += 1;
+        },
+      };
+    },
+    onLeave(run) {
+      leavers.push(run);
     },
     navigate(name, to) {
       seen.navigations.push({ name, params: to || {} });
@@ -104,7 +137,7 @@ export function recorder(client, params, answers, now) {
       };
     },
   };
-  return { ctx, seen };
+  return { ctx, seen, leave };
 }
 
 // Every element of a view tree, depth first.

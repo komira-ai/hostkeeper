@@ -142,8 +142,9 @@ place the files the flags name:
   `console-ipmi-privilege` (`administrator`), `console-ipmi-timeout-s` (1), `console-ipmi-retries`
   (2), `console-attach-s` (30), `console-max-sessions` (8), `console-idle-s` (1800, a stream that
   carries no byte either way for that long closes), `console-total-s` (28800, the longest a stream
-  stays attached) and `console-connect-timeout-s` (5, the dial of a Mac's Screen Sharing on TCP
-  5900) have defaults and need no key. A console stream is the WebSocket
+  stays attached), `console-connect-timeout-s` (5, the dial of a Mac's Screen Sharing on TCP
+  5900) and `console-quiet-s` (10, how long the Console page waits for a serial console's first
+  byte before it says that no output came yet) have defaults and need no key. A console stream is the WebSocket
   `GET /console/v1/stream/<session>` on the private listener, which `Console/Open` hands out.
 - **Writable by the coordinator:** the state files and the CA's key, under
   `/var/lib/hostkeeper-coordinator`.

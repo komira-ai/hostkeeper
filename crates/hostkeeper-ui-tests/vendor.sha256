@@ -2,3 +2,12 @@
 # digits, two spaces, the path under ui/). Every file under ui/vendor/ has a line here and every line
 # names a file there (`cargo test -p hostkeeper-ui-tests --test sources`), so a change to a vendored
 # library is a change to this file. Above each library's lines: its name, version and licence.
+
+# xterm.js 5.5.0 (MIT): the npm package @xterm/xterm 5.5.0, files lib/xterm.js, css/xterm.css and LICENSE, unchanged.
+1f991ac3b4b283ebf96e60ae23a00a52765dd3a2e46fa6fdda9f1aab032f7495  vendor/xterm/xterm.js
+ba8e6985669488981ccf40c0cefe3aba80722cb6c92de7ad628b0bd717faf2b6  vendor/xterm/xterm.css
+b569f629d00f2626a8100df2a1798210535621e42164dfd426a6fe5aac7b0ccd  vendor/xterm/LICENSE
+
+# xterm.js addon-attach 0.11.0 (MIT): the npm package @xterm/addon-attach 0.11.0, files lib/addon-attach.js and LICENSE, unchanged.
+af810fa330a1503cf3c305a0a68adc3b4361671fa58ec472b0fae8e59a7c3b66  vendor/xterm-addon-attach/addon-attach.js
+689ceb10716bd7a87a804c14951d7c2b818cbd60aab83d540902470ce3b13444  vendor/xterm-addon-attach/LICENSE

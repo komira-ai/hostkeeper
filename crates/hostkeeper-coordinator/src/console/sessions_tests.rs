@@ -32,6 +32,35 @@ fn list(fixture: &Fixture, who: &str) -> Vec<proto::ConsoleSession> {
         .sessions
 }
 
+/// Proves: `Open` tells the page how long to wait for a serial console's first byte, the console's
+/// quiet time (the default 10 seconds, and `--console-quiet-s` once set) in `quiet_secs`, and 0
+/// for a Mac's screen, whatever the quiet time is.
+///
+/// Catches: a quiet time the page is never told, or one told for a screen that has no serial
+/// port.
+#[test]
+fn open_tells_a_serial_page_how_long_to_wait_for_a_first_byte_and_a_screen_zero() {
+    let mut fixture = Fixture::new("console-open-quiet");
+    let quiet = |fixture: &Fixture, host: &str| {
+        let answer = fixture
+            .rig
+            .coordinator
+            .console_open(&caller("alice"), &open(host, "look"))
+            .expect("opened");
+        fixture
+            .rig
+            .coordinator
+            .console_close(&caller("alice"), &close(host))
+            .expect("closed");
+        answer.quiet_secs
+    };
+    assert_eq!(quiet(&fixture, NODE), 10);
+    assert_eq!(quiet(&fixture, MAC), 0);
+    fixture.rig.coordinator.console.quiet = Duration::from_secs(45);
+    assert_eq!(quiet(&fixture, NODE), 45);
+    assert_eq!(quiet(&fixture, MAC), 0);
+}
+
 /// Proves: opening a Linux server's console answers a serial session with a 64-digit id and the
 /// attach window, writes one `console_open` line with the session and its kind after the reason,
 /// shows the session in `List` (without its id), and contacts no device; a Mac's is a screen.
@@ -50,6 +79,7 @@ fn an_open_session_is_listed_and_audited_without_contacting_the_device() {
             kind: proto::ConsoleKind::Serial.into(),
             session: session_id(1),
             expires_in_secs: 30,
+            quiet_secs: 10,
         })
     );
     let screen = coordinator.console_open(&caller("alice"), &open(MAC, "login stuck"));
