@@ -22,7 +22,10 @@
 //! connection counts against it until the upgraded socket ends ([`Hold`]). A console stream
 //! ([`crate::console`]) also takes its upgraded connection off the patience rule ([`Patience`]): a
 //! write the browser does not read is not cut after a patience, and the stream counts against
-//! `--console-max-sessions` instead.
+//! `--console-max-sessions` instead. At the stop ([`crate::graceful`]) the heartbeat, private and
+//! LAN listeners accept no more, and each of their connections is told to finish: an HTTP/2 one
+//! goes away as it does after its patience, an HTTP/1.1 one closes after the request in flight,
+//! and an upgraded one ends with its socket.
 
 use std::convert::Infallible;
 use std::io;
@@ -49,6 +52,7 @@ use tokio_rustls::TlsAcceptor;
 
 use crate::console::ConsoleFiles;
 use crate::enrollment::Enrollment;
+use crate::graceful::Graceful;
 use crate::grpc::route;
 use crate::http::{Peer, PeerAddr, Surface};
 use crate::operator_keys::OperatorKeys;
@@ -118,10 +122,11 @@ pub fn accept_tcp(
     }
 }
 
-/// Serves `listener` for `coordinator` for as long as the future is polled. A client gets
-/// `patience` for its handshake, again for its request head, again for its request body and
-/// again for each write of a response that it does not read, and at most `max_connections` are served at once (an
-/// upgraded socket is served until it ends). It never returns.
+/// Serves `listener` for `coordinator` for as long as the future is polled, for a listener that
+/// is never told to stop. A client gets `patience` for its handshake, again for its request head,
+/// again for its request body and again for each write of a response that it does not read, and
+/// at most `max_connections` are served at once (an upgraded socket is served until it ends). It
+/// never returns.
 pub fn serve<A, F, S>(
     listener: Listener<A>,
     coordinator: Arc<Coordinator>,
@@ -133,11 +138,37 @@ where
     F: Future<Output = io::Result<S>> + Send,
     S: AsyncRead + AsyncWrite + Remote + Unpin + Send + 'static,
 {
-    serve_with_slots(
+    serve_until_stopped(
+        listener,
+        coordinator,
+        patience,
+        max_connections,
+        Graceful::default(),
+    )
+}
+
+/// [`serve`] for a listener of `graceful` (the heartbeat, private and LAN ones of a coordinator
+/// that stops): each connection is counted as open on it while it is served, and is told to finish
+/// when it is told to stop ([`crate::graceful`]). It never returns; the listener's accepting ends
+/// by [`crate::graceful::accept_until_stopped`] dropping it.
+pub(crate) fn serve_until_stopped<A, F, S>(
+    listener: Listener<A>,
+    coordinator: Arc<Coordinator>,
+    patience: Duration,
+    max_connections: usize,
+    graceful: Graceful,
+) -> impl Future<Output = Infallible>
+where
+    A: FnMut() -> F + Send,
+    F: Future<Output = io::Result<S>> + Send,
+    S: AsyncRead + AsyncWrite + Remote + Unpin + Send + 'static,
+{
+    serve_counted(
         listener,
         coordinator,
         patience,
         Arc::new(Semaphore::new(max_connections)),
+        graceful,
     )
 }
 
@@ -154,31 +185,51 @@ where
     F: Future<Output = io::Result<S>> + Send,
     S: AsyncRead + AsyncWrite + Remote + Unpin + Send + 'static,
 {
+    serve_counted(listener, coordinator, patience, slots, Graceful::default()).await
+}
+
+/// [`serve_with_slots`] counting its connections on `graceful`.
+async fn serve_counted<A, F, S>(
+    listener: Listener<A>,
+    coordinator: Arc<Coordinator>,
+    patience: Duration,
+    slots: Arc<Semaphore>,
+    graceful: Graceful,
+) -> Infallible
+where
+    A: FnMut() -> F + Send,
+    F: Future<Output = io::Result<S>> + Send,
+    S: AsyncRead + AsyncWrite + Remote + Unpin + Send + 'static,
+{
     let Listener {
         accept,
         tls,
         surface,
     } = listener;
-    accept_each(accept, slots, move |stream| {
-        connection(
+    accept_each(accept, slots, graceful, move |stream, graceful| {
+        connection_with(
             stream,
-            tls.clone(),
+            tls.config(),
             surface,
             Arc::clone(&coordinator),
             patience,
+            graceful,
         )
     })
     .await
 }
 
 /// Accepts the connections `accept` yields and serves each on a task of its own with
-/// `serve_one`, holding one of `slots` for each while it is served: with none free, clients
-/// queue in the kernel's backlog. A failed accept is logged and tried again after a pause. It
-/// never returns.
+/// `serve_one` (which is given `graceful`, to end the connection by when it is told to stop),
+/// holding one of `slots` for each while it is served and counting it as open on `graceful`
+/// from the moment it is accepted: with no slot free, clients queue in the kernel's backlog. A
+/// failed accept is logged and tried again after a pause. It never returns; the caller drops it
+/// to stop accepting, and the connections already accepted go on on their tasks.
 pub(crate) async fn accept_each<A, F, S, C>(
     mut accept: A,
     slots: Arc<Semaphore>,
-    mut serve_one: impl FnMut(S) -> C,
+    graceful: Graceful,
+    mut serve_one: impl FnMut(S, Graceful) -> C,
 ) -> Infallible
 where
     A: FnMut() -> F + Send,
@@ -191,10 +242,14 @@ where
         let slot = Arc::clone(&slots).acquire_owned().await.ok();
         match accept().await {
             Ok(stream) => {
-                let serving = serve_one(stream);
+                // Counted before the spawn, with no await between the accept and here: a stop
+                // that drops this loop leaves no accepted connection uncounted.
+                let open = graceful.open();
+                let serving = serve_one(stream, graceful.clone());
                 tokio::spawn(async move {
                     serving.await;
                     drop(slot);
+                    drop(open);
                 });
             }
             Err(why) => {
@@ -383,16 +438,30 @@ pub async fn connection<S>(
 ) where
     S: AsyncRead + AsyncWrite + Remote + Unpin + Send + 'static,
 {
-    connection_with(stream, tls.config(), surface, coordinator, patience).await;
+    connection_with(
+        stream,
+        tls.config(),
+        surface,
+        coordinator,
+        patience,
+        Graceful::default(),
+    )
+    .await;
 }
 
-/// [`connection`] over the configuration `config`, which the caller took for this connection.
+/// [`connection`] over the configuration `config`, which the caller took for this connection,
+/// and told to finish once `graceful` is told to stop: an HTTP/2 connection goes away as it does
+/// after its patience (no new stream; the calls in flight finish, a held wait keeps it until the
+/// wait ends), an HTTP/1.1 connection closes after the request in flight (one that is idle closes
+/// at once), and an upgraded one is left to its socket. A connection still in its TLS handshake
+/// at the stop finishes it by its patience and is told then.
 pub(crate) async fn connection_with<S>(
     stream: S,
     config: Arc<ServerConfig>,
     surface: Surface,
     coordinator: Arc<Coordinator>,
     patience: Duration,
+    graceful: Graceful,
 ) where
     S: AsyncRead + AsyncWrite + Remote + Unpin + Send + 'static,
 {
@@ -440,14 +509,23 @@ pub(crate) async fn connection_with<S>(
             .keep_alive_interval(patience)
             .keep_alive_timeout(patience)
             .serve_connection(io, service);
-        let mut serving = std::pin::pin!(serving);
-        // An HTTP/2 connection takes new calls for one patience: then it is told to go away
-        // (no new stream; the calls in flight finish), and dropped one patience later, so an
-        // idle client that answers pings cannot keep a slot of the listener. A held wait keeps
-        // it: it is dropped one patience after the last held wait on it ends.
-        match tokio::time::timeout(patience, serving.as_mut()).await {
-            Ok(ended) => ended,
-            Err(_) => {
+        let mut serving = pin!(serving);
+        // An HTTP/2 connection takes new calls for one patience, or until the stop: then it is
+        // told to go away (no new stream; the calls in flight finish), and dropped one patience
+        // later, so an idle client that answers pings cannot keep a slot of the listener. A held
+        // wait keeps it: it is dropped one patience after the last held wait on it ends.
+        let ended = match select(
+            pin!(tokio::time::timeout(patience, serving.as_mut())),
+            pin!(graceful.stopped()),
+        )
+        .await
+        {
+            Either::Left((Ok(ended), _)) => Some(ended),
+            Either::Left((Err(_), _)) | Either::Right(((), _)) => None,
+        };
+        match ended {
+            Some(ended) => ended,
+            None => {
                 serving.as_mut().graceful_shutdown();
                 unless(waits.quiet_for(patience), serving)
                     .await
@@ -455,12 +533,25 @@ pub(crate) async fn connection_with<S>(
             }
         }
     } else {
-        http1::Builder::new()
+        let serving = http1::Builder::new()
             .timer(TokioTimer::new())
             .header_read_timeout(patience)
             .serve_connection(io, service)
-            .with_upgrades()
-            .await
+            .with_upgrades();
+        let mut serving = pin!(serving);
+        // At the stop an HTTP/1.1 connection closes after the request in flight; one that is
+        // idle closes at once. One upgraded before the stop has ended here already.
+        let ended = match select(serving.as_mut(), pin!(graceful.stopped())).await {
+            Either::Left((ended, _)) => Some(ended),
+            Either::Right(((), _)) => None,
+        };
+        match ended {
+            Some(ended) => ended,
+            None => {
+                serving.as_mut().graceful_shutdown();
+                serving.await
+            }
+        }
     };
     if let Err(why) = served {
         tracing::debug!(%why, "a connection ended badly");

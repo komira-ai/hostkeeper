@@ -16,6 +16,7 @@ use rustls::pki_types::ServerName;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use super::Shared;
+use crate::graceful::Graceful;
 use crate::http::{Surface, handle};
 use crate::listen::tests::{connector, tls_material};
 use crate::listen::{CLIENT_PATIENCE, accept_each, connection};
@@ -467,15 +468,20 @@ async fn an_upgraded_connection_holds_its_slot_until_the_terminal_ends() {
         }
     };
     let coordinator = Arc::clone(&site.rig.coordinator);
-    let accepting = tokio::spawn(accept_each(accept, Arc::clone(&slots), move |stream| {
-        connection(
-            stream,
-            source.clone(),
-            Surface::Control,
-            Arc::clone(&coordinator),
-            CLIENT_PATIENCE,
-        )
-    }));
+    let accepting = tokio::spawn(accept_each(
+        accept,
+        Arc::clone(&slots),
+        Graceful::default(),
+        move |stream, _| {
+            connection(
+                stream,
+                source.clone(),
+                Surface::Control,
+                Arc::clone(&coordinator),
+                CLIENT_PATIENCE,
+            )
+        },
+    ));
     let mut tls = connector(&ca, &[b"http/1.1"])
         .connect(ServerName::try_from("localhost").expect("a name"), client)
         .await

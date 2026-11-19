@@ -316,7 +316,11 @@ fn the_tunnel_flags_are_checked_at_start() {
 fn a_stop_with_no_tunnel_open_ends_at_once() {
     let database = Database::new();
     let files = Files::new("ssh-start-stop");
-    let args = ssh_args(&files, &database, &[("--ssh-drain-s", "3600")]);
+    let args = ssh_args(
+        &files,
+        &database,
+        &[("--ssh-drain-s", "3600"), ("--drain-delay-secs", "0")],
+    );
     let bound = Arc::new(Mutex::new(Vec::new()));
     let log = Arc::clone(&bound);
     let bind = move |addr: SocketAddr| {

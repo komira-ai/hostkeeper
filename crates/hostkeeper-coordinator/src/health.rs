@@ -1,12 +1,14 @@
-//! The health listener of `serve --health-listen` (`docs/design/two-programs.md`, section 2.7):
-//! plain HTTP/1.1 on a loopback address, with no TLS and no token, for a probe on the
-//! coordinator's own machine (an orchestrator's HTTP probe, the machine's monitoring). The image
-//! has no shell and no client, so the probe runs outside the container, and there is no verb.
+//! The health listener of `serve --health-listen` (`docs/design/two-programs.md`, section 2.7,
+//! and `docs/design/coordinator-multi-instance.md`, section 11): plain HTTP/1.1 with no TLS and no
+//! token, for a probe on the coordinator's own machine (an orchestrator's HTTP probe, the
+//! machine's monitoring) on a loopback address, or for the edge's check on the address of one
+//! interface (a wildcard with `--health-listen-wildcard`). The image has no shell and no client,
+//! so the probe runs outside the container, and there is no verb.
 //!
 //! It answers `GET` and `HEAD` of `/healthz` and of `/readyz`, and `404 not_found` to any other
 //! path or method; a `HEAD` is answered the status and the body's length, with no body. The body
 //! is the token and nothing else: no version, no host, no count. An answer reads memory only and
-//! writes no audit line (`docs/design/service-update-contract.md`, section 2).
+//! writes no audit line.
 //!
 //! `/readyz` is whether this coordinator takes traffic, which the edge checks: `200 ok` when every
 //! listener the flags name is bound and serving and the store takes writes, and `503` with one
@@ -18,6 +20,12 @@
 //! moment every listener is bound, whatever the database does and while the coordinator drains, and
 //! `503 starting` before. A database that does not answer, or a stop in progress, must not have
 //! the orchestrator kill a coordinator that is doing what it should.
+//!
+//! The health listener is the one listener the stop does not close: after `--drain-delay-secs` the
+//! heartbeat, private and LAN listeners stop accepting and the coordinator waits for the
+//! connections they hold ([`crate::graceful`]), and this listener answers `/healthz` `200` and
+//! `/readyz` `503 draining` meanwhile, until the process exits. Its own connections are not
+//! waited for.
 //!
 //! The listener has the limits of the others ([`crate::listen`]): at most
 //! [`crate::listen::MAX_CONNECTIONS`] connections at once, the patience for a request head and
@@ -40,6 +48,7 @@ use hyper_util::rt::{TokioIo, TokioTimer};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Semaphore;
 
+use crate::graceful::Graceful;
 use crate::listen::{WriteDeadline, accept_each};
 use crate::service::Coordinator;
 use crate::store::Health;
@@ -253,10 +262,13 @@ where
     F: Future<Output = io::Result<S>> + Send,
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
+    // Its connections are counted on a `Graceful` of its own that nothing stops: the health
+    // listener answers until the process exits, and the stop does not wait for its connections.
     accept_each(
         accept,
         Arc::new(Semaphore::new(max_connections)),
-        move |stream| connection(stream, Arc::clone(&coordinator), serving.clone(), patience),
+        Graceful::default(),
+        move |stream, _| connection(stream, Arc::clone(&coordinator), serving.clone(), patience),
     )
 }
 
