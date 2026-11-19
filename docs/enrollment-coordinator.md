@@ -12,7 +12,8 @@ critical: the URI of the fixed host role `host`, the coordinator's `--host-role-
 default `urn:hostkeeper:host-role:`) followed by `host`, so `urn:hostkeeper:host-role:host`, and
 one DNS name, the host id, which a server that trusts this CA reads the host from
 ([docs/design/host-identity.md](design/host-identity.md)); its extended key usage is `clientAuth`
-alone. A certificate issued before the DNS name existed has none until the host renews it. The role
+alone. A certificate issued before the DNS name existed has none until the host renews it, which a
+daemon that knows the DNS name does at its start ([operations](operations/enrollment.md#renewal)). The role
 means nothing and is the same for every host: the coordinator reads who a host is from its host
 id and its key, and which host group it is in from its enrollment record
 ([docs/design/hostgroups.md](design/hostgroups.md) section 1.2), never from its certificate. A

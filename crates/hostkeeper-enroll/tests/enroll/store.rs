@@ -432,11 +432,25 @@ fn a_generation_that_does_not_hold_together_stops_the_step() {
     crate::support::write_private(&key, &pkcs8(&signing_key(0x5a)));
     assert!(matches!(enroller.run_once(), Err(Error::Corrupt(1))));
 
+    // A bundle of another CA is the host's certificate of another CA: the enrollment does not
+    // read it as the host's, and the step returns with its key, `renewal_of` the host
+    // (`reissue.rs`); this fake coordinator still holds the key's approval and answers at once.
     let world = World::new("other-ca");
     let mut enroller = world.enrolled();
     let other = crate::support::Ca::new(0x5b);
     fs::write(world.pki().join("gen-1/ca.pem"), &other.pem).expect("ca");
-    assert!(matches!(enroller.run_once(), Err(Error::Corrupt(1))));
+    assert!(matches!(
+        enroller.enrollment(),
+        hostkeeper_enroll::Enrollment::Unreadable(_)
+    ));
+    let step = enroller.run_once();
+    assert!(matches!(step, Ok(Outcome::Enrolled(_))), "{step:?}");
+    let c = world.coordinator();
+    assert!(c.renews.is_empty());
+    assert_eq!(
+        c.enrolls.last().and_then(|r| r.renewal_of.clone()),
+        hostkeeper_enroll::HostId::new(HOST)
+    );
 
     let world = World::new("missing-ca");
     let mut enroller = world.enrolled();
