@@ -78,9 +78,9 @@ pub enum StartError {
         /// Why it is refused.
         reason: &'static str,
     },
-    /// `--health-listen` is not a loopback address.
+    /// `--health-listen` is a wildcard address, and `--health-listen-wildcard` is not given.
     #[error(
-        "--health-listen: {0} is not a loopback address; the health listener answers with no token and no TLS, so name an address of 127.0.0.0/8 or ::1"
+        "--health-listen: {0} is a wildcard address; the health listener answers with no token and no TLS, so name a loopback address or the address of one interface, or give --health-listen-wildcard in a network namespace whose interfaces are loopback and one private network"
     )]
     HealthListen(SocketAddr),
     /// The allow-list of CI's OIDC token is refused.

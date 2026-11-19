@@ -1,7 +1,7 @@
 # The coordinator as N instances: measurements, model check, compatibility and tests
 
 Companion of [coordinator-multi-instance.md](coordinator-multi-instance.md) (the as-built choices of its section 4's M3, of
-its section 5's M6, of its section 6's M4 and of its sections 8 and 9's M8, the measurements of its section 7, and its sections 14 and 15, moved here so that file stays under 1000 lines, R12). Section numbers are kept; "section n" in the text below refers
+its section 5's M6, of its section 6's M4, of its sections 8 and 9's M8, of its section 11's M9, the measurements of its section 7, and its sections 14 and 15, moved here so that file stays under 1000 lines, R12). Section numbers are kept; "section n" in the text below refers
 to that document.
 
 ## 4. The rest of M3, as built
@@ -10,7 +10,7 @@ The choices the design's section 4 leaves open, as the code makes them (`store/p
 `migrate.rs`, `0022_instances.sql`, `config_database.rs`):
 
 - A write takes the session that has been free longest, so the sessions take turns. Any session found lost makes the whole
-  instance lost (every write refused at once, `/healthz` 503 `store_unreachable`) until the next heartbeat's revival, which runs
+  instance lost (every write refused at once, `/readyz` 503 `store_unreachable`) until the next heartbeat's revival, which runs
   on every session's thread: a session that is up answers one `SELECT 1` and is kept, one that is gone, or found gone so, is
   opened again with the shared lock and settles its own commit of unknown outcome. A writer whose thread is gone stops the
   store for good at that revival.
@@ -255,6 +255,28 @@ The choices sections 8 and 9 leave open, as the code makes them (`store/postgres
 - The initial-admin file's writes of a `users` row lock the `accounts` row of `state_versions` and move its version on when
   they change the row, so every coordinator reads its copy of the accounts again (M4's rule of section 6).
 
+## 11. Health and drain, as built (M9)
+
+The choices section 11 leaves open, as the code makes them (`health.rs`, `graceful.rs`, `graceful_tests.rs`, `config_stop.rs`,
+`config_listen.rs`, `listen.rs`, `wait.rs`; it continues komira-ai/hostkeeper#396 and komira-ai/hostkeeper#411):
+
+- Two paths, two meanings (adopted from komira-ai/hostkeeper#411). `/healthz` is liveness: 503 `starting` until every listener is bound, then 200 for
+  good, so the orchestrator never kills a task for a lost database or a drain. `/readyz` is readiness: 200, or 503 with one token
+  (`draining`, then `starting`, then `store_unreachable`). The edge checks `/readyz`; Docker's healthcheck checks `/healthz`.
+- `--health-listen-wildcard` is the opt-in for a wildcard address, as `--private-listen-wildcard` and `--lan-listen-wildcard` are for
+  theirs. A task's overlay address is not known before it starts, and the listener has no token and no TLS, so a wildcard is
+  refused unless the flag says the namespace holds loopback and one private network alone.
+- The delay counts from the signal: the sleep is made at the signal, not from the start. A test proves that a signal 100 s after
+  start still waits the full delay.
+- Held `WaitConverged` calls are answered at the stop as at their `wait_secs` (one more read, `DEADLINE` unless it ends the wait).
+  No proto change is made (B8), and no held call keeps a stopping coordinator's connection open past the stop grace period.
+- The stop order: the three listeners stop accepting and tell their connections to finish; held waits end; console streams
+  close; SSH tunnels end or are closed after `--ssh-drain-s`; then the process exits when no connection is open. The wait adds no
+  timeout of its own: each connection ends by the limits it already has. The health listener's connections are not waited for.
+- The delay is not checked against the edge at run time (B20). The coordinator reads none of the edge's values; the deploy
+  checks once that `--drain-delay-secs` exceeds the edge's DNS refresh plus `healthy_threshold` times its interval plus one
+  interval, and that `stop_grace_period` exceeds the delay plus the longest stop step. That check, and the edge's health check, are M10.
+
 ## 14. The model check, before code
 
 The protocol to check is the deciding transaction, the conditional writes and the periodic claim, not the SQL. Two tools, one
@@ -357,7 +379,8 @@ Tests, named (each asserts the behaviour in its name; the PR bodies list them by
   `migration_lint_refuses_a_rewrite_of_a_hot_table` (negative case, T15; **Built** (M3) in `store/postgres/migrate_tests.rs`), `cache_is_never_labelled_newer_than_its_content`,
   `partial_fleet_in_quiet_window_raises_no_halt_and_reverts_nothing` (a failed-looking host set after a gap),
   `operator_halt_in_quiet_window_is_read_by_every_decision`, `old_task_accepts_until_the_drain_delay_ends` and
-  `draining_task_answers_healthz_503_while_serving` (injected clock, T10), `drain_delay_config_is_refused_at_deploy_when_not_above_the_edge_check`,
+  `draining_task_answers_readyz_503_while_serving` (injected clock, T10; **Built** (M9) as one test, `tests/graceful_stop.rs`
+  `the_drain_delay_counts_from_the_signal_and_every_listener_accepts_through_it`), `drain_delay_config_is_refused_at_deploy_when_not_above_the_edge_check` (M10's deploy),
   `stalled_holder_is_terminated_and_gate_is_released` (the server's idle-in-transaction timeout against the service container,
   set short for the test), `beat_never_overtakes_a_queued_operator_edit` (against real Postgres),
   `operator_halt_waits_for_one_holder_not_for_beats`.

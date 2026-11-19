@@ -32,7 +32,8 @@ with a reason; `Services.Unhold` releases it. A hold freezes the service where i
   version marked bad is an alert: `Alerts.List` lists it, an error-level log line with
   `alert=held_on_bad_version` is logged once when it appears, and the status flags the host.
 - Holds are kept in the ops file (on the database store, the table `holds`) and survive a restart.
-  `Services.List` shows them.
+  `Services.List` shows them. On the database store a hold is a row changed under the rollout
+  gate, so it reaches every coordinator on the database: each reads it before it next decides.
 - Holding the same service in the same scope again replaces the reason. `Unhold` releases the
   pairs to the desired version at their next heartbeat, and they become eligible for the
   plan's stages again.
@@ -238,6 +239,31 @@ service's update plan over for the hosts it does not order.
 
 The `force`, `abort` and `clear_record` orders travel only on the typed heartbeat of
 `hostkeeper.agent.v1`; the JSON heartbeat route carries none of them.
+
+## Several coordinators on one database
+
+On the database store ([coordinator-state.md](coordinator-state.md#the-database-store)) more than
+one coordinator can answer heartbeats, and every rule above holds across them, because each is a
+row and each heartbeat is decided over the rows
+([rollout-plans.md](rollout-plans.md#more-than-one-coordinator-on-the-database)):
+
+- A hold, an unhold, a force, a mark, a `Releases.Halt` and a `ClearHalt` are edits of the
+  operations or desired state that wait for the rollout gate (`--operator-gate-wait-ms`) and are
+  committed with their audit rows. Whichever coordinator took the call, the others read the change
+  before they next decide, so a held pair is ordered nothing by any of them.
+- A halt, a bad mark or an automatic rollback a heartbeat's decision makes is written in that
+  decision's transaction (`store/postgres/decide.rs`), not in memory first. A change an operator
+  made memory first (a halt, a pause, an abort) whose commit fails stands in memory of that
+  coordinator, is committed again at each heartbeat, and is listed in the file of
+  `--halt-marker-file`, which the database store requires, until it lands.
+- When the database cannot be reached, no order, halt or rollback is decided: a host is answered
+  with no new order, keeps what it runs, and asks again.
+- A force's desired version is set under a new `set_seq`, so it takes its place in the queue of
+  `--live-rollouts` by when it was set, on every coordinator.
+- What `Hosts.Retry` sets aside and the order of `Hosts.ClearRecord` are kept in the memory of the
+  coordinator that took the call, as before.
+
+Over the files one process decides over its own memory; none of this applies.
 
 ## The audit file
 

@@ -559,6 +559,10 @@ that lowers it needs storage first. They are kept, with storage now the database
 
 ## 5. The advisory lock (a fence between releases, shared since migration `0019`)
 
+Superseded in part by [coordinator-multi-instance.md](coordinator-multi-instance.md) section 4: the lock is shared, and
+`lease.commits` and the epoch's exit are gone. The bullets on the epoch, on every write and on losing the session below are the
+record of the single writer; the file store keeps its exclusive file lock.
+
 - **The order at start:** take the lock shared; read `schema_version` and refuse a newer schema (section 6); run the
   migrations the database lacks, under a runners' lock of their own so that coordinators that start together run each
   once; raise the epoch; load. Nothing is read or written before the lock is held.
@@ -616,6 +620,10 @@ that lowers it needs storage first. They are kept, with storage now the database
   Taking something away is a later release's own reviewed change, and is not designed here.
 
 ## 7. A standby, designed and not built
+
+Superseded by [coordinator-multi-instance.md](coordinator-multi-instance.md) (section 18 there): there is no standby, every
+instance serves. Its takeover, its quiet-start timing bound and its list-of-addresses option are not needed. The text below is
+kept as the record.
 
 The lock and the epoch are the base of a standby, and C3 builds them. Nothing else below is built by the items of
 section 13; the standby is listed there as a later item that is not scheduled, and its `--standby` flag and the
@@ -767,8 +775,8 @@ volumes:
 - **Health.** The database has a health check and the coordinator starts only once it passes. The coordinator's image
   has no shell or client to run one, so the coordinator has no compose `healthcheck` and no `HEALTHCHECK`; it exits on a
   refusal and the restart policy starts it again (section 5). Its health is a route a probe outside the container asks
-  instead: `serve --health-listen <loopback address:port>` answers `GET /healthz` with `200 ok`, or `503` and one of
-  `starting`, `store_unreachable`, `not_writer` and `draining` (from SIGTERM until it exits; two-programs.md
+  instead: `serve --health-listen <address:port>` (a loopback address or one interface's) answers `GET /healthz` (liveness: `503 starting`, then `200 ok`) and
+  `GET /readyz` (`200 ok`, or `503` and one of `draining`, `starting` and `store_unreachable`; `draining` from SIGTERM until it exits; two-programs.md
   section 2.7, [coordinator-health.md](../deploy/coordinator-health.md)).
 
 ## 10. Backups and the restore drill
@@ -991,16 +999,16 @@ tests in its own pull request.
 | Question | Decision | Why |
 |---|---|---|
 | One database or one per store | One database, one schema. | The flows that cross stores (force, retire) can then commit together, and one lock covers everything. |
-| What decisions read | Memory, as today; the database is read at start, by lists and by the import. | A heartbeat costs no query, and the gate's code does not change. |
+| What decisions read | Memory, as today; the database is read at start, by lists and by the import. | A heartbeat costs no query, and the gate's code does not change. Superseded by coordinator-multi-instance.md section 5.2. |
 | How a change reaches the database | The state before and after, compared in memory; only changed rows are written. | The stores' call sites and edits stay as they are; a change costs what it changes. |
 | Typed columns or the records' encodings as blobs | Typed columns, with `jsonb` only for the values that are JSON today; the MDM gate's device records alone are their file's bytes (section 3.6). | The tables can be queried and constrained; each JSON value keeps its reader's strictness. The device record is the gate's own format, versioned by the gate's additive rule, and its reader is already as strict as a row must be. |
 | Generations and write ids | Columns added by C6 with the API that honours them; not in `0001`. | They are what the operator API already describes; adding them before anything maintains them would store numbers that mean nothing. |
-| The audit's numbers | Assigned by the coordinator under its writers' lock, not by a sequence. | One writer; no gaps from rolled-back transactions; the import keeps the file numbers. |
+| The audit's numbers | Assigned by the coordinator under its writers' lock, not by a sequence. | One writer; no gaps from rolled-back transactions; the import keeps the file numbers. Superseded by coordinator-multi-instance.md section 6. |
 | Audit retention | Keep every row; the rotation flags stay with the file store. | The history is small in rows, and keeping it removes the "pruned before" cases. |
 | The audit's actor | Derived from `by_name`, not stored twice. | One column cannot disagree with itself. |
 | `audit_unavailable` | Kept in the proto, not returned by the Postgres store; an enrollment change's line still lands after it, repaired at start. | For every other change the line and the change are one transaction; there is no case to name. |
 | The marker | A file, `--halt-marker-file`, listing the pending audit numbers; removed at start when they all landed. | It must be writable when the database is not, and a crash after the commit needs no person. |
-| A commit of unknown outcome | Settled by inserting the transaction's `tx_ledger` id again after the reconnect. | The insert waits for the first transaction while it is in progress, so the database says whether it landed. |
+| A commit of unknown outcome | Settled by inserting the transaction's `tx_ledger` id again after the reconnect. | The insert waits for the first transaction while it is in progress, so the database says whether it landed. Superseded by coordinator-multi-instance.md section 4. |
 | Retry of memory-first changes | Every heartbeat, for all of them, not only halts. | One rule; a pause that failed to write no longer waits for an unrelated change. |
 | Losing the writing session | Order nothing, retry the lock at each heartbeat, resume. | A blip of the database does not need a person; another coordinator having started meanwhile deposes nobody. |
 | A database not up at start | Refuse to start; the supervisor starts it again. | No wait loop in the code (rule B20). |

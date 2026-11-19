@@ -359,13 +359,13 @@ fn negotiated(tls: &TlsStream<DuplexStream>) -> Option<Vec<u8>> {
 }
 
 /// A coordinator in a rig of its own, with the rig's directory, which must outlive it.
-fn coordinator(name: &str) -> (Arc<Coordinator>, hostkeeper_testkit::Scratch) {
+pub(crate) fn coordinator(name: &str) -> (Arc<Coordinator>, hostkeeper_testkit::Scratch) {
     let rig = Rig::new(name);
     (Arc::new(rig.coordinator), rig.dir)
 }
 
 /// One `GET` of the status as the operator over HTTP/1.1 on `tls`, and the whole answer.
-async fn status_over_http1(mut tls: TlsStream<DuplexStream>) -> String {
+pub(crate) async fn status_over_http1(mut tls: TlsStream<DuplexStream>) -> String {
     let request = format!(
         "GET {STATUS_PATH} HTTP/1.1\r\nHost: localhost\r\n\
          Authorization: Bearer {OPERATOR}\r\nConnection: close\r\n\r\n"
@@ -377,7 +377,7 @@ async fn status_over_http1(mut tls: TlsStream<DuplexStream>) -> String {
 }
 
 /// An HTTP/2 client over `tls`.
-async fn http2(
+pub(crate) async fn http2(
     tls: TlsStream<DuplexStream>,
 ) -> hyper::client::conn::http2::SendRequest<Full<Bytes>> {
     let (send, driver) = hyper::client::conn::http2::handshake::<_, _, Full<Bytes>>(
@@ -595,7 +595,7 @@ async fn an_http2_connection_its_client_closes_ends_at_once() {
 
 /// A wait for 2.0 of kbf for 30 seconds as the operator: as a gRPC call, or as the gateway's
 /// JSON when `gateway`.
-fn wait_request(gateway: bool) -> Request<Full<Bytes>> {
+pub(crate) fn wait_request(gateway: bool) -> Request<Full<Bytes>> {
     let path = "/hostkeeper.operator.v1.Releases/WaitConverged";
     let call = Request::builder()
         .method("POST")

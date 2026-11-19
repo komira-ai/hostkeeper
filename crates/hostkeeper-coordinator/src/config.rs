@@ -27,8 +27,8 @@
 //! files of that directory under `/ui/` (`crate::ui`); without the flag, the binary serves
 //! [`DEFAULT_UI_DIR`], where the container image holds the operator web app, when that path is
 //! a directory ([`Serve::with_default_ui_dir`]).
-//! With `--health-listen` (a loopback address) it also serves `GET /healthz` in plain HTTP to a
-//! probe on the same machine (`crate::health`).
+//! With `--health-listen` it also serves `/healthz` and `/readyz` in plain HTTP to a probe or the
+//! edge's check (`crate::health`); a stop drains for `--drain-delay-secs` first (`config_stop.rs`).
 //! How the sockets are bound is a function the caller gives ([`bind_tcp`] in the binary), so
 //! the whole start can be driven over in-memory connections.
 //!
@@ -74,14 +74,15 @@ use crate::backup::{Backup, Report, Restore, backup, restore};
 use crate::desired::DesiredStore;
 use crate::enrollment::{Setup, StoreAt, os_random, setup};
 use crate::fleet::{CLOCK_SKEW_AFTER, QUIET_START};
-use crate::health::{self, Serving};
+use crate::graceful::{Graceful, accept_until_stopped};
+use crate::health::Serving;
 use crate::host_groups::GroupName;
 use crate::http::Surface;
 use crate::initial_admin::{LoginFlags, watch_every};
 use crate::inventory::RecordWindow;
 use crate::layout::LayoutStore;
 use crate::listen::{
-    CLIENT_PATIENCE, Listener, MAX_CONNECTIONS, Remote, reload_every, serve, together,
+    CLIENT_PATIENCE, Listener, MAX_CONNECTIONS, Remote, reload_every, serve_until_stopped, together,
 };
 use crate::lock::{FileLock, LockGuard, StateLock};
 use crate::operator_keys::OperatorKeys;
@@ -120,6 +121,10 @@ use secs::{record_window_secs, request_ttl_secs};
 /// The start's checks of the listen addresses.
 #[path = "config_listen.rs"]
 mod listen;
+
+/// The stop: the drain delay, then the end of the connections.
+#[path = "config_stop.rs"]
+mod stop;
 
 /// The addresses `serve` bound, the line it prints for them, and the socket it binds with.
 #[path = "config_bound.rs"]
@@ -232,14 +237,23 @@ pub struct Serve {
     /// The opt-in of a wildcard --lan-listen and the address it is reached at.
     #[command(flatten)]
     pub lan: listen::LanFlags,
-    /// A health listener, plain HTTP with no TLS and no token, for a probe on this machine: it
-    /// answers `GET` and `HEAD` of `/healthz` only, `200 ok` while every listener is bound and
-    /// serving and the store takes writes, and `503` with one reason token otherwise
-    /// (`starting`, `not_writer`, `store_unreachable`). It takes a loopback address
-    /// (127.0.0.0/8 or ::1): any other, a wildcard among them, is refused at start. Without it
-    /// there is no health listener.
+    /// A health listener, plain HTTP with no TLS and no token, for a probe on this machine or the
+    /// edge's check: `GET` and `HEAD` of `/healthz` (`200 ok` once every listener is bound) and of
+    /// `/readyz` (`200 ok` while the coordinator takes traffic, `503` with `starting`,
+    /// `store_unreachable` or `draining` otherwise) only. A loopback address or the address of one
+    /// interface; a wildcard only with --health-listen-wildcard. Without it there is none.
     #[arg(long)]
     pub health_listen: Option<SocketAddr>,
+    /// The opt-in of a wildcard --health-listen.
+    #[command(flatten)]
+    pub health: listen::HealthFlags,
+    /// How long, from SIGTERM or SIGINT, the coordinator answers `503 draining` on `/readyz` and
+    /// keeps accepting and serving on every listener before it stops: then the heartbeat, private
+    /// and LAN listeners accept no more, held waits end, each open connection finishes, and it
+    /// exits. 0 stops at once. Checked once at deploy against the edge's values: above its DNS
+    /// refresh plus its healthy threshold times its check interval plus one interval.
+    #[arg(long, default_value_t = 15)]
+    pub drain_delay_secs: u64,
     /// The coordinator's certificate chain (PEM), issued by the farm CA with the role
     /// `coordinator`.
     #[arg(long)]
@@ -506,8 +520,7 @@ pub struct Parts {
     /// Where to bind the LAN listener, when there is one. It serves the heartbeat listener's
     /// TLS and surface.
     pub lan_listen: Option<SocketAddr>,
-    /// Where to bind the health listener (`--health-listen`, a loopback address), when there
-    /// is one.
+    /// Where to bind the health listener (`--health-listen`), when there is one.
     pub health_listen: Option<SocketAddr>,
     /// How often to look at the TLS files and the tokens file.
     pub reload: Duration,
@@ -523,8 +536,8 @@ pub struct Parts {
 /// [`StartError`]: a file is missing, unreadable or refused (the text names the flag or the
 /// file; the ops file must be one this build reads), `--ui-dir` is missing or not a directory,
 /// `--private-listen` (without `--private-listen-wildcard`), `--lan-listen` (without `--lan-listen-wildcard`) or `--lan-address` is a wildcard
-/// address, a `--lan-name` is no DNS name, `--health-listen` is not a
-/// loopback address, `--quiet-secs` is below two
+/// address, a `--lan-name` is no DNS name, `--health-listen` is a wildcard address (without
+/// `--health-listen-wildcard`), `--quiet-secs` is below two
 /// heartbeat intervals,
 /// another coordinator holds the lock of the state files, a halt was being written when the
 /// coordinator stopped, both token flags or neither is given, an allow-list entry names no
@@ -730,15 +743,17 @@ where
     Next: Future<Output = io::Result<Stream>> + Send,
     Stream: AsyncRead + AsyncWrite + Remote + Unpin + Send + 'static,
 {
-    run_as(parts, bind, ready, Serving::default()).await
+    run_as(parts, bind, ready, Serving::default(), Graceful::default()).await
 }
 
-/// [`run`], its health listener saying what `serving` holds ([`start`] drains it).
+/// [`run`], its health listener saying what `serving` holds ([`start`] drains it), and its
+/// heartbeat, private and LAN listeners stopping together when `graceful` is told to stop.
 async fn run_as<Bind, Binding, Accept, Next, Stream>(
     parts: Parts,
     bind: Bind,
     ready: impl FnOnce(Bound),
     serving: Serving,
+    graceful: Graceful,
 ) -> Result<Infallible, StartError>
 where
     Bind: Fn(SocketAddr) -> Binding,
@@ -751,7 +766,7 @@ where
         Some(addr) => {
             let (addr, accept) = bind(addr).await?;
             tracing::info!(%addr, "serving the health listener");
-            let probing = health::serve(
+            let probing = crate::health::serve(
                 accept,
                 Arc::clone(&parts.coordinator),
                 serving.clone(),
@@ -762,7 +777,7 @@ where
         }
         None => (None, Either::Right(std::future::pending())),
     };
-    let rest = run_listeners(parts, bind, |bound| {
+    let rest = run_listeners(parts, bind, graceful, |bound| {
         ready(Bound { health, ..bound });
         serving.set();
     });
@@ -773,10 +788,12 @@ where
 }
 
 /// [`run`] past the health listener: binds the other listeners, calls `ready` with their
-/// addresses (`health` none), and serves them until the future is dropped.
+/// addresses (`health` none), and serves them until the future is dropped; once `graceful` is
+/// told to stop they accept no more, while the periodic work and the connections go on.
 async fn run_listeners<Bind, Binding, Accept, Next, Stream>(
     parts: Parts,
     bind: Bind,
+    graceful: Graceful,
     ready: impl FnOnce(Bound),
 ) -> Result<Infallible, StartError>
 where
@@ -829,20 +846,26 @@ where
     coordinator.console_started();
     let sweeping = crate::console::sweep_every(Arc::clone(&coordinator));
     // Without a LAN listener, a future that never finishes stands in for it.
-    let serving_lan = match lan {
-        Some(lan) => Either::Left(serve(
-            lan,
-            Arc::clone(&coordinator),
+    let serving_one = |listener, coordinator| {
+        let stops = graceful.clone();
+        serve_until_stopped(
+            listener,
+            coordinator,
             CLIENT_PATIENCE,
             MAX_CONNECTIONS,
-        )),
+            stops,
+        )
+    };
+    let serving_lan = match lan {
+        Some(lan) => Either::Left(serving_one(lan, Arc::clone(&coordinator))),
         None => Either::Right(std::future::pending()),
     };
     let (for_heartbeat, for_control) = (Arc::clone(&coordinator), Arc::clone(&coordinator));
     let serving = together(
-        serve(heartbeat, for_heartbeat, CLIENT_PATIENCE, MAX_CONNECTIONS),
-        serve(control, for_control, CLIENT_PATIENCE, MAX_CONNECTIONS),
+        serving_one(heartbeat, for_heartbeat),
+        serving_one(control, for_control),
     );
+    let accepting = accept_until_stopped(&graceful, together(serving, serving_lan));
     let expire = !coordinator.claims_jobs();
     let reloading = reload_every(
         enrollment.map(|enrollment| (enrollment, expire)),
@@ -854,7 +877,7 @@ where
         parts.reload,
     );
     let all = together(
-        together(serving, serving_lan),
+        accepting,
         together(
             reloading,
             together(observing, together(adopting, together(polling, sweeping))),
@@ -874,7 +897,8 @@ async fn signalled() -> io::Result<()> {
 }
 
 /// Runs the coordinator, its sockets bound by `bind` and the issuer's keys fetched trusting
-/// `roots`, until `stop` resolves, which drains the health listener ([`health::drain_on`]).
+/// `roots`, until `stop` resolves and it has stopped: `--drain-delay-secs` of draining, then the
+/// end of its connections (`config_stop.rs`).
 ///
 /// # Errors
 /// [`StartError`]: the start is refused ([`build`]), an address cannot be bound, or `stop`
@@ -894,28 +918,11 @@ where
 {
     let parts = build(&flags, roots)?;
     let coordinator = Arc::clone(&parts.coordinator);
-    let health = Serving::default();
-    let stop = health::drain_on(stop, health.clone());
-    let serving = run_as(
-        parts,
-        bind,
-        |bound| println!("{}", start_line(&bound)),
-        health,
-    );
-    match select(pin!(stop), pin!(serving)).await {
-        // The tunnels end on their own, or are closed after --ssh-drain-s, while the listeners
-        // go on serving (the health listener says `draining`).
-        // The console's streams close and clean up first.
-        Either::Left((Ok(()), mut serving)) => {
-            crate::console::drained(&coordinator, serving.as_mut()).await?;
-            ssh::drained(&coordinator, serving).await
-        }
-        Either::Left((Err(why), _)) => Err(StartError::from(why)),
-        Either::Right((served, _)) => {
-            let Err(why) = served;
-            Err(why)
-        }
-    }
+    let (health, graceful) = (Serving::default(), Graceful::default());
+    let print = |bound: Bound| println!("{}", start_line(&bound));
+    let serving = run_as(parts, bind, print, health.clone(), graceful.clone());
+    let delay = Duration::from_secs(flags.drain_delay_secs);
+    stop::stopped(&coordinator, stop, delay, health, &graceful, serving).await
 }
 
 /// Builds the runtime and runs the coordinator on it until a signal, serving

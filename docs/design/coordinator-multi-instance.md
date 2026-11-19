@@ -7,7 +7,7 @@ lock, the ledger, the migration runner's mutex (M3, komira-ai/hostkeeper#395), t
 lock timeout and retry and the lint's hot-table rule (the rest of M3), with section 12's keys for those; sections 8 and 9 (M8); the models of
 section 14 (M2); in section 6 the enrollment's conditional writes, its fresh host and deny reads and the spent CI
 token ids decided by the insert (M5); section 6's edits, versions, reload, audit counter and facts generation and the gate of 5.2
-(M4; as built: the companion, section 6); in section 5 the fleet's tables, the gap rule, the ordered beat upsert, the in-SQL bake and the release of slots (M6; as built: the companion, section 5); in sections 5.2 and 5.3 the deciding transaction under the gate, its re-read of every input, the orders written with the host's key as the backstop, the compare-and-set of a stage, halts and rollbacks written in the decision, the quiet rule read from the rows, `set_seq`/`set_for` and their start-time re-stamp, and fail closed (M7; as built: the companion, section 5.3). Still Designed in section 4: `--migrate-wait-secs`, `--ledger-retry-secs` and the
+(M4; as built: the companion, section 6); in section 5 the fleet's tables, the gap rule, the ordered beat upsert, the in-SQL bake and the release of slots (M6; as built: the companion, section 5); in sections 5.2 and 5.3 the deciding transaction under the gate, its re-read of every input, the orders written with the host's key as the backstop, the compare-and-set of a stage, halts and rollbacks written in the decision, the quiet rule read from the rows, `set_seq`/`set_for` and their start-time re-stamp, and fail closed (M7; as built: the companion, section 5.3); in section 11 items 1 and 2 as far as the coordinator goes, with section 12's keys: `/healthz` for liveness and `/readyz` for readiness, `--health-listen` on loopback or the address of one interface (with `--health-listen-wildcard` for a task whose address is not known before it starts), `--drain-delay-secs` and the graceful stop, and the four operations documents named in section 17 (M9). The edge's check, the update shape and the deploy check are M10. Still Designed in section 4: `--migrate-wait-secs`, `--ledger-retry-secs` and the
 prune in a reload tick (#395 differs, below). Everything else is Designed. M1 is measured (section 7).
 
 It changes one decision of [coordinator-storage.md](coordinator-storage.md): that decision's section 5 ("the single writer: an
@@ -95,7 +95,7 @@ reads. So the fleet moves into the database first (section 5), and the rest foll
    locks; no instance's clock does it.
 4. **The database is the central dependency, and an instance that cannot use it decides nothing (fail closed).** When Postgres
    is unreachable, or a decision's transaction fails, the instance places no order, raises no halt, moves no plan, answers
-   `/healthz` 503 and answers a heartbeat with "unavailable" so the host retries. There is no memory-first fallback and no
+   `/readyz` 503 (`/healthz`, the liveness check, stays 200 so the orchestrator does not kill the instance) and answers a heartbeat with "unavailable" so the host retries. There is no memory-first fallback and no
    halt or order held in memory until the database is back. Hosts keep running what they run; nothing is rolled out or halted
    until a database is reachable again, and after any gap in the beats the quiet rule of section 5.1 applies. This is
    `Health::Lost` today (`health.rs`), now the rule for every decision.
@@ -483,7 +483,7 @@ sequenceDiagram
     H->>A: heartbeat
     A->>P: upsert / BEGIN
     P--xA: connection refused or timeout
-    A-->>H: unavailable (no order, no halt, no plan step); /healthz 503
+    A-->>H: unavailable (no order, no halt, no plan step); /readyz 503
     Note over H: the host keeps what it runs and retries its heartbeat
     Note over A,P: when Postgres answers again, the gap rule (section 5.1) quiets every decision of its own for --quiet-secs
 ```
@@ -749,18 +749,28 @@ coordinator sees the client certificate. So 8443 and 8445 already spread over ev
 Needed:
 
 1. **An active health check** on both clusters, as the existing frontend's clusters have (`/readyz`, `close_connections_on_host_health_failure:
-   false`). The coordinator's `/healthz` is on `127.0.0.1:8446` inside the task (`health.rs`): a new additive flag
-   `--health-listen` serves the same path on an address of the overlay `cp-hk`. 200 only when the store is `Up`, the
-   listeners are bound and the task is not draining.
-2. **Update shape:** `replicas: 1`, `order: start-first`, `parallelism: 1`: one instance in steady state, two only while the
+   false`). **Built (M9), the coordinator's part** (`crates/hostkeeper-coordinator/src/health.rs`, `config_listen.rs`, `listen.rs`): the
+   health listener serves two paths, plain HTTP/1.1 with no TLS and no token. `/healthz` is liveness, for Docker's healthcheck
+   and machine monitoring: 503 `starting` until every listener the flags name is bound, then 200 for good, also while the
+   database link is lost and while the task drains. `/readyz` is readiness, for the edge: 200 only when every listener is
+   bound, the store takes writes and the task is not draining, else 503 with one token (`draining`, `starting` or
+   `store_unreachable`, in that order). `--health-listen` takes a loopback address or the address of one interface (for
+   example the task's address on the overlay `cp-hk`); a wildcard address is refused unless `--health-listen-wildcard` is given,
+   for a network namespace whose interfaces are loopback and one private network. The edge's check itself is M10 (**Designed**).
+2. **Update shape** (**Designed**, M10; the coordinator's part, the drain delay and the graceful stop, is **Built**, M9: `graceful.rs`, `config_stop.rs`, `listen.rs`, `wait.rs`): `replicas: 1`, `order: start-first`, `parallelism: 1`: one instance in steady state, two only while the
    old one drains. The Docker healthcheck says when the new one is healthy in its own container (as now: 5 s
    interval, `start_period` 120 s), and Swarm then sends the old task SIGTERM. That is not the moment the *edge* can use the new
    task: it learns of it through `STRICT_DNS` (1 s refresh) and then needs its own active check to pass `healthy_threshold`
    times at `interval`. "At least one task answers 200" is a claim about tasks; what matters is that the edge has a healthy
-   upstream that accepts. So the old task gets a **drain delay**: from SIGTERM it answers `/healthz` 503 (so the edge stops
-   choosing it once it has the new one) but **keeps its listeners open and keeps serving new connections for
-   `--drain-delay-secs`**; only then does it stop accepting, finish in-flight calls and exit, all inside `stop_grace_period`.
-   Long calls (`WaitConverged`) end at the end of the delay and callers retry, as they do at a deploy today.
+   upstream that accepts. So the old task gets a **drain delay**: from SIGTERM (or SIGINT) it answers `/readyz` 503 `draining` (so the edge stops
+   choosing it once it has the new one; `/healthz` stays 200 so Docker does not kill it) but **keeps its listeners open and keeps serving new connections for
+   `--drain-delay-secs`**, counted from the signal; only then does it stop accepting, finish in-flight calls and exit, all inside
+   `stop_grace_period`. As built, the end of the delay runs in this order: the heartbeat, private and LAN listeners accept no more
+   connections and each open connection is told to finish (an HTTP/2 connection goes away, an HTTP/1.1 one closes after its
+   request in flight); every held `Releases.WaitConverged` call is answered at once as at its `wait_secs` (read once more,
+   `DEADLINE` unless that read ends the wait: CI's `set-desired` job reports `not_converged`, where a call cut at a
+   deploy before reported `no_answer`); console streams close (`coordinator_stopping`); SSH tunnels end or are closed after `--ssh-drain-s`; once no
+   connection of the three listeners is open the process exits 0. The health listener and the periodic work run until the exit.
    The deploy checks, once (B20), that `--drain-delay-secs > dns_refresh_rate + healthy_threshold x interval + one interval` of
    the edge's new check and that `stop_grace_period > --drain-delay-secs + the longest in-flight call`. Proposed values: check
    `interval` 2 s, `healthy_threshold` 2, `unhealthy_threshold` 2 (the edge's check does not exist yet; these are mine, to be
@@ -796,11 +806,11 @@ sequenceDiagram
     S->>N: start (start-first)
     N->>P: shared lock
     N->>P: migration lock (advisory, MIGRATE_KEY); migrations (may-run, lock_timeout on DDL); load
-    N-->>E: /healthz 503 starting
-    N-->>E: /healthz 200
+    N-->>E: /readyz 503 starting
+    N-->>E: /readyz 200
     Note over S,N: Docker healthcheck of N passes
     S->>O: SIGTERM
-    O-->>E: /healthz 503 draining (listeners stay open and serving)
+    O-->>E: /readyz 503 draining (listeners stay open and serving)
     Note over E,N: STRICT_DNS (1 s) sees N; active check passes healthy_threshold times
     E->>N: begin sending connections
     E->>O: stop choosing O (503, unhealthy_threshold)
@@ -815,7 +825,8 @@ sequenceDiagram
 |---|---|---|
 | `--database-pool` | 4 | write/decision sessions per instance |
 | `--instance-beat-secs` | 5 | `instances.seen_unix` |
-| `--health-listen` | none | readiness address on `cp-hk` |
+| `--health-listen` | none | the health listener's address: loopback or one interface's address, for example on `cp-hk` (Built, M9) |
+| `--health-listen-wildcard` | off | allows a wildcard address for `--health-listen`, in a network namespace whose interfaces are loopback and one private network; takes no value, needs `--health-listen` (Built, M9) |
 | `--cache-nodes-ttl-ms` | 1000 | per-instance cache of read-only parts of the fleet, if section 7 needs it |
 | `--session-touch-secs` | 30 | write of `last_used_unix` at most this often (Built, M8) |
 | `--beat-reorder-secs` | 30 | a beat older (by the host's `sent_unix`) than the stored one is dropped unless the stored row is older than this. Built (M6; 1 to 44) |
@@ -823,7 +834,7 @@ sequenceDiagram
 | `--operator-gate-wait-ms` | 30000 | how long an operator edit waits for the gate row (a heartbeat never waits: `SKIP LOCKED`); then it is refused `store_failed`. Built (M4) |
 | `--tx-idle-timeout-ms` | 5000 | `idle_in_transaction_session_timeout` of every pool session: the longest a silent instance holds the gate or a row lock |
 | `--statement-timeout-ms` | 5000 | `statement_timeout` of every pool session |
-| `--drain-delay-secs` | 15 | from SIGTERM, the old task answers 503 on `/healthz` but keeps accepting for this long; deploy-checked against the edge's DNS refresh and check interval x thresholds |
+| `--drain-delay-secs` | 15 | from SIGTERM, the old task answers 503 on `/readyz` but keeps accepting for this long (0 stops at once); deploy-checked against the edge's DNS refresh and check interval x thresholds (Built, M9; the deploy check is M10's) |
 | `--migrate-wait-secs` | 60 | how long a starter waits for the migration lock |
 | `--migrate-ddl-lock-timeout-ms` | 3000 | `lock_timeout` of a migration transaction: a DDL that cannot get its lock rolls the migration back |
 | `--migrate-retry-secs`, `--migrate-attempts` | 5, 6 | the wait between and number of attempts of a rolled-back migration before the instance exits |
@@ -910,7 +921,7 @@ the farm): the back-out is a stopgap while a fix ships.
 | M6 | Built: the fleet in Postgres, without decisions: `fleet_hosts`, `fleet_bakes`, `fleet_orders`, `cluster_quiet` (`0024`), and on every answered heartbeat one statement with the gap rule, the ordered beat upsert, the in-SQL bake and the release of slots (`store/postgres/fleet_rows.rs`, `store/beat.rs`), `--beat-reorder-secs`; no decision reads the rows (as built: the companion, section 5) | M4, M5 | M |
 | M7 | Built: the deciding transaction and the steps of 5.3: gate, re-read of every input, `set_seq`/`set_for` and the start-time re-stamp, orders with the unique host index, compare-and-set stage advance, halts and rollbacks written in the decision, fail closed; the quiet rule, read from the rows, gating verdicts and rollbacks as well as orders (`store/decision.rs`, `store/postgres/decide.rs`, `store/postgres/queue_seq.rs`, `service_decide.rs`, `fleet_shared.rs`, `0026_decisions.sql`) | M6 | L |
 | M8 | Built: sessions and login limiter (`store/postgres/login_rows.rs`); `periodic_jobs` and the claim (`periodic.rs`, `jobs.rs`); alerts, pruning and initial-admin made exactly-once (`alert_rows.rs`, `admin_rows.rs`), the expiry claimed as a job over M5's conditional write; migration `0025` | M3 | M |
-| M9 | `--health-listen` and `--drain-delay-secs` (the old task keeps accepting while it answers 503); docs (`coordinator-state.md`, `rollout-plans.md`, `holds-and-force.md`, `enrollment.md`) updated; this document's tags turned to Built | M7, M8 | S |
+| M9 | Built: `/healthz` (liveness) and `/readyz` (readiness) on `--health-listen` (loopback or one interface's address; `--health-listen-wildcard` for a wildcard) in `health.rs`, `config_listen.rs`; `--drain-delay-secs` and the graceful stop in `graceful.rs`, `config_stop.rs`, `listen.rs` (the old task keeps accepting while it answers 503, then stops accepting, ends held waits as at `wait_secs` (`wait.rs`) and exits once no connection is open); docs (`coordinator-state.md`, `rollout-plans.md`, `holds-and-force.md`, `enrollment.md`) updated; this document's tags turned to Built (as built: the companion, section 11; komira-ai/hostkeeper#396 and komira-ai/hostkeeper#411 are the work it continues) | M7, M8 | S |
 | M10 | Infrastructure (outside this repository): CA secret and config, tmpfs, edge health checks and Mac listener, `start-first` update at `replicas: 1`. The cutover of section 16 | M9 | M |
 | M11 | js-server's design and PRs in its repository, to the same leaderless rule | none | not sized |
 
@@ -922,7 +933,7 @@ This supersedes section 7 of coordinator-storage.md (the standby: its takeover, 
 list-of-addresses option are not needed when every instance serves), the second half of section 5 ("the single writer": the lock is
 shared, `lease.commits` and the epoch's exit are gone), and these rows of section 14 "What decisions read" (a heartbeat reads
 the database), "The audit's numbers" (still gap-free, by a counter row, not by the lock) and "A commit of unknown outcome"
-(the ledger). M9 edits those sections to point here. Nothing is deleted from the file store (C9's business).
+(the ledger). M9 made those edits (Built): each of those sections of coordinator-storage.md now says it is superseded and points here. Nothing is deleted from the file store (C9's business).
 
 ## 19. Decided by the owner
 

@@ -173,6 +173,8 @@ async fn the_retired_mdm_flags_are_accepted_and_ignored() {
         tokio::task::yield_now().await;
         Ok(())
     };
+    // No drain delay: the stop is not what this test is about.
+    all.extend(["--drain-delay-secs".into(), "0".into()]);
     start(flags_of(all), roots(), bind, stop)
         .await
         .expect("a start that passes every retired flag runs and stops cleanly");
@@ -374,7 +376,9 @@ async fn a_coordinator_with_no_services_starts_and_grants_nothing() {
         tokio::task::yield_now().await;
         Ok(())
     };
-    start(flags_of(args.clone()), roots(), bind, stop)
+    let mut undelayed = args.clone();
+    undelayed.extend(["--drain-delay-secs".into(), "0".into()]);
+    start(flags_of(undelayed), roots(), bind, stop)
         .await
         .expect("the start runs and stops cleanly");
 
@@ -509,7 +513,9 @@ async fn start_runs_until_stopped_and_says_why_it_ended() {
         tokio::task::yield_now().await;
         Ok(())
     };
-    start(flags_of(files.args()), roots(), bind.clone(), stop)
+    let mut undelayed = files.args();
+    undelayed.extend(["--drain-delay-secs".into(), "0".into()]);
+    start(flags_of(undelayed), roots(), bind.clone(), stop)
         .await
         .expect("a stop is a clean end");
     assert_eq!(*binds.lock().expect("count"), 2);
