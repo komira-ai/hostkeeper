@@ -698,11 +698,13 @@ pub struct Observed {
     pub first_unix: u64,
 }
 
-/// The alerts the last observation found, each with when it was first observed: in memory only.
+/// The alerts the last observation found, each with when it was first observed: in memory, and,
+/// over a database, in its rows too ([`Book::over`]), which decide which coordinator logs an alert.
 #[derive(Debug, Default)]
 pub struct Book {
     thresholds: Thresholds,
     seen: Mutex<BTreeMap<Subject, u64>>,
+    rows: Option<crate::store::postgres::alert_rows::PgAlerts>,
 }
 
 impl Book {
@@ -712,6 +714,7 @@ impl Book {
         Self {
             thresholds,
             seen: Mutex::new(BTreeMap::new()),
+            rows: None,
         }
     }
 
@@ -726,6 +729,13 @@ impl Book {
     ) -> Result<Vec<Observed>, E> {
         let mut seen = self.seen.lock().unwrap_or_else(PoisonError::into_inner);
         let (alerts, unix) = find()?;
+        if let Some(observed) = rows::observed(self.rows.as_ref(), &alerts, unix) {
+            *seen = observed
+                .iter()
+                .map(|one| (one.alert.subject.clone(), one.first_unix))
+                .collect();
+            return Ok(observed);
+        }
         let observed: Vec<Observed> = alerts
             .into_iter()
             .map(|alert| {
@@ -791,45 +801,50 @@ impl Coordinator {
     /// # Errors
     /// [`StoreError`]: the enrollment store could not be read; nothing is noted or logged.
     pub fn observe_alerts(&self) -> Result<Vec<Observed>, StoreError> {
-        self.alerts.observe_with(|| {
-            let heard: Vec<HostId> = self
-                .lock_fleet()
-                .nodes()
-                .map(|(id, _)| id.clone())
-                .collect();
-            let enrollment = match self.enrollment_facts(&heard) {
-                Ok(facts) => facts,
-                // The alert that says the database is lost is not hidden by it.
-                Err(why) if self.lock_fleet().store_lost => {
-                    tracing::warn!(%why, "the enrollment store is not read while the database is lost");
-                    EnrollmentFacts::default()
-                }
-                Err(why) => return Err(why),
-            };
-            let enrollment = EnrollmentFacts {
-                prerequisites: self.prerequisites.reports(),
-                ..enrollment
-            };
-            let at = At {
-                now: (self.clock)(),
-                unix: self.ops.unix_now(),
-            };
-            let ops = self.ops.state();
-            let alerts = derive_in(
-                &self.lock_fleet(),
-                &ops,
-                &self.services,
-                &self.desired.host_groups(),
-                &enrollment,
-                at,
-                &self.alerts.thresholds,
-            );
-            Ok((alerts, at.unix))
-        })
+        self.alerts.observe_with(|| self.find_alerts())
+    }
+
+    /// Every alert now, with the unix second it was found at; nothing noted or logged.
+    fn find_alerts(&self) -> Result<(Vec<Alert>, u64), StoreError> {
+        let heard: Vec<HostId> = self
+            .lock_fleet()
+            .nodes()
+            .map(|(id, _)| id.clone())
+            .collect();
+        let enrollment = match self.enrollment_facts(&heard) {
+            Ok(facts) => facts,
+            // The alert that says the database is lost is not hidden by it.
+            Err(why) if self.lock_fleet().store_lost => {
+                tracing::warn!(%why, "the enrollment store is not read while the database is lost");
+                EnrollmentFacts::default()
+            }
+            Err(why) => return Err(why),
+        };
+        let enrollment = EnrollmentFacts {
+            prerequisites: self.prerequisites.reports(),
+            ..enrollment
+        };
+        let at = At {
+            now: (self.clock)(),
+            unix: self.ops.unix_now(),
+        };
+        let ops = self.ops.state();
+        let alerts = derive_in(
+            &self.lock_fleet(),
+            &ops,
+            &self.services,
+            &self.desired.host_groups(),
+            &enrollment,
+            at,
+            &self.alerts.thresholds,
+        );
+        Ok((alerts, at.unix))
     }
 
     /// `Alerts.List`: every alert now, as an observation finds it ([`Self::observe_alerts`]).
-    /// Changes nothing but the book of alerts.
+    /// Changes nothing but the book of alerts. Over a database it writes nothing: each alert's
+    /// first observed second is read from the rows the job `alerts` writes, and an alert the job
+    /// has not noted yet is first observed now and not logged here.
     ///
     /// # Errors
     /// `unauthorized`, `forbidden`, `store_failed` (the enrollment store could not be read).
@@ -839,7 +854,7 @@ impl Coordinator {
         _request: proto::ListAlertsRequest,
     ) -> Result<proto::ListAlertsResponse, proto::AlertsRefusal> {
         caller.operator()?;
-        let observed = self.observe_alerts().map_err(|why| {
+        let observed = self.alerts.list_with(|| self.find_alerts()).map_err(|why| {
             tracing::error!(%why, "the alerts could not be listed: the enrollment store could not be read");
             proto::AlertsRefusal::StoreFailed
         })?;
@@ -923,3 +938,6 @@ mod coordinator_tests;
 
 #[path = "group_alerts.rs"]
 mod group_alerts;
+
+#[path = "alerts_rows.rs"]
+mod rows;

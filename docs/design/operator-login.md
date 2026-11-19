@@ -100,7 +100,8 @@ All of it runs in `hostkeeper-coordinator serve`; hostkeeper adds no process, no
 Sessions live in memory, not in the store. A coordinator restart signs everyone out, which is a minute's cost on a
 service that restarts rarely and keeps a table, its migration and a write per request out of the design. If the
 standby of [coordinator-storage.md](coordinator-storage.md) section 7 is ever built, sessions are the first thing it
-revisits.
+revisits. Superseded over a database by [coordinator-multi-instance.md](coordinator-multi-instance.md), section 8 (built): there
+the session table and the limiter's counts are rows, and a restart signs nobody out; over the files they stay in memory.
 
 ## 4. The first admin
 
@@ -426,7 +427,7 @@ never logs a request body.
 | Two admins change a password at once | one wins by the store's write; the other sees `current` fail | the store's single-writer commit |
 | An admin disables themself | refused if it is the last enabled user | check in `Users.Disable` |
 | A user is disabled while signed in | their next call is 401 | sessions end at disable |
-| A coordinator restart | every session ends; the sign-in form shows | sessions are in memory |
+| A coordinator restart | over the files every session ends and the sign-in form shows; over a database nothing ends | sessions are in memory, or rows of the database (coordinator-multi-instance.md, section 8) |
 | Postgres is down | login answers 503 `store_unreachable`; bearer tokens from the tokens file still work; stored tokens and users do not | tokens file is a file; the store's health gate (coordinator-storage.md section 5) |
 | A clock steps back | sessions live longer until the clock catches up; no session is created with a past deadline | deadlines are absolute times from the injected clock, with a saturating compare |
 | The same name as a token and a user | refused at creation | one namespace |

@@ -197,10 +197,22 @@ impl Coordinator {
     }
 
     /// Ends every session of `name`.
-    fn end_sessions(&self, name: &str) {
-        if let Some(login) = self.login() {
-            login.sessions.end_user(name, None);
-        }
+    ///
+    /// # Errors
+    /// `store_failed`: the sessions could not be ended and may still live; the change itself was
+    /// made, and making it again ends them.
+    fn end_sessions(&self, name: &str) -> Result<(), UserRefusal> {
+        let Some(login) = self.login() else {
+            return Ok(());
+        };
+        login
+            .sessions
+            .end_user(name, None)
+            .map(drop)
+            .map_err(|why| {
+                tracing::error!(%why, "the user's sessions could not be ended");
+                UserRefusal::StoreFailed
+            })
     }
 
     /// The user `name` as the answer says it: none if a call that removed them came between.
@@ -296,7 +308,7 @@ impl Coordinator {
         request: &proto::DisableUserRequest,
     ) -> Result<proto::DisableUserResponse, UserRefusal> {
         let user = self.set_enabled(caller, &request.name, false, USER_DISABLE)?;
-        self.end_sessions(&request.name);
+        self.end_sessions(&request.name)?;
         Ok(proto::DisableUserResponse { user })
     }
 
@@ -345,7 +357,7 @@ impl Coordinator {
             })
         })
         .map_err(Stopped::user)?;
-        login.sessions.end_user(name, None);
+        self.end_sessions(name)?;
         if let Some(id) = adopted
             && let Some(file) = &self.initial_admin
             && let Err(why) = file.delete_if_adopted(name, &id)
@@ -372,7 +384,7 @@ impl Coordinator {
         let name = request.name.as_str();
         self.change_accounts(about(by, USER_DELETE, name), |held| held.without_user(name))
             .map_err(Stopped::user)?;
-        self.end_sessions(name);
+        self.end_sessions(name)?;
         Ok(proto::DeleteUserResponse {})
     }
 

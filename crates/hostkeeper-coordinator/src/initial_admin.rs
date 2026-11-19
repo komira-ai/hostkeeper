@@ -21,6 +21,14 @@
 //! `valid_until` is compared with it and with nothing else. No error, no log line and no
 //! [`Debug`](std::fmt::Debug) text holds the password or its hash.
 //!
+//! Over a database every coordinator looks at the same file (the volume is mounted by each), and
+//! the effects are conditional writes on the user's row ([`PgAdmin`]): the adoption is written
+//! unless the row holds the file's `id` already, the void unless it is void already, and only the
+//! coordinator whose write changed the row audits, so a file is applied once however many look
+//! (`docs/design/coordinator-multi-instance.md`, section 9). There, the expired file's audit is
+//! written by the coordinator whose delete removed it, and a delete that finds the file gone or
+//! the volume read-only counts as done.
+//!
 //! This module makes the record and nothing of the sign-in: the session table, the login routes
 //! and the password change are [`crate::login`] and [`crate::login_routes`]; a password change
 //! deletes the file its user's password came from ([`InitialAdmin::delete_if_adopted`]).
@@ -44,6 +52,7 @@ use crate::password::{PasswordError, PasswordSettings, Passwords, PolicyError};
 use crate::reconcile::COORDINATOR;
 use crate::service::Coordinator;
 use crate::session::{LimiterSettings, SessionSettings};
+use crate::store::postgres::admin_rows::PgAdmin;
 use crate::tokens::{TokenName, TokenNameError};
 
 /// The flag that names the file, which the texts of its errors name instead of its path.
@@ -228,6 +237,9 @@ pub enum InitialAdminError {
     /// The audit entry could not be written.
     #[error("--initial-admin-file: the audit entry was not written: {0}")]
     Audit(#[from] OpsError),
+    /// The database's row of the user could not be read or written.
+    #[error("--initial-admin-file: the user's row could not be read or written: {0}")]
+    Rows(String),
 }
 
 /// What one look did.
@@ -259,6 +271,7 @@ pub struct InitialAdmin {
     max_secs: u64,
     passwords: Passwords,
     clock: UnixClock,
+    rows: Option<PgAdmin>,
 }
 
 impl std::fmt::Debug for InitialAdmin {
@@ -312,7 +325,15 @@ impl InitialAdmin {
             max_secs: max_secs.min(MAX_VALID_SECS),
             passwords: Passwords::new(settings)?,
             clock,
+            rows: None,
         })
+    }
+
+    /// The same file, its effects written as conditional writes on the rows of `rows`.
+    #[must_use]
+    pub(crate) fn over(mut self, rows: PgAdmin) -> Self {
+        self.rows = Some(rows);
+        self
     }
 
     /// One look at the file, and what it asks for done to `accounts`, audited in `ops`.
@@ -336,7 +357,7 @@ impl InitialAdmin {
         let adopted = held
             .user(&file.user)
             .is_some_and(|user| user.initial_id.as_deref() == Some(file.id.as_str()));
-        if adopted {
+        if adopted || self.adopted_in_rows(&file)? {
             return Ok(Outcome::AlreadyAdopted);
         }
         if file.valid_until - now > self.max_secs {
@@ -348,6 +369,25 @@ impl InitialAdmin {
             .check_policy(&file.password, &file.user, None)
             .map_err(InitialAdminError::Policy)?;
         let hash = self.passwords.hash(&file.password)?.as_str().to_owned();
+        if let Some(rows) = &self.rows {
+            // The row first: of the coordinators that look at once, the one whose write changed
+            // it audits, and the others find it adopted.
+            let next = adopt(&held, &file, hash.clone(), now)?;
+            // As the accounts' rows hold a user (`store/postgres/accounts.rs`).
+            let record = next
+                .user(&file.user)
+                .and_then(|user| serde_json::to_value(user).ok())
+                .unwrap_or_default();
+            let made = rows
+                .adopt(&file.user, record, &file.id)
+                .map_err(InitialAdminError::Rows)?;
+            if !made {
+                return Ok(Outcome::AlreadyAdopted);
+            }
+            audit(ops, USER_BOOTSTRAP, &file.user)?;
+            accounts.change(|held| adopt(held, &file, hash, now))?;
+            return Ok(Outcome::Adopted);
+        }
         // Audited first, as the expiry is: an audit that cannot be written leaves the user
         // unmade and the next look does both again, where an audit after the store would be
         // lost for good (the next look finds the id adopted). A store that cannot write after
@@ -404,6 +444,9 @@ impl InitialAdmin {
                 mine && user.initial_expires_at.is_none(),
             )
         });
+        if let Some(rows) = &self.rows {
+            return self.expire_in_rows(rows, file, void, accounts, ops);
+        }
         if void {
             accounts.change(|held| {
                 held.with_user_edited(&file.user, |user| user.initial_void = true)
@@ -413,6 +456,62 @@ impl InitialAdmin {
             audit(ops, INITIAL_PASSWORD_EXPIRED, &file.user)?;
         }
         self.delete()?;
+        Ok(Outcome::Expired)
+    }
+}
+
+impl InitialAdmin {
+    /// Whether the database's row of the file's user holds its `id` already: false without rows.
+    fn adopted_in_rows(&self, file: &RawFile) -> Result<bool, InitialAdminError> {
+        self.rows.as_ref().map_or(Ok(false), |rows| {
+            rows.adopted(&file.user, &file.id)
+                .map_err(InitialAdminError::Rows)
+        })
+    }
+
+    /// [`InitialAdmin::expire`] over rows, judged by the rows and not by this coordinator's copy
+    /// of the accounts: the void is a conditional write, audited by the coordinator it voided
+    /// for, before the file is deleted; a file whose `id` the user's row does not hold is audited by the coordinator whose
+    /// delete removed it; a row that holds the `id` and was not voided now (its password was
+    /// changed, or another coordinator voided it) is not audited. A delete that finds the file
+    /// gone, or the volume read-only, counts as done.
+    fn expire_in_rows(
+        &self,
+        rows: &PgAdmin,
+        file: &RawFile,
+        void: bool,
+        accounts: &AccountStore,
+        ops: &OpsStore,
+    ) -> Result<Outcome, InitialAdminError> {
+        let voided = rows
+            .void(&file.user, &file.id)
+            .map_err(InitialAdminError::Rows)?;
+        if voided {
+            // Audited before the delete: the next look finds the row void and does not audit, so
+            // an entry left for after a delete that fails would be lost.
+            audit(ops, INITIAL_PASSWORD_EXPIRED, &file.user)?;
+            if void {
+                accounts.change(|held| {
+                    held.with_user_edited(&file.user, |user| user.initial_void = true)
+                })?;
+            }
+        }
+        let mine = !voided && self.adopted_in_rows(file)?;
+        let removed = match std::fs::remove_file(&self.path) {
+            Ok(()) => true,
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::ReadOnlyFilesystem
+                ) =>
+            {
+                false
+            }
+            Err(e) => return Err(InitialAdminError::Delete(e.kind())),
+        };
+        if !voided && !mine && removed {
+            audit(ops, INITIAL_PASSWORD_EXPIRED, &file.user)?;
+        }
         Ok(Outcome::Expired)
     }
 }

@@ -195,7 +195,7 @@ async fn a_session_that_ended_before_the_first_message_gets_no_terminal() {
     let site = site("term-ended").await;
     let mut browser = site.connect(HOST);
     let sessions = &site.rig.coordinator.login().expect("a sign-in").sessions;
-    assert!(sessions.end(&site.session.0));
+    assert_eq!(sessions.end(&site.session.0), Ok(true));
     browser.text(&site.hello(80, 24)).await;
     assert!(browser.closed("token_revoked").await.is_empty());
     assert!(site.rig.ledger.certs().is_empty());
@@ -553,7 +553,7 @@ async fn a_terminal_lives_as_long_as_its_session_and_needs_no_token() {
     browser.binary(b"alive\r").await;
     browser.output_until(b"alive\r").await;
     let sessions = &site.rig.coordinator.login().expect("a sign-in").sessions;
-    assert!(sessions.end(&site.session.0));
+    assert_eq!(sessions.end(&site.session.0), Ok(true));
     site.rig.poll().await;
     browser.closed("token_revoked").await;
     let id = site.opened().await;
