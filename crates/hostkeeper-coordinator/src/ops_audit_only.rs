@@ -11,7 +11,9 @@
 //! changes what a host's facts say.
 //!
 //! Lines land in their numbers' order: what is pending in memory is committed first, and the
-//! append is refused when that fails, as a storage-first change is.
+//! append is refused when that fails, as a storage-first change is. Over Postgres the line is
+//! numbered by the audit counter in an edit that holds the counter's row and nothing else
+//! ([`Scope::AUDIT`]): it takes neither the gate nor a part.
 
 use std::io;
 use std::sync::PoisonError;
@@ -19,7 +21,7 @@ use std::sync::PoisonError;
 use super::{AuditEntry, OpsError, OpsStore, announce};
 use crate::audit_actions::AuditOnly;
 use crate::audit_file::AuditLine;
-use crate::store::Commit;
+use crate::store::{Commit, Scope};
 
 impl OpsStore {
     /// Appends the audit line of `action` by `by`, concerning the host `node_id` with `reason`,
@@ -42,15 +44,21 @@ impl OpsStore {
         let mut entry = AuditEntry::new(by, action.as_str());
         entry.node_id = node_id.map(str::to_owned);
         entry.reason = reason.map(str::to_owned);
+        let edit = self
+            .backend
+            .begin(Scope::AUDIT)
+            .map_err(OpsError::from)
+            .map_err(unavailable)?;
         let ringed = self.lock().audit.last().map_or(0, |last| last.seq);
-        entry.seq = self.backend.last_seq().max(ringed) + 1;
+        entry.seq = edit
+            .next_seq()
+            .unwrap_or_else(|| self.backend.last_seq().max(ringed) + 1);
         let line = AuditLine::of(&entry, (self.unix)());
         let commit = Commit {
             audit: std::slice::from_ref(&line),
             ..Commit::default()
         };
-        self.backend
-            .commit(&commit)
+        edit.commit_or(&commit, |commit| self.backend.commit(commit))
             .map_err(OpsError::from)
             .map_err(unavailable)?;
         announce(&entry);

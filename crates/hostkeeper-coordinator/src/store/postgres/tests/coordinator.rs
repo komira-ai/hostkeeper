@@ -98,8 +98,8 @@ fn waits() -> Timeouts {
     crate::store::postgres::TIMEOUTS
 }
 
-/// A coordinator running `web` and `db` over the three stores of one Postgres backend, as
-/// `serve` has them, and the marker `marker`: what [`crate::marks_support::start_on`] makes over
+/// A coordinator running `web` and `db` over the stores of one Postgres backend, as `serve` has
+/// them, and the marker `marker`: what [`crate::marks_support::start_on`] makes over
 /// a fake.
 pub(super) fn start_on_postgres(
     rig: &Rig,
@@ -126,9 +126,10 @@ pub(super) fn start_on_postgres(
     )
     .with_verdicts(VerdictFile::over(Arc::clone(&backend), loaded.verdicts))
     .with_accounts(crate::accounts::AccountStore::over(
-        backend,
+        Arc::clone(&backend),
         loaded.accounts,
     ))
+    .with_layout(crate::layout::LayoutStore::over(backend, loaded.layout))
 }
 
 impl Farm {
@@ -401,11 +402,12 @@ async fn an_accounts_change_that_landed_before_its_session_was_lost_is_taken_int
 
 /// Proves: a commit whose session was lost before the server committed it is not taken: the
 /// exclusion is refused, memory and the table both lack it after the revival, and the next
-/// change skips the number of the lost commit (it is numbered two past the newest row held), so
-/// no audit number is used twice.
+/// change takes the number the lost commit took (one past the newest row held): the audit
+/// counter, which the lost commit's rolled-back transaction never moved on, numbers the lines
+/// with no gap, and no audit number is used twice.
 ///
-/// Catches: a change taken into memory that the database never held, or an audit number of a
-/// lost commit used again for another change.
+/// Catches: a change taken into memory that the database never held, an audit number used twice,
+/// and a gap a lost commit leaves in the numbers.
 #[tokio::test]
 async fn a_commit_that_did_not_land_before_its_session_was_lost_is_not_taken() {
     let farm = Farm::plain("pg-not-landed").seeded().await;
@@ -455,7 +457,11 @@ async fn a_commit_that_did_not_land_before_its_session_was_lost_is_not_taken() {
         .expect("the next change lands")
         .entry
         .expect("an entry");
-    assert_eq!(done.seq, newest + 2, "the lost commit's number is skipped");
+    assert_eq!(
+        done.seq,
+        newest + 1,
+        "the counter's number the lost commit took is free again"
+    );
     let held = numbers(&farm);
     let mut unique = held.clone();
     unique.dedup();

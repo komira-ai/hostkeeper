@@ -30,7 +30,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use serde::{Deserialize, Serialize};
 
 use crate::desired::StoreError;
-use crate::store::{BackendError, Commit, Fake, Files, Landing, Shared};
+use crate::store::{BackendError, Commit, Edit, Fake, Files, Landing, Part, Scope, Shared};
 use crate::tokens::{TokenName, TokenNameError};
 
 /// The most bytes of a password hash a user record holds: a PHC string is a hundred or so.
@@ -531,16 +531,34 @@ impl AccountStore {
         &self,
         edit: impl FnOnce(&Accounts) -> Result<Accounts, AccountsError>,
     ) -> Result<(), AccountsError> {
-        let held = self.held();
+        let mut held = self.held();
+        let opened = self.begin(&mut held)?;
         let next = edit(&held);
-        self.commit_change(held, next)
+        self.commit_change(held, opened, next)
     }
 
-    /// Commits `next`, the result of an edit of `held`, and puts it in `held`. Not generic over
-    /// the edit, so each of its branches is one branch to cover.
+    /// Begins the edit of a change of the accounts ([`Scope::ACCOUNTS`]), and takes into `held`
+    /// what it read afresh.
+    ///
+    /// # Errors
+    /// [`AccountsError::Io`]: no edit can be begun now; nothing changed.
+    fn begin(&self, held: &mut Accounts) -> Result<Edit, AccountsError> {
+        let mut edit = self
+            .backend
+            .begin(Scope::ACCOUNTS)
+            .map_err(accounts_error)?;
+        if let Some(fresh) = edit.take_accounts() {
+            *held = fresh;
+        }
+        Ok(edit)
+    }
+
+    /// Commits `next`, the result of an edit of `held`, through `opened`, and puts it in `held`.
+    /// Not generic over the edit, so each of its branches is one branch to cover.
     fn commit_change(
         &self,
         mut held: MutexGuard<'_, Accounts>,
+        opened: Edit,
         next: Result<Accounts, AccountsError>,
     ) -> Result<(), AccountsError> {
         let next = next?;
@@ -551,12 +569,36 @@ impl AccountStore {
             accounts: Some((&held, &next)),
             ..Commit::default()
         };
-        self.backend.commit(&commit).map_err(|why| match why {
-            BackendError::Accounts(why) => why,
-            other => AccountsError::Io(other.into_store()),
-        })?;
+        opened
+            .commit_or(&commit, |commit| self.backend.commit(commit))
+            .map_err(accounts_error)?;
         *held = next;
         Ok(())
+    }
+
+    /// Reads the accounts again when the backend's rows moved on since memory's copy was read
+    /// (`docs/design/coordinator-multi-instance.md`, section 6, "Invalidation"); not while a
+    /// change holds them, which reads the part afresh itself.
+    pub(crate) fn refresh(&self) {
+        let Ok(mut held) = self.held.try_lock() else {
+            return;
+        };
+        match self.backend.reload(Part::Accounts) {
+            Ok(fresh) => {
+                if let Some(fresh) = fresh.accounts {
+                    *held = fresh;
+                }
+            }
+            Err(why) => tracing::warn!(%why, "the accounts could not be read again"),
+        }
+    }
+}
+
+/// The backend's error as the accounts' own.
+fn accounts_error(why: BackendError) -> AccountsError {
+    match why {
+        BackendError::Accounts(why) => why,
+        other => AccountsError::Io(other.into_store()),
     }
 }
 

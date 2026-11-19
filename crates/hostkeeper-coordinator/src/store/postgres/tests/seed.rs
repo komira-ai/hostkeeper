@@ -8,11 +8,11 @@ use super::TestDatabase;
 use crate::accounts::Accounts;
 use crate::desired;
 use crate::ops::OpsState;
-use crate::store::Commit;
 use crate::store::postgres::rows::{Stmt, Val};
 use crate::store::postgres::session::Session;
 use crate::store::postgres::transfer::Moved;
-use crate::store::postgres::{TIMEOUTS, migrate, records, state, statements};
+use crate::store::postgres::{TIMEOUTS, edit, migrate, records, state};
+use crate::store::{Commit, Scope};
 use crate::verdict_file;
 
 /// The statements that write `moved` into the empty tables of a database: the desired state, the
@@ -27,14 +27,17 @@ fn writes(moved: &Moved) -> Vec<Stmt> {
         verdict_file::Held::default(),
         Accounts::default(),
     );
-    let mut out = statements(&Commit {
-        desired: Some((&desired, &moved.loaded.desired)),
-        ops: Some((&ops, &moved.loaded.ops)),
-        verdicts: Some((&verdicts, &moved.loaded.verdicts)),
-        accounts: Some((&held, &moved.loaded.accounts)),
-        layout: Some((&crate::layout::Layout::default(), &moved.loaded.layout)),
-        audit: &moved.audit,
-    })
+    let (mut out, _) = edit::plan(
+        &Commit {
+            desired: Some((&desired, &moved.loaded.desired)),
+            ops: Some((&ops, &moved.loaded.ops)),
+            verdicts: Some((&verdicts, &moved.loaded.verdicts)),
+            accounts: Some((&held, &moved.loaded.accounts)),
+            layout: Some((&crate::layout::Layout::default(), &moved.loaded.layout)),
+            audit: &moved.audit,
+        },
+        Scope::WHOLE,
+    )
     .expect("the state makes rows");
     for (jti, until) in &moved.loaded.spent {
         out.push(Stmt {
