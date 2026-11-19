@@ -322,6 +322,12 @@ fn a_certificate_of_another_ca_returns_with_its_key_at_start() {
             );
         }
         assert_eq!(
+            enroller.run_once().expect("poll"),
+            Outcome::Pending,
+            "{name}"
+        );
+        assert_eq!(world.coordinator().enrolls.len(), 1, "{name}: posted once");
+        assert_eq!(
             enroller.enrollment(),
             Enrollment::Unreadable(
                 "the pki directory's generation 1 is not a certificate and key of this host"

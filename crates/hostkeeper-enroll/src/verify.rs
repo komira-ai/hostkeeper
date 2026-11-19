@@ -19,10 +19,11 @@
 //! [`verify`] is [`check`] and the validity window on the wall clock.
 //!
 //! A certificate that passes [`check`] is also compared with the host client certificate the CA
-//! issues now (design 4.4, `crates/hostkeeper-enrollment/src/ca/issue.rs`), in [`Verified::as_issued`]:
-//! its DNS names are exactly one, the host id (a certificate issued before the CA named the host
-//! by a DNS name has none), and its extended key usage is client authentication alone. Neither refuses it; the enroller renews such a certificate at once
-//! (`enroller.rs`). Its URI name is not compared: its prefix is the coordinator's setting.
+//! issues now (design 4.4, `crates/hostkeeper-enrollment/src/ca/issue.rs`), in
+//! [`Verified::as_issued`]: its DNS names are exactly one, the host id (a certificate issued
+//! before the CA named the host by a DNS name has none), and its extended key usage is client
+//! authentication alone. A difference refuses nothing; the enroller renews such a certificate at
+//! once (`enroller.rs`). Its URI name is not compared: its prefix is the coordinator's setting.
 //! [`certifies`] is what a stored certificate that fails [`check`] must still pass to be returned
 //! with `renewal_of`: its subject names this host and it certifies the key the host holds.
 //!
@@ -207,8 +208,8 @@ pub(crate) fn certifies(cert_pem: &str, key: &HostKey) -> Option<(HostId, (u64, 
     (spki == key.spki_der()).then(|| (host_id, window(&leaf)))
 }
 
-/// The certificate is an end entity for client authentication; see the module documentation.
-/// Its extended key usage's purposes.
+/// The certificate is an end entity for client authentication (see the module documentation);
+/// the purposes of its extended key usage.
 fn check_usage(leaf: &Certificate) -> Result<Vec<ObjectIdentifier>, Refusal> {
     let tbs = leaf.tbs_certificate();
     // An extension that does not decode, or appears twice, refuses as its check would.
