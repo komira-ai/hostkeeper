@@ -99,7 +99,7 @@ statement would cut. At 0.73 beats/s that is not a load, so none of section 7's 
 ## 8 and 9. M8, as built
 
 The choices sections 8 and 9 leave open, as the code makes them (`store/postgres/login_rows.rs`, `periodic.rs`,
-`alert_rows.rs`, `admin_rows.rs`, `records.rs`, `0023_sessions_and_jobs.sql`, `session.rs`, `jobs.rs`, `alerts_rows.rs`,
+`alert_rows.rs`, `admin_rows.rs`, `0023_sessions_and_jobs.sql`, `session.rs`, `jobs.rs`, `alerts_rows.rs`,
 `initial_admin.rs`, `config_database.rs`):
 
 - Time is the database's `now()`, read in the statement that judges by it; the stores take a fixed second instead only in a
@@ -118,9 +118,8 @@ The choices sections 8 and 9 leave open, as the code makes them (`store/postgres
 - The alerts' rows are keyed by the whole subject (six texts); only the job `alerts` writes them. `Alerts.List` reads them
   for each alert's first observed second (now for one the job has not noted yet) and writes and logs nothing; a write or
   read that fails falls back to this coordinator's memory, so the alert of a lost database is still logged.
-- A request's expiry is not a state of its own here: the conditional update is `SET expired_unix = now, expired_after_secs =
-  ttl WHERE state IN (1, 2) AND expired_unix = 0 AND now - posted_unix > ttl RETURNING ...` (`PgRecords::expire_waiting`),
-  through the enrollment records' port, so the files keep their locked sweep.
+- The request expiry's effect is M5's conditional write (the store's write lands only on the requests as read); M8 makes
+  its scan the job `request-expiry`, and the reload tick expires nothing over a database.
 - An end of sessions that the rows cannot take (a logout, a password change or reset, a user disabled or removed) is an
   error the caller answers (`store_unreachable`, `store_failed`), not a silent zero: the change itself stands, and making it
   again ends the sessions.
@@ -236,7 +235,9 @@ Tests, named (each asserts the behaviour in its name; the PR bodies list them by
 - Return after a back-out (the old-release-on-new-data test extended with the new release again after it):
   `new_release_again_continues_audit_numbers_after_the_release_before_ran` and
   `set_seq_of_a_row_changed_by_the_release_before_is_restamped_in_queue_order`.
-- `denied_host_is_refused_by_the_other_task`, `one_request_is_approved_once`, `session_is_valid_on_the_other_task`,
+- `denied_host_is_refused_by_the_other_task`, `one_request_is_approved_once` (**Built**, M5, in
+  `store/postgres/tests/enrollment_races.rs`, with `one_certificate_is_issued_per_round_by_two_tasks`,
+  `expiry_on_two_tasks_expires_each_request_once` and the others of that file), `session_is_valid_on_the_other_task`,
   `login_failures_count_across_tasks`, `expiry_audits_each_request_once`, `alert_is_logged_once`.
 - `lost_session_orders_nothing_until_revived_and_settles_by_ledger` (replaces the `lease.commits` settle test).
 - T5/T13: each test above has a failure case (the gate removed, the conditional write made unconditional).

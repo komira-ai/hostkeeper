@@ -130,6 +130,17 @@ impl TestDatabase {
         })
     }
 
+    /// How many write transactions the stores over it have committed (and not yet purged): each
+    /// inserts its row of `tx_ledger` first, and a read inserts none. What a test counts to say
+    /// that a call wrote nothing, whatever it read.
+    pub(crate) fn commits(&self) -> u64 {
+        self.rows("SELECT count(*) FROM tx_ledger")
+            .first()
+            .and_then(|row| row.first().cloned().flatten())
+            .and_then(|count| count.parse().ok())
+            .expect("a count")
+    }
+
     /// The rows `sql` answers, each as text, beside the store.
     pub(crate) fn rows(&self, sql: &str) -> Vec<Vec<Option<String>>> {
         let (name, sql) = (self.name.clone(), sql.to_owned());
@@ -223,6 +234,20 @@ impl TestDatabase {
                     &[&name],
                 )
                 .expect("the sessions are ended");
+            // A backend told to end ends a moment later: wait until none is left, so the next
+            // use of a store's session finds it gone.
+            while client
+                .query_one(
+                    "SELECT count(*) FROM pg_stat_activity WHERE datname = $1 \
+                     AND pid <> pg_backend_pid()",
+                    &[&name],
+                )
+                .expect("the sessions are counted")
+                .get::<_, i64>(0)
+                > 0
+            {
+                std::thread::yield_now();
+            }
         });
     }
 }
@@ -299,7 +324,7 @@ mod alert_rows;
 mod audit_only;
 mod connect;
 mod coordinator;
-mod expiry_rows;
+mod enrollment_races;
 mod generations;
 mod host_groups;
 mod instance;

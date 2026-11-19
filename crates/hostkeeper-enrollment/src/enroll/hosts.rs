@@ -10,8 +10,8 @@
 
 use std::sync::PoisonError;
 
-use super::records::Record;
-use super::rows::{DenyState, claims_of_pb, corrupt};
+use super::records::{Record, Seen};
+use super::rows::{DenyState, HostRow, claims_of_pb, corrupt};
 use super::store::{EnrollmentStore, LIVE_WINDOW_SECS};
 use super::{EnrolledHost, HostHeld, HostRunning, RequestState, StoreError};
 use crate::names::{HostId, KeyHash, Role};
@@ -19,17 +19,20 @@ use crate::names::{HostId, KeyHash, Role};
 impl EnrollmentStore {
     /// Denies `host`: a retiring deny row (a row already retiring or retired is kept), and the
     /// host's request marked denied, so a repost or poll of its key is refused. Returns whether
-    /// the row is new: `false` when the host was denied already, decided under the store's lock,
-    /// so of two calls at once exactly one sees `true`.
+    /// the row is new: `false` when the host was denied already, decided by a write that lands
+    /// only on the deny row as read, so of two calls at once, in one coordinator or two, exactly
+    /// one sees `true`.
     ///
     /// # Errors
     /// [`StoreError`] when a record cannot be read or written.
     pub fn deny(&self, host: &HostId) -> Result<bool, StoreError> {
-        let _held = self.lock()?;
-        let new = !self.denied(host)?;
-        let row = new.then(|| Self::deny_record(host, DenyState::Retiring, &[]));
-        self.commit_denied(host, row.into_iter().collect())?;
-        Ok(new)
+        self.decided(|| {
+            let mut seen = Vec::new();
+            let new = !self.saw_denied(host, &mut seen)?;
+            let row = new.then(|| Self::deny_record(host, DenyState::Retiring, &[]));
+            self.commit_denied(host, row.into_iter().collect(), seen)?;
+            Ok(new)
+        })
     }
 
     /// Records that `host` retired: its deny row becomes final (written denied when it was not
@@ -38,33 +41,48 @@ impl EnrollmentStore {
     /// # Errors
     /// [`StoreError`] when a record cannot be read or written.
     pub fn retire(&self, host: &HostId) -> Result<(), StoreError> {
-        let _held = self.lock()?;
-        self.commit_denied(host, vec![Self::deny_record(host, DenyState::Retired, &[])])
+        self.decided(|| {
+            let mut seen = Vec::new();
+            self.saw_deny(host, &mut seen)?;
+            let row = Self::deny_record(host, DenyState::Retired, &[]);
+            self.commit_denied(host, vec![row], seen)
+        })
     }
 
-    /// Commits `rows` (the deny row, if any) with `host`'s request marked denied. When the
-    /// request cannot be read, the deny row is committed alone and the error returned: the host
-    /// is refused whatever else fails.
-    fn commit_denied(&self, host: &HostId, mut rows: Vec<Record>) -> Result<(), StoreError> {
-        match self.request_denied(host) {
+    /// Commits `rows` (the deny row, if any) with `host`'s request marked denied, when the records
+    /// of `seen` and the host's record and request are as read. When the request cannot be read,
+    /// the deny row is committed alone and the error returned: the host is refused whatever else
+    /// fails.
+    fn commit_denied(
+        &self,
+        host: &HostId,
+        mut rows: Vec<Record>,
+        mut seen: Vec<Seen>,
+    ) -> Result<(), StoreError> {
+        match self.request_denied(host, &mut seen) {
             Ok(request) => {
                 rows.extend(request);
-                self.commit(&rows)
+                self.commit(&seen, &rows)
             }
             Err(why) => {
-                self.commit(&rows)?;
+                self.commit(&seen, &rows)?;
                 Err(why)
             }
         }
     }
 
-    /// The request of `host`'s key marked denied; `None` for a host id never approved.
-    fn request_denied(&self, host: &HostId) -> Result<Option<Record>, StoreError> {
-        let Some(row) = self.load_host(host)? else {
+    /// The request of `host`'s key marked denied; `None` for a host id never approved. The
+    /// host's record and request are noted in `seen` as read.
+    fn request_denied(
+        &self,
+        host: &HostId,
+        seen: &mut Vec<Seen>,
+    ) -> Result<Option<Record>, StoreError> {
+        let Some(row) = self.saw_host(host, seen)? else {
             return Ok(None);
         };
         let missing = corrupt(&self.host_path(host), "the host's request is missing");
-        let mut request = self.load_request(&row.key)?.ok_or(missing)?;
+        let mut request = self.saw_request(&row.key, seen)?.ok_or(missing)?;
         request.set_state(RequestState::Denied);
         Ok(Some(Record::Request(request.pb)))
     }
@@ -84,12 +102,14 @@ impl EnrollmentStore {
     /// # Errors
     /// [`StoreError`] when the host record cannot be read, or holds no role.
     pub fn host_role(&self, host: &HostId) -> Result<Option<Role>, StoreError> {
-        let Some(row) = self.load_host(host)? else {
-            return Ok(None);
-        };
-        Role::parse(&row.pb.role)
-            .map(Some)
-            .map_err(|e| corrupt(&self.host_path(host), &e.to_string()))
+        self.load_host(host)?
+            .map(|row| self.role_of(host, &row))
+            .transpose()
+    }
+
+    /// The role the host record `row` of `host` holds.
+    fn role_of(&self, host: &HostId, row: &HostRow) -> Result<Role, StoreError> {
+        Role::parse(&row.pb.role).map_err(|e| corrupt(&self.host_path(host), &e.to_string()))
     }
 
     /// The role `host` was approved for, when its approval is for the key `key_hash`; `None`
@@ -104,13 +124,10 @@ impl EnrollmentStore {
         host: &HostId,
         key_hash: &KeyHash,
     ) -> Result<Option<Role>, StoreError> {
-        let holds = self
-            .load_host(host)?
-            .is_some_and(|row| row.key.equals_in_constant_time(key_hash));
-        if !holds {
-            return Ok(None);
-        }
-        self.host_role(host)
+        self.load_host(host)?
+            .filter(|row| row.key.equals_in_constant_time(key_hash))
+            .map(|row| self.role_of(host, &row))
+            .transpose()
     }
 
     /// `host` as enrolled: its host record names the key it was approved for, and the request of
@@ -228,9 +245,13 @@ impl EnrollmentStore {
     /// key, or a renewal) records its next heartbeat. A host id never approved has no record and
     /// nothing is recorded.
     ///
-    /// Decided under the store's lock, so of two heartbeats at once exactly one is written. A
-    /// host whose record is known to hold the time already (this store wrote or read it) is
-    /// answered from memory, without the lock or a read; an approval of the host forgets it.
+    /// Decided by a write that lands only on the host record as read, so of two heartbeats at
+    /// once exactly one is written, and a record another writer changed since is never written
+    /// back. A host whose record is known to hold the time already (this store wrote or read it)
+    /// is answered from memory, without the lock or a read; an approval of the host by this store
+    /// forgets it. That memory is this store's alone: after an approval of the host by another
+    /// coordinator on the same database, this one still answers from it, and the first heartbeat
+    /// of the new approval is recorded by a coordinator that did not know the host as heard.
     ///
     /// # Errors
     /// [`StoreError`] when the host record cannot be read or written.
@@ -239,15 +260,16 @@ impl EnrollmentStore {
         if heard().contains(host) {
             return Ok(());
         }
-        let _held = self.lock()?;
-        let Some(row) = self.load_host(host)? else {
-            return Ok(());
-        };
-        if row.pb.first_heartbeat_unix.is_none() {
-            self.records().set_first_heartbeat(&row.pb, now)?;
-        }
-        heard().insert(host.clone());
-        Ok(())
+        self.decided(|| {
+            let Some(row) = self.load_host(host)? else {
+                return Ok(());
+            };
+            if row.pb.first_heartbeat_unix.is_none() {
+                self.records().set_first_heartbeat(&row.pb, now)?;
+            }
+            heard().insert(host.clone());
+            Ok(())
+        })
     }
 
     /// The heartbeat path's report that a heartbeat of `host` it accepted at `now` said a
@@ -256,8 +278,8 @@ impl EnrollmentStore {
     /// is. An approval writes the host record without it. A host id never approved has no
     /// record and nothing is recorded.
     ///
-    /// Decided under the store's lock, as [`Self::note_heartbeat`] is; a host whose record is
-    /// known to hold the time already is answered from memory, and an approval forgets it.
+    /// Decided as [`Self::note_heartbeat`] is; a host whose record is known to hold the time
+    /// already is answered from memory, and an approval by this store forgets it.
     ///
     /// # Errors
     /// [`StoreError`] when the host record cannot be read or written.
@@ -266,15 +288,16 @@ impl EnrollmentStore {
         if served().contains(host) {
             return Ok(());
         }
-        let _held = self.lock()?;
-        let Some(row) = self.load_host(host)? else {
-            return Ok(());
-        };
-        if row.pb.first_serving_unix.is_none() {
-            self.records().set_first_serving(&row.pb, now)?;
-        }
-        served().insert(host.clone());
-        Ok(())
+        self.decided(|| {
+            let Some(row) = self.load_host(host)? else {
+                return Ok(());
+            };
+            if row.pb.first_serving_unix.is_none() {
+                self.records().set_first_serving(&row.pb, now)?;
+            }
+            served().insert(host.clone());
+            Ok(())
+        })
     }
 
     /// The heartbeat path's report that a daemon on machine `machine_id` speaks for `host` at
@@ -290,22 +313,23 @@ impl EnrollmentStore {
         machine_id: &str,
         now: u64,
     ) -> Result<bool, StoreError> {
-        let _held = self.lock()?;
-        let row = self
-            .load_host(host)?
-            .ok_or(StoreError::UnknownHost(host.clone()))?;
-        let machines = {
-            let mut live = self.live.lock().unwrap_or_else(PoisonError::into_inner);
-            let seen = live.entry(host.clone()).or_default();
-            seen.retain(|_, at| now.saturating_sub(*at) <= LIVE_WINDOW_SECS);
-            seen.insert(machine_id.to_owned(), now);
-            seen.len()
-        };
-        if machines > 1 && !row.pb.duplicate {
-            self.records().set_duplicate(&row.pb)?;
-            tracing::warn!(host_id = %host, machines, "two live daemons report one host id");
-            return Ok(true);
-        }
-        Ok(row.pb.duplicate)
+        self.decided(|| {
+            let row = self
+                .load_host(host)?
+                .ok_or(StoreError::UnknownHost(host.clone()))?;
+            let machines = {
+                let mut live = self.live.lock().unwrap_or_else(PoisonError::into_inner);
+                let seen = live.entry(host.clone()).or_default();
+                seen.retain(|_, at| now.saturating_sub(*at) <= LIVE_WINDOW_SECS);
+                seen.insert(machine_id.to_owned(), now);
+                seen.len()
+            };
+            if machines > 1 && !row.pb.duplicate {
+                self.records().set_duplicate(&row.pb)?;
+                tracing::warn!(host_id = %host, machines, "two live daemons report one host id");
+                return Ok(true);
+            }
+            Ok(row.pb.duplicate)
+        })
     }
 }

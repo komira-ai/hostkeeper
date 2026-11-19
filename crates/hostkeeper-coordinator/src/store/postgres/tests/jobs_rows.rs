@@ -65,7 +65,7 @@ async fn node(test: &str, plan: Plan) -> Node {
     let mut coordinator = super::coordinator::start_on_postgres(&rig, &store, loaded, &marker);
     let mut enrollment = None;
     if plan.enrolled {
-        let records = Arc::new(crate::store::postgres::PgRecords::over(&store).expect("records"));
+        let records = Arc::new(crate::store::postgres::PgRecords::over(&store));
         let files = Files::in_dir(&rig.dir);
         let started = Arc::new(
             setup(

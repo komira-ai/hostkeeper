@@ -46,10 +46,14 @@ pub trait SpentJtis: Send + Sync {
     /// expired.
     fn load(&self) -> Vec<(String, u64)>;
 
-    /// Records that `jti` is spent until `until`, durably, before the token is accepted.
+    /// Records that `jti` is spent until `until`, durably, before the token is accepted. What
+    /// it answers decides: the verifier's memory only refuses an id earlier, and an id spent
+    /// through another verifier on the same records is refused here.
     ///
     /// # Errors
-    /// The id could not be recorded: the verifier refuses the token
+    /// [`io::ErrorKind::AlreadyExists`]: the records hold the id spent and not yet past, a
+    /// replay ([`Refusal::Replayed`]), which the verifier then remembers. Any other: the id could
+    /// not be recorded, and the verifier refuses the token
     /// ([`Refusal::ReplayCacheUnavailable`]).
     fn record(&self, jti: &str, until: u64) -> io::Result<()>;
 }
@@ -431,8 +435,9 @@ impl Verifier {
     }
 
     /// Remembers `jti` until `exp` (plus the leeway the token is still accepted for): recorded
-    /// in [`SpentJtis`] first, and in memory only once it is recorded there. The memory's lock
-    /// is held across both, so the same id presented twice at once is spent once.
+    /// in [`SpentJtis`] first, and in memory only once it is recorded there, or once the records
+    /// answer that it was spent already (through another verifier on the same records). The
+    /// memory's lock is held across both, so the same id presented twice at once is spent once.
     fn spend(&self, jti: &str, exp: i64, now: u64) -> Result<(), Refusal> {
         let until = u64::try_from(exp).unwrap_or(0).saturating_add(LEEWAY_SECS);
         let mut seen = self
@@ -446,9 +451,16 @@ impl Verifier {
         if seen.len() >= MAX_REMEMBERED_JTIS {
             return Err(Refusal::ReplayCacheFull);
         }
-        if let Err(why) = self.spent.record(jti, until) {
-            tracing::error!(%why, "a spent token id could not be recorded: the token is refused");
-            return Err(Refusal::ReplayCacheUnavailable);
+        match self.spent.record(jti, until) {
+            Ok(()) => {}
+            Err(why) if why.kind() == io::ErrorKind::AlreadyExists => {
+                seen.insert(jti.to_owned(), until);
+                return Err(Refusal::Replayed);
+            }
+            Err(why) => {
+                tracing::error!(%why, "a spent token id could not be recorded: the token is refused");
+                return Err(Refusal::ReplayCacheUnavailable);
+            }
         }
         seen.insert(jti.to_owned(), until);
         Ok(())

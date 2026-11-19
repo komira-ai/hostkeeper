@@ -2,20 +2,27 @@
 //! request takes before issuance: [`EnrollmentStore::post`] and [`EnrollmentStore::approve`]
 //! (or [`EnrollmentStore::approve_recorded`]), and the one it takes when no operator approves
 //! it in time: [`EnrollmentStore::expire`].
+//!
+//! Every decision that writes runs in [`EnrollmentStore::decided`]: it reads the records it
+//! decides by, noting each as it was read ([`Seen`]), and its write lands only when they still
+//! are so. When another writer changed one in between (another coordinator on the same
+//! database, whose records take no lock), the write is refused with nothing written and the
+//! decision runs once more on what that writer left: zero rows means the other one won, and the
+//! caller reads its result (docs/design/coordinator-multi-instance.md, section 6).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use super::records::{FileRecords, Record, RecordKey, Records, RecordsLock, pb};
+use super::records::{FileRecords, Record, RecordKey, Records, RecordsLock, Seen, pb};
 use super::rows::{
     DenyState, HostRow, RequestRow, SCHEMA, claims_of_pb, claims_to_pb, corrupt, deny_state,
 };
 use super::{
-    Approval, ApprovalRecord, ApproveError, Claims, Decision, HostRunning, NewRequest, PostError,
-    PostOutcome, RecordedApproval, RequestState, RequestView, StoreError,
+    Approval, ApprovalRecord, ApproveError, Claims, Decision, HostRunning, IssueError, NewRequest,
+    PostError, PostOutcome, RecordedApproval, RejectError, RequestState, RequestView, StoreError,
 };
-use crate::ca::{HOST_VALIDITY_SECS, check_request};
+use crate::ca::{HOST_VALIDITY_SECS, VerifiedRequest, check_request};
 use crate::fs::Fs;
 use crate::names::{HostId, KeyHash, MacAddress};
 
@@ -25,6 +32,13 @@ pub const LIVE_WINDOW_SECS: u64 = 600;
 
 /// The serial of the first certificate the store hands out; 1 is the CA certificate's.
 pub const FIRST_SERIAL: u64 = 2;
+
+/// How many times one decision runs at most ([`EnrollmentStore::decided`]): a write refused
+/// because another writer changed a record the decision read runs it again. A decision makes at
+/// most two writes (issuance: a serial reserved, then the certificate recorded), and each record
+/// moves forward at every refusal, so two refused runs and the run that reads what the others
+/// left answer every decision that only other decisions race.
+const DECISION_RUNS: usize = 3;
 
 /// How many requests may wait for an operator, unless [`EnrollmentStore::with_max_pending`]
 /// says otherwise (the coordinator's `--max-pending-enrollments`).
@@ -62,10 +76,47 @@ impl std::fmt::Debug for EnrollmentStore {
     }
 }
 
-/// The store's lock, held: the records' lock is released before the mutex.
+/// The store's lock, held: the store's mutex, when the records' lock asks for it, is released
+/// before the records' lock.
 pub(super) struct Held<'a> {
+    _guard: Option<MutexGuard<'a, ()>>,
     _records: RecordsLock,
-    _guard: MutexGuard<'a, ()>,
+}
+
+/// An error that may be a write refused because a record its decision read was changed by
+/// another writer ([`StoreError::Raced`]).
+pub(super) trait Contended: std::fmt::Display {
+    fn raced(&self) -> bool;
+}
+
+impl Contended for StoreError {
+    fn raced(&self) -> bool {
+        matches!(self, StoreError::Raced { .. })
+    }
+}
+
+impl Contended for PostError {
+    fn raced(&self) -> bool {
+        matches!(self, PostError::Store(e) if e.raced())
+    }
+}
+
+impl Contended for ApproveError {
+    fn raced(&self) -> bool {
+        matches!(self, ApproveError::Store(e) if e.raced())
+    }
+}
+
+impl Contended for IssueError {
+    fn raced(&self) -> bool {
+        matches!(self, IssueError::Store(e) if e.raced())
+    }
+}
+
+impl Contended for RejectError {
+    fn raced(&self) -> bool {
+        matches!(self, RejectError::Store(e) if e.raced())
+    }
 }
 
 impl EnrollmentStore {
@@ -121,29 +172,78 @@ impl EnrollmentStore {
         self.host_validity_secs
     }
 
-    /// Takes the store's mutex, then the records' lock.
+    /// Takes the records' lock, then the store's mutex when that lock is exclusive
+    /// ([`RecordsLock::exclusive`]): records whose writes check what was read take neither.
     pub(super) fn lock(&self) -> Result<Held<'_>, StoreError> {
-        let guard = self.mutex.lock().unwrap_or_else(PoisonError::into_inner);
+        let records = self.records.lock()?;
+        let guard = records
+            .exclusive()
+            .then(|| self.mutex.lock().unwrap_or_else(PoisonError::into_inner));
         Ok(Held {
-            _records: self.records.lock()?,
             _guard: guard,
+            _records: records,
         })
+    }
+
+    /// Runs `decide` under the store's lock (none when the records' writes check what was read),
+    /// and again when its write was refused because
+    /// another writer changed a record it read ([`StoreError::Raced`]), up to [`DECISION_RUNS`]
+    /// runs: each run reads what the writers before it left, so the caller is answered as the
+    /// decision stands after them. The last run's refusal is returned.
+    pub(super) fn decided<R, E: Contended + From<StoreError>>(
+        &self,
+        decide: impl Fn() -> Result<R, E>,
+    ) -> Result<R, E> {
+        let mut runs = 1;
+        loop {
+            let decided = {
+                let _held = self.lock()?;
+                decide()
+            };
+            match decided {
+                Err(error) if error.raced() && runs < DECISION_RUNS => {
+                    tracing::debug!("another writer changed a record this decision read: again");
+                    runs += 1;
+                }
+                decided => return decided,
+            }
+        }
     }
 
     pub(super) fn records(&self) -> &dyn Records {
         &*self.records
     }
 
-    /// Writes `records` in one commit.
-    pub(super) fn commit(&self, records: &[Record]) -> Result<(), StoreError> {
-        self.records.commit(records)
+    /// Writes `records` in one commit, when every record of `seen` still is as it was read.
+    pub(super) fn commit(&self, seen: &[Seen], records: &[Record]) -> Result<(), StoreError> {
+        self.records.commit(seen, records)
     }
 
     pub(super) fn load_request(&self, id: &KeyHash) -> Result<Option<RequestRow>, StoreError> {
-        self.records
-            .request(id)?
-            .map(|pb| RequestRow::check(self.records.place(&RecordKey::Request(*id)), pb, id))
+        self.saw_request(id, &mut Vec::new())
+    }
+
+    /// The request `id`, checked, noted in `seen` as it was read.
+    pub(super) fn saw_request(
+        &self,
+        id: &KeyHash,
+        seen: &mut Vec<Seen>,
+    ) -> Result<Option<RequestRow>, StoreError> {
+        let pb = self.records.request(id)?;
+        seen.push(Seen::Request(*id, pb.clone()));
+        pb.map(|pb| RequestRow::check(self.records.place(&RecordKey::Request(*id)), pb, id))
             .transpose()
+    }
+
+    /// The issued certificate of request `id`, noted in `seen` as it was read.
+    pub(super) fn saw_issued(
+        &self,
+        id: &KeyHash,
+        seen: &mut Vec<Seen>,
+    ) -> Result<Option<pb::Issued>, StoreError> {
+        let issued = self.records.issued(id)?;
+        seen.push(Seen::Issued(*id, issued.clone()));
+        Ok(issued)
     }
 
     /// Every request, checked, in the order of their ids.
@@ -160,9 +260,18 @@ impl EnrollmentStore {
     }
 
     pub(super) fn load_host(&self, host: &HostId) -> Result<Option<HostRow>, StoreError> {
-        self.records
-            .host(host)?
-            .map(|pb| HostRow::check(&self.host_path(host), pb))
+        self.saw_host(host, &mut Vec::new())
+    }
+
+    /// The host `host`, checked, noted in `seen` as it was read.
+    pub(super) fn saw_host(
+        &self,
+        host: &HostId,
+        seen: &mut Vec<Seen>,
+    ) -> Result<Option<HostRow>, StoreError> {
+        let pb = self.records.host(host)?;
+        seen.push(Seen::Host(host.clone(), pb.clone()));
+        pb.map(|pb| HostRow::check(&self.host_path(host), pb))
             .transpose()
     }
 
@@ -172,10 +281,28 @@ impl EnrollmentStore {
     }
 
     pub(super) fn load_deny(&self, host: &HostId) -> Result<Option<DenyState>, StoreError> {
-        self.records
-            .deny(host)?
-            .map(|pb| deny_state(&self.records.place(&RecordKey::Deny(host.clone())), &pb))
+        self.saw_deny(host, &mut Vec::new())
+    }
+
+    /// The state of the deny row of `host`, noted in `seen` as it was read.
+    pub(super) fn saw_deny(
+        &self,
+        host: &HostId,
+        seen: &mut Vec<Seen>,
+    ) -> Result<Option<DenyState>, StoreError> {
+        let pb = self.records.deny(host)?;
+        seen.push(Seen::Deny(host.clone(), pb.clone()));
+        pb.map(|pb| deny_state(&self.records.place(&RecordKey::Deny(host.clone())), &pb))
             .transpose()
+    }
+
+    /// Whether `host` is denied (retiring or retired), its deny row noted in `seen`.
+    pub(super) fn saw_denied(
+        &self,
+        host: &HostId,
+        seen: &mut Vec<Seen>,
+    ) -> Result<bool, StoreError> {
+        Ok(self.saw_deny(host, seen)?.is_some_and(DenyState::is_active))
     }
 
     /// The deny row of `host` in `state`, cleared by the request `cleared_by` (none: empty).
@@ -201,7 +328,32 @@ impl EnrollmentStore {
     /// [`StoreError`] when the counter cannot be read or written.
     pub fn allocate_serial(&self) -> Result<u64, StoreError> {
         let _held = self.lock()?;
-        self.records.take_serial(None)
+        self.records.take_serial(&[], None)
+    }
+
+    /// A serial number for a renewed certificate of `host` for the key `key_hash`, taken in the
+    /// same write that finds the host holding that key, not denied and not marked duplicate;
+    /// `None`, and nothing taken, when it is not so. A deny or a new key another writer records
+    /// before the serial is taken makes this decide again on it.
+    ///
+    /// # Errors
+    /// [`StoreError`] when a record or the counter cannot be read or written.
+    pub fn renewal_serial(
+        &self,
+        host: &HostId,
+        key_hash: &KeyHash,
+    ) -> Result<Option<u64>, StoreError> {
+        self.decided(|| {
+            let mut seen = Vec::new();
+            let denied = self.saw_denied(host, &mut seen)?;
+            let holds = self
+                .saw_host(host, &mut seen)?
+                .is_some_and(|row| row.key == *key_hash && !row.pb.duplicate);
+            if denied || !holds {
+                return Ok(None);
+            }
+            self.records.take_serial(&seen, None).map(Some)
+        })
     }
 
     /// The request `id`, as the store holds it.
@@ -239,39 +391,32 @@ impl EnrollmentStore {
 
     /// Expires every request that has waited for an operator (pending or a duplicate claim)
     /// more than `ttl_secs` at `now` (unix seconds): one posted at `now - ttl_secs` or later
-    /// still waits. Each is marked [`RequestState::Expired`] at `now`, under the store lock, so
-    /// an approval and the sweep never both take one request, and a request is expired once: a
-    /// later sweep finds it no longer waiting. Returns the requests it expired, in the order of
-    /// their ids, as the store now holds them.
+    /// still waits. Each is marked [`RequestState::Expired`] at `now`, in a write that lands only
+    /// on each request it expires as read, so an approval and the sweep never both take one
+    /// request, and a request is expired once, by one sweep however many coordinators sweep: a
+    /// later or racing sweep finds it no longer waiting. Returns the requests it expired, in the
+    /// order of their ids, as the store now holds them.
     ///
     /// # Errors
     /// [`StoreError`] when a record cannot be read or written. Every request it expires is
     /// written in one commit: over the files, the ones written before a failure stay expired;
     /// over records that commit all or nothing, none does.
     pub fn expire(&self, now: u64, ttl_secs: u64) -> Result<Vec<RequestView>, StoreError> {
-        let _held = self.lock()?;
-        if let Some(expired) = self.records.expire_waiting(now, ttl_secs)? {
-            let mut rows = expired
-                .into_iter()
-                .map(|(id, pb)| {
-                    let key = RecordKey::Request(id);
-                    RequestRow::check(self.records.place(&key), pb, &id)
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            rows.sort_by_key(|row| row.id);
-            return rows.iter().map(view).collect();
-        }
-        let mut expired = Vec::new();
-        let mut records = Vec::new();
-        for mut row in self.all_requests()? {
-            if row.state.is_pending() && now.saturating_sub(row.pb.posted_unix) > ttl_secs {
-                row.expire(now, ttl_secs);
-                expired.push(view(&row)?);
-                records.push(Record::Request(row.pb));
+        self.decided(|| {
+            let mut expired = Vec::new();
+            let mut records = Vec::new();
+            let mut seen = Vec::new();
+            for mut row in self.all_requests()? {
+                if row.state.is_pending() && now.saturating_sub(row.pb.posted_unix) > ttl_secs {
+                    seen.push(Seen::Request(row.id, Some(row.pb.clone())));
+                    row.expire(now, ttl_secs);
+                    expired.push(view(&row)?);
+                    records.push(Record::Request(row.pb));
+                }
             }
-        }
-        self.commit(&records)?;
-        Ok(expired)
+            self.commit(&seen, &records)?;
+            Ok(expired)
+        })
     }
 
     /// Records `request`, posted at `now` (unix seconds).
@@ -292,25 +437,43 @@ impl EnrollmentStore {
     /// and nothing is written: no waiting request is dropped for it, and a repost of a waiting
     /// request is accepted as before. Approved, issued and denied requests do not count.
     ///
+    /// The write lands only when the key's request, and the host and deny row a renewal names,
+    /// are as read; the pending cap and the machine id and MAC of other requests and hosts are
+    /// read without that check, so two coordinators posting at one moment may each let one
+    /// request in past the cap, or each miss the other's claim of one machine id (the approval
+    /// of either still checks its host id).
+    ///
     /// # Errors
     /// [`PostError::Profile`] for a CSR outside the profile, [`PostError::RenewalNotAllowed`],
     /// [`PostError::PendingFull`], [`PostError::Store`].
     pub fn post(&self, request: NewRequest, now: u64) -> Result<PostOutcome, PostError> {
         let verified = check_request(&request.csr_der)?;
+        self.decided(|| self.post_once(request.clone(), &verified, now))
+    }
+
+    /// One decision of [`Self::post`], of the request whose CSR is `verified`.
+    fn post_once(
+        &self,
+        request: NewRequest,
+        verified: &VerifiedRequest,
+        now: u64,
+    ) -> Result<PostOutcome, PostError> {
         let id = verified.key().key_hash();
-        let _held = self.lock()?;
+        let mut seen = Vec::new();
         let host = match &request.renewal_of {
-            Some(host_id) => Some(self.renewal_host(host_id, &id)?),
+            Some(host_id) => Some(self.renewal_host(host_id, &id, &mut seen)?),
             None => None,
         };
-        let existing = self.load_request(&id)?;
+        let existing = self.saw_request(&id, &mut seen)?;
         let next_round = host.is_some()
             && existing
                 .as_ref()
                 .is_some_and(|row| row.state == RequestState::Issued);
         let round = match existing {
             Some(row) if row.state == RequestState::Expired => row.pb.round,
-            Some(row) if !next_round => return self.repost(row, &request).map_err(PostError::from),
+            Some(row) if !next_round => {
+                return self.repost(row, &request, &seen).map_err(PostError::from);
+            }
             Some(row) => row.pb.round + 1,
             None => 0,
         };
@@ -354,7 +517,7 @@ impl EnrollmentStore {
             key: verified.key().clone(),
             state,
         };
-        self.commit(&[Record::Request(row.pb)])?;
+        self.commit(&seen, &[Record::Request(row.pb)])?;
         if let Some(reason) = reason {
             alert(&id, &request.claims.machine_id, reason);
         }
@@ -367,10 +530,16 @@ impl EnrollmentStore {
         })
     }
 
-    /// The host a `renewal_of` names, when it may renew with key `id`.
-    fn renewal_host(&self, host: &HostId, id: &KeyHash) -> Result<HostRow, PostError> {
-        let denied = self.denied(host)?;
-        self.load_host(host)?
+    /// The host a `renewal_of` names, when it may renew with key `id`; its host record and deny
+    /// row noted in `seen`.
+    fn renewal_host(
+        &self,
+        host: &HostId,
+        id: &KeyHash,
+        seen: &mut Vec<Seen>,
+    ) -> Result<HostRow, PostError> {
+        let denied = self.saw_denied(host, seen)?;
+        self.saw_host(host, seen)?
             .filter(|row| row.key == *id && !denied)
             .ok_or(PostError::RenewalNotAllowed)
     }
@@ -422,8 +591,14 @@ impl EnrollmentStore {
     }
 
     /// The same key posted again: the same request, flagged when its machine id changed, and
-    /// marked as having presented a Mac nonce when it waits and does now.
-    fn repost(&self, mut row: RequestRow, request: &NewRequest) -> Result<PostOutcome, StoreError> {
+    /// marked as having presented a Mac nonce when it waits and does now; written when the
+    /// records of `seen` are as read.
+    fn repost(
+        &self,
+        mut row: RequestRow,
+        request: &NewRequest,
+        seen: &[Seen],
+    ) -> Result<PostOutcome, StoreError> {
         let changed = row.machine_id() != request.claims.machine_id;
         let flag = changed && row.state == RequestState::Pending;
         let presented =
@@ -435,7 +610,7 @@ impl EnrollmentStore {
             row.pb.mac_nonce_presented = true;
         }
         if flag || presented {
-            self.commit(&[Record::Request(row.pb.clone())])?;
+            self.commit(seen, &[Record::Request(row.pb.clone())])?;
         }
         if changed {
             alert(
@@ -455,16 +630,20 @@ impl EnrollmentStore {
 
     /// Approves the pending request `request_id` as `decision` says.
     ///
-    /// `key_hash` is the SHA-256 of the key the operator saw; it must be the request's. Under
-    /// the store lock, in this order: the host id must not be denied and must not be held by
+    /// `key_hash` is the SHA-256 of the key the operator saw; it must be the request's. In this
+    /// order, each read noted for the write: the host id must not be denied and must not be held by
     /// another key, unless `decision.replace` (not for a renewal, which must name the host it
     /// renews); a host group the decision names must be the one of the host a renewal renews or
     /// a `replace` takes the id of, when that host is in one and not denied
     /// ([`ApproveError::HostGroupDiffers`]); then a deny row it clears is marked cleared by this
     /// request, the host row is written (host id, key hash, machine id, role, services, host
     /// group), and the request is marked
-    /// approved. A crash between those writes leaves a host row of this key, which a retry
-    /// accepts as its own. It does not issue. The key hash is compared in constant time.
+    /// approved, in one commit that lands only when the request is still as read (pending), and
+    /// the host id's host record, deny row and Mac nonce too: of two approvals of one request, or
+    /// of two requests for one new host id, at once, the second to write decides again and is
+    /// refused (`not_pending`, `host_id_taken`). Over records that write one record after the
+    /// other, a crash between those writes leaves a host row of this key, which a retry accepts
+    /// as its own. It does not issue. The key hash is compared in constant time.
     ///
     /// # Errors
     /// [`ApproveError`]; nothing is written when one is returned before the writes.
@@ -474,12 +653,11 @@ impl EnrollmentStore {
         key_hash: &KeyHash,
         decision: &Decision,
     ) -> Result<Approval, ApproveError> {
-        let _held = self.lock()?;
-        self.approve_held(request_id, key_hash, decision, None)
+        self.decided(|| self.approve_held(request_id, key_hash, decision, None))
     }
 
     /// [`Self::approve`] with `record` written into the approval: who approved, when and why.
-    /// Under the same lock, before anything is written, it also refuses a request flagged
+    /// In the same decision, before anything is written, it also refuses a request flagged
     /// `duplicate_claim` unless `decision.replace` ([`ApproveError::DuplicateClaim`]), and
     /// checks the Mac nonce of `record`, if any, at `record.approved_unix`: issued, unexpired,
     /// unused, for the serial the request claims, and for this request when the nonce names one
@@ -504,8 +682,7 @@ impl EnrollmentStore {
         decision: &Decision,
         record: &ApprovalRecord,
     ) -> Result<Approval, ApproveError> {
-        let _held = self.lock()?;
-        self.approve_held(request_id, key_hash, decision, Some(record))
+        self.decided(|| self.approve_held(request_id, key_hash, decision, Some(record)))
     }
 
     /// The approvals recorded with an approver ([`Self::approve_recorded`]), in the order of
@@ -537,7 +714,7 @@ impl EnrollmentStore {
             .collect())
     }
 
-    /// The approval of [`Self::approve`] and [`Self::approve_recorded`]; the caller holds the
+    /// One decision of [`Self::approve`] and [`Self::approve_recorded`]; the caller holds the
     /// lock.
     fn approve_held(
         &self,
@@ -546,8 +723,9 @@ impl EnrollmentStore {
         decision: &Decision,
         record: Option<&ApprovalRecord>,
     ) -> Result<Approval, ApproveError> {
+        let mut seen = Vec::new();
         let mut row = self
-            .load_request(request_id)?
+            .saw_request(request_id, &mut seen)?
             .ok_or(ApproveError::UnknownRequest)?;
         if !key_hash.equals_in_constant_time(request_id) {
             return Err(ApproveError::KeyMismatch);
@@ -561,7 +739,7 @@ impl EnrollmentStore {
         let nonce = match record.and_then(|r| r.mac_nonce.map(|hash| (hash, r.approved_unix))) {
             Some((hash, at)) => Some((
                 hash,
-                self.mac_nonce_verdict(&hash, request_id, row.mac_serial(), at)??,
+                self.mac_nonce_verdict(&hash, request_id, row.mac_serial(), at, &mut seen)??,
             )),
             None => None,
         };
@@ -571,8 +749,8 @@ impl EnrollmentStore {
             return Err(ApproveError::RenewalOfOtherHost);
         }
         let replace = decision.replace && renewal.is_none();
-        let denied = self.denied(host)?;
-        let current = self.load_host(host)?;
+        let denied = self.saw_denied(host, &mut seen)?;
+        let current = self.saw_host(host, &mut seen)?;
         if denied && !replace {
             return Err(ApproveError::Denied);
         }
@@ -580,7 +758,7 @@ impl EnrollmentStore {
         let rejoined = match (holder, record.and_then(|r| r.mac_enrolled_since_unix)) {
             // A renewal's key is its host's: it has no other holder.
             (Some(holder), Some(since)) if nonce.is_some() => {
-                self.mac_rejoined(holder, row.mac_serial(), since)?
+                self.mac_rejoined(holder, row.mac_serial(), since, &mut seen)?
             }
             _ => false,
         };
@@ -690,7 +868,7 @@ impl EnrollmentStore {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .remove(host);
-        self.commit(&records)?;
+        self.commit(&seen, &records)?;
         Ok(Approval {
             request_id: *request_id,
             host_id: host.clone(),
@@ -706,9 +884,16 @@ impl EnrollmentStore {
     /// Whether the host id `holder` holds may go to a new key of the Mac of `serial`, whose
     /// current enrollment began at `since`: the holder's own request claimed `serial` (not
     /// empty), and its approval was recorded (with a time) before `since`. A holder whose
-    /// request is missing may not. The caller holds the lock.
-    fn mac_rejoined(&self, holder: &HostRow, serial: &str, since: u64) -> Result<bool, StoreError> {
-        let Some(own) = self.load_request(&holder.key)? else {
+    /// request is missing may not. The caller holds the lock; the request read is noted in
+    /// `seen`.
+    fn mac_rejoined(
+        &self,
+        holder: &HostRow,
+        serial: &str,
+        since: u64,
+        seen: &mut Vec<Seen>,
+    ) -> Result<bool, StoreError> {
+        let Some(own) = self.saw_request(&holder.key, seen)? else {
             return Ok(false);
         };
         let approved_unix = own.pb.approved.as_ref().map_or(0, |a| a.approved_unix);

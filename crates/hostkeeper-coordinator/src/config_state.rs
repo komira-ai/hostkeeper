@@ -146,9 +146,7 @@ pub(super) fn open_store(
         settle_in_database(&store, marker, &numbers)?;
     }
     let records: Option<Arc<dyn Records>> = match flags.ca_key_file {
-        Some(_) => Some(Arc::new(
-            PgRecords::over(&store).map_err(|e| DatabaseError::Load(e.to_string()))?,
-        )),
+        Some(_) => Some(Arc::new(PgRecords::over(&store))),
         None => None,
     };
     let ledger: Option<Arc<dyn Ledger>> = Some(Arc::new(PgLedger::new(store.clone())));

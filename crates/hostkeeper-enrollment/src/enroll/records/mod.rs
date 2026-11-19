@@ -6,16 +6,24 @@
 //! checks every value it reads (a state it does not know, a key that is not the one a request's
 //! id names, a host id outside its grammar), and writes them in [`Records::commit`]. The rules
 //! that are not a key (the pending cap, a machine id or MAC already bound, one certificate per
-//! request and round, a host id another key holds) are the store's, decided under its lock.
+//! request and round, a host id another key holds) are the store's.
 //!
-//! There are two implementations here; the coordinator is to add a third on its database (build
-//! item C3 of docs/design/coordinator-storage.md, not built yet):
+//! Every write says what the decision it records read ([`Seen`]): each record, as it was read or
+//! as absent. The write lands only when every one of them still is so, and is refused
+//! [`StoreError::Raced`], with nothing written, when another writer changed one in between. That
+//! is what makes a decision safe when several processes share the records with no lock between
+//! them (docs/design/coordinator-multi-instance.md, section 6): the coordinator's records in its
+//! database check it in the transaction that writes ([`RecordsLock::none`]). Records that one
+//! process holds under a lock check it too, and find it so.
+//!
+//! There are two implementations here; the coordinator adds a third on its database:
 //!
 //! - [`FileRecords`]: one file per record in the store's directory, written through the
 //!   [`Fs`](crate::fs::Fs) port, as the store has always kept them. A commit writes its records
 //!   one after the other, each whole; [`FileRecords::lock`] is a `flock`.
-//! - [`MemoryRecords`]: a fake that keeps the records in memory, commits all or nothing, and fails
-//!   the operation a test chooses.
+//! - [`MemoryRecords`]: a fake that keeps the records in memory, commits all or nothing, fails
+//!   the operation a test chooses, and lands another writer's commit before the next write when
+//!   a test asks ([`MemoryRecords::interleave`]).
 //!
 //! [`conformance`] is the contract every implementation is held to, as a suite its own tests run.
 
@@ -110,23 +118,108 @@ impl Record {
     }
 }
 
+/// A record as a decision read it, by its key: `None` when it was absent. A write given it lands
+/// only when the record still is so ([`Records::commit`]).
+#[derive(Clone, Debug, PartialEq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a decision notes a handful of records, built and dropped with it, as `Record`'s \
+              variants are; boxing the request would add an allocation at every read"
+)]
+pub enum Seen {
+    Request(KeyHash, Option<pb::Request>),
+    Issued(KeyHash, Option<pb::Issued>),
+    Host(HostId, Option<pb::Host>),
+    Deny(HostId, Option<pb::Deny>),
+    MacNonce(MacNonceHash, Option<pb::MacNonce>),
+}
+
+impl Seen {
+    /// The key of the record seen.
+    pub fn key(&self) -> RecordKey {
+        match self {
+            Seen::Request(id, _) => RecordKey::Request(*id),
+            Seen::Issued(id, _) => RecordKey::Issued(*id),
+            Seen::Host(host, _) => RecordKey::Host(host.clone()),
+            Seen::Deny(host, _) => RecordKey::Deny(host.clone()),
+            Seen::MacNonce(hash, _) => RecordKey::MacNonce(*hash),
+        }
+    }
+
+    /// What a write of `host` as the store loaded it sees: that record.
+    ///
+    /// # Errors
+    /// [`StoreError::Unkeyed`] when its host id does not parse.
+    pub fn of_host(host: &pb::Host) -> Result<Seen, StoreError> {
+        let id = HostId::parse(&host.host_id).map_err(|_| StoreError::Unkeyed("host"))?;
+        Ok(Seen::Host(id, Some(host.clone())))
+    }
+
+    /// The record seen, as a record; `None` when it was seen absent.
+    pub fn record(&self) -> Option<Record> {
+        match self {
+            Seen::Request(_, r) => r.clone().map(Record::Request),
+            Seen::Issued(_, r) => r.clone().map(Record::Issued),
+            Seen::Host(_, r) => r.clone().map(Record::Host),
+            Seen::Deny(_, r) => r.clone().map(Record::Deny),
+            Seen::MacNonce(_, r) => r.clone().map(Record::MacNonce),
+        }
+    }
+
+    /// Whether `records` hold the record as it was seen, read through their loads.
+    ///
+    /// # Errors
+    /// [`StoreError`] when it cannot be read.
+    pub fn holds(&self, records: &dyn Records) -> Result<bool, StoreError> {
+        Ok(match self {
+            Seen::Request(id, r) => records.request(id)? == *r,
+            Seen::Issued(id, r) => records.issued(id)? == *r,
+            Seen::Host(host, r) => records.host(host)? == *r,
+            Seen::Deny(host, r) => records.deny(host)? == *r,
+            Seen::MacNonce(hash, r) => records.mac_nonce(hash)? == *r,
+        })
+    }
+}
+
 /// The exclusion [`Records::lock`] gives, held until it is dropped: a file lock for
-/// [`FileRecords`], nothing beyond the store's own mutex for records that keep other processes
-/// off by other means.
+/// [`FileRecords`] and the store's own mutex, the mutex alone, or none for records whose every
+/// write checks what its decision read in the transaction that writes ([`Seen`]).
 #[derive(Debug)]
 pub struct RecordsLock {
     _file: Option<FileLock>,
+    exclusive: bool,
 }
 
 impl RecordsLock {
-    /// No exclusion beyond the store's mutex.
+    /// The store's mutex, and no exclusion beyond it.
     pub fn in_process() -> RecordsLock {
-        RecordsLock { _file: None }
+        RecordsLock {
+            _file: None,
+            exclusive: true,
+        }
     }
 
-    /// The `flock` of `file`, released when this is dropped.
+    /// The `flock` of `file`, released when this is dropped, and the store's mutex.
     pub fn file(file: FileLock) -> RecordsLock {
-        RecordsLock { _file: Some(file) }
+        RecordsLock {
+            _file: Some(file),
+            exclusive: true,
+        }
+    }
+
+    /// No exclusion at all, not even the store's mutex: decisions run side by side, in this
+    /// process and in others, and a write whose decision read a record another writer changed
+    /// since is refused ([`StoreError::Raced`]).
+    pub fn none() -> RecordsLock {
+        RecordsLock {
+            _file: None,
+            exclusive: false,
+        }
+    }
+
+    /// Whether the store takes its mutex too.
+    pub fn exclusive(&self) -> bool {
+        self.exclusive
     }
 }
 
@@ -134,9 +227,12 @@ impl RecordsLock {
 ///
 /// Every load returns a record exactly as the last commit that wrote it left it, and `None` for
 /// one never written: a record is never deleted. A write is durable when it returns `Ok`. The
-/// store calls every write, and every read it decides by, under its mutex and [`Records::lock`].
+/// store calls every write, and every read it decides by, under [`Records::lock`]; every write
+/// lands only when what its decision read is unchanged ([`Seen`]), and is refused
+/// [`StoreError::Raced`], writing nothing, when it is not.
 pub trait Records: Send + Sync + fmt::Debug {
-    /// Keeps other processes off the records while the store decides and writes.
+    /// Keeps other processes off the records while the store decides and writes, or, for
+    /// records whose writes check what was read ([`RecordsLock::none`]), nothing.
     ///
     /// # Errors
     /// [`StoreError`] when the exclusion cannot be taken.
@@ -190,59 +286,61 @@ pub trait Records: Send + Sync + fmt::Debug {
     /// [`StoreError`] when it cannot be read.
     fn mac_nonce(&self, hash: &MacNonceHash) -> Result<Option<pb::MacNonce>, StoreError>;
 
-    /// Writes `records`, each over the record of its key, in one commit.
+    /// Writes `records`, each over the record of its key, in one commit, when every record of
+    /// `seen` still is as it was seen; a record of `records` whose key `seen` names absent is
+    /// written only where none is.
     ///
     /// # Errors
+    /// [`StoreError::Raced`] when a record of `seen` is not as seen: nothing is written.
     /// [`StoreError`] when they cannot be written; [`StoreError::Unkeyed`] for a record whose key
     /// does not parse ([`Record::key`]). What a failed commit leaves is the implementation's to
     /// say.
-    fn commit(&self, records: &[Record]) -> Result<(), StoreError>;
+    fn commit(&self, seen: &[Seen], records: &[Record]) -> Result<(), StoreError>;
 
     /// Takes the next serial ([`FIRST_SERIAL`](super::FIRST_SERIAL) when none was taken) and
-    /// records the one after it; with `reserving`, also writes that request with its `serial`
-    /// set to the one taken. The serial is never taken again once this returns `Ok`.
+    /// records the one after it, when every record of `seen` still is as it was seen; with
+    /// `reserving`, also writes that request with its `serial` set to the one taken. The serial
+    /// is never taken again once this returns `Ok`.
     ///
     /// # Errors
-    /// [`StoreError`] when the counter or the request cannot be read or written.
-    fn take_serial(&self, reserving: Option<&pb::Request>) -> Result<u64, StoreError>;
+    /// [`StoreError::Raced`] when a record of `seen` is not as seen: no serial is taken and
+    /// nothing is written. [`StoreError`] when the counter or the request cannot be read or
+    /// written.
+    fn take_serial(
+        &self,
+        seen: &[Seen],
+        reserving: Option<&pb::Request>,
+    ) -> Result<u64, StoreError>;
 
-    /// Writes `host`, as the store loaded it, with its first heartbeat at `at_unix`.
+    /// Writes `host`, as the store loaded it, with its first heartbeat at `at_unix`, when the
+    /// host's record still is `host`.
     ///
     /// # Errors
-    /// [`StoreError`] when it cannot be written.
+    /// [`StoreError::Raced`] when it is not: nothing is written. [`StoreError`] when it cannot
+    /// be written.
     fn set_first_heartbeat(&self, host: &pb::Host, at_unix: u64) -> Result<(), StoreError>;
 
-    /// Writes `host`, as the store loaded it, serving since `at_unix`.
+    /// Writes `host`, as the store loaded it, serving since `at_unix`, when the host's record
+    /// still is `host`.
     ///
     /// # Errors
-    /// [`StoreError`] when it cannot be written.
+    /// [`StoreError::Raced`] when it is not: nothing is written. [`StoreError`] when it cannot
+    /// be written.
     fn set_first_serving(&self, host: &pb::Host, at_unix: u64) -> Result<(), StoreError>;
 
-    /// Writes `host`, as the store loaded it, with `running` as what its daemon said it runs.
+    /// Writes `host`, as the store loaded it, with `running` as what its daemon said it runs,
+    /// when the host's record still is `host`.
     ///
     /// # Errors
-    /// [`StoreError`] when it cannot be written.
+    /// [`StoreError::Raced`] when it is not: nothing is written. [`StoreError`] when it cannot
+    /// be written.
     fn set_running(&self, host: &pb::Host, running: pb::Running) -> Result<(), StoreError>;
 
-    /// Writes `host`, as the store loaded it, marked duplicate.
+    /// Writes `host`, as the store loaded it, marked duplicate, when the host's record still is
+    /// `host`.
     ///
     /// # Errors
-    /// [`StoreError`] when it cannot be written.
+    /// [`StoreError::Raced`] when it is not: nothing is written. [`StoreError`] when it cannot
+    /// be written.
     fn set_duplicate(&self, host: &pb::Host) -> Result<(), StoreError>;
-
-    /// Expires, in one conditional write, every request that waits for an operator (pending or
-    /// a duplicate claim, not yet expired) and was posted more than `ttl_secs` before `now`: the
-    /// requests this call expired, as now written, each once however many processes share the
-    /// records. `None` when the records have no such write; the store then expires under its
-    /// lock ([`super::EnrollmentStore::expire`]).
-    ///
-    /// # Errors
-    /// [`StoreError`] when they cannot be written.
-    fn expire_waiting(
-        &self,
-        _now: u64,
-        _ttl_secs: u64,
-    ) -> Result<Option<Vec<(KeyHash, pb::Request)>>, StoreError> {
-        Ok(None)
-    }
 }
