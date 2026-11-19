@@ -150,7 +150,7 @@ fn a_migration_that_fails_is_rolled_back_whole_and_stops_the_start() {
     assert_eq!((ran, again), (vec![27], Vec::<i32>::new()));
     assert_eq!(
         versions(&db),
-        [shipped_rows(), vec![row("26", "later", "may-run")]].concat()
+        [shipped_rows(), vec![row("27", "later", "may-run")]].concat()
     );
 }
 
