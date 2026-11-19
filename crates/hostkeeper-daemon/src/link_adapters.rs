@@ -9,8 +9,9 @@
 //! rules are the daemon's.
 //!
 //! [`DaemonHalts`] is the loop's [`HeldHalts`] over the very store the executor reads
-//! ([`crate::executor::Ctx::halts`]): a generation the loop raises lifts the service's halt as
-//! `clear_halt` does, and is the one the next order of the service is judged against.
+//! ([`crate::executor::Ctx::halts`]): each generation of a reply goes to
+//! [`crate::verbs::clear_halt::heard`], which holds a halt under it, lifts a halt as `clear_halt`
+//! does, or removes the file of a service that holds no halt.
 //!
 //! [`DaemonRecords`] is the loop's [`ServiceRecords`]: every service whose `current` link names a
 //! version, at that version, with the target of its step record while the record is unfinished
@@ -242,25 +243,19 @@ impl DaemonHalts {
 }
 
 impl HeldHalts for DaemonHalts {
-    /// The generation the store holds. A store that cannot be read holds every generation: the
-    /// loop raises a generation only above the one held, so a halt is never lifted on a file
-    /// that cannot be read, and the executor refuses the service's orders (`halt_unreadable`)
-    /// until it can.
-    fn held(&self, service: &ServiceName) -> u64 {
-        self.daemon.ctx().halts.get(service).unwrap_or(u64::MAX)
-    }
-
-    /// Lifts the halt for a greater generation as `clear_halt` does ([`Daemon::clear_halt`]):
-    /// the service's `Halt` record cleared first, then the store's generation raised. A
-    /// generation not above the one held changes nothing and is not an error; a service whose
-    /// lock is held, and a store or record that cannot be read or written, are, and the loop
-    /// tries again at its next heartbeat.
-    fn raise(&self, service: &ServiceName, generation: u64) -> io::Result<()> {
-        match self.daemon.clear_halt(service, generation) {
-            Ok(_) => Ok(()),
-            Err(refused) if refused.refusal == Refusal::StaleHaltGeneration => Ok(()),
-            Err(refused) => Err(io::Error::other(refused.detail)),
-        }
+    /// Judges the generation as [`Daemon::heard_halt`] does: a halt held under no generation is
+    /// held under `before` (or lifted by a greater generation), one held under a smaller one is
+    /// lifted (the service's `Halt` record cleared
+    /// first, then its file removed), and a file of a service that holds no halt is removed. A
+    /// service whose lock is held, and a record or file that cannot be read, change nothing and
+    /// are not an error: the next reply judges them again, and the executor refuses the service's
+    /// orders (`record_unreadable`, `halt_unreadable`) until they read. A file or record that
+    /// cannot be written is the error, which the loop logs.
+    fn heard(&self, service: &ServiceName, before: Option<u64>, generation: u64) -> io::Result<()> {
+        self.daemon
+            .heard_halt(service, before, generation)
+            .map(drop)
+            .map_err(|refused| io::Error::other(refused.detail))
     }
 
     /// The halt the service's step record ended in, under the generation the store holds, and

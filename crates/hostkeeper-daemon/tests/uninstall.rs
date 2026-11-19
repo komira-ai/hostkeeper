@@ -453,8 +453,8 @@ fn uninstall_never_touches_the_services_data_directory() {
 
 /// Catches an uninstall that removes what is another service's: `api` and `web` both installed,
 /// `web` uninstalled; the entry of `api` in `placed.json`, its package, its enablement link, its
-/// version directory, its seal, its `current` and its step record are as they were. The held halt generation of
-/// `web` stays (it is never lowered), and with it `web`'s state directory.
+/// version directory, its seal, its `current` and its step record are as they were. A held-halt
+/// file `web` was left with, holding no halt, goes with the rest of `web`'s state directory.
 #[test]
 fn uninstall_leaves_other_services_package_and_versions_alone() {
     let farm = NativeHost::new("uninstall-other");
@@ -465,7 +465,7 @@ fn uninstall_leaves_other_services_package_and_versions_alone() {
     HaltStore::new(&rig.state)
         .raise(&name("web"), 4)
         .expect("a held halt");
-    // What else a crash may leave in the state directory goes; the held halt stays.
+    // What else a crash may leave in the state directory goes, a held halt of no halt too.
     fs::write(rig.state.join("web/params.toml.tmp"), "x").expect("a stray file");
     let api_entry = rig.placed_record().installed.get("api").cloned();
     assert!(api_entry.is_some(), "api is recorded as installed");
@@ -487,11 +487,7 @@ fn uninstall_leaves_other_services_package_and_versions_alone() {
         record_before
     );
     assert!(gone(&farm, "web"));
-    assert_eq!(
-        fs::read_to_string(rig.state.join("web/held-halt")).expect("the held halt"),
-        "4\n"
-    );
-    assert!(!rig.state.join("web/params.toml.tmp").exists());
+    assert!(!rig.state.join("web").exists());
 }
 
 /// Catches a tombstone that waits for an order to be finished, or that the start resumes from

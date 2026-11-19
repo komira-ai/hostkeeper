@@ -11,6 +11,7 @@ mod support_host;
 use std::sync::Arc;
 
 use hostkeeper_config::names::ServiceName;
+use hostkeeper_daemon::halt::HaltStore;
 use hostkeeper_daemon::prune::LayoutPrune;
 use hostkeeper_daemon::{Daemon, Refusal, Reply};
 use hostkeeper_hook::{Step, Verdict};
@@ -54,16 +55,20 @@ fn halted_install(farm: &NativeHost) -> Daemon {
 
 /// Proves: the next install of a service whose halted install left nothing installed is run, not
 /// refused `halted`: the install succeeds, the record then holds its success, the daemon says in
-/// its log, once, that it lifted the halt of the absent service, no held halt generation is
-/// written, and an update of the installed service follows.
+/// its log, once, that it lifted the halt of the absent service, the held-halt file of that halt
+/// is removed, and an update of the installed service follows.
 ///
 /// Catches: an absent service held halted by the record of its failed install until an
-/// operator's `clear_halt`, though the coordinator orders the install again.
+/// operator's `clear_halt`, though the coordinator orders the install again, or the held-halt
+/// file of that halt left behind once it is lifted.
 #[test]
 fn an_install_of_an_absent_service_runs_over_the_halt_of_its_failed_install() {
     let farm = NativeHost::new("halt-absent-install");
     let rig = farm.rig();
     let (daemon, log) = alerting(halted_install(&farm));
+    HaltStore::new(&rig.state)
+        .raise(&ServiceName::new("web").expect("a name"), 4)
+        .expect("the halt held under 4");
     assert_eq!(daemon.order(&farm.install("web", "2.0", 2)), succeeded());
     let held = daemon.order(&farm.update("web", "2.1", 3));
     assert_eq!(held, succeeded(), "installed, so not halted: {held:?}");

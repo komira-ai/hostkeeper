@@ -193,7 +193,7 @@ fn repaired(ctx: &Ctx, service: &ServiceName, reply: Reply) -> Reply {
 /// every other order of the service, but an `install` of a service that is absent (no release
 /// installed, not being uninstalled) has nothing left to protect: the halted
 /// order's own rollback took the package off the host, or it was removed by hand. The record is
-/// turned into the `halt_cleared` deferral as `clear_halt` does ([`super::clear_halt::clear_record`])
+/// turned into the `halt_cleared` deferral and its held-halt file removed, as `clear_halt` does ([`super::clear_halt::lift`]),
 /// and the order goes on to the try rules and runs. A resend of the halted order itself (the same
 /// package and try) is still answered from the record, and a service that has a release installed
 /// stays halted. `true` when the record was cleared.
@@ -233,7 +233,7 @@ fn forgets_halt(
     }
     // The record was read as a halt under the service's lock, which this order holds: nothing
     // else clears it first, so the clear always lifts it, and the record is read again.
-    super::clear_halt::clear_record(ctx, &order.service)
+    super::clear_halt::lift(ctx, &order.service)
         .map_err(|refused| Reply::refused(refused.refusal, refused.detail))?;
     ctx.log(&format!(
         "level=warn alert=halt_forgotten service={}: the step record held a halt, and the service is absent: the halt is lifted for the install of {}",

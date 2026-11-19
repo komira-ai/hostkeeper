@@ -9,6 +9,7 @@ mod support_host;
 use std::fs;
 use std::sync::Arc;
 
+use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::checks::{Check, Checks};
 use hostkeeper_daemon::locks::Package;
 use hostkeeper_daemon::testing::{Log, manifest, spawn};
@@ -18,7 +19,7 @@ use hostkeeper_hook::{Class, Phase, Step, Verdict};
 use hostkeeper_placed::testing::{FakeUnitControl, Log as PlacedLog};
 use hostkeeper_proto::hostkeeper::release::v1::Target;
 use hostkeeper_steps::record::{PARAMS_FILE, RECORD_FILE};
-use hostkeeper_steps::{Clock, Finished, ForceFailure, ForceVerdict};
+use hostkeeper_steps::{Clock, CrashPoint, Finished, ForceFailure, ForceVerdict, RecordStore};
 use support::force::{UNIT, WEB, asked_active, calls, failed, link_of, set, started, token_of};
 use support::{OWN, config, d, digest, force, lines, name, roots, snapshot};
 use support_apt::with_entry;
@@ -226,8 +227,8 @@ fn force_fetches_and_verifies_before_it_stops_anything() {
 
 /// Catches a halt lifted before the pre-checks, or ignored (design section 5.4): with `web` and
 /// `api` halted and held at generation 2, a force with generation 3 that fails its stage leaves
-/// the hold at 2 and the halt in place; one that passes raises the hold to 3, clears the halt
-/// and runs; and a force of `api` with generation 2 runs and leaves its hold at 2.
+/// the hold at 2 and the halt in place; one that passes clears the halt, removes its held-halt
+/// file and runs; and a force of `api` with generation 2 runs and leaves its file at 2.
 #[test]
 fn force_over_a_standing_halt_lifts_the_halt() {
     let rig = NativeHost::new("force-lift");
@@ -276,23 +277,49 @@ fn force_over_a_standing_halt_lifts_the_halt() {
         })
     ));
     assert_eq!(daemon.order(&rig.force(WEB, "3.0.0", 3, 3)), succeeded());
-    assert_eq!(halts.get(&name(WEB)).ok(), Some(3));
+    assert_eq!(halts.read(&name(WEB)).ok(), Some(None));
     assert_eq!(daemon.order(&rig.force("api", "3.0.0", 2, 2)), succeeded());
     assert_eq!(halts.get(&name("api")).ok(), Some(2));
 }
 
-/// Catches a lift whose write fails being passed over: the force is refused `store_failed` and
-/// nothing is placed or switched.
+/// Catches a lift whose write fails being passed over: with `web` halted and its record store
+/// failing every write, a force whose generation lifts the halt is refused `store_failed`,
+/// nothing is placed or switched, and the halt stands.
 #[test]
 fn a_halt_lift_that_cannot_be_written_stops_the_force() {
     let rig = NativeHost::new("force-lift-fails");
-    let daemon = rig.daemon();
-    web(&rig, "2.0.0");
-    fs::create_dir_all(rig.state.join(WEB).join("held-halt.tmp")).expect("a directory in the way");
-    let reply = daemon.order(&rig.force(WEB, "2.0.0", 1, 1));
+    rig.add(WEB, "1.0.0");
+    rig.pin(WEB, "2.0.0");
+    rig.launcher.exits(WEB, Step::Prepare, &[76]);
+    let (daemon, _) = rig.booted();
+    let halted = daemon.order(&rig.update(WEB, "1.0.0", 1));
+    assert!(
+        matches!(
+            halted,
+            Reply::Finished {
+                verdict: Verdict::Halt,
+                ..
+            }
+        ),
+        "{halted:?}"
+    );
+    drop(daemon);
+    let placed_before = rig.placed_log.events().len();
+    let failing = rig
+        .daemon()
+        .with_stores(Arc::new(|_: &ServiceName, store: RecordStore| {
+            store.with_crash_gate(Arc::new(|_: CrashPoint| true))
+        }));
+    let reply = failing.order(&rig.force(WEB, "2.0.0", 2, 1));
     assert_eq!(reply.refusal(), Some(Refusal::StoreFailed), "{reply:?}");
-    assert!(rig.placed_log.events().is_empty());
-    assert_eq!(link_of(&rig, WEB, "current"), None);
+    assert_eq!(rig.placed_log.events().len(), placed_before);
+    assert!(matches!(
+        rig.verdict(WEB),
+        Some(Finished {
+            verdict: Verdict::Halt,
+            ..
+        })
+    ));
 }
 
 /// Catches a force that stops the wrong unit, waits for the step to end by itself, or closes the
