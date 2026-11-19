@@ -129,11 +129,15 @@ export async function main() {
         out["rows"],
         json!([
             [
-                "Server", "State", "Address", "Where", "Group", "Version", "Console"
+                "Server", "State", "Why", "Address", "Where", "Group", "Version", "Console"
             ],
-            ["mac-1", "healthy", "-", "Unplaced", "-", "-", "Desktop"],
-            ["new-1", "pending", "-", "Unplaced", "-", "-", "-"],
-            ["web-1", "healthy", "-", "Unplaced", "-", "-", "Console"],
+            [
+                "mac-1", "healthy", "-", "-", "Unplaced", "-", "-", "Desktop"
+            ],
+            ["new-1", "pending", "-", "-", "Unplaced", "-", "-", "-"],
+            [
+                "web-1", "healthy", "-", "-", "Unplaced", "-", "-", "Console"
+            ],
         ])
     );
     assert_eq!(out["links"], json!(1), "one Desktop link");

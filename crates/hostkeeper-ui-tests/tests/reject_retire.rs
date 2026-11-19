@@ -111,6 +111,7 @@ await click(tree, "retire");
             (m("HostGroups/List"), json!({})),
             (m("Ssh/HostKeys"), json!({"hostId": "web-2"})),
             (m("Layout/Get"), json!({})),
+            (m("Alerts/List"), json!({})),
             (m("Hosts/Retire"), json!({"nodeId": "web-2", "reason": ""})),
             (
                 m("Hosts/Retire"),
