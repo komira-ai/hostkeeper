@@ -109,7 +109,7 @@ const UNNUMBERED: [&str; 2] = [
     "SELECT NULL::text, service FROM desired \
      WHERE set_seq IS NULL OR set_for IS DISTINCT FROM version ORDER BY service",
     "SELECT g.host_group, g.service FROM group_desired g \
-     JOIN host_groups h ON h.name = g.host_group \
+     JOIN host_groups h ON h.\"name\" = g.host_group \
      LEFT JOIN host_group_packages p ON p.host_group = g.host_group AND p.service = g.service \
      WHERE g.set_seq IS NULL OR g.set_for IS DISTINCT FROM g.version \
      ORDER BY h.at_unix, g.host_group, coalesce(p.position, 9223372036854775807), g.service",
