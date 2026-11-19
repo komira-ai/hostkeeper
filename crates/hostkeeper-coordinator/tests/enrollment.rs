@@ -217,8 +217,9 @@ fn a_start_records_a_mac_enrolled_without_a_record() {
     drop(parts);
 
     let records = |parts: &Parts| {
-        let by =
-            hostkeeper_coordinator::operator::Caller::Operator("operator".parse().expect("a name"));
+        let by = hostkeeper_coordinator::operator::Caller::Operator(
+            hostkeeper_coordinator::tokens::Operator::named("operator".parse().expect("a name")),
+        );
         parts
             .coordinator
             .list_records(&by, Default::default())
