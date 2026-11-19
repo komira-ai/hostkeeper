@@ -1,5 +1,5 @@
 //! `verify_each`, the batch of `gh attestation verify` commands `release check` asks for: every
-//! ask answered in order, the first run alone and the rest as one batch, and a reply that is not
+//! ask answered in order, every run handed to the runner as one batch, and a reply that is not
 //! JSON refused.
 
 use super::*;
@@ -74,9 +74,9 @@ impl Exec for Batches {
 }
 
 #[test]
-fn verify_each_runs_the_first_verification_alone_and_the_rest_as_one_batch() {
-    // Catches: every verification started at once, so that each `gh` writes the trusted root's
-    // cache at the same time as the others, or the batch split so that an ask is lost.
+fn verify_each_hands_every_verification_to_the_runner_as_one_batch() {
+    // Catches: the verifications handed over one by one (each waiting for the one before, a
+    // release check that takes minutes longer), or the batch split so that an ask is lost.
     let api = Gh::new(Batches::default());
     let signer = Signer::hostkeeper();
     let pinned = commit();
@@ -89,7 +89,7 @@ fn verify_each_runs_the_first_verification_alone_and_the_rest_as_one_batch() {
     let answers = api.verify_each(&[ask; 4]);
     assert_eq!(answers.len(), 4);
     assert!(answers.iter().all(Result::is_err));
-    assert_eq!(*api.exec.0.borrow(), [1, 3]);
+    assert_eq!(*api.exec.0.borrow(), [4]);
 }
 
 #[test]

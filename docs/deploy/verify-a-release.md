@@ -370,7 +370,9 @@ Before anything is published, the `verify` job of `release.yml`, on the files of
   attested file runs the command of step 3 and the command of step 4 with `$PIN` the commit
   released. Step 4 runs without `--custom-trusted-root`: the runner fetches the trusted root
   itself. Each command gets `--format json` added, so that the attestations it verified are read
-  back, and each must name this commit and the file's SHA-256;
+  back, and each must name this commit and the file's SHA-256. The commands run side by side,
+  each `gh` with a cache directory of its own (`XDG_CACHE_HOME`): every `gh` writes the Sigstore
+  TUF metadata it fetches into its cache, and two writing one cache at once fail each other;
 - runs step 6 on the linux-x86_64 binaries, the daemon's, the coordinator's and
   the coordinator updater's
   (`cargo xtask release check-binary`); `cargo xtask release check` holds `hkctl-<version>` to the
