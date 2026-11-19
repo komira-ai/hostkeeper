@@ -168,8 +168,10 @@ Tests, named (each asserts the behaviour in its name; the PR bodies list them by
   `gate_busy_answers_the_beat_with_no_new_order`.
 - Added by the second review (section 20, items 7 to 11): `two_starters_apply_each_migration_once` (two runners at once, a duplicate
   of the unlocked variant fails), `migration_ddl_gives_up_by_lock_timeout_instead_of_stalling_heartbeats` (a held gate
-  transaction, a DDL with `lock_timeout`: no beat statement waits longer than the timeout, injected clock not wall time),
-  `migration_lint_refuses_a_rewrite_of_a_hot_table` (negative case, T15), `cache_is_never_labelled_newer_than_its_content`,
+  transaction, a DDL with `lock_timeout`: no beat statement waits longer than the timeout, injected clock not wall time;
+  **Built** (M3) in `store/postgres/tests/migrate_ddl.rs` with a held transaction on a table in place of the gate, which is M4's,
+  and the beat shown let through while the holder is still open, no clock read),
+  `migration_lint_refuses_a_rewrite_of_a_hot_table` (negative case, T15; **Built** (M3) in `store/postgres/migrate_tests.rs`), `cache_is_never_labelled_newer_than_its_content`,
   `partial_fleet_in_quiet_window_raises_no_halt_and_reverts_nothing` (a failed-looking host set after a gap),
   `operator_halt_in_quiet_window_is_read_by_every_decision`, `old_task_accepts_until_the_drain_delay_ends` and
   `draining_task_answers_healthz_503_while_serving` (injected clock, T10), `drain_delay_config_is_refused_at_deploy_when_not_above_the_edge_check`,

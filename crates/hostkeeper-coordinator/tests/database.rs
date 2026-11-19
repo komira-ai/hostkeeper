@@ -345,7 +345,7 @@ fn services_have_repository(database: &Database) -> bool {
 
 /// Proves: a `serve` with no `--rollout-file` starts on a database at the schema of the release
 /// before (0.1.252: migrations `0001` to `0008`, no `repository` column on `services`): it runs
-/// `0009` to `0021`, so `schema_version` holds 1 to 21 and the column is there, and an operator's change is
+/// `0009` to `0022`, so `schema_version` holds 1 to 22 and the column is there, and an operator's change is
 /// held by the audit table.
 ///
 /// Catches: a release that cannot start on the database the release before left, or that starts
@@ -362,7 +362,7 @@ fn a_serve_starts_on_a_database_at_the_schema_of_the_release_before() {
 
     drop(start(args.clone()));
     database.lock_is_free();
-    // The schema of 0.1.252: `0009` to `0021` taken back, the column, the tables and their
+    // The schema of 0.1.252: `0009` to `0022` taken back, the column, the tables and their
     // `schema_version` rows.
     run(
         &database,
@@ -373,13 +373,14 @@ fn a_serve_starts_on_a_database_at_the_schema_of_the_release_before() {
          DROP TABLE lab_cluster, lab_rows, lab_racks, lab_placements, lab_devices, lab_sleds, lab_sled_items; \
          DROP TABLE tx_ledger; \
          DROP TABLE ssh_tunnel, ssh_host_key_pin, ssh_host, ssh_revocation, ssh_cert, ssh_audit; DROP SEQUENCE ssh_cert_serial; \
+         DROP TABLE instances; \
          DELETE FROM schema_version WHERE version >= 9",
     );
     assert_eq!(schema_versions(&database), (1..=8).collect::<Vec<i32>>());
     assert!(!services_have_repository(&database));
 
     let parts = start(args);
-    assert_eq!(schema_versions(&database), (1..=21).collect::<Vec<i32>>());
+    assert_eq!(schema_versions(&database), (1..=22).collect::<Vec<i32>>());
     assert!(services_have_repository(&database));
     let done = parts
         .coordinator
@@ -395,7 +396,7 @@ fn a_serve_starts_on_a_database_at_the_schema_of_the_release_before() {
 }
 
 /// Proves: a `serve` is refused on a database that holds a migration newer than this release's
-/// that says `refuse`, with the exact text of the database's refusal naming migration 22; a newer
+/// that says `refuse`, with the exact text of the database's refusal naming migration 23; a newer
 /// one that says `may-run` is taken.
 ///
 /// Catches: a coordinator that starts on, and writes to, a schema a newer release changed in a
@@ -409,17 +410,17 @@ fn a_serve_refuses_a_database_newer_than_this_release() {
     database.lock_is_free();
 
     let put = "INSERT INTO schema_version (version, name, older_releases) \
-               VALUES (22, 'from_the_future', ";
+               VALUES (23, 'from_the_future', ";
     run(&database, &format!("{put}'refuse')"));
     let why = refusal(args.clone());
     assert!(matches!(&why, StartError::Database(_)), "{why}");
     assert_eq!(
         why.to_string(),
-        "the database's schema is newer than this coordinator (migration 22, from_the_future)"
+        "the database's schema is newer than this coordinator (migration 23, from_the_future)"
     );
     database.lock_is_free();
 
-    run(&database, "DELETE FROM schema_version WHERE version = 22");
+    run(&database, "DELETE FROM schema_version WHERE version = 23");
     run(&database, &format!("{put}'may-run')"));
     drop(start(args));
 }
@@ -452,4 +453,68 @@ fn a_database_that_holds_sealed_mdm_secrets_starts_without_their_key() {
         .query_one("SELECT count(*)::text FROM mdm_secrets", &[])
         .expect("the count");
     assert_eq!(held.get::<_, String>(0), "1");
+}
+
+/// Proves: `serve --database-pool 2` holds the coordinator's lock on exactly two writing sessions
+/// (the default 4 on four), and each start makes its row of `instances` with this build's release
+/// (`hostkeeper-coordinator --version`'s) and the addresses of its heartbeat and private listeners;
+/// `--database-pool 0` and a `--migrate-ddl-lock-timeout-ms` of 0 or of 5000 (not below the
+/// store's statement timeout) are usage errors, before the database is touched.
+///
+/// Catches: a pool flag that does not reach the store, a start that makes no row of its own, and
+/// a lock timeout the statement timeout would cut short.
+#[test]
+fn a_serve_holds_its_pool_and_makes_its_instance_row() {
+    let files = Files::new("database-pool");
+    let database = Database::new();
+    let args = database_args(&files, &database);
+    let shared = || -> i64 {
+        in_schema(&database)
+            .query_one(
+                "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND mode = 'ShareLock' \
+                 AND granted AND database = (SELECT oid FROM pg_database \
+                                             WHERE datname = current_database())",
+                &[],
+            )
+            .expect("the locks")
+            .get(0)
+    };
+
+    let mut pooled = args.clone();
+    pooled.extend(flags(&[("--database-pool", "2")]));
+    let parts = start(pooled);
+    assert_eq!(shared(), 2);
+    drop(parts);
+    database.lock_is_free();
+    let parts = start(args.clone());
+    assert_eq!(shared(), 4, "the default pool");
+    drop(parts);
+
+    let rows: Vec<(String, String)> = in_schema(&database)
+        .query(
+            "SELECT release, listen FROM instances ORDER BY started_unix, id",
+            &[],
+        )
+        .expect("the instances")
+        .iter()
+        .map(|row| (row.get(0), row.get(1)))
+        .collect();
+    let release = hostkeeper_coordinator::stamp::version().to_owned();
+    let listen = "heartbeat=192.0.2.1:1 private=192.0.2.1:2".to_owned();
+    assert_eq!(
+        rows,
+        vec![(release.clone(), listen.clone()), (release, listen)]
+    );
+
+    for (flag, value) in [
+        ("--database-pool", "0"),
+        ("--migrate-ddl-lock-timeout-ms", "0"),
+        ("--migrate-ddl-lock-timeout-ms", "5000"),
+        ("--migrate-attempts", "0"),
+        ("--instance-beat-secs", "0"),
+    ] {
+        let mut wrong = args.clone();
+        wrong.extend(flags(&[(flag, value)]));
+        assert_eq!(exit_code(wrong), ExitCode::from(2), "{flag} {value}");
+    }
 }

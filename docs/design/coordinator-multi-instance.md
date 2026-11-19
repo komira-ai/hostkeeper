@@ -2,8 +2,9 @@
 
 Status: design, approved by the owner (2026-11-18), with the answers to its two open questions in section 19. A living
 document: it is updated in the pull requests that build it. Tags as in [hostkeeper-design.md](hostkeeper-design.md): **Built**
-names code on `main` with a path, **Designed** means nothing implements it yet. Built so far: part of section 4 (the shared
-lock, the ledger, the migration runner's mutex) and the models of section 14 (M2); everything else is Designed. The
+names code on `main` with a path, **Designed** means nothing implements it yet. Built so far: section 4 (the shared
+lock, the ledger, the migration runner's mutex, the pool of sessions, `instances`, the migrations' lock timeout and retry,
+and the migration lint's rule for hot tables), the keys of section 12 those use, and the models of section 14 (M2); everything else is Designed. The
 measurements of M1 are taken (section 7).
 
 It changes one decision of [coordinator-storage.md](coordinator-storage.md): that decision's section 5 ("the single writer: an
@@ -118,8 +119,22 @@ session advisory lock on `MIGRATE_KEY` around the runner, each migration its own
 session's `lock_timeout`, and the runner runs on a session that already holds the shared lock (`mod.rs`, `open_session`),
 then a start bumps `lease.epoch` and `holder` once in a transaction of its own; the timeouts are constants in `dsn.rs`
 (statement 5 s, lock 3 s, idle in transaction equal to the statement's), not the flags of section 12, and a lost commit is
-settled once, at the revival, with no retry window. Still Designed (M3): the pool of sessions, `instances`, the DDL `lock_timeout` with its retry, and
-the lint rule.
+settled once, at the revival, with no retry window.
+
+**Built** (M3, the rest: `store/postgres/pool.rs`, `writer.rs`, `instance.rs`, `migrate.rs`, migration `0022_instances.sql`,
+`config_database.rs`): the pool of sessions, `instances`, each migration's `lock_timeout` with its bounded retry, and the lint
+rule, as the paragraphs below say, with these choices where the text leaves them open. A write takes the session that has been free longest,
+so the sessions take turns; any session found lost makes the whole instance lost (every write refused at once, `/healthz`
+503) until the next heartbeat's revival, which runs on every session's thread: a session that is up answers one `SELECT 1`
+and is kept, a session that is gone, or found gone so, is opened again with the shared lock and settles its own commit of
+unknown outcome. The instance's row is made in the transaction that bumps the epoch at start (its id the database's
+`gen_random_uuid()`) and upserted on a thread of its own every `--instance-beat-secs`, made again as it was if it is gone;
+`listen` holds the heartbeat, private and LAN listeners' addresses as configured. The status page does not list the rows yet.
+A migration rolled back by its lock timeout lets go of the runners' mutex for the pause, then the runner tries again from that
+migration; after the last attempt the start is refused naming it (`ApplyError::Busy`). The lint's rule refuses, on a hot table
+the migration did not create, any `ALTER TABLE` action but `ADD COLUMN` with a type, `NOT NULL`, a collation and a default with
+no function call or value function (a serial, generated, constrained or referencing column included), an index build, and
+`CLUSTER`, `REINDEX` and `VACUUM`; a quoted or schema-qualified name is read as the bare one.
 
 **Designed.** The lock is only a fence between releases: every new instance holds it at once, it elects nobody and no decision
 reads it, and it exists because the release before takes the key exclusively. An instance takes the same key in **shared** mode, `pg_try_advisory_lock_shared(LOCK_KEY)`, on each of its sessions.
@@ -151,12 +166,12 @@ Two consequences, both changes of code:
 - **"Deposed" goes.** Another instance's epoch is normal now (`config.rs:798`, `ops.rs:551`). `Lost`/`Reviving` stay: an instance whose
   session is gone orders nothing until it is revived (`writer.rs`), and answers 503 meanwhile.
 
-**Sessions.** The single writing thread becomes a small pool of sessions per instance (a config key, section 12), each holding the
+**Sessions** (Built, M3). The single writing thread becomes a small pool of sessions per instance (a config key, section 12), each holding the
 shared lock, so heartbeats of one task do not queue behind each other on one session. The pool plus one reader session is
 how many connections an instance needs; `max_connections` of the Postgres service must cover `instances x (pool + 1)` with room (it is 200,
 with 173 free: M1, section 7).
 
-**Instances.** Each instance has an `instance_id` (random at start) and upserts `instances(id, started_unix, seen_unix, release,
+**Instances** (Built, M3). Each instance has an `instance_id` (random at start) and upserts `instances(id, started_unix, seen_unix, release,
 listen)` every few seconds. It is for the status page and for the start rule of section 5; correctness never reads it.
 
 **Migrations (serialized, and short).** A shared fence excludes nobody, so it cannot serialize two instances that start at the
@@ -171,7 +186,7 @@ the same new migration, and one would fail on a duplicate object. The runner the
   reads it, and it is gone when the transaction ends.
 - Lock order: the migration lock is taken after the shared fence lock (Built; a shared lock never waits on it), and the runner never takes the gate
   or a `state_versions` row, so it joins no cycle (`lock_order_has_no_cycle` covers it).
-- A migration's DDL can need `ACCESS EXCLUSIVE` on a table the running instance uses (`fleet_orders`, `state_versions`).
+- (Built, M3.) A migration's DDL can need `ACCESS EXCLUSIVE` on a table the running instance uses (`fleet_orders`, `state_versions`).
   Postgres queues every later statement on that table behind a waiting DDL, so an unbounded wait behind the old instance's open
   gate transaction would stall its heartbeats for the whole overlap. Each migration transaction therefore sets `SET LOCAL
   lock_timeout` to `--migrate-ddl-lock-timeout-ms` (default 3000): a DDL that cannot get its lock in that time rolls the whole
@@ -874,7 +889,7 @@ the farm): the back-out is a stopgap while a fix ships.
 |---|---|---|---|
 | M1 | Measured: the deployment read only, the rest on a scratch copy of the same version (section 7). Round trip on the socket, the gate's hold and the operator edit's wait under a 50% stage, how often a beat finds the gate busy, DDL lock wait of a migration against a running instance, `fleet_hosts` write cost at the real host count, `max_connections`, the Postgres version; a table in the companion document | none | S |
 | M2 | Built: the models of section 14 (spec and Rust state-space test at N = 1, 2, 3), failing on the unlocked variants (`docs/design/models/`, `crates/hostkeeper-coordinator/tests/multi_instance_model/`) | M1 | M |
-| M3 | Built by komira-ai/hostkeeper#395: the shared fence lock, the `tx_ledger` settle (`0019`), no `lease.commits` write, no deposed exit, the migration mutex, the session timeouts. Left: the pool of sessions, `instances` (a migration of its own), DDL `lock_timeout` with its bounded retry, the migration lint rule. Still one instance | M2 | M |
+| M3 | Built: by komira-ai/hostkeeper#395 the shared fence lock, the `tx_ledger` settle (`0019`), no `lease.commits` write, no deposed exit, the migration mutex, the session timeouts; then the pool of sessions (`store/postgres/pool.rs`), `instances` (`0022`, `instance.rs`), DDL `lock_timeout` with its bounded retry and the migration lint rule (`migrate.rs`). Still one instance | M2 | M |
 | M4 | Row-transaction edits and `state_versions` invalidation for desired, ops, accounts, layout, verdicts, with the row-lock order of section 6 and the one-snapshot reload rule; `rollout_gate` with `SKIP LOCKED` for beats and the operator wait; `audit_counter` and its start-time re-seed; `facts_generation` | M3 | L |
 | M5 | Enrollment: conditional writes, `FOR UPDATE`, fresh deny read; spent-token cache | M3 | M |
 | M6 | The fleet in Postgres, without decisions: `fleet_*`, `cluster_quiet` and the gap rule, the ordered beat upsert, the in-SQL bake, the converged path | M4, M5 | M |

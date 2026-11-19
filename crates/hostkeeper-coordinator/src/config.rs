@@ -107,6 +107,11 @@ pub use ssh::{PasswordAuth, SigningKey, SshFlags, SshStartError};
 #[path = "config_file.rs"]
 mod config_file;
 
+/// The flags of the Postgres store beside `--database-dsn-file`.
+#[path = "config_database.rs"]
+mod database;
+pub use database::DatabaseFlags;
+
 pub use error::StartError;
 
 /// The times the flags take, in seconds.
@@ -266,6 +271,9 @@ pub struct Serve {
     /// otherwise.
     #[arg(long, requires = "database_dsn_file")]
     pub halt_marker_file: Option<PathBuf>,
+    /// The pool, the instance's row and the migrations of the database.
+    #[command(flatten)]
+    pub database: DatabaseFlags,
     /// The allow-list of CI's OIDC token: a TOML file with a `[remote_operator]` table. Its
     /// issuer, audience, event and runner rules apply to every token; its entries are also each
     /// package's trusted publishers until an operator changes the package's list in the state.
