@@ -6,6 +6,8 @@ Status: DRAFT. **The shape in this document is decided** (rev 4): a generic upda
 
 Superseded in part by [`rollout-update-plans.md`](rollout-update-plans.md): the one live update at a time across the farm (5.2, Question 1), the canary proposal (5.3, Question 7) and the tests that pin them (section 9) are replaced by update plans, stages of a growing share of a service's hosts. This document is kept as the history of those decisions; where they disagree, the plans document wins. The roles, the per-(service, role) slots and the rollout file it describes are superseded by [hostgroups.md](hostgroups.md).
 
+Extended, in design only, by [`macos-xcode-versions.md`](macos-xcode-versions.md) section 6: two optional host-level steps, `host-drain` and `host-undrain`, which the daemon runs on every service whose manifest sets `host_drain`, before and after a host-wide Apple update. The five steps below are unchanged.
+
 Labels: **[F]** read in the code at the commit above, **[I]** inference, **[D]** a design choice made here, **[V]** to verify before building on it.
 
 Sections 4.1 (tierstore) and 4.2 (js-agent) are the owners' hook sections, written as `update-hook` steps. The nftables mechanics of 4.1 are the tierstore owner's.
