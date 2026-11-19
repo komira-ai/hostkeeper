@@ -167,10 +167,14 @@ message OpenConsoleResponse {
   // What the session carries: `serial` for a Linux server, `screen` for a Mac.
   ConsoleKind kind = 1;
   // The session's id, 64 lower-case hex characters, which the WebSocket's path names. It is not
-  // a credential: attaching also takes the bearer of the operator name that opened it, once.
+  // a credential: attaching also takes the credential of the operator name that opened it (its
+  // bearer, or a browser's sign-in), once.
   string session = 2;
   // How long the session waits to be attached, in seconds.
   uint64 expires_in_secs = 3;
+  // For a serial session, how many seconds without a byte from the host the page waits before it
+  // says no output came yet (the coordinator's `--console-quiet-s`); 0 for a screen session.
+  uint64 quiet_secs = 4;
 }
 
 message ConsolePowerRequest {

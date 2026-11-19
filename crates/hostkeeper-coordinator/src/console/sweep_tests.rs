@@ -118,6 +118,84 @@ async fn a_revoked_operator_loses_its_stream() {
     live.gone(MAC).await;
 }
 
+/// Proves: on the sweep, a stream attached with a browser's session is held to that session and
+/// not to a token: it stays while the session lives though its user has no token at all, and
+/// closes 4008 `token_revoked`, its payload deactivated, once the session has ended (sign-out).
+///
+/// Catches: a console opened from the web UI cut at the first sweep for lack of a token, and one
+/// that outlives the sign-out of the browser that holds it.
+#[tokio::test]
+async fn a_stream_attached_with_a_session_lives_and_dies_with_that_session() {
+    let live = Live::signed_in("sweep-session");
+    live.keep_tokens(&[("bob", BOB), ("carol", CAROL)]);
+    let _host = live
+        .fixture
+        .tool
+        .sol_session(&[NODE_BMC_ANSWER, " 01 00 00\n", INFO]);
+    live.fixture.tool.session(&[NODE_BMC_ANSWER, ""]);
+    let serial = live.open("alice", NODE);
+    let browser = live.browser("alice", false);
+    let mut client = live.attach_browser(&serial, &browser).await;
+    live.coordinator.console_sweep();
+    live.coordinator.console_sweep();
+    live.sign_out(&browser.0);
+    live.coordinator.console_sweep();
+    client.closed(4008, "token_revoked").await;
+    live.gone(NODE).await;
+    assert!(
+        live.fixture
+            .tool
+            .seen()
+            .contains(&hostkeeper_console::scripted::Seen::Ask(
+                "sol deactivate".to_owned()
+            ))
+    );
+}
+
+/// Proves: a console in use keeps the browser's sign-in it attached with alive: bytes crossing
+/// between sweeps use the session as its requests would, so the stream outlives the sign-in's idle
+/// limit (1800 s) many times over; once no byte crosses for that limit the session ends and the
+/// stream closes 4008 `token_revoked`, not before.
+///
+/// Catches: a console from the web UI cut at the sign-in's idle limit while the operator types in
+/// it, and one that keeps a sign-in alive after its console went quiet.
+#[tokio::test]
+async fn a_console_in_use_keeps_its_browsers_sign_in_alive() {
+    let live = Live::signed_in("sweep-session-use");
+    live.coordinator.console.lock_table().sessions = Sessions::new(Bounds {
+        max: 8,
+        window: Duration::from_secs(30),
+        idle: Duration::from_secs(86_400),
+        total: Duration::from_secs(86_400),
+    });
+    let mut mac = live.fixture.dials.connect();
+    let screen = live.open("alice", MAC);
+    let browser = live.browser("alice", false);
+    let mut client = live.attach_browser(&screen, &browser).await;
+    let start = live
+        .fixture
+        .rig
+        .clock
+        .load(std::sync::atomic::Ordering::SeqCst);
+    for step in 1..=6 {
+        live.fixture.rig.at(start + step * 1_000);
+        mac.write_all(b".").await.expect("written");
+        assert_eq!(client.output(1).await, b".");
+        live.coordinator.console_sweep();
+    }
+    let used = start + 6_000;
+    live.fixture.rig.at(used + 1_799);
+    live.coordinator.console_sweep();
+    assert!(
+        live.coordinator.console.lock_table().live.contains_key(MAC),
+        "a second before the sign-in's idle limit the stream is still attached"
+    );
+    live.fixture.rig.at(used + 1_800);
+    live.coordinator.console_sweep();
+    client.closed(4008, "token_revoked").await;
+    live.gone(MAC).await;
+}
+
 /// Proves: the sweep ends a session not attached in its window and writes its close line, with no
 /// `Console` call needed to notice it.
 ///
