@@ -289,12 +289,12 @@ fn sockets_finds_each_call_of_websocket() {
 #[test]
 fn the_opener_holds_one_websocket_call_to_the_address_socket_address_builds() {
     let one = "import { socketAddress } from \"./socket_address.js\";\n\
-               const socket = new WebSocket(socketAddress(window.location, path));";
+               const socket = new WebSocket(socketAddress(window.location, path), socketProtocols(path, csrf));";
     assert!(opener(SOCKET_OPENER, one).is_empty());
-    let spaced = "new WebSocket /* c */ (\n  socketAddress(window.location, path)\n);";
+    let spaced = "new WebSocket /* c */ (\n  socketAddress(window.location, path), socketProtocols(path, csrf)\n);";
     assert!(opener(SOCKET_OPENER, spaced).is_empty());
     assert_eq!(
-        SOCKET_ADDRESS, "socketAddress(window.location, path)",
+        SOCKET_ADDRESS, "socketAddress(window.location, path), socketProtocols(path, csrf)",
         "the argument main.js writes"
     );
 }
@@ -303,8 +303,8 @@ fn the_opener_holds_one_websocket_call_to_the_address_socket_address_builds() {
 fn a_second_websocket_in_the_opener_is_refused() {
     // Catches: a second socket in the one file allowed to open one, whatever its address, and an
     // opener with no socket at all.
-    let two = "new WebSocket(socketAddress(window.location, path));\n\
-               const b = new WebSocket(socketAddress(window.location, path));";
+    let two = "new WebSocket(socketAddress(window.location, path), socketProtocols(path, csrf));\n\
+               const b = new WebSocket(socketAddress(window.location, path), socketProtocols(path, csrf));";
     assert_eq!(
         whats(&opener(SOCKET_OPENER, two)),
         [(2, "a second `WebSocket(` call")]
@@ -328,6 +328,9 @@ fn a_socket_address_built_any_other_way_is_refused() {
         "url",
         "socketAddress(otherLocation, path)",
         "socketAddress(window.location, path), protocols",
+        "socketAddress(window.location, path)",
+        "socketAddress(window.location, path), socketProtocols(otherPath, csrf)",
+        "socketAddress(window.location, path), [\"hostkeeper.console.v1\", csrf]",
         "socketAddress(window.location, `/x/${path}`)",
         "socketAddress(window.location, (path))",
         "",
@@ -337,7 +340,7 @@ fn a_socket_address_built_any_other_way_is_refused() {
             whats(&opener(SOCKET_OPENER, &text)),
             [(
                 1,
-                "a socket address not built by `socketAddress(window.location, path)`"
+                "a socket address not built by `socketAddress(window.location, path), socketProtocols(path, csrf)`"
             )],
             "{argument}"
         );
@@ -345,11 +348,11 @@ fn a_socket_address_built_any_other_way_is_refused() {
     assert_eq!(
         whats(&opener(
             SOCKET_OPENER,
-            "\nnew WebSocket(socketAddress(window.location, path)"
+            "\nnew WebSocket(socketAddress(window.location, path), socketProtocols(path, csrf)"
         )),
         [(
             2,
-            "a socket address not built by `socketAddress(window.location, path)`"
+            "a socket address not built by `socketAddress(window.location, path), socketProtocols(path, csrf)`"
         )]
     );
     let both = "new WebSocket(a);\nnew WebSocket(b);";
@@ -358,12 +361,12 @@ fn a_socket_address_built_any_other_way_is_refused() {
         [
             (
                 1,
-                "a socket address not built by `socketAddress(window.location, path)`"
+                "a socket address not built by `socketAddress(window.location, path), socketProtocols(path, csrf)`"
             ),
             (2, "a second `WebSocket(` call"),
             (
                 2,
-                "a socket address not built by `socketAddress(window.location, path)`"
+                "a socket address not built by `socketAddress(window.location, path), socketProtocols(path, csrf)`"
             ),
         ]
     );

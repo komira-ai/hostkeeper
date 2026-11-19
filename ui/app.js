@@ -22,6 +22,7 @@ import * as switchPage from "./pages/switch.js";
 import * as audit from "./pages/audit.js";
 import * as users from "./pages/users.js";
 import * as tokens from "./pages/tokens.js";
+import * as desktop from "./pages/desktop.js";
 
 // The side menu: groups of pages, each `[name, title, module, glyph]`. The page's `name` is the
 // name of its button (`page-<name>`); `glyph` names its icon (`view.js`), which is all the collapsed
@@ -42,14 +43,16 @@ const SETTINGS = [
   ["audit", "Audit", audit],
 ];
 // The pages that are reached by a link and not by the menu, each `[name, title, module, crumb]`:
-// Home, a host of the lab view, and a package, which the Packages page opens. The
-// crumb is the top bar's one line of where the page is; Home and the host page have their own
-// breadcrumbs (Lab > Row > Rack > Host) and so none here.
+// Home, a host of the lab view, a package, which the Packages page opens, and a Mac's Desktop,
+// which the Desktop link of the lab's list opens. The crumb is the top bar's one line of where the
+// page is; Home and the host page have their own breadcrumbs (Lab > Row > Rack > Host) and so
+// none here.
 const LINKED = [
   ["home", "Lab", home, ""],
   ["host", "Host", host, ""],
   ["package", "Package", pkg, "Package"],
   ["switch", "Switch", switchPage, ""],
+  ["desktop", "Desktop", desktop, "Desktop"],
 ];
 const PAGES = GROUPS.flatMap(([group, pages]) => pages.map(([name, title, page, glyph]) => [name, title, page, glyph, title]))
   .concat(SETTINGS.map(([name, title, page]) => [name, title, page, "", "Settings"]))
@@ -90,11 +93,14 @@ export function redirected(name, params) {
 // yes-or-no question to the operator (the browser's confirm), `now` the time in unix seconds
 // and `every` (`(run, milliseconds)` to a function that stops it) the repeating of a call a page
 // asks for, each injected so tests can fake them; without `every` a page's repeat never runs.
-// `openSocket(path, handlers)` opens a socket to `path` of the page's own origin (`main.js` makes
-// it, the one place that opens a socket) and returns `{send, close}`; a page that needs one
-// finds it as `ctx.openSocket`, which is absent when none was given.
+// `openSocket(path, handlers, csrf)` opens a socket to `path` of the page's own origin (`main.js`
+// makes it, the one place that opens a socket; a console stream offers the sign-in's CSRF token
+// `csrf` in its subprotocol) and returns `{send, close}`; a page that needs one finds it as
+// `ctx.openSocket`, which is absent when none was given. `viewScreen(target, socket, events)` draws
+// a Mac's screen from an open socket (`screen.js`, over the vendored noVNC); a page finds it as
+// `ctx.viewScreen`, absent when none was given.
 // Returns the frame's controls, which the browser does not need.
-export function startApp({ doc, root, fetch, confirm, now, every, openSocket, prefs = NO_PREFS }) {
+export function startApp({ doc, root, fetch, confirm, now, every, openSocket, viewScreen, prefs = NO_PREFS }) {
   // The operator's look, kept in memory: the theme (`prefs.apply(theme)` shows it) and whether the
   // side menu is collapsed to icons.
   let theme = "system";
@@ -344,7 +350,8 @@ export function startApp({ doc, root, fetch, confirm, now, every, openSocket, pr
       api,
       params: at.params,
       confirm: (question) => confirm(question) === true,
-      openSocket: typeof openSocket === "function" ? (path, handlers) => openSocket(path, handlers) : undefined,
+      openSocket: typeof openSocket === "function" ? (path, handlers, csrf) => openSocket(path, handlers, csrf) : undefined,
+      viewScreen: typeof viewScreen === "function" ? (target, socket, events) => viewScreen(target, socket, events) : undefined,
       now: () => now(),
       navigate,
       // Runs `run` once when this rendering of the page stops being the latest: the operator

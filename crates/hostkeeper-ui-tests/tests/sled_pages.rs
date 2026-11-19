@@ -676,7 +676,9 @@ return { head: all[0], web1: all.find((r) => r[0] === "web-1"), one, byName };"#
     );
     assert_eq!(
         out["head"],
-        json!(["Server", "State", "Address", "Where", "Group", "Version"])
+        json!([
+            "Server", "State", "Address", "Where", "Group", "Version", "Console"
+        ])
     );
     assert_eq!(out["web1"][2], "C0-R0-R0-S0-S0");
     assert_eq!(out["one"], json!(["mac-studio-1"]));

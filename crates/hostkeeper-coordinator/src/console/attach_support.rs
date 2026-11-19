@@ -21,6 +21,8 @@ use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 
 use super::support::{Fixture, caller};
 use crate::http::{PeerAddr, Surface, handle};
+use crate::login::Login;
+use crate::login_support::{Seconds, counting, settings};
 use crate::service::Coordinator;
 use crate::ssh_terminal_route::Shared;
 use crate::tokens::OperatorTokens;
@@ -67,6 +69,11 @@ pub(crate) struct Live {
 impl Live {
     /// The fixture `name` with at most `max` sessions, each attached within `window`.
     pub(crate) fn with(name: &str, max: usize, window: Duration) -> Self {
+        Self::build(name, max, window, false)
+    }
+
+    /// [`Live::with`] over a coordinator that has a sign-in when `signed` is true.
+    fn build(name: &str, max: usize, window: Duration, signed: bool) -> Self {
         let mut fixture = Fixture::with(name, max, window);
         let tokens_path = fixture.rig.dir.path().join("tokens.toml");
         let live = [("alice", ALICE), ("bob", BOB), ("carol", CAROL)];
@@ -76,11 +83,30 @@ impl Live {
             crate::marks_support::start(&fixture.rig.dir, &fixture.rig.clock, ""),
         );
         coordinator.tokens = OperatorTokens::from_file(&tokens_path).expect("tokens");
+        if signed {
+            let clock = Arc::new(Seconds(fixture.rig.clock.clone()));
+            let login = Login::new(settings(), clock, counting()).expect("a sign-in");
+            coordinator = coordinator.with_login(login);
+        }
         Self {
             fixture,
             coordinator: Arc::new(coordinator),
             tokens_path,
         }
+    }
+
+    /// The fixture `name` with the default bounds and a sign-in, which browser sessions are of.
+    pub(crate) fn signed_in(name: &str) -> Self {
+        Self::build(name, 8, Duration::from_secs(30), true)
+    }
+
+    /// A browser session of the user `username`: the cookie's id and the CSRF token.
+    pub(crate) fn browser(&self, username: &str, must_change: bool) -> (String, String) {
+        let sessions = &self.coordinator.login().expect("a sign-in").sessions;
+        let (id, view) = sessions
+            .create(username, must_change, None)
+            .expect("a session");
+        (id.as_str().to_owned(), view.csrf().to_owned())
     }
 
     /// The fixture `name` with the default bounds.
@@ -212,6 +238,20 @@ pub(crate) fn good_headers(token: &str) -> Vec<(&'static str, String)> {
             format!("hostkeeper.console.v1, bearer.{}", encoded(token)),
         ),
     ]
+}
+
+/// The headers of an attach from a browser: the session cookie `id` and the subprotocols
+/// `offers` after `hostkeeper.console.v1`.
+pub(crate) fn browser_headers(id: &str, offers: &[&str]) -> Vec<(&'static str, String)> {
+    let mut protocols = vec!["hostkeeper.console.v1"];
+    protocols.extend_from_slice(offers);
+    let mut headers: Vec<_> = good_headers("unused")
+        .into_iter()
+        .filter(|(name, _)| *name != "Sec-WebSocket-Protocol")
+        .collect();
+    headers.push(("Cookie", format!("{}={id}", crate::login_support::COOKIE)));
+    headers.push(("Sec-WebSocket-Protocol", protocols.join(", ")));
+    headers
 }
 
 /// The request of an attach to `session` with `headers`.

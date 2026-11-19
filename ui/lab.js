@@ -177,6 +177,12 @@ function versionOf(host) {
   return own !== undefined && typeof own.installedVersion === "string" ? own.installedVersion : "";
 }
 
+// Whether a host is a Mac, as its last heartbeat said its platform: its console is its screen
+// (the Desktop link), not a serial port.
+export function isMac(host) {
+  return (host.heartbeat || {}).platform === "PLATFORM_DARWIN_ARM64";
+}
+
 // Every server the lab knows, joined with its place: one for each enrolled host (its entry's
 // place when an entry matches it, else its own), one for each inventory entry no host is enrolled
 // against (pending), and one for each placement whose host or entry is gone (offline, `gone`).
@@ -202,13 +208,14 @@ export function serversOf(layout, hosts, records) {
       group: host.hostGroup || "",
       version: versionOf(host),
       host: host.nodeId,
+      mac: isMac(host),
     });
   }
   for (const record of records) {
     if (!seen.has(`inventory:${record.hostId}`)) {
       take({
         key: `inventory:${record.hostId}`, kind: "inventory", id: record.hostId, name: record.hostId,
-        state: "pending", group: record.hostGroup || "", version: "", host: null,
+        state: "pending", group: record.hostGroup || "", version: "", host: null, mac: false,
       });
     }
   }
@@ -217,7 +224,7 @@ export function serversOf(layout, hosts, records) {
     if (!seen.has(p.key) && !gear.has(p.key)) {
       take({
         key: p.key, kind: p.kind, id: p.id, name: p.id, state: "offline", group: "", version: "",
-        host: p.kind === "host" ? p.id : null, gone: true,
+        host: p.kind === "host" ? p.id : null, gone: true, mac: false,
       });
     }
   }

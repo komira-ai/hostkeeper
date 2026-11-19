@@ -55,7 +55,7 @@ export const NOW = 1800000000;
 // replies to the page's questions, in order; a question beyond them is answered no. Its clock
 // reads `now` (NOW when absent).
 export function recorder(client, params, answers, now) {
-  const seen = { reports: [], refreshes: 0, navigations: [], questions: [], shown: [], repeats: [], sockets: [] };
+  const seen = { reports: [], refreshes: 0, navigations: [], questions: [], shown: [], repeats: [], sockets: [], viewers: [] };
   const left = (answers || []).slice();
   const ctx = {
     api: client,
@@ -67,11 +67,12 @@ export function recorder(client, params, answers, now) {
     now() {
       return now === undefined ? NOW : now;
     },
-    // A socket the test drives: nothing arrives by itself. The test calls `handlers.open()`,
-    // `handlers.message(frame)` (a string, or a Uint8Array) and `handlers.close()` itself; what the
-    // page sends is kept in `sent` (`{text}` or `{bytes}`), and each `close()` is counted.
-    openSocket(path, handlers) {
-      const socket = { path, handlers, sent: [], closes: 0 };
+    // A socket the test drives: nothing arrives by itself. The test calls `handlers.open(socket)`,
+    // `handlers.message(frame)` (a string, or a Uint8Array) and `handlers.close(code, reason)`
+    // itself; the CSRF token the page gave for the subprotocol is kept in `csrf` (null when none),
+    // what the page sends in `sent` (`{text}` or `{bytes}`), and each `close()` is counted.
+    openSocket(path, handlers, csrf) {
+      const socket = { path, handlers, csrf: csrf === undefined ? null : csrf, sent: [], closes: 0 };
       seen.sockets.push(socket);
       return {
         send(data) {
@@ -80,6 +81,22 @@ export function recorder(client, params, answers, now) {
         close() {
           socket.closes += 1;
         },
+      };
+    },
+    // A viewer the test watches: each call is kept in `seen.viewers` with the element and the socket
+    // it was given and the events it may tell (`events.connect()` and the rest, which the test
+    // calls); the credentials sent and the disconnects are kept and counted.
+    viewScreen(target, socket, events) {
+      const viewer = { target, socket, events, credentials: [], disconnects: 0 };
+      seen.viewers.push(viewer);
+      return {
+        sendCredentials(creds) {
+          viewer.credentials.push(creds);
+        },
+        disconnect() {
+          viewer.disconnects += 1;
+        },
+        focus() {},
       };
     },
     navigate(name, to) {

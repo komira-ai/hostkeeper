@@ -29,7 +29,8 @@
 //!   `GET /v1/ssh/terminal?host=<host id>`, the WebSocket upgrade of the UI's Remote SSH
 //!   ([`crate::ssh_terminal_route`]), which takes a session and no bearer. With or without a
 //!   sign-in it answers `GET /console/v1/stream/<session>`, the WebSocket of a console session,
-//!   which takes the operator's bearer in its subprotocol ([`crate::console::route`]). `GET /v1/version[?at_least=<X.Y.Z>]`
+//!   which takes either the operator's bearer or the browser session's CSRF token (beside its
+//!   cookie) in its subprotocol ([`crate::console::route`]). `GET /v1/version[?at_least=<X.Y.Z>]`
 //!   answers which release this coordinator is, with no token read ([`crate::version_route`]):
 //!   CI waits on it before it sets a release a coordinator older than the release would refuse.
 //!
@@ -230,7 +231,7 @@ where
         && let Some(session) = path.strip_prefix(crate::console::route::PREFIX)
     {
         return if method == Method::GET {
-            crate::console::route::answer(coordinator, request, session)
+            crate::console::route::answer(coordinator, coordinator.login(), request, session)
         } else {
             error(StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed")
         };

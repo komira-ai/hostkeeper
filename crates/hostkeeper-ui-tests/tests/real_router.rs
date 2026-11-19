@@ -185,6 +185,15 @@ const REQUESTS: &[(&str, &str)] = &[
         r#"{"reason": "add row"}"#,
     ),
     (
+        "hostkeeper.operator.v1.Console/Close",
+        r#"{"hostId":"storage-1"}"#,
+    ),
+    ("hostkeeper.operator.v1.Console/List", "{}"),
+    (
+        "hostkeeper.operator.v1.Console/Open",
+        r#"{"hostId":"storage-1","reason":"checking"}"#,
+    ),
+    (
         "hostkeeper.operator.v1.Console/Power",
         r#"{"hostId":"storage-1","action":"POWER_ACTION_STATUS","reason":"checking"}"#,
     ),

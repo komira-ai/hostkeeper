@@ -155,6 +155,17 @@ by their route and are not in the menu.
   `no_pin`, `host_key_mismatch`, `auth_refused`, `shell_refused`, `bad_request` and `exit`); a socket that closes without it says so.
   **Close** closes the socket. The terminal has no resize (it is always 120 by 36) and keeps the last 200 lines that scrolled off.
   A proxy in front of the private listener must pass WebSocket upgrades on that path.
+- **Desktop** (`ui/pages/desktop.js`, reached by the **Desktop** link of a Mac's row in the Lab's list, a host whose last heartbeat
+  said `PLATFORM_DARWIN_ARM64`; design: [console design](design/console-broker.md) sections 3 and 11.2): a Mac's screen through the
+  coordinator. The page names who holds the Mac's console (`Console.List`), with a **Close it** that asks first and sends
+  `Console.Close`. **Open the desktop** needs a reason (1 to 256 bytes, no control character), sends `Console.Open`, then opens one
+  socket to `/console/v1/stream/<session>` of the page's own origin, offering `hostkeeper.console.v1` and `csrf.<the session's CSRF
+  token>` as its subprotocols (the coordinator checks the token beside the session's cookie and selects `hostkeeper.console.v1`
+  alone). In the socket's `open` handler the open socket is handed to the vendored noVNC viewer (`ui/screen.js`), which is never
+  given an address. When the Mac asks for its login the page shows a form for what it asks and hands what is typed to the viewer
+  only, keeping no copy of the password. Every close of the stream is shown in words (`ui/console_words.js`, one sentence per close
+  token of the coordinator). **Close**, leaving the page and signing out close the socket. An answer that is not a Mac's screen gives
+  the session back with `Console.Close`. The Mac's Power buttons are not on the page yet.
 - **Users** (`Users.List`; `Users.Create`, `Disable`, `Enable`, `ResetPassword` and `Delete` on a button): a table
   of the users with whether each is enabled, must change its password, who made it and when, its last sign-in and the
   second its temporary password stops working. Create takes a name; Create and Reset password show the temporary
@@ -190,17 +201,26 @@ by their route and are not in the menu.
   images; [console design](design/console-broker.md), section 8.2); the app's own files still use neither inline style nor
   inline script. No answer of the coordinator carries an `Access-Control-*` header.
 - The one socket: the app opens one kind of WebSocket, to its own origin, in exactly one place, `ui/main.js`, which builds
-  `ctx.openSocket(path, handlers)` and hands it to the pages as it hands them `fetch`. Its address comes from
+  `ctx.openSocket(path, handlers, csrf)` and hands it to the pages as it hands them `fetch`; its `open` handler is given the open
+  socket, which a console page hands to its viewer, and its `close` handler the close frame's code and reason. Its address comes from
   `socketAddress` (`ui/socket_address.js`): the page's own host, over TLS when the page is, and a path of one of two fixed shapes, the
   Remote SSH terminal's (`/v1/ssh/terminal?host=<host id>`) and a console session's stream
   (`/console/v1/stream/<session id of 64 lower-case hex digits>`); any other path is refused before a socket is made. The scan of the
   sources (`crates/hostkeeper-ui-tests/src/scan.rs`) refuses `WebSocket` in every other file of the app and a `ws://` or `wss://`
-  address in every file, and holds `main.js` to one `WebSocket(` call, whose argument is `socketAddress(window.location, path)`.
+  address in every file, and holds `main.js` to one `WebSocket(` call, whose arguments are
+  `socketAddress(window.location, path), socketProtocols(path, csrf)`. `socketProtocols` offers nothing for the Remote SSH terminal
+  (its first message carries the CSRF token) and, for a console stream, `hostkeeper.console.v1` and `csrf.<token>`, refusing a
+  stream without a token of base64url characters; the token is in no address.
 - Vendored libraries: third-party code lives under `ui/vendor/`, each file pinned by its SHA-256 in
   `crates/hostkeeper-ui-tests/vendor.sha256` (`sha256sum` lines, run in `ui/`), so a change to a vendored library is a change to
   that file; the scan fails for a vendored file with no pin or another digest, and for a pin with no file. The directory is exempt
   from the scan's needles (minified code names licence URLs and `console.`), and is still refused, by the scan, inline script and
-  handlers made from text, and any `WebSocket(` call: the libraries are handed the app's one socket, already open.
+  handlers made from text, and any `WebSocket(` call: the libraries are handed the app's one socket, already open. The app's
+  1000-line limit is for its own files; a vendored file is the library's text. The one library vendored is noVNC 1.7.0
+  (`ui/vendor/novnc/`, MPL-2.0, with its bundled pako, MIT): `core/rfb.js` and the modules it imports, unchanged but for
+  `core/websock.js`, whose `open` (the library's one `new WebSocket(`) throws instead and is marked as changed in the file;
+  `LICENSE.txt`, `AUTHORS` and the licence texts are the package's own. The entry module imports it; no test loads it (the pages
+  are run against a fake viewer).
 - The files need no sign-in. The operator API the app calls still needs a session (with its CSRF
   header) or an operator token on every call.
 

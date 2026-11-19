@@ -15,7 +15,8 @@
 //! - [`sockets`]: a call of `WebSocket`, which only the entry module may make, once (it builds the
 //!   one function, `openSocket`, that pages are given as `ctx.openSocket`, as they are given `fetch`),
 //!   and [`opener`], what that one call must look like: its address is `socketAddress`'s, which is
-//!   the page's own host and a path of a fixed shape (`ui/socket_address.js`);
+//!   the page's own host and a path of a fixed shape, and its subprotocols `socketProtocols`'s
+//!   (`ui/socket_address.js`);
 //! - [`vendored_code`]: what a vendored library (a file under [`crate::vendor::VENDOR_DIR`]) is
 //!   held to instead of all of the above: no inline script or handler made from text and no
 //!   `WebSocket(` call. [`scan_file`] picks a file's rules by its directory.
@@ -292,10 +293,12 @@ pub fn sockets(path: &str, text: &str) -> Vec<Finding> {
     needles(path, text, &["WebSocket("])
 }
 
-/// The one argument [`SOCKET_OPENER`]'s `WebSocket(` call may have: the address
+/// The one argument list [`SOCKET_OPENER`]'s `WebSocket(` call may have: the address
 /// `ui/socket_address.js` builds from the page's own location and the path asked for, which it
-/// refuses unless the path has one of its fixed shapes.
-pub const SOCKET_ADDRESS: &str = "socketAddress(window.location, path)";
+/// refuses unless the path has one of its fixed shapes, and the subprotocols it builds from the
+/// path (for a console stream, its own and the sign-in's CSRF token; none for any other).
+pub const SOCKET_ADDRESS: &str =
+    "socketAddress(window.location, path), socketProtocols(path, csrf)";
 
 /// The text between the `(` that opens at `open` in `text` and the `)` that closes it, trimmed,
 /// or `None` when it is never closed.
@@ -316,7 +319,7 @@ fn argument(text: &str, open: usize) -> Option<&str> {
     None
 }
 
-/// What [`SOCKET_OPENER`] must hold: exactly one `WebSocket(` call, and that call's argument is
+/// What [`SOCKET_OPENER`] must hold: exactly one `WebSocket(` call, and that call's arguments are
 /// [`SOCKET_ADDRESS`] (so the socket goes to the page's own host, at a path of a fixed shape).
 /// One finding for a file with no call, one for each call past the first and one for each call
 /// with another argument.

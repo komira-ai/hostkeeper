@@ -4,7 +4,8 @@
 // keys, arrow buttons and one rack at a time on a phone, with the number of the rack in view and
 // a fade at an end that has more); a click on a server opens its host page. Above the floor plan,
 // the conditions that need a person as one compact strip; below it, the servers not placed yet.
-// `list` (true) shows every server in one compact list instead of the floor plan.
+// `list` (true) shows every server in one compact list instead of the floor plan; a Mac's row there
+// has a Desktop link, which opens the Mac's Desktop page (its screen).
 // Breadcrumbs: Lab > Row > Rack > Host.
 //
 // The layout is the coordinator's own small model (rows, racks numbered in their row and as many U
@@ -92,6 +93,17 @@ export function matches(server, text) {
   return server.name.toLowerCase().includes(want) || address === want || address.startsWith(`${want}-`);
 }
 
+// The console link of a server's row: Desktop for a Mac (its screen); "-" for any other.
+function consoleLink(ctx, server) {
+  if (server.host === null || server.mac !== true) {
+    return "-";
+  }
+  return h("button", {
+    type: "button", class: "linklike", name: "open-desktop",
+    on: { click: () => ctx.navigate("desktop", { nodeId: server.host }) },
+  }, "Desktop");
+}
+
 // The list view: every server in one compact table, with its address and where it stands, under a
 // filter that takes a name or an address (the page is drawn again when it is applied).
 function serversList(ctx, layout, servers, state, redraw) {
@@ -106,7 +118,8 @@ function serversList(ctx, layout, servers, state, redraw) {
     h("td", { class: "mono" }, s.placement === null ? "-" : s.placement.address),
     h("td", {}, s.placement === null ? "Unplaced" : `${rackName(layout, s.placement.rack)}, U${s.placement.u}`),
     h("td", {}, s.group || "-"),
-    h("td", {}, s.version || "-")));
+    h("td", {}, s.version || "-"),
+    h("td", {}, consoleLink(ctx, s))));
   const form = { text: state.filter };
   const apply = () => {
     state.filter = form.text;
@@ -120,7 +133,7 @@ function serversList(ctx, layout, servers, state, redraw) {
   };
   return [
     h("div", { class: "buttons" }, input, h("button", { type: "button", name: "apply-filter", on: { click: apply } }, "Filter")),
-    table(["Server", "State", "Address", "Where", "Group", "Version"], rows),
+    table(["Server", "State", "Address", "Where", "Group", "Version", "Console"], rows),
   ];
 }
 

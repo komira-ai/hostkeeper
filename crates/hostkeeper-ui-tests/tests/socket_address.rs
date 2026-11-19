@@ -118,3 +118,95 @@ fn a_path_of_no_fixed_shape_is_refused() {
         ]
     );
 }
+
+/// What `socketProtocols(path, csrf)` gives for each `[path, csrf]`: `{"protocols": [...]}`, or
+/// `{"refused": <the error's message>}` when it throws.
+fn protocols(cases: &[(Value, Value)]) -> Vec<Value> {
+    let input: Vec<Value> = cases
+        .iter()
+        .map(|(path, csrf)| json!({"path": path, "csrf": csrf}))
+        .collect();
+    let driver = format!(
+        r#"
+import {{ socketProtocols }} from "./socket_address.js";
+const cases = {};
+export async function main() {{
+  return cases.map((c) => {{
+    try {{
+      return {{ protocols: socketProtocols(c.path, c.csrf === null ? undefined : c.csrf) }};
+    }} catch (e) {{
+      return {{ refused: e.message }};
+    }}
+  }});
+}}"#,
+        json!(input)
+    );
+    Ui::start()
+        .run(&driver)
+        .as_array()
+        .expect("one answer per case")
+        .clone()
+}
+
+/// Proves: a console stream offers exactly `hostkeeper.console.v1` and the sign-in's CSRF token as
+/// `csrf.<token>`, in that order; the Remote SSH terminal offers nothing, whatever token is given
+/// (its first message carries it).
+///
+/// Catches: a token offered to the SSH terminal, a console stream that offers the token without
+/// the console's subprotocol (which the coordinator refuses `bad_request`), and a token put in the
+/// path instead.
+#[test]
+fn a_console_stream_offers_its_protocol_and_the_csrf_token_and_the_terminal_offers_none() {
+    let stream = format!("/console/v1/stream/{SESSION}");
+    let csrf = "Zm9vYmFyLWJheg_-0123456789";
+    let got = protocols(&[
+        (json!(stream), json!(csrf)),
+        (json!("/v1/ssh/terminal?host=web-2"), json!(csrf)),
+        (json!("/v1/ssh/terminal?host=web-2"), json!(null)),
+    ]);
+    assert_eq!(
+        got,
+        [
+            json!({"protocols": ["hostkeeper.console.v1", format!("csrf.{csrf}")]}),
+            json!({"protocols": []}),
+            json!({"protocols": []}),
+        ]
+    );
+}
+
+/// Proves: a console stream without the sign-in's CSRF token, or with one that is not base64url of
+/// 1 to 256 characters (empty, too long, a comma, a space, `=` padding, not a string), is refused
+/// before a socket is made, and the refusal names no token.
+///
+/// Catches: a socket offered with `csrf.` and nothing after it (refused by the coordinator only
+/// after the connection is made), and a token that would split into two subprotocols (`a,b`) or
+/// break the header.
+#[test]
+fn a_console_stream_without_a_well_formed_csrf_token_is_refused_naming_no_token() {
+    let stream = format!("/console/v1/stream/{SESSION}");
+    let longest = "a".repeat(256);
+    let too_long = "a".repeat(257);
+    let accepted = protocols(&[(json!(stream), json!(longest))]);
+    assert_eq!(
+        accepted,
+        [json!({"protocols": ["hostkeeper.console.v1", format!("csrf.{longest}")]})]
+    );
+    let bad = [
+        json!(null),
+        json!(""),
+        json!(too_long),
+        json!("a,b"),
+        json!("a b"),
+        json!("abc="),
+        json!("a.b"),
+        json!(42),
+    ];
+    let cases: Vec<(Value, Value)> = bad.iter().map(|c| (json!(stream), c.clone())).collect();
+    for (csrf, got) in bad.iter().zip(protocols(&cases)) {
+        assert_eq!(
+            got,
+            json!({"refused": "a console stream needs the sign-in's CSRF token"}),
+            "{csrf}"
+        );
+    }
+}

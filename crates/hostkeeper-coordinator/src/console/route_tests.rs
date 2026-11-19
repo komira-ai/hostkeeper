@@ -8,7 +8,9 @@ use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::{Method, Request, StatusCode, Version};
 
-use super::attach_support::{ALICE, BOB, CAROL, Live, encoded, good_headers, send, upgrade};
+use super::attach_support::{
+    ALICE, BOB, CAROL, Live, browser_headers, encoded, good_headers, send, upgrade,
+};
 use super::support::{MAC, NODE, caller};
 use crate::http::{Surface, handle};
 use crate::testutil::Log;
@@ -625,4 +627,258 @@ async fn a_connection_that_is_not_handed_over_ends_its_session() {
     );
     assert!(live.last_reason().contains("cause=not_upgraded;"));
     assert_eq!(live.fixture.dials.dialled(), Vec::<String>::new());
+}
+
+/// Asks for the stream of `session` over a served connection with `headers`: the answer's head
+/// and body as text.
+async fn asked(live: &Live, session: &str, headers: &[(&'static str, String)]) -> String {
+    let mut stream = live.connection();
+    send(&mut stream, &upgrade(session, headers)).await
+}
+
+/// Proves: a browser session whose user opened the console session attaches with the session's
+/// CSRF token as a `csrf.` subprotocol beside its cookie and no bearer: the `101` selects
+/// `hostkeeper.console.v1` alone and carries neither the token nor the cookie's value, the
+/// session shows attached, and a second attach by the same session is 403 `already_attached`.
+///
+/// Catches: a web app that cannot attach to the console session it opened, and a `101` that
+/// echoes the CSRF token as the selected subprotocol.
+#[tokio::test]
+async fn a_browser_session_attaches_with_its_csrf_in_the_subprotocol() {
+    let live = Live::signed_in("route-browser");
+    let _mac = live.fixture.dials.connect();
+    let session = live.open("alice", MAC);
+    let (id, csrf) = live.browser("alice", false);
+    let offer = format!("csrf.{csrf}");
+    let headers = browser_headers(&id, &[&offer]);
+    let head = asked(&live, &session, &headers).await;
+    assert!(head.starts_with("HTTP/1.1 101 "), "{head}");
+    let lower = head.to_ascii_lowercase();
+    assert!(
+        lower.contains("\r\nsec-websocket-protocol: hostkeeper.console.v1\r\n"),
+        "{head}"
+    );
+    assert_eq!(lower.matches("sec-websocket-protocol").count(), 1, "{head}");
+    for secret in [csrf.as_str(), id.as_str()] {
+        assert!(!head.contains(secret), "{head}");
+    }
+    let listed = live
+        .coordinator
+        .console_list(&caller("alice"), &proto::ListConsoleSessionsRequest {})
+        .expect("listed");
+    assert!(listed.sessions[0].attached);
+    let again = asked(&live, &session, &headers).await;
+    assert!(again.starts_with("HTTP/1.1 403 "), "{again}");
+    assert!(again.ends_with(&error("already_attached")), "{again}");
+}
+
+/// Proves: a live browser session that offers no `csrf.` subprotocol, one that is another
+/// session's token, one that is longer than any token, or an empty one, is 403 `csrf` with the
+/// exact body, no `Sec-WebSocket-Protocol` header and neither token in the answer; the console
+/// session stays unattached, so the right token then attaches. Only the first `csrf.` offer is
+/// read: the right token after a wrong one is refused.
+///
+/// Catches: a stream attached without proof that the page holds the session's CSRF token, and a
+/// refusal that echoes the offered token.
+#[tokio::test]
+async fn a_session_without_its_csrf_or_with_another_is_refused_403_csrf() {
+    let live = Live::signed_in("route-csrf");
+    let _mac = live.fixture.dials.connect();
+    let session = live.open("alice", MAC);
+    let (id, csrf) = live.browser("alice", false);
+    let (_, other) = live.browser("alice", false);
+    let wrong = format!("csrf.{other}");
+    let long = format!("csrf.{}", "A".repeat(4096));
+    let right = format!("csrf.{csrf}");
+    let cases: Vec<(&str, Vec<&str>)> = vec![
+        ("no offer", vec![]),
+        ("another session's token", vec![&wrong]),
+        ("a token longer than any", vec![&long]),
+        ("an empty token", vec!["csrf."]),
+        ("the right token second", vec![&wrong, &right]),
+    ];
+    for (label, offers) in cases {
+        let answered = asked(&live, &session, &browser_headers(&id, &offers)).await;
+        assert!(answered.starts_with("HTTP/1.1 403 "), "{label}: {answered}");
+        assert!(
+            answered.ends_with(&format!("\r\n\r\n{}", error("csrf"))),
+            "{label}: {answered}"
+        );
+        assert!(
+            !answered
+                .to_ascii_lowercase()
+                .contains("sec-websocket-protocol"),
+            "{label}: {answered}"
+        );
+        for secret in [csrf.as_str(), other.as_str(), id.as_str()] {
+            assert!(!answered.contains(secret), "{label}: {answered}");
+        }
+    }
+    let listed = live
+        .coordinator
+        .console_list(&caller("alice"), &proto::ListConsoleSessionsRequest {})
+        .expect("listed");
+    assert!(!listed.sessions[0].attached);
+    let head = asked(&live, &session, &browser_headers(&id, &[&right])).await;
+    assert!(head.starts_with("HTTP/1.1 101 "), "{head}");
+}
+
+/// Proves: with no `bearer.` offer, a request with no cookie, a cookie that names no live
+/// session, or a cookie while the coordinator has no sign-in, is 401 `unauthorized` however good
+/// its `csrf.` offer.
+///
+/// Catches: an attach with no credential at all, and a coordinator with no sign-in that answers
+/// anything else.
+#[tokio::test]
+async fn no_session_cookie_and_no_bearer_is_unauthorized() {
+    let live = Live::signed_in("route-no-cookie");
+    let session = live.open("alice", MAC);
+    let (id, csrf) = live.browser("alice", false);
+    let offer = format!("csrf.{csrf}");
+    let mut no_cookie = browser_headers(&id, &[&offer]);
+    no_cookie.retain(|(name, _)| *name != "Cookie");
+    let unknown = browser_headers("no-such-session", &[&offer]);
+    for (label, headers) in [("no cookie", no_cookie), ("an unknown cookie", unknown)] {
+        let answered = asked(&live, &session, &headers).await;
+        assert!(answered.starts_with("HTTP/1.1 401 "), "{label}: {answered}");
+        assert!(
+            answered.ends_with(&error("unauthorized")),
+            "{label}: {answered}"
+        );
+    }
+    let plain = Live::new("route-no-sign-in");
+    let session = plain.open("alice", MAC);
+    let answered = asked(&plain, &session, &browser_headers(&id, &[&offer])).await;
+    assert!(answered.starts_with("HTTP/1.1 401 "), "{answered}");
+    assert!(answered.ends_with(&error("unauthorized")), "{answered}");
+}
+
+/// Proves: a browser session that must choose a new password first is 403
+/// `password_change_required`, and one whose user is not a valid operator name is 403
+/// `forbidden`, each with the right CSRF token; neither attaches the session.
+///
+/// Catches: a console attached from a session that may do nothing else yet, and a session user
+/// that is no operator name taken as one.
+#[tokio::test]
+async fn a_session_that_owes_a_new_password_cannot_attach() {
+    let live = Live::signed_in("route-must-change");
+    let session = live.open("alice", MAC);
+    let (id, csrf) = live.browser("alice", true);
+    let offer = format!("csrf.{csrf}");
+    let answered = asked(&live, &session, &browser_headers(&id, &[&offer])).await;
+    assert!(answered.starts_with("HTTP/1.1 403 "), "{answered}");
+    assert!(
+        answered.ends_with(&error("password_change_required")),
+        "{answered}"
+    );
+    let (id, csrf) = live.browser("not a name!", false);
+    let offer = format!("csrf.{csrf}");
+    let answered = asked(&live, &session, &browser_headers(&id, &[&offer])).await;
+    assert!(answered.starts_with("HTTP/1.1 403 "), "{answered}");
+    assert!(answered.ends_with(&error("forbidden")), "{answered}");
+    let listed = live
+        .coordinator
+        .console_list(&caller("alice"), &proto::ListConsoleSessionsRequest {})
+        .expect("listed");
+    assert!(!listed.sessions[0].attached);
+}
+
+/// Proves: a browser session of another operator name than the session's opener is 403
+/// `forbidden` and leaves the session unattached, so its opener's session still attaches.
+///
+/// Catches: one operator's console session taken by another's browser.
+#[tokio::test]
+async fn a_session_of_another_name_cannot_attach_to_the_session() {
+    let live = Live::signed_in("route-browser-other");
+    let _mac = live.fixture.dials.connect();
+    let session = live.open("alice", MAC);
+    let (id, csrf) = live.browser("bob", false);
+    let offer = format!("csrf.{csrf}");
+    let answered = asked(&live, &session, &browser_headers(&id, &[&offer])).await;
+    assert!(answered.starts_with("HTTP/1.1 403 "), "{answered}");
+    assert!(answered.ends_with(&error("forbidden")), "{answered}");
+    let (id, csrf) = live.browser("alice", false);
+    let offer = format!("csrf.{csrf}");
+    let head = asked(&live, &session, &browser_headers(&id, &[&offer])).await;
+    assert!(head.starts_with("HTTP/1.1 101 "), "{head}");
+}
+
+/// Proves: a request that offers a `bearer.` beside a live session's cookie and its CSRF token is
+/// judged by the bearer alone: a bad bearer is 401 `unauthorized` although the session and its
+/// CSRF token are good, another operator's bearer is 403 `forbidden` on a session of the cookie's
+/// user, and the opener's bearer attaches, with the `101` selecting the protocol alone.
+///
+/// Catches: a cookie that overrides or rescues a bearer, which would let a request pick which
+/// credential is judged.
+#[tokio::test]
+async fn a_bearer_offer_beside_a_cookie_is_judged_as_a_bearer() {
+    let live = Live::signed_in("route-bearer-and-cookie");
+    let _mac = live.fixture.dials.connect();
+    let session = live.open("alice", MAC);
+    let (id, csrf) = live.browser("alice", false);
+    let csrf_offer = format!("csrf.{csrf}");
+    let bad = format!("bearer.{}", encoded("no-such-token-0123456789abcdef"));
+    let both = browser_headers(&id, &[&csrf_offer, &bad]);
+    let answered = asked(&live, &session, &both).await;
+    assert!(answered.starts_with("HTTP/1.1 401 "), "{answered}");
+    assert!(answered.ends_with(&error("unauthorized")), "{answered}");
+    let bob = format!("bearer.{}", encoded(BOB));
+    let both = browser_headers(&id, &[&csrf_offer, &bob]);
+    let answered = asked(&live, &session, &both).await;
+    assert!(answered.starts_with("HTTP/1.1 403 "), "{answered}");
+    assert!(answered.ends_with(&error("forbidden")), "{answered}");
+    let good = format!("bearer.{}", encoded(ALICE));
+    let both = browser_headers(&id, &[&csrf_offer, &good]);
+    let head = asked(&live, &session, &both).await;
+    assert!(head.starts_with("HTTP/1.1 101 "), "{head}");
+    let lower = head.to_ascii_lowercase();
+    assert!(
+        lower.contains("\r\nsec-websocket-protocol: hostkeeper.console.v1\r\n"),
+        "{head}"
+    );
+    assert!(!head.contains(&csrf), "{head}");
+}
+
+/// Proves: the session's CSRF token and its cookie are in no log line: not of an attach, of a
+/// refusal (a wrong token, a foreign origin), or of a stream that failed after its upgrade (whose
+/// own line is there, so the log was read).
+///
+/// Catches: a CSRF token or session id logged with the request's headers.
+#[tokio::test]
+async fn the_csrf_is_in_no_log_line() {
+    let live = Live::signed_in("route-csrf-log");
+    let log = Log::default();
+    let _guard = log.install();
+    let session = live.open("alice", NODE);
+    let (id, csrf) = live.browser("alice", false);
+    let offer = format!("csrf.{csrf}");
+    let wrong = "csrf.not-the-token-0123456789".to_owned();
+    let answered = asked(&live, &session, &browser_headers(&id, &[&wrong])).await;
+    assert!(answered.starts_with("HTTP/1.1 403 "), "{answered}");
+    let mut foreign = browser_headers(&id, &[&offer]);
+    foreign.retain(|(name, _)| *name != "Origin");
+    foreign.push(("Origin", "https://evil.test".to_owned()));
+    let answered = asked(&live, &session, &foreign).await;
+    assert!(answered.starts_with("HTTP/1.1 403 "), "{answered}");
+    live.fixture
+        .tool
+        .refuse(hostkeeper_console::ipmi::ShellError::Start);
+    let mut stream = live.connection();
+    let head = send(
+        &mut stream,
+        &upgrade(&session, &browser_headers(&id, &[&offer])),
+    )
+    .await;
+    assert!(head.starts_with("HTTP/1.1 101 "), "{head}");
+    let mut client = super::attach_support::Client { stream };
+    client.closed(4013, "bmc_failed").await;
+    live.gone(NODE).await;
+    let text = log.text();
+    assert!(
+        text.contains("a serial console was not activated"),
+        "{text}"
+    );
+    for secret in [csrf.as_str(), id.as_str(), "not-the-token-0123456789"] {
+        assert!(!text.contains(secret), "{text}");
+    }
 }
