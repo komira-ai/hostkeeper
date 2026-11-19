@@ -229,4 +229,20 @@ pub trait Records: Send + Sync + fmt::Debug {
     /// # Errors
     /// [`StoreError`] when it cannot be written.
     fn set_duplicate(&self, host: &pb::Host) -> Result<(), StoreError>;
+
+    /// Expires, in one conditional write, every request that waits for an operator (pending or
+    /// a duplicate claim, not yet expired) and was posted more than `ttl_secs` before `now`: the
+    /// requests this call expired, as now written, each once however many processes share the
+    /// records. `None` when the records have no such write; the store then expires under its
+    /// lock ([`super::EnrollmentStore::expire`]).
+    ///
+    /// # Errors
+    /// [`StoreError`] when they cannot be written.
+    fn expire_waiting(
+        &self,
+        _now: u64,
+        _ttl_secs: u64,
+    ) -> Result<Option<Vec<(KeyHash, pb::Request)>>, StoreError> {
+        Ok(None)
+    }
 }

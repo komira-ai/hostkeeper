@@ -1,7 +1,8 @@
 //! The flags of the Postgres store beside `--database-dsn-file`
 //! (`docs/design/coordinator-multi-instance.md`, section 12): the pool of writing sessions, how
-//! often this instance's row of `instances` is upserted, and how a migration waits for its locks
-//! and is tried again. Each has a default; with the file store none is read.
+//! often this instance's row of `instances` is upserted, how a migration waits for its locks
+//! and is tried again, how often a session's last use is written, and how often the periodic
+//! jobs are claimed and each runs. Each has a default; with the file store none is read.
 
 use std::net::SocketAddr;
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
@@ -11,6 +12,7 @@ use clap::Args;
 
 use crate::store::postgres::Options;
 use crate::store::postgres::migrate::Retry;
+use crate::store::postgres::periodic::{ALERTS, JOBS, PRUNE, REQUEST_EXPIRY};
 
 /// The most milliseconds `--migrate-ddl-lock-timeout-ms` takes: below the statement timeout of
 /// every session of the store (5 seconds), which would end a longer wait first and fail the start
@@ -50,6 +52,47 @@ pub struct DatabaseFlags {
     /// back for want of a lock before it gives up and exits, naming the migration. At least 1.
     #[arg(long, value_name = "N", default_value = "6")]
     pub migrate_attempts: NonZeroU32,
+    /// With --database-dsn-file: the fewest seconds between two writes of a browser session's
+    /// last use; a use inside them is not written, so a session's idle deadline may count from
+    /// up to this long before its last use.
+    #[arg(long, value_name = "SECS", default_value_t = 30)]
+    pub session_touch_secs: u64,
+    /// With --database-dsn-file: how often, in seconds, this coordinator claims the periodic
+    /// jobs that are due. At least 1.
+    #[arg(long, value_name = "SECS", default_value = "5")]
+    pub job_tick_secs: NonZeroU64,
+    /// With --database-dsn-file: the period of a periodic job, NAME=SECS, one of `alerts`
+    /// (default 15), `request-expiry` (default 15) and `prune` (default 3600); SECS at least 1.
+    /// Repeatable; a later one for the same job wins.
+    #[arg(long, value_name = "NAME=SECS", value_parser = job_every)]
+    pub job_every: Vec<JobEvery>,
+}
+
+/// A period of `--job-every`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct JobEvery {
+    /// The job.
+    pub name: &'static str,
+    /// Its period.
+    pub secs: NonZeroU64,
+}
+
+/// The default period of each job.
+const JOB_DEFAULTS: [(&str, u64); 3] = [(ALERTS, 15), (REQUEST_EXPIRY, 15), (PRUNE, 3600)];
+
+/// Parses `NAME=SECS` of `--job-every`.
+fn job_every(text: &str) -> Result<JobEvery, String> {
+    let (name, secs) = text
+        .split_once('=')
+        .ok_or_else(|| format!("{text:?} is not NAME=SECS"))?;
+    let name = JOBS
+        .into_iter()
+        .find(|job| *job == name)
+        .ok_or_else(|| format!("no job is named {name:?}: one of {}", JOBS.join(", ")))?;
+    let secs = secs
+        .parse::<NonZeroU64>()
+        .map_err(|_| format!("{secs:?} is not a number of seconds of at least 1"))?;
+    Ok(JobEvery { name, secs })
 }
 
 impl DatabaseFlags {
@@ -67,6 +110,29 @@ impl DatabaseFlags {
             release: release.to_owned(),
             listen: listen.to_owned(),
         }
+    }
+}
+
+impl DatabaseFlags {
+    /// Every job with its period in seconds: the default, or the last `--job-every` of it.
+    pub(crate) fn job_periods(&self) -> Vec<(String, i64)> {
+        JOB_DEFAULTS
+            .iter()
+            .map(|(name, secs)| {
+                let secs = self
+                    .job_every
+                    .iter()
+                    .rev()
+                    .find(|every| every.name == *name)
+                    .map_or(*secs, |every| every.secs.get());
+                ((*name).to_owned(), i64::try_from(secs).unwrap_or(i64::MAX))
+            })
+            .collect()
+    }
+
+    /// How often the jobs are claimed.
+    pub(crate) fn job_tick(&self) -> Duration {
+        Duration::from_secs(self.job_tick_secs.get())
     }
 }
 

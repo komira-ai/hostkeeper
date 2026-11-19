@@ -27,13 +27,17 @@
 //!   turned out to be is taken by the stores ([`Landing`]).
 
 mod accounts;
+pub(crate) mod admin_rows;
+pub(crate) mod alert_rows;
 mod at;
 mod dsn;
 mod generations;
 mod groups;
 mod instance;
 mod layout;
+pub(crate) mod login_rows;
 pub(crate) mod migrate;
+pub(crate) mod periodic;
 mod pool;
 mod records;
 mod releases;

@@ -8,7 +8,6 @@
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::Duration;
 
-#[cfg(test)]
 use super::Postgres;
 use super::pool::Pool;
 use super::session::Session;
@@ -54,13 +53,15 @@ pub(crate) fn start(
     })
 }
 
-#[cfg(test)]
 impl Postgres {
     /// This instance's row.
     pub(crate) fn instance(&self) -> &Instance {
         &self.inner.instance
     }
+}
 
+#[cfg(test)]
+impl Postgres {
     /// Upserts this instance's row ([`beat`]).
     ///
     /// # Errors

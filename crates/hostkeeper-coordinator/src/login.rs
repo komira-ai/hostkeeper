@@ -25,6 +25,7 @@ use crate::password::{
     HashSlots, PasswordError, PasswordSettings, Passwords, PolicyError, StoredHash, Verdict,
 };
 use crate::session::{LimiterSettings, LoginLimiter, SessionSettings, SessionView, Sessions};
+use crate::store::postgres::login_rows::PgLoginRows;
 
 /// The name of the session cookie. The `__Host-` prefix makes a browser refuse the cookie unless
 /// it came over a secure connection with `Path=/` and no `Domain`.
@@ -114,6 +115,15 @@ impl Login {
             #[cfg(test)]
             checked: std::sync::Mutex::new(None),
         })
+    }
+
+    /// The same sign-in keeping its sessions and failure counts in `rows`, a database's, instead
+    /// of this process's memory (`docs/design/coordinator-multi-instance.md`, section 8).
+    #[must_use]
+    pub(crate) fn with_rows(mut self, rows: Arc<PgLoginRows>) -> Self {
+        self.sessions = self.sessions.over(Arc::clone(&rows));
+        self.limiter = self.limiter.over(rows);
+        self
     }
 
     /// From now on, `hook` runs each time a password has been hashed and what it decides is about

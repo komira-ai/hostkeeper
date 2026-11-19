@@ -217,7 +217,7 @@ fn the_release_before_runs_on_a_database_with_0022_and_this_one_on_its() {
     let (store, _) = old.open("this release").expect("this release starts on it");
     assert_eq!(
         old.rows("SELECT max(version) FROM schema_version"),
-        vec![vec![Some("22".to_owned())]]
+        vec![vec![Some("23".to_owned())]]
     );
     assert_eq!(
         old.rows("SELECT count(*) FROM instances"),

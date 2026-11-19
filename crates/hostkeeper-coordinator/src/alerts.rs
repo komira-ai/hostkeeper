@@ -698,11 +698,13 @@ pub struct Observed {
     pub first_unix: u64,
 }
 
-/// The alerts the last observation found, each with when it was first observed: in memory only.
+/// The alerts the last observation found, each with when it was first observed: in memory, and,
+/// over a database, in its rows too ([`Book::over`]), which decide which coordinator logs an alert.
 #[derive(Debug, Default)]
 pub struct Book {
     thresholds: Thresholds,
     seen: Mutex<BTreeMap<Subject, u64>>,
+    rows: Option<crate::store::postgres::alert_rows::PgAlerts>,
 }
 
 impl Book {
@@ -712,6 +714,7 @@ impl Book {
         Self {
             thresholds,
             seen: Mutex::new(BTreeMap::new()),
+            rows: None,
         }
     }
 
@@ -726,6 +729,13 @@ impl Book {
     ) -> Result<Vec<Observed>, E> {
         let mut seen = self.seen.lock().unwrap_or_else(PoisonError::into_inner);
         let (alerts, unix) = find()?;
+        if let Some(observed) = rows::observed(self.rows.as_ref(), &alerts, unix) {
+            *seen = observed
+                .iter()
+                .map(|one| (one.alert.subject.clone(), one.first_unix))
+                .collect();
+            return Ok(observed);
+        }
         let observed: Vec<Observed> = alerts
             .into_iter()
             .map(|alert| {
@@ -923,3 +933,6 @@ mod coordinator_tests;
 
 #[path = "group_alerts.rs"]
 mod group_alerts;
+
+#[path = "alerts_rows.rs"]
+mod rows;

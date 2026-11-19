@@ -583,6 +583,49 @@ impl Records for PgRecords {
         Ok(RecordsLock::in_process())
     }
 
+    /// One conditional write: a request still waiting (pending or a duplicate claim, its
+    /// `expired_unix` 0) and posted more than `ttl_secs` before `now` is expired, and returned,
+    /// by the one statement whose update took its row; a coordinator whose statement found the
+    /// row expired already by another's does not return it, so each expiry is audited once
+    /// (`docs/design/coordinator-multi-instance.md`, section 9, job `request-expiry`).
+    fn expire_waiting(
+        &self,
+        now: u64,
+        ttl_secs: u64,
+    ) -> Result<Option<Vec<(KeyHash, pb::Request)>>, StoreError> {
+        let (now, ttl) = (
+            int(now, "enrollment_requests")?,
+            int(ttl_secs, "enrollment_requests")?,
+        );
+        let expired = self
+            .store
+            .write(move |tx| {
+                Ok(tx
+                    .query(
+                        &format!(
+                            "UPDATE enrollment_requests SET expired_unix = greatest($1::bigint, 1), \
+                             expired_after_secs = $2 WHERE state IN (1, 2) AND expired_unix = 0 \
+                             AND greatest($1::bigint - posted_unix, 0) > $2 \
+                             RETURNING {REQUEST_COLUMNS}"
+                        ),
+                        &[&now, &ttl],
+                    )?
+                    .iter()
+                    .map(request_of)
+                    .collect::<Vec<_>>())
+            })
+            .map_err(|fail| failed(at("enrollment_requests"), fail.why()))?;
+        expired
+            .into_iter()
+            .map(|request| {
+                KeyHash::from_bytes(&request.request_id)
+                    .map(|id| (id, request))
+                    .ok_or(StoreError::Unkeyed("request"))
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(Some)
+    }
+
     fn place(&self, key: &RecordKey) -> PathBuf {
         match key {
             RecordKey::Request(id) => at(&format!("enrollment_requests/{id}")),

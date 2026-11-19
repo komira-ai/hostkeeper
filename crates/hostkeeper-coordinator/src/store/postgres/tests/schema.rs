@@ -42,6 +42,7 @@ fn shipped_rows() -> Vec<Vec<Option<String>>> {
         row("20", "ssh_certs", "may-run"),
         row("21", "ssh_tunnels", "may-run"),
         row("22", "instances", "may-run"),
+        row("23", "sessions_and_jobs", "may-run"),
     ]
 }
 
@@ -102,7 +103,7 @@ fn a_migration_that_fails_is_rolled_back_whole_and_stops_the_start() {
     let db = TestDatabase::new();
     let shipped = migrate::checked(&migrate::SHIPPED).expect("the shipped set");
     let failing = Migration {
-        version: 23,
+        version: 24,
         name: "half",
         older: OlderReleases::Refuse,
         sql: "CREATE TABLE half (x int); SELECT 1/0;",
@@ -115,14 +116,14 @@ fn a_migration_that_fails_is_rolled_back_whole_and_stops_the_start() {
     assert!(matches!(
         error,
         ApplyError::Failed {
-            version: 23,
+            version: 24,
             name: "half",
             ..
         }
     ));
     assert_eq!(
         error.to_string(),
-        "migration 23 (half) failed and was rolled back: ERROR: division by zero (SQLSTATE 22012)"
+        "migration 24 (half) failed and was rolled back: ERROR: division by zero (SQLSTATE 22012)"
     );
     assert_eq!(
         db.rows("SELECT to_regclass('hostkeeper.half')::text"),
@@ -132,7 +133,7 @@ fn a_migration_that_fails_is_rolled_back_whole_and_stops_the_start() {
 
     // A migration that works is run, once, and its number answered.
     let good = Migration {
-        version: 23,
+        version: 24,
         name: "later",
         older: OlderReleases::MayRun,
         sql: "CREATE TABLE later (x int)",
@@ -143,10 +144,10 @@ fn a_migration_that_fails_is_rolled_back_whole_and_stops_the_start() {
         let ran = migrate::apply(session, &set).expect("the set applies");
         (ran, migrate::apply(session, &set).expect("and again"))
     });
-    assert_eq!((ran, again), (vec![23], Vec::<i32>::new()));
+    assert_eq!((ran, again), (vec![24], Vec::<i32>::new()));
     assert_eq!(
         versions(&db),
-        [shipped_rows(), vec![row("23", "later", "may-run")]].concat()
+        [shipped_rows(), vec![row("24", "later", "may-run")]].concat()
     );
 }
 
@@ -190,16 +191,16 @@ fn a_migration_marked_refuse_stops_an_older_release_and_may_run_does_not() {
     let (store, _) = db.open("first").expect("the store opens");
     store.stop();
     db.run(
-        "INSERT INTO schema_version (version, name, older_releases) VALUES (23, 'later', 'refuse')",
+        "INSERT INTO schema_version (version, name, older_releases) VALUES (24, 'later', 'refuse')",
     )
     .expect("a later migration is recorded");
     let error = db.open("older").err().expect("an older release is refused");
     assert!(matches!(error, DatabaseError::Schema(_)));
     assert_eq!(
         error.to_string(),
-        "the database's schema is newer than this coordinator (migration 23, later)"
+        "the database's schema is newer than this coordinator (migration 24, later)"
     );
-    db.run("UPDATE schema_version SET older_releases = 'may-run' WHERE version = 23")
+    db.run("UPDATE schema_version SET older_releases = 'may-run' WHERE version = 24")
         .expect("the rule is changed");
     let (store, _) = db.open("older").expect("an older release may run");
     store.stop();
@@ -447,7 +448,7 @@ fn starters_that_run_together_apply_each_migration_once() {
         .flat_map(|runner| runner.join().expect("the runner ends"))
         .collect();
     ran.sort_unstable();
-    assert_eq!(ran, (1..=22).collect::<Vec<i32>>());
+    assert_eq!(ran, (1..=23).collect::<Vec<i32>>());
     assert_eq!(versions(&db), shipped_rows());
 }
 
@@ -476,7 +477,7 @@ fn a_runner_that_cannot_get_the_runners_lock_runs_nothing() {
     let ran = with_session(&db, move |session| {
         migrate::apply(session, &set).expect("the set applies")
     });
-    assert_eq!(ran, (1..=22).collect::<Vec<i32>>());
+    assert_eq!(ran, (1..=23).collect::<Vec<i32>>());
 }
 
 /// How many times the tests below end a store and take its lock at once.

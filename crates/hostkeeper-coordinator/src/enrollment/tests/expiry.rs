@@ -35,6 +35,7 @@ const TTL: u64 = DEFAULT_REQUEST_TTL_SECS;
 async fn tick(enrollment: &Rig) {
     reload_all(
         Some(&enrollment.enrollment),
+        true,
         &[],
         &OperatorTokens::single(OPERATOR),
         &OperatorKeys::default(),

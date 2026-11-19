@@ -250,6 +250,17 @@ impl EnrollmentStore {
     /// over records that commit all or nothing, none does.
     pub fn expire(&self, now: u64, ttl_secs: u64) -> Result<Vec<RequestView>, StoreError> {
         let _held = self.lock()?;
+        if let Some(expired) = self.records.expire_waiting(now, ttl_secs)? {
+            let mut rows = expired
+                .into_iter()
+                .map(|(id, pb)| {
+                    let key = RecordKey::Request(id);
+                    RequestRow::check(self.records.place(&key), pb, &id)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            rows.sort_by_key(|row| row.id);
+            return rows.iter().map(view).collect();
+        }
         let mut expired = Vec::new();
         let mut records = Vec::new();
         for mut row in self.all_requests()? {

@@ -29,6 +29,7 @@ use crate::audit_file::{DEFAULT_MAX_BYTES, DEFAULT_RETAINED, Rotation, wall_cloc
 use crate::backup::{migrate_marker, ops_path, restore_marker};
 use crate::enrollment::os_random;
 use crate::initial_admin::InitialAdmin;
+use crate::jobs::Jobs;
 use crate::jti_file::jti_path;
 use crate::layout::layout_path;
 use crate::lock::{LockError, LockGuard, StateLock, lock_path};
@@ -37,6 +38,10 @@ use crate::ops::{Marker, OpsState, unlanded};
 use crate::service::Coordinator;
 use crate::ssh_book::Book;
 use crate::ssh_ledger::Ledger;
+use crate::store::postgres::admin_rows::PgAdmin;
+use crate::store::postgres::alert_rows::PgAlerts;
+use crate::store::postgres::login_rows::PgLoginRows;
+use crate::store::postgres::periodic::PgJobs;
 use crate::store::postgres::ssh::PgLedger;
 use crate::store::postgres::ssh_book::PgBook;
 use crate::store::postgres::{DatabaseError, Dsn, PgRecords, Postgres};
@@ -58,6 +63,9 @@ pub(super) struct Opened {
     pub(super) ledger: Option<Arc<dyn Ledger>>,
     /// The book of the SSH tunnels, which only the database keeps.
     pub(super) book: Option<Arc<dyn Book>>,
+    /// The database, when the store is one: the sign-in's rows, the periodic jobs, the alerts'
+    /// rows and the initial-admin file's are kept there.
+    pub(super) database: Option<Postgres>,
 }
 
 /// Opens the store `flags` name: the database of `--database-dsn-file`, or the files of
@@ -90,6 +98,7 @@ pub(super) fn open_store(
             records: None,
             ledger: None,
             book: None,
+            database: None,
         });
     };
     let file_flags = [
@@ -148,10 +157,11 @@ pub(super) fn open_store(
         backend: Arc::new(store.clone()),
         loaded,
         marker: marker.clone(),
-        held: LockGuard::new(store),
+        held: LockGuard::new(store.clone()),
         records,
         ledger,
         book,
+        database: Some(store),
     })
 }
 
@@ -378,9 +388,13 @@ pub(super) fn initial_admin(flags: &Serve) -> Result<Option<InitialAdmin>, Start
 pub(super) fn with_initial_admin(
     coordinator: Coordinator,
     flags: &Serve,
+    database: Option<&Postgres>,
 ) -> Result<Coordinator, StartError> {
     let coordinator = match initial_admin(flags)? {
-        Some(file) => coordinator.with_initial_admin(file),
+        Some(file) => coordinator.with_initial_admin(match database {
+            Some(store) => file.over(PgAdmin::new(store.clone())),
+            None => file,
+        }),
         None => coordinator,
     };
     coordinator.look_at_initial_admin()?;
@@ -395,13 +409,27 @@ pub(super) fn with_initial_admin(
 pub(super) fn with_login(
     coordinator: Coordinator,
     flags: &Serve,
+    database: Option<&Postgres>,
 ) -> Result<Coordinator, StartError> {
-    let login = Login::new(
-        flags.login.login_settings(),
-        Arc::new(SystemClock),
-        os_random(),
-    )?;
-    Ok(coordinator.with_login(login))
+    let settings = flags.login.login_settings();
+    let login = Login::new(settings, Arc::new(SystemClock), os_random())?;
+    let Some(store) = database else {
+        return Ok(coordinator.with_login(login));
+    };
+    let rows = PgLoginRows::new(
+        store.clone(),
+        settings.sessions,
+        settings.limiter,
+        flags.database.session_touch_secs,
+    );
+    let jobs = PgJobs::start(store.clone(), flags.database.job_periods(), &rows)
+        .map_err(DatabaseError::Refused)?;
+    Ok(coordinator
+        .with_login(login.with_rows(Arc::new(rows)))
+        .with_jobs(
+            Jobs::new(jobs, flags.database.job_tick()),
+            PgAlerts::new(store.clone()),
+        ))
 }
 
 /// The thresholds of the alerts `flags` name: `--alert-silent-host-secs` and
