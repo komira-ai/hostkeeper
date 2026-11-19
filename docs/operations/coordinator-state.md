@@ -77,8 +77,22 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   nothing, on any of them, until the next heartbeat's revival has opened every lost one again with
   the lock. Reads that are not decisions
   (`Audit.List`, the enrollment lists, the alerts' scans) run on a second, read-only session.
-  Decisions read memory: a heartbeat in the steady state writes nothing. It reads its host's
-  enrollment and deny rows, fresh, so a deny another coordinator recorded is seen at once.
+  Decisions read memory: a heartbeat in the steady state writes only its host's rows of the fleet
+  (below). It reads its host's enrollment and deny rows, fresh, so a deny another coordinator
+  recorded is seen at once.
+- **The fleet's rows.** Every heartbeat a coordinator answers is kept, in one statement on a writing
+  session and outside a transaction, in the tables of migration `0024`: the host's row of
+  `fleet_hosts` (the heartbeat as read, the database's time it was heard, the host's own clock in
+  it and the instance that heard it), a row of `fleet_bakes` for each service the heartbeat names
+  (the healthy beats in a row at one version, the bake of `docs/design/host-updates.md`), and the
+  removal of the host's row of `fleet_orders` for a service whose ordered version it reports. A
+  heartbeat older by its host's clock than the one stored is dropped unless the stored one is
+  `--beat-reorder-secs` old (default 30, 1 to 44): two coordinators can receive one host's
+  heartbeats out of order. When the newest row of `fleet_hosts` is 45 seconds old or older, or
+  there is none (a database restart, an outage, a first start), the statement raises
+  `cluster_quiet.until_unix` to `--quiet-secs` past its moment. No decision reads these rows yet: a
+  heartbeat is decided over the coordinator's memory as before, and one whose row cannot be
+  written is answered all the same (`a beat is not kept` in the log).
 - **Edits, and the copies in memory.** Each change of the state (an operator's, CI's, or one the
   coordinator makes itself) is one transaction that locks, after its row of `tx_ledger`, the row
   of `rollout_gate` when it changes what a rollout decision reads (the desired state, the

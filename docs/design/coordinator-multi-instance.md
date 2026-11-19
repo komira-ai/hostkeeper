@@ -7,7 +7,7 @@ lock, the ledger, the migration runner's mutex (M3, komira-ai/hostkeeper#395), t
 lock timeout and retry and the lint's hot-table rule (the rest of M3), with section 12's keys for those; the models of
 section 14 (M2); in section 6 the enrollment's conditional writes, its fresh host and deny reads and the spent CI
 token ids decided by the insert (M5); section 6's edits, versions, reload, audit counter and facts generation and the gate of 5.2
-(M4; as built: the companion, section 6). Still Designed in section 4: `--migrate-wait-secs`, `--ledger-retry-secs` and the
+(M4; as built: the companion, section 6); in section 5 the fleet's tables, the gap rule, the ordered beat upsert, the in-SQL bake and the release of slots (M6; as built: the companion, section 5). Still Designed in section 4: `--migrate-wait-secs`, `--ledger-retry-secs` and the
 prune in a reload tick (#395 differs, below). Everything else is Designed. M1 is measured (section 7).
 
 It changes one decision of [coordinator-storage.md](coordinator-storage.md): that decision's section 5 ("the single writer: an
@@ -196,11 +196,11 @@ the same new migration, and one would fail on a duplicate object. The runner the
 
 | Table | Holds | Logged |
 |---|---|---|
-| `fleet_hosts(host_id pk, role, beat bytea, seen_unix, sent_unix, running bytea, repo_report bytea, instance)` | the last heartbeat of each host (the proto, as received), the host's own `sent_unix` of it, what it runs and its repository report (today `running.rs:43`, `repository_push.rs:119`) | logged (decided by M1, below), `fillfactor` 50, no index on updated columns (HOT) |
-| `fleet_bakes(host_id, service, target, beats int, at_unix)` | the count of healthy beats in a row at one version, per service and host (today `Bake`, `bake.rs:33`) | unlogged |
-| `fleet_orders(host_id, service, target, uninstall_id, at_unix, try)` | an outstanding order that holds a slot (today `orders`, `ORDER_AGE` 120 s); a unique index on `host_id` (one update at a time on a host) backs the gate | logged |
-| `fleet_tries`, `fleet_canaries`, `fleet_queued_orders(host_id, service, kind, order_id)`, `fleet_found`, `fleet_defers` | the other maps of `Fleet` (`fleet.rs:180-210`) | logged |
-| `cluster_quiet(id, until_unix)` | the start rule below | logged |
+| `fleet_hosts(host_id pk, role, beat bytea, seen_unix, sent_unix, running bytea, repo_report bytea, instance)` | the last heartbeat of each host (the proto, as received; as built, the JSON the coordinator read), the host's own `sent_unix` of it, what it runs and its repository report (today `running.rs:43`, `repository_push.rs:119`) | logged (decided by M1, below), `fillfactor` 50, no index on updated columns (HOT). **Built** (M6, `0024`; no `running` or `repo_report` yet: the companion, section 5) |
+| `fleet_bakes(host_id, service, target, beats int, at_unix)` | the count of healthy beats in a row at one version, per service and host (today `Bake`, `bake.rs:33`) | unlogged. **Built** (M6, `0024`) |
+| `fleet_orders(host_id, service, target, uninstall_id, at_unix, try)` | an outstanding order that holds a slot (today `orders`, `ORDER_AGE` 120 s); a unique index on `host_id` (one update at a time on a host) backs the gate | logged. **Built** (M6, `0024`; written from M7) |
+| `fleet_tries`, `fleet_canaries`, `fleet_queued_orders(host_id, service, kind, order_id)`, `fleet_found`, `fleet_defers` | the other maps of `Fleet` (`fleet.rs:180-210`) | logged. Designed: made with M7, which writes them |
+| `cluster_quiet(id, until_unix)` | the start rule below | logged. **Built** (M6, `0024`) |
 | `rollout_gate(id)` | one row, never updated, only locked `FOR UPDATE` by every transaction that decides or edits a decision input (section 5.2); **Built** (M4, `0023`) | logged |
 | `periodic_jobs(name, next_run_unix, last_run_unix, last_instance)` | the due time of each periodic job, advanced by whoever claims it (section 9) | logged |
 | `desired_seq` (sequence) and columns `set_seq`, `set_for` on `desired`/`group_desired` | the FIFO order of the queue (today `queue.rs:58`, per instance), and the version the `set_seq` was taken for (section 16, back-out) | logged |
@@ -219,7 +219,7 @@ rows, so the old ones are old). In all of them the rows still there carry an old
 alone would count most of the fleet as down while the first hosts beat, and `min_up`, the stages and the halt logic (a host
 that did not come back) would act on a partial fleet. The rule keys on the signal itself, a gap in the beats:
 
-- The heartbeat's one statement reads `max(seen_unix)` of `fleet_hosts` **as the statement's snapshot has it, before its own
+- (**Built**, M6: `store/postgres/fleet_rows.rs`.) The heartbeat's one statement reads `max(seen_unix)` of `fleet_hosts` **as the statement's snapshot has it, before its own
   upsert** (a data-modifying CTE does not see its own rows), and in the same statement, when that value is older than
   `DOWN_AFTER` or the table is empty, sets `cluster_quiet.until_unix = greatest(until_unix, now() + quiet)`. No sentinel row
   and no epoch are needed: an empty table is a gap too. The table holds 11 rows today (M1), so the `max` is a
@@ -259,7 +259,7 @@ Two paths:
      beat was applied. A slot is also freed by age: `ORDER_AGE` is read as a filter by every reader, and the deciding
      transaction, under the gate, deletes the aged rows. Deleting a row without the gate only frees a slot, so a decision
      that reads the row a moment before the delete is conservative (one fewer order), never wrong;
-  4. the gap rule above, the state-version vector (section 6), the host's deny row and the host's queued orders.
+  4. the gap rule above, the state-version vector (section 6), the host's deny row and the host's queued orders. (**Built**, M6: 1 to 3 and the gap rule, `fleet_rows.rs`; the versions and the deny row stay reads of their own, the queued orders M7's: the companion, section 5.)
   A cache is reloaded only by the rule of section 6 ("Invalidation": rows and version read in one snapshot, so a cache is
   never labelled newer than its content).
   If all are as the instance's caches say, reply. No gate, one round trip. **This path never places an order, a halt or a plan
@@ -277,7 +277,7 @@ Two paths:
   again. An agent that predates the field sends none: its `sent_unix` is stored as 0, so its order is the arrival order, as
   today. A dropped beat still gets its reply (the decision of the current row). Presence is written on every applied beat, about
   4 writes per host per minute; the owner accepts a write per host about every 5 s, so no thinning of this write is designed
-  (the fallback of section 7 stays a fallback).
+  (the fallback of section 7 stays a fallback). **Built** (M6, `fleet_rows.rs`).
 - **Deciding path** (an order, a halt, a plan step may follow). One transaction, READ COMMITTED:
 
   ```
@@ -569,8 +569,8 @@ rows read. Where this differs from the text below: a row that does not exist yet
 key lock is what serializes two writers of a new host id or a new deny row, rather than the unique index alone; the
 whole row as read is the condition, not the state column alone; the `Copy` is gone rather than made a cache under an
 `enrollment` version (that version is `state_versions`', M4's), so a host's row and its deny row are read fresh at
-each read (decision 4 of section 19), by queries of their own on the read-only session until the heartbeat's one
-statement (M6) carries the deny row; `Renew`'s checks and its serial are one write (`renewal_serial`). The pending cap
+each read (decision 4 of section 19), by queries of their own on the read-only session (M6 keeps them so: the companion,
+section 5); `Renew`'s checks and its serial are one write (`renewal_serial`). The pending cap
 and the machine id and MAC of other requests and hosts, which a post reads as lists, are not part of the condition:
 two coordinators posting at one moment may each let one request past the cap or miss the other's claim of a machine
 id; an approval still checks its host id. The heartbeat's `heard`, `served` and `running` sets of a store, which only
@@ -819,7 +819,7 @@ sequenceDiagram
 | `--health-listen` | none | readiness address on `cp-hk` |
 | `--cache-nodes-ttl-ms` | 1000 | per-instance cache of read-only parts of the fleet, if section 7 needs it |
 | `--session-touch-secs` | 30 | write of `last_used_unix` at most this often |
-| `--beat-reorder-secs` | 30 | a beat older (by the host's `sent_unix`) than the stored one is dropped unless the stored row is older than this |
+| `--beat-reorder-secs` | 30 | a beat older (by the host's `sent_unix`) than the stored one is dropped unless the stored row is older than this. Built (M6; 1 to 44) |
 | `--ledger-retry-secs` | 10 | how long an instance retries a transaction of unknown outcome, a deadlock or a serialization failure before it answers 503 |
 | `--operator-gate-wait-ms` | 30000 | how long an operator edit waits for the gate row (a heartbeat never waits: `SKIP LOCKED`); then it is refused `store_failed`. Built (M4) |
 | `--tx-idle-timeout-ms` | 5000 | `idle_in_transaction_session_timeout` of every pool session: the longest a silent instance holds the gate or a row lock |
@@ -908,7 +908,7 @@ the farm): the back-out is a stopgap while a fix ships.
 | M3 | Built: by komira-ai/hostkeeper#395 the shared fence lock, the `tx_ledger` settle (`0019`), no `lease.commits` write, no deposed exit, the migration mutex, the session timeouts; then the pool of sessions (`store/postgres/pool.rs`), `instances` (`0022`, `instance.rs`), DDL `lock_timeout` with its bounded retry and the migration lint rule (`migrate.rs`). Still one instance | M2 | M |
 | M4 | Built: row-transaction edits and `state_versions` invalidation for desired, ops, accounts, layout, verdicts, with the row-lock order of section 6 and the one-snapshot reload rule (`store/edit.rs`, `store/postgres/edit.rs`, `parts.rs`, the stores' `*_edit.rs`, `0023_state_versions.sql`); `rollout_gate` with `SKIP LOCKED` for beats and the operator wait (`--operator-gate-wait-ms`); `audit_counter` and its start-time re-seed; `facts_generation` | M3 | L |
 | M5 | Built: enrollment's conditional writes (`Seen`, `enroll/store.rs` `decided`), the key locks and `FOR UPDATE` re-read of `store/postgres/records.rs`, host and deny rows read fresh, `Renew` in one write; the spent CI token id decided by the insert (section 6) | M3 | M |
-| M6 | The fleet in Postgres, without decisions: `fleet_*`, `cluster_quiet` and the gap rule, the ordered beat upsert, the in-SQL bake, the converged path | M4, M5 | M |
+| M6 | Built: the fleet in Postgres, without decisions: `fleet_hosts`, `fleet_bakes`, `fleet_orders`, `cluster_quiet` (`0024`), and on every answered heartbeat one statement with the gap rule, the ordered beat upsert, the in-SQL bake and the release of slots (`store/postgres/fleet_rows.rs`, `store/beat.rs`), `--beat-reorder-secs`; no decision reads the rows (as built: the companion, section 5) | M4, M5 | M |
 | M7 | The deciding transaction and the steps of 5.3: gate, re-read of every input, `set_seq`/`set_for` and the start-time re-stamp, orders with the unique host index, compare-and-set stage advance, storage-first halts, rollback before delete, fail closed; the quiet rule gating verdicts and rollbacks as well as orders | M6 | L |
 | M8 | Sessions and login limiter; `periodic_jobs` and the claim; alerts, expiry, pruning and initial-admin made exactly-once | M3 | M |
 | M9 | `--health-listen` and `--drain-delay-secs` (the old task keeps accepting while it answers 503); docs (`coordinator-state.md`, `rollout-plans.md`, `holds-and-force.md`, `enrollment.md`) updated; this document's tags turned to Built | M7, M8 | S |

@@ -290,6 +290,7 @@ pub(crate) fn options() -> Options {
         release: "test-release".to_owned(),
         listen: "heartbeat=127.0.0.1:8443".to_owned(),
         gate_wait: std::time::Duration::from_secs(30),
+        fleet: super::Timing::of(30, 30),
     }
 }
 
@@ -326,6 +327,7 @@ mod coordinator;
 mod copies;
 mod edits;
 mod enrollment_races;
+mod fleet_rows;
 mod gate;
 mod generations;
 mod host_groups;

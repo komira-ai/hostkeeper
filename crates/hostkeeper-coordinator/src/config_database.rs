@@ -1,8 +1,9 @@
 //! The flags of the Postgres store beside `--database-dsn-file`
 //! (`docs/design/coordinator-multi-instance.md`, section 12): the pool of writing sessions, how
 //! often this instance's row of `instances` is upserted, how a migration waits for its locks
-//! and is tried again, and how long an edit waits for the rollout gate. Each has a default; with
-//! the file store none is read.
+//! and is tried again, how long an edit waits for the rollout gate, and when a heartbeat older by
+//! its host's clock than the one stored is believed. Each has a default; with the file store none
+//! is read.
 
 use std::net::SocketAddr;
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
@@ -10,13 +11,18 @@ use std::time::Duration;
 
 use clap::Args;
 
-use crate::store::postgres::Options;
 use crate::store::postgres::migrate::Retry;
+use crate::store::postgres::{Options, Timing};
 
 /// The most milliseconds `--migrate-ddl-lock-timeout-ms` takes: below the statement timeout of
 /// every session of the store (5 seconds), which would end a longer wait first and fail the start
 /// instead of rolling the migration back to try again.
 const MAX_DDL_LOCK_TIMEOUT_MS: u64 = 4999;
+
+/// The bound `--beat-reorder-secs` stays below: the seconds of silence after which a host is down
+/// ([`crate::fleet::DOWN_AFTER`]), so a host whose clock stepped back is believed again before it
+/// would count as down.
+const MAX_BEAT_REORDER_SECS: u64 = crate::fleet::DOWN_AFTER.as_secs();
 
 /// The flags of the Postgres store.
 #[derive(Clone, Debug, Args)]
@@ -57,12 +63,25 @@ pub struct DatabaseFlags {
     /// nothing changed. A heartbeat's own write never waits for the gate. At least 1.
     #[arg(long, value_name = "MS", default_value = "30000")]
     pub operator_gate_wait_ms: NonZeroU64,
+    /// With --database-dsn-file: how old, in seconds, the stored heartbeat of a host must be
+    /// before a heartbeat that its host's clock says is older replaces it. A heartbeat reaches the
+    /// database through any coordinator, so two can arrive out of order; the older one is dropped,
+    /// unless the host's clock stepped back and the stored one is this old. 1 to 44, below the 45
+    /// seconds of silence after which a host is down.
+    #[arg(
+        long,
+        value_name = "SECS",
+        default_value_t = 30,
+        value_parser = clap::value_parser!(u64).range(1..MAX_BEAT_REORDER_SECS)
+    )]
+    pub beat_reorder_secs: u64,
 }
 
 impl DatabaseFlags {
-    /// The store's options of these flags, for an instance that runs `release` and listens on
-    /// `listen`.
-    pub(crate) fn options(&self, release: &str, listen: &str) -> Options {
+    /// The store's options of these flags, for an instance that runs `release`, listens on
+    /// `listen` and holds decisions back for `quiet_secs` (`--quiet-secs`) after a gap in the
+    /// heartbeats.
+    pub(crate) fn options(&self, release: &str, listen: &str, quiet_secs: u64) -> Options {
         Options {
             pool: self.database_pool,
             migrate: Retry {
@@ -74,6 +93,7 @@ impl DatabaseFlags {
             release: release.to_owned(),
             listen: listen.to_owned(),
             gate_wait: Duration::from_millis(self.operator_gate_wait_ms.get()),
+            fleet: Timing::of(self.beat_reorder_secs, quiet_secs),
         }
     }
 }
