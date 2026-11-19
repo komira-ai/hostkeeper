@@ -294,6 +294,60 @@ export function dropStart(layout, rackId, height, u, except) {
   return null;
 }
 
+// The U a sled `height` U high with its lowest U at `u` takes, in words: "U5", or "U5-7".
+export function uSpan(u, height) {
+  return height > 1 ? `U${u}-${u + height - 1}` : `U${u}`;
+}
+
+// Where the next sled `height` U high goes in `rackId` after one was put at `from`: the lowest start
+// at or above `from` where it fits, else the lowest anywhere in the rack, else null (no room).
+export function nextSledStart(layout, rackId, height, from) {
+  const starts = freeSledStarts(layout, rackId, height);
+  const above = starts.find((u) => u >= from);
+  if (above !== undefined) {
+    return above;
+  }
+  return starts.length > 0 ? starts[0] : null;
+}
+
+// The tallest a rack is made (the coordinator's limit), and the height a drag of a rack's bottom edge
+// asks for: the rack's height `from`, plus one U for each `unit` pixels the pointer moved down (`dy`;
+// up is negative), to the nearest U, never below 1 nor above the limit.
+export const MAX_RACK_HEIGHT = 60;
+export function dragHeight(from, dy, unit) {
+  const by = unit > 0 ? Math.round(dy / unit) : 0;
+  return Math.min(Math.max(from + by, 1), MAX_RACK_HEIGHT);
+}
+
+// Why `rackId` cannot be made `height` U high, in words, or null when it can: the height is 1 to the
+// limit, and a rack keeps every U a sled of it stands on (its U count from the bottom, so a shrink
+// takes U off the top). The words name each sled the shrink would cut, where it stands and what is
+// on it, and the least height the rack can have.
+export function rackHeightProblem(layout, rackId, height) {
+  if (!Number.isInteger(height) || height < 1 || height > MAX_RACK_HEIGHT) {
+    return `A rack is 1 to ${MAX_RACK_HEIGHT}U high.`;
+  }
+  const cut = sledsIn(layout, rackId).filter((s) => s.u + s.height - 1 > height);
+  if (cut.length === 0) {
+    return null;
+  }
+  const least = Math.max(...cut.map((s) => s.u + s.height - 1));
+  const said = cut.map((s) => {
+    const on = occupants(layout, s.id).map((p) => p.id);
+    return `${s.address} at ${uSpan(s.u, s.height)}${on.length === 0 ? "" : ` with ${on.join(", ")}`}`;
+  });
+  return `${rackName(layout, rackId)} cannot be ${height}U: that would cut off ${cut.length === 1 ? "the sled" : "the sleds"} ${said.join("; ")}. `
+    + `Move or remove ${cut.length === 1 ? "it" : "them"} first, or keep the rack at least ${least}U.`;
+}
+
+// The free slots of the sleds of `rackId`, `[{sled, slot, address, u, height}]` by address.
+export function freeSlotsIn(layout, rackId) {
+  const sleds = new Map(sledsIn(layout, rackId).map((s) => [s.id, s]));
+  return freeSlots(layout, "")
+    .filter((f) => sleds.has(f.sled))
+    .map((f) => ({ ...f, u: sleds.get(f.sled).u, height: sleds.get(f.sled).height }));
+}
+
 // The numbers of an address, `C0-R0-R1-S2-S0` -> [0, 0, 1, 2, 0], to order addresses by place.
 function addressKey(address) {
   return (address.match(/\d+/g) || []).map(Number);

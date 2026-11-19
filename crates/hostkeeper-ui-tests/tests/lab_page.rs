@@ -564,14 +564,14 @@ return seen.reports;"#,
 #[test]
 fn a_rack_is_resized_and_moved_to_another_row_from_its_head() {
     // Catches: a resize that drops the row or a move that drops the height, either of which the
-    // coordinator would refuse or apply wrongly.
+    // coordinator would refuse or apply wrongly. The height list resizes as soon as a height is chosen.
     let mut ui = start();
     let out = home(
         &mut ui,
         r#"{ row: "row-1", edit: true }"#,
         r#"
 choose(tree, "rack-height", "48", 1);
-await click(tree, "resize-rack", 1);
+for (let i = 0; i < 60; i += 1) { await null; }
 choose(tree, "rack-row", "row-2", 1);
 await click(tree, "move-rack", 1);
 return seen.reports;"#,

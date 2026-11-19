@@ -70,8 +70,18 @@ Sled { id sled-<n>, rack, u (lowest U, 1 is the bottom), height_u 1..60, slots 1
 
 ## 5. UI
 
-- **Edit layout, rack view: Add sled** asks Size (height in U), Slots (1..8, default 1), U location (only the U where that size fits). The
-  new sled draws as an empty tray with N empty bays. A sled has Resize/Move/Remove (Remove names what stands on it when refused).
+- **Edit layout: + Add sled and + Add device on each rack.** Each opens one form above the racks, titled with what it adds and where
+  ("Add a sled to Row 0 / Rack 1 at U5-6", "Add a device to Row 0 / Rack 1 on C0-R0-R1-S0-S1"). Add sled asks Height (U), Slots (1..8,
+  default 1), an optional Label and Position (only the lowest U where that height fits); Add device asks the server or switch (from those
+  on no sled) and the free slot of a sled of that rack. Before anything is added the rack draws the sled's outline, or marks the bay. After
+  an add the page is read again and the form stays open with its inputs as they were, at the next free U above the sled just added (or
+  the next free slot), so four Mac Studio sleds are four clicks. What cannot be added (no room, no free slot, nothing waiting, a
+  coordinator refusal) is said in the form, and nothing is sent. The new sled draws as an empty tray with N empty bays. A sled has
+  Resize/Move/Remove (Remove names what stands on it when refused).
+- **A rack's height** is set on the rack: a stepper (one U shorter, a height from 1 to 60 U, one U taller) in its head, and a grip on its
+  bottom edge dragged down for more U or up for fewer (the arrow keys on the grip: a U at a time). A rack's U count from the bottom, so a
+  shrink takes U off the top; one that would cut a sled is refused before any call, under the rack, naming the sled, where it stands, what
+  is on it and the least height the rack can have. Each resize is one `PutRack`.
 - **Assigning**: click an empty bay, pick from the unplaced items (servers and switches); Unassign on an item. Enrollment approval offers
   Host group and an optional "Sled slot" (the free slots by address, e.g. C0-R0-R0-S2-S0); no height or U.
 - **Drag and drop in Edit layout**: drag a sled up or down its rack or to another rack (everything on it moves; only where it fits, the

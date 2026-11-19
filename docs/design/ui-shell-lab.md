@@ -52,8 +52,11 @@ MDM setup), Fleet a table of hosts. After: a side menu, and Home a picture of th
   attention; the tab chosen is kept across a refresh of the same host), then Retire alone in a red-bordered danger zone at the bottom.
   The state is `degraded`, not `healthy`, for a live host whose service reports unhealthy or whose last update failed.
 - Edit layout (a toggle on Home) shows the controls: rename the cluster, add a row (the next number), add a rack to a row (height
-  from a list, 42 U by default), resize, move to another row, remove. A sled is what goes in a rack (docs/design/rack-sleds.md): **Add
-  sled** asks Size (1 to 60 U from a list), Slots (1 to 8) and U location (only where that size fits); a sled is resized, moved
+  from a list, 42 U by default), move to another row, remove; a rack's height is set on the rack (a stepper in its head, or a grip on
+  its bottom edge to drag; a shrink that would cut a sled is refused, naming it). A sled is what goes in a rack
+  (docs/design/rack-sleds.md): each rack has **+ Add sled** (Height 1 to 60 U, Slots 1 to 8, an optional Label and Position, only where
+  that height fits) and **+ Add device** (a server or switch on no sled, and a free slot of that rack), each a form titled with what it
+  adds and where that keeps its inputs after an add; a sled is resized, moved
   (dragged to a free U of a rack in view, or picked and moved with the arrow keys and Enter, or Move... to any rack) and removed; an
   item is assigned by clicking an empty bay (or dragging an item, or an Unplaced chip, onto it) and unassigned with Unassign. Each
   change is one call (`PutSled`, `RemoveSled`, `Place`, `Unplace`) and the page is read again. A rack that holds sleds, or a sled that
@@ -129,7 +132,9 @@ approval asks for no placement); `hkctl` gets the verbs from the generated comma
   port `prefs.apply`).
 - `ui/lab.js`: the model the views share (layout, servers joined with hosts and inventory entries, states, free U for a sled height,
   free slots, breadcrumbs, the words of a refusal). `ui/pages/home.js`: the three levels and the edit mode; `ui/sleds.js` draws the
-  sleds and decides the drops, `ui/sledpanels.js` has the edit panels, `ui/styles/sleds.css` the trays and boxes.
+  sleds and decides the drops, `ui/sledpanels.js` has the edit panels of a picked sled or item, `ui/rackforms.js` the controls on a rack (+ Add sled,
+  + Add device and their forms, which keep their inputs across the page's refreshes; the height stepper and the bottom-edge grip),
+  `ui/styles/sleds.css` the trays and boxes and `ui/styles/rackforms.css` the rack controls and forms.
   `ui/pages/enrollment.js`: the placement control only; `ui/pages/host.js` also lays out the Host page above.
 - `ui/sshpanel.js` is the Remote SSH tab of the Host page (the pin of the host's SSH host keys and the terminal; section 13 of
   `docs/design/ssh-through-coordinator.md`). The terminal is the UI's own, in three modules: `ui/terminal.js` (the model: UTF-8, a grid of
