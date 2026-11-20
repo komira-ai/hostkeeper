@@ -107,8 +107,9 @@
 //!   only forwards to it.
 //! - [`maintenance_hook`]: `hostkeeper maintenance-hook <prepare|cutover|verify>`, the OS work of
 //!   a maintenance run: the parameters of the run's `maintain` order, the work of each kind
-//!   (`macos`, `xcode`, `linux`, `reboot`) found by the host's platform, and the reboot recorded
-//!   in the run record before it is asked for.
+//!   (`macos`, `xcode`, `linux`, `reboot`) found by the host's platform, the reboot recorded
+//!   in the run record before it is asked for, and the Linux kinds' `verify`: the host booted
+//!   again, nothing of the run still due and every service healthy.
 //! - [`maintenance_linux`]: the `linux` and `reboot` kinds of that hook on a Linux host: the
 //!   install of the host's package manager (`apt`, `dnf` or `apk`), the question whether the host
 //!   then needs a reboot, the kernel it runs after the reboot, and the reboot itself.

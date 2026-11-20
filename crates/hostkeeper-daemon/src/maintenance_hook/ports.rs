@@ -14,8 +14,11 @@ pub enum KindState {
     Pending,
     /// Installed; the reboot it needs was asked for in the boot `boot`.
     RebootUnderWay { boot: BootId },
-    /// Applied.
+    /// Applied, with no reboot of it asked for.
     Applied,
+    /// Applied after the reboot it needed, which was asked for in the boot `asked_in`: `verify`
+    /// checks that the host no longer runs that boot.
+    AppliedAfterReboot { asked_in: BootId },
 }
 
 /// Why the run record could not be read or written.
@@ -36,7 +39,9 @@ pub trait RunRecord {
     fn state(&self, run_id: &str, kind: Kind) -> Result<KindState, RecordError>;
     /// Records that the reboot `kind` needs is under way, asked for in the boot `boot`.
     fn reboot_under_way(&self, run_id: &str, kind: Kind, boot: &BootId) -> Result<(), RecordError>;
-    /// Records `kind` applied, the host running `version` of it.
+    /// Records `kind` applied, the host running `version` of it. A kind whose reboot was under
+    /// way is then held [`KindState::AppliedAfterReboot`], with the boot its reboot was asked in;
+    /// any other, [`KindState::Applied`].
     fn applied(&self, run_id: &str, kind: Kind, version: &str) -> Result<(), RecordError>;
 }
 

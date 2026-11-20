@@ -166,7 +166,11 @@ impl RunRecord for FakeRecord {
             &self.effects,
             format!("record {run_id} {kind} applied {version}"),
         );
-        self.set(kind, KindState::Applied);
+        let state = match self.state(run_id, kind)? {
+            KindState::RebootUnderWay { boot } => KindState::AppliedAfterReboot { asked_in: boot },
+            _ => KindState::Applied,
+        };
+        self.set(kind, state);
         Ok(())
     }
 }
