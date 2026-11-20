@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// `Drain` and `Resume` are additive too, and no step of an update: a maintenance run of the
 /// host runs them from the installed release, `drain` before the host's own update and `resume`
-/// after it (maintenance-updates.md section 5.2). `drain` takes the service out of service and
+/// after it. `drain` takes the service out of service and
 /// returns once it has no work; `resume` puts it back. Both are safe to run twice, and `resume`
 /// with no `drain` before it succeeds and changes nothing. A `drain` given a deadline
 /// ([`crate::DRAIN_DEADLINE_KEY`]) that passes while work is left resumes the service, cuts no

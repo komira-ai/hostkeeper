@@ -13,7 +13,7 @@
 //!
 //! `uninstall` is no step of an update: it runs alone, and what it reports is the verdict of the
 //! uninstall (design section 4.7, "Uninstall"). Nor are `drain` and `resume`: a maintenance run
-//! runs each alone, and reads its verdict by its own rules (maintenance-updates.md section 5.4: a
+//! runs each alone, and reads its verdict by its own rules (a
 //! failure halts the host; a `drain` deferred by its deadline is followed by every `resume`).
 //!
 //! The function holds no clock and no counter: the updater says whether the verify deadline has

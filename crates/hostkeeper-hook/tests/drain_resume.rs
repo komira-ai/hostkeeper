@@ -6,7 +6,7 @@
 use std::ffi::OsString;
 use std::fs;
 use std::io::{self, BufRead, BufReader};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 
 use hostkeeper_hook::conformance::{
     Conformance, FakeService, Fault, HookCommand, Sandbox, Violation, check,
@@ -17,6 +17,18 @@ mod support;
 use support::{ExampleFake, LEASE, Scratch, example, example_with};
 
 const CONVENTION: &[&str] = &["update-hook"];
+
+const EXAMPLE: &str = env!("CARGO_BIN_EXE_hostkeeper-hook-example");
+
+/// A hook process killed when the test ends, so a failed assertion leaves no `drain` waiting.
+struct Killed(Child);
+
+impl Drop for Killed {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
 
 /// Check 9 alone on `hook`, against the example fake.
 fn drain_check(name: &str, hook: &HookCommand) -> Result<(Vec<String>, Vec<String>), Violation> {
@@ -128,8 +140,9 @@ fn drain_and_resume_get_the_service_the_run_and_a_passed_deadline() {
     Conformance::new(&hook, &mut fake, scratch.path())
         .drain_resume()
         .expect("passes");
-    // Three sandboxes: resume alone, drain then resume, the deadline.
-    for (run, deadline) in [(1, None), (2, None), (3, Some(1))] {
+    // Four sandboxes: resume alone, drain then resume with no deadline and with a passed one,
+    // and the passed deadline with work in flight.
+    for (run, deadline) in [(1, None), (2, None), (3, Some(1)), (4, Some(1))] {
         let file = scratch.path().join(format!("run-{run}/control/drain.toml"));
         let params = Params::read(&file).expect("the drain params");
         assert_eq!(params.service(), Some("conformance"), "run-{run}");
@@ -139,7 +152,7 @@ fn drain_and_resume_get_the_service_the_run_and_a_passed_deadline() {
         assert_eq!(params.staged_release(), None, "a drain stages nothing");
     }
     // The deadline run kept its work, and the service is back in service.
-    let world = scratch.path().join("run-3/world");
+    let world = scratch.path().join("run-4/world");
     assert_eq!(fs::read(world.join("work").join(LEASE)).unwrap(), b"job 1");
     assert!(!world.join("drained").exists());
 }
@@ -209,6 +222,21 @@ fn a_drain_deferred_by_its_deadline_must_resume() {
     }
 }
 
+/// Catches a `drain` that defers whenever its deadline has passed, even with no work left to
+/// wait for: a host with nothing to drain would never be updated once its deadline passed.
+#[test]
+fn a_drain_with_no_work_succeeds_past_its_deadline() {
+    match refused("drain-bad-idle", "deadline-defers-idle") {
+        Violation::UnexpectedOutcome { step, wanted, got } => {
+            assert_eq!(
+                (step, wanted, got),
+                (Step::Drain, Outcome::Success, Outcome::Deferred)
+            );
+        }
+        other => panic!("{other}"),
+    }
+}
+
 /// Catches a `resume` that changes a service it never drained: the updater runs `resume` for
 /// every service it may have drained.
 #[test]
@@ -249,7 +277,7 @@ fn a_drain_with_no_deadline_returns_once_its_work_has_ended() {
     params.insert(RUN_ID_KEY, Scalar::Text("run-1".to_owned()));
     let file = sandbox.control().join("drain.toml");
     fs::write(&file, params.to_toml()).expect("the params");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_hostkeeper-hook-example"))
+    let mut child = Command::new(EXAMPLE)
         .args(["update-hook", "drain", "--params"])
         .arg(&file)
         .envs(fake.env(&sandbox))
@@ -258,7 +286,10 @@ fn a_drain_with_no_deadline_returns_once_its_work_has_ended() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("start the example hook");
-    let mut stderr = BufReader::new(child.stderr.take().expect("a pipe"));
+    let stderr = child.stderr.take().expect("a pipe");
+    let stdout = child.stdout.take().expect("a pipe");
+    let mut child = Killed(child);
+    let mut stderr = BufReader::new(stderr);
     let mut line = String::new();
     stderr.read_line(&mut line).expect("a line");
     assert_eq!(
@@ -267,9 +298,11 @@ fn a_drain_with_no_deadline_returns_once_its_work_has_ended() {
     );
     assert!(sandbox.world().join("drained").exists(), "drained first");
     fs::remove_file(sandbox.world().join("work").join(LEASE)).expect("end the work");
-    let out = child.wait_with_output().expect("the hook exits");
-    assert_eq!(out.status.code(), Some(0));
-    let report = Report::from_stdout(&String::from_utf8_lossy(&out.stdout)).expect("a last line");
+    let status = child.0.wait().expect("the hook exits");
+    assert_eq!(status.code(), Some(0));
+    let mut out = String::new();
+    io::Read::read_to_string(&mut { stdout }, &mut out).expect("its standard output");
+    let report = Report::from_stdout(&out).expect("a last line");
     assert_eq!(report.retry_after_secs, None);
     assert!(sandbox.world().join("drained").exists());
     assert_eq!(
@@ -277,5 +310,39 @@ fn a_drain_with_no_deadline_returns_once_its_work_has_ended() {
         "run-1"
     );
     // The outcome the updater reads.
-    assert_eq!(Outcome::from_exit(out.status.code()), Outcome::Success);
+    assert_eq!(Outcome::from_exit(status.code()), Outcome::Success);
+}
+
+/// Catches an example `drain` that drains without knowing the service or the run it is part of:
+/// a params file without them is refused with exit 1, and nothing is drained.
+#[test]
+fn a_drain_without_the_service_or_the_run_is_refused() {
+    let scratch = Scratch::new("drain-no-run");
+    let sandbox = Sandbox::create(scratch.path().join("run")).expect("a sandbox");
+    let mut fake = ExampleFake::default();
+    fake.init(&sandbox).expect("init");
+    for key in [SERVICE_KEY, RUN_ID_KEY] {
+        let mut params = fake.params();
+        for other in [SERVICE_KEY, RUN_ID_KEY].into_iter().filter(|k| *k != key) {
+            params.insert(other, Scalar::Text("x".to_owned()));
+        }
+        let file = sandbox.control().join("drain.toml");
+        fs::write(&file, params.to_toml()).expect("the params");
+        let out = Command::new(EXAMPLE)
+            .args(["update-hook", "drain", "--params"])
+            .arg(&file)
+            .envs(fake.env(&sandbox))
+            .stdin(Stdio::null())
+            .output()
+            .expect("run the example hook");
+        assert_eq!(out.status.code(), Some(1), "{key}");
+        let report =
+            Report::from_stdout(&String::from_utf8_lossy(&out.stdout)).expect("a last line");
+        assert_eq!(
+            report.detail.as_deref(),
+            Some("the params lack the service or the run"),
+            "{key}"
+        );
+        assert!(!sandbox.world().join("drained").exists(), "{key}");
+    }
 }

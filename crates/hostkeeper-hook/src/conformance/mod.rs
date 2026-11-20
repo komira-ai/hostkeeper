@@ -31,7 +31,7 @@
 //! 9. **Drain and resume**, for a hook that has them ([`Conformance::with_drain`]; see
 //!    [`drain`]): each run twice ends the same and changes nothing the second time; `resume`
 //!    with no `drain` before it succeeds and changes nothing; `resume` after `drain` leaves the
-//!    world as it was; and a `drain` whose deadline has passed with work in flight exits `75`,
+//!    world as it was (with no deadline, and with one passed while no work is left); and a `drain` whose deadline has passed with work in flight exits `75`,
 //!    cuts no work and leaves the service resumed. These steps get a params file of their own:
 //!    the fake's table, the service, the run and, for the deadline, the deadline.
 //!
@@ -177,8 +177,7 @@ pub trait FakeService {
     /// for the `drain` past its deadline of check 9: what this call changes in the world is the
     /// work, which the `drain` must leave as it was. `Ok(false)` if this fake has no work to put
     /// in flight, the default; the scenario is then skipped and said to be.
-    fn start_work(&mut self, sandbox: &Sandbox) -> io::Result<bool> {
-        let _ = sandbox;
+    fn start_work(&mut self, _sandbox: &Sandbox) -> io::Result<bool> {
         Ok(false)
     }
 }

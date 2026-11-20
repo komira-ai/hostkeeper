@@ -54,6 +54,7 @@
 //! Their defects: `drain-not-idempotent` and `resume-not-idempotent` (a second run writes again),
 //! `drain-ignores-deadline` (exits `0` with work left past the deadline), `drain-cuts-work`
 //! (empties `work/` at the deadline), `deadline-stays-drained` (exits `75` without resuming),
+//! `deadline-defers-idle` (exits `75` past the deadline with no work left),
 //! `resume-without-drain-writes` (writes `resumed` whether drained or not) and
 //! `resume-leaves-drained` (keeps `drained` in the world).
 //!
@@ -377,12 +378,13 @@ impl Hook {
         let mut said = false;
         loop {
             let work = self.work()?;
-            if work.is_empty() {
-                return Ok(self.finish(Step::Drain, report));
-            }
             let passed = params
                 .drain_deadline_unix()
                 .is_some_and(|deadline| now() >= deadline);
+            let defers_idle = passed && self.defect("deadline-defers-idle");
+            if work.is_empty() && !defers_idle {
+                return Ok(self.finish(Step::Drain, report));
+            }
             if passed {
                 if self.defect("drain-ignores-deadline") {
                     return Ok((Outcome::Success, report));
@@ -401,8 +403,9 @@ impl Hook {
                 report.retry_after_secs = Some(60);
                 return Ok((Outcome::Deferred, report));
             }
-            // The work is the fake service's: it ends when a test removes it. The line tells a
-            // test that the hook is waiting.
+            // A wait for an event, not a time: the work is the fake service's, and it ends when
+            // a test removes it. The line tells the test that the hook is waiting; nothing
+            // judges how long the wait takes.
             if !said {
                 eprintln!(
                     "hostkeeper-hook-example: drain: waiting for {} piece of work",

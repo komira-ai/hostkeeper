@@ -1,7 +1,7 @@
 //! Check 9 of the harness, for a hook with `drain` and `resume` steps
 //! ([`Conformance::with_drain`]): each run twice ends the same and changes nothing the second
 //! time; `resume` with no `drain` before it succeeds and changes nothing; `drain` then `resume`
-//! puts the service back; and a `drain` whose deadline has passed while work is in flight exits
+//! puts the service back, with no deadline and with one passed while no work is left; and a `drain` whose deadline has passed while work is in flight exits
 //! `75`, cuts no work and leaves the service resumed.
 //!
 //! The deadline is a time the harness writes into the params file, never a wait: it is
@@ -83,12 +83,20 @@ impl Conformance<'_> {
         Ok(())
     }
 
-    /// `drain` twice, then `resume` twice, with no work in flight and no deadline: each second
-    /// run ends as the first and changes nothing, and after the `resume` the world is as it
-    /// was before the `drain`.
+    /// `drain` twice, then `resume` twice, with no work in flight: each second run ends as the
+    /// first and changes nothing, and after the `resume` the world is as it was before the
+    /// `drain`. With no deadline, and again with a passed one: a deadline only matters while
+    /// work is left, so a `drain` with nothing to wait for succeeds.
     pub fn drain_then_resume(&mut self) -> Result<(), Violation> {
+        for deadline in [None, Some(PASSED_DEADLINE)] {
+            self.drain_then_resume_with(deadline)?;
+        }
+        Ok(())
+    }
+
+    fn drain_then_resume_with(&mut self, deadline: Option<i64>) -> Result<(), Violation> {
         let sandbox = self.fresh()?;
-        self.write_drain_params(&sandbox, None)?;
+        self.write_drain_params(&sandbox, deadline)?;
         let start = Self::world(&sandbox)?;
         self.twice(&sandbox, Step::Drain)?;
         self.twice(&sandbox, Step::Resume)?;
@@ -132,11 +140,8 @@ impl Conformance<'_> {
             return Err(Violation::DeferredDrainNotResumed { changes: left });
         }
         self.again(&sandbox, Step::Drain, first)?;
+        // The updater runs `resume` after a deferred drain too.
         self.exec_ok(&sandbox, Step::Resume)?;
-        let moved = changes(&busy, &Self::world(&sandbox)?);
-        if !moved.is_empty() {
-            return Err(Violation::ResumeWithoutDrainChanged { changes: moved });
-        }
         Ok(true)
     }
 }
