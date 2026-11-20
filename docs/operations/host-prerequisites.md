@@ -35,7 +35,7 @@ to another group leaves the Command Line Tools on the Mac.
 
 | Host | What the daemon does for `xcode-command-line-tools` |
 |---|---|
-| Mac | looks with `pkgutil` and `xcode-select`; when the package is missing, installs it with `softwareupdate` as root; looks again every hour and after every start of the daemon, and installs it again when it is gone |
+| Mac | looks with `pkgutil` and `xcode-select`, and, with no receipt, for the tools' compiler on disk or a selected Xcode whose licence is accepted and whose first launch ran (`xcodebuild`); when it finds none of these, installs the tools with `softwareupdate` as root; looks again every hour and after every start of the daemon, and installs it again when it is gone |
 | Linux (systemd or OpenRC) | holds the set, reports the name `NOT_APPLICABLE`, and runs nothing |
 
 The install makes the marker file `/tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress`,
@@ -57,9 +57,9 @@ when the daemon last looked at the host for it (absent before it first did).
 | `status` | It means |
 |---|---|
 | `PENDING` | the daemon holds the name and has not looked at the host for it yet |
-| `PRESENT` | the host has it; `version` is the version `pkgutil` gives |
+| `PRESENT` | the host has it; `version` is the version `pkgutil` gives, empty for tools on disk without their receipt, or the selected Xcode's (`Xcode 16.1`) |
 | `INSTALLING` | the host did not have it and the daemon is installing it now: the listing, the install and the look after it, each with its deadline, at most about two hours and twenty minutes |
-| `FAILED` | the last look or install failed: `reason` names the step, its exit code and the first line of the program's error, `failures` counts the tries in a row and `nextTryUnix` is when the daemon tries again |
+| `FAILED` | the last look or install failed: `reason` names the step, its exit code and the first line of the program's error (a listing that exited non-zero or offered no tools also the macOS version and build, the first line of each stream and the labels holding `Command Line Tools`), `failures` counts the tries in a row and `nextTryUnix` is when the daemon tries again |
 | `NOT_APPLICABLE` | the name is of another platform than the host's (the Command Line Tools on Linux); nothing is done |
 | `UNKNOWN` | the daemon does not know the name (a newer coordinator's); nothing is done |
 | `prerequisites` empty (`{}`) | the daemon holds no set: the coordinator was not given the file, or has not sent it since the daemon started |
