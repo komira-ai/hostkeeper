@@ -3,9 +3,10 @@
 //! reboot and which kernel it runs ([`RebootCheck`]).
 //!
 //! `cutover` and `after_reboot` are written here. The `prepare` of `linux` is its stage
-//! ([`Stage`], `crate::maintenance_hook::linux`) when the kind is given one; the `prepare` of
-//! `reboot` and the `verify` of both answer [`Unsupported`]: the check of a Linux run is the work
-//! of its own change.
+//! ([`Stage`], `crate::maintenance_hook::linux::stage`) when the kind is given one; the `prepare`
+//! of `reboot` and the `verify` of both answer [`Unsupported`]: on a host the hook checks both
+//! kinds with [`crate::maintenance_hook::LinuxCheck`] in place of their `verify`
+//! ([`crate::maintenance_hook::registry_for`]).
 
 use std::collections::BTreeSet;
 
@@ -250,7 +251,8 @@ impl MaintenanceKind for LinuxKind {
         self.check.running()
     }
 
-    /// Not written yet: [`Unsupported`].
+    /// Not written here: [`Unsupported`]. On a host the hook checks the kind with
+    /// [`crate::maintenance_hook::LinuxCheck`] instead.
     fn verify(&self, params: &MaintainParams) -> Result<(), KindError> {
         Unsupported(Kind::Linux).verify(params)
     }
@@ -291,7 +293,8 @@ impl MaintenanceKind for RebootKind {
         self.check.running()
     }
 
-    /// Not written yet: [`Unsupported`].
+    /// Not written here: [`Unsupported`]. On a host the hook checks the kind with
+    /// [`crate::maintenance_hook::LinuxCheck`] instead.
     fn verify(&self, params: &MaintainParams) -> Result<(), KindError> {
         Unsupported(Kind::Reboot).verify(params)
     }
