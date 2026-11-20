@@ -79,6 +79,8 @@ syntax = "proto3";
 package hostkeeper.operator.v1;
 
 import "hostkeeper/agent/v1/agent.proto";
+// `MaintenanceReport`, which `Host` carries.
+import "hostkeeper/agent/v1/maintenance.proto";
 // The release a set with targets names, per platform (`SetDesiredRequest.targets`).
 import "hostkeeper/release/v1/release.proto";
 // `AuditEntry` and `Actor`, which every service of the package answers.
@@ -545,6 +547,11 @@ message Host {
   // The host group the host is in, kept with its enrollment; empty from a coordinator that does
   // not hold host groups.
   string host_group = 25;
+  // The last maintenance report of the host's daemon (`HeartbeatRequest.maintenance`) the
+  // coordinator kept: what the host runs, what is due on it and the maintenance run it holds.
+  // Absent while the coordinator keeps none: the host's daemon has not announced `maintenance-v1`,
+  // or has sent no report the coordinator read.
+  optional hostkeeper.agent.v1.MaintenanceReport maintenance = 26;
 }
 
 // One service a host runs, as its daemon said in a heartbeat (packages-native.md section 10.6).

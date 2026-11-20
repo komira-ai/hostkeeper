@@ -114,12 +114,12 @@ Xcode <version> (<build>), sha256 <sha256>`.
 
 ## Seeing and removing archives
 
-`hkctl xcode list` lists the archives, newest release first, with each one's SHA-256, version, build,
+`hk xcode list` lists the archives, newest release first, with each one's SHA-256, version, build,
 size, who pushed it and when; whether a store is configured; how many newest releases it keeps (the
 largest `xcode_keep`, at least 1); the most bytes of an archive; and the release the alert
 `xcode_release_waiting` names, if any.
 
-`hkctl xcode remove --sha256 <sha256> --reason <text>` removes an archive: the reason is required, 1 to
+`hk xcode remove --sha256 <sha256> --reason <text>` removes an archive: the reason is required, 1 to
 256 bytes, with no control character. It is audited as `xcode_remove` before the files go. A CI token
 cannot call either. The refusals are `unauthorized`, `forbidden`, `invalid_request` (a SHA-256 that is
 not 64 lowercase hex characters, or a bad reason), `no_store`, `unknown_archive`, `store_failed` and
@@ -144,5 +144,5 @@ holds nothing, so the alert stands while the list holds a release.
 The coordinator raises the warning `xcode_version_taken` for each version whose second build was
 refused. The alert's `version` is the version; the message names the build the store holds and the build
 that was refused. It is the coordinator's memory, like a failed canary's: it stands until the held archive
-of that version is removed (`hkctl xcode remove`) and a restart forgets it. To switch builds, remove the
+of that version is removed (`hk xcode remove`) and a restart forgets it. To switch builds, remove the
 held archive, then push the other build.

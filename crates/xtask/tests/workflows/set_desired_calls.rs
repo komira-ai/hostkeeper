@@ -7,7 +7,7 @@
 //! `--response-file` exactly once with exactly its value, or passes any other flag, a token input
 //! of [`TOKEN_INPUTS`] among them (a call takes the job's own OIDC token, by
 //! `--github-oidc-audience`, and no token is ever a file or stdin of the job); it does not call
-//! `releases <method>`, or that is not a command of hkctl's table (`hostkeeper_proto::ctl`); a flag
+//! `releases <method>`, or that is not a command of hk's table (`hostkeeper_proto::ctl`); a flag
 //! after the method is not one of that command; or it does not end with exactly its `redirect`,
 //! which sends its diagnostics to its own file, the one the outputs step reads (the set:
 //! [`SET_REDIRECT`], through `tee` to its log as well; the wait: `2> <file>`); or it does not
@@ -16,7 +16,7 @@
 //! [`REQUEST_FILE`], which the request step writes; the wait: the service, the version and
 //! [`WAIT_SECS`]); or it does not pass each flag of its `optional` as the one word
 //! `${VAR:+"--flag=$VAR"}` ([`optional_word`]) exactly once, between its fields and its redirect
-//! (the host group: hkctl writes every flag it is given into the request, and a coordinator older
+//! (the host group: hk writes every flag it is given into the request, and a coordinator older
 //! than its client refuses a field it does not know, so an empty input must send no flag at all),
 //! or gives such a flag as a field, unconditionally, or passes a word of that form that is not
 //! one of its `optional`, or an optional flag is not a flag of the command; or a variable of [`CALL_ENV`] its command names is not given in its `env` as
@@ -27,7 +27,7 @@
 //! [`OUTPUTS_ARGS`] and run that program into `$GITHUB_OUTPUT`: the workflow lint's tests run the
 //! program with exactly those variables.
 
-use hostkeeper_hkctl::is_served;
+use hostkeeper_hk::is_served;
 use hostkeeper_proto::ctl::{COMMANDS, Command, Input};
 
 use super::lint::entry;
@@ -51,16 +51,16 @@ pub struct Call {
 /// The set's redirect: its diagnostics go to the file the outputs step reads and, through
 /// `tee`, to the step's own log, so a failed set names its cause there (the coordinator's code
 /// and its `refused: <token>` line). It is a redirect of the one command, so the step ends with
-/// hkctl's exit code.
-pub const SET_REDIRECT: &str = r#"2> >(tee "$RUNNER_TEMP/hkctl-set.err" >&2)"#;
+/// hk's exit code.
+pub const SET_REDIRECT: &str = r#"2> >(tee "$RUNNER_TEMP/hk-set.err" >&2)"#;
 
 /// The two calls, in the order they run.
 pub const CALLS: [Call; 2] = [
     Call {
         step: CLIENT_STEP,
         method: "set-desired",
-        response: "$RUNNER_TEMP/hkctl-set.json",
-        err: "$RUNNER_TEMP/hkctl-set.err",
+        response: "$RUNNER_TEMP/hk-set.json",
+        err: "$RUNNER_TEMP/hk-set.err",
         fields: &[("--service", "$SERVICE"), ("--request", REQUEST_FILE)],
         optional: &[HOST_GROUP],
         redirect: SET_REDIRECT,
@@ -68,15 +68,15 @@ pub const CALLS: [Call; 2] = [
     Call {
         step: WAIT_STEP,
         method: "wait-converged",
-        response: "$RUNNER_TEMP/hkctl-wait.json",
-        err: "$RUNNER_TEMP/hkctl-wait.err",
+        response: "$RUNNER_TEMP/hk-wait.json",
+        err: "$RUNNER_TEMP/hk-wait.err",
         fields: &[
             ("--service", "$SERVICE"),
             ("--version", "$VERSION"),
             WAIT_SECS,
         ],
         optional: &[HOST_GROUP],
-        redirect: r#"2> "$RUNNER_TEMP/hkctl-wait.err""#,
+        redirect: r#"2> "$RUNNER_TEMP/hk-wait.err""#,
     },
 ];
 /// What a call step's `env` gives each variable its command names, exactly: the caller's inputs.
@@ -101,25 +101,25 @@ pub fn optional_word(flag: &str, var: &str) -> String {
 fn is_optional_like(word: &str) -> bool {
     word.starts_with("${") && word.contains(":+")
 }
-/// The service of hkctl both calls are methods of.
+/// The service of hk both calls are methods of.
 pub const SERVICE: &str = "releases";
 /// The global flags each call passes before the service, with their values: the private
 /// listener, the coordinator's CA as the one trusted root, and the job's own OIDC token for the
 /// caller's audience.
 pub const CALL_GLOBALS: [(&str, &str); 3] = [
     ("--endpoint", "$COORDINATOR_URL"),
-    ("--ca-file", "$RUNNER_TEMP/hkctl-coordinator-ca.pem"),
+    ("--ca-file", "$RUNNER_TEMP/hk-coordinator-ca.pem"),
     ("--github-oidc-audience", "$AUDIENCE"),
 ];
 /// The flag that puts a call's answer in its file, so that stdout carries only workflow
-/// commands (hkctl's `::add-mask::`).
+/// commands (hk's `::add-mask::`).
 pub const RESPONSE_FLAG: &str = "--response-file";
-/// hkctl's other token inputs, which no call passes.
+/// hk's other token inputs, which no call passes.
 pub const TOKEN_INPUTS: [&str; 2] = ["--token-file", "--token-stdin"];
-/// The flags of hkctl that take no value.
+/// The flags of hk that take no value.
 const SWITCHES: [&str; 1] = ["--token-stdin"];
 /// The request of the set, which the request step writes.
-pub const REQUEST_FILE: &str = "$RUNNER_TEMP/hkctl-request.json";
+pub const REQUEST_FILE: &str = "$RUNNER_TEMP/hk-request.json";
 /// How the wait step bounds its hold: `max_polls` with a 0 appended, ten times it, as text.
 pub const WAIT_SECS: (&str, &str) = ("--wait-secs", "${MAX_POLLS}0");
 /// The value of `MAX_POLLS` in the wait step.
@@ -136,19 +136,19 @@ pub const OUTPUTS_ENV: [(&str, &str); 9] = [
     ("WAIT_OUTCOME", "${{ steps.wait.outcome }}"),
     (
         "SET_BODY",
-        "${{ steps.set-desired.outcome == 'success' && format('{0}/hkctl-set.json', runner.temp) || '/dev/null' }}",
+        "${{ steps.set-desired.outcome == 'success' && format('{0}/hk-set.json', runner.temp) || '/dev/null' }}",
     ),
     (
         "SET_ERR",
-        "${{ steps.set-desired.outcome == 'failure' && format('{0}/hkctl-set.err', runner.temp) || '/dev/null' }}",
+        "${{ steps.set-desired.outcome == 'failure' && format('{0}/hk-set.err', runner.temp) || '/dev/null' }}",
     ),
     (
         "WAIT_BODY",
-        "${{ steps.wait.outcome == 'success' && format('{0}/hkctl-wait.json', runner.temp) || '/dev/null' }}",
+        "${{ steps.wait.outcome == 'success' && format('{0}/hk-wait.json', runner.temp) || '/dev/null' }}",
     ),
     (
         "WAIT_ERR",
-        "${{ steps.wait.outcome == 'failure' && format('{0}/hkctl-wait.err', runner.temp) || '/dev/null' }}",
+        "${{ steps.wait.outcome == 'failure' && format('{0}/hk-wait.err', runner.temp) || '/dev/null' }}",
     ),
 ];
 /// The variables the outputs step's jq binds, in order: how (`--arg`, a text; `--rawfile`, a
@@ -167,7 +167,7 @@ pub const OUTPUTS_ARGS: [(&str, &str, &str); 9] = [
 /// How the outputs step's one command ends: the program, its output appended to the job's.
 pub const OUTPUTS_END: [&str; 3] = ["$OUTPUTS_PROGRAM", ">>", "$GITHUB_OUTPUT"];
 
-/// The command of hkctl's table for `releases <method>`.
+/// The command of hk's table for `releases <method>`.
 pub fn command(method: &str) -> Option<&'static Command> {
     COMMANDS
         .iter()
@@ -259,7 +259,7 @@ pub fn step_call_problems(who: &str, step: &Node, call: &Call) -> Vec<String> {
     }
     let Some(command) = command(call.method) else {
         problems.push(format!(
-            "`{SERVICE} {}` is not a command of hkctl's table",
+            "`{SERVICE} {}` is not a command of hk's table",
             call.method
         ));
         return problems;

@@ -62,9 +62,30 @@ impl DaemonOrders {
 }
 
 impl OrderSink for DaemonOrders {
+    /// The daemon's reply as its verdict ([`order_result`]), with the hook's own `detail` of a
+    /// verdict the step record holds ([`hook_detail`]) when the reply gives none.
     fn execute(&self, order: &Order, target: &Version) -> OrderResult {
-        order_result(order, target, &self.daemon.order(&wire_order(order)))
+        let reply = self.daemon.order(&wire_order(order));
+        let mut result = order_result(order, target, &reply);
+        if matches!(reply, Reply::Finished { .. }) & result.detail.is_none() {
+            result.detail = hook_detail(self.daemon.ctx(), order, target);
+        }
+        result
     }
+}
+
+/// The hook's `detail` of how `order` ended at `target` ([`Record::finished_detail`]), cut to
+/// [`MAX_DETAIL`] bytes: from the service's step record when it is finished and is the record of
+/// that try at that version. `None` when the record holds none, is of another order or version
+/// (a verdict answered without a step record, such as a refused entry), or cannot be read.
+fn hook_detail(ctx: &Ctx, order: &Order, target: &Version) -> Option<String> {
+    let Ok(Loaded::Current(record)) = ctx.store(order.service()).load() else {
+        return None;
+    };
+    let same =
+        (record.order_try == Some(order.order_try)) & (record.target_version == target.as_str());
+    same.then(|| record.finished_detail().map(bounded))
+        .flatten()
 }
 
 /// `order` as the protobuf `Order` the daemon takes, every field as it is: the id, the try, and
@@ -377,7 +398,8 @@ fn recorded_installer(ctx: &Ctx, service: &ServiceName) -> Option<String> {
 
 /// The verdict a finished record of an update of hostkeeper itself keeps to report: under the
 /// order id the settlement kept (`Progress::report_order_id`) and the record's try, at its
-/// target, as an order that ended with the record's verdict ([`finished`]); `None` for a record
+/// target, as an order that ended with the record's verdict ([`finished`]), with the hook's
+/// `detail` the record holds of it ([`Record::finished_detail`]); `None` for a record
 /// that keeps none, is unfinished, names no try, or whose id or target the loop cannot send.
 pub fn settled_result(record: &Record) -> Option<OrderResult> {
     let State::Finished { verdict, reason } = &record.state else {
@@ -396,7 +418,11 @@ pub fn settled_result(record: &Record) -> Option<OrderResult> {
         forced: false,
         detail: None,
     };
-    Some(finished(base, verdict, reason.as_deref()))
+    let result = finished(base, verdict, reason.as_deref());
+    Some(OrderResult {
+        detail: result.detail.or(record.finished_detail().map(bounded)),
+        ..result
+    })
 }
 
 /// The service-observer port over the daemon's observer.

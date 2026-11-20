@@ -26,7 +26,8 @@ use that for one thing only, a tiny **hostkeeper bootstrap** pkg. Everything aft
    Blueprint also carries the farm's two values as the managed preference domain `dev.hostkeeper.config` (section 4); a Mac set up by hand has them in a file.
 2. The bootstrap, run by launchd at load, reads the farm values, fetches hostkeeper's signed macOS pkg from the public repository, checks it (size and
    SHA-256 of the repository's pointer, then `pkgutil --check-signature`, then the signer's Team ID), writes the daemon's config when it is absent
-   (section 6), runs `installer`, and exits. It carries no secret and **does no enrollment**.
+   (section 6), writes the update-account file when the settings name the update account (section 4), runs `installer`, and exits. The pkg carries no
+   secret, and the bootstrap **does no enrollment**.
 3. hostkeeper's own daemon starts, and enrolls through the existing enrollment request and approval flow (`hostkeeper-enroll`, `hostkeeper-enrollment`):
    a key made on the Mac, the coordinator's CA pinned by its SHA-256, approval by the hash of the key (an operator's click, or an inventory record by serial).
 4. From then on hostkeeper updates itself and the coordinator installs services through host groups, as on Linux. Apple never sees those packages,
@@ -125,6 +126,32 @@ error, never a reason to try the next one. The keys; **every number is a key wit
 | `[bounds]` `installer_timeout_secs` | 600 | the longest `installer` is waited for |
 | `[bounds]` `wait_secs` | 900 | how long a failed run keeps retrying before it exits (section 9) |
 | `[bounds]` `retry_secs` | 30 (at least 1) | the pause between two attempts |
+| `update_account_name` | none (all four or none) | the update account of [maintenance-updates.md](maintenance-updates.md) section 5.5, `hkupdate` there; written to the update-account file |
+| `update_account_password` | none (all four or none) | its password; written to the update-account file |
+| `admin_name` | none (all four or none) | the administrator made at Setup Assistant, a holder of a Secure Token, which gives the update account its own |
+| `admin_password` | none (all four or none) | that administrator's password; the bootstrap writes it nowhere |
+
+**The update account's four keys** (`crates/hostkeeper-bootstrap/src/update_account.rs`) are given all four or none. A source with none of them
+makes no update-account file, as before they existed; such a Mac has no update account and is never ordered a macOS update. A source with some of
+them is refused, naming the first one missing in the order of the table; nothing is fetched. Each is a string (a number, say, is refused as "is not a
+string", never quoted): a name is ASCII letters, digits, `_`, `.` and `-`, not starting with `-` (the rule of the daemon's reader); a password is not
+empty and holds no line break; the two names differ; and the file the first two make is at most 4096 bytes, the reader's bound. No error or log line holds a value of these keys, and no debug print holds a
+password: an error names the key and the rule, and a password prints as `Password(withheld)` (the names print as they are).
+
+The bootstrap writes `/Library/Application Support/hostkeeper/update-account` (root's, mode 0600; section 6) from the first two, in the layout the
+daemon's reader takes (`crates/hostkeeper-daemon/src/update_account.rs`): the line `name=<update_account_name>`, then the line
+`password=<update_account_password>`, each ending in a newline, the value byte for byte.
+
+**The administrator's password is used for the account-creation call only and not kept: the bootstrap writes no copy of it.** The daemon reads the
+two `admin_` keys from the same settings source (the managed preferences, else `bootstrap.toml`), under the same trust rule, at the start that makes
+the account, and uses them for that call alone (**Designed**: the daemon's account-making start is later work; until it lands the two keys are checked
+by the bootstrap and read by nothing). A one-shot file handed from the bootstrap to the daemon's first start was the other way, and is not
+chosen: the source holds the password anyway, so a second copy adds a file to remove and a window in which it is there, and a daemon that never ran
+the call (a release before it, or a start that failed first) would leave it behind. The settings that hold the passwords are never committed to a
+repository and never printed. The operator sets a `bootstrap.toml` that holds them to mode 0600; the bootstrap checks only that no account but
+root can write it (the trust rule), not who can read it. The mode macOS gives the managed preferences file is its own
+**[V]**, and the owner's ruling that the update account's password is not treated as a secret (maintenance-updates.md section 5.5, "Threat model")
+is what covers it.
 
 The text of either source is also made into the daemon's config and parsed by the daemon's own loader before anything is fetched, so a value the daemon
 would refuse stops the bootstrap with the loader's reason, not the daemon at its first start.
@@ -148,10 +175,10 @@ this repository).
 Unchanged code, as [operations/enrollment.md](../operations/enrollment.md) "The Mac path" says it. A Mac's request is approved in one of two ways
 (**Q3 and Q6, default, owner may change**: an operator's click is acceptable for every Mac, and a re-imaged Mac takes `--replace true`):
 
-- **Inventory record by serial.** `hkctl enrollment add-record --host-id mac-03 --host-group build --serial <serial>`. A record that names a group is
+- **Inventory record by serial.** `hk enrollment add-record --host-id mac-03 --host-group build --serial <serial>`. A record that names a group is
   the approval, for a window (24 hours by default, 7 days at most) and once; the request must match exactly one record and no other pending request
   may contest it. The coordinator approves it itself, in the record's group, and audits `enrollment.auto_approved`.
-- **An operator** on the Enrollment page or `hkctl enrollment approve`, naming the key's hash and the `host_group`. The coordinator then writes
+- **An operator** on the Enrollment page or `hk enrollment approve`, naming the key's hash and the `host_group`. The coordinator then writes
   the Mac's inventory record from its serial, added by `coordinator`, with no group and no window, so the Mac is listed in the inventory and the
   record approves nothing ([operations/enrollment.md](../operations/enrollment.md#a-host-approved-without-a-record)); a Mac approved so before
   this is recorded at the coordinator's next start.
@@ -182,7 +209,13 @@ exists, so "a reinstall never changes a Mac's trust root". The bootstrap uses ex
    file appeared meanwhile; a file that is there as a regular file is kept as it is (refused when group- or other-writable), and a link or a directory is refused and left. If `installer` then fails, the files this attempt made are removed. The staging directory must be owned by root and not group- or other-writable, or the attempt fails.
 2. The text was parsed by the daemon's own loader (`DaemonConfig::parse`, and the signers file's parser) when the settings were read, so a value the
    daemon would refuse stops the bootstrap, not the daemon.
-3. The pkg's postinstall loads the job; the daemon start finds the files and keeps them.
+3. When the settings name the update account (section 4), the bootstrap writes `/Library/Application Support/hostkeeper/update-account` the same
+   way, with mode 0600, after the two configs and before `installer`, so the daemon's first start finds it. One that is there is kept as it is, even
+   when its bytes differ from the settings (the account it names may already have that password; its contents are not checked, and the daemon's
+   reader judges them), but only when it is a regular file of root's with
+   mode 0600 exactly, what the daemon's reader requires; any other file there is refused and left, and the attempt fails. If a write or `installer`
+   fails, every file this attempt made is removed.
+4. The pkg's postinstall loads the job; the daemon start finds the files and keeps them.
 
 `stores.toml` is not written: a pkg the coordinator resolves from a repository entry is fetched from the coordinator itself
 ([packages-repositories.md](packages-repositories.md) 4.7), so a Mac needs no store.
@@ -262,7 +295,8 @@ The bootstrap is a root launchd job (`dev.hostkeeper.bootstrap`, `RunAtLoad`, re
 2. Read the settings (section 4), then the repository's descriptor and pointer (`hostkeeper_release::descriptor`), and download the pkg into a new root-only file in
    `/var/lib/hostkeeper-bootstrap` (mode 0600, never replacing a file), hashed in the same pass, held to the pointer's size and SHA-256 and to `max_package_bytes`.
 3. `pkgutil --check-signature` and the Team ID pin (section 7). A pkg that fails any check is deleted, and nothing else is written or run.
-4. Write `hostkeeper.toml` and `macos-pkg.toml` when absent (section 6), run `installer -pkg <file> -target /`, delete the file and exit 0.
+4. Write `hostkeeper.toml` and `macos-pkg.toml` when absent, and the update-account file when the settings name the update account (section 6),
+   run `installer -pkg <file> -target /`, delete the file and exit 0.
 
 **The bounded wait (default, owner may change).** A failed attempt (no settings yet, no network, a bad pkg, a failed install) is retried after `retry_secs`, until the sum of
 the pauses would pass `wait_secs`; then the program exits non-zero with the last error and launchd starts it again after its throttle. The Blueprint's preference payload may arrive
@@ -315,7 +349,9 @@ the migrations and their tables (unused), `mdm.proto` (every call answers `UNIMP
 | **Settings refused** (not owned by root, writable by others, a link, an unknown key, a value the daemon's loader refuses) | The same retry; the reason names the file and the key; nothing is fetched | the log |
 | **Repository unreachable, descriptor or pointer wrong** | The same retry; the reason names the URL and the status | the log; the host never has hostkeeper |
 | **Pkg refused** (size or digest differs from the pointer, `pkgutil` fails, the status is not Apple's, the Team ID is not the pinned one) | The file is deleted before anything is written or run: no config, no `installer`. The attempt is retried after `retry_secs`, since the pointer may move to a good file | the log, naming the Team ID found and the one pinned |
-| **`installer` fails** | The staged file is removed, and so are the config files this attempt made (a file the operator had stays), so a corrected setting is read on the next attempt; that attempt installs again | the log, with `installer`'s last line |
+| **The update account's keys are partial or a value breaks its rule** | Settings refused, the same retry; the reason names the file, the key and the rule, never the value | the log |
+| **An update-account file is there with another owner or mode, or something not a file is at its path** | The attempt fails before `installer`, the file is left, and the configs this attempt made are removed; the same retry | the log, naming the uid and mode found |
+| **`installer` fails** | The staged file is removed, and so are the config files and the update-account file this attempt made (a file the operator had stays), so a corrected setting is read on the next attempt; that attempt installs again | the log, with `installer`'s last line |
 | **Coordinator unreachable at first boot** (down, wrong LAN, CA hash mismatch) | Not the bootstrap's: the daemon's CA check fails first, so nothing is sent and no key is made on a hash mismatch (`UntrustedCoordinator`); a connection failure is a failed step, retried every poll period | the daemon's log; no request in the queue |
 | **Approval never given** | The request waits and expires after `--enrollment-request-ttl` (72 h). The daemon posts again with the same key and the request is listed again | the request in the Enrollment page; after the TTL, under `unenrolled` |
 | **The Mac is re-imaged** | The Blueprint installs the bootstrap again; the files of the old install are gone, so it installs hostkeeper again, and the daemon makes a new key and a new request. The host id is held by the old key, so the record does not approve it (the record is used, and "no other key holds the host id" fails): an operator approves with `--replace true` in the same group. A different group is refused `host_group_differs` | one click; the old key's certificate stops being admitted |

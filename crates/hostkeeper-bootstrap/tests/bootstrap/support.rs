@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::Cursor;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -57,6 +57,7 @@ pub fn paths_in(dir: &Path, extra: &str) -> Paths {
         pki_current: dir.join("etc/updater/pki/current"),
         config_dir: dir.join("etc/hostkeeper"),
         staging_dir: dir.join("var/bootstrap"),
+        update_account: dir.join("Library/hostkeeper/update-account"),
     };
     write_mode(&paths.sources.fallback, &settings_text(extra), 0o600);
     paths
@@ -176,6 +177,10 @@ pub struct Tool_ {
     pub calls: Mutex<Vec<(Tool, Vec<String>)>>,
     /// The bytes of the staged pkg when `pkgutil` was run, to prove what it was asked about.
     pub seen_pkg: Mutex<Vec<Vec<u8>>>,
+    /// Files whose bytes `installer` records when it is run: what its postinstall would find.
+    pub watch: Mutex<Vec<PathBuf>>,
+    /// For each run of `installer`, the bytes of each watched file, `None` when it is not there.
+    pub at_installer: Mutex<Vec<Vec<Option<Vec<u8>>>>>,
 }
 
 impl Tool_ {
@@ -186,6 +191,8 @@ impl Tool_ {
             installer_spawn_fails: Mutex::new(false),
             calls: Mutex::new(Vec::new()),
             seen_pkg: Mutex::new(Vec::new()),
+            watch: Mutex::new(Vec::new()),
+            at_installer: Mutex::new(Vec::new()),
         }
     }
 
@@ -214,6 +221,16 @@ impl Tools for Tool_ {
             .lock()
             .expect("calls")
             .push((tool, args.to_vec()));
+        if tool == Tool::Installer {
+            let seen = self
+                .watch
+                .lock()
+                .expect("watch")
+                .iter()
+                .map(|path| fs::read(path).ok())
+                .collect();
+            self.at_installer.lock().expect("seen").push(seen);
+        }
         match tool {
             Tool::Pkgutil => {
                 let pkg = args.last().expect("a path");

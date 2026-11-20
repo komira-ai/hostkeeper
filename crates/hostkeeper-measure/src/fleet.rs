@@ -5,7 +5,7 @@
 
 use serde_json::Value;
 
-/// A host as `hkctl hosts list` and `hkctl hosts get` give it (`Host`).
+/// A host as `hk hosts list` and `hk hosts get` give it (`Host`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct HostView {
     pub node: String,

@@ -217,7 +217,7 @@ fn the_xcode_refusals_and_the_alert_kind_have_fixed_numbers_and_tokens() {
 }
 
 /// Proves: the service has exactly `List` and `Remove`, each unary and carrying the messages the
-/// design names, and the command table (so `hkctl` and the web app's client) lists them as
+/// design names, and the command table (so `hk` and the web app's client) lists them as
 /// `xcode list` and `xcode remove`.
 /// Catches: a call missing, renamed or streaming, and one the command table does not list.
 #[test]
@@ -275,7 +275,7 @@ fn the_xcode_service_has_its_two_unary_calls_in_the_command_table() {
 
 /// Proves: `xcode list` takes no flag, `xcode remove` takes `--sha256` and `--reason` as plain
 /// flags, and no field of the Xcode store is marked secret.
-/// Catches: a request field that `hkctl` would not take as a flag, and a SHA-256 or a reason
+/// Catches: a request field that `hk` would not take as a flag, and a SHA-256 or a reason
 /// marked secret, which would hide it from the command line.
 #[test]
 fn every_xcode_request_field_is_a_flag_and_none_is_secret() {

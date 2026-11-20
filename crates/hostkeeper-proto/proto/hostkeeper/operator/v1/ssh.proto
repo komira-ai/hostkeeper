@@ -9,7 +9,7 @@
 //
 // Served by: the coordinator, on its control listener, as operator.proto says. `Tunnel` is gRPC
 // only: it is not in the JSON gateway and has no generated command line (the command table holds
-// unary calls only; `hkctl ssh-proxy` makes the call).
+// unary calls only; `hk ssh-proxy` makes the call).
 //
 // Authentication: `Ssh` takes the operator's credential only; no CI token reaches it. A caller
 // may use a host only when the coordinator's operators file lists it for that host, its group or

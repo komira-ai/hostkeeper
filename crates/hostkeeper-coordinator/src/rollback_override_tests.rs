@@ -41,6 +41,7 @@ fn ack_of(node: &str, phase: Option<Phase>, class: Option<Class>, target: &str) 
             reason: None,
             order_id: None,
             order_try: None,
+            detail: None,
         },
     }
 }

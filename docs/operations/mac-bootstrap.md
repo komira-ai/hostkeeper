@@ -15,18 +15,23 @@ are the owner's; this page says what to put in them and what to watch.
    and is not notarized.
 2. **The farm's two values**, as the managed preference domain `dev.hostkeeper.config`: the keys
    `coordinator` (the LAN listener, an `https://` URL) and `ca_sha256` (the SHA-256 of the farm
-   CA, 64 hex digits), and nothing else is needed. Optional keys are in the design's section 4. It is not
+   CA, 64 hex digits), and nothing else is needed. Optional keys are in the design's section 4. For
+   maintenance updates of macOS, add the update account's four keys, all four or none:
+   `update_account_name` (`hkupdate`), `update_account_password`, `admin_name` and `admin_password`
+   (the administrator made at Setup Assistant); the bootstrap writes the update account's name and
+   password to `/Library/Application Support/hostkeeper/update-account` (root, 0600) and writes the
+   administrator's password nowhere. Never commit these settings to a repository. It is not
    yet verified that Apple Business's built-in management can carry a custom preference payload; if it
    cannot, put the same keys, as TOML, in `/Library/Application Support/hostkeeper/bootstrap.toml` on
-   the Mac (owned by root, mode 0600 or 0644, not writable by others), which the bootstrap reads when
-   there are no managed preferences.
+   the Mac (owned by root, mode 0600 or 0644, not writable by others; 0600 when it holds the update
+   account's keys), which the bootstrap reads when there are no managed preferences.
 
 ## Before the Mac is powered on
 
 Add the record that approves it, in the host group it belongs to:
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment add-record --host-id mac-03 --host-group build --serial <serial>
 ```
 

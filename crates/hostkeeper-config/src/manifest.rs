@@ -7,9 +7,10 @@
 //!   daemon are compared in.
 //! - [`ManifestRefusal`] says why a version is refused, with its class ([`Class`]) and its reason
 //!   token.
-//! - [`check_health_url`], [`is_boot_step`] and [`REFUSED_PREFIXES`] are the rules of a health
-//!   URL, of the name of a hook's boot step and of the paths a package may not place a file at,
-//!   which a release manifest (crate `hostkeeper-release`) is checked by as well.
+//! - [`check_health_url`], [`is_boot_step`], [`is_drain_step`], [`is_resume_step`] and
+//!   [`REFUSED_PREFIXES`] are the rules of a health URL, of the names of a hook's boot, drain and
+//!   resume steps and of the paths a package may not place a file at, which a release manifest
+//!   (crate `hostkeeper-release`) is checked by as well.
 //!
 //! This module reads no file.
 
@@ -34,16 +35,26 @@ pub const REFUSED_PREFIXES: [&str; 8] = [
     "/boot",
     "/var/lib",
 ];
-/// The steps of an update and the `uninstall` step, which `boot` may not name.
-pub const STEP_NAMES: [&str; 6] = [
+/// The words of the contract's own steps: the steps of an update, `uninstall`, and the
+/// [`DRAIN_STEP`] and [`RESUME_STEP`] of a maintenance run. `boot` may name none of them, so a
+/// daemon's start never runs a drain or a resume; `drain` and `resume` may name only their own.
+pub const STEP_NAMES: [&str; 8] = [
     "prepare",
     "cutover",
     "verify",
     "rollback",
     "cleanup",
     "uninstall",
+    DRAIN_STEP,
+    RESUME_STEP,
 ];
-/// The most bytes of the name of the `boot` step.
+/// The word of the contract's `drain` step: what a hook built on `hostkeeper-hook` names in
+/// `[hook] drain`.
+pub const DRAIN_STEP: &str = "drain";
+/// The word of the contract's `resume` step: what a hook built on `hostkeeper-hook` names in
+/// `[hook] resume`.
+pub const RESUME_STEP: &str = "resume";
+/// The most bytes of the name of the `boot`, `drain` or `resume` step.
 pub const MAX_BOOT_NAME: usize = 64;
 
 /// A version of hostkeeper: `major.minor.patch`, three whole numbers, with no pre-release or
@@ -164,6 +175,12 @@ pub struct Hook {
     pub command: Vec<String>,
     /// The step run from `current` at daemon start, if any.
     pub boot: Option<String>,
+    /// The step a maintenance run takes the service out of service with, before the host's own
+    /// update, if any; named with [`Hook::resume`] or not at all. Nothing runs it yet but the
+    /// conformance harness.
+    pub drain: Option<String>,
+    /// The step a maintenance run puts the service back with, after the host's own update.
+    pub resume: Option<String>,
     pub verify_deadline_secs: u64,
     /// `None` means no ceiling.
     pub promotion_ceiling_secs: Option<NonZeroU64>,
@@ -207,6 +224,19 @@ pub fn is_boot_step(name: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_lowercase() | b.is_ascii_digit() | (b == b'_'));
     token & !STEP_NAMES.contains(&name)
+}
+
+/// Whether `name` may name a hook's `drain` step: [`DRAIN_STEP`] itself, or any name `boot` may
+/// take ([`is_boot_step`]). The rule of a release manifest's `hook.drain` (crate
+/// `hostkeeper-release`), which also needs `hook.resume` and a name of its own.
+pub fn is_drain_step(name: &str) -> bool {
+    (name == DRAIN_STEP) | is_boot_step(name)
+}
+
+/// Whether `name` may name a hook's `resume` step: [`RESUME_STEP`] itself, or any name `boot`
+/// may take ([`is_boot_step`]). The rule of a release manifest's `hook.resume`.
+pub fn is_resume_step(name: &str) -> bool {
+    (name == RESUME_STEP) | is_boot_step(name)
 }
 
 /// Whether `host` is a loopback literal: the address `127.0.0.1`, or `::1` in brackets in any

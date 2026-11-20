@@ -253,6 +253,7 @@ fn a_host_is_what_the_status_holds_of_it() {
             operator_keys: None,
             prerequisites: None,
             bmc: None,
+            maintenance: None,
         }),
         labels: HashMap::from([("rack".to_owned(), "r1".to_owned())]),
         exclusions: vec![proto::Exclusion {
@@ -294,6 +295,7 @@ fn a_host_is_what_the_status_holds_of_it() {
         running_unix: Some(UNIX + 2_000),
         repositories: None,
         host_group: String::new(),
+        maintenance: None,
     };
     assert_eq!(host, expected);
     let listed = list(&rig, 0, "").expect("a page");

@@ -2,7 +2,7 @@
 //! [`DOC`]. [`problems`] reads each of those commands out of the document, writes its
 //! placeholders the way the workflow names the same things ([`NAMES`]), and refuses the workflow
 //! when:
-//! - the job's `HOSTKEEPER_TAG` is not the document's tag, or its `HKCTL_ASSET` is not the
+//! - the job's `HOSTKEEPER_TAG` is not the document's tag, or its `HK_ASSET` is not the
 //!   asset the document's table lists as [`BINARY`] (one asset for every platform);
 //! - the `checksum` step does not run the document's step 2 command word for word, in
 //!   [`RELEASE_DIR`] (the document's `cd release`);
@@ -10,8 +10,8 @@
 //!   word, its flags in the same order, followed only by [`ATTESTATION_OUTPUT`], the file the
 //!   commit step reads;
 //! - the `version` step does not compare the output of the document's step 6 command
-//!   [`VERSION_COMMAND`] (the step's `install` line is not compared: the workflow installs hkctl
-//!   into a directory of its own) with the document's expected output for hkctl, the one that
+//!   [`VERSION_COMMAND`] (the step's unpack line is not compared: the workflow unpacks the tarball
+//!   into a directory of its own) with the document's expected output for hk, the one that
 //!   starts with [`STAMP`], and nothing else, or does not take `HOSTKEEPER_VERSION` and
 //!   `HOSTKEEPER_COMMIT` from their inputs ([`VERSION_ENV`]).
 //!
@@ -30,30 +30,30 @@ pub const NAMES: [(&str, &str); 6] = [
     ("<first 12 hex digits of $PIN>", "${HOSTKEEPER_COMMIT:0:12}"),
     ("<X.Y.Z>", "$HOSTKEEPER_VERSION"),
     ("$PIN", "$HOSTKEEPER_COMMIT"),
-    (
-        "release/<asset>",
-        "\"$RUNNER_TEMP/hkctl-release/$HKCTL_ASSET\"",
-    ),
+    ("release/<asset>", "\"$RUNNER_TEMP/hk-release/$HK_ASSET\""),
     ("cd release && ", ""),
-    ("./hkctl", PROGRAM),
+    ("./hk", PROGRAM),
 ];
 /// The directory the workflow downloads the release to, where the checksum step runs.
-pub const RELEASE_DIR: &str = "${{ runner.temp }}/hkctl-release";
+pub const RELEASE_DIR: &str = "${{ runner.temp }}/hk-release";
 /// What the attestation step adds to the document's command: the verified attestations, as JSON,
 /// in the file the commit step reads.
 pub const ATTESTATION_OUTPUT: [&str; 4] = [
     "--format",
     "json",
     ">",
-    "\"$RUNNER_TEMP/hkctl-release/attestation.json\"",
+    "\"$RUNNER_TEMP/hk-release/attestation.json\"",
 ];
-/// How the document's table starts to say what hkctl's asset is, the one asset the workflow
-/// downloads.
+/// How the document's table starts to say what hk's asset is, the one asset the workflow
+/// downloads (the tarball of the platform of the runner, [`RUNNER_PLATFORM`]; the table lists it
+/// for every `<platform>`).
 pub const BINARY: &str = "the command line of the coordinator";
-/// The command of step 6 that prints hkctl's version.
-pub const VERSION_COMMAND: [&str; 2] = ["./hkctl", "--version"];
-/// How hkctl's expected output in step 6 starts.
-pub const STAMP: &str = "hkctl ";
+/// The platform of the runner of the job, which the tarball the job downloads is for.
+pub const RUNNER_PLATFORM: &str = "linux-x86_64";
+/// The command of step 6 that prints hk's version.
+pub const VERSION_COMMAND: [&str; 2] = ["./hk", "--version"];
+/// How hk's expected output in step 6 starts.
+pub const STAMP: &str = "hk ";
 /// The hostkeeper version, as the job's `env` names it.
 pub const VERSION_INPUT: &str = "${{ inputs.hostkeeper_version }}";
 /// The variables the version step compares with, and the inputs they must be.
@@ -151,11 +151,13 @@ pub fn problems(doc: &str, workflow: &Node) -> Vec<String> {
             "the job's `HOSTKEEPER_TAG` `{tag}` is not the tag of {DOC}"
         ));
     }
-    let asset = env(job, "HKCTL_ASSET").unwrap_or_default();
-    let listed = asset.replace(VERSION_INPUT, "<version>");
+    let asset = env(job, "HK_ASSET").unwrap_or_default();
+    let listed = asset
+        .replace(VERSION_INPUT, "<version>")
+        .replace(&format!("-{RUNNER_PLATFORM}.tar.gz"), "-<platform>.tar.gz");
     if !doc.contains(&format!("| `{listed}` | {BINARY}")) {
         problems.push(format!(
-            "the job's `HKCTL_ASSET` `{asset}` is not hkctl's asset in {DOC}"
+            "the job's `HK_ASSET` `{asset}` is not hk's asset in {DOC}"
         ));
     }
 
@@ -197,7 +199,7 @@ pub fn problems(doc: &str, workflow: &Node) -> Vec<String> {
             .filter_map(|rest| rest.split('`').next())
             .find(|e| e.starts_with(STAMP))
     });
-    let version = command(doc, 6, "./hkctl --version", |w| w == VERSION_COMMAND);
+    let version = command(doc, 6, "./hk --version", |w| w == VERSION_COMMAND);
     match (version, expected) {
         (Ok(run), Some(expected)) => {
             let program = run.first().map_or("", String::as_str);
@@ -214,7 +216,7 @@ pub fn problems(doc: &str, workflow: &Node) -> Vec<String> {
             ));
         }
         (Err(e), _) => problems.push(e),
-        (Ok(_), None) => problems.push(format!("{DOC} has no expected output for hkctl in step 6")),
+        (Ok(_), None) => problems.push(format!("{DOC} has no expected output for hk in step 6")),
     }
     let version_step = step(workflow, "version");
     for (key, want) in VERSION_ENV {

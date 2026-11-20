@@ -6,7 +6,8 @@ use std::process::ExitCode;
 pub const EXIT_OK: i32 = 0;
 /// Failure.
 pub const EXIT_FAILURE: i32 = 1;
-/// Deferred: the host is busy or not ready, nothing irreversible happened, try later.
+/// Deferred: the host is busy or not ready, nothing irreversible happened, try later. For a
+/// `drain`: its deadline passed with work left, and the hook resumed the service and cut no work.
 pub const EXIT_DEFERRED: i32 = 75;
 /// Halt: no version can repair this; acting further would make it worse.
 pub const EXIT_HALT: i32 = 76;

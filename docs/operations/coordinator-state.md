@@ -147,7 +147,7 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   next due time and the instance that ran it last.
 - **Generations and write ids.** The database keeps, with each service's desired state, its
   generation (one more for every accepted set, a set identical to the state held included, and a
-  force), the write id of the last set (`hkctl releases set-desired --write-id`, 1 to
+  force), the write id of the last set (`hk releases set-desired --write-id`, 1 to
   128 visible ASCII characters), and the version and minimums the last change of version replaced.
   `Releases.SetDesired` answers them as its `record` and `Releases.Converge` shows them, so a writer
   that lost an answer can look up whether its write landed. A set with `--if-generation <n>` is
@@ -364,7 +364,7 @@ The rest of this page is the file store.
 | `<state-file>.repositories` | The registry of package repositories ([packages-repositories.md](../design/packages-repositories.md) section 3): each repository with its keyring and the registry generation it was last put at, and the registry's generation. Written whole when an operator's `Repositories.Put` or `Repositories.Remove` changes it. A coordinator before the registry does not read it. | The registry is empty: no host is sent a repository until an operator puts each one again, and a `SetDesired` with a repository entry is refused `repository_unknown`. |
 | `<state-file>.jti` | The ids of CI's OIDC tokens already spent, each with the second until which it is refused. | A CI token spent before the loss can be used again until it expires. |
 | `<state-file>.verdicts` | Per service and host, the last release verdict the coordinator acknowledged, and the verdicts it counts toward an automatic rollback. | A host whose daemon stopped resending its verdict is no longer read as having failed it, so it can be ordered that version again; the count toward an automatic rollback starts again. |
-| `<state-file>.accounts` | The operator's users and API tokens (`docs/design/operator-login.md`, komira-ai/hostkeeper#300, sections 6, 7 and 9): per user, the Argon2id hash of the password, whether the user is enabled, whether it must change its password, the deadline of an initial or reset password, who made the user and when, and when it last signed in; per token, the SHA-256 of the token, who made it and when. Written whole, mode 0600, when a change of a user or a token is made, and only then. A coordinator before the users does not read it; a key this release does not know is skipped, and a value it cannot read stops the start, naming the file. The writers are `--initial-admin-file` (below), a password change at sign-in, and the `Users` and `ApiTokens` calls ("Users and API tokens", below), by the Users and API tokens pages of the web app and by `hkctl`. | No user and no API token made in the UI exists; the tokens of `--tokens-file` still work. |
+| `<state-file>.accounts` | The operator's users and API tokens (`docs/design/operator-login.md`, komira-ai/hostkeeper#300, sections 6, 7 and 9): per user, the Argon2id hash of the password, whether the user is enabled, whether it must change its password, the deadline of an initial or reset password, who made the user and when, and when it last signed in; per token, the SHA-256 of the token, who made it and when. Written whole, mode 0600, when a change of a user or a token is made, and only then. A coordinator before the users does not read it; a key this release does not know is skipped, and a value it cannot read stops the start, naming the file. The writers are `--initial-admin-file` (below), a password change at sign-in, and the `Users` and `ApiTokens` calls ("Users and API tokens", below), by the Users and API tokens pages of the web app and by `hk`. | No user and no API token made in the UI exists; the tokens of `--tokens-file` still work. |
 | `<state-file>.layout` | The lab's layout (`docs/design/ui-shell-lab.md`): the one cluster's name, its numbered rows, the numbered racks of each row with their height in U, and the placements of servers (an inventory entry, or a host no entry matches) in racks, each with its lowest U and its height in U. Written whole when a change of the layout commits, and only then; a file that is not there is an empty layout, and one that breaks a rule of it (a placement outside its rack, two on one U) stops the start, naming the file. Backed up and restored with the state file. | The Home page shows an empty lab and every server unplaced; rows, racks and placements are made again on the page. |
 | `--xcode-dir` | The private Xcode store ([xcode-releases.md](xcode-releases.md)): per archive, `<sha256>.xip` (the bytes as Apple ships them) and `<sha256>.json` (its version, build, size, who pushed it and when), each mode 0600. Not written by `backup`, which copies the state files only; with the file store or the database, it is the directory the operator makes and mounts. | The archives are gone; an archive is pushed again, and the alert `xcode_release_waiting` stands until it is. |
 | `<state-file>.lock` | Nothing: the lock `serve` holds while it runs, so a second coordinator on the same files is refused. | Nothing. It is not backed up. |
@@ -587,8 +587,8 @@ routes exist even with no user, and no one can sign in until `--initial-admin-fi
 ## Users and API tokens
 
 The operator API has two services for the accounts of the sign-in (`docs/design/operator-login.md`, section 7), served on the private
-listener as every operator call is, by gRPC and on the JSON gateway (`docs/gateway.md`), and by `hkctl users ...` and
-`hkctl api-tokens ...` (`docs/cli.md`). Every operator is equal: a token of the tokens file, a stored API token and a signed-in user
+listener as every operator call is, by gRPC and on the JSON gateway (`docs/gateway.md`), and by `hk users ...` and
+`hk api-tokens ...` (`docs/cli.md`). Every operator is equal: a token of the tokens file, a stored API token and a signed-in user
 call both, and the audit's `by` is the name of whichever called. A CI token is refused `forbidden`.
 
 - `Users.Create` takes a name and makes the user with a temporary password, which the answer carries once and the coordinator
@@ -624,7 +624,7 @@ A coordinator before this release has neither service: it answers the paths `UNI
 ## The lab layout
 
 The operator API has one service for the lab (`docs/design/ui-shell-lab.md`), `Layout`, which takes an operator only (a CI token is
-`forbidden`) and which `hkctl layout ...` (`docs/cli.md`) and the Home page call. A hostkeeper runs one lab: the layout has one
+`forbidden`) and which `hk layout ...` (`docs/cli.md`) and the Home page call. A hostkeeper runs one lab: the layout has one
 cluster name, rows numbered 0, 1, 2, racks numbered within their row (each 1 to 60 U high, 42 by default) and placements. A
 placement puts a server in a rack from its lowest U, so many U high; U 1 is the bottom. It belongs to the physical server, which
 is its inventory entry when one matches the host (so a wipe and a new enrollment keep the place), else the host.

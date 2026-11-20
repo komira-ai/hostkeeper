@@ -306,7 +306,7 @@ async fn a_login_from_another_site_is_refused_as_csrf() {
         "Application/JSON; charset=utf-8".parse().expect("a value"),
     );
     assert_eq!(world.send(request).await.status, StatusCode::OK);
-    // A client with no browser headers at all (`hkctl`, a script) is a login too.
+    // A client with no browser headers at all (`hk`, a script) is a login too.
     let plain = Request::builder()
         .method("POST")
         .uri("/v1/login")

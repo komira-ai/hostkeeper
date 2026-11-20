@@ -185,7 +185,7 @@ the tailnet's admin, not by the service's CI.
    is not reachable from a GitHub-hosted runner and the job ends with `reason` `no_answer`.
 8. **The first run.** Dispatch the workflow from `main` with a released version. It ends with
    `reason` `converged` once the fleet runs the version (or `not_converged` after half an hour,
-   the roll going on). `hkctl releases get-release --service my-service --version <X.Y.Z>`
+   the roll going on). `hk releases get-release --service my-service --version <X.Y.Z>`
    (with `--host-group <group>` to ask as one group, which must list the service)
    answers the targets the coordinator stored. A refusal names its token
    ([When it fails](ci-client.md#when-it-fails)); fix what it names before you run it again.

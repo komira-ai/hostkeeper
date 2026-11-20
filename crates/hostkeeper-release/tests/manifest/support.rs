@@ -45,6 +45,8 @@ pub fn hook() -> Hook {
     Hook {
         command: vec!["bin/web".to_owned(), "update-hook".to_owned()],
         boot: Some("restore".to_owned()),
+        drain: None,
+        resume: None,
         timeout_secs: Some(StepBounds {
             prepare: 0,
             cutover: 10,

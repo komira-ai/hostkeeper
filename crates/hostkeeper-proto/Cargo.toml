@@ -6,10 +6,12 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "hostkeeper's protobuf services, compiled from proto/ with protox, the command table `hkctl` and the UI client are generated from, and the check that keeps them compatible."
+description = "hostkeeper's protobuf services, compiled from proto/ with protox, the command table `hk` and the UI client are generated from, and the check that keeps them compatible."
 
 [dependencies]
 prost.workspace = true
+# The error of a maintenance report that breaks a bound (`maintenance`).
+thiserror.workspace = true
 tonic.workspace = true
 tonic-prost.workspace = true
 
