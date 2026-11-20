@@ -21,9 +21,10 @@
 //!    the log (if any) is given them, the job is booted out (unloaded, as `--collect` does for a
 //!    systemd unit) and its directory removed.
 //!
-//! [`StepLauncher::run_additive`] (the hook's `uninstall`, or a `[hook] boot` step) runs the same
-//! way: `<executable> <hook_args...> <step> --params <params>` as one job, bounded by its
-//! `timeout_secs` (0 is no bound, as `RuntimeMaxSec=0` is for a systemd unit).
+//! [`StepLauncher::run_additive`] (the hook's `uninstall`, a `[hook] boot` step, or a maintenance
+//! run's `drain` or `resume`) runs the same way: `<executable> <hook_args...> <step> --params
+//! <params>` as one job, bounded by the call's `bound` (`Bound::Unbounded` is no bound, as
+//! `RuntimeMaxSec=infinity` is for a systemd unit, for example a drain with no deadline).
 //!
 //! [`StepLauncher::stop`] is [`bootout`]: a label that is not loaded is stopped already, so a
 //! second stop, or a stop of a step that has ended, is not an error. `launchctl bootout` waits
@@ -46,7 +47,6 @@
 use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::io;
-use std::num::NonZeroU64;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -262,7 +262,8 @@ impl<'a> Run<'a> {
         }
     }
 
-    /// `<hook_args...> <step> --params <params>`, bounded by `timeout_secs` (0 is no bound).
+    /// `<hook_args...> <step> --params <params>`, bounded by the call's `bound`
+    /// (`Bound::Unbounded` is no bound).
     fn additive(call: &'a AdditiveCall<'a>) -> Run<'a> {
         let mut args: Vec<OsString> = call.hook_args.iter().map(OsString::from).collect();
         args.push(OsString::from(call.step));
@@ -274,7 +275,7 @@ impl<'a> Run<'a> {
             executable: call.executable,
             args,
             params: Some(call.params),
-            bound: NonZeroU64::new(call.timeout_secs).map_or(Bound::Unbounded, Bound::Secs),
+            bound: call.bound,
         }
     }
 }
@@ -414,7 +415,7 @@ impl StepLauncher for LaunchdLauncher {
     }
 
     /// Runs `<executable> <hook_args...> <step> --params <params>` as [`StepLauncher::run`]
-    /// runs a step, bounded by `timeout_secs`.
+    /// runs a step, bounded by the call's `bound`.
     fn run_additive(&self, call: &AdditiveCall<'_>) -> Result<StepExit, LaunchError> {
         self.run_step(&Run::additive(call))
     }
