@@ -103,8 +103,9 @@
 //!   only forwards to it.
 //! - [`maintenance_hook`]: `hostkeeper maintenance-hook <prepare|cutover|verify>`, the OS work of
 //!   a maintenance run: the parameters of the run's `maintain` order, the work of each kind
-//!   (`macos`, `xcode`, `linux`, `reboot`) found by the host's platform, and the reboot recorded
-//!   in the run record before it is asked for.
+//!   (`macos`, `xcode`, `linux`, `reboot`) found by the host's platform (on a Mac, the `macos`
+//!   kind's stage: `softwareupdate --download` or `--fetch-full-installer` after a free-space
+//!   check), and the reboot recorded in the run record before it is asked for.
 //! - [`stamp`]: the version `hostkeeper --version` prints, with the commit of a release build.
 //! - [`refusal`]: the closed set of reason tokens.
 //! - [`link_adapters`]: the daemon as the executor, the held halts, the installed services and

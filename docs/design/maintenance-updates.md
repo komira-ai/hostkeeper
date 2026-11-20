@@ -362,7 +362,9 @@ exclusion, `min_up`) are kept per package and count a cordoned host as up:
 
 The coordinator sends one order, `maintain` (New, a case of `Order.verb`, with an `order_id` and `try` like the others): the run, the
 kinds, for `xcode` the store entries (version, build, size, SHA-256) and the versions to remove and the default, the Linux scope, the
-drain deadline, and for `macos` the path (`install` or `wait`, section 5.5.2).
+drain deadline, and for `macos` the path (`install` or `wait`, section 5.5.2) and whether a major upgrade may be staged and installed
+(`Maintain.macos_major`, the group's `macos_major`; false when not sent). The order names no version or label: the host stages what its
+own listing offers (section 1, "Only what Apple offers now can be installed").
 
 ### 5.2 On the host: drain hooks and the maintenance hook
 
@@ -388,7 +390,7 @@ after each step, so a crash, a reboot or a daemon that restarts as a newer relea
 
 | # | Step | What runs | On failure |
 |---|---|---|---|
-| 1 | stage | maintenance hook `prepare`: check free space (twice the download, at least), then download what can be downloaded (`softwareupdate --download`, `softwareupdate --fetch-full-installer` for a major upgrade, `apt-get --download-only`, `dnf --downloadonly`, the Xcode archive copied from the store and expanded into staging) | deferred: nothing was touched, the host never left service; the run goes on |
+| 1 | stage | maintenance hook `prepare`: check free space (twice the download, at least), then download what can be downloaded (`softwareupdate --download`, `softwareupdate --fetch-full-installer` for a major upgrade, `apt-get --download-only`, `dnf --downloadonly`, the Xcode archive copied from the store and expanded into staging). Built for `macos` (`crates/hostkeeper-daemon/src/maintenance_hook/macos/stage.rs`): `sw_vers` and the Mac's own `softwareupdate --list` (and `--list-full-installers` only when the order's `macos_major` allows it); with an upgrade allowed and offered, the newest full installer of a higher major alone, else every macOS update of the running major by its label; the data volume's free space at least twice the sizes the listings give; then `softwareupdate --download <label>` or `--fetch-full-installer --full-installer-version <version>`. Nothing offered, or a download answering `Update not found`, defers `macos_update_not_listed`; a short disk `free_space_short`, nothing downloaded | deferred: nothing was touched, the host never left service; the run goes on |
 | 2 | drain | each installed service's `drain`, in the group's package order, unbounded unless the run sets a deadline (5.3). js-agent's cordons the host and waits for its leases to end | halt (5.4) |
 | 3 | apply | maintenance hook `cutover`, which applies each kind of the run once (by the run record), macOS first (section 5.5). When a kind needs a reboot (`Action: restart`, `reboot-required`, a new kernel), the hook records that the kind's reboot is under way, then reboots (on a Mac, section 5.5: `softwareupdate --install ... --restart`; with FileVault on, `--install` then `fdesetup authrestart`; `startosinstall` for a major upgrade; or only a wait when device management installs it; `systemctl reboot`, or OpenRC's `reboot`, on Linux). After the reboot the daemon runs `cutover` again: it reads the record and the changed boot id, records the kind applied once it reads the new version, and goes on with the next kind, never installing the first again. A major upgrade on a Mac with FileVault on is not ordered until MP shows `startosinstall` restarts it authenticated | halt; `maintenance_not_back` when silent past `return_secs` |
 | 4 | check | maintenance hook `verify` (section 5.6) | halt |

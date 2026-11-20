@@ -63,6 +63,7 @@ fn maintain() -> agent::Maintain {
         xcode_remove: vec!["26.4".to_owned()],
         xcode_default: "27.2".to_owned(),
         return_secs: 1_800,
+        macos_major: true,
     }
 }
 
@@ -564,6 +565,14 @@ fn the_maintenance_fields_have_their_numbers_and_types() {
             "return_secs",
             10,
             Kind::Uint64,
+            false,
+            false,
+        ),
+        (
+            "hostkeeper.agent.v1.Maintain",
+            "macos_major",
+            11,
+            Kind::Bool,
             false,
             false,
         ),

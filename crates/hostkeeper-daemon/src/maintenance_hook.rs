@@ -8,8 +8,10 @@
 //!
 //! **Kinds.** Each kind of the run (`macos`, `xcode`, `linux`, `reboot`) is the work of a
 //! [`MaintenanceKind`], found in the host platform's [`Registry`]; a kind the platform has no work
-//! for fails `unsupported_kind`. The steps run each kind of the run in [`Kind::ALL`]'s order,
-//! macOS before Xcode, whatever order the parameters give:
+//! for, or whose work is not written yet, fails `unsupported_kind`. Written so far: on a Mac, the
+//! `macos` kind's `prepare` ([`MacosKind`]), which stages a macOS update or defers. The steps run
+//! each kind of the run in [`Kind::ALL`]'s order, macOS before Xcode, whatever order the
+//! parameters give:
 //!
 //! - `prepare` runs each kind's `prepare`, and ends at the first that does not succeed. It writes
 //!   nothing to the run record and reboots nothing.
@@ -31,6 +33,7 @@
 //! reason a token, the detail at most [`MAX_DETAIL`] bytes.
 
 mod kind;
+mod macos;
 mod params;
 mod ports;
 mod registry;
@@ -46,6 +49,7 @@ use hostkeeper_proto::maintenance::MAX_HALTED_REASON;
 use hostkeeper_steps::{BootId, BootIdSource};
 
 pub use kind::{Cutover, KindError, MaintenanceKind, REASON_UNSUPPORTED_KIND, Unsupported};
+pub use macos::MacosKind;
 pub use params::{Kind, MAX_PARAMS_BYTES, MaintainParams, ParamsError};
 pub use ports::{KindState, RebootError, Rebooter, RecordError, RunRecord, Unwired};
 pub use registry::Registry;
@@ -177,12 +181,12 @@ fn bounded(detail: &str) -> String {
     detail[..end].to_owned()
 }
 
-/// `hostkeeper maintenance-hook` on this host: the kinds of its platform, the boot id of the
-/// system the binary was built for, and no run record or reboot yet ([`Unwired`]); the parameters
-/// from the file `args` names or from the process's standard input, the report to its standard
-/// output.
+/// `hostkeeper maintenance-hook` on this host: the kinds of its platform with the work written so
+/// far ([`Registry::at_host`]), the boot id of the system the binary was built for, and no run
+/// record or reboot yet ([`Unwired`]); the parameters from the file `args` names or from the
+/// process's standard input, the report to its standard output.
 pub fn host_main(args: &HookArgs) -> Outcome {
-    let kinds = Registry::for_platform(Platform::host().kind);
+    let kinds = Registry::at_host(Platform::host().kind);
     let boot_id = crate::adapters::host_boot_id();
     let ports = HookPorts {
         kinds: &kinds,

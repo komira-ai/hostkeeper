@@ -69,10 +69,10 @@ impl Typed {
 
 /// The typed arguments of the `maintain` verb and of the Xcode entries it names, beyond
 /// `ORDER_FIELDS`: each by its message, its name, its one type and whether it repeats. None can
-/// carry a command, a path, a URL or a script: an id, enums, durations, versions, a size and a
-/// digest (an Xcode is named by its version, build, size and SHA-256, and fetched from the
+/// carry a command, a path, a URL or a script: an id, enums, durations, versions, a size, a
+/// digest and a switch (an Xcode is named by its version, build, size and SHA-256, and fetched from the
 /// coordinator's store).
-const MAINTAIN_ARGUMENTS: [(&str, &str, Typed, bool); 14] = [
+const MAINTAIN_ARGUMENTS: [(&str, &str, Typed, bool); 15] = [
     (MAINTAIN, "run_id", Typed::Scalar(Kind::String), false),
     (
         MAINTAIN,
@@ -113,6 +113,7 @@ const MAINTAIN_ARGUMENTS: [(&str, &str, Typed, bool); 14] = [
         false,
     ),
     (MAINTAIN, "return_secs", Typed::Scalar(Kind::Uint64), false),
+    (MAINTAIN, "macos_major", Typed::Scalar(Kind::Bool), false),
     (XCODE_ENTRY, "version", Typed::Scalar(Kind::String), false),
     (XCODE_ENTRY, "build", Typed::Scalar(Kind::String), false),
     (XCODE_ENTRY, "size", Typed::Scalar(Kind::Uint64), false),
