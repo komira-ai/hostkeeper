@@ -296,6 +296,8 @@ fn a_host_is_what_the_status_holds_of_it() {
         repositories: None,
         host_group: String::new(),
         maintenance: None,
+        maintenance_look_age_secs: None,
+        maintenance_stale: false,
     };
     assert_eq!(host, expected);
     let listed = list(&rig, 0, "").expect("a page");

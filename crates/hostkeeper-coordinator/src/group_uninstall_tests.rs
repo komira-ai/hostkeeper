@@ -37,6 +37,7 @@ fn fleet_of(hosts: &[(&str, &[&str])]) -> Fleet {
             last_renew_error: None,
             trusted_root: crate::trusted_root::TrustedRootSaid::default(),
             skewed_beats: 0,
+            maintenance: None,
         };
         fleet.note_node(id(host), node, 0);
     }

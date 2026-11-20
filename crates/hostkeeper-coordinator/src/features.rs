@@ -28,7 +28,8 @@ use crate::{halt, verdict_file};
 /// the host is sent its sshd access (the CA public keys of its class, its principal and login user,
 /// the password policy and its revoked serials) in every answer until it reports its generation
 /// ([`crate::ssh_heartbeat`]); advertised always, and acted on only while the coordinator holds an
-/// SSH user CA.
+/// SSH user CA. `maintenance-v1`: the `maintenance` report of a heartbeat is read, kept with the host
+/// and shown in `Hosts.List` and `Hosts.Get` ([`crate::maintenance`]); no `maintain` order is sent.
 pub const FEATURES: &[&str] = &[
     "deferred-v1",
     halt::FEATURE,
@@ -43,6 +44,7 @@ pub const FEATURES: &[&str] = &[
     crate::operator_keys::FEATURE,
     crate::ssh_heartbeat::FEATURE,
     crate::prerequisites::FEATURE,
+    crate::maintenance::FEATURE,
 ];
 
 /// The fields of the answer to a heartbeat that go only to an agent that announced a feature,
