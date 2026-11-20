@@ -11,8 +11,9 @@
 //! Every other rule of [`super::lint`] holds for the file as for any pull-request workflow: no
 //! secret and no token named, no other write scope, no root, no macOS, a Linux x86_64 runner.
 //!
-//! [`problems`] holds the file to its shape, so that what the job with the token may do is fixed
-//! here:
+//! [`problems`] holds the file to its shape: the triggers, the one job, its rights, farm-connect's
+//! inputs and the check of the build. It does not fix the other steps of the job, each of which
+//! could ask for the token; a change to them is reviewed like any change to a workflow:
 //! - its `on` is exactly `pull_request` with no filter and `push` to `branches: [main]`;
 //! - its jobs are exactly [`JOB`], on [`RUNNER`], with `permissions` exactly `contents: read`
 //!   and `id-token: write`;
@@ -54,7 +55,7 @@ pub const LOCAL_ZERO_RUN: &str = "grep -Eq 'Commands: [0-9]+ \\(.*local: 0\\)' \
 
 /// What a [`FILE`] whose `on` is anything else is refused with.
 pub const ON_PROBLEM: &str =
-    "farm.yml: on must be pull_request with no filter and push to branches [main], and nothing else";
+    "farm.yml: on must be pull_request with no filter and push to branches [main] alone";
 
 /// Whether the job `name` of `file` may hold `id-token: write` (under [`JOB_IF`]).
 pub fn id_token_job(file: &str, name: &str) -> bool {

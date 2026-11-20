@@ -1,5 +1,6 @@
 # Written by `buildrules init`. Remote-only execution platform: the worker properties come
-# from `[buildrules_re]` in .buckconfig.local, so none is committed.
+# from `[buildrules_re]`, which .buckconfig fills from farm-connect's buckconfig in CI and a
+# machine's own .buckconfig.local sets otherwise, so none is committed.
 load("@buildrules//rules:platforms.bzl", "buildrules_execution_platforms")
 
 buildrules_execution_platforms(

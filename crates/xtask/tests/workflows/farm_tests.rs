@@ -53,6 +53,14 @@ fn the_token_is_held_only_under_the_jobs_exact_if() {
         "${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}",
         "always()",
     ];
+    let dropped = format!("    if: {JOB_IF}\n");
+    assert_eq!(
+        problems_with(&dropped, ""),
+        [format!(
+            "job build: `id-token: write` needs the exact `if: {JOB_IF}`"
+        )],
+        "no if:"
+    );
     for condition in wrong {
         assert_eq!(
             problems_with(JOB_IF, condition),
@@ -155,7 +163,8 @@ fn farm_connect_takes_exactly_its_variables() {
     // Catches: an input added (a header, another platform's workers), one taken from somewhere
     // a pull request controls instead of the organisation's variable of its name, one missing,
     // or one that is not a plain value.
-    let inputs = format!("job build: the farm-connect step's `with:` must be exactly {CONNECT_INPUTS:?}");
+    let inputs =
+        format!("job build: the farm-connect step's `with:` must be exactly {CONNECT_INPUTS:?}");
     let tls = "          tls: ${{ vars.FARM_TLS || 'false' }}\n";
     let cases = [
         format!("{tls}          farm-qos: batch\n"),
@@ -175,9 +184,25 @@ fn exactly_one_step_uses_farm_connect() {
     assert_eq!(
         problems_with(
             &format!("{FARM_CONNECT}@a26616d62db17ee8aff67ee9c12d411c2fad7609"),
-            "tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd # v4.2.0"
+            "example/join@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa # v1.0.0"
         ),
         [format!("job build: exactly one step must use {FARM_CONNECT}")]
+    );
+    // A name that only starts with farm-connect's is another action: it needs a version comment,
+    // and the step is no farm-connect step.
+    let lookalike = format!("{FARM_CONNECT}-fork@a26616d62db17ee8aff67ee9c12d411c2fad7609");
+    assert_eq!(
+        problems_with(
+            &format!("{FARM_CONNECT}@a26616d62db17ee8aff67ee9c12d411c2fad7609"),
+            &lookalike
+        ),
+        [
+            format!(
+                "line {}: `uses: {lookalike}` has no version comment (`# v1.2.3`) on its line",
+                line_of(FARM_CONNECT)
+            ),
+            format!("job build: exactly one step must use {FARM_CONNECT}"),
+        ]
     );
 }
 
@@ -205,9 +230,20 @@ fn the_triggers_are_every_pull_request_and_a_push_to_main() {
         ("  pull_request:\n", "  pull_request:\n    paths: [crates/**]\n"),
         ("    branches: [main]\n", "    branches: [main, dev]\n"),
         ("    branches: [main]\n", "    branches: main\n"),
-        ("    branches: [main]\n", "    branches: [main]\n    paths: [crates/**]\n"),
-        ("  push:\n    branches: [main]\n", "  push:\n    branches: [main]\n  workflow_dispatch:\n"),
-        ("on:\n  pull_request:\n  push:\n    branches: [main]\n", "on: [pull_request, push]\n"),
+        (
+            "    branches: [main]\n",
+            "    branches: [main]\n    paths: [crates/**]\n",
+        ),
+        (
+            "  push:\n    branches: [main]\n",
+            "  push:\n    branches: [main]\n  workflow_dispatch:\n",
+        ),
+        (
+            "on:\n  pull_request:\n  push:\n    branches: [main]\n",
+            "on: [pull_request, push]\n",
+        ),
+        ("    branches: [main]\n", "    branches: [dev]\n"),
+        ("    branches: [main]\n", "    tags: [main]\n"),
     ];
     for (from, to) in cases {
         assert_eq!(problems_with(from, to), [ON_PROBLEM], "{to}");

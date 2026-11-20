@@ -9,7 +9,7 @@ request from a branch of this repository, and no check of it is required.
 
 ## Status
 
-The buildrules commit `.buckconfig` pins (v0.0.76) cannot yet analyse this workspace: two gaps of
+The buildrules commit `.buckconfig` pins (2391d31, release v0.0.76) cannot yet analyse this workspace: two gaps of
 its Rust rules, komira-ai/buildrules#160 items 1 and 2, fail every target at load. Until a
 buildrules release has them, `farm.yml` is red at that step. That changes nothing for a pull
 request, which ci.yml gates. The numbers below were measured with those two changes applied. Each
@@ -92,9 +92,9 @@ Read the summary line: `local` must be 0.
 
 ## How the job reaches the farm
 
-The farm is on a private network. komira's farm-connect action, pinned by commit, joins it as
-`tag:ci` with the job's OIDC token (workload identity federation: no secret is stored), refuses to
-go on unless the farm answers, and writes the farm's buckconfig under `~/.buckconfig.d`, where buck2
+The farm is on a private network. komira's farm-connect action, pinned by commit, joins it with
+the job's OIDC token (workload identity federation: no secret is stored), refuses to
+go on unless the farm answers (it masks the address in the log), and writes the farm's buckconfig under `~/.buckconfig.d`, where buck2
 reads it. Its inputs are the organisation's variables `TS_CLIENT_ID` and `TS_AUDIENCE` (the tailnet
 identity), `FARM_ADDRESS`, `FARM_INSTANCE`, `FARM_LINUX_X86_64_PROPERTIES` and `FARM_TLS`.
 farm-connect writes the worker property set under `[komira_re]`; `.buckconfig` hands it to
@@ -104,9 +104,14 @@ and holds no value of its own.
 That join is why the job holds `id-token: write` on a pull request, the one job of a pull-request
 workflow that may (AGENTS.md, B10 of this repository). The workflow lint
 (`crates/xtask/tests/workflows/farm.rs`) holds it to: exactly that scope and `contents: read`;
-the exact `if:` that skips a fork's pull request and Dependabot's; farm-connect's inputs exactly
+the exact `if:` that skips a fork's pull request (which gets no OIDC token) and Dependabot's; farm-connect's inputs exactly
 the variables above; a build of `//:ci` followed by the `local: 0` check; and the triggers, one
-job and one runner.
+job and one runner. It does not fix the job's other steps, each of which could ask for the token:
+a change to them is reviewed like any change to a workflow.
+
+A pull request's build and a build of `main` share the farm's action cache, as every build of
+every repository on the farm does: a result one writes, the other reads. The farm's cache is
+keyed by the action's digest, so a result is reused only for byte-identical inputs and command.
 
 ## Measured
 

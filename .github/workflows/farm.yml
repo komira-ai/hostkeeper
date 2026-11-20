@@ -10,7 +10,7 @@
 # red and blocks nothing; a fix to the farm itself is built and tested by ci.yml alone.
 #
 # The farm is reached through komira's farm-connect action, pinned by commit (komira tags no
-# release of it). It joins the farm's private network as `tag:ci` with this job's OIDC token
+# release of it). It joins the farm's private network with this job's OIDC token
 # (workload identity federation: the farm trusts a token GitHub issues to this repository, and
 # nothing is stored), refuses to go on unless the farm answers, and writes the farm's buckconfig
 # under ~/.buckconfig.d. Its inputs are the organisation's variables TS_CLIENT_ID and TS_AUDIENCE
@@ -18,8 +18,8 @@
 # this repository holds no endpoint and no worker property set. That is why the one job holds
 # `id-token: write` on a pull request, which the workflow lint allows to this job alone, under its
 # exact `if:` (crates/xtask/tests/workflows/farm.rs): a push to main, or a pull request from a
-# branch of this repository that is not Dependabot's. A fork's pull request gets neither the token
-# nor the variables, and is skipped.
+# branch of this repository that is not Dependabot's. A fork's pull request gets no OIDC token, and
+# is skipped.
 #
 # buck2 is the release buildrules is tested with (its tools/buck2), restored from the actions
 # cache or downloaded, and installed by `cargo xtask install-tool` only once its SHA-256 matches.

@@ -589,6 +589,7 @@ fn every_pinned_download_of_the_repository_is_held_to_the_rule() {
         "ci.yml test-shard cargo-llvm-cov.tar.gz",
         "ci.yml test-shard cargo-nextest.tar.gz",
         "ci.yml coverage cargo-llvm-cov.tar.gz",
+        "farm.yml build buck2.zst",
         "net-install.yml net-install nfpm.tar.gz",
         "net-install.yml net-install gh.tar.gz",
         "net-install.yml net-install-arm64 gh.tar.gz",
