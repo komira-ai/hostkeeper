@@ -45,6 +45,18 @@ const MODE_EXEC: u32 = 0o755;
 /// Mode of the other files.
 const MODE_FILE: u32 = 0o644;
 
+/// How the `verify` step of a version of the fixture ends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Verify {
+    /// It asks every port of the new release, and succeeds when each serves the new version.
+    Serves,
+    /// It fails (`tierstore_like_fail_verify`): the daemon runs the hook's `rollback`.
+    Fails,
+    /// It halts (`tierstore_like_halt_verify`, exit 76): the daemon runs no step more and holds
+    /// a halt of the service, and the coordinator halts the service.
+    Halts,
+}
+
 /// One version of the fixture service.
 #[derive(Clone, Copy, Debug)]
 pub struct FixtureVersion {
@@ -53,8 +65,8 @@ pub struct FixtureVersion {
     /// The ports of the two run instances (each version of a scenario has its own pair, so the
     /// old and the new release can run side by side during the cutover).
     pub ports: [u16; 2],
-    /// Whether this version's `verify` step fails (`tierstore_like_fail_verify`).
-    pub fail_verify: bool,
+    /// How this version's `verify` step ends.
+    pub verify: Verify,
 }
 
 /// A built package and what an order for it needs.
@@ -167,7 +179,11 @@ impl PackageBuilder {
                 ),
                 (
                     "tierstore_like_fail_verify".to_owned(),
-                    aptrepo::flag(version.fail_verify),
+                    aptrepo::flag(version.verify == Verify::Fails),
+                ),
+                (
+                    "tierstore_like_halt_verify".to_owned(),
+                    aptrepo::flag(version.verify == Verify::Halts),
                 ),
             ]
             .into_iter()

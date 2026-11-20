@@ -2,7 +2,7 @@
 //! tests do not depend on each other or on their order.
 //!
 //! [`Scenario::start`] brings up the whole rig: the host root and the host's fixed paths, the
-//! apt repository with the three fixture versions published and the host's entry of it, the
+//! apt repository with the four fixture versions published and the host's entry of it, the
 //! coordinator in process, the daemon under a `Type=notify` unit, and the daemon's enrollment
 //! approved. [`Scenario::installed`] then has the coordinator install `1.0.0` (an `install`
 //! order, the hooked path with no previous release), and [`Scenario::updated`] goes on to `1.1.0`
@@ -19,7 +19,7 @@ use serde_json::Value;
 use super::aptrepo::{AptRepo, REGISTRY_NAME};
 use super::coordinator::CoordinatorHandle;
 use super::host_root::{DaemonUnit, HostRoot};
-use super::package::{BuiltPackage, FixtureVersion, PackageBuilder};
+use super::package::{BuiltPackage, FixtureVersion, PackageBuilder, Verify};
 use super::{FIXTURE_BINARY, HOST_ID, HeldPort, ROLE, SERVICE, served_version, wait_for};
 
 /// The first release.
@@ -28,6 +28,9 @@ pub const V1: &str = "1.0.0";
 pub const V2: &str = "1.1.0";
 /// An update whose `verify` fails.
 pub const V3: &str = "1.2.0";
+/// An update whose `verify` halts, after its `cutover` has started it and stopped the release
+/// before.
+pub const V4: &str = "1.3.0";
 
 /// Tries for a state reached through the coordinator: its quiet start (30 seconds, a floor), the
 /// enrollment and a heartbeat per order or report, at a pause of half a second per try.
@@ -115,14 +118,19 @@ impl Scenario {
         host.install_repository(&repo);
 
         let builder = PackageBuilder::new(&host.records(), Path::new(FIXTURE_BINARY));
-        let versions = [(V1, false), (V2, false), (V3, true)];
+        let versions = [
+            (V1, Verify::Serves),
+            (V2, Verify::Serves),
+            (V3, Verify::Fails),
+            (V4, Verify::Halts),
+        ];
         let mut packages = BTreeMap::new();
         let (ports, pairs) = held_pairs(versions.len());
-        for ((version, fail_verify), ports) in versions.into_iter().zip(pairs) {
+        for ((version, verify), ports) in versions.into_iter().zip(pairs) {
             let fixture = FixtureVersion {
                 version,
                 ports,
-                fail_verify,
+                verify,
             };
             packages.insert(version, builder.build(&fixture, &repo));
         }
