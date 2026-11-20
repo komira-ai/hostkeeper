@@ -136,8 +136,8 @@ fn other_updates_are_due_only_under_scope_all() {
         all.due[6],
         linux_item(
             "vim-tiny",
-            "2:9.1.0016-1ubuntu7.2",
-            "2:9.1.0016-1ubuntu7.3",
+            "2:9.1-1ubuntu7.2",
+            "2:9.1-1ubuntu7.3",
             false,
             false
         )
