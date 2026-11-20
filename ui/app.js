@@ -24,6 +24,7 @@ import * as audit from "./pages/audit.js";
 import * as users from "./pages/users.js";
 import * as tokens from "./pages/tokens.js";
 import * as desktop from "./pages/desktop.js";
+import * as maintenance from "./pages/maintenance.js";
 
 // The side menu: groups of pages, each `[name, title, module, glyph]`. The page's `name` is the
 // name of its button (`page-<name>`); `glyph` names its icon (`view.js`), which is all the collapsed
@@ -34,6 +35,7 @@ const GROUPS = [
     ["packages", "Packages", packages, "packages"],
     ["inventory", "Inventory", inventory, "inventory"],
     ["enrollment", "Enrollment", enrollment, "enrollment"],
+    ["maintenance", "Maintenance", maintenance, "maintenance"],
   ]],
 ];
 // The pages of Settings, reached from the entry at the bottom of the menu and from the tabs above
