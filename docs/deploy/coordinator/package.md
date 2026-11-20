@@ -164,6 +164,13 @@ site's `https://xcodereleases.com/data.json`, which the coordinator reads once a
 newer than any its Xcode store holds exists ([xcode-releases.md](../../operations/xcode-releases.md)); a URL
 that is not `https://`, or names no file, is refused at start. The coordinator reads no third party unless the key is set.
 
+`xcode-dir` (absent: no store) is a directory, which must exist, where the coordinator keeps the Xcode
+archives an operator pushes to it, exactly as Apple ships them, for its own Macs to read; the coordinator
+does not make it and does not start when it is missing or is not a directory. It must be writable by the
+unit: under `/var/lib/hostkeeper-coordinator`, which the unit may write, as in the template's example. With
+several coordinators, every instance mounts the same directory. `xcode-max-bytes` (21474836480, 20 GiB; at
+least 1) is the most bytes of one archive ([xcode-releases.md](../../operations/xcode-releases.md)).
+
 ## Starting it
 
 ```sh

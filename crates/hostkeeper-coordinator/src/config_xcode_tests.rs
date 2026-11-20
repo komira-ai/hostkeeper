@@ -59,3 +59,41 @@ fn a_url_that_is_not_https_or_names_no_file_is_refused() {
         assert!(refused.to_string().contains(text), "{refused}");
     }
 }
+
+/// Proves: without `--xcode-dir` there is no directory (so no store), and with it the flag is the
+/// path given.
+///
+/// Catches: a default directory that opens a store on every coordinator.
+#[test]
+fn the_store_is_opened_only_where_a_directory_is_given() {
+    let flags = Flags::try_parse_from(["serve"]).expect("the flags parse");
+    assert_eq!(flags.xcode.xcode_dir, None);
+    let flags =
+        Flags::try_parse_from(["serve", "--xcode-dir", "/srv/xcode"]).expect("the flags parse");
+    assert_eq!(flags.xcode.xcode_dir, Some(PathBuf::from("/srv/xcode")));
+}
+
+/// Proves: `--xcode-max-bytes` is the store's default (20 GiB) when it is not given, a value
+/// given is that value, and 0, which would refuse every archive, is refused with the flag's name.
+///
+/// Catches: a default that differs from the store's, and a limit of 0 that starts.
+#[test]
+fn the_most_bytes_of_an_archive_defaults_to_the_stores_and_is_at_least_one() {
+    let flags = Flags::try_parse_from(["serve"]).expect("the flags parse");
+    assert_eq!(flags.xcode.xcode_max_bytes, DEFAULT_MAX_BYTES);
+    let flags =
+        Flags::try_parse_from(["serve", "--xcode-max-bytes", "1"]).expect("the flags parse");
+    assert_eq!(flags.xcode.xcode_max_bytes, 1);
+    let flags =
+        Flags::try_parse_from(["serve", "--xcode-max-bytes=64424509440"]).expect("the flags parse");
+    assert_eq!(flags.xcode.xcode_max_bytes, 64_424_509_440);
+    for text in ["0", "-1", "many"] {
+        let refused = Flags::try_parse_from(["serve", &format!("--xcode-max-bytes={text}")])
+            .expect_err("the limit is refused");
+        assert_eq!(refused.kind(), ErrorKind::ValueValidation, "{text}");
+        assert!(
+            refused.to_string().contains("--xcode-max-bytes"),
+            "{refused}"
+        );
+    }
+}
