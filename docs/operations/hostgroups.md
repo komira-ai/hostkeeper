@@ -457,6 +457,7 @@ version, and the `targets` of the release).
 | `max_updating` | the whole stage | 0 to 10000; 0 holds the group; a number caps the hosts updating one package at once |
 | `min_up` | 0 | 0 to 10000 |
 | `live_rollouts` | the coordinator's `--live-rollouts` | 1 to 16; can only lower the coordinator's number |
+| `maintenance` | every key at its default | the keys of [Maintenance](#maintenance) below |
 
 A key left out takes its default. Each package of the group rolls by this one policy: its stages
 are computed over the group's eligible hosts, `max_updating` caps the group's hosts updating that
@@ -467,6 +468,26 @@ and the others queue in the order their versions were set. `rollout_elsewhere` n
 that hold the place. A group that stored a `max_updating` of 1 before this default changed wrote
 nothing, so it now has no cap; set 1 to cap it. The plan, the canary, the bake, the failed-host
 rules and `--live-rollouts` are otherwise as [rollout-plans.md](rollout-plans.md) says.
+
+### Maintenance
+
+`maintenance` holds the keys a group keeps for its hosts' maintenance. A key left out takes its default.
+
+| Key | Default | Range |
+|---|---|---|
+| `xcode_keep` | 0 | 0 to 4; how many of the newest Xcode releases the group's Macs keep; 0 leaves Xcode alone |
+| `xcode_default` | `latest` | `latest`, or a version of 1 to 3 numbers of 1 to 4 digits joined by dots (`26.1.1`); a version needs an `xcode_keep` of at least 1 |
+| `macos_major` | false | true or false |
+| `linux_scope` | `LINUX_SCOPE_SECURITY` | `LINUX_SCOPE_SECURITY` (security updates and the kernel; `LINUX_SCOPE_UNSPECIFIED` reads as it) or `LINUX_SCOPE_ALL` (every update) |
+| `batch` | 1 | 1 to 10000 |
+| `min_serving` | 1 | 0 to 10000 |
+| `drain_deadline_secs` | 0 (none) | any number of seconds |
+| `return_secs` | 0 (1200 for a Linux host, 3600 for a Mac) | 0, or 60 to 86400 |
+
+A value out of range is refused `invalid_policy`, and the log names the key, `maintenance`, and why.
+`Get` and `List` answer the table with every key named, a default included. A `Put` replaces the group
+whole, so a `Put` that leaves `maintenance` out sets every key back to its default. No maintenance run
+reads these keys yet.
 
 ## Incidents are per host and per group
 

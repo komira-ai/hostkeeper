@@ -791,6 +791,7 @@ fn the_json_of_a_put_reads_into_the_request_and_an_unknown_key_is_refused() {
                 max_updating: Some(0),
                 min_up: 0,
                 live_rollouts: None,
+                maintenance: None,
             }),
         }),
         if_generation: Some(4),
