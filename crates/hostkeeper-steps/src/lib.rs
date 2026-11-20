@@ -26,6 +26,9 @@
 //! - [`force`] is the journal of a hookless `force` ([`ForceRecord`]), an optional field of the
 //!   step record; a force that stops a running update flags its record `forced`, and the runner
 //!   then closes it `forced_over` and launches nothing more.
+//! - [`maintenance`] is the run record of a host's turn of a maintenance run and the pure state
+//!   machine of that turn (stage, drain, apply with its reboots, check, put back): what the
+//!   sequencer of a `maintain` order keeps and follows (docs/design/maintenance-updates.md, 5.2).
 //! - [`SystemdLauncher`] is the [`StepLauncher`] of the host: one transient systemd unit per
 //!   step, with `RuntimeMaxSec=` and nothing else (a tool run is offline unless a fetch, and may
 //!   be confined to listed paths, [`StepLauncher::run_tool`]); [`capture`] bounds what is kept of a hook's output.
@@ -41,6 +44,7 @@ pub mod deadman;
 pub mod force;
 pub mod handover;
 pub mod launcher;
+pub mod maintenance;
 mod order_util;
 pub mod prune;
 pub mod reader;
