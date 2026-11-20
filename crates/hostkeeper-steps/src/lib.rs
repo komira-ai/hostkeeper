@@ -29,6 +29,10 @@
 //! - [`SystemdLauncher`] is the [`StepLauncher`] of the host: one transient systemd unit per
 //!   step, with `RuntimeMaxSec=` and nothing else (a tool run is offline unless a fetch, and may
 //!   be confined to listed paths, [`StepLauncher::run_tool`]); [`capture`] bounds what is kept of a hook's output.
+//! - [`run_maintenance_step`] runs one service's `drain` or `resume` of a maintenance run through
+//!   a [`StepLauncher`], bounded by a [`Bound`] the caller gives
+//!   ([`MaintenanceStep::default_bound`]: none for a `drain`, [`RESUME_BOUND_SECS`] for a
+//!   `resume`), and reads its end as a [`MaintenanceOutcome`] ([`maintenance`]).
 //!
 //! The crate names no service and reads no manifest: the runner is given the order and its
 //! bounds, and runs each step through the [`StepLauncher`] it is given.
@@ -41,6 +45,7 @@ pub mod deadman;
 pub mod force;
 pub mod handover;
 pub mod launcher;
+pub mod maintenance;
 mod order_util;
 pub mod prune;
 pub mod reader;
@@ -63,6 +68,10 @@ pub use force::{ForceFailure, ForcePhase, ForceRecord, ForceVerdict};
 pub use launcher::{
     AdditiveCall, BUILTIN_EXIT, Bound, LaunchError, StepCall, StepExit, StepLauncher, ToolCall,
     ToolExit, ToolNetwork,
+};
+pub use maintenance::{
+    MaintenanceCall, MaintenanceExit, MaintenanceOutcome, MaintenanceStep, RESUME_BOUND_SECS,
+    run_maintenance_step,
 };
 pub use order_util::PreviousHook;
 pub use prune::{

@@ -8,6 +8,7 @@ mod support_host;
 
 use std::ffi::OsString;
 use std::fs;
+use std::num::NonZeroU64;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixDatagram;
 use std::process::ExitCode;
@@ -19,6 +20,7 @@ use hostkeeper_daemon::start::{self, StartError};
 use hostkeeper_daemon::testing::{AdditiveFault, FakeNotifier, Log};
 use hostkeeper_daemon::{NoNotifier, ReadyNotifier, Refusal, SystemdNotifier};
 use hostkeeper_hook::Step;
+use hostkeeper_steps::Bound;
 use support::versions::hook_path;
 use support::{OWN, alerting, d, lines, manifest_with, name};
 use support_host::NativeHost;
@@ -82,7 +84,10 @@ fn the_boot_hook_runs_from_current_after_all_updates_and_before_ready() {
         ran[0].executable,
         current.join("tree").join(hook_path("alpha"))
     );
-    assert_eq!(ran[0].timeout_secs, 300);
+    assert_eq!(
+        ran[0].bound,
+        Bound::Secs(NonZeroU64::new(300).expect("nonzero"))
+    );
     // A package's hook is called with no arguments: its program is the whole command.
     assert!(ran[0].hook_args.is_empty(), "{:?}", ran[0].hook_args);
     let params = hostkeeper_hook::Params::parse(&ran[0].params).expect("the params file");

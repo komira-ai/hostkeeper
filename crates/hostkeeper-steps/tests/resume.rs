@@ -584,7 +584,7 @@ fn a_launcher_runs_no_additive_step_by_default() {
         params: Path::new("/state/svc/params.toml"),
         executable: Path::new("/packages/svc/1.0.0/hook"),
         unit: "updater-svc-restore-0",
-        timeout_secs: 300,
+        bound: support::secs(300),
     };
     let Err(LaunchError::NoStart(why)) = rig.fake.run_additive(&call) else {
         panic!("refused")
