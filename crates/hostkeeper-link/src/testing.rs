@@ -19,13 +19,13 @@ use crate::heartbeater::{DEFAULT_HEARTBEAT_SECS, Heartbeater, LoopConfig, Ports}
 use crate::host_facts::PushedFacts;
 use crate::host_ssh::{PushedSsh, SshReport};
 use crate::operator_keys::{KeysReport, PushedKeys};
-use crate::order::{Order, OrderRef, OrderResult, Outcome, Reply};
+use crate::order::{MaintainOrder, Order, OrderRef, OrderResult, Outcome, Reply};
 use crate::ports::{
     BmcSource, CertSource, CertState, ClientIdentity, CoordinatorLink, Dispatch, FactsSink,
-    HeldHalt, HeldHalts, Job, LinkError, Log, MaintenanceSource, Observation, OperatorKeysSink,
-    OrderSink, PrerequisitesSink, RecordedService, RemoteLoginProbeSource, RenewalSource,
-    RepositorySink, ServiceObserver, ServiceRecords, Sleeper, SshSink, Tick, TrustedRootSource,
-    UnixClock,
+    HeldHalt, HeldHalts, Job, LinkError, Log, MaintainSink, MaintenanceSource, Observation,
+    OperatorKeysSink, OrderSink, PrerequisitesSink, RecordedService, RemoteLoginProbeSource,
+    RenewalSource, RepositorySink, ServiceObserver, ServiceRecords, Sleeper, SshSink, Tick,
+    TrustedRootSource, UnixClock,
 };
 use crate::prerequisites::{PrerequisitesReport, PushedPrerequisites};
 use crate::probe::RemoteLoginProbe;
@@ -555,6 +555,25 @@ impl MaintenanceSource for FakeMaintenance {
     }
 }
 
+/// The daemon's runner of `maintain` orders, as a test sees it: it records every order it is given.
+#[derive(Default)]
+pub struct FakeMaintain {
+    given: Mutex<Vec<MaintainOrder>>,
+}
+
+impl FakeMaintain {
+    /// The orders the loop gave, oldest first.
+    pub fn given(&self) -> Vec<MaintainOrder> {
+        lock(&self.given).clone()
+    }
+}
+
+impl MaintainSink for FakeMaintain {
+    fn maintain(&self, order: &MaintainOrder) {
+        lock(&self.given).push(order.clone());
+    }
+}
+
 /// The host's repository configuration, as a test sets it: it holds the report a test gives it,
 /// records every set it is given, and lists the installers a test gives it.
 #[derive(Default)]
@@ -791,8 +810,9 @@ pub struct World {
     pub prerequisites: Arc<FakePrerequisites>,
     keeping_prerequisites: bool,
     /// The host's maintenance facts; the ports hold them only after
-    /// [`World::keeping_maintenance`].
+    /// [`World::keeping_maintenance`], with [`World::maintain`], its runner of `maintain` orders.
     pub maintenance: Arc<FakeMaintenance>,
+    pub maintain: Arc<FakeMaintain>,
     keeping_maintenance: bool,
 }
 
@@ -833,6 +853,7 @@ impl World {
             prerequisites: Arc::default(),
             keeping_prerequisites: false,
             maintenance: Arc::default(),
+            maintain: Arc::default(),
             keeping_maintenance: false,
         }
     }
@@ -929,6 +950,9 @@ impl World {
             maintenance: self
                 .keeping_maintenance
                 .then(|| Arc::clone(&self.maintenance) as Arc<dyn MaintenanceSource>),
+            maintain: self
+                .keeping_maintenance
+                .then(|| Arc::clone(&self.maintain) as Arc<dyn MaintainSink>),
         }
     }
 

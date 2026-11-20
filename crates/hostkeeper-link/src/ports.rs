@@ -18,7 +18,7 @@ use crate::host_facts::PushedFacts;
 use crate::host_ssh::{PushedSsh, SshReport};
 use crate::names::Reason;
 use crate::operator_keys::{KeysReport, PushedKeys};
-use crate::order::{Order, OrderRef, OrderResult, Reply};
+use crate::order::{MaintainOrder, Order, OrderRef, OrderResult, Reply};
 use crate::prerequisites::{PrerequisitesReport, PushedPrerequisites};
 use crate::probe::RemoteLoginProbe;
 use crate::repositories::{PushedSet, RepositoriesReport};
@@ -310,6 +310,15 @@ pub trait SshSink: Send + Sync {
 
     /// Sets sshd up as `access` says. It says nothing back: the next report does.
     fn apply(&self, access: &PushedSsh);
+}
+
+/// The daemon's runner of `maintain` orders (docs/design/maintenance-updates.md, sections 5.2 to
+/// 5.7). The loop calls it on a worker of its [`Dispatch`], once per reply that carries the order,
+/// so a resend of an order the daemon already holds is given again: the daemon recognises it by
+/// its id and try and starts nothing twice. It answers nothing: how the host's turn goes is the
+/// run state of the maintenance report ([`MaintenanceSource`]).
+pub trait MaintainSink: Send + Sync {
+    fn maintain(&self, order: &MaintainOrder);
 }
 
 /// What the daemon last found of the host's maintenance (`maintenance-v1`): what runs, what is

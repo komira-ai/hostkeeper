@@ -1,12 +1,15 @@
-//! The daemon behind six ports of the heartbeat loop (`hostkeeper_link`): the executor, the
+//! The daemon behind seven ports of the heartbeat loop (`hostkeeper_link`): the executor, the
 //! held halts, the installed services, the service observer, the enrollment loop's word on the
-//! certificate and the report of the Sigstore trusted root.
+//! certificate, the report of the Sigstore trusted root and the runner of `maintain` orders.
 //!
 //! [`DaemonOrders`] is the loop's [`OrderSink`]: it writes the loop's order (an update, a forced
 //! update, an install, an uninstall, an abort or a clear-record) as the protobuf `Order` that
 //! [`Daemon::order`] takes ([`wire_order`]), and reads the daemon's [`Reply`] as the verdict the loop reports
 //! ([`order_result`]). It decides nothing about the order: the checks, the locks and the try
 //! rules are the daemon's.
+//!
+//! [`DaemonMaintain`] is the loop's [`MaintainSink`]: a `maintain` order, as the protobuf `Order`
+//! [`Daemon::order`] takes.
 //!
 //! [`DaemonHalts`] is the loop's [`HeldHalts`] over the very store the executor reads
 //! ([`crate::executor::Ctx::halts`]): each generation of a reply goes to
@@ -32,9 +35,10 @@ use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_enroll::RenewalState;
 use hostkeeper_hook::{Class, Phase, Verdict};
 use hostkeeper_link::{
-    Drift, Health, HeldHalt, HeldHalts, Liveness, Observation, Order, OrderId, OrderRef,
-    OrderResult, OrderSink, Outcome, Reason, RecordedService, Renewal, RenewalSource,
-    ServiceObserver, ServiceRecords, Target, TrustedRootFacts, TrustedRootSource, Verb,
+    Drift, Health, HeldHalt, HeldHalts, Liveness, MaintainOrder, MaintainSink, Observation, Order,
+    OrderId, OrderRef, OrderResult, OrderSink, Outcome, Reason, RecordedService, Renewal,
+    RenewalSource, ServiceObserver, ServiceRecords, Target, TrustedRootFacts, TrustedRootSource,
+    Verb,
 };
 use hostkeeper_observe::{ServiceState, VersionView, beat_health};
 use hostkeeper_proto::hostkeeper::agent::v1 as wire;
@@ -46,6 +50,40 @@ use crate::installed::{self, CURRENT};
 use crate::observer;
 use crate::refusal::Refusal;
 use crate::verbs::force::SELF_SERVICE;
+
+/// The runner of `maintain` orders over the daemon: each order the loop gives it is run by
+/// [`Daemon::order`] (`verbs::maintain`), on the loop's worker, to the turn's end or a wait for a
+/// reboot. The answer goes to the daemon's log only, but for a resend's: how the turn goes is the run state of the
+/// maintenance report ([`crate::maintenance_state::RunReported`]).
+pub struct DaemonMaintain {
+    daemon: Arc<Daemon>,
+}
+
+impl DaemonMaintain {
+    pub fn new(daemon: Arc<Daemon>) -> DaemonMaintain {
+        DaemonMaintain { daemon }
+    }
+}
+
+impl MaintainSink for DaemonMaintain {
+    fn maintain(&self, order: &MaintainOrder) {
+        let maintain = wire::Order {
+            order_id: order.id.as_str().to_owned(),
+            r#try: order.order_try,
+            verb: Some(wire::order::Verb::Maintain(order.maintain.clone())),
+        };
+        let reply = self.daemon.order(&maintain);
+        // A resend is answered `Running` while the turn runs or waits, and from the record once
+        // it ended: neither says anything new.
+        if !matches!(reply, Reply::Running | Reply::Finished { resent: true, .. }) {
+            self.daemon.ctx().log(&format!(
+                "maintain order {} try {}: {reply:?}",
+                order.id.as_str(),
+                order.order_try
+            ));
+        }
+    }
+}
 
 /// The most bytes of a verdict's `detail` (`UpdateResult.detail` of `hostkeeper.agent.v1`).
 pub const MAX_DETAIL: usize = 512;
