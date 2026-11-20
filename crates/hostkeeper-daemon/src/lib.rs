@@ -94,7 +94,12 @@
 //! - [`observer`]: what [`Daemon::status`] reports of a running service.
 //! - [`node`]: the host's enrollment and the heartbeat loop's link, as the loops last wrote them,
 //!   which [`Daemon::status`] reports besides the services.
-//! - [`cli`]: `hostkeeper daemon` and its flags; the binary only forwards to it.
+//! - [`cli`]: `hostkeeper daemon` and its flags, and `hostkeeper maintenance-hook`; the binary
+//!   only forwards to it.
+//! - [`maintenance_hook`]: `hostkeeper maintenance-hook <prepare|cutover|verify>`, the OS work of
+//!   a maintenance run: the parameters of the run's `maintain` order, the work of each kind
+//!   (`macos`, `xcode`, `linux`, `reboot`) found by the host's platform, and the reboot recorded
+//!   in the run record before it is asked for.
 //! - [`stamp`]: the version `hostkeeper --version` prints, with the commit of a release build.
 //! - [`refusal`]: the closed set of reason tokens.
 //! - [`link_adapters`]: the daemon as the executor, the held halts, the installed services and
@@ -155,6 +160,7 @@ pub mod maintenance_collect;
 pub mod maintenance_collectors;
 pub mod maintenance_dnf;
 pub mod maintenance_facts;
+pub mod maintenance_hook;
 pub mod maintenance_host;
 pub mod maintenance_own;
 pub mod maintenance_reboot;
