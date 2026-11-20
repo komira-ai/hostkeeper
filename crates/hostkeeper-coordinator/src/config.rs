@@ -286,6 +286,9 @@ pub struct Serve {
     /// The pool, the instance's row and the migrations of the database.
     #[command(flatten)]
     pub database: DatabaseFlags,
+    /// The list of Xcode releases the coordinator reads.
+    #[command(flatten)]
+    pub xcode: crate::config_xcode::XcodeFlags,
     /// The allow-list of CI's OIDC token: a TOML file with a `[remote_operator]` table. Its
     /// issuer, audience, event and runner rules apply to every token; its entries are also each
     /// package's trusted publishers until an operator changes the package's list in the state.
@@ -660,6 +663,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         );
     coordinator = state::with_initial_admin(coordinator, flags, database.as_ref())?;
     coordinator = state::with_login(coordinator, flags, database.as_ref())?;
+    coordinator = state::with_xcode(coordinator, flags, database.as_ref());
     coordinator = ssh::attach(coordinator, flags, ledger, book, &os_random())?;
     let store = match (&flags.enrollment_dir, records) {
         (Some(dir), _) => Some(StoreAt::Dir(dir)),

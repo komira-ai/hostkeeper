@@ -91,7 +91,7 @@ fn an_audit_line_keeps_the_api_token_it_was_made_with() {
 /// Proves: the release before (migrations `0001` to `0026`) runs on a database this release
 /// migrated, running nothing, and a line written as it writes one (its columns, no `api_token`)
 /// holds NULL, which this release reads as no token; this release, started on a database the
-/// release before migrated, runs `0027` alone.
+/// release before migrated, runs `0027`, and `0028` after it.
 ///
 /// Catches: a `0027` that is not `may-run`, which would turn a rollback into a restore; a column
 /// the release before's insert must name (a `NOT NULL` without a default); and a line of the
@@ -132,7 +132,7 @@ fn the_release_before_runs_on_a_database_with_0027_and_this_one_on_its() {
     store.stop();
     assert_eq!(
         old.rows("SELECT version FROM schema_version WHERE version > 26"),
-        [vec![Some("27".to_owned())]],
-        "0027 alone ran"
+        [vec![Some("27".to_owned())], vec![Some("28".to_owned())]],
+        "0027 ran, and 0028 after it"
     );
 }

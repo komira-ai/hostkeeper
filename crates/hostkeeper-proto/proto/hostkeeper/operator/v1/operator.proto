@@ -1517,6 +1517,12 @@ enum AlertKind {
   // with its failures in a row, its next try and its reason. One alert for each host, listed
   // while the host's last report holds a failed state. Log token `prerequisite_failed`.
   ALERT_KIND_PREREQUISITE_FAILED = 16;
+  // The list of Xcode releases the coordinator reads once a day (`--xcode-feed-url`) lists a
+  // release (not a beta, not a release candidate) newer than any its Xcode store holds. The
+  // message names its version, its build and the macOS it requires. One alert, listed until the
+  // store holds that release or a newer one; its `version` is the release's version. Log token
+  // `xcode_release_waiting`.
+  ALERT_KIND_XCODE_RELEASE_WAITING = 17;
 }
 
 // How soon an `Alert` needs a person.
