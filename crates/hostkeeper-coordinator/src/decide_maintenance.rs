@@ -35,7 +35,7 @@
 //!
 //! A host that passes every rule and whose turn holds `macos` is then read against its last kept
 //! report ([`crate::maintenance_mac::macos_skip`]): when it may not be ordered `macos`
-//! (`mdm_conflict`, `no_update_account`, `filevault_not_ready`), it is sent nothing at this
+//! (`mdm_conflict`, `no_update_account`, `filevault_not_ready`), it is sent no `maintain` at this
 //! heartbeat ([`Verdict::Skip`]), and the caller stores why on its turn: without `macos`, the turn
 //! waits for its other kinds, which a later heartbeat starts; with only `macos`, the turn ends
 //! skipped. A host's other kinds are never held back by these rules.
@@ -123,8 +123,9 @@ pub(crate) enum Verdict {
     Waits(Hold),
     /// Start the host's turn: send it the order and store its step as staging.
     Start(Ordered),
-    /// The host's turn holds `macos`, which its report says it may not be ordered: send it
-    /// nothing, and store why on its turn.
+    /// The host's turn holds `macos`, which its report says it may not be ordered: send it no
+    /// `maintain`, and store why on its turn; packages are decided as ever, since the host is in
+    /// no turn.
     Skip(Skipping),
 }
 

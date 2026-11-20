@@ -92,7 +92,8 @@ struct Seen {
     /// the host's group allows one ([`maintenance_mac::counts_as_due`]).
     due: Vec<Kind>,
     /// Why the kept report keeps the host from being ordered `macos`
-    /// ([`maintenance_mac::macos_skip`]).
+    /// ([`maintenance_mac::macos_skip`]): read only when `macos` is due, so a Linux host's
+    /// `no_update_account` (it reports no Mac facts) is never used.
     macos_skip: Option<Skip>,
 }
 
