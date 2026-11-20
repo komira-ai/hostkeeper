@@ -10,6 +10,7 @@ mod support_maintenance;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+use hostkeeper_daemon::cli::DEFAULT_PACKAGE_LOCK_WAIT_SECS;
 use hostkeeper_daemon::maintenance_collect::{Collector, Look, Section, linux_item, reboot_item};
 use hostkeeper_daemon::maintenance_hook::linux::{
     self, LinuxCheck, REASON_FACTS_UNREADABLE, REASON_HEALTH_UNREADABLE, REASON_KERNEL_NOT_NEWEST,
@@ -230,6 +231,7 @@ fn an_updated_rebooted_and_healthy_host_passes_verify_with_exit_0() {
     let args = HookArgs {
         step: HookStep::Verify,
         params: PathBuf::from("-"),
+        package_lock_wait_secs: DEFAULT_PACKAGE_LOCK_WAIT_SECS,
     };
     let json = format!(
         r#"{{"runId":"{RUN}","action":"MAINTAIN_ACTION_RUN","kinds":["MAINTENANCE_KIND_REBOOT","MAINTENANCE_KIND_LINUX"],"linuxScope":"LINUX_SCOPE_ALL"}}"#
