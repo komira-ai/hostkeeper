@@ -394,11 +394,40 @@ impl CoordinatorHandle {
         );
     }
 
-    /// Forces `service` to `version` on the host `host_id` at once, with no hook.
-    pub fn force(&self, service: &str, version: &str, host_id: &str) {
+    /// Forces `service` to `version` on the host `host_id` at once, with no hook; a pair an
+    /// operator holds is skipped. The reply is the call's: its audit `entries`, the `held` hosts
+    /// it skipped and the number of hosts it `targeted`.
+    pub fn force(&self, service: &str, version: &str, host_id: &str) -> Value {
         must(
             "releases force",
-            self.api.force(service, version, host_id, "privileged test"),
+            self.api
+                .force(service, version, host_id, "privileged test", false),
+        )
+    }
+
+    /// [`CoordinatorHandle::force`] with `include_held`: the host is ordered also while an operator
+    /// holds the service on it.
+    pub fn force_including_held(&self, service: &str, version: &str, host_id: &str) -> Value {
+        must(
+            "releases force --include-held",
+            self.api
+                .force(service, version, host_id, "privileged test", true),
+        )
+    }
+
+    /// Marks `version` of `service` bad by hand, as `releases mark-bad` does.
+    pub fn mark_bad(&self, service: &str, version: &str, reason: &str) {
+        must(
+            "releases mark-bad",
+            self.api.mark_bad(service, version, reason),
+        );
+    }
+
+    /// Holds `service` on the host `host_id`, as `services hold --host` does.
+    pub fn hold_host(&self, service: &str, host_id: &str, reason: &str) {
+        must(
+            "services hold",
+            self.api.hold_host(service, host_id, reason),
         );
     }
 

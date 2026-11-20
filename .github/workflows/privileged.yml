@@ -14,7 +14,8 @@
 # real coordinator in process update a tierstore-shaped package, a .deb the daemon stages from a
 # signed apt repository the test builds on disk (the entry's pin and the repository's signature
 # checked, the tree extracted and sealed), installs with apt, switches and runs by its hook in
-# step units, roll it back on a failed verify, and force it back to the previous version with the
+# step units, roll it back on a failed verify, force it back past a halt its verify raised and a
+# bad mark (past a hold only with include_held), and force it back to the previous version with the
 # repository removed; in self_update_across_releases.rs, hostkeeper's update of itself from the
 # published release crates/hostkeeper-privileged/previous-release.toml pins to this build, with
 # the same coordinator, through its .deb from a loopback apt repository: the released daemon as
