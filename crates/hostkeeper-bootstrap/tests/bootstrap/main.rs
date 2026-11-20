@@ -8,3 +8,4 @@ mod run;
 mod settings;
 mod signer;
 mod support;
+mod update_account;

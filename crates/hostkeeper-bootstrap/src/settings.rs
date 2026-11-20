@@ -26,6 +26,12 @@
 //! refs          = ["refs/tags/*"]
 //! hosted_runner = true
 //!
+//! # The update account (crate::update_account): all four or none.
+//! update_account_name     = "hkupdate"
+//! update_account_password = "<its password>"
+//! admin_name              = "<the administrator made at Setup Assistant>"
+//! admin_password          = "<that administrator's password>"
+//!
 //! [bounds]
 //! fetch_timeout_secs     = 1800
 //! connect_timeout_secs   = 30
@@ -36,7 +42,8 @@
 //! retry_secs             = 30
 //! ```
 //!
-//! Every key but the first two has the default shown. The text a source holds is also made into
+//! Every key but the first two has the default shown, but the four keys of the update account,
+//! which have none and are given together or not at all ([`crate::update_account`]). The text a source holds is also made into
 //! the daemon's config ([`Settings::daemon_config`]) and parsed by the daemon's own loader, so a
 //! value the daemon would refuse stops the bootstrap before anything is downloaded.
 
@@ -46,6 +53,8 @@ use std::path::{Path, PathBuf};
 use hostkeeper_config::daemon::{ConfigError, DaemonConfig};
 use hostkeeper_config::trust::{TrustError, read_trusted};
 use serde::Deserialize;
+
+use crate::update_account::{self, UpdateAccountKeys};
 
 /// Where macOS writes the managed preferences of the domain `dev.hostkeeper.config`.
 pub const MANAGED_PREFERENCES: &str = "/Library/Managed Preferences/dev.hostkeeper.config.plist";
@@ -130,6 +139,8 @@ pub struct Settings {
     pub macos_pkg_signers: Vec<String>,
     pub trusted_signers: Signers,
     pub bounds: Bounds,
+    /// The update account and its administrator; `None` when the source names neither.
+    pub update_account: Option<UpdateAccountKeys>,
 }
 
 /// Why no settings could be made.
@@ -164,6 +175,9 @@ pub enum SettingsError {
     /// A required key is missing.
     #[error("{} has no {key}", path.display())]
     Missing { path: PathBuf, key: &'static str },
+    /// Some of the update account's four keys are given, and `key` is not.
+    #[error("{} has no {key}: the update account's four keys are given together or not at all", path.display())]
+    Incomplete { path: PathBuf, key: &'static str },
     /// A value breaks its rule.
     #[error("{} {key} {why}", path.display())]
     Invalid {
@@ -190,6 +204,12 @@ struct File {
     macos_pkg_signers: Option<Vec<String>>,
     trusted_signers: Option<SignersFile>,
     bounds: Option<BoundsFile>,
+    // Values, not strings: a value of another type is refused by its key's name alone, never by an
+    // error of the TOML reader, which would quote it.
+    update_account_name: Option<toml::Value>,
+    update_account_password: Option<toml::Value>,
+    admin_name: Option<toml::Value>,
+    admin_password: Option<toml::Value>,
 }
 
 #[derive(Deserialize)]
@@ -336,6 +356,15 @@ impl Settings {
             path: path.to_path_buf(),
             key: "ca_sha256",
         })?;
+        let update_account = update_account::keys(
+            path,
+            [
+                file.update_account_name,
+                file.update_account_password,
+                file.admin_name,
+                file.admin_password,
+            ],
+        )?;
         let team_id = file.team_id.unwrap_or_else(|| DEFAULT_TEAM_ID.to_owned());
         if !is_team_id(&team_id) {
             return Err(invalid(
@@ -391,6 +420,7 @@ impl Settings {
             macos_pkg_signers,
             trusted_signers: signers,
             bounds,
+            update_account,
         };
         DaemonConfig::parse(&settings.daemon_config()).map_err(|source| {
             SettingsError::DaemonConfig {

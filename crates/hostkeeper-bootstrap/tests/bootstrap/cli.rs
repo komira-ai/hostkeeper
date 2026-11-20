@@ -17,6 +17,7 @@ fn args(dir: &std::path::Path, settings: &str, more: &[&str]) -> Vec<OsString> {
         ("--config-dir", paths.config_dir.clone()),
         ("--staging-dir", paths.staging_dir.clone()),
         ("--installed-binary", paths.binary.clone()),
+        ("--update-account-file", paths.update_account.clone()),
     ] {
         all.push(flag.into());
         all.push(value.into());
@@ -48,6 +49,26 @@ fn flags_point_a_run_at_its_own_paths_and_it_exits_zero() {
     );
     assert_eq!(code(exit), status(0));
     assert!(exists(&dir.path().join("etc/hostkeeper/hostkeeper.toml")));
+}
+
+/// Catches `--update-account-file` being ignored: a run whose settings name the update account
+/// writes the file at the flag's path, byte for byte, and exits 0.
+#[test]
+fn the_update_account_file_flag_names_where_the_file_is_written() {
+    let dir = scratch("cli-account");
+    let keys = "update_account_name = \"hkupdate\"\nupdate_account_password = 'pw one'\nadmin_name = \"admin\"\nadmin_password = 'pw two'\n";
+    let world = World::good();
+    let args = args(dir.path(), keys, &[]);
+    let at = dir.path().join("Library/hostkeeper/update-account");
+    let given = args
+        .iter()
+        .position(|arg| arg == "--update-account-file")
+        .map(|flag| args[flag + 1].clone());
+    assert_eq!(given, Some(at.clone().into_os_string()));
+    let exit = execute(args, &world.repo, &world.tools, &world.pauses);
+    assert_eq!(code(exit), status(0));
+    assert_eq!(read(&at), "name=hkupdate\npassword=pw one\n");
+    assert_eq!(mode(&at), 0o600);
 }
 
 /// A run that gives up exits 1, so launchd starts the program again.
