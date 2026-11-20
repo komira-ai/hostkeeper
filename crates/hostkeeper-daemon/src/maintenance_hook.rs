@@ -34,9 +34,15 @@
 //!   applied after a reboot while the host still runs the boot that reboot was asked in, and
 //!   otherwise runs the kind's `verify`. A kind not in the run is not checked.
 //!
-//! **The run record.** A host keeps none yet ([`Unwired`]): a `cutover` there would install and
-//! then fail to record it, so [`host_main`] refuses the step first, before any kind runs, failing
-//! `run_record_failed` ([`unwired_record`]). `prepare` and `verify` are run as before.
+//! **The run record.** The record is the maintenance run record in the directory of the
+//! `--params` file ([`StoreRecord`]), where the daemon puts the parameters. With the parameters on
+//! standard input there is no such directory and the record is [`Unwired`]: a `cutover` there
+//! would install and then fail to record it, so [`host_main`] refuses the step first, before any
+//! kind runs, failing `run_record_failed` ([`unwired_record`]); `prepare` and `verify` run. The
+//! daemon's sequencer ([`crate::maintenance_run`]) launches `cutover` with the parameters of one
+//! kind at a time, and applies a kind whose reboot was under way itself once it reads a new boot
+//! id: it launches no `cutover` after the reboot, except on the same boot, to ask for the reboot
+//! again.
 //!
 //! **Outcome.** The exit code is the hook contract's: `0` done, `75` deferred (the kind touched
 //! nothing), `1` failed. The last line of standard output is the contract's JSON report: the
@@ -48,6 +54,7 @@ mod macos;
 mod params;
 mod ports;
 mod registry;
+mod store;
 
 use std::fs::File;
 use std::io::{self, Read, Write};
@@ -75,6 +82,8 @@ pub use macos::MacosKind;
 pub use params::{Kind, MAX_PARAMS_BYTES, MaintainParams, ParamsError};
 pub use ports::{KindState, RebootError, Rebooter, RecordError, RunRecord, Unwired};
 pub use registry::Registry;
+pub use store::StoreRecord;
+pub(crate) use store::record_kind;
 
 /// The `--params` that names standard input.
 pub const STDIN_PARAMS: &str = "-";
@@ -254,20 +263,22 @@ pub fn registry_for(platform: &Platform, lock_wait_secs: u64, own: &str) -> Regi
     }
 }
 
-/// The ending of a `cutover`, which a host with no run record ([`Unwired`]) refuses before any
-/// kind runs: failed `run_record_failed`, saying the host keeps no run record. `None` for the
-/// other steps.
+/// The ending of a `cutover`, which a hook with no run record ([`Unwired`]: its parameters on
+/// standard input) refuses before any kind runs: failed `run_record_failed`, saying the host keeps
+/// no run record. `None` for the other steps.
 pub fn unwired_record(step: HookStep) -> Option<Ending> {
     (step == HookStep::Cutover).then(|| record_failed(RecordError::NotWired))
 }
 
 /// `hostkeeper maintenance-hook` on this host: the kinds of its platform ([`registry_for`]), the
 /// boot id of the system the binary was built for, the platform's reboot ([`HostRebooter`]; none
-/// on a Mac) and no run record yet ([`Unwired`]), so a `cutover` is refused ([`unwired_record`])
-/// before its parameters are read; the parameters from the file `args` names or from the
-/// process's standard input, the report to its standard output.
+/// on a Mac) and the run record beside the parameters file ([`StoreRecord::beside_params`]); with
+/// the parameters on standard input there is no record ([`Unwired`]), so a `cutover` is refused
+/// ([`unwired_record`]) before its parameters are read. The parameters come from the file `args`
+/// names or from the process's standard input, the report goes to its standard output.
 pub fn host_main(args: &HookArgs) -> Outcome {
-    if let Some(ending) = unwired_record(args.step) {
+    let store_record = StoreRecord::beside_params(&args.params);
+    if let Some(ending) = unwired_record(args.step).filter(|_| store_record.is_none()) {
         let _unwritten = ending.report().write_to(&mut io::stdout().lock());
         return ending.outcome;
     }
@@ -286,7 +297,9 @@ pub fn host_main(args: &HookArgs) -> Outcome {
         });
     let ports = HookPorts {
         kinds: &kinds,
-        record: &Unwired,
+        record: store_record
+            .as_ref()
+            .map_or(&Unwired as &dyn RunRecord, |r| r as &dyn RunRecord),
         rebooter,
         boot_id: boot_id.as_ref(),
     };

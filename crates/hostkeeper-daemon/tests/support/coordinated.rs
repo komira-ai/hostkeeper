@@ -349,6 +349,7 @@ impl CoordinatorLink for InProcess {
             operator_keys: None,
             ssh: None,
             prerequisites: None,
+            maintain: None,
         })
     }
 }

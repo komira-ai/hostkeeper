@@ -10,10 +10,12 @@ use std::fmt;
 use std::num::NonZeroU64;
 
 use hostkeeper_config::names::{ServiceName, Version};
-use hostkeeper_proto::hostkeeper::agent::v1::{Order, order};
+use hostkeeper_proto::hostkeeper::agent::v1::{Maintain, MaintainAction, Order, order};
 use hostkeeper_proto::hostkeeper::release::v1::Target;
+use hostkeeper_proto::maintenance::MAX_RUN_ID;
 
 use crate::checks;
+use crate::maintenance_hook::{MaintainParams, ParamsError};
 
 /// A package digest as an order carries it: the SHA-256 of the package as 64 lower-case hex
 /// digits (the units of `hostkeeper/agent/v1/agent.proto`).
@@ -116,6 +118,21 @@ pub enum Verb {
     },
     /// The `clear_record` case of an order.
     ClearRecord(ServiceName),
+    /// The `maintain` case of an order: a host's turn of a maintenance run.
+    Maintain(Box<Maintained>),
+}
+
+/// The arguments of a `maintain` (docs/design/maintenance-updates.md, section 5.1): the order's
+/// id and try, and its terms, checked as the maintenance hook reads them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Maintained {
+    /// The coordinator's id of the order: 1 to [`MAX_RUN_ID`] bytes, the bound the report gives
+    /// it back under.
+    pub order_id: String,
+    /// The coordinator's try of the order, from 1.
+    pub order_try: NonZeroU64,
+    /// The run: its id and kinds checked ([`MaintainParams::new`]), its action `RUN`.
+    pub params: MaintainParams,
 }
 
 /// Why an order could not be decoded: the field, dotted (`update.version`), and its rule.
@@ -136,6 +153,40 @@ pub const SERVICE_RULE: &str = hostkeeper_config::names::SERVICE_NAME_RULE;
 pub const VERSION_RULE: &str = hostkeeper_config::names::VERSION_RULE;
 /// What a malformed package digest breaks.
 pub const DIGEST_RULE: &str = "is not a SHA-256 of 64 lower-case hex digits";
+/// What the order id of a `maintain` breaks.
+pub const ORDER_ID_RULE: &str = "is not 1 to 64 bytes";
+/// What a `maintain` whose action is not `RUN` breaks.
+pub const ACTION_RULE: &str =
+    "is not RUN: this daemon runs a host's turn, and no retry or put back";
+/// What the run id of a `maintain` breaks.
+pub const RUN_ID_RULE: &str = "is not 1 to 64 bytes";
+/// What the kinds of a `maintain` break.
+pub const KINDS_RULE: &str = "are not 1 to 4 known kinds, each given once";
+
+/// The arguments of `maintain`, from the order `order_id` try `order_try`.
+fn maintained(
+    maintain: &Maintain,
+    (order_try, order_id): (NonZeroU64, &str),
+) -> Result<Maintained, BadOrder> {
+    if !(1..=MAX_RUN_ID).contains(&order_id.len()) {
+        return Err(BadOrder {
+            field: "order_id".to_owned(),
+            rule: ORDER_ID_RULE,
+        });
+    }
+    if maintain.action != i32::from(MaintainAction::Run) {
+        return Err(bad("maintain", "action", ACTION_RULE));
+    }
+    let params = MaintainParams::new(maintain.clone()).map_err(|error| match error {
+        ParamsError::RunId => bad("maintain", "run_id", RUN_ID_RULE),
+        _ => bad("maintain", "kinds", KINDS_RULE),
+    })?;
+    Ok(Maintained {
+        order_id: order_id.to_owned(),
+        order_try,
+        params,
+    })
+}
 
 fn bad(verb: &str, field: &str, rule: &'static str) -> BadOrder {
     BadOrder {
@@ -217,9 +268,7 @@ impl TryFrom<&Order> for Verb {
                 halt_generation: a.halt_generation,
             },
             order::Verb::ClearRecord(a) => Verb::ClearRecord(service("clear_record", &a.service)?),
-            // A verb this daemon does not run yet (the maintenance run of `maintenance-v1`: it reports
-            // the facts of a look and takes no order).
-            order::Verb::Maintain(_) => return Err(no_verb()),
+            order::Verb::Maintain(a) => Verb::Maintain(Box::new(maintained(a, of)?)),
         })
     }
 }

@@ -96,15 +96,17 @@ pub use names::{OrderId, PackageDigest, Reason, WordError};
 pub use negotiated::NegotiatedLink;
 pub use operator_keys::{KeysRefusal, KeysReport, MAX_KEYS_REASON, PushedKeys};
 pub use order::{
-    Acknowledged, DeferredReport, Entry, Order, OrderRef, OrderResult, Outcome, Reply, Target, Verb,
+    Acknowledged, DeferredReport, Entry, MaintainOrder, Order, OrderRef, OrderResult, Outcome,
+    Reply, Target, Verb,
 };
 pub use pki::PkiCertSource;
 pub use ports::{
     BmcSource, CertSource, CertState, ClientIdentity, ClockSleeper, CoordinatorLink, Dispatch,
-    Drift, FactsSink, HeldHalt, HeldHalts, Job, LinkError, Log, MaintenanceSource, Observation,
-    OperatorKeysSink, OrderSink, PrerequisitesSink, RecordedService, RemoteLoginProbeSource,
-    RenewalSource, ReplyFault, RepositorySink, ServiceObserver, ServiceRecords, Sleeper, SshSink,
-    StopFlag, ThreadDispatch, Tick, TrustFault, TrustedRootSource, UnixClock, Unsendable,
+    Drift, FactsSink, HeldHalt, HeldHalts, Job, LinkError, Log, MaintainSink, MaintenanceSource,
+    Observation, OperatorKeysSink, OrderSink, PrerequisitesSink, RecordedService,
+    RemoteLoginProbeSource, RenewalSource, ReplyFault, RepositorySink, ServiceObserver,
+    ServiceRecords, Sleeper, SshSink, StopFlag, ThreadDispatch, Tick, TrustFault,
+    TrustedRootSource, UnixClock, Unsendable,
 };
 pub use prerequisites::{
     MAX_PREREQUISITE_REASON, MAX_PREREQUISITE_VERSION, PrerequisiteState, PrerequisiteStatus,
