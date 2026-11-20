@@ -1,0 +1,4 @@
+Inst nano [7.2-1] (7.2-1+deb12u1 Debian-Security:12/stable-security [amd64])
+W: --force-yes is deprecated, use one of the options starting with --allow instead.
+Inst bash held back by something odd
+Conf nano (7.2-1+deb12u1 Debian-Security:12/stable-security [amd64])

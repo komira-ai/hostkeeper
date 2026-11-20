@@ -55,6 +55,7 @@ export namespace hostkeeper_agent_v1 {
     lookedUnix?: string;
     unparsedLines?: number;
     run?: hostkeeper_agent_v1.MaintenanceRunState;
+    lookFailed?: string;
   }
   export interface MaintenanceRunState { runId?: string; orderId?: string; step?: hostkeeper_agent_v1.MaintenanceStep; applied?: hostkeeper_agent_v1.MaintenanceKind[]; haltedReason?: string; }
   export type MaintenanceStep =

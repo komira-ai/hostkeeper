@@ -25,7 +25,7 @@ fn heartbeat(report: Option<agent::MaintenanceReport>) -> agent::HeartbeatReques
 }
 
 /// A report that names every kind of fact a report holds: the host, an Xcode, a Mac's update
-/// facts, due items of two kinds, a look, unparsed lines and the run held.
+/// facts, due items of two kinds, a look, unparsed lines, the run held and a failed look's reason.
 fn full(due: usize, looked: u64) -> agent::MaintenanceReport {
     agent::MaintenanceReport {
         host: Some(agent::MaintenanceHost {
@@ -78,6 +78,7 @@ fn full(due: usize, looked: u64) -> agent::MaintenanceReport {
             order_id: "order-1".to_owned(),
             ..agent::MaintenanceRunState::default()
         }),
+        look_failed: "apt: apt-get update did not finish within its deadline".to_owned(),
     }
 }
 

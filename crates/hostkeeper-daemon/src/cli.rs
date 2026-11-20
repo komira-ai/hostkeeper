@@ -46,7 +46,9 @@ use hostkeeper_enroll::{
 };
 use hostkeeper_install::version::Owner;
 use hostkeeper_launchd::{Platform, PlatformKind};
-use hostkeeper_link::{ClockSleeper, LoopFlags, PkiCertSource, StopFlag, ThreadDispatch};
+use hostkeeper_link::{
+    ClockSleeper, LoopFlags, MaintenanceSource, PkiCertSource, StopFlag, ThreadDispatch,
+};
 use hostkeeper_observe::ProcessRunner;
 use hostkeeper_package::net::{NetFetcher, UreqTransport};
 use hostkeeper_placed::roots::STATE_DIR;
@@ -67,6 +69,8 @@ use crate::identity_group::IdentityGroup;
 use crate::ipmi::DevIpmi;
 use crate::links::{DaemonLog, HostLink, Links};
 use crate::mac::HostIoreg;
+use crate::maintenance_collect::{Collector, LinuxScope};
+use crate::maintenance_facts::MaintenanceFacts;
 use crate::maintenance_hook::HookArgs;
 use crate::notify::{
     NoNotifier, NoWatchdog, ReadyFile, ReadyNotifier, SystemdNotifier, SystemdWatchdog, Watchdog,
@@ -187,6 +191,10 @@ pub struct DaemonFlags {
         value_parser = clap::value_parser!(u64).range(1..=MAX_PACKAGE_LOCK_WAIT_SECS),
     )]
     pub package_lock_wait_secs: u64,
+    /// Which Linux updates the host reports due (`maintenance-v1`): `security`, the default,
+    /// security updates and newer kernels; `all`, every update. A Mac reports none of them.
+    #[arg(long, value_enum, default_value_t = LinuxScope::Security)]
+    pub maintenance_linux_scope: LinuxScope,
     /// The heartbeat loop's flag: `--heartbeat-secs`.
     #[command(flatten)]
     pub link: LoopFlags,
@@ -291,8 +299,15 @@ pub fn run_with(cli: Cli, systemd: SystemdVars) -> ExitCode {
     };
     let period = flags.link.heartbeat_secs;
     let watchdog = watchdog(&flags, &systemd);
-    let served = notifier(&flags, systemd.notify_socket)
-        .and_then(|notifier| daemon(&flags.settings(), period, notifier.as_ref(), watchdog));
+    let served = notifier(&flags, systemd.notify_socket).and_then(|notifier| {
+        daemon(
+            &flags.settings(),
+            period,
+            flags.maintenance_linux_scope,
+            notifier.as_ref(),
+            watchdog,
+        )
+    });
     ExitCode::from(exit_status(&served))
 }
 
@@ -346,6 +361,7 @@ pub fn watchdog(flags: &DaemonFlags, systemd: &SystemdVars) -> Box<dyn Watchdog>
 fn daemon(
     settings: &Settings,
     period: NonZeroU64,
+    scope: LinuxScope,
     notifier: &dyn ReadyNotifier,
     watchdog: Box<dyn Watchdog>,
 ) -> Result<(), StartError> {
@@ -359,6 +375,7 @@ fn daemon(
     runtime.block_on(start_and_serve(
         settings,
         period,
+        scope,
         own_version,
         notifier,
         watchdog,
@@ -368,6 +385,7 @@ fn daemon(
 async fn start_and_serve(
     settings: &Settings,
     period: NonZeroU64,
+    scope: LinuxScope,
     own_version: HostkeeperVersion,
     notifier: &dyn ReadyNotifier,
     watchdog: Box<dyn Watchdog>,
@@ -375,7 +393,14 @@ async fn start_and_serve(
     let files = HostFiles::host();
     let platform = Platform::host();
     let started = start_with(settings, &files, own_version, notifier, &platform)?;
-    let links = host_links(started.daemon(), &files, period, platform.kind, watchdog);
+    let links = host_links(
+        started.daemon(),
+        &files,
+        period,
+        platform.kind,
+        scope,
+        watchdog,
+    );
     start::serve(started, links).await;
     Ok(())
 }
@@ -406,6 +431,9 @@ async fn start_and_serve(
 ///   account's `authorized_keys` ([`OperatorKeys::at_host`]);
 /// - every host keeps the host prerequisites the coordinator sends, which a Mac installs and a
 ///   Linux host only reports ([`Prerequisites::at_host`]);
+/// - a Linux host reports what it last found of its maintenance, under `scope`, from the packages
+///   `placed.json` records and its package manager ([`maintenance_source`] over
+///   [`crate::maintenance_collectors::at_host`]); a Mac has none;
 /// - every heartbeat of a Linux host reports its BMC's address and MAC, read through
 ///   `/dev/ipmi0` ([`crate::bmc::at_host`]);
 /// - when `files` names a console, the enrollment loop writes its issue file, naming the daemon
@@ -417,6 +445,7 @@ pub fn host_links(
     files: &HostFiles,
     period: NonZeroU64,
     kind: PlatformKind,
+    scope: LinuxScope,
     watchdog: Box<dyn Watchdog>,
 ) -> Links {
     let ctx = daemon.ctx();
@@ -454,6 +483,14 @@ pub fn host_links(
     );
     let operator_keys = OperatorKeys::at_host(kind, log.clone());
     let prerequisites = Prerequisites::at_host(kind, log.clone());
+    let maintenance = maintenance_source(
+        daemon,
+        scope,
+        crate::maintenance_collectors::at_host(kind),
+        Arc::new(SystemUnixClock),
+        Arc::new(ThreadDispatch),
+        log.clone(),
+    );
     let clock: Arc<dyn hostkeeper_link::UnixClock> = Arc::new(SystemUnixClock);
     Links {
         enroller: Box::new(move || host_enroller(&endpoint, &pki, settings.clone(), kind)),
@@ -474,7 +511,31 @@ pub fn host_links(
         remote_login_probe: crate::remote_login_probe::at_host_start(kind),
         operator_keys: Some(Arc::new(operator_keys)),
         prerequisites: Some(Arc::new(prerequisites)),
+        maintenance,
     }
+}
+
+/// The maintenance facts `daemon`'s heartbeats report (`maintenance-v1`): looks by `collectors`
+/// under `scope` (`--maintenance-linux-scope`), leaving out the packages of the daemon's own
+/// `placed.json` ([`crate::Placement`] of its context), timed by `clock` and run on `dispatch`;
+/// none when there is no collector (a Mac today), which then announces and sends nothing.
+pub fn maintenance_source(
+    daemon: &Arc<Daemon>,
+    scope: LinuxScope,
+    collectors: Vec<Box<dyn Collector>>,
+    clock: Arc<dyn hostkeeper_link::UnixClock>,
+    dispatch: Arc<dyn hostkeeper_link::Dispatch>,
+    log: Arc<dyn hostkeeper_link::Log>,
+) -> Option<Arc<dyn MaintenanceSource>> {
+    MaintenanceFacts::of_host(
+        collectors,
+        &daemon.ctx().placement,
+        scope,
+        clock,
+        dispatch,
+        log,
+    )
+    .map(|facts| Arc::new(facts) as Arc<dyn MaintenanceSource>)
 }
 
 /// What the enrollment request says the daemon came from: this binary, `hostkeeper-<version>`.

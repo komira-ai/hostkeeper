@@ -264,6 +264,7 @@ pub fn host(
             &files,
             PERIOD,
             PlatformKind::Linux,
+            hostkeeper_daemon::maintenance_collect::LinuxScope::default(),
             Box::new(hostkeeper_daemon::NoWatchdog),
         )
     };
