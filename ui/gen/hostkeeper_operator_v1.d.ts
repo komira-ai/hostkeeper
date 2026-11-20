@@ -315,6 +315,7 @@ export namespace hostkeeper_operator_v1 {
   export interface LayoutSled { id?: string; rack?: string; number?: number; u?: number; heightU?: number; label?: string; address?: string; slots?: number; }
   export interface LayoutSubject { kind?: hostkeeper_operator_v1.LayoutSubjectKind; id?: string; }
   export type LayoutSubjectKind = "LAYOUT_SUBJECT_KIND_UNSPECIFIED" | "LAYOUT_SUBJECT_KIND_HOST" | "LAYOUT_SUBJECT_KIND_INVENTORY";
+  export type LinuxScope = "LINUX_SCOPE_UNSPECIFIED" | "LINUX_SCOPE_SECURITY" | "LINUX_SCOPE_ALL";
   export interface ListAlertsRequest {}
   export interface ListAlertsResponse { alerts?: hostkeeper_operator_v1.Alert[]; }
   export interface ListApiTokensRequest {}
@@ -349,6 +350,16 @@ export namespace hostkeeper_operator_v1 {
   export interface ListUsersResponse { users?: hostkeeper_operator_v1.UserInfo[]; }
   export type LiveReason = "LIVE_REASON_UNSPECIFIED" | "LIVE_REASON_UPDATING" | "LIVE_REASON_PROMOTION_PENDING" | "LIVE_REASON_ORDERED" | "LIVE_REASON_BAKING" | "LIVE_REASON_PLAN_UNDER_WAY" | "LIVE_REASON_QUEUED";
   export interface LiveRollout { service?: string; reason?: hostkeeper_operator_v1.LiveReason; nodeId?: string; }
+  export interface MaintenancePolicy {
+    xcodeKeep?: number;
+    xcodeDefault?: string;
+    macosMajor?: boolean;
+    linuxScope?: hostkeeper_operator_v1.LinuxScope;
+    batch?: number;
+    minServing?: number;
+    drainDeadlineSecs?: string;
+    returnSecs?: string;
+  }
   export interface MarkBadRequest { service?: string; version?: string; reason?: string; }
   export interface MarkBadResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface MdmAbmCheck { result?: hostkeeper_operator_v1.MdmAbmResult; organization?: string; detail?: string; }
@@ -598,6 +609,7 @@ export namespace hostkeeper_operator_v1 {
     maxUpdating?: number;
     minUp?: number;
     liveRollouts?: number;
+    maintenance?: hostkeeper_operator_v1.MaintenancePolicy;
   }
   export interface RunningService { service?: string; version?: string; installer?: string; }
   export interface SecretInfo { kind?: string; version?: number; fingerprintSha256?: string; notAfterUnix?: string; createdUnix?: string; supersededUnix?: string; }
