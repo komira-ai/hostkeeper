@@ -1,4 +1,4 @@
-//! The `hkctl` port with a real process (the fake hkctl of tests/bin), and the command line from
+//! The `hk` port with a real process (the fake hk of tests/bin), and the command line from
 //! its arguments to the files it writes.
 
 use std::ffi::OsString;
@@ -7,16 +7,16 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 use hostkeeper_measure::cli;
-use hostkeeper_measure::coordinator::{Answer, CallError, Coordinator, Hkctl};
+use hostkeeper_measure::coordinator::{Answer, CallError, Coordinator, Hk};
 use hostkeeper_testkit::Scratch;
 use serde_json::{Value, json};
 
 use crate::support::{self, FakeClock};
 
-const FAKE: &str = env!("CARGO_BIN_EXE_hostkeeper-measure-fake-hkctl");
+const FAKE: &str = env!("CARGO_BIN_EXE_hostkeeper-measure-fake-hk");
 const ENDPOINT: &str = "https://coordinator.invalid";
 
-/// A directory for the fake hkctl: its CA file (whose directory it answers from) and token.
+/// A directory for the fake hk: its CA file (whose directory it answers from) and token.
 struct Rig {
     scratch: Scratch,
 }
@@ -64,12 +64,12 @@ fn strings(items: &[&str]) -> Vec<String> {
 }
 
 #[test]
-fn hkctl_is_called_with_the_globals_the_command_and_the_request_file_and_its_answer_read() {
-    let rig = Rig::new("hkctl-call");
+fn hk_is_called_with_the_globals_the_command_and_the_request_file_and_its_answer_read() {
+    let rig = Rig::new("hk-call");
     let requests = rig.dir().join("requests");
     std::fs::create_dir_all(&requests).expect("the requests directory");
     rig.answer(&json!({"code": 2, "stdout": "{\"x\":1}\n", "stderr": "refused: held_bad\n"}));
-    let mut hkctl = Hkctl::new(
+    let mut hk = Hk::new(
         Path::new(FAKE),
         ENDPOINT,
         &rig.ca(),
@@ -77,7 +77,7 @@ fn hkctl_is_called_with_the_globals_the_command_and_the_request_file_and_its_ans
         &requests,
     );
     let request = json!({"service": "hello"});
-    let answer = hkctl
+    let answer = hk
         .call(&strings(&["releases", "set-desired"]), Some(&request))
         .expect("a call");
     assert_eq!(
@@ -88,9 +88,7 @@ fn hkctl_is_called_with_the_globals_the_command_and_the_request_file_and_its_ans
             stderr: "refused: held_bad\n".to_owned()
         }
     );
-    let second = hkctl
-        .call(&strings(&["hosts", "list"]), None)
-        .expect("a call");
+    let second = hk.call(&strings(&["hosts", "list"]), None).expect("a call");
     assert_eq!(second.code, 2);
     let request_file = requests.join("1.json");
     assert_eq!(
@@ -126,11 +124,11 @@ fn hkctl_is_called_with_the_globals_the_command_and_the_request_file_and_its_ans
 }
 
 #[test]
-fn hkctl_that_cannot_run_or_is_killed_or_whose_request_cannot_be_written_is_an_error() {
-    let rig = Rig::new("hkctl-errors");
-    let nowhere = rig.dir().join("no-such-hkctl");
-    let mut hkctl = Hkctl::new(&nowhere, ENDPOINT, &rig.ca(), &rig.token(), rig.dir());
-    let err = hkctl
+fn hk_that_cannot_run_or_is_killed_or_whose_request_cannot_be_written_is_an_error() {
+    let rig = Rig::new("hk-errors");
+    let nowhere = rig.dir().join("no-such-hk");
+    let mut hk = Hk::new(&nowhere, ENDPOINT, &rig.ca(), &rig.token(), rig.dir());
+    let err = hk
         .call(&strings(&["hosts", "list"]), None)
         .expect_err("no program");
     assert!(matches!(err, CallError::Spawn { .. }));
@@ -140,8 +138,8 @@ fn hkctl_that_cannot_run_or_is_killed_or_whose_request_cannot_be_written_is_an_e
         "{err}"
     );
     let missing = rig.dir().join("no-requests");
-    let mut hkctl = Hkctl::new(Path::new(FAKE), ENDPOINT, &rig.ca(), &rig.token(), &missing);
-    let err = hkctl
+    let mut hk = Hk::new(Path::new(FAKE), ENDPOINT, &rig.ca(), &rig.token(), &missing);
+    let err = hk
         .call(&strings(&["releases", "set-desired"]), Some(&json!({})))
         .expect_err("no requests directory");
     assert!(
@@ -152,14 +150,14 @@ fn hkctl_that_cannot_run_or_is_killed_or_whose_request_cannot_be_written_is_an_e
         "{err}"
     );
     rig.answer(&json!({"abort": true}));
-    let mut hkctl = Hkctl::new(
+    let mut hk = Hk::new(
         Path::new(FAKE),
         ENDPOINT,
         &rig.ca(),
         &rig.token(),
         rig.dir(),
     );
-    let err = hkctl
+    let err = hk
         .call(&strings(&["hosts", "list"]), None)
         .expect_err("killed");
     assert_eq!(err.to_string(), format!("{FAKE} was ended by a signal"));
@@ -332,7 +330,7 @@ fn live(rig: &Rig, run_dir: &Path, plan: &Path, extra: &[&str]) -> Vec<String> {
     ]));
     args.push(run_dir.display().to_string());
     args.extend(strings(&[
-        "--hkctl",
+        "--hk",
         FAKE,
         "--endpoint",
         ENDPOINT,
@@ -593,7 +591,7 @@ fn run_with_dry_run_prints_the_steps_and_writes_nothing() {
     assert_eq!((code, err.as_str()), (ExitCode::SUCCESS, ""));
     assert_eq!(
         out,
-        "plan cli: The command line\nhosts: Every live host.\nrepetitions: 1\nevery call is `hkctl --endpoint <endpoint> --ca-file <ca file> --token-file <token file> <command>`\nrepetition 1:\n  start: hkctl hosts list (the live hosts)\n  status: call `hkctl releases status --request <file: {\"service\":\"hello\"}>`\n  ask: ask the operator: Say when.\n  up: watch every 1 s, at most 5 s (a timeout ends the repetition): every host is live\ndry run: nothing was called or written and the operator was asked nothing; the parameter files were read to check them\n"
+        "plan cli: The command line\nhosts: Every live host.\nrepetitions: 1\nevery call is `hk --endpoint <endpoint> --ca-file <ca file> --token-file <token file> <command>`\nrepetition 1:\n  start: hk hosts list (the live hosts)\n  status: call `hk releases status --request <file: {\"service\":\"hello\"}>`\n  ask: ask the operator: Say when.\n  up: watch every 1 s, at most 5 s (a timeout ends the repetition): every host is live\ndry run: nothing was called or written and the operator was asked nothing; the parameter files were read to check them\n"
     );
     assert!(rig.calls().is_empty());
     // With every live flag given too, --dry-run still runs nothing.

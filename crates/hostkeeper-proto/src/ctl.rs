@@ -3,7 +3,7 @@
 //! Nothing here is written by hand but the shapes of the entries; a new RPC in a proto is a new
 //! entry of [`COMMANDS`] at the next build.
 //!
-//! The command line `hkctl` (the crate `hostkeeper-hkctl`) is generated from this table, and the
+//! The command line `hk` (the crate `hostkeeper-hk`) is generated from this table, and the
 //! web app's client (`ui/gen/`) too, by `hostkeeper-ui-tests`. This crate stays code generation only.
 //!
 //! How a request field becomes input ([`Input`]):

@@ -6,7 +6,7 @@ A Mac of the farm, erased and enrolled anew through Automated Device Enrollment,
 
 **Hosts.** One Mac of the farm, erased and enrolled anew: host-1 in the records.
 
-**Recorded.** The operator's erase, stamped by the runner; the Mac's `enrolledSinceUnix` as `hkctl mdm list-devices` lists it; the audit entries `mdm_install_sent`, `enroll_requested`, `mdm_nonce_pushed`, `enroll_approve` by `mdm-nonce` and `enroll_issued`, each with its time; and the host's `firstHeartbeatUnix` and `firstServingUnix`. The runner polls every 5 s for the MDM enrollment and every 2 s for the rest.
+**Recorded.** The operator's erase, stamped by the runner; the Mac's `enrolledSinceUnix` as `hk mdm list-devices` lists it; the audit entries `mdm_install_sent`, `enroll_requested`, `mdm_nonce_pushed`, `enroll_approve` by `mdm-nonce` and `enroll_issued`, each with its time; and the host's `firstHeartbeatUnix` and `firstServingUnix`. The runner polls every 5 s for the MDM enrollment and every 2 s for the rest.
 
 | Measure | What | Unit | n | Missing | Min | Median | Max | Clock |
 |---|---|---|---|---|---|---|---|---|

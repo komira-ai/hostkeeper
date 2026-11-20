@@ -127,7 +127,7 @@ with the reason `approval`. A placement the store then cannot write leaves the a
 Compatibility (B8): only additions: a new file, a new service, three optional fields, four enum values, new tables, a new file beside
 the state. Nothing is renumbered or required. The test `crates/hostkeeper-proto/tests/additions_lab_layout.rs` runs the release before on
 the new messages (it keeps every byte, and an `ApproveRequest` carrying a placement) and this build on what the release before wrote (an
-approval asks for no placement); `hkctl` gets the verbs from the generated command table and `ui/gen/` from the generator.
+approval asks for no placement); `hk` gets the verbs from the generated command table and `ui/gen/` from the generator.
 
 ## 4. The frame in the code
 

@@ -130,7 +130,7 @@ export function keyringFingerprints(bytes) {
     }
     if (packet.tag === PUBLIC_KEY) {
       if (bytes[packet.start] === 6) {
-        return { problem: "The keyring has a version 6 key, whose fingerprint this page does not make; use hkctl repositories put." };
+        return { problem: "The keyring has a version 6 key, whose fingerprint this page does not make; use hk repositories put." };
       }
       if (bytes[packet.start] !== 4) {
         return { problem: "The keyring has a key of a version this page does not read." };

@@ -275,7 +275,7 @@ fn the_tags_of_the_maintenance_table_are_pinned_on_the_wire() {
 /// field it does not know, and the bytes it writes back are the bytes it read; the generated type
 /// decodes them equal to the original.
 /// Catches: a table that the release before refuses, drops or changes (an older coordinator
-/// storing a group put by a newer `hkctl`, an older client of `Get` and `Put`), or that makes it
+/// storing a group put by a newer `hk`, an older client of `Get` and `Put`), or that makes it
 /// lose a key it knows.
 #[test]
 fn the_reader_of_the_release_before_keeps_the_maintenance_table_and_writes_it_back() {

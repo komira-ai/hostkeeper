@@ -62,7 +62,7 @@ Storage: file store `<state-file>.layout` gains an optional `devices` object; Po
 - Audit actions `layout_device_put`, `layout_device_remove`, each with the optional reason, as every layout write.
 - Not changed: every existing message, field, refusal; `Enrollment.*Record` (a server entry); `Place`/`Unplace` (a device is a subject).
 
-`hkctl` and the UI client (`ui/gen/`) pick the two calls from the generated tables.
+`hk` and the UI client (`ui/gen/`) pick the two calls from the generated tables.
 
 ## 5. UI
 

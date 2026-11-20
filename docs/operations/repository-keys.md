@@ -32,7 +32,7 @@ repository's own change, and a change of the device-management configuration for
 
 | Host | Files | Placed by |
 |---|---|---|
-| Linux | `/etc/hostkeeper/repositories/` | the daemon, from the coordinator's registry (`hkctl repositories put`), at the first heartbeat after the registry holds every repository the host's services name; it adopts files already there when they are byte for byte the set, and replaces them otherwise |
+| Linux | `/etc/hostkeeper/repositories/` | the daemon, from the coordinator's registry (`hk repositories put`), at the first heartbeat after the registry holds every repository the host's services name; it adopts files already there when they are byte for byte the set, and replaces them otherwise |
 | Linux, before it reaches the coordinator | `/etc/hostkeeper/repositories/` | only for a host that must install from the repository first: `repositories = "<dir>"` in the boot server's `/etc/pxe/pxe.toml` ([network-install.md](network-install.md)) or the enrollment runbook's step ([enrollment.md](enrollment.md#bootstrap-a-linux-node)); the registry's set adopts or replaces them |
 | Mac under device management | `stores.toml`, `macos-pkg.toml` | the device-management configuration, as the managed preferences `dev.hostkeeper.stores` and `dev.hostkeeper.macos-pkg`; the daemon's start writes each file from them |
 | Mac without device management | `stores.toml`, `macos-pkg.toml` | the operator, by hand, root:wheel 0644 |
@@ -59,11 +59,11 @@ fingerprint the keyring holds that may sign the suites, primary key or subkey, a
   "reason": "the project's package repository" }
 ```
 
-Then `hkctl repositories put --request komira.json`. The coordinator refuses a keyring that lacks
+Then `hk repositories put --request komira.json`. The coordinator refuses a keyring that lacks
 a listed fingerprint, holds a key none of whose fingerprints is listed, or holds a secret key
-(`keyring_invalid`), and changes nothing. `hkctl repositories list` shows each repository, the
+(`keyring_invalid`), and changes nothing. `hk repositories list` shows each repository, the
 services that name it, and `unregistered`: the repositories services name that the registry lacks.
-A host one of whose services names one of those is sent nothing. `hkctl hosts get` shows each
+A host one of whose services names one of those is sent nothing. `hk hosts get` shows each
 host's `repositories`: `current` once the host holds the set, and `refused` with the daemon's
 reason when it refused it (the host keeps its set in force).
 
@@ -92,7 +92,7 @@ refuses a public entry that names a file (`invalid_request`). Its `suites` are t
 serves. Each Linux host whose services name it and whose daemon announces
 `private-repository-v1` is sent it with its own group as the one suite, and fills its local mirror
 from the coordinator. To change the credential, write the file again: the coordinator reads it at
-every fetch from the origin, and nothing restarts. A host's `repositories` in `hkctl hosts get`
+every fetch from the origin, and nothing restarts. A host's `repositories` in `hk hosts get`
 shows the set as for any entry; a key rotation is the same as below.
 
 ## Rotate the repository's signing key (Linux)
@@ -106,7 +106,7 @@ during an overlap ([package-repositories.md](../deploy/package-repositories.md))
    Check that it lists both: `gpg --show-keys komira-archive-keyring.both.gpg`.
 2. **Put the repository** with that keyring and the fingerprints of both keys, as above. Each Linux
    host whose services name it writes the new keyring at its next heartbeat.
-3. **Check** every host before the owner stops signing with the old key: `hkctl hosts list` shows
+3. **Check** every host before the owner stops signing with the old key: `hk hosts list` shows
    each host's `repositories` with `current` true. A host still on the old keyring alone fails each
    `stage` from then on with `signature`, and the rollout gate stops on it.
 4. **After the overlap**, once the suites are signed with the new key alone, put the repository
