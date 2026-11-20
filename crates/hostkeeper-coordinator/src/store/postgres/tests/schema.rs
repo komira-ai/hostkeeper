@@ -455,7 +455,7 @@ fn starters_that_run_together_apply_each_migration_once() {
         .flat_map(|runner| runner.join().expect("the runner ends"))
         .collect();
     ran.sort_unstable();
-    assert_eq!(ran, (1..=29).collect::<Vec<i32>>());
+    assert_eq!(ran, (1..=30).collect::<Vec<i32>>());
     assert_eq!(versions(&db), shipped_rows());
 }
 
@@ -484,7 +484,7 @@ fn a_runner_that_cannot_get_the_runners_lock_runs_nothing() {
     let ran = with_session(&db, move |session| {
         migrate::apply(session, &set).expect("the set applies")
     });
-    assert_eq!(ran, (1..=29).collect::<Vec<i32>>());
+    assert_eq!(ran, (1..=30).collect::<Vec<i32>>());
 }
 
 /// How many times the tests below end a store and take its lock at once.

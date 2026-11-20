@@ -379,13 +379,18 @@ impl Run {
     }
 
     /// `host`'s turn as it stands at `now`: a host that had not started (waiting, or deferred and
-    /// not offered again) once the run's window has ended is not reached, since the window
-    /// ended, as a cancel would end it; any other as held. A window that ends needs no write.
+    /// not offered again) in a run that was cancelled, or whose window has ended, is not reached,
+    /// since the cancel, else since the window's end; any other as held. A window that ends needs
+    /// no write, and a host in its turn at a cancel that defers after it is shown not reached.
     pub(crate) fn shown(&self, host: &RunHost, now: u64) -> RunHost {
         let mut shown = host.clone();
-        if host.step.may_start() && self.window_ended(now) {
+        let ended = match self.cancelled_unix {
+            Some(at) => Some(at),
+            None => self.window_ended(now).then_some(self.window_end_unix),
+        };
+        if let Some(at) = ended.filter(|_| host.step.may_start()) {
             shown.step = Step::NotReached;
-            shown.since_unix = self.window_end_unix;
+            shown.since_unix = at;
         }
         shown
     }

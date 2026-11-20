@@ -1,11 +1,13 @@
-//! A heartbeat's maintenance ([`crate::decide_maintenance`]): the host's turn of a run as its
-//! daemon reports it, stored before anything is decided, then the `maintain` the host is sent, or
+//! A heartbeat's maintenance ([`crate::decide_maintenance`]): the bake of a host whose turn is
+//! done, counted from the heartbeat before its report is read; the host's turn of a run as its
+//! daemon reports it, stored before anything is decided; then the `maintain` the host is sent, or
 //! the package orders it is not given.
 //!
-//! Both are the coordinator's changes of the ops state, audited by `coordinator`
-//! (`maintenance_step`, `maintenance_start`), made under the fleet's lock and, over a shared store,
-//! in the heartbeat's decision transaction, so a decision that does not land puts them back with
-//! the rest. A start is stored before the order is answered (storage first): a start that cannot
+//! All three are the coordinator's changes of the ops state, made under the fleet's lock and,
+//! over a shared store, in the heartbeat's decision transaction, so a decision that does not land
+//! puts them back with the rest. A step and a start are audited by `coordinator`
+//! (`maintenance_step`, `maintenance_start`); a bake's count is stored at each heartbeat with no
+//! entry of its own, and the heartbeat that ends it is audited `maintenance_step` (`baked`). A start is stored before the order is answered (storage first): a start that cannot
 //! be stored sends no order, and the host is asked again at its next heartbeat.
 
 use std::collections::BTreeMap;
@@ -91,38 +93,47 @@ impl Coordinator {
     /// next healthy heartbeat counts again from what is held.
     pub(super) fn bake_maintenance(&self, fleet: &Fleet, id: &HostId) {
         let need = |group: &str| self.group_policy(group).bake_beats;
-        let Some((r, h, beats, run_id, group, done)) = self.ops.read(|state| {
+        let counts: Vec<(usize, usize, u32, String, String, bool)> = self.ops.read(|state| {
             let runs = &state.maintenance_runs;
-            decide_maintenance::baked(runs, fleet.node(id), id, need).map(|(r, h, beats)| {
-                let host = &runs[r].hosts[h];
-                let done = beats >= need(&host.host_group);
-                (
-                    r,
-                    h,
-                    beats,
-                    runs[r].id.clone(),
-                    host.host_group.clone(),
-                    done,
-                )
-            })
-        }) else {
+            decide_maintenance::baked(runs, fleet.node(id), id, need)
+                .into_iter()
+                .map(|(r, h, beats)| {
+                    let host = &runs[r].hosts[h];
+                    let done = beats >= need(&host.host_group);
+                    (
+                        r,
+                        h,
+                        beats,
+                        runs[r].id.clone(),
+                        host.host_group.clone(),
+                        done,
+                    )
+                })
+                .collect()
+        });
+        if counts.is_empty() {
             return;
-        };
+        }
         let stored = self.ops.decide_changes(Write::BeforeMemory, |state| {
-            if let Some(held) = state
-                .maintenance_runs
-                .get_mut(r)
-                .filter(|run| run.id == run_id)
-                .and_then(|run| run.hosts.get_mut(h))
-                .filter(|host| host.step == Step::Done)
-            {
-                held.baked_beats = beats;
+            let mut audit = Vec::new();
+            for (r, h, beats, run_id, group, done) in &counts {
+                if let Some(held) = state
+                    .maintenance_runs
+                    .get_mut(*r)
+                    .filter(|run| run.id == *run_id)
+                    .and_then(|run| run.hosts.get_mut(*h))
+                    .filter(|host| host.step == Step::Done)
+                {
+                    held.baked_beats = *beats;
+                    if *done {
+                        audit.push(entry(MAINTENANCE_STEP, id, group, run_id, " baked"));
+                    }
+                }
             }
-            let audit = done.then(|| entry(MAINTENANCE_STEP, id, &group, &run_id, " baked"));
-            Ok::<_, crate::ops::OpsError>(audit.into_iter().collect())
+            Ok::<_, crate::ops::OpsError>(audit)
         });
         if let Err(why) = stored {
-            tracing::warn!(%why, node_id = %id, run = %run_id, "a host's maintenance bake could not be stored: its next healthy heartbeat counts again");
+            tracing::warn!(%why, node_id = %id, "a host's maintenance bake could not be stored: its next healthy heartbeat counts again");
         }
     }
 

@@ -456,7 +456,8 @@ fn a_host_not_back_holds_its_place_until_its_report_moves_it_on() {
 }
 
 /// Proves: a deferred host offered again [`MAX_OFFERED_AGAIN`] times is not offered again, its
-/// backoff passed; its run does not end while it is deferred, and `Cancel` ends it.
+/// backoff passed; its run does not end while it is deferred, and `Cancel` ends it, the host not
+/// reached.
 ///
 /// Catches: an offer past the count whose order id would no longer fit the wire's 64 bytes.
 #[test]
@@ -470,6 +471,9 @@ fn a_host_offered_again_as_often_as_an_order_id_allows_is_not_offered_more() {
     assert!(!starts(&world, "h1"));
     assert_eq!(turn_of(&world, "h1").step, Step::Deferred);
     assert!(!world.ops().maintenance_runs[0].ended_at(UNIX));
+    cancel(&world, RUN, "give up").expect("cancelled");
+    assert_eq!(turn_of(&world, "h1").step, Step::NotReached);
+    assert!(world.ops().maintenance_runs[0].ended_at(UNIX));
 }
 
 /// Proves: a start decided for a deferred host under an order id that is no longer its next one
@@ -524,4 +528,74 @@ fn a_bake_count_that_cannot_be_stored_counts_again_at_the_next_beat() {
     tell(&world, "h1", at_step(MaintenanceStep::Done));
     assert_eq!(turn_of(&world, "h1").baked_beats, 1);
     assert!(starts(&world, "h2"));
+}
+
+/// Proves: a host in its turn when the run is cancelled, which then reports its turn deferred, is
+/// stored deferred, shown not reached since the cancel by `Get`, and never offered again.
+///
+/// Catches: a cancelled run that lists a host deferred for ever.
+#[test]
+fn a_host_that_defers_after_a_cancel_is_shown_not_reached() {
+    let world = scheduled("mt-cancel-defer", table(1, 0), &["h1"], |_| {});
+    assert!(starts(&world, "h1"));
+    cancel(&world, RUN, "not today").expect("cancelled");
+    tell(
+        &world,
+        "h1",
+        report(ORDER, MaintenanceStep::Deferred, "stage: exit 75"),
+    );
+    assert_eq!(turn_of(&world, "h1").step, Step::Deferred);
+    since(&world, "h1", UNIX - 10_000);
+    assert_eq!(
+        ordered(
+            &world,
+            "h1",
+            report(ORDER, MaintenanceStep::Deferred, "stage: exit 75")
+        ),
+        None
+    );
+    let got = get(&world, RUN).expect("the run");
+    let host = &got.hosts[0];
+    assert_eq!(
+        (host.step(), host.since_unix, host.reason.as_str()),
+        (MaintenanceHostStep::NotReached, UNIX, "stage: exit 75")
+    );
+}
+
+/// Proves: a host done and baking in one run and in its turn of another holds one batch place,
+/// not two: with a batch of 2 the group's next host starts. While it is in that turn its
+/// heartbeats do not count toward the bake of the run it is done with, even healthy ones.
+///
+/// Catches: one host counted twice against the batch, and a bake proven, or reset, by the
+/// heartbeats of a later turn.
+#[test]
+fn a_host_in_two_runs_holds_one_place_and_bakes_only_out_of_its_turn() {
+    let world = baking("mt-two-runs", table(2, 0), 5, &["h1", "h2", "h3"]);
+    edit_runs(&world, |runs| {
+        let hosts = &mut runs[0].hosts;
+        hosts[0].step = Step::Done;
+        hosts[1].step = Step::Done;
+        hosts[1].baked_beats = 5;
+        let mut other = run_of(
+            "run-2-1",
+            vec![RunHost {
+                step: Step::Staging,
+                ..waiting("h1", GROUP, &[Kind::Linux])
+            }],
+        );
+        other.take_last_host = true;
+        runs.push(other);
+    });
+    assert!(starts(&world, "h3"), "h1 holds one place of two");
+    tell(&world, "h1", beat(LINUX, None));
+    tell(&world, "h1", beat(LINUX, None));
+    assert_eq!(turn_of(&world, "h1").baked_beats, 0, "h1 is in a turn");
+    edit_runs(&world, |runs| runs[1].hosts[0].step = Step::Done);
+    tell(&world, "h1", beat(LINUX, None));
+    assert_eq!(turn_of(&world, "h1").baked_beats, 1);
+    assert_eq!(
+        world.ops().maintenance_runs[1].hosts[0].baked_beats,
+        1,
+        "both bake"
+    );
 }

@@ -396,14 +396,19 @@ pub(crate) fn package_skip(state: &OpsState, id: &str, role: &str) -> Option<Ski
     }
 }
 
-/// How many batch places of `group` are held, over every run of `runs`: by the hosts in their
-/// turn, and by the done hosts that still bake for the group's `bake_beats`.
+/// How many batch places of `group` are held, over every run of `runs`: one by each host in its
+/// turn, or done and still baking for the group's `bake_beats`, however many runs hold it so.
 fn places_of(runs: &[Run], group: &str, bake_beats: u32) -> usize {
-    runs.iter()
+    let mut holders: Vec<&str> = runs
+        .iter()
         .flat_map(|run| &run.hosts)
         .filter(|host| host.host_group == group)
         .filter(|host| host.step.in_turn() || host.bakes(bake_beats))
-        .count()
+        .map(|host| host.host_id.as_str())
+        .collect();
+    holders.sort_unstable();
+    holders.dedup();
+    holders.len()
 }
 
 /// The hosts of `group` the coordinator has heard, live or not.
@@ -529,30 +534,39 @@ pub(crate) fn folded(
     (turn != *held).then_some((r, h, turn))
 }
 
-/// The bake of the host `id` after its heartbeat, kept as `node`: for a turn of `runs` that is
-/// done and still bakes for its group's `bake_beats` (`bake_beats_of` the turn's group), the
+/// The bake of the host `id` after its heartbeat, kept as `node`: for each turn of `runs` that
+/// is done and still bakes for its group's `bake_beats` (`bake_beats_of` the turn's group), the
 /// index of the run and of the host and the healthy heartbeats in a row it has sent since it was
 /// done: one more for a heartbeat in which every service it lists is healthy, none after any
-/// other (the count starts again). None when no turn of the host bakes, or the count is what is
-/// held.
+/// other (the count starts again); only the turns whose count changes. Nothing while the host is
+/// in a turn of any run: its heartbeats then prove that turn, not the one it is done with.
 pub(crate) fn baked(
     runs: &[Run],
     node: Option<&Node>,
     id: &HostId,
     bake_beats_of: impl Fn(&str) -> u32,
-) -> Option<(usize, usize, u32)> {
-    let (r, h) = runs.iter().enumerate().find_map(|(r, run)| {
-        run.hosts
-            .iter()
-            .position(|host| {
-                host.host_id == id.as_str() && host.bakes(bake_beats_of(&host.host_group))
-            })
-            .map(|h| (r, h))
-    })?;
-    let held = runs[r].hosts[h].baked_beats;
+) -> Vec<(usize, usize, u32)> {
+    let of_host = || {
+        runs.iter().enumerate().flat_map(|(r, run)| {
+            run.hosts
+                .iter()
+                .enumerate()
+                .filter(|(_, host)| host.host_id == id.as_str())
+                .map(move |(h, host)| (r, h, host))
+        })
+    };
+    if of_host().any(|(_, _, host)| host.step.in_turn()) {
+        return Vec::new();
+    }
     let healthy = node.is_some_and(|node| node.announced.values().all(|h| *h == Health::Healthy));
-    let beats = if healthy { held.saturating_add(1) } else { 0 };
-    (beats != held).then_some((r, h, beats))
+    of_host()
+        .filter(|(_, _, host)| host.bakes(bake_beats_of(&host.host_group)))
+        .filter_map(|(r, h, host)| {
+            let held = host.baked_beats;
+            let beats = if healthy { held.saturating_add(1) } else { 0 };
+            (beats != held).then_some((r, h, beats))
+        })
+        .collect()
 }
 
 #[cfg(test)]

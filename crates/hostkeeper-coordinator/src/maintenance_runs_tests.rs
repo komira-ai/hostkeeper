@@ -811,3 +811,26 @@ fn a_run_past_its_window_shows_its_unstarted_hosts_not_reached() {
         assert_eq!(&run.shown(turn, u64::MAX), turn, "no end");
     }
 }
+
+/// Proves: in a cancelled run, a host that had not started, or that deferred after the cancel,
+/// is shown not reached since the cancel (whether or not its window has ended), and a host in
+/// its turn as held.
+///
+/// Catches: a host of a cancelled run shown deferred for ever, as if it could still be offered.
+#[test]
+fn a_cancelled_run_shows_its_unstarted_hosts_not_reached_since_the_cancel() {
+    let mut run = run("run-1-1", Vec::new());
+    run.window_end_unix = 1_000;
+    run.cancelled_unix = Some(50);
+    let deferred = host("h1", "web", Step::Deferred, 60);
+    let shown = run.shown(&deferred, 70);
+    assert_eq!((shown.step, shown.since_unix), (Step::NotReached, 50));
+    let shown = run.shown(&deferred, 2_000);
+    assert_eq!(
+        (shown.step, shown.since_unix),
+        (Step::NotReached, 50),
+        "the cancel's time"
+    );
+    let draining = host("h2", "web", Step::Draining, 40);
+    assert_eq!(run.shown(&draining, 70), draining);
+}
