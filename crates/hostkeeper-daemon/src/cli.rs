@@ -194,7 +194,7 @@ pub struct DaemonFlags {
     )]
     pub package_lock_wait_secs: u64,
     /// Which Linux updates the host reports due (`maintenance-v1`): `security`, the default,
-    /// security updates and newer kernels; `all`, every update. A Mac reports none of them.
+    /// security updates and newer kernels; `all`, every update. It applies to a Linux host alone.
     #[arg(long, value_enum, default_value_t = LinuxScope::Security)]
     pub maintenance_linux_scope: LinuxScope,
     /// Whether a Mac reports the newest major upgrade of macOS due (`maintenance-v1`); without
@@ -446,7 +446,8 @@ async fn start_and_serve(
 /// - every host reports what it last found of its maintenance ([`maintenance_source`] over
 ///   [`crate::maintenance_collectors::at_host`]): a Linux host under `scope`, from the packages
 ///   `placed.json` records and its package manager; a Mac from `sw_vers`, `softwareupdate`,
-///   `fdesetup`, its data volume and its Command Line Tools, a major upgrade due under `major`;
+///   `fdesetup`, its data volume and its Command Line Tools, a major upgrade due under `major`,
+///   and its Xcodes, its update account and its device-management conflicts;
 /// - every heartbeat of a Linux host reports its BMC's address and MAC, read through
 ///   `/dev/ipmi0` ([`crate::bmc::at_host`]);
 /// - when `files` names a console, the enrollment loop writes its issue file, naming the daemon

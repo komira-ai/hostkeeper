@@ -200,9 +200,8 @@ pub struct Ports {
     pub prerequisites: Option<Arc<dyn PrerequisitesSink>>,
     /// The host's BMC; none on a host whose daemon reads none (a Mac), which then sends none.
     pub bmc: Option<Arc<dyn BmcSource>>,
-    /// The host's maintenance facts; none on a host that reads none, which then
-    /// announces no `maintenance-v1` and sends no report; nor does a host with no
-    /// [`Ports::maintain`].
+    /// The host's maintenance facts; none on a host that has no collector, which then announces
+    /// no `maintenance-v1` and sends no report; nor does a host with no [`Ports::maintain`].
     pub maintenance: Option<Arc<dyn MaintenanceSource>>,
     /// The daemon's runner of `maintain` orders; none on a host that runs none, which then
     /// announces no `maintenance-v1`.

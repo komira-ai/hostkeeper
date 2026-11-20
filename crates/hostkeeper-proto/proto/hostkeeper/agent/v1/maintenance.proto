@@ -1,5 +1,5 @@
-// hostkeeper.agent.v1: maintenance (docs/design/maintenance-updates.md sections 1, 4.1 and 5):
-// the report a host's daemon sends in its heartbeat (`HeartbeatRequest.maintenance`,
+// hostkeeper.agent.v1: maintenance (docs/design/maintenance-updates.md sections 1, 4.1 and 5): the
+// report a host's daemon sends in its heartbeat (`HeartbeatRequest.maintenance`,
 // `MaintenanceReport`) and the arguments of the `maintain` order (`Order.maintain`, `Maintain`).
 // The rest of the package is agent.proto (`Heartbeat`, `Enroll`, `Poll` and `Renew` of the
 // `Coordinator` service), which imports this file; this file is the same package and API, kept
@@ -91,6 +91,10 @@ message InstalledXcode {
   string path = 3;
   // Whether `xcode-select -p` names it.
   bool selected = 4;
+  // Whether its directory is other than `Xcode-<version>.app`, `<version>` its own `version`:
+  // one a person, the App Store or device management put there, which a run never removes
+  // (docs/design/maintenance-updates.md section 2.4).
+  bool foreign = 5;
 }
 
 // What a macOS update needs of a Mac.
@@ -107,8 +111,8 @@ message MacUpdateFacts {
   CommandLineToolsState command_line_tools = 5;
   // The device-management settings found on the Mac that must not be set on one hostkeeper
   // updates (section 5.8), each by its key's name as Apple's schema names it (`Deferrals`,
-  // `forceDelayedSoftwareUpdates`) or by its declaration's type: at most 16, each at most 64
-  // bytes. Empty when none is found.
+  // `forceDelayedSoftwareUpdates`) or by its declaration's type, and `xcode-app-store` for an
+  // Xcode the App Store installed: at most 16, each at most 64 bytes. Empty when none is found.
   repeated string mdm_conflicts = 6;
 }
 
@@ -134,6 +138,8 @@ message UpdateAccountState {
   bool admin = 2;
   // Whether it holds a Secure Token (`sysadminctl -secureTokenStatus`).
   bool secure_token = 3;
+  // Whether it is hidden (its user record's `IsHidden`), as section 5.5 wants it.
+  bool hidden = 4;
 }
 
 // The Command Line Tools on a Mac.
