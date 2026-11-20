@@ -7,9 +7,10 @@ use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener};
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 
 use hostkeeper_hk::ssh::{Coordinator, Launch, Verb};
+use hostkeeper_hk::xcode_push::Mac;
 use hostkeeper_hk::{World, run};
 use hostkeeper_proto::ctl::Command;
 use hostkeeper_testkit::Scratch;
@@ -144,8 +145,9 @@ pub struct Server {
     seen: Arc<Mutex<Vec<Seen>>>,
 }
 
-/// Reads one request: its head up to the blank line, then `Content-Length` bytes.
-fn read_request(stream: &mut impl Read) -> Option<Request> {
+/// Reads one request: its head up to the blank line, then `Content-Length` bytes. A request that
+/// says `Expect: 100-continue` is answered `100 Continue` before its body is read.
+fn read_request(stream: &mut (impl Read + Write)) -> Option<Request> {
     let mut bytes = Vec::new();
     let mut chunk = [0_u8; 4096];
     let split = loop {
@@ -168,6 +170,13 @@ fn read_request(stream: &mut impl Read) -> Option<Request> {
         .filter_map(|l| l.split_once(':'))
         .map(|(n, v)| (n.trim().to_ascii_lowercase(), v.trim().to_owned()))
         .collect();
+    let expects = headers
+        .iter()
+        .any(|(n, v)| n == "expect" && v.eq_ignore_ascii_case("100-continue"));
+    if expects {
+        stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").ok()?;
+        stream.flush().ok()?;
+    }
     let length: usize = headers
         .iter()
         .find(|(n, _)| n == "content-length")
@@ -198,18 +207,7 @@ impl Server {
     {
         let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback listener");
         let port = listener.local_addr().expect("its address").port();
-        let chain = vec![CertificateDer::from_pem_slice(pki.cert_pem.as_bytes()).expect("a cert")];
-        let key = PrivateKeyDer::from_pem_slice(pki.key_pem.as_bytes()).expect("a key");
-        let config = Arc::new(
-            rustls::ServerConfig::builder_with_provider(Arc::new(
-                rustls::crypto::ring::default_provider(),
-            ))
-            .with_safe_default_protocol_versions()
-            .expect("protocol versions")
-            .with_no_client_auth()
-            .with_single_cert(chain, key)
-            .expect("a server certificate"),
-        );
+        let config = server_config(pki);
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
         std::thread::spawn(move || {
@@ -292,6 +290,99 @@ impl Server {
     }
 }
 
+/// The TLS configuration of a test server with the certificate of `pki`.
+fn server_config(pki: &Pki) -> Arc<rustls::ServerConfig> {
+    let chain = vec![CertificateDer::from_pem_slice(pki.cert_pem.as_bytes()).expect("a cert")];
+    let key = PrivateKeyDer::from_pem_slice(pki.key_pem.as_bytes()).expect("a key");
+    Arc::new(
+        rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .expect("protocol versions")
+        .with_no_client_auth()
+        .with_single_cert(chain, key)
+        .expect("a server certificate"),
+    )
+}
+
+/// What [`Early`] heard: the request's target, and the bytes of body that arrived after its
+/// head, until the client went away.
+type Heard = (String, usize);
+
+/// An HTTPS server on 127.0.0.1, port 0, for one request: it answers a final status as soon as
+/// the request's head is read (with no `100 Continue`, before any body), then counts the bytes
+/// of body that still arrive until the client closes the connection.
+pub struct Early {
+    pub port: u16,
+    heard: Arc<(Mutex<Option<Heard>>, Condvar)>,
+}
+
+impl Early {
+    /// A server that refuses its one request with `status` and `body` from its head alone.
+    pub fn refusing(pki: &Pki, status: u16, body: &str) -> Early {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback listener");
+        let port = listener.local_addr().expect("its address").port();
+        let config = server_config(pki);
+        let answer = format!(
+            "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+             Connection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let heard = Arc::new((Mutex::new(None), Condvar::new()));
+        let record = Arc::clone(&heard);
+        std::thread::spawn(move || {
+            let serve = || -> Option<Heard> {
+                let (stream, _) = listener.accept().ok()?;
+                let conn = rustls::ServerConnection::new(config).ok()?;
+                let mut tls = rustls::StreamOwned::new(conn, stream);
+                let mut bytes = Vec::new();
+                let mut chunk = [0_u8; 4096];
+                let split = loop {
+                    if let Some(at) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break at;
+                    }
+                    let n = tls.read(&mut chunk).ok()?;
+                    if n == 0 {
+                        return None;
+                    }
+                    bytes.extend_from_slice(&chunk[..n]);
+                };
+                let head = String::from_utf8_lossy(&bytes[..split]).into_owned();
+                let target = head.split(' ').nth(1).unwrap_or_default().to_owned();
+                let mut after = bytes.len() - split - 4;
+                tls.write_all(answer.as_bytes()).ok()?;
+                tls.conn.send_close_notify();
+                let _ = tls.flush();
+                while let Ok(n) = tls.read(&mut chunk) {
+                    if n == 0 {
+                        break;
+                    }
+                    after += n;
+                }
+                Some((target, after))
+            };
+            let heard = serve().unwrap_or((String::new(), usize::MAX));
+            let (lock, ready) = &*record;
+            *lock.lock().expect("the record") = Some(heard);
+            ready.notify_all();
+        });
+        Early { port, heard }
+    }
+
+    /// The target of the request and the bytes of body that arrived, once the client is gone.
+    pub fn heard(&self) -> Heard {
+        let (lock, ready) = &*self.heard;
+        let mut heard = lock.lock().expect("the record");
+        loop {
+            if let Some(done) = heard.clone() {
+                return done;
+            }
+            heard = ready.wait(heard).expect("the record");
+        }
+    }
+}
+
 /// The address of a loopback port where nothing listens.
 pub fn closed_port() -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback listener");
@@ -360,6 +451,8 @@ pub struct Opts<'a> {
     pub home: Option<PathBuf>,
     pub no_home: bool,
     pub ssh: Option<&'a Recorder>,
+    /// The system and the programs of `hk xcode-push`; the real ones when `None`.
+    pub mac: Option<&'a Mac>,
 }
 
 impl<'a> Opts<'a> {
@@ -374,6 +467,7 @@ impl<'a> Opts<'a> {
             home: None,
             no_home: false,
             ssh: None,
+            mac: None,
         }
     }
 
@@ -403,6 +497,11 @@ impl<'a> Opts<'a> {
 
     pub fn ssh(mut self, recorder: &'a Recorder) -> Self {
         self.ssh = Some(recorder);
+        self
+    }
+
+    pub fn mac(mut self, mac: &'a Mac) -> Self {
+        self.mac = Some(mac);
         self
     }
 
@@ -493,6 +592,8 @@ impl Rig {
             Some(recorder) => recorder,
             None => &default_ssh,
         };
+        let default_mac = Mac::system();
+        let mac = opts.mac.unwrap_or(&default_mac);
         let mut world = World {
             table: opts.table,
             stamp: opts.stamp,
@@ -508,6 +609,7 @@ impl Rig {
             oidc_token: opts.oidc.map(|(_, token)| token.as_bytes().to_vec()),
             web_roots: &web_roots,
             ssh,
+            mac,
         };
         let code = run(&mut world, args);
         Ran {
