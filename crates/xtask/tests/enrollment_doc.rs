@@ -463,7 +463,7 @@ fn span_problems(span: &str, globals: &[Global]) -> Vec<String> {
         return span
             .split_whitespace()
             .skip(1)
-            .filter(|w| w.starts_with("--") && *w != "--")
+            .filter(|w| w.starts_with("--") && *w != "--" && *w != "--help")
             .map(|w| w.split('=').next().unwrap_or(w))
             .filter(|f| !own.contains(f) && !is_global(f))
             .map(|f| format!("`{span}`: {service} has no flag {f}"))

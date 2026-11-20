@@ -4,11 +4,12 @@
 //! (one per RPC the coordinator's JSON gateway serves) is `hk <service> <method> [flags]`, one
 //! POST of the request the flags make, with the exit code of the gateway's answer. The SSH tunnel
 //! is built in: [`ssh`] is `hk ssh`, `hk ssh-proxy`, `hk ssh-revoke`, `hk ssh-status` and the
-//! `hk ssh-known-host` that ssh runs.
+//! `hk ssh-known-host` that ssh runs. [`xcode_push`] is `hk xcode-push`, which brings an Xcode
+//! release into the coordinator's Xcode store from the operator's own Mac.
 //!
 //! - [`run`]: a command line against a [`World`], which holds everything it reads and writes: the
-//!   command table, the streams, the home directory, the runner's token request and the program
-//!   that runs the ssh verbs. The tests of this crate run it with fakes for all of them.
+//!   command table, the streams, the home directory, the runner's token request, the program
+//!   that runs the ssh verbs and the programs of the Mac that `hk xcode-push` runs. The tests of this crate run it with fakes for all of them.
 //! - [`main`]: the program's `main`, which builds the real [`World`] from the process.
 //! - [`markdown`]: `docs/cli.md`, from a command table.
 //! - [`stamp`]: the version `hk --version` prints, with the commit of a release build.
@@ -32,6 +33,7 @@ pub mod stamp;
 mod table;
 #[cfg(test)]
 mod tests;
+pub mod xcode_push;
 
 use std::ffi::OsString;
 use std::io::{Read, Write};
@@ -71,6 +73,8 @@ pub struct World<'a> {
     pub web_roots: &'a dyn Fn() -> Vec<Vec<u8>>,
     /// What runs the ssh commands.
     pub ssh: &'a dyn ssh::Launch,
+    /// The system and the programs `hk xcode-push` runs.
+    pub mac: &'a xcode_push::Mac,
 }
 
 /// Why a command line stopped before its answer: a usage error (exit 2), a failure (exit 1), or
@@ -155,6 +159,7 @@ pub fn main() -> ExitCode {
         oidc_token: env_of("ACTIONS_ID_TOKEN_REQUEST_TOKEN").map(OsString::into_vec),
         web_roots: &system_roots,
         ssh: &ssh::System,
+        mac: &xcode_push::Mac::system(),
     };
     ExitCode::from(run(&mut world, &args))
 }

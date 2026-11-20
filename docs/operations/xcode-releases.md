@@ -4,7 +4,8 @@ The coordinator reads the list of Xcode releases once a day (`--xcode-feed-url`;
 the reading off) and keeps it. A failed read is a log line and another try the next day, never an alert.
 
 With `--xcode-dir` it also keeps a private store of the Xcode archives themselves. This page says what
-the store holds, how an archive gets into it and out of it, and what an operator sees.
+the store holds, how an archive gets into it (`hk xcode-push`) and out of it, and what an operator
+sees.
 
 ## The store
 
@@ -31,6 +32,45 @@ place, so an archive is held only while both files exist. A start removes the `.
 left uploads); a newer one may be an upload another coordinator of the directory has in progress, and stays. A record that cannot be read is left out of the list and logged.
 
 `--xcode-max-bytes` (default 21474836480, 20 GiB; at least 1) is the most bytes of one archive.
+
+## Pushing a release from your Mac: `hk xcode-push`
+
+When the alert `xcode_release_waiting` names a release, an operator brings it in with one command on
+their own Mac, the one signed in to the organisation's Apple developer account:
+
+```
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> xcode-push 27.2
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> xcode-push ~/Downloads/Xcode_27.2.xip
+```
+
+It runs on macOS only (anywhere else it says so and stops) and needs `xcodes` on the `PATH` for the
+first form. In order, and a step that fails uploads nothing:
+
+1. Given a version, `xcodes download <version> --directory ~/Downloads/hk-xcode-push/<version>`, in
+   your own session: `xcodes` uses the Apple sign-in kept in your Keychain, and asks for a two-factor
+   code at the terminal only when Apple has ended that session. The directory must then hold exactly
+   one `.xip` (the archive is kept there afterwards). Given a path, `hk` takes that file, downloaded
+   in a browser from Apple's developer site.
+2. `pkgutil --check-signature` on the archive must exit 0, give the status `signed Apple Software`
+   (Apple's own signature, not a developer's) and a certificate chain that ends at Apple Root CA,
+   matched by its SHA-256 fingerprint.
+3. `hk` computes the archive's SHA-256 and size, then reads its version (`CFBundleShortVersionString`)
+   and build (`ProductBuildVersion`) with `plutil` from the app that `xip --expand` makes in a directory
+   beside the archive, `.hk-xcode-push-expansion`, which it removes afterwards (and first, if an
+   interrupted push left it). That takes as much free space as an installed Xcode, on the archive's
+   volume, and some minutes. Given a version, the archive's must be it.
+4. The archive is uploaded unmodified and streamed with the `PUT` below, with your token from
+   `--token-file` as the bearer: the token is never an argument, an environment variable of a program
+   `hk` runs, or a line it prints. The request says `Expect: 100-continue`, so a refusal the
+   coordinator makes before the body (`not_listed`, `already_held`, `not_kept`, `unauthorized`) comes
+   back before the archive is sent.
+
+`--timeout-secs` bounds the connection and the wait for the coordinator's `100 Continue`; once the
+archive is sent, its answer is waited for 30 minutes at least, as long as the coordinator may take to
+sync, audit and store it. The answer, the archive stored, is printed. A refusal prints `refused:
+<error>` (the table below) and exits 3 for 401 and 403, 2 for another 4xx and 1 otherwise; an upload cut
+off before its answer keeps nothing in the store and is pushed again. `--token-stdin` is not taken: the
+terminal is `xcodes`'s, for the two-factor prompt.
 
 ## Pushing an archive: `PUT /v1/xcode/<sha256>?version=<version>&build=<build>`
 
@@ -135,8 +175,8 @@ not a release candidate) newer than any release its Xcode store holds. The messa
 version and build and the macOS it requires, and the alert's `version` is the release's version. There
 is one alert, for the newest such release. See it with `hk alerts list`.
 
-It clears when the store holds that release or a newer one. What to do: push the release's archive with
-the `PUT` above, from a Mac signed in to the Apple developer account. Without `--xcode-dir` the store
+It clears when the store holds that release or a newer one. What to do: push the release with
+`hk xcode-push <version>` (above), from a Mac signed in to the Apple developer account. Without `--xcode-dir` the store
 holds nothing, so the alert stands while the list holds a release.
 
 ## The alert `xcode_version_taken`
