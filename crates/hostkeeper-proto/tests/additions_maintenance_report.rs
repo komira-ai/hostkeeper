@@ -1,10 +1,10 @@
 //! What the coordinator's keeping of maintenance reports adds to the operator API, new since the
 //! committed baseline (`proto/compat/baseline.binpb`, the release before): `Host.maintenance_look_age_secs`
 //! (27) and `Host.maintenance_stale` (28), `Alert.host_group` (10) and `AlertKind.UPDATES_DUE`
-//! (19). A client of the release before keeps each field as one it does not know and writes it
-//! back byte for byte, and reads the alert's kind as a number it has no name for; this build
-//! reads what that release wrote with none of them. Those are the tests of rule B8 in both
-//! directions.
+//! (19). A client of the release before keeps each new field of `Host` as one it does not know and
+//! writes it back byte for byte, and this build reads a host that release wrote with none of them:
+//! the tests of rule B8 in both directions. `Alert` is new since the baseline, so it has no reader
+//! of the release before; its new field and kind are proved on the wire as written.
 
 use prost::Message as _;
 use prost_reflect::{DescriptorPool, DynamicMessage, Value};
@@ -64,21 +64,18 @@ fn an_older_client_keeps_a_hosts_look_age_and_stale_mark() {
     assert_eq!(read.encode_to_vec(), bytes, "written back byte for byte");
 }
 
-/// Catches: an alert of the new kind with its host group that a client of the release before
-/// refuses, drops, reads as a kind it names, or writes back changed. Proves the tag on the wire:
-/// field 10 of `Alert` (`0x52`) and the kind's number 19, which that client reads as a number
-/// it has no name for and keeps.
+/// Catches: an alert of the new kind, or its host group, lost or read as something else. `Alert`
+/// itself is new since the baseline (`additions.rs` round-trips it with every field set), so no
+/// client of the release before reads one: this proves the tag on the wire, field 10 (`0x52`), and
+/// the kind's number 19, read back as written.
 #[test]
-fn an_older_client_keeps_an_updates_due_alert_and_its_group() {
-    let older = baseline_pool();
-    let alert_d = older
-        .get_message_by_name("hostkeeper.operator.v1.Alert")
-        .expect("Alert");
-    assert!(alert_d.get_field_by_name("host_group").is_none());
-    let kind_d = older
-        .get_enum_by_name("hostkeeper.operator.v1.AlertKind")
-        .expect("AlertKind");
-    assert!(kind_d.values().all(|v| v.number() != 19));
+fn an_updates_due_alert_and_its_group_read_back_as_written() {
+    assert!(
+        baseline_pool()
+            .get_message_by_name("hostkeeper.operator.v1.Alert")
+            .is_none(),
+        "Alert is new since the baseline"
+    );
     let alert = op::Alert {
         kind: op::AlertKind::UpdatesDue.into(),
         severity: op::AlertSeverity::Warning.into(),
@@ -87,26 +84,15 @@ fn an_older_client_keeps_an_updates_due_alert_and_its_group() {
         ..op::Alert::default()
     };
     let bytes = alert.encode_to_vec();
+    assert_eq!(&bytes[..2], [0x08, 19]);
+    assert!(bytes.windows(4).any(|w| w == [0x52, 3, b'w', b'e']));
     assert_eq!(op::Alert::decode(bytes.as_slice()).expect("decodes"), alert);
-    assert!(bytes.contains(&0x52));
-    let read = DynamicMessage::decode(alert_d, bytes.as_slice()).expect("decodes");
-    assert_eq!(kept(&read), [10]);
-    assert_eq!(
-        read.get_field_by_name("kind").as_deref(),
-        Some(&Value::EnumNumber(19))
-    );
-    assert_eq!(
-        read.get_field_by_name("message").as_deref(),
-        Some(&Value::String("Updates due on 2 hosts of web".to_owned()))
-    );
-    assert_eq!(read.encode_to_vec(), bytes, "written back byte for byte");
 }
 
-/// Catches: a host or an alert of the release before read with a look age, a stale mark or a
-/// host group nobody wrote, or an alert's kind read as another one: each reads with none, and
-/// the fields it had as they were written.
+/// Catches: a host of the release before read with a look age or a stale mark nobody wrote: it
+/// reads with none, and the fields it had as they were written.
 #[test]
-fn the_release_befores_hosts_and_alerts_read_without_the_new_fields() {
+fn the_release_befores_hosts_read_without_the_new_fields() {
     let older = baseline_pool();
     let mut host = DynamicMessage::new(
         older
@@ -118,18 +104,6 @@ fn the_release_befores_hosts_and_alerts_read_without_the_new_fields() {
     assert_eq!(read.maintenance_look_age_secs, None, "absent, not 0");
     assert!(!read.maintenance_stale);
     assert_eq!(read.node_id, "db-1");
-
-    let mut alert = DynamicMessage::new(
-        older
-            .get_message_by_name("hostkeeper.operator.v1.Alert")
-            .expect("Alert"),
-    );
-    alert.set_field_by_name("kind", Value::EnumNumber(17));
-    alert.set_field_by_name("message", Value::String("a release waits".to_owned()));
-    let read = op::Alert::decode(alert.encode_to_vec().as_slice()).expect("decodes");
-    assert_eq!(read.kind, i32::from(op::AlertKind::XcodeReleaseWaiting));
-    assert_eq!(read.host_group, "");
-    assert_eq!(read.message, "a release waits");
 }
 
 /// Catches: the look's age read as absent when it is 0, or a zero age lost on the wire: a look
@@ -189,5 +163,4 @@ fn the_new_fields_and_the_kind_have_their_numbers_and_types() {
         .expect("value");
     assert_eq!(value.number(), 19);
     assert_eq!(op::AlertKind::UpdatesDue as i32, 19);
-    assert!(kind.values().all(|v| v.number() != 18));
 }

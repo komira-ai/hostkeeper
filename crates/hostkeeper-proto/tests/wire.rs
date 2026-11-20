@@ -627,6 +627,8 @@ const FIELDS: [(&str, &[(&str, u32)]); 40] = [
             ("repositories", 24),
             ("host_group", 25),
             ("maintenance", 26),
+            ("maintenance_look_age_secs", 27),
+            ("maintenance_stale", 28),
         ],
     ),
     (
