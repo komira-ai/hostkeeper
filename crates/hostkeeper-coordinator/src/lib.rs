@@ -179,6 +179,15 @@ pub mod lock;
 pub mod login;
 pub(crate) mod login_routes;
 pub(crate) mod macos_resolve;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the maintenance runs read it; until they are built only its tests call it"
+    )
+)]
+pub(crate) mod maintenance_effective;
+pub(crate) mod maintenance_policy;
 pub mod membership;
 pub(crate) mod moving;
 pub mod operate;
@@ -377,6 +386,8 @@ mod host_group_list_tests;
 mod host_group_move_tests;
 #[cfg(test)]
 mod host_group_proto_tests;
+#[cfg(test)]
+mod host_group_put_maintenance_tests;
 #[cfg(test)]
 mod host_group_put_policy_tests;
 #[cfg(test)]

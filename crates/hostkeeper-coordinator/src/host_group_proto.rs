@@ -9,6 +9,7 @@ use crate::defer::DeferBackoff;
 use crate::host_groups::{
     DEFAULT_MAX_UPDATING, GroupName, HostGroup, Policy, PolicyCanary, PolicyError, PolicyStage,
 };
+use crate::maintenance_policy::{LinuxScope, Maintenance, XcodeDefault};
 use crate::reconcile::{FailThreshold, Rollback};
 use crate::stages::Advance;
 
@@ -17,7 +18,8 @@ use crate::stages::Advance;
 ///
 /// # Errors
 /// [`PolicyError`] for a stage's `advance` or the `rollback` mode that is a number the proto does
-/// not define.
+/// not define, and of `maintenance` for its `linux_scope` that is one, or an `xcode_default` that
+/// is neither `latest` nor a version.
 pub(crate) fn policy_of(policy: Option<&proto::RolloutPolicy>) -> Result<Policy, PolicyError> {
     let Some(policy) = policy else {
         return Ok(Policy::default());
@@ -55,7 +57,65 @@ pub(crate) fn policy_of(policy: Option<&proto::RolloutPolicy>) -> Result<Policy,
         max_updating: policy.max_updating.unwrap_or(DEFAULT_MAX_UPDATING),
         min_up: policy.min_up,
         live_rollouts: policy.live_rollouts,
+        maintenance: maintenance_of(policy.maintenance.as_ref())?,
     })
+}
+
+/// The maintenance table `table` says: each key it leaves out takes its default; no range is
+/// checked ([`Maintenance::check`] checks them).
+fn maintenance_of(table: Option<&proto::MaintenancePolicy>) -> Result<Maintenance, PolicyError> {
+    let Some(table) = table else {
+        return Ok(Maintenance::default());
+    };
+    let refused = |why: String| PolicyError {
+        key: "maintenance",
+        why,
+    };
+    let defaults = Maintenance::default();
+    let linux_scope = match proto::LinuxScope::try_from(table.linux_scope) {
+        Ok(proto::LinuxScope::Unspecified | proto::LinuxScope::Security) => LinuxScope::Security,
+        Ok(proto::LinuxScope::All) => LinuxScope::All,
+        Err(_) => {
+            return Err(refused(format!(
+                "linux_scope {} is not a Linux scope",
+                table.linux_scope
+            )));
+        }
+    };
+    Ok(Maintenance {
+        xcode_keep: table.xcode_keep,
+        xcode_default: match table.xcode_default.as_deref() {
+            None => defaults.xcode_default,
+            Some(text) => text
+                .parse::<XcodeDefault>()
+                .map_err(|bad| refused(bad.to_string()))?,
+        },
+        macos_major: table.macos_major,
+        linux_scope,
+        batch: table.batch.unwrap_or(defaults.batch),
+        min_serving: table.min_serving.unwrap_or(defaults.min_serving),
+        drain_deadline_secs: table.drain_deadline_secs,
+        return_secs: table.return_secs,
+    })
+}
+
+/// `table` as the proto says it, every key named: `return_secs` of 0 stays 0, as its default is
+/// the platform's.
+fn maintenance_proto(table: &Maintenance) -> proto::MaintenancePolicy {
+    proto::MaintenancePolicy {
+        xcode_keep: table.xcode_keep,
+        xcode_default: Some(table.xcode_default.to_string()),
+        macos_major: table.macos_major,
+        linux_scope: match table.linux_scope {
+            LinuxScope::Security => proto::LinuxScope::Security,
+            LinuxScope::All => proto::LinuxScope::All,
+        }
+        .into(),
+        batch: Some(table.batch),
+        min_serving: Some(table.min_serving),
+        drain_deadline_secs: table.drain_deadline_secs,
+        return_secs: table.return_secs,
+    }
 }
 
 fn advance_of(number: i32) -> Result<Advance, PolicyError> {
@@ -116,6 +176,7 @@ pub(crate) fn policy_proto(policy: &Policy) -> proto::RolloutPolicy {
         max_updating: (policy.max_updating != DEFAULT_MAX_UPDATING).then_some(policy.max_updating),
         min_up: policy.min_up,
         live_rollouts: policy.live_rollouts,
+        maintenance: Some(maintenance_proto(&policy.maintenance)),
     }
 }
 
