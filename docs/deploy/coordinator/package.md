@@ -159,6 +159,11 @@ Two keys bound how the coordinator reads a repository when an operator adds one
 the key, may take, and `repository-descriptor-max-bytes` (65536, 1 to 65536) is the most bytes of a descriptor.
 No repository is built into the program: the organisation's `komira` is added by an operator like any other.
 
+`xcode-feed-url` (empty: off) is the `https://` address of a list of Xcode releases, the Xcode Releases
+site's `https://xcodereleases.com/data.json`, which the coordinator reads once a day to tell that a release
+newer than any its Xcode store holds exists ([xcode-releases.md](../../operations/xcode-releases.md)); a URL
+that is not `https://`, or names no file, is refused at start. The coordinator reads no third party unless the key is set.
+
 ## Starting it
 
 ```sh

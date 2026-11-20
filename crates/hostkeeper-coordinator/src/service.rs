@@ -161,6 +161,8 @@ pub struct Coordinator {
     /// its write, and by `Repositories.Remove` from its check that no service names the
     /// repository to its commit, so neither decides on what the other is changing.
     pub(crate) repository_naming: Mutex<()>,
+    /// The list of Xcode releases and the Xcode store ([`crate::xcode_feed`]).
+    pub(crate) xcode: crate::xcode_feed::Xcode,
     /// Told when CI's set of a desired state finds the fleet's lock held and waits for it: a
     /// test's progress event, so a race is made to happen rather than waited for.
     #[cfg(test)]
@@ -229,6 +231,7 @@ impl Coordinator {
             repository_origin: None,
             discovery: crate::repository_discover::Limits::default(),
             repository_naming: Mutex::new(()),
+            xcode: crate::xcode_feed::Xcode::default(),
             #[cfg(test)]
             set_waits: Mutex::new(None),
         }

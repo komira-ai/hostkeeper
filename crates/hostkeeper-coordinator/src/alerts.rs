@@ -43,7 +43,11 @@
 //!   `prerequisites-v1` and whose last prerequisites report ([`crate::prerequisites`]) holds a
 //!   state whose status is failed, one alert per host naming each failed prerequisite
 //!   with its failures in a row, its next try and its reason; it stands until the host's last
-//!   report holds none.
+//!   report holds none;
+//! - `xcode_release_waiting`: the list of Xcode releases the coordinator reads once a day
+//!   ([`crate::xcode_feed`]) lists a release, no beta and no release candidate, newer than any its
+//!   Xcode store holds; one alert with the release's version, until the store holds it or a newer
+//!   one.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
@@ -118,6 +122,8 @@ pub enum Kind {
     TrustedRoot,
     /// A host's daemon failed to make sure of a host prerequisite.
     PrerequisiteFailed,
+    /// The list of Xcode releases has a release newer than any the Xcode store holds.
+    XcodeReleaseWaiting,
 }
 
 impl Kind {
@@ -139,6 +145,7 @@ impl Kind {
             Self::StoreUnreachable => "store_unreachable",
             Self::TrustedRoot => "trusted_root",
             Self::PrerequisiteFailed => "prerequisite_failed",
+            Self::XcodeReleaseWaiting => "xcode_release_waiting",
         }
     }
 
@@ -156,7 +163,8 @@ impl Kind {
             | Self::SilentHost
             | Self::CertNearExpiry
             | Self::TrustedRoot
-            | Self::PrerequisiteFailed => proto::AlertSeverity::Warning,
+            | Self::PrerequisiteFailed
+            | Self::XcodeReleaseWaiting => proto::AlertSeverity::Warning,
         }
     }
 
@@ -176,6 +184,7 @@ impl Kind {
             Self::StoreUnreachable => proto::AlertKind::StoreUnreachable,
             Self::TrustedRoot => proto::AlertKind::TrustedRoot,
             Self::PrerequisiteFailed => proto::AlertKind::PrerequisiteFailed,
+            Self::XcodeReleaseWaiting => proto::AlertKind::XcodeReleaseWaiting,
         }
     }
 }
@@ -249,6 +258,9 @@ pub struct EnrollmentFacts {
     /// The last prerequisites report of each host that sent one ([`crate::prerequisites`]); not
     /// the store's, the coordinator's memory.
     pub prerequisites: BTreeMap<HostId, PrerequisitesReport>,
+    /// The release the alert `xcode_release_waiting` names, of the list kept and the Xcode store
+    /// ([`crate::xcode_feed::Xcode::release_waiting`]); none without a feed.
+    pub(crate) xcode_waiting: Option<crate::xcode_feed::XcodeRelease>,
 }
 
 /// When an observation is made: by the coordinator's clock (since its start, the clock the
@@ -316,6 +328,7 @@ pub(crate) fn derive_in(
     alerts.extend(store_unreachable(fleet));
     alerts.extend(trusted_roots(fleet));
     alerts.extend(prerequisite_failures(fleet, &enrollment.prerequisites));
+    alerts.extend(xcode_release_waiting(enrollment));
     alerts.sort_by(|a, b| a.subject.cmp(&b.subject));
     alerts.dedup_by(|a, b| a.subject == b.subject);
     alerts
@@ -598,6 +611,19 @@ fn trusted_roots(fleet: &Fleet) -> Vec<Alert> {
         .collect()
 }
 
+/// `xcode_release_waiting`: one alert for the release the list holds that the Xcode store does not,
+/// with the release's version.
+fn xcode_release_waiting(enrollment: &EnrollmentFacts) -> Option<Alert> {
+    let release = enrollment.xcode_waiting.as_ref()?;
+    Some(Alert {
+        subject: Subject {
+            version: release.id.version.to_string(),
+            ..Subject::of(Kind::XcodeReleaseWaiting)
+        },
+        message: crate::xcode_feed::waiting_message(release),
+    })
+}
+
 /// `prerequisite_failed`: each host of the fleet whose last heartbeat announced
 /// `prerequisites-v1` and whose last prerequisites report holds a failed state, with each failed
 /// prerequisite, its failures in a row, the Unix time of its next try and its reason. A report
@@ -822,6 +848,7 @@ impl Coordinator {
         };
         let enrollment = EnrollmentFacts {
             prerequisites: self.prerequisites.reports(),
+            xcode_waiting: self.xcode.release_waiting(),
             ..enrollment
         };
         let at = At {
@@ -903,6 +930,7 @@ impl Coordinator {
                 .collect(),
             server_not_after: Some(enrollment.server_certificate().not_after),
             prerequisites: BTreeMap::new(),
+            xcode_waiting: None,
         })
     }
 }
@@ -935,6 +963,10 @@ mod book_tests;
 #[cfg(test)]
 #[path = "alerts_coordinator_tests.rs"]
 mod coordinator_tests;
+
+#[cfg(test)]
+#[path = "alerts_xcode_tests.rs"]
+mod xcode_tests;
 
 #[path = "group_alerts.rs"]
 mod group_alerts;
