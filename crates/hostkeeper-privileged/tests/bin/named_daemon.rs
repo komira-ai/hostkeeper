@@ -85,6 +85,9 @@ fn daemon(flags: &DaemonFlags) -> ExitCode {
                 period,
                 platform.kind,
                 flags.maintenance_linux_scope,
+                hostkeeper_daemon::maintenance_softwareupdate::MacosMajor::from_flag(
+                    flags.maintenance_macos_major,
+                ),
                 watchdog,
             );
             start::serve(started, links).await;

@@ -185,6 +185,7 @@ fn without_a_certificate_the_daemon_waits_and_names_the_missing_file() {
             DEFAULT_HEARTBEAT_SECS,
             hostkeeper_launchd::PlatformKind::Linux,
             hostkeeper_daemon::maintenance_collect::LinuxScope::default(),
+            hostkeeper_daemon::maintenance_softwareupdate::MacosMajor::default(),
             Box::new(hostkeeper_daemon::NoWatchdog),
         )
     };

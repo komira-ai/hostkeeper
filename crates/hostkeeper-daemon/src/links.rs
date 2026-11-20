@@ -153,7 +153,7 @@ pub struct Links {
     pub prerequisites: Option<Arc<dyn PrerequisitesSink>>,
     /// The host's maintenance facts ([`crate::maintenance_facts`]), which every heartbeat to a
     /// coordinator that advertises `maintenance-v1` reports. A daemon that has them announces
-    /// `maintenance-v1`; none on a host with no collector (a Mac today).
+    /// `maintenance-v1`; none on a host with no collector.
     pub maintenance: Option<Arc<dyn MaintenanceSource>>,
     /// The host's BMC ([`crate::bmc`]), which every heartbeat reports; none on a Mac.
     pub bmc: Option<Arc<dyn BmcSource>>,

@@ -548,8 +548,8 @@ fn hostkeepers_own_packages_never_appear() {
     }
 }
 
-/// Proves a host with no collector (a Mac today) has no maintenance facts, so it announces and
-/// sends nothing, and a host with one has; a host's sink reads hostkeeper's packages from the
+/// Proves a host with no collector has no maintenance facts, so it announces and sends nothing,
+/// and a host with one has; a host's sink reads hostkeeper's packages from the
 /// `placed.json` of its placement (a state directory with none holds `hostkeeper` alone).
 #[test]
 fn only_a_host_with_a_collector_has_maintenance_facts() {

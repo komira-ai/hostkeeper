@@ -73,12 +73,19 @@ fn a_linux_host_lists_the_host_the_reboot_and_the_package_manager() {
 }
 
 /// Proves the host's own collectors start with the host's facts and the reboot need on Linux,
-/// systemd or OpenRC alike, and a Mac has none.
+/// systemd or OpenRC alike, whatever the Mac's setting, and a Mac reads `macos` then `mac` under
+/// either setting.
 #[test]
 fn the_platforms_list_their_collectors() {
-    for kind in [PlatformKind::Linux, PlatformKind::Openrc] {
-        let collectors = at_host(kind);
-        assert_eq!(names(&collectors)[..2], ["host", "reboot"]);
+    for major in [MacosMajor::NotDue, MacosMajor::Due] {
+        for kind in [PlatformKind::Linux, PlatformKind::Openrc] {
+            let collectors = at_host(kind, major);
+            assert_eq!(names(&collectors)[..2], ["host", "reboot"]);
+        }
+        assert_eq!(
+            names(&at_host(PlatformKind::Macos, major)),
+            ["macos", "mac"]
+        );
+        assert_eq!(names(&mac(major)), ["macos", "mac"]);
     }
-    assert!(at_host(PlatformKind::Macos).is_empty());
 }

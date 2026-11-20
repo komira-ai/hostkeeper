@@ -183,6 +183,7 @@ fn daemon_flag_defaults_are_the_documented_ones() {
             ready_file: None,
             package_lock_wait_secs: DEFAULT_PACKAGE_LOCK_WAIT_SECS,
             maintenance_linux_scope: LinuxScope::Security,
+            maintenance_macos_major: false,
             link: LoopFlags {
                 heartbeat_secs: DEFAULT_HEARTBEAT_SECS,
             },
@@ -201,6 +202,7 @@ fn daemon_flag_defaults_are_the_documented_ones() {
         format!("`--packages-dir` | `{DEFAULT_PACKAGES_DIR}`"),
         format!("`--facts-file` | `{DEFAULT_FACTS_FILE}`"),
         "`--notify-systemd` | off".to_owned(),
+        "`--maintenance-macos-major` | off".to_owned(),
         format!("`--package-lock-wait-secs` | `{DEFAULT_PACKAGE_LOCK_WAIT_SECS}`"),
         format!("`--heartbeat-secs` | `{DEFAULT_HEARTBEAT_SECS}`"),
         format!("| {EXIT_FAILED} |"),
