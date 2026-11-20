@@ -22,13 +22,15 @@ use crate::operator_keys::{KeysReport, PushedKeys};
 use crate::order::{Order, OrderRef, OrderResult, Outcome, Reply};
 use crate::ports::{
     BmcSource, CertSource, CertState, ClientIdentity, CoordinatorLink, Dispatch, FactsSink,
-    HeldHalt, HeldHalts, Job, LinkError, Log, Observation, OperatorKeysSink, OrderSink,
-    PrerequisitesSink, RecordedService, RemoteLoginProbeSource, RenewalSource, RepositorySink,
-    ServiceObserver, ServiceRecords, Sleeper, SshSink, Tick, TrustedRootSource, UnixClock,
+    HeldHalt, HeldHalts, Job, LinkError, Log, MaintenanceSource, Observation, OperatorKeysSink,
+    OrderSink, PrerequisitesSink, RecordedService, RemoteLoginProbeSource, RenewalSource,
+    RepositorySink, ServiceObserver, ServiceRecords, Sleeper, SshSink, Tick, TrustedRootSource,
+    UnixClock,
 };
 use crate::prerequisites::{PrerequisitesReport, PushedPrerequisites};
 use crate::probe::RemoteLoginProbe;
 use crate::repositories::{PushedSet, RepositoriesReport};
+use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 
 /// A lock that a panicking test thread did not spoil: what it holds is still the fake's state.
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -526,6 +528,33 @@ impl BmcSource for FakeBmc {
     }
 }
 
+/// The host's maintenance facts, as a test sets them: it holds the report a test gives it and
+/// counts how often it was asked.
+#[derive(Default)]
+pub struct FakeMaintenance {
+    report: Mutex<pb::MaintenanceReport>,
+    asked: Mutex<usize>,
+}
+
+impl FakeMaintenance {
+    /// Sets the report the next asks give.
+    pub fn set(&self, report: pb::MaintenanceReport) {
+        *lock(&self.report) = report;
+    }
+
+    /// How many times the loop asked for the report.
+    pub fn asked(&self) -> usize {
+        *lock(&self.asked)
+    }
+}
+
+impl MaintenanceSource for FakeMaintenance {
+    fn report(&self) -> pb::MaintenanceReport {
+        *lock(&self.asked) += 1;
+        lock(&self.report).clone()
+    }
+}
+
 /// The host's repository configuration, as a test sets it: it holds the report a test gives it,
 /// records every set it is given, and lists the installers a test gives it.
 #[derive(Default)]
@@ -761,6 +790,10 @@ pub struct World {
     /// The host prerequisites; the ports hold them only after [`World::keeping_prerequisites`].
     pub prerequisites: Arc<FakePrerequisites>,
     keeping_prerequisites: bool,
+    /// The host's maintenance facts; the ports hold them only after
+    /// [`World::keeping_maintenance`].
+    pub maintenance: Arc<FakeMaintenance>,
+    keeping_maintenance: bool,
 }
 
 impl Default for World {
@@ -799,6 +832,8 @@ impl World {
             keeping_operator_keys: false,
             prerequisites: Arc::default(),
             keeping_prerequisites: false,
+            maintenance: Arc::default(),
+            keeping_maintenance: false,
         }
     }
 
@@ -843,6 +878,14 @@ impl World {
         self
     }
 
+    /// The world of a host that reads its maintenance facts: its ports hold
+    /// [`World::maintenance`], and it announces `maintenance-v1` to a coordinator that advertises
+    /// it.
+    pub fn keeping_maintenance(mut self) -> World {
+        self.keeping_maintenance = true;
+        self
+    }
+
     /// The loop announces `private-repository-v1` though the world holds no repository
     /// configuration: a daemon that reads private repositories another way (a Mac).
     pub fn reading_private_repositories(mut self) -> World {
@@ -883,6 +926,9 @@ impl World {
                 .keeping_prerequisites
                 .then(|| Arc::clone(&self.prerequisites) as Arc<dyn PrerequisitesSink>),
             bmc: Some(Arc::clone(&self.bmc) as Arc<dyn BmcSource>),
+            maintenance: self
+                .keeping_maintenance
+                .then(|| Arc::clone(&self.maintenance) as Arc<dyn MaintenanceSource>),
         }
     }
 

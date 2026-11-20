@@ -391,6 +391,7 @@ fn run_daemon(
                 &files,
                 flags.link.heartbeat_secs,
                 platform.kind,
+                flags.maintenance_linux_scope,
                 watchdog,
             );
             // The shipped loops keep the host identity copy under the real
@@ -447,6 +448,7 @@ fn file_links(
         remote_login_probe: None,
         operator_keys: None,
         prerequisites: None,
+        maintenance: None,
         period,
         dispatch: Arc::new(ThreadDispatch),
         stop,

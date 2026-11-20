@@ -142,6 +142,7 @@ fn the_loop_dials_only_the_coordinator_link_port() {
         "host_facts.rs",
         "host_ssh.rs",
         "lib.rs",
+        "maintenance.rs",
         "mtls.rs",
         "names.rs",
         "negotiated.rs",

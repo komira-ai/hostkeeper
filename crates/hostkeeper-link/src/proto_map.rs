@@ -103,7 +103,7 @@ pub(crate) fn heartbeat(beat: &Heartbeat) -> Result<pb::HeartbeatRequest, Unsend
             ip: report.ip.clone(),
             mac: report.mac.clone(),
         }),
-        maintenance: None,
+        maintenance: beat.maintenance.clone(),
     })
 }
 

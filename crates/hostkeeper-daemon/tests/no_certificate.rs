@@ -184,6 +184,7 @@ fn without_a_certificate_the_daemon_waits_and_names_the_missing_file() {
             &files,
             DEFAULT_HEARTBEAT_SECS,
             hostkeeper_launchd::PlatformKind::Linux,
+            hostkeeper_daemon::maintenance_collect::LinuxScope::default(),
             Box::new(hostkeeper_daemon::NoWatchdog),
         )
     };
