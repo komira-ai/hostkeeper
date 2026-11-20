@@ -1,0 +1,6 @@
++-o J180dAP  <class IOPlatformExpertDevice, id 0x100000214, registered, matched, active, busy 0 (12345 ms), retain 39>
+    {
+      "IOPlatformUUID" = "4C1D2B3A-5E6F-4A7B-8C9D-0E1F2A3B4C5D"
+      "IOPlatformSerialNumber" = "H7K2XQ9WLM"
+      "model" = <"Mac15,14">
+    }

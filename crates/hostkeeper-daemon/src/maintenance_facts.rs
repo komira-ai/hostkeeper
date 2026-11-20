@@ -121,8 +121,7 @@ impl MaintenanceFacts {
     /// The sink of a host under `scope` over `collectors` (on a host, its platform's:
     /// [`crate::maintenance_collectors::at_host`]) and the packages recorded in the daemon's
     /// `placed.json` ([`PlacedPackages`] of `placement`), its looks timed by `clock` and run on
-    /// `dispatch`; none when there is no collector (a Mac today), so that the host announces and
-    /// sends nothing.
+    /// `dispatch`; none when there is no collector, so that the host announces and sends nothing.
     #[must_use]
     pub fn of_host(
         collectors: Vec<Box<dyn Collector>>,
