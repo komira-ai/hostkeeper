@@ -774,6 +774,7 @@ fn wire_names_are_pinned() {
                 "mdm_dns_credential_rejected",
                 "mdm_identity_near_expiry",
                 "prerequisite_failed",
+                "xcode_release_waiting",
             ],
         ),
         (
