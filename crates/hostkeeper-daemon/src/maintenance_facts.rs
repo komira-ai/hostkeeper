@@ -2,12 +2,12 @@
 //! section 1): the [`MaintenanceSource`] of the daemon's heartbeat loop. It keeps the
 //! `MaintenanceReport` of the last look and gives it to every heartbeat that asks.
 //!
-//! **A look** runs on a worker of the sink's [`Dispatch`]: it reads the packages hostkeeper
-//! itself installs ([`OwnPackages`]), then asks each [`Collector`] in order what it finds. The
-//! sections join into the report ([`Section`]): the host texts, the Xcodes and the Mac's facts as
-//! the collectors give them, what is due ordered reboots first, then security updates, then the
-//! rest, each group in the order found, at most [`MAX_DUE`] of them (the count of the rest is
-//! `due_left_out`), every text kept to its bound, and the report checked against the wire's
+//! **A look** runs on a worker of the sink's [`Dispatch`]: it reads the packages hostkeeper itself
+//! installs ([`OwnPackages`]), then asks each [`Collector`] in order what it finds. The sections
+//! join into the report ([`Section`]): the host texts, the Xcodes and the Mac's facts (field by
+//! field) as the collectors give them, what is due ordered reboots first, then security updates,
+//! then the rest, each group in the order found, at most [`MAX_DUE`] of them (the count of the rest
+//! is `due_left_out`), every text kept to its bound, and the report checked against the wire's
 //! bounds ([`check_report`]) before it is kept. Its `looked_unix` is the second the look started.
 //!
 //! **A look that fails** (a collector's reason, naming it; the packages of hostkeeper that cannot
@@ -241,7 +241,12 @@ fn join(sections: Vec<Section>, looked_unix: u64) -> pb::MaintenanceReport {
     for section in sections {
         fill_host(&mut host, &section.host);
         report.xcodes.extend(section.xcodes);
-        report.mac = section.mac.or(report.mac);
+        if let Some(mac) = section.mac {
+            fill_mac(
+                report.mac.get_or_insert_with(pb::MacUpdateFacts::default),
+                mac,
+            );
+        }
         due.extend(section.due);
         report.unparsed_lines = report.unparsed_lines.saturating_add(section.unparsed);
     }
@@ -277,6 +282,28 @@ fn fill_host(into: &mut pb::MaintenanceHost, from: &pb::MaintenanceHost) {
     }
     if into.boot_unix == 0 {
         into.boot_unix = from.boot_unix;
+    }
+}
+
+/// Takes from `from` each Mac fact `into` holds none of, as [`Section`] says: a FileVault state
+/// other than unspecified, `authrestart_supported` true, a free size, an update account and Command
+/// Line Tools; and adds each of its device-management conflicts `into` does not hold yet.
+fn fill_mac(into: &mut pb::MacUpdateFacts, from: pb::MacUpdateFacts) {
+    if into.filevault == i32::from(pb::FileVaultState::Unspecified) {
+        into.filevault = from.filevault;
+    }
+    into.authrestart_supported |= from.authrestart_supported;
+    into.data_free_bytes = into.data_free_bytes.or(from.data_free_bytes);
+    if into.update_account.is_none() {
+        into.update_account = from.update_account;
+    }
+    if into.command_line_tools.is_none() {
+        into.command_line_tools = from.command_line_tools;
+    }
+    for conflict in from.mdm_conflicts {
+        if !into.mdm_conflicts.contains(&conflict) {
+            into.mdm_conflicts.push(conflict);
+        }
     }
 }
 

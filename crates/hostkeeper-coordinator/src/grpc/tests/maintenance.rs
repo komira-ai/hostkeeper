@@ -43,6 +43,7 @@ fn full(due: usize, looked: u64) -> agent::MaintenanceReport {
             build: "27B52".to_owned(),
             path: "/Applications/Xcode-27.2.app".to_owned(),
             selected: true,
+            foreign: false,
         }],
         mac: Some(agent::MacUpdateFacts {
             filevault: agent::FileVaultState::On as i32,
@@ -52,6 +53,7 @@ fn full(due: usize, looked: u64) -> agent::MaintenanceReport {
                 present: true,
                 admin: true,
                 secure_token: true,
+                hidden: true,
             }),
             command_line_tools: Some(agent::CommandLineToolsState {
                 receipt: true,

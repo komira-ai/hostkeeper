@@ -34,7 +34,7 @@ export namespace hostkeeper_agent_v1 {
     bmc?: hostkeeper_agent_v1.BmcReport;
     maintenance?: hostkeeper_agent_v1.MaintenanceReport;
   }
-  export interface InstalledXcode { version?: string; build?: string; path?: string; selected?: boolean; }
+  export interface InstalledXcode { version?: string; build?: string; path?: string; selected?: boolean; foreign?: boolean; }
   export interface LocalHalt { reason?: string; generation?: string; ageSecs?: string; }
   export interface MacUpdateFacts {
     filevault?: hostkeeper_agent_v1.FileVaultState;
@@ -110,7 +110,7 @@ export namespace hostkeeper_agent_v1 {
   export interface SshReport { appliedGeneration?: string; state?: string; hostKeyFingerprints?: string[]; detail?: string; }
   export interface StepRun { name?: string; attempt?: number; }
   export type TrustedRootReason = "TRUSTED_ROOT_REASON_UNSPECIFIED" | "TRUSTED_ROOT_REASON_NONE" | "TRUSTED_ROOT_REASON_STALE" | "TRUSTED_ROOT_REASON_MISSING" | "TRUSTED_ROOT_REASON_UNPARSEABLE";
-  export interface UpdateAccountState { present?: boolean; admin?: boolean; secureToken?: boolean; }
+  export interface UpdateAccountState { present?: boolean; admin?: boolean; secureToken?: boolean; hidden?: boolean; }
   export interface UpdateResult {
     target?: string;
     outcome?: hostkeeper_agent_v1.Outcome;
