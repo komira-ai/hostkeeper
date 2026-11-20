@@ -1,12 +1,10 @@
 //! The rules of `farm.yml` ([`super::farm`]), the farm lane: the one job that holds
 //! `id-token: write` on a pull request, and only under its exact `if:`; farm-connect pinned by
 //! commit in that file alone, with exactly the variables it is given; the triggers, the runner,
-//! the rights, and the `local: 0` check after the build. Each rule is shown to refuse its defect
+//! the rights, and the build through `cargo xtask farm-build` after farm-connect. Each rule is shown to refuse its defect
 //! by putting it into the committed workflow and reading the exact problems the lint reports.
 
-use super::farm::{
-    BUILD_RUN, CONNECT_INPUTS, FARM_CONNECT, FILE, JOB_IF, LOCAL_ZERO_RUN, ON_PROBLEM, RUNNER,
-};
+use super::farm::{BUILD_RUN, CONNECT_INPUTS, FARM_CONNECT, FILE, JOB_IF, ON_PROBLEM, RUNNER};
 use super::lint::lint;
 use super::{with_in, workflows};
 
@@ -189,9 +187,10 @@ fn exactly_one_step_uses_farm_connect() {
             &format!("{FARM_CONNECT}@a26616d62db17ee8aff67ee9c12d411c2fad7609"),
             "example/join@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa # v1.0.0"
         ),
-        [format!(
-            "job build: exactly one step must use {FARM_CONNECT}"
-        )]
+        [
+            format!("job build: exactly one step must use {FARM_CONNECT}"),
+            BUILD_ORDER.to_owned(),
+        ]
     );
     // A name that only starts with farm-connect's is another action: it needs a version comment,
     // and the step is no farm-connect step.
@@ -207,24 +206,36 @@ fn exactly_one_step_uses_farm_connect() {
                 line_of(FARM_CONNECT)
             ),
             format!("job build: exactly one step must use {FARM_CONNECT}"),
+            BUILD_ORDER.to_owned(),
         ]
     );
 }
 
+/// The problem of a build step that is missing from after farm-connect's.
+const BUILD_ORDER: &str = "job build: the build does not come after the farm-connect step";
+
 #[test]
-fn the_build_is_checked_for_local_zero() {
-    // Catches: a build of something other than `//:ci`, or a build whose summary line is never
-    // read, so that actions run on the runner (no farm, or a fallback) pass as a farm build.
+fn the_job_runs_farm_build_of_ci_after_farm_connect() {
+    // Catches: a build of something other than `//:ci`, a build not run through `farm-build`
+    // (whose checks refuse no workers and `local` above 0), or one run before the farm is
+    // connected, which would build on the runner.
     assert_eq!(
         problems_with(BUILD_RUN, &BUILD_RUN.replace("//:ci", "//...")),
         [format!("job build: no step runs `{BUILD_RUN}`")]
     );
     assert_eq!(
-        problems_with(LOCAL_ZERO_RUN, "echo built"),
-        [format!(
-            "job build: the step after the build does not run `{LOCAL_ZERO_RUN}`"
-        )]
+        problems_with(BUILD_RUN, "buck2 build //:ci"),
+        [format!("job build: no step runs `{BUILD_RUN}`")]
     );
+    let text = committed();
+    let step =
+        format!("      - name: buck2 build //:ci on the farm, local 0\n        run: {BUILD_RUN}\n");
+    let early = with_in(&text, &step, "").replacen(
+        "      - name: Connect to the farm\n",
+        &format!("{step}      - name: Connect to the farm\n"),
+        1,
+    );
+    assert_eq!(lint(FILE, &early), [BUILD_ORDER]);
 }
 
 #[test]

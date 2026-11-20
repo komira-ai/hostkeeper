@@ -21,8 +21,9 @@
 //!   tailnet identity (`TS_CLIENT_ID`, `TS_AUDIENCE`) and the farm's address, instance, worker
 //!   property set and TLS switch, each from the organisation's variable of its name, and nothing
 //!   else (no secret, no token, no input a pull request could set);
-//! - the build step is exactly [`BUILD_RUN`] and the step after it exactly [`LOCAL_ZERO_RUN`]: the
-//!   build's summary line must say that no action ran on the runner.
+//! - a step after farm-connect's runs exactly [`BUILD_RUN`]: `cargo xtask farm-build` of `//:ci`,
+//!   which refuses a build with no farm workers or whose summary line does not say `local: 0`
+//!   (crates/xtask/src/farm.rs).
 
 use std::collections::BTreeMap;
 
@@ -53,9 +54,7 @@ pub const CONNECT_INPUTS: [(&str, &str); 6] = [
 ];
 /// The build step's `run:`.
 pub const BUILD_RUN: &str =
-    "set -o pipefail; \"$RUNNER_TEMP/bin/buck2\" build //:ci 2>&1 | tee \"$RUNNER_TEMP/build.log\"";
-/// The `run:` of the step after the build: no action ran on the runner.
-pub const LOCAL_ZERO_RUN: &str = "grep -Eq 'Commands: [0-9]+ \\(.*local: 0\\)' \"$RUNNER_TEMP/build.log\" || { echo \"::error::the build's summary line does not say local: 0\"; exit 1; }";
+    "cargo xtask farm-build --buck2 \"$RUNNER_TEMP/bin/buck2\" --target //:ci";
 
 /// What a [`FILE`] whose `on` is anything else is refused with.
 pub const ON_PROBLEM: &str =
@@ -171,19 +170,20 @@ fn job_problems(job: &Node) -> Vec<String> {
             "job {JOB}: exactly one step must use {FARM_CONNECT}"
         )),
     }
-    let runs: Vec<Option<&str>> = steps
+    let connect = steps.iter().position(|s| {
+        entry(s, "uses")
+            .and_then(Node::as_str)
+            .is_some_and(|u| unversioned_pin_allowed(FILE, u))
+    });
+    let build = steps
         .iter()
-        .map(|s| entry(s, "run").and_then(Node::as_str))
-        .collect();
-    let build = runs.iter().position(|r| *r == Some(BUILD_RUN));
-    match build {
-        None => problems.push(format!("job {JOB}: no step runs `{BUILD_RUN}`")),
-        Some(at) if runs.get(at + 1).copied().flatten() != Some(LOCAL_ZERO_RUN) => {
-            problems.push(format!(
-                "job {JOB}: the step after the build does not run `{LOCAL_ZERO_RUN}`"
-            ));
-        }
-        Some(_) => {}
+        .position(|s| entry(s, "run").and_then(Node::as_str) == Some(BUILD_RUN));
+    match (connect, build) {
+        (_, None) => problems.push(format!("job {JOB}: no step runs `{BUILD_RUN}`")),
+        (Some(c), Some(b)) if c < b => {}
+        _ => problems.push(format!(
+            "job {JOB}: the build does not come after the farm-connect step"
+        )),
     }
     problems
 }

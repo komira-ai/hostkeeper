@@ -102,17 +102,9 @@ jobs:
           farm-instance: ${{ vars.FARM_INSTANCE }}
           farm-properties: ${{ vars.FARM_LINUX_X86_64_PROPERTIES }}
           tls: ${{ vars.FARM_TLS || 'false' }}
-      # .buckconfig hands farm-connect's worker property set to buildrules; with none, buck2 would
-      # have no execution platform. Refuse before the build says so less clearly.
-      - name: The buckconfig names the farm's workers
-        run: '"$RUNNER_TEMP/bin/buck2" audit config buildrules_re.linux_x86_64_properties --style json | grep -q "\": *\"[^\"]" || { echo "::error::buildrules_re.linux_x86_64_properties is empty: farm-connect wrote no [komira_re] linux_x86_64_properties"; exit 1; }'
-      - name: buck2 build //:ci
-        run: set -o pipefail; "$RUNNER_TEMP/bin/buck2" build //:ci 2>&1 | tee "$RUNNER_TEMP/build.log"
-      # The summary line counts the actions run on this machine: all must have run on the farm or
-      # come from its cache.
-      - name: No action ran on the runner
-        run: |-
-          grep -Eq 'Commands: [0-9]+ \(.*local: 0\)' "$RUNNER_TEMP/build.log" || { echo "::error::the build's summary line does not say local: 0"; exit 1; }
-      - name: Stop buck2
-        if: ${{ always() }}
-        run: '"$RUNNER_TEMP/bin/buck2" kill || true'
+      # One command (crates/xtask/src/farm.rs): it refuses to build unless .buckconfig handed
+      # farm-connect's worker property set to buildrules, builds //:ci, fails unless the summary
+      # line says `local: 0` (every action ran on the farm or came from its cache), and stops
+      # buck2's daemon however the build ended.
+      - name: buck2 build //:ci on the farm, local 0
+        run: cargo xtask farm-build --buck2 "$RUNNER_TEMP/bin/buck2" --target //:ci

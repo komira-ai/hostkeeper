@@ -23,8 +23,10 @@ binaries and every test target, with `[workspace.lints]` and `clippy.toml`, warn
 and, for the members listed below as farm-tested, its `:test`. A test target runs as a build
 action: its `.passed` marker exists only if every test of the target passed, and a cached marker
 means the tests passed on byte-identical inputs. The summary line must read
-`Commands: N (cached: N, remote: N, local: 0)`: no action ran on the runner. `farm.yml` refuses a
-build that does not say `local: 0`.
+`Commands: N (cached: N, remote: N, local: 0)`: no action ran on the runner. `farm.yml` runs the build
+as one command, `cargo xtask farm-build` (`crates/xtask/src/farm.rs`): it refuses to start
+without the farm's worker property set, fails a build that does not say `local: 0`, and stops
+buck2's daemon however the build ended.
 
 The files of the build, all generated or written once by `buildrules`:
 
@@ -105,7 +107,7 @@ That join is why the job holds `id-token: write` on a pull request, the one job 
 workflow that may (AGENTS.md, B10 of this repository). The workflow lint
 (`crates/xtask/tests/workflows/farm.rs`) holds it to: exactly that scope and `contents: read`;
 the exact `if:` that skips a fork's pull request (which gets no OIDC token) and Dependabot's; farm-connect's inputs exactly
-the variables above; a build of `//:ci` followed by the `local: 0` check; and the triggers, one
+the variables above; a step after farm-connect's that runs `cargo xtask farm-build` of `//:ci`; and the triggers, one
 job and one runner. It does not fix the job's other steps, each of which could ask for the token:
 a change to them is reviewed like any change to a workflow.
 
