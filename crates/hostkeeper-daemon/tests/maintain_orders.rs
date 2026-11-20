@@ -241,17 +241,17 @@ fn another_order_while_a_turn_waits_for_a_reboot_is_refused_busy() {
 }
 
 /// Catches an order whose fields are not checked before anything runs: each is refused
-/// `invalid_order` naming the field and its rule (the action that is not `RUN`, a run id that is
-/// empty, kinds that are none, unspecified or repeated, an order id of 65 bytes, a try of 0), with
-/// nothing launched and no record.
+/// `invalid_order` naming the field and its rule (an action unspecified or of no known value, a run
+/// id that is empty, kinds that are none, unspecified or repeated, an order id of 65 bytes, a try
+/// of 0), with nothing launched and no record.
 #[test]
 fn an_order_that_breaks_its_grammar_is_refused_before_anything_runs() {
     let rig = Rig::new("maintain-grammar");
     let daemon = rig.daemon();
     let linux = MaintenanceKind::Linux;
-    let with_action = |action: MaintainAction| {
+    let with_action = |action: i32| {
         let mut terms = terms(&[linux], None);
-        terms.action = action.into();
+        terms.action = action;
         order_of(ORDER, 1, terms)
     };
     let mut no_run_id = terms(&[linux], None);
@@ -259,11 +259,11 @@ fn an_order_that_breaks_its_grammar_is_refused_before_anything_runs() {
     let long_id = "x".repeat(65);
     let cases = [
         (
-            with_action(MaintainAction::Retry),
+            with_action(MaintainAction::Unspecified.into()),
             format!("the order's maintain.action {ACTION_RULE}"),
         ),
         (
-            with_action(MaintainAction::PutBack),
+            with_action(4),
             format!("the order's maintain.action {ACTION_RULE}"),
         ),
         (

@@ -94,6 +94,7 @@ fn a_turn_launches_its_steps_in_order_and_ends_done() {
         running: false,
         deferred: None,
         halted: None,
+        put_back: None,
     };
     let held = record(&rig).expect("the run record");
     assert_eq!(held, expected);

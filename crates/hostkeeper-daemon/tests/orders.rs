@@ -190,7 +190,8 @@ fn an_unspecified_or_malformed_order_is_refused_naming_the_field() {
             "clear_record.service",
             SERVICE_RULE,
         ),
-        // A `maintain` with no action is refused naming it: this daemon runs only `RUN`.
+        // A `maintain` with no action is refused naming it: it is none of `RUN`, `RETRY` and
+        // `PUT_BACK`.
         (
             with_verb(order::Verb::Maintain(Maintain::default())),
             "maintain.action",
