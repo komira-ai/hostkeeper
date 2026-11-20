@@ -6,7 +6,7 @@
 //! field added to a shipped message. A reader of the release before keeps every method, message,
 //! value and field it knows, reads what this build writes with the new fields set, and writes
 //! them back unchanged; this build reads what that release wrote with every new field at its
-//! default. The explicit-presence fields tell zero from absent, and the JSON a `hkctl --request`
+//! default. The explicit-presence fields tell zero from absent, and the JSON an `hk --request`
 //! file carries for `HostGroups.Put` reads into the request.
 
 use std::fmt::Debug;
@@ -727,7 +727,7 @@ fn explicit_zero_and_empty_values_are_distinct_from_absent() {
     assert_eq!(read.facts, Some(agent::HostFacts::default()));
 }
 
-/// The body a `hkctl --request` file carries for `HostGroups.Put`, as the gateway reads it.
+/// The body an `hk --request` file carries for `HostGroups.Put`, as the gateway reads it.
 fn put_body() -> serde_json::Value {
     serde_json::json!({
         "hostGroup": {

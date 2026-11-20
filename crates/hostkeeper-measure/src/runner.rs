@@ -1,13 +1,13 @@
-//! The runner: carries a plan out against a coordinator, with `hkctl` alone, and records each
+//! The runner: carries a plan out against a coordinator, with `hk` alone, and records each
 //! event it sees.
 //!
-//! Each repetition starts with the plan's hosts, read from `hkctl hosts list` (refused when they
+//! Each repetition starts with the plan's hosts, read from `hk hosts list` (refused when they
 //! are not as many as the plan says), and the newest audit sequence number, after which the
 //! audit is read. Then each step runs in order:
-//! - a call runs `hkctl` once; a call that fails ends the repetition. With `audit`, the entry of
+//! - a call runs `hk` once; a call that fails ends the repetition. With `audit`, the entry of
 //!   that action the call wrote stamps the event with the coordinator's time;
 //! - an operator step prints its instruction and waits for a line on standard input;
-//! - a watch polls until its condition holds. Each poll that `hkctl` fails is a `call-failed`
+//! - a watch polls until its condition holds. Each poll that `hk` fails is a `call-failed`
 //!   event and the watch goes on; at the timeout the watch records `timed-out` and ends the
 //!   repetition, or goes on to the next step when the plan says so.
 //!
@@ -36,7 +36,7 @@ use crate::template::{self, TemplateError};
 
 /// The gateway's name of a successful update.
 const SUCCEEDED: &str = "OUTCOME_SUCCEEDED";
-/// The most entries or hosts one page of `hkctl` answers.
+/// The most entries or hosts one page of `hk` answers.
 const PAGE: &str = "256";
 
 /// Why a run stopped before its end. The records written until then stay.
@@ -57,9 +57,9 @@ pub enum RunError {
         #[source]
         source: io::Error,
     },
-    #[error("`hkctl {command}` answered what is not the gateway's JSON: {why}")]
+    #[error("`hk {command}` answered what is not the gateway's JSON: {why}")]
     Unreadable { command: String, why: String },
-    #[error("`hkctl {command}` failed (exit {code}{reason}), and the run needs its answer")]
+    #[error("`hk {command}` failed (exit {code}{reason}), and the run needs its answer")]
     Needed {
         command: String,
         code: i32,

@@ -12,7 +12,7 @@
 //! | coordinator to browser | binary | the host's output, at most 16 KiB each |
 //! | coordinator to browser | text, last | `{"type": "closed", "cause": "<token>"}` |
 //!
-//! The steps, in the order of `hkctl ssh`: the first message must carry the session's CSRF token
+//! The steps, in the order of `hk ssh`: the first message must carry the session's CSRF token
 //! and a size in range (else `bad_request`); the operators file must permit the host and the host
 //! must be enrolled (the refusal's token: `not_permitted`, `unknown_host`, ...) and have a pinned
 //! host key set (`no_pin`); then a key of the terminal's own is made from the coordinator's random

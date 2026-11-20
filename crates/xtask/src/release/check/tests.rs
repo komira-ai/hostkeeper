@@ -56,7 +56,7 @@ fn a_good_directory_passes_with_two_verifier_calls_per_attested_asset() {
     assert_eq!(
         run(&verifier, &dir, &commit),
         Ok(vec![format!(
-            "release check: the 72 assets of v0.1.5 match SHA256SUMS, and 62 attestations of \
+            "release check: the 73 assets of v0.1.5 match SHA256SUMS, and 62 attestations of \
              commit {commit} verified online and from their bundles"
         )])
     );
@@ -305,7 +305,7 @@ fn a_release_without_its_macos_assets_is_refused_naming_each() {
         .into_iter()
         .filter(|n| n.contains("macos-arm64"))
         .collect();
-    assert_eq!(mac.len(), 9);
+    assert_eq!(mac.len(), 12);
     for name in &mac {
         std::fs::remove_file(dir.join(name)).expect("remove a macOS asset");
     }
@@ -328,37 +328,71 @@ fn a_release_without_its_macos_assets_is_refused_naming_each() {
 }
 
 #[test]
-fn an_hkctl_asset_that_is_not_the_releases_script_is_listed() {
-    // Catches: `release check` passing a command line of another release or another commit, or a
-    // file that is not the script at all, as `hkctl-<version>`.
-    let (dir, commit) = assets("check-hkctl");
+fn an_hk_tarball_that_is_not_the_program_and_its_old_name_is_listed() {
+    // Catches: `release check` passing a command line tarball without `hk`, without the `hkctl`
+    // link, with a link to another target, with `hkctl` as a file, with another member besides
+    // them, or one that is no gzip tar archive; and a tarball that is
+    // absent being read.
+    use crate::release::fakes::{Member, tarball};
+    let (dir, commit) = assets("check-hk-tarball");
     let verifier = FakeVerifier::good(&commit);
-    let name = crate::release::contract::hkctl_name(&version());
-    let wrong = format!(
-        "{name} does not hold exactly one version line `_hk_version='hkctl 0.1.5+{}'`",
-        commit.short()
-    );
-    // Another release's, and this release's at another commit.
-    for line in ["hkctl 0.1.4+000000000000", "hkctl 0.1.5+0123456789ab"] {
-        std::fs::write(
-            dir.join(&name),
-            format!("#!/usr/bin/env bash\n_hk_version='{line}'\n"),
+    let name = "hk-0.1.5-linux-arm64.tar.gz";
+    let wrong = |holds: &str| {
+        format!(
+            "{name} does not hold exactly the file `hk` and the symbolic link `hkctl` to `hk` \
+             (it holds {holds})"
         )
-        .expect("write");
+    };
+    let cases: [(Vec<Member<'_>>, &str); 6] = [
+        (vec![Member::File("hk", "x".into())], "hk (file)"),
+        (vec![Member::Link("hkctl", "hk")], "hkctl (link to hk)"),
+        (
+            vec![
+                Member::File("hk", "x".into()),
+                Member::Link("hkctl", "hkssh"),
+            ],
+            "hk (file), hkctl (link to hkssh)",
+        ),
+        (
+            vec![
+                Member::File("hk", "x".into()),
+                Member::File("hkctl", "x".into()),
+            ],
+            "hk (file), hkctl (file)",
+        ),
+        (
+            vec![
+                Member::File("hk", "x".into()),
+                Member::Link("hkctl", "hk"),
+                Member::File("hkssh", "x".into()),
+            ],
+            "hk (file), hkctl (link to hk), hkssh (file)",
+        ),
+        (
+            vec![Member::Dir("hk/"), Member::Link("hkctl", "hk")],
+            "hk/ (type 5), hkctl (link to hk)",
+        ),
+    ];
+    for (members, holds) in cases {
+        std::fs::write(dir.join(name), tarball(&members)).expect("write");
         let lines = refused(run(&verifier, &dir, &commit));
-        assert!(lines.contains(&wrong), "{lines:?}");
+        assert!(lines.contains(&wrong(holds)), "{holds}: {lines:?}");
     }
-    std::fs::write(dir.join(&name), "not a script\n").expect("write");
+    std::fs::write(dir.join(name), "not an archive\n").expect("write");
     let lines = refused(run(&verifier, &dir, &commit));
     assert!(
-        lines.contains(&format!("{name} does not start with `#!/usr/bin/env bash`")),
+        lines
+            .iter()
+            .any(|l| l.starts_with(&format!("{name} is not a readable gzip tar archive: "))),
         "{lines:?}"
     );
-    // Absent, it is listed once, as missing, and no later step reads it.
-    std::fs::remove_file(dir.join(&name)).expect("remove");
-    assert_eq!(
-        refused(run(&verifier, &dir, &commit)),
-        [format!("missing {name}")]
+    // Absent, it is listed once, as missing, and the other platforms' stay checked.
+    std::fs::remove_file(dir.join(name)).expect("remove");
+    let lines = refused(run(&verifier, &dir, &commit));
+    assert!(lines.contains(&format!("missing {name}")), "{lines:?}");
+    assert!(
+        !lines.iter().any(|l| l.contains("does not hold exactly")),
+        "{lines:?}"
     );
 }
 

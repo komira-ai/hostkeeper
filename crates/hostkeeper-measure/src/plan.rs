@@ -55,7 +55,7 @@ pub struct Hosts {
     pub exactly: Option<u32>,
 }
 
-/// How the hosts of a repetition are found, from `hkctl hosts list` at its start.
+/// How the hosts of a repetition are found, from `hk hosts list` at its start.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum Pick {
@@ -89,7 +89,7 @@ pub struct Step {
 /// What a step does.
 #[derive(Clone, Debug)]
 pub enum Action {
-    /// Runs `hkctl <args>`, with `--request <file>` holding `request` when it is set. With
+    /// Runs `hk <args>`, with `--request <file>` holding `request` when it is set. With
     /// `audit`, the coordinator's audit entry of that action the call wrote stamps the event.
     Call {
         args: Vec<String>,
@@ -661,7 +661,7 @@ fn json_strings<'a>(value: &'a serde_json::Value, out: &mut Vec<&'a str>) {
     }
 }
 
-/// An audit action as `hkctl audit list --action` takes it.
+/// An audit action as `hk audit list --action` takes it.
 fn action_ok(action: &str) -> bool {
     !action.is_empty()
         && action.len() <= 64

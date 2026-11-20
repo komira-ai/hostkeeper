@@ -4,7 +4,7 @@ What the coordinator does with `--ssh-ca-secret-file` set (build items C2 and C4
 [ssh-through-coordinator.md](../design/ssh-through-coordinator.md)): it signs short-lived OpenSSH user
 certificates for the operators the owner lists, one host each, revokes them, and carries an operator's ssh
 connection to a host's sshd through its private listener (the `Ssh/Tunnel` stream, below). The clients of the
-tunnel (the ssh commands of `hkctl` and its proxy, C5) and the daemon's sshd setup and its report of the host keys
+tunnel (the ssh commands of `hk` and its proxy, C5) and the daemon's sshd setup and its report of the host keys
 (C3, C3m) are other changes. The heartbeat plumbing (C6) tells each host's daemon the CA's public key, its
 principal and login user, the password policy and the revoked serials (below, "What hosts are sent").
 
@@ -132,7 +132,7 @@ heard from an address other than the one before writes an `ssh_address_changed` 
 
 **Host keys.** A host's sshd host keys are pinned by an operator, never taken from the host being reached. The
 daemon reports the fingerprints of its sshd host keys in its heartbeat; the coordinator holds the last set
-reported. `Ssh/PinHostKeys` (`hkctl ssh pin-host-keys`) pins a set of at most 8 fingerprints (`SHA256:` and 43
+reported. `Ssh/PinHostKeys` (`hk ssh pin-host-keys`) pins a set of at most 8 fingerprints (`SHA256:` and 43
 base64 characters each) and is refused `not_reported` when it is not, as a set, exactly the set of the host's
 last heartbeat (so an operator pins what the host says now, a step a person takes, not a script). It needs the
 operators file to permit the operator the host, as signing does, and is audited as `ssh_hostkey_pinned`
@@ -199,7 +199,7 @@ raised.
 ## Remote SSH from the UI
 
 On a host's page an operator signed in to the coordinator's UI opens a terminal on the host through the same
-certificate, tunnel, audit and revocation as `hkctl ssh` (`docs/design/ssh-through-coordinator.md`, section
+certificate, tunnel, audit and revocation as `hk ssh` (`docs/design/ssh-through-coordinator.md`, section
 13). The route is `GET /v1/ssh/terminal?host=<host id>` on the private listener, an HTTP/1.1 upgrade to
 WebSocket (RFC 6455); the heartbeat and LAN listeners never serve it, and nor does a coordinator with no sign-in.
 There is no flag and no new setting: the SSH CA, the operators file, the tunnel limits and the pinned host keys
@@ -233,10 +233,10 @@ the first message.
 | coordinator | binary: the host's output (standard output and standard error), at most 16 KiB each |
 | coordinator | text, last `{"type": "closed", "cause": "<token>"}`, then a WebSocket close frame |
 
-The steps are `hkctl ssh`'s: the first message must carry the session's CSRF token and a size in range (else
+The steps are `hk ssh`'s: the first message must carry the session's CSRF token and a size in range (else
 `bad_request`); the host keys pinned for the host are read as `Ssh/HostKeys` reads them (a refusal is told by its
 token: `not_permitted`, `unknown_host`, `invalid_request`, ..., and an unpinned host is `no_pin`: pin it first
-with `hkctl ssh pin-host-keys`); then a key of the terminal's own is made from the coordinator's random source, in
+with `hk ssh pin-host-keys`); then a key of the terminal's own is made from the coordinator's random source, in
 memory, for this terminal only, and its certificate is signed and audited as `Ssh/SignUserCert` does (the reason is
 `coordinator UI terminal`); the tunnel is opened as `Ssh/Tunnel` opens it, with every check and refusal listed under
 Tunnels (a refusal is told by its token: `too_many_tunnels`, `host_not_live`, ...), under the credential of the login

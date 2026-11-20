@@ -369,7 +369,7 @@ assertions, the `keep_awake` lines, the two `launchctl print` and `codesign -dvv
 in that order. Every gRPC heartbeat after the probe is done carries it
 (`HeartbeatRequest.remote_login_probe`); it is the first fact a heartbeat drops when it would not
 fit 16 KiB. The coordinator keeps the last one in memory and shows it in the host's heartbeat:
-`hkctl hosts get --node-id <host>` answers it as `host.heartbeat.remoteLoginProbe`. Nothing decides
+`hk hosts get --node-id <host>` answers it as `host.heartbeat.remoteLoginProbe`. Nothing decides
 on it; a restart of the daemon (an update included) runs it again.
 
 ### Operator SSH keys and Remote Login
@@ -400,7 +400,7 @@ marker. It runs as root under launchd, so no password, account name or sudoers r
 the Mac. It looks again every hour and after every start, installs the tools again when they are
 gone, and never removes them. A failed try is repeated after 30 minutes, then after twice as long
 each time, at most 24 hours, and the coordinator raises `prerequisite_failed` meanwhile. The
-report is `host.heartbeat.prerequisites` in `hkctl hosts get`
+report is `host.heartbeat.prerequisites` in `hk hosts get`
 ([operations/host-prerequisites.md](operations/host-prerequisites.md)).
 
 ### Release and installer pkg

@@ -92,14 +92,14 @@ one credential is the OIDC token GitHub issues to the job.
    its settings (`enabled` `true`). Before that a host would defer the release
    (`not_in_repository`). A failed write, or a channel without its settings, leaves
    `set-desired` skipped: nothing is set. The job calls the CI client
-   ([set-desired.yml](ci-client.md)) once: it verifies the pinned hostkeeper release's `hkctl`,
-   joins the tailnet when `HOSTKEEPER_TAILNET_CLIENT_ID` is set, and runs `hkctl releases set-desired` for the
-   service `hostkeeper` at `<X.Y.Z>`; hkctl requests the OIDC token itself and hands it to the
-   call through a pipe, never a file or an argument. The call names the release by its targets
+   ([set-desired.yml](ci-client.md)) once: it verifies the pinned hostkeeper release's command line (`hk`, called `hkctl` before it),
+   joins the tailnet when `HOSTKEEPER_TAILNET_CLIENT_ID` is set, and runs `hk releases set-desired` for the
+   service `hostkeeper` at `<X.Y.Z>`; hk requests the OIDC token itself and sends it in
+   the request's header, never a file or an argument. The call names the release by its targets
    alone, so each host is ordered its own platform's native package; a
    daemon before `target-v1`, or one that announces no `apt`, is ordered nothing
    (`installer_dropped`): stage 9's counts are zero before this release is set.
-   `hkctl releases get-release --service hostkeeper --version <X.Y.Z>` answers the targets the
+   `hk releases get-release --service hostkeeper --version <X.Y.Z>` answers the targets the
    coordinator stored, one list per platform (`--host-group <group>` asks as that group, which must
    list `hostkeeper`).
    The job does not wait for the fleet (`wait: false`); it ends when the coordinator has stored
@@ -129,7 +129,7 @@ one credential is the OIDC token GitHub issues to the job.
    hand-over, installing the package once the new binary has confirmed itself
    ([packages-native.md](../design/packages-native.md), section 10.4).
 
-Watch the roll on the UI's Packages page (open the package), or with `hkctl releases converge --service hostkeeper`.
+Watch the roll on the UI's Packages page (open the package), or with `hk releases converge --service hostkeeper`.
 
 ## Turning it on and off
 
@@ -187,7 +187,7 @@ host has its repository entry and key ([package-repositories.md](package-reposit
 converged on every host.
 
 **hostkeeper's rollout** is the policy of each host group, which lists `hostkeeper` besides its
-other packages; the policy is the one each group's `hkctl host-groups put` carries
+other packages; the policy is the one each group's `hk host-groups put` carries
 ([hostgroups.md](../operations/hostgroups.md#policy)), with its canary and bake:
 
 ```json
@@ -199,7 +199,7 @@ other packages; the policy is the one each group's `hkctl host-groups put` carri
 
 `bakeBeats` is the healthy heartbeats at the new version before the next stage, and `canary` one
 host that goes first, alone, and bakes. These are keys of the group's `policy`, put with
-`hkctl host-groups put`.
+`hk host-groups put`.
 
 **The allow-list entry.** `release.yml` calls the CI client as `hello-desired.yml` does, at the
 same revision ([Pinning the client](#pinning-the-client)), so the entry for this repository
@@ -249,7 +249,7 @@ OIDC token is a published release, verified before it runs, never the commit bei
 
 Both callers of this repository, `release.yml` and `hello-desired.yml`, pin one revision: commit
 `2c767d1842a88edb7120073d2dff3b4bfccc834c`, release `v0.1.184`, the first whose
-`set-desired.yml` takes the tailnet tag (`tailnet_tag`), on top of a release's targets and hkctl
+`set-desired.yml` takes the tailnet tag (`tailnet_tag`), on top of a release's targets and hk
 (one set, and for `hello-desired.yml` one held wait). A coordinator that does not take `SetDesired` with targets refuses their sets; the
 coordinator is updated to one that does before the pin moves. For a release, the job `coordinator`
 holds `set-desired` until the coordinator runs that release. The workflow

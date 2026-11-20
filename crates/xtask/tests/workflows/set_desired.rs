@@ -1,6 +1,6 @@
 //! The rules `set-desired.yml`, the CI client a service's release job calls
 //! (docs/design/two-programs.md, section 5), is held to beyond those of every workflow. They fix
-//! what makes the client safe: hkctl of the pinned release is proven before anything can hold an
+//! what makes the client safe: hk of the pinned release is proven before anything can hold an
 //! OIDC token or run it, each call asks for its own token, and every way the job ends reaches the
 //! caller as outputs.
 //!
@@ -25,7 +25,7 @@
 //!   outputs step's not [`ALWAYS_IF`];
 //! - any step up to the last provenance check of [`PROVENANCE_STEPS`] uses an action (any action
 //!   can read the token request variables once the job holds `id-token: write`), names the token
-//!   request ([`TOKEN_WORDS`]), runs `ctl` or runs hkctl ([`PROGRAM`]); or the `env`, `defaults`,
+//!   request ([`TOKEN_WORDS`]), runs `ctl` or runs hk ([`PROGRAM`]); or the `env`, `defaults`,
 //!   `container` or `services` of the workflow or of the job names the token request;
 //! - a later step's `env` names the token request, or any step writes `GITHUB_ENV` (a step sets
 //!   no environment of another, so no token can reach one);
@@ -63,7 +63,7 @@ pub const JOB: &str = "set-desired";
 /// The provenance checks, by `id`: the SHA256SUMS, the attestation, the attested commit. Until
 /// the last of them nothing of ours may run.
 pub const PROVENANCE_STEPS: [&str; 3] = ["checksum", "attestation", "commit"];
-/// Every check the set step must come after: the provenance checks and hkctl's version.
+/// Every check the set step must come after: the provenance checks and hk's version.
 pub const VERIFY_STEPS: [&str; 4] = ["checksum", "attestation", "commit", "version"];
 /// The set step, the first that requests an OIDC token.
 pub const CLIENT_STEP: &str = "set-desired";
@@ -101,8 +101,8 @@ pub const ORDERED: [&str; 11] = [
 ];
 /// The steps the set step reads what they wrote: the coordinator's CA and the request.
 pub const SET_READS: [&str; 2] = ["ca", "request"];
-/// The verified hkctl, as the steps name it.
-pub const PROGRAM: &str = "$RUNNER_TEMP/hkctl-bin/hkctl";
+/// The verified hk, as the steps name it.
+pub const PROGRAM: &str = "$RUNNER_TEMP/hk-bin/hk";
 /// What a step that asks for an OIDC token names: the runner's request variables, or the
 /// toolkit's call.
 pub const TOKEN_WORDS: [&str; 2] = ["ACTIONS_ID_TOKEN_REQUEST", "getIDToken"];
@@ -539,7 +539,7 @@ fn early_problems(who: &str, step: &Node) -> Vec<String> {
     }
     if lines().any(|l| l.contains(PROGRAM)) {
         problems.push(format!(
-            "{who} comes before the last verification step and runs hkctl"
+            "{who} comes before the last verification step and runs hk"
         ));
     }
     problems

@@ -59,14 +59,14 @@ jobs:
           TAILNET_TAG: ${{ inputs.tailnet_tag }}
         run: jq --null-input --arg tag \"$TAILNET_TAG\" 'empty'
       - id: download
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --remote-name https://github.com/komira-ai/hostkeeper/releases/download/v1/hkctl-1
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --remote-name https://github.com/komira-ai/hostkeeper/releases/download/v1/hk-1-linux-x86_64.tar.gz
       - id: checksum
         run: sha256sum --check --strict --ignore-missing SHA256SUMS
       - id: attestation
         env:
           HOSTKEEPER_COMMIT: ${{ inputs.hostkeeper_commit }}
         run: |
-          gh attestation verify hkctl-1 \\
+          gh attestation verify hk-1-linux-x86_64.tar.gz \\
             --repo komira-ai/hostkeeper \\
             --signer-workflow komira-ai/hostkeeper/.github/workflows/artifacts.yml \\
             --source-ref refs/heads/main \\
@@ -78,9 +78,9 @@ jobs:
           HOSTKEEPER_COMMIT: ${{ inputs.hostkeeper_commit }}
         run: jq --exit-status '[.[].verificationResult.signature.certificate.sourceRepositoryDigest] | unique == [env.HOSTKEEPER_COMMIT]' verified.json
       - id: install
-        run: install -D --mode 0755 hkctl-1 \"$RUNNER_TEMP/hkctl-bin/hkctl\"
+        run: tar -xzf hk-1-linux-x86_64.tar.gz -C \"$RUNNER_TEMP/hk-bin\" hk
       - id: version
-        run: test \"$(\"$RUNNER_TEMP/hkctl-bin/hkctl\" --version)\" = \"hkctl 1.0.0+0123456789ab\"
+        run: test \"$(\"$RUNNER_TEMP/hk-bin/hk\" --version)\" = \"hk 1.0.0+0123456789ab\"
       - id: tailnet
         if: ${{ inputs.join_tailnet }}
         uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd # v4.2.0
@@ -92,12 +92,12 @@ jobs:
           sha256sum: c6f99a5d774c7783b56902188d69e9756fc3dddfb08ac6be4cb2585f3fecdc32
           ping: ${{ inputs.tailnet_coordinator }}
       - id: ca
-        run: printf '%s\\n' \"$CA\" > \"$RUNNER_TEMP/hkctl-coordinator-ca.pem\"
+        run: printf '%s\\n' \"$CA\" > \"$RUNNER_TEMP/hk-coordinator-ca.pem\"
       - id: request
         env:
           VERSION: ${{ inputs.version }}
           TARGETS: ${{ inputs.targets }}
-        run: jq --null-input --arg version \"$VERSION\" --arg targets \"$TARGETS\" '{}' > \"$RUNNER_TEMP/hkctl-request.json\"
+        run: jq --null-input --arg version \"$VERSION\" --arg targets \"$TARGETS\" '{}' > \"$RUNNER_TEMP/hk-request.json\"
       - id: set-desired
         continue-on-error: true
         env:
@@ -106,16 +106,16 @@ jobs:
           COORDINATOR_URL: ${{ inputs.coordinator_url }}
           AUDIENCE: ${{ inputs.audience }}
         run: |
-          \"$RUNNER_TEMP/hkctl-bin/hkctl\" \\
+          \"$RUNNER_TEMP/hk-bin/hk\" \\
             --endpoint \"$COORDINATOR_URL\" \\
-            --ca-file \"$RUNNER_TEMP/hkctl-coordinator-ca.pem\" \\
+            --ca-file \"$RUNNER_TEMP/hk-coordinator-ca.pem\" \\
             --github-oidc-audience \"$AUDIENCE\" \\
-            --response-file \"$RUNNER_TEMP/hkctl-set.json\" \\
+            --response-file \"$RUNNER_TEMP/hk-set.json\" \\
             releases set-desired \\
             --service \"$SERVICE\" \\
-            --request \"$RUNNER_TEMP/hkctl-request.json\" \\
+            --request \"$RUNNER_TEMP/hk-request.json\" \\
             ${HOST_GROUP:+\"--host-group=$HOST_GROUP\"} \\
-            2> >(tee \"$RUNNER_TEMP/hkctl-set.err\" >&2)
+            2> >(tee \"$RUNNER_TEMP/hk-set.err\" >&2)
       - id: wait
         if: ${{ inputs.wait && steps.set-desired.outcome == 'success' }}
         continue-on-error: true
@@ -127,17 +127,17 @@ jobs:
           AUDIENCE: ${{ inputs.audience }}
           MAX_POLLS: ${{ inputs.max_polls }}
         run: |
-          \"$RUNNER_TEMP/hkctl-bin/hkctl\" \\
+          \"$RUNNER_TEMP/hk-bin/hk\" \\
             --endpoint \"$COORDINATOR_URL\" \\
-            --ca-file \"$RUNNER_TEMP/hkctl-coordinator-ca.pem\" \\
+            --ca-file \"$RUNNER_TEMP/hk-coordinator-ca.pem\" \\
             --github-oidc-audience \"$AUDIENCE\" \\
-            --response-file \"$RUNNER_TEMP/hkctl-wait.json\" \\
+            --response-file \"$RUNNER_TEMP/hk-wait.json\" \\
             releases wait-converged \\
             --service \"$SERVICE\" \\
             --version \"$VERSION\" \\
             --wait-secs \"${MAX_POLLS}0\" \\
             ${HOST_GROUP:+\"--host-group=$HOST_GROUP\"} \\
-            2> \"$RUNNER_TEMP/hkctl-wait.err\"
+            2> \"$RUNNER_TEMP/hk-wait.err\"
       - id: outputs
         if: ${{ always() }}
         env:
@@ -146,10 +146,10 @@ jobs:
           WAIT: ${{ inputs.wait }}
           SET_OUTCOME: ${{ steps.set-desired.outcome }}
           WAIT_OUTCOME: ${{ steps.wait.outcome }}
-          SET_BODY: ${{ steps.set-desired.outcome == 'success' && format('{0}/hkctl-set.json', runner.temp) || '/dev/null' }}
-          SET_ERR: ${{ steps.set-desired.outcome == 'failure' && format('{0}/hkctl-set.err', runner.temp) || '/dev/null' }}
-          WAIT_BODY: ${{ steps.wait.outcome == 'success' && format('{0}/hkctl-wait.json', runner.temp) || '/dev/null' }}
-          WAIT_ERR: ${{ steps.wait.outcome == 'failure' && format('{0}/hkctl-wait.err', runner.temp) || '/dev/null' }}
+          SET_BODY: ${{ steps.set-desired.outcome == 'success' && format('{0}/hk-set.json', runner.temp) || '/dev/null' }}
+          SET_ERR: ${{ steps.set-desired.outcome == 'failure' && format('{0}/hk-set.err', runner.temp) || '/dev/null' }}
+          WAIT_BODY: ${{ steps.wait.outcome == 'success' && format('{0}/hk-wait.json', runner.temp) || '/dev/null' }}
+          WAIT_ERR: ${{ steps.wait.outcome == 'failure' && format('{0}/hk-wait.err', runner.temp) || '/dev/null' }}
           OUTPUTS_PROGRAM: '\"reason=converged\"'
         run: |
           jq --null-input --raw-output \\
@@ -174,16 +174,16 @@ pub(super) const CLIENT_BLOCK: &str = "      - id: set-desired
           COORDINATOR_URL: ${{ inputs.coordinator_url }}
           AUDIENCE: ${{ inputs.audience }}
         run: |
-          \"$RUNNER_TEMP/hkctl-bin/hkctl\" \\
+          \"$RUNNER_TEMP/hk-bin/hk\" \\
             --endpoint \"$COORDINATOR_URL\" \\
-            --ca-file \"$RUNNER_TEMP/hkctl-coordinator-ca.pem\" \\
+            --ca-file \"$RUNNER_TEMP/hk-coordinator-ca.pem\" \\
             --github-oidc-audience \"$AUDIENCE\" \\
-            --response-file \"$RUNNER_TEMP/hkctl-set.json\" \\
+            --response-file \"$RUNNER_TEMP/hk-set.json\" \\
             releases set-desired \\
             --service \"$SERVICE\" \\
-            --request \"$RUNNER_TEMP/hkctl-request.json\" \\
+            --request \"$RUNNER_TEMP/hk-request.json\" \\
             ${HOST_GROUP:+\"--host-group=$HOST_GROUP\"} \\
-            2> >(tee \"$RUNNER_TEMP/hkctl-set.err\" >&2)
+            2> >(tee \"$RUNNER_TEMP/hk-set.err\" >&2)
 ";
 
 /// The join step of [`CLIENT`], whole.
@@ -274,7 +274,7 @@ fn the_oidc_request_comes_after_every_verification_step() {
         "the OIDC token step `set-desired` (step 3) comes before the verification step `version` (step 8)",
         "the set step `set-desired` (step 3) comes before `ca` (step 10), whose file it reads",
         "the set step `set-desired` (step 3) comes before `request` (step 11), whose file it reads",
-        "step 3 (`set-desired`) comes before the last verification step and runs hkctl",
+        "step 3 (`set-desired`) comes before the last verification step and runs hk",
         "the join step `tailnet` (step 9) comes after the OIDC token step `set-desired` (step 3)",
     ];
     assert_client(&early, &early_want);
@@ -300,8 +300,8 @@ fn nothing_before_verification_touches_the_token_or_ctl() {
             &["step 5 (`early`) comes before the last verification step and runs ctl"],
         ),
         (
-            "      - id: early\n        run: exec \"$RUNNER_TEMP/hkctl-bin/hkctl\" --version\n",
-            &["step 5 (`early`) comes before the last verification step and runs hkctl"],
+            "      - id: early\n        run: exec \"$RUNNER_TEMP/hk-bin/hk\" --version\n",
+            &["step 5 (`early`) comes before the last verification step and runs hk"],
         ),
         (
             "      - id: early\n        run: echo \"$ACTIONS_ID_TOKEN_REQUEST_TOKEN\"\n",

@@ -1,5 +1,5 @@
 //! The tests of hostkeeper-measure, one binary: the plans, the runner against a simulated fleet,
-//! the analysis and its output, the hkctl port and the command line.
+//! the analysis and its output, the hk port and the command line.
 
 mod analysis;
 mod cli;

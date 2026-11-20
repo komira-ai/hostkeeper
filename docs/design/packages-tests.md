@@ -332,8 +332,8 @@ only in the device jobs, against a signed fixture repository and signed fixture 
   needs (`desired.rs`, `desired_tests.rs`, `tailnet_join_tests.rs`; the job run with bash in `targets_run_tests.rs`,
   hello's in `hello_run_tests.rs`, held to one input by `callers.rs`); X1's pin is a release from A19 on.
 - **The runbook (A22; `docs/operations/move-to-native.md`, `crates/xtask/tests/enrollment_doc.rs` and
-  `enrollment_doc/move_runbook.rs`).** Every `hkctl` command of the runbook is one of `hkctl`'s table, as for the
-  enrollment runbook. Each query is one block of one `hkctl` call and one `jq` program reading the file the call
+  `enrollment_doc/move_runbook.rs`).** Every `hk` command of the runbook is one of `hk`'s table, as for the
+  enrollment runbook. Each query is one block of one `hk` call and one `jq` program reading the file the call
   wrote, and each program, as the runbook writes it, is run with jaq on `Hosts.List` and `Hosts.Get` answers
   serialized as the gateway serializes them: stage 9's two counts each count a host once, compare versions as
   numbers, count a host not known to be past them (no daemon known, an installer not known, nothing known of what it

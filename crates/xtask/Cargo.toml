@@ -21,10 +21,10 @@ hex.workspace = true
 # type of the release contract. The packaging test (tests/packaging) also loads the config
 # template with the daemon config's loader.
 hostkeeper-config = { path = "../hostkeeper-config" }
-# The release asset `hkctl-<version>` (`release hkctl`): the script the emitter makes from the
-# command table of the protos. The operator docs' test (tests/enrollment_doc.rs) reads hkctl's
-# global flags from its docs/cli.md text, its command table, and the protos' descriptors.
-hostkeeper-hkctl = { path = "../hostkeeper-hkctl" }
+# The operator docs' test (tests/enrollment_doc.rs) reads hk's global flags from its docs/cli.md
+# text, its command table, and the protos' descriptors; the workflow lint reads which commands hk
+# serves.
+hostkeeper-hk = { path = "../hostkeeper-hk" }
 hostkeeper-proto = { path = "../hostkeeper-proto" }
 # The checks of a release's targets and their manifests (`release targets`), the coordinator's own
 # and the daemon's for an `apt` entry, run on the entries before CI sends them.

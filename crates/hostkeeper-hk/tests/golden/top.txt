@@ -1,0 +1,49 @@
+hk 1.2.3+0123456789ab: call one method of hostkeeper's coordinator through its JSON gateway.
+
+Usage: hk [global flags] <service> <method> [flags]
+
+Every command is one method: `hk <service> <method>`, both in kebab case as the protos name them (`Releases.SetDesired` is `releases set-desired`), called as one POST of JSON to the coordinator's gateway over HTTPS. hk is one program: it needs no bash, no curl and no jq, and runs no other program for a gateway call. `hkctl` is the old name of hk, which still answers to it: a program called `hkctl` behaves as `hk` does and puts `hkctl:` before its diagnostics.
+
+A request field is a flag named after it (`node_id` is `--node-id`): a scalar takes one value; a bool takes `true` or `false`, so that an absent flag and `false` differ; an enum takes a value's name without its prefix, in lower case, never `unspecified`; a repeated field repeats its flag; a `map<string, string>` repeats `--<field> key=value`. A flag takes its value as `--flag value` or `--flag=value`; a value that starts with `--` only as `--flag=value`.
+
+A message, a oneof, `bytes` and any other map come only through `--request <file|->`: a JSON object, `-` for stdin, which the flags add to. A field named both by a flag and by the request file is a usage error.
+
+A secret field (`(hostkeeper.secret)`) is never a flag: it is read with `--<field>-file <path>` (one trailing newline dropped) or `--<field>-stdin`, and never printed. At most one input reads stdin. No token or secret is ever written to a file or put in an argument list or in the environment of a program hk runs: it is read into memory and sent in the request.
+
+The answer, the gateway's JSON, goes to stdout or to `--response-file`; diagnostics go to stderr. A refusal prints `refused: <reason>` when its reason is a token of `[a-z0-9_]{1,64}`. A call refused `invalid_request` makes one more call, with no token, to the coordinator's `GET /v1/version?at_least=<this hk's release>`: when that says the coordinator is older (`409`, or `404` from a coordinator before the route), hk says so on stderr, with the coordinator's version when it gave one, and the reason it prints is `coordinator_older`; any other answer, or none, leaves `invalid_request`.
+
+Four commands are not gateway calls: the SSH tunnel is built into hk. `hk ssh <host-id> [--identity FILE] [--reason TEXT] [-- ssh args]` gets a one-host SSH certificate and runs ssh to the host through the coordinator's tunnel (a word after `ssh` that is not a method of the service `ssh` is a host id). `hk ssh-proxy <host-id>` is the byte stream for `ProxyCommand hk --endpoint URL --ca-file PATH --token-file PATH ssh-proxy %h` in `~/.ssh/config`. `hk ssh-revoke --operator NAME | --serial N | --host <host-id>` revokes certificates. `hk ssh-status <host-id>` shows the host keys pinned for a host and the certificate held. They need --endpoint, --ca-file and --token-file, take no other credential, keep the key, the certificates and the pins in `$HOME/.hostkeeper/ssh`, and read the token from its file. `hk ssh-known-host` is run by ssh itself, as the `KnownHostsCommand` of `hk ssh`, and not by hand.
+
+Global flags:
+  --endpoint URL
+      The coordinator's private listener, as https://<host>[:<port>]. Needed for a call.
+  --ca-file PATH
+      PEM certificates of the CA the coordinator's certificate must chain to; no other root is trusted for the coordinator. Needed for a call.
+  --token-file PATH
+      Read the bearer token (an operator token) from this file, which only its owner may read; one trailing newline is dropped. The token is never an argument, an environment variable or a line of output.
+  --token-stdin
+      Read the bearer token from stdin instead.
+  --github-oidc-audience AUDIENCE
+      In a GitHub Actions job with id-token: write: ask the runner for a fresh ID token for this audience and call with it; `::add-mask::<token>` is printed on stdout first.
+  --response-file PATH
+      Write the answer to this file instead of stdout.
+  --timeout-secs SECONDS
+      How long to wait to connect, and for the answer, 1 to 999999; a method that holds the call (a `wait_secs` field) adds its hold.
+  --help
+      Print the help of hk, a service or a method.
+  --version
+      Print `hk <version>+<commit>`; only before the service, so a method's own `--version` is its field.
+
+Exit codes:
+  0  the call succeeded
+  1  anything else: no answer, an answer that is not the gateway's, or any other code
+  2  a usage error, or the coordinator refused the request: INVALID_ARGUMENT or FAILED_PRECONDITION
+  3  the coordinator refused the caller: UNAUTHENTICATED or PERMISSION_DENIED
+
+Services:
+  gadgets
+      Gadgets, a second service; its comment has a quote: it's "quoted".
+  widgets
+      Widgets, for the tests.
+
+Run 'hk <service> --help' for its methods, and 'hk <service> <method> --help' for a method's flags.

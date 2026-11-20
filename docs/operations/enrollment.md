@@ -10,14 +10,16 @@ coordinator then writes the host's record from what it claimed, unless the recor
 lists every enrolled host, with its record or without one. The
 coordinator's side (its flags, its CA, its state files) is
 [enrollment-coordinator.md](../enrollment-coordinator.md); every command, flag and exit code of
-`hkctl` is [cli.md](../cli.md).
+`hk` is [cli.md](../cli.md).
 
-`hkctl` is the operator's command line. It is the release asset `hkctl-<version>`, verified as
-[verify-a-release.md](../deploy/verify-a-release.md) says, and needs bash 3.2 or later and curl
-7.55 or later. Only its owner may read its `--token-file` (mode 0600): `hkctl` refuses a file its
+`hk` is the operator's command line. It is one program, in the release asset
+`hk-<version>-<platform>.tar.gz` (`linux-x86_64`, `linux-arm64` or `macos-arm64`), verified and
+unpacked as [verify-a-release.md](../deploy/verify-a-release.md) says; it needs nothing else
+installed. The tarball also holds `hkctl`, the old name of `hk`, a link to it, so a script that
+calls `hkctl` keeps working. Only its owner may read its `--token-file` (mode 0600): `hk` refuses a file its
 group or others may read.
 
-Every `hkctl enrollment` call takes the operator token only: a CI token is refused with
+Every `hk enrollment` call takes the operator token only: a CI token is refused with
 `forbidden`, no token with `unauthorized`, and a refused call changes nothing. An approval and
 every change to a record is an entry of the audit log, under the name of the token that made it.
 The commands below reach the coordinator's private listener (`--private-listen`):
@@ -34,7 +36,7 @@ are written as six pairs of hex digits separated all by `:` or all by `-`, or as
 digits, in either case, and are kept as lower-case `aa:bb:cc:dd:ee:ff`.
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment add-record --host-id web-17 --host-group web \
     --data-macs 00:00:5e:00:53:01 --data-macs 00:00:5e:00:53:02 \
     --bmc-mac 00:00:5e:00:53:a1 --serial SN-0042 --notes "rack 4, unit 17"
@@ -65,18 +67,18 @@ its server by hand. The group must be one the coordinator holds (`unknown_host_g
 group's name as its `role` too, and `list-records` shows it as both `role` and `hostGroup`.
 
 A coordinator that holds no host group yet refuses every `--host-group`
-(`unknown_host_group`), and a host it enrolls is unassigned and is ordered nothing: put a group first (`hkctl host-groups put`,
+(`unknown_host_group`), and a host it enrolls is unassigned and is ordered nothing: put a group first (`hk host-groups put`,
 [hostgroups.md](hostgroups.md)), or move a fleet placed by roles to groups through the operator
 API ([hostgroups.md](hostgroups.md#moving-a-fleet-from-roles-to-host-groups)); `add-record` and
 `approve` name the group of each record and approval.
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment list-records --limit 50
 ```
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment remove-record --host-id web-17 --reason "wrong BMC MAC"
 ```
 
@@ -107,7 +109,7 @@ that matches several. The page reads the hosts with `hosts list`; when that is r
 above the table, and those hosts are not shown. A MAC is typed in any common spelling (`aa:bb:..`,
 `AA-BB-..`, `aabb.ccdd.eeff`, twelve digits) and sent in the one spelling, and a field that is wrong is marked
 under itself. A host group, role, serial, platform and window are not shown there and an edit never changes them; set them
-with `hkctl enrollment add-record`. A server added on the page names no host group, so it approves no request by itself: its
+with `hk enrollment add-record`. A server added on the page names no host group, so it approves no request by itself: its
 name and MACs match a pending request on the Enrollment page, which an operator approves there.
 
 ### A host approved without a record
@@ -154,7 +156,7 @@ The flow for each server, from the operator's side:
 3. Enter the record:
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment add-record --host-id web-17 --host-group web \
     --data-macs 00:00:5e:00:53:01 --bmc-mac 00:00:5e:00:53:a1 \
     --approve-for-secs 43200 --notes "rack 4, unit 17"
@@ -217,7 +219,7 @@ window fields; the end of the window is audited `record_open` with the reason. A
 that matches it is approved then.
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment open-record --host-id web-17 --approve-for-secs 86400 \
     --reason "rack delayed to Thursday"
 ```
@@ -353,7 +355,7 @@ shows the key hash ([Check the key hash](#check-the-key-hash)).
 ## The pending request and its match
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment list --limit 50
 ```
 
@@ -361,7 +363,7 @@ hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <tok
 and `key_sha256` (the same value: the SHA-256 of the request's public key), the host's `claims`
 (machine id, DMI serial and product UUID, network addresses, BMC MAC; serial and platform UUID on
 a Mac), `image`, `first_seen_unix`, `renewal_of` for a returning host, `duplicate_claim` and
-`mac_nonce_presented`, and how it matches the inventory. `hkctl` prints the gateway's JSON body,
+`mac_nonce_presented`, and how it matches the inventory. `hk` prints the gateway's JSON body,
 with the field names in lower camel case (`keySha256`) and a field at its default (`false`, an
 empty string) left out.
 
@@ -423,7 +425,7 @@ matches a Mac request when its serial equals the claimed serial, letters compare
 MACs are not compared. Record a Mac with `--serial` and no MAC:
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment add-record --host-id mac-03 --host-group build --serial C02XK1ABJG5J
 ```
 
@@ -477,7 +479,7 @@ openssl pkey -inform DER -in /etc/updater/pki/pending/key -pubout -outform DER |
 
 The key is a P-256 key, PKCS#8 DER; the hash is that of its public key's DER
 SubjectPublicKeyInfo, and must equal `key_sha256` of the request. Once the host is enrolled, the
-same key is `/etc/updater/pki/current/key`. The coordinator's `hkctl enrollment list` shows it as `key_sha256` ([docs/admin.md](../admin.md)).
+same key is `/etc/updater/pki/current/key`. The coordinator's `hk enrollment list` shows it as `key_sha256` ([docs/admin.md](../admin.md)).
 
 ## Approve
 
@@ -493,7 +495,7 @@ applied. `--role` is accepted as an alias of `--host-group` for older scripts an
 group's name when `--host-group` is left out; with both, they must be the same name
 (`invalid_role`). With neither, the host is enrolled in no group, **unassigned**: there is no built-in group
 ([hostgroups.md](hostgroups.md#there-is-no-built-in-group)), so it is ordered no package at all,
-`hostkeeper` included, and keeps what it runs, until `hkctl host-groups move` puts it in a group, and again
+`hostkeeper` included, and keeps what it runs, until `hk host-groups move` puts it in a group, and again
 whenever it is moved back to none ([hostgroups.md](hostgroups.md#moving-a-host)). A group named
 `all` is a group like any other, and an approval that names one the coordinator does not hold is
 `unknown_host_group`. The console's Enrollment page approves this way: a Host group dropdown of
@@ -512,7 +514,7 @@ requires `--role`.
 A request that matches one record, approved as that record's host id (no `--host-id`):
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment approve --request-id <request-id> --key-sha256 <key-sha256> \
     --host-group web --reason "racked in row 4, key checked on the console"
 ```
@@ -520,7 +522,7 @@ hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <tok
 The same, with no group and no reason (the host is put in a group later):
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment approve --request-id <request-id> --key-sha256 <key-sha256>
 ```
 
@@ -528,7 +530,7 @@ A request that matches no record or several, or a renewal, approved under a host
 names:
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment approve --request-id <request-id> --key-sha256 <key-sha256> \
     --host-id web-17 --host-group web --reason "no record yet, key checked on the console"
 ```
@@ -544,13 +546,13 @@ hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <tok
 - the host id was denied (`denied` without it).
 
 A `--replace` keeps the group of the host it replaces, and naming no group leaves it there:
-naming another group is refused `host_group_differs`, and changes nothing. A host changes group only by `hkctl host-groups move`
+naming another group is refused `host_group_differs`, and changes nothing. A host changes group only by `hk host-groups move`
 ([hostgroups.md](hostgroups.md#moving-a-host)). The group of a denied host ended with its
 retirement, so an approval that takes a denied host id puts the new key's host in the group it
 names; so does one that replaces a host approved before the coordinator held groups.
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment approve --request-id <request-id> --key-sha256 <key-sha256> \
     --host-id web-17 --host-group web --replace true \
     --reason "web-17 rebuilt on new disks, key checked on the console"
@@ -583,14 +585,14 @@ is answered `DENIED`, and a repost of the same key changes nothing. The rejectio
 rejected succeeds and audits nothing.
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment reject --request-id <request-id> --reason "not one of ours"
 ```
 
 The same, with no reason (`--reason` may be left out):
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment reject --request-id <request-id>
 ```
 
@@ -611,7 +613,7 @@ true`, under each service assigned to it once its heartbeat names that service, 
 `live` while it heartbeats within 45 seconds:
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     releases status --service api
 ```
 
@@ -650,7 +652,7 @@ start. A certificate of another CA than the daemon's pinned `ca_sha256`, or one 
 (`renewal_of`, below), and that request waits for an operator's approval.
 
 Every heartbeat also says when the host's certificate ends, why its last enrollment or renewal
-step failed (until a step succeeds), and the host's own clock. `hkctl hosts get
+step failed (until a step succeeds), and the host's own clock. `hk hosts get
 --node-id <id>` answers the first two as `cert_not_after_unix` and `last_renew_error`, and
 `clock_skew_beats`: how many of the host's heartbeats since the coordinator started said a time
 more than `--clock-skew-secs` (120 by default) from the coordinator's clock, either way. The Host
@@ -721,7 +723,7 @@ cancelled. Its group's list is not changed. It is sent no `uninstall`: what it r
 is. The reason may be left out.
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     hosts retire --node-id web-17 --reason "board failed, replaced by web-23"
 ```
 
@@ -774,7 +776,7 @@ coordinators receiving new requests at one moment may each let one past the cap.
 
 The `Enrollment` service (`list`, `approve`, `reject`, `add-record`, `list-records`,
 `remove-record`, `open-record`)
-refuses with exactly one of these tokens; `hkctl` exits 2 on INVALID_ARGUMENT and
+refuses with exactly one of these tokens; `hk` exits 2 on INVALID_ARGUMENT and
 FAILED_PRECONDITION, 3 on UNAUTHENTICATED and PERMISSION_DENIED, and 1 on the others.
 
 | token | code | cause | fix |
@@ -802,12 +804,12 @@ FAILED_PRECONDITION, 3 on UNAUTHENTICATED and PERMISSION_DENIED, and 1 on the ot
 | `invalid_window` | INVALID_ARGUMENT | `add-record` or `open-record` with both `--approve-until-unix` and `--approve-for-secs`, an end not in the future, a window longer than the coordinator's `--record-approve-max`, or a window on a record that names no host group | give one field, within the maximum, for a record with a host group |
 | `record_used` | FAILED_PRECONDITION | `open-record` of a record whose one use is spent (`RECORD_STATE_USED`) | `remove-record`, then `add-record` it again |
 | `record_contested` | FAILED_PRECONDITION | `approve` of a request that another pending request contests: they match one record (`contested_by` names the others) | compare each `key_sha256` with the machine's console, and `reject` all but the one that is it; `--replace true` does not set it aside |
-| `services_retired` | INVALID_ARGUMENT | `approve` with `--services`: the host's group decides what it runs | leave out `--services`; to change what the group runs, `hkctl host-groups put` ([hostgroups.md](hostgroups.md)) |
-| `host_group_differs` | FAILED_PRECONDITION | `approve` of a renewal, or with `--replace`, that names another group than the one the host it renews or replaces is in | name the host's own group; to change it, approve in that group and then `hkctl host-groups move` ([hostgroups.md](hostgroups.md#moving-a-host)) |
-| `unknown_host_group` | NOT_FOUND | `approve` or `add-record` naming, by `--host-group` or by `--role`, a group the coordinator does not hold, which is any group on a coordinator that holds none | name a group `hkctl host-groups list` shows, or make it with `hkctl host-groups put` ([hostgroups.md](hostgroups.md)) |
+| `services_retired` | INVALID_ARGUMENT | `approve` with `--services`: the host's group decides what it runs | leave out `--services`; to change what the group runs, `hk host-groups put` ([hostgroups.md](hostgroups.md)) |
+| `host_group_differs` | FAILED_PRECONDITION | `approve` of a renewal, or with `--replace`, that names another group than the one the host it renews or replaces is in | name the host's own group; to change it, approve in that group and then `hk host-groups move` ([hostgroups.md](hostgroups.md#moving-a-host)) |
+| `unknown_host_group` | NOT_FOUND | `approve` or `add-record` naming, by `--host-group` or by `--role`, a group the coordinator does not hold, which is any group on a coordinator that holds none | name a group `hk host-groups list` shows, or make it with `hk host-groups put` ([hostgroups.md](hostgroups.md)) |
 | `placement_invalid` | INVALID_ARGUMENT | `approve` with a `--rack` and no `--placement-u` or `--placement-height-u`, or either without a rack, or a height or U that is not a whole number of U | give the rack, the lowest U and the height together, or none of them |
-| `unknown_rack` | NOT_FOUND | `approve` naming a `--rack` the lab layout does not hold (any, on a coordinator that holds none) | name a rack `hkctl layout get` shows, or make it with `hkctl layout put-rack` |
-| `placement_overlap` | FAILED_PRECONDITION | `approve` whose placement shares a U with a server already in the rack | choose free U (`hkctl layout get` lists the placements) |
+| `unknown_rack` | NOT_FOUND | `approve` naming a `--rack` the lab layout does not hold (any, on a coordinator that holds none) | name a rack `hk layout get` shows, or make it with `hk layout put-rack` |
+| `placement_overlap` | FAILED_PRECONDITION | `approve` whose placement shares a U with a server already in the rack | choose free U (`hk layout get` lists the placements) |
 | `placement_out_of_rack` | FAILED_PRECONDITION | `approve` whose placement is not within the rack's U 1 to its height | choose a U and height inside the rack |
 
 ## Refusals of the host's calls

@@ -46,7 +46,7 @@ deadline. The install downloads from Apple, so the Mac needs a route to it.
 ## Check a host
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     hosts get --node-id <id>
 ```
 
@@ -74,7 +74,7 @@ The daemon's log has a line for every failure and for every install.
 ## The alert `prerequisite_failed`
 
 The coordinator raises `prerequisite_failed` for a host while its last report holds a `FAILED`
-state, and it clears when the report no longer does. See it with `hkctl alerts list`. What to do:
+state, and it clears when the report no longer does. See it with `hk alerts list`. What to do:
 
 1. Read `reason` and `failures` in `hosts get`. A Mac that cannot reach Apple's update servers, or
    that has no disk space for the download, fails every time until that is fixed.

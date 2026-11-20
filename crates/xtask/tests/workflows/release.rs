@@ -23,8 +23,8 @@
 //!   [`IMAGE_UI_CHECK`], [`IMAGE_RUN`]), and its `attest` job, under its exact
 //!   `if:`, runs no repository code: no checkout, and no `run:` but the checks of
 //!   [`ATTEST_RUNS`] and the bundle copies of [`BUNDLE_COPY`]. It attests every package of
-//!   each binary tarball of [`TARBALLS`], each file of [`ATTESTED_FILES`], [`NATIVE_FILES`] and
-//!   [`VERSIONED_FILES`], and copies the bundle of each beside it
+//!   each binary tarball of [`TARBALLS`], each file of [`ATTESTED_FILES`] and
+//!   [`NATIVE_FILES`], and copies the bundle of each beside it
 //!   ([`package_problems`]), and attests the SBOM of each binary tarball ([`sbom_problem`]): a
 //!   host trusts only attested packages, so a release asset list that names a bundle needs the
 //!   steps that make it. Its build job makes the pxe package with [`PXE_BUILD`] and
@@ -108,7 +108,7 @@ pub const SHIPPED_BINARIES: [&str; 4] = [
     "hostkeeper",
     "hostkeeper-coordinator",
     "hostkeeper-coordinator-update",
-    "hkssh",
+    "hk",
 ];
 
 /// How each of the two builds of the coordinator's image in the image job of artifacts.yml
@@ -171,8 +171,8 @@ pub const PXE_BUILD: &str = "cargo build --locked --release --target \"$MUSL_TAR
 
 /// The binary tarballs the release carries, each as its program (the stem of its file name,
 /// `<program>-<version>-<platform>.tar.gz`) and the platforms it ships for: hostkeeper's on
-/// every platform, the coordinator's, the coordinator updater's and the SSH client's on the two
-/// Linux platforms. Each has a bundle and an attested SBOM
+/// every platform, the command line's (`hk`, with the symlink `hkctl`) on every platform, the
+/// coordinator's and the coordinator updater's on the two Linux platforms. Each has a bundle and an attested SBOM
 /// (`<program>-<version>-<platform>.cdx.json`).
 pub const TARBALLS: [(&str, &[&str]); 4] = [
     ("hostkeeper", &PLATFORMS),
@@ -181,7 +181,7 @@ pub const TARBALLS: [(&str, &[&str]); 4] = [
         "hostkeeper-coordinator-update",
         &["linux-x86_64", "linux-arm64"],
     ),
-    ("hkssh", &["linux-x86_64", "linux-arm64"]),
+    ("hk", &PLATFORMS),
 ];
 
 /// The release's other files that the attest job attests alone, each as its `subject-path` and
@@ -204,11 +204,6 @@ pub const NATIVE_FILES: [&str; 8] = [
     "pxe_<version>_amd64.deb",
     "pxe_<version>_arm64.deb",
 ];
-
-/// The release's other files that the attest job attests alone and whose name carries the
-/// version, each as the stem before `-<version>`: `hkctl-<version>`, the command line of the
-/// coordinator, one script for every platform.
-pub const VERSIONED_FILES: [&str; 1] = ["hkctl"];
 
 /// Whether the attest job may run `run`: one of [`ATTEST_RUNS`], or a [`BUNDLE_COPY`].
 fn attest_may_run(run: &str) -> bool {
@@ -675,7 +670,7 @@ fn pxe_problems(doc: &Node) -> Vec<String> {
 }
 
 /// One line per Linux package (the deb and the rpm) of each of [`LINUX_ARCHES`], per binary tarball of
-/// [`TARBALLS`], per file of [`ATTESTED_FILES`], [`NATIVE_FILES`] and [`VERSIONED_FILES`], that the
+/// [`TARBALLS`], per file of [`ATTESTED_FILES`] and [`NATIVE_FILES`], that the
 /// attest job does not attest (a
 /// provenance step whose `subject-path` is the file) or whose bundle it does not copy to
 /// `<file>.sigstore.json` from the outputs of that same step; and one per binary tarball whose
@@ -728,12 +723,6 @@ fn package_problems(attest: Option<&Node>) -> Vec<String> {
         let subject = format!("dist/{}", file.replace("<version>", version));
         let copied = file.replace("<version>", "${V}");
         problems.extend(attest_problem(attest, &subject, file, &copied));
-    }
-    for stem in VERSIONED_FILES {
-        let subject = format!("dist/{stem}-${{{{ needs.version.outputs.version }}}}");
-        let file = format!("{stem}-<version>");
-        let copied = format!("{stem}-${{V}}");
-        problems.extend(attest_problem(attest, &subject, &file, &copied));
     }
     problems
 }

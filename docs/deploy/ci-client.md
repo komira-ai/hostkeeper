@@ -8,11 +8,11 @@ service calls it; it does not write the step itself.
 
 The workflow does these steps, in this order (docs/design/two-programs.md, section 5). Steps 2, 3
 and 6 run the checks of [Verify a release](verify-a-release.md) (steps 2, 3 and 6 there) on
-`hkctl`, the command line of the coordinator ([docs/cli.md](../cli.md)), with `--format json`
+`hk`, the command line of the coordinator ([docs/cli.md](../cli.md); `hkctl` is its old name, a link to it in the tarball), with `--format json`
 added to the attestation check so that step 4 can read it; step 1 downloads with `curl` instead of
 `gh release download`, and step 4 is a further check of the attested commit. The workflow lint
 keeps steps 2 and 3 equal to the commands of that page, word for word, step 6 equal to its
-`./hkctl --version` check and expected output, and the downloaded asset and tag equal to its
+`./hk --version` check and expected output, and the downloaded asset and tag equal to its
 tables: a change to either file alone is refused.
 
 First of all, before it downloads anything, the job checks `tailnet_tag`, the tag the join would
@@ -20,28 +20,28 @@ give the runner ([The tag and the ACL](#the-tag-and-the-acl)), and stops when it
 followed by a Tailscale tag name. The value is checked whether or not the job joins; the join is
 the one step that reads it.
 
-1. Download `hkctl-<hostkeeper_version>` of the pinned hostkeeper release, one bash script for
-   every platform, and its `SHA256SUMS`.
+1. Download `hk-<hostkeeper_version>-linux-x86_64.tar.gz` of the pinned hostkeeper release, the
+   tarball of `hk` and the link `hkctl` to it, and its `SHA256SUMS`.
 2. Check the downloaded files against `SHA256SUMS`.
-3. Verify hkctl's attestation: signed by `.github/workflows/artifacts.yml` of
+3. Verify the attestation of the tarball: signed by `.github/workflows/artifacts.yml` of
    `komira-ai/hostkeeper` on a GitHub-hosted runner, for a build of `refs/heads/main` at the pinned
    `hostkeeper_commit`.
 4. Compare the commit every verified attestation names as the build's source with the pinned
    `hostkeeper_commit`.
-5. Install the verified hkctl, executable, as `hkctl`.
-6. Check that `hkctl --version` prints `hkctl <hostkeeper_version>+<the first 12 hex digits of
+5. Unpack `hk` from the verified tarball.
+6. Check that `hk --version` prints `hk <hostkeeper_version>+<the first 12 hex digits of
    hostkeeper_commit>`, exactly.
 7. Only when `join_tailnet` is true: join the tailnet, so that the runner can reach the
    coordinator's private listener ([Reaching the coordinator](#reaching-the-coordinator)). This is
    the first step that uses an action, and it runs after every check above.
-8. Write the coordinator's CA to a file, the one root hkctl trusts for the call.
+8. Write the coordinator's CA to a file, the one root hk trusts for the call.
 9. Write the request of the set: the version and the targets ([Targets](#targets)). A caller
    whose targets are empty or are not one JSON object stops here, before any token exists.
-10. Set the desired version: `hkctl releases set-desired`, as one command
-    ([The calls](#the-calls)). hkctl asks the runner for a fresh OIDC token for `audience` and
-    sends it to the coordinator through a pipe: no file holds it, no argument list and no
+10. Set the desired version: `hk releases set-desired`, as one command
+    ([The calls](#the-calls)). hk asks the runner for a fresh OIDC token for `audience` and
+    sends it to the coordinator in the request's header: no file holds it, no argument list and no
     other step's environment.
-11. Only when `wait` is true and the set succeeded: wait for the fleet, `hkctl releases
+11. Only when `wait` is true and the set succeeded: wait for the fleet, `hk releases
     wait-converged`, one call the coordinator holds until the fleet has converged on the
     version, the service is halted, another version is set, or `max_polls` times 10 seconds have
     passed. It asks for a token of its own.
@@ -106,7 +106,7 @@ publishers it matches).
 
 Which GitHub Actions runs may set a package's desired version is set per package, on the package's
 page in the console (Packages, then the package, section Trusted publishers), or with
-`hkctl services list-trusted-publishers`, `put-trusted-publisher` and `remove-trusted-publisher`.
+`hk services list-trusted-publishers`, `put-trusted-publisher` and `remove-trusted-publisher`.
 An entry is:
 
 | field | example | meaning |
@@ -219,9 +219,9 @@ no host group takes the call as it always did. The coordinator has no built-in g
 `host_group` reaches every host: a name it does not hold (`all`, unless an operator made a group of that name) is refused
 `unknown_host_group`, and a host in no group is ordered nothing by any call. Every group must list `hostkeeper`.
 
-A non-empty `host_group` needs a coordinator that holds host groups and the `hkctl` of a hostkeeper
+A non-empty `host_group` needs a coordinator that holds host groups and the `hk` of a hostkeeper
 release that has `--host-group`: with `host_group` empty the workflow passes no `--host-group`
-flag at all, since hkctl writes every flag it is given into the request and a coordinator older
+flag at all, since hk writes every flag it is given into the request and a coordinator older
 than its client refuses a field it does not know ([the gateway](../gateway.md)), so an empty input
 sends the bytes it sent before. Only a non-empty one sends the field, and an older coordinator
 then refuses it.
@@ -270,7 +270,7 @@ call now, which declares no `host_group` input, so they pass none: their set is 
 each group that lists the service. `hostkeeper` is listed in every group, so a release of
 hostkeeper is one deployment per group, each rolled by its own group's policy. Chaining the groups
 in order lands when that pin moves to a revision that has the input, and the callers pass
-`hostkeeper_version` and `hostkeeper_commit` of a release whose hkctl has `--host-group`.
+`hostkeeper_version` and `hostkeeper_commit` of a release whose hk has `--host-group`.
 
 ## Inputs
 
@@ -279,8 +279,8 @@ in order lands when that pin moves to a revision that has the input, and the cal
 | `service` | string | yes |  | The service whose desired version is set, as the coordinator names it. |
 | `version` | string | yes |  | The version of the service to set. |
 | `targets` | string | no |  | The targets of the version: one JSON object keyed by platform (`linux-x86_64`, `linux-arm64`, `macos-arm64`), each value `{"entries": [...]}` in the order the service prefers, under 128 KiB, the most the runner passes in one environment value or argument ([Targets](#targets)). Needs a coordinator that takes `SetDesired` with targets. |
-| `host_group` | string | no |  | The host group the version is set in and waited on, as the coordinator names it ([Host groups](#host-groups)). Empty: each group that lists the service (for a token whose allow-list entry names `host_groups`, each of those that lists it), the call sending no group, as before this input. A non-empty value needs a coordinator that holds host groups and the `hkctl` of a hostkeeper release that has `--host-group`. The coordinator has no built-in group: a name it does not hold, `all` included, is refused `unknown_host_group`. |
-| `hostkeeper_version` | string | yes |  | The hostkeeper release whose command line, `hkctl`, makes the calls. |
+| `host_group` | string | no |  | The host group the version is set in and waited on, as the coordinator names it ([Host groups](#host-groups)). Empty: each group that lists the service (for a token whose allow-list entry names `host_groups`, each of those that lists it), the call sending no group, as before this input. A non-empty value needs a coordinator that holds host groups and the `hk` of a hostkeeper release that has `--host-group`. The coordinator has no built-in group: a name it does not hold, `all` included, is refused `unknown_host_group`. |
+| `hostkeeper_version` | string | yes |  | The hostkeeper release whose command line, `hk`, makes the calls. |
 | `hostkeeper_commit` | string | yes |  | The commit of `komira-ai/hostkeeper` that release was built from, 40 lower-case hex digits. |
 | `coordinator_url` | string | yes |  | The coordinator's private listener, as `https://<host>[:<port>]`. |
 | `coordinator_ca` | string | yes |  | The PEM certificates of the CA the coordinator's certificate must chain to. No other root is trusted. |
@@ -299,11 +299,11 @@ in order lands when that pin moves to a revision that has the input, and the cal
 |---|---|
 | `desired_version` | The desired version the coordinator stored; empty when it stored none. |
 | `converged` | `true` when the fleet converged on the version, `false` otherwise. |
-| `reason` | Why the job ended where it did, one token: `converged`, `not_waited`, `halted`, `superseded`, `not_converged`, `not_stored`, `no_answer`, `coordinator_older` (the coordinator is older than the hkctl that made the call), or the refusal token the coordinator gave (for example `held_bad`, `target_invalid`, `invalid_wait` or `too_many_waits`). Empty when a step before the set failed (a verification, the install, the CA or the request), so the set never ran. |
+| `reason` | Why the job ended where it did, one token: `converged`, `not_waited`, `halted`, `superseded`, `not_converged`, `not_stored`, `no_answer`, `coordinator_older` (the coordinator is older than the hk that made the call), or the refusal token the coordinator gave (for example `held_bad`, `target_invalid`, `invalid_wait` or `too_many_waits`). Empty when a step before the set failed (a verification, the unpack, the CA or the request), so the set never ran. |
 
 The last step writes them with one jq program, held in the workflow beside the step that runs it,
 from the outcome of each call, the answer each wrote (`--response-file`) and the diagnostics each
-wrote to its own file, where hkctl prints a refusal as `refused: <token>`. A token is taken only
+wrote to its own file, where hk prints a refusal as `refused: <token>`. A token is taken only
 when it is 1 to 64 characters of `[a-z0-9_]`, and a version is written only when it is a version
 (1 to 255 of `A-Za-z0-9._+-`, not starting with `-` or `.`): nothing else of a caller's input or of
 an answer reaches the outputs. The first row that holds, in order:
@@ -312,7 +312,7 @@ an answer reaches the outputs. The first row that holds, in order:
 |---|---|---|---|
 | the set did not run: a step before it failed | empty | `false` | empty |
 | the set failed with `refused: <token>` | the token | `false` | empty: the version is not set |
-| the set failed with `refused: coordinator_older`: hkctl got `invalid_request` and its call to the coordinator's `GET /v1/version` showed the coordinator older than hkctl | `coordinator_older` | `false` | empty: the version is not set |
+| the set failed with `refused: coordinator_older`: hk got `invalid_request` and its call to the coordinator's `GET /v1/version` showed the coordinator older than hk | `coordinator_older` | `false` | empty: the version is not set |
 | the set failed otherwise (no answer, an answer that is not the gateway's, a reason outside the grammar, cancelled) | `no_answer` | `false` | empty: whether it is set is not known |
 | the stored version differs from the requested one | `not_stored` | `false` | the stored one, when it is a version; else empty |
 | `wait` is false | `not_waited` | `false` | the requested version |
@@ -330,11 +330,12 @@ Pin three things, and change them together, in a reviewed pull request of the se
 
 - the `uses:` line, to the full commit of this repository whose `set-desired.yml` you call, with
   the release as its comment;
-- `hostkeeper_version`, the release whose hkctl the job downloads: one that has the asset
-  `hkctl-<version>`;
+- `hostkeeper_version`, the release whose hk the job downloads: one that has the asset
+  `hk-<version>-linux-x86_64.tar.gz` (a caller that pins an older revision of the workflow pins an
+  older release, whose command line is the bash script `hkctl-<version>`);
 - `hostkeeper_commit`, the commit of `komira-ai/hostkeeper` that release was built from.
 
-Why: the downloaded hkctl holds your OIDC token. A pin means a new hostkeeper release,
+Why: the downloaded hk holds your OIDC token. A pin means a new hostkeeper release,
 or a moved tag, cannot change what runs with that token until you change the pin. The commit is
 what the attestation proves: the job refuses a release whose attestation names any other source
 commit, so a release replaced after you pinned it is refused, not run.
@@ -481,21 +482,21 @@ change can take up.
 
 ## The calls
 
-Each call is one `hkctl` command. Its globals name the coordinator, its CA and the token's
-audience; `--github-oidc-audience` makes hkctl ask the runner for a fresh GitHub Actions ID token
+Each call is one `hk` command. Its globals name the coordinator, its CA and the token's
+audience; `--github-oidc-audience` makes hk ask the runner for a fresh GitHub Actions ID token
 for that audience, print `::add-mask::<token>` so the log never shows it, and send it to the
-coordinator through a pipe. The coordinator accepts each token once, so each call asks for its
+coordinator in the request's header. The coordinator accepts each token once, so each call asks for its
 own. The answer goes to the file of `--response-file`, so that stdout carries only the mask line,
 and the workflow sends each call's diagnostics to a file of its own (`2>`), which the outputs step
 reads. The set's diagnostics also go to its step's own log, through `tee` (`2> >(tee <file> >&2)`),
-and the step ends with hkctl's exit code, so a red set step names the cause: the coordinator's code
-(`hkctl: the coordinator answered FAILED_PRECONDITION`) and the `refused: <token>` line, or `no
+and the step ends with hk's exit code, so a red set step names the cause: the coordinator's code
+(`hk: the coordinator answered FAILED_PRECONDITION`) and the `refused: <token>` line, or `no
 answer`. The set:
 
 ```sh
-hkctl --endpoint https://<coordinator> --ca-file "$RUNNER_TEMP/hkctl-coordinator-ca.pem" \
-  --github-oidc-audience "$AUDIENCE" --response-file "$RUNNER_TEMP/hkctl-set.json" \
-  releases set-desired --service "$SERVICE" --request "$RUNNER_TEMP/hkctl-request.json" \
+hk --endpoint https://<coordinator> --ca-file "$RUNNER_TEMP/hk-coordinator-ca.pem" \
+  --github-oidc-audience "$AUDIENCE" --response-file "$RUNNER_TEMP/hk-set.json" \
+  releases set-desired --service "$SERVICE" --request "$RUNNER_TEMP/hk-request.json" \
   --host-group web
 ```
 
@@ -506,8 +507,8 @@ JSON names of the request, the targets the object of the input as an object, not
 Then the wait, with `--wait-secs` ten times `max_polls`:
 
 ```sh
-hkctl --endpoint https://<coordinator> --ca-file "$RUNNER_TEMP/hkctl-coordinator-ca.pem" \
-  --github-oidc-audience "$AUDIENCE" --response-file "$RUNNER_TEMP/hkctl-wait.json" \
+hk --endpoint https://<coordinator> --ca-file "$RUNNER_TEMP/hk-coordinator-ca.pem" \
+  --github-oidc-audience "$AUDIENCE" --response-file "$RUNNER_TEMP/hk-wait.json" \
   releases wait-converged --service "$SERVICE" --version "$VERSION" --wait-secs 1800 \
   --host-group web
 ```
@@ -519,7 +520,7 @@ an empty `host_group` sends no flag, so the request has no host group field and 
 coordinator takes it as it always did.
 
 The coordinator answers at once when the wait is over already, and otherwise after the change
-that ends it; hkctl gives curl a time limit of the wait plus its own timeout. A wait cut by a
+that ends it; hk gives the call a time limit of the wait plus its own timeout. A wait cut by a
 restart of the coordinator or by the network ends with no answer (`no_answer`): the version is
 set and the roll goes on, and the job can be run again.
 
@@ -549,7 +550,7 @@ section 10.1), and a host that runs the service from `apt` is picked its list's 
 other ([packages.md](../design/packages.md), section 3.3). A list of `hostkeeper-archive` entries
 alone orders no host, but the coordinator still stores the set, and with `wait` false the job
 still ends `not_waited`: each host shows `installer_dropped` (it runs the service from an
-installer the list has no entry of) or `no_build_for_host` in `hkctl releases status --service
+installer the list has no entry of) or `no_build_for_host` in `hk releases status --service
 <service>`, and the version does not converge. A service whose hosts install it from a package
 repository lists, for each Linux platform, the `apt` entry of its `.deb` as that repository
 publishes it: `repository` the hosts' entry (the stem of the file
@@ -594,7 +595,7 @@ whose bundle does not list it. `hello-desired.yml` passes it for its `fail-ready
 digest, size, location or manifest out of its bounds, or for the service `hostkeeper` a list that
 is not one native entry), and the same version set before with other targets
 (`release_exists`, do not retry: a release never changes; set a new version). A set with targets
-is at most 256 KiB. `hkctl releases get-release --service <service>
+is at most 256 KiB. `hk releases get-release --service <service>
 --version <version>` reads back what was set. A coordinator before targets refuses the set for
 its size or the unknown field, and nothing is set: send targets only once your coordinator takes
 them.
@@ -604,16 +605,16 @@ them.
 | step that failed | what it means | what to do |
 |---|---|---|
 | Check the tailnet tag | `tailnet_tag` is not `tag:` followed by a lower-case letter, then lower-case letters, digits and `-` (jq's error says so), with or without `join_tailnet`. Nothing is downloaded and the version is not set. | Pass one tag, such as `tag:ci`, or leave the input out for `tag:hk-ci`. |
-| Download hkctl of the hostkeeper release | No release `v<hostkeeper_version>`, or it has no `hkctl-<hostkeeper_version>` (a release before hkctl) or no `SHA256SUMS`. The version is not set. | Check the pin against the releases of `komira-ai/hostkeeper`. |
-| Check hkctl against SHA256SUMS | A downloaded file does not have the bytes `SHA256SUMS` lists. The version is not set. | Do not retry with another file. Report it to the hostkeeper maintainers. |
-| Verify the attestation of hkctl | hkctl has no attestation from `artifacts.yml` of `komira-ai/hostkeeper` on `refs/heads/main`, built on a GitHub-hosted runner from `hostkeeper_commit`. The version is not set. | Check that `hostkeeper_commit` is the commit of `hostkeeper_version`. If it is, the release is not the one that was built: report it. |
+| Download hk of the hostkeeper release | No release `v<hostkeeper_version>`, or it has no `hk-<hostkeeper_version>-linux-x86_64.tar.gz` (a release before hk) or no `SHA256SUMS`. The version is not set. | Check the pin against the releases of `komira-ai/hostkeeper`. |
+| Check hk against SHA256SUMS | A downloaded file does not have the bytes `SHA256SUMS` lists. The version is not set. | Do not retry with another file. Report it to the hostkeeper maintainers. |
+| Verify the attestation of hk | The tarball has no attestation from `artifacts.yml` of `komira-ai/hostkeeper` on `refs/heads/main`, built on a GitHub-hosted runner from `hostkeeper_commit`. The version is not set. | Check that `hostkeeper_commit` is the commit of `hostkeeper_version`. If it is, the release is not the one that was built: report it. |
 | Compare the attested source commit | An attestation names another source commit than `hostkeeper_commit` (`jq` prints `false`). The version is not set. | As above. |
-| Install the verified hkctl | The runner could not write the file. The version is not set. | Run the job again. |
-| Check the version of the verified hkctl | hkctl does not say `hkctl <hostkeeper_version>+<first 12 hex digits of hostkeeper_commit>`. The version is not set. | Check the two pins belong together. |
+| Unpack the verified hk | The runner could not write the file. The version is not set. | Run the job again. |
+| Check the version of the verified hk | hk does not say `hk <hostkeeper_version>+<first 12 hex digits of hostkeeper_commit>`. The version is not set. | Check the two pins belong together. |
 | Join the tailnet | Only with `join_tailnet`. Tailscale refused the federated identity (no credential for this client ID and audience, a subject that does not match the job, or a `tailnet_tag` the credential does not issue), or `tailnet_coordinator` did not answer a ping within 3 minutes. The version is not set. | Check the [federation](#the-federation-set-up-once-by-a-tailnet-admin) and the [ACL](#the-tag-and-the-acl). |
 | Write the request of the set | `targets` is empty or is not one JSON object (jq's error names the rule). `reason` is empty. The version is not set. | Give the targets of the release as one JSON object. |
-| Set the desired version | The coordinator refused the call, and `reason` is its token: `unauthorized` or `forbidden` (no trusted publisher of the service admits this repository, workflow file, branch or environment, or the allow-list does not accept the audience), `unknown_service`, `invalid_request` (a service or version the coordinator does not take), `not_in_host_group` (the group does not exist or does not list the service, or, with no `host_group`, no group lists it), `invalid_request` also when `host_group` is not a host group name, `ambiguous_host_group` (no `host_group`, and the set carries a generation while more than one group lists the service), `limits_in_host_group` (the request carries `max_updating` or `min_up`, which belong to the group's policy), `forbidden` also when the entry's `host_groups` do not include the group, or, with no `host_group`, include none that lists the service ([Host groups](#host-groups)), `held_bad` (the version is marked bad; only an operator can lift the mark, design 8.1), `keys_unavailable` (retry later), `coordinator_older` (the coordinator is older than the hostkeeper release whose hkctl made the call: it refused a field it does not know, and hkctl's one more call to the coordinator's `GET /v1/version` showed it older; do not retry, update the coordinator, [coordinator-update.md](coordinator-update.md), then run the job again), `target_invalid` (the targets break a rule of a release, [Targets](#targets)), `release_exists` (the version was set before with other targets; do not retry). `no_answer`: the coordinator could not be reached (with `join_tailnet` false this is what a GitHub-hosted runner gets, because the private listener is not reachable from it, [Reaching the coordinator](#reaching-the-coordinator)), GitHub issued no token (the calling job does not grant `id-token: write`), or hkctl refused a flag. `not_stored`: it answered with another version. The version is not set, except for `not_stored` and possibly `no_answer`: read `hkctl releases status --service <service>` before you retry. | Fix what the token names, then run the job again. |
-| Wait for the fleet to converge | The version is set. `halted`: a host halted the service, and no host is ordered until an operator clears the halt (a halt whose host reports the service absent clears itself once, and the host is ordered the install again). `superseded`: the desired version changed while the job waited (an automatic rollback, or a newer release). `not_converged`: `max_polls` times 10 seconds passed and the fleet had not converged; the roll goes on. `invalid_wait`: `max_polls` is above 180 (or below 1). `too_many_waits`: the coordinator already holds 16 waits on its listener; run the job again. `no_answer`: the wait was cut (a restart of the coordinator, the network) or got no token. | Look at the service in the coordinator's UI or with `hkctl releases status`. |
+| Set the desired version | The coordinator refused the call, and `reason` is its token: `unauthorized` or `forbidden` (no trusted publisher of the service admits this repository, workflow file, branch or environment, or the allow-list does not accept the audience), `unknown_service`, `invalid_request` (a service or version the coordinator does not take), `not_in_host_group` (the group does not exist or does not list the service, or, with no `host_group`, no group lists it), `invalid_request` also when `host_group` is not a host group name, `ambiguous_host_group` (no `host_group`, and the set carries a generation while more than one group lists the service), `limits_in_host_group` (the request carries `max_updating` or `min_up`, which belong to the group's policy), `forbidden` also when the entry's `host_groups` do not include the group, or, with no `host_group`, include none that lists the service ([Host groups](#host-groups)), `held_bad` (the version is marked bad; only an operator can lift the mark, design 8.1), `keys_unavailable` (retry later), `coordinator_older` (the coordinator is older than the hostkeeper release whose hk made the call: it refused a field it does not know, and hk's one more call to the coordinator's `GET /v1/version` showed it older; do not retry, update the coordinator, [coordinator-update.md](coordinator-update.md), then run the job again), `target_invalid` (the targets break a rule of a release, [Targets](#targets)), `release_exists` (the version was set before with other targets; do not retry). `no_answer`: the coordinator could not be reached (with `join_tailnet` false this is what a GitHub-hosted runner gets, because the private listener is not reachable from it, [Reaching the coordinator](#reaching-the-coordinator)), GitHub issued no token (the calling job does not grant `id-token: write`), or hk refused a flag. `not_stored`: it answered with another version. The version is not set, except for `not_stored` and possibly `no_answer`: read `hk releases status --service <service>` before you retry. | Fix what the token names, then run the job again. |
+| Wait for the fleet to converge | The version is set. `halted`: a host halted the service, and no host is ordered until an operator clears the halt (a halt whose host reports the service absent clears itself once, and the host is ordered the install again). `superseded`: the desired version changed while the job waited (an automatic rollback, or a newer release). `not_converged`: `max_polls` times 10 seconds passed and the fleet had not converged; the roll goes on. `invalid_wait`: `max_polls` is above 180 (or below 1). `too_many_waits`: the coordinator already holds 16 waits on its listener; run the job again. `no_answer`: the wait was cut (a restart of the coordinator, the network) or got no token. | Look at the service in the coordinator's UI or with `hk releases status`. |
 
 ## What it does not do
 

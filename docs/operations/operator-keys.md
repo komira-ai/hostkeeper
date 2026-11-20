@@ -53,7 +53,7 @@ host's group like any other.
 ## Check a host
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     hosts get --node-id <id>
 ```
 

@@ -16,7 +16,7 @@ use super::yaml::{self, Node, Value};
 /// The set step's line of its global flag `--github-oidc-audience`, and the wait step's.
 const AUDIENCE: &str = "            --github-oidc-audience \"$AUDIENCE\" \\\n";
 /// The set step's response flag.
-const SET_RESPONSE: &str = "            --response-file \"$RUNNER_TEMP/hkctl-set.json\" \\\n";
+const SET_RESPONSE: &str = "            --response-file \"$RUNNER_TEMP/hk-set.json\" \\\n";
 /// The line of both calls that passes the host group only when it is not empty.
 const HOST_GROUP_WORD: &str = "            ${HOST_GROUP:+\"--host-group=$HOST_GROUP\"} \\\n";
 /// The wait step's bound.
@@ -41,7 +41,7 @@ fn set_with(from: &str, to: &str) -> String {
 #[test]
 fn the_real_file_keeps_every_rule_of_the_calls() {
     // Catches: the real workflow drifting from the rules, a step of the order missing from it,
-    // and the two methods it calls missing from hkctl's command table.
+    // and the two methods it calls missing from hk's command table.
     let text = real();
     assert_client(&text, &[]);
     assert_client(CLIENT, &[]);
@@ -122,24 +122,24 @@ fn a_call_takes_the_jobs_own_token_and_no_other() {
     );
     assert_client(
         &set_with(
-            "            --ca-file \"$RUNNER_TEMP/hkctl-coordinator-ca.pem\" \\\n",
+            "            --ca-file \"$RUNNER_TEMP/hk-coordinator-ca.pem\" \\\n",
             "",
         ),
         &[
-            "step 11 (`set-desired`) does not pass `--ca-file \"$RUNNER_TEMP/hkctl-coordinator-ca.pem\"` before the method exactly once",
+            "step 11 (`set-desired`) does not pass `--ca-file \"$RUNNER_TEMP/hk-coordinator-ca.pem\"` before the method exactly once",
         ],
     );
 }
 
 #[test]
-fn a_call_is_one_hkctl_command_of_the_table_into_its_own_files() {
-    // Catches: a call step that runs more than hkctl, another program, a method renamed or not
+fn a_call_is_one_hk_command_of_the_table_into_its_own_files() {
+    // Catches: a call step that runs more than hk, another program, a method renamed or not
     // in the table, a flag the method does not take, its answer printed on stdout (where the
     // token's mask line is) or into another file, and its diagnostics not in the file the
     // outputs step reads.
     let not_one =
-        "step 11 (`set-desired`) does not run `$RUNNER_TEMP/hkctl-bin/hkctl` as its one command";
-    let first = "          \"$RUNNER_TEMP/hkctl-bin/hkctl\" \\\n            --endpoint";
+        "step 11 (`set-desired`) does not run `$RUNNER_TEMP/hk-bin/hk` as its one command";
+    let first = "          \"$RUNNER_TEMP/hk-bin/hk\" \\\n            --endpoint";
     assert_client(
         &set_with(first, &format!("          echo calling\n{first}")),
         &[not_one],
@@ -148,10 +148,7 @@ fn a_call_is_one_hkctl_command_of_the_table_into_its_own_files() {
         &with_in(
             CLIENT,
             CLIENT_BLOCK,
-            &CLIENT_BLOCK.replace(
-                "$RUNNER_TEMP/hkctl-bin/hkctl",
-                "$RUNNER_TEMP/hkctl-bin/hostkeeper",
-            ),
+            &CLIENT_BLOCK.replace("$RUNNER_TEMP/hk-bin/hk", "$RUNNER_TEMP/hk-bin/hostkeeper"),
         ),
         &[not_one],
     );
@@ -176,7 +173,7 @@ fn a_call_is_one_hkctl_command_of_the_table_into_its_own_files() {
     assert_client(
         &set_with(SET_RESPONSE, ""),
         &[
-            "step 11 (`set-desired`) does not pass `--response-file \"$RUNNER_TEMP/hkctl-set.json\"` before the method exactly once",
+            "step 11 (`set-desired`) does not pass `--response-file \"$RUNNER_TEMP/hk-set.json\"` before the method exactly once",
         ],
     );
     // The response flag after the method is a flag of no method.
@@ -187,11 +184,11 @@ fn a_call_is_one_hkctl_command_of_the_table_into_its_own_files() {
             &format!("            --service \"$SERVICE\" \\\n{SET_RESPONSE}            --request"),
         ),
         &[
-            "step 11 (`set-desired`) does not pass `--response-file \"$RUNNER_TEMP/hkctl-set.json\"` before the method exactly once",
+            "step 11 (`set-desired`) does not pass `--response-file \"$RUNNER_TEMP/hk-set.json\"` before the method exactly once",
             "step 11 (`set-desired`) passes `--response-file`, which is not a flag of `releases set-desired`",
         ],
     );
-    let no_err = "step 11 (`set-desired`) does not end with `2> >(tee \"$RUNNER_TEMP/hkctl-set.err\" >&2)`, which sends its diagnostics to `$RUNNER_TEMP/hkctl-set.err`, the file the outputs step reads";
+    let no_err = "step 11 (`set-desired`) does not end with `2> >(tee \"$RUNNER_TEMP/hk-set.err\" >&2)`, which sends its diagnostics to `$RUNNER_TEMP/hk-set.err`, the file the outputs step reads";
     // The diagnostics not sent anywhere: the outputs step reads nothing and the log shows them.
     assert_client(
         &set_with(
@@ -201,18 +198,18 @@ fn a_call_is_one_hkctl_command_of_the_table_into_its_own_files() {
         &[no_err],
     );
     for to in [
-        // The set step as it was: its own log shows only hkctl's exit code.
-        "2> \"$RUNNER_TEMP/hkctl-set.err\"",
+        // The set step as it was: its own log shows only hk's exit code.
+        "2> \"$RUNNER_TEMP/hk-set.err\"",
         // The wait's file, which the outputs step does not read for the set.
-        "2> >(tee \"$RUNNER_TEMP/hkctl-wait.err\" >&2)",
+        "2> >(tee \"$RUNNER_TEMP/hk-wait.err\" >&2)",
         // To the log alone: the outputs step reads no diagnostics.
         "2>&1",
         // To the file and to stdout, which carries only the mask line.
-        "2> >(tee \"$RUNNER_TEMP/hkctl-set.err\")",
+        "2> >(tee \"$RUNNER_TEMP/hk-set.err\")",
         // A tee that appends to a file a re-run of the job left.
-        "2> >(tee -a \"$RUNNER_TEMP/hkctl-set.err\" >&2)",
+        "2> >(tee -a \"$RUNNER_TEMP/hk-set.err\" >&2)",
         // A pipe: the step's code becomes tee's, and a failed set reads as a success.
-        "2>&1 | tee \"$RUNNER_TEMP/hkctl-set.err\"",
+        "2>&1 | tee \"$RUNNER_TEMP/hk-set.err\"",
     ] {
         assert_client(&set_with(SET_REDIRECT, to), &[no_err]);
     }
@@ -220,11 +217,11 @@ fn a_call_is_one_hkctl_command_of_the_table_into_its_own_files() {
     assert_client(
         &with_in(
             CLIENT,
-            "2> \"$RUNNER_TEMP/hkctl-wait.err\"\n",
-            "2> >(tee \"$RUNNER_TEMP/hkctl-wait.err\" >&2)\n",
+            "2> \"$RUNNER_TEMP/hk-wait.err\"\n",
+            "2> >(tee \"$RUNNER_TEMP/hk-wait.err\" >&2)\n",
         ),
         &[
-            "step 12 (`wait`) does not end with `2> \"$RUNNER_TEMP/hkctl-wait.err\"`, which sends its diagnostics to `$RUNNER_TEMP/hkctl-wait.err`, the file the outputs step reads",
+            "step 12 (`wait`) does not end with `2> \"$RUNNER_TEMP/hk-wait.err\"`, which sends its diagnostics to `$RUNNER_TEMP/hk-wait.err`, the file the outputs step reads",
         ],
     );
 }
@@ -234,8 +231,8 @@ fn the_set_sends_the_request_and_the_wait_is_bounded_by_max_polls() {
     // Catches: the set sending another file than the request step writes, the request step
     // writing elsewhere, and the wait held without its bound, with a bound that is not ten times
     // `max_polls`, or with `max_polls` taken from anything but its input.
-    let request = "            --request \"$RUNNER_TEMP/hkctl-request.json\" \\\n";
-    let no_request = "step 11 (`set-desired`) does not pass `--request \"$RUNNER_TEMP/hkctl-request.json\"` exactly once";
+    let request = "            --request \"$RUNNER_TEMP/hk-request.json\" \\\n";
+    let no_request = "step 11 (`set-desired`) does not pass `--request \"$RUNNER_TEMP/hk-request.json\"` exactly once";
     assert_client(&with_in(CLIENT, request, ""), &[no_request]);
     assert_client(
         &with_in(CLIENT, request, &format!("{request}{request}")),
@@ -244,11 +241,11 @@ fn the_set_sends_the_request_and_the_wait_is_bounded_by_max_polls() {
     assert_client(
         &with_in(
             CLIENT,
-            "'{}' > \"$RUNNER_TEMP/hkctl-request.json\"",
+            "'{}' > \"$RUNNER_TEMP/hk-request.json\"",
             "'{}' > \"$RUNNER_TEMP/request.json\"",
         ),
         &[
-            "the request step does not end by writing `\"$RUNNER_TEMP/hkctl-request.json\"`, the file the set step reads",
+            "the request step does not end by writing `\"$RUNNER_TEMP/hk-request.json\"`, the file the set step reads",
         ],
     );
     let no_bound = "step 12 (`wait`) does not pass `--wait-secs \"${MAX_POLLS}0\"` exactly once";
@@ -415,7 +412,7 @@ fn no_step_hands_a_token_or_an_environment_on() {
     assert_client(
         &with_in(
             CLIENT,
-            "        run: printf '%s\\n' \"$CA\" > \"$RUNNER_TEMP/hkctl-coordinator-ca.pem\"\n",
+            "        run: printf '%s\\n' \"$CA\" > \"$RUNNER_TEMP/hk-coordinator-ca.pem\"\n",
             "        run: echo \"CA=$RUNNER_TEMP/ca.pem\" >> \"$GITHUB_ENV\"\n",
         ),
         &["step 9 (`ca`) writes `GITHUB_ENV`, which sets the environment of the steps after it"],
@@ -452,12 +449,12 @@ fn the_outputs_step_reads_exactly_the_files_the_calls_leave() {
             &[&format!("the outputs step's `{key}` is not `{value}`")],
         );
     }
-    let set_body = "          SET_BODY: ${{ steps.set-desired.outcome == 'success' && format('{0}/hkctl-set.json', runner.temp) || '/dev/null' }}\n";
+    let set_body = "          SET_BODY: ${{ steps.set-desired.outcome == 'success' && format('{0}/hk-set.json', runner.temp) || '/dev/null' }}\n";
     assert_client(
         &with_in(
             CLIENT,
             set_body,
-            "          SET_BODY: ${{ runner.temp }}/hkctl-set.json\n",
+            "          SET_BODY: ${{ runner.temp }}/hk-set.json\n",
         ),
         &[&format!(
             "the outputs step's `SET_BODY` is not `{}`",
@@ -651,7 +648,7 @@ fn the_request_takes_each_part_of_the_release_from_its_own_input() {
     }
 }
 
-/// Runs the set step of the real `set-desired.yml`, under the runner's shell, with a fake hkctl
+/// Runs the set step of the real `set-desired.yml`, under the runner's shell, with a fake hk
 /// that writes `stderr` and exits `status`: the step's exit code, what it printed to stderr, and
 /// what the diagnostics file the outputs step reads holds.
 fn run_set_step(name: &str, stderr: &str, status: u8) -> (Option<i32>, String, String) {
@@ -672,14 +669,14 @@ fn run_set_step(name: &str, stderr: &str, status: u8) -> (Option<i32>, String, S
     let script = entry(step, "run").and_then(Node::as_str).expect("its run");
     let base = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("set-step-run");
     let root = super::testdir::TestDir::under(&base, name);
-    let bin = root.join("hkctl-bin");
+    let bin = root.join("hk-bin");
     std::fs::create_dir_all(&bin).expect("make the fake's directory");
-    let fake = bin.join("hkctl");
+    let fake = bin.join("hk");
     std::fs::write(
         &fake,
         "#!/bin/bash\nprintf '%s' \"$FAKE_STDERR\" >&2\nexit \"$FAKE_STATUS\"\n",
     )
-    .expect("write the fake hkctl");
+    .expect("write the fake hk");
     std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
     let out = std::process::Command::new("bash")
         .args(["--noprofile", "--norc", "-eo", "pipefail", "-c", script])
@@ -693,7 +690,7 @@ fn run_set_step(name: &str, stderr: &str, status: u8) -> (Option<i32>, String, S
         .env("FAKE_STATUS", status.to_string())
         .output()
         .expect("run bash");
-    let saved = std::fs::read_to_string(root.join("hkctl-set.err")).expect("the diagnostics file");
+    let saved = std::fs::read_to_string(root.join("hk-set.err")).expect("the diagnostics file");
     (
         out.status.code(),
         String::from_utf8(out.stderr).expect("utf-8"),
@@ -702,23 +699,22 @@ fn run_set_step(name: &str, stderr: &str, status: u8) -> (Option<i32>, String, S
 }
 
 #[test]
-fn a_failed_set_prints_hkctls_diagnostics_and_keeps_its_exit_code() {
+fn a_failed_set_prints_hks_diagnostics_and_keeps_its_exit_code() {
     // Catches: a red set step whose own log shows only `exit code 2`, a failure turned into
     // success or into another code (the outputs step reads the step's outcome), and the
     // diagnostics file left empty for the outputs step.
-    let refusal =
-        "hkctl: the coordinator answered FAILED_PRECONDITION\nrefused: repository_unknown\n";
+    let refusal = "hk: the coordinator answered FAILED_PRECONDITION\nrefused: repository_unknown\n";
     assert_eq!(
         run_set_step("refused", refusal, 2),
         (Some(2), refusal.to_owned(), refusal.to_owned())
     );
-    // No answer at all is hkctl's exit 1, printed the same way.
-    let no_answer = "hkctl: no answer from https://coordinator.example (curl exited 7)\n";
+    // No answer at all is hk's exit 1, printed the same way.
+    let no_answer = "hk: no answer from https://coordinator.example (connection refused)\n";
     assert_eq!(
         run_set_step("no-answer", no_answer, 1),
         (Some(1), no_answer.to_owned(), no_answer.to_owned())
     );
-    // A failure with no diagnostics still ends with hkctl's code, and prints nothing.
+    // A failure with no diagnostics still ends with hk's code, and prints nothing.
     assert_eq!(
         run_set_step("silent", "", 4),
         (Some(4), String::new(), String::new())
@@ -726,14 +722,14 @@ fn a_failed_set_prints_hkctls_diagnostics_and_keeps_its_exit_code() {
 }
 
 #[test]
-fn a_set_that_succeeds_succeeds_and_shows_what_hkctl_wrote() {
+fn a_set_that_succeeds_succeeds_and_shows_what_hk_wrote() {
     // Catches: a success turned into a failure by the redirect, and a warning on success lost
     // from the log or from the file.
     assert_eq!(
         run_set_step("success", "", 0),
         (Some(0), String::new(), String::new())
     );
-    let warning = "hkctl: a warning\n";
+    let warning = "hk: a warning\n";
     assert_eq!(
         run_set_step("success-warning", warning, 0),
         (Some(0), warning.to_owned(), warning.to_owned())
@@ -741,8 +737,8 @@ fn a_set_that_succeeds_succeeds_and_shows_what_hkctl_wrote() {
 }
 
 /// Runs the call step `id` of the real `set-desired.yml`, under the runner's shell, with a fake
-/// hkctl that records its arguments, one per line, with `HOST_GROUP` set to `host_group` (unset
-/// when `None`): the arguments the step gave hkctl after the method's other flags, from
+/// hk that records its arguments, one per line, with `HOST_GROUP` set to `host_group` (unset
+/// when `None`): the arguments the step gave hk after the method's other flags, from
 /// `--host-group` on or from the redirect.
 fn host_group_args(name: &str, id: &str, host_group: Option<&str>) -> Vec<String> {
     use std::os::unix::fs::PermissionsExt;
@@ -762,14 +758,14 @@ fn host_group_args(name: &str, id: &str, host_group: Option<&str>) -> Vec<String
     let script = entry(step, "run").and_then(Node::as_str).expect("its run");
     let base = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("host-group-run");
     let root = super::testdir::TestDir::under(&base, name);
-    let bin = root.join("hkctl-bin");
+    let bin = root.join("hk-bin");
     std::fs::create_dir_all(&bin).expect("make the fake's directory");
-    let fake = bin.join("hkctl");
+    let fake = bin.join("hk");
     std::fs::write(
         &fake,
         "#!/bin/bash\nprintf '%s\\n' \"$@\" > \"$RUNNER_TEMP/args\"\n",
     )
-    .expect("write the fake hkctl");
+    .expect("write the fake hk");
     std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
     let mut command = std::process::Command::new("bash");
     command
@@ -797,7 +793,7 @@ fn host_group_args(name: &str, id: &str, host_group: Option<&str>) -> Vec<String
 }
 
 #[test]
-fn an_empty_host_group_gives_hkctl_no_argument_and_a_group_gives_exactly_one() {
+fn an_empty_host_group_gives_hk_no_argument_and_a_group_gives_exactly_one() {
     // Catches: an empty `host_group` sending `--host-group=` (a request field an older
     // coordinator refuses), and a group split into two words, quoted wrongly or dropped, in
     // either call.
@@ -893,7 +889,7 @@ fn the_host_group_is_passed_only_as_the_one_conditional_word_in_both_calls() {
             ),
         ),
         &[
-            "step 11 (`set-desired`) does not end with `2> >(tee \"$RUNNER_TEMP/hkctl-set.err\" >&2)`, which sends its diagnostics to `$RUNNER_TEMP/hkctl-set.err`, the file the outputs step reads",
+            "step 11 (`set-desired`) does not end with `2> >(tee \"$RUNNER_TEMP/hk-set.err\" >&2)`, which sends its diagnostics to `$RUNNER_TEMP/hk-set.err`, the file the outputs step reads",
         ],
     );
     // The variable comes from the input, in both steps.
@@ -916,7 +912,7 @@ fn the_host_group_is_passed_only_as_the_one_conditional_word_in_both_calls() {
 
 #[test]
 fn an_optional_flag_must_be_a_flag_of_the_command() {
-    // Catches: a conditional word for a flag the method does not take, which hkctl would refuse
+    // Catches: a conditional word for a flag the method does not take, which hk would refuse
     // as a usage error exactly when the input is not empty.
     let doc = yaml::load(CLIENT).expect("the fixture parses");
     let steps = match entry(&doc, "jobs")
