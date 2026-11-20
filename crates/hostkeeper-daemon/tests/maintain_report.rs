@@ -473,9 +473,8 @@ fn the_runner_runs_the_turn_and_logs_the_answer_and_a_resend_starts_nothing() {
     assert!(!said.contains(&answer(true)));
 }
 
-/// Proves: an order the daemon refuses (the action `RETRY`, which this daemon does not run) is
-/// logged by the runner with the refusal and its detail, nothing is launched, and no record is
-/// written.
+/// Proves: an order the daemon refuses (an action that is not given) is logged by the runner with
+/// the refusal and its detail, nothing is launched, and no record is written.
 ///
 /// Catches: a refusal the runner swallows, so that a coordinator's order that cannot run leaves no
 /// line on the host to say why.
@@ -488,7 +487,7 @@ fn a_refused_order_is_logged_with_its_refusal_and_runs_nothing() {
         id: OrderId::new(ORDER).expect("an order id"),
         order_try: 1,
         maintain: pb::Maintain {
-            action: pb::MaintainAction::Retry.into(),
+            action: pb::MaintainAction::Unspecified.into(),
             ..terms(&[pb::MaintenanceKind::Linux], None)
         },
     };
