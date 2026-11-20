@@ -12,6 +12,10 @@
 //! - `softwareupdate --list-full-installers` names each full installer of macOS in one line:
 //!   `* Title: <title>, Version: <version>, Size: <size>, Build: <build>, Deferred: YES|NO`.
 //!
+//! Each update's and installer's `Size` is kept in bytes when it is a whole number of KiB
+//! (`Size: 4718592KiB`, the one form the fixtures show); any other size is kept as unknown
+//! (`None`), never guessed at, and the line is not counted for it.
+//!
 //! A line the parser does not know is counted ([`SoftwareUpdateListing::unparsed`]) and never
 //! guessed at: a detail line with no `* Label:` line before it, a `* Label:` line with no detail
 //! line after it, a details line with a field it does not know (its known fields are still read),
@@ -68,7 +72,7 @@ const RESTART_ACTIONS: [&str; 2] = ["restart", "shut down"];
 const YES_NO: [&str; 2] = ["YES", "NO"];
 
 /// What the title of a macOS update or installer starts with.
-const MACOS_TITLE: &str = "macOS ";
+pub(crate) const MACOS_TITLE: &str = "macOS ";
 
 /// Whether a major upgrade of macOS is due on the host (`hostkeeper daemon
 /// --maintenance-macos-major`, the group setting `macos_major` of the design's section 3).
@@ -104,6 +108,8 @@ pub struct ListedUpdate {
     pub version: String,
     /// Whether it restarts the Mac (`Action: restart` or `Action: shut down`).
     pub restart: bool,
+    /// Its download in bytes, from its `Size` in KiB; `None` when the line gives no size in KiB.
+    pub size: Option<u64>,
 }
 
 /// One full installer `softwareupdate --list-full-installers` names.
@@ -115,6 +121,8 @@ pub struct FullInstaller {
     pub version: String,
     /// Its build (`25C56`).
     pub build: String,
+    /// Its download in bytes, from its `Size` in KiB; `None` when the line gives no size in KiB.
+    pub size: Option<u64>,
 }
 
 /// What [`parse_softwareupdate_list`] read.
@@ -137,6 +145,7 @@ struct Fields<'a> {
     version: Option<&'a str>,
     action: Option<&'a str>,
     build: Option<&'a str>,
+    size: Option<&'a str>,
     strange: bool,
 }
 
@@ -196,6 +205,7 @@ impl SoftwareUpdateListing {
                     restart: fields
                         .action
                         .is_some_and(|action| RESTART_ACTIONS.contains(&action)),
+                    size: fields.size.and_then(kib_bytes),
                 });
                 if fields.strange {
                     self.count_unparsed();
@@ -215,6 +225,7 @@ impl SoftwareUpdateListing {
                     title: title.to_owned(),
                     version: version.to_owned(),
                     build: build.to_owned(),
+                    size: fields.size.and_then(kib_bytes),
                 });
                 if fields.strange || fields.action.is_some() {
                     self.count_unparsed();
@@ -251,10 +262,22 @@ fn fields(line: &str) -> Fields<'_> {
                 fields.action = Some(value);
             }
             "Recommended" | "Deferred" => fields.strange |= !YES_NO.contains(&value),
-            _ => {}
+            // `Size`, the one field of [`FIELDS`] left.
+            _ => fields.size = Some(value),
         }
     }
     fields
+}
+
+/// The bytes of a `Size` of whole KiB (`4718592KiB`): its digits times 1024; `None` for any other
+/// text, or more bytes than `u64` holds.
+#[must_use]
+pub fn kib_bytes(size: &str) -> Option<u64> {
+    let digits = size.strip_suffix("KiB")?;
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse::<u64>().ok()?.checked_mul(1024)
 }
 
 /// The major version of a macOS version: the number before its first `.` (`26` of `26.2`, and of

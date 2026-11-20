@@ -514,14 +514,15 @@ fn a_cutover_is_refused_while_the_host_keeps_no_run_record() {
     assert_eq!(format!("{code:?}"), format!("{:?}", ExitCode::from(1)));
 }
 
-/// Proves: a Linux host's registry holds the `linux` and `reboot` kinds and a Mac's its three: a
-/// Linux `prepare` is the stage, which defers a run with no `linux_scope` before it runs any
-/// program; `reboot`'s `prepare` answers `unsupported_kind`, as does a Mac's `macos` `prepare`; a
-/// build whose version is not `major.minor.patch` cannot check its host, so the `verify` of its
-/// `linux` and `reboot` answers `unsupported_kind` (the check itself is
-/// `maintenance_hook_linux.rs`'s, over fakes: a host's reads the host); a Mac's `xcode` stages (an
-/// order with no Xcode stages nothing and succeeds) and its `cutover`, `after_reboot` and `verify`
-/// answer `unsupported_kind`.
+/// Proves: a Linux host's registry holds the `linux` and `reboot` kinds and a Mac's its three,
+/// `macos` and `xcode` with their stages: a Linux `prepare` is the stage, which defers a run with
+/// no `linux_scope` before it runs any program; `reboot`'s `prepare` answers `unsupported_kind`,
+/// as does a Mac's `macos` `cutover` (the Mac's `macos` `prepare` would run the host's own
+/// `softwareupdate`; it is tested over a fake Mac in the daemon's unit tests); a build whose
+/// version is not `major.minor.patch` cannot check its host, so the `verify` of its `linux` and
+/// `reboot` answers `unsupported_kind` (the check itself is `maintenance_hook_linux.rs`'s, over
+/// fakes: a host's reads the host); a Mac's `xcode` stages (an order with no Xcode stages nothing
+/// and succeeds) and its `cutover`, `after_reboot` and `verify` answer `unsupported_kind`.
 ///
 /// Catches: a platform's kinds put in the wrong platform's registry, or a host that cannot be
 /// checked made to look checked.
@@ -572,7 +573,7 @@ fn the_registry_of_a_platform_holds_its_kinds() {
         mac.kinds().collect::<Vec<_>>(),
         [Kind::Macos, Kind::Xcode, Kind::Reboot]
     );
-    let refused = mac.get(Kind::Macos).expect("held").prepare(&params);
+    let refused = mac.get(Kind::Macos).expect("held").cutover(&params);
     assert_eq!(refused, Err(KindError::unsupported(Kind::Macos)));
     let xcode = mac.get(Kind::Xcode).expect("held");
     assert_eq!(xcode.prepare(&params), Ok(()));
