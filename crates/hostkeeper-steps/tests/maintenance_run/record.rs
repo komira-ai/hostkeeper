@@ -16,7 +16,7 @@ use hostkeeper_steps::maintenance::{
 use crate::support::{Scratch, apply, boot, defer, drain, ok_until, on, record, run_step, service};
 
 /// A record with every key set: a kind applied, a reboot under way, services drained, a
-/// deferral and a halt.
+/// deferral, a halt and the note of a Put back.
 fn full_record() -> MaintenanceRecord {
     let rec = ok_until(
         record(&[Kind::Linux, Kind::Reboot], &["js-agent", "tierstore"]),
@@ -27,6 +27,7 @@ fn full_record() -> MaintenanceRecord {
     let (mut rec, _) = on(&started, Event::RebootUnderWay(boot(3)));
     rec.deferred = Some("drain tierstore: the drain deadline passed".to_owned());
     rec.halted = Some("check: exit 1".to_owned());
+    rec.put_back = Some("apply linux: exit 1".to_owned());
     rec
 }
 
@@ -110,6 +111,7 @@ fn the_record_of_the_documented_schema_reads() {
           "running": true,
           "deferred": "drain tierstore: the drain deadline passed",
           "halted": "resume tierstore: exit 1",
+          "put_back": "apply linux: exit 1",
           "a_key_of_a_later_release": 1
         }"#,
     );
@@ -122,6 +124,7 @@ fn the_record_of_the_documented_schema_reads() {
     );
     assert_eq!(rec.drained, [service("js-agent"), service("tierstore")]);
     assert_eq!(rec.halted.as_deref(), Some("resume tierstore: exit 1"));
+    assert_eq!(rec.put_back.as_deref(), Some("apply linux: exit 1"));
 }
 
 /// Catches a record of a newer schema read as this one, written over by a save, or set aside by

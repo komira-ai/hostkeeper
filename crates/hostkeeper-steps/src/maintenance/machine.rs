@@ -15,6 +15,13 @@
 //!   read, the kind is applied and the turn goes on with the next kind, or the check.
 //! - **Put back** resumes the drained services in reverse order, then the turn ends: done, or
 //!   deferred when it was a deferral that put them back.
+//! - A **halted** turn moves only by an operator's order (section 4.2), whose try the record
+//!   takes: **Retry** ([`Event::Retried`]) lifts the halt and launches the step that failed again
+//!   (the same drain, the first kind not applied, the check, or the same resume), and the turn
+//!   goes on from there; **Put back** ([`Event::PutBack`]) lifts the halt, keeps its reason in
+//!   `put_back`, and resumes every drained service in reverse order, leaving each kind applied or
+//!   not as it was, and the turn ends done (deferred when the halt came while a deferral put the
+//!   services back). Neither ever runs a `rollback`.
 
 use std::fmt;
 
@@ -112,6 +119,15 @@ pub enum Event {
     /// The version of the kind waited for was read: `reached` when it is the one the kind
     /// installs.
     VersionRead { reached: bool },
+    /// An operator's Retry of the halted turn, by the order's try `order_try`, with the boot id
+    /// read now (`None` when it cannot be read): the step that failed is launched again.
+    Retried {
+        order_try: u64,
+        boot: Option<BootId>,
+    },
+    /// An operator's Put back of the halted turn, by the order's try `order_try`: the drained
+    /// services are resumed and the turn ends.
+    PutBack { order_try: u64 },
 }
 
 impl Event {
@@ -122,6 +138,8 @@ impl Event {
             Event::RebootUnderWay(_) => "reboot under way",
             Event::BootIdRead(_) => "boot id read",
             Event::VersionRead { .. } => "version read",
+            Event::Retried { .. } => "retried",
+            Event::PutBack { .. } => "put back",
         }
     }
 }
@@ -153,6 +171,7 @@ pub fn next_action(record: &MaintenanceRecord) -> Action {
 /// - [`Event::BootIdRead`] and [`Event::VersionRead`] fit an [`Action::Wait`]: the same boot id,
 ///   or a version not reached, keeps waiting; another boot id, or the version reached, applies
 ///   the kind.
+/// - [`Event::Retried`] and [`Event::PutBack`] fit a halted turn alone: see the module's rules.
 pub fn transition(
     record: &MaintenanceRecord,
     event: Event,
@@ -193,6 +212,12 @@ pub fn transition(
             true => Ok(applied(rec, kind)),
             false => Ok((rec, Action::Wait(kind))),
         },
+        (Event::Retried { order_try, boot }, Action::End(Ending::Halted(_))) => {
+            Ok(retried(rec, order_try, boot.as_ref()))
+        }
+        (Event::PutBack { order_try }, Action::End(Ending::Halted(reason))) => {
+            Ok(put_back(rec, order_try, reason))
+        }
         (event, action) => Err(TransitionError {
             event: event.name(),
             at: action.to_string(),
@@ -245,6 +270,51 @@ fn applied(mut rec: MaintenanceRecord, kind: Kind) -> (MaintenanceRecord, Action
             progress.applied = true;
             progress.reboot_under_way = None;
         });
+    rec.running = false;
+    settle(rec)
+}
+
+/// The halted record retried by the try `order_try`, the boot id read now being `boot`, and the
+/// step that failed, which comes next.
+///
+/// The step stays the one that failed, so the next action is that step again: the first kind not
+/// applied, the check, or the last drained service's `resume`. A failed drain counted its service
+/// drained when it was launched, so it is marked running, as a drain cut short is, and the same
+/// drain is launched again rather than the next one. A kind whose reboot was asked in the boot
+/// the host still runs (its `cutover` failed after it asked, and the reboot never came) has that
+/// reboot forgotten, so that its `cutover` is launched again; one asked in another boot, or when
+/// the boot id cannot be read, is left to the wait, which applies the kind once the host is on a
+/// new boot.
+fn retried(
+    mut rec: MaintenanceRecord,
+    order_try: u64,
+    boot: Option<&BootId>,
+) -> (MaintenanceRecord, Action) {
+    rec.halted = None;
+    rec.order_try = order_try;
+    rec.kinds
+        .iter_mut()
+        .filter(|progress| boot.is_some() & (progress.reboot_under_way.as_ref() == boot))
+        .for_each(|progress| progress.reboot_under_way = None);
+    rec.running = (rec.step == RunStep::Drain) & !rec.drained.is_empty();
+    settle(rec)
+}
+
+/// The halted record put back by the try `order_try`, the halt's `reason` kept as its note: every
+/// drained service resumed next, in reverse order, then the end. A kind whose reboot is under way
+/// is not applied, and its reboot is no longer waited for.
+fn put_back(
+    mut rec: MaintenanceRecord,
+    order_try: u64,
+    reason: String,
+) -> (MaintenanceRecord, Action) {
+    rec.halted = None;
+    rec.put_back = Some(reason);
+    rec.order_try = order_try;
+    rec.kinds
+        .iter_mut()
+        .for_each(|progress| progress.reboot_under_way = None);
+    rec.step = RunStep::PutBack;
     rec.running = false;
     settle(rec)
 }

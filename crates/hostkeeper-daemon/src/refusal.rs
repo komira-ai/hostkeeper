@@ -155,11 +155,15 @@ pub enum Refusal {
     /// `clear_halt` with a halt generation not above the one the service is held under: nothing
     /// is written.
     StaleHaltGeneration,
+    /// A `maintain` `RETRY` or `PUT_BACK` of a turn that is not halted: no record, the record of
+    /// another order or run, or a turn that runs, waits for a reboot or has ended. Nothing runs
+    /// and nothing is written.
+    NotHalted,
 }
 
 impl Refusal {
     /// Every refusal, in the order of the enum.
-    pub const ALL: [Refusal; 50] = [
+    pub const ALL: [Refusal; 51] = [
         Refusal::InvalidOrder,
         Refusal::NotImplemented,
         Refusal::Busy,
@@ -210,6 +214,7 @@ impl Refusal {
         Refusal::NothingRunning,
         Refusal::RecordReads,
         Refusal::StaleHaltGeneration,
+        Refusal::NotHalted,
     ];
 
     /// The token.
@@ -265,6 +270,7 @@ impl Refusal {
             Refusal::NothingRunning => "nothing_running",
             Refusal::RecordReads => "record_reads",
             Refusal::StaleHaltGeneration => "stale_halt_generation",
+            Refusal::NotHalted => "not_halted",
         }
     }
 }
