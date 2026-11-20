@@ -41,6 +41,8 @@ pub struct FakeKind {
     pub effects: Effects,
     pub prepare: Result<(), KindError>,
     pub cutover: Result<Cutover, KindError>,
+    /// The kind's own restart; `None`: the host's rebooter makes it.
+    pub restart: Option<Result<(), KindError>>,
     pub after_reboot: Result<String, KindError>,
     pub verify: Result<(), KindError>,
 }
@@ -55,8 +57,18 @@ impl FakeKind {
             cutover: Ok(Cutover::Applied {
                 version: version.to_owned(),
             }),
+            restart: None,
             after_reboot: Ok(version.to_owned()),
             verify: Ok(()),
+        }
+    }
+
+    /// A kind whose install restarts the host itself (a Mac's update), the host then running
+    /// `version` of it.
+    pub fn restarting(kind: Kind, version: &str, effects: &Effects) -> FakeKind {
+        FakeKind {
+            restart: Some(Ok(())),
+            ..FakeKind::rebooting(kind, version, effects)
         }
     }
 
@@ -83,6 +95,12 @@ impl MaintenanceKind for FakeKind {
     fn cutover(&self, _params: &MaintainParams) -> Result<Cutover, KindError> {
         self.log("cutover");
         self.cutover.clone()
+    }
+
+    fn restart(&self, _params: &MaintainParams) -> Option<Result<(), KindError>> {
+        let restart = self.restart.clone()?;
+        self.log("restart");
+        Some(restart)
     }
 
     fn after_reboot(&self, _params: &MaintainParams) -> Result<String, KindError> {

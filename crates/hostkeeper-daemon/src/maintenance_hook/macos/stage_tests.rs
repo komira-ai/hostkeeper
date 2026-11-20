@@ -18,6 +18,7 @@ use hostkeeper_proto::hostkeeper::agent::v1::{
 use hostkeeper_steps::{BootId, BootIdError, BootIdSource};
 
 use super::*;
+use crate::maintenance_hook::macos::Apply;
 use crate::maintenance_hook::{
     Ending, HookArgs, HookPorts, HookStep, Kind, MacosKind, MaintenanceKind, Registry,
     STDIN_PARAMS, Unwired, main_with,
@@ -689,22 +690,25 @@ fn the_newest_full_installer_of_a_higher_major_is_staged() {
     );
 }
 
-/// Proves: the `macos` kind's `prepare` is the stage, and its `cutover`, `after_reboot` and
-/// `verify` are not written yet: each fails `unsupported_kind`, as the stub does.
+/// The `macos` kind of `mac`'s stage, its apply the Mac's own, which a `prepare` never runs.
+fn macos_kind(mac: &Mac) -> MacosKind {
+    MacosKind::new(mac.stage(), Apply::at_host(None))
+}
+
+/// Proves: the `macos` kind's `prepare` is the stage, and runs nothing of the apply (its steps
+/// are tested in `apply_tests.rs`).
 ///
-/// Catches: a kind whose other steps succeed without doing anything.
+/// Catches: a kind whose `prepare` is not the stage.
 #[test]
-fn the_macos_kind_stages_and_its_other_steps_are_unsupported() {
+fn the_macos_kinds_prepare_is_the_stage() {
     let mac = Mac::on_26(Ok(2 * TAHOE_26_7_BYTES), LIST_MAJOR);
     mac.answer(SOFTWAREUPDATE, &["--download", TAHOE_26_7], ok(""));
-    let kind = MacosKind::new(mac.stage());
-    let params = params(false);
-    assert_eq!(kind.prepare(&params), Ok(()));
-    assert_eq!(mac.runs().last(), Some(&download_ran(TAHOE_26_7)));
-    let unsupported = KindError::unsupported(Kind::Macos);
-    assert_eq!(kind.cutover(&params), Err(unsupported.clone()));
-    assert_eq!(kind.after_reboot(&params), Err(unsupported.clone()));
-    assert_eq!(kind.verify(&params), Err(unsupported));
+    let kind = macos_kind(&mac);
+    assert_eq!(kind.prepare(&params(false)), Ok(()));
+    assert_eq!(
+        mac.runs(),
+        vec![sw_vers_ran(), list_ran(), download_ran(TAHOE_26_7)]
+    );
 }
 
 /// A boot id the hook's `prepare` has no need of.
@@ -719,7 +723,7 @@ impl BootIdSource for Boot {
 /// `hostkeeper maintenance-hook prepare --params -` over `mac`'s stage as the `macos` kind, with
 /// the parameters `json` on standard input: its outcome and its standard output.
 fn hook(mac: &Mac, json: &str) -> (Outcome, String) {
-    let kinds = Registry::new().with(Kind::Macos, Box::new(MacosKind::new(mac.stage())));
+    let kinds = Registry::new().with(Kind::Macos, Box::new(macos_kind(mac)));
     let ports = HookPorts {
         kinds: &kinds,
         record: &Unwired,

@@ -1,6 +1,6 @@
 # Scheduled maintenance updates
 
-Status: design; the Linux report of sections 1 and 4.1 is built (`crates/hostkeeper-daemon/src/maintenance_facts.rs`), and on a Mac its macOS facts and due macOS updates, FileVault, the data volume's free space, the Command Line Tools, its Xcodes, its update account and the settings of section 5.8 (`maintenance_macos.rs`, `maintenance_mac.rs`, `maintenance_xcode.rs`, `maintenance_account.rs`, `maintenance_mdm.rs`), as are the maintenance hook's steps, the Linux kinds' `cutover` (`maintenance_linux.rs`) and their `verify` of section 5.6 (`crates/hostkeeper-daemon/src/maintenance_hook/linux.rs`); nothing else. The owner's answers of 2026-11-19 are in: the Mac's update account (section 5.5) and the first-class Linux path
+Status: design; the Linux report of sections 1 and 4.1 is built (`crates/hostkeeper-daemon/src/maintenance_facts.rs`), and on a Mac its macOS facts and due macOS updates, FileVault, the data volume's free space, the Command Line Tools, its Xcodes, its update account and the settings of section 5.8 (`maintenance_macos.rs`, `maintenance_mac.rs`, `maintenance_xcode.rs`, `maintenance_account.rs`, `maintenance_mdm.rs`), as are the maintenance hook's steps, the Linux kinds' `cutover` (`maintenance_linux.rs`) and their `verify` of section 5.6 (`crates/hostkeeper-daemon/src/maintenance_hook/linux.rs`), and the `macos` kind's `cutover`, install and `verify` on the daemon path of section 5.5 (`crates/hostkeeper-daemon/src/maintenance_hook/macos/apply.rs`, FileVault off only); nothing else. The owner's answers of 2026-11-19 are in: the Mac's update account (section 5.5) and the first-class Linux path
 (the one-button update of section 4.2) are decided; for Xcode, section 2.0 makes a push from the operator's own Mac the source (owner's direction, 2026-11-20), with a fetcher Mac as the alternative. Facts about this repository were read on `main` at the commit this document lands on top
 of; facts about komira-ai/jobscheduler and komira-ai/kbf were read on their `main` and are marked as theirs. **Built** marks what exists
 (with its path), **New** what this design adds, **[V]** a claim to verify before building on it.
@@ -450,7 +450,10 @@ drain was never asked for is never held.
 - **macOS.** Apple silicon installs a macOS update or upgrade only with a *volume owner's* authorisation: an administrator holding a
   Secure Token. Root alone is not one, and the bootstrap token, which is one, can be redeemed only by a device-management service, not by
   a local daemon. Two paths follow, and one coordinator flag says which is live (section 5.5.2):
-  - **The daemon installs it (live today).** A minor update: `softwareupdate --install <label> --agree-to-license --restart --user
+  - **The daemon installs it (live today; Built with FileVault off: `crates/hostkeeper-daemon/src/maintenance_hook/macos/apply.rs`,
+    where the hook's `cutover` checks the update-account file, FileVault and the listings and keeps its choice in
+    `macos-install.json` beside the run record, the hook records the reboot under way, and only then does the kind's own restart run
+    the install; a Mac whose FileVault is not off is refused `filevault_not_off`).** A minor update: `softwareupdate --install <label> --agree-to-license --restart --user
     <account> --stdinpass`, with the label `--list` named, after the download step 1 made. A major upgrade (only when the group's
     `macos_major` allows it): step 1 fetches the installer, `softwareupdate --fetch-full-installer --full-installer-version <version>`,
     and step 3 runs that app's `startosinstall --agreetolicense --nointeraction --user <account> --stdinpass`, which restarts the Mac
