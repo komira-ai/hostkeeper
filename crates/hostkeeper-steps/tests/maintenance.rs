@@ -7,6 +7,7 @@ mod support;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use hostkeeper_hook::Step;
 use hostkeeper_steps::{
     AdditiveCall, Bound, LAST_LINE_MAX, LaunchError, MaintenanceCall, MaintenanceExit,
     MaintenanceOutcome, MaintenanceStep, RESUME_BOUND_SECS, StepCall, StepExit, StepLauncher,
@@ -326,4 +327,13 @@ fn a_launch_error_is_answered_as_the_error_and_nothing_else_runs() {
     assert_eq!(why, "the updater died");
     assert_eq!(launcher.seen().len(), 1);
     assert!(launcher.stops().is_empty());
+}
+
+/// Catches a maintenance step named as the wrong step of the hook contract: `Drain` is
+/// `Step::Drain` and `Resume` is `Step::Resume`, and neither is the other's.
+#[test]
+fn each_maintenance_step_is_its_own_step_of_the_contract() {
+    assert_eq!(DRAIN.step(), Step::Drain);
+    assert_eq!(RESUME.step(), Step::Resume);
+    assert_ne!(DRAIN.step(), RESUME.step());
 }
