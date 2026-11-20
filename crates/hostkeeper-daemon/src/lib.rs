@@ -82,6 +82,8 @@
 //! - [`prerequisites`]: the host prerequisites the coordinator sends (`prerequisites-v1`), made sure
 //!   of on the host and reported by state in every heartbeat; [`xcode_clt`] is the one there is,
 //!   Apple's Command Line Tools, looked for and installed headless on a Mac.
+//! - [`update_account`]: a Mac's update account, read from its root-only file, and the update
+//!   call, which gives its password to the program on its standard input alone.
 //! - [`observer`]: what [`Daemon::status`] reports of a running service.
 //! - [`node`]: the host's enrollment and the heartbeat loop's link, as the loops last wrote them,
 //!   which [`Daemon::status`] reports besides the services.
@@ -174,6 +176,7 @@ pub mod testing;
 pub mod uninstall;
 pub mod unit_links;
 pub mod unix_clock;
+pub mod update_account;
 pub mod verb;
 pub mod verbs;
 pub mod watchers;
