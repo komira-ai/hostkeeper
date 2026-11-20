@@ -10,8 +10,9 @@
 //! [`MaintenanceKind`], found in the host platform's [`Registry`] ([`registry_for`]); a kind the
 //! platform has no work for fails `unsupported_kind`. On a Linux host (systemd or OpenRC) the
 //! `cutover` and the `after_reboot` of `linux` and `reboot` are written
-//! ([`crate::maintenance_linux`]); every other step of every kind is `unsupported_kind` until its
-//! own change. The steps run each kind of the run in [`Kind::ALL`]'s order, macOS before Xcode,
+//! ([`crate::maintenance_linux`]); on a Mac, the `prepare` of `xcode`, the stage of the Xcodes of
+//! the order ([`XcodeKind`]); every other step of every kind is `unsupported_kind` until its own
+//! change. The steps run each kind of the run in [`Kind::ALL`]'s order, macOS before Xcode,
 //! whatever order the parameters give:
 //!
 //! - `prepare` runs each kind's `prepare`, and ends at the first that does not succeed. It writes
@@ -41,6 +42,7 @@ mod kind;
 mod params;
 mod ports;
 mod registry;
+pub mod xcode;
 
 use std::fs::File;
 use std::io::{self, Read, Write};
@@ -64,6 +66,7 @@ pub use kind::{Cutover, KindError, MaintenanceKind, REASON_UNSUPPORTED_KIND, Uns
 pub use params::{Kind, MAX_PARAMS_BYTES, MaintainParams, ParamsError};
 pub use ports::{KindState, RebootError, Rebooter, RecordError, RunRecord, Unwired};
 pub use registry::Registry;
+pub use xcode::XcodeKind;
 
 /// The `--params` that names standard input.
 pub const STDIN_PARAMS: &str = "-";
@@ -204,7 +207,8 @@ fn bounded(detail: &str) -> String {
 /// The kinds of a host of `platform`: [`Registry::for_platform`]'s, with `linux` and `reboot` of a
 /// Linux host (systemd or OpenRC) put in place of their stubs ([`LinuxKind`], [`RebootKind`]), the
 /// install waiting up to `lock_wait_secs` for the package manager's lock and leaving untouched the
-/// packages recorded in the daemon's `placed.json`. A Mac keeps its stubs.
+/// packages recorded in the daemon's `placed.json`. A Mac's `xcode` is [`XcodeKind`]; its
+/// `macos` and `reboot` keep their stubs.
 pub fn registry_for(platform: &Platform, lock_wait_secs: u64) -> Registry {
     let registry = Registry::for_platform(platform.kind);
     match platform.kind {
@@ -225,7 +229,7 @@ pub fn registry_for(platform: &Platform, lock_wait_secs: u64) -> Registry {
                 )
                 .with(Kind::Reboot, Box::new(RebootKind::at_host()))
         }
-        PlatformKind::Macos => registry,
+        PlatformKind::Macos => registry.with(Kind::Xcode, Box::new(XcodeKind::at_host())),
     }
 }
 

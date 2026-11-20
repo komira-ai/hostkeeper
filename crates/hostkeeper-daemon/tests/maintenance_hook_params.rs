@@ -512,9 +512,10 @@ fn a_cutover_is_refused_while_the_host_keeps_no_run_record() {
     assert_eq!(format!("{code:?}"), format!("{:?}", ExitCode::from(1)));
 }
 
-/// Proves: a Linux host's registry holds the `linux` and `reboot` kinds and a Mac's keeps the
-/// stubs of its three: a Linux `prepare` and `verify` still answer `unsupported_kind`, as does a
-/// Mac's `prepare`.
+/// Proves: a Linux host's registry holds the `linux` and `reboot` kinds and a Mac's its three:
+/// a Linux `prepare` and `verify` still answer `unsupported_kind`, as does a Mac's `macos`
+/// `prepare`; a Mac's `xcode` stages (an order with no Xcode stages nothing and succeeds) and its
+/// `cutover`, `after_reboot` and `verify` answer `unsupported_kind`.
 ///
 /// Catches: a platform's kinds put in the wrong platform's registry.
 #[test]
@@ -556,4 +557,10 @@ fn the_registry_of_a_platform_holds_its_kinds() {
     );
     let refused = mac.get(Kind::Macos).expect("held").prepare(&params);
     assert_eq!(refused, Err(KindError::unsupported(Kind::Macos)));
+    let xcode = mac.get(Kind::Xcode).expect("held");
+    assert_eq!(xcode.prepare(&params), Ok(()));
+    let unsupported = KindError::unsupported(Kind::Xcode);
+    assert_eq!(xcode.cutover(&params), Err(unsupported.clone()));
+    assert_eq!(xcode.after_reboot(&params), Err(unsupported.clone()));
+    assert_eq!(xcode.verify(&params), Err(unsupported));
 }

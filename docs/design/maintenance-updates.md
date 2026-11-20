@@ -258,6 +258,12 @@ No step below needs an Apple Account: the daemon runs each as root.
    (`/Applications/.hostkeeper-staging/`) with `xip --expand`, which checks Apple's signature **[V]** (or, for an encrypted archive,
    `archiveutil` as `xcodes` does **[V]**: Apple is reported to ship releases after 27.3 in that format), then check the expanded app's
    `ProductBuildVersion` and its code signature (`codesign --verify`).
+   Built (`crates/hostkeeper-daemon/src/maintenance_hook/xcode/stage.rs`): each entry of the order not installed with its build is
+   staged in `/Applications/.hostkeeper-staging/<sha256>/`. The free space checked first is, per archive to fetch, what is left of it
+   to fetch plus three times its size. The archive is read by `GET /v1/xcode/<sha256>` alone, resumed with a range after a broken
+   connection (at most 8 connections) or from a copy an interrupted hook left, and refused before `xip` unless its size and SHA-256
+   are the order's. The verified app ends at `<sha256>/Xcode.app`, the archive and the expansion removed. An encrypted archive is
+   deferred until the Mac proof shows `archiveutil`'s use. Any failure defers and removes the staging directory.
 2. **On the drained host:** move it to `/Applications/Xcode-<version>.app` (a rename on one volume), `xcodebuild -license accept`,
    `xcodebuild -runFirstLaunch` (it installs packages every Xcode shares, which is why the host is drained, [V]), then `xcode-select -s` to
    the group's default Xcode.

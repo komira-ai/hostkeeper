@@ -76,6 +76,27 @@ impl Bench {
         });
         (got, body, server.join().expect("the server"))
     }
+
+    /// As `answered`, for a ranged read of `/p` from byte `first`.
+    fn answered_from(
+        &self,
+        first: u64,
+        raw: Vec<u8>,
+        limit: Limit,
+    ) -> (Result<Got, GetError>, Vec<u8>, Option<crate::tls::Request>) {
+        let server = serve(
+            &self.transport,
+            self.farm.server(),
+            Close::Notify,
+            move |_| raw,
+        );
+        let mut body = Vec::new();
+        let got = self.get.get_from("/p", first, limit, &mut |bytes| {
+            body.extend_from_slice(bytes);
+            Ok(())
+        });
+        (got, body, server.join().expect("the server"))
+    }
 }
 
 /// An HTTP/1.1 answer whose head is `head` (lines after the status line) and body `body`.
@@ -445,4 +466,151 @@ fn an_address_with_a_path_is_refused_at_construction() {
         Arc::new(FakeClock::new(0, 0)),
     );
     assert!(matches!(refused, Err(EndpointError::Path(_))));
+}
+
+/// A 206 whose head is `Content-Length: <body>` and the given `Content-Range`.
+fn part_206(range: &str, body: &[u8]) -> Vec<u8> {
+    raw(
+        "HTTP/1.1 206 Partial Content",
+        &[&format!("Content-Length: {}", body.len()), range],
+        body,
+    )
+}
+
+/// Proves a read from byte 0 is the plain read and a read from a later byte asks for the range:
+/// the first request has no `Range` line, the second has `Range: bytes=<first>-` in decimal
+/// between `Accept` and `Connection`, and nothing else differs.
+#[test]
+fn a_range_is_asked_for_only_from_a_byte_past_zero() {
+    let bench = Bench::new("get-range-request");
+    let (got, body, request) = bench.answered_from(0, plain_200(b"abc"), ROOMY);
+    assert_eq!((got, body), (Ok(Got::Body(3)), b"abc".to_vec()));
+    assert_eq!(
+        request.expect("a request").head,
+        "GET /p HTTP/1.1\r\nHost: coordinator.test:8443\r\nAccept: */*\r\nConnection: close"
+    );
+    let answer = part_206(
+        "Content-Range: bytes 1234567890123-1234567890125/1234567890126",
+        b"xyz",
+    );
+    let (_, _, request) = bench.answered_from(1_234_567_890_123, answer, ROOMY);
+    assert_eq!(
+        request.expect("a request").head,
+        "GET /p HTTP/1.1\r\nHost: coordinator.test:8443\r\nAccept: */*\r\n\
+         Range: bytes=1234567890123-\r\nConnection: close"
+    );
+}
+
+/// Proves a 206 that matches the request is the rest of the file: the sink gets exactly the
+/// part, in order and in more than one chunk when it is long, and the call says the part's
+/// length; the header name is read in any case.
+#[test]
+fn a_matching_206_streams_exactly_the_part() {
+    let bench = Bench::new("get-range-part");
+    let part: Vec<u8> = (0..150_000_u32).map(|n| (n % 241) as u8).collect();
+    let size = 100 + part.len();
+    let answer = raw(
+        "HTTP/1.1 206 Partial Content",
+        &[
+            &format!("content-length: {}", part.len()),
+            &format!("CONTENT-RANGE: bytes 100-{}/{size}", size - 1),
+        ],
+        &part,
+    );
+    let server = serve(&bench.transport, bench.farm.server(), Close::Notify, {
+        move |_| answer
+    });
+    let mut chunks = Vec::new();
+    let got = bench.get.get_from("/p", 100, ROOMY, &mut |bytes| {
+        chunks.push(bytes.to_vec());
+        Ok(())
+    });
+    server.join().expect("the server");
+    assert_eq!(got, Ok(Got::Body(150_000)));
+    assert!(chunks.len() > 1, "a long part arrives in chunks");
+    assert_eq!(chunks.concat(), part);
+}
+
+/// Proves a server that ignored the range does not get its whole body appended: a 200 to a
+/// ranged request is a refusal naming 200 and gives the sink nothing; a 416 and a 206 to a
+/// request from 0 are refusals naming them; a 404 is not found.
+#[test]
+fn a_ranged_read_takes_only_a_206_and_a_404() {
+    let bench = Bench::new("get-range-statuses");
+    let (got, body, _) = bench.answered_from(5, plain_200(b"abcdefgh"), ROOMY);
+    assert_eq!((got, body), (Err(GetError::Status(200)), Vec::new()));
+    let refused = raw(
+        "HTTP/1.1 416 Range Not Satisfiable",
+        &["Content-Range: bytes */8", "Content-Length: 0"],
+        b"",
+    );
+    let (got, body, _) = bench.answered_from(9, refused, ROOMY);
+    assert_eq!((got, body), (Err(GetError::Status(416)), Vec::new()));
+    let (got, body, _) = bench.answered_from(5, raw("HTTP/1.1 404 Not Found", &[], b""), ROOMY);
+    assert_eq!((got, body), (Ok(Got::NotFound), Vec::new()));
+    let part = part_206("Content-Range: bytes 5-7/8", b"fgh");
+    let (got, body, _) = bench.answered_from(0, part, ROOMY);
+    assert_eq!((got, body), (Err(GetError::Status(206)), Vec::new()));
+}
+
+/// Proves a 206 is refused unless its head says what was asked: a `Content-Range` that starts
+/// elsewhere, ends before the size less one, is for a length the `Content-Length` disagrees
+/// with, is absent, is given twice, is not in `bytes`, or is not numbers; and a 206 with no
+/// `Content-Length` or a size of nothing. No byte reaches the sink.
+#[test]
+fn a_206_that_is_not_the_part_asked_for_is_malformed() {
+    let bench = Bench::new("get-range-malformed");
+    let cases: [Vec<u8>; 11] = [
+        part_206("Content-Range: bytes 4-7/8", b"fgh"),
+        part_206("Content-Range: bytes 5-6/8", b"fg"),
+        part_206("Content-Range: bytes 5-9/10", b"fgh"),
+        raw(
+            "HTTP/1.1 206 Partial Content",
+            &["Content-Length: 3"],
+            b"fgh",
+        ),
+        raw(
+            "HTTP/1.1 206 Partial Content",
+            &[
+                "Content-Length: 3",
+                "Content-Range: bytes 5-7/8",
+                "Content-Range: bytes 5-7/8",
+            ],
+            b"fgh",
+        ),
+        part_206("Content-Range: items 5-7/8", b"fgh"),
+        part_206("Content-Range: bytes 5-7", b"fgh"),
+        part_206("Content-Range: bytes 5/8", b"fgh"),
+        part_206("Content-Range: bytes five-7/8", b"fgh"),
+        raw(
+            "HTTP/1.1 206 Partial Content",
+            &["Content-Range: bytes 5-7/8"],
+            b"fgh",
+        ),
+        part_206("Content-Range: bytes 5-0/0", b""),
+    ];
+    for answer in cases {
+        let (got, body, _) = bench.answered_from(5, answer, ROOMY);
+        assert_eq!(got, bad_reply(ReplyFault::Malformed));
+        assert!(body.is_empty());
+    }
+}
+
+/// Proves the limit bounds the part, not the file: a part over `max_bytes` is refused before
+/// any byte is given even though the file is larger anyway, and a part at the limit is taken
+/// though the offset is past it.
+#[test]
+fn a_part_over_the_limit_is_refused_and_one_at_it_is_taken() {
+    let bench = Bench::new("get-range-limit");
+    let limit = Limit {
+        max_bytes: 3,
+        deadline_secs: 60,
+    };
+    let answer = part_206("Content-Range: bytes 10-13/14", b"wxyz");
+    let (got, body, _) = bench.answered_from(10, answer, limit);
+    assert_eq!(got, Err(GetError::TooLong { length: 4, max: 3 }));
+    assert!(body.is_empty());
+    let answer = part_206("Content-Range: bytes 10-12/13", b"wxy");
+    let (got, body, _) = bench.answered_from(10, answer, limit);
+    assert_eq!((got, body), (Ok(Got::Body(3)), b"wxy".to_vec()));
 }
