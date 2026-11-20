@@ -137,6 +137,8 @@ fn verdict(result: &OrderResult) -> Result<Option<UpdateResult>, Unsendable> {
         // A loop's order id is one of the wire's, whose grammar is wider.
         order_id: WireOrderId::parse(result.order.id.as_str()),
         order_try: Some(result.order.order_try),
+        // The route is frozen: the detail goes over gRPC only (`proto_map`).
+        detail: None,
     }))
 }
 

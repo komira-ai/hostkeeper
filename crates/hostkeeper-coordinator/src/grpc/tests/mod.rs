@@ -19,6 +19,7 @@ mod group_calls;
 mod group_releases;
 mod heartbeat;
 mod hello_group;
+mod hook_detail;
 mod host_group_requests;
 mod host_groups;
 mod hosts;

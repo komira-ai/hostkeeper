@@ -13,8 +13,9 @@
 //! that entry is the JSON top level and the others are `services`. In every other case the top
 //! level is the agent itself, as `hostkeeper-link` sends it on the JSON route (the agent's
 //! version, health `healthy`, no update) and every entry is in `services`, which is sent even
-//! when it is empty. A fact that has no field in the JSON (the log tail, the detail and start of
-//! an update, a pin) is left out. The host's clock and certificate (`sent_unix`,
+//! when it is empty. A fact that has no field in the JSON (the log tail and start of an update,
+//! a pin) is left out. An update's detail is kept, as its `detail` key, which the JSON reader
+//! cuts to `MAX_DETAIL_BYTES`. The host's clock and certificate (`sent_unix`,
 //! `cert_not_after_unix`, `last_renew_error`) are top-level keys, each only when the request
 //! sets it.
 
@@ -153,6 +154,9 @@ fn update_result(update: &proto::UpdateResult) -> Value {
     }
     if let Some(order_try) = update.order_try {
         object.insert("order_try".to_owned(), order_try.into());
+    }
+    if let Some(detail) = &update.detail {
+        object.insert("detail".to_owned(), detail.clone().into());
     }
     Value::Object(object)
 }
