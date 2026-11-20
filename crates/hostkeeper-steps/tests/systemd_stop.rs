@@ -212,7 +212,7 @@ fn uninstall<'a>(executable: &'a Path, params: &'a Path, unit: &'a str) -> Addit
         params,
         executable,
         unit,
-        timeout_secs: 600,
+        bound: secs(600),
     }
 }
 

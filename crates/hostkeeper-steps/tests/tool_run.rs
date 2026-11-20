@@ -159,7 +159,7 @@ fn the_hook_and_additive_lines_have_no_private_network() {
         params: &params,
         executable: &hook,
         unit: UNIT,
-        timeout_secs: 5,
+        bound: secs(5),
     })
     .unwrap();
     for line in [strings(step), strings(additive)] {

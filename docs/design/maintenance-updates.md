@@ -397,7 +397,7 @@ No step of this sequence runs `rollback`; a failure stops it where it is.
 ### 5.3 Drain: no deadline by default
 
 Work is never cut to finish an update (`docs/design/hostkeeper-design.md`, goal 6). A `drain` step runs with no time bound
-(`RuntimeMaxSec=infinity`, Built for `prepare`, extended to `drain`, New) unless the run names `drain_deadline_secs`. When a deadline passes, the step exits 75 (deferred, Built
+(`RuntimeMaxSec=infinity`, Built for `prepare`; for `drain` the launchers and `hostkeeper_steps::run_maintenance_step` are Built, and the sequencer that calls it is New, bounded by exactly the deadline when there is one, and reading a deadline that passed as exit 75) unless the run names `drain_deadline_secs`. When a deadline passes, the step exits 75 (deferred, Built
 outcome): the daemon runs `resume` for every service it drained, the host is back in service with nothing changed, it is marked `deferred`,
 and the run moves on to the next host; a deferred host is offered again when the run's other hosts are done, if the window is still open.
 Nothing stops a job.
