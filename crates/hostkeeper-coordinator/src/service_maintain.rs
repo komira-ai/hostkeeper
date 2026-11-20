@@ -21,7 +21,7 @@ use crate::host_groups::GroupName;
 use crate::maintenance::FEATURE;
 use crate::maintenance_policy::Maintenance as Policy;
 use crate::maintenance_runs::Step;
-use crate::ops::{AuditEntry, Write};
+use crate::ops::{AuditEntry, OpsError, Write};
 use crate::orders::Order;
 use crate::reconcile::COORDINATOR;
 
@@ -77,7 +77,7 @@ impl Coordinator {
 
     /// The maintenance of the heartbeat of the host `id` at `now`, decided over `fleet`: a
     /// `maintain` only over a transport that carries typed orders (`orders`) to a daemon that
-    /// announced `maintenance-v1`, and a start only while the store is not lost.
+    /// announced `maintenance-v1` (a lost store is a quiet start, which starts no turn).
     pub(super) fn maintenance_next(
         &self,
         fleet: &Fleet,
@@ -134,38 +134,52 @@ impl Coordinator {
                 resend: Some(ordered),
             } if sends => Next::Order(order_of(ordered)),
             Verdict::InTurn { resend: Some(_) } => Next::Busy,
-            Verdict::Start(ordered) if sends && !fleet.store_lost => {
-                self.start_turn(id, ordered, unix_now)
-            }
+            Verdict::Start(ordered) if sends => self.start_turn(id, ordered, unix_now),
             Verdict::Start(_) => Next::Free,
         }
     }
 
     /// Stores the start of the host `id`'s turn decided as `ordered` at `unix_now` (its step
-    /// staging, audited `maintenance_start`) and answers its order; nothing when it cannot be
-    /// stored.
-    fn start_turn(&self, id: &HostId, ordered: Ordered, unix_now: u64) -> Next {
+    /// staging, audited `maintenance_start`) and answers its order. Nothing is stored or sent when
+    /// the store refuses the change, or when the turn no longer waits in a run that is not
+    /// cancelled by the time it is stored (an operator's `Cancel` in between).
+    pub(super) fn start_turn(&self, id: &HostId, ordered: Ordered, unix_now: u64) -> Next {
         let run_id = ordered.run_id.clone();
         let audit = entry(MAINTENANCE_START, id, &ordered.host_group, &run_id, "");
-        let stored = self.ops.change(Write::BeforeMemory, audit, |state| {
+        let stored = self.ops.try_change(Write::BeforeMemory, audit, |state| {
             let held = state
                 .maintenance_runs
                 .iter_mut()
-                .filter(|run| run.id == run_id)
+                .filter(|run| run.id == run_id && run.cancelled_unix.is_none())
                 .flat_map(|run| run.hosts.iter_mut())
-                .find(|host| host.host_id == id.as_str());
-            if let Some(held) = held {
-                held.step = Step::Staging;
-                held.since_unix = unix_now;
-            }
+                .find(|host| host.host_id == id.as_str() && host.step == Step::Waiting)
+                .ok_or(Unstarted::Gone)?;
+            held.step = Step::Staging;
+            held.since_unix = unix_now;
+            Ok(())
         });
         match stored {
             Ok(_) => Next::Order(order_of(ordered)),
-            Err(why) => {
+            Err(Unstarted::Gone) => Next::Busy,
+            Err(Unstarted::Store(why)) => {
                 tracing::warn!(%why, node_id = %id, run = %run_id, "a host's maintenance turn could not be stored: it is not started at this heartbeat");
                 Next::Busy
             }
         }
+    }
+}
+
+/// Why a start was not stored.
+enum Unstarted {
+    /// The turn no longer waits in a run that is not cancelled.
+    Gone,
+    /// The store refused the change.
+    Store(OpsError),
+}
+
+impl From<OpsError> for Unstarted {
+    fn from(why: OpsError) -> Self {
+        Self::Store(why)
     }
 }
 

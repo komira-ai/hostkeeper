@@ -15,7 +15,7 @@ use super::*;
 use crate::decide_maintenance::tests::{
     ORDER, RUN, at_step, beat, in_turn, maintain_id, scheduled, starts, steps, table, tell,
 };
-use crate::group_decision_support::Farm;
+use crate::group_decision_support::{Farm, policy, stages};
 use crate::host_groups_support::{SELF, UNIX, coordinator_on};
 use crate::maintenance_calls_tests::{GROUP, LINUX, LINUX_REBOOT, edit_runs, host_at, run_of};
 use crate::maintenance_runs::Kind;
@@ -25,15 +25,16 @@ use crate::orders::Maintain;
 use crate::testutil::{Rig, version};
 
 /// What the tests compare of an audit entry: who, the action, the host, the group and the reason.
-fn said(
-    entry: &AuditEntry,
-) -> (
+type Said = (
     String,
     String,
     Option<String>,
     Option<String>,
     Option<String>,
-) {
+);
+
+/// [`Said`] of `entry`.
+fn said(entry: &AuditEntry) -> Said {
     (
         entry.by.clone(),
         entry.action.clone(),
@@ -44,17 +45,7 @@ fn said(
 }
 
 /// An audit entry of the coordinator's, `action`, about `host` of [`GROUP`], with `reason`.
-fn coordinator_said(
-    action: &str,
-    host: &str,
-    reason: &str,
-) -> (
-    String,
-    String,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-) {
+fn coordinator_said(action: &str, host: &str, reason: &str) -> Said {
     (
         "coordinator".to_owned(),
         action.to_owned(),
@@ -65,15 +56,7 @@ fn coordinator_said(
 }
 
 /// The maintenance entries of the world's audit, as [`said`] says them.
-fn maintenance_audit(
-    world: &crate::host_groups_support::World,
-) -> Vec<(
-    String,
-    String,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-)> {
+fn maintenance_audit(world: &crate::host_groups_support::World) -> Vec<Said> {
     world
         .audit()
         .iter()
@@ -167,10 +150,12 @@ fn farm_beat(web: ServiceBeat, step: Option<MaintenanceStep>) -> Heartbeat {
     said
 }
 
-/// A farm with the group [`GROUP`] listing `web`, its hosts a1 and a2, and `web` 2.0 wanted.
+/// A farm with the group [`GROUP`] listing `web` in a plan of one stage, its hosts a1 and a2, and
+/// `web` 2.0 wanted.
 fn farm(name: &str) -> Farm {
     let farm = Farm::new(name);
-    farm.group(GROUP, &["web"], None);
+    // One stage of every host, so a2's update takes no place a1 needs.
+    farm.group(GROUP, &["web"], Some(policy(|p| p.stages = stages(&[100]))));
     farm.host("a1", GROUP);
     farm.host("a2", GROUP);
     farm.want(GROUP, "web", "2.0");
@@ -275,6 +260,13 @@ fn a_second_heartbeat_does_not_issue_a_new_order() {
     assert_eq!(maintain_id(Some(&first)), Some(ORDER));
 
     assert_eq!(tell(&world, "h1", beat(LINUX, None)), Some(first.clone()));
+    let mut no_report = beat(LINUX, None);
+    no_report.maintenance = None;
+    assert_eq!(
+        tell(&world, "h1", no_report),
+        Some(first.clone()),
+        "a beat that carries no report names no run: the order is sent again"
+    );
     assert!(!starts(&world, "h2"));
     assert_eq!(
         maintenance_audit(&world),
@@ -531,4 +523,50 @@ fn no_turn_starts_in_the_quiet_start() {
     assert_eq!(maintain_id(ask(&rig).as_ref()), None, "in the quiet start");
     rig.at(2_000);
     assert_eq!(maintain_id(ask(&rig).as_ref()), Some(ORDER));
+}
+
+/// Proves: a start decided before an operator's `Cancel` and stored after it stores nothing, sends
+/// no order and writes no audit entry: the host stays not reached.
+///
+/// Catches: an order sent for a turn of a cancelled run, which the coordinator would not hold.
+#[test]
+fn a_start_after_the_run_was_cancelled_stores_and_sends_nothing() {
+    let world = scheduled("sm-cancelled", table(1, 0), &["h1"], |_| {});
+    let ordered = crate::decide_maintenance::Ordered {
+        run_id: RUN.to_owned(),
+        host_group: GROUP.to_owned(),
+        order_id: ORDER.to_owned(),
+        maintain: Maintain {
+            run_id: RUN.to_owned(),
+            kinds: vec![MaintenanceKind::Linux],
+            linux_scope: agent::LinuxScope::Security,
+            drain_deadline_secs: None,
+            macos_path: agent::MacosPath::Install,
+            return_secs: 1200,
+        },
+    };
+    edit_runs(&world, |runs| runs[0].cancel(UNIX));
+
+    let next = world
+        .coordinator()
+        .start_turn(&crate::testutil::id("h1"), ordered, UNIX);
+    assert!(matches!(next, Next::Busy));
+    assert_eq!(steps(&world), vec![("h1".to_owned(), Step::NotReached)]);
+    assert!(maintenance_audit(&world).is_empty());
+}
+
+/// Proves: a host whose daemon reports its turn deferred is sent nothing more by this release and
+/// its run does not end while the window is open (offering it again waits for a new try of its
+/// order, which the run does not keep yet).
+///
+/// Catches: a deferred host ordered again under the same order id, which its daemon would take as
+/// the order it already ran.
+#[test]
+fn a_deferred_host_is_not_ordered_again_under_the_same_order() {
+    let world = scheduled("sm-deferred", table(1, 0), &["h1"], |_| {});
+    assert!(starts(&world, "h1"));
+    assert_eq!(tell(&world, "h1", at_step(MaintenanceStep::Deferred)), None);
+    assert_eq!(tell(&world, "h1", beat(LINUX, None)), None);
+    assert_eq!(steps(&world), vec![("h1".to_owned(), Step::Deferred)]);
+    assert!(!world.ops().maintenance_runs[0].ended_at(UNIX));
 }

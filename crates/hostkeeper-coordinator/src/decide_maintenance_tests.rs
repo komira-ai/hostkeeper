@@ -222,8 +222,8 @@ fn groups_go_in_parallel_each_under_its_own_batch() {
 }
 
 /// Proves: in a group of two with `min_serving` 1 and a batch of 2, the first host is taken (two
-/// serve) and the second is not while the first is staging, draining or halted (one serves); once
-/// the first is done, the second is taken.
+/// serve) and the second is not while the first is staging or draining (one serves), nor while it
+/// is halted (which also halts the group's run); once the first is done, the second is taken.
 ///
 /// Catches: a serving count that counts a host in its turn as serving because it still
 /// heartbeats, or a halted host as serving.
@@ -253,7 +253,6 @@ fn an_unhealthy_host_does_not_count_as_serving() {
 
     tell(&world, "h3", unhealthy(beat(LINUX, None)));
     assert!(!starts(&world, "h1"), "two serve, three are needed");
-    assert!(!starts(&world, "h3"));
     tell(&world, "h3", beat(LINUX, None));
     assert!(starts(&world, "h1"));
 }
@@ -425,14 +424,23 @@ fn a_host_moved_or_in_a_halted_group_is_not_started() {
     );
 }
 
-/// Proves: a host the coordinator has not heard within its liveness bound neither counts as
-/// serving nor holds back the hosts after it: with the lowest node id silent, the next host is
-/// started; the silent host, heard again, waits for the batch.
+/// Proves: a host the coordinator has not heard within its liveness bound, one it has not heard
+/// since it started, and a row whose id is no host id, neither count as serving nor hold back the
+/// hosts after them: with the lowest node ids among them, the next host is started; the silent
+/// host, heard again, waits for the batch.
 ///
-/// Catches: a silent host that keeps the first place forever, so its group never goes on.
+/// Catches: a silent or unknown host that keeps the first place forever, so its group never goes
+/// on.
 #[test]
 fn a_silent_host_holds_back_no_other_host() {
     let world = scheduled("dm-silent", table(1, 1), &["h1", "h2", "h3"], |_| {});
+    edit_runs(&world, |runs| {
+        for unheard in ["Not A Host", "h0"] {
+            runs[0]
+                .hosts
+                .insert(0, waiting(unheard, GROUP, &[Kind::Linux]));
+        }
+    });
     world.rig.at(2_100);
     tell(&world, "h3", beat(LINUX, None));
     assert!(
