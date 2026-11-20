@@ -1,8 +1,8 @@
 //! The apply and the check of the `macos` kind on a Mac (docs/design/maintenance-updates.md,
 //! sections 5.2 step 3, 5.5 "The daemon installs it" and 5.6), on the order's path `install`
-//! alone: the path `wait` (device management installs the update) is not built, and every step of
-//! it, as of an order that names no path, fails `macos_path_not_built` before it reads or runs
-//! anything.
+//! alone: the path `wait` (device management installs the update) is not built, and on it, as on
+//! an order that names no path, `cutover`, the restart and `verify` fail `macos_path_not_built`
+//! before they read or run anything (`after_reboot` only reads `sw_vers`).
 //!
 //! **`cutover`** ([`Apply::cutover`]) installs nothing; it makes sure the install can run, chooses
 //! it and keeps the choice ([`super::plan`]), and answers [`Cutover::NeedsReboot`]. In order:

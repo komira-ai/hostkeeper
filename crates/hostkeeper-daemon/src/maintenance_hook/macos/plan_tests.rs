@@ -118,9 +118,9 @@ fn a_plan_that_is_not_this_runs_is_refused() {
 
     let none = PlanFile::new(None);
     let no_dir =
-        Err("the hook has no run directory: its parameters came on standard input".to_owned());
-    assert_eq!(none.save("run-1", &update()), no_dir);
-    assert_eq!(none.load("run-1"), no_dir);
+        || "the hook has no run directory: its parameters came on standard input".to_owned();
+    assert_eq!(none.save("run-1", &update()), Err(no_dir()));
+    assert_eq!(none.load("run-1"), Err(no_dir()));
 }
 
 /// Proves: a plan whose directory is gone cannot be kept, and the failure names the file.
