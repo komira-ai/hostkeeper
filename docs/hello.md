@@ -19,7 +19,7 @@ marked **specified, not built**, with the pull request that builds it.
 | running a hook step on a Mac | the daemon runs each step as a launchd job through `LaunchdLauncher` (`hostkeeper-launchd`), and links and loads the package's plists (`docs/macos.md`) | — |
 | the UI's pages and their calls | the pages, and the HTTP/JSON gateway they call (`docs/gateway.md`) | — |
 | placing hello on hosts | a host group that lists hello (`HostGroups.Put`, `examples/hello/host-group.json`), an approval into it (`Enrollment.Approve` or an inventory record naming the group) or `HostGroups.Move` for a host to get into it, the coordinator's `install` order, and the daemon's heartbeat loop, which announces `install-v1` and runs the install | the daemon's heartbeat link to the coordinator: the shipped daemon gives its loop `NoLink`, so no order reaches a host |
-| setting the desired version | `hkctl releases set-desired` (with `--host-group` to name the group), CI's set-desired workflow and its hello caller `hello-desired.yml`, the package page's Set version (through the gateway) | `host_group` as an input of the CI client: the callers' pinned release does not take it (see "The proof from CI") |
+| setting the desired version | `hk releases set-desired` (with `--host-group` to name the group), CI's set-desired workflow and its hello caller `hello-desired.yml`, the package page's Set version (through the gateway) | `host_group` as an input of the CI client: the callers' pinned release does not take it (see "The proof from CI") |
 | taking hello out with uninstall | the daemon's uninstall verb, hello's `uninstall` step, a `Put` of the group without hello, and the daemon's heartbeat loop, which runs the uninstall | the daemon's heartbeat link to the coordinator (`NoLink`) |
 
 ## The package
@@ -100,7 +100,7 @@ makes that directory, owner only, on its first step.
 3. **No rollout entry.** hello needs no entry of a rollout file: `serve` refuses
    `--rollout-file`, and what a package has alone is set through the API. hello comes from the
    default repository `komira`; to take it from another registry entry, call
-   `Services.SetRepository` (`hkctl services set-repository`) before the first `SetDesired`.
+   `Services.SetRepository` (`hk services set-repository`) before the first `SetDesired`.
    The group of `examples/hello/host-group.json` (section 1 below) is what places
    hello and sets its policy.
 4. **CI's allow-list.** If CI sets the desired version, the allow-list entry that admits its
@@ -134,7 +134,7 @@ automatic rollback once one failed host or 25 percent of the group's hosts have 
 50 and 100 percent. Put it:
 
 ```sh
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     host-groups put --request examples/hello/host-group.json --reason "the hello proof"
 ```
 
@@ -147,12 +147,12 @@ coordinator that already holds groups gets `farm` beside them.
 A host already enrolled gets into the group by `Move`:
 
 ```sh
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     host-groups move --node-id <host> --host-group farm --reason "a host of the proof"
 ```
 
 A host enrolled after this is approved into the group instead, by an approval or an inventory
-record naming it (`hkctl enrollment approve --host-group farm`,
+record naming it (`hk enrollment approve --host-group farm`,
 [enrollment.md](operations/enrollment.md)), and installs the group's packages in order from its
 first heartbeat. A moved host is then moving: at its heartbeats it is admitted into the plans of the group's packages,
 and ordered to install the packages of the group in the order of the list, once the group has a
@@ -165,7 +165,7 @@ is set.
 `Services.Assign` and `Services.Unassign` are refused `placed_by_host_group`, the
 package page's Assign and Unassign with them: the group is the only placement.
 
-**Watch:** nothing is ordered yet for hello. `hkctl host-groups get --host-group farm` answers
+**Watch:** nothing is ordered yet for hello. `hk host-groups get --host-group farm` answers
 the group with its generation, its hosts, and per package its desired version (none set) and its
 convergence. Hosts and Home show a moved host with the group as its role. The Audit page shows a
 `host_group_put` and a `host_move` entry by the token's name, which `Audit.List` with
@@ -178,7 +178,7 @@ Set the desired version to the first release, `<v1>`:
 ```sh
 jq -n --arg version <v1> --slurpfile targets targets.json \
   '{desired: {version: $version}, targets: $targets[0]}' > desired.json
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     releases set-desired --service hello --request desired.json
 ```
 
@@ -205,7 +205,7 @@ confirm.
 
 **Watch:**
 
-- `hkctl releases converge --service hello --host-group farm`: the group's convergence.
+- `hk releases converge --service hello --host-group farm`: the group's convergence.
 - Rollout, section `hello`: `Desired` is `<v1>`. The canary host goes first, then the others by
   the stages of hello's update plan, each baked before the next; a stage's hosts update in
   parallel up to the group's `max_updating` (the whole stage unless the policy sets a number).
@@ -287,7 +287,7 @@ input, so the set is one deployment to each group that lists hello, `farm` here.
 takes `host_group` from the release after the one the callers pin; `hello-desired.yml` passes it
 once its pin moves there.) It is pinned to a hostkeeper release, as any service pins it
 (`docs/deploy/ci-client.md`, "Pinning hostkeeper"), with `wait` left at `true`: the job waits
-for the fleet. Once it has set, `hkctl releases get-release --service hello --version <version>`
+for the fleet. Once it has set, `hk releases get-release --service hello --version <version>`
 answers the release's targets, one list per platform.
 
 Run it twice, in this order, with the same `version`, a release the hosts are not already at:
@@ -295,7 +295,7 @@ Run it twice, in this order, with the same `version`, a release the hosts are no
 1. **`variant: hello`.** The coordinator stores `<version>` as hello's desired version. The canary
    host updates first, bakes, then the others stage by stage, as in step 2. The job ends green,
    with the outputs `desired_version` `<version>`, `converged` `true` and `reason` `converged`.
-   The wait is one call (`hkctl releases wait-converged`) that the coordinator holds until the
+   The wait is one call (`hk releases wait-converged`) that the coordinator holds until the
    fleet has converged, at most 30 minutes (`max_polls` left at 180).
 2. **`variant: fail-ready`.** The coordinator stores `<version>-fail-ready`. The canary host fails
    its `verify` (`not_ready`, phase `gate_release`) and rolls itself back. The coordinator marks
@@ -315,7 +315,7 @@ example when `job_workflow_ref` does not name the commit of the `uses:` line.
 Put the group again without hello, naming the generation `Get` or `List` answered:
 
 ```sh
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     host-groups put --request farm.json --reason "end of the hello proof"
 ```
 

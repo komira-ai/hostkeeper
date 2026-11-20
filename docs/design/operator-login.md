@@ -38,7 +38,7 @@ revoked person means editing it again. Nothing records a sign-in or a sign-out.
   hours, whichever comes first, or when the person signs out, or when an admin disables the user or resets the password.
 - Any admin creates and disables users, sets a temporary password for a user who forgot theirs, and creates and
   revokes API tokens, all in the UI (section 7). Every one of those, and every login, is in the audit log (section 8).
-- API tokens stay what they are, named bearer tokens for `hkctl`, CI and scripts. They can now be created and
+- API tokens stay what they are, named bearer tokens for `hk`, CI and scripts. They can now be created and
   revoked in the UI, and the ones in the tokens file are listed there too, read-only.
 
 **What does not change.** Every operator method, its request and its answer. A bearer call is authenticated exactly
@@ -373,14 +373,14 @@ failure's audit text does not say which part was wrong. `Actor::of(by)` already 
 ## 9. Migration from the tokens file
 
 1. Deploy the new coordinator build with the new flags (section 10). Nothing in a running setup changes: the tokens
-   `ceo` and `engineering` still log in as bearers, `hkctl` and CI still work, and the UI lists them read-only.
+   `ceo` and `engineering` still log in as bearers, `hk` and CI still work, and the UI lists them read-only.
 2. The deploy script mints the first admin (section 4). The admin changes the password, creates a user for each person,
    and gives each their temporary password.
 3. For automation, the admin creates API tokens in the UI, hands them to their users, and removes the matching entries
    from the tokens file. The deploy script's tokens-file step becomes optional (a komira change, K1 below), so a farm
    whose tokens are all in the store runs without `--tokens-file`.
 4. The pasted-token form leaves the UI in the same pull request that adds the password form (L6): a person with only a
-   token uses `hkctl`, which has always been the supported way for a script.
+   token uses `hk`, which has always been the supported way for a script.
 
 No format changes: the tokens file is read as now, the new store tables are new tables, the operator messages gain
 only new services and fields. Running the previous release on a store the new one wrote works because the old

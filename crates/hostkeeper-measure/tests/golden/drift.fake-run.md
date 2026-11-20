@@ -6,7 +6,7 @@ After a hand-made change to what hostkeeper placed for hello on one host, the ti
 
 **Hosts.** The one host hello is assigned to (label one host demo=yes and no other): host-1 in the records.
 
-**Recorded.** The operator's change, stamped by the runner when the operator confirms it; the first poll of `hkctl hosts list` that shows hello unhealthy on the host, or the timeout; the repair's set, stamped by its `set_desired` audit entry; and the first poll that shows the new version installed by a succeeded update with hello healthy, stamped with the host's last heartbeat.
+**Recorded.** The operator's change, stamped by the runner when the operator confirms it; the first poll of `hk hosts list` that shows hello unhealthy on the host, or the timeout; the repair's set, stamped by its `set_desired` audit entry; and the first poll that shows the new version installed by a succeeded update with hello healthy, stamped with the host's last heartbeat.
 
 | Measure | What | Unit | n | Missing | Min | Median | Max | Clock |
 |---|---|---|---|---|---|---|---|---|

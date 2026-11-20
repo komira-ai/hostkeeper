@@ -28,6 +28,8 @@ harness is behind the feature `conformance`, which a service turns on in its dev
 | `rollback` | | undo `prepare` and `cutover` as far as they can be undone |
 | `cleanup` | | remove what only the update needed; run only after `verify` succeeded |
 | `uninstall` | | not a step of an update: run once, from the installed release, when the service is removed from the host; bounded by the manifest's `[hook.timeout_secs] uninstall`, and never run for a manifest without that bound |
+| `drain` | | not a step of an update: run alone in a maintenance run, with `--params <file>` and no artifact; stop the service taking new work and wait for the work in flight to end; with a deadline that passes while work is left, resume the service, cut no work and exit `75` |
+| `resume` | | not a step of an update: run alone, with `--params <file>` and no artifact; let the service take work again; safe to run with no `drain` before it |
 
 Every step may be followed by `--params <file>`: a TOML table of scalars, the
 manifest's `[params]` table, opaque to the updater. It also carries the reserved key
@@ -42,6 +44,15 @@ every step). The digest is an identity the hook keys its record on; it is not fo
 artifact again. `Params::artifact_digest` refuses any other shape. The manifest's own `[params]`
 may not set any `updater.*` key (`Params::parse_declared` refuses it, and so does the manifest
 loader).
+The params file of a `drain` or a `resume` holds three more reserved keys: `updater.service` (text,
+the service), `updater.run_id` (text, the maintenance run; the same for the `drain` and the `resume`
+of one host's turn) and, for a `drain` with a deadline, `updater.drain_deadline_unix` (a whole number of
+seconds since the Unix epoch, not negative; `Params::drain_deadline_unix` refuses any other value).
+Absent: no deadline, and the `drain` waits for the work to end. Once the host's clock reads the
+deadline or later with work left, the hook resumes the service, cuts no work and exits `75`
+(deferred). Accessors: `Params::service`, `run_id`, `drain_deadline_unix`. `drain` and `resume`
+report like `uninstall` in `hostkeeper_hook::next`: success is `Succeeded`, failure `Failed(before_commit)`
+with the hook's class, `75` `Deferred`, `76` halt.
 **A hook still validates every value it reads from this file against its own record directory and
 the manifest it shipped with**: a value read from a file is untrusted input.
 
@@ -122,6 +133,13 @@ the hook as the updater would and checks:
 - the same checks run as an update (previous release and version present, the release a real tree)
   and as a first install (neither); a params file with an unknown `updater.*` key is accepted;
 - with the record directory locked, every step refuses.
+- check 9, only for a hook given `Conformance::with_drain`: `drain` and `resume` each run twice
+  end the same and the second changes nothing; `resume` with no `drain` before it succeeds and
+  changes nothing; `drain` then `resume` puts the service back; and a `drain` whose deadline has
+  passed (the harness writes one second after the Unix epoch, and never waits) while the work of
+  `FakeService::start_work` is in flight exits `75`, cuts no work and leaves the service resumed.
+  A fake whose `start_work` returns `Ok(false)` (the default) has no work to put in flight: that
+  scenario is skipped and said to be.
 
 **Allowances.** The hook's author may declare to the harness, with `Conformance::with_allowances`
 and an `Allowances` in the hook's own test, up to three behaviours the checks above refuse by

@@ -189,7 +189,7 @@ One run of a step:
    standard output is the step's report; the job is booted out (unloaded) and its directory
    removed.
 
-A step that is not one of the five of an update (the hook's `uninstall`, a `[hook] boot` step)
+A step that is not one of the five of an update (the hook's `uninstall`, a `[hook] boot` step, and the `drain` and `resume` steps a maintenance run will run)
 runs the same way, as one job: `<hook> <hook args> <step> --params <file>`, bounded by its
 timeout (a timeout of 0 is no bound). The unit of a `[hook] boot` step is
 `updater-<service>-boot-<generation>`, whatever the step's name, and its label
@@ -369,7 +369,7 @@ assertions, the `keep_awake` lines, the two `launchctl print` and `codesign -dvv
 in that order. Every gRPC heartbeat after the probe is done carries it
 (`HeartbeatRequest.remote_login_probe`); it is the first fact a heartbeat drops when it would not
 fit 16 KiB. The coordinator keeps the last one in memory and shows it in the host's heartbeat:
-`hkctl hosts get --node-id <host>` answers it as `host.heartbeat.remoteLoginProbe`. Nothing decides
+`hk hosts get --node-id <host>` answers it as `host.heartbeat.remoteLoginProbe`. Nothing decides
 on it; a restart of the daemon (an update included) runs it again.
 
 ### Operator SSH keys and Remote Login
@@ -404,7 +404,7 @@ gone, and never removes them. A failed try is repeated after 30 minutes, then af
 each time, at most 24 hours, and the coordinator raises `prerequisite_failed` meanwhile. A
 listing that exits non-zero or offers no tools says in the reason the macOS version and build, the first line of
 each of `softwareupdate`'s streams and the labels it listed that hold `Command Line Tools`. The
-report is `host.heartbeat.prerequisites` in `hkctl hosts get`
+report is `host.heartbeat.prerequisites` in `hk hosts get`
 ([operations/host-prerequisites.md](operations/host-prerequisites.md)).
 
 ### Release and installer pkg

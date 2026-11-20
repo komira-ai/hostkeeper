@@ -1033,7 +1033,7 @@ fn a_keyring_the_page_cannot_name_the_keys_of_is_answered_with_why() {
         ),
         (
             "[198, 3, 6, 0, 0]",
-            "The keyring has a version 6 key, whose fingerprint this page does not make; use hkctl repositories put.",
+            "The keyring has a version 6 key, whose fingerprint this page does not make; use hk repositories put.",
         ),
         (
             "[198, 3, 3, 0, 0]",

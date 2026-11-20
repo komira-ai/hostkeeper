@@ -76,7 +76,7 @@ pub const MAX_PROBE_TEXT: usize = 4096;
 pub const FILE_DESCRIPTOR_SET: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/hostkeeper.binpb"));
 
-/// The command table `hkctl` and the UI client are generated from, itself generated from the descriptors.
+/// The command table `hk` and the UI client are generated from, itself generated from the descriptors.
 pub mod ctl;
 
 /// The bounds of a heartbeat's maintenance report, and the check of them.

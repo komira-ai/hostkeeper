@@ -1,0 +1,15 @@
+hk gadgets tune: /hostkeeper.fixture.v1.Gadgets/Tune
+
+Set the speed.
+
+Usage: hk [global flags] gadgets tune [flags]
+
+Flags:
+  --request FILE|-
+      The request as a JSON object, from a file or `-` for stdin; flags add to it.
+  --speed VALUE
+      How fast. One of: slow, fast.
+  --version STRING
+      A field named like hk's own --version, which after the method is this field.
+
+Run 'hk --help' for the global flags and the exit codes.

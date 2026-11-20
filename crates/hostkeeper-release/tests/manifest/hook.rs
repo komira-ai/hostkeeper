@@ -293,3 +293,249 @@ fn each_installer_bound_is_1_to_3600() {
         "installer_bounds.stage_secs is 3601, not 1 to 3600"
     );
 }
+
+fn pair(drain: Option<&str>, resume: Option<&str>) -> Hook {
+    Hook {
+        drain: drain.map(str::to_owned),
+        resume: resume.map(str::to_owned),
+        ..hook()
+    }
+}
+
+/// Catches: a hook naming `drain` and `resume` (their own words, or free names of the additive
+/// grammar) refused by the rules every manifest keeps or by the rules of the installer.
+#[test]
+fn a_drain_and_resume_pair_passes_under_their_own_words_or_free_names() {
+    for (drain, resume) in [("drain", "resume"), ("quiesce", "unquiesce")] {
+        let given = pair(Some(drain), Some(resume));
+        assert_eq!(check_hook(given.clone()), Ok(()), "{drain} {resume}");
+        assert_eq!(
+            manifest::check_hook_of(false, &with_hook(given.clone())),
+            Ok(()),
+            "{drain} {resume}"
+        );
+        let mut apt = manifest(Installer::Apt);
+        let native = apt.hook.as_mut().expect("a hook");
+        native.drain = given.drain;
+        native.resume = given.resume;
+        assert_eq!(
+            manifest::check_for(&web(), LINUX, Installer::Apt, &apt),
+            Ok(()),
+            "{drain} {resume}"
+        );
+    }
+}
+
+/// Catches: `drain` or `resume` accepted as the name of the boot step, which would run the
+/// maintenance step at every daemon start.
+#[test]
+fn a_boot_step_cannot_be_named_drain_or_resume() {
+    for bad in ["drain", "resume"] {
+        assert_eq!(
+            check_hook(Hook {
+                boot: Some(bad.to_owned()),
+                ..hook()
+            }),
+            Err(ManifestError::Boot(bad.to_owned())),
+            "{bad}"
+        );
+    }
+    assert_eq!(
+        ManifestError::Boot("drain".to_owned()).to_string(),
+        "hook.boot \"drain\" is not the name of an additive step: 1 to 64 of a-z, 0-9 and `_`, and none of prepare, cutover, verify, rollback, cleanup, uninstall, drain, resume"
+    );
+}
+
+/// Catches: one of `drain` and `resume` passing without the other, which would take a service out
+/// of service with no hook to put it back.
+#[test]
+fn drain_and_resume_come_together() {
+    assert_eq!(
+        check_hook(pair(Some("drain"), None)),
+        Err(ManifestError::MaintenancePair {
+            given: "drain",
+            missing: "resume",
+            name: "drain".to_owned()
+        })
+    );
+    assert_eq!(
+        check_hook(pair(None, Some("quiesce"))),
+        Err(ManifestError::MaintenancePair {
+            given: "resume",
+            missing: "drain",
+            name: "quiesce".to_owned()
+        })
+    );
+    assert_eq!(
+        check_hook(pair(Some("drain"), None))
+            .expect_err("refused")
+            .to_string(),
+        "hook.drain \"drain\" needs a hook.resume; drain and resume go together"
+    );
+    assert_eq!(check_hook(pair(None, None)), Ok(()));
+}
+
+/// Catches: a name outside the drain or resume grammar passing: another step's word, the other
+/// maintenance step's word, a capital, or an empty name.
+#[test]
+fn a_drain_or_resume_name_is_its_own_word_or_a_free_name() {
+    let cases = [
+        ("drain", "resume", pair(Some("resume"), Some("resume"))),
+        ("drain", "cleanup", pair(Some("cleanup"), Some("resume"))),
+        ("drain", "Drain", pair(Some("Drain"), Some("resume"))),
+        ("resume", "drain", pair(Some("drain"), Some("drain"))),
+        ("resume", "", pair(Some("drain"), Some(""))),
+    ];
+    for (field, name, hook) in cases {
+        assert_eq!(
+            check_hook(hook),
+            Err(ManifestError::MaintenanceStep {
+                field,
+                name: name.to_owned()
+            }),
+            "{field} {name:?}"
+        );
+    }
+    assert_eq!(
+        check_hook(pair(Some("cleanup"), Some("resume")))
+            .expect_err("refused")
+            .to_string(),
+        "hook.drain \"cleanup\" is not the name of the drain step: drain itself, or 1 to 64 of a-z, 0-9 and `_` and none of prepare, cutover, verify, rollback, cleanup, uninstall, drain, resume"
+    );
+}
+
+/// Catches: two of `boot`, `drain` and `resume` naming one step passing, which would run it for
+/// both.
+#[test]
+fn no_step_is_named_by_two_of_boot_drain_and_resume() {
+    let cases = [
+        (
+            "boot",
+            "drain",
+            Hook {
+                boot: Some("quiesce".to_owned()),
+                ..pair(Some("quiesce"), Some("resume"))
+            },
+        ),
+        (
+            "boot",
+            "resume",
+            Hook {
+                boot: Some("unquiesce".to_owned()),
+                ..pair(Some("drain"), Some("unquiesce"))
+            },
+        ),
+        (
+            "drain",
+            "resume",
+            Hook {
+                boot: Some("restore".to_owned()),
+                ..pair(Some("x"), Some("x"))
+            },
+        ),
+    ];
+    for (first, second, hook) in cases {
+        let name = match first {
+            "boot" => hook.boot.clone(),
+            _ => hook.drain.clone(),
+        }
+        .expect("named");
+        assert_eq!(
+            check_hook(hook),
+            Err(ManifestError::StepNamedTwice {
+                first,
+                second,
+                name
+            }),
+            "{first} {second}"
+        );
+    }
+    assert_eq!(
+        ManifestError::StepNamedTwice {
+            first: "boot",
+            second: "drain",
+            name: "quiesce".to_owned()
+        }
+        .to_string(),
+        "hook.boot and hook.drain both name the step \"quiesce\""
+    );
+}
+
+/// Catches: `drain` or `resume` with no program passing for the installer's rule (the built-in
+/// steps have neither), the boot step's refusal not coming first, or the field and name lost from
+/// the message.
+#[test]
+fn drain_and_resume_need_a_command() {
+    let without = |hook: Hook| {
+        manifest::check_hook_of(
+            false,
+            &with_hook(Hook {
+                command: Vec::new(),
+                ..hook
+            }),
+        )
+    };
+    assert_eq!(
+        without(Hook {
+            boot: None,
+            ..pair(Some("drain"), Some("resume"))
+        }),
+        Err(ManifestError::MaintenanceWithoutCommand {
+            field: "drain",
+            name: "drain".to_owned()
+        })
+    );
+    assert_eq!(
+        without(Hook {
+            boot: None,
+            ..pair(None, Some("resume"))
+        }),
+        Err(ManifestError::MaintenanceWithoutCommand {
+            field: "resume",
+            name: "resume".to_owned()
+        })
+    );
+    assert_eq!(
+        without(pair(Some("drain"), Some("resume"))),
+        Err(ManifestError::BootWithoutCommand("restore".to_owned()))
+    );
+    assert_eq!(
+        without(Hook {
+            boot: None,
+            ..pair(Some("drain"), Some("resume"))
+        })
+        .expect_err("refused")
+        .to_string(),
+        "hook.drain \"drain\" needs a hook.command; the built-in steps have no drain step"
+    );
+    assert_eq!(
+        without(Hook {
+            boot: None,
+            ..pair(None, None)
+        }),
+        Ok(())
+    );
+}
+
+/// Catches: the step bounds judged before the drain and resume names, so a manifest with both a
+/// bad name and no bounds reports the bounds.
+#[test]
+fn a_bad_drain_name_is_reported_before_the_step_bounds() {
+    assert_eq!(
+        check_hook(Hook {
+            timeout_secs: None,
+            ..pair(Some("cleanup"), Some("resume"))
+        }),
+        Err(ManifestError::MaintenanceStep {
+            field: "drain",
+            name: "cleanup".to_owned()
+        })
+    );
+    assert_eq!(
+        check_hook(Hook {
+            timeout_secs: None,
+            ..pair(Some("drain"), Some("resume"))
+        }),
+        Err(ManifestError::NoStepBounds)
+    );
+}

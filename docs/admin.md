@@ -2,15 +2,15 @@
 
 The daemon serves nothing on the host: it binds no socket, and `hostkeeper admin` is gone (it is a
 usage error, exit status 2). What the three calls of `hostkeeper admin` did, the coordinator does,
-through [`hkctl`](cli.md):
+through [`hk`](cli.md):
 
 | to | run | needs |
 |---|---|---|
-| read a host's status | `hkctl hosts get` | the host heard from since the coordinator started |
-| stop a service's running step | `hkctl hosts abort` | any daemon that announces `abort-v1` |
-| set aside a step record that does not read | `hkctl hosts clear-record` | a daemon that announces `clear-record-v1` |
+| read a host's status | `hk hosts get` | the host heard from since the coordinator started |
+| stop a service's running step | `hk hosts abort` | any daemon that announces `abort-v1` |
+| set aside a step record that does not read | `hk hosts clear-record` | a daemon that announces `clear-record-v1` |
 
-Every `hkctl` call takes the endpoint, the CA file and the token of [cli.md](cli.md). A host the coordinator cannot reach is the last section.
+Every `hk` call takes the endpoint, the CA file and the token of [cli.md](cli.md). A host the coordinator cannot reach is the last section.
 
 No call installs, updates or switches a version, and none lifts a halt: a halt is lifted only by the
 coordinator's `clear_halt` order.
@@ -18,7 +18,7 @@ coordinator's `clear_halt` order.
 ## Status
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     hosts get --node-id <id>
 ```
 
@@ -37,21 +37,21 @@ announces `target-v1` and the coordinator has read its installers over neither g
 record).
 
 The enrollment of a host that has no certificate yet is read at the coordinator, not on the host:
-`hkctl enrollment list` shows the request with its `key_sha256`, which an operator at the host's
+`hk enrollment list` shows the request with its `key_sha256`, which an operator at the host's
 console checks against the SHA-256 of the host's pending key
 ([enrollment.md](operations/enrollment.md#check-the-key-hash)).
 
 ## Abort
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     hosts abort --node-id <id> --service <service> --reason <why>
 ```
 
 The coordinator orders the host `abort` for the service in its next heartbeat answer; the order
 takes no farm slot. The daemon stops the service's running step and ends its update in the halt
 phase with the reason `aborted_by_operator`: the halt is that order's verdict, which comes back in a
-heartbeat and `hkctl hosts get` shows. The abort's own answer is only in the daemon's log, where a
+heartbeat and `hk hosts get` shows. The abort's own answer is only in the daemon's log, where a
 service with no step running is `nothing_running`, and nothing changes. A daemon that
 does not announce `abort-v1` is refused `daemon_too_old` and nothing is ordered. An aborted service
 takes no other order until its halt is lifted.
@@ -59,14 +59,14 @@ takes no other order until its halt is lifted.
 ## A step record that does not read
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     hosts clear-record --node-id <id> --service <service>
 ```
 
 The coordinator orders the host `clear_record` for the service, once, in its next heartbeat answer.
 A host whose daemon does not announce `clear-record-v1` is refused `daemon_too_old`, an unknown
 host `unknown_host`, and nothing is ordered. The daemon runs the order under the service's lock,
-without waiting, and answers with one verdict (`hkctl hosts get` shows it):
+without waiting, and answers with one verdict (`hk hosts get` shows it):
 
 | verdict | meaning |
 |---|---|

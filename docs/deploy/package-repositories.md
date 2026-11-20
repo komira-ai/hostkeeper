@@ -440,7 +440,7 @@ the coordinator. A private repository is an entry of the coordinator's registry 
   coordinator's user, mode 0600 or 0400. `Repositories.Put` refuses the entry `credential_unusable` when the file is
   not so, and the coordinator reads it again at every read from the origin, so a new credential
   takes effect without a restart. A public entry names no credential file. The credential is never
-  sent to a host, logged or answered; `hkctl repositories get` shows the file's path.
+  sent to a host, logged or answered; `hk repositories get` shows the file's path.
 - **One suite and one pool per host group**: the suite `dists/<group>/` lists that group's packages
   alone, from the pool `pool/<group>/`, so a host learns nothing of another group's configuration.
   The entry's `suites` are the groups it serves; a release's repository entry names the channel

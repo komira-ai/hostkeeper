@@ -50,6 +50,8 @@ must update hostkeeper first), every other refusal `Release` with `manifest_mism
 The rules a release manifest (crate `hostkeeper-release`) shares with it: `check_health_url`
 (`http://` to a loopback literal, `127.0.0.1` or `[::1]`, design 5.8; a `{port}` in the port's
 place needs every run unit to be an instance whose name is a port), `is_boot_step` (a lowercase
-name, `a-z0-9_`, 1 to 64, that is none of the five update steps or `uninstall`) and
+name, `a-z0-9_`, 1 to 64, that is none of the words of the contract's steps: the five update
+steps, `uninstall`, `drain` and `resume`), `is_drain_step` and `is_resume_step` (the step's own
+word, `drain` or `resume`, or any name `boot` may take) and
 `REFUSED_PREFIXES` (the directories a placed file's path may not be at or below, compared on
 whole components).

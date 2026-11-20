@@ -79,7 +79,7 @@ const PROCESS_TESTS: [(&str, &str); 19] = [
     ),
     (
         "tests/workflows/set_desired_calls_tests.rs",
-        "runs the committed set step of set-desired.yml with bash, with a fake hkctl",
+        "runs the committed set step of set-desired.yml with bash, with a fake hk",
     ),
     (
         "tests/workflows/coordinator_wait_run_tests.rs",
