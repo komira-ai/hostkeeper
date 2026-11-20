@@ -101,18 +101,27 @@ and the time of its next try has come.
    installed, and its `version:` line is the version reported; any other exit means it is not.
    When it is, `xcode-select -p` must exit 0; when it does not, `xcode-select --switch
    /Library/Developer/CommandLineTools` and `xcode-select -p` again must both exit 0. A Mac with
-   the package and a developer directory is `PRESENT`.
-2. *Install,* when the package is not installed: the state is `INSTALLING`; the marker file
+   the package and a developer directory is `PRESENT`. With no package, the Mac is `PRESENT` too
+   when the tools are on disk without their receipt (`/Library/Developer/CommandLineTools/usr/bin/clang`
+   is a file and `xcode-select -p` exits 0; the version is empty), or when the directory
+   `xcode-select -p` names is an Xcode's (`<name>.app/Contents/Developer`) whose licence is accepted
+   and whose first launch ran (`xcodebuild -license check` and `xcodebuild -checkFirstLaunchStatus`
+   exit 0; the version is the first line of `xcodebuild -version`, such as `Xcode 16.1`).
+2. *Install,* when the look finds none of these: the state is `INSTALLING`; the marker file
    `/tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress` is made (never through a link),
    which makes `softwareupdate` offer the tools; `softwareupdate --list` names them in `* Label: `
    lines, as `Command Line Tools for Xcode-<version>` (older catalogs) or
    `Command Line Tools for Xcode <version>-<version>` (current ones, the last version being the
    tools'), and the label of the highest version is installed with `softwareupdate --install
    <label>`; the marker is removed whatever happened after it was made; then step 1 must find them.
-   A listing with no label of the tools fails with a reason that names the labels it listed or,
-   with none, the first line of `softwareupdate`'s standard error.
+   A listing that exits non-zero, or that names no label of the tools, fails with a reason that
+   also names the macOS version and build (`sw_vers`), the first line of each of the listing's
+   streams that is not blank, and every label that holds `Command Line Tools` in any case or, with
+   none, every label it listed; each part is cut to its own bound and the whole to the 256 bytes
+   the coordinator reads.
 3. Each program is run as a child with an empty environment and no input, its output kept to
-   64 KiB, and killed when it runs past its deadline: 1 minute for `pkgutil` and `xcode-select`,
+   64 KiB, and killed when it runs past its deadline: 1 minute for `pkgutil`, `xcode-select`,
+   `xcodebuild` and `sw_vers`,
    15 minutes for `softwareupdate --list`, 2 hours for `softwareupdate --install`.
 
 **Failure and the wait.** A look or an install that fails sets the state `FAILED` with the reason
