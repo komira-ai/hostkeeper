@@ -7,7 +7,7 @@ mod support;
 use std::fs;
 
 use hostkeeper_daemon::maintenance_hook::linux::{HostServices, ServiceHealth, host_kinds};
-use hostkeeper_daemon::maintenance_hook::{Kind, KindError, MaintainParams, MaintenanceKind};
+use hostkeeper_daemon::maintenance_hook::{Kind, KindError, MaintainParams};
 use hostkeeper_daemon::selfupdate::binary_dir;
 use hostkeeper_daemon::testing::manifest;
 use hostkeeper_launchd::Platform;

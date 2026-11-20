@@ -8,7 +8,7 @@
 //! `linux` the updates its package manager lists ([`package_manager`]) under the order's
 //! `linux_scope`, leaving out the packages hostkeeper itself installs ([`OwnPackages`]); and the
 //! health of every installed service as its heartbeat reports it ([`ServiceHealth`]: the
-//! `ServiceBeat.health` of [`beat_health`], over the daemon's observer).
+//! `health` of a `ServiceBeat`, as [`beat_health`] gives it, over the daemon's observer).
 //!
 //! **What it fails on.** The first wrong fact, in this order, each named in the detail (which
 //! the hook bounds to its [`MAX_DETAIL`](super::MAX_DETAIL)):
@@ -71,8 +71,9 @@ pub const REASON_SERVICE_UNHEALTHY: &str = "service_unhealthy";
 pub const REASON_HEALTH_UNREADABLE: &str = "health_unreadable";
 
 /// The health of the services a host runs, as its heartbeat reports them.
-pub trait ServiceHealth {
-    /// Each installed service's name and its health (`ServiceBeat.health`), in name order.
+pub trait ServiceHealth: Send + Sync {
+    /// Each installed service's name and its health (the `health` of its `ServiceBeat`), in name
+    /// order.
     ///
     /// # Errors
     /// Why the services could not be listed.
