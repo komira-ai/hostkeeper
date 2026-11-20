@@ -10,12 +10,15 @@
 //!
 //! **Install** ([`CommandLineTools::install`]): the marker file [`INSTALL_MARKER`] is made, never
 //! through a link and never truncating a file that is there, which makes `softwareupdate` offer the tools; `softwareupdate --list` names them
-//! as `* Label: Command Line Tools for Xcode-<version>` lines; the label of the highest version is
-//! installed with `softwareupdate --install <label>`; the marker is removed whatever happened after
-//! it was made (a removal that fails is logged, not an error of the install); then the look must
-//! find the tools.
+//! in `* Label: ` lines, as `Command Line Tools for Xcode-<version>` (the form of older catalogs) or
+//! `Command Line Tools for Xcode <version>-<version>` (the form of current ones, the last version
+//! being the tools'); the label of the highest version is installed with
+//! `softwareupdate --install <label>`; the marker is removed whatever happened after it was made (a
+//! removal that fails is logged, not an error of the install); then the look must find the tools.
 //!
-//! An error names the step, its exit code and the first line of the program's standard error.
+//! An error names the step, its exit code and the first line of the program's standard error. A
+//! listing with no label of the tools also names the labels it listed, or, with none, the first line
+//! of its standard error, so the coordinator shows what the Mac was offered.
 
 use std::fs::{self, OpenOptions};
 use std::io;
@@ -26,7 +29,7 @@ use std::time::Duration;
 use hostkeeper_launchd::{Launchctl, LaunchctlProcess};
 use hostkeeper_link::Log;
 
-use crate::login_account::{run, run_ok};
+use crate::login_account::{exit_failure, run, run_ok};
 
 /// The tool that reads the installed packages.
 pub const PKGUTIL: &str = "/usr/sbin/pkgutil";
@@ -46,8 +49,12 @@ pub const DEVELOPER_DIR: &str = "/Library/Developer/CommandLineTools";
 /// The package the tools are recorded as.
 const PACKAGE: &str = "com.apple.pkg.CLTools_Executables";
 
-/// What a label of the tools starts with, after the `* Label: ` of `softwareupdate --list`.
-const LABEL_PREFIX: &str = "Command Line Tools for Xcode-";
+/// What a label of the tools starts with, after the `* Label: ` of `softwareupdate --list`; a `-`
+/// or a space follows it, then the version.
+const LABEL_PREFIX: &str = "Command Line Tools for Xcode";
+
+/// The reason of a listing with no label of the tools, before what it listed.
+const NONE_OFFERED: &str = "softwareupdate --list offered no Command Line Tools for Xcode";
 
 /// The longest `pkgutil` and `xcode-select` run.
 pub const LOOK_DEADLINE: Duration = Duration::from_secs(60);
@@ -177,11 +184,13 @@ impl CommandLineTools {
 
     /// `softwareupdate --list` and `softwareupdate --install` of the highest label it names.
     fn install_label(&self) -> Result<(), CommandLineToolsError> {
-        let listed = run_ok(&*self.list, "softwareupdate --list", &["--list"]).or_else(fail)?;
+        let output = run(&*self.list, "softwareupdate --list", &["--list"]).or_else(fail)?;
+        if output.code != Some(0) {
+            return fail(exit_failure("softwareupdate --list", &output, true));
+        }
+        let listed = String::from_utf8_lossy(&output.stdout);
         let Some(label) = highest_label(&listed) else {
-            return fail(
-                "softwareupdate --list offered no Command Line Tools for Xcode".to_owned(),
-            );
+            return fail(none_offered(&listed, &output.stderr_text()));
         };
         run_ok(
             &*self.install,
@@ -222,15 +231,44 @@ fn version_of(text: &str) -> String {
         .unwrap_or_default()
 }
 
-/// The label of the highest version among the `* Label: Command Line Tools for Xcode-<version>`
-/// lines of `softwareupdate --list`; the first of equal versions.
+/// The labels of the `* Label: ` lines of `softwareupdate --list`, in its order.
+fn labels(listing: &str) -> impl Iterator<Item = &str> {
+    listing
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("* Label:").map(str::trim))
+}
+
+/// The version of the tools a label names: all that follows [`LABEL_PREFIX`] and a `-`, or, after a
+/// space, the last of `<version>-<version>`; `None` for a label of other software or with no
+/// version.
+fn tools_version(label: &str) -> Option<&str> {
+    let rest = label.strip_prefix(LABEL_PREFIX)?;
+    let version = match rest.strip_prefix('-') {
+        Some(version) => version,
+        None => rest.strip_prefix(' ')?.rsplit('-').next()?,
+    };
+    Some(version).filter(|version| !version.is_empty())
+}
+
+/// The reason of a listing with no label of the tools: [`NONE_OFFERED`], then the labels it listed
+/// or, with none, the first line of its standard error that is not blank.
+fn none_offered(listing: &str, stderr: &str) -> String {
+    let listed: Vec<&str> = labels(listing).collect();
+    if !listed.is_empty() {
+        return format!("{NONE_OFFERED}; it listed: {}", listed.join("; "));
+    }
+    match stderr.lines().map(str::trim).find(|line| !line.is_empty()) {
+        Some(line) => format!("{NONE_OFFERED}; standard error: {line}"),
+        None => NONE_OFFERED.to_owned(),
+    }
+}
+
+/// The label of the highest version among the labels of the tools in `softwareupdate --list`
+/// ([`tools_version`]); the first of equal versions.
 fn highest_label(listing: &str) -> Option<&str> {
     let mut best: Option<(&str, &str)> = None;
-    for line in listing.lines() {
-        let Some(label) = line.trim().strip_prefix("* Label:").map(str::trim) else {
-            continue;
-        };
-        let Some(version) = label.strip_prefix(LABEL_PREFIX) else {
+    for label in labels(listing) {
+        let Some(version) = tools_version(label) else {
             continue;
         };
         if best.is_none_or(|(_, held)| compare_versions(version, held).is_gt()) {
