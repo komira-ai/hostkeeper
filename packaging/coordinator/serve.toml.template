@@ -44,6 +44,11 @@ tokens-file = "/etc/hostkeeper-coordinator/tokens.toml"
 # xcode-dir = "/var/lib/hostkeeper-coordinator/xcode"
 # xcode-max-bytes = 21474836480
 
+# How a Mac's macOS update of a maintenance run is applied: daemon (the default), the Mac's own daemon
+# installing it, is the only value taken. apple-business is refused at start (exit 2): Apple Business
+# offers no call that installs an update on one Mac.
+# macos-update-via = "daemon"
+
 # The console (power and boot device through each Linux server's BMC): which token names may use it
 # (no secret; root's, readable by the group), the one BMC user and password (a secret: owned by
 # hostkeeper-coordinator, mode 0600 or 0400), and, optional, an address that overrides for a BMC by

@@ -1,6 +1,6 @@
 //! Every RPC of the command table is served but those [`PENDING`] lists, which answer
-//! `UNIMPLEMENTED`; those are the six methods of `Maintenance`. A method added to a proto without
-//! a handler cannot pass unnoticed.
+//! `UNIMPLEMENTED`; those are `RetryHost` and `PutBack` of `Maintenance`. A method added to a
+//! proto without a handler cannot pass unnoticed.
 
 use hostkeeper_proto::ctl::{COMMANDS, Command};
 use tonic::Code;
@@ -53,21 +53,26 @@ const HOST_GROUPS: [&str; 5] = [
     "/hostkeeper.operator.v1.HostGroups/Move",
 ];
 
-/// The gRPC path of each method of `Maintenance`, the service described and not yet served.
-const MAINTENANCE: [&str; 6] = [
-    "/hostkeeper.operator.v1.Maintenance/Schedule",
-    "/hostkeeper.operator.v1.Maintenance/List",
-    "/hostkeeper.operator.v1.Maintenance/Get",
-    "/hostkeeper.operator.v1.Maintenance/Cancel",
+/// The gRPC path of each method of `Maintenance` whose handler has not landed.
+const MAINTENANCE: [&str; 2] = [
     "/hostkeeper.operator.v1.Maintenance/RetryHost",
     "/hostkeeper.operator.v1.Maintenance/PutBack",
 ];
 
-/// Proves: [`PENDING`] is exactly the six methods of `Maintenance`, each a method of the compiled
-/// descriptor set (the command table lists it), and each of the five methods of `HostGroups` is
-/// one too, so a path misspelt here or a method the proto drops cannot hide behind the excuse.
+/// The gRPC path of each method of `Maintenance` that is served.
+const MAINTENANCE_SERVED: [&str; 4] = [
+    "/hostkeeper.operator.v1.Maintenance/Schedule",
+    "/hostkeeper.operator.v1.Maintenance/List",
+    "/hostkeeper.operator.v1.Maintenance/Get",
+    "/hostkeeper.operator.v1.Maintenance/Cancel",
+];
+
+/// Proves: [`PENDING`] is exactly `RetryHost` and `PutBack` of `Maintenance`, each a method of the
+/// compiled descriptor set (the command table lists it), the four served methods of `Maintenance`
+/// are in the set and not pending, and each of the five methods of `HostGroups` is in the set
+/// too, so a path misspelt here or a method the proto drops cannot hide behind the excuse.
 #[test]
-fn only_maintenance_is_pending_and_each_host_groups_method_is_in_the_descriptor_set() {
+fn only_retry_host_and_put_back_are_pending_and_the_other_methods_are_in_the_descriptor_set() {
     assert_eq!(PENDING, &MAINTENANCE[..]);
     for path in PENDING {
         assert!(
@@ -75,11 +80,12 @@ fn only_maintenance_is_pending_and_each_host_groups_method_is_in_the_descriptor_
             "{path} is a method of the descriptor set"
         );
     }
-    for path in HOST_GROUPS {
+    for path in HOST_GROUPS.iter().chain(MAINTENANCE_SERVED.iter()) {
         assert!(
-            COMMANDS.iter().any(|command| command.path == path),
+            COMMANDS.iter().any(|command| command.path == *path),
             "{path} is a method of the descriptor set"
         );
+        assert!(!PENDING.contains(path), "{path} is served");
     }
 }
 

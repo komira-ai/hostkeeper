@@ -139,6 +139,7 @@ mod bmc_report;
 pub mod canary;
 pub mod clear_record;
 pub mod config;
+pub mod config_maintenance;
 pub mod config_xcode;
 pub(crate) mod console;
 pub mod converge;
@@ -189,6 +190,8 @@ pub mod maintenance;
 )]
 pub(crate) mod maintenance_effective;
 pub(crate) mod maintenance_policy;
+pub(crate) mod maintenance_runs;
+pub(crate) mod maintenance_service;
 pub mod membership;
 pub(crate) mod moving;
 pub mod operate;
@@ -435,6 +438,8 @@ mod live_tests;
 pub(crate) mod login_support;
 #[cfg(test)]
 mod macos_resolve_tests;
+#[cfg(test)]
+mod maintenance_calls_tests;
 #[cfg(test)]
 mod marks_support;
 #[cfg(test)]
