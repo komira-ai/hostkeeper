@@ -1,6 +1,7 @@
-//! `hostkeeper maintenance-hook <prepare|cutover|verify> --params <file>`: the maintenance hook,
-//! the OS work of a maintenance run (docs/design/maintenance-updates.md, section 5.2), run the way
-//! the step runner runs a hook's step.
+//! `hostkeeper maintenance-hook <prepare|cutover|verify> --params <file>
+//! [--package-lock-wait-secs <secs>]`: the maintenance hook, the OS work of a maintenance run
+//! (docs/design/maintenance-updates.md, section 5.2), run the way the step runner runs a hook's
+//! step.
 //!
 //! **Parameters.** The fields of the run's `maintain` order (`hostkeeper.agent.v1.Maintain`) as
 //! proto3 canonical JSON, in the file `--params` names, or on standard input when it names `-`
@@ -8,8 +9,11 @@
 //!
 //! **Kinds.** Each kind of the run (`macos`, `xcode`, `linux`, `reboot`) is the work of a
 //! [`MaintenanceKind`], found in the host platform's [`Registry`]; a kind the platform has no work
-//! for fails `unsupported_kind`. The steps run each kind of the run in [`Kind::ALL`]'s order,
-//! macOS before Xcode, whatever order the parameters give:
+//! for fails `unsupported_kind`. On Linux the `linux` kind's `prepare` is its stage (the module
+//! `linux`: the free space, then a download alone, waiting at most `--package-lock-wait-secs`
+//! for a held package manager's lock); its other steps, and every other kind, are not written
+//! yet. The steps run each kind of the run in [`Kind::ALL`]'s order, macOS before Xcode,
+//! whatever order the parameters give:
 //!
 //! - `prepare` runs each kind's `prepare`, and ends at the first that does not succeed. It writes
 //!   nothing to the run record and reboots nothing.
@@ -31,6 +35,7 @@
 //! reason a token, the detail at most [`MAX_DETAIL`] bytes.
 
 mod kind;
+mod linux;
 mod params;
 mod ports;
 mod registry;
@@ -44,6 +49,8 @@ use hostkeeper_hook::{Class, Outcome, Report, is_reason_token};
 use hostkeeper_launchd::Platform;
 use hostkeeper_proto::maintenance::MAX_HALTED_REASON;
 use hostkeeper_steps::{BootId, BootIdSource};
+
+use crate::cli::{DEFAULT_PACKAGE_LOCK_WAIT_SECS, MAX_PACKAGE_LOCK_WAIT_SECS};
 
 pub use kind::{Cutover, KindError, MaintenanceKind, REASON_UNSUPPORTED_KIND, Unsupported};
 pub use params::{Kind, MAX_PARAMS_BYTES, MaintainParams, ParamsError};
@@ -92,6 +99,14 @@ pub struct HookArgs {
     /// standard input.
     #[arg(long)]
     pub params: PathBuf,
+    /// How long the stage waits for a package manager's lock another holds, per run of a
+    /// program, in seconds, before it defers `package_manager_busy`: the daemon's own `--package-lock-wait-secs`, 1 to 3600.
+    #[arg(
+        long,
+        default_value_t = DEFAULT_PACKAGE_LOCK_WAIT_SECS,
+        value_parser = clap::value_parser!(u64).range(1..=MAX_PACKAGE_LOCK_WAIT_SECS),
+    )]
+    pub package_lock_wait_secs: u64,
 }
 
 /// What the hook works through: the kinds of the host, its run record, its reboot and its boot
@@ -177,12 +192,12 @@ fn bounded(detail: &str) -> String {
     detail[..end].to_owned()
 }
 
-/// `hostkeeper maintenance-hook` on this host: the kinds of its platform, the boot id of the
-/// system the binary was built for, and no run record or reboot yet ([`Unwired`]); the parameters
-/// from the file `args` names or from the process's standard input, the report to its standard
-/// output.
+/// `hostkeeper maintenance-hook` on this host: the kinds of its platform ([`Registry::at_host`],
+/// the package manager's lock waited for `--package-lock-wait-secs`), the boot id of the system
+/// the binary was built for, and no run record or reboot yet ([`Unwired`]); the parameters from
+/// the file `args` names or from the process's standard input, the report to its standard output.
 pub fn host_main(args: &HookArgs) -> Outcome {
-    let kinds = Registry::for_platform(Platform::host().kind);
+    let kinds = Registry::at_host(Platform::host().kind, args.package_lock_wait_secs);
     let boot_id = crate::adapters::host_boot_id();
     let ports = HookPorts {
         kinds: &kinds,

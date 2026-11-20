@@ -1,12 +1,13 @@
 //! The kinds of maintenance a platform has work for ([`Registry::for_platform`]). Each is a stub
 //! ([`Unsupported`]) until its platform's work is written; that work is a file of its own beside
-//! this one, and putting it in its place here is the one line it changes.
+//! this one, put in its place by [`Registry::at_host`]: the `linux` kind's stage ([`Linux`]).
 
 use std::collections::BTreeMap;
 
 use hostkeeper_launchd::PlatformKind;
 
 use super::kind::{KindError, MaintenanceKind, Unsupported};
+use super::linux::Linux;
 use super::params::Kind;
 
 /// The work of each kind a host has; a kind it does not hold fails `unsupported_kind`.
@@ -31,6 +32,19 @@ impl Registry {
         kinds.iter().fold(Registry::new(), |registry, kind| {
             registry.with(*kind, Box::new(Unsupported(*kind)))
         })
+    }
+
+    /// The kinds of a host of `platform`, as [`Registry::for_platform`] has them, with the work
+    /// written so far in place of its stub: on Linux, the `linux` kind's stage ([`Linux`]), which
+    /// waits `lock_wait_secs` at most for a held package manager's lock.
+    pub fn at_host(platform: PlatformKind, lock_wait_secs: u64) -> Registry {
+        let registry = Registry::for_platform(platform);
+        match platform {
+            PlatformKind::Linux | PlatformKind::Openrc => {
+                registry.with(Kind::Linux, Box::new(Linux::at_host(lock_wait_secs)))
+            }
+            PlatformKind::Macos => registry,
+        }
     }
 
     /// This registry with `work` as the work of `kind`, in place of what it held.

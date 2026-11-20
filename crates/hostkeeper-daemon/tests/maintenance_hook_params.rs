@@ -12,7 +12,9 @@ use std::sync::Mutex;
 
 use clap::Parser;
 use clap::error::ErrorKind;
-use hostkeeper_daemon::cli::{self, Cli, Command, SystemdVars};
+use hostkeeper_daemon::cli::{
+    self, Cli, Command, DEFAULT_PACKAGE_LOCK_WAIT_SECS, MAX_PACKAGE_LOCK_WAIT_SECS, SystemdVars,
+};
 use hostkeeper_daemon::maintenance_hook::{
     Cutover, HookArgs, HookPorts, HookStep, Kind, KindError, KindState, MAX_PARAMS_BYTES,
     MaintainParams, MaintenanceKind, ParamsError, RebootError, Rebooter, RecordError, Registry,
@@ -288,6 +290,7 @@ fn main_on_file(registry: &Registry, step: HookStep, path: &Path) -> (Outcome, S
     let args = HookArgs {
         step,
         params: path.to_owned(),
+        package_lock_wait_secs: DEFAULT_PACKAGE_LOCK_WAIT_SECS,
     };
     let mut stdout = Vec::new();
     let mut stdin = io::empty();
@@ -384,6 +387,7 @@ fn the_command_line_takes_the_three_steps_and_the_params_file() {
             HookArgs {
                 step,
                 params: PathBuf::from("-"),
+                package_lock_wait_secs: DEFAULT_PACKAGE_LOCK_WAIT_SECS,
             }
         );
     }
@@ -403,9 +407,43 @@ fn the_command_line_takes_the_three_steps_and_the_params_file() {
     assert_eq!(refused.exit_code(), 2);
 }
 
-/// Proves: the binary's command line runs the hook on this host's kinds, stubs today, and exits
-/// with the step's code (1, `unsupported_kind`); started from a packaged path, the hook is run
-/// there and not handed to `current` as the daemon is.
+/// Proves: `--package-lock-wait-secs` reaches the hook's arguments as given, from 1 to 3600
+/// seconds, defaults to the daemon's own default, and 0 or 3601 is clap's usage error, exit 2.
+///
+/// Catches: a stage that cannot be given the daemon's lock wait, or one that takes no wait at
+/// all or more than a step may ask for.
+#[test]
+fn the_package_lock_wait_reaches_the_hook_within_its_range() {
+    let parse = |secs: &str| {
+        Cli::try_parse_from([
+            "hostkeeper",
+            "maintenance-hook",
+            "prepare",
+            "--params",
+            "-",
+            "--package-lock-wait-secs",
+            secs,
+        ])
+    };
+    for secs in [1, 42, MAX_PACKAGE_LOCK_WAIT_SECS] {
+        let cli = parse(&secs.to_string()).expect("parses");
+        let Command::MaintenanceHook(args) = cli.command else {
+            panic!("not the maintenance hook: {:?}", cli.command);
+        };
+        assert_eq!(args.package_lock_wait_secs, secs);
+    }
+    assert_eq!(DEFAULT_PACKAGE_LOCK_WAIT_SECS, 300);
+    for refused in ["0", "3601", "x"] {
+        let error = parse(refused).expect_err("out of range");
+        assert_eq!(error.kind(), ErrorKind::ValueValidation, "{refused}");
+        assert_eq!(error.exit_code(), 2);
+    }
+}
+
+/// Proves: the binary's command line runs the hook on this host and exits with the step's code
+/// (1: `verify` over the host's run record, not wired yet, finds the kind not applied, before
+/// any kind's work runs, so nothing of the test host is touched); started from a packaged path,
+/// the hook is run there and not handed to `current` as the daemon is.
 ///
 /// Catches: `maintenance-hook` dispatched to the daemon, or exec'd into another binary.
 #[test]
@@ -416,7 +454,7 @@ fn the_binary_runs_the_hook_and_exits_with_its_code() {
     let words = [
         OsString::from("hostkeeper"),
         "maintenance-hook".into(),
-        "prepare".into(),
+        "verify".into(),
         "--params".into(),
         file.clone().into_os_string(),
     ];
