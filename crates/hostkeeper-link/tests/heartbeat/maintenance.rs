@@ -27,6 +27,7 @@ fn full_report() -> pb::MaintenanceReport {
             build: "16B40".to_owned(),
             path: "/Applications/Xcode-16.1.app".to_owned(),
             selected: true,
+            foreign: false,
         }],
         mac: Some(pb::MacUpdateFacts {
             filevault: pb::FileVaultState::On.into(),
@@ -36,6 +37,7 @@ fn full_report() -> pb::MaintenanceReport {
                 present: true,
                 admin: false,
                 secure_token: true,
+                hidden: true,
             }),
             command_line_tools: Some(pb::CommandLineToolsState {
                 receipt: true,
@@ -149,12 +151,18 @@ fn a_report_is_counted_as_json_with_the_names_of_the_message() {
                 "build": "16B40",
                 "path": "/Applications/Xcode-16.1.app",
                 "selected": true,
+                "foreign": false,
             }],
             "mac": {
                 "filevault": "FILE_VAULT_STATE_ON",
                 "authrestart_supported": true,
                 "data_free_bytes": 1000,
-                "update_account": { "present": true, "admin": false, "secure_token": true },
+                "update_account": {
+                    "present": true,
+                    "admin": false,
+                    "secure_token": true,
+                    "hidden": true,
+                },
                 "command_line_tools": { "receipt": true, "files": false, "version": "16.0" },
                 "mdm_conflicts": ["com.apple.SoftwareUpdate"],
             },
