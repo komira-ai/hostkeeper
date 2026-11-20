@@ -5,7 +5,7 @@
 //! - the version `X.Y.Z` ([`Version`]) and the tag `v<X.Y.Z>` ([`Version::tag`]);
 //! - the text a shipped binary prints for `--version`, `hostkeeper X.Y.Z+<12 hex>`
 //!   ([`stamp_string`]), `hostkeeper-coordinator X.Y.Z+<12 hex>` and
-//!   `hostkeeper-coordinator-update X.Y.Z+<12 hex>` ([`stamp_of`]), and [`RELEASE_COMMIT`], the build-time input that carries
+//!   `hostkeeper-coordinator-update X.Y.Z+<12 hex>` and `hkssh X.Y.Z+<12 hex>` ([`stamp_of`]), and [`RELEASE_COMMIT`], the build-time input that carries
 //!   the commit;
 //! - the identity that signs every attestation: [`SIGNER_WORKFLOW`] on [`SIGNER_REF`] of
 //!   [`REPO`], on a hosted runner;
@@ -17,7 +17,7 @@
 //! and a release missing one is refused. macos-arm64 also ships the
 //! installer pkg of a Mac's first install ([`installer_name`]); the two Linux platforms also ship
 //! the coordinator ([`COORDINATOR`]) and the coordinator
-//! updater's ([`COORDINATOR_UPDATE`]). A release carries four
+//! updater's ([`COORDINATOR_UPDATE`]) and the operator's SSH client ([`HKSSH`]). A release carries four
 //! kinds of package ([`Package`]): hostkeeper's own, `hello`, the example service of
 //! `examples/hello`, hello's failing build, and `pxe`, the boot server of network install, a `.deb` for the
 //! two Linux platforms; each is a native package ([`Package::native_name`]) and the
@@ -113,6 +113,11 @@ pub(crate) const COORDINATOR: &str = "hostkeeper-coordinator";
 /// tarball with its SBOM.
 pub(crate) const COORDINATOR_UPDATE: &str = "hostkeeper-coordinator-update";
 
+/// The asset stem of the operator's SSH client, and the name of its binary: `hkctl ssh` runs it
+/// from beside the `hkctl` script or from the PATH. Released for the two Linux platforms only,
+/// as a tarball with its SBOM.
+pub(crate) const HKSSH: &str = "hkssh";
+
 /// The name of the boot server's service package (docs/design/two-programs.md section 6.1): its
 /// package name and its program `pxe`, which prints `pxe X.Y.Z` for `--version` (no commit
 /// stamp). Built for both Linux platforms, as a `.deb` alone.
@@ -130,11 +135,11 @@ pub(crate) const HKCTL: &str = hostkeeper_hkctl::PROGRAM;
 
 /// The binaries a release ships, by file name: each prints `<name> X.Y.Z+<12 hex>` for
 /// `--version` ([`stamp_of`]).
-pub(crate) const PROGRAMS: [&str; 3] = [PROGRAM, COORDINATOR, COORDINATOR_UPDATE];
+pub(crate) const PROGRAMS: [&str; 4] = [PROGRAM, COORDINATOR, COORDINATOR_UPDATE, HKSSH];
 
 /// The binaries `release check-binary` holds to their stamp ([`stamp_of`]): the shipped binaries
 /// of [`PROGRAMS`].
-pub(crate) const STAMPED: [&str; 3] = PROGRAMS;
+pub(crate) const STAMPED: [&str; 4] = PROGRAMS;
 
 /// The file listing the SHA-256 of every asset but itself and the bundles.
 pub(crate) const SUMS: &str = "SHA256SUMS";
@@ -378,7 +383,7 @@ pub(crate) fn stamp_string(version: &Version, commit: &Commit) -> String {
 
 /// The text the shipped binary `program` (one of [`STAMPED`]) prints for `--version`:
 /// `<program> X.Y.Z+<12 hex>`. The coordinator's is `hostkeeper-coordinator X.Y.Z+<12 hex>`, the coordinator updater's
-/// `hostkeeper-coordinator-update X.Y.Z+<12 hex>`.
+/// `hostkeeper-coordinator-update X.Y.Z+<12 hex>`, the SSH client's `hkssh X.Y.Z+<12 hex>`.
 pub(crate) fn stamp_of(program: &str, version: &Version, commit: &Commit) -> String {
     format!("{program} {version}+{}", commit.short())
 }
@@ -631,6 +636,8 @@ pub(crate) fn is_bundle(name: &str) -> bool {
 /// - `hostkeeper-coordinator-<v>-<p>.cdx.json`, its SBOM;
 /// - `hostkeeper-coordinator-update-<v>-<p>.tar.gz`, the coordinator updater's binary, and
 ///   `hostkeeper-coordinator-update-<v>-<p>.cdx.json`, its SBOM;
+/// - `hkssh-<v>-<p>.tar.gz`, the operator's SSH client binary, and `hkssh-<v>-<p>.cdx.json`, its
+///   SBOM;
 ///
 /// and on macOS `hostkeeper-<v>-macos-arm64.pkg`, the installer ([`installer_name`]), and
 /// `hostkeeper-bootstrap-<v>-macos-arm64.pkg`, the bootstrap pkg ([`bootstrap_installer_name`]);
@@ -641,7 +648,7 @@ pub(crate) fn is_bundle(name: &str) -> bool {
 /// `pxe_<v>_<deb>.deb` on each Linux platform (attested);
 /// hostkeeper's own are its `.deb` and its installer above, each listed once;
 ///
-/// the bundle of each binary tarball (the three programs'), Linux package, installer, native
+/// the bundle of each binary tarball (the four programs'), Linux package, installer, native
 /// package and image; when both Linux platforms are given, once, the coordinator's image index
 /// `hostkeeper-coordinator-<v>.image.json` ([`super::image_index`]) and its bundle; and once,
 /// [`NETBOOT`] (the boot sets of network install) and its bundle, `hkctl-<v>` (the command line,
@@ -678,9 +685,11 @@ pub(crate) fn asset_names(version: &Version, platforms: &[Platform]) -> Vec<Stri
                 format!("{COORDINATOR}-{version}-1.{rpm}.rpm"),
                 format!("{COORDINATOR}-{version}-{p}.image.tar"),
                 format!("{COORDINATOR_UPDATE}-{version}-{p}.tar.gz"),
+                format!("{HKSSH}-{version}-{p}.tar.gz"),
             ]);
             names.push(format!("{COORDINATOR}-{version}-{p}.cdx.json"));
             names.push(format!("{COORDINATOR_UPDATE}-{version}-{p}.cdx.json"));
+            names.push(format!("{HKSSH}-{version}-{p}.cdx.json"));
         }
         if platform == Platform::MacosArm64 {
             attested.push(installer_name(version));

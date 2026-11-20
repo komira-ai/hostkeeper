@@ -104,10 +104,11 @@ pub const RELEASE_TRIGGERS: [&str; 3] = ["schedule", "workflow_dispatch", "workf
 pub const REQUIRED_WORKFLOWS: [&str; 2] = ["artifacts", "ci"];
 
 /// The binaries a release ships, each of which the verify job of release.yml runs.
-pub const SHIPPED_BINARIES: [&str; 3] = [
+pub const SHIPPED_BINARIES: [&str; 4] = [
     "hostkeeper",
     "hostkeeper-coordinator",
     "hostkeeper-coordinator-update",
+    "hkssh",
 ];
 
 /// How each of the two builds of the coordinator's image in the image job of artifacts.yml
@@ -170,16 +171,17 @@ pub const PXE_BUILD: &str = "cargo build --locked --release --target \"$MUSL_TAR
 
 /// The binary tarballs the release carries, each as its program (the stem of its file name,
 /// `<program>-<version>-<platform>.tar.gz`) and the platforms it ships for: hostkeeper's on
-/// every platform, the coordinator's and the coordinator updater's on the two
+/// every platform, the coordinator's, the coordinator updater's and the SSH client's on the two
 /// Linux platforms. Each has a bundle and an attested SBOM
 /// (`<program>-<version>-<platform>.cdx.json`).
-pub const TARBALLS: [(&str, &[&str]); 3] = [
+pub const TARBALLS: [(&str, &[&str]); 4] = [
     ("hostkeeper", &PLATFORMS),
     ("hostkeeper-coordinator", &["linux-x86_64", "linux-arm64"]),
     (
         "hostkeeper-coordinator-update",
         &["linux-x86_64", "linux-arm64"],
     ),
+    ("hkssh", &["linux-x86_64", "linux-arm64"]),
 ];
 
 /// The release's other files that the attest job attests alone, each as its `subject-path` and

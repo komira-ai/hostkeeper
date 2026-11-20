@@ -189,6 +189,11 @@ fn the_binary_exits_with_the_codes_it_promises() {
         assert_eq!(out.status.code(), Some(0), "{flag}");
         assert!(!out.stdout.is_empty());
     }
+    let out = hkssh(&["--version"]);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        format!("hkssh {}\n", hostkeeper_hkssh::stamp::version())
+    );
     let out = hkssh(&["revoke"]);
     assert_eq!(out.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&out.stderr).contains("--operator"));

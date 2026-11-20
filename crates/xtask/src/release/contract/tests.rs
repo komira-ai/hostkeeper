@@ -230,7 +230,7 @@ fn asset_names_are_the_documented_contract() {
     let v = version("7.8.9");
     let names = asset_names(&v, &Platform::RELEASED);
     assert_eq!(names, baseline_for(&v));
-    assert_eq!(names.len(), 66);
+    assert_eq!(names.len(), 72);
     assert_eq!(documented_names(DOC, &v), Ok(names.clone()));
     // The document changed alone: a name dropped, or one renamed.
     let image = "hostkeeper-coordinator-<version>-<linux-platform>.image.tar\n";
@@ -289,7 +289,7 @@ fn asset_name_list_only_grows_but_for_the_withdrawn_names() {
 fn tag_and_version_string_formats_are_pinned() {
     // Catches: a tag that is not `v<X.Y.Z>`, a `--version` text other than
     // `hostkeeper X.Y.Z+<12 hex>` (`hostkeeper-coordinator ...` and
-    // `hostkeeper-coordinator-update ...` for the other shipped binaries), a shipped binary dropped, or a change of the signer identity.
+    // `hostkeeper-coordinator-update ...` and `hkssh ...` for the other shipped binaries), a shipped binary dropped, or a change of the signer identity.
     let v = version("0.1.27");
     let c = commit("0123456789abcdef0123456789abcdef01234567");
     assert_eq!(v.tag(), "v0.1.27");
@@ -301,6 +301,7 @@ fn tag_and_version_string_formats_are_pinned() {
             "hostkeeper 0.1.27+0123456789ab",
             "hostkeeper-coordinator 0.1.27+0123456789ab",
             "hostkeeper-coordinator-update 0.1.27+0123456789ab",
+            "hkssh 0.1.27+0123456789ab",
         ]
     );
     assert_eq!(RELEASE_COMMIT, "RELEASE_COMMIT");
@@ -425,8 +426,8 @@ fn the_attested_and_summed_names_partition_the_assets() {
     let v = version("0.1.3");
     let attested = attested_names(&v);
     let summed = summed_names(&v);
-    assert_eq!(attested.len(), 29);
-    assert_eq!(summed.len(), 36);
+    assert_eq!(attested.len(), 31);
+    assert_eq!(summed.len(), 40);
     // The boot sets of network install are summed and attested, with a bundle of their own, and
     // so is the command line, one script for every platform.
     assert!(summed.contains(&NETBOOT.to_owned()) & attested.contains(&NETBOOT.to_owned()));
@@ -627,6 +628,43 @@ fn a_linux_platform_ships_the_coordinator_updater_attested_with_its_sbom() {
             .any(|n| n.starts_with("hostkeeper-coordinator-update-")),
         "{macos:?}"
     );
+}
+
+#[test]
+fn a_linux_platform_ships_the_ssh_client_attested_with_its_sbom() {
+    // Catches: the operator's SSH client missing from a Linux platform (so `hkctl ssh` would find
+    // no `hkssh` to run), named other than `hkssh-<v>-<p>.tar.gz`, shipped without its bundle or
+    // its SBOM, an SBOM given a bundle of its own, or a macOS one.
+    let v = version("0.2.1");
+    for platform in [Platform::LinuxX86_64, Platform::LinuxArm64] {
+        let p = platform.name();
+        let names = asset_names(&v, &[platform]);
+        let client: Vec<&str> = names
+            .iter()
+            .map(String::as_str)
+            .filter(|n| n.starts_with("hkssh-"))
+            .collect();
+        assert_eq!(
+            client,
+            [
+                format!("hkssh-0.2.1-{p}.cdx.json"),
+                format!("hkssh-0.2.1-{p}.tar.gz"),
+                format!("hkssh-0.2.1-{p}.tar.gz.sigstore.json"),
+            ],
+            "{p}"
+        );
+    }
+    let attested = attested_names(&v);
+    let summed = summed_names(&v);
+    for p in ["linux-x86_64", "linux-arm64"] {
+        let tarball = format!("hkssh-0.2.1-{p}.tar.gz");
+        let sbom = format!("hkssh-0.2.1-{p}.cdx.json");
+        assert!(attested.contains(&tarball), "{tarball} is attested");
+        assert!(!attested.contains(&sbom), "{sbom} has no bundle");
+        assert!(summed.contains(&tarball) & summed.contains(&sbom), "{p}");
+    }
+    let macos = asset_names(&v, &[Platform::MacosArm64]);
+    assert!(!macos.iter().any(|n| n.starts_with("hkssh-")), "{macos:?}");
 }
 
 #[test]

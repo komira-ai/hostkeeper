@@ -9,7 +9,7 @@ use clap::{Args, Parser, Subcommand};
 #[derive(Debug, Parser)]
 #[command(
     name = "hkssh",
-    version,
+    version = crate::stamp::version(),
     about = "SSH to a host through the coordinator"
 )]
 pub struct Cli {
