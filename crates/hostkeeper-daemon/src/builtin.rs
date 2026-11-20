@@ -152,7 +152,9 @@ fn run(ports: &BuiltinPorts, step: Step, order: &UpdateOrder, bound: Bound) -> S
         Bound::Unbounded => u64::MAX,
     };
     match step {
-        Step::Prepare | Step::Cleanup | Step::Uninstall => BUILTIN_EXIT,
+        Step::Prepare | Step::Cleanup | Step::Uninstall | Step::Drain | Step::Resume => {
+            BUILTIN_EXIT
+        }
         // A first install has nothing to start again: the switch back removed its package.
         Step::Rollback if order.previous.is_none() => BUILTIN_EXIT,
         Step::Cutover | Step::Rollback => restart(ports, &manifest.run, bound_secs, step),

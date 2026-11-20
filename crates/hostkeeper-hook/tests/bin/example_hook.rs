@@ -47,6 +47,17 @@
 //!   `descendant.pid` there and parks; the hook goes on only after the child says it holds the
 //!   lock. The lock is free again only when the child is dead.
 //!
+//! `drain` takes the service out of service (`drained` in the world, and in the record the run
+//! that drained it) and returns once `work/` in the world is empty; with work left once the
+//! params' drain deadline has passed, it resumes the service, cuts no work, and exits `75`.
+//! `resume` puts the service back if the record says it was drained, and does nothing if not.
+//! Their defects: `drain-not-idempotent` and `resume-not-idempotent` (a second run writes again),
+//! `drain-ignores-deadline` (exits `0` with work left past the deadline), `drain-cuts-work`
+//! (empties `work/` at the deadline), `deadline-stays-drained` (exits `75` without resuming),
+//! `deadline-defers-idle` (exits `75` past the deadline with no work left),
+//! `resume-without-drain-writes` (writes `resumed` whether drained or not) and
+//! `resume-leaves-drained` (keeps `drained` in the world).
+//!
 //! Command line: `update-hook [--irreversible-cutover] [--defect=<name>] [--behaviour=<name>]...
 //! <step> [args]`, or the step first when the first argument is not `update-hook`.
 
@@ -55,6 +66,7 @@ use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
+use std::time::{Duration, SystemTime};
 
 use hostkeeper_hook::conformance::gate;
 use hostkeeper_hook::{Class, Invocation, Outcome, Params, Report, Step};
@@ -328,6 +340,101 @@ impl Hook {
         self.rec_get("stop_begun").is_some()
     }
 
+    /// Appends `line` to `name` in the world: a write that every run makes again.
+    fn world_append(&self, name: &str, line: &str) -> io::Result<()> {
+        self.gate();
+        let mut log = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.world.join(name))?;
+        writeln!(log, "{line}")
+    }
+
+    /// The work in flight: the entries of `work/` in the world.
+    fn work(&self) -> io::Result<Vec<PathBuf>> {
+        match fs::read_dir(self.world.join("work")) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
+            entries => entries?.map(|entry| entry.map(|e| e.path())).collect(),
+        }
+    }
+
+    /// Takes the service out of service and waits for its work to end, or, past the deadline
+    /// with work left, puts it back and defers.
+    fn drain(&self, params: &Params, mut report: Report) -> io::Result<(Outcome, Report)> {
+        let Some(run) = params.run_id().filter(|_| params.service().is_some()) else {
+            report.detail = Some("the params lack the service or the run".to_owned());
+            return Ok((Outcome::Failure, report));
+        };
+        self.world_set("drained", "1")?;
+        self.rec_set("drained", run)?;
+        if self.defect("drain-not-idempotent") {
+            self.world_append("drain-log", "drain")?;
+        }
+        let now = || {
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map_or(0, |since| since.as_secs())
+        };
+        let mut said = false;
+        loop {
+            let work = self.work()?;
+            let passed = params
+                .drain_deadline_unix()
+                .is_some_and(|deadline| now() >= deadline);
+            let defers_idle = passed && self.defect("deadline-defers-idle");
+            if work.is_empty() && !defers_idle {
+                return Ok(self.finish(Step::Drain, report));
+            }
+            if passed {
+                if self.defect("drain-ignores-deadline") {
+                    return Ok((Outcome::Success, report));
+                }
+                if self.defect("drain-cuts-work") {
+                    for job in work {
+                        self.gate();
+                        fs::remove_file(job)?;
+                    }
+                }
+                if !self.defect("deadline-stays-drained") {
+                    self.take(&self.world, "drained")?;
+                    self.take(&self.record, "drained")?;
+                }
+                report.detail = Some("the drain deadline passed with work in flight".to_owned());
+                report.retry_after_secs = Some(60);
+                return Ok((Outcome::Deferred, report));
+            }
+            // A wait for an event, not a time: the work is the fake service's, and it ends when
+            // a test removes it. The line tells the test that the hook is waiting; nothing
+            // judges how long the wait takes.
+            if !said {
+                eprintln!(
+                    "hostkeeper-hook-example: drain: waiting for {} piece of work",
+                    work.len()
+                );
+                said = true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Puts the service back if this hook drained it; changes nothing if it did not.
+    fn resume(&self) -> io::Result<()> {
+        if self.defect("resume-without-drain-writes") {
+            self.world_set("resumed", "1")?;
+        }
+        if self.rec_get("drained").is_none() {
+            return Ok(());
+        }
+        if self.defect("resume-not-idempotent") {
+            // Appends on every run and forgets nothing, so a second run writes again.
+            return self.world_append("resume-log", "resume");
+        }
+        if !self.defect("resume-leaves-drained") {
+            self.take(&self.world, "drained")?;
+        }
+        self.take(&self.record, "drained")
+    }
+
     fn run(&self, inv: &Invocation) -> io::Result<(Outcome, Report)> {
         let step = inv.step;
         let mut report = Report::default();
@@ -343,9 +450,18 @@ impl Hook {
             // Held to the end of the process.
             std::mem::forget(record);
         }
-        // Every step gets the same params file: the staged release and the target version.
+        // Every step gets the same params file: the staged release and the target version;
+        // `drain` and `resume` get one of their own, of a maintenance run.
         let params = Params::read(&inv.params.clone().unwrap_or_default())
             .map_err(|e| io::Error::other(e.to_string()))?;
+        match step {
+            Step::Drain => return self.drain(&params, report),
+            Step::Resume => {
+                self.resume()?;
+                return Ok(self.finish(step, report));
+            }
+            _ => {}
+        }
         if params.staged_release().is_none() || params.target_version().is_none() {
             report.detail = Some("the params lack the staged release or the target".to_owned());
             return Ok((Outcome::Failure, report));
@@ -546,7 +662,8 @@ impl Hook {
                 report.reversible = self.defect("reversible-flips") && seen;
             }
             // This hook has no `uninstall` step: its manifest would have no `uninstall` bound.
-            Step::Uninstall => return Ok((Outcome::Failure, report)),
+            // `drain` and `resume` ran above, with their own params.
+            Step::Uninstall | Step::Drain | Step::Resume => return Ok((Outcome::Failure, report)),
         }
         Ok(self.finish(step, report))
     }

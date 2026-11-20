@@ -323,7 +323,9 @@ fn hook(args: &[OsString]) -> Fallible<Outcome> {
         Step::Verify => verify(&ctx),
         Step::Rollback => rollback(&ctx),
         Step::Cleanup => cleanup(&ctx),
-        Step::Uninstall => Err("the fixture has no uninstall step".into()),
+        Step::Uninstall | Step::Drain | Step::Resume => {
+            Err(format!("the fixture has no {step} step").into())
+        }
     };
     // A step that cannot finish says so in its record, for the test to read, before it fails.
     if result.is_err() {

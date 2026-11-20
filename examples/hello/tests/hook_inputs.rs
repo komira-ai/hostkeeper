@@ -54,7 +54,7 @@ fn next_after_environment_failure(step: Step) -> Next {
         },
         Step::Rollback => Next::Report(Verdict::Halt),
         Step::Cleanup => Next::Report(failed(Phase::AfterCommit)),
-        Step::Uninstall => Next::Report(failed(Phase::BeforeCommit)),
+        Step::Uninstall | Step::Drain | Step::Resume => Next::Report(failed(Phase::BeforeCommit)),
     }
 }
 
