@@ -29,6 +29,7 @@ fn update(label: &str, title: &str, version: &str, restart: bool) -> ListedUpdat
         title: title.to_owned(),
         version: version.to_owned(),
         restart,
+        size: None,
     }
 }
 
@@ -37,6 +38,23 @@ fn installer(title: &str, version: &str, build: &str) -> FullInstaller {
         title: title.to_owned(),
         version: version.to_owned(),
         build: build.to_owned(),
+        size: None,
+    }
+}
+
+/// `update` of a listing line whose `Size` is `kib` KiB.
+fn sized(update: ListedUpdate, kib: u64) -> ListedUpdate {
+    ListedUpdate {
+        size: Some(kib * 1024),
+        ..update
+    }
+}
+
+/// `installer` of a listing line whose `Size` is `kib` KiB.
+fn sized_installer(installer: FullInstaller, kib: u64) -> FullInstaller {
+    FullInstaller {
+        size: Some(kib * 1024),
+        ..installer
     }
 }
 
@@ -68,7 +86,7 @@ fn macos(from: &str, to: &str, needs_reboot: bool, label: &str) -> pb::DueItem {
 }
 
 /// Proves a macOS 26 listing of a minor update that says `Action: restart` is read with its label,
-/// title, version and restart, the Command Line Tools beside it with no restart, and no line
+/// title, version, restart and size, the Command Line Tools beside it with no restart, and no line
 /// unknown; the minor update is due with a reboot, from the running version, and the tools are not.
 #[test]
 fn a_minor_update_with_a_restart_is_due_with_a_reboot() {
@@ -77,17 +95,23 @@ fn a_minor_update_with_a_restart_is_due_with_a_reboot() {
         listing,
         updates(
             vec![
-                update(
-                    "Command Line Tools for Xcode 26.4-26.4",
-                    "Command Line Tools for Xcode 26.4",
-                    "26.4",
-                    false,
+                sized(
+                    update(
+                        "Command Line Tools for Xcode 26.4-26.4",
+                        "Command Line Tools for Xcode 26.4",
+                        "26.4",
+                        false,
+                    ),
+                    912_346,
                 ),
-                update(
-                    "macOS Tahoe 26.6.1-25G110",
-                    "macOS Tahoe 26.6.1",
-                    "26.6.1",
-                    true,
+                sized(
+                    update(
+                        "macOS Tahoe 26.6.1-25G110",
+                        "macOS Tahoe 26.6.1",
+                        "26.6.1",
+                        true,
+                    ),
+                    3_215_472,
                 ),
             ],
             0,
@@ -105,7 +129,10 @@ fn a_macos_27_minor_update_is_due() {
     assert_eq!(
         listing,
         updates(
-            vec![update("macOS 27.2-26C45", "macOS 27.2", "27.2", true)],
+            vec![sized(
+                update("macOS 27.2-26C45", "macOS 27.2", "27.2", true),
+                3_670_016
+            )],
             0
         )
     );
@@ -122,11 +149,14 @@ fn a_minor_update_without_a_restart_is_due_with_no_reboot() {
     assert_eq!(
         listing,
         updates(
-            vec![update(
-                "macOS Tahoe 26.6.1 (a)-25G110a",
-                "macOS Tahoe 26.6.1 (a)",
-                "26.6.1 (a)",
-                false,
+            vec![sized(
+                update(
+                    "macOS Tahoe 26.6.1 (a)-25G110a",
+                    "macOS Tahoe 26.6.1 (a)",
+                    "26.6.1 (a)",
+                    false,
+                ),
+                98_304,
             )],
             0,
         )
@@ -166,8 +196,14 @@ fn a_listed_major_upgrade_is_due_only_when_allowed() {
         listing,
         updates(
             vec![
-                update("macOS Tahoe 26.7-25H62", "macOS Tahoe 26.7", "26.7", true),
-                update("macOS 27.1-26B70", "macOS 27.1", "27.1", true),
+                sized(
+                    update("macOS Tahoe 26.7-25H62", "macOS Tahoe 26.7", "26.7", true),
+                    4_718_592,
+                ),
+                sized(
+                    update("macOS 27.1-26B70", "macOS 27.1", "27.1", true),
+                    15_728_640,
+                ),
             ],
             0,
         )
@@ -183,7 +219,7 @@ fn a_listed_major_upgrade_is_due_only_when_allowed() {
     );
 }
 
-/// Proves the full installers of macOS 26 and 27 are read with title, version and build; on a
+/// Proves the full installers of macOS 26 and 27 are read with title, version, build and size; on a
 /// Mac of macOS 26 the installer of 27 is a major upgrade, due only when allowed and named by its
 /// title, and the installers of its own or a lower major version are never due.
 #[test]
@@ -192,9 +228,9 @@ fn a_full_installer_of_a_higher_major_version_is_due_only_when_allowed() {
     assert_eq!(
         on_26,
         installers(vec![
-            installer("macOS 27.1", "27.1", "26B70"),
-            installer("macOS Tahoe", "26.7", "25H62"),
-            installer("macOS Sequoia", "15.7.4", "24G517"),
+            sized_installer(installer("macOS 27.1", "27.1", "26B70"), 16_252_928),
+            sized_installer(installer("macOS Tahoe", "26.7", "25H62"), 15_204_352),
+            sized_installer(installer("macOS Sequoia", "15.7.4", "24G517"), 14_680_064),
         ])
     );
     assert_eq!(macos_due("26.6.1", &on_26, MacosMajor::NotDue), Vec::new());
@@ -206,8 +242,8 @@ fn a_full_installer_of_a_higher_major_version_is_due_only_when_allowed() {
     assert_eq!(
         on_27,
         installers(vec![
-            installer("macOS 27.2", "27.2", "26C45"),
-            installer("macOS Tahoe", "26.7", "25H62"),
+            sized_installer(installer("macOS 27.2", "27.2", "26C45"), 16_515_072),
+            sized_installer(installer("macOS Tahoe", "26.7", "25H62"), 15_204_352),
         ])
     );
     assert_eq!(macos_due("27.1", &on_27, MacosMajor::Due), Vec::new());
@@ -245,7 +281,10 @@ fn an_unknown_line_is_counted() {
     assert_eq!(
         listing,
         updates(
-            vec![update("macOS 27.2-26C45", "macOS 27.2", "27.2", true)],
+            vec![sized(
+                update("macOS 27.2-26C45", "macOS 27.2", "27.2", true),
+                3_670_016
+            )],
             4
         )
     );
@@ -396,4 +435,50 @@ fn the_flag_maps_to_the_setting() {
     assert_eq!(MacosMajor::from_flag(true), MacosMajor::Due);
     assert_eq!(MacosMajor::from_flag(false), MacosMajor::NotDue);
     assert_eq!(MacosMajor::default(), MacosMajor::NotDue);
+}
+
+/// Proves a `Size` is kept in bytes only when it is a whole number of KiB, on an update and on a
+/// full installer, and that any other size is kept unknown without counting the line: another
+/// unit, a fraction, no digits, a sign, and more bytes than `u64` holds.
+///
+/// Catches: a size in another unit read as KiB, or one too large wrapped to a small number, which
+/// would let the stage's free-space check pass on a guess.
+#[test]
+fn a_size_is_kept_only_in_whole_kib() {
+    let text = "* Label: kib\n\
+                \tTitle: macOS Tahoe 26.7, Version: 26.7, Size: 12KiB,\n\
+                * Label: mib\n\
+                \tTitle: macOS Tahoe 26.7, Version: 26.7, Size: 12MiB,\n\
+                * Title: macOS 27.1, Version: 27.1, Size: 3KiB, Build: 26B70\n\
+                * Title: macOS 27.1, Version: 27.1, Size: 1.5KiB, Build: 26B70\n";
+    assert_eq!(
+        parse_softwareupdate_list(text),
+        SoftwareUpdateListing {
+            updates: vec![
+                sized(update("kib", "macOS Tahoe 26.7", "26.7", false), 12),
+                update("mib", "macOS Tahoe 26.7", "26.7", false),
+            ],
+            installers: vec![
+                sized_installer(installer("macOS 27.1", "27.1", "26B70"), 3),
+                installer("macOS 27.1", "27.1", "26B70"),
+            ],
+            unparsed: 0,
+        }
+    );
+    assert_eq!(kib_bytes("0KiB"), Some(0));
+    assert_eq!(kib_bytes("4718592KiB"), Some(4_831_838_208));
+    let largest = u64::MAX / 1024;
+    assert_eq!(kib_bytes(&format!("{largest}KiB")), Some(largest * 1024));
+    for odd in [
+        "KiB",
+        "12",
+        "12 KiB",
+        "+12KiB",
+        "-12KiB",
+        "12kib",
+        &format!("{}KiB", largest + 1),
+        "99999999999999999999999KiB",
+    ] {
+        assert_eq!(kib_bytes(odd), None, "{odd}");
+    }
 }

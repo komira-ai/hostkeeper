@@ -151,8 +151,8 @@ impl MaintainParams {
         self.kinds.iter().copied()
     }
 
-    /// The whole `Maintain`, for the kinds' own fields (the Linux scope, the macOS path, the
-    /// Xcodes).
+    /// The whole `Maintain`, for the kinds' own fields (the Linux scope, the macOS path and whether
+    /// a major upgrade is allowed, the Xcodes).
     pub fn maintain(&self) -> &Maintain {
         &self.maintain
     }

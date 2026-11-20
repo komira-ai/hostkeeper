@@ -29,7 +29,8 @@
 //!   [`MAINTENANCE_CORRUPT_FILE`]. A key this binary does not know is ignored, so a later release
 //!   may add one under the same schema.
 //!
-//! Schema 1 (every key is written; `reboot_under_way`, `deferred` and `halted` only when set):
+//! Schema 1 (every key is written; `reboot_under_way`, `deferred`, `halted` and `put_back` only
+//! when set):
 //!
 //! ```json
 //! {
@@ -47,7 +48,8 @@
 //!   "step": "apply",
 //!   "running": true,
 //!   "deferred": "drain tierstore: the drain deadline passed",
-//!   "halted": "check: exit 1"
+//!   "halted": "check: exit 1",
+//!   "put_back": "apply linux: exit 1"
 //! }
 //! ```
 //!
@@ -63,7 +65,10 @@
 //! - `deferred`: why the turn is deferred (stage failed, or a drain's deadline passed): the
 //!   drained services are put back and the turn ends deferred. `halted`: why the turn halted (a
 //!   step from drain on failed): nothing more runs, not even a `resume`, and the step stays the
-//!   one that failed.
+//!   one that failed, until an operator's Retry or Put back lifts it.
+//! - `put_back`: the reason of the halt an operator's Put back ended: the drained services were
+//!   put back and the turn ended with each kind as far as it got. A binary that does not know the
+//!   key reads the record as the same turn without its note.
 //!
 //! # The machine
 //!

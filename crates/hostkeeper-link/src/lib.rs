@@ -32,7 +32,8 @@
 //!
 //! [`CoordinatorGet`] ([`fetch`]) reads a path of the coordinator's agent listener over the same
 //! mutual TLS and streams the body to the caller's sink, through the same [`Transport`]: the
-//! daemon's mirror of a private repository reads its files with it.
+//! daemon's mirror of a private repository reads its files with it. `get_from` reads a file from
+//! a given byte on (a 206), to resume a download.
 //!
 //! The coordinator's repository sets ([`PushedSet`]) go to the daemon's [`RepositorySink`], which
 //! the loop calls only while the coordinator advertises [`Feature::RepositoriesV1`]. Its host
