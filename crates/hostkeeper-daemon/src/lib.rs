@@ -100,6 +100,9 @@
 //!   a maintenance run: the parameters of the run's `maintain` order, the work of each kind
 //!   (`macos`, `xcode`, `linux`, `reboot`) found by the host's platform, and the reboot recorded
 //!   in the run record before it is asked for.
+//! - [`maintenance_linux`]: the `linux` and `reboot` kinds of that hook on a Linux host: the
+//!   install of the host's package manager (`apt`, `dnf` or `apk`), the question whether the host
+//!   then needs a reboot, the kernel it runs after the reboot, and the reboot itself.
 //! - [`stamp`]: the version `hostkeeper --version` prints, with the commit of a release build.
 //! - [`refusal`]: the closed set of reason tokens.
 //! - [`link_adapters`]: the daemon as the executor, the held halts, the installed services and
@@ -162,6 +165,7 @@ pub mod maintenance_dnf;
 pub mod maintenance_facts;
 pub mod maintenance_hook;
 pub mod maintenance_host;
+pub mod maintenance_linux;
 pub mod maintenance_own;
 pub mod maintenance_reboot;
 pub mod mirror;
