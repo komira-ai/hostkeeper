@@ -33,6 +33,13 @@
 //!    a group of one is taken, and a larger group still keeps `min_serving` while its hosts' turns
 //!    overlap.
 //!
+//! A host that passes every rule and whose turn holds `macos` is then read against its last kept
+//! report ([`crate::maintenance_mac::macos_skip`]): when it may not be ordered `macos`
+//! (`mdm_conflict`, `no_update_account`, `filevault_not_ready`), it is sent nothing at this
+//! heartbeat ([`Verdict::Skip`]), and the caller stores why on its turn: without `macos`, the turn
+//! waits for its other kinds, which a later heartbeat starts; with only `macos`, the turn ends
+//! skipped. A host's other kinds are never held back by these rules.
+//!
 //! A host that passes every rule is sent a `maintain` with the action `RUN`, the order id
 //! `maintain-<run id>` ([`order_id`]) and try 1 ([`Ordered`]); the caller stores its step as
 //! [`Step::Staging`] in the same change, so it holds its batch place and is out of the serving
@@ -55,7 +62,7 @@ use hostkeeper_wire::HostId;
 use hostkeeper_wire::wire::Health;
 
 use crate::fleet::{Fleet, Node};
-use crate::maintenance::FEATURE;
+use crate::maintenance::{FEATURE, Kept};
 use crate::maintenance_effective::effective_of;
 use crate::maintenance_policy::{LinuxScope, Maintenance as Policy};
 use crate::maintenance_runs::{Kind, Run, RunHost, Skip, Step};
@@ -116,6 +123,20 @@ pub(crate) enum Verdict {
     Waits(Hold),
     /// Start the host's turn: send it the order and store its step as staging.
     Start(Ordered),
+    /// The host's turn holds `macos`, which its report says it may not be ordered: send it
+    /// nothing, and store why on its turn.
+    Skip(Skipping),
+}
+
+/// The `macos` of a host's turn left out at a heartbeat, and why.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Skipping {
+    /// The run's id.
+    pub(crate) run_id: String,
+    /// The group the run took the host in; empty: none.
+    pub(crate) host_group: String,
+    /// Why.
+    pub(crate) why: Skip,
 }
 
 /// A `maintain` decided for a host, with where its turn is held.
@@ -239,10 +260,20 @@ pub(crate) fn decide(view: &View<'_>, id: &HostId) -> Verdict {
         } => Verdict::InTurn {
             resend: unreported.then(|| ordered(view, &runs[run], id)),
         },
-        Turn::Waiting { run, host } => match start(view, &runs[run], &runs[run].hosts[host]) {
-            Ok(()) => Verdict::Start(ordered(view, &runs[run], id)),
-            Err(hold) => Verdict::Waits(hold),
-        },
+        Turn::Waiting { run, host } => {
+            let (run, host) = (&runs[run], &runs[run].hosts[host]);
+            match start(view, run, host) {
+                Ok(()) => match macos_skip(view, id, host) {
+                    Some(why) => Verdict::Skip(Skipping {
+                        run_id: run.id.clone(),
+                        host_group: host.host_group.clone(),
+                        why,
+                    }),
+                    None => Verdict::Start(ordered(view, run, id)),
+                },
+                Err(hold) => Verdict::Waits(hold),
+            }
+        }
     }
 }
 
@@ -288,6 +319,20 @@ fn start(view: &View<'_>, run: &Run, host: &RunHost) -> Result<(), Hold> {
         return Err(Hold::Serving);
     }
     Ok(())
+}
+
+/// Why the host `id`, whose turn is `host`, may not be ordered the `macos` its turn holds, by its
+/// last kept report; none when its turn holds no `macos`, or it may.
+fn macos_skip(view: &View<'_>, id: &HostId, host: &RunHost) -> Option<Skip> {
+    if !host.kinds.contains(&Kind::Macos) {
+        return None;
+    }
+    let report = view
+        .fleet
+        .node(id)
+        .and_then(|node| node.maintenance.as_ref())
+        .map(Kept::report);
+    crate::maintenance_mac::macos_skip(report)
 }
 
 /// Whether the waiting `host` may be started at all now, by what it is and does, whatever its

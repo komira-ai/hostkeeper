@@ -273,6 +273,21 @@ fn skip_names_and_proto() {
         ),
         (Skip::Held, "held", MaintenanceSkip::Held),
         (Skip::Excluded, "excluded", MaintenanceSkip::Excluded),
+        (
+            Skip::MdmConflict,
+            "mdm_conflict",
+            MaintenanceSkip::MdmConflict,
+        ),
+        (
+            Skip::NoUpdateAccount,
+            "no_update_account",
+            MaintenanceSkip::NoUpdateAccount,
+        ),
+        (
+            Skip::FilevaultNotReady,
+            "filevault_not_ready",
+            MaintenanceSkip::FilevaultNotReady,
+        ),
     ];
     assert_eq!(Skip::ALL.len(), expected.len());
     for (skip, name, proto) in expected {

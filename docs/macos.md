@@ -442,6 +442,22 @@ Nothing is installed or downloaded. A program that does not run, exits non-zero 
 its deadline (15 minutes for `softwareupdate`), or a property list that cannot be read, fails the look: the report keeps what the last look
 that succeeded found and names the collector and the step in `look_failed`.
 
+The coordinator orders a Mac a `macos` update only while its last report allows it
+(`crates/hostkeeper-coordinator/src/maintenance_mac.rs`), read when `Maintenance.Schedule` takes the
+Mac in a run and again at the heartbeat that would start its turn. The first that applies is the
+reason, shown as the host's `skipped_because` by `Schedule` and `Get`:
+
+| Reason | When |
+|---|---|
+| `mdm_conflict` | `mdm_conflicts` names anything |
+| `no_update_account` | the update account is absent, not an administrator or without a Secure Token, or the report carries no Mac facts |
+| `filevault_not_ready` | FileVault is not reported off: the report does not yet say whether the update account is a FileVault user, so a Mac with FileVault on is not ordered `macos` even when it can restart authenticated |
+
+Only `macos` is left out: the Mac's other kinds of the same run, an `xcode` install, still go, and
+the Mac is shown `skipped` only when `macos` was all its turn held. A major upgrade the Mac reports
+counts as due only when its group's `macos_major` is true, and the `maintain` order carries that
+setting, so the daemon stages a major upgrade only for such a group.
+
 ### Release and installer pkg
 
 Every release ships macos-arm64 beside the two Linux platforms: the binary tarball
