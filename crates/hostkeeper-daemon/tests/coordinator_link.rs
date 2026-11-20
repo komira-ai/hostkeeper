@@ -309,8 +309,11 @@ fn the_shipped_heartbeat_reaches_the_coordinator_and_its_order_reaches_the_daemo
     let files = files_under(apt.rig.scratch.path());
     enroll(&files.pki, &ca.host(), &ca);
     let (dispatch, jobs) = kept();
+    // No maintenance look: the coordinator advertises `maintenance-v1`, and the shipped source
+    // would run the runner's own package manager.
     let links = hostkeeper_daemon::links::Links {
         dispatch,
+        maintenance: None,
         ..host_links(
             &daemon,
             &files,

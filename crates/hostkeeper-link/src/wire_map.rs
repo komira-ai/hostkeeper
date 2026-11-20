@@ -83,6 +83,7 @@ pub(crate) fn heartbeat(beat: &Heartbeat) -> Result<wire::Heartbeat, Unsendable>
         cert_not_after_unix: beat.renewal.cert_not_after_unix,
         last_renew_error: beat.renewal.last_renew_error.clone(),
         record_try: None,
+        maintenance: None,
     })
 }
 

@@ -237,6 +237,7 @@ pub fn wire_beat(beat: &Heartbeat) -> wire::Heartbeat {
         cert_not_after_unix: None,
         last_renew_error: None,
         record_try: None,
+        maintenance: None,
     }
 }
 

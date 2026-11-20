@@ -246,7 +246,11 @@ message HeartbeatRequest {
   // the last one it read; a heartbeat without one leaves the one kept as it is.
   optional BmcReport bmc = 17;
   // What the host runs, what is due on it and the maintenance run it holds (maintenance.proto).
-  // For a daemon that announces `maintenance-v1`, over gRPC only; a Linux daemon sends the facts of its last look.
+  // For a daemon that announces `maintenance-v1`; a Linux daemon sends the facts of its last look,
+  // over gRPC. The coordinator keeps the last report it read (from a gRPC heartbeat, or, as base64
+  // of the encoding of this message, from the key `maintenance` of a JSON heartbeat); a report that
+  // breaks a bound of `MaintenanceReport` is dropped and the one kept stays, and a heartbeat without
+  // one leaves the one kept as it is.
   optional MaintenanceReport maintenance = 18;
 }
 

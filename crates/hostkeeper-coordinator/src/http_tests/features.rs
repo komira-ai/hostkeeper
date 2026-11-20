@@ -152,17 +152,18 @@ async fn an_agent_that_announced_features_gets_the_supported_subset() {
     );
 }
 
-/// Catches: `maintenance-v1` advertised before this coordinator reads a maintenance report or
-/// sends a `maintain` order: a coordinator that advertises everything it handles answers an
-/// agent that announces it with the other names it announced, and not it.
+/// Proves: `maintenance-v1` is advertised, so an agent that announces it with another name is
+/// answered both, in the coordinator's order.
+///
+/// Catches: a feature that is read and kept but not advertised, which no daemon would announce.
 #[tokio::test]
-async fn maintenance_v1_is_not_advertised() {
-    assert!(!FEATURES.contains(&crate::maintenance::FEATURE));
+async fn maintenance_v1_is_advertised() {
+    assert!(FEATURES.contains(&crate::maintenance::FEATURE));
     let rig = rig("http-features-maintenance", FEATURES).await;
     let announcing = beat("2.0", r#","agent_features":["maintenance-v1","halt-v1"]"#);
     assert_eq!(
         beat_text(&rig, "d1", "daemon", &announcing).await,
-        r#"{"reply":"nothing","features":["halt-v1"]}"#
+        r#"{"reply":"nothing","features":["halt-v1","maintenance-v1"]}"#
     );
 }
 
@@ -292,6 +293,9 @@ async fn advertised_features_equal_the_handled_set() {
         } else if *name == crate::prerequisites::FEATURE {
             // The host prerequisites of a host go only in the answer over gRPC.
             crate::prerequisites::tests::prerequisites_v1_is_acted_on();
+        } else if *name == crate::maintenance::FEATURE {
+            // The report of a host is kept and shown, whatever the route.
+            crate::maintenance::tests::maintenance_v1_is_acted_on();
         } else if let Some(extra) = uses.get(name) {
             let without = typed_text(&rig, "d1", "daemon", &beat("1.0", &announce)).await;
             let with_it = beat("1.0", &format!("{announce}{extra}"));
@@ -314,6 +318,7 @@ async fn advertised_features_equal_the_handled_set() {
     handled.push(crate::operator_keys::FEATURE);
     handled.push(crate::ssh_heartbeat::FEATURE);
     handled.push(crate::prerequisites::FEATURE);
+    handled.push(crate::maintenance::FEATURE);
     handled.sort_unstable();
     proven.sort_unstable();
     assert_eq!(proven, handled);
