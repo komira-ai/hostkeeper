@@ -3,9 +3,8 @@
 // `MaintenanceReport`) and the arguments of the `maintain` order (`Order.maintain`, `Maintain`).
 // The rest of the package is agent.proto (`Heartbeat`, `Enroll`, `Poll` and `Renew` of the
 // `Coordinator` service), which imports this file; this file is the same package and API, kept
-// apart to shorten agent.proto. A Linux daemon and a Mac's send a report to a coordinator that
-// advertises `maintenance-v1` (a Mac's, today, its Xcodes, its update account and its
-// device-management conflicts); a coordinator keeps the last report a daemon that announces it sent
+// apart to shorten agent.proto. A Linux or Mac daemon sends a report to a coordinator that
+// advertises `maintenance-v1`; a coordinator keeps the last report a daemon that announces it sent
 // (over gRPC, or over the JSON route as base64 of its encoding in the key `maintenance`) and shows
 // it in the operator API. No daemon runs a `maintain` and no coordinator sends one yet.
 //

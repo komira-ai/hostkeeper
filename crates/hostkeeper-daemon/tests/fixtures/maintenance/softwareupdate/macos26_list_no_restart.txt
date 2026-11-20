@@ -1,0 +1,6 @@
+Software Update Tool
+
+Finding available software
+Software Update found the following new or updated software:
+* Label: macOS Tahoe 26.6.1 (a)-25G110a
+	Title: macOS Tahoe 26.6.1 (a), Version: 26.6.1 (a), Size: 98304KiB, Recommended: YES, 

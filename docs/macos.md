@@ -408,6 +408,40 @@ each of `softwareupdate`'s streams and the labels it listed that hold `Command L
 report is `host.heartbeat.prerequisites` in `hk hosts get`
 ([operations/host-prerequisites.md](operations/host-prerequisites.md)).
 
+### Maintenance facts
+
+A Mac's daemon looks at its Mac for maintenance after every start and every hour, on a worker that
+never holds up a heartbeat, and reports what it found to a coordinator that advertises
+`maintenance-v1` ([design/maintenance-updates.md](design/maintenance-updates.md) sections 1 and
+4.1), as a Linux host does. Five collectors read it, in this order, each program as root with an
+empty environment, no standard input, a deadline and capped output:
+
+- `macos` (`crates/hostkeeper-daemon/src/maintenance_macos.rs`): `macOS`, its version and build
+  from `sw_vers`, the hardware serial from `ioreg`, and the macOS updates `softwareupdate --list`
+  names. The listing is read by one parser, `parse_softwareupdate_list`
+  (`maintenance_softwareupdate.rs`), pinned by fixtures; a line it does not know is counted in the
+  report's `unparsed_lines`. A macOS update of the running major version is due, with a reboot when
+  it says `Action: restart`. A major upgrade is never due unless the daemon runs with
+  `--maintenance-macos-major`; then `softwareupdate --list-full-installers` is listed too and the
+  newest major upgrade of either listing is due.
+- `mac` (`maintenance_mac.rs`): FileVault's state (`fdesetup status`) and whether it can restart
+  authenticated (`fdesetup supportsauthrestart`), the free bytes of `/System/Volumes/Data`
+  (`statvfs`), and the Command Line Tools: their receipt and its version (`pkgutil --pkg-info`) and
+  whether their compiler is on disk.
+- `xcode` (`maintenance_xcode.rs`): each `/Applications/Xcode*.app`, its version and build from
+  `Contents/version.plist`, whether `xcode-select -p` names it, and `foreign` when its directory
+  is not `Xcode-<version>.app`. The daemon reports no Xcode due; the coordinator decides.
+- `update-account` (`maintenance_account.rs`): the update account's name from its root-only file,
+  then whether it exists, is hidden and is an administrator (`dscl`) and holds a Secure Token
+  (`sysadminctl -secureTokenStatus`). Its password is never kept, passed or reported.
+- `mdm` (`maintenance_mdm.rs`): the device-management settings of the design's section 5.8 found
+  in `/Library/Managed Preferences`, in the software-update declarations the Mac holds, and an
+  Xcode the App Store installed, each by name in `mdm_conflicts`.
+
+Nothing is installed or downloaded. A program that does not run, exits non-zero or does not end by
+its deadline (15 minutes for `softwareupdate`), or a property list that cannot be read, fails the look: the report keeps what the last look
+that succeeded found and names the collector and the step in `look_failed`.
+
 ### Release and installer pkg
 
 Every release ships macos-arm64 beside the two Linux platforms: the binary tarball

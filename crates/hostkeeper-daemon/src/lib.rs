@@ -90,11 +90,13 @@
 //!   platform's list), which are [`maintenance_collect`]'s `Collector`s: [`maintenance_host`] (the
 //!   OS, the kernels, the boot), [`maintenance_reboot`] (a reboot the host asks for) and the
 //!   package managers [`maintenance_apt`], [`maintenance_dnf`] and [`maintenance_apk`], with
-//!   [`maintenance_own`] naming the packages hostkeeper itself installs, which are never due; on
-//!   a Mac [`maintenance_xcode`] (the Xcodes installed and the one selected),
-//!   [`maintenance_account`] (the update account's state) and [`maintenance_mdm`] (the
-//!   device-management settings that conflict with a run), reading property lists through
-//!   [`maintenance_plist`].
+//!   [`maintenance_own`] naming the packages hostkeeper itself installs, which are never due; on a
+//!   Mac, [`maintenance_macos`] (`sw_vers`, the hardware serial, and the macOS updates
+//!   `softwareupdate` lists, read by [`maintenance_softwareupdate`]), [`maintenance_mac`]
+//!   (FileVault, the data volume's free space, the Command Line Tools), [`maintenance_xcode`] (the
+//!   Xcodes installed and the one selected), [`maintenance_account`] (the update account's state)
+//!   and [`maintenance_mdm`] (the device-management settings that conflict with a run), reading
+//!   property lists through [`maintenance_plist`].
 //! - [`update_account`]: a Mac's update account, read from its root-only file, and the update
 //!   call, which gives its password to the program on its standard input alone.
 //! - [`observer`]: what [`Daemon::status`] reports of a running service.
@@ -169,10 +171,13 @@ pub mod maintenance_dnf;
 pub mod maintenance_facts;
 pub mod maintenance_hook;
 pub mod maintenance_host;
+pub mod maintenance_mac;
+pub mod maintenance_macos;
 pub mod maintenance_mdm;
 pub mod maintenance_own;
 pub mod maintenance_plist;
 pub mod maintenance_reboot;
+pub mod maintenance_softwareupdate;
 pub mod maintenance_state;
 pub mod maintenance_xcode;
 pub mod mirror;

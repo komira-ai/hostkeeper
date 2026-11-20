@@ -4,8 +4,10 @@
 //! A Linux host, under systemd or OpenRC, reads the host's facts ([`HostFacts`]), whether it
 //! needs a reboot ([`RebootNeed`]) and the updates its package manager lists: `apt-get` when the
 //! host has it, else `dnf`, else `apk`; a host with none of the three has no package collector. A
-//! Mac reads its Xcodes ([`Xcodes`]), its update account ([`UpdateAccountFacts`]) and the
-//! device-management settings that conflict with a run ([`MdmConflicts`]).
+//! Mac reads what it runs and which macOS updates are due ([`Macos`], under the host's
+//! [`MacosMajor`]), what an update needs of it ([`MacReadiness`]), its Xcodes ([`Xcodes`]), its
+//! update account ([`UpdateAccountFacts`]) and the device-management settings that conflict with a
+//! run ([`MdmConflicts`]).
 
 use hostkeeper_launchd::PlatformKind;
 
@@ -15,25 +17,30 @@ use crate::maintenance_apt::{self, Apt};
 use crate::maintenance_collect::{Collector, HostRoot};
 use crate::maintenance_dnf::{self, Dnf};
 use crate::maintenance_host::HostFacts;
+use crate::maintenance_mac::MacReadiness;
+use crate::maintenance_macos::Macos;
 use crate::maintenance_mdm::MdmConflicts;
 use crate::maintenance_reboot::RebootNeed;
+use crate::maintenance_softwareupdate::MacosMajor;
 use crate::maintenance_xcode::Xcodes;
 
 /// The collectors of a host of `kind`, over the host's own programs and files, in the order its
-/// look reads them.
+/// look reads them; a Mac's under `major`.
 #[must_use]
-pub fn at_host(kind: PlatformKind) -> Vec<Box<dyn Collector>> {
+pub fn at_host(kind: PlatformKind, major: MacosMajor) -> Vec<Box<dyn Collector>> {
     match kind {
         PlatformKind::Linux | PlatformKind::Openrc => linux_under(&HostRoot::host()),
-        PlatformKind::Macos => mac(),
+        PlatformKind::Macos => mac(major),
     }
 }
 
-/// The collectors of a Mac, over its own programs and files: its Xcodes, its update account and
-/// its device-management conflicts.
+/// The collectors of a Mac, over its own programs and files: `macos` under `major`, `mac`, then
+/// its Xcodes, its update account and its device-management conflicts.
 #[must_use]
-pub fn mac() -> Vec<Box<dyn Collector>> {
+pub fn mac(major: MacosMajor) -> Vec<Box<dyn Collector>> {
     vec![
+        Box::new(Macos::at_host(major)),
+        Box::new(MacReadiness::at_host()),
         Box::new(Xcodes::at_host()),
         Box::new(UpdateAccountFacts::at_host()),
         Box::new(MdmConflicts::at_host()),
