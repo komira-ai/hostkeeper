@@ -87,9 +87,9 @@ distribution with no entry it can install shows `no_build_for_host`, as today; n
 path (the grammar of `hostkeeper_config::names::check_path`) of a file the package installs; the elements after it are
 leading arguments. A tierstore entry with `["/usr/bin/tierstore", "update-hook"]` runs `/usr/bin/tierstore update-hook
 <step> [<version dir>] --params <file>`, in a transient unit under the step's bound: the contract of
-`crates/hostkeeper-hook` is unchanged (the steps `prepare`, `cutover`, `verify`, `rollback`, `cleanup`, `uninstall` and
-`boot`, the exit codes, the last line, the params file). A service ships no wrapper for it. An empty `command` gets the
-built-in steps (packages-lifecycle.md section 6.3), and `hook.boot` needs a command, for every installer. The hook's
+`crates/hostkeeper-hook` is unchanged (the steps `prepare`, `cutover`, `verify`, `rollback`, `cleanup`, `uninstall`,
+`boot`, `drain` and `resume`, the exit codes, the last line, the params file). A service ships no wrapper for it. An empty `command` gets the
+built-in steps (packages-lifecycle.md section 6.3), and `hook.boot`, `hook.drain` and `hook.resume` need a command, for every installer. The hook's
 bounds, `timeout_secs`, `verify_deadline_secs`, `boot`, `promotion_ceiling_secs` and `cleanup_retries`, stay in the
 manifest's `Hook`.
 
@@ -145,7 +145,7 @@ leaves any link already there. At `cutover` and at every daemon start it starts 
 **What the daemon checks before it runs anything**, in order, each before the next reads a byte:
 
 1. **The order**: the entry's shape and kind, the installer listed, `min_hostkeeper`, the manifest's checks
-   (packages.md section 4.4), `hook.command`'s first element absolute and `hook.boot` only with a command.
+   (packages.md section 4.4), `hook.command`'s first element absolute and `hook.boot`, `hook.drain` and `hook.resume` only with a command.
 2. **The bytes**: for `apt`, the suite's signature by the host's keyring, the stanza's `SHA256` equal to the pin and
    its `Size` within bounds, the simulation, the downloaded file hashed equal to the pin (section 4.3); for
    `macos-pkg`, the size and digest equal to the pin, then the signature's leaf among the host's signers (section 4.7).

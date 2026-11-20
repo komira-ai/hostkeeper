@@ -4,7 +4,16 @@
 export namespace hostkeeper_release_v1 {
   export interface Blob { digest?: string; bytes?: string; locations?: hostkeeper_release_v1.Location[]; }
   export interface Container { unit?: string; args?: string[]; ports?: hostkeeper_release_v1.Port[]; volumes?: hostkeeper_release_v1.Volume[]; }
-  export interface Hook { command?: string[]; boot?: string; timeoutSecs?: hostkeeper_release_v1.StepBounds; verifyDeadlineSecs?: string; promotionCeilingSecs?: string; cleanupRetries?: number; }
+  export interface Hook {
+    command?: string[];
+    boot?: string;
+    timeoutSecs?: hostkeeper_release_v1.StepBounds;
+    verifyDeadlineSecs?: string;
+    promotionCeilingSecs?: string;
+    cleanupRetries?: number;
+    drain?: string;
+    resume?: string;
+  }
   export interface InstallerBounds { stageSecs?: string; activateSecs?: string; removeSecs?: string; }
   export interface Location { store?: string; locator?: string; }
   export interface Manifest {
