@@ -92,8 +92,11 @@
 //!   package managers [`maintenance_apt`], [`maintenance_dnf`] and [`maintenance_apk`], with
 //!   [`maintenance_own`] naming the packages hostkeeper itself installs, which are never due; on a
 //!   Mac, [`maintenance_macos`] (`sw_vers`, the hardware serial, and the macOS updates
-//!   `softwareupdate` lists, read by [`maintenance_softwareupdate`]) and [`maintenance_mac`]
-//!   (FileVault, the data volume's free space, the Command Line Tools).
+//!   `softwareupdate` lists, read by [`maintenance_softwareupdate`]), [`maintenance_mac`]
+//!   (FileVault, the data volume's free space, the Command Line Tools), [`maintenance_xcode`] (the
+//!   Xcodes installed and the one selected), [`maintenance_account`] (the update account's state)
+//!   and [`maintenance_mdm`] (the device-management settings that conflict with a run), reading
+//!   property lists through [`maintenance_plist`].
 //! - [`update_account`]: a Mac's update account, read from its root-only file, and the update
 //!   call, which gives its password to the program on its standard input alone.
 //! - [`observer`]: what [`Daemon::status`] reports of a running service.
@@ -103,8 +106,9 @@
 //!   only forwards to it.
 //! - [`maintenance_hook`]: `hostkeeper maintenance-hook <prepare|cutover|verify>`, the OS work of
 //!   a maintenance run: the parameters of the run's `maintain` order, the work of each kind
-//!   (`macos`, `xcode`, `linux`, `reboot`) found by the host's platform, and the reboot recorded
-//!   in the run record before it is asked for.
+//!   (`macos`, `xcode`, `linux`, `reboot`) found by the host's platform, the reboot recorded
+//!   in the run record before it is asked for, and the Linux kinds' `verify`: the host booted
+//!   again, nothing of the run still due and every service healthy.
 //! - [`maintenance_linux`]: the `linux` and `reboot` kinds of that hook on a Linux host: the
 //!   install of the host's package manager (`apt`, `dnf` or `apk`), the question whether the host
 //!   then needs a reboot, the kernel it runs after the reboot, and the reboot itself.
@@ -162,6 +166,7 @@ pub mod mac_config;
 pub mod mac_files;
 pub mod mac_ssh;
 pub mod macos_pkg;
+pub mod maintenance_account;
 pub mod maintenance_apk;
 pub mod maintenance_apt;
 pub mod maintenance_collect;
@@ -173,10 +178,13 @@ pub mod maintenance_host;
 pub mod maintenance_linux;
 pub mod maintenance_mac;
 pub mod maintenance_macos;
+pub mod maintenance_mdm;
 pub mod maintenance_own;
+pub mod maintenance_plist;
 pub mod maintenance_reboot;
 pub mod maintenance_softwareupdate;
 pub mod maintenance_state;
+pub mod maintenance_xcode;
 pub mod mirror;
 pub mod node;
 pub mod notify;

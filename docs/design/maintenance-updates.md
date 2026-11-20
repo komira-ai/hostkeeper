@@ -1,6 +1,6 @@
 # Scheduled maintenance updates
 
-Status: design; the Linux report of sections 1 and 4.1 is built (`crates/hostkeeper-daemon/src/maintenance_facts.rs`), and on a Mac its macOS facts and due macOS updates, FileVault, the data volume's free space and the Command Line Tools (`maintenance_macos.rs`, `maintenance_mac.rs`); nothing else. The owner's answers of 2026-11-19 are in: the Mac's update account (section 5.5) and the first-class Linux path
+Status: design; the Linux report of sections 1 and 4.1 is built (`crates/hostkeeper-daemon/src/maintenance_facts.rs`), and on a Mac its macOS facts and due macOS updates, FileVault, the data volume's free space, the Command Line Tools, its Xcodes, its update account and the settings of section 5.8 (`maintenance_macos.rs`, `maintenance_mac.rs`, `maintenance_xcode.rs`, `maintenance_account.rs`, `maintenance_mdm.rs`), as are the maintenance hook's steps, the Linux kinds' `cutover` (`maintenance_linux.rs`) and their `verify` of section 5.6 (`crates/hostkeeper-daemon/src/maintenance_hook/linux.rs`); nothing else. The owner's answers of 2026-11-19 are in: the Mac's update account (section 5.5) and the first-class Linux path
 (the one-button update of section 4.2) are decided; for Xcode, section 2.0 makes a push from the operator's own Mac the source (owner's direction, 2026-11-20), with a fetcher Mac as the alternative. Facts about this repository were read on `main` at the commit this document lands on top
 of; facts about komira-ai/jobscheduler and komira-ai/kbf were read on their `main` and are marked as theirs. **Built** marks what exists
 (with its path), **New** what this design adds, **[V]** a claim to verify before building on it.
@@ -266,7 +266,7 @@ No step below needs an Apple Account: the daemon runs each as root.
    their own SHA-256, and imported on each Mac with `xcodebuild -importPlatform` **[V]**; `-downloadPlatform`, which fetches from Apple
    on every Mac, fails too often to be a step of a run.
 3. **Remove** each `Xcode-<version>.app` older than the group's newest `xcode_keep`, on the drained host. An Xcode whose directory is not
-   `Xcode-<version>.app` (one a person or Apple Business put there) is reported and never removed.
+   `Xcode-<version>.app` (one a person or Apple Business put there) is reported (`InstalledXcode.foreign`, Built) and never removed.
 
 `<version>` is `CFBundleShortVersionString` (`27.2`, `26.1.1`). A second build under a version the store already holds is refused
 (`xcode_version_taken`) and alerted, so on our hosts a version names one build.
@@ -303,7 +303,7 @@ and `hkctl` edit it):
 `HeartbeatRequest` gains `maintenance` (the next free field, optional), announced by the feature `maintenance-v1` and sent only to a
 coordinator that advertises it, like `prerequisites` (Built). It carries the host's facts (OS name, version and build, on a Mac its hardware serial, running and newest
 installed kernel, the boot id the daemon already reads for its step record, Built: `hostkeeper_steps::ProcBootId` and
-`hostkeeper_launchd::SysctlBootId`, and the boot time), the installed Xcodes (version, build, path, `xcode-select`'s), on a Mac the update facts of section 1 (FileVault, free space, the update
+`hostkeeper_launchd::SysctlBootId`, and the boot time), the installed Xcodes (version, build, path, `xcode-select`'s, and `foreign` when its directory is not `Xcode-<version>.app`), on a Mac the update facts of section 1 (FileVault, free space, the update
 account, the Command Line Tools, device-management conflicts), the due items of
 section 1 (kind, from, to, needs reboot, label), when it last looked, how many listing lines no parser knew, why the last look failed (`look_failed`, Built: a failed look keeps the last good report), the state of the maintenance run it holds, and, on the fetcher, the
 state of its fetch (release, `downloading`, `held`, `signin_needed` with its reason, or `failed` with its reason, and the next try).
@@ -374,7 +374,8 @@ changes keep it so:
   service and returns when it has no work; `resume` puts it back. Both are safe to run twice. A package that names neither is left alone.
   The conformance harness (Built: `hostkeeper-hook`'s `conformance` feature) gains checks for them.
 - **The maintenance hook (Built: the command and its skeleton, `crates/hostkeeper-daemon/src/maintenance_hook.rs`; the `cutover`
-  of `linux` and `reboot`, `crates/hostkeeper-daemon/src/maintenance_linux.rs`; the other kinds' work and steps New).** The OS work is a hook too, a subcommand of hostkeeper's own binary, `hostkeeper maintenance-hook <prepare|cutover|verify>
+  of `linux` and `reboot`, `crates/hostkeeper-daemon/src/maintenance_linux.rs`, and their `verify`,
+  `crates/hostkeeper-daemon/src/maintenance_hook/linux.rs`; the other kinds' work and steps New).** The OS work is a hook too, a subcommand of hostkeeper's own binary, `hostkeeper maintenance-hook <prepare|cutover|verify>
   --params <file>`, launched the way the step runner launches a step (Built: `hostkeeper_steps` launchers: a transient systemd unit, a
   launchd job on a Mac, a process group under OpenRC). Its parameters are the `maintain` order's fields as JSON, in a file or on standard
   input (`--params -`), never in an argument. Each kind is the work of a `MaintenanceKind`, found by the host's platform; until a kind's
@@ -462,7 +463,7 @@ drain was never asked for is never held.
   `sysadminctl -secureTokenOn hkupdate -password - -adminUser <admin> -adminPassword -`, the passwords on standard input **[V]** (if
   `sysadminctl` reads `-` only from a terminal, the daemon gives it a pseudo-terminal it owns, never an argument), then hides it. The
   administrator's password is used for that call and not kept. The report of section 1 says whether the account exists, is an
-  administrator and holds a token; a Mac whose account lacks one is never ordered a macOS update (`no_update_account`, shown in the
+  administrator, holds a token and is hidden (Built: `maintenance_account.rs`, the name read from the update-account file); a Mac whose account lacks one is never ordered a macOS update (`no_update_account`, shown in the
   Schedule form).
 
   **FileVault.** With FileVault on, a restart stops at the pre-boot login until someone types a volume owner's password, unless it is an
@@ -562,11 +563,21 @@ from Apple's published device-management schema):
   removed in 27);
 - in `com.apple.SoftwareUpdate`: `CatalogURL`, `AllowPreReleaseInstallation`, `AutomaticallyInstallMacOSUpdates` true,
   `restrict-software-update-require-admin-to-install`;
-- an App Store assignment of Xcode (the App Store would update it in place under running builds).
+- an App Store assignment of Xcode (the App Store would update it in place under running builds), reported as `xcode-app-store` when an
+  `/Applications/Xcode*.app` holds `Contents/_MASReceipt/receipt`.
 
 These are fixed in Apple Business, at their source. The daemon reports each one it finds on the Mac (`/Library/Managed Preferences`,
 and the declarations the Mac reports **[V]**) because the Mac is the only place that shows what reached it; the Schedule form shows a
 host with one as `mdm_conflict`, and it is not ordered `macos` while one stands.
+
+Built (`crates/hostkeeper-daemon/src/maintenance_mdm.rs`): the daemon reads the top-level files of `/Library/Managed Preferences`
+(`com.apple.applicationaccess.plist` and `com.apple.SoftwareUpdate.plist`, a boolean key reported when true, any other when set) and,
+for the declarations, `/var/db/softwareupdate/SoftwareUpdateDDMStatePersistence.plist`, which Apple does not document **[V]**: an
+enforced target (`TargetOSVersion` or `TargetBuildVersion` anywhere in it) is reported as the `enforcement.specific` declaration, and
+in its `SUCorePersistedStatePolicyFields` / `SUCoreDDMDeclarationGlobalSettings` a key naming a deferral as `Deferrals`,
+`automaticallyInstallOSUpdates` or `automaticallyInstallSystemAndSecurityUpdates` as `AutomaticActions`, and a key naming a beta as
+`Beta`. A file there that cannot be read fails the look (`look_failed`), never reads as a clean Mac. The Mac proof (MP) shows how each
+setting appears on a Mac and corrects these keys.
 
 ## 6. Builds stay correct across an Xcode change
 
