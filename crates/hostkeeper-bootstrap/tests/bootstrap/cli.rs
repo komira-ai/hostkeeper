@@ -17,6 +17,7 @@ fn args(dir: &std::path::Path, settings: &str, more: &[&str]) -> Vec<OsString> {
         ("--config-dir", paths.config_dir.clone()),
         ("--staging-dir", paths.staging_dir.clone()),
         ("--installed-binary", paths.binary.clone()),
+        ("--update-account-file", paths.update_account.clone()),
     ] {
         all.push(flag.into());
         all.push(value.into());
