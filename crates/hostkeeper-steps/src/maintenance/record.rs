@@ -125,6 +125,10 @@ pub struct MaintenanceRecord {
     /// Why the turn halted: nothing more runs. Written only when set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub halted: Option<String>,
+    /// The reason of the halt an operator's Put back ended: the drained services are put back and
+    /// the turn ends with each kind as far as it got. Written only when set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub put_back: Option<String>,
 }
 
 /// A record that breaks a rule of [`MaintenanceRecord::check`].
@@ -179,6 +183,7 @@ impl MaintenanceRecord {
             running: false,
             deferred: None,
             halted: None,
+            put_back: None,
         };
         record.check()?;
         Ok(record)

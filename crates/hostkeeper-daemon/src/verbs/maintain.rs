@@ -1,7 +1,9 @@
 //! `maintain`: a host's turn of a maintenance run (docs/design/maintenance-updates.md, sections
-//! 5.1 to 5.4 and 5.7), run by the daemon's sequencer ([`crate::maintenance_run`]) over the run
-//! record. The order is checked as it is decoded ([`crate::verb::Maintained`]: an order id of 1
-//! to 64 bytes, the action `RUN`, a run id and 1 to 4 known kinds). Then, in this order:
+//! 4.2, 5.1 to 5.4 and 5.7), run by the daemon's sequencer ([`crate::maintenance_run`]) over the
+//! run record. The order is checked as it is decoded ([`crate::verb::Maintained`]: an order id of
+//! 1 to 64 bytes, the action `RUN`, `RETRY` or `PUT_BACK`, a run id and 1 to 4 known kinds).
+//!
+//! A `RUN` starts the host's turn. Then, in this order:
 //!
 //! 1. **One sequencer.** While a sequencer runs a turn on the host, a resend of that turn's order
 //!    is answered `Running` and starts nothing; any other `maintain` is refused `busy`.
@@ -23,6 +25,22 @@
 //!    written beside the record, then the record of the new turn: a write that fails is refused
 //!    `store_failed`, and nothing has run.
 //!
+//! A `RETRY` or `PUT_BACK` acts on the halted turn its order took (section 4.2), under a new try of
+//! that order. After step 1 above:
+//!
+//! - **The record of the order.** A record that does not read is refused as above. No record, or
+//!   the record of another order id or run id, is refused `not_halted`.
+//! - **The try.** A lower try than the record's is refused `stale_try`. The record's own try is a
+//!   resend: the turn is answered, or resumed, from where its record stands, as for a `RUN`, so an
+//!   action delivered twice acts once.
+//! - **The halt.** A higher try on a turn that is not halted (it runs, waits for a reboot, or has
+//!   ended) is refused `not_halted`, and nothing is written. On a halted turn, the record is
+//!   written with the halt lifted and the order's try ([`Event::Retried`], [`Event::PutBack`]):
+//!   a `RETRY` launches the step that failed again and goes on from there; a `PUT_BACK` resumes
+//!   every drained service in reverse order and ends the turn, done with the halt's reason kept
+//!   as its note, each kind left applied or not as it was. Neither runs a `rollback`. A write that
+//!   fails is refused `store_failed`, and nothing has run.
+//!
 //! The turn then runs on the caller's thread to its end, or to a reboot it waits for, and the
 //! answer says which: `Finished` (succeeded for done, deferred, or halt, with the record's reason),
 //! `Running` while a reboot is waited for, `Interrupted` (`store_failed`) when the record could not
@@ -32,7 +50,8 @@ use std::collections::BTreeMap;
 
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_steps::maintenance::{
-    Action, Ending, Kind, MaintenanceRecord, MaintenanceRecordError, next_action,
+    Action, Ending, Event, Kind, MaintenanceRecord, MaintenanceRecordError, MaintenanceStore,
+    next_action, transition,
 };
 use hostkeeper_steps::record::{Loaded, State};
 
@@ -42,7 +61,7 @@ use crate::installed;
 use crate::maintenance_hook::record_kind;
 use crate::maintenance_run::{self, launch};
 use crate::refusal::Refusal;
-use crate::verb::Maintained;
+use crate::verb::{Maintained, TurnAction};
 
 pub fn run(ctx: &Ctx, order: &Maintained) -> Reply {
     let _hold = match ctx.maintenance.hold(&order.order_id) {
@@ -60,6 +79,9 @@ pub fn run(ctx: &Ctx, order: &Maintained) -> Reply {
         Ok(held) => held,
         Err(error) => return Reply::refused(record_refusal(&error), error),
     };
+    if order.action != TurnAction::Run {
+        return act_on_halt(ctx, &store, held, order);
+    }
     match held {
         Some(record) if record.order_id == order.order_id => {
             if order.order_try.get() < record.order_try {
@@ -87,6 +109,87 @@ pub fn run(ctx: &Ctx, order: &Maintained) -> Reply {
     }
 }
 
+/// A `RETRY` or `PUT_BACK` of the halted turn `held` (the module's second list).
+fn act_on_halt(
+    ctx: &Ctx,
+    store: &MaintenanceStore,
+    held: Option<MaintenanceRecord>,
+    order: &Maintained,
+) -> Reply {
+    let record = match held {
+        Some(record)
+            if (record.order_id == order.order_id) & (record.run_id == order.params.run_id()) =>
+        {
+            record
+        }
+        Some(record) => {
+            return Reply::refused(
+                Refusal::NotHalted,
+                format!(
+                    "the maintenance record holds order {} of run {}, not order {} of run {}",
+                    record.order_id,
+                    record.run_id,
+                    order.order_id,
+                    order.params.run_id()
+                ),
+            );
+        }
+        None => {
+            return Reply::refused(
+                Refusal::NotHalted,
+                "no maintenance turn is held on this host",
+            );
+        }
+    };
+    let order_try = order.order_try.get();
+    if order_try < record.order_try {
+        return Reply::refused(
+            Refusal::StaleTry,
+            format!(
+                "order {} try {} is older than try {}, which the maintenance record holds",
+                order.order_id, order_try, record.order_try
+            ),
+        );
+    }
+    if order_try == record.order_try {
+        let resent = !maintenance_run::unfinished(&record);
+        return maintenance_run::drive(ctx, store, record).reply(resent);
+    }
+    let event = match order.action {
+        TurnAction::Retry => Event::Retried {
+            order_try,
+            boot: ctx.clock.boot_id().ok(),
+        },
+        _ => Event::PutBack { order_try },
+    };
+    let Ok((next, action)) = transition(&record, event) else {
+        return Reply::refused(
+            Refusal::NotHalted,
+            format!(
+                "the maintenance turn of order {} (run {}) stands at {}, and is not halted",
+                record.order_id,
+                record.run_id,
+                next_action(&record)
+            ),
+        );
+    };
+    if let Err(error) = store.save(&next) {
+        return Reply::refused(Refusal::StoreFailed, error);
+    }
+    let what = match order.action {
+        TurnAction::Retry => "retries",
+        _ => "puts back",
+    };
+    ctx.log(&format!(
+        "maintenance run {}: order {} try {} {what} the turn halted at {}; next: {action}",
+        next.run_id,
+        next.order_id,
+        next.order_try,
+        record.halted.as_deref().unwrap_or_default(),
+    ));
+    maintenance_run::drive(ctx, store, next).reply(false)
+}
+
 /// Whether the turn of `record` keeps another turn off the host: unfinished, or halted.
 fn holds_host(record: &MaintenanceRecord) -> bool {
     matches!(
@@ -96,11 +199,7 @@ fn holds_host(record: &MaintenanceRecord) -> bool {
 }
 
 /// Starts the turn of `order` (steps 4 and 5 of the module's list) and runs it.
-fn new_turn(
-    ctx: &Ctx,
-    store: &hostkeeper_steps::maintenance::MaintenanceStore,
-    order: &Maintained,
-) -> Reply {
+fn new_turn(ctx: &Ctx, store: &MaintenanceStore, order: &Maintained) -> Reply {
     if let Some(why) = package_step_unfinished(ctx) {
         return Reply::refused(Refusal::Busy, why);
     }

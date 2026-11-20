@@ -29,6 +29,10 @@
 //!
 //! **One turn at a time.** One sequencer runs on a host at a time ([`MaintenanceRuns::hold`]); the
 //! order's verb ([`crate::verbs::maintain`]) refuses a second turn while one is unfinished.
+//!
+//! **A halted turn.** Nothing more runs until an operator's `RETRY` or `PUT_BACK` of its order
+//! ([`crate::verbs::maintain`]) lifts the halt in the record; the sequencer then drives the turn
+//! from there, as from any other record.
 
 pub mod launch;
 

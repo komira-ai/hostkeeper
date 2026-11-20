@@ -360,8 +360,8 @@ fn ends_deferred_with_nothing_drained() {
 }
 
 /// Catches a halted turn (section 5.7, halted) that yields a `resume`, or any launch, by any
-/// road: after the halt, every event that would launch a step is refused and the record stands
-/// halted with the drained services kept.
+/// road but an operator's Retry or Put back (`operator`): after the halt, every event of the
+/// sequencer is refused and the record stands halted with the drained services kept.
 #[test]
 fn ends_halted_and_a_halt_never_yields_a_resume() {
     let halts = [
