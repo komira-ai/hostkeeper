@@ -226,7 +226,7 @@ Settles: none; the order of the account steps in design 5.5. Runs: a root shell 
 ```
 Record: the time from creation to hiding; operatorKeys and ssh at each heartbeat across the window; whether `IsHidden 1` alone satisfies the daemon's next report.
 Decides:
-- if "n local administrator accounts" is reported in the window -> the account step of the hook writes `IsHidden 1` in the same step as `-addUser`, or creates without `-admin`, hides, then grants admin (design 5.5; not built).
+- if "n local administrator accounts" is reported in the window -> the account-making start writes `IsHidden 1` right after `-addUser` and before any other call (built: `update_account_make.rs`); if that window is still seen, it creates without `-admin`, hides, then grants admin (design 5.5).
 - if `ssh.state` becomes `no_login_user` and the session drops -> real lockout risk; run the proof only with the owner at the Mac (MP-E9).
 
 
@@ -646,7 +646,7 @@ Decides:
 
 ### MP-A2 Create the account, hidden, in one job
 
-Settles section 5.5 line 468-470 ([V]: `-password -` read from standard input without a terminal; else the daemon needs a pty it owns). Root shell on the proof Mac. Needs A1. The hide is in the creating job, so the Mac never holds two visible administrators (the daemon's one-administrator rule would fail). Design argv, not built (`SYSADMINCTL` path const, `maintenance_account.rs:35`).
+Settles section 5.5 line 468-470 ([V]: `-password -` read from standard input without a terminal; else the daemon needs a pty it owns). Root shell on the proof Mac. Needs A1. The hide is in the creating job, so the Mac never holds two visible administrators (the daemon's one-administrator rule would fail). Built as the daemon's account-making start (`crates/hostkeeper-daemon/src/update_account_make.rs`: `-addUser <name> -password - -admin`, the password and a newline on a pipe, no terminal, an empty environment; then `IsHidden 1` and `UserShell /usr/bin/false`); this step shows whether that pipe is enough.
 
 ```sh
 # variant A, harness of MP-E8, stdin /var/root/hk-proof/pw-proof
@@ -671,7 +671,7 @@ Decides:
 
 ### MP-A3 Grant the Secure Token with two passwords on standard input
 
-Settles section 5.5 line 469 ([V]: `-secureTokenOn ... -password - -adminUser <admin> -adminPassword -`, both passwords on stdin, which order). Root shell. Needs A2 (account has no token; `-secureTokenStatus hkproof` says DISABLED). Design argv, not built. Use the variant that worked in A2.
+Settles section 5.5 line 469 ([V]: `-secureTokenOn ... -password - -adminUser <admin> -adminPassword -`, both passwords on stdin, which order). Root shell. Needs A2 (account has no token; `-secureTokenStatus hkproof` says DISABLED). Built as order 1 on a pipe (`update_account_make.rs`: `<account pw>\n<admin pw>\n`, the order of the arguments, then `-secureTokenStatus` read again). Use the variant that worked in A2.
 
 ```sh
 # order 1 (hkproof, then admin): harness of MP-E8, stdin /var/root/hk-proof/in-proof-admin
@@ -712,7 +712,7 @@ Decides:
 
 ### MP-A5 Hidden, no shell, not in ssh
 
-Settles section 5.5 line 470-471 (hidden, no login shell, not in `com.apple.access_ssh`). Root shell. Needs A2 (the hide was done there). Built reads: `login_account.rs:210-213` (`is_hidden`), `maintenance_account.rs:174-182`; nothing built writes `IsHidden`.
+Settles section 5.5 line 470-471 (hidden, no login shell, not in `com.apple.access_ssh`). Root shell. Needs A2 (the hide was done there). Built reads: `login_account.rs:210-213` (`is_hidden`), `maintenance_account.rs:174-182`; the account-making start (`update_account_make.rs`) writes `IsHidden 1` and `UserShell /usr/bin/false` with `dscl . -create` and takes the account out of `com.apple.access_ssh` with `dseditgroup -o edit -d`, each only when it is not so already.
 
 ```sh
 /usr/bin/dscl . -read "$U/hkproof" RecordName IsHidden; echo "exit=$?"
