@@ -17,11 +17,14 @@
 //! a pin) is left out. An update's detail is kept, as its `detail` key, which the JSON reader
 //! cuts to `MAX_DETAIL_BYTES`. The host's clock and certificate (`sent_unix`,
 //! `cert_not_after_unix`, `last_renew_error`) are top-level keys, each only when the request
-//! sets it.
+//! sets it. So is the maintenance report, as `maintenance`: standard base64 of its encoding
+//! ([`crate::maintenance`]).
 
 use hostkeeper_proto::hostkeeper::agent::v1 as proto;
 use hostkeeper_wire::wire::ORDER_FEATURE;
 use serde_json::{Map, Value, json};
+
+use crate::maintenance::text_of;
 
 /// The JSON heartbeat of `request` for a coordinator whose legacy service is `legacy`.
 pub(crate) fn json(request: &proto::HeartbeatRequest, legacy: Option<&str>) -> Vec<u8> {
@@ -74,6 +77,9 @@ pub(crate) fn json(request: &proto::HeartbeatRequest, legacy: Option<&str>) -> V
     }
     if let Some(error) = &request.last_renew_error {
         object.insert("last_renew_error".to_owned(), error.clone().into());
+    }
+    if let Some(report) = &request.maintenance {
+        object.insert("maintenance".to_owned(), text_of(report).into());
     }
     serde_json::to_vec(&Value::Object(object)).unwrap_or_default()
 }

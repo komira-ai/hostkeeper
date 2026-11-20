@@ -20,6 +20,7 @@ fn subject(kind: Kind, host: &str) -> Subject {
         version: String::new(),
         request: String::new(),
         other_host: String::new(),
+        group: String::new(),
     }
 }
 
