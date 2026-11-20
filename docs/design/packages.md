@@ -147,7 +147,8 @@ Every item is **Built** at the path given.
   `<archive>.sigstore.json` with the pinned `gh attestation verify` against `[trusted_signers]` in
   `/etc/hostkeeper/hostkeeper.toml`. Only then does `VerifiedArchive` exist, the one way to the bytes.
 - **On the host.** `/var/lib/hostkeeper/packages/<service>/<version>/` (0555), `<version>.seal` (tree digest and package
-  digest), `current` and `previous` links; two versions kept (`crates/hostkeeper-steps/src/prune.rs`). `Staged::check`
+  digest), `current` and `previous` links; `current`, `previous`, the pinned version and the newest `--keep-versions` others kept
+  (`crates/hostkeeper-steps/src/prune.rs`, hostkeeper-design.md Q14). `Staged::check`
   re-hashes the tree before every hook step (`crates/hostkeeper-steps/src/artifact.rs`); the tree digest refuses
   anything but regular files and directories.
 - **Placement.** The daemon links each file of `units/` and each `[[files]]` entry to its system path, pointing into
@@ -478,7 +479,7 @@ in an outcome with a class and a reason. It has four steps:
 |---|---|---|
 | `stage` | Makes the version directory from the verified artifact: keeps the artifact, and extracts from it, with the format's own extractor, the tree the hook and the observer read. Checks the artifact is the package the manifest names | Change anything outside the version's staging directory, or run any script of the package |
 | `activate` | Makes this version the installed one: installs it with the format's tool, then switches `current`. Is also how a rollback goes back (activating the kept previous version) | Fetch anything; start, stop or restart the service's `run` units (that is the hook's); touch another service's package |
-| `retire` | Drops a version that is neither `current` nor `previous` (today's prune): deletes its directory, its seal and its kept artifact | Call the format's tool on the host's installed package, which belongs to `current` |
+| `retire` | Drops a version the host does not keep, neither `current`, `previous`, the pinned one nor one of the newest (today's prune): deletes its directory, its seal and its kept artifact | Call the format's tool on the host's installed package, which belongs to `current` |
 | `remove` | Takes the whole service off the host, on uninstall or when a first install fails: what its `activate` recorded; a package the host's package manager already had is not a first install on apt, where an `install` adopts it instead (packages-lifecycle.md section 6.1), but an uninstall of the adopted service removes it | Remove anything `activate` did not record, or anything changed since; a native package's files are what the format's own database lists for it, removed whatever their content (packages-lifecycle.md section 6.5) |
 
 Installers are **built into the daemon**. Each is a module of a new crate, `hostkeeper-install`, behind one trait, and

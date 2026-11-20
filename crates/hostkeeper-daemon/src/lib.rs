@@ -53,8 +53,9 @@
 //!   loop at `/var/lib/hostkeeper/identity` for the group `hostkeeper-identity`
 //!   ([`identity_group`]), for the services of the host (docs/design/host-identity.md).
 //! - [`prune`]: after a confirmed switch (an update that ends `Succeeded`, a force that moved
-//!   `current`), the service's version directories but `current` and `previous` are deleted,
-//!   under the lock the order already holds.
+//!   `current`), the service's version directories but `current`, `previous`, the pinned one
+//!   ([`pin`]), the ones the records use and the newest `--keep-versions` others are deleted,
+//!   under the lock the order already holds, and none while an update of the service is on trial.
 //! - [`halt`]: the generation a halt of each service is held under, persisted while the halt stands.
 //! - [`hook_log`]: what the host's step launcher kept of a hook's standard error, as lines of the
 //!   daemon's log under the step's unit.
@@ -192,6 +193,7 @@ pub mod operator_keys;
 pub mod own_package;
 pub mod packaged;
 pub mod packages;
+pub mod pin;
 pub mod place;
 pub mod prerequisites;
 pub mod prune;

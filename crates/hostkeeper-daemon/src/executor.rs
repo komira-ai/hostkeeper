@@ -124,6 +124,9 @@ pub struct Ctx {
     pub units: Arc<dyn UnitControl + Send + Sync>,
     pub placement: Placement,
     pub prune: Arc<dyn Prune>,
+    /// How many versions of a service a prune keeps besides `current`, `previous`, the pin and
+    /// what the records use (`--keep-versions`): [`Ctx::keep_versions`].
+    keep_versions: u64,
     pub force_lock_point: Arc<dyn ForceLockPoint>,
     /// Observes the installed services; it takes none of the daemon's locks.
     pub observer: Arc<Observer>,
@@ -160,6 +163,13 @@ pub struct Ctx {
 }
 
 impl Ctx {
+    /// How many whole versions of a service a prune keeps besides `current`, `previous`, the pin
+    /// and what the records use, the newest first ([`crate::prune`]): `--keep-versions`, set by
+    /// [`Daemon::keeping_versions`].
+    pub fn keep_versions(&self) -> u64 {
+        self.keep_versions
+    }
+
     /// The daemon's request to exit with status 0 after the follow-on of its own update.
     pub fn restart(&self) -> &Restart {
         &self.restart
@@ -634,6 +644,7 @@ impl Daemon {
                 units: ports.units,
                 placement: ports.placement,
                 prune: ports.prune,
+                keep_versions: crate::prune::DEFAULT_KEEP_VERSIONS,
                 force_lock_point: ports.force_lock_point,
                 observer: ports.observer,
                 announcement: ports.announcement,
@@ -658,6 +669,14 @@ impl Daemon {
             },
             abort_tries: Mutex::default(),
         }
+    }
+
+    /// The same daemon, its prunes keeping the newest `versions` whole versions of a service
+    /// besides `current`, `previous`, the pin and what the records use, in place of
+    /// [`crate::prune::DEFAULT_KEEP_VERSIONS`]: `--keep-versions`.
+    pub fn keeping_versions(mut self, versions: u64) -> Daemon {
+        self.ctx.keep_versions = versions;
+        self
     }
 
     /// The same daemon, every step record store it makes changed by `seam` as it is made: the

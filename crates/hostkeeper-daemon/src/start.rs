@@ -85,6 +85,9 @@ pub struct Settings {
     /// The seconds a step of the repository installer waits for the package manager's lock
     /// (`--package-lock-wait-secs`).
     pub package_lock_wait_secs: u64,
+    /// How many versions of a service a prune keeps besides `current`, `previous`, the pin and
+    /// what the records use (`--keep-versions`).
+    pub keep_versions: u64,
 }
 
 impl Settings {
@@ -276,7 +279,9 @@ pub fn startup_notifying(
         packages: settings.packages_dir.clone(),
         facts: settings.facts_file.clone(),
     };
-    let daemon = Arc::new(Daemon::new(config, dirs, ports, own_version));
+    let daemon = Arc::new(
+        Daemon::new(config, dirs, ports, own_version).keeping_versions(settings.keep_versions),
+    );
     daemon.clear_policy_rc_d(&mut report);
     settle_self_update(&daemon, &mut report);
     activate_own_package(&daemon, &mut report);

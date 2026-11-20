@@ -58,7 +58,8 @@ An update runs, in order:
 3. Hook `prepare`, from the new version's tree.
 4. Installer `activate` of the new version. This takes the place of today's switch of `current` before `cutover`.
 5. Hook `cutover`, `verify`, `cleanup`, as today.
-6. After a confirmed switch: installer `retire` of every version but `current` and `previous` (today's prune).
+6. After a confirmed switch: installer `retire` of every version but `current`, `previous`, the pinned one and the newest
+   `--keep-versions` others (today's prune, hostkeeper-design.md Q14).
 
 The installer changes what is on disk. The hook changes what runs: it stops the old processes, drains, migrates, starts
 the new ones and says whether the new release serves. A package whose own scripts restart the service (a `postinst` running `deb-systemd-invoke restart`)
