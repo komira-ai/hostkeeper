@@ -2,10 +2,11 @@
 //! [`RebootKind`]), and the question they ask of the host after an install, whether it needs a
 //! reboot and which kernel it runs ([`RebootCheck`]).
 //!
-//! Only `cutover` and `after_reboot` are written here. The `prepare` and the `verify` of both
-//! kinds answer [`Unsupported`]: the staging of a Linux run is the work of its own change, and on
-//! a host the hook checks both kinds with [`crate::maintenance_hook::LinuxCheck`] in place of
-//! their `verify` ([`crate::maintenance_hook::registry_for`]).
+//! `cutover` and `after_reboot` are written here. The `prepare` of `linux` is its stage
+//! ([`Stage`], `crate::maintenance_hook::linux::stage`) when the kind is given one; the `prepare`
+//! of `reboot` and the `verify` of both answer [`Unsupported`]: on a host the hook checks both
+//! kinds with [`crate::maintenance_hook::LinuxCheck`] in place of their `verify`
+//! ([`crate::maintenance_hook::registry_for`]).
 
 use std::collections::BTreeSet;
 
@@ -15,6 +16,7 @@ use crate::maintenance_apk::APK;
 use crate::maintenance_apt::APT_GET;
 use crate::maintenance_collect::{Collector, HostRoot, LinuxScope, Look};
 use crate::maintenance_dnf::DNF;
+use crate::maintenance_hook::linux::stage::Stage;
 use crate::maintenance_hook::{
     Cutover, Kind, KindError, MaintainParams, MaintenanceKind, Unsupported,
 };
@@ -157,12 +159,13 @@ fn scope_of(wire: i32) -> Result<LinuxScope, KindError> {
     }
 }
 
-/// The `linux` kind: the install of the host's package manager, then the question whether the
-/// host needs a reboot.
+/// The `linux` kind: its stage, the install of the host's package manager, then the question
+/// whether the host needs a reboot.
 pub struct LinuxKind {
     upgrader: Option<Box<dyn Upgrader>>,
     own: Box<dyn OwnPackages>,
     check: RebootCheck,
+    stage: Option<Stage>,
 }
 
 impl LinuxKind {
@@ -178,11 +181,20 @@ impl LinuxKind {
             upgrader,
             own,
             check,
+            stage: None,
         }
     }
 
+    /// This kind, its `prepare` staged by `stage`.
+    #[must_use]
+    pub(crate) fn with_stage(mut self, stage: Stage) -> LinuxKind {
+        self.stage = Some(stage);
+        self
+    }
+
     /// The kind of this host: the package manager it has ([`upgrader_under`] its own files),
-    /// waiting up to `lock_wait_secs` for the package manager's lock, and its own reboot check.
+    /// waiting up to `lock_wait_secs` for the package manager's lock, its own reboot check, and
+    /// its own stage ([`Stage::at_host`]), which waits as long.
     #[must_use]
     pub fn at_host(lock_wait_secs: u64, own: Box<dyn OwnPackages>) -> LinuxKind {
         LinuxKind::new(
@@ -190,13 +202,18 @@ impl LinuxKind {
             own,
             RebootCheck::at_host(),
         )
+        .with_stage(Stage::at_host(lock_wait_secs))
     }
 }
 
 impl MaintenanceKind for LinuxKind {
-    /// Not written yet: [`Unsupported`].
+    /// The stage ([`Stage::run`]): the free space checked, then a download alone; every failure
+    /// deferred. [`Unsupported`] for a kind given no stage.
     fn prepare(&self, params: &MaintainParams) -> Result<(), KindError> {
-        Unsupported(Kind::Linux).prepare(params)
+        match &self.stage {
+            Some(stage) => stage.run(params),
+            None => Unsupported(Kind::Linux).prepare(params),
+        }
     }
 
     /// Installs the updates of the run's `linux_scope`, then answers [`Cutover::NeedsReboot`]
