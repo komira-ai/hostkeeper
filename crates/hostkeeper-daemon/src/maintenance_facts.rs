@@ -24,21 +24,18 @@
 //! log.
 
 use std::collections::BTreeSet;
-use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use hostkeeper_launchd::PlatformKind;
-use hostkeeper_link::{Dispatch, Log, MaintenanceSource, ThreadDispatch, UnixClock};
+use hostkeeper_link::{Dispatch, Log, MaintenanceSource, UnixClock};
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use hostkeeper_proto::maintenance::{
     MAX_DUE, MAX_DUE_LABEL, MAX_DUE_VERSION, MAX_KERNEL_TEXT, MAX_LOOK_FAILED, MAX_OS_TEXT,
     check_report,
 };
 
+use crate::Placement;
 use crate::maintenance_collect::{Collector, LinuxScope, Look, Section, clip};
-use crate::maintenance_collectors;
 use crate::maintenance_own::{OwnPackages, PlacedPackages};
-use crate::unix_clock::SystemUnixClock;
 
 /// How long after a look started the next one is due, in seconds.
 pub const LOOK_SECS: u64 = 60 * 60;
@@ -121,27 +118,29 @@ impl MaintenanceFacts {
         }
     }
 
-    /// The sink of a host of `kind` under `scope`, over the collectors of its platform
-    /// ([`maintenance_collectors::at_host`]) and the packages recorded in the state directory
-    /// `placed_dir`; none when the platform has no collector (a Mac today), so that it announces
-    /// and sends nothing. Its clock is the host's, and each look runs on a thread of its own.
+    /// The sink of a host under `scope` over `collectors` (on a host, its platform's:
+    /// [`crate::maintenance_collectors::at_host`]) and the packages recorded in the daemon's
+    /// `placed.json` ([`PlacedPackages`] of `placement`), its looks timed by `clock` and run on
+    /// `dispatch`; none when there is no collector (a Mac today), so that the host announces and
+    /// sends nothing.
     #[must_use]
-    pub fn at_host(
-        kind: PlatformKind,
+    pub fn of_host(
+        collectors: Vec<Box<dyn Collector>>,
+        placement: &Placement,
         scope: LinuxScope,
+        clock: Arc<dyn UnixClock>,
+        dispatch: Arc<dyn Dispatch>,
         log: Arc<dyn Log>,
-        placed_dir: &Path,
     ) -> Option<MaintenanceFacts> {
-        let collectors = maintenance_collectors::at_host(kind);
         if collectors.is_empty() {
             return None;
         }
         Some(MaintenanceFacts::new(
             collectors,
-            Box::new(PlacedPackages::new(placed_dir)),
+            Box::new(PlacedPackages::new(placement)),
             scope,
-            Arc::new(SystemUnixClock),
-            Arc::new(ThreadDispatch),
+            clock,
+            dispatch,
             log,
         ))
     }

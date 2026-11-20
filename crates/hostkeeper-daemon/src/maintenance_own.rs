@@ -4,9 +4,11 @@
 //! are updated by hostkeeper's own orders, never by a maintenance run.
 
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use hostkeeper_placed::{RealFs, Store};
+use hostkeeper_placed::{Fs, Roots, Store};
+
+use crate::Placement;
 
 /// The name of hostkeeper's own native package (`packaging/linux/nfpm.yaml`).
 pub const OWN_PACKAGE: &str = "hostkeeper";
@@ -20,19 +22,20 @@ pub trait OwnPackages: Send + Sync {
     fn names(&self) -> Result<BTreeSet<String>, String>;
 }
 
-/// The packages of `placed.json` in the daemon's state directory, and hostkeeper's own.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// The packages of the daemon's `placed.json`, and hostkeeper's own.
 pub struct PlacedPackages {
-    /// The state directory `placed.json` is in, as an absolute path of the host.
-    pub dir: PathBuf,
+    roots: Roots,
+    fs: Arc<dyn Fs + Send + Sync>,
 }
 
 impl PlacedPackages {
-    /// The packages recorded in the state directory `dir`.
+    /// The packages recorded in the `placed.json` of `placement`, the daemon's own: in the state
+    /// directory of its roots, read through its filesystem, as the repository installer writes it.
     #[must_use]
-    pub fn new(dir: &Path) -> PlacedPackages {
+    pub fn new(placement: &Placement) -> PlacedPackages {
         PlacedPackages {
-            dir: dir.to_owned(),
+            roots: placement.roots.clone(),
+            fs: Arc::clone(&placement.fs),
         }
     }
 }
@@ -41,8 +44,7 @@ impl OwnPackages for PlacedPackages {
     /// [`OWN_PACKAGE`] and the `package` of every `installed` entry that names one; a state
     /// directory with no `placed.json` holds [`OWN_PACKAGE`] alone.
     fn names(&self) -> Result<BTreeSet<String>, String> {
-        let fs = RealFs::new(Path::new("/"));
-        let record = Store::new(&fs, &self.dir)
+        let record = Store::new(&*self.fs, self.roots.state_dir())
             .load()
             .map_err(|error| error.to_string())?;
         let mut names = BTreeSet::from([OWN_PACKAGE.to_owned()]);

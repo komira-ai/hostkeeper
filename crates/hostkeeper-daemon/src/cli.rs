@@ -67,7 +67,7 @@ use crate::identity_group::IdentityGroup;
 use crate::ipmi::DevIpmi;
 use crate::links::{DaemonLog, HostLink, Links};
 use crate::mac::HostIoreg;
-use crate::maintenance_collect::LinuxScope;
+use crate::maintenance_collect::{Collector, LinuxScope};
 use crate::maintenance_facts::MaintenanceFacts;
 use crate::notify::{
     NoNotifier, NoWatchdog, ReadyFile, ReadyNotifier, SystemdNotifier, SystemdWatchdog, Watchdog,
@@ -419,8 +419,8 @@ async fn start_and_serve(
 /// - every host keeps the host prerequisites the coordinator sends, which a Mac installs and a
 ///   Linux host only reports ([`Prerequisites::at_host`]);
 /// - a Linux host reports what it last found of its maintenance, under `scope`, from the packages
-///   `placed.json` records and its package manager ([`MaintenanceFacts::at_host`]); a Mac has
-///   none;
+///   `placed.json` records and its package manager ([`maintenance_source`] over
+///   [`crate::maintenance_collectors::at_host`]); a Mac has none;
 /// - every heartbeat of a Linux host reports its BMC's address and MAC, read through
 ///   `/dev/ipmi0` ([`crate::bmc::at_host`]);
 /// - when `files` names a console, the enrollment loop writes its issue file, naming the daemon
@@ -470,8 +470,14 @@ pub fn host_links(
     );
     let operator_keys = OperatorKeys::at_host(kind, log.clone());
     let prerequisites = Prerequisites::at_host(kind, log.clone());
-    let maintenance = MaintenanceFacts::at_host(kind, scope, log.clone(), Path::new(STATE_DIR))
-        .map(|facts| Arc::new(facts) as Arc<dyn MaintenanceSource>);
+    let maintenance = maintenance_source(
+        daemon,
+        scope,
+        crate::maintenance_collectors::at_host(kind),
+        Arc::new(SystemUnixClock),
+        Arc::new(ThreadDispatch),
+        log.clone(),
+    );
     let clock: Arc<dyn hostkeeper_link::UnixClock> = Arc::new(SystemUnixClock);
     Links {
         enroller: Box::new(move || host_enroller(&endpoint, &pki, settings.clone(), kind)),
@@ -494,6 +500,29 @@ pub fn host_links(
         prerequisites: Some(Arc::new(prerequisites)),
         maintenance,
     }
+}
+
+/// The maintenance facts `daemon`'s heartbeats report (`maintenance-v1`): looks by `collectors`
+/// under `scope` (`--maintenance-linux-scope`), leaving out the packages of the daemon's own
+/// `placed.json` ([`crate::Placement`] of its context), timed by `clock` and run on `dispatch`;
+/// none when there is no collector (a Mac today), which then announces and sends nothing.
+pub fn maintenance_source(
+    daemon: &Arc<Daemon>,
+    scope: LinuxScope,
+    collectors: Vec<Box<dyn Collector>>,
+    clock: Arc<dyn hostkeeper_link::UnixClock>,
+    dispatch: Arc<dyn hostkeeper_link::Dispatch>,
+    log: Arc<dyn hostkeeper_link::Log>,
+) -> Option<Arc<dyn MaintenanceSource>> {
+    MaintenanceFacts::of_host(
+        collectors,
+        &daemon.ctx().placement,
+        scope,
+        clock,
+        dispatch,
+        log,
+    )
+    .map(|facts| Arc::new(facts) as Arc<dyn MaintenanceSource>)
 }
 
 /// What the enrollment request says the daemon came from: this binary, `hostkeeper-<version>`.

@@ -548,24 +548,53 @@ fn hostkeepers_own_packages_never_appear() {
     }
 }
 
-/// Proves a Mac has no maintenance facts (it announces and sends nothing) and a Linux host, under
-/// systemd or OpenRC, has.
+/// Proves a host with no collector (a Mac today) has no maintenance facts, so it announces and
+/// sends nothing, and a host with one has; a host's sink reads hostkeeper's packages from the
+/// `placed.json` of its placement (a state directory with none holds `hostkeeper` alone).
 #[test]
-fn only_a_linux_host_has_maintenance_facts() {
-    let scratch = scratch("facts-at-host");
+fn only_a_host_with_a_collector_has_maintenance_facts() {
+    let scratch = scratch("facts-of-host");
+    let placement = Placement {
+        roots: hostkeeper_placed::Roots::new(
+            scratch.path(),
+            &scratch.path().join("units"),
+            &scratch.path().join("packages"),
+        ),
+        fs: Arc::new(hostkeeper_placed::RealFs::new(std::path::Path::new("/"))),
+    };
+    let clock = Arc::new(FakeClock::new(START, 0));
+    let dispatch = Arc::new(ManualDispatch::default());
     let log = Arc::new(RecordingLog::default());
     assert!(
-        MaintenanceFacts::at_host(
-            PlatformKind::Macos,
+        MaintenanceFacts::of_host(
+            Vec::new(),
+            &placement,
             LinuxScope::Security,
+            clock.clone(),
+            dispatch.clone(),
             log.clone(),
-            scratch.path()
         )
         .is_none()
     );
-    for kind in [PlatformKind::Linux, PlatformKind::Openrc] {
-        assert!(
-            MaintenanceFacts::at_host(kind, LinuxScope::All, log.clone(), scratch.path()).is_some()
-        );
-    }
+    let facts = MaintenanceFacts::of_host(
+        vec![Box::new(Updating(vec![
+            ("hostkeeper", true, false),
+            ("openssl", true, false),
+        ]))],
+        &placement,
+        LinuxScope::Security,
+        clock,
+        dispatch.clone(),
+        log,
+    )
+    .expect("a host with a collector");
+    facts.report();
+    assert!(dispatch.run_next());
+    let labels: Vec<String> = facts
+        .report()
+        .due
+        .into_iter()
+        .map(|item| item.label)
+        .collect();
+    assert_eq!(labels, ["openssl"]);
 }
