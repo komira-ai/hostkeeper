@@ -5,6 +5,7 @@ use serde_json::json;
 
 use super::*;
 use crate::force::ForceTargets;
+use crate::maintenance_policy::{LinuxScope, Maintenance, XcodeDefault};
 use crate::ops::HaltOrigin;
 use crate::registry::Digest;
 use crate::rollouts::Pause;
@@ -169,6 +170,23 @@ fn the_default_policy_is_written_as_nothing_and_read_back_from_nothing() {
         serde_json::from_value::<Policy>(json!({})).expect("reads"),
         policy
     );
+    assert_eq!(policy.maintenance, Maintenance::default());
+    let named = json!({"maintenance": {}});
+    assert_eq!(
+        serde_json::from_value::<Policy>(named).expect("reads"),
+        policy
+    );
+    let tabled = Policy {
+        maintenance: Maintenance {
+            batch: 2,
+            ..Maintenance::default()
+        },
+        ..Policy::default()
+    };
+    assert_eq!(
+        serde_json::to_value(&tabled).expect("serialises"),
+        json!({"maintenance": {"batch": 2}})
+    );
     assert_eq!(policy.check(), Ok(()));
     let halves = [RawStage::Percent(50), RawStage::Percent(100)];
     assert_eq!(
@@ -206,6 +224,16 @@ fn every_key() -> Policy {
         max_updating: 0,
         min_up: 5,
         live_rollouts: Some(2),
+        maintenance: Maintenance {
+            xcode_keep: 2,
+            xcode_default: XcodeDefault::Version("26.1".to_owned()),
+            macos_major: true,
+            linux_scope: LinuxScope::All,
+            batch: 3,
+            min_serving: 0,
+            drain_deadline_secs: 900,
+            return_secs: 1800,
+        },
     }
 }
 
@@ -230,7 +258,17 @@ fn a_policy_with_every_key_is_written_by_name_and_read_back() {
             "defer_backoff": {"initial_secs": 60, "factor": 3, "max_secs": 7200},
             "max_updating": 0,
             "min_up": 5,
-            "live_rollouts": 2
+            "live_rollouts": 2,
+            "maintenance": {
+                "xcode_keep": 2,
+                "xcode_default": "26.1",
+                "macos_major": true,
+                "linux_scope": "all",
+                "batch": 3,
+                "min_serving": 0,
+                "drain_deadline_secs": 900,
+                "return_secs": 1800
+            }
         })
     );
     assert_eq!(
@@ -356,6 +394,41 @@ fn every_policy_key_is_checked_at_its_bounds() {
     .check()
     .expect_err("refused");
     assert_eq!(error.key, "min_up");
+}
+
+/// Proves: a maintenance key out of range is refused as `maintenance: <why>`, with the reason of
+/// the table's check, and the policy's earlier keys are named before it; a policy written by the
+/// release before, with no `maintenance` key, reads as the default table.
+///
+/// Catches: a table out of range stored because the policy's check skips it, or a group of the
+/// release before read with a table other than the default.
+#[test]
+fn a_maintenance_key_out_of_range_is_refused_and_an_absent_table_is_the_default() {
+    let with = |edit: PolicyEdit<'_>| {
+        let mut policy = Policy::default();
+        edit(&mut policy);
+        policy.check().map_err(|e| e.to_string())
+    };
+    assert_eq!(
+        with(&|p| p.maintenance.batch = 0),
+        Err("maintenance: batch is not 1 to 10000".to_owned())
+    );
+    assert_eq!(
+        with(&|p| p.maintenance.xcode_keep = 5),
+        Err("maintenance: xcode_keep is over 4".to_owned())
+    );
+    assert_eq!(with(&|p| p.maintenance.xcode_keep = 4), Ok(()));
+    assert_eq!(
+        with(&|p| {
+            p.min_up = 10_001;
+            p.maintenance.batch = 0;
+        }),
+        Err("min_up: is over 10000".to_owned())
+    );
+    let before = json!({"bake_beats": 3, "min_up": 1});
+    let read = serde_json::from_value::<Policy>(before).expect("reads");
+    assert_eq!(read.maintenance, Maintenance::default());
+    assert_eq!(read.check(), Ok(()));
 }
 
 /// Proves: a policy key this build does not know is refused, as is a stage's.
