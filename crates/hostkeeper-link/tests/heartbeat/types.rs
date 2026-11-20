@@ -212,6 +212,7 @@ fn the_heartbeat_json_has_the_wire_names() {
         ssh: None,
         prerequisites: None,
         bmc: None,
+        maintenance: None,
     };
     let mut expected = serde_json::json!({
         "platform": "darwin-arm64",

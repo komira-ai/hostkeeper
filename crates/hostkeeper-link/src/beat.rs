@@ -24,14 +24,17 @@
 //! at most 16 names held; only a name this release knows carries a version or a reason, so with
 //! the one it knows the report is a few hundred bytes and at most about 4 KiB) is counted and
 //! never dropped either. The host's BMC ([`Heartbeat::bmc`], as `bmc`: an address and a MAC) is
-//! counted and never dropped.
+//! counted and never dropped. The host's maintenance report ([`Heartbeat::maintenance`], as `maintenance`: the
+//! daemon's own message, at most about 5 KiB) is counted and never dropped.
 
 use hostkeeper_config::names::{ServiceName, Version};
 pub use hostkeeper_proto::MAX_SERVICES_PER_HEARTBEAT;
+use hostkeeper_proto::hostkeeper::agent::v1::MaintenanceReport;
 use serde_json::{Map, Value, json};
 
 use crate::bmc::BmcReport;
 use crate::host_ssh::SshReport;
+use crate::maintenance::maintenance_json;
 use crate::names::Reason;
 use crate::operator_keys::KeysReport;
 use crate::order::{DeferredReport, OrderResult};
@@ -116,9 +119,10 @@ pub enum Feature {
     /// with a sink for them ([`crate::PrerequisitesSink`]): the loop adds it ([`PREREQUISITES`]).
     PrerequisitesV1,
     /// `maintenance-v1`: the daemon reports its host's maintenance report and takes the
-    /// `maintain` order. No daemon of this release announces it: the loop has no report to send
-    /// and runs no `maintain` order (it drops one as a verb it does not run), so it is not in
-    /// [`ANNOUNCED`] and the loop adds it nowhere; it is read from a reply's list like the others.
+    /// `maintain` order. A daemon with a [`crate::MaintenanceSource`] announces it, like `ssh-v1`
+    /// only once the coordinator advertised it, and reports what the source gives ([`MAINTENANCE`]);
+    /// the loop runs no `maintain` order (it drops one as a verb it does not run), so it is not in
+    /// [`ANNOUNCED`].
     MaintenanceV1,
 }
 
@@ -153,6 +157,9 @@ pub const OPERATOR_KEYS: Feature = Feature::OperatorKeysV1;
 pub const PREREQUISITES: Feature = Feature::PrerequisitesV1;
 /// The feature a daemon with an [`crate::SshSink`] announces last, after [`PREREQUISITES`].
 pub const SSH: Feature = Feature::SshV1;
+/// The feature a daemon with a [`crate::MaintenanceSource`] announces to a coordinator that
+/// advertises it, after [`SSH`].
+pub const MAINTENANCE: Feature = Feature::MaintenanceV1;
 
 impl Feature {
     /// Its wire name.
@@ -190,7 +197,7 @@ impl Feature {
                 OPERATOR_KEYS,
                 PREREQUISITES,
                 SSH,
-                Feature::MaintenanceV1,
+                MAINTENANCE,
             ])
             .find(|feature| feature.as_str() == name)
     }
@@ -438,7 +445,7 @@ pub struct TrustedRootFacts {
 }
 
 /// One heartbeat.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Heartbeat {
     pub platform: Platform,
     /// The daemon's own version; its name is [`AGENT_NAME`].
@@ -484,6 +491,10 @@ pub struct Heartbeat {
     /// BMC, a daemon that is not root, a Mac). Sent over gRPC only, and counted toward the bound
     /// on both.
     pub bmc: Option<BmcReport>,
+    /// What the daemon last found of the host's maintenance (`maintenance-v1`); none from a
+    /// daemon that has none, or to a coordinator that does not advertise the feature. Sent over
+    /// gRPC only, and counted toward the bound on both.
+    pub maintenance: Option<MaintenanceReport>,
 }
 
 impl Heartbeat {
@@ -567,6 +578,9 @@ impl Heartbeat {
         if let Some(report) = &self.bmc {
             beat.insert("bmc".to_owned(), report.to_json());
         }
+        if let Some(report) = &self.maintenance {
+            beat.insert("maintenance".to_owned(), maintenance_json(report));
+        }
         Value::Object(beat)
     }
 
@@ -622,7 +636,7 @@ pub enum Oversize {
 
 /// A heartbeat within its bound, and the groups of optional facts it lost to get there, in the
 /// order they were dropped.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Fitted {
     pub beat: Heartbeat,
     pub dropped: Vec<OptionalFact>,

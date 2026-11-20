@@ -73,6 +73,7 @@ fn beat(platform: Platform, agent: &str, services: Vec<ServiceFacts>) -> Heartbe
         ssh: None,
         prerequisites: None,
         bmc: None,
+        maintenance: None,
     }
 }
 
