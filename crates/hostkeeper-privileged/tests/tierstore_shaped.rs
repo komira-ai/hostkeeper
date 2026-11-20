@@ -28,10 +28,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use e2e::host_root::is_active;
-use e2e::scenario::{COORDINATED, LOCAL, Scenario, V1, V2, V3};
-use e2e::{FIXTURE_BINARY, SERVICE, instance, served_version, wait_for};
+use e2e::scenario::{COORDINATED, LOCAL, Scenario, V1, V2, V3, V4};
+use e2e::{FIXTURE_BINARY, HOST_ID, SERVICE, instance, served_version, wait_for};
 use hostkeeper_steps::selfupdate::Layout;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 /// The unit directory of the host the package installs its units in, and the directory the
 /// installer links the units it enables from.
@@ -370,6 +370,271 @@ fn force_back_to_previous_needs_no_fetch() {
     assert_eq!(fs::read(&seal_path).expect("1.0.0's seal"), seal_before);
     assert_eq!(tree(&s.host.service_dir().join(V1)), tree_before);
     s.wait_converged(V1);
+}
+
+/// The audit entries of a force's reply, as `(action, reason)`, in the order it wrote them.
+fn entries_of(reply: &Value) -> Vec<(String, String)> {
+    reply["entries"]
+        .as_array()
+        .unwrap_or_else(|| panic!("a force writes audit entries: {reply}"))
+        .iter()
+        .map(|entry| {
+            let text = |field: &str| entry[field].as_str().unwrap_or_default().to_owned();
+            (text("action"), text("reason"))
+        })
+        .collect()
+}
+
+/// From `1.1.0` converged (`previous` `1.0.0`), CI sets `1.3.0`, whose `verify` halts: the
+/// daemon runs `prepare` and `cutover` (which starts `1.3.0`'s instances and stops `1.1.0`'s),
+/// then `verify` halts, and no `rollback` or `cleanup` runs. The host is left on the broken
+/// release, as only a force can repair: `current` `1.3.0` and `previous` `1.1.0`, dpkg at
+/// `1.3.0`, its instances serving and `1.1.0`'s stopped, the step record finished `Halt`, the
+/// host reporting the update failed in phase `halt` and holding a halt of the service; and the
+/// coordinator halts the service on `1.3.0` at the host.
+fn halted_on_v4(s: &Scenario) {
+    s.order(V4);
+    wait_for("the host reports 1.3.0 halted", COORDINATED, || {
+        let update = s.last_update();
+        update["target"] == V4 && update["outcome"] == "OUTCOME_FAILED"
+    });
+    let update = s.last_update();
+    assert_eq!(update["phase"], "FAILURE_PHASE_HALT", "{update}");
+    assert_eq!(update["reason"], "fixture_verify_halted", "{update}");
+    for (step, ended) in [("prepare", "ok"), ("cutover", "ok"), ("verify", "halted")] {
+        assert_eq!(
+            s.host.record(&format!("{step}-{V4}")).as_deref(),
+            Some(ended),
+            "{step} of 1.3.0"
+        );
+    }
+    for step in ["rollback", "cleanup"] {
+        assert_eq!(
+            s.host.record(&format!("{step}-{V4}")),
+            None,
+            "{step} of 1.3.0 never ran"
+        );
+    }
+    let record = s.host.step_record().expect("the step record of the update");
+    assert_eq!(record["target_version"], V4, "{record}");
+    assert_eq!(record["state"]["state"], "finished", "{record}");
+    assert_eq!(record["state"]["verdict"], "Halt", "{record}");
+    assert_eq!(s.link("current").as_deref(), Some(V4));
+    assert_eq!(s.link("previous").as_deref(), Some(V2));
+    assert_eq!(dpkg_version().as_deref(), Some(V4));
+    s.wait_serving(V4);
+    for port in s.package(V2).ports {
+        assert!(!active(port), "the instance {port} of 1.1.0 is stopped");
+    }
+    wait_for(
+        "the coordinator halts the service on 1.3.0",
+        COORDINATED,
+        || {
+            let halt = s.status()["marks"]["halt"].clone();
+            halt["target"] == V4 && halt["nodeId"] == HOST_ID
+        },
+    );
+    assert_eq!(
+        s.status()["marks"]["halt"]["check"],
+        "fixture_verify_halted"
+    );
+    assert_eq!(s.convergence()["state"], "CONVERGENCE_STATE_HALTED");
+    wait_for("the host reports the halt it holds", COORDINATED, || {
+        s.host_row()["beat"]["localHalt"].is_object()
+    });
+}
+
+/// Waits for the host to report the force of `version` (its order id `force-<n>`) and checks it
+/// succeeded; then that the host runs `version` as the force left it: `current` at `version`,
+/// `previous` at `left`, dpkg at `version`, `version`'s instances active and serving it, and
+/// `left`'s stopped.
+fn forced_onto(s: &Scenario, version: &str, left: &str) {
+    wait_for(
+        &format!("the host reports the force to {version}"),
+        COORDINATED,
+        || {
+            let update = s.last_update();
+            update["target"] == version
+                && update["orderId"]
+                    .as_str()
+                    .is_some_and(|id| id.starts_with("force-"))
+                && update["outcome"] != Value::Null
+        },
+    );
+    let update = s.last_update();
+    assert_eq!(update["outcome"], "OUTCOME_SUCCEEDED", "{update}");
+    assert_eq!(s.link("current").as_deref(), Some(version));
+    assert_eq!(s.link("previous").as_deref(), Some(left));
+    assert_eq!(dpkg_version().as_deref(), Some(version));
+    // A unit is active once its program is executed, a moment before it answers: wait for it.
+    s.wait_serving(version);
+    for port in s.package(version).ports {
+        assert!(active(port), "the instance {port} of {version} is active");
+        assert_eq!(
+            served_version(port).as_deref(),
+            Some(version),
+            "instance {port}"
+        );
+    }
+    for port in s.package(left).ports {
+        assert!(!active(port), "the instance {port} of {left} is stopped");
+    }
+}
+
+/// A force repairs a hooked package whose hook halted after its cutover, past a standing halt
+/// and a bad mark of the version it goes back to, with no step of any hook. From `1.1.0`
+/// converged, an operator marks `1.1.0` bad and CI sets `1.3.0`, whose `verify` halts with the
+/// host on `1.3.0` (`halted_on_v4`). An operator then forces `1.1.0` on the host. The force
+/// orders the one host, and its audit entries are, in this order, `force`, `unmark_bad` of
+/// `1.1.0`, `mark_bad` of `1.3.0` (the version the host leaves) and `clear_halt`. The host runs
+/// it: no step of the hook of either version runs (the hook's record directory is the same,
+/// byte for byte, after the force as before it), `1.3.0`'s instances are stopped and `1.1.0` is
+/// installed again from the copy the host kept and serves, the host reports the force
+/// succeeded and holds no halt of the service, and the coordinator holds no halt, holds `1.3.0`
+/// bad (by the force) and `1.1.0` not, and reports the host converged on `1.1.0`.
+#[test]
+fn a_force_repairs_a_hooked_package_halted_after_its_cutover_past_a_bad_mark() {
+    let s = Scenario::updated("fhb");
+    s.coordinator.mark_bad(SERVICE, V2, "1.3.0 replaces it");
+    assert_eq!(s.status()["marks"]["bad"], json!([V2]));
+    halted_on_v4(&s);
+    let hooks_before = tree(&s.host.records());
+
+    let forced = s.coordinator.force(SERVICE, V2, HOST_ID);
+    assert_eq!(forced["targeted"], 1, "{forced}");
+    assert_eq!(forced["held"], Value::Null, "{forced}");
+    let entries = entries_of(&forced);
+    assert_eq!(
+        entries
+            .iter()
+            .map(|(action, _)| action.as_str())
+            .collect::<Vec<_>>(),
+        ["force", "unmark_bad", "mark_bad", "clear_halt"],
+        "{forced}"
+    );
+    assert_eq!(
+        entries[1..]
+            .iter()
+            .map(|(_, reason)| reason.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "1.1.0 is forced",
+            "1.3.0 is left by the force to 1.1.0",
+            "cleared by the force to 1.1.0",
+        ],
+        "{forced}"
+    );
+
+    forced_onto(&s, V2, V4);
+    assert_eq!(
+        tree(&s.host.records()),
+        hooks_before,
+        "no step of a hook ran for the force"
+    );
+    wait_for("the host holds no halt", COORDINATED, || {
+        s.host_row()["beat"]["localHalt"].is_null()
+    });
+    let marks = s.status()["marks"].clone();
+    assert_eq!(marks["halt"], Value::Null, "{marks}");
+    assert_eq!(marks["bad"], json!([V4]), "{marks}");
+    assert_eq!(marks["badByForce"], json!([V4]), "{marks}");
+    s.wait_converged(V2);
+}
+
+/// A force skips a host whose service an operator holds unless the call sets `include_held`,
+/// and then removes no hold. From `1.1.0` converged, CI sets `1.3.0`, whose `verify` halts with
+/// the host on `1.3.0` (`halted_on_v4`), and an operator holds the service on the host. A force
+/// of `1.1.0` to the host without `include_held` lists the host `held` and orders no host; its
+/// audit entries are `force` and `clear_halt` (no host leaves a version, so none is marked bad).
+/// The reply that carries the service's new halt generation lifts the host's own halt, and once
+/// the host reports that, it is still on `1.3.0`, untouched: no order of the coordinator stands
+/// for it, it reports no update in flight, its step record is still that of `1.3.0` with no
+/// force in it, `current` is `1.3.0` and `1.3.0` serves. The same force with `include_held`
+/// orders the host, writes `force` (saying `include_held`) and `mark_bad` of `1.3.0`, and the
+/// host runs it with no hook step and serves `1.1.0`; the hold still stands on the host.
+#[test]
+fn a_force_passes_a_held_host_only_with_include_held() {
+    let s = Scenario::updated("fhd");
+    halted_on_v4(&s);
+    s.coordinator
+        .hold_host(SERVICE, HOST_ID, "kept as it is for a look");
+
+    let skipped = s.coordinator.force(SERVICE, V2, HOST_ID);
+    assert_eq!(skipped["held"], json!([HOST_ID]), "{skipped}");
+    assert_eq!(
+        skipped["targeted"],
+        Value::Null,
+        "no host is ordered: {skipped}"
+    );
+    assert_eq!(
+        entries_of(&skipped)
+            .iter()
+            .map(|(action, _)| action.as_str())
+            .collect::<Vec<_>>(),
+        ["force", "clear_halt"],
+        "{skipped}"
+    );
+    wait_for(
+        "the host reports its halt lifted by the new generation",
+        COORDINATED,
+        || s.host_row()["beat"]["localHalt"].is_null(),
+    );
+    let row = s.host_row();
+    assert_eq!(
+        row["view"]["order"],
+        Value::Null,
+        "nothing is ordered: {row}"
+    );
+    assert_eq!(row["beat"]["updating"], Value::Null, "{row}");
+    assert!(
+        row["view"]["holds"]
+            .as_array()
+            .is_some_and(|holds| !holds.is_empty()),
+        "the hold stands: {row}"
+    );
+    let record = s.host.step_record().expect("the step record");
+    assert_eq!(record["target_version"], V4, "{record}");
+    assert!(
+        record.get("force").is_none_or(Value::is_null),
+        "no force ran: {record}"
+    );
+    assert_eq!(s.link("current").as_deref(), Some(V4));
+    assert_eq!(dpkg_version().as_deref(), Some(V4));
+    s.wait_serving(V4);
+    let hooks_before = tree(&s.host.records());
+
+    let included = s.coordinator.force_including_held(SERVICE, V2, HOST_ID);
+    assert_eq!(included["targeted"], 1, "{included}");
+    assert_eq!(included["held"], Value::Null, "{included}");
+    let entries = entries_of(&included);
+    assert_eq!(
+        entries
+            .iter()
+            .map(|(action, _)| action.as_str())
+            .collect::<Vec<_>>(),
+        ["force", "mark_bad"],
+        "{included}"
+    );
+    assert!(
+        entries[0].1.contains("; include_held;"),
+        "the force says it ordered held pairs: {included}"
+    );
+    assert_eq!(entries[1].1, "1.3.0 is left by the force to 1.1.0");
+
+    forced_onto(&s, V2, V4);
+    assert_eq!(
+        tree(&s.host.records()),
+        hooks_before,
+        "no step of a hook ran for the force"
+    );
+    let row = s.host_row();
+    assert!(
+        row["view"]["holds"]
+            .as_array()
+            .is_some_and(|holds| !holds.is_empty()),
+        "the hold still stands: {row}"
+    );
+    assert_eq!(s.status()["marks"]["bad"], json!([V4]));
 }
 
 /// Every socket under `dir`, as paths (links are not followed).
