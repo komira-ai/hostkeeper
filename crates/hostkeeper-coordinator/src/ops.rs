@@ -8,11 +8,11 @@
 //! halt, the last good version, the bad versions, the force that stands: [`crate::force`]), where
 //! each service's update plan stands (the stages entered, the hosts done, an operator's pause:
 //! [`crate::rollouts`]; kept in the halts file beside this one, not in this file), the marks of
-//! each (host group, package) (`crate::host_groups`, all of them in this file), and a ring of
-//! the last changes made. A key this build added is written only when it holds
-//! something, so a file that never held one keeps the shape the release before reads; once it
-//! does, the release before refuses the file, as it should: it would ignore a hold, a force or an
-//! assignment.
+//! each (host group, package) (`crate::host_groups`, all of them in this file), the maintenance
+//! runs (`crate::maintenance_runs`), and a ring of the last changes made. A key this build added
+//! is written only when it holds something, so a file that never held one keeps the shape the
+//! release before reads; once it does, the release before refuses the file, as it should: it would
+//! ignore a hold, a force or an assignment.
 //! Over a file it is one JSON file, `--ops-file`, kept apart from `desired.json` so that an
 //! earlier coordinator, which refuses a key it does not know there, still reads the desired
 //! state. The file is created by the first change (a
@@ -326,7 +326,9 @@ pub struct AuditEntry {
     /// `mdm_nonce_pushed`, `mdm_install_sent` and `mdm_baseline`, by `mdm-gate`; `state_imported`, by
     /// `coordinator`, the last row an earlier release's `import` wrote into the database; this
     /// release writes none; the Xcode store's `xcode_put` (an operator's upload) and `xcode_remove`
-    /// (an operator's `Xcode.Remove` or the coordinator's pruning); the console's `console_open`,
+    /// (an operator's `Xcode.Remove` or the coordinator's pruning); the maintenance runs'
+    /// `maintenance_schedule` and `maintenance_cancel` (an operator's `Maintenance` calls); the
+    /// console's `console_open`,
     /// `console_close`, `console_denied`,
     /// `power_action`, `boot_device_set` and `console_coordinator_start`, lines that change no
     /// state and never enter the ring, [`OpsStore::append_audit_only`]).
@@ -452,6 +454,10 @@ pub struct OpsState {
     /// and every other mark in this file, written only when there are any.
     #[serde(default, skip_serializing_if = "GroupsMarks::is_empty")]
     pub(crate) host_groups: GroupsMarks,
+    /// The maintenance runs (`crate::maintenance_runs`), oldest first; written only when there
+    /// are any, so a file with none keeps the shape the release before reads.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) maintenance_runs: Vec<crate::maintenance_runs::Run>,
 }
 
 impl Default for OpsState {
@@ -467,6 +473,7 @@ impl Default for OpsState {
             inventory: Vec::new(),
             rollouts: BTreeMap::new(),
             host_groups: GroupsMarks::default(),
+            maintenance_runs: Vec::new(),
         }
     }
 }

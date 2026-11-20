@@ -199,10 +199,9 @@ pub enum Command {
 // refuses the directory beside it, naming it, at start).
 #[group(id = "records_store", args = ["enrollment_dir", "database_dsn_file"], multiple = true)]
 pub struct Serve {
-    /// A TOML file of flags of `serve`, each key a flag's name without `--` (a string or an
-    /// integer is its value, `true` a flag with no value, an array the flag once per element),
-    /// put in place of this flag before the others are parsed: a flag it gives may not be given
-    /// again.
+    /// A TOML file of flags of `serve`, each key a flag's name without `--` (a string or an integer
+    /// is its value, `true` a flag with no value, an array the flag once per element), put in place
+    /// of this flag before the others are parsed: a flag it gives may not be given again.
     #[arg(long, value_name = "FILE")]
     pub config: Option<PathBuf>,
     /// Where updaters dial (mutual TLS).
@@ -277,10 +276,9 @@ pub struct Serve {
     /// --audit-retained-segments. Requires --halt-marker-file.
     #[arg(long, requires = "halt_marker_file")]
     pub database_dsn_file: Option<PathBuf>,
-    /// With --database-dsn-file: the file, on a local disk that stays writable when the database
-    /// is not, that lists the changes that stand in memory and are not yet committed. A start
-    /// that finds it removes it when the database holds every change it lists, and refuses
-    /// otherwise.
+    /// With --database-dsn-file: the file, on a local disk that stays writable when the database is
+    /// not, that lists the changes that stand in memory and are not yet committed. A start that
+    /// finds it removes it when the database holds every change it lists, and refuses otherwise.
     #[arg(long, requires = "database_dsn_file")]
     pub halt_marker_file: Option<PathBuf>,
     /// The pool, the instance's row and the migrations of the database.
@@ -289,6 +287,9 @@ pub struct Serve {
     /// The list of Xcode releases the coordinator reads.
     #[command(flatten)]
     pub xcode: crate::config_xcode::XcodeFlags,
+    /// How a Mac's macOS update of a maintenance run is applied.
+    #[command(flatten)]
+    pub maintenance: crate::config_maintenance::MaintenanceFlags,
     /// The allow-list of CI's OIDC token: a TOML file with a `[remote_operator]` table. Its
     /// issuer, audience, event and runner rules apply to every token; its entries are also each
     /// package's trusted publishers until an operator changes the package's list in the state.

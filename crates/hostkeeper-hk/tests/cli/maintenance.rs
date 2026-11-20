@@ -1,7 +1,9 @@
 //! The `Maintenance` calls, as `hk` sends them: the path each posts to and the body its flags
 //! make, a kind or a state the proto does not name refused before anything is sent, and every
-//! call through the real gateway answered `UNIMPLEMENTED`, as this release's coordinator, which
-//! has no handler of the service yet, answers it.
+//! call through the real gateway of a coordinator that holds no run and no enrolled host: the four
+//! served calls answer what an empty state answers (`schedule` and `get`/`cancel` a refusal
+//! `NOT_FOUND`, exit 1; `list` no runs), `retry-host` and `put-back`, which have no handler yet,
+//! `UNIMPLEMENTED`.
 
 use crate::gateway;
 use crate::rig::{Rig, Server, call};
@@ -24,9 +26,9 @@ fn commands() -> Vec<(Vec<&'static str>, &'static str, &'static str)> {
                 "--host-ids",
                 "node-02",
                 "--window-start-unix",
-                "1800000000",
+                "4102444800",
                 "--window-end-unix",
-                "1800003600",
+                "4102448400",
                 "--batch",
                 "2",
                 "--drain-deadline-secs",
@@ -39,7 +41,7 @@ fn commands() -> Vec<(Vec<&'static str>, &'static str, &'static str)> {
                 "true",
             ],
             "Maintenance/Schedule",
-            r#"{"kinds":["MAINTENANCE_KIND_LINUX","MAINTENANCE_KIND_REBOOT"],"hostIds":["node-01","node-02"],"windowStartUnix":"1800000000","windowEndUnix":"1800003600","batch":2,"drainDeadlineSecs":"0","reason":"monthly update","takeLastHost":true,"confirm":true}"#,
+            r#"{"kinds":["MAINTENANCE_KIND_LINUX","MAINTENANCE_KIND_REBOOT"],"hostIds":["node-01","node-02"],"windowStartUnix":"4102444800","windowEndUnix":"4102448400","batch":2,"drainDeadlineSecs":"0","reason":"monthly update","takeLastHost":true,"confirm":true}"#,
         ),
         (
             vec![
@@ -195,19 +197,51 @@ fn a_kind_or_state_the_proto_does_not_name_is_refused_before_anything_is_sent() 
     assert!(server.seen().is_empty());
 }
 
-/// Proves: every maintenance command, through the real gateway, reaches the coordinator's method
-/// of `Maintenance` with its body, and the coordinator, which serves no handler of the service
-/// yet, answers it `UNIMPLEMENTED` (HTTP 501): `hk` exits 1 with exactly the code on stderr, no
-/// `refused:` line and nothing on stdout.
+/// Proves: through the real gateway of a coordinator with no run and no enrolled host, each
+/// maintenance command reaches its method with its body and gets what an empty state answers.
+/// `schedule` of host ids that are not enrolled is `NOT_FOUND` (HTTP 404) `unknown_host`, of a host
+/// group the coordinator does not hold `NOT_FOUND` `unknown_group`; `get` and `cancel` of a run id
+/// no run has are `NOT_FOUND` `unknown_run`; each of those exits 1 with the code and the
+/// `refused:` reason on stderr and nothing on stdout. `list` is 200 with no run, printed as the
+/// gateway sent it, exit 0. `retry-host` and `put-back`, which have no handler yet, are
+/// `UNIMPLEMENTED` (501): exit 1 with exactly the code on stderr, no `refused:` line.
 ///
-/// Catches: a coordinator that serves a maintenance method before its handler lands, an
-/// `UNIMPLEMENTED` answer that exits 0 or as a refusal of the caller (exit 3), and a command whose
-/// path the gateway does not know.
+/// Catches: a served method answered `UNIMPLEMENTED`, a missing run or host answered as a
+/// refusal of the caller (exit 3) or of the request (exit 2), a refusal that loses its reason,
+/// and a method that is answered before its handler lands.
 #[test]
-fn each_maintenance_command_through_the_real_gateway_is_unimplemented() {
+fn maintenance_commands_through_the_real_gateway_answer_an_empty_state_and_two_stay_unimplemented()
+{
     let rig = Rig::new("maintenance-gateway");
     let gateway = gateway::start(&rig.pki, &rig.path(""));
-    for (i, (words, method, body)) in commands().into_iter().enumerate() {
+    let not_found = |reason: &str| {
+        (
+            404,
+            1,
+            format!("hk: the coordinator answered NOT_FOUND\nrefused: {reason}\n"),
+        )
+    };
+    let wants = [
+        not_found("unknown_host"),
+        not_found("unknown_group"),
+        (200, 0, String::new()),
+        (200, 0, String::new()),
+        not_found("unknown_run"),
+        not_found("unknown_run"),
+        (
+            501,
+            1,
+            "hk: the coordinator answered UNIMPLEMENTED\n".to_owned(),
+        ),
+        (
+            501,
+            1,
+            "hk: the coordinator answered UNIMPLEMENTED\n".to_owned(),
+        ),
+    ];
+    for (i, ((words, method, body), (status, code, stderr))) in
+        commands().into_iter().zip(wants).enumerate()
+    {
         let ran = rig.hk(&call(&rig, gateway.port, &words));
         let seen = gateway.seen();
         assert_eq!(seen.len(), i + 1, "{words:?}: {seen:#?}");
@@ -215,10 +249,20 @@ fn each_maintenance_command_through_the_real_gateway_is_unimplemented() {
         assert_eq!(last.method, "POST", "{words:?}");
         assert_eq!(last.target, format!("{PREFIX}{method}"), "{words:?}");
         assert_eq!(last.text(), body, "{words:?}");
-        assert_eq!(last.status, 501, "{words:?}");
+        assert_eq!(last.status, status, "{words:?}");
+        let answer = String::from_utf8_lossy(&last.answer).into_owned();
+        let stdout = if code == 0 {
+            assert!(
+                matches!(answer.as_str(), "{}" | "{\"runs\":[]}"),
+                "{answer}"
+            );
+            format!("{answer}\n")
+        } else {
+            String::new()
+        };
         assert_eq!(
-            (ran.code, ran.stdout.as_str(), ran.stderr.as_str()),
-            (1, "", "hk: the coordinator answered UNIMPLEMENTED\n"),
+            (ran.code, ran.stdout, ran.stderr),
+            (code, stdout, stderr),
             "{words:?}"
         );
     }

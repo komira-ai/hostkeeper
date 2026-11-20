@@ -320,6 +320,7 @@ fn the_shipped_heartbeat_reaches_the_coordinator_and_its_order_reaches_the_daemo
             PERIOD,
             PlatformKind::Linux,
             hostkeeper_daemon::maintenance_collect::LinuxScope::default(),
+            hostkeeper_daemon::maintenance_softwareupdate::MacosMajor::default(),
             Box::new(hostkeeper_daemon::NoWatchdog),
         )
     };
@@ -399,6 +400,7 @@ fn the_link_of_host_links_answers_the_coordinators_reply() {
         PERIOD,
         PlatformKind::Linux,
         hostkeeper_daemon::maintenance_collect::LinuxScope::default(),
+        hostkeeper_daemon::maintenance_softwareupdate::MacosMajor::default(),
         Box::new(hostkeeper_daemon::NoWatchdog),
     );
 
@@ -469,6 +471,7 @@ fn a_coordinator_whose_ca_is_not_the_pinned_one_hears_no_heartbeat() {
         PERIOD,
         PlatformKind::Linux,
         hostkeeper_daemon::maintenance_collect::LinuxScope::default(),
+        hostkeeper_daemon::maintenance_softwareupdate::MacosMajor::default(),
         Box::new(hostkeeper_daemon::NoWatchdog),
     );
 
@@ -506,6 +509,7 @@ fn a_host_not_enrolled_makes_no_link_and_dials_nothing() {
         PERIOD,
         PlatformKind::Linux,
         hostkeeper_daemon::maintenance_collect::LinuxScope::default(),
+        hostkeeper_daemon::maintenance_softwareupdate::MacosMajor::default(),
         Box::new(hostkeeper_daemon::NoWatchdog),
     );
     let mut heartbeater = links.heartbeater(&daemon);

@@ -1,6 +1,6 @@
 # Scheduled maintenance updates
 
-Status: design; the Linux report of sections 1 and 4.1 is built (`crates/hostkeeper-daemon/src/maintenance_facts.rs`), as are the maintenance hook's steps over per-kind stubs and the Linux kinds' `verify` of section 5.6 (`crates/hostkeeper-daemon/src/maintenance_hook/`), nothing else. The owner's answers of 2026-11-19 are in: the Mac's update account (section 5.5) and the first-class Linux path
+Status: design; the Linux report of sections 1 and 4.1 is built (`crates/hostkeeper-daemon/src/maintenance_facts.rs`), and on a Mac its macOS facts and due macOS updates, FileVault, the data volume's free space and the Command Line Tools (`maintenance_macos.rs`, `maintenance_mac.rs`), as are the maintenance hook's steps over per-kind stubs and the Linux kinds' `verify` of section 5.6 (`crates/hostkeeper-daemon/src/maintenance_hook/`); nothing else. The owner's answers of 2026-11-19 are in: the Mac's update account (section 5.5) and the first-class Linux path
 (the one-button update of section 4.2) are decided; for Xcode, section 2.0 makes a push from the operator's own Mac the source (owner's direction, 2026-11-20), with a fetcher Mac as the alternative. Facts about this repository were read on `main` at the commit this document lands on top
 of; facts about komira-ai/jobscheduler and komira-ai/kbf were read on their `main` and are marked as theirs. **Built** marks what exists
 (with its path), **New** what this design adds, **[V]** a claim to verify before building on it.

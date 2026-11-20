@@ -138,7 +138,8 @@ fn a_lost_store_keeps_and_reads_nothing() {
 /// Proves (B8, both ways, for `0028`): the release before (migrations `0001` to `0027`) runs on a
 /// database this release migrated, running nothing, and the table it does not know holds a row
 /// without the release before's statements touching it; this release, started on a database the
-/// release before migrated, runs `0028` alone and makes the table empty.
+/// release before migrated, runs `0028` and the migration after it (`0029`) and makes the table
+/// empty.
 ///
 /// Catches: a `0028` that is not `may-run`, which would turn a rollback into a restore, and a
 /// table the start does not make.
@@ -170,9 +171,9 @@ fn the_release_before_runs_on_a_database_with_0028_and_this_one_on_its() {
     let (store, _) = old.open("this release").expect("this release starts on it");
     store.stop();
     assert_eq!(
-        old.rows("SELECT version FROM schema_version WHERE version > 27"),
-        [vec![Some("28".to_owned())]],
-        "0028 alone ran"
+        old.rows("SELECT version FROM schema_version WHERE version > 27 ORDER BY version"),
+        [vec![Some("28".to_owned())], vec![Some("29".to_owned())]],
+        "0028 and 0029 ran"
     );
     assert_eq!(
         old.rows("SELECT count(*) FROM xcode_releases"),

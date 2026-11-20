@@ -8,8 +8,8 @@
 
 use hostkeeper_proto::hostkeeper::operator::v1::{
     AlertsRefusal, ApiTokensRefusal, AuditRefusal, ConsoleRefusal, EnrollmentRefusal,
-    HostGroupsRefusal, HostsRefusal, LayoutRefusal, ReleasesRefusal, RepositoriesRefusal,
-    RolloutsRefusal, ServicesRefusal, SshRefusal, UsersRefusal, XcodeRefusal,
+    HostGroupsRefusal, HostsRefusal, LayoutRefusal, MaintenanceRefusal, ReleasesRefusal,
+    RepositoriesRefusal, RolloutsRefusal, ServicesRefusal, SshRefusal, UsersRefusal, XcodeRefusal,
 };
 use tonic::{Code, Status};
 
@@ -335,4 +335,26 @@ pub(crate) fn xcode(refusal: XcodeRefusal) -> Status {
         XcodeRefusal::AuditUnavailable => Code::Unavailable,
     };
     refused(code, refusal.as_str_name(), "XCODE_REFUSAL_")
+}
+
+/// The status of a refusal by `Maintenance`.
+pub(crate) fn maintenance(refusal: MaintenanceRefusal) -> Status {
+    let code = match refusal {
+        MaintenanceRefusal::Unspecified | MaintenanceRefusal::StoreFailed => Code::Internal,
+        MaintenanceRefusal::Unauthorized => Code::Unauthenticated,
+        MaintenanceRefusal::Forbidden => Code::PermissionDenied,
+        MaintenanceRefusal::InvalidRequest => Code::InvalidArgument,
+        MaintenanceRefusal::UnknownGroup
+        | MaintenanceRefusal::UnknownHost
+        | MaintenanceRefusal::UnknownRun
+        | MaintenanceRefusal::NotInRun => Code::NotFound,
+        MaintenanceRefusal::NothingDue
+        | MaintenanceRefusal::WindowEnded
+        | MaintenanceRefusal::LastHost
+        | MaintenanceRefusal::HostInMaintenance
+        | MaintenanceRefusal::RunEnded
+        | MaintenanceRefusal::NotHalted => Code::FailedPrecondition,
+        MaintenanceRefusal::AuditUnavailable => Code::Unavailable,
+    };
+    refused(code, refusal.as_str_name(), "MAINTENANCE_REFUSAL_")
 }
