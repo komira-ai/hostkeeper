@@ -1,6 +1,6 @@
 # Scheduled maintenance updates
 
-Status: design. No code. The owner's answers of 2026-11-19 are in: the Mac's update account (section 5.5) and the first-class Linux path
+Status: design; the Linux report of sections 1 and 4.1 is built (`crates/hostkeeper-daemon/src/maintenance_facts.rs`), nothing else. The owner's answers of 2026-11-19 are in: the Mac's update account (section 5.5) and the first-class Linux path
 (the one-button update of section 4.2) are decided; for Xcode, section 2.0 makes a push from the operator's own Mac the source (owner's direction, 2026-11-20), with a fetcher Mac as the alternative. Facts about this repository were read on `main` at the commit this document lands on top
 of; facts about komira-ai/jobscheduler and komira-ai/kbf were read on their `main` and are marked as theirs. **Built** marks what exists
 (with its path), **New** what this design adds, **[V]** a claim to verify before building on it.
@@ -305,7 +305,7 @@ coordinator that advertises it, like `prerequisites` (Built). It carries the hos
 installed kernel, the boot id the daemon already reads for its step record, Built: `hostkeeper_steps::ProcBootId` and
 `hostkeeper_launchd::SysctlBootId`, and the boot time), the installed Xcodes (version, build, path, `xcode-select`'s), on a Mac the update facts of section 1 (FileVault, free space, the update
 account, the Command Line Tools, device-management conflicts), the due items of
-section 1 (kind, from, to, needs reboot, label), when it last looked, the state of the maintenance run it holds, and, on the fetcher, the
+section 1 (kind, from, to, needs reboot, label), when it last looked, how many listing lines no parser knew, why the last look failed (`look_failed`, Built: a failed look keeps the last good report), the state of the maintenance run it holds, and, on the fetcher, the
 state of its fetch (release, `downloading`, `held`, `signin_needed` with its reason, or `failed` with its reason, and the next try).
 `HeartbeatResponse` gains `fetch_xcode` (optional), sent only to a daemon that announced `maintenance-v1`; an older daemon never sees it. It is bounded under the
 heartbeat's 16 KiB and stored for free in the host's last beat (Built: `fleet_hosts.beat`). Proto changes are additive, with an

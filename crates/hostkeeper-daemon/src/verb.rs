@@ -217,7 +217,8 @@ impl TryFrom<&Order> for Verb {
                 halt_generation: a.halt_generation,
             },
             order::Verb::ClearRecord(a) => Verb::ClearRecord(service("clear_record", &a.service)?),
-            // A verb this daemon does not run yet (`maintenance-v1`, which it does not announce).
+            // A verb this daemon does not run yet (the maintenance run of `maintenance-v1`: it reports
+            // the facts of a look and takes no order).
             order::Verb::Maintain(_) => return Err(no_verb()),
         })
     }

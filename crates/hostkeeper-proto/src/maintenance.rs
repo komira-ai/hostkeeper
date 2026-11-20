@@ -36,6 +36,8 @@ pub const MAX_DUE_LABEL: usize = 64;
 pub const MAX_RUN_ID: usize = 64;
 /// The most bytes of `run.halted_reason`.
 pub const MAX_HALTED_REASON: usize = 256;
+/// The most bytes of `look_failed`.
+pub const MAX_LOOK_FAILED: usize = 256;
 
 /// The bound of a maintenance report a report breaks. A field is named by its path in the
 /// report, a list's entries all by the list's name (`due.label`).
@@ -152,11 +154,13 @@ pub fn check_report(report: &MaintenanceReport) -> Result<(), MaintenanceReportE
             ),
         ]
     });
+    let look_failed = [("look_failed", report.look_failed.as_str(), MAX_LOOK_FAILED)];
     match host
         .chain(xcodes)
         .chain(mac_texts)
         .chain(due)
         .chain(run_texts)
+        .chain(look_failed)
         .find(|&(_, text, max)| text.len() > max)
     {
         Some((field, text, max)) => Err(MaintenanceReportError::TooLong {

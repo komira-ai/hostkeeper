@@ -1,0 +1,4 @@
+# a comment
+ID=debian
+
+VERSION_ID=12

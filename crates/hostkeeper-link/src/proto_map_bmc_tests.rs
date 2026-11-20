@@ -24,6 +24,7 @@ fn beat(bmc: Option<BmcReport>) -> Heartbeat {
         ssh: None,
         prerequisites: None,
         bmc,
+        maintenance: None,
     }
 }
 

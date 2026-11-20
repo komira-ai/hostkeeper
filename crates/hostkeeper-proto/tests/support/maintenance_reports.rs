@@ -4,8 +4,8 @@
 use hostkeeper_proto::hostkeeper::agent::v1 as agent;
 use hostkeeper_proto::maintenance::{
     MAX_APPLIED, MAX_DUE, MAX_DUE_LABEL, MAX_DUE_VERSION, MAX_HALTED_REASON, MAX_KERNEL_TEXT,
-    MAX_MAC_TEXT, MAX_MDM_CONFLICTS, MAX_OS_TEXT, MAX_RUN_ID, MAX_XCODE_PATH, MAX_XCODE_VERSION,
-    MAX_XCODES,
+    MAX_LOOK_FAILED, MAX_MAC_TEXT, MAX_MDM_CONFLICTS, MAX_OS_TEXT, MAX_RUN_ID, MAX_XCODE_PATH,
+    MAX_XCODE_VERSION, MAX_XCODES,
 };
 
 /// `n` bytes of text.
@@ -72,6 +72,7 @@ pub fn at_every_bound() -> agent::MaintenanceReport {
             applied: vec![agent::MaintenanceKind::Reboot.into(); MAX_APPLIED],
             halted_reason: text(MAX_HALTED_REASON),
         }),
+        look_failed: text(MAX_LOOK_FAILED),
     }
 }
 

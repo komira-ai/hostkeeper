@@ -1,0 +1,6 @@
+NEEDRESTART-VER: 3.6
+NEEDRESTART-KSTA: 2
+NEEDRESTART-NEW: something a later version says
+NEEDRESTART-KSTA: soon
+
+needrestart is not a thing

@@ -464,6 +464,7 @@ fn the_host_links_write_the_issue_file_and_run_the_given_agetty() {
         &files,
         hostkeeper_link::DEFAULT_HEARTBEAT_SECS,
         PlatformKind::Linux,
+        hostkeeper_daemon::maintenance_collect::LinuxScope::default(),
         Box::new(hostkeeper_daemon::NoWatchdog),
     );
     let log = RecordingLog::default();
