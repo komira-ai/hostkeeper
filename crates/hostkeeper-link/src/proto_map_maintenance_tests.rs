@@ -1,12 +1,11 @@
 //! `maintenance-v1` through the conversions of `proto_map`: the report out as `maintenance`, the
-//! feature read from a reply's list, and a `maintain` order, which this daemon does not run, dropped unrun whatever the reply
-//! advertises.
+//! feature read from a reply's list, and a `maintain` order read into the reply's `maintain`.
 
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 
 use hostkeeper_config::names::Version;
 
-use super::{NOT_RUN, heartbeat, reply};
+use super::{NOT_READ, heartbeat, reply};
 use crate::beat::{ANNOUNCED, Feature, Heartbeat, Platform};
 
 fn beat(maintenance: Option<pb::MaintenanceReport>) -> Heartbeat {
@@ -102,16 +101,39 @@ fn the_feature_reads_back_from_its_name() {
     assert_eq!(mapped.reply.features, vec![Feature::MaintenanceV1]);
 }
 
-/// Proves a `maintain` order is not given to the loop and comes back as a verb the daemon does
-/// not run, from a coordinator that advertises `maintenance-v1` as from one that does not: no
-/// host runs maintenance on this release.
+/// Proves a `maintain` order maps to the reply's `maintain` with its order id, its try and the
+/// message unchanged, and to no service order, from a coordinator that advertises
+/// `maintenance-v1` as from one that does not (the loop decides what to do with it), and that
+/// nothing is dropped.
 #[test]
-fn a_maintain_order_is_dropped_unrun() {
+fn a_maintain_order_maps_to_the_reply_unchanged() {
     for features in [&[][..], &["maintenance-v1"][..]] {
-        let mapped = reply(maintain(features));
+        let response = maintain(features);
+        let Some(pb::order::Verb::Maintain(terms)) =
+            response.order.clone().and_then(|order| order.verb)
+        else {
+            panic!("a maintain order");
+        };
+        let mapped = reply(response);
         assert_eq!(mapped.reply.order, None, "{features:?}");
-        let dropped = mapped.dropped.expect("dropped");
-        assert_eq!(dropped.what, "order \"o-1\"");
-        assert_eq!(dropped.why, NOT_RUN);
+        assert_eq!(mapped.dropped, None, "{features:?}");
+        let order = mapped.reply.maintain.expect("a maintain order");
+        assert_eq!(order.id.as_str(), "o-1");
+        assert_eq!(order.order_try, 1);
+        assert_eq!(order.maintain, terms);
     }
+}
+
+/// Proves a `maintain` order whose order id the daemon's grammar refuses is not given to the
+/// loop and comes back dropped, naming the verb and the id.
+#[test]
+fn a_maintain_order_with_an_unreadable_id_is_dropped() {
+    let mut response = maintain(&["maintenance-v1"]);
+    response.order.as_mut().expect("an order").order_id = "a/b".to_owned();
+    let mapped = reply(response);
+    assert_eq!(mapped.reply.order, None);
+    assert_eq!(mapped.reply.maintain, None);
+    let dropped = mapped.dropped.expect("dropped");
+    assert_eq!(dropped.what, "maintain order \"a/b\"");
+    assert_eq!(dropped.why, NOT_READ);
 }

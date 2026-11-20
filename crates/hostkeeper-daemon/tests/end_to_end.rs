@@ -216,6 +216,7 @@ fn without_executor(daemon: &Arc<Daemon>, links: &Links) -> Heartbeater {
             ssh: None,
             prerequisites: None,
             maintenance: None,
+            maintain: None,
             bmc: None,
         },
     )

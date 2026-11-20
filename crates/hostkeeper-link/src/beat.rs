@@ -119,10 +119,10 @@ pub enum Feature {
     /// with a sink for them ([`crate::PrerequisitesSink`]): the loop adds it ([`PREREQUISITES`]).
     PrerequisitesV1,
     /// `maintenance-v1`: the daemon reports its host's maintenance report and takes the
-    /// `maintain` order. A daemon with a [`crate::MaintenanceSource`] announces it, like `ssh-v1`
-    /// only once the coordinator advertised it, and reports what the source gives ([`MAINTENANCE`]);
-    /// the loop runs no `maintain` order (it drops one as a verb it does not run), so it is not in
-    /// [`ANNOUNCED`].
+    /// `maintain` order. A daemon with a [`crate::MaintenanceSource`] and a
+    /// [`crate::MaintainSink`] announces it, like `ssh-v1` only once the coordinator advertised
+    /// it, reports what the source gives and hands the order to the sink ([`MAINTENANCE`]); it is
+    /// not in [`ANNOUNCED`].
     MaintenanceV1,
 }
 
