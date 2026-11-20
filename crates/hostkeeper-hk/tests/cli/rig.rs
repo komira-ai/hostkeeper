@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use hostkeeper_hk::ssh::{Coordinator, Launch, Verb};
+use hostkeeper_hk::xcode_push::Mac;
 use hostkeeper_hk::{World, run};
 use hostkeeper_proto::ctl::Command;
 use hostkeeper_testkit::Scratch;
@@ -144,8 +145,9 @@ pub struct Server {
     seen: Arc<Mutex<Vec<Seen>>>,
 }
 
-/// Reads one request: its head up to the blank line, then `Content-Length` bytes.
-fn read_request(stream: &mut impl Read) -> Option<Request> {
+/// Reads one request: its head up to the blank line, then `Content-Length` bytes. A request that
+/// says `Expect: 100-continue` is answered `100 Continue` before its body is read.
+fn read_request(stream: &mut (impl Read + Write)) -> Option<Request> {
     let mut bytes = Vec::new();
     let mut chunk = [0_u8; 4096];
     let split = loop {
@@ -168,6 +170,13 @@ fn read_request(stream: &mut impl Read) -> Option<Request> {
         .filter_map(|l| l.split_once(':'))
         .map(|(n, v)| (n.trim().to_ascii_lowercase(), v.trim().to_owned()))
         .collect();
+    let expects = headers
+        .iter()
+        .any(|(n, v)| n == "expect" && v.eq_ignore_ascii_case("100-continue"));
+    if expects {
+        stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").ok()?;
+        stream.flush().ok()?;
+    }
     let length: usize = headers
         .iter()
         .find(|(n, _)| n == "content-length")
@@ -360,6 +369,8 @@ pub struct Opts<'a> {
     pub home: Option<PathBuf>,
     pub no_home: bool,
     pub ssh: Option<&'a Recorder>,
+    /// The system and the programs of `hk xcode-push`; the real ones when `None`.
+    pub mac: Option<&'a Mac>,
 }
 
 impl<'a> Opts<'a> {
@@ -374,6 +385,7 @@ impl<'a> Opts<'a> {
             home: None,
             no_home: false,
             ssh: None,
+            mac: None,
         }
     }
 
@@ -403,6 +415,11 @@ impl<'a> Opts<'a> {
 
     pub fn ssh(mut self, recorder: &'a Recorder) -> Self {
         self.ssh = Some(recorder);
+        self
+    }
+
+    pub fn mac(mut self, mac: &'a Mac) -> Self {
+        self.mac = Some(mac);
         self
     }
 
@@ -493,6 +510,8 @@ impl Rig {
             Some(recorder) => recorder,
             None => &default_ssh,
         };
+        let default_mac = Mac::system();
+        let mac = opts.mac.unwrap_or(&default_mac);
         let mut world = World {
             table: opts.table,
             stamp: opts.stamp,
@@ -508,6 +527,7 @@ impl Rig {
             oidc_token: opts.oidc.map(|(_, token)| token.as_bytes().to_vec()),
             web_roots: &web_roots,
             ssh,
+            mac,
         };
         let code = run(&mut world, args);
         Ran {

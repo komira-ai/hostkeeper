@@ -2,7 +2,7 @@
 //! [flags]`. Global flags are taken at each; the service and the method are words of the command
 //! table; `--help` at each level prints that level's help; and the commands that are not
 //! gateway calls (`ssh`, `ssh-proxy`, `ssh-revoke`, `ssh-status`, `ssh-known-host`) are handed
-//! to the ssh module after the checks of their global flags.
+//! to the ssh module after the checks of their global flags, and `xcode-push` to its module.
 
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt as _;
@@ -68,6 +68,7 @@ pub(crate) fn dispatch(w: &mut World<'_>, argv: &[Vec<u8>]) -> Flow<()> {
     let tail = argv.get(at..).unwrap_or_default();
     match service.as_slice() {
         b"ssh-proxy" | b"ssh-revoke" | b"ssh-status" => return ssh_main(w, globals, service, tail),
+        b"xcode-push" => return crate::xcode_push::xcode_push(w, globals, tail),
         b"ssh-known-host" => {
             if tail.is_empty() {
                 return Err(Stop::usage("ssh-known-host needs <pins-file> %H %t %K %f"));

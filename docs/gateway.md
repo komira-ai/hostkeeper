@@ -25,8 +25,8 @@ serves the gateway; the heartbeat listener never does.
 
 The `Xcode` service (`List`, `Remove`) lists and removes the archives of the coordinator's Xcode
 store. The archives themselves are not gateway calls: an operator's Mac uploads one with
-`PUT /v1/xcode/<sha256>?version=<version>&build=<build>` on the private listener, with the
-operator's token as a bearer, and a host reads one with `GET /v1/xcode/<sha256>`, with byte
+`hk xcode-push`, which sends `PUT /v1/xcode/<sha256>?version=<version>&build=<build>` on the
+private listener, with the operator's token as a bearer, and a host reads one with `GET /v1/xcode/<sha256>`, with byte
 ranges, on the listener hosts use. Both answer only on a coordinator started with
 `--xcode-dir`; without it the path is `not_found`.
 

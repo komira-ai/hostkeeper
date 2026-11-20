@@ -316,6 +316,7 @@ fn an_answer_that_cannot_be_written_is_a_failure() {
         oidc_token: None,
         web_roots: &web_roots,
         ssh: &recorder,
+        mac: &hostkeeper_hk::xcode_push::Mac::system(),
     };
     assert_eq!(hostkeeper_hk::run(&mut world, &os), 1);
     assert_eq!(stderr, b"hk: cannot write the answer\n");

@@ -42,19 +42,18 @@ pub(crate) fn certificates(pem: &[u8]) -> Vec<Certificate<'static>> {
 }
 
 /// `text` as one line: its words joined by one space.
-fn one_line(text: &str) -> String {
+pub(crate) fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Sends the request to `url`, with the `Authorization: Bearer` header when `bearer` (visible
-/// ASCII) is given,
-/// trusting `roots` alone. The error is a line saying why there is no answer.
-pub(crate) fn send(
-    url: &str,
-    method: &Method<'_>,
+/// The agent of every request: HTTPS only, the roots `roots` alone, no redirect followed, no
+/// proxy, a status that is never an error, `connect` to connect and `total` (when given) for the
+/// whole request. The error is that there is no root to trust.
+pub(crate) fn agent(
     roots: &[Certificate<'static>],
-    limits: Limits,
-) -> Result<Answer, String> {
+    connect: Duration,
+    total: Option<Duration>,
+) -> Result<ureq::Agent, String> {
     if roots.is_empty() {
         return Err("no certificate to trust".to_owned());
     }
@@ -69,10 +68,22 @@ pub(crate) fn send(
         .max_redirects_will_error(false)
         .proxy(None)
         .tls_config(tls)
-        .timeout_connect(Some(limits.connect))
-        .timeout_global(Some(limits.total))
+        .timeout_connect(Some(connect))
+        .timeout_global(total)
         .build();
-    let agent = ureq::Agent::new_with_config(config);
+    Ok(ureq::Agent::new_with_config(config))
+}
+
+/// Sends the request to `url`, with the `Authorization: Bearer` header when `bearer` (visible
+/// ASCII) is given,
+/// trusting `roots` alone. The error is a line saying why there is no answer.
+pub(crate) fn send(
+    url: &str,
+    method: &Method<'_>,
+    roots: &[Certificate<'static>],
+    limits: Limits,
+) -> Result<Answer, String> {
+    let agent = agent(roots, limits.connect, Some(limits.total))?;
     let response = match method {
         Method::Get(None) => agent.get(url).call(),
         Method::Get(Some(token)) => agent

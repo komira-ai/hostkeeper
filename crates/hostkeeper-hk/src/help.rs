@@ -1,4 +1,4 @@
-//! The help texts: of `hk`, of a service, of a method, and of the ssh commands. All of it is
+//! The help texts: of `hk`, of a service, of a method, of the ssh commands and of `xcode-push`. All of it is
 //! written from the command table and says `hk`, whatever name the program is called by.
 
 use std::fmt::Write as _;
@@ -48,7 +48,17 @@ ssh-revoke --operator NAME | --serial N | --host <host-id>` revokes certificates
 ssh-status <host-id>` shows the host keys pinned for a host and the certificate held. They need \
 --endpoint, --ca-file and --token-file, take no other credential, keep the key, the \
 certificates and the pins in `$HOME/.hostkeeper/ssh`, and read the token from its file. `hk \
-ssh-known-host` is run by ssh itself, as the `KnownHostsCommand` of `hk ssh`, and not by hand.";
+ssh-known-host` is run by ssh itself, as the `KnownHostsCommand` of `hk ssh`, and not by hand.
+
+`hk xcode-push <version> | <archive.xip>` is not a gateway call either: on macOS only, it brings \
+an Xcode release into the coordinator's Xcode store. Given a version, it downloads the archive \
+with `xcodes download <version>` in the operator's own session (a two-factor prompt is answered \
+at the terminal); given a file, it takes the file. Apple's signature must be on it \
+(`pkgutil --check-signature`: exit 0, `signed Apple Software`, a chain ending at Apple Root CA), \
+its version and build are read from the app `xip --expand` makes, and it is uploaded unmodified \
+and streamed, `PUT /v1/xcode/<sha256>?version=<version>&build=<build>`; a step that fails \
+uploads nothing. It needs --endpoint, --ca-file and --token-file, and takes no other \
+credential; `hk xcode-push --help` says each step.";
 
 /// The top-level help; `stamp` is the version, `<version>+<12 hex of the commit>` for a release.
 pub(crate) fn top_help(commands: &[&Command], stamp: &str) -> String {
@@ -156,3 +166,29 @@ hk ssh-known-host <pins-file> %H %t %K %f
 These take the global flags --endpoint, --ca-file, --token-file and --timeout-secs, all but the
 last required, and are built into hk. The token is read from the file; --token-stdin,
 --github-oidc-audience and --response-file are not taken.";
+
+/// The help of `hk xcode-push`.
+pub(crate) const XCODE_PUSH_HELP: &str = "\
+hk xcode-push <version> | <archive.xip>
+    Brings an Xcode release into the coordinator's Xcode store, from the operator's own Mac
+    signed in to the Apple developer account; macOS only. In order, and nothing is uploaded when
+    a step fails:
+    1. Given a version (27.2): xcodes download <version> --directory
+       $HOME/Downloads/hk-xcode-push/<version>, in the operator's own session, with this
+       terminal (a two-factor prompt is answered here); the directory must then hold one .xip.
+       Given a path: that file.
+    2. pkgutil --check-signature <archive> must exit 0, with the status signed Apple Software
+       and a chain ending at Apple Root CA (by its SHA-256 fingerprint).
+    3. The archive's SHA-256 and size; then its version (CFBundleShortVersionString) and
+       build (ProductBuildVersion), read with plutil from the app that xip --expand makes in
+       .hk-xcode-push-expansion beside the archive, which is removed before and afterwards.
+       Given a version, the archive's must be it.
+    4. PUT /v1/xcode/<sha256>?version=<version>&build=<build>: the archive unmodified and
+       streamed. The answer, the archive stored, is printed; a refusal prints
+       refused: <code> and exits 3 (401, 403), 2 (other 4xx) or 1. The answer is waited for
+       30 minutes at least once the archive is sent.
+
+It takes the global flags --endpoint, --ca-file, --token-file and --timeout-secs, all but the
+last required. The token is read from its file into memory and sent only as the request's
+bearer: never in an argument, the environment of a program it runs, or an output line.
+--token-stdin, --github-oidc-audience and --response-file are not taken.";

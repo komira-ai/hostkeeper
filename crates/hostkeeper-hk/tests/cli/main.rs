@@ -17,7 +17,8 @@
 //!   module, and the methods of the service `ssh`, which stay gateway calls;
 //! - `golden`: the help texts of the fixture's table against their files;
 //! - `methods`: the requests of the methods of the real protos that the operator's tools use;
-//! - `xcode`: the commands of the service `xcode`: their paths, bodies, answers and a refusal.
+//! - `xcode`: the commands of the service `xcode`: their paths, bodies, answers and a refusal;
+//! - `xcode_push`: `hk xcode-push`, on stand-ins for the Mac's programs and a fake Xcode store.
 
 mod answers;
 mod flags;
@@ -33,3 +34,4 @@ mod ssh;
 mod surface;
 mod transport;
 mod xcode;
+mod xcode_push;
