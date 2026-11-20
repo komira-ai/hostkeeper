@@ -187,7 +187,7 @@ pub fn additive_call<'a>(
     executable: &'a Path,
     hook_args: &'a [String],
     params: &'a Path,
-    timeout_secs: u64,
+    bound: Bound,
 ) -> AdditiveCall<'a> {
     AdditiveCall {
         service: "web",
@@ -196,7 +196,7 @@ pub fn additive_call<'a>(
         params,
         executable,
         unit: UNIT,
-        timeout_secs,
+        bound,
     }
 }
 

@@ -1,5 +1,6 @@
 //! Every RPC of the command table is served but those [`PENDING`] lists, which answer
-//! `UNIMPLEMENTED`; none is. A method added to a proto without a handler cannot pass unnoticed.
+//! `UNIMPLEMENTED`; those are the six methods of `Maintenance`. A method added to a proto without
+//! a handler cannot pass unnoticed.
 
 use hostkeeper_proto::ctl::{COMMANDS, Command};
 use tonic::Code;
@@ -52,12 +53,28 @@ const HOST_GROUPS: [&str; 5] = [
     "/hostkeeper.operator.v1.HostGroups/Move",
 ];
 
-/// Proves: no method is [`PENDING`], and each of the five methods of `HostGroups` is a method of
-/// the compiled descriptor set (the command table lists it), so a path misspelt here or a method
-/// the proto drops cannot hide behind the excuse.
+/// The gRPC path of each method of `Maintenance`, the service described and not yet served.
+const MAINTENANCE: [&str; 6] = [
+    "/hostkeeper.operator.v1.Maintenance/Schedule",
+    "/hostkeeper.operator.v1.Maintenance/List",
+    "/hostkeeper.operator.v1.Maintenance/Get",
+    "/hostkeeper.operator.v1.Maintenance/Cancel",
+    "/hostkeeper.operator.v1.Maintenance/RetryHost",
+    "/hostkeeper.operator.v1.Maintenance/PutBack",
+];
+
+/// Proves: [`PENDING`] is exactly the six methods of `Maintenance`, each a method of the compiled
+/// descriptor set (the command table lists it), and each of the five methods of `HostGroups` is
+/// one too, so a path misspelt here or a method the proto drops cannot hide behind the excuse.
 #[test]
-fn nothing_is_pending_and_each_host_groups_method_is_in_the_descriptor_set() {
-    assert_eq!(PENDING, &[] as &[&str]);
+fn only_maintenance_is_pending_and_each_host_groups_method_is_in_the_descriptor_set() {
+    assert_eq!(PENDING, &MAINTENANCE[..]);
+    for path in PENDING {
+        assert!(
+            COMMANDS.iter().any(|command| command.path == *path),
+            "{path} is a method of the descriptor set"
+        );
+    }
     for path in HOST_GROUPS {
         assert!(
             COMMANDS.iter().any(|command| command.path == path),
@@ -98,6 +115,25 @@ async fn every_method_of_the_retired_mdm_service_answers_unimplemented() {
         .collect();
     assert_eq!(methods.len(), 15, "the proto still defines its 15 methods");
     for path in methods {
+        for bearer in [Some(OPERATOR), None] {
+            let request = grpc_request(path, (), bearer);
+            let answer = call(&served.coordinator, Surface::Control, &None, request).await;
+            assert_eq!(answer, (Code::Unimplemented, String::new(), None), "{path}");
+        }
+    }
+}
+
+/// Proves: every method of [`PENDING`] answers `UNIMPLEMENTED` with an empty message and no
+/// response message on the private listener, with the operator token and with none (the refusal
+/// comes before any credential is looked at).
+///
+/// Catches: a method served before its handler is listed out of [`PENDING`], or one that answers
+/// a caller without a credential differently from one with it.
+#[tokio::test]
+async fn every_pending_method_answers_unimplemented() {
+    let served = served("grpc-pending-methods");
+    assert!(!PENDING.is_empty(), "the check called something");
+    for path in PENDING {
         for bearer in [Some(OPERATOR), None] {
             let request = grpc_request(path, (), bearer);
             let answer = call(&served.coordinator, Surface::Control, &None, request).await;
