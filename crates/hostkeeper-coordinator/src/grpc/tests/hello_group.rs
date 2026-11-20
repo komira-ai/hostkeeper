@@ -1,5 +1,5 @@
 //! The host group of the example service hello (`examples/hello/host-group.json`), posted through
-//! the gateway as `hkctl host-groups put --request` sends it: what docs/hello.md tells an operator
+//! the gateway as `hk host-groups put --request` sends it: what docs/hello.md tells an operator
 //! to put is a group the coordinator accepts, with the packages and the policy the farm proof
 //! relies on.
 
@@ -37,7 +37,7 @@ async fn gateway(coordinator: &Arc<Coordinator>, path: &str, body: String) -> (S
     (status, serde_json::from_slice(&answer).expect("JSON"))
 }
 
-/// Proves: the file, with the reason `hkctl` adds, is accepted by `HostGroups.Put` through the
+/// Proves: the file, with the reason `hk` adds, is accepted by `HostGroups.Put` through the
 /// gateway as the first generation of a group `farm`, and `Get` answers the group with the
 /// packages `hostkeeper` then `hello` and the policy of the file: a lone canary, two baked
 /// beats, automatic rollback after one failed host or 25 percent.

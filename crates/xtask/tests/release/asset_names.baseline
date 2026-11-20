@@ -11,15 +11,19 @@
 # `hello-index.json`, `hello-fail-ready-index.json`, `mdm-index.json`) are withdrawn
 # (docs/design/packages-native.md, item A28). The MDM's assets (`hostkeeper-mdm-<version>-<platform>.*` and
 # `mdm_<version>_amd64.deb`, with their bundles) are withdrawn with the MDM (docs/design/mac-bootstrap.md).
+# `hk-<version>-<platform>.tar.gz` (with its SBOM and bundle) is the operator's command line for all three
+# platforms: the one file `hk`. `hkctl-<version>` (the bash script) and the `hkssh-*`
+# tarballs are withdrawn with it (docs/cli.md).
 SHA256SUMS
-hkctl-<version>
-hkctl-<version>.sigstore.json
-hkssh-<version>-linux-arm64.cdx.json
-hkssh-<version>-linux-arm64.tar.gz
-hkssh-<version>-linux-arm64.tar.gz.sigstore.json
-hkssh-<version>-linux-x86_64.cdx.json
-hkssh-<version>-linux-x86_64.tar.gz
-hkssh-<version>-linux-x86_64.tar.gz.sigstore.json
+hk-<version>-linux-arm64.cdx.json
+hk-<version>-linux-arm64.tar.gz
+hk-<version>-linux-arm64.tar.gz.sigstore.json
+hk-<version>-linux-x86_64.cdx.json
+hk-<version>-linux-x86_64.tar.gz
+hk-<version>-linux-x86_64.tar.gz.sigstore.json
+hk-<version>-macos-arm64.cdx.json
+hk-<version>-macos-arm64.tar.gz
+hk-<version>-macos-arm64.tar.gz.sigstore.json
 hostkeeper-<version>-1.aarch64.rpm
 hostkeeper-<version>-1.aarch64.rpm.sigstore.json
 hostkeeper-<version>-1.x86_64.rpm
@@ -129,3 +133,11 @@ withdrawn: mdm-<version>-linux-x86_64.tar.zst.sigstore.json
 withdrawn: mdm-index.json
 withdrawn: mdm_<version>_amd64.deb
 withdrawn: mdm_<version>_amd64.deb.sigstore.json
+withdrawn: hkctl-<version>
+withdrawn: hkctl-<version>.sigstore.json
+withdrawn: hkssh-<version>-linux-arm64.cdx.json
+withdrawn: hkssh-<version>-linux-arm64.tar.gz
+withdrawn: hkssh-<version>-linux-arm64.tar.gz.sigstore.json
+withdrawn: hkssh-<version>-linux-x86_64.cdx.json
+withdrawn: hkssh-<version>-linux-x86_64.tar.gz
+withdrawn: hkssh-<version>-linux-x86_64.tar.gz.sigstore.json

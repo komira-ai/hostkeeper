@@ -1,6 +1,6 @@
 //! `GET /v1/version` on the private listener: which release this coordinator is, for anyone
 //! that reaches the listener, with no token read. A release's deploy waits on it before it sets
-//! the hosts' desired version (`release.yml`'s job `coordinator`), and `hkctl` asks it when a
+//! the hosts' desired version (`release.yml`'s job `coordinator`), and `hk` asks it when a
 //! call is refused `invalid_request`, to say whether the coordinator is older than the request
 //! (docs/deploy/coordinator-update.md).
 //!

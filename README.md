@@ -24,7 +24,7 @@ It is made of two programs:
   coordinator refuses to start; the plain files it kept before stay selectable as the way back
   until they are removed ([docs/operations/coordinator-state.md](docs/operations/coordinator-state.md),
   [design](docs/design/coordinator-storage.md)). Operators use it through the operator API,
-  `hkctl`, the generated command line ([docs/cli.md](docs/cli.md)), and the web UI (`ui/`). A new
+  `hk`, the generated command line ([docs/cli.md](docs/cli.md)), and the web UI (`ui/`). A new
   host asks the coordinator to enroll it, and an operator approves the request. Macs enroll through
   the same approval, after a small bootstrap package that Apple Business device management installs
   puts the daemon and its config on them ([macOS](docs/macos.md)); the coordinator no longer runs an
@@ -38,7 +38,7 @@ Every API is a protobuf service, and the command line is generated from those de
 **hostkeeper is pre-release.** There is no release yet. Two programs are built from source: the
 one host program, `hostkeeper daemon`, which serves nothing on the host and runs the orders the
 coordinator sends in its heartbeat replies (status, abort and clearing a step record go through
-`hkctl`, see [docs/admin.md](docs/admin.md); see
+`hk`, see [docs/admin.md](docs/admin.md); see
 [Running the daemon](#running-the-daemon)), and the
 update coordinator, `hostkeeper-coordinator serve`. The parts are being moved here from
 [kbf](https://github.com/komira-ai/kbf), where they were developed first
@@ -66,16 +66,15 @@ update coordinator, `hostkeeper-coordinator serve`. The parts are being moved he
 | [`hostkeeper-pxe-packets`](crates/hostkeeper-pxe-packets) | the packets of network install, with no socket and no inventory: proxyDHCP offers and ACKs for architectures 7, 9, 11, 16 and 19, router-mode learning of each client's address and architecture, and TFTP read requests (only served names, `hostkeeper/boot.efi` as the shim of the learned architecture) and transfers ([design](docs/design/network-install.md), item N7) |
 | [`hostkeeper-pxe-seed`](crates/hostkeeper-pxe-seed) | what a network-installed machine boots into: the fixed `grub.cfg`, the install or local-disk menu of a MAC, and its autoinstall seed, each a pure function of the inventory record, the daemon config and the flags ([design](docs/design/network-install.md), item N6) |
 | [`hostkeeper-wire`](crates/hostkeeper-wire) | what the coordinator and a host exchange: the heartbeat and its reply, versions, host ids, role names and platforms, the certificate identity, the secret-file rule |
-| [`hostkeeper-proto`](crates/hostkeeper-proto) | the protobuf services of the coordinator (`hostkeeper.agent.v1`, `hostkeeper.operator.v1`) and the frozen file of the daemon's former admin socket (`hostkeeper.local.v1`, no code generated from it), the messages of a release (`hostkeeper.release.v1`), the command table `hkctl` and the UI's generated client are made from, and the compatibility test |
-| [`hostkeeper-hkctl`](crates/hostkeeper-hkctl) | `hkctl`, the operator's bash command line over the gateway: the emitter of its script from the same command table (`cargo xtask release hkctl` writes the asset `hkctl-<version>`), [docs/cli.md](docs/cli.md), and the scan that holds the script to bash 3.2 |
-| [`hostkeeper-hkssh`](crates/hostkeeper-hkssh) | `hkssh`, the operator's side of SSH through the coordinator (`hkctl ssh`, `ssh-proxy`, `ssh-revoke`, `ssh-status` run it): the byte-stream proxy over `Ssh/Tunnel`, the one-host certificate and the pinned host keys |
+| [`hostkeeper-proto`](crates/hostkeeper-proto) | the protobuf services of the coordinator (`hostkeeper.agent.v1`, `hostkeeper.operator.v1`) and the frozen file of the daemon's former admin socket (`hostkeeper.local.v1`, no code generated from it), the messages of a release (`hostkeeper.release.v1`), the command table `hk` and the UI's generated client are made from, and the compatibility test |
+| [`hostkeeper-hk`](crates/hostkeeper-hk) | `hk`, the operator's command line, one Rust binary generated at build time from the command table: every method of the operator API (`hk <service> <method>`), the SSH commands through the coordinator (`hk ssh`, `ssh-proxy`, `ssh-revoke`, `ssh-status`: the byte-stream proxy over `Ssh/Tunnel`, the one-host certificate and the pinned host keys), [docs/cli.md](docs/cli.md) ([design](docs/design/hk.md)) |
 | [`hostkeeper-coordinator`](crates/hostkeeper-coordinator) | the update coordinator: the host groups (the packages, rollout policy and hosts of each), the desired version of each package per group, the repository of each package (`Services.SetRepository`), the heartbeat endpoint, the operator endpoint, the convergence of a fleet, and its state in Postgres (the migrations, the advisory lock and `export`) or in the file store kept as the way back |
 | [`hostkeeper-enrollment`](crates/hostkeeper-enrollment) | the coordinator's certificate authority (profile, certificates, key file, CA bundle) and its durable enrollment store |
 | [`hostkeeper-oidc`](crates/hostkeeper-oidc) | the verifier of OIDC tokens (CI tokens) against an allow-list, with its issuer keys fetched over HTTPS |
 | [`hostkeeper-release`](crates/hostkeeper-release) | the pure checks of a release, shared by the coordinator and the daemon: each platform's list of artifacts, one per installer, with digests, sizes, attestation and locations, and each entry's manifest, by the rules every manifest keeps and those of its installer, against the daemon's version and installers and against the staged tree ([design](docs/design/packages.md), item A1); nothing calls it yet |
 | [`hostkeeper-tls`](crates/hostkeeper-tls) | TLS server configuration reloaded from certificate files, with its reload metrics |
 | [`hostkeeper-ui-tests`](crates/hostkeeper-ui-tests) | the generator of the web app's API client ([`ui/gen/`](ui/gen), from the protos), and the tests of the operator web app in [`ui/`](ui), run in a JavaScript engine against a fake gateway, with each call of [`ui/calls.json`](ui/calls.json) sent to the real coordinator with an operator's token; not shipped |
-| [`hostkeeper-measure`](crates/hostkeeper-measure) | the measurements of the [technical report](docs/report/hostkeeper.html): the measurement plans ([`plans/`](crates/hostkeeper-measure/plans)), a runner that carries a plan out against a coordinator with `hkctl` alone and records each event (with a dry run), and the pure analysis that turns a run's records into a section of the [results page](docs/report/results/README.md) and a result file; an operator's tool, not shipped |
+| [`hostkeeper-measure`](crates/hostkeeper-measure) | the measurements of the [technical report](docs/report/hostkeeper.html): the measurement plans ([`plans/`](crates/hostkeeper-measure/plans)), a runner that carries a plan out against a coordinator with `hk` alone and records each event (with a dry run), and the pure analysis that turns a run's records into a section of the [results page](docs/report/results/README.md) and a result file; an operator's tool, not shipped |
 | [`hello`](examples/hello) | the example service: an HTTP server on loopback and its update hook, packaged for each release, which proves an install, an update and a rollback on the farm ([docs/hello.md](docs/hello.md)) |
 | `hostkeeper-testkit` | helpers the tests share |
 | [`hostkeeper-privileged`](crates/hostkeeper-privileged) | the tests that run as root against a host's real systemd (and, in the job `openrc-device`, OpenRC in an Alpine container), in `privileged.yml` after a merge to main and in `pr-device.yml` on every pull request, with the workload fixture `hostkeeper-fixture-hook` they drive, the end-to-end update of a tierstore-shaped package through the real coordinator and daemon, and network install end to end (in `net-install.yml` only, which no release waits for): a QEMU guest installed by the real `pxe`, enrolled and given a service, reinstalled and retired (x86-64), and booted to its seed fetch (arm64) ([design](docs/design/network-install.md) section 11, item N10); not shipped |
@@ -97,8 +96,9 @@ The design is [docs/design/hostkeeper-design.md](docs/design/hostkeeper-design.m
 [docs/design/host-updates.md](docs/design/host-updates.md) remains the long-form reference for
 the hook contract and the step record.
 
-Every command of `hkctl`, with its flags and exit codes, is in [docs/cli.md](docs/cli.md), which a
-test of `hostkeeper-hkctl` regenerates from the protos and compares, so it cannot drift from them.
+Every command of `hk`, with its flags and exit codes, is in [docs/cli.md](docs/cli.md), which a
+test of `hostkeeper-hk` regenerates from the protos and compares, so it cannot drift from them.
+`hkctl` and `hkssh` are gone; use `hk`, with the same flags.
 Enrolling a node, from its inventory record to its first heartbeat, with every refusal on the way,
 is [docs/operations/enrollment.md](docs/operations/enrollment.md). Putting the operators' SSH public keys
 on every host, Linux and Mac, from one coordinator file is
@@ -112,9 +112,9 @@ how the coordinator finds each BMC's address, the console files, `ipmitool` besi
 BIOS settings) and moving an installed server to the serial console baseline is
 [docs/operations/console.md](docs/operations/console.md); its file examples are read by the
 console's parsers and its hand step is held to the seed's own files and commands. A test (`crates/xtask/tests/enrollment_doc.rs`)
-reads every fenced `hkctl` line of every Markdown file but the design documents as hkctl reads
+reads every fenced `hk` line of every Markdown file but the design documents as hk reads
 it, against its command table and global flags, so a runbook's command cannot name a method, a
-flag or a value hkctl does not take.
+flag or a value hk does not take.
 
 ## Build order
 
@@ -143,7 +143,7 @@ The items B1 to B28 of section 12.2 of the design, by theme. "Built" means the c
 - **Enrollment.** Built: B16 (certificate authority, enrollment and renewal), B17 (approval).
   Planned: B21 (adopting hosts that run kbf's agent).
 - **Operator surfaces.** Built: B1 (the protobuf services, every method of which has a handler),
-  B10 (the generated command line: `hkctl`, over the gateway),
+  B10 (the generated command line: `hk`, over the gateway),
   B24 (the CI client), B25 (the UI).
   Designed: operator login with a username, a password and a browser session, and API tokens
   managed in the UI ([operator-login.md](docs/design/operator-login.md)).
@@ -173,7 +173,7 @@ only, never from the environment:
 | `--ready-file <file>` | none | once the boot work is over, write the file with the daemon's pid: the readiness notice the OpenRC init script removes before a start and waits for after; not with `--notify-systemd` |
 | `--package-lock-wait-secs` | `300` | seconds a step of the repository installer (`apt`) waits at most for the host's package manager's lock, from 1 to 3600: apt's own wait (`DPkg::Lock::Timeout`) for an install, a try every 2 seconds for `dpkg --purge` and `apt-mark`, whose wait is logged (`alert=lock_wait`) at its start and every 30 seconds (apt's own wait is not); a lock still held then defers the order (`package_manager_busy`), which halts nothing |
 | `--heartbeat-secs` | `15` | seconds between two heartbeats, at least 1; the end of a running order is reported within a second, without waiting for the period |
-| `--trusted-root-max-age-days` | `90` | days after which the Sigstore trusted root that package attestations are checked against is reported `trusted_root_stale` and stale in every gRPC heartbeat (`hkctl hosts get`, the `trusted_root` alert), at least 1; a signal only, package checks go on (see [docs/deploy/verify-a-release.md](docs/deploy/verify-a-release.md#the-trusted-root-on-a-host)) |
+| `--trusted-root-max-age-days` | `90` | days after which the Sigstore trusted root that package attestations are checked against is reported `trusted_root_stale` and stale in every gRPC heartbeat (`hk hosts get`, the `trusted_root` alert), at least 1; a signal only, package checks go on (see [docs/deploy/verify-a-release.md](docs/deploy/verify-a-release.md#the-trusted-root-on-a-host)) |
 
 At start it loads the config first: a config that does not load stops the daemon with an error
 naming the key, and nothing on the host changes. It then takes the lock on the state directory
@@ -225,7 +225,7 @@ no repository installer.
 ### Operator verbs on the host
 
 The daemon has two operator verbs besides the update orders, `abort` and `clear_record`, and they
-reach it as orders in a heartbeat reply (`hkctl hosts abort`, `hkctl hosts clear-record`); the
+reach it as orders in a heartbeat reply (`hk hosts abort`, `hk hosts clear-record`); the
 daemon serves no socket. With the coordinator unreachable, root stops the daemon and, for a record,
 renames it by hand ([docs/admin.md](docs/admin.md)). Neither verb installs, updates or switches a
 version, and neither lifts a halt.
@@ -251,7 +251,7 @@ version, and neither lifts a halt.
   record that reads, in any state, or that a newer hostkeeper wrote, is refused `record_reads`.
   A unit that the lost record had started is not stopped, since nothing names it any more: find
   it (`systemctl list-units 'updater-<service>-*'`) and stop it by name before the next order.
-  The `clear_record` order (`hkctl hosts clear-record`) runs this verb, for a
+  The `clear_record` order (`hk hosts clear-record`) runs this verb, for a
   daemon that announces `clear-record-v1`; its verdict, in the next heartbeat, is `succeeded`
   with the reason `record_cleared`, or the refusal's token.
 

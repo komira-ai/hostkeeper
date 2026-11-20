@@ -447,7 +447,7 @@ fn the_maintenance_enums_have_fixed_numbers_and_tokens() {
 }
 
 /// Proves: the service has exactly `Schedule`, `List`, `Get`, `Cancel`, `RetryHost` and `PutBack`,
-/// each unary and carrying the messages the design names, and the command table (so `hkctl` and
+/// each unary and carrying the messages the design names, and the command table (so `hk` and
 /// the web app's client) lists them as `maintenance schedule`, `list`, `get`, `cancel`,
 /// `retry-host` and `put-back`, at their paths.
 /// Catches: a call missing, renamed or streaming, and one the command table does not list.
@@ -564,7 +564,7 @@ fn the_maintenance_service_has_its_six_unary_calls_in_the_command_table() {
 /// takes its flags in the proto's order, and the enum flags take exactly the values the design
 /// names (the unspecified zero is no flag value): `--kinds` the four kinds, `--states` the six
 /// states.
-/// Catches: a request field that `hkctl` would not take as a flag, a reason marked secret, a flag
+/// Catches: a request field that `hk` would not take as a flag, a reason marked secret, a flag
 /// that moved, and an enum flag that offers `unspecified` or lacks a value.
 #[test]
 fn every_maintenance_request_field_is_a_flag_and_none_is_secret() {

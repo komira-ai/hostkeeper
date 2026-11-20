@@ -159,7 +159,7 @@ the JSON heartbeat route; any other waits for the next heartbeat over gRPC.
   until the host reports a verdict of another order, but it is no word on a release: it never
   replaces the host's standing verdict, so a failure the host fell back from still keeps that
   version from being ordered to it, and a failed clear holds no update slot.
-- `Hosts.Retry` (`hkctl hosts retry --node-id N --service S`) lets a host be ordered again a
+- `Hosts.Retry` (`hk hosts retry --node-id N --service S`) lets a host be ordered again a
   version it failed. A host whose last report of a service is a failure of the desired version is
   not ordered that version again (gate reason `failed_here`), and neither clearing the halt the
   failure raised nor excluding and including the host changes that: the report stands until the

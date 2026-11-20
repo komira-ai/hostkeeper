@@ -64,7 +64,7 @@ service Mdm {
   // Seals `material` as the next version of the secret of `kind` and keeps it; the version it
   // replaces is kept for the `secret_grace_days` setting, so that a wrong upload is undone by
   // uploading again. Session-only: a call with a bearer token is refused `PERMISSION_DENIED`
-  // `session_required`, so `hkctl` cannot make it. Audited under the signed-in user's name as
+  // `session_required`, so `hk` cannot make it. Audited under the signed-in user's name as
   // `mdm_push_cert_put`, `mdm_abm_token_put`, `mdm_tls_put`, `mdm_acme_credential_put` or
   // `mdm_secret_put` by the kind, with the kind, the fingerprint and the expiry, and never the
   // material; a refusal after the caller is known is audited with its token. Answers what

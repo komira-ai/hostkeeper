@@ -11,15 +11,15 @@
 #     with: ...
 #
 # The order of the steps is the point of this file, and the workflow lint
-# (crates/xtask/tests/workflows, `set_desired.rs`) holds it. The command line `hkctl` of the
-# pinned hostkeeper release is downloaded and proven first, by the commands of
+# (crates/xtask/tests/workflows, `set_desired.rs`) holds it. The command line `hk` of the
+# pinned hostkeeper release, a tarball of the one file `hk`, is downloaded and proven first, by the commands of
 # docs/deploy/verify-a-release.md, which the workflow lint (`verify_doc.rs`) keeps equal to the
-# steps here: its SHA256SUMS, its attestation by `artifacts.yml` of komira-ai/hostkeeper on
+# steps here: its SHA256SUMS, the tarball's attestation by `artifacts.yml` of komira-ai/hostkeeper on
 # refs/heads/main for the pinned `hostkeeper_commit`, the attested commit compared with the pin,
-# and its `--version`. Nothing of ours runs before the attestation is verified, so those steps
+# and, once unpacked, its `--version`. Nothing of ours runs before the attestation is verified, so those steps
 # are `gh`, `jq` and coreutils. Every step in the job can read the token request variables once
 # the job holds `id-token: write`, so no step before the verification uses an action, reads
-# those variables or runs hkctl. A verification that fails stops the job before any token
+# those variables or runs hk. A verification that fails stops the job before any token
 # exists: the version is not set.
 #
 # A GitHub-hosted runner is not on the private network the coordinator's private listener is
@@ -31,16 +31,16 @@
 # action. The first step of the job checks `tailnet_tag`, whether or not the job joins: no other
 # step but the join reads it.
 #
-# Then the verified hkctl makes two calls, each one hkctl command that asks the runner for its
+# Then the verified hk makes two calls, each one hk command that asks the runner for its
 # own OIDC token (`--github-oidc-audience`; the set's diagnostics also go to its log): `releases set-desired`, with the request the `request`
 # step wrote (the version and the targets; the coordinator checks them); and, when
 # `wait` is true and the set succeeded,
 # `releases wait-converged`, one call the coordinator holds until the fleet converges, the
 # service halts, another version is set or `max_polls` times 10 seconds pass. Both pass
-# `--host-group` only when the `host_group` input is not empty: hkctl writes every flag it is
+# `--host-group` only when the `host_group` input is not empty: hk writes every flag it is
 # given into the request, and a coordinator older than its client refuses a field it does not
-# know, so an empty input sends the bytes it sent before the input existed. hkctl keeps the
-# token in a shell variable and hands it to curl through a pipe: no file holds it, no argument
+# know, so an empty input sends the bytes it sent before the input existed. hk keeps the
+# token in memory and sends it in the request's header: no file holds it, no argument
 # list and no other step's environment. Each call runs with `continue-on-error`, its answer in
 # a file (`--response-file`) and its diagnostics in another, so that the last step, which runs
 # whatever happened before it, reads them with one jq program and writes the job's outputs.
@@ -64,12 +64,12 @@ on:
         type: string
         required: false
       host_group:
-        description: "The host group the version is set in and waited on, as the coordinator names it. Empty: each group that lists the service (for a token whose allow-list entry names host_groups, each of those that lists it), the call sending no group, as before this input. A non-empty value needs a coordinator that holds host groups and the hkctl of a hostkeeper release that has --host-group. The coordinator has no built-in group: a name it does not hold, `all` included, is refused unknown_host_group."
+        description: "The host group the version is set in and waited on, as the coordinator names it. Empty: each group that lists the service (for a token whose allow-list entry names host_groups, each of those that lists it), the call sending no group, as before this input. A non-empty value needs a coordinator that holds host groups and the hk of a hostkeeper release that has --host-group. The coordinator has no built-in group: a name it does not hold, `all` included, is refused unknown_host_group."
         type: string
         required: false
         default: ""
       hostkeeper_version:
-        description: The hostkeeper release whose command line, hkctl, makes the calls, X.Y.Z, pinned by the caller.
+        description: The hostkeeper release whose command line, hk, makes the calls, X.Y.Z, pinned by the caller.
         type: string
         required: true
       hostkeeper_commit:
@@ -152,10 +152,10 @@ jobs:
       converged: ${{ steps.outputs.outputs.converged || 'false' }}
       reason: ${{ steps.outputs.outputs.reason }}
     env:
-      # The hostkeeper release (docs/deploy/verify-a-release.md): its tag and its command line,
-      # one bash script for every platform.
+      # The hostkeeper release (docs/deploy/verify-a-release.md): its tag and the tarball of its
+      # command line for this runner, linux-x86_64.
       HOSTKEEPER_TAG: v${{ inputs.hostkeeper_version }}
-      HKCTL_ASSET: hkctl-${{ inputs.hostkeeper_version }}
+      HK_ASSET: hk-${{ inputs.hostkeeper_version }}-linux-x86_64.tar.gz
     steps:
       # `tailnet_tag` is `tag:` and a Tailscale tag name, or the job ends here, before anything is
       # downloaded and before the join, the one other step that reads it. jq exits 5 with the
@@ -169,36 +169,36 @@ jobs:
 
       # The download proves nothing: the download is not trusted, the next three steps
       # decide (docs/deploy/verify-a-release.md, step 1).
-      - name: Download hkctl of the hostkeeper release
+      - name: Download hk of the hostkeeper release
         id: download
         run: |
           curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location \
-            --create-dirs --output-dir "$RUNNER_TEMP/hkctl-release" \
-            --remote-name "https://github.com/komira-ai/hostkeeper/releases/download/$HOSTKEEPER_TAG/$HKCTL_ASSET" \
+            --create-dirs --output-dir "$RUNNER_TEMP/hk-release" \
+            --remote-name "https://github.com/komira-ai/hostkeeper/releases/download/$HOSTKEEPER_TAG/$HK_ASSET" \
             --remote-name "https://github.com/komira-ai/hostkeeper/releases/download/$HOSTKEEPER_TAG/SHA256SUMS"
 
       # Verification 1 of 3: the downloaded files have the bytes SHA256SUMS lists.
-      - name: Check hkctl against SHA256SUMS
+      - name: Check hk against SHA256SUMS
         id: checksum
-        working-directory: ${{ runner.temp }}/hkctl-release
+        working-directory: ${{ runner.temp }}/hk-release
         run: sha256sum --check --strict --ignore-missing SHA256SUMS
 
-      # Verification 2 of 3: hkctl's attestation, signed by `artifacts.yml` of
+      # Verification 2 of 3: the attestation of the tarball of hk, signed by `artifacts.yml` of
       # komira-ai/hostkeeper on a GitHub-hosted runner, for a build of refs/heads/main at the
       # pinned commit.
-      - name: Verify the attestation of hkctl
+      - name: Verify the attestation of hk
         id: attestation
         env:
           GH_TOKEN: ${{ github.token }}
           HOSTKEEPER_COMMIT: ${{ inputs.hostkeeper_commit }}
         run: |
-          gh attestation verify "$RUNNER_TEMP/hkctl-release/$HKCTL_ASSET" \
+          gh attestation verify "$RUNNER_TEMP/hk-release/$HK_ASSET" \
             --repo komira-ai/hostkeeper \
             --signer-workflow komira-ai/hostkeeper/.github/workflows/artifacts.yml \
             --source-ref refs/heads/main \
             --source-digest "$HOSTKEEPER_COMMIT" \
             --deny-self-hosted-runners \
-            --format json > "$RUNNER_TEMP/hkctl-release/attestation.json"
+            --format json > "$RUNNER_TEMP/hk-release/attestation.json"
 
       # Verification 3 of 3: every verified attestation names the pinned commit as its source,
       # and no other (jq exits non-zero when the comparison is false).
@@ -206,19 +206,19 @@ jobs:
         id: commit
         env:
           HOSTKEEPER_COMMIT: ${{ inputs.hostkeeper_commit }}
-        run: jq --exit-status '[.[].verificationResult.signature.certificate.sourceRepositoryDigest] | unique == [env.HOSTKEEPER_COMMIT]' "$RUNNER_TEMP/hkctl-release/attestation.json"
+        run: jq --exit-status '[.[].verificationResult.signature.certificate.sourceRepositoryDigest] | unique == [env.HOSTKEEPER_COMMIT]' "$RUNNER_TEMP/hk-release/attestation.json"
 
-      - name: Install the verified hkctl
+      - name: Unpack the verified hk
         id: install
-        run: install -D --mode 0755 "$RUNNER_TEMP/hkctl-release/$HKCTL_ASSET" "$RUNNER_TEMP/hkctl-bin/hkctl"
+        run: tar -xzf "$RUNNER_TEMP/hk-release/$HK_ASSET" -C "$RUNNER_TEMP/hk-release" hk
 
-      # hkctl says the release's version and the pinned commit, exactly.
-      - name: Check the version of the verified hkctl
+      # hk says the release's version and the pinned commit, exactly.
+      - name: Check the version of the verified hk
         id: version
         env:
           HOSTKEEPER_VERSION: ${{ inputs.hostkeeper_version }}
           HOSTKEEPER_COMMIT: ${{ inputs.hostkeeper_commit }}
-        run: test "$("$RUNNER_TEMP/hkctl-bin/hkctl" --version)" = "hkctl $HOSTKEEPER_VERSION+${HOSTKEEPER_COMMIT:0:12}"
+        run: test "$("$RUNNER_TEMP/hk-release/hk" --version)" = "hk $HOSTKEEPER_VERSION+${HOSTKEEPER_COMMIT:0:12}"
 
       # Only with `join_tailnet`: the runner joins the tailnet, so that it can reach the private
       # listener. The first action of the job, after every verification step. The node is
@@ -242,7 +242,7 @@ jobs:
         id: ca
         env:
           COORDINATOR_CA: ${{ inputs.coordinator_ca }}
-        run: printf '%s\n' "$COORDINATOR_CA" > "$RUNNER_TEMP/hkctl-coordinator-ca.pem"
+        run: printf '%s\n' "$COORDINATOR_CA" > "$RUNNER_TEMP/hk-coordinator-ca.pem"
 
       # The request of the set, in the request's canonical JSON names: the version and the
       # targets (the JSON object of the input, as an object). Every value comes from the step's
@@ -258,12 +258,12 @@ jobs:
             --arg version "$VERSION" \
             --arg targets "$TARGETS" \
             '(if $targets == "" then error("give targets") else [$targets | try fromjson catch null] | if length == 1 and (.[0] | type) == "object" then .[0] else error("targets is not one JSON object") end end) as $parsed | {desired: {version: $version}, targets: $parsed}' \
-            > "$RUNNER_TEMP/hkctl-request.json"
+            > "$RUNNER_TEMP/hk-request.json"
 
       # The first step that requests an OIDC token for the coordinator. Its outcome, its answer
       # and its diagnostics are read by the outputs step, so a failure goes on to it. The
       # diagnostics also go to the step's own log (`tee`), so a failed set names its cause there
-      # (the coordinator's code and its `refused: <token>` line); the step ends with hkctl's exit
+      # (the coordinator's code and its `refused: <token>` line); the step ends with hk's exit
       # code. `--host-group` is passed as the one word `${HOST_GROUP:+"--host-group=$HOST_GROUP"}`,
       # which bash expands to nothing when the input is empty and to one argument otherwise.
       - name: Set the desired version
@@ -275,16 +275,16 @@ jobs:
           COORDINATOR_URL: ${{ inputs.coordinator_url }}
           AUDIENCE: ${{ inputs.audience }}
         run: |
-          "$RUNNER_TEMP/hkctl-bin/hkctl" \
+          "$RUNNER_TEMP/hk-release/hk" \
             --endpoint "$COORDINATOR_URL" \
-            --ca-file "$RUNNER_TEMP/hkctl-coordinator-ca.pem" \
+            --ca-file "$RUNNER_TEMP/hk-coordinator-ca.pem" \
             --github-oidc-audience "$AUDIENCE" \
-            --response-file "$RUNNER_TEMP/hkctl-set.json" \
+            --response-file "$RUNNER_TEMP/hk-set.json" \
             releases set-desired \
             --service "$SERVICE" \
-            --request "$RUNNER_TEMP/hkctl-request.json" \
+            --request "$RUNNER_TEMP/hk-request.json" \
             ${HOST_GROUP:+"--host-group=$HOST_GROUP"} \
-            2> >(tee "$RUNNER_TEMP/hkctl-set.err" >&2)
+            2> >(tee "$RUNNER_TEMP/hk-set.err" >&2)
 
       # One held call, with a token of its own. `--wait-secs` is `max_polls` with a 0 appended,
       # ten times it, as text: no arithmetic is done on an input. The coordinator refuses a wait
@@ -301,24 +301,24 @@ jobs:
           AUDIENCE: ${{ inputs.audience }}
           MAX_POLLS: ${{ inputs.max_polls }}
         run: |
-          "$RUNNER_TEMP/hkctl-bin/hkctl" \
+          "$RUNNER_TEMP/hk-release/hk" \
             --endpoint "$COORDINATOR_URL" \
-            --ca-file "$RUNNER_TEMP/hkctl-coordinator-ca.pem" \
+            --ca-file "$RUNNER_TEMP/hk-coordinator-ca.pem" \
             --github-oidc-audience "$AUDIENCE" \
-            --response-file "$RUNNER_TEMP/hkctl-wait.json" \
+            --response-file "$RUNNER_TEMP/hk-wait.json" \
             releases wait-converged \
             --service "$SERVICE" \
             --version "$VERSION" \
             --wait-secs "${MAX_POLLS}0" \
             ${HOST_GROUP:+"--host-group=$HOST_GROUP"} \
-            2> "$RUNNER_TEMP/hkctl-wait.err"
+            2> "$RUNNER_TEMP/hk-wait.err"
 
       # Runs whatever happened before it. The program below (OUTPUTS_PROGRAM) reads the outcomes
       # of the two calls, their answers and their diagnostics (a file a call did not leave is
       # read as /dev/null), and prints the three outputs; it ends with exit 1 unless the reason is
       # `converged` or `not_waited`. Its table is docs/deploy/ci-client.md's "Outputs"; the
       # workflow lint's tests run it with jaq on one fixture per row. The files hold no token:
-      # hkctl prints none.
+      # hk prints none.
       - name: Write the job's outputs
         id: outputs
         if: ${{ always() }}
@@ -328,10 +328,10 @@ jobs:
           WAIT: ${{ inputs.wait }}
           SET_OUTCOME: ${{ steps.set-desired.outcome }}
           WAIT_OUTCOME: ${{ steps.wait.outcome }}
-          SET_BODY: ${{ steps.set-desired.outcome == 'success' && format('{0}/hkctl-set.json', runner.temp) || '/dev/null' }}
-          SET_ERR: ${{ steps.set-desired.outcome == 'failure' && format('{0}/hkctl-set.err', runner.temp) || '/dev/null' }}
-          WAIT_BODY: ${{ steps.wait.outcome == 'success' && format('{0}/hkctl-wait.json', runner.temp) || '/dev/null' }}
-          WAIT_ERR: ${{ steps.wait.outcome == 'failure' && format('{0}/hkctl-wait.err', runner.temp) || '/dev/null' }}
+          SET_BODY: ${{ steps.set-desired.outcome == 'success' && format('{0}/hk-set.json', runner.temp) || '/dev/null' }}
+          SET_ERR: ${{ steps.set-desired.outcome == 'failure' && format('{0}/hk-set.err', runner.temp) || '/dev/null' }}
+          WAIT_BODY: ${{ steps.wait.outcome == 'success' && format('{0}/hk-wait.json', runner.temp) || '/dev/null' }}
+          WAIT_ERR: ${{ steps.wait.outcome == 'failure' && format('{0}/hk-wait.err', runner.temp) || '/dev/null' }}
           OUTPUTS_PROGRAM: |
             # A token of the coordinator's refusals, and a version, as the coordinator spells them.
             # Each pattern ends with \z, the end of the text: jq's `$` also matches before a last

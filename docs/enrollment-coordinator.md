@@ -130,9 +130,9 @@ coordinator's gRPC serving registers them. Both take the operator token only: a 
 `forbidden` and no token or any other `unauthorized`, before the request is looked at.
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment list --limit 50
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment approve --request-id <id> --key-sha256 <key-sha256> \
     --host-id web-17 --host-group web --reason "racked in row 4"
 ```

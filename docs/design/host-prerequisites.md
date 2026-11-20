@@ -75,7 +75,7 @@ reason, and one `PrerequisiteState` for each name of the held set: its status (`
 failed the reason, the count of failures in a row and the Unix time of the next try, and the Unix
 time the daemon last looked at the host for it (`seen_unix`). The
 coordinator keeps the last report of each host in memory and shows it in the host's heartbeat
-(`hkctl hosts get --node-id <host>`: `host.heartbeat.prerequisites`).
+(`hk hosts get --node-id <host>`: `host.heartbeat.prerequisites`).
 
 A daemon reads a name it does not know (a newer coordinator's) as `UNKNOWN` and does nothing for
 it, so a set is never refused for a name alone; a coordinator keeps a status value it does not know

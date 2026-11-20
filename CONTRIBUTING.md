@@ -343,12 +343,12 @@ path listed, with its reason, in `crates/xtask/tests/wallclock/allowed.txt`: cer
 enrollment-nonce validity, and the time stamp of the coordinator's audit file, which no decision
 reads.
 
-A command an operator doc gives is an `hkctl` command ([docs/cli.md](docs/cli.md)), written out
-in full in a fenced block: `hkctl --endpoint https://<private-listener> --ca-file <ca.pem>
+A command an operator doc gives is an `hk` command ([docs/cli.md](docs/cli.md)), written out
+in full in a fenced block: `hk --endpoint https://<private-listener> --ca-file <ca.pem>
 --token-file <token-file> <service> <method> [flags]`. `cargo test -p xtask --test enrollment_doc`
-reads each such line of every Markdown file but the design documents (`docs/design/`) as hkctl
+reads each such line of every Markdown file but the design documents (`docs/design/`) as `hk`
 reads it, against its command table and global flags, and the method and flags an inline
-`` `hkctl ...` `` span names; it refuses a fenced `hostkeeper ctl` line.
+`` `hk ...` `` span names; it refuses a fenced `hostkeeper ctl` line.
 
 ## Small pull requests
 

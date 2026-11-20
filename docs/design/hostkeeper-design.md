@@ -269,6 +269,8 @@ All five steps use the hook in the **new** release. The **previous** release's h
 
 Parameters: the daemon writes one TOML file per update and passes it to every step: the manifest's opaque `[params]` plus reserved keys `updater.staged_release`, `updater.previous_release`, `updater.target_version`, `updater.previous_version`, `updater.artifact_digest`, `updater.promotion_ceiling_secs`. A manifest may not set an `updater.*` key; a hook ignores unknown `updater.*` keys.
 
+**Drain and resume.** A manifest may name two more steps, `[hook] drain` and `[hook] resume` (release manifest `hook.drain`, `hook.resume`), both or neither. Each is its own word (`drain`, `resume`) or a name `boot` may take; `boot` names neither word, no two of `boot`, `drain` and `resume` name one step, and each needs a `hook.command`. `drain` takes the service out of service and returns once it has no work; `resume` puts it back. Both are safe to run twice, and `resume` without a prior `drain` succeeds and changes nothing. They are not steps of an update: a maintenance run runs them (the maintenance-updates design, section 5.2, under review in komira-ai/hostkeeper#447; not built, nothing in hostkeeper runs them today). Their params file carries `updater.service`, `updater.run_id` and, for a drain with a deadline, `updater.drain_deadline_unix` (seconds since the epoch). Past the deadline with work left, `drain` resumes the service, cuts no work and exits 75 (deferred). A package naming neither is left alone. The conformance harness checks them with `Conformance::with_drain` (check 9).
+
 ### 5.3 How a hook runs
 
 A hook runs as root. Each step is a transient unit, `systemd-run --system --wait --collect --pipe --unit=updater-<service>-<step>-<generation>`, with `RuntimeMaxSec` set to the step's timeout (`infinity` for an unbounded `prepare`) and nothing else: no user, no capability set, no sandbox property, no `ReadOnlyPaths` or `ReadWritePaths`, no polkit rule. The unit exists for three reasons only: the timeout (the dead-man stops the unit by name), the kill (the whole cgroup goes), and the capture of the exit code, last stdout line and log. On macOS the same three come from a launchd job (section 5.9).
@@ -561,7 +563,7 @@ Reconcile on every heartbeat: advance `last_good`, mark bad, plan automatic roll
 | Rollback fails after commit | Failed after commit if the hook says `reversible:false`, else Halt | `next.rs` |
 | Hook-requested wait too long | clamped to 3600 seconds | `MAX_RETRY_SECS` |
 | Newer-schema step record | read, reported, never rewritten | `RecordNewer` |
-| Corrupt step record | the run fails; the operator clears it with `hkctl hosts clear-record` (two-programs.md 3.2; off-line, docs/admin.md) | `RecordError::Corrupt` |
+| Corrupt step record | the run fails; the operator clears it with `hk hosts clear-record` (two-programs.md 3.2; off-line, docs/admin.md) | `RecordError::Corrupt` |
 | First start of a daemon not yet enrolled | logs once, calls nothing, retries every few seconds, finishes a half-written enrollment under the store lock | designed from kbf `enrolled.rs` |
 | Package whose manifest `name`, `version` or `platform` differs from the one asked for | `manifest_mismatch`, nothing is linked | `a_manifest_for_another_name_version_or_platform_is_manifest_mismatch` (unpack), `a_manifest_for_another_platform_is_manifest_mismatch` (loader) |
 | Order carrying a version that is not a version | refused by grammar | `crates/hostkeeper-wire/src/version.rs` (open PR #5) |

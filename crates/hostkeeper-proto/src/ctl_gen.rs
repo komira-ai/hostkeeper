@@ -42,7 +42,7 @@ pub const RESERVED_FLAGS: &[&str] = &[
 ];
 
 /// The streaming RPCs the command table leaves out, by full name: a hand-written command makes
-/// the call (`hkctl ssh-proxy`). Any other streaming RPC fails the build.
+/// the call (`hk ssh-proxy`). Any other streaming RPC fails the build.
 pub const GRPC_ONLY: &[&str] = &["hostkeeper.operator.v1.Ssh.Tunnel"];
 
 /// Whether a service is one of a host's admin socket (its package is `hostkeeper.local.v<n>`),

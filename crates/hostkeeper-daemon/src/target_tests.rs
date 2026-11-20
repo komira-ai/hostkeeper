@@ -528,23 +528,29 @@ fn min_hostkeeper_is_judged_against_the_daemons_version() {
     assert_eq!(of(dir, &min("0.1.70")).expect("equal").min_hostkeeper, OWN);
 }
 
-/// Proves the hook's own settings carry over: the boot step, the verify deadline, the promotion
-/// ceiling (0 is none), and the cleanup retries (3 when the entry does not say).
+/// Proves the hook's own settings carry over: the boot, drain and resume steps, the verify
+/// deadline, the promotion ceiling (0 is none), and the cleanup retries (3 when the entry does
+/// not say).
 #[test]
 fn the_hooks_boot_deadline_ceiling_and_retries_carry_over() {
     let dir = Path::new("/nonexistent");
     let plain = of(dir, &entry()).expect("accepted").hook;
     assert_eq!(plain.boot, None);
+    assert_eq!((plain.drain, plain.resume), (None, None));
     assert_eq!(plain.promotion_ceiling_secs, None);
     assert_eq!(plain.cleanup_retries, DEFAULT_CLEANUP_RETRIES);
     let set = with_manifest(|manifest| {
         let hook = manifest.hook.as_mut().expect("a hook");
         hook.boot = Some("boot".to_owned());
+        hook.drain = Some("drain".to_owned());
+        hook.resume = Some("resume".to_owned());
         hook.promotion_ceiling_secs = Some(900);
         hook.cleanup_retries = Some(0);
     });
     let hook = of(dir, &set).expect("accepted").hook;
     assert_eq!(hook.boot.as_deref(), Some("boot"));
+    assert_eq!(hook.drain.as_deref(), Some("drain"));
+    assert_eq!(hook.resume.as_deref(), Some("resume"));
     assert_eq!(hook.promotion_ceiling_secs.map(|n| n.get()), Some(900));
     assert_eq!(hook.cleanup_retries, 0);
     let zero = with_manifest(|manifest| {

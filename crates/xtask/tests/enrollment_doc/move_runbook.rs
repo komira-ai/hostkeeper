@@ -1,7 +1,7 @@
 //! `docs/operations/move-to-native.md`, the runbook of the move to native packages
-//! (packages-native.md section 10.6), against `hkctl` and the coordinator's JSON.
+//! (packages-native.md section 10.6), against `hk` and the coordinator's JSON.
 //!
-//! - Each query of [`QUERIES`] is one fenced block: its label line, one `hkctl` line that calls
+//! - Each query of [`QUERIES`] is one fenced block: its label line, one `hk` line that calls
 //!   the query's method and writes the answer with `--response-file`, and one `jq` line that
 //!   reads that file with the query's output flag and exactly the query's `--arg` names. The
 //!   block is found by its label, and anything else in it is refused.
@@ -24,7 +24,7 @@ use super::{command_of, fenced_lines, repo_root, words};
 /// The runbook, from the repository root.
 const RUNBOOK: &str = "docs/operations/move-to-native.md";
 
-/// One query of the runbook: its label, the `hkctl` call it makes, the flag `jq` prints with,
+/// One query of the runbook: its label, the `hk` call it makes, the flag `jq` prints with,
 /// and the names of its `--arg`s.
 struct Spec {
     label: &'static str,
@@ -121,11 +121,11 @@ fn program(doc: &str, spec: &Spec) -> Result<String, String> {
         return Err(format!("{label}: two blocks"));
     }
     let [_, call, jq] = block.as_slice() else {
-        return Err(format!("{label}: not one hkctl line and one jq line"));
+        return Err(format!("{label}: not one hk line and one jq line"));
     };
     let call_words = words(call)?;
-    if call_words.first().map(String::as_str) != Some("hkctl") {
-        return Err(format!("{label}: the second line is not hkctl"));
+    if call_words.first().map(String::as_str) != Some("hk") {
+        return Err(format!("{label}: the second line is not hk"));
     }
     match command_of(call)? {
         Some(c) if c == spec.call => {}
@@ -135,7 +135,7 @@ fn program(doc: &str, spec: &Spec) -> Result<String, String> {
         return Err(format!("{label}: not one page of 256 hosts"));
     }
     let file = value_of(&call_words, "--response-file")
-        .ok_or(format!("{label}: hkctl writes no --response-file"))?;
+        .ok_or(format!("{label}: hk writes no --response-file"))?;
     let jq = words(jq)?;
     let mut rest = jq.iter();
     if rest.next().map(String::as_str) != Some("jq") {
@@ -163,7 +163,7 @@ fn program(doc: &str, spec: &Spec) -> Result<String, String> {
     }
     match operands.as_slice() {
         [program, read] if **read == file => Ok((*program).to_owned()),
-        [_, read] => Err(format!("{label}: jq reads {read}, hkctl writes {file}")),
+        [_, read] => Err(format!("{label}: jq reads {read}, hk writes {file}")),
         _ => Err(format!(
             "{label}: jq takes {operands:?}, not a program and a file"
         )),
@@ -293,7 +293,7 @@ fn printed(lines: &[&str]) -> Ran {
 }
 
 /// Catches a query of the runbook that is missing, split, calls another method, reads another
-/// file than hkctl wrote, or binds other variables; and a stage section that does not say when it
+/// file than hk wrote, or binds other variables; and a stage section that does not say when it
 /// starts or how it is backed out.
 #[test]
 fn the_runbook_holds_each_query_and_stage() {
@@ -324,14 +324,14 @@ fn the_runbook_check_refuses_each_defect() {
             "    hosts get --node-id <id> --response-file host.json\njq -r",
             "    hosts get --node-id <id> --response-file host.json\necho\njq -r"
         ),
-        ["# check: busy: not one hkctl line and one jq line"]
+        ["# check: busy: not one hk line and one jq line"]
     );
     assert_eq!(
         edit(
             "hosts.json\n```\n\n`<version>`",
             "other.json\n```\n\n`<version>`"
         ),
-        ["# query: older-daemons: jq reads other.json, hkctl writes hosts.json"]
+        ["# query: older-daemons: jq reads other.json, hk writes hosts.json"]
     );
     assert_eq!(
         edit(

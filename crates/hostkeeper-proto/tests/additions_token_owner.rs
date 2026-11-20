@@ -74,7 +74,7 @@ fn a_reader_of_the_release_before_keeps_an_audit_entrys_api_token() {
 }
 
 /// Catches: a token's owner or a creation's owner that the release before's reader refuses or
-/// that makes it lose a field it knows (an older `hkctl` or page against a newer coordinator), and
+/// that makes it lose a field it knows (an older `hk` or page against a newer coordinator), and
 /// a message of the release before read with an owner it never named (a creation read as naming
 /// one, a token of the tokens file listed with one); an owner named empty is written apart from
 /// one not named.

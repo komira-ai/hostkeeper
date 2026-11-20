@@ -5,7 +5,7 @@ Every enrolled host is in one group or is unassigned (there is no built-in group
 packages its group lists, at the group's desired version of each, and an unassigned host is ordered none. This page is what the coordinator does with groups.
 The design is [hostgroups.md](../design/hostgroups.md). A fleet that was placed by roles and a
 rollout file moves through the operator API, by [Moving a fleet from roles to host groups](#moving-a-fleet-from-roles-to-host-groups).
-`hkctl` is [cli.md](../cli.md).
+`hk` is [cli.md](../cli.md).
 
 Every `HostGroups` call takes the operator token only: a CI token is refused with `forbidden`, no
 token with `unauthorized`, and a refused call changes nothing. A call that changes something needs
@@ -88,7 +88,7 @@ an audit entry, `set_repository`, naming the service, with the reason `repositor
 (or `repository komira (the default): <yours>` when cleared).
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     services set-repository --service hello-config-web --repository acme-private \
     --reason "the web config comes from the private repository"
 ```
@@ -114,7 +114,7 @@ rollout file. A host's own minimum stands before it.
 ## The calls
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     host-groups put --request web.json --reason "the web tier"
 ```
 
@@ -177,9 +177,9 @@ and each package its groups list) are registered by being listed: nothing is add
 see them.
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     services put --service js-agent --repository komira --reason "the agent the web group will run"
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     services remove --service js-agent --reason "not deployed after all"
 ```
 
@@ -242,11 +242,11 @@ In group mode an approval puts its host in the group it names, which must be one
 holds (`unknown_host_group`); an operator's approval may name none, and the host is
 then unassigned, and ordered nothing, until `Move` ([enrollment.md](enrollment.md)):
 
-- `hkctl enrollment add-record --host-group <group>`: the record is the approval, and the
+- `hk enrollment add-record --host-group <group>`: the record is the approval, and the
   coordinator puts the host it approves in the record's group. A record added before the
   coordinator held groups names its group by its role; one whose role no group has approves
   nothing, and its request waits for an operator.
-- `hkctl enrollment approve --host-group <group>`: the operator's approval. It names no
+- `hk enrollment approve --host-group <group>`: the operator's approval. It names no
   `--services` (`services_retired`), and the group is optional (so is `--reason`).
 - A Mac approved by an inventory record goes into the record's group; the MDM nonce and
   `--mac-serial-allowlist` are read by nothing and accepted and ignored for one release ([coordinator-mdm.md](../design/coordinator-mdm.md)).
@@ -261,7 +261,7 @@ with `--replace` keeps the group of the host it replaces: naming another group i
 
 A host in a group is changed to another by `Move`, and a host approved in none, or before the
 coordinator held groups, is put in one by `Move`. A host in a group is moved back to none by a
-`Move` with an empty `host_group` (`hkctl host-groups move --host-group ""`, the blank choice of the
+`Move` with an empty `host_group` (`hk host-groups move --host-group ""`, the blank choice of the
 **Host group** dropdown on the host's own page in the console):
 it is then unassigned: it is ordered nothing and keeps what it runs, so the host does not move; a host already in none is refused `same_host_group`.
 In the console a host is moved on its Host page, whose **Host group**
@@ -269,14 +269,14 @@ dropdown lists the groups held and a blank, Unassigned; the Host groups page lis
 link to that page, and has no form that moves one.
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     host-groups move --node-id web-17 --host-group web --reason "racked for the web tier"
 ```
 
 Out of its group, into none:
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     host-groups move --node-id web-17 --host-group "" --reason "no longer a web server"
 ```
 
@@ -303,7 +303,7 @@ The host is then moving until its packages match its new group, at the host's he
    `facts-v1` is ordered nothing, and is told `moving`, until its heartbeat reports that
    generation: the daemon has written the facts file by then, so a package installed after reads
    the new group. The coordinator decides this at each heartbeat, so a change of the host's facts
-   during the move (`hkctl hosts set-labels`) holds the sequence again until the host reports
+   during the move (`hk hosts set-labels`) holds the sequence again until the host reports
    the new generation. A host whose daemon does not announce `facts-v1`, or that heartbeats over
    the JSON route, is sent no facts and is not held for them; so is every host of a coordinator
    that does not advertise the feature.
@@ -437,7 +437,7 @@ Promotion from one group to the next is a sequence of deployments the caller mak
 canary group, `WaitConverged` on it, then set the next.
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     releases set-desired --service hello --host-group web-canary --request desired.json
 ```
 
@@ -523,18 +523,18 @@ below is safe at every step.
    `--mac-serial-allowlist` for now: a start refuses an entry that names `services`, and one that
    names a group the store does not hold, which at this point is every group. Start the release.
    Every host keeps running what it runs and is ordered nothing.
-2. **Put each group.** `hkctl host-groups put` with the group's packages in install order and its
-   policy ([cli.md](../cli.md#hkctl-host-groups-put), [The calls](#the-calls)). Name a group after
+2. **Put each group.** `hk host-groups put` with the group's packages in install order and its
+   policy ([cli.md](../cli.md#hk-host-groups-put), [The calls](#the-calls)). Name a group after
    the role whose hosts it takes.
-3. **Move each enrolled host into its group.** `hkctl host-groups move` for each host, the hosts
-   of a role into the group of that name ([cli.md](../cli.md#hkctl-host-groups-move),
+3. **Move each enrolled host into its group.** `hk host-groups move` for each host, the hosts
+   of a role into the group of that name ([cli.md](../cli.md#hk-host-groups-move),
    [Moving a host](#moving-a-host)).
-4. **Set what the rollout file held per package.** `hkctl services set-repository` for each
+4. **Set what the rollout file held per package.** `hk services set-repository` for each
    package whose repository is not `komira` (put the registry's entries in place first,
-   [package-repositories.md](../deploy/package-repositories.md)), and `hkctl services
+   [package-repositories.md](../deploy/package-repositories.md)), and `hk services
    set-min-version` for each minimum a group needs
    ([Where a package's repository and minimum version come from](#where-a-packages-repository-and-minimum-version-come-from)).
-5. **Set the desired versions.** `hkctl releases set-desired --host-group <group>` for each
+5. **Set the desired versions.** `hk releases set-desired --host-group <group>` for each
    package of each group ([Deployments](#deployments-a-version-is-set-in-a-group)), and point CI at
    the groups with the `host_group` of its release step
    ([github-actions.md](../deploy/github-actions.md)).
@@ -544,7 +544,7 @@ below is safe at every step.
 
 A host is ordered nothing until both its group exists and has a desired version, so no service is
 touched while the move runs; a host's packages change only when step 5 gives its group a version
-that differs from what it runs. Scripts that pass `--role` to `hkctl enrollment approve` or
+that differs from what it runs. Scripts that pass `--role` to `hk enrollment approve` or
 `enrollment add-record`, or name a `role` in a `releases force` request, keep working: it is read as
 the group's name. Scripts that call `services assign` or `unassign`, or approve naming services, are
 refused (`placed_by_host_group`, `services_retired`) and must change.

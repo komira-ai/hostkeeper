@@ -3,7 +3,7 @@
 > **Update 2026-11-14.** The `Mdm` service is no longer served: its methods answer `UNIMPLEMENTED`. The MDM was removed from the coordinator and the repository (`docs/design/coordinator-mdm.md`, superseded); Macs enroll through the bootstrap package (`docs/design/mac-bootstrap.md`). Where this document describes the MDM, its kit, its policy gate or the `mdm` package, it describes what was removed; the rest stands.
 
 The coordinator's private listener serves the operator API twice: as gRPC, and as plain HTTP with
-JSON bodies, the gateway. `hkctl` (which has no other transport) and the operator web app
+JSON bodies, the gateway. `hk` (which has no other transport) and the operator web app
 ([docs/ui-serving.md](ui-serving.md)) call the gateway. Both ways reach the same handlers with
 the same checks; the gateway adds no rule of its own. Every command and request message is in
 [docs/cli.md](cli.md).
@@ -87,7 +87,7 @@ that does not arrive whole are all refused as `INVALID_ARGUMENT` with the reason
 `invalid_request`. A response is 200 with the response message.
 
 A field the message does not have is what a coordinator older than its client refuses: the
-client sends a field a later release added. So `hkctl`, on an `invalid_request`, asks the
+client sends a field a later release added. So `hk`, on an `invalid_request`, asks the
 coordinator's version (below) and says `coordinator_older` when the coordinator is older than
 its own release ([docs/cli.md](cli.md)).
 

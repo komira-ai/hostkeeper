@@ -279,6 +279,8 @@ pub fn of_entry(
         hook: Hook {
             command,
             boot: hook.boot,
+            drain: hook.drain,
+            resume: hook.resume,
             verify_deadline_secs: hook.verify_deadline_secs,
             promotion_ceiling_secs: hook.promotion_ceiling_secs.and_then(NonZeroU64::new),
             cleanup_retries: hook.cleanup_retries.unwrap_or(DEFAULT_CLEANUP_RETRIES),

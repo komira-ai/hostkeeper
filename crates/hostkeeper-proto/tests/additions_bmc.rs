@@ -147,7 +147,7 @@ fn address() -> op::ConsoleAddress {
 }
 
 /// Catches: an answer with an address that a client of the release that shipped the console
-/// (`hkctl`, the web app) refuses or reads with other values, and an answer of that release read
+/// (`hk`, the web app) refuses or reads with other values, and an answer of that release read
 /// by this build with a made-up address: each direction reads every field the writer and the
 /// reader share as written, and the address is absent where it was not written.
 #[test]
