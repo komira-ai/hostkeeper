@@ -31,7 +31,10 @@ const EXIT_USAGE: u8 = 2;
 
 fn main() -> ExitCode {
     let Cli { command } = Cli::parse();
-    let Command::Daemon(flags) = command;
+    let Command::Daemon(flags) = command else {
+        eprintln!("`daemon` is the only verb of this program");
+        return ExitCode::from(EXIT_USAGE);
+    };
     daemon(&flags)
 }
 

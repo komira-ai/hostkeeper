@@ -43,7 +43,9 @@ fn args(list: &[&str]) -> Vec<String> {
 fn reported(name: &str, argv: &[&str]) -> Vec<String> {
     let mut line = vec!["hostkeeper", "daemon"];
     line.extend_from_slice(argv);
-    let Command::Daemon(flags) = Cli::try_parse_from(line).expect("the flags parse").command;
+    let Command::Daemon(flags) = Cli::try_parse_from(line).expect("the flags parse").command else {
+        panic!("`hostkeeper daemon` is the daemon verb");
+    };
 
     let rig = Rig::new(name);
     let mut record = rig.placed_record();
