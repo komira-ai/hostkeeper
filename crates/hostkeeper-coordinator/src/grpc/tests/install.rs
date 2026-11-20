@@ -46,6 +46,7 @@ fn installer_beat(services: &[(&str, &str)]) -> proto::HeartbeatRequest {
         operator_keys: None,
         prerequisites: None,
         bmc: None,
+        maintenance: None,
     }
 }
 

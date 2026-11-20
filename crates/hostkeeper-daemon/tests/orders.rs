@@ -15,7 +15,7 @@ use hostkeeper_daemon::verbs::update::declared_params;
 use hostkeeper_daemon::{Refusal, Reply};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
 use hostkeeper_proto::hostkeeper::agent::v1::{
-    Abort, ClearHalt, ClearRecord, Force, Install, Order, Uninstall, order,
+    Abort, ClearHalt, ClearRecord, Force, Install, Maintain, Order, Uninstall, order,
 };
 use hostkeeper_proto::hostkeeper::release::v1::Target;
 use hostkeeper_steps::record::{Loaded, RECORD_FILE};
@@ -187,6 +187,12 @@ fn an_unspecified_or_malformed_order_is_refused_naming_the_field() {
             })),
             "clear_record.service",
             SERVICE_RULE,
+        ),
+        // A `maintain`, which this daemon does not run, is refused as a verb it does not know.
+        (
+            with_verb(order::Verb::Maintain(Maintain::default())),
+            "verb",
+            NO_VERB,
         ),
     ];
     for (order, field, rule) in rows {

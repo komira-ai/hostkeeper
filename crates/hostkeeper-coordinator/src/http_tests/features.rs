@@ -152,6 +152,20 @@ async fn an_agent_that_announced_features_gets_the_supported_subset() {
     );
 }
 
+/// Catches: `maintenance-v1` advertised before this coordinator reads a maintenance report or
+/// sends a `maintain` order: a coordinator that advertises everything it handles answers an
+/// agent that announces it with the other names it announced, and not it.
+#[tokio::test]
+async fn maintenance_v1_is_not_advertised() {
+    assert!(!FEATURES.contains(&crate::maintenance::FEATURE));
+    let rig = rig("http-features-maintenance", FEATURES).await;
+    let announcing = beat("2.0", r#","agent_features":["maintenance-v1","halt-v1"]"#);
+    assert_eq!(
+        beat_text(&rig, "d1", "daemon", &announcing).await,
+        r#"{"reply":"nothing","features":["halt-v1"]}"#
+    );
+}
+
 /// Catches: a coordinator that advertises nothing staying silent to a new agent: it answers
 /// `features: []`, which tells the agent this coordinator knows the field and supports none.
 #[tokio::test]

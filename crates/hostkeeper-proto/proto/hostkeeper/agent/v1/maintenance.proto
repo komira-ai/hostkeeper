@@ -1,0 +1,285 @@
+// hostkeeper.agent.v1: maintenance (docs/design/maintenance-updates.md sections 1, 4.1 and 5):
+// the report a host's daemon sends in its heartbeat (`HeartbeatRequest.maintenance`,
+// `MaintenanceReport`) and the arguments of the `maintain` order (`Order.maintain`, `Maintain`).
+// The rest of the package is agent.proto (`Heartbeat`, `Enroll`, `Poll` and `Renew` of the
+// `Coordinator` service), which imports this file; this file is the same package and API, kept
+// apart to shorten agent.proto. No daemon of this release sends a report or runs a `maintain`,
+// and no coordinator of it reads one or sends one: these are the shapes the release that
+// implements `maintenance-v1` speaks.
+//
+// Served by: the coordinator, on its heartbeat listener, as agent.proto says.
+//
+// Authentication: as agent.proto says; this file declares no service.
+//
+// Refusals: none; this file declares no service. A coordinator that reads reports drops one that
+// breaks a bound of `MaintenanceReport` and keeps the last one it read.
+//
+// Units: as agent.proto says: times are Unix seconds, durations whole seconds and sizes bytes. A
+// text's bound is in bytes of UTF-8.
+//
+// Extending: as agent.proto says: add fields, messages and enum values; never renumber, rename,
+// retype or remove one, and never reuse a number. A reader treats an enum value it does not know
+// as UNSPECIFIED.
+syntax = "proto3";
+
+package hostkeeper.agent.v1;
+
+// What a host's daemon found when it last looked at its host for maintenance, and the maintenance
+// run it holds. Every text and every list has a bound, given with its field, so that a report at
+// every bound is at most 5120 bytes encoded, well inside the heartbeat's 16 KiB
+// (`hostkeeper_proto::maintenance` holds the bounds and the check of them). A report that breaks a
+// bound is refused whole, never cut: the daemon keeps each text and list within its bound.
+message MaintenanceReport {
+  // What the host runs.
+  MaintenanceHost host = 1;
+  // The Xcodes installed in `/Applications`, at most 6; empty on Linux.
+  repeated InstalledXcode xcodes = 2;
+  // On a Mac, what a macOS update needs; absent on Linux.
+  optional MacUpdateFacts mac = 3;
+  // What is due on the host, at most 12; empty when nothing is. The daemon lists no `xcode` item:
+  // whether a newer Xcode is due is the coordinator's to decide, from `xcodes`.
+  repeated DueItem due = 4;
+  // How many more due items the daemon found than the 12 `due` lists; 0 when it lists them all.
+  uint32 due_left_out = 5;
+  // The Unix time the daemon last looked at the host; 0 before it first did.
+  uint64 looked_unix = 6;
+  // How many lines of the listings it read at that look (`softwareupdate --list`, the package
+  // manager's) no parser knew: counted, never guessed at.
+  uint32 unparsed_lines = 7;
+  // The maintenance run the host holds; absent when it holds none.
+  optional MaintenanceRunState run = 8;
+}
+
+// What a host runs, as the daemon read it.
+message MaintenanceHost {
+  // The operating system's name: `macOS` on a Mac, the `ID` of `/etc/os-release` on Linux
+  // (`ubuntu`, `alpine`). At most 32 bytes.
+  string os_name = 1;
+  // Its version (`26.1`; `VERSION_ID` on Linux), at most 32 bytes.
+  string os_version = 2;
+  // Its build (`25B78`), at most 32 bytes; empty on Linux.
+  string os_build = 3;
+  // On a Mac, its hardware serial number, at most 32 bytes; empty on Linux.
+  string hardware_serial = 4;
+  // The running kernel's release (`uname -r`), at most 64 bytes.
+  string running_kernel = 5;
+  // On Linux, the newest kernel installed (the newest under `/lib/modules`), at most 64 bytes:
+  // `running_kernel` when no newer one is installed. Empty on a Mac.
+  string newest_kernel = 6;
+  // The host's boot id, the one the daemon keeps in its step records, at most 64 bytes.
+  string boot_id = 7;
+  // The Unix time the host booted; 0 when not read.
+  uint64 boot_unix = 8;
+}
+
+// One Xcode installed on a Mac.
+message InstalledXcode {
+  // Its version (`CFBundleShortVersionString` of `Contents/version.plist`, `27.2`), at most 16
+  // bytes.
+  string version = 1;
+  // Its build (`ProductBuildVersion`, `27B52`), at most 16 bytes.
+  string build = 2;
+  // Where it is (`/Applications/Xcode-27.2.app`), at most 128 bytes.
+  string path = 3;
+  // Whether `xcode-select -p` names it.
+  bool selected = 4;
+}
+
+// What a macOS update needs of a Mac.
+message MacUpdateFacts {
+  // FileVault's state (`fdesetup status`).
+  FileVaultState filevault = 1;
+  // Whether `fdesetup supportsauthrestart` says yes.
+  bool authrestart_supported = 2;
+  // The free bytes of the data volume (`statvfs` of `/System/Volumes/Data`); absent when not read.
+  optional uint64 data_free_bytes = 3;
+  // The update account's state (docs/design/maintenance-updates.md section 5.5).
+  UpdateAccountState update_account = 4;
+  // The Command Line Tools on the Mac.
+  CommandLineToolsState command_line_tools = 5;
+  // The device-management settings found on the Mac that must not be set on one hostkeeper
+  // updates (section 5.8), each by its key's name as Apple's schema names it (`Deferrals`,
+  // `forceDelayedSoftwareUpdates`) or by its declaration's type: at most 16, each at most 64
+  // bytes. Empty when none is found.
+  repeated string mdm_conflicts = 6;
+}
+
+// FileVault's state on a Mac.
+enum FileVaultState {
+  // Not read.
+  FILE_VAULT_STATE_UNSPECIFIED = 0;
+  // Off.
+  FILE_VAULT_STATE_OFF = 1;
+  // On.
+  FILE_VAULT_STATE_ON = 2;
+  // Being turned on: encryption is in progress.
+  FILE_VAULT_STATE_ENCRYPTING = 3;
+  // Being turned off: decryption is in progress.
+  FILE_VAULT_STATE_DECRYPTING = 4;
+}
+
+// The state of a Mac's update account.
+message UpdateAccountState {
+  // Whether the account exists.
+  bool present = 1;
+  // Whether it is an administrator.
+  bool admin = 2;
+  // Whether it holds a Secure Token (`sysadminctl -secureTokenStatus`).
+  bool secure_token = 3;
+}
+
+// The Command Line Tools on a Mac.
+message CommandLineToolsState {
+  // Whether `pkgutil` knows the package `com.apple.pkg.CLTools_Executables`.
+  bool receipt = 1;
+  // Whether the compiler file is on disk (`/Library/Developer/CommandLineTools/usr/bin/clang`).
+  bool files = 2;
+  // The version `pkgutil` gives of that package, at most 64 bytes; empty without a receipt.
+  string version = 3;
+}
+
+// One update due on a host.
+message DueItem {
+  // What kind of update it is; never `MAINTENANCE_KIND_XCODE` from a daemon.
+  MaintenanceKind kind = 1;
+  // The version the host has (`26.1`; a package's installed version; the running kernel), at
+  // most 32 bytes; empty when there is none (a package not yet installed).
+  string from = 2;
+  // The version it would have after the update, at most 32 bytes; empty for a `reboot` item.
+  string to = 3;
+  // Whether applying it needs a reboot (`Action: restart`, a new kernel); always for `reboot`.
+  bool needs_reboot = 4;
+  // What names it to the platform's tool: the `softwareupdate` label, the package's name, or the
+  // reason of a `reboot` (`reboot-required`, `kernel`). At most 64 bytes.
+  string label = 5;
+  // For `linux`, whether it comes from a security origin; false otherwise.
+  bool security = 6;
+}
+
+// A kind of maintenance.
+enum MaintenanceKind {
+  // Not given.
+  MAINTENANCE_KIND_UNSPECIFIED = 0;
+  // A macOS update or upgrade.
+  MAINTENANCE_KIND_MACOS = 1;
+  // An Xcode install, removal or switch of the default.
+  MAINTENANCE_KIND_XCODE = 2;
+  // A Linux package update: security updates and the kernel, or every update.
+  MAINTENANCE_KIND_LINUX = 3;
+  // A reboot the host needs and has not had, with nothing to install.
+  MAINTENANCE_KIND_REBOOT = 4;
+}
+
+// The state of the maintenance run a host holds, as its run record says.
+message MaintenanceRunState {
+  // The run's id (`Maintain.run_id`), at most 64 bytes.
+  string run_id = 1;
+  // The id of the `maintain` order the host took it by (`Order.order_id`), at most 64 bytes.
+  string order_id = 2;
+  // Where the host's turn stands.
+  MaintenanceStep step = 3;
+  // The kinds applied so far, in the order applied: at most 4.
+  repeated MaintenanceKind applied = 4;
+  // `MAINTENANCE_STEP_HALTED` or `MAINTENANCE_STEP_DEFERRED`: why, as the daemon words it (the
+  // step and the exit code, never a secret), at most 256 bytes; empty otherwise.
+  string halted_reason = 5;
+}
+
+// Where a host's turn of a maintenance run stands.
+enum MaintenanceStep {
+  // Not reported.
+  MAINTENANCE_STEP_UNSPECIFIED = 0;
+  // Ordered, and not started yet.
+  MAINTENANCE_STEP_WAITING = 1;
+  // Downloading and staging the update while the host still serves.
+  MAINTENANCE_STEP_STAGING = 2;
+  // Running the services' `drain` steps.
+  MAINTENANCE_STEP_DRAINING = 3;
+  // Applying the update.
+  MAINTENANCE_STEP_APPLYING = 4;
+  // Rebooting, for a kind that needs it.
+  MAINTENANCE_STEP_REBOOTING = 5;
+  // Running the maintenance hook's `verify`.
+  MAINTENANCE_STEP_CHECKING = 6;
+  // Running the drained services' `resume` steps.
+  MAINTENANCE_STEP_PUTTING_BACK = 7;
+  // Done: the host is back in service with the update applied.
+  MAINTENANCE_STEP_DONE = 8;
+  // Deferred: staging failed or the drain deadline passed; the host is back in service with
+  // nothing changed.
+  MAINTENANCE_STEP_DEFERRED = 9;
+  // Halted: a step from drain on failed; the host stays out of service until an operator acts.
+  MAINTENANCE_STEP_HALTED = 10;
+}
+
+// The arguments of a `maintain`. No field names a path, a URL or a command: an Xcode is named by
+// its version, build, size and SHA-256, and the daemon fetches it from the coordinator's store.
+message Maintain {
+  // The run's id, 1 to 64 bytes of the order id's characters.
+  string run_id = 1;
+  // What to do with the host's turn.
+  MaintainAction action = 2;
+  // The kinds to apply, each once, at most 4; the daemon applies `macos` before `xcode`.
+  repeated MaintenanceKind kinds = 3;
+  // For `linux`: which updates.
+  LinuxScope linux_scope = 4;
+  // How long the drain may take before the host is put back unchanged and deferred; absent: no
+  // deadline, the drain waits for the work to end.
+  optional uint64 drain_deadline_secs = 5;
+  // For `macos`: whether the daemon installs the update or waits for device management to.
+  MacosPath macos_path = 6;
+  // For `xcode`: the Xcodes of the coordinator's store the host is to have, at most 8.
+  repeated XcodeEntry xcodes = 7;
+  // For `xcode`: the versions of Xcode to remove from the host, at most 8, each at most 16 bytes.
+  repeated string xcode_remove = 8;
+  // For `xcode`: the version `xcode-select` is to name, at most 16 bytes; empty: leave it.
+  string xcode_default = 9;
+  // How long the host may be silent while it reboots, or, on the `wait` path, take to report the
+  // new build, before its turn halts.
+  uint64 return_secs = 10;
+}
+
+// What a `maintain` does with the host's turn.
+enum MaintainAction {
+  // Not given: the order is invalid.
+  MAINTAIN_ACTION_UNSPECIFIED = 0;
+  // Start the turn: stage, drain, apply, check and put back.
+  MAINTAIN_ACTION_RUN = 1;
+  // Retry a halted turn from the step that failed.
+  MAINTAIN_ACTION_RETRY = 2;
+  // Put a halted host back: run the drained services' `resume`, and leave the update as far as
+  // it got.
+  MAINTAIN_ACTION_PUT_BACK = 3;
+}
+
+// Which Linux updates a `linux` kind applies.
+enum LinuxScope {
+  // Not given: invalid in an order with a `linux` kind.
+  LINUX_SCOPE_UNSPECIFIED = 0;
+  // Security updates and the kernel.
+  LINUX_SCOPE_SECURITY = 1;
+  // Every update.
+  LINUX_SCOPE_ALL = 2;
+}
+
+// How a Mac's macOS update is applied.
+enum MacosPath {
+  // Not given: invalid in an order with a `macos` kind.
+  MACOS_PATH_UNSPECIFIED = 0;
+  // The daemon installs it with the update account.
+  MACOS_PATH_INSTALL = 1;
+  // Device management installs it; the daemon waits for the new version.
+  MACOS_PATH_WAIT = 2;
+}
+
+// One Xcode of the coordinator's store, as a `maintain` names it.
+message XcodeEntry {
+  // Its version (`27.2`), at most 16 bytes.
+  string version = 1;
+  // Its build (`27B52`), at most 16 bytes.
+  string build = 2;
+  // The size of its archive, in bytes.
+  uint64 size = 3;
+  // The SHA-256 of its archive, 64 lower-case hex characters.
+  string sha256 = 4;
+}

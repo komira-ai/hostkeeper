@@ -589,7 +589,8 @@ impl Heartbeater {
     /// private repositories, `operator-keys-v1` when it keeps operator keys, and
     /// `prerequisites-v1` when it keeps host prerequisites, and `ssh-v1` when it sets sshd up and
     /// the coordinator's last reply advertised `ssh-v1`: a coordinator of a release before it reads
-    /// at most 16 names and drops a longer list whole, and a daemon with every port names 17.
+    /// at most 16 names and drops a longer list whole, and a daemon with every port names 17. It
+    /// never announces `maintenance-v1`, which names a report and an order this loop does not have.
     fn announced(&self) -> Vec<Feature> {
         let mut features = ANNOUNCED.to_vec();
         if self.ports.repositories.is_some() {

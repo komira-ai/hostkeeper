@@ -79,6 +79,9 @@ pub const FILE_DESCRIPTOR_SET: &[u8] =
 /// The command table `hkctl` and the UI client are generated from, itself generated from the descriptors.
 pub mod ctl;
 
+/// The bounds of a heartbeat's maintenance report, and the check of them.
+pub mod maintenance;
+
 #[cfg(test)]
 mod compat;
 #[cfg(test)]

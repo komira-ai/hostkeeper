@@ -5,11 +5,14 @@ export namespace hostkeeper_agent_v1 {
   export interface AgentInfo { name?: string; version?: string; }
   export interface BmcReport { ip?: string; mac?: string; }
   export interface Claims { machineId?: string; dmiSerial?: string; productUuid?: string; addresses?: string[]; macSerial?: string; platformUuid?: string; bmcMac?: string; }
+  export interface CommandLineToolsState { receipt?: boolean; files?: boolean; version?: string; }
   export type CommitState = "COMMIT_STATE_UNSPECIFIED" | "COMMIT_STATE_UNCOMMITTED" | "COMMIT_STATE_COMMITTED";
   export interface DeferredReport { target?: string; reason?: string; retryAfterSecs?: string; }
   export interface DriftReport { found?: string; recorded?: string; }
+  export interface DueItem { kind?: hostkeeper_agent_v1.MaintenanceKind; from?: string; to?: string; needsReboot?: boolean; label?: string; security?: boolean; }
   export type FailureClass = "FAILURE_CLASS_UNSPECIFIED" | "FAILURE_CLASS_RELEASE" | "FAILURE_CLASS_ENVIRONMENT";
   export type FailurePhase = "FAILURE_PHASE_UNSPECIFIED" | "FAILURE_PHASE_BEFORE_COMMIT" | "FAILURE_PHASE_GATE_RELEASE" | "FAILURE_PHASE_GATE_ENVIRONMENT" | "FAILURE_PHASE_AFTER_COMMIT" | "FAILURE_PHASE_HALT";
+  export type FileVaultState = "FILE_VAULT_STATE_UNSPECIFIED" | "FILE_VAULT_STATE_OFF" | "FILE_VAULT_STATE_ON" | "FILE_VAULT_STATE_ENCRYPTING" | "FILE_VAULT_STATE_DECRYPTING";
   export type Health = "HEALTH_UNSPECIFIED" | "HEALTH_HEALTHY" | "HEALTH_UNHEALTHY" | "HEALTH_ABSENT";
   export interface HeartbeatRequest {
     platform?: hostkeeper_agent_v1.Platform;
@@ -29,8 +32,43 @@ export namespace hostkeeper_agent_v1 {
     prerequisites?: hostkeeper_agent_v1.PrerequisitesReport;
     ssh?: hostkeeper_agent_v1.SshReport;
     bmc?: hostkeeper_agent_v1.BmcReport;
+    maintenance?: hostkeeper_agent_v1.MaintenanceReport;
   }
+  export interface InstalledXcode { version?: string; build?: string; path?: string; selected?: boolean; }
   export interface LocalHalt { reason?: string; generation?: string; ageSecs?: string; }
+  export interface MacUpdateFacts {
+    filevault?: hostkeeper_agent_v1.FileVaultState;
+    authrestartSupported?: boolean;
+    dataFreeBytes?: string;
+    updateAccount?: hostkeeper_agent_v1.UpdateAccountState;
+    commandLineTools?: hostkeeper_agent_v1.CommandLineToolsState;
+    mdmConflicts?: string[];
+  }
+  export interface MaintenanceHost { osName?: string; osVersion?: string; osBuild?: string; hardwareSerial?: string; runningKernel?: string; newestKernel?: string; bootId?: string; bootUnix?: string; }
+  export type MaintenanceKind = "MAINTENANCE_KIND_UNSPECIFIED" | "MAINTENANCE_KIND_MACOS" | "MAINTENANCE_KIND_XCODE" | "MAINTENANCE_KIND_LINUX" | "MAINTENANCE_KIND_REBOOT";
+  export interface MaintenanceReport {
+    host?: hostkeeper_agent_v1.MaintenanceHost;
+    xcodes?: hostkeeper_agent_v1.InstalledXcode[];
+    mac?: hostkeeper_agent_v1.MacUpdateFacts;
+    due?: hostkeeper_agent_v1.DueItem[];
+    dueLeftOut?: number;
+    lookedUnix?: string;
+    unparsedLines?: number;
+    run?: hostkeeper_agent_v1.MaintenanceRunState;
+  }
+  export interface MaintenanceRunState { runId?: string; orderId?: string; step?: hostkeeper_agent_v1.MaintenanceStep; applied?: hostkeeper_agent_v1.MaintenanceKind[]; haltedReason?: string; }
+  export type MaintenanceStep =
+    | "MAINTENANCE_STEP_UNSPECIFIED"
+    | "MAINTENANCE_STEP_WAITING"
+    | "MAINTENANCE_STEP_STAGING"
+    | "MAINTENANCE_STEP_DRAINING"
+    | "MAINTENANCE_STEP_APPLYING"
+    | "MAINTENANCE_STEP_REBOOTING"
+    | "MAINTENANCE_STEP_CHECKING"
+    | "MAINTENANCE_STEP_PUTTING_BACK"
+    | "MAINTENANCE_STEP_DONE"
+    | "MAINTENANCE_STEP_DEFERRED"
+    | "MAINTENANCE_STEP_HALTED";
   export interface OperatorKeysRefusal { digest?: string; reason?: string; }
   export interface OperatorKeysReport { digest?: string; refused?: hostkeeper_agent_v1.OperatorKeysRefusal; failed?: string; }
   export type Outcome = "OUTCOME_UNSPECIFIED" | "OUTCOME_SUCCEEDED" | "OUTCOME_FAILED";
@@ -71,6 +109,7 @@ export namespace hostkeeper_agent_v1 {
   export interface SshReport { appliedGeneration?: string; state?: string; hostKeyFingerprints?: string[]; detail?: string; }
   export interface StepRun { name?: string; attempt?: number; }
   export type TrustedRootReason = "TRUSTED_ROOT_REASON_UNSPECIFIED" | "TRUSTED_ROOT_REASON_NONE" | "TRUSTED_ROOT_REASON_STALE" | "TRUSTED_ROOT_REASON_MISSING" | "TRUSTED_ROOT_REASON_UNPARSEABLE";
+  export interface UpdateAccountState { present?: boolean; admin?: boolean; secureToken?: boolean; }
   export interface UpdateResult {
     target?: string;
     outcome?: hostkeeper_agent_v1.Outcome;
