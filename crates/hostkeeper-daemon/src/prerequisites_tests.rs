@@ -6,12 +6,13 @@ use std::collections::VecDeque;
 use std::os::unix::fs::symlink;
 use std::path::PathBuf;
 
-use hostkeeper_launchd::{Launchctl, LaunchctlError, LaunchctlOutput};
+use hostkeeper_launchd::{FakeLaunchctl, Launchctl, LaunchctlError, LaunchctlOutput};
 use hostkeeper_link::Job;
 use hostkeeper_link::testing::{FakeClock, ManualDispatch, RecordingLog};
 use hostkeeper_testkit::Scratch;
 
 use super::*;
+use crate::xcode_clt::{CLANG, FileCheck, Ports};
 
 const START: u64 = 2_000_000_000;
 const NAME: &str = "xcode-command-line-tools";
@@ -43,6 +44,8 @@ type Hook = Arc<dyn Fn() + Send + Sync>;
 /// What the scripted Mac does.
 struct Mac {
     installed: bool,
+    /// Whether the compiler of the tools is on disk.
+    clang: bool,
     version: String,
     pkgutil_runs: bool,
     select: VecDeque<i32>,
@@ -126,6 +129,15 @@ impl Machine {
 /// One program of the Mac.
 struct Port(Arc<Machine>, &'static str);
 
+/// The Mac's disk: the compiler of the tools is a file there when the Mac says so.
+struct Disk(Arc<Machine>);
+
+impl FileCheck for Disk {
+    fn is_file(&self, path: &std::path::Path) -> bool {
+        path == std::path::Path::new(CLANG) && self.0.mac().clang
+    }
+}
+
 impl Launchctl for Port {
     fn run(&self, args: &[String]) -> Result<LaunchctlOutput, LaunchctlError> {
         self.0.run(self.1, args)
@@ -147,6 +159,7 @@ fn mac_over(name: &str, dispatch: Arc<dyn Dispatch>) -> Rig {
     let machine = Arc::new(Machine {
         mac: Mutex::new(Mac {
             installed: false,
+            clang: false,
             version: VERSION.to_owned(),
             pkgutil_runs: true,
             select: VecDeque::new(),
@@ -159,13 +172,23 @@ fn mac_over(name: &str, dispatch: Arc<dyn Dispatch>) -> Rig {
         }),
         marker: marker.clone(),
     });
-    let tools = CommandLineTools::new(
-        Box::new(Port(Arc::clone(&machine), "pkgutil")),
-        Box::new(Port(Arc::clone(&machine), "xcode-select")),
-        Box::new(Port(Arc::clone(&machine), "softwareupdate")),
-        Box::new(Port(Arc::clone(&machine), "softwareupdate")),
-        marker,
+    let sw_vers = FakeLaunchctl::new();
+    sw_vers.always(
+        &[],
+        Ok(LaunchctlOutput::success(
+            "ProductVersion:\t15.1\nBuildVersion:\t24B83\n",
+        )),
     );
+    let tools = CommandLineTools::new(Ports {
+        pkgutil: Box::new(Port(Arc::clone(&machine), "pkgutil")),
+        xcode_select: Box::new(Port(Arc::clone(&machine), "xcode-select")),
+        xcodebuild: Box::new(FakeLaunchctl::new()),
+        sw_vers: Box::new(sw_vers),
+        list: Box::new(Port(Arc::clone(&machine), "softwareupdate")),
+        install: Box::new(Port(Arc::clone(&machine), "softwareupdate")),
+        files: Box::new(Disk(Arc::clone(&machine))),
+        marker,
+    });
     let clock = Arc::new(FakeClock::new(START, 7));
     let log = Arc::new(RecordingLog::default());
     Rig {
@@ -239,7 +262,7 @@ fn a_mac_without_the_tools_installs_them_once_and_reports_them_present() {
     rig.sink.apply(&held);
     assert_eq!(
         rig.calls(),
-        [LOOK, LISTING, INSTALLING, LOOK, SELECTED].map(str::to_owned)
+        [LOOK, SELECTED, LISTING, INSTALLING, LOOK, SELECTED].map(str::to_owned)
     );
     assert_eq!(rig.mac().markers, [true, true]);
     assert!(!rig.machine.marker.exists());
@@ -260,7 +283,7 @@ fn a_mac_without_the_tools_installs_them_once_and_reports_them_present() {
     );
     rig.sink.report();
     rig.sink.apply(&held);
-    assert_eq!(rig.calls().len(), 5);
+    assert_eq!(rig.calls().len(), 6);
     assert_eq!(
         rig.log.lines(),
         [
@@ -269,6 +292,23 @@ fn a_mac_without_the_tools_installs_them_once_and_reports_them_present() {
             format!("host prerequisites: {NAME} is present, version {VERSION}"),
         ]
     );
+}
+
+/// Proves a Mac whose tools are on disk without their receipt, with a developer directory, reports
+/// them present with no version and never runs `softwareupdate`, so it raises no
+/// `prerequisite_failed`. Catches a look that knows only the receipt.
+#[test]
+fn a_mac_with_the_tools_on_disk_and_no_receipt_only_looks() {
+    let rig = mac("prereq-on-disk");
+    rig.mac().clang = true;
+    rig.sink.apply(&set(&[NAME]));
+    assert_eq!(rig.calls(), [LOOK, SELECTED].map(str::to_owned));
+    let state = rig.state();
+    assert_eq!(
+        (state.status, state.version.as_str(), state.failures),
+        (PrerequisiteStatus::Present, "", 0)
+    );
+    assert!(rig.mac().markers.is_empty());
 }
 
 /// Proves a Mac that has the tools runs only the look: no `softwareupdate` call, and the tools are
@@ -311,7 +351,7 @@ fn a_failed_install_waits_and_doubles_its_wait_to_the_cap() {
     rig.mac().install_code = 1;
     let held = set(&[NAME]);
     rig.sink.apply(&held);
-    assert_eq!(rig.calls().len(), 3);
+    assert_eq!(rig.calls().len(), 4);
     assert_eq!(
         rig.state(),
         PrerequisiteState {
@@ -344,12 +384,12 @@ fn a_failed_install_waits_and_doubles_its_wait_to_the_cap() {
         rig.at(previous - 1);
         rig.sink.report();
         rig.sink.apply(&held);
-        assert_eq!(rig.calls().len(), 3 * tries, "no try before its time");
+        assert_eq!(rig.calls().len(), 4 * tries, "no try before its time");
         let now = previous;
         rig.at(now);
         let state = rig.state();
         tries += 1;
-        assert_eq!(rig.calls().len(), 3 * tries, "one try at its time");
+        assert_eq!(rig.calls().len(), 4 * tries, "one try at its time");
         assert_eq!(state.status, PrerequisiteStatus::Failed);
         assert_eq!(state.failures, failures);
         assert_eq!(state.next_try_unix, now + wait);
@@ -616,7 +656,7 @@ fn a_new_set_carries_over_the_state_of_a_shared_name() {
     rig.sink.apply(&bigger);
     assert_eq!(
         rig.calls().len(),
-        calls + 3,
+        calls + 4,
         "a name that left starts again"
     );
     assert_eq!(rig.sink.report().states[0].failures, 1);
@@ -654,7 +694,7 @@ fn tools_that_are_gone_at_the_next_look_are_installed_again() {
     assert_eq!(state.status, PrerequisiteStatus::Present);
     assert_eq!(
         rig.calls()[2..],
-        [LOOK, LISTING, INSTALLING, LOOK, SELECTED].map(str::to_owned)
+        [LOOK, SELECTED, LISTING, INSTALLING, LOOK, SELECTED].map(str::to_owned)
     );
 }
 
@@ -669,9 +709,9 @@ fn no_label_offered_is_a_failure() {
     assert_eq!(state.status, PrerequisiteStatus::Failed);
     assert_eq!(
         state.reason,
-        "softwareupdate --list offered no Command Line Tools for Xcode"
+        "softwareupdate --list offered no Command Line Tools for Xcode; macOS 15.1 24B83; stdout: No new software available.; stderr empty"
     );
-    assert_eq!(rig.calls(), [LOOK, LISTING].map(str::to_owned));
+    assert_eq!(rig.calls(), [LOOK, SELECTED, LISTING].map(str::to_owned));
     assert!(!rig.machine.marker.exists());
 }
 
@@ -693,7 +733,7 @@ fn a_marker_that_is_a_link_installs_nothing() {
         "{}",
         state.reason
     );
-    assert_eq!(rig.calls(), [LOOK]);
+    assert_eq!(rig.calls(), [LOOK, SELECTED]);
     assert!(!target.exists());
 }
 
@@ -744,7 +784,7 @@ fn a_report_during_an_install_says_installing() {
     assert_eq!(seen.len(), 1);
     assert_eq!(seen[0].states[0].status, PrerequisiteStatus::Installing);
     assert_eq!(seen[0].states[0].reason, "");
-    assert_eq!(rig.calls().len(), 5);
+    assert_eq!(rig.calls().len(), 6);
     assert_eq!(rig.state().status, PrerequisiteStatus::Present);
 }
 
@@ -756,7 +796,7 @@ fn a_set_sent_during_a_pass_is_held_and_drops_a_name_the_pass_was_on() {
     let sink = Arc::clone(&rig.sink);
     rig.mac().on_install = Some(Arc::new(move || sink.apply(&set(&[]))));
     rig.sink.apply(&set(&[NAME]));
-    assert_eq!(rig.calls().len(), 5);
+    assert_eq!(rig.calls().len(), 6);
     let report = rig.sink.report();
     assert_eq!(report.digest, set(&[]).digest);
     assert_eq!(report.states, []);
