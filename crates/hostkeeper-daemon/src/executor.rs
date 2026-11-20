@@ -682,14 +682,14 @@ impl Daemon {
     /// The same daemon, the writes of its maintenance run record stopped where `gate` says, as a
     /// crash would: the seam of the tests that stop a turn between its steps.
     pub fn with_maintenance_crash_gate(mut self, gate: CrashGate) -> Daemon {
-        self.ctx.maintenance = self.ctx.maintenance.with_crash_gate(gate);
+        self.ctx.maintenance.set_crash_gate(gate);
         self
     }
 
     /// The same daemon, a drain's deadline told to its hook in `unix`'s seconds in place of the
     /// host's wall clock: the seam of the tests that read the deadline.
     pub fn with_unix_clock(mut self, unix: Arc<dyn hostkeeper_link::UnixClock>) -> Daemon {
-        self.ctx.maintenance = self.ctx.maintenance.with_unix_clock(unix);
+        self.ctx.maintenance.set_unix_clock(unix);
         self
     }
 

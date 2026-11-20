@@ -88,16 +88,14 @@ impl MaintenanceRuns {
         }
     }
 
-    /// The same, every record store it makes stopped where `gate` says.
-    pub fn with_crash_gate(mut self, gate: CrashGate) -> MaintenanceRuns {
+    /// Every record store it makes from now on stopped where `gate` says.
+    pub fn set_crash_gate(&mut self, gate: CrashGate) {
         self.crash = Some(gate);
-        self
     }
 
-    /// The same, drain deadlines told in `unix`'s seconds.
-    pub fn with_unix_clock(mut self, unix: Arc<dyn UnixClock>) -> MaintenanceRuns {
+    /// Drain deadlines told in `unix`'s seconds from now on.
+    pub fn set_unix_clock(&mut self, unix: Arc<dyn UnixClock>) {
         self.unix = unix;
-        self
     }
 
     /// The wall clock of a drain's deadline.
