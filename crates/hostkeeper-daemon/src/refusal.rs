@@ -159,11 +159,20 @@ pub enum Refusal {
     /// another order or run, or a turn that runs, waits for a reboot or has ended. Nothing runs
     /// and nothing is written.
     NotHalted,
+    /// The service is pinned ([`crate::pin`]): an order that would change what it runs is
+    /// deferred until `hostkeeper unpin`, or a `force` to the pinned version, clears the pin.
+    /// Reported as a deferral, never a failure.
+    Pinned,
+    /// The service's pin cannot be read: it is held as if pinned, and reported as a deferral.
+    PinUnreadable,
+    /// `hostkeeper activate` (or `pin`) of a version the host does not keep whole: there is no
+    /// directory and seal of it, so nothing is fetched and nothing changes.
+    NotKept,
 }
 
 impl Refusal {
     /// Every refusal, in the order of the enum.
-    pub const ALL: [Refusal; 51] = [
+    pub const ALL: [Refusal; 54] = [
         Refusal::InvalidOrder,
         Refusal::NotImplemented,
         Refusal::Busy,
@@ -215,6 +224,9 @@ impl Refusal {
         Refusal::RecordReads,
         Refusal::StaleHaltGeneration,
         Refusal::NotHalted,
+        Refusal::Pinned,
+        Refusal::PinUnreadable,
+        Refusal::NotKept,
     ];
 
     /// The token.
@@ -271,6 +283,9 @@ impl Refusal {
             Refusal::RecordReads => "record_reads",
             Refusal::StaleHaltGeneration => "stale_halt_generation",
             Refusal::NotHalted => "not_halted",
+            Refusal::Pinned => "pinned",
+            Refusal::PinUnreadable => "pin_unreadable",
+            Refusal::NotKept => "not_kept",
         }
     }
 }
