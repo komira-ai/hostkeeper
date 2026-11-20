@@ -197,12 +197,17 @@ fn a_record_that_is_not_this_runs_fails_naming_what_is_wrong() {
     MaintenanceStore::new(dir).save(&saved).expect("save");
     let gate: CrashGate = Arc::new(|_| true);
     let stopped = StoreRecord::new(MaintenanceStore::new(dir).with_crash_gate(gate));
-    for got in [
-        stopped.reboot_under_way(RUN, Kind::Linux, &boot(BOOT_A)),
-        stopped.applied(RUN, Kind::Linux, "1"),
-    ] {
-        assert_eq!(got, Err(failed("stopped at BeforeWrite(1)")));
-    }
+    // The store counts its writes: the first is stopped as write 1, the second as write 2.
+    assert_eq!(
+        [
+            stopped.reboot_under_way(RUN, Kind::Linux, &boot(BOOT_A)),
+            stopped.applied(RUN, Kind::Linux, "1"),
+        ],
+        [
+            Err(failed("stopped at BeforeWrite(1)")),
+            Err(failed("stopped at BeforeWrite(2)")),
+        ]
+    );
     assert_eq!(on_disk(dir), saved);
 }
 

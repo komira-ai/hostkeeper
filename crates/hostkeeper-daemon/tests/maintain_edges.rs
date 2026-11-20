@@ -9,6 +9,7 @@ mod support_maintain;
 
 use std::fs;
 use std::num::NonZeroU64;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -601,7 +602,12 @@ fn every_way_a_release_cannot_be_read_refuses_the_turn() {
         ),
         (
             "bad-manifest",
-            |rig| fs::write(rig.packages.join("alpha/1.0.0/target.json"), "garbage").expect("it"),
+            |rig| {
+                // The sealed tree's files are read-only: made writable to break the manifest.
+                let target = rig.packages.join("alpha/1.0.0/target.json");
+                fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).expect("its mode");
+                fs::write(&target, "garbage").expect("it")
+            },
             |detail| detail.starts_with("alpha: "),
         ),
         (
