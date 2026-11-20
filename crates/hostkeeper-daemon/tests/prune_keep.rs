@@ -10,6 +10,7 @@ mod support_host;
 
 use std::collections::BTreeSet;
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
@@ -23,7 +24,8 @@ use hostkeeper_daemon::prune::{self, DEFAULT_KEEP_VERSIONS, LayoutPrune, MAX_KEE
 use hostkeeper_daemon::start::{Settings, startup};
 use hostkeeper_daemon::testing::{RecordingPrune, manifest};
 use hostkeeper_daemon::verb::{HookedVerb, PackageDigest};
-use hostkeeper_daemon::{Daemon, Ports};
+use hostkeeper_daemon::{Daemon, Ports, Reply};
+use hostkeeper_hook::Verdict;
 use hostkeeper_steps::record::State;
 use hostkeeper_steps::{Layout, PruneReport, RecordStore, Stamp};
 use support::force::{WEB, succeeded};
@@ -67,11 +69,23 @@ fn pin_of(rig: &Rig) -> PathBuf {
     pin::path(&rig.state, &name(WEB))
 }
 
+/// The reply of an order the pin holds.
+fn pinned() -> Reply {
+    Reply::Finished {
+        verdict: Verdict::Deferred {
+            retry_after_secs: Some(pin::PINNED_RETRY_SECS),
+        },
+        reason: Some("pinned".to_owned()),
+        resent: false,
+    }
+}
+
 /// Writes `bytes` as `web`'s pin on `rig`.
 fn pin_web(rig: &Rig, bytes: &[u8]) {
     let path = pin_of(rig);
     fs::create_dir_all(path.parent().expect("the pins directory")).expect("the pins directory");
-    fs::write(path, bytes).expect("the pin");
+    fs::write(&path, bytes).expect("the pin");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("root's pin, 0600");
 }
 
 /// Version `<n>.0.0` of `web` staged on `rig` and never switched to, its seal written at second
@@ -220,7 +234,7 @@ fn a_pin_that_cannot_be_read_prunes_nothing() {
     fs::create_dir(&path).expect("a directory in its place");
     assert_eq!(confirm(&daemon, "4.0.0"), None);
     expected.push(failed(format!(
-        "the pin {} cannot be read: Is a directory (os error 21)",
+        "the file {} is not a pin: it is not a regular file (a link, a directory or a device)",
         path.display()
     )));
     assert_eq!(lines(&alerts), expected);
@@ -309,13 +323,13 @@ fn nothing_is_pruned_while_an_update_is_on_trial() {
 
 /// Catches a keep that holds for a direct call only, not the orders: eight orders of `web`
 /// through a daemon on the default leave `current` 8.0.0, `previous` 7.0.0 and the 4 staged
-/// before them, 3.0.0 to 6.0.0; the pin then names 3.0.0, the oldest, and two more updates
-/// leave it with `current`, `previous` and the 4 newest others, 5.0.0 to 8.0.0, deleting 4.0.0.
+/// before them, 3.0.0 to 6.0.0; the pin then names 3.0.0, the oldest, and the two updates after
+/// it are deferred `pinned` (a pin holds the service's orders), so nothing is deleted.
 /// Of the others each prune here chooses among (none past 8.0.0), the one staged later has the
 /// greater name, so two seals written in the same tick of the file system's clock are still
 /// ordered as they were staged.
 #[test]
-fn updates_keep_current_previous_the_pin_and_the_newest_four() {
+fn updates_keep_current_previous_and_the_newest_four_and_a_pin_holds_the_next() {
     let farm = NativeHost::new("keep-orders");
     let rig = farm.rig();
     let daemon = farm.daemon_on(rig.placed_fs.clone(), Arc::new(LayoutPrune));
@@ -332,9 +346,9 @@ fn updates_keep_current_previous_the_pin_and_the_newest_four() {
     pin_web(rig, b"3.0.0\n");
     for n in 9..=10u32 {
         let order = farm.update(WEB, &format!("{n}.0.0"), u64::from(n));
-        assert_eq!(daemon.order(&order), succeeded(), "{n}.0.0");
+        assert_eq!(daemon.order(&order), pinned(), "{n}.0.0");
     }
-    assert_eq!(versions(rig), numbered(&[3, 5, 6, 7, 8, 9, 10]));
+    assert_eq!(versions(rig), numbered(&[3, 4, 5, 6, 7, 8]));
 }
 
 /// The settings `hostkeeper daemon` parses from `args`.

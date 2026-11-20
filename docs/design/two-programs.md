@@ -4,6 +4,8 @@
 
 > **Update 2026-11-19.** `hkctl` is now `hk`, one Rust binary generated at build time from the same command table, with the ssh commands built in ([hk.md](hk.md)). Where this document says that the command line is a bash script, needs bash 3.2 or `curl`, is one asset for every platform (`hkctl-<version>`), is not in a tarball, or that it execs a separate `hkssh`, it describes the earlier layout, which `hk.md` supersedes: the transport, the release assets, the token handling and the ssh commands. The names of the services and methods, the flags, the output, the exit codes and the refusal tokens are unchanged, and there is no `hkctl`: the sections below that name commands remain right with `hk` for `hkctl`.
 
+> **Update 2026-11-20.** `hostkeeper` gains three verbs root runs on the host with the coordinator out of reach: `activate` (a force to a version the host keeps, with no fetch), `pin` and `unpin` ([hostkeeper-design.md](hostkeeper-design.md) Q16, [admin.md](../admin.md#roll-a-service-back-on-the-host)). They are run once by hand with the daemon stopped, and serve nothing: the daemon still binds no socket, and `daemon` is still the only verb that runs the daemon.
+
 Status: design, for the maintainers' comments. Every statement about new code is **Designed** until its item lands;
 **Built** names code on `main` with a path, as in [hostkeeper-design.md](hostkeeper-design.md). Section 9 lists the
 build items, one pull request each.
