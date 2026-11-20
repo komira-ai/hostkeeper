@@ -6,6 +6,7 @@ mod support_apt;
 mod support_host;
 
 use std::fs;
+use std::num::NonZeroU64;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -16,10 +17,15 @@ use hostkeeper_daemon::testing::{AdditiveFault, Signal, spawn};
 use hostkeeper_daemon::{Daemon, Refusal, Reply};
 use hostkeeper_hook::{Class, Phase, Verdict};
 use hostkeeper_placed::testing::{Event, FakeUnitControl, FsWrite, UnitCall};
-use hostkeeper_steps::ToolCall;
+use hostkeeper_steps::{Bound, ToolCall};
 use support::{Rig, d, name, snapshot, uninstall, update};
 use support_apt::bridge;
 use support_host::NativeHost;
+
+/// A bound of `n` seconds.
+fn secs(n: u64) -> Bound {
+    Bound::Secs(NonZeroU64::new(n).expect("a nonzero bound"))
+}
 
 fn finished(verdict: Verdict, reason: Option<&str>) -> Reply {
     Reply::Finished {
@@ -169,12 +175,8 @@ fn uninstall_runs_the_sequence_in_the_documented_order() {
     let ran = rig.launcher.additive_runs();
     assert_eq!(ran.len(), 1);
     assert_eq!(
-        (
-            ran[0].step.as_str(),
-            ran[0].unit.as_str(),
-            ran[0].timeout_secs
-        ),
-        ("uninstall", "updater-web-uninstall-1", 300)
+        (ran[0].step.as_str(), ran[0].unit.as_str(), ran[0].bound),
+        ("uninstall", "updater-web-uninstall-1", secs(300))
     );
     // The package's hook is the program at its fixed path, run with no argument of its own.
     assert!(ran[0].hook_args.is_empty());
@@ -258,7 +260,10 @@ fn uninstall_hook_exit_codes_map_to_verdicts() {
     let clock = rig.clock.clone();
     rig.launcher.during_additive(move |call| {
         if call.service == "killed" {
-            clock.advance(call.timeout_secs + 1);
+            let Bound::Secs(limit) = call.bound else {
+                panic!("an uninstall is bounded, got {:?}", call.bound);
+            };
+            clock.advance(limit.get() + 1);
         }
     });
 
@@ -315,13 +320,13 @@ fn uninstall_hook_exit_codes_map_to_verdicts() {
         assert!(farm.apt.host.installed(service).is_some(), "{service}");
         assert!(rig.there(wants_link(service)), "{service}");
     }
-    let bounds: Vec<u64> = rig
+    let bounds: Vec<Bound> = rig
         .launcher
         .additive_runs()
         .iter()
-        .map(|ran| ran.timeout_secs)
+        .map(|ran| ran.bound)
         .collect();
-    assert_eq!(bounds, [300; 5]);
+    assert_eq!(bounds, [secs(300); 5]);
 
     let held = daemon.order(&uninstall("halts", 2));
     assert_eq!(held.refusal(), Some(Refusal::Halted), "{held:?}");

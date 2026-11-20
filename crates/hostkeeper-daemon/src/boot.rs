@@ -57,7 +57,7 @@ use hostkeeper_hook::{Params, STAGED_RELEASE_KEY, Scalar, TARGET_VERSION_KEY, Ve
 use hostkeeper_steps::record::{Loaded, Record, RecordError, State};
 use hostkeeper_steps::runner::REASON_ARTIFACT_CHANGED;
 use hostkeeper_steps::{
-    AdditiveCall, ArtifactError, Bounds, Clock, Finished, LaunchError, Layout, ResumeAction,
+    AdditiveCall, ArtifactError, Bound, Bounds, Clock, Finished, LaunchError, Layout, ResumeAction,
     RunError, Seal, Staged, StepExit, UpdateOrder, read_seal, resume,
 };
 
@@ -852,7 +852,7 @@ impl Daemon {
             params: &store.params_path(),
             executable: &executable,
             unit: &unit,
-            timeout_secs: manifest.hook.timeout_secs.cutover.get(),
+            bound: Bound::Secs(manifest.hook.timeout_secs.cutover),
         });
         let ended = match ran {
             Ok(exit) => Ok(Some(exit)),

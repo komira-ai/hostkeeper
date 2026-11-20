@@ -23,7 +23,7 @@ use hostkeeper_config::names::ServiceName;
 use hostkeeper_hook::Step;
 use hostkeeper_proto::hostkeeper::release::v1::Target;
 use hostkeeper_steps::{
-    AdditiveCall, BootId, BootIdError, Clock, LaunchError, Layout, Protected, PruneReport,
+    AdditiveCall, BootId, BootIdError, Bound, Clock, LaunchError, Layout, Protected, PruneReport,
     PruneStep, StepCall, StepExit, StepLauncher, ToolCall, ToolExit,
 };
 
@@ -236,7 +236,8 @@ pub struct AdditiveRan {
     pub hook_args: Vec<String>,
     /// The params file's text, as the step would have read it.
     pub params: String,
-    pub timeout_secs: u64,
+    /// The bound the call was given.
+    pub bound: Bound,
 }
 
 /// How the next run of an additive step of a service goes wrong in [`ScriptedLauncher`].
@@ -474,7 +475,7 @@ impl StepLauncher for ScriptedLauncher {
             executable: call.executable.to_path_buf(),
             hook_args: call.hook_args.to_vec(),
             params: fs::read_to_string(call.params).unwrap_or_default(),
-            timeout_secs: call.timeout_secs,
+            bound: call.bound,
         });
         if let Some(effect) = &*lock(&self.during_additive) {
             effect(call);

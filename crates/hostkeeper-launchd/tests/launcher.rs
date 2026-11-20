@@ -609,8 +609,8 @@ fn a_job_in_xpcproxy_is_not_ended_whatever_exit_it_still_shows() {
 const UNINSTALL_UNIT: &str = "updater-web-uninstall-7";
 const UNINSTALL_LABEL: &str = "dev.hostkeeper.hostkeeper.step.web.uninstall.7";
 
-/// The `uninstall` of a hook whose command is `[<hook>, "update-hook"]`, bounded by `timeout`.
-fn uninstall<'a>(hook: &'a Path, hook_args: &'a [String], timeout: u64) -> AdditiveCall<'a> {
+/// The `uninstall` of a hook whose command is `[<hook>, "update-hook"]`, bounded by `bound`.
+fn uninstall<'a>(hook: &'a Path, hook_args: &'a [String], bound: Bound) -> AdditiveCall<'a> {
     AdditiveCall {
         service: "web",
         step: "uninstall",
@@ -618,7 +618,7 @@ fn uninstall<'a>(hook: &'a Path, hook_args: &'a [String], timeout: u64) -> Addit
         params: Path::new(PARAMS),
         executable: hook,
         unit: UNINSTALL_UNIT,
-        timeout_secs: timeout,
+        bound,
     }
 }
 
@@ -668,7 +668,7 @@ fn an_additive_step_runs_as_one_job_with_the_hook_arguments_before_the_step() {
     let hook_args = ["update-hook".to_owned()];
 
     let exit = launcher
-        .run_additive(&uninstall(&hook, &hook_args, 60))
+        .run_additive(&uninstall(&hook, &hook_args, secs(60)))
         .expect("the step ran");
 
     assert_eq!(
@@ -706,11 +706,11 @@ fn an_additive_step_runs_as_one_job_with_the_hook_arguments_before_the_step() {
     );
 }
 
-/// Catches an additive step bounded wrongly: a `timeout_secs` of 30 boots the job out at exactly
-/// 30 s with no exit code, and a `timeout_secs` of 0 is no bound, so a job that runs for an hour
-/// is not booted out and ends with its own code.
+/// Catches an additive step bounded wrongly: a bound of 30 s boots the job out at exactly 30 s
+/// with no exit code, and `Bound::Unbounded` is no bound, so a job that runs for an hour is not
+/// booted out and ends with its own code.
 #[test]
-fn an_additive_step_is_bounded_by_its_timeout_and_zero_is_no_bound() {
+fn an_additive_step_is_bounded_by_its_bound_and_unbounded_is_no_bound() {
     let root = scratch("launcher-additive-bound");
     let hook = hook_file(root.path());
     let (launcher, sim, _, _) = sim_launcher(&root.path().join("jobs"));
@@ -718,7 +718,7 @@ fn an_additive_step_is_bounded_by_its_timeout_and_zero_is_no_bound() {
 
     sim.script(UNINSTALL_LABEL, Hook::exits(3600, 0, "{}"));
     let exit = launcher
-        .run_additive(&uninstall(&hook, &hook_args, 30))
+        .run_additive(&uninstall(&hook, &hook_args, secs(30)))
         .expect("the step ran");
     assert_eq!(exit.code, None);
     assert_eq!(
@@ -728,13 +728,50 @@ fn an_additive_step_is_bounded_by_its_timeout_and_zero_is_no_bound() {
 
     sim.script(UNINSTALL_LABEL, Hook::exits(3600, 0, "{}"));
     let exit = launcher
-        .run_additive(&uninstall(&hook, &hook_args, 0))
+        .run_additive(&uninstall(&hook, &hook_args, Bound::Unbounded))
         .expect("the step ran");
     assert_eq!(exit.code, Some(0));
     assert_eq!(
         sim.stopped_after().len(),
         1,
         "the unbounded job was not stopped"
+    );
+}
+
+/// Catches a drain the Mac launcher bounds itself: a `drain` step with `Bound::Unbounded` is never
+/// booted out however far the fake clock advances (here 3 hours) and ends with its own exit code,
+/// while the same step with `Bound::Secs(90)` is booted out at exactly 90 s with no exit code.
+#[test]
+fn a_drain_step_is_unbounded_unless_it_is_given_a_bound() {
+    let root = scratch("launcher-drain-bound");
+    let hook = hook_file(root.path());
+    let (launcher, sim, _, _) = sim_launcher(&root.path().join("jobs"));
+    let hook_args: [String; 0] = [];
+    let drain_label = "dev.hostkeeper.hostkeeper.step.web.drain.7";
+    let drain = |bound| AdditiveCall {
+        step: "drain",
+        unit: "updater-web-drain-7",
+        ..uninstall(&hook, &hook_args, bound)
+    };
+
+    sim.script(drain_label, Hook::exits(3 * 3600, 75, "{}"));
+    let exit = launcher
+        .run_additive(&drain(Bound::Unbounded))
+        .expect("the drain ran");
+    assert_eq!(exit.code, Some(75));
+    assert!(
+        sim.stopped_after().is_empty(),
+        "the unbounded drain was not stopped"
+    );
+
+    sim.script(drain_label, Hook::exits(3 * 3600, 75, "{}"));
+    let exit = launcher
+        .run_additive(&drain(secs(90)))
+        .expect("the drain ran");
+    assert_eq!(exit.code, None);
+    assert_eq!(
+        sim.stopped_after(),
+        [(drain_label.to_owned(), Duration::from_secs(90))]
     );
 }
 
@@ -748,17 +785,18 @@ fn a_bad_additive_call_is_refused_before_any_launchctl_call() {
     let (launcher, sim, _, _) = sim_launcher(&root.path().join("jobs"));
     let hook_args: [String; 0] = [];
 
+    let relative_hook = uninstall(Path::new("bin/hook"), &hook_args, secs(5));
     assert_eq!(
-        launcher_error(launcher.run_additive(&uninstall(Path::new("bin/hook"), &hook_args, 5))),
+        launcher_error(launcher.run_additive(&relative_hook)),
         "the hook executable \"bin/hook\" is not an absolute path"
     );
-    let mut relative = uninstall(&hook, &hook_args, 5);
+    let mut relative = uninstall(&hook, &hook_args, secs(5));
     relative.params = Path::new("params.toml");
     assert_eq!(
         launcher_error(launcher.run_additive(&relative)),
         "the params file \"params.toml\" is not an absolute path"
     );
-    let mut not_a_step = uninstall(&hook, &hook_args, 5);
+    let mut not_a_step = uninstall(&hook, &hook_args, secs(5));
     not_a_step.unit = "web.service";
     assert_eq!(
         launcher_error(launcher.run_additive(&not_a_step)),
@@ -766,7 +804,7 @@ fn a_bad_additive_call_is_refused_before_any_launchctl_call() {
     );
     let missing = root.path().join("missing");
     assert_eq!(
-        no_start(launcher.run_additive(&uninstall(&missing, &hook_args, 5))),
+        no_start(launcher.run_additive(&uninstall(&missing, &hook_args, secs(5)))),
         format!(
             "{}: No such file or directory (os error 2)",
             missing.display()
@@ -799,7 +837,7 @@ fn a_boot_step_is_stopped_and_run_under_its_own_label() {
         params: Path::new(PARAMS),
         executable: &hook,
         unit: "updater-web-boot-0",
-        timeout_secs: 60,
+        bound: secs(60),
     };
 
     launcher.stop(call.unit).expect("nothing to stop");
