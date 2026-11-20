@@ -259,7 +259,7 @@ fn the_console_enums_have_an_unspecified_zero_and_fixed_numbers() {
 }
 
 /// Catches: a `Console` call missing, renamed, streaming or carrying other messages than the
-/// design names, and one that the command table (and so `hkctl` and the web app's client) does
+/// design names, and one that the command table (and so `hk` and the web app's client) does
 /// not list: the service has exactly `Open`, `Power`, `SetBootDevice`, `List` and `Close`, each
 /// unary, and the table names them `console open`, `console power`, `console set-boot-device`,
 /// `console list` and `console close`.
@@ -325,7 +325,7 @@ fn the_console_service_has_its_five_unary_calls_in_the_command_table() {
     );
 }
 
-/// Catches: a reason, a host id or an enum that `hkctl` would not take as a flag, or a field of
+/// Catches: a reason, a host id or an enum that `hk` would not take as a flag, or a field of
 /// the console marked secret: every request field of `Console` is a plain flag, and the action
 /// and device flags take exactly the values the design names (the unspecified zero is no flag
 /// value).

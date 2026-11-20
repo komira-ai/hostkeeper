@@ -202,3 +202,24 @@ fn a_boot_directory_that_cannot_be_made_is_io_failed() {
     let ended = plain(&setup, Step::Uninstall, &params, &FakeSystemctl::default());
     ended.succeeded();
 }
+
+/// `drain` and `resume` are refused as `unsupported_step` of class `environment` (exit 1), with
+/// no `systemctl` call and the boot directory as it was: pxe names neither in its manifest, so
+/// the updater never runs them, and one that arrives is not taken for a step it can do.
+///
+/// Catches a hook that answers `drain` or `resume` as it answers `uninstall` or `cleanup`, and
+/// removes or changes the boot sets.
+#[test]
+fn drain_and_resume_are_refused_and_change_nothing() {
+    let setup = Setup::new("maintenance");
+    setup.versions(&["1.0.0", "1.2.3"]);
+    let params = setup.params(Some("1.2.3"), None, "");
+    for which in [Step::Drain, Step::Resume] {
+        let systemctl = FakeSystemctl::default();
+        let ended = plain(&setup, which, &params, &systemctl);
+        let detail = ended.refused(Outcome::Failure, Class::Environment, "unsupported_step");
+        assert_eq!(detail, "the pxe hook has no such step", "{which}");
+        assert_eq!(systemctl.called(), Vec::<String>::new(), "{which}");
+        assert_eq!(setup.listing(), ["1.0.0", "1.2.3"], "{which}");
+    }
+}

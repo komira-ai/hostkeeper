@@ -2,9 +2,9 @@
 
 What an operator does so that the coordinator's **Console** works: a Linux server's serial port
 through its BMC's Serial over LAN (SOL), and its power and boot device through the same BMC, from
-the web app's Console page and host page or from `hkctl console`. The design, and the reason for
+the web app's Console page and host page or from `hk console`. The design, and the reason for
 every rule below, is [console-broker.md](../design/console-broker.md) (cited here as "the
-design"); the Console page is described in [ui-serving.md](../ui-serving.md), every `hkctl
+design"); the Console page is described in [ui-serving.md](../ui-serving.md), every `hk
 console` command in [cli.md](../cli.md#console), and the coordinator's package and its files in
 [package.md](../deploy/coordinator/package.md).
 
@@ -19,7 +19,7 @@ The parts, and where each is set up:
 | The BMC carries the serial port at 115.2 kbit/s, and the firmware's screens reach it | [The BMC and the BIOS](#the-bmc-and-the-bios) |
 | The installed system's console, GRUB and login prompt are on `ttyS1` at 115200 baud | [Moving a server to the serial baseline](#moving-a-server-to-the-serial-baseline) |
 
-The commands of `hkctl` below reach the coordinator's private listener, as in
+The commands of `hk` below reach the coordinator's private listener, as in
 [enrollment.md](enrollment.md): `https://<private-listener>` is its address, `<ca.pem>` the CA
 its certificate chains to, and `<token-file>` a file holding an operator token. The examples use
 the documentation addresses `192.0.2.0/24` for the BMCs and `00:00:5e:00:53:xx` for MACs; put
@@ -67,11 +67,11 @@ ACL** (the design, section 9.1).
 
 The lab's DHCP server cannot reserve an address, so a BMC's lease may move: the coordinator finds
 each BMC's address rather than being told it once. A BMC is known by its MAC, the `bmcMac` of the
-host's inventory record (`hkctl enrollment list-records`); a host whose record has none is
+host's inventory record (`hk enrollment list-records`); a host whose record has none is
 `no_bmc_mac`: add the record's BMC MAC ([enrollment.md](enrollment.md)).
 
 ```sh
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment list-records
 ```
 
@@ -92,7 +92,7 @@ The coordinator tries these addresses, in order, until a BMC answers at one:
    holds a complete entry for the BMC's MAC at another address. Nothing is probed to fill it: it
    holds a BMC the coordinator's host spoke to within the last few minutes.
 
-With none of them the host is `no_address`. Each answer of `hkctl console power`,
+With none of them the host is `no_address`. Each answer of `hk console power`,
 `set-boot-device` and `open` names the address and where it came from: `address` with `source`
 `CONSOLE_ADDRESS_SOURCE_TARGETS_FILE`, `_HEARTBEAT` (with `stale` true while the host is not
 heartbeating, and `reported_unix`) or `_NEIGHBOR_TABLE`.
@@ -118,7 +118,7 @@ the start stops the coordinator, naming its flag and never its path.
 **Who may use the console** (`console-operators-file`; root's, readable by the coordinator's group,
 no secret). One `[[operator]]` for each name that may use it: a user's name, for the web app's
 sign-in and for every API token that user owns (an API token is checked as its owner, never under
-its own name), or a token's name of the tokens file for `hkctl`. `power` is true unless the entry says
+its own name), or a token's name of the tokens file for `hk`. `power` is true unless the entry says
 false; an operator with `power = false` may open, list and close consoles but not change power or
 the boot device (`power_not_permitted`). A name that is not in the file has no console access
 (`no_console_access`).
@@ -349,7 +349,7 @@ on **one server at a time**.
    ```
 
 5. **Reboot it from its own shell, and watch the boot on the Console.** Open the host's Console
-   (web app, or `hkctl console open` and a WebSocket client) first: the session is the BMC's and
+   (web app, or `hk console open` and a WebSocket client) first: the session is the BMC's and
    stays attached through the reboot. Do not reboot a server whose BMC nobody can reach at that
    moment (no Console, no BMC credential): a server that does not come back, or stops in its
    shutdown or in the firmware, can then only be found at the machine. Then `sudo systemctl reboot` on the server. Do not
@@ -381,7 +381,7 @@ A BMC carries one SOL session. The coordinator ends the SOL session of each of i
 stream ends, and of every stream when it stops; only a coordinator that died without its drain
 (killed, or its host lost power) leaves one active at the BMC. The coordinator never ends a session
 it did not start, so every later Console open of that host closes `bmc_sol_busy` (4002) until the
-session is ended by hand. First make sure nobody holds it: `hkctl console list` names no session
+session is ended by hand. First make sure nobody holds it: `hk console list` names no session
 of the host, and nobody in the lab is using SOL on that BMC. Then, on the host as root, in-band:
 
 ```sh

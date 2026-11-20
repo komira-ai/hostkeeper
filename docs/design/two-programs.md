@@ -2,6 +2,8 @@
 
 > **Update 2026-11-14.** The `mdm` package (6.2), the `hostkeeper-mdm` kit and its release assets (M1, M2) are gone. The MDM was removed from the coordinator and the repository (`docs/design/coordinator-mdm.md`, superseded); Macs enroll through the bootstrap package (`docs/design/mac-bootstrap.md`). Where this document describes the MDM, its kit, its policy gate or the `mdm` package, it describes what was removed; the rest stands.
 
+> **Update 2026-11-19.** `hkctl` is now `hk`, one Rust binary generated at build time from the same command table, with the ssh commands built in ([hk.md](hk.md)). Where this document says that the command line is a bash script, needs bash 3.2 or `curl`, is one asset for every platform (`hkctl-<version>`), is not in a tarball, or that it execs a separate `hkssh`, it describes the earlier layout, which `hk.md` supersedes: the transport, the release assets, the token handling and the ssh commands. The names of the services and methods, the flags, the output, the exit codes and the refusal tokens are unchanged, and there is no `hkctl`: the sections below that name commands remain right with `hk` for `hkctl`.
+
 Status: design, for the maintainers' comments. Every statement about new code is **Designed** until its item lands;
 **Built** names code on `main` with a path, as in [hostkeeper-design.md](hostkeeper-design.md). Section 9 lists the
 build items, one pull request each.

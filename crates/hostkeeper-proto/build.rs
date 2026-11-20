@@ -34,6 +34,7 @@ const FILES: &[&str] = &[
     "hostkeeper/operator/v1/layout.proto",
     "hostkeeper/operator/v1/ssh.proto",
     "hostkeeper/operator/v1/console.proto",
+    "hostkeeper/operator/v1/xcode.proto",
     "hostkeeper/local/v1/admin.proto",
     "hostkeeper/release/v1/release.proto",
 ];

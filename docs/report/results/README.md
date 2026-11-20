@@ -43,8 +43,8 @@ No plan has been run yet. A run of a plan becomes a result in three steps:
 1. `hostkeeper-measure run --plan crates/hostkeeper-measure/plans/<plan>.toml --run-id <run>
    --param ... --dry-run` prints every step of every repetition with its parameters, and calls
    nothing and writes nothing; it reads the parameters' files to check them.
-2. The same with `--run-dir <dir> --hkctl <hkctl> --endpoint <url> --ca-file <ca> --token-file
-   <token>` in place of `--dry-run` runs it with `hkctl` and the operator's token, writing into the
+2. The same with `--run-dir <dir> --hk <hk> --endpoint <url> --ca-file <ca> --token-file
+   <token>` in place of `--dry-run` runs it with `hk` and the operator's token, writing into the
    run directory, outside the repository.
 3. `hostkeeper-measure analyze --plan crates/hostkeeper-measure/plans/<plan>.toml --run-dir <dir>
    --out-dir docs/report/results` writes `<plan>-<run>.md`, the run's section of the results page,
@@ -74,8 +74,8 @@ below.
 | Event | Step | Recorded when |
 |---|---|---|
 | `started`, `ended` | `repetition` | a repetition starts with its hosts picked, and ends, complete or not |
-| `called` | a call | `hkctl` answered; stamped by the audit entry the call wrote when the plan names one |
-| `call-failed` | a call or a watch | `hkctl` exited with another code than 0 |
+| `called` | a call | `hk` answered; stamped by the audit entry the call wrote when the plan names one |
+| `call-failed` | a call or a watch | `hk` exited with another code than 0 |
 | `done` | an operator step | the operator pressed Enter |
 | `ordered`, `updated` | a watch of an update | a host first holds an update slot or reports updating to the version; first lists the version installed by a succeeded update |
 | `health` | a watch of health | a host first reports the service with the health the plan names |

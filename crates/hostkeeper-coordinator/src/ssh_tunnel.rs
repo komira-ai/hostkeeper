@@ -112,9 +112,9 @@ pub(crate) enum Event {
 /// ends `token_revoked` when this is gone.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Credential {
-    /// A token of the tokens file (`hkssh`): the operator must still have one.
+    /// A token of the tokens file (`hk ssh`): the operator must still have one.
     Token,
-    /// An API token, by name (`hkssh`): it must still be stored, and its owner, the operator,
+    /// An API token, by name (`hk ssh`): it must still be stored, and its owner, the operator,
     /// still an enabled user.
     ApiToken(TokenName),
     /// A signed-in session (the UI's terminal, `crate::ssh_terminal`): the session must still be

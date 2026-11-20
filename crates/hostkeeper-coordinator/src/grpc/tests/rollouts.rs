@@ -43,7 +43,7 @@ pub(super) type Refused = (Code, String);
 
 /// The call `path` with `request` and `bearer` over `wire`, answered as the message `R` or as
 /// the refusal. The gateway's request and answer are the canonical JSON of the messages, as
-/// `hkctl` and the web app's client send and read them.
+/// `hk` and the web app's client send and read them.
 pub(super) async fn rpc<R: Message + Default>(
     coordinator: &Arc<Coordinator>,
     wire: Wire,

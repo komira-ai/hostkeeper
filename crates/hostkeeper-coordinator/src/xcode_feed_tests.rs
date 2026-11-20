@@ -549,6 +549,7 @@ fn xcode(known: Vec<XcodeRelease>, held: Result<Vec<XcodeId>, String>) -> Xcode 
         feed: None,
         known: Arc::new(memory),
         held: Arc::new(FakeHeld(held)),
+        store: None,
     }
 }
 
@@ -583,6 +584,7 @@ fn release_waiting_judges_the_list_against_the_store() {
         feed: None,
         known: Arc::new(UnreadableKnown),
         held: Arc::new(NoXcodeStore),
+        store: None,
     };
     assert_eq!(unreadable.release_waiting(), None);
 }

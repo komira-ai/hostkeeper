@@ -12,8 +12,9 @@
 //! - `hostkeeper.operator.v1` also holds `Services`: which hosts run each service, and the
 //!   operator's holds; `Enrollment`, the hosts waiting for an operator's approval; `Audit`,
 //!   the log of every change; `Alerts`, the conditions that need a person; `Rollouts`, the
-//!   update plans; `Mdm`, the devices the MDM policy gate knows; and `Console`, a host's serial
-//!   console, power and boot device through its BMC, or a Mac's screen (console.proto).
+//!   update plans; `Mdm`, the devices the MDM policy gate knows; `Console`, a host's serial
+//!   console, power and boot device through its BMC, or a Mac's screen (console.proto); and
+//!   `Xcode`, the archives of the coordinator's Xcode store (xcode.proto).
 //! - `hostkeeper.release.v1`: no service; the messages of a release, a list of artifacts per
 //!   platform, one per installer, each with its manifest, which the operator API's
 //!   `SetDesired` and `GetRelease` carry, and an agent's order the one entry picked for its host
@@ -44,7 +45,7 @@ pub mod hostkeeper {
     }
     pub mod operator {
         /// What an operator and CI ask of the coordinator: `Hosts`, `Releases`, `Services`,
-        /// `Enrollment`, `Audit`, `Alerts`, `Rollouts`, `Mdm` and `Console`.
+        /// `Enrollment`, `Audit`, `Alerts`, `Rollouts`, `Mdm`, `Console` and `Xcode`.
         pub mod v1 {
             tonic::include_proto!("hostkeeper.operator.v1");
         }
@@ -76,7 +77,7 @@ pub const MAX_PROBE_TEXT: usize = 4096;
 pub const FILE_DESCRIPTOR_SET: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/hostkeeper.binpb"));
 
-/// The command table `hkctl` and the UI client are generated from, itself generated from the descriptors.
+/// The command table `hk` and the UI client are generated from, itself generated from the descriptors.
 pub mod ctl;
 
 /// The bounds of a heartbeat's maintenance report, and the check of them.

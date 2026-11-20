@@ -5,8 +5,8 @@
 //!    ([`asset_names`]);
 //! 2. `SHA256SUMS` has one `<sha256>  <name>` line per summed asset ([`summed_names`]), and each
 //!    digest is that of the file;
-//! 3. `hkctl-<version>` is a bash script whose one version line is the stamp of the version and
-//!    the pinned commit (`hkctl::problems`);
+//! 3. each `hk-<version>-<platform>.tar.gz` holds exactly one member: the regular file `hk`
+//!    ([`hk_tarball_problems`]);
 //! 4. the coordinator's image index is the one its two image tarballs make, byte for byte
 //!    ([`super::image_index`]): its SHA-256 is the digest of the image a registry serves;
 //! 5. each attested asset verifies twice, online and from its bundle, and every attestation
@@ -16,13 +16,16 @@
 //!    assets all the same.
 
 use std::collections::BTreeSet;
+use std::io::Read;
 use std::path::Path;
 
+use flate2::read::GzDecoder;
+use tar::EntryType;
+
 use super::contract::{
-    Commit, Platform, SUMS, Signer, Version, asset_names, attested_names, bundle_of, hkctl_name,
+    Commit, HK, Platform, SUMS, Signer, Version, asset_names, attested_names, bundle_of,
     summed_names,
 };
-use super::hkctl;
 use super::image_index;
 use super::ports::{Ask, Attestation, PortError, Verifier};
 use super::{Error, file_sha256};
@@ -40,7 +43,7 @@ pub(crate) fn check(
     let mut problems = Vec::new();
     check_names(version, &expected, &present, &mut problems);
     check_sums(dir, version, &present, &mut problems)?;
-    check_hkctl(dir, (version, commit), &present, &mut problems)?;
+    check_hk_tarballs(dir, version, &present, &mut problems);
     check_image_index(dir, version, &present, &mut problems);
     let attested = attested_names(version);
     let names: Vec<&String> = attested.iter().filter(|n| present.contains(*n)).collect();
@@ -164,26 +167,58 @@ fn check_sums(
     Ok(())
 }
 
-/// Step 3: `hkctl-<version>` is the script `release hkctl` writes for the version and commit. It
-/// is skipped when the asset is absent (step 1 reported that).
-fn check_hkctl(
+/// Step 3: each `hk` tarball holds the program, the regular file `hk`, nothing else.
+/// A tarball that is absent is skipped (step 1 reported that); one that cannot be read is listed.
+fn check_hk_tarballs(
     dir: &Path,
-    (version, commit): (&Version, &Commit),
+    version: &Version,
     present: &BTreeSet<String>,
     problems: &mut Vec<String>,
-) -> Result<(), Error> {
-    let name = hkctl_name(version);
-    if !present.contains(&name) {
-        return Ok(());
+) {
+    for platform in Platform::RELEASED {
+        let name = format!("{HK}-{version}-{}.tar.gz", platform.name());
+        if !present.contains(&name) {
+            continue;
+        }
+        let path = dir.join(&name);
+        let listing = std::fs::File::open(&path)
+            .map_err(|e| e.to_string())
+            .and_then(|file| members(file).map_err(|e| e.to_string()));
+        match listing {
+            Ok(found) if found == expected_members() => {}
+            Ok(found) => problems.push(format!(
+                "{name} does not hold exactly the one file `{HK}` (it holds {})",
+                found.join(", ")
+            )),
+            Err(e) => problems.push(format!("{name} is not a readable gzip tar archive: {e}")),
+        }
     }
-    let path = dir.join(&name);
-    let bytes = std::fs::read(&path).map_err(Error::io(format!("read {}", path.display())))?;
-    problems.extend(hkctl::problems(
-        &String::from_utf8_lossy(&bytes),
-        version,
-        commit,
-    ));
-    Ok(())
+}
+
+/// What an `hk` tarball holds, as [`members`] lists it, sorted.
+fn expected_members() -> Vec<String> {
+    vec![format!("{HK} (file)")]
+}
+
+/// The members of the gzip tar archive `file`, each as `<path> (file)`, `<path> (link to <target>)`
+/// or `<path> (<other type>)`, sorted.
+fn members(file: impl Read) -> std::io::Result<Vec<String>> {
+    let mut found = Vec::new();
+    for entry in tar::Archive::new(GzDecoder::new(file)).entries()? {
+        let entry = entry?;
+        let path = entry.path()?.display().to_string();
+        let kind = match entry.header().entry_type() {
+            EntryType::Regular => "file".to_owned(),
+            EntryType::Symlink => {
+                let target = entry.link_name()?.map(|t| t.display().to_string());
+                format!("link to {}", target.unwrap_or_default())
+            }
+            other => format!("type {}", other.as_byte() as char),
+        };
+        found.push(format!("{path} ({kind})"));
+    }
+    found.sort();
+    Ok(found)
 }
 
 /// Step 5 for the attested assets `names`: each verified online, then from its bundle, all
