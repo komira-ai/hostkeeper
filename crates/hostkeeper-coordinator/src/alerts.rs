@@ -48,6 +48,9 @@
 //!   ([`crate::xcode_feed`]) lists a release, no beta and no release candidate, newer than any its
 //!   Xcode store holds; one alert with the release's version, until the store holds it or a newer
 //!   one;
+//! - `xcode_version_taken`: an upload of a second build under a version the Xcode store holds was
+//!   refused ([`crate::xcode_store`]); one alert per version, until the held archive of that version
+//!   is removed (the coordinator's memory, like a failed canary's);
 //! - `updates_due`: one alert per host group with hosts whose kept report has updates due.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -57,7 +60,7 @@ use std::time::Duration;
 
 use hostkeeper_enrollment::enroll::{RecordedApproval, RequestState, RequestView, StoreError};
 use hostkeeper_enrollment::names::MacAddress;
-use hostkeeper_proto::hostkeeper::agent::v1::{PrerequisiteStatus, PrerequisitesReport};
+use hostkeeper_proto::hostkeeper::agent::v1::PrerequisitesReport;
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_wire::HostId;
 
@@ -125,6 +128,8 @@ pub enum Kind {
     PrerequisiteFailed,
     /// The list of Xcode releases has a release newer than any the Xcode store holds.
     XcodeReleaseWaiting,
+    /// An upload of a second build under a version the Xcode store holds was refused.
+    XcodeVersionTaken,
     /// Hosts of a host group have updates due.
     UpdatesDue,
 }
@@ -149,6 +154,7 @@ impl Kind {
             Self::TrustedRoot => "trusted_root",
             Self::PrerequisiteFailed => "prerequisite_failed",
             Self::XcodeReleaseWaiting => "xcode_release_waiting",
+            Self::XcodeVersionTaken => "xcode_version_taken",
             Self::UpdatesDue => "updates_due",
         }
     }
@@ -169,6 +175,7 @@ impl Kind {
             | Self::TrustedRoot
             | Self::PrerequisiteFailed
             | Self::XcodeReleaseWaiting
+            | Self::XcodeVersionTaken
             | Self::UpdatesDue => proto::AlertSeverity::Warning,
         }
     }
@@ -190,6 +197,7 @@ impl Kind {
             Self::TrustedRoot => proto::AlertKind::TrustedRoot,
             Self::PrerequisiteFailed => proto::AlertKind::PrerequisiteFailed,
             Self::XcodeReleaseWaiting => proto::AlertKind::XcodeReleaseWaiting,
+            Self::XcodeVersionTaken => proto::AlertKind::XcodeVersionTaken,
             Self::UpdatesDue => proto::AlertKind::UpdatesDue,
         }
     }
@@ -270,6 +278,9 @@ pub struct EnrollmentFacts {
     /// The release the alert `xcode_release_waiting` names, of the list kept and the Xcode store
     /// ([`crate::xcode_feed::Xcode::release_waiting`]); none without a feed.
     pub(crate) xcode_waiting: Option<crate::xcode_feed::XcodeRelease>,
+    /// The refusals of a second build under a held version that stand
+    /// ([`crate::xcode_store::XcodeStore::taken`]); empty without a store.
+    pub(crate) xcode_taken: Vec<crate::xcode_store::Taken>,
     /// The host group of each heard host with a kept maintenance report ([`updates`]).
     pub(crate) groups: Option<BTreeMap<HostId, String>>,
 }
@@ -338,8 +349,12 @@ pub(crate) fn derive_in(
     ));
     alerts.extend(store_unreachable(fleet));
     alerts.extend(trusted_roots(fleet));
-    alerts.extend(prerequisite_failures(fleet, &enrollment.prerequisites));
+    alerts.extend(prerequisite_alerts::prerequisite_failures(
+        fleet,
+        &enrollment.prerequisites,
+    ));
     alerts.extend(xcode_release_waiting(enrollment));
+    alerts.extend(crate::xcode_service::version_taken(&enrollment.xcode_taken));
     alerts.extend(updates::updates_due(fleet, enrollment.groups.as_ref()));
     alerts.sort_by(|a, b| a.subject.cmp(&b.subject));
     alerts.dedup_by(|a, b| a.subject == b.subject);
@@ -645,46 +660,6 @@ fn xcode_release_waiting(enrollment: &EnrollmentFacts) -> Option<Alert> {
     })
 }
 
-/// `prerequisite_failed`: each host of the fleet whose last heartbeat announced
-/// `prerequisites-v1` and whose last prerequisites report holds a failed state, with each failed
-/// prerequisite, its failures in a row, the Unix time of its next try and its reason. A report
-/// kept for a host that left the fleet, or whose daemon no longer announces the feature, raises
-/// none.
-fn prerequisite_failures(
-    fleet: &Fleet,
-    reports: &BTreeMap<HostId, PrerequisitesReport>,
-) -> Vec<Alert> {
-    reports
-        .iter()
-        .filter(|(id, _)| fleet.announced(id, crate::prerequisites::FEATURE))
-        .filter_map(|(id, report)| {
-            let failed: Vec<String> = report
-                .states
-                .iter()
-                .filter(|state| state.status == PrerequisiteStatus::Failed as i32)
-                .map(|state| {
-                    format!(
-                        "{} failed {} in a row, next try at unix {}: {}",
-                        state.name, state.failures, state.next_try_unix, state.reason
-                    )
-                })
-                .collect();
-            (!failed.is_empty()).then(|| Alert {
-                subject: Subject {
-                    host: id.to_string(),
-                    ..Subject::of(Kind::PrerequisiteFailed)
-                },
-                message: format!(
-                    "{id} cannot make sure of its host prerequisites ({}); its daemon tries \
-                     again by itself, and until it succeeds the host lacks what its host group \
-                     needs",
-                    failed.join("; ")
-                ),
-            })
-        })
-        .collect()
-}
-
 /// `cert_near_expiry`: the certificate the coordinator serves its hosts, when it expires
 /// before `unix` plus `window` seconds.
 fn cert_near_expiry(enrollment: &EnrollmentFacts, unix: u64, window: u64) -> Vec<Alert> {
@@ -871,6 +846,7 @@ impl Coordinator {
         let enrollment = EnrollmentFacts {
             prerequisites: self.prerequisites.reports(),
             xcode_waiting: self.xcode.release_waiting(),
+            xcode_taken: self.xcode_taken(),
             groups: self.groups_of_reports(),
             ..enrollment
         };
@@ -992,6 +968,9 @@ mod xcode_tests;
 
 #[path = "group_alerts.rs"]
 mod group_alerts;
+
+#[path = "alerts_prerequisites.rs"]
+mod prerequisite_alerts;
 
 #[path = "alerts_rows.rs"]
 mod rows;

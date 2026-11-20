@@ -51,3 +51,4 @@ mod trusted_publishers;
 mod trusted_root;
 mod waits;
 mod wires;
+mod xcode;

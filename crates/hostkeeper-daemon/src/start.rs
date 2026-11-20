@@ -14,7 +14,7 @@
 //! daemon is asked to exit for its own update ([`crate::selfupdate::Restart`]).
 //!
 //! The daemon serves nothing on the host: it binds no socket and listens on no port. What it
-//! does is seen through the coordinator (`hkctl hosts get`), and orders reach it only in a
+//! does is seen through the coordinator (`hk hosts get`), and orders reach it only in a
 //! heartbeat's answer (docs/design/two-programs.md, section 1).
 //!
 //! [`settle_self_update`] settles the update of hostkeeper itself that waits for this start

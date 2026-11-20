@@ -637,6 +637,7 @@ fn alerts_come_by_kind_then_service_and_host() {
         Kind::TrustedRoot,
         Kind::PrerequisiteFailed,
         Kind::XcodeReleaseWaiting,
+        Kind::XcodeVersionTaken,
         Kind::UpdatesDue,
     ];
     assert_eq!(
@@ -655,12 +656,13 @@ fn alerts_come_by_kind_then_service_and_host() {
             "trusted_root",
             "prerequisite_failed",
             "xcode_release_waiting",
+            "xcode_version_taken",
             "updates_due",
         ]
     );
     assert_eq!(
         all.map(|kind| kind.proto() as i32),
-        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 16, 17, 19]
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 16, 17, 18, 19]
     );
     let critical: Vec<Kind> = all
         .into_iter()

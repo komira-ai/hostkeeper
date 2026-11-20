@@ -9,7 +9,7 @@
 use hostkeeper_proto::hostkeeper::operator::v1::{
     AlertsRefusal, ApiTokensRefusal, AuditRefusal, ConsoleRefusal, EnrollmentRefusal,
     HostGroupsRefusal, HostsRefusal, LayoutRefusal, ReleasesRefusal, RepositoriesRefusal,
-    RolloutsRefusal, ServicesRefusal, SshRefusal, UsersRefusal,
+    RolloutsRefusal, ServicesRefusal, SshRefusal, UsersRefusal, XcodeRefusal,
 };
 use tonic::{Code, Status};
 
@@ -321,4 +321,18 @@ pub(crate) fn console(refusal: ConsoleRefusal) -> Status {
         | ConsoleRefusal::BmcFailed => Code::Unavailable,
     };
     refused(code, refusal.as_str_name(), "CONSOLE_REFUSAL_")
+}
+
+/// The status of a refusal by `Xcode`.
+pub(crate) fn xcode(refusal: XcodeRefusal) -> Status {
+    let code = match refusal {
+        XcodeRefusal::Unspecified | XcodeRefusal::StoreFailed => Code::Internal,
+        XcodeRefusal::Unauthorized => Code::Unauthenticated,
+        XcodeRefusal::Forbidden => Code::PermissionDenied,
+        XcodeRefusal::InvalidRequest => Code::InvalidArgument,
+        XcodeRefusal::NoStore => Code::FailedPrecondition,
+        XcodeRefusal::UnknownArchive => Code::NotFound,
+        XcodeRefusal::AuditUnavailable => Code::Unavailable,
+    };
+    refused(code, refusal.as_str_name(), "XCODE_REFUSAL_")
 }

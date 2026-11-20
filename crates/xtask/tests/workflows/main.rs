@@ -32,7 +32,7 @@ mod downloads;
 mod downloads_tests;
 mod expr;
 mod hello_run_tests;
-mod hkssh_release_tests;
+mod hk_release_tests;
 mod image_push_tests;
 #[path = "../jq/run.rs"]
 mod jq;
@@ -75,6 +75,7 @@ mod services_tests;
 mod set_desired;
 mod set_desired_calls;
 mod set_desired_calls_tests;
+mod set_desired_install_tests;
 mod set_desired_outputs_tests;
 mod set_desired_tag;
 mod set_desired_tag_tests;

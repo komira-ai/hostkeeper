@@ -3,8 +3,8 @@
 //
 // Served by: nothing. This file is frozen: no program serves it and no code is generated from it.
 // The daemon binds no admin socket and `hostkeeper admin` is gone (docs/design/two-programs.md,
-// section 3.3): a host's status is `hkctl hosts get`, a step is stopped by `hkctl hosts abort`,
-// and a corrupt step record is cleared by `hkctl hosts clear-record` (docs/admin.md). The file
+// section 3.3): a host's status is `hk hosts get`, a step is stopped by `hk hosts abort`,
+// and a corrupt step record is cleared by `hk hosts clear-record` (docs/admin.md). The file
 // stays because the format shipped: an older `hostkeeper admin` on a host still speaks it to an
 // older daemon, and the compatibility test of `hostkeeper-proto` holds it to the last release.
 //

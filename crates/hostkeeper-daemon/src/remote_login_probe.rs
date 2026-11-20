@@ -1,7 +1,7 @@
 //! The Remote Login probe: once at its start, a Mac's daemon runs, as itself (root under launchd,
 //! with whatever privacy grants it has, none on a stock Mac), the commands that tell whether it can
 //! turn on Remote Login, and reports what each said in every heartbeat after
-//! (`HeartbeatRequest.remote_login_probe`), where `hkctl hosts get` shows it. It decides nothing:
+//! (`HeartbeatRequest.remote_login_probe`), where `hk hosts get` shows it. It decides nothing:
 //! it answered, from the Macs themselves, whether the daemon needs Full Disk Access to turn on
 //! sshd (docs/design/ssh-through-coordinator.md, section 3, has the results), and it keeps
 //! reporting the same steps at each start.

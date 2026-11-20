@@ -1,8 +1,8 @@
-//! The coordinator as the runner sees it: `hkctl`, one call per command, behind a port.
+//! The coordinator as the runner sees it: `hk`, one call per command, behind a port.
 //!
-//! [`Hkctl`] runs the program `--hkctl` names with the coordinator's endpoint, its CA file and
+//! [`Hk`] runs the program `--hk` names with the coordinator's endpoint, its CA file and
 //! the operator's token file as flags, so the token is never an argument or an environment
-//! variable of the runner. A request (a message `hkctl` takes only as JSON) is written to
+//! variable of the runner. A request (a message `hk` takes only as JSON) is written to
 //! `requests/<n>.json` in the run directory first, which keeps what was sent.
 
 use std::io;
@@ -12,7 +12,7 @@ use std::process::{Command, Stdio};
 use serde_json::Value;
 use thiserror::Error;
 
-/// What `hkctl` answered: its exit code (0 ok, 1 no answer or another code, 2 refused or a usage
+/// What `hk` answered: its exit code (0 ok, 1 no answer or another code, 2 refused or a usage
 /// error, 3 the caller refused; docs/cli.md) and its two outputs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Answer {
@@ -31,13 +31,13 @@ impl Answer {
     }
 }
 
-/// The coordinator, one `hkctl` call at a time: `args` are the command and its flags, after the
+/// The coordinator, one `hk` call at a time: `args` are the command and its flags, after the
 /// global flags; `request` goes in as `--request <file>`.
 pub trait Coordinator {
     fn call(&mut self, args: &[String], request: Option<&Value>) -> Result<Answer, CallError>;
 }
 
-/// Why `hkctl` could not be run at all.
+/// Why `hk` could not be run at all.
 #[derive(Debug, Error)]
 pub enum CallError {
     #[error("running {program}: {source}")]
@@ -56,16 +56,16 @@ pub enum CallError {
     Signal { program: PathBuf },
 }
 
-/// The real coordinator: the `hkctl` program.
+/// The real coordinator: the `hk` program.
 #[derive(Debug)]
-pub struct Hkctl {
+pub struct Hk {
     program: PathBuf,
     globals: Vec<String>,
     requests: PathBuf,
     sent: u32,
 }
 
-impl Hkctl {
+impl Hk {
     /// `program` called with `--endpoint endpoint --ca-file ca_file --token-file token_file`;
     /// requests are written under `requests`, which must exist.
     pub fn new(
@@ -91,7 +91,7 @@ impl Hkctl {
     }
 }
 
-impl Coordinator for Hkctl {
+impl Coordinator for Hk {
     fn call(&mut self, args: &[String], request: Option<&Value>) -> Result<Answer, CallError> {
         let mut command = Command::new(&self.program);
         command.args(&self.globals).args(args);

@@ -171,6 +171,10 @@ fn execute(
         Step::Rollback => steps::rollback(host, &params),
         Step::Cleanup => steps::cleanup(&params),
         Step::Uninstall => steps::uninstall(&params),
+        Step::Drain | Step::Resume => Err(Failure::environment(
+            "unsupported_step",
+            "the pxe hook has no such step".to_owned(),
+        )),
     }
 }
 

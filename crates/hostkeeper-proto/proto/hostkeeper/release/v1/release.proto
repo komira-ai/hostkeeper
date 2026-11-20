@@ -148,6 +148,12 @@ message Hook {
   optional uint64 promotion_ceiling_secs = 5;
   // How often `cleanup` is tried again. Absent: 3.
   optional uint32 cleanup_retries = 6;
+  // The hook's additive step a maintenance run takes the service out of service with: `drain`,
+  // or a name `boot` may take, and not `boot`'s. Needs a `command` and `resume`.
+  optional string drain = 7;
+  // The hook's additive step a maintenance run puts the service back with: `resume`, or a name
+  // `boot` may take, and neither `boot`'s nor `drain`'s. Needs a `command` and `drain`.
+  optional string resume = 8;
 }
 
 // The bound of each hook step, in seconds. Every bound but `prepare` is above 0; `prepare` 0 is

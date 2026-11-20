@@ -4,7 +4,7 @@
 
 use hostkeeper_config::manifest::{
     BadHostkeeperVersion, Class, HealthUrlError, HostkeeperVersion, MAX_BOOT_NAME, ManifestRefusal,
-    REFUSED_PREFIXES, STEP_NAMES, check_health_url, is_boot_step,
+    REFUSED_PREFIXES, STEP_NAMES, check_health_url, is_boot_step, is_drain_step, is_resume_step,
 };
 use hostkeeper_config::names::is_within;
 
@@ -129,7 +129,41 @@ fn a_boot_step_is_a_reason_token_that_is_none_of_the_steps() {
     for step in STEP_NAMES {
         assert!(!is_boot_step(step), "{step}");
     }
-    assert_eq!(STEP_NAMES.len(), 6);
+    assert_eq!(STEP_NAMES.len(), 8);
+}
+
+/// Catches `boot` naming a maintenance run's `drain` or `resume`, which every start of the daemon
+/// would then run (cordoning the host, or lifting an operator's cordon): both are words of the
+/// contract, and `boot` may take neither.
+#[test]
+fn a_boot_step_may_not_be_drain_or_resume() {
+    assert!(STEP_NAMES.contains(&"drain") && STEP_NAMES.contains(&"resume"));
+    assert!(!is_boot_step("drain"));
+    assert!(!is_boot_step("resume"));
+    assert!(is_boot_step("drained"), "a longer name is no step's word");
+}
+
+/// Catches a `drain` or `resume` name outside its grammar, and one that names another step of the
+/// contract: each takes its own word or any name `boot` may take, and no other step's word, the
+/// other's included.
+#[test]
+fn drain_and_resume_take_their_own_word_or_a_boot_name() {
+    for good in ["drain", "quiesce", "step_2", &"a".repeat(MAX_BOOT_NAME)] {
+        assert!(is_drain_step(good), "{good}");
+    }
+    for good in ["resume", "unquiesce", "step_2", &"a".repeat(MAX_BOOT_NAME)] {
+        assert!(is_resume_step(good), "{good}");
+    }
+    for bad in ["", "Drain", "dr-ain", &"a".repeat(MAX_BOOT_NAME + 1)] {
+        assert!(!is_drain_step(bad), "{bad:?}");
+        assert!(!is_resume_step(bad), "{bad:?}");
+    }
+    for step in STEP_NAMES.into_iter().filter(|step| *step != "drain") {
+        assert!(!is_drain_step(step), "drain = {step:?}");
+    }
+    for step in STEP_NAMES.into_iter().filter(|step| *step != "resume") {
+        assert!(!is_resume_step(step), "resume = {step:?}");
+    }
 }
 
 /// Catches a health URL that is not `http` to a loopback literal being passed: the IPv4 loopback

@@ -4,7 +4,7 @@
 //! to name, the release.
 //!
 //! A fixture is what the steps before the outputs step leave: the outcome of each call step, the
-//! answer each wrote with `--response-file`, the diagnostics each wrote to its own file (hkctl's
+//! answer each wrote with `--response-file`, the diagnostics each wrote to its own file (hk's
 //! `refused: <token>` line among them), and the inputs the program names. A file a call did not
 //! leave is read as `/dev/null` by the workflow, so it is empty here.
 
@@ -66,9 +66,9 @@ fn waited<'a>(outcome: &'a str, body: &'a str, err: &'a str) -> Left<'a> {
     }
 }
 
-/// hkctl's diagnostics of a refusal with the reason `refused:` line it prints.
+/// hk's diagnostics of a refusal with the reason `refused:` line it prints.
 const REFUSED_SET: &str =
-    "hkctl: the coordinator answered FAILED_PRECONDITION\nrefused: not_in_channel\n";
+    "hk: the coordinator answered FAILED_PRECONDITION\nrefused: not_in_channel\n";
 
 /// The outputs program of the real workflow, run on `left`.
 fn outputs(left: &Left) -> Ran {
@@ -134,7 +134,7 @@ fn a_refused_set_writes_its_token_and_no_version() {
     // An unauthenticated caller exits 3 with its token the same way.
     assert_eq!(
         outputs(&set_failed(
-            "hkctl: the coordinator answered UNAUTHENTICATED\nrefused: unauthorized\n"
+            "hk: the coordinator answered UNAUTHENTICATED\nrefused: unauthorized\n"
         )),
         want("", false, "unauthorized", true)
     );
@@ -142,11 +142,11 @@ fn a_refused_set_writes_its_token_and_no_version() {
 
 #[test]
 fn a_set_refused_by_an_older_coordinator_writes_coordinator_older() {
-    // hkctl's stderr when the coordinator refused a field it does not know with invalid_request
-    // and then said it is older than hkctl: the `refused:` line carries coordinator_older. Catches
+    // hk's stderr when the coordinator refused a field it does not know with invalid_request
+    // and then said it is older than hk: the `refused:` line carries coordinator_older. Catches
     // the reason read from the line before it, and the job's message naming another reason.
-    let err = "hkctl: the coordinator answered INVALID_ARGUMENT
-hkctl: the coordinator is older than this hkctl (1.2.3): it runs 1.0.0; update the coordinator, then call again
+    let err = "hk: the coordinator answered INVALID_ARGUMENT
+hk: the coordinator is older than this hk (1.2.3): it runs 1.0.0; update the coordinator, then call again
 refused: coordinator_older
 ";
     assert_eq!(
@@ -173,14 +173,14 @@ refused: coordinator_older
 #[test]
 fn a_set_with_no_refusal_token_is_no_answer() {
     // Row 2: the set failed otherwise. Catches a transport failure, a reason outside the token
-    // grammar (which hkctl drops, and the program must not trust), a usage error and a
+    // grammar (which hk drops, and the program must not trust), a usage error and a
     // cancelled set read as anything but `no_answer`, and any of them writing a version.
     for err in [
-        "curl: (7) Failed to connect to coordinator.example port 443\nhkctl: no answer from https://coordinator.example (curl exited 7)\n",
-        "hkctl: the coordinator answered FAILED_PRECONDITION\nrefused: Not A Token\n",
-        "hkctl: the coordinator answered FAILED_PRECONDITION\nrefused: \n",
-        "hkctl: the answer (HTTP 502) is not the gateway's\n",
-        "hkctl: --endpoint takes https://<host>[:<port>]\n",
+        "hk: no answer from https://coordinator.example (connection refused)\n",
+        "hk: the coordinator answered FAILED_PRECONDITION\nrefused: Not A Token\n",
+        "hk: the coordinator answered FAILED_PRECONDITION\nrefused: \n",
+        "hk: the answer (HTTP 502) is not the gateway's\n",
+        "hk: --endpoint takes https://<host>[:<port>]\n",
         "",
     ] {
         assert_eq!(
@@ -270,11 +270,11 @@ fn a_refused_wait_writes_its_token() {
     // Catches a max_polls above 180 or a full listener reported as anything but its token.
     for (err, token) in [
         (
-            "hkctl: the coordinator answered INVALID_ARGUMENT\nrefused: invalid_wait\n",
+            "hk: the coordinator answered INVALID_ARGUMENT\nrefused: invalid_wait\n",
             "invalid_wait",
         ),
         (
-            "hkctl: the coordinator answered FAILED_PRECONDITION\nrefused: too_many_waits\n",
+            "hk: the coordinator answered FAILED_PRECONDITION\nrefused: too_many_waits\n",
             "too_many_waits",
         ),
     ] {
@@ -293,7 +293,7 @@ fn a_wait_with_no_outcome_is_no_answer() {
         (
             "failure",
             "",
-            "curl: (52) Empty reply from server\nhkctl: no answer from https://coordinator.example (curl exited 52)\n",
+            "hk: no answer from https://coordinator.example (the connection closed before an answer)\n",
         ),
         ("failure", "", "refused: Not A Token\n"),
         ("cancelled", "", ""),

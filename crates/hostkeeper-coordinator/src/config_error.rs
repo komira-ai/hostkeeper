@@ -128,6 +128,9 @@ pub enum StartError {
     /// `--record-approve-for` is longer than `--record-approve-max`.
     #[error(transparent)]
     RecordWindow(#[from] WindowAboveMax),
+    /// `--xcode-dir` is not a directory the store could be opened in.
+    #[error("--xcode-dir: {0}")]
+    XcodeDir(String),
     /// A socket, the runtime or the signal handlers failed.
     #[error(transparent)]
     Io(#[from] io::Error),

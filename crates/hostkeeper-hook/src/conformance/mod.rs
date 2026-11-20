@@ -28,6 +28,12 @@
 //!    is no reason to refuse (a hook may refuse an unknown key of its own `[params]`).
 //! 8. **One at a time.** With an exclusive lock held on the record directory, every step
 //!    refuses (exit `1`) and changes nothing.
+//! 9. **Drain and resume**, for a hook that has them ([`Conformance::with_drain`]; see
+//!    [`drain`]): each run twice ends the same and changes nothing the second time; `resume`
+//!    with no `drain` before it succeeds and changes nothing; `resume` after `drain` leaves the
+//!    world as it was (with no deadline, and with one passed while no work is left); and a `drain` whose deadline has passed with work in flight exits `75`,
+//!    cuts no work and leaves the service resumed. These steps get a params file of their own:
+//!    the fake's table, the service, the run and, for the deadline, the deadline.
 //!
 //! The params file is written once per sandbox and given to every step: the staged release
 //! (byte for byte the argument of `prepare`), the target and the previous version, the
@@ -45,6 +51,7 @@
 //! strictly.
 
 mod allow;
+pub mod drain;
 pub mod gate;
 mod run;
 mod sandbox;
@@ -165,6 +172,14 @@ pub trait FakeService {
     /// What only the update needed and is still there (a cordon, a staged copy): empty after a
     /// `cleanup` that succeeded and after a `rollback` that was reversible.
     fn residue(&self, sandbox: &Sandbox) -> io::Result<Vec<String>>;
+
+    /// Puts work in flight in `sandbox.world()` that does not end by itself (a lease, a job),
+    /// for the `drain` past its deadline of check 9: what this call changes in the world is the
+    /// work, which the `drain` must leave as it was. `Ok(false)` if this fake has no work to put
+    /// in flight, the default; the scenario is then skipped and said to be.
+    fn start_work(&mut self, _sandbox: &Sandbox) -> io::Result<bool> {
+        Ok(false)
+    }
 }
 
 /// Why a hook was refused.
@@ -249,6 +264,16 @@ pub enum Violation {
         outcome: Outcome,
         changes: Vec<String>,
     },
+    #[error("resume of a service it did not drain changed the world or its record: {changes:?}")]
+    ResumeWithoutDrainChanged { changes: Vec<String> },
+    #[error("resume after drain did not put the world back as it was: {changes:?}")]
+    ResumeLeftDrained { changes: Vec<String> },
+    #[error("drain exited 0 with work in flight after its deadline had passed")]
+    DrainMissedDeadline,
+    #[error("drain cut work in flight: {changes:?}")]
+    DrainCutWork { changes: Vec<String> },
+    #[error("drain deferred by its deadline left the service drained: {changes:?}")]
+    DeferredDrainNotResumed { changes: Vec<String> },
 }
 
 /// The steps the updater ran for one scenario and what it reported.
@@ -284,6 +309,7 @@ pub struct Conformance<'a> {
     sandboxes: u32,
     first_install: bool,
     allow: Allowances,
+    drains: bool,
 }
 
 /// Runs every check on `hook` against `fake`, in sandboxes made under `base` (a directory of
@@ -309,7 +335,16 @@ impl<'a> Conformance<'a> {
             sandboxes: 0,
             first_install: false,
             allow: Allowances::default(),
+            drains: false,
         }
+    }
+
+    /// Runs check 9 ([`drain`]) in [`Self::check_all`] too: for a hook whose manifest names
+    /// `[hook] drain` and `[hook] resume` as `drain` and `resume`. Without it, the harness runs
+    /// neither step.
+    pub fn with_drain(mut self) -> Conformance<'a> {
+        self.drains = true;
+        self
     }
 
     /// Accepts the behaviours `allow` declares (see [`Allowances`]); without it, none. The
@@ -328,11 +363,16 @@ impl<'a> Conformance<'a> {
         self
     }
 
-    /// All the checks of the module documentation.
+    /// All the checks of the module documentation; check 9 only [`Self::with_drain`].
     pub fn check_all(&mut self) -> Result<Summary, Violation> {
         self.idempotence()?;
         let kill_points = self.crash_resume()?;
-        let (scenarios, skipped) = self.scenarios()?;
+        let (mut scenarios, mut skipped) = self.scenarios()?;
+        if self.drains {
+            let (ran, cannot) = self.drain_resume()?;
+            scenarios.extend(ran);
+            skipped.extend(cannot);
+        }
         self.tolerates_unknown_updater_keys()?;
         self.exclusive_record()?;
         // The same update as a first install: no previous release or version in the params.
@@ -406,10 +446,14 @@ impl<'a> Conformance<'a> {
     /// Runs `step` once and checks only that it left the artifact and `outside/` alone;
     /// `kill_at` above zero stops it at that kill point.
     fn exec_at(&self, sandbox: &Sandbox, step: Step, kill_at: u64) -> Result<Run, Violation> {
+        let file = match step {
+            Step::Drain | Step::Resume => drain::DRAIN_PARAMS,
+            _ => "params.toml",
+        };
         let inv = Invocation {
             step,
             artifact: (step == Step::Prepare).then(|| sandbox.artifact()),
-            params: Some(sandbox.control().join("params.toml")),
+            params: Some(sandbox.control().join(file)),
         };
         let before = sandbox.guarded()?;
         let run = run_step(self.hook, self.fake.env(sandbox), sandbox, &inv, kill_at)?;

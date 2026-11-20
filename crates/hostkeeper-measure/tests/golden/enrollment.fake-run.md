@@ -6,7 +6,7 @@ A new host from its first contact with the coordinator to enrolled and running i
 
 **Hosts.** One new Linux host, not yet enrolled: host-1 in the records.
 
-**Recorded.** The audit entries `enroll_requested`, `enroll_approve` (or `enrollment.auto_approved`) and `enroll_issued`, each with its time, read with `hkctl audit list`; then the host's `firstHeartbeatUnix` and `firstServingUnix`, read with `hkctl hosts get`. The runner polls every 2 s.
+**Recorded.** The audit entries `enroll_requested`, `enroll_approve` (or `enrollment.auto_approved`) and `enroll_issued`, each with its time, read with `hk audit list`; then the host's `firstHeartbeatUnix` and `firstServingUnix`, read with `hk hosts get`. The runner polls every 2 s.
 
 | Measure | What | Unit | n | Missing | Min | Median | Max | Clock |
 |---|---|---|---|---|---|---|---|---|

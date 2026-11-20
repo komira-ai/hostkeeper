@@ -1,4 +1,4 @@
-//! `ctl` is not a verb of the `hostkeeper` binary: the coordinator's command line is `hkctl`
+//! `ctl` is not a verb of the `hostkeeper` binary: the coordinator's command line is `hk`
 //! (docs/cli.md), generated from the protos, and nothing of the daemon's command line reaches
 //! the coordinator's API.
 
