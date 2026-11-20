@@ -10,9 +10,10 @@
 //! [`MaintenanceKind`], found in the host platform's [`Registry`] ([`registry_for`]); a kind the
 //! platform has no work for fails `unsupported_kind`. On a Linux host (systemd or OpenRC) the
 //! `cutover` and the `after_reboot` of `linux` and `reboot` are written
-//! ([`crate::maintenance_linux`]); on a Mac, the `prepare` of `xcode`, the stage of the Xcodes of
-//! the order ([`XcodeKind`]); every other step of every kind is `unsupported_kind` until its own
-//! change. The steps run each kind of the run in [`Kind::ALL`]'s order, macOS before Xcode,
+//! ([`crate::maintenance_linux`]), and so is their `verify` ([`LinuxCheck`], the module
+//! [`linux`]); on a Mac, the `prepare` of `xcode`, the stage of the Xcodes of the order
+//! ([`XcodeKind`]); every other step of every kind is `unsupported_kind` until its own change.
+//! The steps run each kind of the run in [`Kind::ALL`]'s order, macOS before Xcode,
 //! whatever order the parameters give:
 //!
 //! - `prepare` runs each kind's `prepare`, and ends at the first that does not succeed. It writes
@@ -27,8 +28,10 @@
 //!   boot id, the reboot was asked for and has not happened: it is asked for again, and nothing is
 //!   installed again. A `reboot` kind after a kind whose reboot the same `cutover` saw finished is
 //!   recorded applied without a second reboot.
-//! - `verify` fails `not_applied` for a kind the run record does not hold applied, and otherwise
-//!   runs each kind's `verify`.
+//! - `verify` checks each kind of the run in turn and ends at the first wrong fact: it fails
+//!   `not_applied` for a kind the run record does not hold applied, `not_rebooted` for a kind
+//!   applied after a reboot while the host still runs the boot that reboot was asked in, and
+//!   otherwise runs the kind's `verify`. A kind not in the run is not checked.
 //!
 //! **The run record.** A host keeps none yet ([`Unwired`]): a `cutover` there would install and
 //! then fail to record it, so [`host_main`] refuses the step first, before any kind runs, failing
@@ -39,6 +42,7 @@
 //! reason a token, the detail at most [`MAX_DETAIL`] bytes.
 
 mod kind;
+pub mod linux;
 mod params;
 mod ports;
 mod registry;
@@ -50,6 +54,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use clap::{Args, ValueEnum};
+use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_hook::{Class, Outcome, Report, is_reason_token};
 use hostkeeper_launchd::{Platform, PlatformKind};
 use hostkeeper_placed::{RealFs, Roots};
@@ -57,12 +62,14 @@ use hostkeeper_proto::maintenance::MAX_HALTED_REASON;
 use hostkeeper_steps::{BootId, BootIdSource};
 
 use crate::Placement;
+use crate::adapters::Adapters;
 use crate::cli;
 use crate::maintenance_linux::kinds::{LinuxKind, RebootKind};
 use crate::maintenance_linux::rebooter::HostRebooter;
 use crate::maintenance_own::PlacedPackages;
 
 pub use kind::{Cutover, KindError, MaintenanceKind, REASON_UNSUPPORTED_KIND, Unsupported};
+pub use linux::LinuxCheck;
 pub use params::{Kind, MAX_PARAMS_BYTES, MaintainParams, ParamsError};
 pub use ports::{KindState, RebootError, Rebooter, RecordError, RunRecord, Unwired};
 pub use registry::Registry;
@@ -86,6 +93,9 @@ pub const REASON_REBOOT_FAILED: &str = "reboot_failed";
 pub const REASON_REBOOT_UNDER_WAY: &str = "reboot_under_way";
 /// The reason of a `verify` of a kind the run record does not hold applied.
 pub const REASON_NOT_APPLIED: &str = "not_applied";
+/// The reason of a `verify` of a kind applied after a reboot while the host still runs the boot
+/// that reboot was asked in.
+pub const REASON_NOT_REBOOTED: &str = "not_rebooted";
 /// The reason given in place of a kind's reason that is not a token.
 pub const REASON_KIND_FAILED: &str = "kind_failed";
 
@@ -204,12 +214,15 @@ fn bounded(detail: &str) -> String {
     detail[..end].to_owned()
 }
 
-/// The kinds of a host of `platform`: [`Registry::for_platform`]'s, with `linux` and `reboot` of a
-/// Linux host (systemd or OpenRC) put in place of their stubs ([`LinuxKind`], [`RebootKind`]), the
+/// The kinds of a host of `platform`, for a build of version `own` (`major.minor.patch`):
+/// [`Registry::for_platform`]'s, with `linux` and `reboot` of a Linux host (systemd or OpenRC) put
+/// in place of their stubs: installed and rebooted by [`LinuxKind`] and [`RebootKind`], the
 /// install waiting up to `lock_wait_secs` for the package manager's lock and leaving untouched the
-/// packages recorded in the daemon's `placed.json`. A Mac's `xcode` is [`XcodeKind`]; its
-/// `macos` and `reboot` keep their stubs.
-pub fn registry_for(platform: &Platform, lock_wait_secs: u64) -> Registry {
+/// packages recorded in the daemon's `placed.json`, and checked by the host's [`LinuxCheck`]
+/// ([`linux::kinds`]). When `own` is not a version (which the daemon itself refuses to start
+/// with), or the build has no adapters for the platform, their `verify` stays `unsupported_kind`.
+/// A Mac's `xcode` is [`XcodeKind`]; its `macos` and `reboot` keep their stubs.
+pub fn registry_for(platform: &Platform, lock_wait_secs: u64, own: &str) -> Registry {
     let registry = Registry::for_platform(platform.kind);
     match platform.kind {
         PlatformKind::Linux | PlatformKind::Openrc => {
@@ -221,13 +234,20 @@ pub fn registry_for(platform: &Platform, lock_wait_secs: u64) -> Registry {
                 ),
                 fs: Arc::new(RealFs::new(Path::new("/"))),
             };
-            let own = Box::new(PlacedPackages::new(&placement));
-            registry
-                .with(
-                    Kind::Linux,
-                    Box::new(LinuxKind::at_host(lock_wait_secs, own)),
-                )
-                .with(Kind::Reboot, Box::new(RebootKind::at_host()))
+            let packages = Box::new(PlacedPackages::new(&placement));
+            let linux_work = Box::new(LinuxKind::at_host(lock_wait_secs, packages));
+            let reboot_work = Box::new(RebootKind::at_host());
+            match (
+                HostkeeperVersion::parse(own),
+                Adapters::for_platform(platform),
+            ) {
+                (Ok(own), Ok(adapters)) => {
+                    linux::kinds(LinuxCheck::at_host(adapters, own), linux_work, reboot_work)
+                }
+                _ => registry
+                    .with(Kind::Linux, linux_work)
+                    .with(Kind::Reboot, reboot_work),
+            }
         }
         PlatformKind::Macos => registry.with(Kind::Xcode, Box::new(XcodeKind::at_host())),
     }
@@ -251,7 +271,11 @@ pub fn host_main(args: &HookArgs) -> Outcome {
         return ending.outcome;
     }
     let platform = Platform::host();
-    let kinds = registry_for(&platform, args.package_lock_wait_secs);
+    let kinds = registry_for(
+        &platform,
+        args.package_lock_wait_secs,
+        env!("CARGO_PKG_VERSION"),
+    );
     let boot_id = crate::adapters::host_boot_id();
     let host_rebooter = HostRebooter::for_platform(platform.kind);
     let rebooter = host_rebooter
@@ -328,7 +352,7 @@ fn cutover(params: &MaintainParams, ports: &HookPorts<'_>) -> Result<Ending, End
     let mut rebooted: Option<BootId> = None;
     for kind in params.kinds() {
         match record.state(run_id, kind).map_err(record_failed)? {
-            KindState::Applied => {}
+            KindState::Applied | KindState::AppliedAfterReboot { .. } => {}
             KindState::RebootUnderWay { boot } => {
                 let now = boot_id(ports.boot_id)?;
                 if now == boot {
@@ -362,18 +386,34 @@ fn cutover(params: &MaintainParams, ports: &HookPorts<'_>) -> Result<Ending, End
     Ok(Ending::done())
 }
 
-/// Each kind's `verify`, once the run record holds every kind applied.
+/// Each kind's check, in the run's order, to the first wrong fact: the kind recorded applied,
+/// the host booted again since the reboot it needed was asked for, and the kind's own `verify`.
 fn verify(params: &MaintainParams, ports: &HookPorts<'_>) -> Result<Ending, Ending> {
     for kind in params.kinds() {
         let state = ports
             .record
             .state(params.run_id(), kind)
             .map_err(record_failed)?;
-        if state != KindState::Applied {
-            return Err(Ending::failed(
-                REASON_NOT_APPLIED,
-                format!("{kind} is not recorded applied"),
-            ));
+        match state {
+            KindState::Applied => {}
+            KindState::AppliedAfterReboot { asked_in } => {
+                if boot_id(ports.boot_id)? == asked_in {
+                    return Err(Ending::failed(
+                        REASON_NOT_REBOOTED,
+                        format!(
+                            "{kind} needed a reboot, and the host still runs the boot {} it was \
+                             asked in",
+                            asked_in.as_str()
+                        ),
+                    ));
+                }
+            }
+            KindState::Pending | KindState::RebootUnderWay { .. } => {
+                return Err(Ending::failed(
+                    REASON_NOT_APPLIED,
+                    format!("{kind} is not recorded applied"),
+                ));
+            }
         }
         ports.kinds.get(kind)?.verify(params)?;
     }

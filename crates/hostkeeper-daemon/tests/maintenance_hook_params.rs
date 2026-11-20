@@ -513,14 +513,19 @@ fn a_cutover_is_refused_while_the_host_keeps_no_run_record() {
 }
 
 /// Proves: a Linux host's registry holds the `linux` and `reboot` kinds and a Mac's its three:
-/// a Linux `prepare` and `verify` still answer `unsupported_kind`, as does a Mac's `macos`
-/// `prepare`; a Mac's `xcode` stages (an order with no Xcode stages nothing and succeeds) and its
-/// `cutover`, `after_reboot` and `verify` answer `unsupported_kind`.
+/// a Linux `prepare` still answers `unsupported_kind`, as does a Mac's `macos` `prepare`; a
+/// build whose version is not `major.minor.patch` cannot check its host, so the `verify` of its
+/// `linux` and `reboot` answers `unsupported_kind` (the check itself is
+/// `maintenance_hook_linux.rs`'s, over fakes: a host's reads the host); a Mac's `xcode` stages
+/// (an order with no Xcode stages nothing and succeeds) and its `cutover`, `after_reboot` and
+/// `verify` answer `unsupported_kind`.
 ///
-/// Catches: a platform's kinds put in the wrong platform's registry.
+/// Catches: a platform's kinds put in the wrong platform's registry, or a host that cannot be
+/// checked made to look checked.
 #[test]
 fn the_registry_of_a_platform_holds_its_kinds() {
-    let kinds = |platform: &Platform| registry_for(platform, DEFAULT_PACKAGE_LOCK_WAIT_SECS);
+    let kinds =
+        |platform: &Platform| registry_for(platform, DEFAULT_PACKAGE_LOCK_WAIT_SECS, "0.1.0");
     let linux = kinds(&Platform::linux());
     assert_eq!(
         linux.kinds().collect::<Vec<_>>(),
@@ -539,17 +544,20 @@ fn the_registry_of_a_platform_holds_its_kinds() {
     .expect("valid");
     let refused = linux.get(Kind::Linux).expect("held").prepare(&params);
     assert_eq!(refused, Err(KindError::unsupported(Kind::Linux)));
-    let refused = linux.get(Kind::Linux).expect("held").verify(&params);
-    assert_eq!(refused, Err(KindError::unsupported(Kind::Linux)));
     let reboot = linux.get(Kind::Reboot).expect("held");
     assert_eq!(
         reboot.prepare(&params),
         Err(KindError::unsupported(Kind::Reboot))
     );
+    let unchecked = registry_for(&Platform::linux(), DEFAULT_PACKAGE_LOCK_WAIT_SECS, "0.1");
     assert_eq!(
-        reboot.verify(&params),
-        Err(KindError::unsupported(Kind::Reboot))
+        unchecked.kinds().collect::<Vec<_>>(),
+        [Kind::Linux, Kind::Reboot]
     );
+    for kind in [Kind::Linux, Kind::Reboot] {
+        let refused = unchecked.get(kind).expect("held").verify(&params);
+        assert_eq!(refused, Err(KindError::unsupported(kind)));
+    }
     let mac = kinds(&Platform::macos());
     assert_eq!(
         mac.kinds().collect::<Vec<_>>(),

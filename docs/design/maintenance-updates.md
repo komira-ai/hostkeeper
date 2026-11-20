@@ -1,6 +1,6 @@
 # Scheduled maintenance updates
 
-Status: design; the Linux report of sections 1 and 4.1 is built (`crates/hostkeeper-daemon/src/maintenance_facts.rs`), and on a Mac its macOS facts and due macOS updates, FileVault, the data volume's free space, the Command Line Tools, its Xcodes, its update account and the settings of section 5.8 (`maintenance_macos.rs`, `maintenance_mac.rs`, `maintenance_xcode.rs`, `maintenance_account.rs`, `maintenance_mdm.rs`); nothing else. The owner's answers of 2026-11-19 are in: the Mac's update account (section 5.5) and the first-class Linux path
+Status: design; the Linux report of sections 1 and 4.1 is built (`crates/hostkeeper-daemon/src/maintenance_facts.rs`), and on a Mac its macOS facts and due macOS updates, FileVault, the data volume's free space, the Command Line Tools, its Xcodes, its update account and the settings of section 5.8 (`maintenance_macos.rs`, `maintenance_mac.rs`, `maintenance_xcode.rs`, `maintenance_account.rs`, `maintenance_mdm.rs`), as are the maintenance hook's steps, the Linux kinds' `cutover` (`maintenance_linux.rs`) and their `verify` of section 5.6 (`crates/hostkeeper-daemon/src/maintenance_hook/linux.rs`); nothing else. The owner's answers of 2026-11-19 are in: the Mac's update account (section 5.5) and the first-class Linux path
 (the one-button update of section 4.2) are decided; for Xcode, section 2.0 makes a push from the operator's own Mac the source (owner's direction, 2026-11-20), with a fetcher Mac as the alternative. Facts about this repository were read on `main` at the commit this document lands on top
 of; facts about komira-ai/jobscheduler and komira-ai/kbf were read on their `main` and are marked as theirs. **Built** marks what exists
 (with its path), **New** what this design adds, **[V]** a claim to verify before building on it.
@@ -380,7 +380,8 @@ changes keep it so:
   service and returns when it has no work; `resume` puts it back. Both are safe to run twice. A package that names neither is left alone.
   The conformance harness (Built: `hostkeeper-hook`'s `conformance` feature) gains checks for them.
 - **The maintenance hook (Built: the command and its skeleton, `crates/hostkeeper-daemon/src/maintenance_hook.rs`; the `cutover`
-  of `linux` and `reboot`, `crates/hostkeeper-daemon/src/maintenance_linux.rs`; the other kinds' work and steps New).** The OS work is a hook too, a subcommand of hostkeeper's own binary, `hostkeeper maintenance-hook <prepare|cutover|verify>
+  of `linux` and `reboot`, `crates/hostkeeper-daemon/src/maintenance_linux.rs`, and their `verify`,
+  `crates/hostkeeper-daemon/src/maintenance_hook/linux.rs`; the other kinds' work and steps New).** The OS work is a hook too, a subcommand of hostkeeper's own binary, `hostkeeper maintenance-hook <prepare|cutover|verify>
   --params <file>`, launched the way the step runner launches a step (Built: `hostkeeper_steps` launchers: a transient systemd unit, a
   launchd job on a Mac, a process group under OpenRC). Its parameters are the `maintain` order's fields as JSON, in a file or on standard
   input (`--params -`), never in an argument. Each kind is the work of a `MaintenanceKind`, found by the host's platform; until a kind's
