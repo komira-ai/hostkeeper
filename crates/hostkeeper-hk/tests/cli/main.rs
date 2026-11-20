@@ -17,12 +17,15 @@
 //!   module, and the methods of the service `ssh`, which stay gateway calls;
 //! - `golden`: the help texts of the fixture's table against their files;
 //! - `methods`: the requests of the methods of the real protos that the operator's tools use;
+//! - `maintenance`: the `Maintenance` calls' requests, their enum flags' usage errors, and the
+//!   `UNIMPLEMENTED` answer of every one through the real gateway;
 //! - `xcode`: the commands of the service `xcode`: their paths, bodies, answers and a refusal.
 
 mod answers;
 mod flags;
 mod gateway;
 mod golden;
+mod maintenance;
 mod methods;
 mod oidc;
 mod older;
