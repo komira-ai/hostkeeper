@@ -32,7 +32,7 @@
 //! starts before [`startup`] has returned, so no order is taken while the boot work runs.
 
 use std::fs::{File, OpenOptions};
-use std::io;
+use std::io::{self, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
@@ -230,7 +230,9 @@ impl Started {
     }
 }
 
-/// Takes the exclusive lock of the state directory, made mode 0700 when it is missing.
+/// Takes the exclusive lock of the state directory, made mode 0700 when it is missing, and writes
+/// this process's pid in its file, which `hostkeeper activate` names when the lock is held
+/// ([`crate::local`]). The lock is the kernel's: it goes with the process that held it.
 pub(crate) fn lock_state_dir(state_dir: &Path) -> Result<File, StartError> {
     files::make_private(state_dir).map_err(io_at(state_dir))?;
     let path = state_dir.join(LOCK_FILE);
@@ -247,6 +249,9 @@ pub(crate) fn lock_state_dir(state_dir: &Path) -> Result<File, StartError> {
         path: path.clone(),
         source: io::Error::from(e),
     })?;
+    file.set_len(0)
+        .and_then(|()| (&file).write_all(format!("{}\n", std::process::id()).as_bytes()))
+        .map_err(io_at(&path))?;
     Ok(file)
 }
 

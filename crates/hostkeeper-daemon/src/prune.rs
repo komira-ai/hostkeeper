@@ -4,7 +4,8 @@
 //!
 //! A switch is confirmed when an update ends `Succeeded` (one with `promotion_pending` counts),
 //! [`crate::verbs::update`], or a force moves `current`, whatever its verdict,
-//! [`crate::verbs::force`]. Those are the only two callers of [`confirmed_switch`], and both hold
+//! [`crate::verbs::force`] (the host-local `hostkeeper activate` among them, whose prune keeps
+//! every version: [`crate::local`]). Those are the only two callers of [`confirmed_switch`], and both hold
 //! the service's lock already: the function takes its guard, so a prune without it does not
 //! compile, and it takes no other lock (not the step lock, not the lock of `placed.json`). Nothing
 //! else prunes: not a failed, deferred, halted or `forced_over` update, not the start pass, not
@@ -35,7 +36,8 @@
 //! and seal, which is the same for every installer and all a repository installer's `retire`
 //! has to do. A prune that fails, wholly or for one version, is logged as the alert
 //! [`ALERT_PRUNE`] and never changes the verdict of the order that confirmed the switch; the
-//! next confirmed switch tries again. A pin that cannot be read fails the prune the same way.
+//! next confirmed switch tries again. A pin that cannot be read, or a file at its path that is not
+//! a pin ([`crate::pin::look`]), fails the prune the same way.
 
 use std::collections::BTreeSet;
 use std::io;
@@ -205,10 +207,13 @@ fn protected(
         .load()
         .map_err(|error| error.to_string())?;
     installers::steps_for(&placed, service)?;
-    let pinned = pin::read(&pin::path(&ctx.dirs.state, service)).map_err(|e| e.to_string())?;
-    protect
-        .pinned
-        .extend(pinned.map(|version| version.to_string()));
+    match pin::look(&pin::path(&ctx.dirs.state, service)) {
+        pin::Look::Absent => {}
+        pin::Look::Pinned(version) => {
+            protect.pinned.insert(version.to_string());
+        }
+        pin::Look::NotAPin(why) | pin::Look::Unreadable(why) => return Err(why),
+    }
     Ok(Some(protect))
 }
 

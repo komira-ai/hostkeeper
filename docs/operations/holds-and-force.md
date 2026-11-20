@@ -38,6 +38,13 @@ with a reason; `Services.Unhold` releases it. A hold freezes the service where i
   pairs to the desired version at their next heartbeat, and they become eligible for the
   plan's stages again.
 
+A hold is the coordinator's. A host whose coordinator cannot be reached has its own: root's pin,
+which `hostkeeper pin` or `hostkeeper activate --pin` writes on the host
+([admin.md](../admin.md#roll-a-service-back-on-the-host)). While a service is pinned, its daemon
+defers every order of the coordinator that would change it with the reason `pinned` (or
+`pin_unreadable` when the pin cannot be read), which the status shows as for any deferral; a
+force to the version the host is pinned at removes the pin and runs.
+
 The ops file gains a `holds` key once a hold is set. A coordinator of an earlier release refuses
 to start on such a file rather than ignore the holds; a file that never held one keeps the shape
 earlier releases read.
@@ -240,7 +247,8 @@ entry the rollout gate would pick it). A held pair is ordered only when the call
 no hold is removed.
 
 A host that reports the force failed is not ordered again; a second force, to another version,
-orders it again. A force whose targets are all held or too old orders no host and still makes
+orders it again. A host whose service root pinned on the host defers a force to any other version
+(`pinned`); a force to the pinned version removes the pin. A force whose targets are all held or too old orders no host and still makes
 every change above. The force stands until CI or an operator sets another version or another force replaces it.
 While it stands, the automatic rollback of the service is suspended, and the hosts it orders
 take no update slot and no place in a stage. The new desired version the force sets starts the

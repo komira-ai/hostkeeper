@@ -796,6 +796,7 @@ impl Daemon {
     /// stops without a verdict, whatever its reason, is an alert too (`order_interrupted`), with
     /// its service, its reason and what failed: the coordinator keeps only the reason, so this
     /// line is where the host says why (a switch that could not relink, a launcher that failed).
+    /// A pinned service's orders are held next, before any lock ([`crate::pin::gate`]).
     pub fn execute(&self, verb: Verb) -> Reply {
         let hooked = match &verb {
             Verb::Update(order) | Verb::ForceRollback(order) | Verb::Install(order) => {
@@ -817,7 +818,12 @@ impl Daemon {
                 ),
             );
         }
+        let clears = match crate::pin::gate(&self.ctx, &verb) {
+            Ok(clears) => clears.cloned(),
+            Err(held) => return held,
+        };
         let reply = self.dispatch(verb);
+        crate::pin::cleared(&self.ctx, clears.as_ref(), &reply);
         match (&reply, &hooked) {
             (
                 Reply::Interrupted {
