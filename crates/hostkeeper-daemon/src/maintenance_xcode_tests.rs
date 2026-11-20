@@ -44,13 +44,12 @@ impl Mac {
         }
     }
 
-    /// An Xcode directory `dir` whose version list holds `bytes`.
+    /// An Xcode at the host path `dir` whose version list holds `bytes`.
     fn xcode(&self, dir: &str, bytes: &[u8]) {
         let contents = self
             .root
             .path()
-            .join("Applications")
-            .join(dir)
+            .join(dir.trim_start_matches('/'))
             .join("Contents");
         fs::create_dir_all(&contents).expect("the directory");
         fs::write(contents.join("version.plist"), bytes).expect("the file");
@@ -137,8 +136,8 @@ fn the_collector_is_named_xcode_and_is_built_over_the_host() {
 #[test]
 fn two_xcodes_are_reported_and_the_selected_one_is_flagged() {
     let mac = Mac::new("xcode-two");
-    mac.xcode("Xcode-27.2.app", V27);
-    mac.xcode("Xcode-26.3.app", V26);
+    mac.xcode("/Applications/Xcode-27.2.app", V27);
+    mac.xcode("/Applications/Xcode-26.3.app", V26);
     mac.selects(DEVELOPER_27);
     assert_eq!(
         mac.collect(),
@@ -162,9 +161,9 @@ fn two_xcodes_are_reported_and_the_selected_one_is_flagged() {
 #[test]
 fn a_directory_not_named_for_its_version_is_foreign() {
     let mac = Mac::new("xcode-foreign");
-    mac.xcode("Xcode.app", V27);
-    mac.xcode("Xcode-beta.app", V27);
-    mac.xcode("Xcode-27.2.app", V27);
+    mac.xcode("/Applications/Xcode.app", V27);
+    mac.xcode("/Applications/Xcode-beta.app", V27);
+    mac.xcode("/Applications/Xcode-27.2.app", V27);
     mac.xcode_select
         .always(&args(&["-p"]), Ok(LaunchctlOutput::exit(2, "")));
     assert_eq!(
@@ -189,9 +188,8 @@ fn a_directory_not_named_for_its_version_is_foreign() {
 fn a_mac_with_no_xcode_reports_none_and_runs_nothing() {
     let mac = Mac::new("xcode-none");
     assert_eq!(mac.collect(), Ok(Section::default()));
-    let applications = mac.root.path().join("Applications");
-    fs::create_dir_all(&applications).expect("the directory");
-    fs::write(applications.join("Xcode-1.app"), "").expect("the file");
+    fs::create_dir_all(mac.root.path().join("Applications")).expect("the directory");
+    fs::write(mac.root.path().join("Applications/Xcode-1.app"), "").expect("the file");
     assert_eq!(mac.collect(), Ok(Section::default()));
     assert_eq!(mac.xcode_select.calls(), Vec::<Vec<String>>::new());
 }
@@ -200,7 +198,7 @@ fn a_mac_with_no_xcode_reports_none_and_runs_nothing() {
 #[test]
 fn no_developer_directory_selects_none() {
     let mac = Mac::new("xcode-exit2");
-    mac.xcode("Xcode-27.2.app", V27);
+    mac.xcode("/Applications/Xcode-27.2.app", V27);
     mac.xcode_select.always(
         &args(&["-p"]),
         Ok(LaunchctlOutput::exit(
@@ -224,7 +222,7 @@ fn no_developer_directory_selects_none() {
 #[test]
 fn the_command_line_tools_select_none() {
     let mac = Mac::new("xcode-clt");
-    mac.xcode("Xcode-27.2.app", V27);
+    mac.xcode("/Applications/Xcode-27.2.app", V27);
     let none = section(vec![xcode(
         "27.2",
         "27B52",
@@ -240,11 +238,12 @@ fn the_command_line_tools_select_none() {
 }
 
 /// Proves a developer directory is under an Xcode only past a `/`: the directory of
-/// `Xcode-27.2.app.old` does not select `Xcode-27.2.app`, and the Xcode's own directory does.
+/// `/Applications/Xcode-27.2.app.old` does not select `/Applications/Xcode-27.2.app`, and the
+/// Xcode's own directory does.
 #[test]
 fn a_directory_that_only_starts_with_the_path_does_not_select_it() {
     let mac = Mac::new("xcode-prefix");
-    mac.xcode("Xcode-27.2.app", V27);
+    mac.xcode("/Applications/Xcode-27.2.app", V27);
     mac.selects("/Applications/Xcode-27.2.app.old/Contents/Developer");
     let not_selected = xcode(
         "27.2",
@@ -272,7 +271,7 @@ fn a_directory_that_only_starts_with_the_path_does_not_select_it() {
 #[test]
 fn a_failing_xcode_select_fails_the_collector() {
     let mac = Mac::new("xcode-select-fails");
-    mac.xcode("Xcode-27.2.app", V27);
+    mac.xcode("/Applications/Xcode-27.2.app", V27);
     mac.xcode_select.then(
         &args(&["-p"]),
         Ok(LaunchctlOutput::exit(1, "xcode-select: bad\nmore\n")),
@@ -299,7 +298,7 @@ fn a_failing_xcode_select_fails_the_collector() {
 #[test]
 fn an_unreadable_version_list_fails_the_collector() {
     let mac = Mac::new("xcode-garbage");
-    mac.xcode("Xcode-27.2.app", GARBAGE);
+    mac.xcode("/Applications/Xcode-27.2.app", GARBAGE);
     mac.selects(DEVELOPER_27);
     assert_eq!(
         mac.collect(),
@@ -325,7 +324,7 @@ fn a_missing_version_list_fails_the_collector() {
 #[test]
 fn a_version_list_without_a_text_key_fails_the_collector() {
     let mac = Mac::new("xcode-keys");
-    mac.xcode("Xcode-27.2.app", NO_BUILD);
+    mac.xcode("/Applications/Xcode-27.2.app", NO_BUILD);
     assert_eq!(
         mac.collect(),
         Err(
@@ -333,7 +332,7 @@ fn a_version_list_without_a_text_key_fails_the_collector() {
                 .to_owned()
         )
     );
-    mac.xcode("Xcode-27.2.app", INTEGER);
+    mac.xcode("/Applications/Xcode-27.2.app", INTEGER);
     assert_eq!(
         mac.collect(),
         Err(
@@ -370,7 +369,7 @@ fn seven_xcodes_fail_the_collector_before_reading_anything() {
 fn six_xcodes_are_all_reported() {
     let mac = Mac::new("xcode-six");
     for n in 1..=6 {
-        mac.xcode(&format!("Xcode-{n}.app"), V27);
+        mac.xcode(&format!("/Applications/Xcode-{n}.app"), V27);
     }
     mac.selects("/Library/Developer/CommandLineTools");
     let expected = (1..=6)

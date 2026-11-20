@@ -10,8 +10,8 @@
 //! directory is set) is taken to be what a Mac without one answers; this is unverified on the
 //! farm's macOS [V], and any other code but 0 fails the collector. An Xcode is selected when the
 //! developer directory is its directory or is under it, so `Xcode-27.2.app/Contents/Developer`
-//! selects `Xcode-27.2.app` and not `Xcode-27.2.app.old`, and the Command Line Tools' directory
-//! selects none.
+//! selects `/Applications/Xcode-27.2.app` and not `/Applications/Xcode-27.2.app.old`, and the
+//! Command Line Tools' directory selects none.
 //!
 //! The collector only reports; the coordinator decides what is due. A text is never cut: one over
 //! its bound makes the look's report check refuse the report and the look fail naming the field,

@@ -336,24 +336,30 @@ fn a_host_without_applications_has_no_xcode() {
 #[test]
 fn the_xcodes_are_the_xcode_app_directories_sorted() {
     let scratch = scratch("xcode-apps");
-    let applications = scratch.path().join("Applications");
-    for name in [
-        "Xcode-beta.app",
-        "Xcode.app",
-        "Xcode-27.2.app",
-        "Safari.app",
-        "XcodeHelper",
-        ".hostkeeper-staging",
+    let root = HostRoot::at(scratch.path());
+    for path in [
+        "/Applications/Xcode-beta.app",
+        "/Applications/Xcode.app",
+        "/Applications/Xcode-27.2.app",
+        "/Applications/Safari.app",
+        "/Applications/XcodeHelper",
+        "/Applications/.hostkeeper-staging",
     ] {
-        std::fs::create_dir_all(applications.join(name)).expect("the directory");
+        std::fs::create_dir_all(root.path(path)).expect("the directory");
     }
-    std::fs::write(applications.join("Xcode-9.app"), "").expect("the file");
+    std::fs::write(root.path("/Applications/Xcode-9.app"), "").expect("the file");
+    let paths = xcode_apps(&root).map(|names| {
+        names
+            .iter()
+            .map(|name| format!("{APPLICATIONS}/{name}"))
+            .collect::<Vec<_>>()
+    });
     assert_eq!(
-        xcode_apps(&HostRoot::at(scratch.path())),
+        paths,
         Ok(vec![
-            "Xcode-27.2.app".to_owned(),
-            "Xcode-beta.app".to_owned(),
-            "Xcode.app".to_owned(),
+            "/Applications/Xcode-27.2.app".to_owned(),
+            "/Applications/Xcode-beta.app".to_owned(),
+            "/Applications/Xcode.app".to_owned(),
         ])
     );
 }

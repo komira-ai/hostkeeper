@@ -82,7 +82,7 @@ fn a_file_that_is_not_there_gives_none() {
 /// of the file in it.
 #[test]
 fn bytes_that_are_not_a_property_list_give_a_reason_without_a_byte_of_them() {
-    let (_scratch, plists) = host_with("plist-garbage", b"<secret-bytes");
+    let (_scratch, plists) = host_with("plist-garbage", b"this is not a property list\n");
     assert_eq!(
         plists.dictionary(PATH),
         Err(format!("{PATH} is not a property list"))

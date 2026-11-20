@@ -51,7 +51,8 @@ impl AccountName for Named {
 
 /// The arguments of the read of the update account's user record.
 fn user_args() -> Vec<String> {
-    words(&[".", "-read", "/Users/hkupdate", "RecordName", "IsHidden"])
+    let user = format!("{}/hkupdate", crate::login_account::USERS);
+    words(&[".", "-read", &user, "RecordName", "IsHidden"])
 }
 
 /// The arguments of the read of the admin group.
