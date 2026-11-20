@@ -63,6 +63,7 @@ fn maintain() -> agent::Maintain {
         xcode_remove: vec!["26.4".to_owned()],
         xcode_default: "27.2".to_owned(),
         return_secs: 1_800,
+        macos_major: true,
     }
 }
 
@@ -576,6 +577,14 @@ fn the_maintenance_fields_have_their_numbers_and_types() {
             false,
         ),
         (
+            "hostkeeper.agent.v1.Maintain",
+            "macos_major",
+            11,
+            Kind::Bool,
+            false,
+            false,
+        ),
+        (
             "hostkeeper.agent.v1.XcodeEntry",
             "size",
             3,
@@ -658,7 +667,7 @@ fn the_maintenance_fields_have_their_numbers_and_types() {
         .iter()
         .map(|name| message(&now, name).fields().count())
         .collect();
-    assert_eq!(counts, [9, 8, 5, 6, 4, 3, 6, 5, 10, 4]);
+    assert_eq!(counts, [9, 8, 5, 6, 4, 3, 6, 5, 11, 4]);
 }
 
 /// The values of the enum `name` of `pool`, by name and number.
