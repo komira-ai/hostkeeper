@@ -19,7 +19,8 @@
 //! - `methods`: the requests of the methods of the real protos that the operator's tools use;
 //! - `maintenance`: the `Maintenance` calls' requests, their enum flags' usage errors, and the
 //!   `UNIMPLEMENTED` answer of every one through the real gateway;
-//! - `xcode`: the commands of the service `xcode`: their paths, bodies, answers and a refusal.
+//! - `xcode`: the commands of the service `xcode`: their paths, bodies, answers and a refusal;
+//! - `xcode_push`: `hk xcode-push`, on stand-ins for the Mac's programs and a fake Xcode store.
 
 mod answers;
 mod flags;
@@ -36,3 +37,4 @@ mod ssh;
 mod surface;
 mod transport;
 mod xcode;
+mod xcode_push;
