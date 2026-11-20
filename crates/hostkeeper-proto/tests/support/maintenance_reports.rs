@@ -32,6 +32,7 @@ pub fn at_every_bound() -> agent::MaintenanceReport {
                 build: text(MAX_XCODE_VERSION),
                 path: text(MAX_XCODE_PATH),
                 selected: true,
+                foreign: true,
             };
             MAX_XCODES
         ],
@@ -43,6 +44,7 @@ pub fn at_every_bound() -> agent::MaintenanceReport {
                 present: true,
                 admin: true,
                 secure_token: true,
+                hidden: true,
             }),
             command_line_tools: Some(agent::CommandLineToolsState {
                 receipt: true,
