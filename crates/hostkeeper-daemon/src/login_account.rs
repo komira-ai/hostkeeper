@@ -205,6 +205,13 @@ pub(crate) fn dscl_value(text: &str, key: &str) -> Option<String> {
     Some(value)
 }
 
+/// Whether the user record `dscl -read` wrote is hidden: its `IsHidden` is `1`, `yes` or `true`,
+/// in any case.
+pub(crate) fn is_hidden(record: &str) -> bool {
+    dscl_value(record, "IsHidden")
+        .is_some_and(|value| matches!(value.to_ascii_lowercase().as_str(), "1" | "yes" | "true"))
+}
+
 /// The members of a group record `dscl -read` wrote: the words of its `GroupMembership`.
 pub(crate) fn group_members(text: &str) -> Vec<String> {
     dscl_value(text, "GroupMembership")
@@ -270,10 +277,7 @@ impl MacAdmin {
             ],
         )
         .map_err(AccountError::Failed)?;
-        let hidden = dscl_value(&record, "IsHidden").is_some_and(|value| {
-            matches!(value.to_ascii_lowercase().as_str(), "1" | "yes" | "true")
-        });
-        if hidden {
+        if is_hidden(&record) {
             return Ok(None);
         }
         let home = dscl_value(&record, "NFSHomeDirectory").filter(|home| home.starts_with('/'));

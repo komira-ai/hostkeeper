@@ -18,6 +18,7 @@ pub(crate) fn maintenance_json(report: &pb::MaintenanceReport) -> Value {
                 "build": xcode.build,
                 "path": xcode.path,
                 "selected": xcode.selected,
+                "foreign": xcode.foreign,
             })
         })
         .collect();
@@ -69,6 +70,7 @@ fn mac_json(mac: &pb::MacUpdateFacts) -> Value {
             "present": account.present,
             "admin": account.admin,
             "secure_token": account.secure_token,
+            "hidden": account.hidden,
         },
         "command_line_tools": {
             "receipt": tools.receipt,
