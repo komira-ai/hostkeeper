@@ -112,6 +112,7 @@ fn host(
         remote_login_probe: None,
         operator_keys: None,
         prerequisites,
+        maintenance: None,
         bmc: None,
     };
     (links.heartbeater(&daemon), link)

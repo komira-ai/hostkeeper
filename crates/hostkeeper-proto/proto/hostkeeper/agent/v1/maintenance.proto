@@ -3,9 +3,10 @@
 // `MaintenanceReport`) and the arguments of the `maintain` order (`Order.maintain`, `Maintain`).
 // The rest of the package is agent.proto (`Heartbeat`, `Enroll`, `Poll` and `Renew` of the
 // `Coordinator` service), which imports this file; this file is the same package and API, kept
-// apart to shorten agent.proto. A coordinator keeps the last report a daemon that announces
-// `maintenance-v1` sent (over gRPC, or over the JSON route as base64 of its encoding in the key
-// `maintenance`) and shows it in the operator API; no coordinator sends a `maintain` yet.
+// apart to shorten agent.proto. A Linux daemon sends a report to a coordinator that advertises
+// `maintenance-v1`; a coordinator keeps the last report a daemon that announces it sent (over gRPC,
+// or over the JSON route as base64 of its encoding in the key `maintenance`) and shows it in the
+// operator API. No daemon runs a `maintain` and no coordinator sends one yet.
 //
 // Served by: the coordinator, on its heartbeat listener, as agent.proto says.
 //
@@ -48,6 +49,12 @@ message MaintenanceReport {
   uint32 unparsed_lines = 7;
   // The maintenance run the host holds; absent when it holds none.
   optional MaintenanceRunState run = 8;
+  // Why the daemon's last look failed, as the daemon words it: the collector's name, then the
+  // reason (a program's step and exit code and the first line of its standard error, a deadline,
+  // a file that cannot be read); at most 256 bytes. Empty when the last look succeeded. A failed
+  // look leaves the rest of the report as the last look that succeeded left it, `looked_unix`
+  // its time.
+  string look_failed = 9;
 }
 
 // What a host runs, as the daemon read it.

@@ -108,9 +108,9 @@ use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_wire::wire::clip_renew_error;
 
 use crate::beat::{
-    ANNOUNCED, FACTS, Feature, Features, Health, Heartbeat, Liveness, LocalHalt, OPERATOR_KEYS,
-    Observed, PREREQUISITES, PRIVATE_REPOSITORY, Platform, REPOSITORIES, Renewal, SSH,
-    ServiceFacts, fit,
+    ANNOUNCED, FACTS, Feature, Features, Health, Heartbeat, Liveness, LocalHalt, MAINTENANCE,
+    OPERATOR_KEYS, Observed, PREREQUISITES, PRIVATE_REPOSITORY, Platform, REPOSITORIES, Renewal,
+    SSH, ServiceFacts, fit,
 };
 use crate::deferral::{Book, Deferral};
 use crate::host_facts::PushedFacts;
@@ -119,9 +119,9 @@ use crate::names::Reason;
 use crate::order::{Acknowledged, Order, OrderRef, OrderResult, Outcome, Reply, Verb};
 use crate::ports::{
     BmcSource, CertSource, CertState, CoordinatorLink, Dispatch, FactsSink, HeldHalts, LinkError,
-    Log, OperatorKeysSink, OrderSink, PrerequisitesSink, RecordedService, RemoteLoginProbeSource,
-    RenewalSource, RepositorySink, ServiceObserver, ServiceRecords, Sleeper, SshSink, Tick,
-    TrustedRootSource, UnixClock,
+    Log, MaintenanceSource, OperatorKeysSink, OrderSink, PrerequisitesSink, RecordedService,
+    RemoteLoginProbeSource, RenewalSource, RepositorySink, ServiceObserver, ServiceRecords,
+    Sleeper, SshSink, Tick, TrustedRootSource, UnixClock,
 };
 
 /// The period when the daemon is given none: 15 seconds.
@@ -198,6 +198,9 @@ pub struct Ports {
     pub prerequisites: Option<Arc<dyn PrerequisitesSink>>,
     /// The host's BMC; none on a host whose daemon reads none (a Mac), which then sends none.
     pub bmc: Option<Arc<dyn BmcSource>>,
+    /// The host's maintenance facts; none on a host that reads none (a Mac, for now), which then
+    /// announces no `maintenance-v1` and sends no report.
+    pub maintenance: Option<Arc<dyn MaintenanceSource>>,
 }
 
 /// What one heartbeat came to.
@@ -580,6 +583,12 @@ impl Heartbeater {
             ssh: self.ports.ssh.as_ref().and_then(|sink| sink.report()),
             prerequisites: self.ports.prerequisites.as_ref().map(|sink| sink.report()),
             bmc: self.ports.bmc.as_ref().and_then(|source| source.bmc()),
+            maintenance: self
+                .ports
+                .maintenance
+                .as_ref()
+                .filter(|_| self.advertised.has(Feature::MaintenanceV1))
+                .map(|source| source.report()),
         })
     }
 
@@ -588,9 +597,11 @@ impl Heartbeater {
     /// `private-repository-v1` when it has a repository configuration or is told it reads
     /// private repositories, `operator-keys-v1` when it keeps operator keys, and
     /// `prerequisites-v1` when it keeps host prerequisites, and `ssh-v1` when it sets sshd up and
-    /// the coordinator's last reply advertised `ssh-v1`: a coordinator of a release before it reads
-    /// at most 16 names and drops a longer list whole, and a daemon with every port names 17. It
-    /// never announces `maintenance-v1`, which names a report and an order this loop does not have.
+    /// the coordinator's last reply advertised `ssh-v1`, and `maintenance-v1` when it reads the
+    /// host's maintenance and the last reply advertised `maintenance-v1`: a coordinator of a
+    /// release before `ssh-v1` reads at most 16 names and drops a longer list whole, and a daemon
+    /// with every port names 17 to it (18 to one that advertises `maintenance-v1`). It takes no
+    /// `maintain` order: the order is dropped unrun.
     fn announced(&self) -> Vec<Feature> {
         let mut features = ANNOUNCED.to_vec();
         if self.ports.repositories.is_some() {
@@ -610,6 +621,9 @@ impl Heartbeater {
         }
         if self.ports.ssh.is_some() && self.advertised.has(Feature::SshV1) {
             features.push(SSH);
+        }
+        if self.ports.maintenance.is_some() && self.advertised.has(Feature::MaintenanceV1) {
+            features.push(MAINTENANCE);
         }
         features
     }

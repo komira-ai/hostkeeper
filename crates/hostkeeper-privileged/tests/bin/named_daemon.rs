@@ -79,7 +79,14 @@ fn daemon(flags: &DaemonFlags) -> ExitCode {
         runtime.block_on(async {
             let files = HostFiles::host();
             let started = cli::start_with(&settings, &files, own, notifier.as_ref(), &platform)?;
-            let links = cli::host_links(started.daemon(), &files, period, platform.kind, watchdog);
+            let links = cli::host_links(
+                started.daemon(),
+                &files,
+                period,
+                platform.kind,
+                flags.maintenance_linux_scope,
+                watchdog,
+            );
             start::serve(started, links).await;
             Ok(())
         })

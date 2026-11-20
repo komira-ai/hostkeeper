@@ -1,0 +1,18 @@
+Reading package lists...
+Building dependency tree...
+Reading state information...
+Calculating upgrade...
+The following packages will be REMOVED:
+  libssl1.1
+The following packages have been kept back:
+  docker-ce docker-ce-cli
+The following packages will be upgraded:
+  libssl3 openssl
+
+Remv libssl1.1 [1.1.1n-0+deb11u5]
+Purg libssl1.1 [1.1.1n-0+deb11u5]
+Inst libssl3 [3.0.11-1~deb12u2] (3.0.14-1~deb12u1 Debian-Security:12/stable-security [amd64])
+Inst openssl [3.0.11-1~deb12u2] (3.0.14-1~deb12u1 Debian-Security:12/stable-security [amd64])
+Conf libssl3 (3.0.14-1~deb12u1 Debian-Security:12/stable-security [amd64])
+Conf openssl (3.0.14-1~deb12u1 Debian-Security:12/stable-security [amd64])
+2 upgraded, 0 newly installed, 1 to remove and 2 not upgraded.

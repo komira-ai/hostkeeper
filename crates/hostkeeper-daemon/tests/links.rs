@@ -100,6 +100,7 @@ fn links_with(
         remote_login_probe: None,
         operator_keys: None,
         prerequisites: None,
+        maintenance: None,
         bmc: None,
     }
 }
@@ -549,6 +550,7 @@ fn the_host_links_read_the_pki_directory_and_log_through_the_daemon() {
         &files,
         period,
         PlatformKind::Linux,
+        hostkeeper_daemon::maintenance_collect::LinuxScope::default(),
         Box::new(NoWatchdog),
     );
     assert_eq!(links.period, period);
