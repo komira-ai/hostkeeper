@@ -35,6 +35,7 @@ use crate::canary::Canary;
 use crate::defer::DeferBackoff;
 use crate::desired::MAX_COUNT;
 use crate::force::{ForceRecord, SELF_SERVICE};
+use crate::maintenance_policy::Maintenance;
 use crate::ops::{Halt, HaltAck, OpsState, ServiceOps};
 use crate::reconcile::{FailThreshold, Rollback};
 use crate::rollouts::Rollout;
@@ -172,6 +173,10 @@ pub(crate) struct Policy {
     /// coordinator's `--live-rollouts`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) live_rollouts: Option<u32>,
+    /// The maintenance settings of the group's hosts ([`crate::maintenance_policy`]); not written
+    /// when every key is at its default.
+    #[serde(skip_serializing_if = "is_default_maintenance")]
+    pub(crate) maintenance: Maintenance,
 }
 
 impl Default for Policy {
@@ -186,6 +191,7 @@ impl Default for Policy {
             max_updating: DEFAULT_MAX_UPDATING,
             min_up: 0,
             live_rollouts: None,
+            maintenance: Maintenance::default(),
         }
     }
 }
@@ -208,6 +214,10 @@ fn is_default_threshold(threshold: &FailThreshold) -> bool {
 
 fn is_default_backoff(backoff: &DeferBackoff) -> bool {
     *backoff == DeferBackoff::default()
+}
+
+fn is_default_maintenance(maintenance: &Maintenance) -> bool {
+    *maintenance == Maintenance::default()
 }
 
 #[expect(
@@ -265,6 +275,7 @@ impl Policy {
             ("max_updating", self.max_updating != other.max_updating),
             ("min_up", self.min_up != other.min_up),
             ("live_rollouts", self.live_rollouts != other.live_rollouts),
+            ("maintenance", self.maintenance != other.maintenance),
         ]
         .into_iter()
         .filter_map(|(key, changed)| changed.then_some(key))
@@ -272,7 +283,7 @@ impl Policy {
     }
 
     /// Whether every key is in its range (section 3), the ranges of the rollout file and of the
-    /// desired state's limits.
+    /// desired state's limits, and the `maintenance` table's ([`Maintenance::check`]).
     ///
     /// # Errors
     /// [`PolicyError`]: the first key, in the order of the policy, that is not.
@@ -315,6 +326,9 @@ impl Policy {
             .is_some_and(|n| !(1..=MAX_LIVE_ROLLOUTS).contains(&n))
         {
             return no("live_rollouts", format!("is not 1 to {MAX_LIVE_ROLLOUTS}"));
+        }
+        if let Err(why) = self.maintenance.check() {
+            return no("maintenance", why);
         }
         Ok(())
     }

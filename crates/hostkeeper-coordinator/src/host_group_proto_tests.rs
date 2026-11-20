@@ -8,6 +8,7 @@ use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use crate::defer::DeferBackoff;
 use crate::host_group_proto::{body_proto, policy_of, policy_proto};
 use crate::host_groups::{HostGroup, Policy, PolicyCanary, PolicyError, PolicyStage};
+use crate::maintenance_policy::{BadXcodeDefault, LinuxScope, Maintenance, XcodeDefault};
 use crate::reconcile::{FailThreshold, Rollback};
 use crate::stages::Advance;
 
@@ -39,6 +40,30 @@ fn every_key() -> Policy {
         max_updating: 4,
         min_up: 6,
         live_rollouts: Some(7),
+        maintenance: Maintenance {
+            xcode_keep: 2,
+            xcode_default: XcodeDefault::Version("26.1".to_owned()),
+            macos_major: true,
+            linux_scope: LinuxScope::All,
+            batch: 3,
+            min_serving: 0,
+            drain_deadline_secs: 7200,
+            return_secs: 900,
+        },
+    }
+}
+
+/// The proto table every key of which is named at its default.
+fn default_table() -> proto::MaintenancePolicy {
+    proto::MaintenancePolicy {
+        xcode_keep: 0,
+        xcode_default: Some("latest".to_owned()),
+        macos_major: false,
+        linux_scope: i32::from(proto::LinuxScope::Security),
+        batch: Some(1),
+        min_serving: Some(1),
+        drain_deadline_secs: 0,
+        return_secs: 0,
     }
 }
 
@@ -83,6 +108,42 @@ fn a_key_left_out_takes_its_default() {
             ..Policy::default()
         })
     );
+
+    let only_some_keys = proto::RolloutPolicy {
+        maintenance: Some(proto::MaintenancePolicy {
+            xcode_keep: 1,
+            xcode_default: None,
+            batch: None,
+            min_serving: None,
+            linux_scope: 0,
+            drain_deadline_secs: 30,
+            ..proto::MaintenancePolicy::default()
+        }),
+        ..proto::RolloutPolicy::default()
+    };
+    assert_eq!(
+        policy_of(Some(&only_some_keys)),
+        Ok(Policy {
+            maintenance: Maintenance {
+                xcode_keep: 1,
+                xcode_default: XcodeDefault::Latest,
+                macos_major: false,
+                linux_scope: LinuxScope::Security,
+                batch: 1,
+                min_serving: 1,
+                drain_deadline_secs: 30,
+                return_secs: 0,
+            },
+            ..Policy::default()
+        })
+    );
+    assert_eq!(
+        policy_of(Some(&proto::RolloutPolicy {
+            maintenance: Some(proto::MaintenancePolicy::default()),
+            ..proto::RolloutPolicy::default()
+        })),
+        Ok(Policy::default())
+    );
 }
 
 /// Proves: a policy with every key set is answered with every key named, and the answer reads
@@ -122,6 +183,16 @@ fn a_policy_reads_back_as_it_was_put_with_every_key_named() {
             max_updating: Some(4),
             min_up: 6,
             live_rollouts: Some(7),
+            maintenance: Some(proto::MaintenancePolicy {
+                xcode_keep: 2,
+                xcode_default: Some("26.1".to_owned()),
+                macos_major: true,
+                linux_scope: proto::LinuxScope::All.into(),
+                batch: Some(3),
+                min_serving: Some(0),
+                drain_deadline_secs: 7200,
+                return_secs: 900,
+            }),
         }
     );
     assert_eq!(policy_of(Some(&said)), Ok(every_key()));
@@ -136,6 +207,7 @@ fn a_policy_reads_back_as_it_was_put_with_every_key_named() {
             min_hosts: Some(2),
         })
     );
+    assert_eq!(default.maintenance, Some(default_table()));
     assert_eq!(policy_of(Some(&default)), Ok(Policy::default()));
 }
 
@@ -181,6 +253,54 @@ fn an_enum_value_the_proto_does_not_define_is_refused_for_its_key() {
             why: "9 is not a rollback mode".to_owned(),
         }
     );
+
+    let scope = |number: i32| proto::RolloutPolicy {
+        maintenance: Some(proto::MaintenancePolicy {
+            linux_scope: number,
+            ..proto::MaintenancePolicy::default()
+        }),
+        ..proto::RolloutPolicy::default()
+    };
+    assert_eq!(
+        policy_of(Some(&scope(0)))
+            .expect("unspecified")
+            .maintenance
+            .linux_scope,
+        LinuxScope::Security
+    );
+    let unknown = policy_of(Some(&scope(9))).expect_err("refused");
+    assert_eq!(
+        unknown,
+        PolicyError {
+            key: "maintenance",
+            why: "linux_scope 9 is not a Linux scope".to_owned(),
+        }
+    );
+}
+
+/// Proves: an `xcode_default` that is neither `latest` nor a version is refused for the key
+/// `maintenance`, with the reason the parse gives.
+///
+/// Catches: text that is no version taken as one, or a refusal that names no key.
+#[test]
+fn an_xcode_default_that_is_no_version_is_refused_for_its_key() {
+    for text in ["", "26.x", "1.2.3.4", "12345", "Latest"] {
+        let policy = proto::RolloutPolicy {
+            maintenance: Some(proto::MaintenancePolicy {
+                xcode_default: Some(text.to_owned()),
+                ..proto::MaintenancePolicy::default()
+            }),
+            ..proto::RolloutPolicy::default()
+        };
+        assert_eq!(
+            policy_of(Some(&policy)),
+            Err(PolicyError {
+                key: "maintenance",
+                why: BadXcodeDefault(text.to_owned()).to_string(),
+            }),
+            "{text:?}"
+        );
+    }
 }
 
 /// Proves: the body of a group is answered with its name, its packages in order and its policy.

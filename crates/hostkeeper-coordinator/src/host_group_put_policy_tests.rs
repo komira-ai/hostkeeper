@@ -279,6 +279,16 @@ fn a_policy_is_read_back_as_it_was_put() {
         max_updating: Some(0),
         min_up: 2,
         live_rollouts: Some(4),
+        maintenance: Some(proto::MaintenancePolicy {
+            xcode_keep: 3,
+            xcode_default: Some("26.1".to_owned()),
+            macos_major: true,
+            linux_scope: proto::LinuxScope::All.into(),
+            batch: Some(2),
+            min_serving: Some(0),
+            drain_deadline_secs: 600,
+            return_secs: 1800,
+        }),
     };
     world
         .put_with("alpha", &[SELF], Some(policy.clone()), None)
@@ -307,4 +317,17 @@ fn a_policy_is_read_back_as_it_was_put() {
     assert_eq!(default.max_updating, None);
     assert_eq!(default.stages, Vec::new());
     assert_eq!(default.live_rollouts, None);
+    assert_eq!(
+        default.maintenance,
+        Some(proto::MaintenancePolicy {
+            xcode_keep: 0,
+            xcode_default: Some("latest".to_owned()),
+            macos_major: false,
+            linux_scope: i32::from(proto::LinuxScope::Security),
+            batch: Some(1),
+            min_serving: Some(1),
+            drain_deadline_secs: 0,
+            return_secs: 0,
+        })
+    );
 }
