@@ -357,6 +357,11 @@ fn verify_a_release_commands_match_the_ones_the_verify_job_runs() {
             "step 6 expects",
         ),
         (
+            "`hkssh <X.Y.Z>+<first 12 hex digits of $PIN>`.\n",
+            "`hkssh <X.Y.Z>`.\n",
+            "step 6 expects",
+        ),
+        (
             "`hkctl <X.Y.Z>+<first 12 hex digits of $PIN>`.\n",
             "`hkctl <X.Y.Z>+<first 7 hex digits of $PIN>`.\n",
             "step 6 expects",
@@ -400,6 +405,11 @@ fn verify_a_release_commands_match_the_ones_the_verify_job_runs() {
             "\"$RUNNER_TEMP/binary/hostkeeper-coordinator-update\" \"$RELEASE_VERSION\" \"$COMMIT\"",
             "\"$RUNNER_TEMP/binary/hostkeeper-coordinator-update\" \"$RELEASE_VERSION\" \"$GITHUB_SHA\"",
             "does not check hostkeeper-coordinator-update",
+        ),
+        (
+            "\"$RUNNER_TEMP/binary/hkssh\" \"$RELEASE_VERSION\" \"$COMMIT\"",
+            "\"$RUNNER_TEMP/binary/hkssh\" \"$RELEASE_VERSION\" \"$GITHUB_SHA\"",
+            "does not check hkssh",
         ),
         (
             "--commit \"$COMMIT\"\n      # The runner is linux-x86_64",
@@ -471,6 +481,8 @@ fn the_platform_sentence_lists_the_released_platforms() {
         "hostkeeper-coordinator-0.1.5-linux-arm64.image.tar",
         "hostkeeper-coordinator-update-0.1.5-linux-x86_64.tar.gz",
         "hostkeeper-coordinator-update-0.1.5-linux-arm64.cdx.json",
+        "hkssh-0.1.5-linux-x86_64.tar.gz",
+        "hkssh-0.1.5-linux-arm64.cdx.json",
         "hostkeeper-0.1.5-macos-arm64.pkg",
     ] {
         assert!(names.iter().any(|n| n == name), "{name} in {names:?}");
@@ -483,7 +495,8 @@ fn the_platform_sentence_lists_the_released_platforms() {
         !names
             .iter()
             .any(|n| n.starts_with("hostkeeper-coordinator-0.1.5-macos")
-                | n.starts_with("hostkeeper-coordinator-update-0.1.5-macos")),
+                | n.starts_with("hostkeeper-coordinator-update-0.1.5-macos")
+                | n.starts_with("hkssh-0.1.5-macos")),
         "{names:?}"
     );
     assert_eq!(names.len(), asset_names(&v, &Platform::RELEASED).len());
