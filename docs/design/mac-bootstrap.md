@@ -135,8 +135,8 @@ error, never a reason to try the next one. The keys; **every number is a key wit
 makes no update-account file, as before they existed; such a Mac has no update account and is never ordered a macOS update. A source with some of
 them is refused, naming the first one missing in the order of the table; nothing is fetched. Each is a string (a number, say, is refused as "is not a
 string", never quoted): a name is ASCII letters, digits, `_`, `.` and `-`, not starting with `-` (the rule of the daemon's reader); a password is not
-empty and holds no line break; the two names differ; and the file the first two make is at most 4096 bytes, the reader's bound. No error, log line or
-debug print holds a value of these keys: an error names the key and the rule, and a password prints as `Password(withheld)`.
+empty and holds no line break; the two names differ; and the file the first two make is at most 4096 bytes, the reader's bound. No error or log line holds a value of these keys, and no debug print holds a
+password: an error names the key and the rule, and a password prints as `Password(withheld)` (the names print as they are).
 
 The bootstrap writes `/Library/Application Support/hostkeeper/update-account` (root's, mode 0600; section 6) from the first two, in the layout the
 daemon's reader takes (`crates/hostkeeper-daemon/src/update_account.rs`): the line `name=<update_account_name>`, then the line
