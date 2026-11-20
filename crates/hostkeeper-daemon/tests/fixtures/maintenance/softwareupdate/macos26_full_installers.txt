@@ -1,0 +1,7 @@
+Software Update Tool
+
+Finding available software
+Software Update found the following full installers:
+* Title: macOS 27.1, Version: 27.1, Size: 16252928KiB, Build: 26B70, Deferred: NO
+* Title: macOS Tahoe, Version: 26.7, Size: 15204352KiB, Build: 25H62, Deferred: NO
+* Title: macOS Sequoia, Version: 15.7.4, Size: 14680064KiB, Build: 24G517, Deferred: NO

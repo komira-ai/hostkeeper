@@ -1,0 +1,9 @@
+Software Update Tool
+
+Finding available software
+Software Update found the following new or updated software:
+* Label: macOS 27.2-26C45
+	Title: macOS 27.2, Version: 27.2, Size: 3670016KiB, Recommended: YES, Action: restart, Priority: High, 
+* Label: Safari 27.2
+Your Mac needs to restart to finish installing updates.
+	Title: Safari 27.2, Version: 27.2, Size: 204800KiB, Recommended: YES, 
