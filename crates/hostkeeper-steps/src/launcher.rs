@@ -12,14 +12,17 @@ use std::path::Path;
 
 use hostkeeper_hook::Invocation;
 
-/// How long a step may run.
+/// How long a step may run. The caller decides it and the launcher renders it as it is: the
+/// launcher never chooses a bound by the step's name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Bound {
     /// At most this many seconds.
     Secs(NonZeroU64),
-    /// No bound: only `prepare`, whose manifest timeout is 0
-    /// (docs/design/hostkeeper-design.md, sections 4.7 and 8.5). Nothing but the hook's own end
-    /// ends it: the dead-man is not armed and the unit has `RuntimeMaxSec=infinity`.
+    /// No bound: a `prepare` whose manifest timeout is 0 (docs/design/hostkeeper-design.md,
+    /// sections 4.7 and 8.5), and a `drain` whose run names no deadline
+    /// (docs/design/maintenance-updates.md, 5.3). Nothing but the hook's own end ends it: the
+    /// dead-man is not armed, the systemd unit has `RuntimeMaxSec=infinity`, and the launchd and
+    /// OpenRC launchers never end it.
     Unbounded,
 }
 
@@ -51,8 +54,9 @@ pub struct StepCall<'a> {
 }
 
 /// One run of an additive step: a step of the hook that is not one of the five of an update (the
-/// hook's `uninstall`, which an uninstall order runs, or the `[hook] boot` step the package's
-/// manifest names, which the daemon runs from `current` at its start). The hook is run as
+/// hook's `uninstall`, which an uninstall order runs, the `[hook] boot` step the package's
+/// manifest names, which the daemon runs from `current` at its start, or the `[hook] drain` and
+/// `[hook] resume` steps of a maintenance run, [`crate::maintenance`]). The hook is run as
 /// `<executable> <hook_args...> <step> --params <params>`.
 #[derive(Clone, Debug)]
 pub struct AdditiveCall<'a> {
@@ -69,8 +73,8 @@ pub struct AdditiveCall<'a> {
     pub executable: &'a Path,
     /// The deterministic name of the transient unit: `updater-<service>-<step>-<generation>`.
     pub unit: &'a str,
-    /// The bound of the run, in seconds.
-    pub timeout_secs: u64,
+    /// The bound of the run: the seconds, or [`Bound::Unbounded`] for none.
+    pub bound: Bound,
 }
 
 /// Whether a tool's unit has the network.

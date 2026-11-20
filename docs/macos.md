@@ -190,8 +190,9 @@ One run of a step:
    removed.
 
 A step that is not one of the five of an update (the hook's `uninstall`, a `[hook] boot` step, and the `drain` and `resume` steps a maintenance run will run)
-runs the same way, as one job: `<hook> <hook args> <step> --params <file>`, bounded by its
-timeout (a timeout of 0 is no bound). The unit of a `[hook] boot` step is
+runs the same way, as one job: `<hook> <hook args> <step> --params <file>`, bounded by the bound
+it is given: a number of seconds, or no bound (a `drain` whose run names no deadline), and then
+the job is never booted out for its time. The unit of a `[hook] boot` step is
 `updater-<service>-boot-<generation>`, whatever the step's name, and its label
 `<prefix>.hostkeeper.step.<service>.boot.<generation>`.
 

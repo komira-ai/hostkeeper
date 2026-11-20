@@ -32,13 +32,15 @@
 //!   `<pid> <start time>`, the leader's process id and field 22 of its `/proc/<pid>/stat`, until
 //!   it ends. A run that cannot write it is killed and fails with [`LaunchError::Launcher`].
 //!
-//! [`StepLauncher::run_additive`] (the hook's `uninstall`, or a `[hook] boot` step) runs
-//! `<executable> <hook_args...> <step> --params <params>` as a step is run, bounded by its
-//! `timeout_secs` (0 is no bound). The call of each is checked as
-//! `SystemdLauncher` checks it: an absolute executable and params file ([`LaunchError::Launcher`]
-//! otherwise), then an executable that is a file with an execute bit ([`LaunchError::NoStart`]
-//! otherwise); a process that cannot be started is [`LaunchError::NoStart`] too. The log, if any,
-//! is given the unit and what was captured after each run.
+//! [`StepLauncher::run_additive`] (the hook's `uninstall`, a `[hook] boot` step, or a maintenance
+//! run's `drain` or `resume`) runs `<executable> <hook_args...> <step> --params <params>` as a
+//! step is run, bounded by its call's bound (`Bound::Unbounded`: never ended by the launcher, as
+//! a drain with no deadline).
+//! The call of each is checked as `SystemdLauncher` checks it: an absolute executable and params
+//! file ([`LaunchError::Launcher`] otherwise), then an executable that is a file with an execute
+//! bit ([`LaunchError::NoStart`] otherwise); a process that cannot be started is
+//! [`LaunchError::NoStart`] too. The log, if any, is given the unit and what was captured after
+//! each run.
 //!
 //! [`StepLauncher::stop`] is called by the dead-man from its own thread while [`run`] waits:
 //!
@@ -71,7 +73,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Write};
-use std::num::NonZeroU64;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -283,7 +284,8 @@ impl<'a> Program<'a> {
         }
     }
 
-    /// `<hook_args...> <step> --params <params>`, bounded by `timeout_secs` (0 is no bound).
+    /// `<hook_args...> <step> --params <params>`, bounded by the call's `bound`
+    /// (`Bound::Unbounded` is never ended by the launcher, as a drain with no deadline).
     fn additive(call: &'a AdditiveCall<'a>) -> Program<'a> {
         let mut args: Vec<OsString> = call.hook_args.iter().map(OsString::from).collect();
         args.push(OsString::from(call.step));
@@ -294,7 +296,7 @@ impl<'a> Program<'a> {
             executable: call.executable,
             args,
             params: Some(call.params),
-            bound: NonZeroU64::new(call.timeout_secs).map_or(Bound::Unbounded, Bound::Secs),
+            bound: call.bound,
         }
     }
 
@@ -613,7 +615,8 @@ impl StepLauncher for OpenrcLauncher {
     }
 
     /// Runs `<executable> <hook_args...> <step> --params <params>` as [`StepLauncher::run`]
-    /// runs a step, bounded by `timeout_secs`.
+    /// runs a step, bounded by the call's `bound` (`Bound::Unbounded`: never ended by the
+    /// launcher).
     fn run_additive(&self, call: &AdditiveCall<'_>) -> Result<StepExit, LaunchError> {
         self.run_step(&Program::additive(call))
     }
