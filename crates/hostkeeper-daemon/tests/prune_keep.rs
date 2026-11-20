@@ -323,14 +323,14 @@ fn updates_keep_current_previous_the_pin_and_the_newest_four() {
         farm.publish(WEB, &format!("{n}.0.0"));
     }
     assert_eq!(daemon.order(&farm.install(WEB, "1.0.0", 1)), succeeded());
-    for n in 2..=8 {
+    for n in 2..=8u32 {
         let order = farm.update(WEB, &format!("{n}.0.0"), u64::from(n));
         assert_eq!(daemon.order(&order), succeeded(), "{n}.0.0");
     }
     assert_eq!(versions(rig), numbered(&[3, 4, 5, 6, 7, 8]));
 
     pin_web(rig, b"3.0.0\n");
-    for n in 9..=10 {
+    for n in 9..=10u32 {
         let order = farm.update(WEB, &format!("{n}.0.0"), u64::from(n));
         assert_eq!(daemon.order(&order), succeeded(), "{n}.0.0");
     }

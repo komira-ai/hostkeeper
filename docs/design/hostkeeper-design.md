@@ -374,7 +374,7 @@ A broken version must be fixable on every host with one call, with no hook, beca
 *Report.*
 
 17. Report the verdict in the next heartbeat.
-18. If `current` moved (step 11 ran), delete every version directory of the service except `current` and `previous` (section 4.7).
+18. If `current` moved (step 11 ran), delete every version directory of the service the host does not keep: all but `current`, `previous`, the pinned one and the newest `--keep-versions` others (section 4.7, Q14).
 
 **What it costs.**
 
@@ -648,7 +648,7 @@ The hook drains inside `prepare`; the updater does not cut work at a deadline. T
 | Crash during `uninstall` | resumes at the tombstone; each step idempotent; version directories go last | `a_crash_during_uninstall_resumes_at_the_tombstone` **(to build, B23)** |
 | An order field that could name a command, path or URL | no such field exists in the order messages | descriptor test **(to build, B1)** |
 | Clock skew | nothing the updater decides reads the wall clock (monotonic time plus boot id); it is used only for certificate, OIDC and nonce validity, so a host with a wrong clock cannot handshake, is silent and keeps its release | `no_decision_reads_the_wall_clock` (an `xtask` lint, **to build, B19**); `a_token_that_expires_while_its_keys_are_fetched_is_refused` (**open PR #5**) |
-| Disk full while staging, or the record cannot be written | `ENOSPC` removes the staging directory and returns `Deferred`, class environment, `no_space`, before any hook runs; nothing is pruned to make room, and `current` and `previous` are never removed (the volume is sized for two versions and the one being staged); if the step record cannot be written no hook runs (`journal_unavailable`) | `enospc_during_staging_defers_with_no_space_and_leaves_no_partial_tree`, `enospc_writing_the_record_runs_no_hook`, `a_crashed_staging_directory_is_removed_at_start` **(to build, B5, B4)** |
+| Disk full while staging, or the record cannot be written | `ENOSPC` removes the staging directory and returns `Deferred`, class environment, `no_space`, before any hook runs; nothing is pruned to make room, and `current` and `previous` are never removed (the volume is sized for the versions kept, Q14, and the one being staged); if the step record cannot be written no hook runs (`journal_unavailable`) | `enospc_during_staging_defers_with_no_space_and_leaves_no_partial_tree`, `enospc_writing_the_record_runs_no_hook`, `a_crashed_staging_directory_is_removed_at_start` **(to build, B5, B4)** |
 | Hook output unbounded | keep the last 1 MiB in a ring; a last line over 64 KiB reads as `{}` and the exit code decides | `a_hook_that_prints_without_limit_is_bounded_and_its_exit_code_stands` |
 | Daemon resends or the fleet resends verdicts | counted once per host, order id and try; stored before it is acknowledged, and counted once more after a restart, not twice | `a_resent_verdict_counts_once`, `a_duplicate_verdict_is_counted_once` |
 | Halt raised by the updater, fix released | a CI write of a new version lifts it; a hook's exit-76 halt needs `clear_halt` | `ci_write_lifts_an_updater_halt_but_not_a_hook_halt` **(to build, B7)** |

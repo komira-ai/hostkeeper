@@ -796,7 +796,7 @@ after CI2: an old pin runs an old binary.
 **Recommendation: both become service packages that hostkeeper installs like any other service, and neither folds into
 the coordinator.** They are services that run on one host of the farm, with root needs of their own; they are not
 hostkeeper programs. That is what a service package is for: the daemon fetches, verifies and installs an attested
-package, runs its hook as root, links its units and keeps two versions with rollback (hostkeeper-design.md section 4.7,
+package, runs its hook as root, links its units and keeps the versions hostkeeper-design.md Q14 names, with rollback (hostkeeper-design.md section 4.7,
 **Built**). Assigning the service to a host installs it there; unassigning uninstalls it.
 
 Why not the coordinator: the coordinator is a non-root container (user 65532, coordinator-storage.md section 9). PXE
