@@ -52,7 +52,7 @@ pub(crate) fn dispatch(w: &mut World<'_>, argv: &[Vec<u8>]) -> Flow<()> {
                 return print(w, &text);
             }
             b"--version" => {
-                let text = format!("{} {}", w.name, w.stamp);
+                let text = format!("{} {}", crate::PROGRAM, w.stamp);
                 return print(w, &text);
             }
             flag if flag.starts_with(b"-") => at += take_global(&mut globals, argv.get(at..))?,
@@ -84,7 +84,7 @@ pub(crate) fn dispatch(w: &mut World<'_>, argv: &[Vec<u8>]) -> Flow<()> {
                 b"no service ".as_slice(),
                 service,
                 b"; '",
-                w.name.as_bytes(),
+                crate::PROGRAM.as_bytes(),
                 b" --help' lists them",
             ]
             .concat(),
@@ -117,7 +117,7 @@ pub(crate) fn dispatch(w: &mut World<'_>, argv: &[Vec<u8>]) -> Flow<()> {
                 b" has no method ",
                 method,
                 b"; '",
-                w.name.as_bytes(),
+                crate::PROGRAM.as_bytes(),
                 b" ",
                 service,
                 b" --help' lists them",
@@ -227,7 +227,7 @@ fn ssh_main(w: &mut World<'_>, mut globals: Globals, word: &[u8], args: &[Vec<u8
             at += 1;
         }
     }
-    let name = w.name;
+    let name = crate::PROGRAM;
     let sub = String::from_utf8_lossy(word).into_owned();
     if globals.token_stdin || globals.audience.is_some() || globals.response_file.is_some() {
         return Err(Stop::usage(format!(

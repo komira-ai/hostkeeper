@@ -171,7 +171,7 @@ pub const PXE_BUILD: &str = "cargo build --locked --release --target \"$MUSL_TAR
 
 /// The binary tarballs the release carries, each as its program (the stem of its file name,
 /// `<program>-<version>-<platform>.tar.gz`) and the platforms it ships for: hostkeeper's on
-/// every platform, the command line's (`hk`, with the symlink `hkctl`) on every platform, the
+/// every platform, the command line's (`hk`) on every platform, the
 /// coordinator's and the coordinator updater's on the two Linux platforms. Each has a bundle and an attested SBOM
 /// (`<program>-<version>-<platform>.cdx.json`).
 pub const TARBALLS: [(&str, &[&str]); 4] = [

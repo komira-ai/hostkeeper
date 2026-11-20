@@ -23,7 +23,8 @@ verifications.
   verified (the release's `SHA256SUMS`, then `gh attestation verify`, as
   [verify-a-release.md](../deploy/verify-a-release.md) says) and unpacked. It needs no bash, no `curl` and no `jq`
   installed to make a call.
-- `hkctl` is the old name. The tarball holds a link `hkctl` to `hk`, so a script that calls `hkctl` keeps working.
+- `hkctl` and `hkssh` are gone. Their commands are `hk` commands with the same flags; a script, a
+  `ProxyCommand` line or a runbook that calls `hkctl` or `hkssh` must call `hk`. The tarball holds `hk` only.
 
 An operator's `ProxyCommand` line in `~/.ssh/config` is
 `ProxyCommand hk --endpoint URL --ca-file PATH --token-file PATH ssh-proxy %h`.
@@ -84,17 +85,10 @@ the tunnel's keepalive is 30 seconds. The default audit reason of a certificate 
 `hk ssh-proxy`) in place of the former program's name. The design of the tunnel itself is
 [ssh-through-coordinator.md](ssh-through-coordinator.md) and is unchanged.
 
-## 5. The program name
-
-`hostkeeper_hk::program_name` is `hkctl` when the file name of argv[0] is exactly `hkctl`, and `hk` otherwise.
-That name is the prefix of a diagnostic (`<name>: <message>`), the first word of `--version`, and the word in a
-message that names the program. A script that calls the `hkctl` link therefore sees what it saw from the bash
-program. Help texts and `docs/cli.md` always say `hk`.
-
-## 6. Release assets
+## 5. Release assets
 
 Each release has, for `linux-x86_64`, `linux-arm64` (static, musl) and `macos-arm64`:
-`hk-<version>-<platform>.tar.gz` holding `hk` and the link `hkctl` to it, its CycloneDX SBOM
+`hk-<version>-<platform>.tar.gz` holding the one file `hk`, its CycloneDX SBOM
 `hk-<version>-<platform>.cdx.json` and its attestation bundle `hk-<version>-<platform>.tar.gz.sigstore.json`.
 
 Withdrawn, no longer published from the first release that ships `hk`: `hkctl-<version>`,
@@ -108,11 +102,12 @@ the attestation, unpacks the archive and runs `hk`. Its input `hostkeeper_versio
 
 `hk` is not in the deb, the rpm or the macOS installer: no host needs it.
 
-## 7. Compatibility and failure modes
+## 6. Compatibility and failure modes
 
-- **Scripts.** A script that calls `hkctl` with any flags keeps working through the link and sees the same
-  output and exit codes. A script that downloaded the asset `hkctl-<version>` of an older release is unaffected;
-  of a newer release, it must fetch `hk-<version>-<platform>.tar.gz`.
+- **Scripts.** A script that calls `hkctl` must call `hk`, with the same flags; the output and exit codes are
+  those `hkctl` gave, with `hk` as the program name in messages. The assets `hkctl-<version>` and `hkssh-<version>-<platform>.tar.gz` are withdrawn from new
+  releases, so a script that downloads one must fetch `hk-<version>-<platform>.tar.gz`. Releases already
+  published keep their `hkctl` and `hkssh` assets.
 - **A proxy in the environment** is not used, where `curl` would have used it. A coordinator reached only through
   a proxy is not reachable by `hk`.
 - **System roots** are not trusted for the coordinator, as before; a call needs `--ca-file`.
@@ -120,16 +115,15 @@ the attestation, unpacks the archive and runs `hk`. Its input `hostkeeper_versio
   others may read (as `hkctl` did), the ssh verbs a file with any group or other bit (as `hkssh` did).
 - **On macOS** the release checks the `hk` of the tarball by its code signature and its `--version`; the macOS
   beta stage runs the tests of the crates `hostkeeper` and `hello` are built from, which `hk` is not.
-- **A program called otherwise** than `hk` or `hkctl` (a renamed copy) says `hk`.
 - **ssh state** is read from the same directory, so an operator who used `hkssh` keeps the key, the certificates
-  and the pins; an old `ProxyCommand hkctl ... ssh-proxy %h` line works through the link.
+  and the pins; a `ProxyCommand` line must name `hk ... ssh-proxy %h`.
 - **The `ssh` programs** (`ssh`, `ssh-keygen`, `ssh-add`) are needed by the ssh verbs only; gateway calls run no other program.
 - **Wire formats** are not touched, so a new `hk` against an old coordinator and the reverse behave as `hkctl` did;
   the `coordinator_older` answer is kept.
 
-## 8. Tests
+## 7. Tests
 
 Behaviour tests of `crates/hostkeeper-hk` run the program in process: the request bytes of every kind of flag,
 the answer and exit code of each gateway status, the refusal tokens, the token-file mode refusal, the OIDC
-token request, the version probe, the `hkctl` name, the ssh verbs against a fake coordinator and fake programs,
+token request, the version probe, the ssh verbs against a fake coordinator and fake programs,
 and `docs_cli_md_is_current`. They use loopback sockets on port 0 and scratch directories, and assert no timing.

@@ -4,7 +4,7 @@
 //! (one per RPC the coordinator's JSON gateway serves) is `hk <service> <method> [flags]`, one
 //! POST of the request the flags make, with the exit code of the gateway's answer. The SSH tunnel
 //! is built in: [`ssh`] is `hk ssh`, `hk ssh-proxy`, `hk ssh-revoke`, `hk ssh-status` and the
-//! `hk ssh-known-host` that ssh runs. `hkctl` is the old name of the same program.
+//! `hk ssh-known-host` that ssh runs.
 //!
 //! - [`run`]: a command line against a [`World`], which holds everything it reads and writes: the
 //!   command table, the streams, the home directory, the runner's token request and the program
@@ -33,7 +33,7 @@ mod table;
 #[cfg(test)]
 mod tests;
 
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 use std::path::PathBuf;
@@ -44,30 +44,14 @@ use hostkeeper_proto::ctl::{COMMANDS, Command};
 pub use doc::markdown;
 pub use table::is_served;
 
-/// The program's name: the word `--help` and `docs/cli.md` use, and the diagnostic prefix of a
-/// program called by it.
+/// The program's name: the word `--help` and `docs/cli.md` use, and the diagnostic prefix, and
+/// what `--version` starts with.
 pub const PROGRAM: &str = "hk";
-
-/// The old name of `hk`: a program called by it prefixes its diagnostics and its version with it.
-pub const OLD_NAME: &str = "hkctl";
-
-/// The name a program called as `argv0` goes by: [`OLD_NAME`] when the file name of `argv0` is
-/// exactly that, and [`PROGRAM`] otherwise.
-pub fn program_name(argv0: &OsStr) -> &'static str {
-    let file = std::path::Path::new(argv0).file_name();
-    if file == Some(OsStr::new(OLD_NAME)) {
-        OLD_NAME
-    } else {
-        PROGRAM
-    }
-}
 
 /// Everything a command line reads and writes besides its arguments.
 pub struct World<'a> {
     /// The command table: one entry per method.
     pub table: &'a [Command],
-    /// The name that starts a diagnostic and `--version`'s line: [`PROGRAM`] or [`OLD_NAME`].
-    pub name: &'a str,
     /// The version, as `--version` prints it after the name: `X.Y.Z+<12 hex>` for a release; its
     /// part before the `+` is what a refused call asks the coordinator if it is older than.
     pub stamp: &'a str,
@@ -123,7 +107,7 @@ pub fn run(world: &mut World<'_>, args: &[OsString]) -> u8 {
         Err(Stop::Fail(message)) => (1, Some(message)),
     };
     if let Some(message) = message {
-        let line = [world.name.as_bytes(), b": ", &message, b"\n"].concat();
+        let line = [PROGRAM.as_bytes(), b": ", &message, b"\n"].concat();
         // A stderr that cannot be written to leaves nothing to say it with.
         let _ = world.stderr.write_all(&line);
     }
@@ -152,18 +136,16 @@ fn system_roots() -> Vec<Vec<u8>> {
         .collect()
 }
 
-/// The program: `hk` or `hkctl` on the process's arguments, standard streams and environment.
+/// The program: `hk` on the process's arguments, standard streams and environment.
 pub fn main() -> ExitCode {
-    let mut args = std::env::args_os();
-    let name = program_name(&args.next().unwrap_or_default());
-    let args: Vec<OsString> = args.collect();
+    // The program's own name, whatever file it is run as, is `hk`: the first argument is skipped.
+    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     // Not locked: the ssh commands read and write the same streams through the runtime's own
     // handles, which would wait for a lock held here.
     let (mut stdin, mut stdout, mut stderr) =
         (std::io::stdin(), std::io::stdout(), std::io::stderr());
     let mut world = World {
         table: COMMANDS,
-        name,
         stamp: stamp::version(),
         stdin: &mut stdin,
         stdout: &mut stdout,

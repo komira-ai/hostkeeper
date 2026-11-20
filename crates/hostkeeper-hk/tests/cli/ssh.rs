@@ -115,15 +115,15 @@ fn each_command_hands_the_ssh_module_the_flags_it_took() {
     );
 }
 
-/// Proves: the exit code of the ssh module is `hk`'s, what it writes to stderr is `hk`'s, a name
-/// of `hkctl` is handed to it as the name of its diagnostics, and an argument that is not text
+/// Proves: the exit code of the ssh module is `hk`'s, what it writes to stderr is `hk`'s, the name
+/// `hk` is handed to it as the name of its diagnostics, and an argument that is not text
 /// reaches it byte for byte.
 #[test]
 fn the_exit_code_the_name_and_the_bytes_of_the_ssh_module_are_hks() {
     let rig = Rig::new("ssh-code");
     let recorder = Recorder {
         code: 3,
-        says: "hkctl: nothing doing\n",
+        says: "hk: nothing doing\n",
         ..Recorder::default()
     };
     let mut line: Vec<OsString> = rig.globals(1).into_iter().map(OsString::from).collect();
@@ -131,13 +131,13 @@ fn the_exit_code_the_name_and_the_bytes_of_the_ssh_module_are_hks() {
     line.push("host-7".into());
     line.push("--".into());
     line.push(OsString::from_vec(b"a\xffb".to_vec()));
-    let ran = rig.run_os(Opts::real().named("hkctl").ssh(&recorder), &line);
+    let ran = rig.run_os(Opts::real().ssh(&recorder), &line);
     assert_eq!(
         (ran.code, ran.stdout.as_str(), ran.stderr.as_str()),
-        (3, "", "hkctl: nothing doing\n")
+        (3, "", "hk: nothing doing\n")
     );
     let calls = recorder.calls.lock().expect("the calls");
-    assert_eq!(calls[0].name, "hkctl");
+    assert_eq!(calls[0].name, "hk");
     assert_eq!(calls[0].args[2], OsString::from_vec(b"a\xffb".to_vec()));
 }
 
@@ -182,7 +182,7 @@ fn the_methods_of_the_service_ssh_stay_gateway_calls() {
 
 /// Proves: the usage errors of the ssh commands, each said exactly before the ssh module runs: a
 /// credential other than a token file, a missing global flag, a bad endpoint and a missing or
-/// empty home, with the name `hkctl` in the messages that name the program; and `--help` prints
+/// empty home, with the name `hk` in the messages that name the program; and `--help` prints
 /// what the five commands are, whichever word asks.
 #[test]
 fn the_commands_refuse_what_they_cannot_take_and_say_what_they_are() {
@@ -211,15 +211,12 @@ fn the_commands_refuse_what_they_cannot_take_and_say_what_they_are() {
             "{flag}"
         );
     }
-    let ran = rig.run(
-        Opts::real().named("hkctl").ssh(&recorder),
-        &args(&["ssh-status", "h"]),
-    );
+    let ran = rig.run(Opts::real().ssh(&recorder), &args(&["ssh-status", "h"]));
     assert_eq!(
         (ran.code, ran.stderr.as_str()),
         (
             2,
-            "hkctl: hkctl ssh-status needs --endpoint, --ca-file and --token-file\n"
+            "hk: hk ssh-status needs --endpoint, --ca-file and --token-file\n"
         )
     );
     let ran = rig.run(Opts::real().ssh(&recorder), &args(&["ssh-proxy", "h"]));
@@ -249,12 +246,12 @@ fn the_commands_refuse_what_they_cannot_take_and_say_what_they_are() {
         );
     }
     let ran = rig.run(
-        Opts::real().named("hkctl").without_home().ssh(&recorder),
+        Opts::real().without_home().ssh(&recorder),
         &with(&["ssh", "h"]),
     );
     assert_eq!(
         ran.stderr,
-        "hkctl: hkctl ssh keeps its key and certificates under $HOME, which is not set\n"
+        "hk: hk ssh keeps its key and certificates under $HOME, which is not set\n"
     );
     // A global flag of the command needs its value too.
     let ran = rig.run(

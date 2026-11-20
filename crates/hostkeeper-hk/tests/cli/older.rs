@@ -59,21 +59,6 @@ fn a_refusal_invalid_request_probed_409_says_the_coordinator_is_older() {
     );
 }
 
-/// Proves: the old name is the name in the two lines: a program called `hkctl` says "this hkctl".
-#[test]
-fn the_old_name_names_itself_in_the_older_line() {
-    let rig = Rig::new("older-name");
-    let server = refused_then(&rig, Reply::new(409, "{\"version\":\"1.0.0\"}"));
-    let ran = rig.run(
-        Opts::fixture().named("hkctl"),
-        &call(&rig, server.port, &["gadgets", "list"]),
-    );
-    assert_eq!(
-        ran.stderr,
-        "hkctl: the coordinator answered INVALID_ARGUMENT\nhkctl: the coordinator is older than this hkctl (1.2.3): it runs 1.0.0; update the coordinator, then call again\nrefused: coordinator_older\n"
-    );
-}
-
 /// Proves: a coordinator before the version route is taken as older: the probe answered `404`
 /// says it does not give its version, and the reason is `coordinator_older`.
 #[test]

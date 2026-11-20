@@ -22,8 +22,7 @@
 //! `examples/hello`, hello's failing build, and `pxe`, the boot server of network install, a `.deb` for the
 //! two Linux platforms; each is a native package ([`Package::native_name`]) and the
 //! failing build has none. It also carries `netboot.json` ([`NETBOOT`]), the boot sets of network install for the two Linux
-//! platforms. The command line is a tarball `hk-<version>-<platform>.tar.gz` of the program `hk` and
-//! the symlink `hkctl` to it, the old name of the program.
+//! platforms. The command line is a tarball `hk-<version>-<platform>.tar.gz` of the program `hk`, its one member.
 
 use std::fmt;
 use std::str::FromStr;
@@ -115,12 +114,8 @@ pub(crate) const COORDINATOR_UPDATE: &str = "hostkeeper-coordinator-update";
 
 /// The asset stem of the operator's command line, and the name of its binary: `hk`, the command
 /// line of the coordinator with the SSH tunnel built in. Released for every platform as a
-/// tarball with its SBOM; the tarball holds `hk` and the symlink [`HKCTL`] to it.
+/// tarball with its SBOM; the tarball holds the one file `hk`.
 pub(crate) const HK: &str = "hk";
-
-/// The old name of `hk`: the symlink to `hk` in the tarball of [`HK`], so that a script that
-/// calls `hkctl` keeps working.
-pub(crate) const HKCTL: &str = "hkctl";
 
 /// The name of the boot server's service package (docs/design/two-programs.md section 6.1): its
 /// package name and its program `pxe`, which prints `pxe X.Y.Z` for `--version` (no commit
@@ -619,7 +614,7 @@ pub(crate) fn is_bundle(name: &str) -> bool {
 ///
 /// - `hostkeeper-<v>-<p>.tar.gz`, the binary;
 /// - `hostkeeper-<v>-<p>.cdx.json`, the SBOM;
-/// - `hk-<v>-<p>.tar.gz`, the operator's command line (`hk` and the symlink `hkctl` to it), and
+/// - `hk-<v>-<p>.tar.gz`, the operator's command line (the one file `hk`), and
 ///   `hk-<v>-<p>.cdx.json`, its SBOM;
 ///
 /// and on Linux, with the deb and rpm architecture `<deb>` and `<rpm>`:

@@ -173,7 +173,7 @@ const WITHDRAWN: [(&str, &str); 54] = [
 ];
 
 /// Why the `hkctl` script and its bundle left the release.
-const HKCTL_WITHDRAWN: &str = "the bash script hkctl is withdrawn: `hk-<version>-<platform>.tar.gz` carries the command line as a binary, and its symlink `hkctl` keeps the old name working (docs/cli.md)";
+const HKCTL_WITHDRAWN: &str = "the bash script hkctl is withdrawn: `hk-<version>-<platform>.tar.gz` carries the command line as a binary (docs/cli.md)";
 
 /// Why the SSH client's tarballs left the release.
 const HKSSH_WITHDRAWN: &str = "the SSH client hkssh is withdrawn: its tunnel is built into `hk` (`hk ssh`, `hk ssh-proxy`), shipped in `hk-<version>-<platform>.tar.gz` (docs/cli.md)";

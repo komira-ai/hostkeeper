@@ -13,8 +13,8 @@ pub(crate) const RULES: &str = "\
 Every command is one method: `hk <service> <method>`, both in kebab case as the protos name \
 them (`Releases.SetDesired` is `releases set-desired`), called as one POST of JSON to the \
 coordinator's gateway over HTTPS. hk is one program: it needs no bash, no curl and no jq, and \
-runs no other program for a gateway call. `hkctl` is the old name of hk, which still answers to \
-it: a program called `hkctl` behaves as `hk` does and puts `hkctl:` before its diagnostics.
+runs no other program for a gateway call. It puts `hk:` before its diagnostics, whatever file \
+name it is run as.
 
 A request field is a flag named after it (`node_id` is `--node-id`): a scalar takes one value; a \
 bool takes `true` or `false`, so that an absent flag and `false` differ; an enum takes a value's \

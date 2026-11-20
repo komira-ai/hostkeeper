@@ -58,7 +58,7 @@ fn serve_args(dir: &Path) -> Vec<OsString> {
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect();
-    let tokens = format!("[[token]]\nname = \"hkctl-test\"\nsha256 = \"{digest}\"\n");
+    let tokens = format!("[[token]]\nname = \"hk-test\"\nsha256 = \"{digest}\"\n");
     let pairs = [
         ("--heartbeat-listen", "192.0.2.1:1".to_owned()),
         ("--private-listen", "192.0.2.1:2".to_owned()),

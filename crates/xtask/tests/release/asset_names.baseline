@@ -12,7 +12,7 @@
 # (docs/design/packages-native.md, item A28). The MDM's assets (`hostkeeper-mdm-<version>-<platform>.*` and
 # `mdm_<version>_amd64.deb`, with their bundles) are withdrawn with the MDM (docs/design/mac-bootstrap.md).
 # `hk-<version>-<platform>.tar.gz` (with its SBOM and bundle) is the operator's command line for all three
-# platforms: `hk` and the symlink `hkctl` to it. `hkctl-<version>` (the bash script) and the `hkssh-*`
+# platforms: the one file `hk`. `hkctl-<version>` (the bash script) and the `hkssh-*`
 # tarballs are withdrawn with it (docs/cli.md).
 SHA256SUMS
 hk-<version>-linux-arm64.cdx.json

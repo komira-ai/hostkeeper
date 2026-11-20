@@ -265,7 +265,7 @@ fn older(w: &mut World<'_>, endpoint: &str, roots: &[Certificate<'static>], time
         })
         .filter(|version| visible(version))
         .map(|version| String::from_utf8_lossy(version).into_owned());
-    let name = w.name;
+    let name = crate::PROGRAM;
     match (answer.status, now) {
         (409, Some(now)) => {
             let _ = writeln!(
@@ -369,7 +369,7 @@ pub(crate) fn call(
     };
     let (code, reason) = refusal(&answer.body).ok_or_else(not_gateway)?;
     let status = exit_of(code).ok_or_else(not_gateway)?;
-    let name = w.name;
+    let name = crate::PROGRAM;
     let _ = writeln!(
         w.stderr,
         "{name}: the coordinator answered {}",

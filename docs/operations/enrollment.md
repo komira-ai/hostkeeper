@@ -15,8 +15,7 @@ coordinator's side (its flags, its CA, its state files) is
 `hk` is the operator's command line. It is one program, in the release asset
 `hk-<version>-<platform>.tar.gz` (`linux-x86_64`, `linux-arm64` or `macos-arm64`), verified and
 unpacked as [verify-a-release.md](../deploy/verify-a-release.md) says; it needs nothing else
-installed. The tarball also holds `hkctl`, the old name of `hk`, a link to it, so a script that
-calls `hkctl` keeps working. Only its owner may read its `--token-file` (mode 0600): `hk` refuses a file its
+installed. Only its owner may read its `--token-file` (mode 0600): `hk` refuses a file its
 group or others may read.
 
 Every `hk enrollment` call takes the operator token only: a CI token is refused with

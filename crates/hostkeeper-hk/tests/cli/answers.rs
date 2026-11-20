@@ -307,7 +307,6 @@ fn an_answer_that_cannot_be_written_is_a_failure() {
     let recorder = crate::rig::Recorder::default();
     let mut world = hostkeeper_hk::World {
         table: hostkeeper_proto::ctl::COMMANDS,
-        name: "hk",
         stamp: crate::rig::STAMP,
         stdin: &mut stdin,
         stdout: &mut stdout,

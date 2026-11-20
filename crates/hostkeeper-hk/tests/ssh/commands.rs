@@ -367,9 +367,9 @@ fn the_tail_after_the_dashes_reaches_ssh_byte_for_byte() {
 }
 
 /// Proves: the lines ssh runs start with the path of the running executable whatever name the
-/// program was called by, and the diagnostics carry that name: run as `hkctl`, the proxy and
+/// program was called by, and the diagnostics carry that name: run as `tool`, the proxy and
 /// known-hosts commands still start with the executable's path, and the warning about changed
-/// host keys starts `hkctl:`.
+/// host keys starts `tool:`.
 #[test]
 fn the_lines_ssh_runs_name_the_executable_not_the_program_name() {
     let rig = Rig::start();
@@ -379,7 +379,7 @@ fn the_lines_ssh_runs_name_the_executable_not_the_program_name() {
     });
     let double = Double::new();
     let call = Call {
-        name: "hkctl",
+        name: "tool",
         verb: Verb::Ssh,
         coordinator: &rig.coordinator(),
         state_dir: &rig.state_dir(),
@@ -390,8 +390,8 @@ fn the_lines_ssh_runs_name_the_executable_not_the_program_name() {
     assert_eq!(
         diag,
         format!(
-            "hkctl: the host keys of {HOST} differ from the pinned ones; connecting with the pinned set\n\
-             hkctl: cannot read a public key from /nonexistent/key.pub: No such file or directory (os error 2)\n"
+            "tool: the host keys of {HOST} differ from the pinned ones; connecting with the pinned set\n\
+             tool: cannot read a public key from /nonexistent/key.pub: No such file or directory (os error 2)\n"
         )
     );
     let call = Call {

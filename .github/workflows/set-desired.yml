@@ -12,8 +12,7 @@
 #
 # The order of the steps is the point of this file, and the workflow lint
 # (crates/xtask/tests/workflows, `set_desired.rs`) holds it. The command line `hk` of the
-# pinned hostkeeper release, a tarball of `hk` and `hkctl` (the program's old name, a symlink to
-# it), is downloaded and proven first, by the commands of
+# pinned hostkeeper release, a tarball of the one file `hk`, is downloaded and proven first, by the commands of
 # docs/deploy/verify-a-release.md, which the workflow lint (`verify_doc.rs`) keeps equal to the
 # steps here: its SHA256SUMS, the tarball's attestation by `artifacts.yml` of komira-ai/hostkeeper on
 # refs/heads/main for the pinned `hostkeeper_commit`, the attested commit compared with the pin,

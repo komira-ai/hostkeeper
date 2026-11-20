@@ -10,7 +10,6 @@ use crate::encode::{base64, encode, json_text, seconds, trim, visible, without_n
 use crate::table::{
     EXIT_CODES, MEANINGS, enc_of, exit_of, field_flags, is_hold, json_name, shape, value_name,
 };
-use crate::{OLD_NAME, PROGRAM, program_name};
 
 /// A field of the tests: a string flag named `name`.
 const fn field(name: &'static str, flag: &'static str, kind: FieldKind) -> Field {
@@ -577,10 +576,9 @@ fn every_code_has_one_exit() {
     assert_eq!(exit_of(b"NOPE"), None);
 }
 
-/// Proves: only the host API (`hostkeeper.agent.v<n>`) has no command; and the program is called
-/// `hkctl` only by a file name of exactly that.
+/// Proves: only the host API (`hostkeeper.agent.v<n>`) has no command.
 #[test]
-fn only_the_host_api_has_no_command_and_only_hkctl_is_the_old_name() {
+fn only_the_host_api_has_no_command() {
     let real: Vec<&str> = COMMANDS
         .iter()
         .filter(|c| !crate::is_served(c))
@@ -598,19 +596,5 @@ fn only_the_host_api_has_no_command_and_only_hkctl_is_the_old_name() {
     ] {
         agent.package = package;
         assert_eq!(crate::is_served(&agent), served, "{package}");
-    }
-    for (argv0, name) in [
-        ("hkctl", OLD_NAME),
-        ("/usr/local/bin/hkctl", OLD_NAME),
-        ("./hkctl", OLD_NAME),
-        ("hk", PROGRAM),
-        ("/usr/bin/hk", PROGRAM),
-        ("hkctl2", PROGRAM),
-        ("xhkctl", PROGRAM),
-        ("hkctl/", OLD_NAME),
-        ("", PROGRAM),
-        ("/", PROGRAM),
-    ] {
-        assert_eq!(program_name(std::ffi::OsStr::new(argv0)), name, "{argv0:?}");
     }
 }

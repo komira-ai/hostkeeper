@@ -2,7 +2,7 @@ hk 1.2.3+0123456789ab: call one method of hostkeeper's coordinator through its J
 
 Usage: hk [global flags] <service> <method> [flags]
 
-Every command is one method: `hk <service> <method>`, both in kebab case as the protos name them (`Releases.SetDesired` is `releases set-desired`), called as one POST of JSON to the coordinator's gateway over HTTPS. hk is one program: it needs no bash, no curl and no jq, and runs no other program for a gateway call. `hkctl` is the old name of hk, which still answers to it: a program called `hkctl` behaves as `hk` does and puts `hkctl:` before its diagnostics.
+Every command is one method: `hk <service> <method>`, both in kebab case as the protos name them (`Releases.SetDesired` is `releases set-desired`), called as one POST of JSON to the coordinator's gateway over HTTPS. hk is one program: it needs no bash, no curl and no jq, and runs no other program for a gateway call. It puts `hk:` before its diagnostics, whatever file name it is run as.
 
 A request field is a flag named after it (`node_id` is `--node-id`): a scalar takes one value; a bool takes `true` or `false`, so that an absent flag and `false` differ; an enum takes a value's name without its prefix, in lower case, never `unspecified`; a repeated field repeats its flag; a `map<string, string>` repeats `--<field> key=value`. A flag takes its value as `--flag value` or `--flag=value`; a value that starts with `--` only as `--flag=value`.
 

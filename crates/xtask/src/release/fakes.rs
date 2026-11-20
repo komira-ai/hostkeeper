@@ -53,10 +53,7 @@ pub(crate) fn write_assets(dir: &Path, version: &Version, marker: &str) {
             continue;
         }
         if name.starts_with("hk-") && name.ends_with(".tar.gz") {
-            let tarball = tarball(&[
-                Member::File("hk", format!("{name} {marker}\n")),
-                Member::Link("hkctl", "hk"),
-            ]);
+            let tarball = tarball(&[Member::File("hk", format!("{name} {marker}\n"))]);
             std::fs::write(dir.join(name), tarball).expect("write the command line");
             continue;
         }

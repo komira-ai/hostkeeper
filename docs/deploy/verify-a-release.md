@@ -35,7 +35,7 @@ the coordinator updater's binary are for the two Linux platforms; the installer 
 |---|---|
 | `hostkeeper-<version>-<platform>.tar.gz` | the daemon binary |
 | `hostkeeper-<version>-<platform>.cdx.json` | its CycloneDX SBOM |
-| `hk-<version>-<platform>.tar.gz` | the command line of the coordinator ([docs/cli.md](../cli.md)), a static program generated from the protobuf services, with the ssh tunnel of `hk ssh` built in: the tarball holds `hk` and the symbolic link `hkctl` to it, the old name of the program, so a script that calls `hkctl` keeps working (called as `hkctl` it prints `hkctl` in its messages and in its `--version`). No host package carries it; a release of a commit from before this asset has `hkctl-<version>`, a bash script, and `hkssh-<version>-<linux-platform>.tar.gz` instead |
+| `hk-<version>-<platform>.tar.gz` | the command line of the coordinator ([docs/cli.md](../cli.md)), a static program generated from the protobuf services, with the ssh tunnel of `hk ssh` built in: the tarball holds the one file `hk`. No host package carries it |
 | `hk-<version>-<platform>.cdx.json` | its CycloneDX SBOM |
 | `hello_<version>_<deb-arch>.deb` | hello's native package (docs/design/packages-native.md section 10.2): the program at `/usr/lib/hello/hello`, which the release entry's hook command names (`/usr/lib/hello/hello update-hook`), and the two slots' units `hello@a.service` and `hello@b.service` in `/usr/lib/systemd/system/`; it has no maintainer script and no dependency. The release publishes it to the `testing` suite of the project's apt repository ([package-repositories.md](package-repositories.md)) |
 | `hello_<version>-fail-ready_<deb-arch>.deb` | the `.deb` of hello's failing build, for the Linux platforms: the hello package above with the service version `<version>-fail-ready` and the units started with `--fail-ready`. Its file name carries the service version; the `Version` of its `control` is the Debian version `<version>~fail.ready`, which sorts below `<version>`, so apt never takes it for the release. The release publishes it to the `testing-fail` suite of the project's apt repository, which lists it alone. It has no `.pkg` |
@@ -111,7 +111,7 @@ built, because every package is a native one. The MDM's assets are withdrawn as 
 `mdm_<version>_amd64.deb` and its bundle; Macs enroll through the bootstrap package, and nothing
 fetches them. The command line's bash script `hkctl-<version>` and its bundle, and the SSH client's
 `hkssh-<version>-<linux-platform>.tar.gz`, `.cdx.json` and bundle, are withdrawn as well: `hk` replaces
-them both (`hk-<version>-<platform>.tar.gz` holds it, and `hkctl`, its old name, as a symbolic link).
+them both (`hk-<version>-<platform>.tar.gz` holds it).
 
 ### Every name
 
@@ -352,8 +352,7 @@ its files, and the release workflow runs the updater only in a release whose bui
 The same holds for `hk`: a release of a commit from before it was an asset has none of its files,
 and the release workflow runs it only in a release whose build made its tarball.
 
-For the command line, unpack `hk-<version>-<platform>.tar.gz`, which holds `hk` and the symbolic
-link `hkctl` to it, and run `hk`:
+For the command line, unpack `hk-<version>-<platform>.tar.gz`, which holds `hk`, and run `hk`:
 
 ```sh
 tar -xzf release/hk-<version>-<platform>.tar.gz
@@ -361,8 +360,6 @@ tar -xzf release/hk-<version>-<platform>.tar.gz
 ```
 
 Expected output, exactly: `hk <X.Y.Z>+<first 12 hex digits of $PIN>`.
-
-The link `hkctl`, the old name of the program, prints the same with `hkctl` as the first word.
 
 What it proves: the binary was built from the pinned commit and reports the version of the tag.
 
@@ -385,8 +382,8 @@ Before anything is published, the `verify` job of `release.yml`, on the files of
 - runs step 6 on the linux-x86_64 binaries, the daemon's, the coordinator's,
   the coordinator updater's and the command line's
   (`cargo xtask release check-binary`); `cargo xtask release check` holds each
-  `hk-<version>-<platform>.tar.gz` to exactly two members, the file `hk` and the symbolic link `hkctl`
-  to `hk`, without running either.
+  `hk-<version>-<platform>.tar.gz` to exactly one member, the file `hk`,
+  without running it.
 
 The test `verify_a_release_commands_match_the_ones_the_verify_job_runs`
 (`cargo test -p xtask`, in `crates/xtask/src/release/doc_tests.rs`) keeps these commands equal to

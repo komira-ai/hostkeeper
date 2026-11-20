@@ -8,7 +8,7 @@ service calls it; it does not write the step itself.
 
 The workflow does these steps, in this order (docs/design/two-programs.md, section 5). Steps 2, 3
 and 6 run the checks of [Verify a release](verify-a-release.md) (steps 2, 3 and 6 there) on
-`hk`, the command line of the coordinator ([docs/cli.md](../cli.md); `hkctl` is its old name, a link to it in the tarball), with `--format json`
+`hk`, the command line of the coordinator ([docs/cli.md](../cli.md)), with `--format json`
 added to the attestation check so that step 4 can read it; step 1 downloads with `curl` instead of
 `gh release download`, and step 4 is a further check of the attested commit. The workflow lint
 keeps steps 2 and 3 equal to the commands of that page, word for word, step 6 equal to its
@@ -21,7 +21,7 @@ followed by a Tailscale tag name. The value is checked whether or not the job jo
 the one step that reads it.
 
 1. Download `hk-<hostkeeper_version>-linux-x86_64.tar.gz` of the pinned hostkeeper release, the
-   tarball of `hk` and the link `hkctl` to it, and its `SHA256SUMS`.
+   tarball of `hk`, and its `SHA256SUMS`.
 2. Check the downloaded files against `SHA256SUMS`.
 3. Verify the attestation of the tarball: signed by `.github/workflows/artifacts.yml` of
    `komira-ai/hostkeeper` on a GitHub-hosted runner, for a build of `refs/heads/main` at the pinned
@@ -332,7 +332,7 @@ Pin three things, and change them together, in a reviewed pull request of the se
   the release as its comment;
 - `hostkeeper_version`, the release whose hk the job downloads: one that has the asset
   `hk-<version>-linux-x86_64.tar.gz` (a caller that pins an older revision of the workflow pins an
-  older release, whose command line is the bash script `hkctl-<version>`);
+  older release, which has no such asset);
 - `hostkeeper_commit`, the commit of `komira-ai/hostkeeper` that release was built from.
 
 Why: the downloaded hk holds your OIDC token. A pin means a new hostkeeper release,

@@ -92,7 +92,7 @@ one credential is the OIDC token GitHub issues to the job.
    its settings (`enabled` `true`). Before that a host would defer the release
    (`not_in_repository`). A failed write, or a channel without its settings, leaves
    `set-desired` skipped: nothing is set. The job calls the CI client
-   ([set-desired.yml](ci-client.md)) once: it verifies the pinned hostkeeper release's command line (`hk`, called `hkctl` before it),
+   ([set-desired.yml](ci-client.md)) once: it verifies the pinned hostkeeper release's command line (`hk`),
    joins the tailnet when `HOSTKEEPER_TAILNET_CLIENT_ID` is set, and runs `hk releases set-desired` for the
    service `hostkeeper` at `<X.Y.Z>`; hk requests the OIDC token itself and sends it in
    the request's header, never a file or an argument. The call names the release by its targets

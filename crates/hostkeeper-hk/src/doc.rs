@@ -32,9 +32,9 @@ pub fn markdown(commands: &[Command]) -> String {
          coordinator's JSON gateway ([gateway.md](gateway.md)) per command, and has the SSH \
          tunnel built in. It is released as `hk-<version>-<platform>.tar.gz`, attested like every \
          other asset ([deploy/verify-a-release.md](deploy/verify-a-release.md)); `hk --version` \
-         prints `hk <version>+<first 12 hex digits of the commit>`. `hkctl` is its old name: the \
-         archive holds a link `hkctl` to `hk`, and a program called `hkctl` behaves as `hk` does \
-         and says `hkctl:` before its diagnostics. Every command, flag and help text below is \
+         prints `hk <version>+<first 12 hex digits of the commit>`. The archive holds the one \
+         file `hk`, and the program says `hk:` before its diagnostics whatever file name it is \
+         run as. Every command, flag and help text below is \
          generated from the descriptors; the host API (`hostkeeper.agent.v<n>`), whose caller is \
          the daemon, is not here.\n\n## Rules\n\n",
     );

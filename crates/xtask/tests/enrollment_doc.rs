@@ -512,7 +512,7 @@ fn doc_problems(path: &str, doc: &str) -> Vec<String> {
     }
     if let Some(line) = lines_of(doc, &["hkctl"]).first() {
         problems.push(format!(
-            "{path}: a fenced `hkctl` line; the operator docs say `hk`, hkctl is its old name: {line}"
+            "{path}: a fenced `hkctl` line; the operator docs name hk, not hkctl: {line}"
         ));
     }
     if let Some(line) = lines_of(doc, &["hostkeeper", "ctl"]).first() {
@@ -723,7 +723,7 @@ fn the_doc_check_reads_the_ssh_hand_verbs() {
     }
 }
 
-/// Catches the doc check passing a fenced line that begins `hkctl`, the old name, or reading it
+/// Catches the doc check passing a fenced line that begins `hkctl`, or reading it
 /// as a call of `hk`, and catches it refusing a span or a prose line that only names `hkctl`.
 #[test]
 fn the_doc_check_refuses_a_fenced_hkctl_line() {
@@ -731,10 +731,10 @@ fn the_doc_check_refuses_a_fenced_hkctl_line() {
     assert_eq!(
         doc_problems("docs/x.md", &fenced(line)),
         [format!(
-            "docs/x.md: a fenced `hkctl` line; the operator docs say `hk`, hkctl is its old name: {line}"
+            "docs/x.md: a fenced `hkctl` line; the operator docs name hk, not hkctl: {line}"
         )]
     );
-    let prose = "`hkctl` is the old name of `hk`; `hkctl hosts nonsense` still works.\n";
+    let prose = "`hkctl` is not a program of this repository; `hkctl hosts nonsense` is not one.\n";
     assert_eq!(doc_problems("docs/x.md", prose), Vec::<String>::new());
 }
 

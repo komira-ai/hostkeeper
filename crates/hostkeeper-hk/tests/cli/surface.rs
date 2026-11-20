@@ -2,7 +2,7 @@
 //! services and methods, the usage errors of the global flags, and a new RPC of the fixture,
 //! which appears as a command with no hand edit.
 
-use crate::rig::{Opts, Rig, STAMP, Server, args, call};
+use crate::rig::{Rig, STAMP, Server, args, call};
 
 /// Proves: `--version` prints `<name> <stamp>`, help is printed to stdout with exit 0 at every
 /// level, with the words of the command table in it and the host API not in it; no words, a
@@ -141,39 +141,6 @@ fn version_help_and_names_are_answered_without_a_call() {
     ));
     assert_eq!(ran.code, 0, "{ran:?}");
     assert_eq!(server.seen()[0].text(), "{\"version\":\"1.0\"}");
-}
-
-/// Proves: a program called `hkctl` prints `hkctl` before its diagnostics, in the first line of
-/// `--version`, and in the words of its messages that name the program; and its help says `hk`.
-#[test]
-fn the_old_name_is_the_name_in_messages_and_the_version() {
-    let rig = Rig::new("old-name");
-    let ran = rig.run(Opts::real().named("hkctl"), &args(&["--version"]));
-    assert_eq!(
-        (ran.code, ran.stdout, ran.stderr),
-        (0, format!("hkctl {STAMP}\n"), String::new())
-    );
-    for (words, why) in [
-        (
-            vec!["nosuch"],
-            "no service nosuch; 'hkctl --help' lists them",
-        ),
-        (
-            vec!["hosts", "nosuch"],
-            "the service hosts has no method nosuch; 'hkctl hosts --help' lists them",
-        ),
-        (vec!["--nosuch"], "unknown flag --nosuch"),
-    ] {
-        let ran = rig.run(Opts::real().named("hkctl"), &args(&words));
-        assert_eq!(
-            (ran.code, ran.stderr),
-            (2, format!("hkctl: {why}\n")),
-            "{words:?}"
-        );
-    }
-    let ran = rig.run(Opts::real().named("hkctl"), &args(&["--help"]));
-    assert!(ran.stdout.starts_with(&format!("hk {STAMP}: ")));
-    assert!(ran.stdout.contains("Usage: hk [global flags]"));
 }
 
 /// Proves: a call made without what it needs (an endpoint that is https, a readable CA file,

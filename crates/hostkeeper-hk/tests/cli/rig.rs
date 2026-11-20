@@ -354,7 +354,6 @@ impl Launch for Recorder {
 pub struct Opts<'a> {
     pub table: &'a [Command],
     pub stdin: Vec<u8>,
-    pub name: &'a str,
     pub stamp: &'a str,
     pub oidc: Option<(&'a str, &'a str)>,
     pub roots: Vec<Vec<u8>>,
@@ -369,7 +368,6 @@ impl<'a> Opts<'a> {
         Opts {
             table: hostkeeper_proto::ctl::COMMANDS,
             stdin: Vec::new(),
-            name: "hk",
             stamp: STAMP,
             oidc: None,
             roots: Vec::new(),
@@ -389,11 +387,6 @@ impl<'a> Opts<'a> {
 
     pub fn stdin(mut self, bytes: &[u8]) -> Self {
         self.stdin = bytes.to_vec();
-        self
-    }
-
-    pub fn named(mut self, name: &'a str) -> Self {
-        self.name = name;
         self
     }
 
@@ -502,7 +495,6 @@ impl Rig {
         };
         let mut world = World {
             table: opts.table,
-            name: opts.name,
             stamp: opts.stamp,
             stdin: &mut stdin,
             stdout: &mut stdout,

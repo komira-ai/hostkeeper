@@ -328,49 +328,39 @@ fn a_release_without_its_macos_assets_is_refused_naming_each() {
 }
 
 #[test]
-fn an_hk_tarball_that_is_not_the_program_and_its_old_name_is_listed() {
-    // Catches: `release check` passing a command line tarball without `hk`, without the `hkctl`
-    // link, with a link to another target, with `hkctl` as a file, with another member besides
-    // them, or one that is no gzip tar archive; and a tarball that is
-    // absent being read.
+fn an_hk_tarball_that_is_not_exactly_the_file_hk_is_listed() {
+    // Catches: `release check` passing a command line tarball with no members, with another
+    // member beside `hk` (a link `hkctl`, a file, a directory), with `hk` as a link or a
+    // directory instead of a regular file, or one that is no gzip tar archive; and a tarball
+    // that is absent being read.
     use crate::release::fakes::{Member, tarball};
     let (dir, commit) = assets("check-hk-tarball");
     let verifier = FakeVerifier::good(&commit);
     let name = "hk-0.1.5-linux-arm64.tar.gz";
-    let wrong = |holds: &str| {
-        format!(
-            "{name} does not hold exactly the file `hk` and the symbolic link `hkctl` to `hk` \
-             (it holds {holds})"
-        )
-    };
-    let cases: [(Vec<Member<'_>>, &str); 6] = [
-        (vec![Member::File("hk", "x".into())], "hk (file)"),
-        (vec![Member::Link("hkctl", "hk")], "hkctl (link to hk)"),
+    let wrong =
+        |holds: &str| format!("{name} does not hold exactly the one file `hk` (it holds {holds})");
+    let cases: [(Vec<Member<'_>>, &str); 7] = [
+        (vec![], ""),
         (
-            vec![
-                Member::File("hk", "x".into()),
-                Member::Link("hkctl", "hkssh"),
-            ],
-            "hk (file), hkctl (link to hkssh)",
+            vec![Member::File("hk", "x".into()), Member::Link("hkctl", "hk")],
+            "hk (file), hkctl (link to hk)",
         ),
         (
             vec![
                 Member::File("hk", "x".into()),
-                Member::File("hkctl", "x".into()),
+                Member::File("other", "x".into()),
             ],
-            "hk (file), hkctl (file)",
+            "hk (file), other (file)",
         ),
+        (vec![Member::File("hkctl", "x".into())], "hkctl (file)"),
         (
-            vec![
-                Member::File("hk", "x".into()),
-                Member::Link("hkctl", "hk"),
-                Member::File("hkssh", "x".into()),
-            ],
-            "hk (file), hkctl (link to hk), hkssh (file)",
+            vec![Member::Link("hk", "elsewhere")],
+            "hk (link to elsewhere)",
         ),
+        (vec![Member::Dir("hk/")], "hk/ (type 5)"),
         (
-            vec![Member::Dir("hk/"), Member::Link("hkctl", "hk")],
-            "hk/ (type 5), hkctl (link to hk)",
+            vec![Member::File("hk", "x".into()), Member::Dir("dir/")],
+            "dir/ (type 5), hk (file)",
         ),
     ];
     for (members, holds) in cases {

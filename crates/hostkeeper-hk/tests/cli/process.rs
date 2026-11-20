@@ -1,4 +1,4 @@
-//! The built `hk` as a process: its `main`, the names it answers to, the environment it reads
+//! The built `hk` as a process: its `main`, the name it goes by, the environment it reads
 //! (the runner's two variables, `HOME`) and the programs it does not need.
 
 use std::ffi::OsString;
@@ -45,25 +45,25 @@ fn hk_os(rig: &Rig, program: &std::path::Path, args: &[OsString], env: &[(&str, 
         .expect("hk runs")
 }
 
-/// Proves: `main` prints the stamp of `--version` after the name the program is called by (`hk`,
-/// and `hkctl` through a link of that name), and a diagnostic starts with the name too; usage
-/// errors exit 2 and a call exits with the gateway's code.
+/// Proves: `main` prints `hk` and the stamp for `--version` and starts a diagnostic with `hk`
+/// whatever file name the program is run as (the binary itself, and a link named `other`); usage
+/// errors exit 2.
 #[test]
-fn the_program_answers_to_hk_and_to_its_old_name_hkctl() {
+fn the_program_is_hk_whatever_file_name_it_is_run_as() {
     let rig = Rig::new("process-names");
     let hk_path = std::path::PathBuf::from(env!("CARGO_BIN_EXE_hk"));
-    let link = rig.path("hkctl");
+    let link = rig.path("other");
     std::os::unix::fs::symlink(&hk_path, &link).expect("a link");
     let version = hostkeeper_hk::stamp::version();
-    for (program, name) in [(hk_path.as_path(), "hk"), (link.as_path(), "hkctl")] {
+    for (program, file) in [(hk_path.as_path(), "hk"), (link.as_path(), "other")] {
         let out = hk(&rig, program, &["--version"], &[]);
         assert_eq!(
             (
                 out.status.code(),
                 String::from_utf8_lossy(&out.stdout).into_owned()
             ),
-            (Some(0), format!("{name} {version}\n")),
-            "{name}"
+            (Some(0), format!("hk {version}\n")),
+            "{file}"
         );
         let out = hk(&rig, program, &["nosuch"], &[]);
         assert_eq!(
@@ -73,9 +73,9 @@ fn the_program_answers_to_hk_and_to_its_old_name_hkctl() {
             ),
             (
                 Some(2),
-                format!("{name}: no service nosuch; '{name} --help' lists them\n")
+                "hk: no service nosuch; 'hk --help' lists them\n".to_owned()
             ),
-            "{name}"
+            "{file}"
         );
         let out = hk(&rig, program, &[], &[]);
         assert_eq!(out.status.code(), Some(2));

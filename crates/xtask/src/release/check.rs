@@ -5,8 +5,8 @@
 //!    ([`asset_names`]);
 //! 2. `SHA256SUMS` has one `<sha256>  <name>` line per summed asset ([`summed_names`]), and each
 //!    digest is that of the file;
-//! 3. each `hk-<version>-<platform>.tar.gz` holds exactly two members: the regular file `hk` and
-//!    the symbolic link `hkctl` whose target is `hk` ([`hk_tarball_problems`]);
+//! 3. each `hk-<version>-<platform>.tar.gz` holds exactly one member: the regular file `hk`
+//!    ([`hk_tarball_problems`]);
 //! 4. the coordinator's image index is the one its two image tarballs make, byte for byte
 //!    ([`super::image_index`]): its SHA-256 is the digest of the image a registry serves;
 //! 5. each attested asset verifies twice, online and from its bundle, and every attestation
@@ -23,7 +23,7 @@ use flate2::read::GzDecoder;
 use tar::EntryType;
 
 use super::contract::{
-    Commit, HK, HKCTL, Platform, SUMS, Signer, Version, asset_names, attested_names, bundle_of,
+    Commit, HK, Platform, SUMS, Signer, Version, asset_names, attested_names, bundle_of,
     summed_names,
 };
 use super::image_index;
@@ -167,7 +167,7 @@ fn check_sums(
     Ok(())
 }
 
-/// Step 3: each `hk` tarball holds the program and the link of its old name, nothing else.
+/// Step 3: each `hk` tarball holds the program, the regular file `hk`, nothing else.
 /// A tarball that is absent is skipped (step 1 reported that); one that cannot be read is listed.
 fn check_hk_tarballs(
     dir: &Path,
@@ -187,8 +187,7 @@ fn check_hk_tarballs(
         match listing {
             Ok(found) if found == expected_members() => {}
             Ok(found) => problems.push(format!(
-                "{name} does not hold exactly the file `{HK}` and the symbolic link `{HKCTL}` to \
-                 `{HK}` (it holds {})",
+                "{name} does not hold exactly the one file `{HK}` (it holds {})",
                 found.join(", ")
             )),
             Err(e) => problems.push(format!("{name} is not a readable gzip tar archive: {e}")),
@@ -198,7 +197,7 @@ fn check_hk_tarballs(
 
 /// What an `hk` tarball holds, as [`members`] lists it, sorted.
 fn expected_members() -> Vec<String> {
-    vec![format!("{HK} (file)"), format!("{HKCTL} (link to {HK})")]
+    vec![format!("{HK} (file)")]
 }
 
 /// The members of the gzip tar archive `file`, each as `<path> (file)`, `<path> (link to <target>)`
