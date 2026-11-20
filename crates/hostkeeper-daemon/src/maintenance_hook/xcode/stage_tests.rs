@@ -6,8 +6,9 @@
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
-use std::fs;
+use std::fs::{self, DirBuilder};
 use std::io;
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -243,8 +244,10 @@ impl Mac {
         runner.answers(XIP, xip_making("Xcode.app", V27));
         runner.answers(CODESIGN, exits_zero());
         let clock: Arc<dyn Clock> = FakeClock::new();
+        let root = scratch(name);
+        fs::create_dir(root.path().join("Applications")).expect("the Applications directory");
         Mac {
-            root: scratch(name),
+            root,
             store: FakeStore::holding(ARCHIVE_BYTES, ARCHIVE_BYTES),
             runner,
             space: FakeSpace {
@@ -290,6 +293,14 @@ impl Mac {
             .collect();
         names.sort();
         names
+    }
+
+    /// The staging directory as the stage makes it: the test's user's, mode 0700.
+    fn trusted_staging(&self) {
+        DirBuilder::new()
+            .mode(0o700)
+            .create(self.path(STAGING))
+            .expect("the staging directory");
     }
 
     /// The host's file `path`, with `bytes`.
@@ -554,6 +565,7 @@ fn a_copy_left_by_an_interrupted_stage_resumes_from_its_length() {
     longer.extend_from_slice(b"more");
     for (left, first) in [(ARCHIVE_BYTES[..4].to_vec(), 4), (longer, 0)] {
         let mac = Mac::new("xcs-left");
+        mac.trusted_staging();
         mac.file(&archive, &left);
         assert_eq!(mac.run(std::slice::from_ref(&entry)), Ok(()), "{first}");
         assert_eq!(
@@ -835,6 +847,7 @@ fn a_staged_app_is_verified_again_and_not_fetched() {
     let entry = entry_of(ARCHIVE_BYTES);
     let app = format!("{STAGING}/{}/Xcode.app", entry.sha256);
     let mut mac = Mac::new("xcs-staged");
+    mac.trusted_staging();
     mac.file(&format!("{app}/Contents/version.plist"), V27);
     mac.space.free = Err("not to be read".to_owned());
     assert_eq!(mac.run(std::slice::from_ref(&entry)), Ok(()));
@@ -842,6 +855,7 @@ fn a_staged_app_is_verified_again_and_not_fetched() {
     assert_eq!(mac.runner.ran(), [mac.codesign_run(&app)]);
 
     let mac = Mac::new("xcs-staged-gone");
+    mac.trusted_staging();
     fs::create_dir_all(mac.path(&app)).expect("the app");
     assert_eq!(
         mac.run(&[entry]),
@@ -859,6 +873,7 @@ fn a_staged_app_is_verified_again_and_not_fetched() {
 #[test]
 fn what_is_not_an_entry_of_the_order_is_removed_from_staging() {
     let mac = Mac::new("xcs-leftovers");
+    mac.trusted_staging();
     mac.file(&format!("{STAGING}/{}/Xcode.app/x", "a".repeat(64)), b"old");
     mac.file(&format!("{STAGING}/stray"), b"stray");
     let entry = entry_of(ARCHIVE_BYTES);
@@ -876,13 +891,68 @@ fn an_order_with_no_xcode_stages_nothing() {
     assert!(mac.runner.ran().is_empty());
 }
 
-/// Proves: a staging directory that cannot be read (a file in its place) defers
-/// `xcode_staging_failed` and is removed.
+/// Proves: what stands at the staging directory's path and is not a directory only the stage's
+/// user can use (a link to another directory, a directory others can read, a file) is removed
+/// without being followed, the stage makes its own and stages the app; the link's target and
+/// what it holds are left as they were.
 #[test]
-fn a_staging_directory_that_cannot_be_read_defers() {
-    let mac = Mac::new("xcs-staging-file");
-    mac.file(STAGING, b"a file");
-    let refused = mac.run(&[entry_of(ARCHIVE_BYTES)]);
+fn a_staging_directory_the_stage_did_not_make_is_replaced_and_not_followed() {
+    let entry = entry_of(ARCHIVE_BYTES);
+    for case in ["link", "open", "file"] {
+        let mac = Mac::new("xcs-untrusted");
+        let target = mac.path("/elsewhere");
+        fs::create_dir(&target).expect("the target");
+        fs::write(target.join("kept"), b"kept").expect("a file in the target");
+        match case {
+            "link" => std::os::unix::fs::symlink(&target, mac.path(STAGING)).expect("the link"),
+            "open" => {
+                fs::create_dir(mac.path(STAGING)).expect("the directory");
+                fs::set_permissions(mac.path(STAGING), fs::Permissions::from_mode(0o755))
+                    .expect("its mode");
+                fs::write(mac.path(&format!("{STAGING}/stray")), b"x").expect("a file");
+            }
+            _ => mac.file(STAGING, b"a file"),
+        }
+        assert_eq!(mac.run(std::slice::from_ref(&entry)), Ok(()), "{case}");
+        assert_eq!(mac.names(STAGING), [entry.sha256.clone()], "{case}");
+        let meta = fs::symlink_metadata(mac.path(STAGING)).expect("the staging directory");
+        assert!(meta.is_dir(), "{case}");
+        assert_eq!(meta.permissions().mode() & 0o777, 0o700, "{case}");
+        assert_eq!(
+            fs::read(target.join("kept")).expect("kept"),
+            b"kept",
+            "{case}"
+        );
+        assert_eq!(mac.names("/elsewhere"), ["kept"], "{case}");
+    }
+}
+
+/// Proves: a staging directory that cannot be made (no `/Applications` to make it in), and an
+/// archive path that holds a directory, each defer `xcode_staging_failed` before anything is
+/// expanded.
+#[test]
+fn a_staging_directory_that_cannot_be_written_defers() {
+    let entry = entry_of(ARCHIVE_BYTES);
+    let mac = Mac::new("xcs-no-applications");
+    fs::remove_dir(mac.path(APPLICATIONS)).expect("no Applications");
+    let refused = mac.run(std::slice::from_ref(&entry));
+    assert_eq!(
+        refused,
+        deferral(
+            REASON_STAGING_FAILED,
+            &format!(
+                "cannot make {}: No such file or directory (os error 2)",
+                mac.path(STAGING).display()
+            )
+        )
+    );
+    assert!(mac.store.asked().is_empty());
+
+    let mac = Mac::new("xcs-archive-dir");
+    mac.trusted_staging();
+    let archive = mac.path(&format!("{STAGING}/{}/{ARCHIVE}", entry.sha256));
+    fs::create_dir_all(&archive).expect("a directory in the archive's place");
+    let refused = mac.run(std::slice::from_ref(&entry));
     assert!(
         matches!(
             refused,
@@ -894,5 +964,22 @@ fn a_staging_directory_that_cannot_be_read_defers() {
         "{refused:?}"
     );
     assert!(mac.store.asked().is_empty());
+    assert!(mac.runner.ran().is_empty());
     mac.assert_clean();
+}
+
+/// Proves: an order naming one archive twice is deferred `xcode_order_invalid` before the store
+/// is read.
+#[test]
+fn an_order_naming_one_archive_twice_defers() {
+    let mac = Mac::new("xcs-twice");
+    let entry = entry_of(ARCHIVE_BYTES);
+    assert_eq!(
+        mac.run(&[entry.clone(), entry.clone()]),
+        deferral(
+            REASON_ORDER_INVALID,
+            &format!("the order names the archive {} twice", entry.sha256)
+        )
+    );
+    assert!(mac.store.asked().is_empty());
 }

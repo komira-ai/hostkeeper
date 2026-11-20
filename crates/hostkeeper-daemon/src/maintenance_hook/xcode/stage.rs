@@ -31,7 +31,13 @@
 //! 10. **Signature.** `codesign --verify --deep --strict <app>` must exit 0. The app is then
 //!     renamed `<staging>/<sha256>/Xcode.app`.
 //!
-//! Whatever is in the staging directory and is not an entry of the order is removed first. Any
+//! The staging directory is taken only when it is a directory of the process's user (root) that
+//! nobody else can read or write; anything else in its place (a link an admin of the Mac put
+//! there, since `/Applications` is theirs to write) is removed without being followed, and the
+//! directory made again, mode 0700.
+//!
+//! Whatever is in the staging directory and is not an entry of the order is removed first. An
+//! order naming one archive twice is deferred `xcode_order_invalid`. Any
 //! step that does not succeed is [`KindError::Deferred`] (the host never left service) and the
 //! whole staging directory is removed. Each program runs as root by absolute path, with no
 //! standard input and only [`PROGRAM_ENV`] as its environment, killed at its deadline.
@@ -39,7 +45,7 @@
 use std::ffi::OsStr;
 use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{self, Read, Write};
-use std::os::unix::fs::DirBuilderExt;
+use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -164,8 +170,18 @@ impl Stage {
     }
 
     fn stage(&self, entries: &[XcodeEntry]) -> Result<(), KindError> {
-        for entry in entries {
+        for (at, entry) in entries.iter().enumerate() {
             check_entry(entry)?;
+            if entries[..at].iter().any(|seen| seen.sha256 == entry.sha256) {
+                return Err(deferred(
+                    REASON_ORDER_INVALID,
+                    format!("the order names the archive {} twice", entry.sha256),
+                ));
+            }
+        }
+        let staging = self.root.path(STAGING);
+        if !trusted(&staging) {
+            remove(&staging)?;
         }
         self.remove_others(entries)?;
         let mut plans = Vec::new();
@@ -228,7 +244,7 @@ impl Stage {
         }
         // A file an interrupted stage left is resumed; one longer than the archive is not it.
         let archive = dir.join(ARCHIVE);
-        let have = match fs::symlink_metadata(&archive) {
+        let have = match fs::symlink_metadata(archive) {
             Ok(meta) if meta.is_file() && meta.len() <= entry.size => meta.len(),
             _ => 0,
         };
@@ -269,7 +285,17 @@ impl Stage {
     /// disk.
     fn fetch_and_expand(&self, entry: &XcodeEntry, have: u64) -> Result<(), KindError> {
         let dir = self.entry_dir(entry);
-        make_dir(&self.root.path(STAGING))?;
+        let staging = self.root.path(STAGING);
+        make_dir(&staging)?;
+        if !trusted(&staging) {
+            return Err(deferred(
+                REASON_STAGING_FAILED,
+                format!(
+                    "{} is not a directory only this process's user can write",
+                    staging.display()
+                ),
+            ));
+        }
         make_dir(&dir)?;
         let expand = dir.join(EXPAND);
         remove(&expand)?;
@@ -289,7 +315,7 @@ impl Stage {
         let app = expand.join(&name);
         self.verify(entry, &format!("{}/{EXPAND}/{name}", entry_host_dir(entry)))?;
         let staged = dir.join(STAGED_APP);
-        fs::rename(&app, &staged).map_err(|error| staging_failed(&app, "rename", &error))?;
+        fs::rename(&app, staged).map_err(|error| staging_failed(&app, "rename", &error))?;
         remove(&expand)
     }
 
@@ -459,7 +485,6 @@ fn check_archive(entry: &XcodeEntry, path: &Path) -> Result<(), KindError> {
     let mut file = File::open(path).map_err(|error| staging_failed(path, "open", &error))?;
     let mut hash = Sha256::new();
     let mut size = 0_u64;
-    let mut head = Vec::new();
     let mut chunk = vec![0_u8; HASH_CHUNK];
     loop {
         let n = file
@@ -468,20 +493,21 @@ fn check_archive(entry: &XcodeEntry, path: &Path) -> Result<(), KindError> {
         if n == 0 {
             break;
         }
-        if head.len() < AEA_MAGIC.len() {
-            let take = (AEA_MAGIC.len() - head.len()).min(n);
-            head.extend_from_slice(&chunk[..take]);
-        }
         hash.update(&chunk[..n]);
         size += n as u64;
     }
     let digest = hex::encode(hash.finalize());
-    if size != entry.size || digest != entry.sha256 {
+    // The order's SHA-256 names the order's bytes, so a match is the order's size too.
+    if digest != entry.sha256 {
         return Err(mismatch(
             entry,
             &format!("the archive is {size} bytes with SHA-256 {digest}"),
         ));
     }
+    let mut head = Vec::new();
+    File::open(path)
+        .and_then(|file| file.take(AEA_MAGIC.len() as u64).read_to_end(&mut head))
+        .map_err(|error| staging_failed(path, "read", &error))?;
     if head == AEA_MAGIC {
         return Err(deferred(
             REASON_ARCHIVE_ENCRYPTED,
@@ -531,6 +557,17 @@ fn program_ok(ran: &io::Result<Ran>, what: &str, reason: &'static str) -> Result
         }
         _ => Err(deferred(reason, format!("{what} {ended}"))),
     }
+}
+
+/// Whether `path` is a directory (not a link to one) that this process's user owns and nobody
+/// else can read or write: what an admin of the Mac (`/Applications` is theirs to write) cannot
+/// have put in its place. A path that is not there is not trusted.
+fn trusted(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|meta| {
+        meta.is_dir()
+            && meta.uid() == rustix::process::geteuid().as_raw()
+            && meta.mode() & 0o077 == 0
+    })
 }
 
 /// Removes the file or the directory `path`, when it is there.

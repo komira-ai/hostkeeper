@@ -560,7 +560,7 @@ fn a_ranged_read_takes_only_a_206_and_a_404() {
 #[test]
 fn a_206_that_is_not_the_part_asked_for_is_malformed() {
     let bench = Bench::new("get-range-malformed");
-    let cases: [Vec<u8>; 11] = [
+    let cases: [Vec<u8>; 13] = [
         part_206("Content-Range: bytes 4-7/8", b"fgh"),
         part_206("Content-Range: bytes 5-6/8", b"fg"),
         part_206("Content-Range: bytes 5-9/10", b"fgh"),
@@ -582,6 +582,8 @@ fn a_206_that_is_not_the_part_asked_for_is_malformed() {
         part_206("Content-Range: bytes 5-7", b"fgh"),
         part_206("Content-Range: bytes 5/8", b"fgh"),
         part_206("Content-Range: bytes five-7/8", b"fgh"),
+        part_206("Content-Range: bytes 5-x/8", b"fgh"),
+        part_206("Content-Range: bytes 5-7/y", b"fgh"),
         raw(
             "HTTP/1.1 206 Partial Content",
             &["Content-Range: bytes 5-7/8"],
