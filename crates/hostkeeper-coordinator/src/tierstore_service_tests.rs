@@ -118,6 +118,7 @@ fn failed(target: &str) -> UpdateResult {
         reason: None,
         order_id: None,
         order_try: None,
+        detail: None,
     }
 }
 

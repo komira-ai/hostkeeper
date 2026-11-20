@@ -20,6 +20,7 @@ mod ctl_gen;
 const FILES: &[&str] = &[
     "hostkeeper/options.proto",
     "hostkeeper/agent/v1/agent.proto",
+    "hostkeeper/agent/v1/maintenance.proto",
     "hostkeeper/operator/v1/operator.proto",
     "hostkeeper/operator/v1/enrollment.proto",
     "hostkeeper/operator/v1/entry.proto",

@@ -59,6 +59,7 @@ pub(crate) fn failure(phase: Option<Phase>, class: Option<Class>, target: &str) 
         reason: None,
         order_id: None,
         order_try: None,
+        detail: None,
     });
     b
 }

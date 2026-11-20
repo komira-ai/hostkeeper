@@ -100,8 +100,8 @@ impl Bounds {
             Step::Verify => self.verify_secs,
             Step::Rollback => self.rollback_secs,
             Step::Cleanup => self.cleanup_secs,
-            // Not a step of an update: the runner never runs it, and it has no bound here.
-            Step::Uninstall => 0,
+            // Not steps of an update: the runner never runs them, and they have no bound here.
+            Step::Uninstall | Step::Drain | Step::Resume => 0,
         }
     }
 
@@ -844,7 +844,7 @@ impl StepRunner {
         last_line: Option<String>,
     ) -> Result<(), RunError> {
         let step = rec.step;
-        let report = Report::read(last_line.as_deref().unwrap_or(""));
+        let report = rec.progress.read_line(code, last_line.as_deref());
         let outcome = Outcome::from_exit(code);
         if rec.progress.watching.is_some() {
             self.watching(order, rec, outcome, &report);

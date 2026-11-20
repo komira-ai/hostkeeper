@@ -83,6 +83,8 @@ const SHAPE: &[(&str, &[&str])] = &[
             "verify_deadline_secs 4 uint64 -",
             "promotion_ceiling_secs 5 uint64 optional",
             "cleanup_retries 6 uint32 optional",
+            "drain 7 string optional",
+            "resume 8 string optional",
         ],
     ),
     (
@@ -249,6 +251,8 @@ fn manifest() -> release::Manifest {
         hook: Some(release::Hook {
             command: vec!["bin/tierstore".to_owned(), "update-hook".to_owned()],
             boot: Some("restore".to_owned()),
+            drain: Some("quiesce".to_owned()),
+            resume: Some("unquiesce".to_owned()),
             timeout_secs: Some(release::StepBounds {
                 prepare: 1,
                 cutover: 300,
@@ -443,18 +447,22 @@ fn an_absent_optional_of_a_manifest_stays_absent_and_a_zero_is_written() {
             read.package.clone(),
             read.health_url.clone(),
             hook.boot.clone(),
+            hook.drain.clone(),
+            hook.resume.clone(),
             hook.promotion_ceiling_secs,
             hook.cleanup_retries,
             hook.timeout_secs.expect("bounds").uninstall,
             read.installer_bounds,
         ),
-        (None, None, None, None, None, None, None)
+        (None, None, None, None, None, None, None, None, None)
     );
     let zero = release::Manifest {
         package: Some(String::new()),
         health_url: Some(String::new()),
         hook: Some(release::Hook {
             boot: Some(String::new()),
+            drain: Some(String::new()),
+            resume: Some(String::new()),
             promotion_ceiling_secs: Some(0),
             cleanup_retries: Some(0),
             timeout_secs: Some(release::StepBounds {
@@ -544,4 +552,52 @@ fn the_tags_of_an_entry_and_a_manifest_are_pinned_on_the_wire() {
         ..release::Manifest::default()
     };
     assert_eq!(floor.encode_to_vec(), [0x3a, 1, b'1']);
+}
+
+/// The hook as a reader built before `drain` and `resume` (fields 7 and 8) knew it.
+#[derive(Clone, PartialEq, prost::Message)]
+struct HookBeforeDrain {
+    #[prost(string, repeated, tag = "1")]
+    command: Vec<String>,
+    #[prost(string, optional, tag = "2")]
+    boot: Option<String>,
+    #[prost(message, optional, tag = "3")]
+    timeout_secs: Option<release::StepBounds>,
+    #[prost(uint64, tag = "4")]
+    verify_deadline_secs: u64,
+    #[prost(uint64, optional, tag = "5")]
+    promotion_ceiling_secs: Option<u64>,
+    #[prost(uint32, optional, tag = "6")]
+    cleanup_retries: Option<u32>,
+}
+
+/// Proves the drain and resume names are an additive change of the hook (rule B8): a reader that
+/// does not know them reads the hook it always read from bytes that carry them, and a hook
+/// written without them reads under the new schema with both absent.
+#[test]
+fn a_hook_with_drain_and_resume_reads_under_the_schema_before_them_and_the_reverse() {
+    let hook = manifest().hook.expect("a hook");
+    assert_eq!(hook.drain.as_deref(), Some("quiesce"));
+    assert_eq!(hook.resume.as_deref(), Some("unquiesce"));
+    let older = HookBeforeDrain::decode(round_trip(&hook).as_slice()).expect("decodes");
+    assert_eq!(
+        older,
+        HookBeforeDrain {
+            command: hook.command.clone(),
+            boot: hook.boot.clone(),
+            timeout_secs: hook.timeout_secs,
+            verify_deadline_secs: hook.verify_deadline_secs,
+            promotion_ceiling_secs: hook.promotion_ceiling_secs,
+            cleanup_retries: hook.cleanup_retries,
+        }
+    );
+    let newer = release::Hook::decode(older.encode_to_vec().as_slice()).expect("decodes");
+    assert_eq!(
+        newer,
+        release::Hook {
+            drain: None,
+            resume: None,
+            ..hook
+        }
+    );
 }

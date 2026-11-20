@@ -450,7 +450,10 @@ drain was never asked for is never held.
 
   **Making the account, with its Secure Token.** A Secure Token is granted only by a holder of one, here the administrator made at
   Setup Assistant, once per Mac. The bootstrap's settings (New keys beside the farm values, `docs/design/mac-bootstrap.md`) carry the
-  update account's name and password and that administrator's name and password; the bootstrap writes the update-account file, and the
+  update account's name and password and that administrator's name and password; the bootstrap writes the update-account file (Built:
+  `crates/hostkeeper-bootstrap/src/update_account.rs`, the keys `update_account_name`, `update_account_password`, `admin_name` and
+  `admin_password`, all four or none), and writes no copy of the administrator's password: the daemon is to read the two `admin_` keys from
+  the bootstrap's settings source at the start that makes the account (mac-bootstrap.md section 4). The
   daemon, at its next start, makes the account if it is missing: `sysadminctl -addUser hkupdate -password - -admin`, then
   `sysadminctl -secureTokenOn hkupdate -password - -adminUser <admin> -adminPassword -`, the passwords on standard input **[V]** (if
   `sysadminctl` reads `-` only from a terminal, the daemon gives it a pseudo-terminal it owns, never an argument), then hides it. The

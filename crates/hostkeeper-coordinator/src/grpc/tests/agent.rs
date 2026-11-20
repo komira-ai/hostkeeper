@@ -68,6 +68,7 @@ pub(super) fn request(
         operator_keys: None,
         prerequisites: None,
         bmc: None,
+        maintenance: None,
     }
 }
 
@@ -191,9 +192,10 @@ fn each_platform_has_its_json_name_and_an_unknown_one_has_none() {
 
 /// Proves a service entry with nothing but a name and a version is those two keys, and one with
 /// every fact is every key the JSON route has for it: a health, the last update (its outcome,
-/// phase, class, reason and order), the update running, its step, commit state and step
+/// phase, class, reason, order and detail), the update running, its step, commit state and step
 /// timings, the promotion, a deferral, and the try the step record holds. The facts that have no JSON key (a pin, an update's
-/// start, force, detail and log tail) are left out.
+/// start, force and log tail) are left out. Catches the hook's detail dropped on the way in: the
+/// JSON reader keeps it.
 #[test]
 fn a_service_entry_is_the_json_entry_of_its_facts() {
     assert_eq!(
@@ -244,6 +246,7 @@ fn a_service_entry_is_the_json_entry_of_its_facts() {
             "target": "3.1", "outcome": "failed", "phase": "after_commit",
             "class": "environment", "reason": "disk_tainted",
             "order_id": "update-0123456789abcdef0123456789abcdef", "order_try": 2,
+            "detail": "detail",
         },
         "updating": "3.2",
         "step": {"name": "verify", "attempt": 2},
@@ -269,7 +272,48 @@ fn a_service_entry_is_the_json_entry_of_its_facts() {
         listed[0].last_update.as_ref().and_then(|u| u.order_try),
         Some(2)
     );
+    assert_eq!(
+        listed[0]
+            .last_update
+            .as_ref()
+            .and_then(|u| u.detail.as_deref()),
+        Some("detail")
+    );
     assert_eq!(listed[0].record_try, Some(2));
+}
+
+/// Catches a detail longer than the coordinator keeps being stored whole: the gRPC verdict's
+/// detail of 512 bytes, the most a daemon sends, is read cut to `MAX_DETAIL_BYTES` at a
+/// character boundary, and a verdict without one is read without one.
+#[test]
+fn a_verdicts_detail_is_read_cut_to_the_coordinators_bound() {
+    use hostkeeper_wire::wire::MAX_DETAIL_BYTES;
+    let with = |detail: Option<String>| {
+        let mut one = entry("svc", "1.0");
+        one.health = proto::Health::Unhealthy as i32;
+        one.last_update = Some(proto::UpdateResult {
+            target: "1.0".to_owned(),
+            outcome: proto::Outcome::Failed as i32,
+            phase: proto::FailurePhase::Halt as i32,
+            reason: "state_invalid".to_owned(),
+            detail,
+            ..proto::UpdateResult::default()
+        });
+        let message = request(agent("hostkeeper-daemon", "1.0"), &["order-v1"], vec![one]);
+        let read = read_heartbeat(&beat_map::json(&message, None), None).expect("a heartbeat");
+        assert_eq!(read.services_dropped, None);
+        let listed = read.beat.services.expect("the services");
+        listed[0].last_update.clone().expect("the last update")
+    };
+    let long = format!("{}é{}", "x".repeat(MAX_DETAIL_BYTES - 1), "y".repeat(255));
+    assert_eq!(long.len(), 512);
+    let read = with(Some(long));
+    assert_eq!(read.detail, Some("x".repeat(MAX_DETAIL_BYTES - 1)));
+    assert_eq!(
+        read.reason.as_ref().map(|r| r.as_str()),
+        Some("state_invalid")
+    );
+    assert_eq!(with(None).detail, None);
 }
 
 /// Proves every enum reaches its JSON word, and an unset one or one the proto does not know

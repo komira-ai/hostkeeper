@@ -98,6 +98,7 @@ syntax = "proto3";
 package hostkeeper.agent.v1;
 
 import "hostkeeper/options.proto";
+import "hostkeeper/agent/v1/maintenance.proto";
 import "hostkeeper/release/v1/release.proto";
 
 service Coordinator {
@@ -163,8 +164,10 @@ message HeartbeatRequest {
   // which asks for `HeartbeatResponse.operator_keys`, writes them to the managed block of the
   // host's login account's `authorized_keys` and reports `operator_keys`,
   // `prerequisites-v1`, which asks for `HeartbeatResponse.prerequisites`, makes sure of them on
-  // the host and reports `prerequisites`, and `ssh-v1`, which asks for `HeartbeatResponse.ssh`,
-  // sets up the host's sshd to trust the certificates it names and reports `ssh`):
+  // the host and reports `prerequisites`, `ssh-v1`, which asks for `HeartbeatResponse.ssh`,
+  // sets up the host's sshd to trust the certificates it names and reports `ssh`, and
+  // `maintenance-v1`, which reports `maintenance` and takes `Maintain`, announced, like `ssh-v1`,
+  // only once advertised):
   // at most 32, each 1 to 32 bytes of `[a-z0-9-]`, none twice; at most 16 to a coordinator that
   // does not advertise `ssh-v1` (a coordinator of a release before it drops a longer list
   // whole), so an agent announces `ssh-v1` only once the coordinator advertised it. An agent
@@ -242,6 +245,10 @@ message HeartbeatRequest {
   // predates it. A report that breaks a rule of `BmcReport` is dropped and the coordinator keeps
   // the last one it read; a heartbeat without one leaves the one kept as it is.
   optional BmcReport bmc = 17;
+  // What the host runs, what is due on it and the maintenance run it holds (maintenance.proto).
+  // For a daemon that announces `maintenance-v1`, over gRPC only; this release sends and reads
+  // none.
+  optional MaintenanceReport maintenance = 18;
 }
 
 // The LAN settings of a host's BMC, as the daemon read them from the BMC (Get LAN Configuration
@@ -828,6 +835,9 @@ message Order {
     // an absent one and one of a newer schema are refused `record_reads` and not touched. Only for
     // a daemon that announced `clear-record-v1`.
     ClearRecord clear_record = 10;
+    // Run, retry or put back the host's turn of a maintenance run (maintenance.proto). Only for a
+    // daemon that announced `maintenance-v1`; this release's daemon runs none.
+    Maintain maintain = 11;
   }
 }
 
