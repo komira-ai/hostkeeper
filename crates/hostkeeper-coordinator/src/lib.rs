@@ -139,6 +139,7 @@ mod bmc_report;
 pub mod canary;
 pub mod clear_record;
 pub mod config;
+pub mod config_xcode;
 pub(crate) mod console;
 pub mod converge;
 pub mod decide;
@@ -178,6 +179,15 @@ pub mod lock;
 pub mod login;
 pub(crate) mod login_routes;
 pub(crate) mod macos_resolve;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the maintenance runs read it; until they are built only its tests call it"
+    )
+)]
+pub(crate) mod maintenance_effective;
+pub(crate) mod maintenance_policy;
 pub mod membership;
 pub(crate) mod moving;
 pub mod operate;
@@ -245,6 +255,8 @@ pub(crate) mod version_route;
 pub(crate) mod wait;
 pub(crate) mod websocket;
 pub(crate) mod write_record;
+pub(crate) mod xcode_feed;
+pub(crate) mod xcode_files;
 
 #[cfg(test)]
 mod agent_service_tests;
@@ -374,6 +386,8 @@ mod host_group_list_tests;
 mod host_group_move_tests;
 #[cfg(test)]
 mod host_group_proto_tests;
+#[cfg(test)]
+mod host_group_put_maintenance_tests;
 #[cfg(test)]
 mod host_group_put_policy_tests;
 #[cfg(test)]
@@ -577,3 +591,5 @@ mod verdict_acks_tests;
 mod verdict_file_tests;
 #[cfg(test)]
 mod version_route_tests;
+#[cfg(test)]
+mod xcode_job_tests;

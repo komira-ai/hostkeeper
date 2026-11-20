@@ -81,6 +81,7 @@ fn fell_back(target: &str) -> UpdateResult {
         reason: Token::parse("self_update_fallback"),
         order_id: None,
         order_try: None,
+        detail: None,
     }
 }
 

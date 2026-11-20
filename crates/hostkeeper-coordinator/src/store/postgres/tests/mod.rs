@@ -368,6 +368,8 @@ mod ssh_book;
 mod start;
 pub(crate) mod store;
 mod unused_mdm_tables;
+mod xcode_jobs;
+mod xcode_rows;
 
 /// What the process logged since it started, as the tests' subscriber wrote it.
 static LOG: Mutex<Vec<u8>> = Mutex::new(Vec::new());

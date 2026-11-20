@@ -844,7 +844,7 @@ impl StepRunner {
         last_line: Option<String>,
     ) -> Result<(), RunError> {
         let step = rec.step;
-        let report = Report::read(last_line.as_deref().unwrap_or(""));
+        let report = rec.progress.read_line(code, last_line.as_deref());
         let outcome = Outcome::from_exit(code);
         if rec.progress.watching.is_some() {
             self.watching(order, rec, outcome, &report);

@@ -26,6 +26,11 @@ githubapp.com
 # declares (http://www.apple.com/DTDs/PropertyList-1.0.dtd).
 apple.com
 
+# The Xcode Releases site, whose list of Xcode releases (https://xcodereleases.com/data.json) the
+# coordinator's `--xcode-feed-url` names as its value (crates/hostkeeper-coordinator,
+# src/xcode_feed.rs).
+=xcodereleases.com
+
 # Canonical's release sites, which the network boot sets are pinned from
 # (packaging/netboot/pins.toml: releases.ubuntu.com, cdimage.ubuntu.com), and the Ubuntu archive
 # its README checks the pinned packages against (archive.ubuntu.com, ports.ubuntu.com).

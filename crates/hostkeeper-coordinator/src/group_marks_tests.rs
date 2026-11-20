@@ -416,6 +416,7 @@ fn forgetting_verdicts_leaves_another_groups_hosts() {
             reason: None,
             order_id: None,
             order_try: None,
+            detail: None,
         });
         beat
     };

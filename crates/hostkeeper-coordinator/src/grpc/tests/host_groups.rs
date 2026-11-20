@@ -244,7 +244,8 @@ async fn ci_and_no_token_are_refused_by_each_call_on_both_wires() {
 enum Req {
     List(proto::ListHostGroupsRequest),
     Get(proto::GetHostGroupRequest),
-    Put(proto::PutHostGroupRequest),
+    /// Boxed: the policy makes a `Put` far larger than the other requests.
+    Put(Box<proto::PutHostGroupRequest>),
     Remove(proto::RemoveHostGroupRequest),
     Move(proto::MoveHostRequest),
 }
@@ -255,7 +256,7 @@ impl Req {
         match self {
             Self::List(r) => (LIST, wired.refused(wire, LIST, Some(OPERATOR), r).await),
             Self::Get(r) => (GET, wired.refused(wire, GET, Some(OPERATOR), r).await),
-            Self::Put(r) => (PUT, wired.refused(wire, PUT, Some(OPERATOR), r).await),
+            Self::Put(r) => (PUT, wired.refused(wire, PUT, Some(OPERATOR), &**r).await),
             Self::Remove(r) => (REMOVE, wired.refused(wire, REMOVE, Some(OPERATOR), r).await),
             Self::Move(r) => (MOVE, wired.refused(wire, MOVE, Some(OPERATOR), r).await),
         }
@@ -326,53 +327,53 @@ async fn every_refusal_of_every_call_is_its_status_on_both_wires() {
             token(not_found, "unknown_host_group"),
         ),
         (
-            Req::Put(put("Beta", &[SELF], None)),
+            Req::Put(Box::new(put("Beta", &[SELF], None))),
             token(invalid, "invalid_host_group"),
         ),
         (
-            Req::Put(put("beta", &[], None)),
+            Req::Put(Box::new(put("beta", &[], None))),
             token(precondition, "hostkeeper_not_listed"),
         ),
         (
-            Req::Put(put("beta", &["svc"], None)),
+            Req::Put(Box::new(put("beta", &["svc"], None))),
             token(precondition, "hostkeeper_not_listed"),
         ),
         (
-            Req::Put(put("beta", &many, None)),
+            Req::Put(Box::new(put("beta", &many, None))),
             token(invalid, "too_many_packages"),
         ),
         (
-            Req::Put(put("beta", &[SELF, "bad name"], None)),
+            Req::Put(Box::new(put("beta", &[SELF, "bad name"], None))),
             token(invalid, "invalid_package"),
         ),
         (
-            Req::Put(put("beta", &[SELF, "svc", "svc"], None)),
+            Req::Put(Box::new(put("beta", &[SELF, "svc", "svc"], None))),
             token(invalid, "invalid_package"),
         ),
         (
-            Req::Put(put_policy(|policy| policy.min_up = 10_001)),
+            Req::Put(Box::new(put_policy(|policy| policy.min_up = 10_001))),
             token(invalid, "invalid_policy"),
         ),
         (
-            Req::Put(put("alpha", &[SELF], None)),
+            Req::Put(Box::new(put("alpha", &[SELF], None))),
             token(precondition, "generation_mismatch"),
         ),
         (
-            Req::Put(put("beta", &[SELF], Some(1))),
+            Req::Put(Box::new(put("beta", &[SELF], Some(1)))),
             token(precondition, "generation_mismatch"),
         ),
         (
-            Req::Put(proto::PutHostGroupRequest {
+            Req::Put(Box::new(proto::PutHostGroupRequest {
                 reason: String::new(),
                 ..put("beta", &[SELF], None)
-            }),
+            })),
             token(invalid, "invalid_request"),
         ),
         (
-            Req::Put(proto::PutHostGroupRequest {
+            Req::Put(Box::new(proto::PutHostGroupRequest {
                 host_group: None,
                 ..put("beta", &[SELF], None)
-            }),
+            })),
             token(invalid, "invalid_request"),
         ),
         (
@@ -417,7 +418,7 @@ async fn every_refusal_of_every_call_is_its_status_on_both_wires() {
             (audit_failure, token(Code::Unavailable, "audit_unavailable")),
         ] {
             wired.fake.refuse(move |_| Some(failure()));
-            let (_, got) = Req::Put(put("beta", &[SELF], None))
+            let (_, got) = Req::Put(Box::new(put("beta", &[SELF], None)))
                 .refused(&wired, wire)
                 .await;
             assert_eq!(got, want, "{wire:?}");

@@ -839,7 +839,7 @@ sequenceDiagram
 | `--migrate-ddl-lock-timeout-ms` | 3000 | `lock_timeout` of a migration transaction: a DDL that cannot get its lock rolls the migration back |
 | `--migrate-retry-secs`, `--migrate-attempts` | 5, 6 | the wait between and number of attempts of a rolled-back migration before the instance exits |
 | `--job-tick-secs` | 5 | how often an instance claims due periodic jobs (section 9; Built, M8) |
-| `--job-every name=secs` (repeatable) | `alerts=15`, `request-expiry=15`, `prune=3600` | the period of each periodic job (Built, M8) |
+| `--job-every name=secs` (repeatable) | `alerts=15`, `request-expiry=15`, `prune=3600`, `xcode-feed=86400` (claimed only with `--xcode-feed-url`) | the period of each periodic job (Built, M8) |
 | `--connection-max-age-secs` | 300 | a server-side maximum age of an agent connection, besides TCP keep-alive |
 | existing: `--quiet-secs` (floor in `config.rs:512`), `--tls-reload-secs` | unchanged | the cluster's quiet rule uses `--quiet-secs` |
 
