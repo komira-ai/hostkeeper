@@ -15,6 +15,9 @@ Every `hk` call takes the endpoint, the CA file and the token of [cli.md](cli.md
 No call installs, updates or switches a version, and none lifts a halt: a halt is lifted only by the
 coordinator's `clear_halt` order.
 
+To switch a service back with the coordinator out of reach, root runs `hostkeeper activate` on the
+host itself: [Roll a service back on the host](#roll-a-service-back-on-the-host).
+
 ## Status
 
 ```
@@ -101,6 +104,50 @@ When the link is down, root works on the host itself.
   read: a record that reads is an update in progress. Then start the daemon again
   (`systemctl start hostkeeper`; on a Mac `launchctl bootstrap system
   /Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist`).
+
+## Roll a service back on the host
+
+With the coordinator or the network down, root switches a service to a version the host keeps,
+fetching nothing, and can pin it there so that the coordinator's orders wait until root says
+otherwise. A host keeps `current`, `previous`, the pinned version and the newest
+`--keep-versions` others of each service (see the README's "The versions a host keeps").
+
+1. Stop the daemon: `systemctl stop hostkeeper` on Linux, `rc-service hostkeeper stop` under
+   OpenRC, `launchctl bootout system/dev.hostkeeper.hostkeeper` on a Mac. `activate` takes the
+   daemon's lock and refuses to run beside it, naming its pid (exit status 4).
+2. Switch, and pin:
+
+   ```
+   hostkeeper activate --service <service> --version <version> --pin
+   ```
+
+   It prints `<service>: <version> is current, <left> previous, pinned at <version>`. A version the
+   host does not keep is refused `not_kept`, with the versions it keeps; one whose files changed
+   since it was staged is refused `release_unreadable`. Nothing of the version left is run: its
+   units are stopped by name, and the version switched to is installed from its own directory.
+   When its units do not start, `activate` says `failed: start_failed` and leaves the host on that
+   version: run `activate` again to another kept version. Pass the daemon's `--config`,
+   `--state-dir` and `--packages-dir` when its unit gives others than the defaults.
+3. Start the daemon again (`systemctl start hostkeeper`, `rc-service hostkeeper start`, or on a Mac
+   `launchctl bootstrap system /Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist`). If
+   `activate` was stopped half-way, by a crash or a power cut, the daemon's start finishes the switch.
+
+While the pin stands, the daemon defers every order of the coordinator that would change the
+service (an update, a rollback, an install, an uninstall or a force to another version), and the
+coordinator shows the deferral's reason, `pinned`. `hk hosts get` shows the version the host runs.
+
+- `hostkeeper unpin --service <service>` removes the pin; the coordinator's next order runs, after
+  the backoff of its deferrals (at most an hour). The daemon may run meanwhile.
+- `hostkeeper pin --service <service> --version <version>` pins without switching, for a version
+  the host keeps.
+- A coordinator force to the pinned version (`hk releases force`) removes the pin and hands the
+  service back to the coordinator.
+
+The pin is the file `/var/lib/updater/pins/<service>` (beside the daemon's `--state-dir`): the
+version and one newline, mode 0600, root's. A file there that is a link, another account's or
+writable by group or others is not a pin: the daemon follows the coordinator and logs the alert
+`not_a_pin`. A file of root's that names no version holds the service all the same
+(`pin_unreadable`) until it is fixed or removed.
 
 ## Hosts that have not updated yet
 

@@ -1,6 +1,8 @@
 //! The command line of the `hostkeeper` binary: `hostkeeper daemon` and its flags, and
 //! `hostkeeper maintenance-hook`, the maintenance hook the daemon runs as a step
-//! ([`crate::maintenance_hook`]), which exits with the hook contract's codes.
+//! ([`crate::maintenance_hook`]), which exits with the hook contract's codes; and the verbs root
+//! runs on the host itself with the coordinator out of reach, `hostkeeper activate`, `pin` and
+//! `unpin` ([`crate::local`], which says their exit statuses).
 //! Configuration comes in as flags only, never from the environment (AGENTS.md S2); every
 //! default is a constant here.
 //!
@@ -156,6 +158,9 @@ pub enum Command {
     /// Run a step of the maintenance hook: the OS work of a maintenance run, which the daemon
     /// runs as it runs a hook's step.
     MaintenanceHook(HookArgs),
+    /// `activate`, `pin` and `unpin`: what root runs on the host itself ([`crate::local`]).
+    #[command(flatten)]
+    Local(crate::local::LocalVerb),
 }
 
 /// The flags of `hostkeeper daemon`.
@@ -314,6 +319,7 @@ pub fn run_with(cli: Cli, systemd: SystemdVars) -> ExitCode {
         Command::MaintenanceHook(args) => {
             return ExitCode::from(crate::maintenance_hook::host_main(&args));
         }
+        Command::Local(verb) => return ExitCode::from(crate::local::main(verb)),
     };
     let period = flags.link.heartbeat_secs;
     let watchdog = watchdog(&flags, &systemd);

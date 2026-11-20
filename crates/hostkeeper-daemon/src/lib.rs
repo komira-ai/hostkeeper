@@ -18,7 +18,8 @@
 //!   and the standing halt, runs no hook, and switches the service under its lock alone, through
 //!   the installer of its version ([`verbs::force`]).
 //!   `uninstall` runs the sequence of design section 4.7 ([`uninstall`]), resumed from its
-//!   tombstone in `placed.json`.
+//!   tombstone in `placed.json`. Before any of these, a service's pin ([`pin`]) defers every
+//!   order that would change what it runs.
 //! - [`selfupdate`]: the update of hostkeeper itself (design section 6.6): an `update` of the
 //!   service `hostkeeper` refused while another service's update is unfinished, its new binary's
 //!   release judged against the daemon's oldest reader, its steps run under the step lock (built
@@ -104,8 +105,11 @@
 //! - [`observer`]: what [`Daemon::status`] reports of a running service.
 //! - [`node`]: the host's enrollment and the heartbeat loop's link, as the loops last wrote them,
 //!   which [`Daemon::status`] reports besides the services.
-//! - [`cli`]: `hostkeeper daemon` and its flags, and `hostkeeper maintenance-hook`; the binary
-//!   only forwards to it.
+//! - [`cli`]: `hostkeeper daemon` and its flags, `hostkeeper maintenance-hook`, and the verbs
+//!   root runs on the host itself; the binary only forwards to it.
+//! - [`local`]: `hostkeeper activate`, `pin` and `unpin`, run by root with the daemon stopped:
+//!   a force to a version the host keeps, with no fetch ([`verbs::force::activate()`]), and the
+//!   pin that holds the coordinator's orders for a service.
 //! - [`maintenance_hook`]: `hostkeeper maintenance-hook <prepare|cutover|verify>`, the OS work of
 //!   a maintenance run: the parameters of the run's `maintain` order, the work of each kind
 //!   (`macos`, `xcode`, `linux`, `reboot`) found by the host's platform, the reboot recorded
@@ -161,6 +165,7 @@ pub mod layout;
 pub mod line_process;
 pub mod link_adapters;
 pub mod links;
+pub mod local;
 pub mod locks;
 pub mod login_account;
 pub mod mac;

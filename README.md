@@ -172,7 +172,7 @@ only, never from the environment:
 | `--notify-systemd` | off | once the boot work is over, send `READY=1` to the notify socket systemd sets for a `Type=notify` unit; without that socket the daemon exits 1 |
 | `--ready-file <file>` | none | once the boot work is over, write the file with the daemon's pid: the readiness notice the OpenRC init script removes before a start and waits for after; not with `--notify-systemd` |
 | `--package-lock-wait-secs` | `300` | seconds a step of the repository installer (`apt`) waits at most for the host's package manager's lock, from 1 to 3600: apt's own wait (`DPkg::Lock::Timeout`) for an install, a try every 2 seconds for `dpkg --purge` and `apt-mark`, whose wait is logged (`alert=lock_wait`) at its start and every 30 seconds (apt's own wait is not); a lock still held then defers the order (`package_manager_busy`), which halts nothing |
-| `--keep-versions` | `4` | how many versions of each service the host keeps besides `current`, `previous`, the one its pin names and the ones an unfinished update or force still uses, from 0 to 32: the newest, by the time each was staged. The pin is the file `pins/<service>` beside the state directory (`/var/lib/updater/pins/<service>`): one version, with one newline or none; a pin that cannot be read or holds anything else deletes nothing and is the alert `prune_failed`. The prune after a confirmed switch deletes the rest, and nothing while an update of the service is on trial |
+| `--keep-versions` | `4` | how many versions of each service the host keeps besides `current`, `previous`, the one its pin names and the ones an unfinished update or force still uses, from 0 to 32: the newest, by the time each was staged. The pin is the file `pins/<service>` beside the state directory (`/var/lib/updater/pins/<service>`): one version, with one newline or none, which root writes with `hostkeeper pin`; a pin that cannot be read, holds anything else or is not root's regular file closed to group and others deletes nothing and is the alert `prune_failed`. The prune after a confirmed switch deletes the rest, and nothing while an update of the service is on trial |
 | `--maintenance-linux-scope` | `security` | which Linux updates the host reports due in its heartbeat (`maintenance-v1`): `security`, security updates and newer kernels; `all`, every update. A package of hostkeeper's own is never reported; the flag applies to a Linux host alone |
 | `--maintenance-macos-major` | off | on a Mac, report the newest major upgrade of macOS due in the heartbeat (`maintenance-v1`), from `softwareupdate --list` and `--list-full-installers`; off, a major upgrade is never due, though `softwareupdate` lists it, and only the minor updates it lists are. A Linux host ignores it |
 | `--heartbeat-secs` | `15` | seconds between two heartbeats, at least 1; the end of a running order is reported within a second, without waiting for the period |
@@ -231,7 +231,10 @@ The daemon has two operator verbs besides the update orders, `abort` and `clear_
 reach it as orders in a heartbeat reply (`hk hosts abort`, `hk hosts clear-record`); the
 daemon serves no socket. With the coordinator unreachable, root stops the daemon and, for a record,
 renames it by hand ([docs/admin.md](docs/admin.md)). Neither verb installs, updates or switches a
-version, and neither lifts a halt.
+version, and neither lifts a halt. To switch a version with the coordinator unreachable, root
+stops the daemon and runs `hostkeeper activate` on the host, and `hostkeeper pin` and
+`hostkeeper unpin` hold and release the coordinator's orders for a service
+([docs/admin.md](docs/admin.md#roll-a-service-back-on-the-host)).
 
 - `abort <service>` stops the service's running step and ends its update. The daemon asks the
   update's runner to launch nothing more (no `rollback`, no `cleanup`), stops the unit of the
@@ -304,17 +307,20 @@ to 12, before the commit up to the switch and after it from then on), `daemon_re
 (step 13) or `start_failed` (steps 14 and 15, blamed on the release). After a failure the host
 stays where it is: nothing is rolled back and the daemon does not try again. The repair is a
 second force, for instance to the version `previous` names, which is on the host and needs no
-fetch.
+fetch. With the coordinator out of reach, root runs the same switch on the host itself,
+`hostkeeper activate`, to any version the host keeps, and can pin the service there
+([docs/admin.md](docs/admin.md#roll-a-service-back-on-the-host)).
 
 ## The versions a host keeps
 
 A host keeps, of each service, the version `current` names and the one `previous` names, so a
 rollback to `previous` is a local switch with no fetch; the version its pin names
-(`/var/lib/updater/pins/<service>`, one version and at most one newline); and the newest
+(`/var/lib/updater/pins/<service>`, one version and at most one newline, which root writes with
+`hostkeeper pin` or `hostkeeper activate --pin`); and the newest
 `--keep-versions` others (4 by default, 0 to 32), newest by the time each was staged. Only a
 whole version (its directory and its seal) is kept for being new; anything else is fetched
-again. A pin that cannot be read, or holds anything but a version, deletes nothing and is the
-alert `prune_failed`. After a confirmed switch (an update that ends
+again. A pin that cannot be read, holds anything but a version, or is not root's regular file
+closed to group and others, deletes nothing and is the alert `prune_failed`. After a confirmed switch (an update that ends
 `Succeeded`, `promotion_pending` or not, or a force that moved `current`, whatever its verdict)
 the daemon deletes every other version directory of the service, with its seal, under the
 service's lock and no other. It keeps the target of the switch, and anything a record says is
