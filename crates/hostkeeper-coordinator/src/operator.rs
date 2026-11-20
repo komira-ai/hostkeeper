@@ -112,7 +112,8 @@ refusals!(
     LayoutRefusal,
     SshRefusal,
     ConsoleRefusal,
-    XcodeRefusal
+    XcodeRefusal,
+    MaintenanceRefusal
 );
 
 changing!(
@@ -125,7 +126,8 @@ changing!(
     UsersRefusal,
     ApiTokensRefusal,
     LayoutRefusal,
-    XcodeRefusal
+    XcodeRefusal,
+    MaintenanceRefusal
 );
 
 /// `Audit` only reads: a log that cannot be read is `store_failed`.

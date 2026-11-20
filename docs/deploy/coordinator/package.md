@@ -171,6 +171,11 @@ unit: under `/var/lib/hostkeeper-coordinator`, which the unit may write, as in t
 several coordinators, every instance mounts the same directory. `xcode-max-bytes` (21474836480, 20 GiB; at
 least 1) is the most bytes of one archive ([xcode-releases.md](../../operations/xcode-releases.md)).
 
+`macos-update-via` (default `daemon`) is how a Mac's macOS update of a maintenance run is applied: `daemon`, the
+Mac's own daemon installing it. It is the only value this build takes. `apple-business`, device management
+installing the update after the drain, is refused at start with exit 2, because Apple Business offers no call that
+installs an update on one Mac; any other value is refused too.
+
 ## Starting it
 
 ```sh

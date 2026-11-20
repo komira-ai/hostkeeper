@@ -296,6 +296,7 @@ fn a_maintenance_table_is_written_in_the_state_file_and_read_back() {
 /// pair at its default.
 fn ops_with_marks() -> OpsState {
     let mut state = rich_ops();
+    state.maintenance_runs.clear();
     state.host_groups.0.insert(
         "web".parse().expect("a name"),
         BTreeMap::from([
@@ -365,6 +366,7 @@ fn an_ops_file_with_group_marks_is_refused_by_the_release_before_and_read_back()
 
     let calm = scratch("files-host-groups-ops-calm");
     let mut defaults = rich_ops();
+    defaults.maintenance_runs.clear();
     defaults.host_groups.0.insert(
         "web".parse().expect("a name"),
         BTreeMap::from([("hostkeeper".to_owned(), GroupMarks::default())]),
@@ -418,6 +420,7 @@ fn a_record_and_an_audit_entry_of_a_group_are_written_with_it_and_read_back() {
     entry.reason = Some("from db".to_owned());
     let line = AuditLine::of(&entry, 1_800_000_000);
     let mut after = rich_ops();
+    after.maintenance_runs.clear();
     after.inventory[1].host_group = "web".to_owned();
     after.audit = vec![entry.clone()];
     commit_ops(&files, &after, std::slice::from_ref(&line));
@@ -446,6 +449,7 @@ fn a_record_and_an_audit_entry_of_a_group_are_written_with_it_and_read_back() {
 
     let plain = scratch("files-host-groups-record-plain");
     let mut none = rich_ops();
+    none.maintenance_runs.clear();
     none.audit = vec![AuditEntry {
         host_group: None,
         ..entry
