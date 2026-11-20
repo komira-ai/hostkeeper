@@ -68,7 +68,10 @@ impl Look<'_> {
 /// What one collector found: the facts of the report it gives. The look joins the sections in
 /// the collectors' order: a host text a section leaves empty (and a boot time it leaves 0) is
 /// taken from the others, the first that is not empty winning; the lists are joined in order;
-/// the Mac facts are the last section's that has any; the unparsed lines are added up.
+/// the Mac facts are joined field by field, each taken from the first section that gives it (a
+/// FileVault state other than unspecified, `authrestart_supported` true, a free size, an update
+/// account, Command Line Tools) and the device-management conflicts joined in order, each once;
+/// the unparsed lines are added up.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Section {
     /// What the host runs, as far as this collector reads it.
@@ -166,6 +169,27 @@ impl HostRoot {
             .map(|entry| entry.file_name().to_string_lossy().into_owned())
             .collect())
     }
+}
+
+/// The directory of a Mac's applications, where its Xcodes are.
+pub const APPLICATIONS: &str = "/Applications";
+
+/// The names of the Xcodes in [`APPLICATIONS`] under `root`: each directory whose name starts
+/// with `Xcode` and ends with `.app`, sorted by name; none when there is no [`APPLICATIONS`].
+///
+/// # Errors
+/// Why [`APPLICATIONS`] could not be read.
+pub fn xcode_apps(root: &HostRoot) -> Result<Vec<String>, String> {
+    if !root.exists(APPLICATIONS) {
+        return Ok(Vec::new());
+    }
+    let mut names: Vec<String> = root
+        .dirs_in(APPLICATIONS)?
+        .into_iter()
+        .filter(|name| name.starts_with("Xcode") && name.ends_with(".app"))
+        .collect();
+    names.sort();
+    Ok(names)
 }
 
 /// Runs `tool` with `args` (`what` names the step) and gives its exit code and standard output

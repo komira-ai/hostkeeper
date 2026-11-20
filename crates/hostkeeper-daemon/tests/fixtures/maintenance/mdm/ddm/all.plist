@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>SUCorePersistedStatePolicyFields</key>
+	<dict>
+		<key>SUCoreDDMDeclarationGlobalSettings</key>
+		<dict>
+			<key>Deferrals</key>
+			<integer>3</integer>
+			<key>adminInstallRequired</key>
+			<false/>
+			<key>automaticallyDownload</key>
+			<false/>
+			<key>automaticallyInstallOSUpdates</key>
+			<true/>
+			<key>automaticallyInstallSystemAndSecurityUpdates</key>
+			<false/>
+			<key>beta</key>
+			<true/>
+			<key>enableGlobalNotifications</key>
+			<true/>
+			<key>enableRapidSecurityResponse</key>
+			<true/>
+			<key>enableRapidSecurityResponseRollback</key>
+			<true/>
+			<key>serializedKeys</key>
+			<array>
+				<string>notifications</string>
+			</array>
+		</dict>
+		<key>SUCoreDDMDeclarations</key>
+		<array>
+			<dict>
+				<key>Identifier</key>
+				<string>enforcement</string>
+				<key>Payload</key>
+				<dict>
+					<key>TargetLocalDateTime</key>
+					<date>2026-12-01T08:00:00Z</date>
+					<key>TargetOSVersion</key>
+					<string>26.2</string>
+				</dict>
+			</dict>
+		</array>
+	</dict>
+</dict>
+</plist>

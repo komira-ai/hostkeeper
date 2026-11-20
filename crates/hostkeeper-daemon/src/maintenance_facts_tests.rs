@@ -208,8 +208,8 @@ fn the_first_report_starts_a_look_and_is_the_default_until_it_ends() {
 }
 
 /// Proves the sections join as the module says: the host texts the first section that has one
-/// wins, the boot time likewise, each text is kept to its bound; the Mac facts are the last
-/// section's that has any; the Xcodes and the unparsed lines (saturating) add up; the due items
+/// wins, the boot time likewise, each text is kept to its bound; the Mac facts join field by
+/// field; the Xcodes and the unparsed lines (saturating) add up; the due items
 /// are the reboots first (a reboot named twice kept once, the first), then the security updates,
 /// then the rest, each group in the order found, at most 12 with the count of the rest, and an
 /// item's texts kept to their bounds.
@@ -597,4 +597,95 @@ fn only_a_host_with_a_collector_has_maintenance_facts() {
         .map(|item| item.label)
         .collect();
     assert_eq!(labels, ["openssl"]);
+}
+
+fn mac_section(mac: Option<pb::MacUpdateFacts>) -> Section {
+    Section {
+        mac,
+        ..Section::default()
+    }
+}
+
+fn account(admin: bool) -> pb::UpdateAccountState {
+    pb::UpdateAccountState {
+        present: true,
+        admin,
+        secure_token: true,
+        hidden: true,
+    }
+}
+
+/// Proves the Mac facts of three sections join field by field: each field is the first section's
+/// that gives it (a FileVault state that is set, `authrestart_supported` true, a free size, an
+/// update account, Command Line Tools), a later FileVault state, free size, account or Command Line
+/// Tools never overrides, and the device-management conflicts are joined in order, each once.
+#[test]
+fn the_mac_facts_join_field_by_field_from_the_first_section_that_gives_each() {
+    let calls = Calls::default();
+    let tools = pb::CommandLineToolsState {
+        receipt: true,
+        files: true,
+        version: "16.1".to_owned(),
+    };
+    let (first, _) = scripted(
+        "first",
+        Ok(mac_section(Some(pb::MacUpdateFacts {
+            filevault: pb::FileVaultState::On.into(),
+            mdm_conflicts: vec!["Deferrals".to_owned()],
+            ..pb::MacUpdateFacts::default()
+        }))),
+        &calls,
+    );
+    let (second, _) = scripted(
+        "second",
+        Ok(mac_section(Some(pb::MacUpdateFacts {
+            data_free_bytes: Some(4096),
+            update_account: Some(account(true)),
+            command_line_tools: Some(tools.clone()),
+            mdm_conflicts: vec!["Deferrals".to_owned(), "CatalogURL".to_owned()],
+            ..pb::MacUpdateFacts::default()
+        }))),
+        &calls,
+    );
+    let (third, _) = scripted(
+        "third",
+        Ok(mac_section(Some(pb::MacUpdateFacts {
+            filevault: pb::FileVaultState::Off.into(),
+            authrestart_supported: true,
+            data_free_bytes: Some(1),
+            update_account: Some(account(false)),
+            command_line_tools: Some(pb::CommandLineToolsState {
+                version: "15.0".to_owned(),
+                ..pb::CommandLineToolsState::default()
+            }),
+            mdm_conflicts: vec!["CatalogURL".to_owned()],
+        }))),
+        &calls,
+    );
+    let rig = simple(vec![Box::new(first), Box::new(second), Box::new(third)]);
+    rig.sink.report();
+    rig.run_look();
+    assert_eq!(
+        rig.sink.report().mac,
+        Some(pb::MacUpdateFacts {
+            filevault: pb::FileVaultState::On.into(),
+            authrestart_supported: true,
+            data_free_bytes: Some(4096),
+            update_account: Some(account(true)),
+            command_line_tools: Some(tools),
+            mdm_conflicts: vec!["Deferrals".to_owned(), "CatalogURL".to_owned()],
+        })
+    );
+}
+
+/// Proves a report whose sections give no Mac facts has none.
+#[test]
+fn sections_without_mac_facts_give_a_report_without_them() {
+    let calls = Calls::default();
+    let (first, _) = scripted("first", Ok(mac_section(None)), &calls);
+    let (second, _) = scripted("second", Ok(Section::default()), &calls);
+    let rig = simple(vec![Box::new(first), Box::new(second)]);
+    rig.sink.report();
+    rig.run_look();
+    assert_eq!(rig.sink.report().mac, None);
 }
