@@ -23,7 +23,7 @@
 // (`HostsRefusal`, `ReleasesRefusal`, `ServicesRefusal`, `EnrollmentRefusal`, `AuditRefusal`,
 // `AlertsRefusal`, `RolloutsRefusal` in rollouts.proto, `MdmRefusal` in mdm.proto, and
 // `RepositoriesRefusal`, `HostGroupsRefusal`, `UsersRefusal`, `ApiTokensRefusal`,
-// `ConsoleRefusal` and `MaintenanceRefusal` in their own .proto),
+// `ConsoleRefusal`, `MaintenanceRefusal` and `XcodeRefusal` in their own .proto),
 // written as the value's name without the prefix, in lower case (for example
 // `below_min_version`); the status code is the one each value names. Nothing
 // else is ever in the message: no claim value, no path, no text of an internal error. A refused
@@ -1532,6 +1532,13 @@ enum AlertKind {
   // store holds that release or a newer one; its `version` is the release's version. Log token
   // `xcode_release_waiting`.
   ALERT_KIND_XCODE_RELEASE_WAITING = 17;
+  // An operator's upload to the Xcode store (`PUT /v1/xcode/<sha256>`) of a second build under a
+  // version the store holds was refused: on our hosts a version names one build. The message
+  // names the version, the build the store holds and the build refused. One alert for each
+  // version, listed until the archive the store holds of that version is removed; its `version`
+  // is that version. The coordinator's memory: a restart forgets it. Log token
+  // `xcode_version_taken`.
+  ALERT_KIND_XCODE_VERSION_TAKEN = 18;
 }
 
 // How soon an `Alert` needs a person.

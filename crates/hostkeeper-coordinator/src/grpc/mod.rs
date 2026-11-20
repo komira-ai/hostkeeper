@@ -55,6 +55,7 @@ use hostkeeper_proto::hostkeeper::operator::v1::rollouts_server::RolloutsServer;
 use hostkeeper_proto::hostkeeper::operator::v1::services_server::ServicesServer;
 use hostkeeper_proto::hostkeeper::operator::v1::ssh_server::SshServer;
 use hostkeeper_proto::hostkeeper::operator::v1::users_server::UsersServer;
+use hostkeeper_proto::hostkeeper::operator::v1::xcode_server::XcodeServer;
 use hostkeeper_wire::wire::MAX_HEARTBEAT_BYTES;
 use http_body_util::{Either, Full};
 use hyper::body::Body;
@@ -75,6 +76,7 @@ use self::operator_host_groups::HostGroupsService;
 use self::operator_layout::LayoutService;
 use self::operator_repositories::RepositoriesService;
 use self::operator_ssh::SshService;
+use self::operator_xcode::XcodeService;
 use self::refusal::token_status;
 use crate::enrollment::MAX_MESSAGE_BYTES;
 use crate::http::{
@@ -98,6 +100,7 @@ mod operator_host_groups;
 mod operator_layout;
 mod operator_repositories;
 mod operator_ssh;
+mod operator_xcode;
 pub(crate) mod refusal;
 pub(crate) mod report;
 
@@ -154,6 +157,8 @@ const LAYOUT: &str = "hostkeeper.operator.v1.Layout";
 const SSH: &str = "hostkeeper.operator.v1.Ssh";
 /// The full name of the operator API's `Console`.
 const CONSOLE: &str = "hostkeeper.operator.v1.Console";
+/// The full name of the operator API's `Xcode`.
+const XCODE: &str = "hostkeeper.operator.v1.Xcode";
 
 /// The path of `Coordinator.Heartbeat`, which needs a client certificate that names a host.
 const HEARTBEAT: &str = "/hostkeeper.agent.v1.Coordinator/Heartbeat";
@@ -315,7 +320,7 @@ pub(crate) async fn admit_via(
             Surface::Control,
             Some(
                 HOSTS | RELEASES | SERVICES | ENROLLMENT | AUDIT | ALERTS | ROLLOUTS | REPOSITORIES
-                | HOST_GROUPS | USERS | API_TOKENS | LAYOUT | SSH | CONSOLE,
+                | HOST_GROUPS | USERS | API_TOKENS | LAYOUT | SSH | CONSOLE | XCODE,
             ),
         ) => Served::Operator,
         _ => return Err(Status::unimplemented("")),
@@ -546,6 +551,11 @@ where
                 .max_decoding_message_size(MAX_OPERATOR_BYTES);
             call(server, request).await
         }
+        Some(XCODE) => {
+            let server = XcodeServer::new(XcodeService::new(coordinator))
+                .max_decoding_message_size(MAX_OPERATOR_BYTES);
+            call(server, request).await
+        }
         _ => Status::unimplemented("").into_http(),
     }
 }
@@ -603,7 +613,10 @@ fn is_grpc(headers: &HeaderMap) -> bool {
 /// private listener, a `POST` of a path that names a method of the operator API is the
 /// gateway's ([`gateway::answer`]), and any other method of such a path is a 405. On the
 /// heartbeat listener a path under `/repositories/` is a private repository's
-/// ([`crate::repository_serve`]), whose body is streamed. Everything else is a JSON route ([`handle`]). A body that has not arrived whole after `patience` is a
+/// ([`crate::repository_serve`]), whose body is streamed. With an Xcode store (`--xcode-dir`), a
+/// path under `/v1/xcode/` is the store's: an operator's upload on the private listener
+/// ([`crate::xcode_put`]) and a Mac's read on the heartbeat listener ([`crate::xcode_get`]), each
+/// streamed. Everything else is a JSON route ([`handle`]). A body that has not arrived whole after `patience` is a
 /// bad request, or a deadline exceeded for gRPC. Before it is answered, the parts of the state
 /// another coordinator changed are read again ([`Coordinator::refresh_caches`]); once it is
 /// answered, the held waits read again.
@@ -633,6 +646,19 @@ where
         answered.map(Either::Left)
     } else if surface == Surface::Heartbeat && request.uri().path().starts_with(PREFIX) {
         serve(coordinator, peer, request).await
+    } else if let Some(store) = coordinator.xcode.store.clone()
+        && request.uri().path().starts_with(crate::xcode_store::PREFIX)
+    {
+        match surface {
+            Surface::Control => {
+                crate::xcode_put::answer(coordinator, &store, peer, request, patience)
+                    .await
+                    .map(Either::Left)
+            }
+            Surface::Heartbeat => {
+                crate::xcode_get::answer(coordinator, &store, peer, request).await
+            }
+        }
     } else {
         handle(coordinator, surface, peer, request, patience)
             .await

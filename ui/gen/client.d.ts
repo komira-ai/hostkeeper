@@ -148,6 +148,10 @@ export interface Client {
     resetPassword(request: hostkeeper_operator_v1.ResetPasswordRequest): Promise<hostkeeper_operator_v1.ResetPasswordResponse>;
     delete(request: hostkeeper_operator_v1.DeleteUserRequest): Promise<hostkeeper_operator_v1.DeleteUserResponse>;
   };
+  readonly xcode: {
+    list(request: hostkeeper_operator_v1.ListXcodeRequest): Promise<hostkeeper_operator_v1.ListXcodeResponse>;
+    remove(request: hostkeeper_operator_v1.RemoveXcodeRequest): Promise<hostkeeper_operator_v1.RemoveXcodeResponse>;
+  };
 }
 
 export declare function createClient(call: Call): Client;
