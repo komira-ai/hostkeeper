@@ -105,6 +105,33 @@ impl Wired {
         self.send(host, &message).await;
     }
 
+    /// The typed order the heartbeat handler answers a gRPC heartbeat of `host` with, which
+    /// announces `maintenance-v1`, reports a Linux update due and, when given, the run record
+    /// `record`.
+    async fn told(
+        &self,
+        host: &str,
+        record: Option<agent::MaintenanceRunState>,
+    ) -> Option<agent::Order> {
+        let mut message = proto_message(&[svc("web", "1.0")]);
+        message.features.push(FEATURE.to_owned());
+        message.maintenance = Some(agent::MaintenanceReport {
+            due: vec![agent::DueItem {
+                kind: agent::MaintenanceKind::Linux as i32,
+                from: "1.0".to_owned(),
+                to: "1.1".to_owned(),
+                needs_reboot: false,
+                label: "update".to_owned(),
+                security: true,
+            }],
+            looked_unix: UNIX,
+            run: record,
+            ..agent::MaintenanceReport::default()
+        });
+        let reply = beat(&self.coordinator, &updater(host, "storage"), &message).await;
+        reply.decode::<agent::HeartbeatResponse>().order
+    }
+
     /// A heartbeat of `host` that does not announce `maintenance-v1`.
     async fn beat_plain(&self, host: &str) {
         self.send(host, &proto_message(&[svc("web", "1.0")])).await;
@@ -737,5 +764,70 @@ async fn retry_host_and_put_back_answer_unimplemented() {
     assert_eq!(
         (put_back.code(), put_back.message()),
         (Code::Unimplemented, "")
+    );
+}
+
+/// Proves, through the heartbeat handler as the heartbeat listener mounts it: after a `Schedule`
+/// of the group `alpha`, whose hosts `a1` and `a2` report a Linux update due, `a1`'s gRPC heartbeat
+/// is answered with the `maintain` that starts its turn (the order id `maintain-<run id>`, try 1,
+/// the action `RUN`, the run, the kind `linux`, the security scope, no drain deadline, the `install`
+/// path and 1200 seconds to come back), `a2`'s with no order (the batch of 1 is taken), and once
+/// `a1` reports the run's order at draining it is sent nothing and `Get` answers it `DRAINING` and
+/// `a2` `WAITING`.
+///
+/// Catches: a `maintain` decided but lost between the coordinator and the agent's wire, or a run
+/// record in the heartbeat that the handler does not carry to the stored turn.
+#[tokio::test]
+async fn a_scheduled_turn_is_ordered_through_the_heartbeat_handler() {
+    let wired = Wired::new("gm-maintain-order");
+    for host in ["a1", "a2"] {
+        assert_eq!(wired.told(host, None).await, None, "no run yet");
+    }
+    let scheduled: proto::ScheduleMaintenanceResponse = wired
+        .ask(Wire::Grpc, SCHEDULE, &group_run(true, "kernel"))
+        .await
+        .expect("scheduled");
+    assert_eq!(scheduled.run.expect("a run").id, FIRST);
+
+    let order_id = format!("maintain-{FIRST}");
+    assert_eq!(
+        wired.told("a1", None).await,
+        Some(agent::Order {
+            order_id: order_id.clone(),
+            r#try: 1,
+            verb: Some(agent::order::Verb::Maintain(agent::Maintain {
+                run_id: FIRST.to_owned(),
+                action: agent::MaintainAction::Run as i32,
+                kinds: vec![agent::MaintenanceKind::Linux as i32],
+                linux_scope: agent::LinuxScope::Security as i32,
+                drain_deadline_secs: None,
+                macos_path: agent::MacosPath::Install as i32,
+                xcodes: Vec::new(),
+                xcode_remove: Vec::new(),
+                xcode_default: String::new(),
+                return_secs: 1200,
+            })),
+        })
+    );
+    assert_eq!(wired.told("a2", None).await, None, "the batch is taken");
+
+    let draining = agent::MaintenanceRunState {
+        run_id: FIRST.to_owned(),
+        order_id,
+        step: agent::MaintenanceStep::Draining as i32,
+        applied: Vec::new(),
+        halted_reason: String::new(),
+    };
+    assert_eq!(wired.told("a1", Some(draining)).await, None);
+    let got: proto::GetMaintenanceRunResponse = wired
+        .ask(Wire::Grpc, GET, &get_of(FIRST))
+        .await
+        .expect("got");
+    assert_eq!(
+        rows(&got.hosts),
+        vec![
+            row("a1", HostStep::Draining, &[agent::MaintenanceKind::Linux]),
+            row("a2", HostStep::Waiting, &[agent::MaintenanceKind::Linux]),
+        ]
     );
 }

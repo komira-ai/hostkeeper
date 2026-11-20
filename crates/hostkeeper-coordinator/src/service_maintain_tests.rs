@@ -282,6 +282,15 @@ fn a_second_heartbeat_does_not_issue_a_new_order() {
         assert_eq!(in_turn(&world), vec!["h1"]);
         assert_eq!(steps(&world)[0], ("h1".to_owned(), Step::Staging));
     }
+    let another_run = beat(
+        LINUX,
+        Some(("run-1-1", "maintain-run-1-1", MaintenanceStep::Draining)),
+    );
+    assert_eq!(
+        tell(&world, "h1", another_run),
+        Some(first.clone()),
+        "a record of another run is not this order"
+    );
     let other = beat(
         LINUX,
         Some((RUN, "maintain-another", MaintenanceStep::Draining)),
@@ -545,7 +554,10 @@ fn a_start_after_the_run_was_cancelled_stores_and_sends_nothing() {
             return_secs: 1200,
         },
     };
-    edit_runs(&world, |runs| runs[0].cancel(UNIX));
+    edit_runs(&world, |runs| {
+        runs[0].cancel(UNIX);
+        runs.push(run_of("run-1-1", Vec::new()));
+    });
 
     let next = world
         .coordinator()
