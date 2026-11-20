@@ -36,7 +36,7 @@ fn world(name: &str, with_store: bool) -> (World, Option<Arc<XcodeStore>>) {
     }
     let dir = rig.dir.path().join("xcode");
     fs::create_dir(&dir).expect("the store's directory");
-    let store = Arc::new(XcodeStore::open(&dir, 1 << 20).expect("a store"));
+    let store = Arc::new(XcodeStore::open(&dir, 1 << 20, std::time::UNIX_EPOCH).expect("a store"));
     let coordinator = coordinator.with_xcode_store(Arc::clone(&store));
     (World::over(rig, coordinator), Some(store))
 }
@@ -225,29 +225,33 @@ async fn remove_refusals_over_grpc_are_the_codes_of_their_values_and_change_noth
 }
 
 /// Proves: both methods refuse a CI token as `PERMISSION_DENIED` `forbidden` and a call with no
-/// token as `UNAUTHENTICATED` `unauthorized`, and the archive stays and no entry is written.
+/// token as `UNAUTHENTICATED` `unauthorized`, and the archive stays and no entry is written. Each
+/// CI call is the first of its coordinator, as a CI token is taken once.
 ///
 /// Catches: a method of the store that CI's token or no token reaches.
 #[tokio::test]
 async fn list_and_remove_over_grpc_refuse_ci_and_no_token() {
-    let (world, store) = world("grpc-xcode-callers", true);
-    let store = store.expect("a store");
-    let archive = stored(&store, "27.1", "27A10", b"the archive");
-    let before = audited(&world);
     let ci = ci_token();
-    for bearer in [Some(ci.as_str()), None] {
-        let expected = match bearer {
-            Some(_) => (Code::PermissionDenied, "forbidden"),
-            None => (Code::Unauthenticated, "unauthorized"),
-        };
-        let (code, message, _) = grpc(&world, LIST, bearer, proto::ListXcodeRequest {}).await;
-        assert_eq!((code, message.as_str()), expected, "List");
-        let (code, message, _) =
-            grpc(&world, REMOVE, bearer, remove_of(&archive.sha256, WHY)).await;
-        assert_eq!((code, message.as_str()), expected, "Remove");
+    for (method, name) in [(LIST, "List"), (REMOVE, "Remove")] {
+        for bearer in [Some(ci.as_str()), None] {
+            let (world, store) = world("grpc-xcode-callers", true);
+            let store = store.expect("a store");
+            let archive = stored(&store, "27.1", "27A10", b"the archive");
+            let before = audited(&world);
+            let expected = match bearer {
+                Some(_) => (Code::PermissionDenied, "forbidden"),
+                None => (Code::Unauthenticated, "unauthorized"),
+            };
+            let (code, message, _) = if method == LIST {
+                grpc(&world, LIST, bearer, proto::ListXcodeRequest {}).await
+            } else {
+                grpc(&world, REMOVE, bearer, remove_of(&archive.sha256, WHY)).await
+            };
+            assert_eq!((code, message.as_str()), expected, "{name}");
+            assert_eq!(audited(&world), before);
+            assert!(store.archive_path(&archive.sha256).exists());
+        }
     }
-    assert_eq!(audited(&world), before);
-    assert!(store.archive_path(&archive.sha256).exists());
 }
 
 /// Proves: with a store, a path under `/v1/xcode/` is routed by the surface it arrives on: on the

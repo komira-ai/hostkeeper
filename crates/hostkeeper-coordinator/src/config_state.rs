@@ -464,7 +464,8 @@ pub(super) fn with_xcode(
     match &flags.xcode.xcode_dir {
         None => Ok(coordinator),
         Some(dir) => {
-            let store = XcodeStore::open(dir, flags.xcode.xcode_max_bytes)
+            let now = std::time::UNIX_EPOCH + Duration::from_secs(coordinator.ops.unix_now());
+            let store = XcodeStore::open(dir, flags.xcode.xcode_max_bytes, now)
                 .map_err(|why| StartError::XcodeDir(why.to_string()))?;
             Ok(coordinator.with_xcode_store(Arc::new(store)))
         }

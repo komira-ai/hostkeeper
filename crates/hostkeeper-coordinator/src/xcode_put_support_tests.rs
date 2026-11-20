@@ -286,7 +286,8 @@ pub(super) fn farm_with(
     let guard = log.install();
     let dir = rig.dir.path().join("xcode");
     fs::create_dir(&dir).expect("the store's directory");
-    let store = Arc::new(XcodeStore::open(&dir, max_bytes).expect("a store"));
+    let store =
+        Arc::new(XcodeStore::open(&dir, max_bytes, std::time::UNIX_EPOCH).expect("a store"));
     let coordinator =
         build(Rig::start(&rig.dir, &rig.clock), &rig.dir).with_xcode_store(Arc::clone(&store));
     coordinator

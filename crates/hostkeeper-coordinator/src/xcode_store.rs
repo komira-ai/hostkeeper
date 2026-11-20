@@ -202,19 +202,25 @@ pub(crate) enum Held {
 
 impl XcodeStore {
     /// The store in `dir`, taking archives of at most `max_bytes`. An upload file a stopped
-    /// coordinator left half written (one last written more than [`STALE_UPLOAD`] ago) is
-    /// removed; a newer one is left, as it may be another coordinator's upload in progress.
+    /// coordinator left half written (one last written more than [`STALE_UPLOAD`] before `now`,
+    /// the coordinator's clock of its audit) is removed; a newer one is left, as it may be another
+    /// coordinator's upload in progress.
     ///
     /// # Errors
     /// [`StoreError::NotADirectory`]: `dir` is not a directory that can be read;
     /// [`StoreError::Io`]: a left upload could not be examined or removed, or no random bytes
     /// could be had for the token of the upload names.
-    pub(crate) fn open(dir: &Path, max_bytes: u64) -> Result<Self, StoreError> {
-        Self::open_with(dir, max_bytes, &os_random())
+    pub(crate) fn open(dir: &Path, max_bytes: u64, now: SystemTime) -> Result<Self, StoreError> {
+        Self::open_with(dir, max_bytes, now, &os_random())
     }
 
     /// [`Self::open`], drawing the token of the upload names from `random`.
-    fn open_with(dir: &Path, max_bytes: u64, random: &Random) -> Result<Self, StoreError> {
+    fn open_with(
+        dir: &Path,
+        max_bytes: u64,
+        now: SystemTime,
+        random: &Random,
+    ) -> Result<Self, StoreError> {
         let not_dir = |source| StoreError::NotADirectory {
             path: dir.to_owned(),
             source,
@@ -231,8 +237,7 @@ impl XcodeStore {
                     .metadata()
                     .and_then(|meta| meta.modified())
                     .map(|written| {
-                        SystemTime::now()
-                            .duration_since(written)
+                        now.duration_since(written)
                             .is_ok_and(|age| age > STALE_UPLOAD)
                     })
                     .map_err(|source| StoreError::Io {

@@ -23,7 +23,7 @@ use crate::testutil::OPERATOR;
 async fn an_upload_older_than_the_kept_releases_is_refused_and_stores_nothing() {
     let farm = farm("xcode-put-not-kept");
     lands_meanwhile(&farm.store, OTHER, "27.2", "27B52")();
-    let mut body = data(&[ARCHIVE]);
+    let body = data(&[ARCHIVE]);
     let polled = body.polled.clone();
     let asked = request(
         "PUT",

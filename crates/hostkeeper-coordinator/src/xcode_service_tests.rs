@@ -18,7 +18,7 @@ use crate::ops::AuditEntry;
 use crate::service::Coordinator;
 use crate::store::{audit_failure, store_failure};
 use crate::testutil::{Rig, id, scratch};
-use crate::xcode_feed::{Channel, KnownReleases, XcodeId, XcodeRelease, XcodeVersion};
+use crate::xcode_feed::{Channel, XcodeId, XcodeRelease, XcodeVersion};
 use crate::xcode_store::{Archive, Digesting, Taken, XcodeStore, kept};
 
 /// The time the archives of the tests were stored, in unix seconds.
@@ -79,7 +79,8 @@ impl Farm {
         let mut world = World::new(name);
         let dir = world.rig.dir.path().join("xcode");
         fs::create_dir(&dir).expect("the store's directory");
-        let store = Arc::new(XcodeStore::open(&dir, 1 << 20).expect("a store"));
+        let store =
+            Arc::new(XcodeStore::open(&dir, 1 << 20, std::time::UNIX_EPOCH).expect("a store"));
         let spare = scratch(&format!("{name}-spare"));
         let placeholder = start(&spare, &world.rig.clock, "");
         let built = std::mem::replace(&mut world.rig.coordinator, placeholder);

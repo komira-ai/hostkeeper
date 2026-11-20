@@ -36,7 +36,7 @@ fn archive(version: &str, build: &str, digit: char) -> Archive {
 /// A store taking archives of at most 1024 bytes in a new directory of its own.
 fn store(name: &str) -> (Scratch, XcodeStore) {
     let dir = scratch(name);
-    let store = XcodeStore::open(dir.path(), 1024).expect("the store opens");
+    let store = XcodeStore::open(dir.path(), 1024, now()).expect("the store opens");
     (dir, store)
 }
 
@@ -62,7 +62,7 @@ fn mode(path: &Path) -> u32 {
 fn open_refuses_a_missing_directory_and_a_file() {
     let dir = scratch("xcode-store-open-refused");
     let missing = dir.path().join("missing");
-    let why = XcodeStore::open(&missing, 1024).expect_err("no directory");
+    let why = XcodeStore::open(&missing, 1024, now()).expect_err("no directory");
     assert!(
         matches!(&why, StoreError::NotADirectory { path, .. } if *path == missing),
         "{why}"
@@ -75,18 +75,24 @@ fn open_refuses_a_missing_directory_and_a_file() {
     assert!(!missing.exists(), "the store made the directory");
     let file = dir.path().join("file");
     fs::write(&file, b"x").expect("a file");
-    let why = XcodeStore::open(&file, 1024).expect_err("a file");
+    let why = XcodeStore::open(&file, 1024, now()).expect_err("a file");
     assert!(
         matches!(&why, StoreError::NotADirectory { path, .. } if *path == file),
         "{why}"
     );
 }
 
-/// Makes the last write of the file or directory at `path` `age` ago.
+/// The time a store of these tests is opened at: the clock of the coordinator's audit, which the
+/// tests set.
+fn now() -> SystemTime {
+    SystemTime::UNIX_EPOCH + Duration::from_secs(1_800_000_000)
+}
+
+/// Makes the last write of the file or directory at `path` `age` before [`now`].
 fn written_ago(path: &Path, age: Duration) {
     fs::File::open(path)
         .expect("the path opens")
-        .set_modified(SystemTime::now() - age)
+        .set_modified(now() - age)
         .expect("the time is set");
 }
 
@@ -104,9 +110,10 @@ fn open_removes_a_stale_upload_and_nothing_else() {
     written_ago(&left, STALE_UPLOAD + Duration::from_secs(60));
     let fresh = dir.path().join(format!(".upload-{}-bb-0", sha('a')));
     fs::write(&fresh, b"going").expect("a fresh upload");
+    written_ago(&fresh, STALE_UPLOAD - Duration::from_secs(60));
     let other = dir.path().join("notes.txt");
     fs::write(&other, b"keep").expect("another file");
-    let store = XcodeStore::open(dir.path(), 4242).expect("the store opens");
+    let store = XcodeStore::open(dir.path(), 4242, now()).expect("the store opens");
     assert!(!left.exists(), "the left upload stands");
     assert!(fresh.exists(), "an upload in progress was removed");
     assert!(other.exists(), "an unrelated file was removed");
@@ -122,13 +129,13 @@ fn open_removes_a_stale_upload_and_nothing_else() {
 #[test]
 fn stores_of_one_directory_name_their_uploads_apart() {
     let dir = scratch("xcode-store-upload-token");
-    let one = XcodeStore::open(dir.path(), 1024).expect("the first store");
-    let two = XcodeStore::open(dir.path(), 1024).expect("the second store");
+    let one = XcodeStore::open(dir.path(), 1024, now()).expect("the first store");
+    let two = XcodeStore::open(dir.path(), 1024, now()).expect("the second store");
     let (first, _a) = one.upload_file(&sha('b')).expect("the first");
     let (second, _b) = two.upload_file(&sha('b')).expect("the second");
     assert_ne!(first, second);
     let broken: Random = Box::new(|_| false);
-    let why = XcodeStore::open_with(dir.path(), 1024, &broken).expect_err("no random bytes");
+    let why = XcodeStore::open_with(dir.path(), 1024, now(), &broken).expect_err("no random bytes");
     assert!(
         matches!(&why, StoreError::Io { path, .. } if path == dir.path()),
         "{why}"
@@ -281,7 +288,7 @@ fn a_directory_that_cannot_be_read_is_an_error_not_an_empty_store() {
     let dir = scratch("xcode-store-gone");
     let inner = dir.path().join("store");
     fs::create_dir(&inner).expect("the directory");
-    let store = XcodeStore::open(&inner, 1024).expect("the store opens");
+    let store = XcodeStore::open(&inner, 1024, now()).expect("the store opens");
     fs::remove_dir_all(&inner).expect("the directory goes");
     assert!(matches!(store.archives(), Err(StoreError::Io { .. })));
     assert!(matches!(
@@ -524,7 +531,7 @@ fn an_upload_that_cannot_be_cleared_or_made_is_an_error() {
     let stuck = dir.path().join(format!(".upload-{}-aa-0", sha('a')));
     fs::create_dir(&stuck).expect("a directory where an upload was");
     written_ago(&stuck, STALE_UPLOAD + Duration::from_secs(60));
-    let why = XcodeStore::open(dir.path(), 1024).expect_err("the upload stands");
+    let why = XcodeStore::open(dir.path(), 1024, now()).expect_err("the upload stands");
     assert!(
         matches!(&why, StoreError::Io { path, .. } if *path == stuck),
         "{why}"
@@ -532,7 +539,7 @@ fn an_upload_that_cannot_be_cleared_or_made_is_an_error() {
     fs::remove_dir(&stuck).expect("the directory goes");
     let inner = dir.path().join("store");
     fs::create_dir(&inner).expect("the directory");
-    let store = XcodeStore::open(&inner, 1024).expect("the store opens");
+    let store = XcodeStore::open(&inner, 1024, now()).expect("the store opens");
     fs::remove_dir(&inner).expect("the directory goes");
     let why = store.upload_file(&sha('b')).expect_err("no directory");
     assert!(matches!(why, StoreError::Io { .. }), "{why}");

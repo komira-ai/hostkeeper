@@ -133,7 +133,7 @@ fn set_up(name: &str) -> Set {
     world.move_to("m1", "keeps").expect("moved");
     world.move_to("m2", "drops").expect("moved");
     let dir = scratch(&format!("{name}-store"));
-    let store = XcodeStore::open(dir.path(), 1 << 30).expect("a store");
+    let store = XcodeStore::open(dir.path(), 1 << 30, std::time::UNIX_EPOCH).expect("a store");
     let bytes = archive_bytes();
     let sha256 = put(&store, "27.2", "27B52", &bytes);
     Set {
@@ -605,7 +605,7 @@ async fn a_file_that_cannot_be_opened_is_answered_by_why() {
     let parent = scratch("xcode-get-open-store");
     let inner = parent.path().join("store");
     std::fs::create_dir(&inner).expect("a directory");
-    let store = XcodeStore::open(&inner, 1 << 20).expect("a store");
+    let store = XcodeStore::open(&inner, 1 << 20, std::time::UNIX_EPOCH).expect("a store");
     std::fs::remove_dir(&inner).expect("removed");
     std::fs::write(&inner, b"a file where the directory was").expect("a file");
     let log = Log::default();
