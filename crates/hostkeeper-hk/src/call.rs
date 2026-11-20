@@ -107,7 +107,7 @@ fn from_der(der: &[Vec<u8>]) -> Vec<Certificate<'static>> {
 
 /// Refuses a token file that group or others may read. A relative path is looked at as
 /// `./<path>`, so that an empty one is the current directory.
-fn private(path: &[u8]) -> Flow<()> {
+pub(crate) fn private(path: &[u8]) -> Flow<()> {
     let at = if path.starts_with(b"/") {
         path.to_vec()
     } else {
