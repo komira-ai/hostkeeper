@@ -394,8 +394,10 @@ changes keep it so:
 The step runner's sequence does not fit as it stands: it runs `rollback` after a failed `prepare`, `cutover` or `verify`, its reboot row
 restarts a new release's units, and only `prepare` may run unbounded (Built: `hostkeeper-hook` `next.rs`, `hostkeeper-steps`
 `resume.rs` and `runner.rs`). An OS update has no release to restart and cannot be rolled back. So the daemon runs a `maintain` order by a
-small sequencer of its own (New), whose position is kept in a durable, versioned run record beside the step records and fsynced before and
-after each step, so a crash, a reboot or a daemon that restarts as a newer release resumes it:
+small sequencer of its own (Built: `crates/hostkeeper-daemon/src/maintenance_run.rs`, the order in `verbs/maintain.rs`), whose position is
+kept in a durable, versioned run record beside the step records and fsynced before and after each step, so a crash, a reboot or a daemon
+that restarts as a newer release resumes it. The order names no services, so the daemon drains the installed services whose release names
+`drain` and `resume` in the order of their names; the group's package order needs a field of the order (additive) and is not built:
 
 | # | Step | What runs | On failure |
 |---|---|---|---|
@@ -411,7 +413,7 @@ No step of this sequence runs `rollback`; a failure stops it where it is.
 ### 5.3 Drain: no deadline by default
 
 Work is never cut to finish an update (`docs/design/hostkeeper-design.md`, goal 6). A `drain` step runs with no time bound
-(`RuntimeMaxSec=infinity`, Built for `prepare`; for `drain` the launchers and `hostkeeper_steps::run_maintenance_step` are Built, and the sequencer that calls it is New, bounded by exactly the deadline when there is one, and reading a deadline that passed as exit 75) unless the run names `drain_deadline_secs`. When a deadline passes, the step exits 75 (deferred, Built
+(`RuntimeMaxSec=infinity`, Built for `prepare`; for `drain` the launchers and `hostkeeper_steps::run_maintenance_step` are Built, and so is the sequencer that calls it, bounded by exactly the deadline when there is one, and reading a deadline that passed as exit 75) unless the run names `drain_deadline_secs`. When a deadline passes, the step exits 75 (deferred, Built
 outcome): the daemon runs `resume` for every service it drained, the host is back in service with nothing changed, it is marked `deferred`,
 and the run moves on to the next host; a deferred host is offered again when the run's other hosts are done, if the window is still open.
 Nothing stops a job.
