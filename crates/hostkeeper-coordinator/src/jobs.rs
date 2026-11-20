@@ -8,10 +8,13 @@
 //!   row logs the alert ([`crate::alerts`]);
 //! - `request-expiry`: the enrollment requests that waited longer than the request TTL
 //!   expired by one conditional update, and each audited by the coordinator that expired it;
-//! - `prune`: expired sessions, forgotten failure counts and instances unseen for a day deleted.
+//! - `prune`: expired sessions, forgotten failure counts and instances unseen for a day deleted;
+//! - `xcode-feed`: the list of Xcode releases read and kept ([`crate::xcode_feed`]), on the
+//!   runtime, since it reads over the network; claimed only with `--xcode-feed-url`.
 //!
 //! Over files there is one coordinator and nothing to claim: the alerts are observed every
-//! [`OBSERVE_EVERY`] and the requests expire at the reload tick, as before.
+//! [`OBSERVE_EVERY`], the list of Xcode releases is read every [`FEED_EVERY`] and the requests
+//! expire at the reload tick, as before.
 
 use std::convert::Infallible;
 use std::sync::Arc;
@@ -20,7 +23,8 @@ use std::time::Duration;
 use crate::alerts::{OBSERVE_EVERY, observe_every};
 use crate::service::Coordinator;
 use crate::store::postgres::alert_rows::PgAlerts;
-use crate::store::postgres::periodic::{ALERTS, PRUNE, PgJobs, REQUEST_EXPIRY};
+use crate::store::postgres::periodic::{ALERTS, PRUNE, PgJobs, REQUEST_EXPIRY, XCODE_FEED};
+use crate::xcode_feed::{FEED_EVERY, read_every};
 
 /// The claimed jobs of a coordinator over a database, and how often it claims.
 #[derive(Debug)]
@@ -56,11 +60,16 @@ impl Coordinator {
 
 /// The coordinator's periodic work, for as long as the future is polled: over a database the
 /// jobs it claims every tick ([`run_claimed`]), else the alerts observed every
-/// [`OBSERVE_EVERY`]. It never returns.
+/// [`OBSERVE_EVERY`] and the list of Xcode releases read every [`FEED_EVERY`] (never, without
+/// `--xcode-feed-url`). It never returns.
 pub async fn periodic(coordinator: Arc<Coordinator>) -> Infallible {
     match coordinator.jobs.clone() {
         Some(jobs) => claim_every(coordinator, jobs).await,
-        None => observe_every(coordinator, OBSERVE_EVERY).await,
+        None => {
+            let alerts = observe_every(Arc::clone(&coordinator), OBSERVE_EVERY);
+            let (never, _) = tokio::join!(alerts, read_every(coordinator, FEED_EVERY));
+            never
+        }
     }
 }
 
@@ -76,8 +85,9 @@ async fn claim_every(coordinator: Arc<Coordinator>, jobs: Arc<Jobs>) -> Infallib
 }
 
 /// One tick: claims the jobs that are due and runs each one this coordinator got, off the
-/// runtime's threads; the names of the jobs it ran. A claim that fails runs nothing (the jobs are
-/// due again at the next tick, on any coordinator), and a job that fails is logged.
+/// runtime's threads (the job `xcode-feed`, which reads over the network, on it); the names of the
+/// jobs it ran. A claim that fails runs nothing (the jobs are due again at the next tick, on any
+/// coordinator), and a job that fails is logged.
 pub(crate) async fn run_claimed(coordinator: &Arc<Coordinator>, jobs: &Arc<Jobs>) -> Vec<String> {
     let claiming = Arc::clone(jobs);
     let claimed = tokio::task::spawn_blocking(move || claiming.jobs.claim())
@@ -88,6 +98,11 @@ pub(crate) async fn run_claimed(coordinator: &Arc<Coordinator>, jobs: &Arc<Jobs>
         Vec::new()
     });
     for name in &claimed {
+        if name == XCODE_FEED {
+            // It logs its own failure and never fails.
+            coordinator.xcode_feed_job().await;
+            continue;
+        }
         let (coordinator, jobs, job) = (Arc::clone(coordinator), Arc::clone(jobs), name.clone());
         let ran = tokio::task::spawn_blocking(move || run(&coordinator, &jobs, &job)).await;
         if let Err(why) = ran.map_err(|e| e.to_string()).and_then(|ran| ran) {

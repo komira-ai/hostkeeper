@@ -634,6 +634,7 @@ fn alerts_come_by_kind_then_service_and_host() {
         Kind::StoreUnreachable,
         Kind::TrustedRoot,
         Kind::PrerequisiteFailed,
+        Kind::XcodeReleaseWaiting,
     ];
     assert_eq!(
         all.map(Kind::log_token),
@@ -650,11 +651,12 @@ fn alerts_come_by_kind_then_service_and_host() {
             "store_unreachable",
             "trusted_root",
             "prerequisite_failed",
+            "xcode_release_waiting",
         ]
     );
     assert_eq!(
         all.map(|kind| kind.proto() as i32),
-        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 16]
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 16, 17]
     );
     let critical: Vec<Kind> = all
         .into_iter()
