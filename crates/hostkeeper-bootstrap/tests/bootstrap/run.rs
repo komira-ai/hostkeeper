@@ -29,7 +29,8 @@ fn a_good_pkg_is_checked_then_configured_then_installed() {
         Outcome::Installed {
             version: VERSION.into(),
             daemon_config: Written::Made,
-            signers_file: Written::Made
+            signers_file: Written::Made,
+            update_account: None,
         }
     );
     assert_eq!(world.tools.ran(), [Tool::Pkgutil, Tool::Installer]);
@@ -68,7 +69,7 @@ fn a_good_pkg_is_checked_then_configured_then_installed() {
         .expect("the daemon's signers parser reads it");
     assert_eq!(
         outcome.to_string(),
-        "installed hostkeeper 1.2.3 (hostkeeper.toml Made, macos-pkg.toml Made)"
+        "installed hostkeeper 1.2.3 (hostkeeper.toml Made, macos-pkg.toml Made, no update account)"
     );
 }
 
@@ -108,7 +109,8 @@ fn existing_configs_are_kept_and_the_install_still_runs() {
         Outcome::Installed {
             version: VERSION.into(),
             daemon_config: Written::Kept,
-            signers_file: Written::Kept
+            signers_file: Written::Kept,
+            update_account: None,
         }
     );
     assert_eq!(
@@ -481,6 +483,20 @@ fn a_config_that_cannot_be_written_stops_before_the_installer() {
     let gave_up = world.run(&paths).expect_err("refused");
     assert!(matches!(gave_up.last, Error::File(_)), "{gave_up}");
     assert_eq!(world.tools.ran(), [Tool::Pkgutil]);
+}
+
+/// Catches a signers file that cannot be written leaving the daemon config this attempt made:
+/// the attempt fails before `installer`, and that config is removed.
+#[test]
+fn a_signers_file_that_cannot_be_written_removes_the_config_the_attempt_made() {
+    let dir = scratch("run-signers-dir");
+    let paths = paths_in(dir.path(), no_wait());
+    fs::create_dir_all(paths.config_dir.join("macos-pkg.toml")).expect("dir");
+    let world = World::good();
+    let gave_up = world.run(&paths).expect_err("refused");
+    assert!(matches!(gave_up.last, Error::File(_)), "{gave_up}");
+    assert_eq!(world.tools.ran(), [Tool::Pkgutil]);
+    assert!(!exists(&paths.config_dir.join("hostkeeper.toml")));
 }
 
 /// The real pause returns; a pause of no seconds is the one a test can take.
