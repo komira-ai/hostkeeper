@@ -1,7 +1,8 @@
 //! The coordinator's gRPC: `hostkeeper.agent.v1.Coordinator` on the heartbeat listener,
 //! `hostkeeper.operator.v1.{Hosts, Releases, Services, Enrollment, Audit, Alerts, Rollouts,
 //! Repositories, HostGroups, Users, ApiTokens}` on the private one (the `Mdm` service is no longer
-//! served: a call of it is `UNIMPLEMENTED`),
+//! served: a call of it is `UNIMPLEMENTED`; `Maintenance` is described and each of its methods
+//! answers `UNIMPLEMENTED` until its handler lands),
 //! and the JSON gateway of the operator API ([`gateway`]), all beside the frozen JSON routes of
 //! [`crate::http`].
 //!
@@ -112,8 +113,15 @@ pub const GRPC_FEATURE: &str = "grpc-v1";
 
 /// The gRPC path of every method of the operator API that no handler serves yet: each is
 /// answered `UNIMPLEMENTED`, with no message, until the coordinator has the handler. A method
-/// added to a proto is listed here until its handler lands. None is.
-pub const PENDING: &[&str] = &[];
+/// added to a proto is listed here until its handler lands. The six methods of `Maintenance` are.
+pub const PENDING: &[&str] = &[
+    "/hostkeeper.operator.v1.Maintenance/Schedule",
+    "/hostkeeper.operator.v1.Maintenance/List",
+    "/hostkeeper.operator.v1.Maintenance/Get",
+    "/hostkeeper.operator.v1.Maintenance/Cancel",
+    "/hostkeeper.operator.v1.Maintenance/RetryHost",
+    "/hostkeeper.operator.v1.Maintenance/PutBack",
+];
 
 /// The body of an answer: the bytes of a JSON route or the gateway, or a gRPC response or the
 /// streamed bytes of a private repository's file.
