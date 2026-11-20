@@ -58,9 +58,9 @@ use hostkeeper_config::names::Version;
 use hostkeeper_enroll::{Enroller, RETRY_SECS};
 use hostkeeper_link::{
     BmcSource, CertSource, ClientIdentity, CoordinatorLink, Dispatch, GrpcLinkError, GrpcMtlsLink,
-    Heartbeat, Heartbeater, JsonMtlsLink, LinkError, LoopConfig, NegotiatedLink, OperatorKeysSink,
-    Platform, Ports, PrerequisitesSink, RemoteLoginProbeSource, Reply, RepositorySink, Sleeper,
-    SshSink, StopFlag, TcpDial, TcpTransport, Tick, UnixClock,
+    Heartbeat, Heartbeater, JsonMtlsLink, LinkError, LoopConfig, MaintenanceSource, NegotiatedLink,
+    OperatorKeysSink, Platform, Ports, PrerequisitesSink, RemoteLoginProbeSource, Reply,
+    RepositorySink, Sleeper, SshSink, StopFlag, TcpDial, TcpTransport, Tick, UnixClock,
 };
 use hostkeeper_observe::ProcessRunner;
 use hostkeeper_observe::command::MAX_STDOUT;
@@ -151,6 +151,10 @@ pub struct Links {
     /// heartbeat reports and a set the coordinator sends replaces. A daemon that has them
     /// announces `prerequisites-v1`.
     pub prerequisites: Option<Arc<dyn PrerequisitesSink>>,
+    /// The host's maintenance facts ([`crate::maintenance_facts`]), which every heartbeat to a
+    /// coordinator that advertises `maintenance-v1` reports. A daemon that has them announces
+    /// `maintenance-v1`; none on a host with no collector (a Mac today).
+    pub maintenance: Option<Arc<dyn MaintenanceSource>>,
     /// The host's BMC ([`crate::bmc`]), which every heartbeat reports; none on a Mac.
     pub bmc: Option<Arc<dyn BmcSource>>,
 }
@@ -240,6 +244,7 @@ impl Links {
                 operator_keys: self.operator_keys.clone(),
                 ssh: ssh_setup(PLATFORM, rustix::process::geteuid().as_raw(), &self.log),
                 prerequisites: self.prerequisites.clone(),
+                maintenance: self.maintenance.clone(),
                 bmc: self.bmc.clone(),
             },
         )

@@ -246,8 +246,7 @@ message HeartbeatRequest {
   // the last one it read; a heartbeat without one leaves the one kept as it is.
   optional BmcReport bmc = 17;
   // What the host runs, what is due on it and the maintenance run it holds (maintenance.proto).
-  // For a daemon that announces `maintenance-v1`, over gRPC only; this release sends and reads
-  // none.
+  // For a daemon that announces `maintenance-v1`, over gRPC only; a Linux daemon sends the facts of its last look.
   optional MaintenanceReport maintenance = 18;
 }
 

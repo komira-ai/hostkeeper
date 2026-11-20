@@ -59,6 +59,7 @@ pub mod grpc;
 pub mod heartbeater;
 pub mod host_facts;
 pub mod host_ssh;
+mod maintenance;
 pub mod mtls;
 pub mod names;
 pub mod negotiated;
@@ -76,8 +77,8 @@ mod wire_map;
 
 pub use beat::{
     ANNOUNCED, FACTS, Feature, Features, Fitted, Health, Heartbeat, Liveness, LocalHalt,
-    MAX_HEARTBEAT_BYTES, Observed, OptionalFact, Oversize, PRIVATE_REPOSITORY, Platform,
-    REPOSITORIES, Renewal, RootReason, SSH, ServiceFacts, TrustedRootFacts, fit,
+    MAINTENANCE, MAX_HEARTBEAT_BYTES, Observed, OptionalFact, Oversize, PRIVATE_REPOSITORY,
+    Platform, REPOSITORIES, Renewal, RootReason, SSH, ServiceFacts, TrustedRootFacts, fit,
 };
 pub use bmc::BmcReport;
 pub use deferral::{Deferral, DeferralError, Deferrals};
@@ -100,10 +101,10 @@ pub use order::{
 pub use pki::PkiCertSource;
 pub use ports::{
     BmcSource, CertSource, CertState, ClientIdentity, ClockSleeper, CoordinatorLink, Dispatch,
-    Drift, FactsSink, HeldHalt, HeldHalts, Job, LinkError, Log, Observation, OperatorKeysSink,
-    OrderSink, PrerequisitesSink, RecordedService, RemoteLoginProbeSource, RenewalSource,
-    ReplyFault, RepositorySink, ServiceObserver, ServiceRecords, Sleeper, SshSink, StopFlag,
-    ThreadDispatch, Tick, TrustFault, TrustedRootSource, UnixClock, Unsendable,
+    Drift, FactsSink, HeldHalt, HeldHalts, Job, LinkError, Log, MaintenanceSource, Observation,
+    OperatorKeysSink, OrderSink, PrerequisitesSink, RecordedService, RemoteLoginProbeSource,
+    RenewalSource, ReplyFault, RepositorySink, ServiceObserver, ServiceRecords, Sleeper, SshSink,
+    StopFlag, ThreadDispatch, Tick, TrustFault, TrustedRootSource, UnixClock, Unsendable,
 };
 pub use prerequisites::{
     MAX_PREREQUISITE_REASON, MAX_PREREQUISITE_VERSION, PrerequisiteState, PrerequisiteStatus,

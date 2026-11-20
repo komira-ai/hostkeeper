@@ -69,6 +69,7 @@ pub fn idle_links() -> Links {
         remote_login_probe: None,
         operator_keys: None,
         prerequisites: None,
+        maintenance: None,
         period: DEFAULT_HEARTBEAT_SECS,
         dispatch: Arc::new(ManualDispatch::default()),
         stop: StopFlag::default(),

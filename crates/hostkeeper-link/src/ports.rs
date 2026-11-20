@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use hostkeeper_config::names::{ServiceName, Version};
+use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use hostkeeper_steps::Clock;
 
 use crate::beat::{Health, Heartbeat, Liveness, Oversize, Renewal, TrustedRootFacts};
@@ -309,6 +310,15 @@ pub trait SshSink: Send + Sync {
 
     /// Sets sshd up as `access` says. It says nothing back: the next report does.
     fn apply(&self, access: &PushedSsh);
+}
+
+/// What the daemon last found of the host's maintenance (`maintenance-v1`): what runs, what is
+/// due and why a look failed.
+pub trait MaintenanceSource: Send + Sync {
+    /// What the daemon last found, as the heartbeat carries it: asked only for a heartbeat to a
+    /// coordinator that advertises `maintenance-v1`. It may start a look on a worker of its own
+    /// and never waits for it.
+    fn report(&self) -> pb::MaintenanceReport;
 }
 
 /// The host prerequisites of the host's group, which the coordinator sends (`prerequisites-v1`).

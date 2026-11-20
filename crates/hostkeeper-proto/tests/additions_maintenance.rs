@@ -392,6 +392,14 @@ fn the_maintenance_fields_have_their_numbers_and_types() {
             true,
         ),
         (
+            "hostkeeper.agent.v1.MaintenanceReport",
+            "look_failed",
+            9,
+            Kind::String,
+            false,
+            false,
+        ),
+        (
             "hostkeeper.agent.v1.MaintenanceHost",
             "boot_unix",
             8,
@@ -637,7 +645,7 @@ fn the_maintenance_fields_have_their_numbers_and_types() {
         .iter()
         .map(|name| message(&now, name).fields().count())
         .collect();
-    assert_eq!(counts, [8, 8, 4, 6, 3, 3, 6, 5, 10, 4]);
+    assert_eq!(counts, [9, 8, 4, 6, 3, 3, 6, 5, 10, 4]);
 }
 
 /// The values of the enum `name` of `pool`, by name and number.

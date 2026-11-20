@@ -8,8 +8,8 @@ use prost::Message as _;
 use hostkeeper_proto::hostkeeper::agent::v1 as agent;
 use hostkeeper_proto::maintenance::{
     MAX_APPLIED, MAX_DUE, MAX_DUE_LABEL, MAX_DUE_VERSION, MAX_HALTED_REASON, MAX_KERNEL_TEXT,
-    MAX_MAC_TEXT, MAX_MDM_CONFLICTS, MAX_OS_TEXT, MAX_REPORT_BYTES, MAX_RUN_ID, MAX_XCODE_PATH,
-    MAX_XCODE_VERSION, MAX_XCODES, MaintenanceReportError, check_report,
+    MAX_LOOK_FAILED, MAX_MAC_TEXT, MAX_MDM_CONFLICTS, MAX_OS_TEXT, MAX_REPORT_BYTES, MAX_RUN_ID,
+    MAX_XCODE_PATH, MAX_XCODE_VERSION, MAX_XCODES, MaintenanceReportError, check_report,
 };
 
 #[path = "support/maintenance_reports.rs"]
@@ -38,9 +38,12 @@ fn a_report_at_every_bound_is_accepted_within_its_budget() {
             MAX_DUE_LABEL,
             MAX_RUN_ID,
             MAX_HALTED_REASON,
+            MAX_LOOK_FAILED,
             MAX_REPORT_BYTES,
         ],
-        [6, 12, 16, 4, 32, 64, 16, 128, 64, 32, 64, 64, 256, 5120]
+        [
+            6, 12, 16, 4, 32, 64, 16, 128, 64, 32, 64, 64, 256, 256, 5120
+        ]
     );
     let full = at_every_bound();
     assert_eq!(check_report(&full), Ok(()));
@@ -191,6 +194,10 @@ fn a_report_one_over_any_bound_is_refused_naming_it() {
         (
             |r| run(r).halted_reason.push('a'),
             too_long("run.halted_reason", MAX_HALTED_REASON),
+        ),
+        (
+            |r| r.look_failed.push('a'),
+            too_long("look_failed", MAX_LOOK_FAILED),
         ),
     ];
     for (breach, want) in breaches {

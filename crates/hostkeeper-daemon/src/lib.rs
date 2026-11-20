@@ -82,6 +82,13 @@
 //! - [`prerequisites`]: the host prerequisites the coordinator sends (`prerequisites-v1`), made sure
 //!   of on the host and reported by state in every heartbeat; [`xcode_clt`] is the one there is,
 //!   Apple's Command Line Tools, looked for and installed headless on a Mac.
+//! - [`maintenance_facts`]: what the host last found of its maintenance (`maintenance-v1`), looked
+//!   for on a worker once an hour and at once after a maintenance step, and reported in every
+//!   heartbeat to a coordinator that asks; the look reads its [`maintenance_collectors`] (each
+//!   platform's list), which are [`maintenance_collect`]'s `Collector`s: [`maintenance_host`] (the
+//!   OS, the kernels, the boot), [`maintenance_reboot`] (a reboot the host asks for) and the
+//!   package managers [`maintenance_apt`], [`maintenance_dnf`] and [`maintenance_apk`], with
+//!   [`maintenance_own`] naming the packages hostkeeper itself installs, which are never due.
 //! - [`update_account`]: a Mac's update account, read from its root-only file, and the update
 //!   call, which gives its password to the program on its standard input alone.
 //! - [`observer`]: what [`Daemon::status`] reports of a running service.
@@ -142,6 +149,15 @@ pub mod mac_config;
 pub mod mac_files;
 pub mod mac_ssh;
 pub mod macos_pkg;
+pub mod maintenance_apk;
+pub mod maintenance_apt;
+pub mod maintenance_collect;
+pub mod maintenance_collectors;
+pub mod maintenance_dnf;
+pub mod maintenance_facts;
+pub mod maintenance_host;
+pub mod maintenance_own;
+pub mod maintenance_reboot;
 pub mod mirror;
 pub mod node;
 pub mod notify;

@@ -48,6 +48,12 @@ message MaintenanceReport {
   uint32 unparsed_lines = 7;
   // The maintenance run the host holds; absent when it holds none.
   optional MaintenanceRunState run = 8;
+  // Why the daemon's last look failed, as the daemon words it: the collector's name, then the
+  // reason (a program's step and exit code and the first line of its standard error, a deadline,
+  // a file that cannot be read); at most 256 bytes. Empty when the last look succeeded. A failed
+  // look leaves the rest of the report as the last look that succeeded left it, `looked_unix`
+  // its time.
+  string look_failed = 9;
 }
 
 // What a host runs, as the daemon read it.
