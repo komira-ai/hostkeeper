@@ -262,6 +262,14 @@ desired version and reads the coordinator's answer through the generated tonic c
   rolled back by its hook, the old release serves again and the coordinator marks `1.2.0` bad;
 - `force_back_to_previous_needs_no_fetch`: a force to the previous version with the release
   channel stopped fetches nothing, and exactly two versions stay on disk;
+- `a_force_repairs_a_hooked_package_halted_after_its_cutover_past_a_bad_mark`: `1.3.0`, whose
+  `verify` halts after its `cutover`, leaves the host on it with the service halted; a force to
+  `1.1.0`, which an operator marked bad, lifts that mark, marks `1.3.0` bad, clears the halt on
+  the coordinator and on the host, and runs no step of any hook while the host goes back to
+  `1.1.0`;
+- `a_force_passes_a_held_host_only_with_include_held`: on the same halted host, held by an
+  operator, a force without `include_held` orders nothing (the host stays on `1.3.0`, its halt
+  lifted by the new generation), and with `include_held` it repairs the host and the hold stands;
 - `the_daemon_is_ready_under_a_notify_unit_only_after_its_boot_pass`: `systemctl start` of the
   daemon returns after its boot pass relinked a placed path;
 - `fixture_attestation_is_checked_by_the_production_verifier`: the fixture's attestation passes
