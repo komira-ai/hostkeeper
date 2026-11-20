@@ -74,6 +74,8 @@ checks below and the report of section 4.1.
 Packages hostkeeper itself installs must not move in an OS upgrade. apt holds them (`apt-mark hold`, Built:
 `docs/design/packages-repositories.md`). dnf and apk have no such hold today, so the maintenance hook excludes them by name (dnf
 `--exclude`, apk by pinning each in `/etc/apk/world` as `name=version`) **[V]**, and the due list leaves them out on every platform.
+The stage (section 5.2, step 1; Built) never names them to apt or apk (apt's hold stays as the installer placed it) and passes
+dnf `--exclude=<name>` for each; the pin in `/etc/apk/world` is the apply's, since the stage changes nothing apk reads.
 
 On a Mac the report also carries what an update needs (section 4.1): FileVault's state (`fdesetup status`, and `fdesetup
 supportsauthrestart`), the free space of the data volume (`statvfs` of `/System/Volumes/Data`), the update account's state (present, an
@@ -375,11 +377,13 @@ changes keep it so:
   The conformance harness (Built: `hostkeeper-hook`'s `conformance` feature) gains checks for them.
 - **The maintenance hook (Built: the command and its skeleton, `crates/hostkeeper-daemon/src/maintenance_hook.rs`; the `cutover`
   of `linux` and `reboot`, `crates/hostkeeper-daemon/src/maintenance_linux.rs`, and their `verify`,
-  `crates/hostkeeper-daemon/src/maintenance_hook/linux.rs`; the other kinds' work and steps New).** The OS work is a hook too, a subcommand of hostkeeper's own binary, `hostkeeper maintenance-hook <prepare|cutover|verify>
+  `crates/hostkeeper-daemon/src/maintenance_hook/linux.rs`; the `prepare` of `linux`, the stage of step 1,
+  `crates/hostkeeper-daemon/src/maintenance_hook/linux/`; the other kinds' work and steps New).** The OS work is a hook too, a subcommand of hostkeeper's own binary, `hostkeeper maintenance-hook <prepare|cutover|verify>
   --params <file>`, launched the way the step runner launches a step (Built: `hostkeeper_steps` launchers: a transient systemd unit, a
   launchd job on a Mac, a process group under OpenRC). Its parameters are the `maintain` order's fields as JSON, in a file or on standard
   input (`--params -`), never in an argument. Each kind is the work of a `MaintenanceKind`, found by the host's platform; until a kind's
-  work is written its step fails `unsupported_kind`.
+  work is written its step fails `unsupported_kind`. The stage and the install wait for a held package manager's lock for at most
+  `--package-lock-wait-secs` (the daemon's flag, given to the hook too).
 
 The step runner's sequence does not fit as it stands: it runs `rollback` after a failed `prepare`, `cutover` or `verify`, its reboot row
 restarts a new release's units, and only `prepare` may run unbounded (Built: `hostkeeper-hook` `next.rs`, `hostkeeper-steps`
@@ -391,7 +395,7 @@ that restarts as a newer release resumes it. The order names no services, so the
 
 | # | Step | What runs | On failure |
 |---|---|---|---|
-| 1 | stage | maintenance hook `prepare`: check free space (twice the download, at least), then download what can be downloaded (`softwareupdate --download`, `softwareupdate --fetch-full-installer` for a major upgrade, `apt-get --download-only`, `dnf --downloadonly`, the Xcode archive copied from the store and expanded into staging) | deferred: nothing was touched, the host never left service; the run goes on |
+| 1 | stage | maintenance hook `prepare`: check free space (twice the download, at least, from the package manager's own estimate), then download what can be downloaded (`softwareupdate --download`, `softwareupdate --fetch-full-installer` for a major upgrade, `apt-get --download-only` sized by `--print-uris`, `dnf upgrade --downloadonly` sized by `--assumeno`'s total, `apk fetch` into `/var/cache/hostkeeper/maintenance/apk` sized by `apk info --size` **[V]**, the Xcode archive copied from the store and expanded into staging). Built for Linux | deferred: nothing was touched, the host never left service; the run goes on |
 | 2 | drain | each installed service's `drain`, in the group's package order, unbounded unless the run sets a deadline (5.3). js-agent's cordons the host and waits for its leases to end | halt (5.4) |
 | 3 | apply | maintenance hook `cutover`, which applies each kind of the run once (by the run record), macOS first (section 5.5). When a kind needs a reboot (`Action: restart`, `reboot-required`, a new kernel), the hook records that the kind's reboot is under way, then reboots (on a Mac, section 5.5: `softwareupdate --install ... --restart`; with FileVault on, `--install` then `fdesetup authrestart`; `startosinstall` for a major upgrade; or only a wait when device management installs it; `systemctl reboot`, or OpenRC's `reboot`, on Linux). After the reboot the daemon runs `cutover` again: it reads the record and the changed boot id, records the kind applied once it reads the new version, and goes on with the next kind, never installing the first again. A major upgrade on a Mac with FileVault on is not ordered until MP shows `startosinstall` restarts it authenticated | halt; `maintenance_not_back` when silent past `return_secs` |
 | 4 | check | maintenance hook `verify` (section 5.6) | halt |
