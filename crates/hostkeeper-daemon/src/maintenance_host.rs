@@ -16,7 +16,7 @@ use crate::maintenance_collect::{
 };
 
 /// The program that names the running kernel's release.
-pub const UNAME: &str = "/usr/bin/uname";
+pub const UNAME: &str = "/bin/uname";
 
 /// How long `uname` is given.
 pub const UNAME_DEADLINE: Duration = Duration::from_secs(60);
