@@ -11,7 +11,7 @@ use hostkeeper_proto::hostkeeper::agent::v1::{
     PrerequisiteState, PrerequisiteStatus, PrerequisitesReport,
 };
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
-use hostkeeper_wire::wire::Health;
+use hostkeeper_wire::wire::{Health, Outcome, UpdateResult};
 use hostkeeper_wire::{HostId, Platform};
 
 use super::{
@@ -193,6 +193,48 @@ fn a_halted_service_is_a_halt() {
         ..ServiceOps::default()
     });
     assert_eq!(derived(&fleet, &unhalted, &quiet_store()), Vec::new());
+}
+
+/// Proves: a halt whose report carries the hook's detail says it after the check, in quotes, a
+/// quote or a line break of it escaped; a report with an empty detail, or none, gives the message
+/// as before.
+///
+/// Catches: a halt an operator cannot act on because the alert names only the check
+/// (`state_invalid`) and not what the hook said of it.
+#[test]
+fn a_halt_says_what_the_hook_said_of_its_check() {
+    let fleet = fleet_of(&["d1"], 990);
+    let halted = |detail: Option<&str>| {
+        let mut report = UpdateResult::new(version("2.0"), Outcome::Failed);
+        report.detail = detail.map(str::to_owned);
+        let ops = marked(ServiceOps {
+            halt: Some(Halt {
+                node_id: "d1".to_owned(),
+                check: "state_invalid".to_owned(),
+                target: version("2.0"),
+                report: Some(report),
+                origin: HaltOrigin::Hook,
+            }),
+            ..ServiceOps::default()
+        });
+        let alerts = derived(&fleet, &ops, &quiet_store());
+        assert_eq!(alerts.len(), 1, "{alerts:?}");
+        alerts[0].message.clone()
+    };
+    assert_eq!(
+        halted(Some("state_root: owned by uid 501")),
+        "kbf is halted at 2.0 by d1, check state_invalid (\"state_root: owned by uid 501\"): \
+         nothing is ordered for it until an operator clears the halt"
+    );
+    assert_eq!(
+        halted(Some("owner \"js\"\nmode 0755")),
+        "kbf is halted at 2.0 by d1, check state_invalid (\"owner \\\"js\\\"\\nmode 0755\"): \
+         nothing is ordered for it until an operator clears the halt"
+    );
+    let plain = "kbf is halted at 2.0 by d1, check state_invalid: nothing is ordered for it \
+                 until an operator clears the halt";
+    assert_eq!(halted(Some("")), plain);
+    assert_eq!(halted(None), plain);
 }
 
 /// Proves: a pending request that is no duplicate claim is `waiting_for_operator`, naming the

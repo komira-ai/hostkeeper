@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use hostkeeper_hook::{Class, Phase, Step, Verdict};
+use hostkeeper_hook::{Class, Phase, Report, Step, Verdict};
 use serde::{Deserialize, Serialize};
 
 use crate::clock::Stamp;
@@ -121,6 +121,45 @@ pub struct Progress {
     /// Additive: written only when set, and a record without it loads as `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activate: Option<PendingActivate>,
+    /// The `detail` of the last line that carried one of a step that did not succeed, under that
+    /// line's `reason` ([`Progress::read_line`]): the prose of why a step ended as it did, which
+    /// [`Record::finished_detail`] gives with the verdict whose reason it is. Additive: written
+    /// only when set, and a record without it loads as `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<HookDetail>,
+}
+
+/// The `detail` of a hook's last line, and the `reason` of the same line ([`Progress::detail`]).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HookDetail {
+    /// The line's `reason`; `None` when it gave none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// The line's `detail`, as the hook wrote it.
+    pub text: String,
+}
+
+impl Progress {
+    /// The report of a step that exited with `code` and wrote `last_line` (`Report::read`), its
+    /// `detail` kept ([`Progress::keep_detail`]) when the step did not succeed.
+    pub fn read_line(&mut self, code: Option<i32>, last_line: Option<&str>) -> Report {
+        let report = Report::read(last_line.unwrap_or(""));
+        if code != Some(0) {
+            self.keep_detail(&report);
+        }
+        report
+    }
+
+    /// Keeps the `detail` of a hook's line `report`, under its `reason`, in place of the one
+    /// kept before; a line without a `detail` leaves the kept one as it is.
+    pub fn keep_detail(&mut self, report: &Report) {
+        if let Some(text) = &report.detail {
+            self.detail = Some(HookDetail {
+                reason: report.reason.clone(),
+                text: text.clone(),
+            });
+        }
+    }
 }
 
 /// The `activate` of the updater's own package that waits to be done ([`Progress::activate`]).
@@ -236,6 +275,22 @@ impl Record {
     /// The deterministic name of the unit a step of this update runs in.
     pub fn unit(&self, step: Step) -> String {
         crate::systemd::unit_name(&self.service, step, self.generation)
+    }
+
+    /// The hook's `detail` of how the update ended: the kept [`Progress::detail`] when the record
+    /// is finished with a verdict other than `Succeeded` and its line's `reason` is the record's
+    /// (both none counts as the same), and `None` otherwise. A reason the updater gave of its own
+    /// (`artifact_changed`, `forced_over`) is no line's, so a detail kept from a step before it
+    /// is not given.
+    pub fn finished_detail(&self) -> Option<&str> {
+        let State::Finished { verdict, reason } = &self.state else {
+            return None;
+        };
+        if matches!(verdict, Verdict::Succeeded { .. }) {
+            return None;
+        }
+        let kept = self.progress.detail.as_ref()?;
+        (kept.reason == *reason).then_some(kept.text.as_str())
     }
 
     /// Closes the update as a `force` closes one it stopped: `forced` set, and `Failed` with the

@@ -36,6 +36,7 @@ fn report(target: &str, phase: Phase, class: Option<Class>) -> UpdateResult {
         reason: None,
         order_id: None,
         order_try: None,
+        detail: None,
     }
 }
 
