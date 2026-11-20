@@ -103,6 +103,7 @@ pub(crate) fn heartbeat(beat: &Heartbeat) -> Result<pb::HeartbeatRequest, Unsend
             ip: report.ip.clone(),
             mac: report.mac.clone(),
         }),
+        maintenance: None,
     })
 }
 
@@ -584,3 +585,7 @@ mod local_halt_tests;
 #[cfg(test)]
 #[path = "proto_map_bmc_tests.rs"]
 mod bmc_tests;
+
+#[cfg(test)]
+#[path = "proto_map_maintenance_tests.rs"]
+mod maintenance_tests;

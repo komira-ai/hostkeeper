@@ -468,6 +468,7 @@ pub(super) fn proto_message(services: &[Svc]) -> proto::HeartbeatRequest {
         operator_keys: None,
         prerequisites: None,
         bmc: None,
+        maintenance: None,
     }
 }
 

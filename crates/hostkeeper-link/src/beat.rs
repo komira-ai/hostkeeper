@@ -115,6 +115,11 @@ pub enum Feature {
     /// ([`crate::PrerequisitesReport`]). Like `operator-keys-v1` it is announced only by a daemon
     /// with a sink for them ([`crate::PrerequisitesSink`]): the loop adds it ([`PREREQUISITES`]).
     PrerequisitesV1,
+    /// `maintenance-v1`: the daemon reports its host's maintenance report and takes the
+    /// `maintain` order. No daemon of this release announces it: the loop has no report to send
+    /// and runs no `maintain` order (it drops one as a verb it does not run), so it is not in
+    /// [`ANNOUNCED`] and the loop adds it nowhere; it is read from a reply's list like the others.
+    MaintenanceV1,
 }
 
 /// The features every heartbeat announces, in this order. Each names something the loop does:
@@ -170,6 +175,7 @@ impl Feature {
             Feature::OperatorKeysV1 => "operator-keys-v1",
             Feature::SshV1 => "ssh-v1",
             Feature::PrerequisitesV1 => "prerequisites-v1",
+            Feature::MaintenanceV1 => "maintenance-v1",
         }
     }
 
@@ -184,6 +190,7 @@ impl Feature {
                 OPERATOR_KEYS,
                 PREREQUISITES,
                 SSH,
+                Feature::MaintenanceV1,
             ])
             .find(|feature| feature.as_str() == name)
     }
