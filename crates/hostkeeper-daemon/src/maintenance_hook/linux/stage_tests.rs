@@ -174,6 +174,10 @@ fn a_directory_that_cannot_be_made_or_measured_defers() {
     assert!(!fake.arg_lists().contains(&download_args()));
 }
 
+/// One case of a run that ends without an exit: how the fake is scripted, the reason and the
+/// detail it defers with.
+type Case<'a> = (&'a dyn Fn(&FakeHost), &'static str, &'static str);
+
 /// Proves: a command that could not be run, one stopped at its deadline and one ended by a signal,
 /// and a listing that could not be run or was ended by a signal, each defer with the step named
 /// and no argument.
@@ -182,7 +186,7 @@ fn a_directory_that_cannot_be_made_or_measured_defers() {
 #[test]
 fn runs_that_end_without_an_exit_defer_naming_the_step() {
     let root = host_with("stage-ends", APT);
-    let cases: [(&dyn Fn(&FakeHost), &'static str, &'static str); 5] = [
+    let cases: [Case<'_>; 5] = [
         (
             &|fake| fake.always(&args(&["update", "-qq"]), Err("No such file".to_owned())),
             REASON_LISTING_FAILED,
