@@ -151,7 +151,10 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   `maintenance_hosts` (one row per host's turn of a run, keyed by the run's id and the host's node
   id, with its step, the time it entered it, its kinds, what it applied and, for a host left out,
   why), both in the order they are held in (`docs/design/maintenance-updates.md`, sections 5.1 and
-  5.7). A database that holds no row holds no run, which is how a coordinator of this release
+  5.7). A host's row changes when the coordinator starts its turn (its step becomes `staging`,
+  audited `maintenance_start`) and when the host's daemon reports another step of it
+  (`maintenance_step`), each in the heartbeat's decision. A database that holds no row holds no
+  run, which is how a coordinator of this release
   starts on a database the release before migrated. `0029` says older releases may run on it
   (`may-run`): the release before never reads either table, so going back below this release needs
   no restore for it; it serves no maintenance run while it runs, and the rows wait for this release

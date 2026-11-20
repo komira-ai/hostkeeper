@@ -327,7 +327,9 @@ pub struct AuditEntry {
     /// `coordinator`, the last row an earlier release's `import` wrote into the database; this
     /// release writes none; the Xcode store's `xcode_put` (an operator's upload) and `xcode_remove`
     /// (an operator's `Xcode.Remove` or the coordinator's pruning); the maintenance runs'
-    /// `maintenance_schedule` and `maintenance_cancel` (an operator's `Maintenance` calls); the
+    /// `maintenance_schedule` and `maintenance_cancel` (an operator's `Maintenance` calls) and the
+    /// coordinator's `maintenance_start` and `maintenance_step` (a host's turn started, and its
+    /// step as its daemon reports it); the
     /// console's `console_open`,
     /// `console_close`, `console_denied`,
     /// `power_action`, `boot_device_set` and `console_coordinator_start`, lines that change no

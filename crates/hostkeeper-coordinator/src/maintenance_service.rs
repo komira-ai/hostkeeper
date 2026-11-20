@@ -225,16 +225,8 @@ fn skip_of(seen: &Seen, state: &OpsState) -> Option<Skip> {
     };
     if !seen.announced {
         Some(Skip::NoMaintenanceV1)
-    } else if state.holds.iter().any(|hold| hold.scope.covers(id, role)) {
-        Some(Skip::Held)
-    } else if state
-        .excluded
-        .iter()
-        .any(|exclusion| exclusion.node_id == id)
-    {
-        Some(Skip::Excluded)
     } else {
-        None
+        crate::decide_maintenance::package_skip(state, id, role)
     }
 }
 

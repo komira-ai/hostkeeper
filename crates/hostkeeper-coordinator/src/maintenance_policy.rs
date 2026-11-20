@@ -7,7 +7,8 @@
 //! all, so a group that names no maintenance is written byte for byte as the release before wrote
 //! it, and a group written by the release before reads as one with every key at its default.
 //!
-//! No maintenance run reads the table yet; [`crate::maintenance_effective`] is what the runs read.
+//! The maintenance runs read it through [`crate::maintenance_effective`]
+//! ([`crate::decide_maintenance`]).
 
 use std::fmt;
 use std::str::FromStr;

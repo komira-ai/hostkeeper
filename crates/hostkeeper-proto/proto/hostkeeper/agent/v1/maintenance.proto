@@ -6,7 +6,8 @@
 // apart to shorten agent.proto. A Linux daemon sends a report to a coordinator that advertises
 // `maintenance-v1`; a coordinator keeps the last report a daemon that announces it sent (over gRPC,
 // or over the JSON route as base64 of its encoding in the key `maintenance`) and shows it in the
-// operator API. No daemon runs a `maintain` and no coordinator sends one yet.
+// operator API. A coordinator sends a `maintain` with the action `RUN` to start a host's turn of a
+// maintenance run, to a daemon that announces `maintenance-v1`; no daemon runs one yet.
 //
 // Served by: the coordinator, on its heartbeat listener, as agent.proto says.
 //
