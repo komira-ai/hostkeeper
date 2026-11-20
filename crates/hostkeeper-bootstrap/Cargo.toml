@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "The hostkeeper bootstrap of a Mac: reads the farm's two values, fetches and checks hostkeeper's signed macOS pkg, writes the daemon config when it is absent, runs the installer and exits."
+description = "The hostkeeper bootstrap of a Mac: reads the farm's two values, fetches and checks hostkeeper's signed macOS pkg, writes the daemon config when it is absent and the update-account file when the settings name the update account, runs the installer and exits."
 
 # docs/design/mac-bootstrap.md. A small program that a one-time pkg installs and a launchd job runs:
 # it holds no secret and enrolls nothing (the daemon it installs enrolls through the normal
