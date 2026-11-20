@@ -27,6 +27,20 @@
 //!
 //! A `reboot` kind in a run that also holds `linux` checks nothing more: the hook checks `linux`
 //! first, and the `linux` check is the `reboot` check and more, so the host is read once.
+//!
+//! **The stage.** The `prepare` of `linux` is its stage, in the submodule `stage`
+//! (docs/design/maintenance-updates.md, section 5.2 step 1): the free space checked, then a
+//! download alone with `apt-get`, `dnf` or `apk`, nothing installed. The kind that holds it is
+//! [`crate::maintenance_linux::kinds::LinuxKind`].
+
+mod apk;
+mod apt;
+mod dnf;
+pub(crate) mod stage;
+#[cfg(test)]
+mod testing;
+#[cfg(test)]
+mod tests;
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};

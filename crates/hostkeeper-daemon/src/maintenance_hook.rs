@@ -11,9 +11,10 @@
 //! platform has no work for fails `unsupported_kind`. On a Linux host (systemd or OpenRC) the
 //! `cutover` and the `after_reboot` of `linux` and `reboot` are written
 //! ([`crate::maintenance_linux`]), and so is their `verify` ([`LinuxCheck`], the module
-//! [`linux`]); on a Mac the `prepare` of `macos` ([`MacosKind`]), which stages a macOS update or
-//! defers; every other step of every kind is `unsupported_kind` until its own change. The steps
-//! run each kind of the run in [`Kind::ALL`]'s order, macOS before Xcode,
+//! [`linux`]), and the `prepare` of `linux`, its stage (the module `linux::stage`: the free space
+//! checked, then a download alone); on a Mac the `prepare` of `macos` ([`MacosKind`]), which
+//! stages a macOS update or defers; every other step of every kind is `unsupported_kind` until its
+//! own change. The steps run each kind of the run in [`Kind::ALL`]'s order, macOS before Xcode,
 //! whatever order the parameters give:
 //!
 //! - `prepare` runs each kind's `prepare`, and ends at the first that does not succeed. It writes
@@ -216,8 +217,8 @@ fn bounded(detail: &str) -> String {
 
 /// The kinds of a host of `platform`, for a build of version `own` (`major.minor.patch`):
 /// [`Registry::for_platform`]'s, with `linux` and `reboot` of a Linux host (systemd or OpenRC) put
-/// in place of their stubs: installed and rebooted by [`LinuxKind`] and [`RebootKind`], the
-/// install waiting up to `lock_wait_secs` for the package manager's lock and leaving untouched the
+/// in place of their stubs: staged, installed and rebooted by [`LinuxKind`] and [`RebootKind`],
+/// the stage and the install each waiting up to `lock_wait_secs` for the package manager's lock and leaving untouched the
 /// packages recorded in the daemon's `placed.json`, and checked by the host's [`LinuxCheck`]
 /// ([`linux::kinds`]). When `own` is not a version (which the daemon itself refuses to start
 /// with), or the build has no adapters for the platform, their `verify` stays `unsupported_kind`.
