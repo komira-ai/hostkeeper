@@ -140,5 +140,9 @@ export function createClient(call) {
       resetPassword: (request) => call("hostkeeper.operator.v1.Users/ResetPassword", request),
       delete: (request) => call("hostkeeper.operator.v1.Users/Delete", request),
     }),
+    xcode: Object.freeze({
+      list: (request) => call("hostkeeper.operator.v1.Xcode/List", request),
+      remove: (request) => call("hostkeeper.operator.v1.Xcode/Remove", request),
+    }),
   });
 }

@@ -4,6 +4,9 @@
 # list in the same change (`the_private_route_set_is_the_committed_one` in `ui.rs` beside it). The four
 # sign-in routes (`/v1/login`, `/v1/logout`, `/v1/password`, `/v1/session`) and the terminal's
 # upgrade (`/v1/ssh/terminal`) are answered only by a coordinator that has a sign-in.
+# `PUT /v1/xcode/<sha256>` (the Xcode store's upload, only with `--xcode-dir`) is answered by
+# `grpc::route`, as the operator API's JSON gateway is, not by the router `ui.rs` asks, so it is not
+# listed; `xcode_put_tests.rs` holds its tests.
 GET /console/v1/stream/*
 GET /ui/*
 GET /v1/convergence

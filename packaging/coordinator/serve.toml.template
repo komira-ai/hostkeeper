@@ -36,6 +36,14 @@ tokens-file = "/etc/hostkeeper-coordinator/tokens.toml"
 # coordinator reads no third party.
 # xcode-feed-url = "https://xcodereleases.com/data.json"
 
+# The coordinator's private Xcode store: the directory where the Xcode archives an operator pushes are
+# kept, exactly as Apple ships them, for the coordinator's own Macs to read. The directory must exist
+# (owned by hostkeeper-coordinator, closed to other users) and the coordinator does not start without it; with
+# several coordinators, every instance mounts the same directory. Without it (the default) there is no
+# store. xcode-max-bytes (default 21474836480, 20 GiB; at least 1) is the most bytes of one archive.
+# xcode-dir = "/var/lib/hostkeeper-coordinator/xcode"
+# xcode-max-bytes = 21474836480
+
 # The console (power and boot device through each Linux server's BMC): which token names may use it
 # (no secret; root's, readable by the group), the one BMC user and password (a secret: owned by
 # hostkeeper-coordinator, mode 0600 or 0400), and, optional, an address that overrides for a BMC by

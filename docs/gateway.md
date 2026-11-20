@@ -12,7 +12,7 @@ the same checks; the gateway adds no rule of its own. Every command and request 
 
 One route per unary method of the `hostkeeper.operator.v1` services (`Hosts`, `Releases`,
 `Services`, `Enrollment`, `Audit`, `Alerts`, `Rollouts`, `Repositories`, `HostGroups`, `Users`,
-`ApiTokens`, `Layout`, `Ssh`, `Console`):
+`ApiTokens`, `Layout`, `Ssh`, `Console`, `Xcode`):
 
 ```
 POST /<package>.<Service>/<Method>
@@ -22,6 +22,13 @@ for example `POST /hostkeeper.operator.v1.Releases/Converge`. A client sends `Co
 application/json` (the gateway reads the body as JSON whatever the header says); the response has
 that type. Only the private listener (`--private-listen`)
 serves the gateway; the heartbeat listener never does.
+
+The `Xcode` service (`List`, `Remove`) lists and removes the archives of the coordinator's Xcode
+store. The archives themselves are not gateway calls: an operator's Mac uploads one with
+`PUT /v1/xcode/<sha256>?version=<version>&build=<build>` on the private listener, with the
+operator's token as a bearer, and a host reads one with `GET /v1/xcode/<sha256>`, with byte
+ranges, on the listener hosts use. Both answer only on a coordinator started with
+`--xcode-dir`; without it the path is `not_found`.
 
 ## Authentication
 
@@ -36,7 +43,7 @@ that fails one of those checks is `PERMISSION_DENIED` with the reason `csrf`, an
 who must still choose a new password is `PERMISSION_DENIED` `password_change_required`; a cookie
 that names no live session is no credential. A call with an `Authorization` header never has its
 cookie read, and the gRPC path never reads one. A method may be declared session-only: a bearer is
-refused it `PERMISSION_DENIED` `session_required`. None is now: the writes of the MDM setup were, and the `Mdm` service is no longer served (a call of it is `UNIMPLEMENTED`). `Users`, `ApiTokens`, `Layout`, `Ssh` and `Console` take an operator only (a token
+refused it `PERMISSION_DENIED` `session_required`. None is now: the writes of the MDM setup were, and the `Mdm` service is no longer served (a call of it is `UNIMPLEMENTED`). `Users`, `ApiTokens`, `Layout`, `Ssh`, `Console` and `Xcode` take an operator only (a token
 of the tokens file, a stored API token, or a session), and a bearer is resolved against the tokens file and the store's tokens
 in one pass (`docs/operations/coordinator-state.md`, "Users and API tokens"). `Releases.SetDesired` takes CI's
 OIDC token or an operator token; `Releases.Converge`, `Releases.WaitConverged` and

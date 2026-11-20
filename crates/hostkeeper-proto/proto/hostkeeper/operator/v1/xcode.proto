@@ -1,0 +1,131 @@
+// hostkeeper.operator.v1: the `Xcode` service of the operator API and its refusals
+// (`XcodeRefusal`): what the coordinator's Xcode store holds, and the removal of an archive from
+// it (docs/design/maintenance-updates.md). The store is a directory (`--xcode-dir`) of Xcode
+// archives that an operator pushed from a Mac, one per release; the hosts of a host group that
+// keeps Xcode read them from it. The rest of the package, `Enrollment` and `EnrollmentRefusal`
+// (enrollment.proto) and `Audit` and `AuditRefusal` among it, is operator.proto; this file is
+// the same package and API, kept apart so that each file stays short.
+//
+// Served by: the coordinator, on its control listener, as operator.proto says. The archive
+// itself does not travel through this API: an operator's Mac uploads it with
+// `PUT /v1/xcode/<sha256>?version=<version>&build=<build>` on the same listener, and a host
+// reads it with `GET /v1/xcode/<sha256>` on the listener hosts use, with byte ranges; both are
+// plain HTTP with no generated command line.
+//
+// Authentication: `Xcode` takes the operator's credential only; no CI token reaches it (see
+// operator.proto). The upload takes the operator's token as a bearer and refuses a client
+// certificate; the download takes a host's client certificate and is answered only for a host of
+// a host group that keeps Xcode.
+//
+// Refusals: a gRPC status whose message is exactly one token of `XcodeRefusal`, written as the
+// value's name without the prefix, in lower case; the status code is the one each value names. A
+// refused request changes nothing; a call that cannot write its audit line changes nothing
+// either (`audit_unavailable`).
+//
+// Units: as operator.proto says; times are unix seconds and sizes are bytes. A SHA-256 is 64
+// lower-case hex characters, that of the archive's bytes. A version is the digits and dots of
+// Apple's release (`26.1.1`) and a build is 1 to 32 ASCII letters, digits and dots (`17B100`). A reason
+// is 1 to 256 bytes once trimmed, with no control character. A call's request message is at most
+// 4 KiB; the archive of an upload is not one.
+//
+// Extending: as operator.proto says: add fields, messages, enum values and RPCs; never renumber,
+// rename, retype or remove one, and never reuse a number.
+syntax = "proto3";
+
+package hostkeeper.operator.v1;
+
+import "hostkeeper/operator/v1/entry.proto";
+
+// The Xcode store. `Remove` is audited as `xcode_remove` under the caller's name, with the
+// caller's reason, and the archive's version, build and SHA-256 as its subject; `List` changes
+// nothing and writes no audit entry.
+service Xcode {
+  // The archives the store holds, newest release first, the release of the daily list of Xcode
+  // releases that the store does not hold yet (the one the alert `xcode_release_waiting` names),
+  // how many releases the store keeps and the most bytes one upload may be. Changes nothing and
+  // is not audited. A coordinator started without `--xcode-dir` answers `configured` false.
+  rpc List(ListXcodeRequest) returns (ListXcodeResponse);
+  // Removes one archive from the store, by its SHA-256, and writes the audit entry `xcode_remove`
+  // first: when the entry cannot be written nothing is removed. The version the archive held is
+  // free for an upload of another build afterwards.
+  rpc Remove(RemoveXcodeRequest) returns (RemoveXcodeResponse);
+}
+
+// Why `Xcode` refused a request. The token is the value's name without the prefix, in lower
+// case.
+enum XcodeRefusal {
+  XCODE_REFUSAL_UNSPECIFIED = 0;
+  // UNAUTHENTICATED: no credential, or not an operator's.
+  XCODE_REFUSAL_UNAUTHORIZED = 1;
+  // PERMISSION_DENIED: the bearer is a valid CI token, which `Xcode` does not take.
+  XCODE_REFUSAL_FORBIDDEN = 2;
+  // INVALID_ARGUMENT: a SHA-256 that is not 64 lower-case hex characters, or a reason that is
+  // empty once trimmed, over 256 bytes, or has a control character.
+  XCODE_REFUSAL_INVALID_REQUEST = 3;
+  // FAILED_PRECONDITION: `Remove` on a coordinator started without `--xcode-dir`; `List` answers
+  // such a coordinator instead.
+  XCODE_REFUSAL_NO_STORE = 4;
+  // NOT_FOUND: the store holds no archive with the SHA-256.
+  XCODE_REFUSAL_UNKNOWN_ARCHIVE = 5;
+  // INTERNAL: the store could not be read, or the archive could not be removed. Asking again is
+  // safe.
+  XCODE_REFUSAL_STORE_FAILED = 6;
+  // UNAVAILABLE: the audit entry could not be written. Nothing was removed.
+  XCODE_REFUSAL_AUDIT_UNAVAILABLE = 7;
+}
+
+message ListXcodeRequest {}
+
+// One Xcode archive the store holds.
+message XcodeArchive {
+  // The SHA-256 of the archive's bytes, 64 lower-case hex characters; the name it is stored and
+  // downloaded under.
+  string sha256 = 1;
+  // The release's version, `26.1.1`.
+  string version = 2;
+  // The release's build, `17B100`.
+  string build = 3;
+  // The archive's size in bytes.
+  uint64 size_bytes = 4;
+  // The name of the operator whose upload stored it.
+  string uploaded_by = 5;
+  // When it was stored, in unix seconds.
+  uint64 uploaded_at_unix = 6;
+}
+
+// An Xcode release the daily list names that the store does not hold.
+message XcodeReleaseWaiting {
+  // The release's version.
+  string version = 1;
+  // The release's build.
+  string build = 2;
+  // The oldest macOS the release runs on, as the list gives it; empty when it names none.
+  string requires_macos = 3;
+}
+
+message ListXcodeResponse {
+  // Whether the coordinator has a store (it was started with `--xcode-dir`).
+  bool configured = 1;
+  // The archives held, newest release first.
+  repeated XcodeArchive archives = 2;
+  // The release the alert `xcode_release_waiting` names; absent when the list has no release
+  // newer than the store's newest.
+  XcodeReleaseWaiting waiting = 3;
+  // How many of the newest releases the store keeps: the largest `xcode_keep` of any host group,
+  // and at least 1. An archive of an Xcode a host reports installed is kept besides.
+  uint32 keep = 4;
+  // The most bytes one upload may be (`--xcode-max-bytes`); 0 without a store.
+  uint64 max_bytes = 5;
+}
+
+message RemoveXcodeRequest {
+  // The SHA-256 of the archive to remove, 64 lower-case hex characters, as `List` gives it.
+  string sha256 = 1;
+  // Why; the audit entry carries it. 1 to 256 bytes once trimmed, with no control character.
+  string reason = 2;
+}
+
+message RemoveXcodeResponse {
+  // The audit entry that records the removal.
+  AuditEntry entry = 1;
+}

@@ -56,7 +56,8 @@ export namespace hostkeeper_operator_v1 {
     | "ALERT_KIND_MDM_DNS_CREDENTIAL_REJECTED"
     | "ALERT_KIND_MDM_IDENTITY_NEAR_EXPIRY"
     | "ALERT_KIND_PREREQUISITE_FAILED"
-    | "ALERT_KIND_XCODE_RELEASE_WAITING";
+    | "ALERT_KIND_XCODE_RELEASE_WAITING"
+    | "ALERT_KIND_XCODE_VERSION_TAKEN";
   export type AlertSeverity = "ALERT_SEVERITY_UNSPECIFIED" | "ALERT_SEVERITY_CRITICAL" | "ALERT_SEVERITY_WARNING";
   export interface ApiTokenInfo { name?: string; source?: hostkeeper_operator_v1.ApiTokenSource; createdBy?: string; createdUnix?: string; owner?: string; }
   export type ApiTokenSource = "API_TOKEN_SOURCE_UNSPECIFIED" | "API_TOKEN_SOURCE_STORE" | "API_TOKEN_SOURCE_TOKENS_FILE";
@@ -349,6 +350,8 @@ export namespace hostkeeper_operator_v1 {
   export interface ListTrustedPublishersResponse { publishers?: hostkeeper_operator_v1.TrustedPublisher[]; }
   export interface ListUsersRequest {}
   export interface ListUsersResponse { users?: hostkeeper_operator_v1.UserInfo[]; }
+  export interface ListXcodeRequest {}
+  export interface ListXcodeResponse { configured?: boolean; archives?: hostkeeper_operator_v1.XcodeArchive[]; waiting?: hostkeeper_operator_v1.XcodeReleaseWaiting; keep?: number; maxBytes?: string; }
   export type LiveReason = "LIVE_REASON_UNSPECIFIED" | "LIVE_REASON_UPDATING" | "LIVE_REASON_PROMOTION_PENDING" | "LIVE_REASON_ORDERED" | "LIVE_REASON_BAKING" | "LIVE_REASON_PLAN_UNDER_WAY" | "LIVE_REASON_QUEUED";
   export interface LiveRollout { service?: string; reason?: hostkeeper_operator_v1.LiveReason; nodeId?: string; }
   export interface MaintenancePolicy {
@@ -570,6 +573,8 @@ export namespace hostkeeper_operator_v1 {
   export interface RemoveServiceResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface RemoveTrustedPublisherRequest { service?: string; repository?: string; workflow?: string; ref?: string; environment?: string; reason?: string; }
   export interface RemoveTrustedPublisherResponse { entry?: hostkeeper_operator_v1.AuditEntry; publishers?: hostkeeper_operator_v1.TrustedPublisher[]; }
+  export interface RemoveXcodeRequest { sha256?: string; reason?: string; }
+  export interface RemoveXcodeResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface Replaced { version?: string; minUp?: { [key: string]: number }; }
   export interface ResetPasswordRequest { name?: string; }
   export interface ResetPasswordResponse { user?: hostkeeper_operator_v1.UserInfo; password?: string; }
@@ -704,4 +709,6 @@ export namespace hostkeeper_operator_v1 {
   export type WaitOutcome = "WAIT_OUTCOME_UNSPECIFIED" | "WAIT_OUTCOME_CONVERGED" | "WAIT_OUTCOME_HALTED" | "WAIT_OUTCOME_SUPERSEDED" | "WAIT_OUTCOME_DEADLINE" | "WAIT_OUTCOME_NO_DESIRED";
   export interface WholeFleet {}
   export interface WriteRecord { generation?: string; replaced?: hostkeeper_operator_v1.Replaced; writeId?: string; }
+  export interface XcodeArchive { sha256?: string; version?: string; build?: string; sizeBytes?: string; uploadedBy?: string; uploadedAtUnix?: string; }
+  export interface XcodeReleaseWaiting { version?: string; build?: string; requiresMacos?: string; }
 }

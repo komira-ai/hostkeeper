@@ -1456,3 +1456,29 @@ enabled user cannot be deleted.
 | flag | value | meaning |
 |---|---|---|
 | `--name` | STRING | The user's name. |
+
+### `xcode`
+
+The service `Xcode` of the package `hostkeeper.operator.v1`. The Xcode store. `Remove` is audited as `xcode_remove` under the caller's name, with the caller's reason, and the archive's version, build and SHA-256 as its subject; `List` changes nothing and writes no audit entry.
+
+#### `hkctl xcode list`
+
+`/hostkeeper.operator.v1.Xcode/List`
+
+The archives the store holds, newest release first, the release of the daily list of Xcode
+releases that the store does not hold yet (the one the alert `xcode_release_waiting` names),
+how many releases the store keeps and the most bytes one upload may be. Changes nothing and
+is not audited. A coordinator started without `--xcode-dir` answers `configured` false.
+
+#### `hkctl xcode remove`
+
+`/hostkeeper.operator.v1.Xcode/Remove`
+
+Removes one archive from the store, by its SHA-256, and writes the audit entry `xcode_remove`
+first: when the entry cannot be written nothing is removed. The version the archive held is
+free for an upload of another build afterwards.
+
+| flag | value | meaning |
+|---|---|---|
+| `--sha256` | STRING | The SHA-256 of the archive to remove, 64 lower-case hex characters, as `List` gives it. |
+| `--reason` | STRING | Why; the audit entry carries it. 1 to 256 bytes once trimmed, with no control character. |
