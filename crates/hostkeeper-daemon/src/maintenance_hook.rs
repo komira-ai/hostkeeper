@@ -12,7 +12,8 @@
 //! `cutover` and the `after_reboot` of `linux` and `reboot` are written
 //! ([`crate::maintenance_linux`]), and so is their `verify` ([`LinuxCheck`], the module
 //! [`linux`]), and the `prepare` of `linux`, its stage (the module `linux::stage`: the free space
-//! checked, then a download alone); every other step of every kind is `unsupported_kind` until its
+//! checked, then a download alone); on a Mac the `prepare` of `macos` ([`MacosKind`]), which
+//! stages a macOS update or defers; every other step of every kind is `unsupported_kind` until its
 //! own change. The steps run each kind of the run in [`Kind::ALL`]'s order, macOS before Xcode,
 //! whatever order the parameters give:
 //!
@@ -49,6 +50,7 @@
 
 mod kind;
 pub mod linux;
+mod macos;
 mod params;
 mod ports;
 mod registry;
@@ -76,6 +78,7 @@ use crate::maintenance_own::PlacedPackages;
 
 pub use kind::{Cutover, KindError, MaintenanceKind, REASON_UNSUPPORTED_KIND, Unsupported};
 pub use linux::LinuxCheck;
+pub use macos::MacosKind;
 pub use params::{Kind, MAX_PARAMS_BYTES, MaintainParams, ParamsError};
 pub use ports::{KindState, RebootError, Rebooter, RecordError, RunRecord, Unwired};
 pub use registry::Registry;
@@ -228,7 +231,7 @@ fn bounded(detail: &str) -> String {
 /// packages recorded in the daemon's `placed.json`, and checked by the host's [`LinuxCheck`]
 /// ([`linux::kinds`]). When `own` is not a version (which the daemon itself refuses to start
 /// with), or the build has no adapters for the platform, their `verify` stays `unsupported_kind`.
-/// A Mac keeps its stubs.
+/// On a Mac, `macos` ([`MacosKind`]), whose `prepare` stages a macOS update.
 pub fn registry_for(platform: &Platform, lock_wait_secs: u64, own: &str) -> Registry {
     let registry = Registry::for_platform(platform.kind);
     match platform.kind {
@@ -256,7 +259,7 @@ pub fn registry_for(platform: &Platform, lock_wait_secs: u64, own: &str) -> Regi
                     .with(Kind::Reboot, reboot_work),
             }
         }
-        PlatformKind::Macos => registry,
+        PlatformKind::Macos => registry.with(Kind::Macos, Box::new(MacosKind::at_host())),
     }
 }
 
