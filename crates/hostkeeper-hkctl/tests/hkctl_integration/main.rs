@@ -11,6 +11,8 @@
 //! - `console`: the `Console` calls' requests, their enum flags' usage errors, and the
 //!   coordinator's `no_console_access` through the real gateway;
 //! - `hosts_retry`: `hosts retry`, its request and its refusal;
+//! - `maintenance`: the `Maintenance` calls' requests, their enum flags' usage errors, and the
+//!   `UNIMPLEMENTED` answer of every one through the real gateway;
 //! - `secrets`: the token never in an argument list, a child's environment or stderr, and a
 //!   token file others can read refused;
 //! - `mdm`: the `Mdm` setup and push-certificate calls, against the fake curl and the real gateway, and the `session_required` refusal;
@@ -31,6 +33,7 @@ mod flags;
 mod gateway;
 mod host_groups;
 mod hosts_retry;
+mod maintenance;
 mod oidc;
 mod older;
 mod rig;
