@@ -413,8 +413,8 @@ report is `host.heartbeat.prerequisites` in `hk hosts get`
 A Mac's daemon looks at its Mac for maintenance after every start and every hour, on a worker that
 never holds up a heartbeat, and reports what it found to a coordinator that advertises
 `maintenance-v1` ([design/maintenance-updates.md](design/maintenance-updates.md) sections 1 and
-4.1), as a Linux host does. Two collectors read it, each program as root with an empty
-environment, no standard input, a deadline and capped output:
+4.1), as a Linux host does. Five collectors read it, in this order, each program as root with an
+empty environment, no standard input, a deadline and capped output:
 
 - `macos` (`crates/hostkeeper-daemon/src/maintenance_macos.rs`): `macOS`, its version and build
   from `sw_vers`, the hardware serial from `ioreg`, and the macOS updates `softwareupdate --list`
@@ -427,11 +427,19 @@ environment, no standard input, a deadline and capped output:
 - `mac` (`maintenance_mac.rs`): FileVault's state (`fdesetup status`) and whether it can restart
   authenticated (`fdesetup supportsauthrestart`), the free bytes of `/System/Volumes/Data`
   (`statvfs`), and the Command Line Tools: their receipt and its version (`pkgutil --pkg-info`) and
-  whether their compiler is on disk. The update account and device-management settings are not
-  read yet.
+  whether their compiler is on disk.
+- `xcode` (`maintenance_xcode.rs`): each `/Applications/Xcode*.app`, its version and build from
+  `Contents/version.plist`, whether `xcode-select -p` names it, and `foreign` when its directory
+  is not `Xcode-<version>.app`. The daemon reports no Xcode due; the coordinator decides.
+- `update-account` (`maintenance_account.rs`): the update account's name from its root-only file,
+  then whether it exists, is hidden and is an administrator (`dscl`) and holds a Secure Token
+  (`sysadminctl -secureTokenStatus`). Its password is never kept, passed or reported.
+- `mdm` (`maintenance_mdm.rs`): the device-management settings of the design's section 5.8 found
+  in `/Library/Managed Preferences`, in the software-update declarations the Mac holds, and an
+  Xcode the App Store installed, each by name in `mdm_conflicts`.
 
 Nothing is installed or downloaded. A program that does not run, exits non-zero or does not end by
-its deadline (15 minutes for `softwareupdate`) fails the look: the report keeps what the last look
+its deadline (15 minutes for `softwareupdate`), or a property list that cannot be read, fails the look: the report keeps what the last look
 that succeeded found and names the collector and the step in `look_failed`.
 
 ### Release and installer pkg

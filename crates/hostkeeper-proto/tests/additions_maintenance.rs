@@ -417,6 +417,14 @@ fn the_maintenance_fields_have_their_numbers_and_types() {
             false,
         ),
         (
+            "hostkeeper.agent.v1.InstalledXcode",
+            "foreign",
+            5,
+            Kind::Bool,
+            false,
+            false,
+        ),
+        (
             "hostkeeper.agent.v1.MacUpdateFacts",
             "filevault",
             1,
@@ -641,7 +649,12 @@ fn the_maintenance_fields_have_their_numbers_and_types() {
         }
     }
     let account = message(&now, "hostkeeper.agent.v1.UpdateAccountState");
-    for (field, number) in [("present", 1), ("admin", 2), ("secure_token", 3)] {
+    for (field, number) in [
+        ("present", 1),
+        ("admin", 2),
+        ("secure_token", 3),
+        ("hidden", 4),
+    ] {
         let found = account.get_field_by_name(field).expect(field);
         assert_eq!((found.number(), found.kind()), (number, Kind::Bool));
     }
@@ -654,7 +667,7 @@ fn the_maintenance_fields_have_their_numbers_and_types() {
         .iter()
         .map(|name| message(&now, name).fields().count())
         .collect();
-    assert_eq!(counts, [9, 8, 4, 6, 3, 3, 6, 5, 11, 4]);
+    assert_eq!(counts, [9, 8, 5, 6, 4, 3, 6, 5, 11, 4]);
 }
 
 /// The values of the enum `name` of `pool`, by name and number.
