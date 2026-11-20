@@ -8,7 +8,7 @@ use std::path::Path;
 use hostkeeper_hk::xcode_push::Mac;
 use sha2::{Digest as _, Sha256};
 
-use crate::rig::{Opts, Ran, Reply, Rig, Server, TOKEN, args, call, closed_port};
+use crate::rig::{Early, Opts, Ran, Reply, Rig, Server, TOKEN, args, call, closed_port};
 
 /// The bytes of the archive of the tests.
 const ARCHIVE: &[u8] = b"the bytes of an Xcode archive, as Apple ships them";
@@ -99,7 +99,7 @@ impl Push {
         let push = Push { rig, mac };
         push.tool("pkgutil.out", SIGNED_BY_APPLE.as_bytes());
         push.tool("xip.version", b"27.2\n");
-        push.tool("xip.build", b"27B52\n");
+        push.tool("xip.product-build", b"27B52\n");
         push
     }
 
@@ -244,7 +244,7 @@ fn a_good_archive_uploads_exactly_its_bytes_under_their_sha256() {
     // What a push stopped by a signal left beside the archive: removed, then used.
     let stale = push.rig.path("downloads/.hk-xcode-push-expansion");
     std::fs::create_dir(&stale).expect("a stale expansion");
-    std::fs::write(stale.join("Xcode.app"), b"left").expect("a stale file");
+    std::fs::write(stale.join("left-over"), b"left").expect("a stale file");
     let server = store(&push.rig);
     let ran = push.run(server.port, &["xcode-push", &archive]);
     assert_eq!(ran.code, 0, "{ran:?}");
@@ -368,6 +368,29 @@ fn a_body_whose_sha256_differs_from_its_path_is_refused() {
     assert_eq!(seen[0].body, [ARCHIVE, b", and more".as_slice()].concat());
 }
 
+/// Proves: a refusal the coordinator makes from the request's head alone, with no
+/// `100 Continue`, is read before any byte of the archive is sent: the coordinator receives none
+/// of its bytes, and the push exits 2 with `refused: not_listed`.
+#[test]
+fn a_refusal_before_the_body_is_read_before_any_byte_of_the_archive_is_sent() {
+    let push = Push::new("early");
+    let archive = push.archive();
+    let server = Early::refusing(&push.rig.pki, 409, "{\"error\":\"not_listed\"}");
+    let ran = push.run(server.port, &["xcode-push", &archive]);
+    assert_eq!(ran.code, 2, "{ran:?}");
+    assert!(
+        ran.stderr
+            .ends_with("hk: the coordinator refused the upload (HTTP 409)\nrefused: not_listed\n"),
+        "{ran:?}"
+    );
+    let (target, bytes) = server.heard();
+    assert_eq!(
+        target,
+        format!("/v1/xcode/{}?version=27.2&build=27B52", sha256(ARCHIVE))
+    );
+    assert_eq!(bytes, 0, "bytes of the archive reached the coordinator");
+}
+
 /// Proves: off macOS the push refuses at once, exit 1, with a message that says it runs on the
 /// Mac signed in to the Apple developer account; no program runs and nothing is uploaded. Its
 /// help is still printed.
@@ -421,11 +444,11 @@ fn a_download_that_does_not_give_one_archive_uploads_nothing() {
         ),
         (
             "none",
-            "/home/Downloads/hk-xcode-push/27.2; nothing was uploaded",
+            "home/Downloads/hk-xcode-push/27.2; nothing was uploaded",
         ),
         (
             "two",
-            "/home/Downloads/hk-xcode-push/27.2 holds more than one .xip; name the one to push, \
+            "home/Downloads/hk-xcode-push/27.2 holds more than one .xip; name the one to push, \
              or leave one; nothing was uploaded",
         ),
         (
@@ -512,12 +535,12 @@ fn an_archive_whose_release_cannot_be_read_uploads_nothing() {
     ];
     for (case, says) in cases {
         let mut push = Push::new(&format!("release-{case}"));
-        let mut words = vec!["xcode-push".to_owned(), push.archive()];
+        let mut words = ["xcode-push".to_owned(), push.archive()];
         match case {
             "xip" => push.tool("xip.exit", b"4"),
             "no-app" => push.untool("xip.version"),
             "version" => push.tool("xip.version", b"27.2b\n"),
-            "build" => push.tool("xip.build", b"27 B52\n"),
+            "build" => push.tool("xip.product-build", b"27 B52\n"),
             "plutil" => push.mac.plutil = push.rig.path("bin/no-such-plutil"),
             "other" => {
                 push.tool("xcodes.xip", ARCHIVE);

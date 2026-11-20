@@ -7,7 +7,7 @@ use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener};
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 
 use hostkeeper_hk::ssh::{Coordinator, Launch, Verb};
 use hostkeeper_hk::xcode_push::Mac;
@@ -207,18 +207,7 @@ impl Server {
     {
         let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback listener");
         let port = listener.local_addr().expect("its address").port();
-        let chain = vec![CertificateDer::from_pem_slice(pki.cert_pem.as_bytes()).expect("a cert")];
-        let key = PrivateKeyDer::from_pem_slice(pki.key_pem.as_bytes()).expect("a key");
-        let config = Arc::new(
-            rustls::ServerConfig::builder_with_provider(Arc::new(
-                rustls::crypto::ring::default_provider(),
-            ))
-            .with_safe_default_protocol_versions()
-            .expect("protocol versions")
-            .with_no_client_auth()
-            .with_single_cert(chain, key)
-            .expect("a server certificate"),
-        );
+        let config = server_config(pki);
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
         std::thread::spawn(move || {
@@ -298,6 +287,99 @@ impl Server {
     /// Every request answered so far.
     pub fn seen(&self) -> Vec<Seen> {
         self.seen.lock().expect("the record").clone()
+    }
+}
+
+/// The TLS configuration of a test server with the certificate of `pki`.
+fn server_config(pki: &Pki) -> Arc<rustls::ServerConfig> {
+    let chain = vec![CertificateDer::from_pem_slice(pki.cert_pem.as_bytes()).expect("a cert")];
+    let key = PrivateKeyDer::from_pem_slice(pki.key_pem.as_bytes()).expect("a key");
+    Arc::new(
+        rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .expect("protocol versions")
+        .with_no_client_auth()
+        .with_single_cert(chain, key)
+        .expect("a server certificate"),
+    )
+}
+
+/// What [`Early`] heard: the request's target, and the bytes of body that arrived after its
+/// head, until the client went away.
+type Heard = (String, usize);
+
+/// An HTTPS server on 127.0.0.1, port 0, for one request: it answers a final status as soon as
+/// the request's head is read (with no `100 Continue`, before any body), then counts the bytes
+/// of body that still arrive until the client closes the connection.
+pub struct Early {
+    pub port: u16,
+    heard: Arc<(Mutex<Option<Heard>>, Condvar)>,
+}
+
+impl Early {
+    /// A server that refuses its one request with `status` and `body` from its head alone.
+    pub fn refusing(pki: &Pki, status: u16, body: &str) -> Early {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback listener");
+        let port = listener.local_addr().expect("its address").port();
+        let config = server_config(pki);
+        let answer = format!(
+            "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+             Connection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let heard = Arc::new((Mutex::new(None), Condvar::new()));
+        let record = Arc::clone(&heard);
+        std::thread::spawn(move || {
+            let serve = || -> Option<Heard> {
+                let (stream, _) = listener.accept().ok()?;
+                let conn = rustls::ServerConnection::new(config).ok()?;
+                let mut tls = rustls::StreamOwned::new(conn, stream);
+                let mut bytes = Vec::new();
+                let mut chunk = [0_u8; 4096];
+                let split = loop {
+                    if let Some(at) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break at;
+                    }
+                    let n = tls.read(&mut chunk).ok()?;
+                    if n == 0 {
+                        return None;
+                    }
+                    bytes.extend_from_slice(&chunk[..n]);
+                };
+                let head = String::from_utf8_lossy(&bytes[..split]).into_owned();
+                let target = head.split(' ').nth(1).unwrap_or_default().to_owned();
+                let mut after = bytes.len() - split - 4;
+                tls.write_all(answer.as_bytes()).ok()?;
+                tls.conn.send_close_notify();
+                let _ = tls.flush();
+                while let Ok(n) = tls.read(&mut chunk) {
+                    if n == 0 {
+                        break;
+                    }
+                    after += n;
+                }
+                Some((target, after))
+            };
+            let heard = serve().unwrap_or((String::new(), usize::MAX));
+            let (lock, ready) = &*record;
+            *lock.lock().expect("the record") = Some(heard);
+            ready.notify_all();
+        });
+        Early { port, heard }
+    }
+
+    /// The target of the request and the bytes of body that arrived, once the client is gone.
+    pub fn heard(&self) -> Heard {
+        let (lock, ready) = &*self.heard;
+        let mut heard = lock.lock().expect("the record");
+        loop {
+            if let Some(done) = heard.clone() {
+                return done;
+            }
+            heard = ready.wait(heard).expect("the record");
+        }
     }
 }
 

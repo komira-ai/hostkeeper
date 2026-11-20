@@ -161,7 +161,7 @@ fn the_doc_check_reads_xcode_push() {
         assert_eq!(error, format!("{line}\n{problem}"));
     }
     assert_eq!(
-        doc_problems("docs/x.md", "`hk xcode-push 27.2 --force`"),
-        ["docs/x.md: `hk xcode-push 27.2 --force`: xcode-push has no flag --force"]
+        doc_problems("docs/x.md", "`hk xcode-push --force`"),
+        ["docs/x.md: `hk xcode-push --force`: xcode-push has no flag --force"]
     );
 }

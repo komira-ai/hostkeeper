@@ -7,8 +7,8 @@
 //! - `xcodes download <version> --directory <into>` copies `<dir>/xcodes.xip`, when there is one,
 //!   to `<into>/Xcode-<version>.xip`;
 //! - `xip --expand <archive>` makes `Xcode.app/Contents` in its working directory, with
-//!   `Info.plist` a copy of `<dir>/xip.version` and `version.plist` of `<dir>/xip.build`, when
-//!   `<dir>/xip.version` exists, and `Xcode-beta.app` too when `<dir>/xip.second` exists; and
+//!   `Info.plist` a copy of `<dir>/xip.version` and `version.plist` of `<dir>/xip.product-build`, when
+//!   `<dir>/xip.version` exists, and `Xcode-beta.app/Contents` too when `<dir>/xip.second` exists; and
 //!   appends `<dir>/xip.append` to the archive when that exists;
 //! - `plutil -extract <key> raw -o - <file>` prints the file when the key is the one of its name
 //!   (`CFBundleShortVersionString` of `Info.plist`, `ProductBuildVersion` of `version.plist`),
@@ -69,7 +69,10 @@ fn run() -> std::io::Result<u8> {
                 let contents = Path::new("Xcode.app/Contents");
                 std::fs::create_dir_all(contents)?;
                 std::fs::copy(dir.join("xip.version"), contents.join("Info.plist"))?;
-                std::fs::copy(dir.join("xip.build"), contents.join("version.plist"))?;
+                std::fs::copy(
+                    dir.join("xip.product-build"),
+                    contents.join("version.plist"),
+                )?;
             }
             if dir.join("xip.second").exists() {
                 std::fs::create_dir_all("Xcode-beta.app/Contents")?;
