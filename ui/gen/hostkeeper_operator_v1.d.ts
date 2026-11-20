@@ -264,6 +264,7 @@ export namespace hostkeeper_operator_v1 {
     runningUnix?: string;
     repositories?: hostkeeper_operator_v1.HostRepositories;
     hostGroup?: string;
+    maintenance?: hostkeeper_agent_v1.MaintenanceReport;
   }
   export interface HostCounts { missing?: number; absent?: number; excluded?: number; unmanaged?: number; deferred?: number; picked?: number; noTarget?: number; noBuildForHost?: number; installerDropped?: number; }
   export interface HostGroup { name?: string; packages?: string[]; policy?: hostkeeper_operator_v1.RolloutPolicy; }

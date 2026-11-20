@@ -68,6 +68,7 @@ pub(super) fn request(
         operator_keys: None,
         prerequisites: None,
         bmc: None,
+        maintenance: None,
     }
 }
 

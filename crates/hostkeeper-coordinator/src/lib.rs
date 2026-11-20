@@ -178,6 +178,7 @@ pub mod lock;
 pub mod login;
 pub(crate) mod login_routes;
 pub(crate) mod macos_resolve;
+pub mod maintenance;
 pub mod membership;
 pub(crate) mod moving;
 pub mod operate;

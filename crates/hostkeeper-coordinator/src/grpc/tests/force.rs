@@ -44,6 +44,7 @@ fn daemon_beat(features: &[&str]) -> proto::HeartbeatRequest {
         operator_keys: None,
         prerequisites: None,
         bmc: None,
+        maintenance: None,
     }
 }
 

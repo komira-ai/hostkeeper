@@ -434,6 +434,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 40] = [
             ("operator_keys", 15),
             ("prerequisites", 16),
             ("bmc", 17),
+            ("maintenance", 18),
         ],
     ),
     ("hostkeeper.agent.v1.BmcReport", &[("ip", 1), ("mac", 2)]),
@@ -625,6 +626,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 40] = [
             ("running_unix", 23),
             ("repositories", 24),
             ("host_group", 25),
+            ("maintenance", 26),
         ],
     ),
     (
@@ -727,6 +729,7 @@ fn wire_names_are_pinned() {
         ("abort", 8),
         ("clear_halt", 9),
         ("clear_record", 10),
+        ("maintain", 11),
     ];
     assert_eq!(fields, want.map(|(name, number)| (name.to_owned(), number)));
 
