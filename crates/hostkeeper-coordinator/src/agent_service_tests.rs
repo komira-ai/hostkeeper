@@ -381,6 +381,7 @@ fn only_an_order_v1_agent_named_after_a_managed_service_runs_it() {
         last_renew_error: None,
         trusted_root: crate::trusted_root::TrustedRootSaid::default(),
         skewed_beats: 0,
+        maintenance: None,
     };
     assert!(runs_itself(&node, HK));
     assert!(!runs_itself(&node, WEB));

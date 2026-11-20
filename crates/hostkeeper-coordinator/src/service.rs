@@ -608,6 +608,7 @@ impl Coordinator {
             last_renew_error: beat.last_renew_error.clone(),
             trusted_root,
             skewed_beats: 0,
+            maintenance: crate::maintenance::kept_of(&beat),
         };
         // `fleet` is the fleet's lock, taken by the caller before the basis was read: every
         // decision and order below is made under it, so a halt is never raised between another
