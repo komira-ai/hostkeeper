@@ -333,20 +333,19 @@ pub fn kinds(check: LinuxCheck) -> Registry {
 }
 
 /// The kinds of this host, of `platform`, for a daemon of version `own` (`major.minor.patch`):
-/// on Linux, under systemd or OpenRC, [`kinds`] over [`LinuxCheck::at_host`]; on a Mac, or when
-/// `own` is not a version (which the daemon itself refuses to start with), the platform's stubs
+/// on Linux, under systemd or OpenRC, [`kinds`] over [`LinuxCheck::at_host`] with the platform's
+/// adapters; on a Mac, on a platform this build has no adapters for, or when `own` is not a
+/// version (which the daemon itself refuses to start with), the platform's stubs
 /// ([`Registry::for_platform`]).
 #[must_use]
 pub fn host_kinds(platform: &Platform, own: &str) -> Registry {
-    let stubs = || Registry::for_platform(platform.kind);
-    let Ok(own) = HostkeeperVersion::parse(own) else {
-        return stubs();
-    };
-    match platform.kind {
-        PlatformKind::Macos => stubs(),
-        PlatformKind::Linux | PlatformKind::Openrc => Adapters::for_platform(platform).map_or_else(
-            |_| stubs(),
-            |adapters| kinds(LinuxCheck::at_host(adapters, own)),
-        ),
+    match (
+        HostkeeperVersion::parse(own),
+        Adapters::for_platform(platform),
+    ) {
+        (Ok(own), Ok(adapters)) if adapters.kind != PlatformKind::Macos => {
+            kinds(LinuxCheck::at_host(adapters, own))
+        }
+        _ => Registry::for_platform(platform.kind),
     }
 }
