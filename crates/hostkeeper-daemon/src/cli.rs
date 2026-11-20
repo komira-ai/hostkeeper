@@ -73,13 +73,14 @@ use crate::maintenance_collect::{Collector, LinuxScope};
 use crate::maintenance_facts::MaintenanceFacts;
 use crate::maintenance_hook::HookArgs;
 use crate::maintenance_softwareupdate::MacosMajor;
+use crate::maintenance_state::RunReported;
 use crate::notify::{
     NoNotifier, NoWatchdog, ReadyFile, ReadyNotifier, SystemdNotifier, SystemdWatchdog, Watchdog,
 };
 use crate::observer::{OwnService, observer_with};
 use crate::operator_keys::OperatorKeys;
 use crate::prerequisites::Prerequisites;
-use crate::prune::{LayoutPrune, NoLockPoint};
+use crate::prune::{DEFAULT_KEEP_VERSIONS, LayoutPrune, MAX_KEEP_VERSIONS, NoLockPoint};
 use crate::real_packages::RealPackages;
 use crate::repositories;
 use crate::repository_push::Managed;
@@ -192,6 +193,16 @@ pub struct DaemonFlags {
         value_parser = clap::value_parser!(u64).range(1..=MAX_PACKAGE_LOCK_WAIT_SECS),
     )]
     pub package_lock_wait_secs: u64,
+    /// How many versions of each service the host keeps besides `current`, `previous`, the one
+    /// its pin names (`pins/<service>` beside the state directory) and the ones an unfinished
+    /// update or force still uses, from 0 to 32: the newest, by the time each was staged. A prune
+    /// after a confirmed switch deletes the rest, and none while an update is on trial.
+    #[arg(
+        long,
+        default_value_t = DEFAULT_KEEP_VERSIONS,
+        value_parser = clap::value_parser!(u64).range(0..=MAX_KEEP_VERSIONS),
+    )]
+    pub keep_versions: u64,
     /// Which Linux updates the host reports due (`maintenance-v1`): `security`, the default,
     /// security updates and newer kernels; `all`, every update. It applies to a Linux host alone.
     #[arg(long, value_enum, default_value_t = LinuxScope::Security)]
@@ -218,6 +229,7 @@ impl DaemonFlags {
             run_dir: Platform::host().run_dir,
             trusted_uid: 0,
             package_lock_wait_secs: self.package_lock_wait_secs,
+            keep_versions: self.keep_versions,
         }
     }
 }
@@ -532,7 +544,8 @@ pub fn host_links(
 /// The maintenance facts `daemon`'s heartbeats report (`maintenance-v1`): looks by `collectors`
 /// under `scope` (`--maintenance-linux-scope`), leaving out the packages of the daemon's own
 /// `placed.json` ([`crate::Placement`] of its context), timed by `clock` and run on `dispatch`;
-/// none when there is no collector, which then announces and sends nothing.
+/// none when there is no collector, which then announces and sends nothing. The report carries
+/// the run state of the host's maintenance turn ([`RunReported`]).
 pub fn maintenance_source(
     daemon: &Arc<Daemon>,
     scope: LinuxScope,
@@ -549,7 +562,9 @@ pub fn maintenance_source(
         dispatch,
         log,
     )
-    .map(|facts| Arc::new(facts) as Arc<dyn MaintenanceSource>)
+    .map(|facts| {
+        Arc::new(RunReported::new(facts, &daemon.ctx().dirs.state)) as Arc<dyn MaintenanceSource>
+    })
 }
 
 /// What the enrollment request says the daemon came from: this binary, `hostkeeper-<version>`.

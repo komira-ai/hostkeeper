@@ -10,7 +10,10 @@
 //! [`MaintenanceKind`], found in the host platform's [`Registry`] ([`registry_for`]); a kind the
 //! platform has no work for fails `unsupported_kind`. On a Linux host (systemd or OpenRC) the
 //! `cutover` and the `after_reboot` of `linux` and `reboot` are written
-//! ([`crate::maintenance_linux`]); every other step of every kind is `unsupported_kind` until its
+//! ([`crate::maintenance_linux`]), and so is their `verify` ([`LinuxCheck`], the module
+//! [`linux`]), and the `prepare` of `linux`, its stage (the module `linux::stage`: the free space
+//! checked, then a download alone); on a Mac the `prepare` of `macos` ([`MacosKind`]), which
+//! stages a macOS update or defers; every other step of every kind is `unsupported_kind` until its
 //! own change. The steps run each kind of the run in [`Kind::ALL`]'s order, macOS before Xcode,
 //! whatever order the parameters give:
 //!
@@ -26,21 +29,32 @@
 //!   boot id, the reboot was asked for and has not happened: it is asked for again, and nothing is
 //!   installed again. A `reboot` kind after a kind whose reboot the same `cutover` saw finished is
 //!   recorded applied without a second reboot.
-//! - `verify` fails `not_applied` for a kind the run record does not hold applied, and otherwise
-//!   runs each kind's `verify`.
+//! - `verify` checks each kind of the run in turn and ends at the first wrong fact: it fails
+//!   `not_applied` for a kind the run record does not hold applied, `not_rebooted` for a kind
+//!   applied after a reboot while the host still runs the boot that reboot was asked in, and
+//!   otherwise runs the kind's `verify`. A kind not in the run is not checked.
 //!
-//! **The run record.** A host keeps none yet ([`Unwired`]): a `cutover` there would install and
-//! then fail to record it, so [`host_main`] refuses the step first, before any kind runs, failing
-//! `run_record_failed` ([`unwired_record`]). `prepare` and `verify` are run as before.
+//! **The run record.** The record is the maintenance run record in the directory of the
+//! `--params` file ([`StoreRecord`]), where the daemon puts the parameters. With the parameters on
+//! standard input there is no such directory and the record is [`Unwired`]: a `cutover` there
+//! would install and then fail to record it, so [`host_main`] refuses the step first, before any
+//! kind runs, failing `run_record_failed` ([`unwired_record`]); `prepare` and `verify` run. The
+//! daemon's sequencer ([`crate::maintenance_run`]) launches `cutover` with the parameters of one
+//! kind at a time, and applies a kind whose reboot was under way itself once it reads a new boot
+//! id: it launches no `cutover` after the reboot, except on the same boot, to ask for the reboot
+//! again.
 //!
 //! **Outcome.** The exit code is the hook contract's: `0` done, `75` deferred (the kind touched
 //! nothing), `1` failed. The last line of standard output is the contract's JSON report: the
 //! reason a token, the detail at most [`MAX_DETAIL`] bytes.
 
 mod kind;
+pub mod linux;
+mod macos;
 mod params;
 mod ports;
 mod registry;
+mod store;
 
 use std::fs::File;
 use std::io::{self, Read, Write};
@@ -48,6 +62,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use clap::{Args, ValueEnum};
+use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_hook::{Class, Outcome, Report, is_reason_token};
 use hostkeeper_launchd::{Platform, PlatformKind};
 use hostkeeper_placed::{RealFs, Roots};
@@ -55,15 +70,20 @@ use hostkeeper_proto::maintenance::MAX_HALTED_REASON;
 use hostkeeper_steps::{BootId, BootIdSource};
 
 use crate::Placement;
+use crate::adapters::Adapters;
 use crate::cli;
 use crate::maintenance_linux::kinds::{LinuxKind, RebootKind};
 use crate::maintenance_linux::rebooter::HostRebooter;
 use crate::maintenance_own::PlacedPackages;
 
 pub use kind::{Cutover, KindError, MaintenanceKind, REASON_UNSUPPORTED_KIND, Unsupported};
+pub use linux::LinuxCheck;
+pub use macos::MacosKind;
 pub use params::{Kind, MAX_PARAMS_BYTES, MaintainParams, ParamsError};
 pub use ports::{KindState, RebootError, Rebooter, RecordError, RunRecord, Unwired};
 pub use registry::Registry;
+pub use store::StoreRecord;
+pub(crate) use store::record_kind;
 
 /// The `--params` that names standard input.
 pub const STDIN_PARAMS: &str = "-";
@@ -83,6 +103,9 @@ pub const REASON_REBOOT_FAILED: &str = "reboot_failed";
 pub const REASON_REBOOT_UNDER_WAY: &str = "reboot_under_way";
 /// The reason of a `verify` of a kind the run record does not hold applied.
 pub const REASON_NOT_APPLIED: &str = "not_applied";
+/// The reason of a `verify` of a kind applied after a reboot while the host still runs the boot
+/// that reboot was asked in.
+pub const REASON_NOT_REBOOTED: &str = "not_rebooted";
 /// The reason given in place of a kind's reason that is not a token.
 pub const REASON_KIND_FAILED: &str = "kind_failed";
 
@@ -201,11 +224,15 @@ fn bounded(detail: &str) -> String {
     detail[..end].to_owned()
 }
 
-/// The kinds of a host of `platform`: [`Registry::for_platform`]'s, with `linux` and `reboot` of a
-/// Linux host (systemd or OpenRC) put in place of their stubs ([`LinuxKind`], [`RebootKind`]), the
-/// install waiting up to `lock_wait_secs` for the package manager's lock and leaving untouched the
-/// packages recorded in the daemon's `placed.json`. A Mac keeps its stubs.
-pub fn registry_for(platform: &Platform, lock_wait_secs: u64) -> Registry {
+/// The kinds of a host of `platform`, for a build of version `own` (`major.minor.patch`):
+/// [`Registry::for_platform`]'s, with `linux` and `reboot` of a Linux host (systemd or OpenRC) put
+/// in place of their stubs: staged, installed and rebooted by [`LinuxKind`] and [`RebootKind`],
+/// the stage and the install each waiting up to `lock_wait_secs` for the package manager's lock and leaving untouched the
+/// packages recorded in the daemon's `placed.json`, and checked by the host's [`LinuxCheck`]
+/// ([`linux::kinds`]). When `own` is not a version (which the daemon itself refuses to start
+/// with), or the build has no adapters for the platform, their `verify` stays `unsupported_kind`.
+/// On a Mac, `macos` ([`MacosKind`]), whose `prepare` stages a macOS update.
+pub fn registry_for(platform: &Platform, lock_wait_secs: u64, own: &str) -> Registry {
     let registry = Registry::for_platform(platform.kind);
     match platform.kind {
         PlatformKind::Linux | PlatformKind::Openrc => {
@@ -217,37 +244,50 @@ pub fn registry_for(platform: &Platform, lock_wait_secs: u64) -> Registry {
                 ),
                 fs: Arc::new(RealFs::new(Path::new("/"))),
             };
-            let own = Box::new(PlacedPackages::new(&placement));
-            registry
-                .with(
-                    Kind::Linux,
-                    Box::new(LinuxKind::at_host(lock_wait_secs, own)),
-                )
-                .with(Kind::Reboot, Box::new(RebootKind::at_host()))
+            let packages = Box::new(PlacedPackages::new(&placement));
+            let linux_work = Box::new(LinuxKind::at_host(lock_wait_secs, packages));
+            let reboot_work = Box::new(RebootKind::at_host());
+            match (
+                HostkeeperVersion::parse(own),
+                Adapters::for_platform(platform),
+            ) {
+                (Ok(own), Ok(adapters)) => {
+                    linux::kinds(LinuxCheck::at_host(adapters, own), linux_work, reboot_work)
+                }
+                _ => registry
+                    .with(Kind::Linux, linux_work)
+                    .with(Kind::Reboot, reboot_work),
+            }
         }
-        PlatformKind::Macos => registry,
+        PlatformKind::Macos => registry.with(Kind::Macos, Box::new(MacosKind::at_host())),
     }
 }
 
-/// The ending of a `cutover`, which a host with no run record ([`Unwired`]) refuses before any
-/// kind runs: failed `run_record_failed`, saying the host keeps no run record. `None` for the
-/// other steps.
+/// The ending of a `cutover`, which a hook with no run record ([`Unwired`]: its parameters on
+/// standard input) refuses before any kind runs: failed `run_record_failed`, saying the host keeps
+/// no run record. `None` for the other steps.
 pub fn unwired_record(step: HookStep) -> Option<Ending> {
     (step == HookStep::Cutover).then(|| record_failed(RecordError::NotWired))
 }
 
 /// `hostkeeper maintenance-hook` on this host: the kinds of its platform ([`registry_for`]), the
 /// boot id of the system the binary was built for, the platform's reboot ([`HostRebooter`]; none
-/// on a Mac) and no run record yet ([`Unwired`]), so a `cutover` is refused ([`unwired_record`])
-/// before its parameters are read; the parameters from the file `args` names or from the
-/// process's standard input, the report to its standard output.
+/// on a Mac) and the run record beside the parameters file ([`StoreRecord::beside_params`]); with
+/// the parameters on standard input there is no record ([`Unwired`]), so a `cutover` is refused
+/// ([`unwired_record`]) before its parameters are read. The parameters come from the file `args`
+/// names or from the process's standard input, the report goes to its standard output.
 pub fn host_main(args: &HookArgs) -> Outcome {
-    if let Some(ending) = unwired_record(args.step) {
+    let store_record = StoreRecord::beside_params(&args.params);
+    if let Some(ending) = unwired_record(args.step).filter(|_| store_record.is_none()) {
         let _unwritten = ending.report().write_to(&mut io::stdout().lock());
         return ending.outcome;
     }
     let platform = Platform::host();
-    let kinds = registry_for(&platform, args.package_lock_wait_secs);
+    let kinds = registry_for(
+        &platform,
+        args.package_lock_wait_secs,
+        env!("CARGO_PKG_VERSION"),
+    );
     let boot_id = crate::adapters::host_boot_id();
     let host_rebooter = HostRebooter::for_platform(platform.kind);
     let rebooter = host_rebooter
@@ -257,7 +297,9 @@ pub fn host_main(args: &HookArgs) -> Outcome {
         });
     let ports = HookPorts {
         kinds: &kinds,
-        record: &Unwired,
+        record: store_record
+            .as_ref()
+            .map_or(&Unwired as &dyn RunRecord, |r| r as &dyn RunRecord),
         rebooter,
         boot_id: boot_id.as_ref(),
     };
@@ -324,7 +366,7 @@ fn cutover(params: &MaintainParams, ports: &HookPorts<'_>) -> Result<Ending, End
     let mut rebooted: Option<BootId> = None;
     for kind in params.kinds() {
         match record.state(run_id, kind).map_err(record_failed)? {
-            KindState::Applied => {}
+            KindState::Applied | KindState::AppliedAfterReboot { .. } => {}
             KindState::RebootUnderWay { boot } => {
                 let now = boot_id(ports.boot_id)?;
                 if now == boot {
@@ -358,18 +400,34 @@ fn cutover(params: &MaintainParams, ports: &HookPorts<'_>) -> Result<Ending, End
     Ok(Ending::done())
 }
 
-/// Each kind's `verify`, once the run record holds every kind applied.
+/// Each kind's check, in the run's order, to the first wrong fact: the kind recorded applied,
+/// the host booted again since the reboot it needed was asked for, and the kind's own `verify`.
 fn verify(params: &MaintainParams, ports: &HookPorts<'_>) -> Result<Ending, Ending> {
     for kind in params.kinds() {
         let state = ports
             .record
             .state(params.run_id(), kind)
             .map_err(record_failed)?;
-        if state != KindState::Applied {
-            return Err(Ending::failed(
-                REASON_NOT_APPLIED,
-                format!("{kind} is not recorded applied"),
-            ));
+        match state {
+            KindState::Applied => {}
+            KindState::AppliedAfterReboot { asked_in } => {
+                if boot_id(ports.boot_id)? == asked_in {
+                    return Err(Ending::failed(
+                        REASON_NOT_REBOOTED,
+                        format!(
+                            "{kind} needed a reboot, and the host still runs the boot {} it was \
+                             asked in",
+                            asked_in.as_str()
+                        ),
+                    ));
+                }
+            }
+            KindState::Pending | KindState::RebootUnderWay { .. } => {
+                return Err(Ending::failed(
+                    REASON_NOT_APPLIED,
+                    format!("{kind} is not recorded applied"),
+                ));
+            }
         }
         ports.kinds.get(kind)?.verify(params)?;
     }

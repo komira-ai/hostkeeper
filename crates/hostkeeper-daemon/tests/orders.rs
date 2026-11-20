@@ -10,7 +10,9 @@ use std::sync::Arc;
 
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::testing::{FakeClock, manifest, spawn};
-use hostkeeper_daemon::verb::{DIGEST_RULE, NO_TRY, NO_VERB, SERVICE_RULE, VERSION_RULE};
+use hostkeeper_daemon::verb::{
+    ACTION_RULE, DIGEST_RULE, NO_TRY, NO_VERB, SERVICE_RULE, VERSION_RULE,
+};
 use hostkeeper_daemon::verbs::update::declared_params;
 use hostkeeper_daemon::{Refusal, Reply};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
@@ -188,11 +190,11 @@ fn an_unspecified_or_malformed_order_is_refused_naming_the_field() {
             "clear_record.service",
             SERVICE_RULE,
         ),
-        // A `maintain`, which this daemon does not run, is refused as a verb it does not know.
+        // A `maintain` with no action is refused naming it: this daemon runs only `RUN`.
         (
             with_verb(order::Verb::Maintain(Maintain::default())),
-            "verb",
-            NO_VERB,
+            "maintain.action",
+            ACTION_RULE,
         ),
     ];
     for (order, field, rule) in rows {

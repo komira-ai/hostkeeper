@@ -56,13 +56,15 @@ pub struct StepCall<'a> {
 /// One run of an additive step: a step of the hook that is not one of the five of an update (the
 /// hook's `uninstall`, which an uninstall order runs, the `[hook] boot` step the package's
 /// manifest names, which the daemon runs from `current` at its start, or the `[hook] drain` and
-/// `[hook] resume` steps of a maintenance run, [`crate::maintenance`]). The hook is run as
+/// `[hook] resume` steps of a maintenance run, [`crate::maintenance`], and the steps of the
+/// daemon's own maintenance hook, `hostkeeper maintenance-hook`). The hook is run as
 /// `<executable> <hook_args...> <step> --params <params>`.
 #[derive(Clone, Debug)]
 pub struct AdditiveCall<'a> {
     /// The service the step belongs to.
     pub service: &'a str,
-    /// The step's name, as the manifest gives it: a token that is none of the five steps.
+    /// The step's name, as the manifest gives it: a token that is none of the five steps; for the
+    /// daemon's maintenance hook, `prepare`, `cutover` or `verify` of that hook.
     pub step: &'a str,
     /// The arguments of the manifest's hook command after its program, given before the step
     /// (`update-hook` in `["bin/tierstore", "update-hook"]`).

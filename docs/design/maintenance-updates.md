@@ -1,6 +1,6 @@
 # Scheduled maintenance updates
 
-Status: design; the Linux report of sections 1 and 4.1 is built (`crates/hostkeeper-daemon/src/maintenance_facts.rs`), and on a Mac its macOS facts and due macOS updates, FileVault, the data volume's free space, the Command Line Tools, its Xcodes, its update account and the settings of section 5.8 (`maintenance_macos.rs`, `maintenance_mac.rs`, `maintenance_xcode.rs`, `maintenance_account.rs`, `maintenance_mdm.rs`); nothing else. The owner's answers of 2026-11-19 are in: the Mac's update account (section 5.5) and the first-class Linux path
+Status: design; the Linux report of sections 1 and 4.1 is built (`crates/hostkeeper-daemon/src/maintenance_facts.rs`), and on a Mac its macOS facts and due macOS updates, FileVault, the data volume's free space, the Command Line Tools, its Xcodes, its update account and the settings of section 5.8 (`maintenance_macos.rs`, `maintenance_mac.rs`, `maintenance_xcode.rs`, `maintenance_account.rs`, `maintenance_mdm.rs`), as are the maintenance hook's steps, the Linux kinds' `cutover` (`maintenance_linux.rs`) and their `verify` of section 5.6 (`crates/hostkeeper-daemon/src/maintenance_hook/linux.rs`); nothing else. The owner's answers of 2026-11-19 are in: the Mac's update account (section 5.5) and the first-class Linux path
 (the one-button update of section 4.2) are decided; for Xcode, section 2.0 makes a push from the operator's own Mac the source (owner's direction, 2026-11-20), with a fetcher Mac as the alternative. Facts about this repository were read on `main` at the commit this document lands on top
 of; facts about komira-ai/jobscheduler and komira-ai/kbf were read on their `main` and are marked as theirs. **Built** marks what exists
 (with its path), **New** what this design adds, **[V]** a claim to verify before building on it.
@@ -74,6 +74,8 @@ checks below and the report of section 4.1.
 Packages hostkeeper itself installs must not move in an OS upgrade. apt holds them (`apt-mark hold`, Built:
 `docs/design/packages-repositories.md`). dnf and apk have no such hold today, so the maintenance hook excludes them by name (dnf
 `--exclude`, apk by pinning each in `/etc/apk/world` as `name=version`) **[V]**, and the due list leaves them out on every platform.
+The stage (section 5.2, step 1; Built) never names them to apt or apk (apt's hold stays as the installer placed it) and passes
+dnf `--exclude=<name>` for each; the pin in `/etc/apk/world` is the apply's, since the stage changes nothing apk reads.
 
 On a Mac the report also carries what an update needs (section 4.1): FileVault's state (`fdesetup status`, and `fdesetup
 supportsauthrestart`), the free space of the data volume (`statvfs` of `/System/Volumes/Data`), the update account's state (present, an
@@ -362,7 +364,9 @@ exclusion, `min_up`) are kept per package and count a cordoned host as up:
 
 The coordinator sends one order, `maintain` (New, a case of `Order.verb`, with an `order_id` and `try` like the others): the run, the
 kinds, for `xcode` the store entries (version, build, size, SHA-256) and the versions to remove and the default, the Linux scope, the
-drain deadline, and for `macos` the path (`install` or `wait`, section 5.5.2).
+drain deadline, and for `macos` the path (`install` or `wait`, section 5.5.2) and whether a major upgrade may be staged and installed
+(`Maintain.macos_major`, the group's `macos_major`; false when not sent). The order names no version or label: the host stages what its
+own listing offers (section 1, "Only what Apple offers now can be installed").
 
 ### 5.2 On the host: drain hooks and the maintenance hook
 
@@ -374,21 +378,26 @@ changes keep it so:
   service and returns when it has no work; `resume` puts it back. Both are safe to run twice. A package that names neither is left alone.
   The conformance harness (Built: `hostkeeper-hook`'s `conformance` feature) gains checks for them.
 - **The maintenance hook (Built: the command and its skeleton, `crates/hostkeeper-daemon/src/maintenance_hook.rs`; the `cutover`
-  of `linux` and `reboot`, `crates/hostkeeper-daemon/src/maintenance_linux.rs`; the other kinds' work and steps New).** The OS work is a hook too, a subcommand of hostkeeper's own binary, `hostkeeper maintenance-hook <prepare|cutover|verify>
+  of `linux` and `reboot`, `crates/hostkeeper-daemon/src/maintenance_linux.rs`, and their `verify`,
+  `crates/hostkeeper-daemon/src/maintenance_hook/linux.rs`; the `prepare` of `linux`, the stage of step 1,
+  `crates/hostkeeper-daemon/src/maintenance_hook/linux/`; the other kinds' work and steps New).** The OS work is a hook too, a subcommand of hostkeeper's own binary, `hostkeeper maintenance-hook <prepare|cutover|verify>
   --params <file>`, launched the way the step runner launches a step (Built: `hostkeeper_steps` launchers: a transient systemd unit, a
   launchd job on a Mac, a process group under OpenRC). Its parameters are the `maintain` order's fields as JSON, in a file or on standard
   input (`--params -`), never in an argument. Each kind is the work of a `MaintenanceKind`, found by the host's platform; until a kind's
-  work is written its step fails `unsupported_kind`.
+  work is written its step fails `unsupported_kind`. The stage and the install wait for a held package manager's lock for at most
+  `--package-lock-wait-secs` (the daemon's flag, given to the hook too).
 
 The step runner's sequence does not fit as it stands: it runs `rollback` after a failed `prepare`, `cutover` or `verify`, its reboot row
 restarts a new release's units, and only `prepare` may run unbounded (Built: `hostkeeper-hook` `next.rs`, `hostkeeper-steps`
 `resume.rs` and `runner.rs`). An OS update has no release to restart and cannot be rolled back. So the daemon runs a `maintain` order by a
-small sequencer of its own (New), whose position is kept in a durable, versioned run record beside the step records and fsynced before and
-after each step, so a crash, a reboot or a daemon that restarts as a newer release resumes it:
+small sequencer of its own (Built: `crates/hostkeeper-daemon/src/maintenance_run.rs`, the order in `verbs/maintain.rs`), whose position is
+kept in a durable, versioned run record beside the step records and fsynced before and after each step, so a crash, a reboot or a daemon
+that restarts as a newer release resumes it. The order names no services, so the daemon drains the installed services whose release names
+`drain` and `resume` in the order of their names; the group's package order needs a field of the order (additive) and is not built:
 
 | # | Step | What runs | On failure |
 |---|---|---|---|
-| 1 | stage | maintenance hook `prepare`: check free space (twice the download, at least), then download what can be downloaded (`softwareupdate --download`, `softwareupdate --fetch-full-installer` for a major upgrade, `apt-get --download-only`, `dnf --downloadonly`, the Xcode archive copied from the store and expanded into staging) | deferred: nothing was touched, the host never left service; the run goes on |
+| 1 | stage | maintenance hook `prepare`: check free space (twice the download, at least, from the package manager's own estimate), then download what can be downloaded (`softwareupdate --download`, `softwareupdate --fetch-full-installer` for a major upgrade, `apt-get --download-only` sized by `--print-uris`, `dnf upgrade --downloadonly` sized by `--assumeno`'s total, `apk fetch` into `/var/cache/hostkeeper/maintenance/apk` sized by `apk info --size` **[V]**, the Xcode archive copied from the store and expanded into staging). Built for Linux. Built for `macos` (`crates/hostkeeper-daemon/src/maintenance_hook/macos/stage.rs`), on the `install` path (on `wait` it runs no program): `sw_vers` and the Mac's own `softwareupdate --list` (and `--list-full-installers` only when the order's `macos_major` allows it); with an upgrade allowed and offered, the newest full installer of a higher major alone (the upgrade replaces the system, so no minor update is staged beside it), else every macOS update of the running major by its label; the data volume's free space at least twice the sizes the listings give; then `softwareupdate --download <label>` or `--fetch-full-installer --full-installer-version <version>`. Nothing offered, or a download answering `Update not found`, defers `macos_update_not_listed`; a short disk `free_space_short`, nothing downloaded | deferred: nothing was touched, the host never left service; the run goes on |
 | 2 | drain | each installed service's `drain`, in the group's package order, unbounded unless the run sets a deadline (5.3). js-agent's cordons the host and waits for its leases to end | halt (5.4) |
 | 3 | apply | maintenance hook `cutover`, which applies each kind of the run once (by the run record), macOS first (section 5.5). When a kind needs a reboot (`Action: restart`, `reboot-required`, a new kernel), the hook records that the kind's reboot is under way, then reboots (on a Mac, section 5.5: `softwareupdate --install ... --restart`; with FileVault on, `--install` then `fdesetup authrestart`; `startosinstall` for a major upgrade; or only a wait when device management installs it; `systemctl reboot`, or OpenRC's `reboot`, on Linux). After the reboot the daemon runs `cutover` again: it reads the record and the changed boot id, records the kind applied once it reads the new version, and goes on with the next kind, never installing the first again. A major upgrade on a Mac with FileVault on is not ordered until MP shows `startosinstall` restarts it authenticated | halt; `maintenance_not_back` when silent past `return_secs` |
 | 4 | check | maintenance hook `verify` (section 5.6) | halt |
@@ -400,7 +409,7 @@ No step of this sequence runs `rollback`; a failure stops it where it is.
 ### 5.3 Drain: no deadline by default
 
 Work is never cut to finish an update (`docs/design/hostkeeper-design.md`, goal 6). A `drain` step runs with no time bound
-(`RuntimeMaxSec=infinity`, Built for `prepare`; for `drain` the launchers and `hostkeeper_steps::run_maintenance_step` are Built, and the sequencer that calls it is New, bounded by exactly the deadline when there is one, and reading a deadline that passed as exit 75) unless the run names `drain_deadline_secs`. When a deadline passes, the step exits 75 (deferred, Built
+(`RuntimeMaxSec=infinity`, Built for `prepare`; for `drain` the launchers and `hostkeeper_steps::run_maintenance_step` are Built, and so is the sequencer that calls it, bounded by exactly the deadline when there is one, and reading a deadline that passed as exit 75) unless the run names `drain_deadline_secs`. When a deadline passes, the step exits 75 (deferred, Built
 outcome): the daemon runs `resume` for every service it drained, the host is back in service with nothing changed, it is marked `deferred`,
 and the run moves on to the next host; a deferred host is offered again when the run's other hosts are done, if the window is still open.
 Nothing stops a job.

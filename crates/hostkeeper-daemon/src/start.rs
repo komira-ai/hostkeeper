@@ -52,6 +52,7 @@ use crate::installed;
 use crate::links::Links;
 use crate::mac_config::MacConfigError;
 use crate::mac_files::MacFilesError;
+use crate::maintenance_run::Driven;
 use crate::notify::{NoNotifier, ReadyNotifier};
 use crate::own_package::{self, OwnActivate};
 
@@ -85,6 +86,9 @@ pub struct Settings {
     /// The seconds a step of the repository installer waits for the package manager's lock
     /// (`--package-lock-wait-secs`).
     pub package_lock_wait_secs: u64,
+    /// How many versions of a service a prune keeps besides `current`, `previous`, the pin and
+    /// what the records use (`--keep-versions`).
+    pub keep_versions: u64,
 }
 
 impl Settings {
@@ -199,6 +203,8 @@ fn io_at(path: &Path) -> impl Fn(io::Error) -> StartError + '_ {
 pub struct Started {
     daemon: Arc<Daemon>,
     report: BootReport,
+    /// The thread that resumes the maintenance turn the run record holds, until it is joined.
+    maintenance: Option<std::thread::JoinHandle<Option<Driven>>>,
     /// Held while the daemon lives: one daemon per state directory.
     _lock: File,
 }
@@ -206,6 +212,16 @@ pub struct Started {
 impl Started {
     pub fn daemon(&self) -> &Arc<Daemon> {
         &self.daemon
+    }
+
+    /// Waits for the resume of the maintenance turn the start began ([`Daemon::resume_maintenance`])
+    /// to stop: the turn ended, waits for a reboot, or could not go on. `None` when there was no
+    /// turn to resume, or it was joined before.
+    pub fn join_maintenance(&mut self) -> Option<Driven> {
+        self.maintenance
+            .take()
+            .and_then(|thread| thread.join().ok())
+            .flatten()
     }
 
     /// What the boot work did.
@@ -276,7 +292,9 @@ pub fn startup_notifying(
         packages: settings.packages_dir.clone(),
         facts: settings.facts_file.clone(),
     };
-    let daemon = Arc::new(Daemon::new(config, dirs, ports, own_version));
+    let daemon = Arc::new(
+        Daemon::new(config, dirs, ports, own_version).keeping_versions(settings.keep_versions),
+    );
     daemon.clear_policy_rc_d(&mut report);
     settle_self_update(&daemon, &mut report);
     activate_own_package(&daemon, &mut report);
@@ -286,11 +304,22 @@ pub fn startup_notifying(
     boot_pass(&daemon, &mut report)?;
     delete_archive_versions(&daemon, &mut report);
     after_boot(&daemon, &mut report, notifier);
+    let maintenance = Some(resume_maintenance(&daemon));
     Ok(Started {
         daemon,
         report,
+        maintenance,
         _lock: lock,
     })
+}
+
+/// The maintenance turn the run record holds, resumed from where it stands on a thread of its
+/// own ([`Daemon::resume_maintenance`]) when it has not ended: after a crash, a reboot or a
+/// restart as a newer release. The start does not wait for it ([`Started::join_maintenance`]
+/// does).
+fn resume_maintenance(daemon: &Arc<Daemon>) -> std::thread::JoinHandle<Option<Driven>> {
+    let daemon = Arc::clone(daemon);
+    std::thread::spawn(move || daemon.resume_maintenance())
 }
 
 /// The update of hostkeeper itself that waits for the restart, settled by this binary
