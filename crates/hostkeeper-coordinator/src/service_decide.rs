@@ -101,6 +101,7 @@ pub(super) fn node_of(
         last_renew_error: beat.last_renew_error.clone(),
         trusted_root,
         skewed_beats: 0,
+        maintenance: crate::maintenance::kept_of(beat),
     }
 }
 
@@ -315,3 +316,7 @@ impl Coordinator {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "service_decide_maintenance_tests.rs"]
+mod maintenance_tests;

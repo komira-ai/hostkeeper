@@ -368,7 +368,7 @@ pub(crate) fn beat(
 ) -> Result<(WireAnswer, Option<Order>), BeatRefused> {
     let BeatCaller { identity, retiring } = caller;
     let HeartbeatRead {
-        beat,
+        mut beat,
         services_dropped,
         extras_dropped,
         extras_dropped_facts,
@@ -379,6 +379,7 @@ pub(crate) fn beat(
     if let Some(why) = extras_dropped {
         coordinator.note_extras_dropped(&identity, &why, &extras_dropped_facts);
     }
+    coordinator.settle_maintenance(&identity, &mut beat);
     if retiring {
         // Heard for its final report only: a slot it held is freed once the report is
         // final, and the host is refused all the same.

@@ -151,6 +151,8 @@ pub struct Node {
     /// How many of its heartbeats since the coordinator started were skewed: counted by the
     /// fleet ([`Fleet::note_node`]), which replaces what the node given to it says.
     pub skewed_beats: u64,
+    /// The host's last maintenance report that was kept, if its daemon announces `maintenance-v1`.
+    pub maintenance: Option<crate::maintenance::Kept>,
 }
 
 impl Node {
@@ -441,8 +443,7 @@ impl Fleet {
         self.nodes.get(id)
     }
 
-    /// The platform the host `id` last named: its node's, else the last word of it about
-    /// `service`.
+    /// The platform the host `id` last named: its node's, else the last word of it about `service`.
     #[must_use]
     pub fn platform_of(&self, service: &str, id: &HostId) -> Option<Platform> {
         self.node(id)
