@@ -1,0 +1,9 @@
+hk gadgets: the service `Gadgets` of the package `hostkeeper.fixture.v1`. Gadgets, a second service; its comment has a quote: it's "quoted".
+
+Usage: hk [global flags] gadgets <method> [flags]
+
+Methods:
+  list
+      Every gadget.
+  tune
+      Set the speed.

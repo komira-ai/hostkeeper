@@ -5,8 +5,8 @@
 //! - The plans, `plans/<id>.toml` ([`plan`]): each says what is measured, on which hosts, how many
 //!   repetitions, what is recorded, the steps of a repetition, the measures computed from the
 //!   records and what the report states from them. [`plan::Plan::parse`] checks a plan whole.
-//! - The runner ([`runner`]): carries a plan out against a coordinator through `hkctl` alone
-//!   ([`coordinator::Hkctl`]: the coordinator's endpoint and CA as flags, the operator's token
+//! - The runner ([`runner`]): carries a plan out against a coordinator through `hk` alone
+//!   ([`coordinator::Hk`]: the coordinator's endpoint and CA as flags, the operator's token
 //!   from a file) and records one event per line ([`record`]). Its dry run prints what it would do
 //!   and calls nothing.
 //! - The analysis ([`analysis`]) and its output ([`render`]): pure functions from a run's records
@@ -17,9 +17,9 @@
 //!
 //! - `hostkeeper-measure check --plan FILE...` reads and checks plans.
 //! - `hostkeeper-measure run --plan FILE --run-id ID [--param NAME[@REP]=VALUE]... --dry-run`
-//!   prints the steps of every repetition with the parameters filled in. It calls no `hkctl`, writes
+//!   prints the steps of every repetition with the parameters filled in. It calls no `hk`, writes
 //!   nothing and asks the operator nothing; it reads the parameters' files to check them.
-//! - `hostkeeper-measure run --plan FILE --run-id ID [--param ...]... --run-dir DIR --hkctl PATH
+//! - `hostkeeper-measure run --plan FILE --run-id ID [--param ...]... --run-dir DIR --hk PATH
 //!   --endpoint URL --ca-file PATH --token-file PATH` runs the plan. It writes `run.json`,
 //!   `records.jsonl` (one event per line, appended and flushed as each is seen), the request files
 //!   it sent under `requests/`, and `hosts.tsv` (each node id and the `host-<n>` the records call

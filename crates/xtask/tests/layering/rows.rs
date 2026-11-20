@@ -110,7 +110,7 @@ fn layering_rules_cover_every_surviving_crate() {
     let fewer_dev: Vec<Layer> = LAYERS
         .iter()
         .map(|row| {
-            if row.0 == "hostkeeper-hkctl" {
+            if row.0 == "hostkeeper-hk" {
                 (row.0, row.1, oidc_only)
             } else {
                 *row
@@ -120,15 +120,22 @@ fn layering_rules_cover_every_surviving_crate() {
     assert_eq!(
         rows_cover(&fewer_dev, &metadata),
         refused(
-            "hostkeeper-hkctl has dev-dependencies on the workspace crates \
+            "hostkeeper-hk has dev-dependencies on the workspace crates \
              {hostkeeper-coordinator, hostkeeper-oidc}, but its row in LAYERS names {hostkeeper-oidc}"
         )
     );
 }
 
-/// The crates of this product that were removed from the workspace: the rights crate, and the CI
-/// client `hostkeeper-ci` (`hostkeeper ci`, replaced by `hkctl` in `set-desired.yml`).
-const REMOVED: [&str; 2] = ["hostkeeper-rights", "hostkeeper-ci"];
+/// The crates of this product that were removed from the workspace: the rights crate, the CI
+/// client `hostkeeper-ci` (`hostkeeper ci`, replaced by `hk` in `set-desired.yml`), and the two
+/// crates `hostkeeper-hkctl` (the script) and `hostkeeper-hkssh` (the ssh tunnel's client) that
+/// `hostkeeper-hk` replaced as one program.
+const REMOVED: [&str; 4] = [
+    "hostkeeper-rights",
+    "hostkeeper-ci",
+    "hostkeeper-hkctl",
+    "hostkeeper-hkssh",
+];
 
 /// Catches: a crate depending on a removed crate of [`REMOVED`], here kept as a path crate
 /// outside the workspace (where neither the layers nor the coverage gate would see it), being

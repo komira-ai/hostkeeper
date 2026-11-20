@@ -14,7 +14,7 @@ timeout. The repair is the next order: an update to a new version, which links e
 path again. When `ServiceBeat.drift` is built, the detection watch reads it instead."""
 records = """
 The operator's change, stamped by the runner when the operator confirms it; the first poll of \
-`hkctl hosts list` that shows hello unhealthy on the host, or the timeout; the repair's set, \
+`hk hosts list` that shows hello unhealthy on the host, or the timeout; the repair's set, \
 stamped by its `set_desired` audit entry; and the first poll that shows the new version \
 installed by a succeeded update with hello healthy, stamped with the host's last heartbeat."""
 repetitions = 3

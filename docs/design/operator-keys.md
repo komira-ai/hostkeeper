@@ -78,7 +78,7 @@ additive (`crates/hostkeeper-proto/tests/additions_operator_keys.rs`).
 The report is sent in every heartbeat: the digest of the set the block holds as the daemon read
 it for that heartbeat, the last set refused with the reason, and why the last try failed. The
 coordinator keeps the last report of each host in memory and shows it in the host's heartbeat
-(`hkctl hosts get --node-id <host>`: `host.heartbeat.operatorKeys`).
+(`hk hosts get --node-id <host>`: `host.heartbeat.operatorKeys`).
 
 ## 4. The daemon
 
@@ -139,7 +139,7 @@ arrives, so every start applies the set once (and, on a Mac, checks Remote Login
 3. The daemon makes a new key and posts its enrollment request. A Mac that was never enrolled and
    has an open inventory record for its serial is approved by the record with no step at all. A
    reinstalled Mac's host id is still held by its old key, so it needs one approval with
-   `--replace true` (a click on the Enrollment page or one `hkctl enrollment approve`), on the
+   `--replace true` (a click on the Enrollment page or one `hk enrollment approve`), on the
    operator's own machine; nothing is typed on the Mac, and no password anywhere
    (`docs/operations/enrollment.md`, "The Mac path").
 4. The daemon takes its certificate at its next poll and heartbeats. The coordinator answers its

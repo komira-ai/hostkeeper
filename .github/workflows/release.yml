@@ -58,8 +58,8 @@
 #          exactly that commit's assets), and runs the downloaded linux-x86_64 binaries, which
 #          must print exactly `hostkeeper X.Y.Z+<12 hex>`, `hostkeeper-coordinator
 #          X.Y.Z+<12 hex>`, `hostkeeper-coordinator-update
-#          X.Y.Z+<12 hex>` and `hkssh X.Y.Z+<12 hex>` (cargo xtask release check-binary); the coordinator
-#          updater's and hkssh's only in a release whose build made their tarballs, since a release
+#          X.Y.Z+<12 hex>` and `hk X.Y.Z+<12 hex>` (cargo xtask release check-binary); the coordinator
+#          updater's and hk's only in a release whose build made their tarballs, since a release
 #          of a commit from before them has none (crates/xtask/tests/workflows/release_assets.rs). These are the commands of
 #          docs/deploy/verify-a-release.md, and a test keeps the two the same
 #          (crates/xtask/src/release/doc_tests.rs).
@@ -287,11 +287,11 @@ jobs:
       - name: hostkeeper-coordinator-update says the version and the commit it is released under
         if: ${{ hashFiles(format('dist/hostkeeper-coordinator-update-{0}-linux-x86_64.tar.gz', env.RELEASE_VERSION)) != '' }}
         run: cargo xtask release check-binary "$RUNNER_TEMP/binary/hostkeeper-coordinator-update" "$RELEASE_VERSION" "$COMMIT"
-      - if: ${{ hashFiles(format('dist/hkssh-{0}-linux-x86_64.tar.gz', env.RELEASE_VERSION)) != '' }}
-        run: tar -xzf "dist/hkssh-$RELEASE_VERSION-linux-x86_64.tar.gz" -C "$RUNNER_TEMP/binary" hkssh
-      - name: hkssh says the version and the commit it is released under
-        if: ${{ hashFiles(format('dist/hkssh-{0}-linux-x86_64.tar.gz', env.RELEASE_VERSION)) != '' }}
-        run: cargo xtask release check-binary "$RUNNER_TEMP/binary/hkssh" "$RELEASE_VERSION" "$COMMIT"
+      - if: ${{ hashFiles(format('dist/hk-{0}-linux-x86_64.tar.gz', env.RELEASE_VERSION)) != '' }}
+        run: tar -xzf "dist/hk-$RELEASE_VERSION-linux-x86_64.tar.gz" -C "$RUNNER_TEMP/binary" hk
+      - name: hk says the version and the commit it is released under
+        if: ${{ hashFiles(format('dist/hk-{0}-linux-x86_64.tar.gz', env.RELEASE_VERSION)) != '' }}
+        run: cargo xtask release check-binary "$RUNNER_TEMP/binary/hk" "$RELEASE_VERSION" "$COMMIT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-${{ matrix.tag }}
@@ -564,7 +564,7 @@ jobs:
 
   # set-desired  the CI client (set-desired.yml, docs/deploy/ci-client.md), pinned like any
   #          caller's, at the CI client's revision the workflow lint names (`callers.rs`,
-  #          `CLIENT_COMMIT`), the one hello-desired.yml pins too. It runs that release's hkctl:
+  #          `CLIENT_COMMIT`), the one hello-desired.yml pins too. It runs that release's hk:
   #          one call with an OIDC token, which names the release by its targets alone, so each
   #          host is ordered its own platform's native package. It does not wait
   #          for the fleet: the coordinator's rollout gate orders the hosts, the canary hosts of

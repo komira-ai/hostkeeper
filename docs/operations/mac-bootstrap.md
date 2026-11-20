@@ -31,7 +31,7 @@ are the owner's; this page says what to put in them and what to watch.
 Add the record that approves it, in the host group it belongs to:
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment add-record --host-id mac-03 --host-group build --serial <serial>
 ```
 

@@ -20,8 +20,8 @@
 //! `2` for a usage error (as clap reports it), [`EXIT_CONFIG`] when the daemon config did not
 //! load, [`EXIT_LOCKED`] when another daemon holds the state directory. A verb or a flag this
 //! binary does not have is a usage error, `2`, as clap reports it: `ctl` (the coordinator's
-//! command line is `hkctl` now, docs/cli.md), `ci` (CI runs `hkctl releases set-desired` and
-//! `hkctl releases wait-converged`, docs/deploy/ci-client.md), `admin` and `--admin-socket` (the
+//! command line is `hk` now, docs/cli.md), `ci` (CI runs `hk releases set-desired` and
+//! `hk releases wait-converged`, docs/deploy/ci-client.md), `admin` and `--admin-socket` (the
 //! daemon serves no admin socket; a host's status, abort and clear-record go through the
 //! coordinator, docs/admin.md), and the verbs of the update before the hand-over
 //! (`self-update-protocol`, `self-update-fallback`, `self-update-seed`, `mac-config`,

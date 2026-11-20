@@ -398,7 +398,7 @@ fn a_commit_that_fails_changes_nothing_and_a_resend_lands() {
 }
 
 /// Proves: the gRPC adapter answers each refusal with the status code its enum documents and the
-/// token as the message, so the page and `hkctl` read the same word.
+/// token as the message, so the page and `hk` read the same word.
 ///
 /// Catches: a refusal that reaches the client as a bare `Unknown`.
 #[test]

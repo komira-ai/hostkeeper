@@ -10,7 +10,7 @@ use std::path::Path;
 
 use super::contract::{
     Commit, Platform, Repo, SIGNER_REF, SIGNER_WORKFLOW, SUMS, Signer, Version, attested_names,
-    bundle_of, hkctl_name, summed_names,
+    bundle_of, summed_names,
 };
 use super::file_sha256;
 use super::image_index;
@@ -52,16 +52,15 @@ pub(crate) fn write_assets(dir: &Path, version: &Version, marker: &str) {
                 .expect("write an image");
             continue;
         }
+        if name.starts_with("hk-") && name.ends_with(".tar.gz") {
+            let tarball = tarball(&[Member::File("hk", format!("{name} {marker}\n"))]);
+            std::fs::write(dir.join(name), tarball).expect("write the command line");
+            continue;
+        }
         write(name, format!("{name} {marker}\n"));
     }
     let image = image_index::index_bytes(dir, version).expect("the image index");
     std::fs::write(dir.join(image_index::index_name(version)), image).expect("write the index");
-    // The command line passes `release check` as the script `release hkctl` writes, stamped with
-    // the 12 digits every commit of [`nth_commit`] below 2^32 starts with.
-    write(
-        &hkctl_name(version),
-        format!("#!/usr/bin/env bash\n# {marker}\n_hk_version='hkctl {version}+000000000000'\n"),
-    );
     let mut sums = String::new();
     for name in &summed {
         let digest = file_sha256(&dir.join(name)).expect("hash an asset");
@@ -71,6 +70,52 @@ pub(crate) fn write_assets(dir: &Path, version: &Version, marker: &str) {
     for name in attested_names(version) {
         write(&bundle_of(&name), "{}\n".to_owned());
     }
+}
+
+/// One member of a tarball made by [`tarball`].
+pub(crate) enum Member<'a> {
+    /// A regular file of this name and text.
+    File(&'a str, String),
+    /// A symbolic link of this name to this target.
+    Link(&'a str, &'a str),
+    /// A directory of this name.
+    Dir(&'a str),
+}
+
+/// A gzip tar archive of `members`, in the order given.
+pub(crate) fn tarball(members: &[Member<'_>]) -> Vec<u8> {
+    let mut builder = tar::Builder::new(Vec::new());
+    for member in members {
+        let mut header = tar::Header::new_gnu();
+        header.set_mode(0o555);
+        match member {
+            Member::File(name, text) => {
+                header.set_size(text.len() as u64);
+                header.set_entry_type(tar::EntryType::Regular);
+                builder
+                    .append_data(&mut header, name, text.as_bytes())
+                    .expect("append a file");
+            }
+            Member::Link(name, target) => {
+                header.set_size(0);
+                header.set_entry_type(tar::EntryType::Symlink);
+                builder
+                    .append_link(&mut header, name, target)
+                    .expect("append a link");
+            }
+            Member::Dir(name) => {
+                header.set_size(0);
+                header.set_entry_type(tar::EntryType::Directory);
+                builder
+                    .append_data(&mut header, name, std::io::empty())
+                    .expect("append a directory");
+            }
+        }
+    }
+    let tar = builder.into_inner().expect("finish the archive");
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    std::io::Write::write_all(&mut gz, &tar).expect("compress");
+    gz.finish().expect("finish the gzip")
 }
 
 /// The commit numbered `n` of a fake history: `n` in hex, 40 digits.
