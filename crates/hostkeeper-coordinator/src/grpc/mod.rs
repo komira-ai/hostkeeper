@@ -1,8 +1,8 @@
 //! The coordinator's gRPC: `hostkeeper.agent.v1.Coordinator` on the heartbeat listener,
 //! `hostkeeper.operator.v1.{Hosts, Releases, Services, Enrollment, Audit, Alerts, Rollouts,
-//! Repositories, HostGroups, Users, ApiTokens}` on the private one (the `Mdm` service is no longer
-//! served: a call of it is `UNIMPLEMENTED`; `Maintenance` is described and each of its methods
-//! answers `UNIMPLEMENTED` until its handler lands),
+//! Repositories, HostGroups, Users, ApiTokens, Maintenance}` on the private one (the `Mdm` service
+//! is no longer served: a call of it is `UNIMPLEMENTED`; of `Maintenance`, `RetryHost` and
+//! `PutBack` answer `UNIMPLEMENTED` until their handlers land, [`PENDING`]),
 //! and the JSON gateway of the operator API ([`gateway`]), all beside the frozen JSON routes of
 //! [`crate::http`].
 //!
@@ -49,6 +49,7 @@ use hostkeeper_proto::hostkeeper::operator::v1::enrollment_server::EnrollmentSer
 use hostkeeper_proto::hostkeeper::operator::v1::host_groups_server::HostGroupsServer;
 use hostkeeper_proto::hostkeeper::operator::v1::hosts_server::HostsServer;
 use hostkeeper_proto::hostkeeper::operator::v1::layout_server::LayoutServer;
+use hostkeeper_proto::hostkeeper::operator::v1::maintenance_server::MaintenanceServer;
 use hostkeeper_proto::hostkeeper::operator::v1::releases_server::ReleasesServer;
 use hostkeeper_proto::hostkeeper::operator::v1::repositories_server::RepositoriesServer;
 use hostkeeper_proto::hostkeeper::operator::v1::rollouts_server::RolloutsServer;
@@ -74,6 +75,7 @@ use self::operator_accounts::{ApiTokensService, UsersService};
 use self::operator_console::ConsoleService;
 use self::operator_host_groups::HostGroupsService;
 use self::operator_layout::LayoutService;
+use self::operator_maintenance::MaintenanceService;
 use self::operator_repositories::RepositoriesService;
 use self::operator_ssh::SshService;
 use self::operator_xcode::XcodeService;
@@ -98,6 +100,7 @@ mod operator_accounts;
 mod operator_console;
 mod operator_host_groups;
 mod operator_layout;
+mod operator_maintenance;
 mod operator_repositories;
 mod operator_ssh;
 mod operator_xcode;
@@ -113,12 +116,9 @@ pub const GRPC_FEATURE: &str = "grpc-v1";
 
 /// The gRPC path of every method of the operator API that no handler serves yet: each is
 /// answered `UNIMPLEMENTED`, with no message, until the coordinator has the handler. A method
-/// added to a proto is listed here until its handler lands. The six methods of `Maintenance` are.
+/// added to a proto is listed here until its handler lands. `RetryHost` and `PutBack` of
+/// `Maintenance` are: the router answers them before it reads any credential ([`admit_via`]).
 pub const PENDING: &[&str] = &[
-    "/hostkeeper.operator.v1.Maintenance/Schedule",
-    "/hostkeeper.operator.v1.Maintenance/List",
-    "/hostkeeper.operator.v1.Maintenance/Get",
-    "/hostkeeper.operator.v1.Maintenance/Cancel",
     "/hostkeeper.operator.v1.Maintenance/RetryHost",
     "/hostkeeper.operator.v1.Maintenance/PutBack",
 ];
@@ -159,6 +159,8 @@ const SSH: &str = "hostkeeper.operator.v1.Ssh";
 const CONSOLE: &str = "hostkeeper.operator.v1.Console";
 /// The full name of the operator API's `Xcode`.
 const XCODE: &str = "hostkeeper.operator.v1.Xcode";
+/// The full name of the operator API's `Maintenance`.
+const MAINTENANCE: &str = "hostkeeper.operator.v1.Maintenance";
 
 /// The path of `Coordinator.Heartbeat`, which needs a client certificate that names a host.
 const HEARTBEAT: &str = "/hostkeeper.agent.v1.Coordinator/Heartbeat";
@@ -301,7 +303,8 @@ pub(crate) async fn admit(
 /// with `password_change_required` while the session's user must choose a new password. A
 /// request with an `Authorization` header never has its cookie read, and a cookie that names no
 /// live session is no credential. A method of `session_only` refuses a bearer
-/// `PERMISSION_DENIED` `session_required`.
+/// `PERMISSION_DENIED` `session_required`. A method of [`PENDING`] is `UNIMPLEMENTED`, with no
+/// message, before anything else is read.
 ///
 /// # Errors
 /// As [`admit`], and the two refusals of a session's call.
@@ -314,13 +317,16 @@ pub(crate) async fn admit_via(
     transport: Transport<'_>,
     session_only: &[&str],
 ) -> Result<Admitted, Status> {
+    if PENDING.contains(&path) {
+        return Err(Status::unimplemented(""));
+    }
     let served = match (surface, service_of(path)) {
         (Surface::Heartbeat, Some(AGENT)) => Served::Agent,
         (
             Surface::Control,
             Some(
                 HOSTS | RELEASES | SERVICES | ENROLLMENT | AUDIT | ALERTS | ROLLOUTS | REPOSITORIES
-                | HOST_GROUPS | USERS | API_TOKENS | LAYOUT | SSH | CONSOLE | XCODE,
+                | HOST_GROUPS | USERS | API_TOKENS | LAYOUT | SSH | CONSOLE | XCODE | MAINTENANCE,
             ),
         ) => Served::Operator,
         _ => return Err(Status::unimplemented("")),
@@ -553,6 +559,11 @@ where
         }
         Some(XCODE) => {
             let server = XcodeServer::new(XcodeService::new(coordinator))
+                .max_decoding_message_size(MAX_OPERATOR_BYTES);
+            call(server, request).await
+        }
+        Some(MAINTENANCE) => {
+            let server = MaintenanceServer::new(MaintenanceService::new(coordinator))
                 .max_decoding_message_size(MAX_OPERATOR_BYTES);
             call(server, request).await
         }

@@ -70,6 +70,8 @@
 //!   with no hook program; [`mirror`] the files of a private repository, read from the coordinator into a local copy apt reads; [`repository_push`] the repository sets the coordinator pushes, written
 //!   as the host's repository configuration and taken into use without a restart.
 //! - [`facts_file`]: the host's facts file, written from the facts the coordinator sends.
+//! - [`maintenance_state`]: the run state of the maintenance report, read from the host's
+//!   maintenance run record (`hostkeeper_steps::maintenance`).
 //! - [`operator_keys`]: the operator keys the coordinator sends (`operator-keys-v1`), put in the
 //!   managed block of the login account's `authorized_keys` ([`authorized_keys`], the block and the
 //!   file) and reported by digest in every heartbeat; [`login_account`] finds the account (root on
@@ -88,7 +90,10 @@
 //!   platform's list), which are [`maintenance_collect`]'s `Collector`s: [`maintenance_host`] (the
 //!   OS, the kernels, the boot), [`maintenance_reboot`] (a reboot the host asks for) and the
 //!   package managers [`maintenance_apt`], [`maintenance_dnf`] and [`maintenance_apk`], with
-//!   [`maintenance_own`] naming the packages hostkeeper itself installs, which are never due.
+//!   [`maintenance_own`] naming the packages hostkeeper itself installs, which are never due; on a
+//!   Mac, [`maintenance_macos`] (`sw_vers`, the hardware serial, and the macOS updates
+//!   `softwareupdate` lists, read by [`maintenance_softwareupdate`]) and [`maintenance_mac`]
+//!   (FileVault, the data volume's free space, the Command Line Tools).
 //! - [`update_account`]: a Mac's update account, read from its root-only file, and the update
 //!   call, which gives its password to the program on its standard input alone.
 //! - [`observer`]: what [`Daemon::status`] reports of a running service.
@@ -100,6 +105,9 @@
 //!   a maintenance run: the parameters of the run's `maintain` order, the work of each kind
 //!   (`macos`, `xcode`, `linux`, `reboot`) found by the host's platform, and the reboot recorded
 //!   in the run record before it is asked for.
+//! - [`maintenance_linux`]: the `linux` and `reboot` kinds of that hook on a Linux host: the
+//!   install of the host's package manager (`apt`, `dnf` or `apk`), the question whether the host
+//!   then needs a reboot, the kernel it runs after the reboot, and the reboot itself.
 //! - [`stamp`]: the version `hostkeeper --version` prints, with the commit of a release build.
 //! - [`refusal`]: the closed set of reason tokens.
 //! - [`link_adapters`]: the daemon as the executor, the held halts, the installed services and
@@ -162,8 +170,13 @@ pub mod maintenance_dnf;
 pub mod maintenance_facts;
 pub mod maintenance_hook;
 pub mod maintenance_host;
+pub mod maintenance_linux;
+pub mod maintenance_mac;
+pub mod maintenance_macos;
 pub mod maintenance_own;
 pub mod maintenance_reboot;
+pub mod maintenance_softwareupdate;
+pub mod maintenance_state;
 pub mod mirror;
 pub mod node;
 pub mod notify;

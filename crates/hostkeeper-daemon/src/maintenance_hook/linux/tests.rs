@@ -1,22 +1,22 @@
-//! The tests of the `linux` kind: its `prepare` is the stage, end to end through the hook's step
-//! (a short disk is a deferral, exit 75); its other steps are not written yet; and the host's
-//! registry holds it on Linux alone.
+//! The tests of the `linux` kind's `prepare`: it is the stage, end to end through the hook's step
+//! and from the hook's command line to its report (a short disk is a deferral, exit 75); a kind
+//! given no stage does not prepare.
 
 use clap::Parser;
 use hostkeeper_hook::{Class, Outcome, Report};
-use hostkeeper_launchd::PlatformKind;
 use hostkeeper_proto::hostkeeper::agent::v1::LinuxScope as WireScope;
 use hostkeeper_steps::ProcBootId;
 
-use super::*;
 use crate::cli::{Cli, Command};
 use crate::maintenance_hook::linux::stage::REASON_BUSY;
 use crate::maintenance_hook::linux::stage::REASON_SPACE_SHORT;
+use crate::maintenance_hook::linux::stage::Stage;
 use crate::maintenance_hook::linux::testing::{FakeHost, args, host_with, params, ran};
 use crate::maintenance_hook::{
-    Ending, HookArgs, HookPorts, HookStep, REASON_UNSUPPORTED_KIND, Registry, Unwired, main_with,
-    run_step,
+    Ending, HookArgs, HookPorts, HookStep, Kind, KindError, MaintenanceKind, Registry, Unwired,
+    main_with, run_step,
 };
+use crate::maintenance_linux::kinds::{LinuxKind, RebootCheck};
 
 const APT: &str = "/usr/bin/apt-get";
 
@@ -62,9 +62,15 @@ fn apt_host() -> FakeHost {
     fake
 }
 
+/// The `linux` kind staging with `stage`, its own packages `fake`'s; its install and reboot check
+/// are never run by `prepare`.
+fn staged(fake: &FakeHost, stage: Stage) -> LinuxKind {
+    LinuxKind::new(None, Box::new(fake.clone()), RebootCheck::at_host()).with_stage(stage)
+}
+
 /// Runs the hook's `prepare` of a `linux` run over a registry whose `linux` kind is `kind`, the
 /// boot id read (never, by `prepare`) from `boot_file`.
-fn prepare(kind: Linux, boot_file: &std::path::Path) -> Ending {
+fn prepare(kind: LinuxKind, boot_file: &std::path::Path) -> Ending {
     let registry = Registry::new().with(Kind::Linux, Box::new(kind));
     let boot = ProcBootId::at(boot_file);
     let ports = HookPorts {
@@ -88,13 +94,13 @@ fn prepare_of_the_linux_kind_is_its_stage() {
     let fake = apt_host();
     fake.free(Ok(20));
     let boot_file = root.path().join("boot_id");
-    let ending = prepare(Linux::new(fake.stage(&root, 300)), &boot_file);
+    let ending = prepare(staged(&fake, fake.stage(&root, 300)), &boot_file);
     assert_eq!(ending.outcome, Outcome::Success);
     assert_eq!(fake.arg_lists().len(), 4);
 
     let fake = apt_host();
     fake.free(Ok(19));
-    let ending = prepare(Linux::new(fake.stage(&root, 300)), &boot_file);
+    let ending = prepare(staged(&fake, fake.stage(&root, 300)), &boot_file);
     assert_eq!(
         ending,
         Ending {
@@ -109,51 +115,19 @@ fn prepare_of_the_linux_kind_is_its_stage() {
     assert_eq!(fake.arg_lists().len(), 3);
 }
 
-/// Proves: the `linux` kind's `cutover`, `after_reboot` and `verify` fail `unsupported_kind`
-/// and run nothing: only the stage is written.
+/// Proves: a `linux` kind given no stage answers `unsupported_kind` to `prepare` and runs
+/// nothing, so a kind built without one is never a stage that does nothing.
 ///
-/// Catches: a cutover that installs before its work is written.
+/// Catches: a `prepare` that succeeds without staging.
 #[test]
-fn the_other_steps_of_the_linux_kind_are_not_written_yet() {
-    let root = host_with("linux-kind-others", APT);
+fn a_linux_kind_with_no_stage_does_not_prepare() {
     let fake = apt_host();
-    let kind = Linux::new(fake.stage(&root, 300));
-    let run = params(WireScope::Security);
-    let unsupported = KindError::Failed {
-        reason: REASON_UNSUPPORTED_KIND,
-        detail: "linux is not supported on this host".to_owned(),
-    };
-    assert_eq!(kind.cutover(&run), Err(unsupported.clone()));
-    assert_eq!(kind.after_reboot(&run), Err(unsupported.clone()));
-    assert_eq!(kind.verify(&run), Err(unsupported));
-    assert_eq!(fake.calls(), Vec::new());
-}
-
-/// Proves: the host's registry holds the kinds of its platform, `linux` and `reboot` on Linux and
-/// under OpenRC, `macos`, `xcode` and `reboot` on a Mac; Linux's `linux` kind is the stage's,
-/// whose other steps still fail `unsupported_kind` (nothing is run to tell it apart further on a
-/// test host).
-///
-/// Catches: the stage left out of the host's registry, or put in a Mac's.
-#[test]
-fn the_hosts_registry_holds_the_linux_kind_on_linux() {
-    for platform in [PlatformKind::Linux, PlatformKind::Openrc] {
-        let registry = Registry::at_host(platform, 300);
-        assert_eq!(
-            registry.kinds().collect::<Vec<_>>(),
-            vec![Kind::Linux, Kind::Reboot]
-        );
-        let linux = registry.get(Kind::Linux).expect("the linux kind");
-        assert_eq!(
-            linux.verify(&params(WireScope::Security)),
-            Err(KindError::unsupported(Kind::Linux))
-        );
-    }
-    let mac = Registry::at_host(PlatformKind::Macos, 300);
+    let kind = LinuxKind::new(None, Box::new(fake.clone()), RebootCheck::at_host());
     assert_eq!(
-        mac.kinds().collect::<Vec<_>>(),
-        vec![Kind::Macos, Kind::Xcode, Kind::Reboot]
+        kind.prepare(&params(WireScope::Security)),
+        Err(KindError::unsupported(Kind::Linux))
     );
+    assert_eq!(fake.calls(), Vec::new());
 }
 
 /// The download apt is asked for by [`apt_host`]'s stage.
@@ -197,7 +171,7 @@ fn run_hook(
     root: &hostkeeper_testkit::Scratch,
     args: &HookArgs,
 ) -> (Outcome, String) {
-    let kind = Linux::new(fake.stage(root, args.package_lock_wait_secs));
+    let kind = staged(fake, fake.stage(root, args.package_lock_wait_secs));
     let registry = Registry::new().with(Kind::Linux, Box::new(kind));
     let boot = ProcBootId::at(&root.path().join("boot_id"));
     let ports = HookPorts {

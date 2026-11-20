@@ -12,16 +12,14 @@ use std::sync::Mutex;
 
 use clap::Parser;
 use clap::error::ErrorKind;
-use hostkeeper_daemon::cli::{
-    self, Cli, Command, DEFAULT_PACKAGE_LOCK_WAIT_SECS, MAX_PACKAGE_LOCK_WAIT_SECS, SystemdVars,
-};
+use hostkeeper_daemon::cli::{self, Cli, Command, DEFAULT_PACKAGE_LOCK_WAIT_SECS, SystemdVars};
 use hostkeeper_daemon::maintenance_hook::{
     Cutover, HookArgs, HookPorts, HookStep, Kind, KindError, KindState, MAX_PARAMS_BYTES,
     MaintainParams, MaintenanceKind, ParamsError, RebootError, Rebooter, RecordError, Registry,
-    RunRecord, Unsupported, Unwired, main_with,
+    RunRecord, Unsupported, Unwired, main_with, registry_for, unwired_record,
 };
 use hostkeeper_hook::{Class, Outcome, Report};
-use hostkeeper_launchd::PlatformKind;
+use hostkeeper_launchd::{Platform, PlatformKind};
 use hostkeeper_proto::hostkeeper::agent::v1::{Maintain, MaintenanceKind as WireKind};
 use hostkeeper_steps::{BootId, ProcBootId};
 use hostkeeper_testkit::Scratch;
@@ -407,43 +405,11 @@ fn the_command_line_takes_the_three_steps_and_the_params_file() {
     assert_eq!(refused.exit_code(), 2);
 }
 
-/// Proves: `--package-lock-wait-secs` reaches the hook's arguments as given, from 1 to 3600
-/// seconds, defaults to the daemon's own default, and 0 or 3601 is clap's usage error, exit 2.
-///
-/// Catches: a stage that cannot be given the daemon's lock wait, or one that takes no wait at
-/// all or more than a step may ask for.
-#[test]
-fn the_package_lock_wait_reaches_the_hook_within_its_range() {
-    let parse = |secs: &str| {
-        Cli::try_parse_from([
-            "hostkeeper",
-            "maintenance-hook",
-            "prepare",
-            "--params",
-            "-",
-            "--package-lock-wait-secs",
-            secs,
-        ])
-    };
-    for secs in [1, 42, MAX_PACKAGE_LOCK_WAIT_SECS] {
-        let cli = parse(&secs.to_string()).expect("parses");
-        let Command::MaintenanceHook(args) = cli.command else {
-            panic!("not the maintenance hook: {:?}", cli.command);
-        };
-        assert_eq!(args.package_lock_wait_secs, secs);
-    }
-    assert_eq!(DEFAULT_PACKAGE_LOCK_WAIT_SECS, 300);
-    for refused in ["0", "3601", "x"] {
-        let error = parse(refused).expect_err("out of range");
-        assert_eq!(error.kind(), ErrorKind::ValueValidation, "{refused}");
-        assert_eq!(error.exit_code(), 2);
-    }
-}
-
 /// Proves: the binary's command line runs the hook on this host and exits with the step's code
-/// (1: `verify` over the host's run record, not wired yet, finds the kind not applied, before
-/// any kind's work runs, so nothing of the test host is touched); started from a packaged path,
-/// the hook is run there and not handed to `current` as the daemon is.
+/// (1: `verify` over the host's run record, not wired yet, finds the kind not applied before any
+/// kind's work runs, so nothing of the test host is touched; a `prepare` of `linux` would run the
+/// host's own package manager); started from a packaged path, the hook is run there and not
+/// handed to `current` as the daemon is.
 ///
 /// Catches: `maintenance-hook` dispatched to the daemon, or exec'd into another binary.
 #[test]
@@ -477,4 +443,126 @@ fn the_binary_runs_the_hook_and_exits_with_its_code() {
     );
     assert_eq!(format!("{code:?}"), failed);
     assert_eq!(execs.lock().expect("execs").len(), 0);
+}
+
+/// Proves: `--package-lock-wait-secs` of the hook parses as given from 1 to 3600 seconds, is the
+/// daemon's default when absent, and 0, 3601 or a word is a usage error (exit 2, as clap reports
+/// it).
+///
+/// Catches: a wait of none (every lock an unattended upgrade holds would fail the install at
+/// once), or a wait past the longest the daemon's flag allows.
+#[test]
+fn the_hooks_package_lock_wait_flag_is_taken_within_its_range() {
+    let parse = |extra: &[&str]| {
+        let mut words = vec!["hostkeeper", "maintenance-hook", "cutover", "--params", "-"];
+        words.extend(extra);
+        Cli::try_parse_from(words)
+    };
+    let Ok(Cli {
+        command: Command::MaintenanceHook(args),
+    }) = parse(&[])
+    else {
+        panic!("the hook parses with no wait");
+    };
+    assert_eq!(args.package_lock_wait_secs, DEFAULT_PACKAGE_LOCK_WAIT_SECS);
+    for secs in [1, 42, cli::MAX_PACKAGE_LOCK_WAIT_SECS] {
+        let given = secs.to_string();
+        let parsed = parse(&["--package-lock-wait-secs", &given]);
+        let Ok(Cli {
+            command: Command::MaintenanceHook(args),
+        }) = parsed
+        else {
+            panic!("{secs} parses: {parsed:?}");
+        };
+        assert_eq!(args.package_lock_wait_secs, secs);
+    }
+    let over = (cli::MAX_PACKAGE_LOCK_WAIT_SECS + 1).to_string();
+    for refused in ["0", over.as_str(), "five"] {
+        let error = parse(&["--package-lock-wait-secs", refused]).expect_err(refused);
+        assert_eq!(error.exit_code(), 2, "{refused}");
+    }
+}
+
+/// Proves: the binary's `cutover` on this host is refused before any kind runs while the host
+/// keeps no run record: exit 1, and the report line is `run_record_failed` saying so; `prepare`
+/// and `verify` are not refused this way. `unwired_record` names the cutover alone.
+///
+/// Catches: a cutover that installs updates on a host that cannot record that it did.
+#[test]
+fn a_cutover_is_refused_while_the_host_keeps_no_run_record() {
+    let ending = unwired_record(HookStep::Cutover).expect("a cutover is refused");
+    assert_eq!(ending.outcome, Outcome::Failure);
+    assert_eq!(ending.reason, Some("run_record_failed"));
+    assert_eq!(
+        ending.detail.as_deref(),
+        Some("this host keeps no run record yet")
+    );
+    assert!(unwired_record(HookStep::Prepare).is_none());
+    assert!(unwired_record(HookStep::Verify).is_none());
+
+    let scratch = scratch("mh-unwired");
+    let file = scratch.path().join("params.json");
+    fs::write(&file, json("run-1", &["MAINTENANCE_KIND_REBOOT"])).expect("write");
+    let words = [
+        OsString::from("hostkeeper"),
+        "maintenance-hook".into(),
+        "cutover".into(),
+        "--params".into(),
+        file.into_os_string(),
+    ];
+    let code = cli::run(Cli::parse_from(&words));
+    assert_eq!(format!("{code:?}"), format!("{:?}", ExitCode::from(1)));
+}
+
+/// Proves: a Linux host's registry holds the `linux` and `reboot` kinds and a Mac's keeps the
+/// stubs of its three: a Linux `prepare` is the stage, which defers a run with no `linux_scope`
+/// before it runs any program; a Linux `verify` and `reboot`'s `prepare` and `verify` still answer
+/// `unsupported_kind`, as does a Mac's `prepare`.
+///
+/// Catches: a platform's kinds put in the wrong platform's registry.
+#[test]
+fn the_registry_of_a_platform_holds_its_kinds() {
+    let kinds = |platform: &Platform| registry_for(platform, DEFAULT_PACKAGE_LOCK_WAIT_SECS);
+    let linux = kinds(&Platform::linux());
+    assert_eq!(
+        linux.kinds().collect::<Vec<_>>(),
+        [Kind::Linux, Kind::Reboot]
+    );
+    let openrc = kinds(&Platform::openrc());
+    assert_eq!(
+        openrc.kinds().collect::<Vec<_>>(),
+        [Kind::Linux, Kind::Reboot]
+    );
+    let params = MaintainParams::new(Maintain {
+        run_id: "run-1".to_owned(),
+        kinds: vec![WireKind::Linux.into()],
+        ..Maintain::default()
+    })
+    .expect("valid");
+    let deferred = linux.get(Kind::Linux).expect("held").prepare(&params);
+    assert_eq!(
+        deferred,
+        Err(KindError::Deferred {
+            reason: "linux_scope_invalid",
+            detail: "linux_scope 0 is not security or all".to_owned(),
+        })
+    );
+    let refused = linux.get(Kind::Linux).expect("held").verify(&params);
+    assert_eq!(refused, Err(KindError::unsupported(Kind::Linux)));
+    let reboot = linux.get(Kind::Reboot).expect("held");
+    assert_eq!(
+        reboot.prepare(&params),
+        Err(KindError::unsupported(Kind::Reboot))
+    );
+    assert_eq!(
+        reboot.verify(&params),
+        Err(KindError::unsupported(Kind::Reboot))
+    );
+    let mac = kinds(&Platform::macos());
+    assert_eq!(
+        mac.kinds().collect::<Vec<_>>(),
+        [Kind::Macos, Kind::Xcode, Kind::Reboot]
+    );
+    let refused = mac.get(Kind::Macos).expect("held").prepare(&params);
+    assert_eq!(refused, Err(KindError::unsupported(Kind::Macos)));
 }

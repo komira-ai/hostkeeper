@@ -1,6 +1,6 @@
 # Scheduled maintenance updates
 
-Status: design; the Linux report of sections 1 and 4.1 is built (`crates/hostkeeper-daemon/src/maintenance_facts.rs`), nothing else. The owner's answers of 2026-11-19 are in: the Mac's update account (section 5.5) and the first-class Linux path
+Status: design; the Linux report of sections 1 and 4.1 is built (`crates/hostkeeper-daemon/src/maintenance_facts.rs`), and on a Mac its macOS facts and due macOS updates, FileVault, the data volume's free space and the Command Line Tools (`maintenance_macos.rs`, `maintenance_mac.rs`); nothing else. The owner's answers of 2026-11-19 are in: the Mac's update account (section 5.5) and the first-class Linux path
 (the one-button update of section 4.2) are decided; for Xcode, section 2.0 makes a push from the operator's own Mac the source (owner's direction, 2026-11-20), with a fetcher Mac as the alternative. Facts about this repository were read on `main` at the commit this document lands on top
 of; facts about komira-ai/jobscheduler and komira-ai/kbf were read on their `main` and are marked as theirs. **Built** marks what exists
 (with its path), **New** what this design adds, **[V]** a claim to verify before building on it.
@@ -375,13 +375,13 @@ changes keep it so:
   `[hook] resume`, as it names `[hook] boot` today (Built: `crates/hostkeeper-config/src/manifest.rs`). `drain` takes the service out of
   service and returns when it has no work; `resume` puts it back. Both are safe to run twice. A package that names neither is left alone.
   The conformance harness (Built: `hostkeeper-hook`'s `conformance` feature) gains checks for them.
-- **The maintenance hook (Built: the command and its skeleton, `crates/hostkeeper-daemon/src/maintenance_hook.rs`; each kind's work
-  New).** The OS work is a hook too, a subcommand of hostkeeper's own binary, `hostkeeper maintenance-hook <prepare|cutover|verify>
+- **The maintenance hook (Built: the command and its skeleton, `crates/hostkeeper-daemon/src/maintenance_hook.rs`; the `cutover`
+  of `linux` and `reboot`, `crates/hostkeeper-daemon/src/maintenance_linux.rs`; the `prepare` of `linux`, the stage of step 1,
+  `crates/hostkeeper-daemon/src/maintenance_hook/linux/`; the other kinds' work and steps New).** The OS work is a hook too, a subcommand of hostkeeper's own binary, `hostkeeper maintenance-hook <prepare|cutover|verify>
   --params <file>`, launched the way the step runner launches a step (Built: `hostkeeper_steps` launchers: a transient systemd unit, a
   launchd job on a Mac, a process group under OpenRC). Its parameters are the `maintain` order's fields as JSON, in a file or on standard
   input (`--params -`), never in an argument. Each kind is the work of a `MaintenanceKind`, found by the host's platform; until a kind's
-  work is written its step fails `unsupported_kind`. Built so far: the `linux` kind's `prepare`, the stage of step 1
-  (`crates/hostkeeper-daemon/src/maintenance_hook/linux/`), which waits for a held package manager's lock for at most
+  work is written its step fails `unsupported_kind`. The stage and the install wait for a held package manager's lock for at most
   `--package-lock-wait-secs` (the daemon's flag, given to the hook too).
 
 The step runner's sequence does not fit as it stands: it runs `rollback` after a failed `prepare`, `cutover` or `verify`, its reboot row
@@ -432,8 +432,9 @@ drain was never asked for is never held.
 ### 5.5 Apply
 
 - **Linux.** apt: `apt-get install --only-upgrade` of the security packages and the kernel (`linux_scope = security`) or `apt-get
-  dist-upgrade` (`all`), non-interactive, keeping existing configuration files; dnf: `dnf upgrade --security` or `dnf upgrade`; apk:
-  `apk upgrade`. The package lock is waited for as the installers wait today (Built: `--package-lock-wait-secs`).
+  dist-upgrade` (`all`), non-interactive, keeping existing configuration files; dnf: `dnf upgrade --security`, then a newer kernel
+  by name, or `dnf upgrade`; apk: `apk upgrade`, under `security` the kernel alone (apk names no security origin). The package lock is
+  waited for as the installers wait today (Built: `--package-lock-wait-secs`, also a flag of `maintenance-hook`).
 - **macOS.** Apple silicon installs a macOS update or upgrade only with a *volume owner's* authorisation: an administrator holding a
   Secure Token. Root alone is not one, and the bootstrap token, which is one, can be redeemed only by a device-management service, not by
   a local daemon. Two paths follow, and one coordinator flag says which is live (section 5.5.2):
