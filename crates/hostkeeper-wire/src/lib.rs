@@ -52,6 +52,8 @@ mod wire_legacy_tests;
 #[cfg(test)]
 mod wire_local_halt_tests;
 #[cfg(test)]
+mod wire_maintenance_tests;
+#[cfg(test)]
 mod wire_order_tests;
 #[cfg(test)]
 mod wire_service_facts_tests;

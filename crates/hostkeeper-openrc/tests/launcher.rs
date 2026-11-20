@@ -15,7 +15,9 @@ use std::time::Duration;
 use hostkeeper_hook::{Invocation, Step};
 use hostkeeper_openrc::OpenrcLauncher;
 use hostkeeper_openrc::launcher::{POLL, READER_GRACE, STEPS_DIR, STOP_TIMEOUT_SECS};
-use hostkeeper_steps::{Bound, LAST_LINE_MAX, LaunchError, RING_BYTES, StepExit, StepLauncher};
+use hostkeeper_steps::{
+    AdditiveCall, Bound, LAST_LINE_MAX, LaunchError, RING_BYTES, StepExit, StepLauncher,
+};
 use launcher_support::{
     PARAMS, Rig, UNIT, additive_call, gone, parse_stat, pid_in, secs, step_call, text, wait_for,
     wait_gone,
@@ -546,7 +548,7 @@ fn an_additive_step_is_run_with_the_hooks_arguments_before_its_step() {
     let hook_args = ["update-hook".to_owned(), "--fast".to_owned()];
     let got = rig
         .launcher
-        .run_additive(&additive_call(&hook, &hook_args, &params, 100))
+        .run_additive(&additive_call(&hook, &hook_args, &params, secs(100)))
         .expect("the step ran");
     assert_eq!(got.code, Some(76));
     assert_eq!(
@@ -559,19 +561,19 @@ fn an_additive_step_is_run_with_the_hooks_arguments_before_its_step() {
 }
 
 #[test]
-fn an_additive_step_is_bounded_by_its_timeout() {
+fn an_additive_step_is_bounded_by_its_bound() {
     let rig = Rig::new("additive-bound", 1);
     let params = rig.path("params.toml");
     let hook = rig.script("hook", "while :; do :; done");
     let got = rig
         .launcher
-        .run_additive(&additive_call(&hook, &[], &params, 2))
+        .run_additive(&additive_call(&hook, &[], &params, secs(2)))
         .expect("the step ran");
     assert_eq!(got, exit(None, None));
 }
 
 #[test]
-fn an_additive_step_with_a_timeout_of_zero_is_not_ended_by_the_launcher() {
+fn an_additive_step_with_no_bound_is_not_ended_by_the_launcher() {
     // A clock that jumps a million seconds a look does not end the step.
     let rig = Rig::new("additive-unbounded", 1_000_000);
     let params = rig.path("params.toml");
@@ -581,8 +583,49 @@ fn an_additive_step_with_a_timeout_of_zero_is_not_ended_by_the_launcher() {
         &format!("while [ ! -e '{}' ]; do :; done\necho done", go.display()),
     );
     let got = run_then_release(&rig, &go, 5, |launcher| {
-        launcher.run_additive(&additive_call(&waiting, &[], &params, 0))
+        launcher.run_additive(&additive_call(&waiting, &[], &params, Bound::Unbounded))
     })
     .expect("the step ran");
     assert_eq!(got, exit(Some(0), Some("done")));
+}
+
+#[test]
+fn a_drain_with_no_bound_is_not_ended_by_the_launcher_however_far_the_clock_goes() {
+    // Catches a launcher that decides a bound by the step's name: each read of the clock is a
+    // year, so any bound would have passed at the first look, and the drain still reports its own
+    // exit code.
+    let rig = Rig::new("drain-unbounded", 31_536_000);
+    let params = rig.path("params.toml");
+    let go = rig.path("go");
+    let hook = rig.script(
+        "hook",
+        &format!(
+            "while [ ! -e '{}' ]; do :; done\necho drained\nexit 75",
+            go.display()
+        ),
+    );
+    let got = run_then_release(&rig, &go, 5, |launcher| {
+        launcher.run_additive(&AdditiveCall {
+            step: "drain",
+            ..additive_call(&hook, &[], &params, Bound::Unbounded)
+        })
+    })
+    .expect("the step ran");
+    assert_eq!(got, exit(Some(75), Some("drained")));
+}
+
+#[test]
+fn a_drain_with_a_bound_is_ended_at_the_bound_and_has_no_code() {
+    // Catches a launcher that leaves a drain unbounded when its call names a bound.
+    let rig = Rig::new("drain-bounded", 1);
+    let params = rig.path("params.toml");
+    let hook = rig.script("hook", "while :; do :; done");
+    let got = rig
+        .launcher
+        .run_additive(&AdditiveCall {
+            step: "drain",
+            ..additive_call(&hook, &[], &params, secs(2))
+        })
+        .expect("the step ran");
+    assert_eq!(got, exit(None, None));
 }

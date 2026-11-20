@@ -70,6 +70,14 @@ export interface Client {
     putSled(request: hostkeeper_operator_v1.PutLayoutSledRequest): Promise<hostkeeper_operator_v1.PutLayoutSledResponse>;
     removeSled(request: hostkeeper_operator_v1.RemoveLayoutSledRequest): Promise<hostkeeper_operator_v1.RemoveLayoutSledResponse>;
   };
+  readonly maintenance: {
+    schedule(request: hostkeeper_operator_v1.ScheduleMaintenanceRequest): Promise<hostkeeper_operator_v1.ScheduleMaintenanceResponse>;
+    list(request: hostkeeper_operator_v1.ListMaintenanceRunsRequest): Promise<hostkeeper_operator_v1.ListMaintenanceRunsResponse>;
+    get(request: hostkeeper_operator_v1.GetMaintenanceRunRequest): Promise<hostkeeper_operator_v1.GetMaintenanceRunResponse>;
+    cancel(request: hostkeeper_operator_v1.CancelMaintenanceRunRequest): Promise<hostkeeper_operator_v1.CancelMaintenanceRunResponse>;
+    retryHost(request: hostkeeper_operator_v1.RetryMaintenanceHostRequest): Promise<hostkeeper_operator_v1.RetryMaintenanceHostResponse>;
+    putBack(request: hostkeeper_operator_v1.PutBackMaintenanceHostRequest): Promise<hostkeeper_operator_v1.PutBackMaintenanceHostResponse>;
+  };
   readonly mdm: {
     listDevices(request: hostkeeper_operator_v1.ListDevicesRequest): Promise<hostkeeper_operator_v1.ListDevicesResponse>;
     putSecret(request: hostkeeper_operator_v1.PutSecretRequest): Promise<hostkeeper_operator_v1.PutSecretResponse>;

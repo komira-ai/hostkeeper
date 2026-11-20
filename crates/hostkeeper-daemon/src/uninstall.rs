@@ -38,7 +38,7 @@ use hostkeeper_hook::{Class, Outcome, Phase, Report, Step, Verdict};
 use hostkeeper_placed::{FileKind, Fs, PlacedError, RealFs, Tombstone};
 use hostkeeper_proto::hostkeeper::release::v1::Target;
 use hostkeeper_steps::record::{Loaded, PARAMS_FILE, RECORD_FILE};
-use hostkeeper_steps::{AdditiveCall, Finished, Layout, Seal, Staged, StepExit, read_seal};
+use hostkeeper_steps::{AdditiveCall, Bound, Finished, Layout, Seal, Staged, StepExit, read_seal};
 
 use crate::boot::boot_params;
 use crate::checks;
@@ -359,7 +359,7 @@ fn run_hook(
         params: &store.params_path(),
         executable: &release.executable,
         unit: &unit,
-        timeout_secs: bound.get(),
+        bound: Bound::Secs(bound),
     });
     let exit = ran.map_err(|error| match ctx.launcher.stop(&unit) {
         Ok(()) => interrupted(
