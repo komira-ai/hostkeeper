@@ -670,6 +670,7 @@ impl Coordinator {
             return (ServiceReply::Nothing, None, None, Vec::new());
         }
         crate::intents::settle(&self.ops, &basis.services, fleet, &who.host_id);
+        self.fold_maintenance(fleet, &who.host_id);
         let mut names: Vec<&str> = legacy
             .into_iter()
             .chain(announced.iter().map(|one| one.name.as_str()))
@@ -698,6 +699,15 @@ impl Coordinator {
             })
         {
             return (ServiceReply::Nothing, Some(order), None, acks);
+        }
+        // One thing at a time on a host: a maintenance turn goes before the packages, and a host
+        // in its turn is given no package order ([`crate::decide_maintenance`]).
+        match self.maintenance_next(fleet, &who.host_id, orders, now) {
+            maintain::Next::Order(order) => {
+                return (ServiceReply::Nothing, Some(order), None, acks);
+            }
+            maintain::Next::Busy => return (ServiceReply::Nothing, None, None, acks),
+            maintain::Next::Free => {}
         }
         let asked = Asked {
             who: &who,
@@ -952,5 +962,7 @@ mod enrollment_calls;
 mod gate_orders;
 #[path = "service_groups.rs"]
 mod group_calls;
+#[path = "service_maintain.rs"]
+mod maintain;
 #[path = "service_store.rs"]
 mod store_calls;

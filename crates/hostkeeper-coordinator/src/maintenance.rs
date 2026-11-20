@@ -2,7 +2,8 @@
 //! what is due on its host, which a daemon that announces [`FEATURE`] carries in every heartbeat
 //! (`HeartbeatRequest.maintenance` over gRPC, the key `maintenance` over the JSON route, standard
 //! padded base64 of the protobuf encoding). The coordinator advertises the feature
-//! ([`crate::features::FEATURES`]) and sends no `maintain` order yet.
+//! ([`crate::features::FEATURES`]) and sends a `maintain` order only to a daemon that announces it
+//! ([`crate::decide_maintenance`]).
 //!
 //! # What is kept
 //!

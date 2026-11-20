@@ -2,14 +2,16 @@
 //! operator's, which go instead of the rollout gate's update (an `abort` an operator queued,
 //! `Hosts.Abort`, a `clear_record` one queued, `Hosts.ClearRecord` ([`crate::clear_record`]),
 //! and the `force` of a standing force, [`crate::force`]); the gate's update
-//! itself, with the terms the JSON answer carries ([`Order::Update`]); and the gate's own
-//! `install` and `uninstall` ([`crate::decide`]).
+//! itself, with the terms the JSON answer carries ([`Order::Update`]); the gate's own
+//! `install` and `uninstall` ([`crate::decide`]); and a maintenance run's `maintain`
+//! ([`crate::decide_maintenance`]).
 //!
 //! They go only over a transport that carries typed orders
 //! ([`crate::service::Coordinator::heartbeat_with_orders`], the `Order` of
 //! `hostkeeper.agent.v1`), and only to a daemon that announced the order's feature: [`ABORT_FEATURE`]
 //! for an abort, [`crate::clear_record::FEATURE`] for a clear-record, [`crate::force::FEATURE`]
-//! for a force, [`INSTALL_FEATURE`] for an install or an uninstall. The JSON heartbeat route
+//! for a force, [`INSTALL_FEATURE`] for an install or an uninstall, [`crate::maintenance::FEATURE`]
+//! for a `maintain`. The JSON heartbeat route
 //! carries none of the operator's orders, an install or an uninstall, so its answers never name
 //! them, and an abort or a clear-record queued for a host that cannot be sent it waits. An
 //! abort, a clear-record and a force take no update slot; an install and an uninstall take it as
@@ -185,6 +187,56 @@ pub enum Order {
         /// The try ([`Fleet::next_try`]).
         order_try: u64,
     },
+    /// Start the host's turn of a maintenance run ([`crate::decide_maintenance`]).
+    Maintain {
+        /// What the turn applies, and how.
+        maintain: Maintain,
+        /// The order's id: `maintain-<run id>` ([`crate::decide_maintenance::order_id`]).
+        order_id: String,
+        /// The try: 1, which a resend of the order keeps.
+        order_try: u64,
+    },
+}
+
+/// The arguments of a `maintain` that starts a host's turn (`MAINTAIN_ACTION_RUN`), as
+/// [`crate::decide_maintenance`] made them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Maintain {
+    /// The run's id.
+    pub run_id: String,
+    /// The kinds the turn applies, as the run holds them for the host.
+    pub kinds: Vec<agent::MaintenanceKind>,
+    /// Which Linux updates a `linux` kind applies: the group's `linux_scope`.
+    pub linux_scope: agent::LinuxScope,
+    /// How long the drain may take; none: no deadline.
+    pub drain_deadline_secs: Option<u64>,
+    /// How a `macos` kind is applied: `install`, the one path built.
+    pub macos_path: agent::MacosPath,
+    /// For `macos`: whether a major upgrade may be staged and installed: the group's
+    /// `macos_major`.
+    pub macos_major: bool,
+    /// How long the host may be silent while it reboots: the group's `return_secs` for the
+    /// host's platform.
+    pub return_secs: u64,
+}
+
+impl Maintain {
+    /// The arguments as `hostkeeper.agent.v1` says them, with the action `RUN` and no Xcode.
+    fn to_proto(&self) -> agent::Maintain {
+        agent::Maintain {
+            run_id: self.run_id.clone(),
+            action: agent::MaintainAction::Run.into(),
+            kinds: self.kinds.iter().map(|kind| i32::from(*kind)).collect(),
+            linux_scope: self.linux_scope.into(),
+            drain_deadline_secs: self.drain_deadline_secs,
+            macos_path: self.macos_path.into(),
+            xcodes: Vec::new(),
+            xcode_remove: Vec::new(),
+            xcode_default: String::new(),
+            return_secs: self.return_secs,
+            macos_major: self.macos_major,
+        }
+    }
 }
 
 impl Order {
@@ -277,6 +329,15 @@ impl Order {
                 agent::order::Verb::Uninstall(agent::Uninstall {
                     service: service.clone(),
                 }),
+            ),
+            Self::Maintain {
+                maintain,
+                order_id,
+                order_try,
+            } => (
+                order_id,
+                *order_try,
+                agent::order::Verb::Maintain(maintain.to_proto()),
             ),
         };
         agent::Order {
