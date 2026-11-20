@@ -138,8 +138,8 @@ fn a_call_is_one_hk_command_of_the_table_into_its_own_files() {
     // token's mask line is) or into another file, and its diagnostics not in the file the
     // outputs step reads.
     let not_one =
-        "step 11 (`set-desired`) does not run `$RUNNER_TEMP/hk-bin/hk` as its one command";
-    let first = "          \"$RUNNER_TEMP/hk-bin/hk\" \\\n            --endpoint";
+        "step 11 (`set-desired`) does not run `$RUNNER_TEMP/hk-release/hk` as its one command";
+    let first = "          \"$RUNNER_TEMP/hk-release/hk\" \\\n            --endpoint";
     assert_client(
         &set_with(first, &format!("          echo calling\n{first}")),
         &[not_one],
@@ -148,7 +148,10 @@ fn a_call_is_one_hk_command_of_the_table_into_its_own_files() {
         &with_in(
             CLIENT,
             CLIENT_BLOCK,
-            &CLIENT_BLOCK.replace("$RUNNER_TEMP/hk-bin/hk", "$RUNNER_TEMP/hk-bin/hostkeeper"),
+            &CLIENT_BLOCK.replace(
+                "$RUNNER_TEMP/hk-release/hk",
+                "$RUNNER_TEMP/hk-release/hostkeeper",
+            ),
         ),
         &[not_one],
     );
@@ -669,7 +672,7 @@ fn run_set_step(name: &str, stderr: &str, status: u8) -> (Option<i32>, String, S
     let script = entry(step, "run").and_then(Node::as_str).expect("its run");
     let base = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("set-step-run");
     let root = super::testdir::TestDir::under(&base, name);
-    let bin = root.join("hk-bin");
+    let bin = root.join("hk-release");
     std::fs::create_dir_all(&bin).expect("make the fake's directory");
     let fake = bin.join("hk");
     std::fs::write(
@@ -758,7 +761,7 @@ fn host_group_args(name: &str, id: &str, host_group: Option<&str>) -> Vec<String
     let script = entry(step, "run").and_then(Node::as_str).expect("its run");
     let base = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("host-group-run");
     let root = super::testdir::TestDir::under(&base, name);
-    let bin = root.join("hk-bin");
+    let bin = root.join("hk-release");
     std::fs::create_dir_all(&bin).expect("make the fake's directory");
     let fake = bin.join("hk");
     std::fs::write(

@@ -101,8 +101,10 @@ pub const ORDERED: [&str; 11] = [
 ];
 /// The steps the set step reads what they wrote: the coordinator's CA and the request.
 pub const SET_READS: [&str; 2] = ["ca", "request"];
-/// The verified hk, as the steps name it.
-pub const PROGRAM: &str = "$RUNNER_TEMP/hk-bin/hk";
+/// The verified hk, as the steps name it: the tarball's one member, unpacked beside it.
+pub const PROGRAM: &str = "$RUNNER_TEMP/hk-release/hk";
+/// The one member of the tarball the install step unpacks.
+pub const MEMBER: &str = "hk";
 /// What a step that asks for an OIDC token names: the runner's request variables, or the
 /// toolkit's call.
 pub const TOKEN_WORDS: [&str; 2] = ["ACTIONS_ID_TOKEN_REQUEST", "getIDToken"];
@@ -405,6 +407,9 @@ fn step_problems(steps: &[Node]) -> Vec<String> {
             );
         }
     }
+    if let Some(i) = index("install") {
+        problems.extend(install_problems(&label(i, &steps[i]), &steps[i]));
+    }
     if let Some(i) = index("request") {
         problems.extend(request_problems(&steps[i]));
     }
@@ -432,6 +437,31 @@ fn step_problems(steps: &[Node]) -> Vec<String> {
         }
     }
     problems
+}
+
+/// What is wrong with the install step: its `run:` is not one command, a `tar` that unpacks the
+/// verified tarball's [`MEMBER`] (AGENTS.md: every CI step is one named command).
+fn install_problems(who: &str, step: &Node) -> Vec<String> {
+    let lines: Vec<String> = logical_lines(text(step, "run").unwrap_or_default())
+        .into_iter()
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+    let one_tar = match lines.as_slice() {
+        [line] => {
+            let parts = words(line);
+            parts.first() == Some(&"tar")
+                && parts.last() == Some(&MEMBER)
+                && !line.contains(['&', ';', '|'])
+        }
+        _ => false,
+    };
+    if one_tar {
+        Vec::new()
+    } else {
+        vec![format!(
+            "{who} is not one command, a `tar` that unpacks `{MEMBER}`"
+        )]
+    }
 }
 
 /// What is wrong with the `if:` and `continue-on-error` of the steps: a check, the install, the

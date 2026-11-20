@@ -78,9 +78,9 @@ jobs:
           HOSTKEEPER_COMMIT: ${{ inputs.hostkeeper_commit }}
         run: jq --exit-status '[.[].verificationResult.signature.certificate.sourceRepositoryDigest] | unique == [env.HOSTKEEPER_COMMIT]' verified.json
       - id: install
-        run: tar -xzf hk-1-linux-x86_64.tar.gz -C \"$RUNNER_TEMP/hk-bin\" hk
+        run: tar -xzf hk-1-linux-x86_64.tar.gz -C \"$RUNNER_TEMP/hk-release\" hk
       - id: version
-        run: test \"$(\"$RUNNER_TEMP/hk-bin/hk\" --version)\" = \"hk 1.0.0+0123456789ab\"
+        run: test \"$(\"$RUNNER_TEMP/hk-release/hk\" --version)\" = \"hk 1.0.0+0123456789ab\"
       - id: tailnet
         if: ${{ inputs.join_tailnet }}
         uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd # v4.2.0
@@ -106,7 +106,7 @@ jobs:
           COORDINATOR_URL: ${{ inputs.coordinator_url }}
           AUDIENCE: ${{ inputs.audience }}
         run: |
-          \"$RUNNER_TEMP/hk-bin/hk\" \\
+          \"$RUNNER_TEMP/hk-release/hk\" \\
             --endpoint \"$COORDINATOR_URL\" \\
             --ca-file \"$RUNNER_TEMP/hk-coordinator-ca.pem\" \\
             --github-oidc-audience \"$AUDIENCE\" \\
@@ -127,7 +127,7 @@ jobs:
           AUDIENCE: ${{ inputs.audience }}
           MAX_POLLS: ${{ inputs.max_polls }}
         run: |
-          \"$RUNNER_TEMP/hk-bin/hk\" \\
+          \"$RUNNER_TEMP/hk-release/hk\" \\
             --endpoint \"$COORDINATOR_URL\" \\
             --ca-file \"$RUNNER_TEMP/hk-coordinator-ca.pem\" \\
             --github-oidc-audience \"$AUDIENCE\" \\
@@ -174,7 +174,7 @@ pub(super) const CLIENT_BLOCK: &str = "      - id: set-desired
           COORDINATOR_URL: ${{ inputs.coordinator_url }}
           AUDIENCE: ${{ inputs.audience }}
         run: |
-          \"$RUNNER_TEMP/hk-bin/hk\" \\
+          \"$RUNNER_TEMP/hk-release/hk\" \\
             --endpoint \"$COORDINATOR_URL\" \\
             --ca-file \"$RUNNER_TEMP/hk-coordinator-ca.pem\" \\
             --github-oidc-audience \"$AUDIENCE\" \\
@@ -300,7 +300,7 @@ fn nothing_before_verification_touches_the_token_or_ctl() {
             &["step 5 (`early`) comes before the last verification step and runs ctl"],
         ),
         (
-            "      - id: early\n        run: exec \"$RUNNER_TEMP/hk-bin/hk\" --version\n",
+            "      - id: early\n        run: exec \"$RUNNER_TEMP/hk-release/hk\" --version\n",
             &["step 5 (`early`) comes before the last verification step and runs hk"],
         ),
         (

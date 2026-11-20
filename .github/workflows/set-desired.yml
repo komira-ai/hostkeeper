@@ -210,9 +210,7 @@ jobs:
 
       - name: Unpack the verified hk
         id: install
-        run: |
-          mkdir "$RUNNER_TEMP/hk-bin"
-          tar -xzf "$RUNNER_TEMP/hk-release/$HK_ASSET" -C "$RUNNER_TEMP/hk-bin" hk
+        run: tar -xzf "$RUNNER_TEMP/hk-release/$HK_ASSET" -C "$RUNNER_TEMP/hk-release" hk
 
       # hk says the release's version and the pinned commit, exactly.
       - name: Check the version of the verified hk
@@ -220,7 +218,7 @@ jobs:
         env:
           HOSTKEEPER_VERSION: ${{ inputs.hostkeeper_version }}
           HOSTKEEPER_COMMIT: ${{ inputs.hostkeeper_commit }}
-        run: test "$("$RUNNER_TEMP/hk-bin/hk" --version)" = "hk $HOSTKEEPER_VERSION+${HOSTKEEPER_COMMIT:0:12}"
+        run: test "$("$RUNNER_TEMP/hk-release/hk" --version)" = "hk $HOSTKEEPER_VERSION+${HOSTKEEPER_COMMIT:0:12}"
 
       # Only with `join_tailnet`: the runner joins the tailnet, so that it can reach the private
       # listener. The first action of the job, after every verification step. The node is
@@ -277,7 +275,7 @@ jobs:
           COORDINATOR_URL: ${{ inputs.coordinator_url }}
           AUDIENCE: ${{ inputs.audience }}
         run: |
-          "$RUNNER_TEMP/hk-bin/hk" \
+          "$RUNNER_TEMP/hk-release/hk" \
             --endpoint "$COORDINATOR_URL" \
             --ca-file "$RUNNER_TEMP/hk-coordinator-ca.pem" \
             --github-oidc-audience "$AUDIENCE" \
@@ -303,7 +301,7 @@ jobs:
           AUDIENCE: ${{ inputs.audience }}
           MAX_POLLS: ${{ inputs.max_polls }}
         run: |
-          "$RUNNER_TEMP/hk-bin/hk" \
+          "$RUNNER_TEMP/hk-release/hk" \
             --endpoint "$COORDINATOR_URL" \
             --ca-file "$RUNNER_TEMP/hk-coordinator-ca.pem" \
             --github-oidc-audience "$AUDIENCE" \

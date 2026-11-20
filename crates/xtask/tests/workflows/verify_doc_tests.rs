@@ -14,7 +14,7 @@ const CHECKSUM: &str = "sha256sum --check --strict --ignore-missing SHA256SUMS";
 /// step reads.
 const ATTESTATION: &str = "gh attestation verify \"$RUNNER_TEMP/hk-release/$HK_ASSET\" --repo komira-ai/hostkeeper --signer-workflow komira-ai/hostkeeper/.github/workflows/artifacts.yml --source-ref refs/heads/main --source-digest \"$HOSTKEEPER_COMMIT\" --deny-self-hosted-runners --format json > \"$RUNNER_TEMP/hk-release/attestation.json\"";
 /// The version step's command: the document's step 6 command, compared with its expected output.
-const VERSION: &str = "test \"$(\"$RUNNER_TEMP/hk-bin/hk\" --version)\" = \"hk $HOSTKEEPER_VERSION+${HOSTKEEPER_COMMIT:0:12}\"";
+const VERSION: &str = "test \"$(\"$RUNNER_TEMP/hk-release/hk\" --version)\" = \"hk $HOSTKEEPER_VERSION+${HOSTKEEPER_COMMIT:0:12}\"";
 
 fn real_doc() -> String {
     std::fs::read_to_string(
