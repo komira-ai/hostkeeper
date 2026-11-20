@@ -373,8 +373,8 @@ fn serving(view: &View<'_>, group: &str) -> usize {
         .count()
 }
 
-/// The `maintain` that starts the turn of the host `id` in `run`: its kinds, the Linux scope and
-/// `return_secs` of its group's table ([`View::policy`]) for the host's platform, and the run's
+/// The `maintain` that starts the turn of the host `id` in `run`: its kinds, the Linux scope,
+/// `macos_major` and `return_secs` of its group's table ([`View::policy`]) for the host's platform, and the run's
 /// drain deadline, else the group's.
 fn ordered(view: &View<'_>, run: &Run, id: &HostId) -> Ordered {
     let host = run.hosts.iter().find(|host| host.host_id == id.as_str());
@@ -404,6 +404,7 @@ fn ordered(view: &View<'_>, run: &Run, id: &HostId) -> Ordered {
             },
             drain_deadline_secs,
             macos_path: agent::MacosPath::Install,
+            macos_major: effective.macos_major,
             return_secs: effective.return_secs,
         },
     }

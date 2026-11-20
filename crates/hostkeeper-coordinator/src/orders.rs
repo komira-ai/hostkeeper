@@ -212,6 +212,9 @@ pub struct Maintain {
     pub drain_deadline_secs: Option<u64>,
     /// How a `macos` kind is applied: `install`, the one path built.
     pub macos_path: agent::MacosPath,
+    /// For `macos`: whether a major upgrade may be staged and installed: the group's
+    /// `macos_major`.
+    pub macos_major: bool,
     /// How long the host may be silent while it reboots: the group's `return_secs` for the
     /// host's platform.
     pub return_secs: u64,
@@ -231,6 +234,7 @@ impl Maintain {
             xcode_remove: Vec::new(),
             xcode_default: String::new(),
             return_secs: self.return_secs,
+            macos_major: self.macos_major,
         }
     }
 }

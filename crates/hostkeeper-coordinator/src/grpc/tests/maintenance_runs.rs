@@ -806,6 +806,7 @@ async fn a_scheduled_turn_is_ordered_through_the_heartbeat_handler() {
                 xcode_remove: Vec::new(),
                 xcode_default: String::new(),
                 return_secs: 1200,
+                macos_major: false,
             })),
         })
     );

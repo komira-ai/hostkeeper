@@ -78,6 +78,7 @@ fn the_maintain_order_carries_the_run_and_the_groups_settings() {
     let mut settings = table(2, 0);
     settings.linux_scope = proto::LinuxScope::All as i32;
     settings.drain_deadline_secs = 600;
+    settings.macos_major = true;
     settings.batch = Some(3);
     let world = crate::host_groups_support::World::new("sm-order");
     crate::decide_maintenance::tests::group_with(&world, GROUP, settings, &["h1", "h2", "h3"]);
@@ -95,6 +96,7 @@ fn the_maintain_order_carries_the_run_and_the_groups_settings() {
             linux_scope: agent::LinuxScope::All,
             drain_deadline_secs,
             macos_path: agent::MacosPath::Install,
+            macos_major: true,
             return_secs: 1200,
         },
         order_id: ORDER.to_owned(),
@@ -121,6 +123,7 @@ fn the_maintain_order_carries_the_run_and_the_groups_settings() {
                 xcode_remove: Vec::new(),
                 xcode_default: String::new(),
                 return_secs: 1200,
+                macos_major: true,
             })),
         }
     );
@@ -551,6 +554,7 @@ fn a_start_after_the_run_was_cancelled_stores_and_sends_nothing() {
             linux_scope: agent::LinuxScope::Security,
             drain_deadline_secs: None,
             macos_path: agent::MacosPath::Install,
+            macos_major: false,
             return_secs: 1200,
         },
     };
