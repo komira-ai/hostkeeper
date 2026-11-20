@@ -417,7 +417,10 @@ No step of this sequence runs `rollback`; a failure stops it where it is.
 Work is never cut to finish an update (`docs/design/hostkeeper-design.md`, goal 6). A `drain` step runs with no time bound
 (`RuntimeMaxSec=infinity`, Built for `prepare`; for `drain` the launchers and `hostkeeper_steps::run_maintenance_step` are Built, and so is the sequencer that calls it, bounded by exactly the deadline when there is one, and reading a deadline that passed as exit 75) unless the run names `drain_deadline_secs`. When a deadline passes, the step exits 75 (deferred, Built
 outcome): the daemon runs `resume` for every service it drained, the host is back in service with nothing changed, it is marked `deferred`,
-and the run moves on to the next host; a deferred host is offered again when the run's other hosts are done, if the window is still open.
+and the run moves on to the next host; a deferred host is offered again when the run's other hosts are done, if the window is still open,
+once its group's `defer_backoff` (Built) has passed since it deferred, longer for each deferral of its turn, under a new order id
+(`maintain-<run id>-<n>`: a daemon answers an order it already holds with that order's end). Built in the coordinator
+(`crates/hostkeeper-coordinator/src/decide_maintenance.rs`), as are the bake of section 5.6 and the ends of section 5.7.
 Nothing stops a job.
 
 js-agent's `drain` (New in komira-ai/jobscheduler, section 7) cordons with the host's own credential on the lease server's own-host route

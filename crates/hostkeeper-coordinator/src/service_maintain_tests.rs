@@ -570,19 +570,3 @@ fn a_start_after_the_run_was_cancelled_stores_and_sends_nothing() {
     assert_eq!(steps(&world), vec![("h1".to_owned(), Step::NotReached)]);
     assert!(maintenance_audit(&world).is_empty());
 }
-
-/// Proves: a host whose daemon reports its turn deferred is sent nothing more by this release and
-/// its run does not end while the window is open (offering it again waits for a new try of its
-/// order, which the run does not keep yet).
-///
-/// Catches: a deferred host ordered again under the same order id, which its daemon would take as
-/// the order it already ran.
-#[test]
-fn a_deferred_host_is_not_ordered_again_under_the_same_order() {
-    let world = scheduled("sm-deferred", table(1, 0), &["h1"], |_| {});
-    assert!(starts(&world, "h1"));
-    assert_eq!(tell(&world, "h1", at_step(MaintenanceStep::Deferred)), None);
-    assert_eq!(tell(&world, "h1", beat(LINUX, None)), None);
-    assert_eq!(steps(&world), vec![("h1".to_owned(), Step::Deferred)]);
-    assert!(!world.ops().maintenance_runs[0].ended_at(UNIX));
-}

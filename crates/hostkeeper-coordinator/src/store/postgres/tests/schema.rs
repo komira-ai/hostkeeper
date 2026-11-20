@@ -49,6 +49,7 @@ fn shipped_rows() -> Vec<Vec<Option<String>>> {
         row("27", "audit_api_token", "may-run"),
         row("28", "xcode_releases", "may-run"),
         row("29", "maintenance_runs", "may-run"),
+        row("30", "maintenance_turns", "may-run"),
     ]
 }
 

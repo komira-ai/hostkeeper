@@ -11,7 +11,9 @@ use hostkeeper_wire::wire::OrderId;
 use serde::de::DeserializeOwned;
 use serde_json::json;
 
-use super::{Kind, MAX_RUNS, Run, RunHost, Skip, Step, new_id, prune};
+use super::{
+    Kind, MAX_OFFERED_AGAIN, MAX_RUNS, Run, RunHost, Skip, Step, new_id, order_id_of, prune,
+};
 
 const NOW: u64 = 1_900_000_000;
 
@@ -22,8 +24,9 @@ const NOW: u64 = 1_900_000_000;
 /// The first run names hosts and has a window, a batch, a drain deadline of 0 and takes the last
 /// host; its hosts, sorted by id, are waiting, left out for each [`Skip`] (one without a group)
 /// and not reached. The second names a host group, has no window, batch or drain deadline, was
-/// cancelled, and has a done host that applied kinds and a halted one with a reason. The third
-/// names one host, has a batch of 1 and a drain deadline of 900, and a host staging.
+/// cancelled, and has a done host that applied kinds and has baked 2 heartbeats, and a halted one
+/// with a reason. The third names one host, has a batch of 1 and a drain deadline of 900, and a
+/// host staging under its turn's second offer.
 pub(crate) fn sample() -> Vec<Run> {
     let host = |id: &str, group: &str, step: Step, since: u64, kinds: &[Kind]| RunHost {
         host_id: id.to_owned(),
@@ -34,6 +37,8 @@ pub(crate) fn sample() -> Vec<Run> {
         applied: Vec::new(),
         skipped_because: None,
         reason: String::new(),
+        offered_again: 0,
+        baked_beats: 0,
     };
     let skipped = |id: &str, group: &str, why: Skip, kinds: &[Kind]| RunHost {
         skipped_because: Some(why),
@@ -92,6 +97,7 @@ pub(crate) fn sample() -> Vec<Run> {
         hosts: vec![
             RunHost {
                 applied: vec![Kind::Linux, Kind::Reboot],
+                baked_beats: 2,
                 ..host(
                     "host-f",
                     "web",
@@ -127,13 +133,16 @@ pub(crate) fn sample() -> Vec<Run> {
         by: "operator ana".to_owned(),
         scheduled_unix: 1_900_000_090,
         cancelled_unix: None,
-        hosts: vec![host(
-            "host-i",
-            "mac",
-            Step::Staging,
-            1_900_000_100,
-            &[Kind::Xcode],
-        )],
+        hosts: vec![RunHost {
+            offered_again: 1,
+            ..host(
+                "host-i",
+                "mac",
+                Step::Staging,
+                1_900_000_100,
+                &[Kind::Xcode],
+            )
+        }],
     };
     vec![first, second, third]
 }
@@ -148,6 +157,8 @@ fn host(id: &str, group: &str, step: Step, since: u64) -> RunHost {
         applied: Vec::new(),
         skipped_because: None,
         reason: String::new(),
+        offered_again: 0,
+        baked_beats: 0,
     }
 }
 
@@ -341,7 +352,8 @@ fn minimal_run_json() {
 }
 
 /// Proves: a run with every key set is written under exactly these keys and values, with a
-/// zero deadline kept (it means no deadline) and the first of the sample read back equal.
+/// zero deadline kept (it means no deadline) and the first of the sample read back equal; a host's
+/// bake and its offers after a deferral are written only when not 0, and read back.
 #[test]
 fn full_run_json() {
     let value = json!({
@@ -383,7 +395,7 @@ fn full_run_json() {
         "hosts": [
             {"host_id": "host-f", "host_group": "web", "step": "done",
              "since_unix": 1_900_000_150u64, "kinds": ["linux", "reboot"],
-             "applied": ["linux", "reboot"]},
+             "applied": ["linux", "reboot"], "baked_beats": 2},
             {"host_id": "host-g", "host_group": "web", "step": "halted",
              "since_unix": 1_900_000_160u64, "kinds": ["linux"], "reason": "drain failed"},
             {"host_id": "host-h", "host_group": "web", "step": "not_reached",
@@ -394,6 +406,14 @@ fn full_run_json() {
         serde_json::to_value(&sample()[1]).expect("serializes"),
         second
     );
+    assert_eq!(
+        serde_json::from_value::<Run>(second).expect("parses"),
+        sample()[1]
+    );
+
+    let third = &serde_json::to_value(&sample()[2]).expect("serializes")["hosts"][0];
+    assert_eq!(third["offered_again"], json!(1));
+    assert_eq!(third.get("baked_beats"), None, "0 is not written");
 }
 
 /// Proves: the sample round-trips through JSON exactly, and covers what the stores' tests rely
@@ -708,4 +728,86 @@ fn new_id_counts_from_one_and_skips_taken() {
     assert!(OrderId::parse(&id).is_some());
     let longest = new_id(&[], 9_999_999_999_999);
     assert!(OrderId::parse(&longest).is_some(), "{longest}");
+}
+
+/// Proves: a host's order id is `maintain-<run id>` for its first offer and `maintain-<run id>-<n>`
+/// for the n-th; the next one is the following offer's only for a deferred host; and at
+/// [`MAX_OFFERED_AGAIN`], with the longest run id [`new_id`] makes, it is still a valid order id
+/// (at most 64 bytes).
+///
+/// Catches: a host offered again under the id of its earlier offer, and an id over the wire's
+/// bound that its daemon would refuse.
+#[test]
+fn a_hosts_order_id_names_its_offer_and_stays_an_order_id() {
+    let mut turn = host("h1", "web", Step::Staging, 0);
+    assert_eq!(turn.order_id("run-1-1"), "maintain-run-1-1");
+    assert_eq!(turn.next_order_id("run-1-1"), "maintain-run-1-1");
+    turn.step = Step::Deferred;
+    assert_eq!(turn.next_order_id("run-1-1"), "maintain-run-1-1-2");
+    turn.offered_again = 1;
+    assert_eq!(turn.order_id("run-1-1"), "maintain-run-1-1-2");
+    assert_eq!(turn.next_order_id("run-1-1"), "maintain-run-1-1-3");
+    turn.step = Step::Waiting;
+    assert_eq!(turn.next_order_id("run-1-1"), "maintain-run-1-1-2");
+
+    let longest = format!("run-{}-{}", u64::MAX, u64::MAX);
+    assert_eq!(longest.len(), 45);
+    let id = order_id_of(&longest, MAX_OFFERED_AGAIN);
+    assert_eq!(id.len(), 64);
+    assert!(OrderId::parse(&id).is_some(), "{id}");
+}
+
+/// Proves: a done host bakes while its count is under its group's `bake_beats` and not once it is
+/// there, and a host at any other step never bakes.
+///
+/// Catches: a bake that holds a place for a host that is not done, or past its count.
+#[test]
+fn only_a_done_host_under_its_count_bakes() {
+    let mut turn = host("h1", "web", Step::Done, 0);
+    turn.baked_beats = 1;
+    assert!(turn.bakes(2));
+    assert!(!turn.bakes(1));
+    assert!(!turn.bakes(0));
+    for step in Step::ALL.iter().copied().filter(|step| *step != Step::Done) {
+        turn.step = step;
+        assert!(!turn.bakes(2), "{step:?}");
+    }
+}
+
+/// Proves: once a run's window has ended, its hosts that had not started (waiting, deferred) are
+/// shown not reached since the window's end with their reason kept, and every other host as
+/// held; before the end, and in a run with no end, every host is shown as held.
+///
+/// Catches: a window that ends with its hosts shown still waiting, and one that rewrites a host
+/// that started.
+#[test]
+fn a_run_past_its_window_shows_its_unstarted_hosts_not_reached() {
+    let mut run = run("run-1-1", Vec::new());
+    for step in Step::ALL {
+        let mut turn = host(step.as_str(), "web", *step, 5);
+        turn.reason = "why".to_owned();
+        run.hosts.push(turn);
+    }
+    run.window_end_unix = 100;
+    for turn in &run.hosts {
+        assert_eq!(
+            &run.shown(turn, 99),
+            turn,
+            "{:?}: before the end",
+            turn.step
+        );
+        let shown = run.shown(turn, 100);
+        if turn.step.may_start() {
+            assert_eq!(
+                (shown.step, shown.since_unix, shown.reason.as_str()),
+                (Step::NotReached, 100, "why")
+            );
+        } else {
+            assert_eq!(&shown, turn, "{:?}", turn.step);
+        }
+    }
+    run.window_end_unix = 0;
+    for turn in &run.hosts {
+        assert_eq!(&run.shown(turn, u64::MAX), turn, "no end");
+    }
 }

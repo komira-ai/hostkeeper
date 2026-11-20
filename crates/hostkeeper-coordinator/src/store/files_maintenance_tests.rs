@@ -75,6 +75,8 @@ fn hand_run() -> Run {
         applied: Vec::new(),
         skipped_because,
         reason: String::new(),
+        offered_again: 0,
+        baked_beats: 0,
     };
     Run {
         id: "run-1900000000-1".to_owned(),

@@ -191,7 +191,58 @@ pub(crate) struct RunHost {
     /// Why it halted or deferred, as its daemon words it; empty otherwise.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub(crate) reason: String,
+    /// How many times it was offered its turn again after a deferral: its order id
+    /// ([`RunHost::order_id`]) is the run's first while 0, and a new one for each offer after.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub(crate) offered_again: u32,
+    /// Done: the healthy heartbeats in a row it has sent since, toward its group's `bake_beats`;
+    /// 0 otherwise.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub(crate) baked_beats: u32,
 }
+
+impl RunHost {
+    /// The id of the order that took the turn it is in, or last was in, in the run `run_id`:
+    /// `maintain-<run id>` for the first offer, then `maintain-<run id>-<n>` for the n-th
+    /// ([`Self::offered_again`] + 1). A daemon answers an order it already holds with the end of
+    /// that order's turn, whatever its try, so a turn offered again after a deferral takes a new
+    /// id: at most 9 + 45 + 10 bytes for a run id [`new_id`] makes, within an order id's 64, since
+    /// a host is offered again at most [`MAX_OFFERED_AGAIN`] times.
+    pub(crate) fn order_id(&self, run_id: &str) -> String {
+        order_id_of(run_id, self.offered_again)
+    }
+
+    /// The id of the order that starts its turn now: [`Self::order_id`] of the next offer when it
+    /// was deferred, its own otherwise.
+    pub(crate) fn next_order_id(&self, run_id: &str) -> String {
+        let again = match self.step {
+            Step::Deferred => self.offered_again.saturating_add(1),
+            _ => self.offered_again,
+        };
+        order_id_of(run_id, again)
+    }
+
+    /// Whether, done in a group that bakes for `bake_beats` healthy heartbeats, it still bakes:
+    /// it holds its batch place until it has sent them.
+    pub(crate) fn bakes(&self, bake_beats: u32) -> bool {
+        self.step == Step::Done && self.baked_beats < bake_beats
+    }
+}
+
+/// The order id of the `maintain` of the run `run_id` offered `again` times after a deferral.
+pub(crate) fn order_id_of(run_id: &str, again: u32) -> String {
+    match again {
+        0 => format!("{ORDER_PREFIX}{run_id}"),
+        n => format!("{ORDER_PREFIX}{run_id}-{}", u64::from(n) + 1),
+    }
+}
+
+/// What the order id of a run's `maintain` begins with: then the run's id.
+pub(crate) const ORDER_PREFIX: &str = "maintain-";
+
+/// The most times a host is offered its turn again after a deferral, so that its order id's
+/// `-<n>` stays within 10 bytes.
+pub(crate) const MAX_OFFERED_AGAIN: u32 = 999_999_998;
 
 /// A maintenance run, as the coordinator stores it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -243,6 +294,15 @@ pub(crate) struct Run {
     reason = "serde's skip_serializing_if passes the field by reference"
 )]
 fn is_zero(n: &u64) -> bool {
+    *n == 0
+}
+
+/// Whether `n` is 0, for a key written only when it is not.
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde's skip_serializing_if passes the field by reference"
+)]
+fn is_zero_u32(n: &u32) -> bool {
     *n == 0
 }
 
@@ -316,6 +376,18 @@ impl Run {
             host.host_id == host_id
                 && (host.step.in_turn() || (host.step.may_start() && !self.ended_at(now)))
         })
+    }
+
+    /// `host`'s turn as it stands at `now`: a host that had not started (waiting, or deferred and
+    /// not offered again) once the run's window has ended is not reached, since the window
+    /// ended, as a cancel would end it; any other as held. A window that ends needs no write.
+    pub(crate) fn shown(&self, host: &RunHost, now: u64) -> RunHost {
+        let mut shown = host.clone();
+        if host.step.may_start() && self.window_ended(now) {
+            shown.step = Step::NotReached;
+            shown.since_unix = self.window_end_unix;
+        }
+        shown
     }
 
     /// Cancels the run at `now`: no host of it starts from now on, so each host that had not
