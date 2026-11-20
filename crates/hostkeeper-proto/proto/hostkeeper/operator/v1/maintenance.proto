@@ -1,0 +1,366 @@
+// hostkeeper.operator.v1: the `Maintenance` service of the operator API, its refusals
+// (`MaintenanceRefusal`) and its messages: maintenance runs, each of which drains, updates, reboots
+// if needed, checks and puts back hosts one batch at a time (docs/design/maintenance-updates.md
+// sections 4.2 and 5). A run is what an operator schedules: what (the kinds of maintenance), where
+// (hosts, or a host group), when (now, or a window) and how many hosts of a group at once. The
+// coordinator orders each host's turn by its heartbeat (`hostkeeper.agent.v1.Order.maintain`), and
+// a host's step is what its daemon's run record says. The rest of the package, `Enrollment` and
+// `EnrollmentRefusal` (enrollment.proto) and `Audit` and `AuditRefusal` among it, is
+// operator.proto, which imports this file publicly; this file is the same package and API, kept
+// apart so that each file stays short. No coordinator of this release serves `Maintenance`: each of
+// its calls answers `UNIMPLEMENTED`; these are the shapes the release that runs maintenance speaks.
+//
+// Served by: the coordinator, on its control listener, as operator.proto says.
+//
+// Authentication: `Maintenance` takes the operator's credential only (a token of the tokens file,
+// a stored API token, which acts as its owner, or a signed-in session); no CI token reaches it
+// (see operator.proto).
+//
+// Refusals: a gRPC status whose message is exactly one token of `MaintenanceRefusal`, written as
+// the value's name without the prefix, in lower case; the status code is the one each value
+// names. A refused request changes nothing and orders no host. A call that changes something
+// writes its audit entry first, and a call that cannot write it changes nothing
+// (`audit_unavailable`).
+//
+// Units: as operator.proto says; times are unix seconds and durations whole seconds. A host id is
+// a node id; a host group's name is a role name. A run id is 1 to 64 bytes of the characters of
+// an order id, as `hostkeeper.agent.v1.Maintain.run_id` is. A reason is 1 to 256 bytes once
+// trimmed, with no control character. A request is at most 4 KiB, which holds 32 host ids. A
+// `limit` is capped at 256, and 0 means the cap.
+//
+// Extending: as operator.proto says: add fields, messages, enum values and RPCs; never renumber,
+// rename, retype or remove one, and never reuse a number. A reader treats an enum value it does
+// not know as UNSPECIFIED.
+syntax = "proto3";
+
+package hostkeeper.operator.v1;
+
+// `MaintenanceKind`, the kinds a run applies.
+import "hostkeeper/agent/v1/maintenance.proto";
+// `AuditEntry`, which each call that changes something answers.
+import "hostkeeper/operator/v1/entry.proto";
+
+// The maintenance runs. Described and not yet served: every call answers `UNIMPLEMENTED` until
+// its handler lands. Each call that changes something takes a reason and answers the audit
+// entry it wrote, under the caller's name, with the caller's reason followed by `run <id>`:
+// `maintenance_schedule` (with the host group as the entry's `host_group` when the run names
+// one), `maintenance_cancel`, `maintenance_retry_host` and `maintenance_put_back` (each with the
+// host as the entry's `node_id`). `List`, `Get` and a `Schedule` without `confirm` change nothing
+// and write no audit entry.
+service Maintenance {
+  // Schedule a run: of the kinds asked (all that are due, when none is named), on the hosts named
+  // or every host of a host group, now or in a window, with the group's batch and drain deadline
+  // unless the request names its own. The run takes the hosts that have something due of its
+  // kinds; a host it cannot order is listed skipped, with why. Without `confirm` nothing is stored
+  // and the answer is the run as it would be, with no id; it is refused as the stored run would
+  // be.
+  rpc Schedule(ScheduleMaintenanceRequest) returns (ScheduleMaintenanceResponse);
+  // The newest runs, newest first, as many as `limit` allows, with no hosts; every run, or those
+  // in the states asked. Changes nothing.
+  rpc List(ListMaintenanceRunsRequest) returns (ListMaintenanceRunsResponse);
+  // One run, with each of its hosts, by node id: its step, since when, and why it halted,
+  // deferred or was skipped. Changes nothing.
+  rpc Get(GetMaintenanceRunRequest) returns (GetMaintenanceRunResponse);
+  // Cancel a run: no host of it starts its turn from now on; a host in its turn finishes it, and
+  // the hosts that had not started end as not reached. A halted host stays halted, and cordoned,
+  // until it is put back: `PutBack` is still taken. Audited `maintenance_cancel`.
+  rpc Cancel(CancelMaintenanceRunRequest) returns (CancelMaintenanceRunResponse);
+  // Retry a halted host's turn from the step that failed: its daemon is ordered the run again
+  // (`MAINTAIN_ACTION_RETRY`) with a new try. Audited `maintenance_retry_host`.
+  rpc RetryHost(RetryMaintenanceHostRequest) returns (RetryMaintenanceHostResponse);
+  // Put a halted host back: its daemon runs the drained services' `resume`
+  // (`MAINTAIN_ACTION_PUT_BACK`) and leaves the update as far as it got; the host's turn ends, and
+  // the run goes on in its group. Taken in a run that has ended too (cancelled, or past its
+  // window), for a host still halted there. Audited `maintenance_put_back`.
+  rpc PutBack(PutBackMaintenanceHostRequest) returns (PutBackMaintenanceHostResponse);
+}
+
+// Why `Maintenance` refused a request. The token is the value's name without the prefix, in lower
+// case.
+enum MaintenanceRefusal {
+  MAINTENANCE_REFUSAL_UNSPECIFIED = 0;
+  // UNAUTHENTICATED: no credential, or not an operator's.
+  MAINTENANCE_REFUSAL_UNAUTHORIZED = 1;
+  // PERMISSION_DENIED: the bearer is a valid CI token, which `Maintenance` does not take.
+  MAINTENANCE_REFUSAL_FORBIDDEN = 2;
+  // INVALID_ARGUMENT: a field breaks its rule: a host id, a host group's name, a run id, a reason
+  // (missing from a call that changes something, over 256 bytes once trimmed, or with a control
+  // character), a kind unspecified or named twice, both or neither of `host_ids` and `host_group`,
+  // more than 32 host ids or one twice, a batch of 0, a window start without an end, or an end not
+  // after its start; or the request is over its size.
+  MAINTENANCE_REFUSAL_INVALID_REQUEST = 3;
+  // NOT_FOUND: `Schedule` names a host group the coordinator does not hold.
+  MAINTENANCE_REFUSAL_UNKNOWN_GROUP = 4;
+  // NOT_FOUND: `Schedule` names a host the coordinator has not enrolled.
+  MAINTENANCE_REFUSAL_UNKNOWN_HOST = 5;
+  // NOT_FOUND: no run has the id.
+  MAINTENANCE_REFUSAL_UNKNOWN_RUN = 6;
+  // FAILED_PRECONDITION: `Schedule` of hosts none of which has anything due of the run's kinds
+  // that it could be ordered: nothing due, or every host with something due skipped.
+  MAINTENANCE_REFUSAL_NOTHING_DUE = 7;
+  // FAILED_PRECONDITION: `Schedule` of a window whose end is at or before the coordinator's clock.
+  MAINTENANCE_REFUSAL_WINDOW_ENDED = 8;
+  // FAILED_PRECONDITION: `Schedule` of a run that would take every host of a host group (the one
+  // host of a group of one among them), without `take_last_host`.
+  MAINTENANCE_REFUSAL_LAST_HOST = 9;
+  // FAILED_PRECONDITION: `Schedule` names a host whose turn of another run has not ended: it is
+  // waiting, between staging and putting back, halted or not back.
+  MAINTENANCE_REFUSAL_HOST_IN_MAINTENANCE = 10;
+  // FAILED_PRECONDITION: `Cancel` or `RetryHost` of a run that has ended: done, cancelled, or
+  // past its window. `PutBack` of a host still halted in such a run is taken.
+  MAINTENANCE_REFUSAL_RUN_ENDED = 11;
+  // NOT_FOUND: `RetryHost` or `PutBack` of a host the run does not hold.
+  MAINTENANCE_REFUSAL_NOT_IN_RUN = 12;
+  // FAILED_PRECONDITION: `RetryHost` or `PutBack` of a host whose turn is not halted.
+  MAINTENANCE_REFUSAL_NOT_HALTED = 13;
+  // INTERNAL: the run could not be read or written; nothing changed, and asking again is safe.
+  MAINTENANCE_REFUSAL_STORE_FAILED = 14;
+  // UNAVAILABLE: the audit entry could not be written; nothing changed, and asking again is safe.
+  MAINTENANCE_REFUSAL_AUDIT_UNAVAILABLE = 15;
+}
+
+// Where a run stands.
+enum MaintenanceState {
+  MAINTENANCE_STATE_UNSPECIFIED = 0;
+  // Its window has not opened: no host has started.
+  MAINTENANCE_STATE_SCHEDULED = 1;
+  // Hosts are being taken, a batch of each group at a time.
+  MAINTENANCE_STATE_RUNNING = 2;
+  // A host's turn halted, or its host is not back, in at least one of its groups
+  // (`halted_groups`): no further host of such a group starts, and the run goes on in its other
+  // groups.
+  MAINTENANCE_STATE_HALTED = 3;
+  // Every host's turn has ended.
+  MAINTENANCE_STATE_DONE = 4;
+  // An operator cancelled it.
+  MAINTENANCE_STATE_CANCELLED = 5;
+  // Its window ended with hosts not reached.
+  MAINTENANCE_STATE_WINDOW_ENDED = 6;
+}
+
+// Where a host's turn of a run stands. Values 1 to 10 are those of the host's own report
+// (`hostkeeper.agent.v1.MaintenanceStep`), by the same number; the others are the coordinator's.
+enum MaintenanceHostStep {
+  MAINTENANCE_HOST_STEP_UNSPECIFIED = 0;
+  // In the run, and not started: its batch place, the window or the serving count holds it.
+  MAINTENANCE_HOST_STEP_WAITING = 1;
+  // Downloading and staging the update while the host still serves.
+  MAINTENANCE_HOST_STEP_STAGING = 2;
+  // Running the services' `drain` steps.
+  MAINTENANCE_HOST_STEP_DRAINING = 3;
+  // Applying the update.
+  MAINTENANCE_HOST_STEP_APPLYING = 4;
+  // Rebooting, for a kind that needs it.
+  MAINTENANCE_HOST_STEP_REBOOTING = 5;
+  // Running the maintenance hook's `verify`.
+  MAINTENANCE_HOST_STEP_CHECKING = 6;
+  // Running the drained services' `resume` steps.
+  MAINTENANCE_HOST_STEP_PUTTING_BACK = 7;
+  // Done: back in service with the update applied, or put back by an operator.
+  MAINTENANCE_HOST_STEP_DONE = 8;
+  // Deferred: staging failed or the drain deadline passed; back in service with nothing changed,
+  // and offered again after the group's other hosts while the window is open.
+  MAINTENANCE_HOST_STEP_DEFERRED = 9;
+  // Halted: a step from drain on failed; the host stays cordoned until an operator retries it or
+  // puts it back.
+  MAINTENANCE_HOST_STEP_HALTED = 10;
+  // Silent past its group's `return_secs` while rebooting; it stays cordoned, and its turn goes
+  // on when it reports again.
+  MAINTENANCE_HOST_STEP_NOT_BACK = 11;
+  // Not started before the run was cancelled or its window ended.
+  MAINTENANCE_HOST_STEP_NOT_REACHED = 12;
+  // Left out of the run (`skipped_because`): never ordered.
+  MAINTENANCE_HOST_STEP_SKIPPED = 13;
+}
+
+// Why a host, or a kind of it, is left out of a run.
+enum MaintenanceSkip {
+  // Not left out.
+  MAINTENANCE_SKIP_UNSPECIFIED = 0;
+  // Its daemon does not announce `maintenance-v1`.
+  MAINTENANCE_SKIP_NO_MAINTENANCE_V1 = 1;
+  // A hold stands on it for a package (`Services.Hold`).
+  MAINTENANCE_SKIP_HELD = 2;
+  // It is excluded from a package (`Hosts.Exclude`).
+  MAINTENANCE_SKIP_EXCLUDED = 3;
+  // For `macos`: the Mac reports a device-management setting that must not be set on a Mac
+  // hostkeeper updates (`hostkeeper.agent.v1.MacUpdateFacts.mdm_conflicts`).
+  MAINTENANCE_SKIP_MDM_CONFLICT = 4;
+  // For `macos`: the Mac's update account is missing, is not an administrator or holds no Secure
+  // Token.
+  MAINTENANCE_SKIP_NO_UPDATE_ACCOUNT = 5;
+  // A package order of the host is outstanding: one thing at a time on a host.
+  MAINTENANCE_SKIP_IN_PACKAGE_UPDATE = 6;
+  // Its host group changed while it waited.
+  MAINTENANCE_SKIP_GROUP_CHANGED = 7;
+  // For `macos`: FileVault is on, and the update account is not a FileVault user or `fdesetup
+  // supportsauthrestart` does not say yes.
+  MAINTENANCE_SKIP_FILEVAULT_NOT_READY = 8;
+}
+
+message ScheduleMaintenanceRequest {
+  // The kinds to apply, each at most once; empty: every kind that is due on each host.
+  repeated hostkeeper.agent.v1.MaintenanceKind kinds = 1;
+  // The hosts, 1 to 32, by node id: one host, or a selection. Empty when `host_group` is set.
+  repeated string host_ids = 2;
+  // Every host of this host group. Empty when `host_ids` is set.
+  string host_group = 3;
+  // When the window opens; 0: now.
+  uint64 window_start_unix = 4;
+  // When the window ends: no host starts its turn after it, and a host in its turn finishes; 0:
+  // no end. Set whenever `window_start_unix` is.
+  uint64 window_end_unix = 5;
+  // How many hosts of each group may be in their turn at once, 1 to 10000; absent: the group's
+  // `batch`.
+  optional uint32 batch = 6;
+  // How long a host's drain may wait before the host is put back as it was and deferred; 0: no
+  // deadline; absent: the group's `drain_deadline_secs`.
+  optional uint64 drain_deadline_secs = 7;
+  // Why; the audit entry carries it. Needed with `confirm`; a call without it may leave it out.
+  string reason = 8;
+  // Take every host of a group, the one host of a group of one included; otherwise such a run is
+  // refused (`last_host`).
+  bool take_last_host = 9;
+  // Store the run. Without it nothing is stored, no host is ordered, and the answer is the run as
+  // it would be.
+  bool confirm = 10;
+}
+
+message ScheduleMaintenanceResponse {
+  // The run; its `id` is empty when the request did not `confirm`.
+  MaintenanceRun run = 1;
+  // Its hosts, by node id, each `waiting` or `skipped`.
+  repeated MaintenanceHost hosts = 2;
+  // The audit entry the call wrote; absent when it did not `confirm`.
+  AuditEntry entry = 3;
+}
+
+message ListMaintenanceRunsRequest {
+  // Only the runs in these states; empty: every run.
+  repeated MaintenanceState states = 1;
+  // At most this many of the newest runs.
+  uint32 limit = 2;
+}
+
+message ListMaintenanceRunsResponse {
+  // The runs, newest first.
+  repeated MaintenanceRun runs = 1;
+}
+
+message GetMaintenanceRunRequest {
+  // The run's id.
+  string run_id = 1;
+}
+
+message GetMaintenanceRunResponse {
+  // The run.
+  MaintenanceRun run = 1;
+  // Its hosts, by node id.
+  repeated MaintenanceHost hosts = 2;
+}
+
+message CancelMaintenanceRunRequest {
+  // The run's id.
+  string run_id = 1;
+  // Why; the audit entry carries it.
+  string reason = 2;
+}
+
+message CancelMaintenanceRunResponse {
+  // The run, cancelled.
+  MaintenanceRun run = 1;
+  // The audit entry the call wrote.
+  AuditEntry entry = 2;
+}
+
+message RetryMaintenanceHostRequest {
+  // The run's id.
+  string run_id = 1;
+  // The halted host, by node id.
+  string host_id = 2;
+  // Why; the audit entry carries it.
+  string reason = 3;
+}
+
+message RetryMaintenanceHostResponse {
+  // The host's turn, as the retry leaves it.
+  MaintenanceHost host = 1;
+  // The audit entry the call wrote.
+  AuditEntry entry = 2;
+}
+
+message PutBackMaintenanceHostRequest {
+  // The run's id.
+  string run_id = 1;
+  // The halted host, by node id.
+  string host_id = 2;
+  // Why; the audit entry carries it.
+  string reason = 3;
+}
+
+message PutBackMaintenanceHostResponse {
+  // The host's turn, as the put back leaves it.
+  MaintenanceHost host = 1;
+  // The audit entry the call wrote.
+  AuditEntry entry = 2;
+}
+
+// A maintenance run, as the coordinator holds it.
+message MaintenanceRun {
+  // Its id: the `run_id` of each host's `maintain` order.
+  string id = 1;
+  // Where it stands.
+  MaintenanceState state = 2;
+  // The kinds it applies, as scheduled; empty: every kind due on each host.
+  repeated hostkeeper.agent.v1.MaintenanceKind kinds = 3;
+  // The hosts it was scheduled on, by node id; empty when it was scheduled on a host group.
+  repeated string host_ids = 4;
+  // The host group it was scheduled on; empty when it was scheduled on hosts.
+  string host_group = 5;
+  // When its window opens; 0: it opened when the run was scheduled.
+  uint64 window_start_unix = 6;
+  // When its window ends; 0: no end.
+  uint64 window_end_unix = 7;
+  // How many hosts of each group may be in their turn at once; absent: each group's `batch`.
+  optional uint32 batch = 8;
+  // How long a drain may wait; 0: no deadline; absent: each group's `drain_deadline_secs`.
+  optional uint64 drain_deadline_secs = 9;
+  // Whether it may take every host of a group.
+  bool take_last_host = 10;
+  // Why it was scheduled.
+  string reason = 11;
+  // Who scheduled it, by name, as the audit entry names them.
+  string by_name = 12;
+  // When it was scheduled.
+  uint64 scheduled_unix = 13;
+  // When it ended: its last host's turn ended, it was cancelled, or its window ended; 0 while it
+  // has not.
+  uint64 ended_unix = 14;
+  // The host groups in which a host's turn halted or a host is not back, by name: no further host
+  // of them starts.
+  repeated string halted_groups = 15;
+  // How many hosts it holds, skipped ones included.
+  uint32 host_count = 16;
+}
+
+// One host's turn of a run.
+message MaintenanceHost {
+  // The host, by node id.
+  string host_id = 1;
+  // Its host group when the run took it.
+  string host_group = 2;
+  // Where its turn stands.
+  MaintenanceHostStep step = 3;
+  // When it entered its step; 0 before it was first ordered.
+  uint64 since_unix = 4;
+  // The kinds its turn applies: those of the run that are due on it and not left out.
+  repeated hostkeeper.agent.v1.MaintenanceKind kinds = 5;
+  // The kinds applied so far, in the order applied, as its daemon reports them.
+  repeated hostkeeper.agent.v1.MaintenanceKind applied = 6;
+  // Why it is left out: with `skipped` the whole host, otherwise a kind of the run left out of
+  // `kinds`; the first cause found when there are several; unspecified when nothing is.
+  MaintenanceSkip skipped_because = 7;
+  // With `halted` or `deferred`: why, as its daemon words it (the step and the exit code), at most
+  // 256 bytes; empty otherwise.
+  string reason = 8;
+}

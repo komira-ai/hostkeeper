@@ -21,7 +21,9 @@ POST /<package>.<Service>/<Method>
 for example `POST /hostkeeper.operator.v1.Releases/Converge`. A client sends `Content-Type:
 application/json` (the gateway reads the body as JSON whatever the header says); the response has
 that type. Only the private listener (`--private-listen`)
-serves the gateway; the heartbeat listener never does.
+serves the gateway; the heartbeat listener never does. The `Maintenance` service is described
+(`maintenance.proto`) and not yet served: each of its methods answers `UNIMPLEMENTED` until its
+handler lands.
 
 The `Xcode` service (`List`, `Remove`) lists and removes the archives of the coordinator's Xcode
 store. The archives themselves are not gateway calls: an operator's Mac uploads one with
