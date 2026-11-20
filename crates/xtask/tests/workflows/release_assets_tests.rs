@@ -16,6 +16,9 @@ const CHECK: &str = "      - run: cargo xtask release check dist --version \"$RE
 /// The coordinator updater's linux-x86_64 tarball, which release 0.1.208 does not have.
 const UPDATER: &str = "hostkeeper-coordinator-update-<version>-linux-x86_64.tar.gz";
 
+/// The SSH client's linux-x86_64 tarball, which release 0.1.208 does not have.
+const SSH_CLIENT: &str = "hkssh-<version>-linux-x86_64.tar.gz";
+
 /// hostkeeper's linux-x86_64 tarball, which every release since 0.1.208 has.
 const HOSTKEEPER: &str = "hostkeeper-<version>-linux-x86_64.tar.gz";
 
@@ -112,6 +115,47 @@ fn release_yml_runs_the_coordinator_updater_only_when_the_release_has_its_tarbal
     assert_eq!(
         release_problems(&both),
         vec![unguarded("release.yml", "verify", 15, UPDATER)]
+    );
+}
+
+#[test]
+fn release_yml_runs_the_ssh_client_only_when_the_release_has_its_tarball() {
+    // Catches: the verify job's unpacking of the SSH client's tarball with no `if:` (so a release
+    // of a commit from before it fails), or its run of the binary under another `if:` than its
+    // unpacking.
+    let text = release_yml();
+    let condition = guard(SSH_CLIENT);
+    let unpacking =
+        format!("      - if: {condition}\n        run: tar -xzf \"dist/hkssh-$RELEASE_VERSION");
+    let running = format!(
+        "        if: {condition}\n        run: cargo xtask release check-binary \"$RUNNER_TEMP/binary/hkssh\""
+    );
+    assert_eq!(release_problems(&text), Vec::<String>::new());
+    assert_eq!(
+        release_problems(&with_in(
+            &text,
+            &unpacking,
+            "      - run: tar -xzf \"dist/hkssh-$RELEASE_VERSION"
+        )),
+        vec![
+            unguarded("release.yml", "verify", 17, SSH_CLIENT),
+            format!(
+                "release.yml: job verify step 18 runs $RUNNER_TEMP/binary/hkssh under `if: {condition}`, not the `if:` of the step that unpacks it, `(none)`"
+            ),
+        ]
+    );
+    let both = with_in(
+        &with_in(
+            &text,
+            &unpacking,
+            "      - run: tar -xzf \"dist/hkssh-$RELEASE_VERSION",
+        ),
+        &running,
+        "        run: cargo xtask release check-binary \"$RUNNER_TEMP/binary/hkssh\"",
+    );
+    assert_eq!(
+        release_problems(&both),
+        vec![unguarded("release.yml", "verify", 17, SSH_CLIENT)]
     );
 }
 

@@ -318,6 +318,131 @@ fn a_listing_with_no_tools_fails_the_install() {
     assert!(!rig.marker.exists());
 }
 
+/// Proves the label of a current catalog, `Command Line Tools for Xcode <version>-<version>`, is
+/// installed as it is listed, with the listing's other lines and labels of other software around it.
+/// Catches a parser that knows only the `Command Line Tools for Xcode-<version>` form.
+#[test]
+fn a_label_of_the_current_form_is_installed() {
+    let rig = rig("clt-current-form");
+    rig.present();
+    rig.offers(concat!(
+        "Software Update Tool\n\nFinding available software\n",
+        "Software Update found the following new or updated software:\n",
+        "* Label: macOS Tahoe 26.1-25B78\n",
+        "\tTitle: macOS Tahoe 26.1, Version: 26.1, Size: 7000000KiB, Recommended: YES, Action: restart,\n",
+        "* Label: Command Line Tools for Xcode 26.4-26.4.1\n",
+        "\tTitle: Command Line Tools for Xcode 26.4, Version: 26.4.1, Size: 900000KiB, Recommended: YES,\n",
+    ));
+    rig.installs("Command Line Tools for Xcode 26.4-26.4.1");
+    assert_eq!(rig.installed(), Ok("15.3.0.0.1.1708646388".to_owned()));
+    assert_eq!(
+        rig.install.calls(),
+        [words(&[
+            "--install",
+            "Command Line Tools for Xcode 26.4-26.4.1"
+        ])]
+    );
+    assert!(!rig.marker.exists());
+}
+
+/// Proves both forms of the label are compared by the tools' version (the last of
+/// `<version>-<version>`, all of the old form), and that a label with no `-` or space after the name, one with no
+/// version, and a beta's label are no label of the tools.
+#[test]
+fn both_label_forms_are_compared_and_near_misses_are_ignored() {
+    let listing = concat!(
+        "* Label: Command Line Tools for Xcode-16.0\n",
+        "* Label: Command Line Tools for Xcode 26.1-26.1\n",
+        "* Label: Command Line Tools for Xcode 26.4-26.4.1\n",
+        "* Label: Command Line Tools for Xcode 26.4-26.4\n",
+    );
+    assert_eq!(
+        highest_label(listing),
+        Some("Command Line Tools for Xcode 26.4-26.4.1")
+    );
+    assert_eq!(
+        highest_label(
+            "* Label: Command Line Tools for Xcode-16.0\n* Label: Command Line Tools for Xcode 15.4-15.4\n"
+        ),
+        Some("Command Line Tools for Xcode-16.0")
+    );
+    for miss in [
+        "* Label: Command Line Tools for Xcode26.0\n",
+        "* Label: Command Line Tools for Xcode 26.0-\n",
+        "* Label: Command Line Tools for Xcode-\n",
+        "* Label: Command Line Tools beta 2 for Xcode 26.0-26.0\n",
+    ] {
+        assert_eq!(highest_label(miss), None, "{miss}");
+    }
+    assert_eq!(
+        tools_version("Command Line Tools for Xcode 26.4-26.4.1"),
+        Some("26.4.1")
+    );
+    assert_eq!(
+        tools_version("Command Line Tools for Xcode-15.3"),
+        Some("15.3")
+    );
+    assert_eq!(
+        tools_version("Command Line Tools for Xcode-16.0-beta1"),
+        Some("16.0-beta1")
+    );
+}
+
+/// Proves a listing with labels but none of the tools fails with a reason that names every label it
+/// listed, in its order, and `softwareupdate --install` is never run.
+#[test]
+fn no_tools_among_listed_labels_names_the_labels() {
+    let rig = rig("clt-other-labels");
+    rig.offers("* Label: macOS Tahoe 26.1-25B78\n* Label: Safari 26.1\n* Label: Command Line Tools beta 2 for Xcode 26.0-26.0\n");
+    assert_eq!(
+        rig.installed().expect_err("fails").to_string(),
+        "softwareupdate --list offered no Command Line Tools for Xcode; it listed: macOS Tahoe 26.1-25B78; Safari 26.1; Command Line Tools beta 2 for Xcode 26.0-26.0"
+    );
+    assert!(rig.install.calls().is_empty());
+    assert!(!rig.marker.exists());
+}
+
+/// Proves a listing with no label at all fails with a reason that names the first line of
+/// `softwareupdate`'s standard error that is not blank, where it says that nothing is offered.
+#[test]
+fn no_label_at_all_names_the_first_line_of_standard_error() {
+    let rig = rig("clt-stderr");
+    rig.list.always(
+        &words(&["--list"]),
+        Ok(LaunchctlOutput {
+            code: Some(0),
+            stdout: b"Software Update Tool\n\nFinding available software\n".to_vec(),
+            stderr: b"\n  \nNo new software available.\nsecond line\n".to_vec(),
+        }),
+    );
+    assert_eq!(
+        rig.installed().expect_err("fails").to_string(),
+        "softwareupdate --list offered no Command Line Tools for Xcode; standard error: No new software available."
+    );
+    assert!(rig.install.calls().is_empty());
+    assert!(!rig.marker.exists());
+}
+
+/// Proves a list ended by a signal is an error that says so, and the marker is removed.
+#[test]
+fn a_list_ended_by_a_signal_is_an_error() {
+    let rig = rig("clt-list-signal");
+    rig.list.always(
+        &words(&["--list"]),
+        Ok(LaunchctlOutput {
+            code: None,
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        }),
+    );
+    assert_eq!(
+        rig.installed().expect_err("fails").to_string(),
+        "softwareupdate --list was ended by a signal"
+    );
+    assert!(rig.install.calls().is_empty());
+    assert!(!rig.marker.exists());
+}
+
 /// Proves a list that exits non-zero and an install that exits non-zero are errors naming the step
 /// and the first line of its standard error, and the marker is removed in both.
 #[test]

@@ -57,10 +57,10 @@
 #          (cargo xtask release check, the released commit's own, which holds the files to
 #          exactly that commit's assets), and runs the downloaded linux-x86_64 binaries, which
 #          must print exactly `hostkeeper X.Y.Z+<12 hex>`, `hostkeeper-coordinator
-#          X.Y.Z+<12 hex>` and `hostkeeper-coordinator-update
-#          X.Y.Z+<12 hex>` (cargo xtask release check-binary); the coordinator updater's only in
-#          a release whose build made its tarball, since a release of a commit from before it has
-#          none (crates/xtask/tests/workflows/release_assets.rs). These are the commands of
+#          X.Y.Z+<12 hex>`, `hostkeeper-coordinator-update
+#          X.Y.Z+<12 hex>` and `hkssh X.Y.Z+<12 hex>` (cargo xtask release check-binary); the coordinator
+#          updater's and hkssh's only in a release whose build made their tarballs, since a release
+#          of a commit from before them has none (crates/xtask/tests/workflows/release_assets.rs). These are the commands of
 #          docs/deploy/verify-a-release.md, and a test keeps the two the same
 #          (crates/xtask/src/release/doc_tests.rs).
 # publish  the one job that holds `contents: write`, per release: creates a draft release at the
@@ -287,6 +287,11 @@ jobs:
       - name: hostkeeper-coordinator-update says the version and the commit it is released under
         if: ${{ hashFiles(format('dist/hostkeeper-coordinator-update-{0}-linux-x86_64.tar.gz', env.RELEASE_VERSION)) != '' }}
         run: cargo xtask release check-binary "$RUNNER_TEMP/binary/hostkeeper-coordinator-update" "$RELEASE_VERSION" "$COMMIT"
+      - if: ${{ hashFiles(format('dist/hkssh-{0}-linux-x86_64.tar.gz', env.RELEASE_VERSION)) != '' }}
+        run: tar -xzf "dist/hkssh-$RELEASE_VERSION-linux-x86_64.tar.gz" -C "$RUNNER_TEMP/binary" hkssh
+      - name: hkssh says the version and the commit it is released under
+        if: ${{ hashFiles(format('dist/hkssh-{0}-linux-x86_64.tar.gz', env.RELEASE_VERSION)) != '' }}
+        run: cargo xtask release check-binary "$RUNNER_TEMP/binary/hkssh" "$RELEASE_VERSION" "$COMMIT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-${{ matrix.tag }}
