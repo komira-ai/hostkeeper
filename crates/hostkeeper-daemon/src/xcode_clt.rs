@@ -72,7 +72,7 @@ pub const DEVELOPER_DIR: &str = "/Library/Developer/CommandLineTools";
 pub const CLANG: &str = "/Library/Developer/CommandLineTools/usr/bin/clang";
 
 /// The package the tools are recorded as.
-const PACKAGE: &str = "com.apple.pkg.CLTools_Executables";
+pub(crate) const CLT_PACKAGE: &str = "com.apple.pkg.CLTools_Executables";
 
 /// What the developer directory of an Xcode ends with.
 const XCODE_DEVELOPER: &str = ".app/Contents/Developer";
@@ -218,7 +218,7 @@ impl CommandLineTools {
         let info = run(
             &*self.pkgutil,
             "pkgutil --pkg-info",
-            &[&format!("--pkg-info={PACKAGE}")],
+            &[&format!("--pkg-info={CLT_PACKAGE}")],
         )
         .or_else(fail)?;
         if info.code != Some(0) {
@@ -378,7 +378,7 @@ fn make_marker(path: &Path) -> Result<(), String> {
 }
 
 /// The value of the `version:` line of `pkgutil --pkg-info`; empty when there is none.
-fn version_of(text: &str) -> String {
+pub(crate) fn version_of(text: &str) -> String {
     text.lines()
         .find_map(|line| line.trim().strip_prefix("version:"))
         .map(|version| version.trim().to_owned())
