@@ -19,7 +19,7 @@ use hostkeeper_proto::hostkeeper::agent::v1::{
 };
 use hostkeeper_steps::maintenance::{MaintenanceRecord, RunStep};
 use hostkeeper_steps::{CrashGate, CrashPoint};
-use support::{Rig, name};
+use support::Rig;
 use support_maintain::{
     HOOK, ORDER, RUN, boot, draining, launched, maintain, order_of, plain, reboot_on_cutover,
     record, terms,
@@ -495,9 +495,9 @@ fn a_retry_whose_record_cannot_be_written_runs_nothing() {
     assert_eq!(record(&rig), Some(held));
 }
 
-/// Catches the token of the new refusal: `not_halted`.
+/// Catches the refusal of a turn that is not halted reported under another token than
+/// `not_halted`, the one the coordinator reads.
 #[test]
-fn the_refusal_of_a_turn_that_is_not_halted_is_not_halted() {
+fn the_refusal_of_a_turn_that_is_not_halted_is_reported_not_halted() {
     assert_eq!(Refusal::NotHalted.token(), "not_halted");
-    assert_eq!(name("alpha").as_str(), "alpha");
 }
