@@ -42,7 +42,7 @@ Sign out ends the session on the coordinator. The host page's Remote SSH termina
 ## The frame and the lab
 
 After sign-in the app opens on **Home**, the lab (`docs/design/ui-shell-lab.md`). The frame around every page is a side menu with
-the "hostkeeper" wordmark on top (a click goes Home), the pages (Host groups, Packages, Inventory and Enrollment) and, at the bottom, **Settings**
+the "hostkeeper" wordmark on top (a click goes Home), the pages (Host groups, Packages, Inventory, Enrollment and Maintenance) and, at the bottom, **Settings**
 (one page with the tabs Users, API tokens and Audit), the theme (the browser's own, light or dark; kept in memory only),
 Sign out and a button that collapses the menu to icons; on a narrow screen it is a drawer opened by the top bar's Menu button.
 The top bar says where you are and who is signed in. The menu's icons are small inline SVG drawings (`icon` in `ui/view.js`; no image or font is loaded). Banners come in three kinds: `error` (red), `warning` (amber) and `notice` (blue, for what is true and needs no action); an empty one shows nothing. The pages that moved keep their old route: `fleet` is Home, and Release, Rollout and Holds still open
@@ -63,6 +63,9 @@ by their route and are not in the menu.
   row (its height from a list, 42 U by default), resize, move to another row or remove a rack, remove a row, and move a server by
   picking it up (or dragging it) and putting it on a free U of a rack, or taking it out of its rack. A row or a rack that still
   holds servers is not removed, and the page names them. A refusal is told in words. An empty lab says so and offers "Add a row".
+  Above the alerts, the updates notice: when `Alerts.List` answers `updates_due` alerts (one per host group with hosts that have
+  updates due, "Updates due on 4 hosts of mac-build"), it shows each one's words and an **Open Maintenance** button that opens
+  the Maintenance page; these alerts are not repeated in the alerts strip, and with none the notice is not shown.
   Calls: `Hosts.List`, `Releases.Status`, `Alerts.List`, `Layout.Get`, `Enrollment.ListRecords`; on a button `Layout.PutName`,
   `AddRow`, `RemoveRow`, `PutRack`, `RemoveRack`, `Place` and `Unplace`.
 - **Enrollment** (approval): besides the host group, the Height (1U to 4U, 1U by default), Row, Rack and U position of the server.
@@ -79,6 +82,21 @@ by their route and are not in the menu.
   hook tells hostkeeper no check and no run id, so they read "not reported to hostkeeper", and since hostkeeper has no action
   that clears a taint, the page says to clear it on the host first. `Alerts.List` is the page's last read; when it fails, the
   page says so and shows the reasons the host's own report gives.
+- **Host** (Updates; `ui/updates.js`): the header shows what the host's maintenance report (`Host.maintenance` of `Hosts.Get`)
+  lists as due, a short phrase each: "kernel update, restart needed" (a Linux kernel package, or a newer kernel installed and not
+  running), "restart needed" (another reboot the host needs), "12 security updates", "3 other updates", "macOS 26.1 to 26.2,
+  restart", "Xcode 27.2 available", and "and 4 more" for the items the report left out; a look the coordinator calls stale
+  (`maintenance_stale`) shows "stale look" with its age, since an empty list then does not mean nothing is due. A host with
+  nothing due and a fresh look, or with no report, shows nothing there. The **Updates** tab shows the report: the operating
+  system and its build, the running and newest installed kernel, when the host booted, the last look and how old it is, each due
+  item (kind, from, to, whether it needs a restart, whether it is a security update, label), and on a Mac what an update needs
+  (FileVault, authrestart, free space, the update account, the Command Line Tools, device-management conflicts) and the Xcodes
+  installed. It is read only and makes no call of its own.
+- **Maintenance** (`ui/pages/maintenance.js`): the fleet's count ("Updates due on 7 hosts in 2 groups"), then each host group
+  (in name order, Unassigned last) with its hosts, those with something due first, each with what is due, its last look and how
+  old it is (", stale" for a stale one), and a link to its Host page; a host whose daemon sends no report says "no report". It
+  reads `Hosts.List` (every page) when opened and again every 60 seconds; a read again that fails keeps the last answer and
+  says so. It is read only.
 
 ## What the pages do for services
 

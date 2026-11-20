@@ -6,6 +6,8 @@
 // the conditions that need a person as one compact strip, then the degraded hosts: how many, with
 // their reasons grouped (`health.js`), each host a link to its page; below it, the servers not
 // placed yet. A server's row says, under Why, every reason its host is not healthy, in short.
+// The alerts `updates_due` (one per host group with hosts that have updates due) are not in the
+// alerts strip: they are a notice of their own, above it, that links the Maintenance page.
 // `list` (true) shows every server in one compact list instead of the floor plan.
 // Breadcrumbs: Lab > Row > Rack > Host.
 //
@@ -55,15 +57,38 @@ const STRIP_GAP = 24;
 // A pointer that moves less than this many pixels between press and release is a click.
 const DRAG_SLOP = 4;
 
+// The kind of the alert that says updates are due on hosts of a group: a notice, not an alert
+// that needs a person now.
+const UPDATES_DUE = "ALERT_KIND_UPDATES_DUE";
+
+// The updates notice: the coordinator's words of each `updates_due` alert (one per host group
+// with hosts that have updates due), and the button that opens the Maintenance page; nothing when
+// no such alert stands.
+function updatesNotice(ctx, reply) {
+  const due = list(reply, "alerts").filter((alert) => alert.kind === UPDATES_DUE);
+  if (due.length === 0) {
+    return null;
+  }
+  return h("div", { class: "alert-strip warn", role: "status", name: "updates-due" },
+    h("strong", { class: "alert-count" }, "Updates due"),
+    h("ul", {}, due.map((alert) => h("li", { class: "alert", name: "updates-due-group" },
+      h("span", { class: "said" }, alert.message || "")))),
+    h("button", {
+      type: "button", class: "linklike", name: "open-maintenance",
+      on: { click: () => ctx.navigate("maintenance", {}) },
+    }, "Open Maintenance"));
+}
+
 // The alerts strip: each alert of Alerts.List as the coordinator derived it (its kind, what
 // happened, and when the coordinator first saw it) on one line, or the refusal when the call
-// failed. The page derives no alert of its own.
+// failed; the `updates_due` alerts are left to the updates notice. The page derives no alert of
+// its own.
 function alertsStrip(reply, failure) {
   if (failure !== null) {
     return h("div", { class: "alert-strip bad", role: "status" },
       h("p", { class: "error", role: "alert" }, `The alerts could not be read: ${describeError(failure)}`));
   }
-  const alerts = list(reply, "alerts");
+  const alerts = list(reply, "alerts").filter((alert) => alert.kind !== UPDATES_DUE);
   if (alerts.length === 0) {
     return h("div", { class: "alert-strip none", role: "status" }, h("span", { class: "sev ok", "aria-hidden": "true" }), "No alerts: nothing needs a person.");
   }
@@ -721,6 +746,7 @@ function lab(app, data, state) {
     return h("section", { class: "page lab" },
       head(title),
       renameCluster(),
+      data.updates,
       data.alerts,
       data.degraded,
       data.failure !== null
@@ -766,6 +792,7 @@ export async function render(ctx) {
     : h("p", { class: "note" }, "The coordinator is in its quiet start: it orders nothing yet.");
   return lab(ctx, {
     layout, servers, failure, notes,
+    updates: inside ? null : updatesNotice(ctx, alerts),
     alerts: inside ? null : alertsStrip(alerts, alertFailure),
     degraded: inside ? null : degradedStrip(ctx, hosts, alertList, alertFailure !== null),
   }, makeState());

@@ -110,6 +110,22 @@
   color: #e6eef5;
 }
 
+/* What the host's maintenance report lists as due (updates.js): a pill per item. */
+.hb-due {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.hb-due small {
+  color: #8da1b4;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
 .meta small {
   color: #8da1b4;
   font-size: 10px;

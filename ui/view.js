@@ -107,6 +107,8 @@ const ICONS = {
     ["line", { x1: 9, y1: 12, x2: 15, y2: 12 }], ["line", { x1: 9, y1: 16, x2: 12, y2: 16 }]],
   enrollment: [["path", { d: "M4 7h10a4 4 0 0 1 0 8H4" }], ["polyline", { points: "8 11 4 15 8 19" }], ["line", { x1: 18, y1: 4, x2: 18, y2: 8 }],
     ["line", { x1: 16, y1: 6, x2: 20, y2: 6 }]],
+  maintenance: [["path", { d: "M20 12a8 8 0 1 1-2.34-5.66" }], ["polyline", { points: "20 4 20 9 15 9" }],
+    ["polyline", { points: "12 8 12 12 15 14" }]],
   settings: [["line", { x1: 4, y1: 7, x2: 20, y2: 7 }], ["line", { x1: 4, y1: 17, x2: 20, y2: 17 }],
     ["circle", { cx: 9, cy: 7, r: 2.5 }], ["circle", { cx: 15, cy: 17, r: 2.5 }]],
   "theme-system": [["circle", { cx: 12, cy: 12, r: 8 }], ["path", { d: "M12 4a8 8 0 0 1 0 16z" }]],
