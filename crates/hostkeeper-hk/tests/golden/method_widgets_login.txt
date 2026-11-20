@@ -1,0 +1,23 @@
+hk widgets login: /hostkeeper.fixture.v1.Widgets/Login
+
+Log in with secrets.
+
+Usage: hk [global flags] widgets login [flags]
+
+Flags:
+  --request FILE|-
+      The request as a JSON object, from a file or `-` for stdin; flags add to it.
+  --user STRING
+      
+  --password-file PATH
+      Read the secret `password` from this file; one trailing newline is dropped. The password.
+  --password-stdin
+      Read the secret `password` from stdin.
+  --key-file PATH
+      Read the secret `key` from this file; one trailing newline is dropped.
+  --key-stdin
+      Read the secret `key` from stdin.
+
+Through --request only: recovery_codes (repeated string).
+
+Run 'hk --help' for the global flags and the exit codes.

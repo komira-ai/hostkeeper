@@ -118,23 +118,23 @@ fn the_coordinator_updater_is_checked_against_its_own_program_name() {
 }
 
 #[test]
-fn the_ssh_client_is_checked_against_its_own_program_name() {
-    // Catches: the SSH client refused as not shipped, accepted printing another program's stamp
+fn the_command_line_is_checked_against_its_own_program_name() {
+    // Catches: the command line refused as not shipped, accepted printing another program's stamp
     // or its developer stamp (no commit).
-    let binary = Path::new("/opt/bin/hkssh");
-    let own = "hkssh 0.1.5+abcdef012345";
+    let binary = Path::new("/opt/bin/hk");
+    let own = "hk 0.1.5+abcdef012345";
     let run =
         |printed: &str| check_binary(&printing(true, printed, ""), binary, &version(), &pinned());
     assert_eq!(
         run(&format!("{own}\n")),
-        Ok(vec![format!("/opt/bin/hkssh: {own}")])
+        Ok(vec![format!("/opt/bin/hk: {own}")])
     );
-    for other in [STAMP, "hkssh 0.1.5", "hkssh 0.1.5+000000000000"] {
+    for other in [STAMP, "hk 0.1.5", "hk 0.1.5+000000000000"] {
         let printed = format!("{other}\n");
         assert_eq!(
             run(&printed),
             Err(Error::Failed(format!(
-                "/opt/bin/hkssh --version printed {printed:?}, not {own:?}"
+                "/opt/bin/hk --version printed {printed:?}, not {own:?}"
             ))),
             "{other}"
         );
@@ -154,7 +154,7 @@ fn a_binary_that_is_not_shipped_is_refused_before_it_runs() {
     let refused = |path: &Path| -> Result<Vec<String>, Error> {
         Err(Error::Failed(format!(
             "{} is not a shipped binary: its file name is none of \
-             [\"hostkeeper\", \"hostkeeper-coordinator\", \"hostkeeper-coordinator-update\", \"hkssh\"]",
+             [\"hostkeeper\", \"hostkeeper-coordinator\", \"hostkeeper-coordinator-update\", \"hk\"]",
             path.display()
         )))
     };

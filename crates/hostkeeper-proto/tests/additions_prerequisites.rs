@@ -333,7 +333,7 @@ fn the_prerequisites_fields_have_their_numbers_and_types() {
 }
 
 /// Catches: a status value renumbered or renamed, or one inserted before the others: the numbers
-/// are on the wire in every report, and the names are what `hkctl` shows.
+/// are on the wire in every report, and the names are what `hk` shows.
 #[test]
 fn the_status_values_are_fixed() {
     let now = current_pool();

@@ -11,7 +11,7 @@ use thiserror::Error;
 
 use crate::analysis::{self, AnalysisError};
 use crate::clock::Clock;
-use crate::coordinator::Hkctl;
+use crate::coordinator::Hk;
 use crate::params::{ParamError, Params};
 use crate::plan::{Plan, PlanError};
 use crate::record::{self, RecordError, RunInfo};
@@ -19,7 +19,7 @@ use crate::render;
 use crate::runner::{self, Io, Names, RunError};
 use crate::template::id_ok;
 
-/// hostkeeper's measurements: carry a measurement plan out against a coordinator with hkctl, and
+/// hostkeeper's measurements: carry a measurement plan out against a coordinator with hk, and
 /// turn a run's records into a section of the results page and a result file.
 #[derive(Debug, Parser)]
 #[command(name = "hostkeeper-measure", version)]
@@ -67,16 +67,16 @@ pub struct RunArgs {
     /// A new or empty directory for the records.
     #[arg(long, required_unless_present = "dry_run")]
     pub run_dir: Option<PathBuf>,
-    /// The hkctl program.
+    /// The hk program.
     #[arg(long, required_unless_present = "dry_run")]
-    pub hkctl: Option<PathBuf>,
-    /// The coordinator's private listener, as hkctl's --endpoint takes it.
+    pub hk: Option<PathBuf>,
+    /// The coordinator's private listener, as hk's --endpoint takes it.
     #[arg(long, required_unless_present = "dry_run")]
     pub endpoint: Option<String>,
-    /// The CA the coordinator's certificate chains to, as hkctl's --ca-file takes it.
+    /// The CA the coordinator's certificate chains to, as hk's --ca-file takes it.
     #[arg(long, required_unless_present = "dry_run")]
     pub ca_file: Option<PathBuf>,
-    /// The operator token's file, as hkctl's --token-file takes it.
+    /// The operator token's file, as hk's --token-file takes it.
     #[arg(long, required_unless_present = "dry_run")]
     pub token_file: Option<PathBuf>,
 }
@@ -249,9 +249,9 @@ fn run(
     }
     let params = Params::parse(&args.params)?;
     // Clap holds the live flags present unless --dry-run is given.
-    let (Some(dir), Some(hkctl), Some(endpoint), Some(ca), Some(token), false) = (
+    let (Some(dir), Some(hk), Some(endpoint), Some(ca), Some(token), false) = (
         &args.run_dir,
-        &args.hkctl,
+        &args.hk,
         &args.endpoint,
         &args.ca_file,
         &args.token_file,
@@ -292,7 +292,7 @@ fn run(
         file.write_all(r.line().as_bytes())?;
         file.flush()
     };
-    let mut coordinator = Hkctl::new(hkctl, endpoint, ca, token, &requests);
+    let mut coordinator = Hk::new(hk, endpoint, ca, token, &requests);
     let mut names = Names::default();
     let result = runner::run(
         &plan,

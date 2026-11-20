@@ -12,9 +12,9 @@ use super::{with_in, workflows_dir, yaml};
 const CHECKSUM: &str = "sha256sum --check --strict --ignore-missing SHA256SUMS";
 /// The attestation step's command, as the document's step 3 gives it, with the output the commit
 /// step reads.
-const ATTESTATION: &str = "gh attestation verify \"$RUNNER_TEMP/hkctl-release/$HKCTL_ASSET\" --repo komira-ai/hostkeeper --signer-workflow komira-ai/hostkeeper/.github/workflows/artifacts.yml --source-ref refs/heads/main --source-digest \"$HOSTKEEPER_COMMIT\" --deny-self-hosted-runners --format json > \"$RUNNER_TEMP/hkctl-release/attestation.json\"";
+const ATTESTATION: &str = "gh attestation verify \"$RUNNER_TEMP/hk-release/$HK_ASSET\" --repo komira-ai/hostkeeper --signer-workflow komira-ai/hostkeeper/.github/workflows/artifacts.yml --source-ref refs/heads/main --source-digest \"$HOSTKEEPER_COMMIT\" --deny-self-hosted-runners --format json > \"$RUNNER_TEMP/hk-release/attestation.json\"";
 /// The version step's command: the document's step 6 command, compared with its expected output.
-const VERSION: &str = "test \"$(\"$RUNNER_TEMP/hkctl-bin/hkctl\" --version)\" = \"hkctl $HOSTKEEPER_VERSION+${HOSTKEEPER_COMMIT:0:12}\"";
+const VERSION: &str = "test \"$(\"$RUNNER_TEMP/hk-release/hk\" --version)\" = \"hk $HOSTKEEPER_VERSION+${HOSTKEEPER_COMMIT:0:12}\"";
 
 fn real_doc() -> String {
     std::fs::read_to_string(
@@ -43,11 +43,11 @@ fn tag_problem(tag: &str) -> String {
 }
 
 fn asset_problem(asset: &str) -> String {
-    format!("the job's `HKCTL_ASSET` `{asset}` is not hkctl's asset in {DOC}")
+    format!("the job's `HK_ASSET` `{asset}` is not hk's asset in {DOC}")
 }
 
 /// The real asset name, with the version as the job's `env` names it.
-const ASSET: &str = "hkctl-${{ inputs.hostkeeper_version }}";
+const ASSET: &str = "hk-${{ inputs.hostkeeper_version }}-linux-x86_64.tar.gz";
 
 #[test]
 fn the_ci_client_runs_the_checks_of_verify_a_release() {
@@ -59,7 +59,7 @@ fn the_ci_client_runs_the_checks_of_verify_a_release() {
 #[test]
 fn a_check_changed_in_the_document_alone_is_refused() {
     // Catches: the document gaining, losing or changing a check the workflow does not follow,
-    // or renaming the release's tag or hkctl's asset; and the daemon's own expected output,
+    // or renaming the release's tag or hk's asset; and the daemon's own expected output,
     // which the workflow does not check, changed without a problem.
     let doc = real_doc();
     let workflow = real_workflow();
@@ -94,8 +94,8 @@ fn a_check_changed_in_the_document_alone_is_refused() {
         (
             with_in(
                 &doc,
-                "Expected output, exactly: `hkctl <X.Y.Z>+",
-                "Expected output, exactly: `hkctl <X.Y.Z>-",
+                "Expected output, exactly: `hk <X.Y.Z>+",
+                "Expected output, exactly: `hk <X.Y.Z>-",
             ),
             vec![runs(
                 "version",
@@ -111,8 +111,8 @@ fn a_check_changed_in_the_document_alone_is_refused() {
         (
             with_in(
                 &doc,
-                "| `hkctl-<version>` | the command line of the coordinator",
-                "| `hkctl-<version>.sh` | the command line of the coordinator",
+                "| `hk-<version>-<platform>.tar.gz` | the command line of the coordinator",
+                "| `hk-<version>-<platform>.tgz` | the command line of the coordinator",
             ),
             vec![asset_problem(ASSET)],
         ),
@@ -125,10 +125,8 @@ fn a_check_changed_in_the_document_alone_is_refused() {
             vec![],
         ),
         (
-            with_in(&doc, "./hkctl --version\n", "./hkctl --version --verbose\n"),
-            vec![format!(
-                "{DOC} has no `./hkctl --version` command in step 6"
-            )],
+            with_in(&doc, "./hk --version\n", "./hk --version --verbose\n"),
+            vec![format!("{DOC} has no `./hk --version` command in step 6")],
         ),
     ];
     for (doc, want) in cases {
@@ -157,16 +155,16 @@ fn a_document_without_one_of_the_checks_refuses_the_workflow() {
             format!("{DOC} has no `gh attestation verify` command in step 3"),
         ),
         (
-            with_in(&doc, "./hkctl --version", "./hkctl version"),
-            format!("{DOC} has no `./hkctl --version` command in step 6"),
+            with_in(&doc, "./hk --version", "./hk version"),
+            format!("{DOC} has no `./hk --version` command in step 6"),
         ),
         (
             with_in(
                 &doc,
-                "Expected output, exactly: `hkctl ",
-                "Expected output: `hkctl ",
+                "Expected output, exactly: `hk ",
+                "Expected output: `hk ",
             ),
-            format!("{DOC} has no expected output for hkctl in step 6"),
+            format!("{DOC} has no expected output for hk in step 6"),
         ),
     ];
     for (doc, want) in cases {
@@ -184,7 +182,7 @@ fn a_check_changed_in_the_workflow_alone_is_refused() {
     let repo = "--repo komira-ai/hostkeeper";
     let signer = "--signer-workflow komira-ai/hostkeeper/.github/workflows/artifacts.yml";
     let version_env = "          HOSTKEEPER_VERSION: ${{ inputs.hostkeeper_version }}\n          HOSTKEEPER_COMMIT: ${{ inputs.hostkeeper_commit }}\n";
-    let cases: [(String, Vec<String>); 9] = [
+    let cases: [(String, Vec<String>); 10] = [
         (
             with_in(
                 &workflow,
@@ -272,11 +270,23 @@ fn a_check_changed_in_the_workflow_alone_is_refused() {
             // runs.
             with_in(
                 &workflow,
-                "HKCTL_ASSET: hkctl-${{ inputs.hostkeeper_version }}\n",
-                "HKCTL_ASSET: hostkeeper-${{ inputs.hostkeeper_version }}-linux-x86_64.tar.gz\n",
+                "HK_ASSET: hk-${{ inputs.hostkeeper_version }}-linux-x86_64.tar.gz\n",
+                "HK_ASSET: hostkeeper-${{ inputs.hostkeeper_version }}-linux-x86_64.tar.gz\n",
             ),
             vec![asset_problem(
                 "hostkeeper-${{ inputs.hostkeeper_version }}-linux-x86_64.tar.gz",
+            )],
+        ),
+        (
+            // The tarball of the other Linux platform is an asset of the release, but the runner
+            // is not that platform.
+            with_in(
+                &workflow,
+                "HK_ASSET: hk-${{ inputs.hostkeeper_version }}-linux-x86_64.tar.gz\n",
+                "HK_ASSET: hk-${{ inputs.hostkeeper_version }}-linux-arm64.tar.gz\n",
+            ),
+            vec![asset_problem(
+                "hk-${{ inputs.hostkeeper_version }}-linux-arm64.tar.gz",
             )],
         ),
     ];

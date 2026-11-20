@@ -2,11 +2,11 @@
 
 Plan [`rollout`](../../../crates/hostkeeper-measure/plans/rollout.toml), run `fake-run`: 3 of 3 repetitions started, 3 complete.
 
-How long a new version of hostkeeper, set as the desired version with `hkctl releases set-desired`, takes to reach every host of the farm under the coordinator's update plan and update slots as they are: the request sets no `maxUpdating`, so each role updates one host at a time (two for the daemon roles), stage by stage. Measured: the time from the set to the first host updated and to the last, and each host's own update, from the poll that first shows it ordered to the poll that first shows the version installed by a succeeded update.
+How long a new version of hostkeeper, set as the desired version with `hk releases set-desired`, takes to reach every host of the farm under the coordinator's update plan and update slots as they are: the request sets no `maxUpdating`, so each role updates one host at a time (two for the daemon roles), stage by stage. Measured: the time from the set to the first host updated and to the last, and each host's own update, from the poll that first shows it ordered to the poll that first shows the version installed by a succeeded update.
 
 **Hosts.** Every host the service hostkeeper is assigned to: the whole farm, host-1 to host-N in the records.
 
-**Recorded.** The set, stamped by its `set_desired` audit entry; then, for each host, the first poll of `hkctl hosts list` that shows it ordered (it holds an update slot, or its heartbeat reports updating to the version) and the first poll that shows the version installed by an update whose outcome is `OUTCOME_SUCCEEDED`, each stamped with the host's last heartbeat as the coordinator received it. The runner polls every 2 s.
+**Recorded.** The set, stamped by its `set_desired` audit entry; then, for each host, the first poll of `hk hosts list` that shows it ordered (it holds an update slot, or its heartbeat reports updating to the version) and the first poll that shows the version installed by an update whose outcome is `OUTCOME_SUCCEEDED`, each stamped with the host's last heartbeat as the coordinator received it. The runner polls every 2 s.
 
 | Measure | What | Unit | n | Missing | Min | Median | Max | Clock |
 |---|---|---|---|---|---|---|---|---|

@@ -1,0 +1,61 @@
+hk widgets make: /hostkeeper.fixture.v1.Widgets/Make
+
+Make a widget from every kind of field.
+
+Usage: hk [global flags] widgets make [flags]
+
+Flags:
+  --request FILE|-
+      The request as a JSON object, from a file or `-` for stdin; flags add to it.
+  --name STRING
+      The widget's name.
+  --i32 INT32
+      
+  --i64 INT64
+      
+  --u32 UINT32
+      
+  --u64 UINT64
+      
+  --s32 SINT32
+      
+  --s64 SINT64
+      
+  --f32 FIXED32
+      
+  --f64 FIXED64
+      
+  --sf32 SFIXED32
+      
+  --sf64 SFIXED64
+      
+  --ratio FLOAT
+      
+  --weight DOUBLE
+      
+  --flag true|false
+      
+  --maybe true|false
+      
+  --colour VALUE
+      One of: red, dark_blue.
+  --colours VALUE
+      One of: red, dark_blue. Repeat the flag for more.
+  --tags STRING
+      Repeat the flag for more.
+  --labels KEY=VALUE
+      Repeat the flag for more.
+  --longs INT64
+      Repeat the flag for more.
+  --node-id STRING
+      A name whose JSON name differs from it (`nodeId`).
+  --maybe-count INT32
+      
+  --weights DOUBLE
+      Repeat the flag for more.
+  --flags true|false
+      Repeat the flag for more.
+
+Through --request only: inner (hostkeeper.fixture.v1.Inner), round (string, in a oneof), square (hostkeeper.fixture.v1.Inner, in a oneof), blob (bytes), counts (map).
+
+Run 'hk --help' for the global flags and the exit codes.

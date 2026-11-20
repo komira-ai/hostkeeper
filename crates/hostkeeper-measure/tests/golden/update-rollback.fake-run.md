@@ -2,11 +2,11 @@
 
 Plan [`update-rollback`](../../../crates/hostkeeper-measure/plans/update-rollback.toml), run `fake-run`: 5 of 5 repetitions started, 5 complete.
 
-On one host, the time from the order to `Succeeded` for an update of the example service hello to a new version (fetched from the release channel), and for a rollback to the version it ran before, which the host keeps as `previous`, so the rollback fetches nothing. The update is a `hkctl releases set-desired`; the rollback is a `hkctl releases force` of the previous version to that host alone. A force marks the version it leaves bad, so each repetition updates to a new version and rolls back to the same base version.
+On one host, the time from the order to `Succeeded` for an update of the example service hello to a new version (fetched from the release channel), and for a rollback to the version it ran before, which the host keeps as `previous`, so the rollback fetches nothing. The update is a `hk releases set-desired`; the rollback is a `hk releases force` of the previous version to that host alone. A force marks the version it leaves bad, so each repetition updates to a new version and rolls back to the same base version.
 
 **Hosts.** The one host hello is assigned to (label one host demo=yes and no other): host-1 in the records.
 
-**Recorded.** The set and the force, each stamped by its audit entry (`set_desired`, `force`); for the host, the first poll of `hkctl hosts list` that shows it ordered and the first that shows the version installed by a succeeded update with hello healthy, each stamped with the host's last heartbeat as the coordinator received it. The runner polls every second.
+**Recorded.** The set and the force, each stamped by its audit entry (`set_desired`, `force`); for the host, the first poll of `hk hosts list` that shows it ordered and the first that shows the version installed by a succeeded update with hello healthy, each stamped with the host's last heartbeat as the coordinator received it. The runner polls every second.
 
 | Measure | What | Unit | n | Missing | Min | Median | Max | Clock |
 |---|---|---|---|---|---|---|---|---|

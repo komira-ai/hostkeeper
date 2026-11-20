@@ -1,4 +1,4 @@
-//! `ci` is not a verb of the `hostkeeper` binary: CI sets a desired version with `hkctl`
+//! `ci` is not a verb of the `hostkeeper` binary: CI sets a desired version with `hk`
 //! (docs/deploy/ci-client.md), which `set-desired.yml` downloads and verifies. A caller pinned to
 //! an older revision of that workflow runs the `hostkeeper ci` of the older release it downloads.
 

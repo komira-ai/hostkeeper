@@ -1,10 +1,10 @@
 # Rollout plans: stages, advance, pause and resume
 
 How a service rolls a new version out, and what an operator can do to it. The design is
-[rollout-update-plans.md](../design/rollout-update-plans.md). `hkctl` is [cli.md](../cli.md).
+[rollout-update-plans.md](../design/rollout-update-plans.md). `hk` is [cli.md](../cli.md).
 The plan of a package is the policy of each host group that lists it ([hostgroups.md](hostgroups.md)),
 and each group rolls it over its own hosts: the section Host groups below says how.
-Every `hkctl rollouts` call takes the operator token only: a CI token is refused with
+Every `hk rollouts` call takes the operator token only: a CI token is refused with
 `forbidden`, no token with `unauthorized`, and a refused call changes nothing (one exception: a
 `Pause` stands without its audit line, see Pause and Resume below). Each call names a
 service and gives a reason (1 to 256 bytes, no control character), and is an entry of the audit log
@@ -70,7 +70,7 @@ A package has one plan for each group that lists it, over that group's hosts alo
 
 ## Reading a plan
 
-`Releases.Status` (`hkctl releases status`) and the package page (Packages, then the package) show, per service, the
+`Releases.Status` (`hk releases status`) and the package page (Packages, then the package) show, per service, the
 plan: its stages with their sizes and hosts, each host `waiting`, `updating`, `baking`, `done` or
 `failed`; the current stage ("stage 2 of 3"); and why the plan waits:
 
@@ -106,7 +106,7 @@ entry (`apt`, `macos-pkg`) for the host's platform.
 ## Advance
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     rollouts advance --service hello --reason "stage 1 looks healthy"
 ```
 
@@ -135,9 +135,9 @@ that lists the service. The entry names the group, and the answer is that group'
 ## Pause and Resume
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     rollouts pause --service hello --reason "waiting for the storage team"
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     rollouts resume --service hello --reason "storage team is done"
 ```
 
