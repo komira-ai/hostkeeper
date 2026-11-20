@@ -6,12 +6,12 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "`hk`: the operator's command line for hostkeeper's coordinator, with the SSH tunnel built in: the byte-stream proxy to a host's sshd, `ssh` with a short-lived certificate, revoking certificates, and the status of a host's pins."
+description = "`hk`: the operator's command line for hostkeeper's coordinator, with the SSH tunnel built in: the byte-stream proxy to a host's sshd, `ssh` with a short-lived certificate, revoking certificates, and the status of a host's pins; and `hk xcode-push`, which uploads an Xcode archive to the coordinator's store from the operator's Mac."
 
 # docs/design/ssh-through-coordinator.md section 8. A gateway call, and `hk ssh`, `hk ssh-proxy`,
 # `hk ssh-revoke` and `hk ssh-status` (the `ssh` module of this crate), read the operator's token
 # from the file a flag names (or stdin, or the runner), once per call, and never put it in an
-# argument, a file of their own or the environment of a program they run.
+# argument, a file of their own or the environment of a program they run; nor does `hk xcode-push`.
 [[bin]]
 name = "hk"
 path = "src/main.rs"
@@ -21,6 +21,13 @@ path = "src/main.rs"
 [[bin]]
 name = "hk-fake-openssh"
 path = "tests/bin/fake_openssh.rs"
+required-features = ["test-support"]
+
+# A stand-in for `xcodes`, `pkgutil`, `xip` and `plutil`, by the name it is run as, that records
+# its arguments and environment; only the tests run it, with `test-support`.
+[[bin]]
+name = "hk-fake-mac-tool"
+path = "tests/bin/fake_mac_tool.rs"
 required-features = ["test-support"]
 
 [features]
@@ -36,6 +43,8 @@ clap.workspace = true
 hostkeeper-proto = { path = "../hostkeeper-proto" }
 # The system's roots, which the runner's token request is trusted by.
 rustls-native-certs.workspace = true
+# The SHA-256 of an Xcode archive, which names it in the store.
+sha2.workspace = true
 thiserror.workspace = true
 # The runtime the ssh verbs run on, and the byte streams of the tunnel.
 tokio = { workspace = true, features = ["io-std", "io-util", "macros", "rt", "sync"] }
@@ -69,7 +78,6 @@ prost-reflect = { workspace = true, features = ["serde"] }
 rcgen.workspace = true
 rustls.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
 tokio = { workspace = true, features = ["net", "rt-multi-thread", "time"] }
 tokio-stream = { workspace = true, features = ["net"] }
 tonic = { workspace = true, features = ["server", "tls-ring"] }
