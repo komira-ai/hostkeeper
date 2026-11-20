@@ -23,10 +23,12 @@
 // reason, after a confirm, Releases.ClearHalt (with the reason typed) or Hosts.Retry.
 //
 // The page is a status header (name, status LED and word, role, group, what it runs, the last
-// heartbeat, and a small elevation of the rack it stands in), then, when the host is not healthy,
+// heartbeat, what its maintenance report lists as due, and a small elevation of the rack it stands
+// in), then, when the host is not healthy,
 // why: every reason (`health.js`) in plain words, with when it began and the one action that fixes
 // it (Clear halt, Retry update), and for a js-agent taint what hostkeeper holds of it; then tabs (Overview, Services,
-// Certificate, Labels, Placement, Host group, Remote SSH, Power and boot; every panel is in the page, the stylesheet shows the
+// Updates (`updates.js`: the facts of the maintenance report Hosts.Get answers, each due item, the Xcodes, the last
+// look and how old it is; read only, no call of its own), Certificate, Labels, Placement, Host group, Remote SSH, Power and boot; every panel is in the page, the stylesheet shows the
 // chosen one, and the choice is kept across a refresh of the same host), then the danger zone,
 // which holds Retire. The status says "degraded" for a live host with any reason: a service of it
 // unhealthy, halted or whose last update failed, or an alert that names it; the lab's state alone
@@ -39,6 +41,7 @@ import {
 import { isDegraded, reasonsOf } from "../health.js";
 import { crumbs, hostState, layoutOf, layoutProblem, rackName, slotOf, slotOptions, subjectOf } from "../lab.js";
 import { loadSsh, sshPanel } from "../sshpanel.js";
+import { dueNotice, isDue, isStale, updatesPanel } from "../updates.js";
 
 // Rows of a facts table: a name and its value, no heading strip.
 function kv(rows, extra) {
@@ -736,6 +739,7 @@ export async function render(ctx) {
     services: services.length === 0
       ? [h("p", { class: "quiet" }, "The host reports no service.")]
       : services.map((view) => serviceSection(ctx, nodeId, view)),
+    updates: updatesPanel(host),
     trust: [h("div", { class: "pair" }, certificate(host, now), trustedRoot(host))],
     labels: [h("fieldset", { class: "card" },
       h("legend", {}, "Labels"),
@@ -764,6 +768,7 @@ export async function render(ctx) {
   const tabs = [
     ["overview", "Overview", ""],
     ["services", "Services", servicesAttention ? "bad" : ""],
+    ["updates", "Updates", isDue(host) || isStale(host) ? "warn" : ""],
     ["trust", "Certificate", trustAttention ? "warn" : ""],
     ["labels", "Labels", ""],
     ["placement", "Placement", where.held ? "" : "muted"],
@@ -792,7 +797,8 @@ export async function render(ctx) {
               ["Last heartbeat", fmtUnix(host.lastHeartbeatUnix)],
               ["Labels", labelCount === 0 ? "" : `${labelCount}`]]
               .filter(([, v]) => typeof v === "string" && v !== "")
-              .map(([k, v]) => h("span", { class: "meta" }, h("small", {}, k), v)))),
+              .map(([k, v]) => h("span", { class: "meta" }, h("small", {}, k), v))),
+          dueNotice(host)),
         where.mini),
       healthSection(ctx, nodeId, reasons, alertsFailure, healthForm),
       h("nav", { class: "tabs", "aria-label": "host sections" },
