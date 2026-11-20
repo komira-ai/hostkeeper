@@ -174,3 +174,33 @@ fn a_halt_is_shown_as_one_only_with_halt_v1() {
     let succeeded = verdict(&update("o-1", 1, "x", "2.0"), Outcome::Succeeded);
     assert_eq!(succeeded.shaped(&Features::default()), succeeded);
 }
+
+/// Proves no daemon announces `maintenance-v1`, whatever the coordinator advertises: a daemon with
+/// every port, answered by a reply that advertises it and `ssh-v1`, then announces every optional
+/// feature, `ssh-v1` last, and not it.
+///
+/// Catches: the name announced before the daemon sends a maintenance report or runs a `maintain`
+/// order, which would have a coordinator that implements it order a host that cannot run it.
+#[test]
+fn no_daemon_announces_maintenance_v1() {
+    let world = World::default()
+        .managing_repositories()
+        .keeping_facts()
+        .keeping_operator_keys()
+        .keeping_prerequisites()
+        .reading_private_repositories()
+        .setting_ssh_up();
+    let rig = Rig::with_world("features-no-maintenance", world);
+    let mut heartbeater = rig.heartbeater();
+    rig.world
+        .link
+        .answer(Ok(reply(None, &[Feature::MaintenanceV1, Feature::SshV1])));
+    heartbeater.beat_once();
+    heartbeater.beat_once();
+    let beats = rig.world.link.beats();
+    assert_eq!(beats.len(), 2);
+    for beat in &beats {
+        assert!(!beat.features.contains(&Feature::MaintenanceV1));
+    }
+    assert_eq!(beats[1].features.last(), Some(&Feature::SshV1));
+}

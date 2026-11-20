@@ -2171,6 +2171,7 @@ dependencies = [
  "prost-types",
  "protox",
  "serde_json",
+ "thiserror",
  "tonic",
  "tonic-prost",
  "tonic-prost-build",

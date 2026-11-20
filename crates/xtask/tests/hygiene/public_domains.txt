@@ -100,6 +100,10 @@ yaml.org
 =services.version.name
 =t.v1.health
 =f.v1.login.pin
+# Field paths a maintenance report's bound check names (hostkeeper-proto's `maintenance` and its
+# tests), ending in `build` and `to`, which the IANA list delegates. Names, not hosts.
+=xcodes.build
+=due.to
 # Protobuf type paths in hostkeeper-proto's operator.proto and tests, not hosts.
 =hostkeeper.agent.v1.health
 =hostkeeper.agent.v1.claims

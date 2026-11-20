@@ -283,6 +283,7 @@ fn a_heartbeat_with_every_fact_maps_to_the_request_field_for_field() {
             operator_keys: None,
             prerequisites: None,
             bmc: None,
+            maintenance: None,
         }
     );
 }

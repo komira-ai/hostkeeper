@@ -10,6 +10,8 @@ description = "hostkeeper's protobuf services, compiled from proto/ with protox,
 
 [dependencies]
 prost.workspace = true
+# The error of a maintenance report that breaks a bound (`maintenance`).
+thiserror.workspace = true
 tonic.workspace = true
 tonic-prost.workspace = true
 
