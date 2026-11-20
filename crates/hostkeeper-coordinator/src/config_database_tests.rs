@@ -136,13 +136,18 @@ fn parsed(args: &[&str]) -> DatabaseFlags {
         .database
 }
 
-/// Proves: `--job-every NAME=SECS` is read for each of the three jobs, as the job's name and its
+/// Proves: `--job-every NAME=SECS` is read for each of the four jobs, as the job's name and its
 /// period.
 ///
 /// Catches: a job the flag does not name, and a period read into another job.
 #[test]
 fn job_every_parses_name_equals_seconds_for_each_job() {
-    for (name, secs) in [("alerts", 7), ("request-expiry", 8), ("prune", 9)] {
+    for (name, secs) in [
+        ("alerts", 7),
+        ("request-expiry", 8),
+        ("prune", 9),
+        ("xcode-feed", 10),
+    ] {
         let given = parsed(&["--job-every", &format!("{name}={secs}")]);
         assert_eq!(
             given.job_every,
@@ -167,7 +172,10 @@ fn job_every_refuses_what_is_not_a_job_and_a_period() {
     );
     assert_eq!(
         job_every("sweep=5"),
-        Err("no job is named \"sweep\": one of alerts, request-expiry, prune".to_owned())
+        Err(
+            "no job is named \"sweep\": one of alerts, request-expiry, prune, xcode-feed"
+                .to_owned()
+        )
     );
     assert_eq!(
         job_every("alerts=0"),
@@ -199,7 +207,7 @@ fn job_every_refuses_what_is_not_a_job_and_a_period() {
 fn job_periods_are_the_defaults_and_the_last_flag_of_a_job_wins() {
     let period = |name: &str, secs: i64| (name.to_owned(), secs);
     assert_eq!(
-        parsed(&[]).job_periods(),
+        parsed(&[]).job_periods(false),
         vec![
             period("alerts", 15),
             period("request-expiry", 15),
@@ -215,7 +223,7 @@ fn job_periods_are_the_defaults_and_the_last_flag_of_a_job_wins() {
             "--job-every",
             "prune=120"
         ])
-        .job_periods(),
+        .job_periods(false),
         vec![
             period("alerts", 5),
             period("request-expiry", 15),
@@ -249,4 +257,29 @@ fn session_touch_secs_is_thirty_by_default() {
         90
     );
     assert_eq!(parsed(&["--session-touch-secs", "0"]).session_touch_secs, 0);
+}
+
+/// Proves: the periods hold no `xcode-feed` when the feed is off, and hold it at 86400 seconds
+/// when it is on; `--job-every xcode-feed=SECS` sets its period, and is not read for a feed that
+/// is off.
+///
+/// Catches: a job row seeded and claimed for a feed that is not set, a default that is not a
+/// day, and a flag that does not reach the job.
+#[test]
+fn the_xcode_feed_job_is_in_the_periods_only_with_a_feed() {
+    let period = |name: &str, secs: i64| (name.to_owned(), secs);
+    let off = parsed(&[]).job_periods(false);
+    assert!(off.iter().all(|(name, _)| name != "xcode-feed"), "{off:?}");
+    assert_eq!(
+        parsed(&[]).job_periods(true),
+        vec![
+            period("alerts", 15),
+            period("request-expiry", 15),
+            period("prune", 3600),
+            period("xcode-feed", 86_400)
+        ]
+    );
+    let given = parsed(&["--job-every", "xcode-feed=600"]);
+    assert_eq!(given.job_periods(true)[3], period("xcode-feed", 600));
+    assert_eq!(given.job_periods(false).len(), 3);
 }

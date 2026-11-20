@@ -26,6 +26,13 @@ pub(super) fn periods() -> Vec<(String, i64)> {
     ]
 }
 
+/// The periods of the four jobs, as the flags' defaults give them with a feed URL set.
+fn periods_with_feed() -> Vec<(String, i64)> {
+    let mut all = periods();
+    all.push(("xcode-feed".to_owned(), 86_400));
+    all
+}
+
 /// A clock a test moves.
 pub(super) fn clock(at: u64) -> (Arc<AtomicU64>, UnixClock) {
     let now = Arc::new(AtomicU64::new(at));
@@ -422,4 +429,66 @@ fn a_lost_store_claims_nothing() {
         assert_eq!(jobs.seed(), Err(LOST.to_owned()));
         assert_eq!(jobs.prune(), Err(LOST.to_owned()));
     });
+}
+
+/// Proves: of 1, 2 or 3 coordinators claiming at once, the job `xcode-feed` goes to exactly one
+/// of them, then is not claimed for the rest of its day (to the last second of it), and goes to
+/// exactly one again at the second a day after the claim; `last_instance` names the claimer.
+///
+/// Catches: a feed read by every coordinator at once, one that is read again inside its day, and a
+/// due time moved by another period than a day.
+#[test]
+fn the_xcode_feed_job_is_claimed_by_one_and_is_due_again_a_day_later() {
+    for n in 1..=3 {
+        let (db, stores) = stores(n);
+        let (now, at) = clock(9000);
+        let jobs: Vec<PgJobs> = stores
+            .iter()
+            .map(|store| jobs_of(&db, store, periods_with_feed(), &at))
+            .collect();
+        let feed = |claimed: Vec<Vec<String>>| {
+            claimed
+                .iter()
+                .filter(|names| names.iter().any(|name| name == "xcode-feed"))
+                .count()
+        };
+        let claimed = claim_together(&jobs);
+        assert_eq!(feed(claimed.clone()), 1, "{n} claimers at t: {claimed:?}");
+        assert_eq!(row(&db, "xcode-feed")[0].as_deref(), Some("95400"));
+        let winner = claimed
+            .iter()
+            .position(|names| names.iter().any(|name| name == "xcode-feed"))
+            .expect("one claimed it");
+        assert_eq!(
+            row(&db, "xcode-feed")[2].as_deref(),
+            Some(stores[winner].instance().id.as_str())
+        );
+        now.store(9000 + 86_399, Ordering::SeqCst);
+        assert_eq!(feed(claim_together(&jobs)), 0, "{n} claimers at t+86399");
+        now.store(9000 + 86_400, Ordering::SeqCst);
+        assert_eq!(feed(claim_together(&jobs)), 1, "{n} claimers at t+86400");
+        assert_eq!(row(&db, "xcode-feed")[0].as_deref(), Some("181800"));
+        stop(&stores);
+    }
+}
+
+/// Proves: a coordinator whose list of jobs has no `xcode-feed` (no feed URL is set) makes no row
+/// of it and claims none, while the other jobs are claimed as before.
+///
+/// Catches: a job row made for a feed that is off, which a coordinator that has the feed on would
+/// then find due.
+#[test]
+fn without_a_feed_no_xcode_feed_row_is_made_or_claimed() {
+    let (db, stores) = stores(1);
+    let (_now, at) = clock(500);
+    let jobs = jobs_of(&db, &stores[0], periods(), &at);
+    assert_eq!(
+        jobs.claim().expect("claims"),
+        names(&["alerts", "prune", "request-expiry"])
+    );
+    assert_eq!(
+        db.rows("SELECT name FROM periodic_jobs WHERE name = 'xcode-feed'"),
+        Vec::<Vec<Option<String>>>::new()
+    );
+    stop(&stores);
 }

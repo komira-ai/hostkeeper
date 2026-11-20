@@ -44,10 +44,13 @@ use crate::store::postgres::login_rows::PgLoginRows;
 use crate::store::postgres::periodic::PgJobs;
 use crate::store::postgres::ssh::PgLedger;
 use crate::store::postgres::ssh_book::PgBook;
+use crate::store::postgres::xcode_rows::PgReleases;
 use crate::store::postgres::{DatabaseError, Dsn, PgRecords, Postgres};
 use crate::store::{Backend, BackendError, Files, Loaded, Shared};
 use crate::tokens::OperatorTokens;
 use crate::verdict_file::verdicts_path;
+use crate::xcode_feed::KnownReleases;
+use crate::xcode_files::{FileReleases, xcode_releases_path};
 
 /// The store a start opened: the backend under the three stores and CI's spent ids, what it
 /// loaded, the marker of changes not yet committed, what holds the store for this process, and
@@ -422,14 +425,36 @@ pub(super) fn with_login(
         settings.limiter,
         flags.database.session_touch_secs,
     );
-    let jobs = PgJobs::start(store.clone(), flags.database.job_periods(), &rows)
-        .map_err(DatabaseError::Refused)?;
+    let jobs = PgJobs::start(
+        store.clone(),
+        flags.database.job_periods(flags.xcode.feed().is_some()),
+        &rows,
+    )
+    .map_err(DatabaseError::Refused)?;
     Ok(coordinator
         .with_login(login.with_rows(Arc::new(rows)))
         .with_jobs(
             Jobs::new(jobs, flags.database.job_tick()),
             PgAlerts::new(store.clone()),
         ))
+}
+
+/// `coordinator` reading the list of Xcode releases at `--xcode-feed-url` (none: not at all) and
+/// keeping it in the database's table, or, over files, in the file beside the state file.
+pub(super) fn with_xcode(
+    coordinator: Coordinator,
+    flags: &Serve,
+    database: Option<&Postgres>,
+) -> Coordinator {
+    let known: Arc<dyn KnownReleases> = match database {
+        Some(store) => Arc::new(PgReleases::new(store.clone())),
+        None => Arc::new(FileReleases::new(xcode_releases_path(
+            &flags.state_file.clone().unwrap_or_default(),
+        ))),
+    };
+    coordinator
+        .with_xcode_feed(flags.xcode.feed())
+        .with_known_xcode_releases(known)
 }
 
 /// The thresholds of the alerts `flags` name: `--alert-silent-host-secs` and

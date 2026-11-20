@@ -20,8 +20,10 @@ pub(crate) const ALERTS: &str = "alerts";
 pub(crate) const REQUEST_EXPIRY: &str = "request-expiry";
 /// The job that deletes rows no rule reads any more.
 pub(crate) const PRUNE: &str = "prune";
+/// The job that reads the list of Xcode releases ([`crate::xcode_feed`]).
+pub(crate) const XCODE_FEED: &str = "xcode-feed";
 /// Every job, as `--job-every` names them.
-pub(crate) const JOBS: [&str; 3] = [ALERTS, REQUEST_EXPIRY, PRUNE];
+pub(crate) const JOBS: [&str; 4] = [ALERTS, REQUEST_EXPIRY, PRUNE, XCODE_FEED];
 
 /// How long an instance's row of `instances` stays after it was last seen: a day.
 pub(crate) const INSTANCE_KEEP_SECS: i64 = 86_400;

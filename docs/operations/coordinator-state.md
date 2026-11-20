@@ -142,7 +142,7 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   `request-expiry` (default 15) expires the enrollment requests no operator approved in time, by
   a write that lands only on the requests as read, and audits each `request_expired` once; `prune` (default 3600) deletes
   the expired sessions, the failure counts the limiter forgot, the `instances` rows not seen
-  for a day and the orders of `fleet_orders` that aged out (120 seconds after they were given). Over files the alerts are observed every 15 seconds and the requests expire at the
+  for a day and the orders of `fleet_orders` that aged out (120 seconds after they were given). `xcode-feed` (default 86400, claimed only with `--xcode-feed-url`) reads the list of Xcode releases and replaces the table `xcode_releases` with it; a read that fails is a warning in the log, and the job is due again a day later. Over files the alerts are observed every 15 seconds and the requests expire at the
   `--tls-reload-secs` tick, as before. `SELECT * FROM hostkeeper.periodic_jobs` shows each job's
   next due time and the instance that ran it last.
 - **Generations and write ids.** The database keeps, with each service's desired state, its

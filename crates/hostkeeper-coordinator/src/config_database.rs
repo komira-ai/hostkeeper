@@ -13,7 +13,7 @@ use std::time::Duration;
 use clap::Args;
 
 use crate::store::postgres::migrate::Retry;
-use crate::store::postgres::periodic::{ALERTS, JOBS, PRUNE, REQUEST_EXPIRY};
+use crate::store::postgres::periodic::{ALERTS, JOBS, PRUNE, REQUEST_EXPIRY, XCODE_FEED};
 use crate::store::postgres::{Options, Timing};
 
 /// The most milliseconds `--migrate-ddl-lock-timeout-ms` takes: below the statement timeout of
@@ -75,8 +75,9 @@ pub struct DatabaseFlags {
     #[arg(long, value_name = "SECS", default_value = "5")]
     pub job_tick_secs: NonZeroU64,
     /// With --database-dsn-file: the period of a periodic job, NAME=SECS, one of `alerts`
-    /// (default 15), `request-expiry` (default 15) and `prune` (default 3600); SECS at least 1.
-    /// Repeatable; a later one for the same job wins.
+    /// (default 15), `request-expiry` (default 15), `prune` (default 3600) and `xcode-feed`
+    /// (default 86400, run only with --xcode-feed-url); SECS at least 1. Repeatable; a later one
+    /// for the same job wins.
     #[arg(long, value_name = "NAME=SECS", value_parser = job_every)]
     pub job_every: Vec<JobEvery>,
     /// With --database-dsn-file: how old, in seconds, the stored heartbeat of a host must be
@@ -103,7 +104,12 @@ pub struct JobEvery {
 }
 
 /// The default period of each job.
-const JOB_DEFAULTS: [(&str, u64); 3] = [(ALERTS, 15), (REQUEST_EXPIRY, 15), (PRUNE, 3600)];
+const JOB_DEFAULTS: [(&str, u64); 4] = [
+    (ALERTS, 15),
+    (REQUEST_EXPIRY, 15),
+    (PRUNE, 3600),
+    (XCODE_FEED, crate::xcode_feed::FEED_EVERY.as_secs()),
+];
 
 /// Parses `NAME=SECS` of `--job-every`.
 fn job_every(text: &str) -> Result<JobEvery, String> {
@@ -142,10 +148,13 @@ impl DatabaseFlags {
 }
 
 impl DatabaseFlags {
-    /// Every job with its period in seconds: the default, or the last `--job-every` of it.
-    pub(crate) fn job_periods(&self) -> Vec<(String, i64)> {
+    /// Every job with its period in seconds: the default, or the last `--job-every` of it. The
+    /// job `xcode-feed` is left out unless `xcode_feed` (a feed URL is set), so that no row of it
+    /// is seeded or claimed without one.
+    pub(crate) fn job_periods(&self, xcode_feed: bool) -> Vec<(String, i64)> {
         JOB_DEFAULTS
             .iter()
+            .filter(|(name, _)| xcode_feed || *name != XCODE_FEED)
             .map(|(name, secs)| {
                 let secs = self
                     .job_every
