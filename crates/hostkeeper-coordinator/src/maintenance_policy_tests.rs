@@ -123,7 +123,15 @@ fn xcode_default_is_latest_or_a_version_of_up_to_three_numbers() {
         );
     }
     for bad in [
-        "", "Latest", "26.", ".1", "1.2.3.4", "12345", "26.1b", "26 1", "-1",
+        "",
+        "Latest",
+        "26.",
+        ".1",
+        "27.2.1.9999",
+        "12345",
+        "26.1b",
+        "26 1",
+        "-1",
     ] {
         assert_eq!(
             bad.parse::<XcodeDefault>(),

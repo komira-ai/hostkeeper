@@ -284,7 +284,7 @@ fn an_enum_value_the_proto_does_not_define_is_refused_for_its_key() {
 /// Catches: text that is no version taken as one, or a refusal that names no key.
 #[test]
 fn an_xcode_default_that_is_no_version_is_refused_for_its_key() {
-    for text in ["", "26.x", "1.2.3.4", "12345", "Latest"] {
+    for text in ["", "26.x", "27.2.1.9999", "12345", "Latest"] {
         let policy = proto::RolloutPolicy {
             maintenance: Some(proto::MaintenancePolicy {
                 xcode_default: Some(text.to_owned()),

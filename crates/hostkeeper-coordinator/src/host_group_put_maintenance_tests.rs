@@ -178,7 +178,7 @@ fn every_key_of_the_maintenance_table_is_held_to_its_range() {
             "xcode_default of four numbers",
             |m| {
                 m.xcode_keep = 1;
-                m.xcode_default = Some("1.2.3.4".to_owned());
+                m.xcode_default = Some("27.2.1.9999".to_owned());
             },
             false,
         ),
