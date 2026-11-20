@@ -43,8 +43,16 @@ at a time sets `max_updating` of 1. A group whose `min_up` equals its host
 count never has a host ordered.
 
 A host is eligible for a plan when it is live, its group lists the package, it is neither
-excluded nor held there, no standing force covers it, and the coordinator could order it the
-package. A held, excluded or forced host is in no stage and does not stop one from being done.
+excluded nor held there, it is not in its turn of a maintenance run, no standing force covers it,
+and the coordinator could order it the package. A held, excluded or forced host is in no stage and
+does not stop one from being done.
+
+A host in its turn of a maintenance run (from the `maintain` order that starts it until the turn
+is done, deferred or put back, a halted turn included) is in no stage of any package's plan, so a
+long drain does not hold a stage open: the stage is done once its other hosts are. The host is
+ordered no package update during its turn (`busy_elsewhere`) and takes its place in the plan, and
+gets the update, after its turn. `min_up` counts it as down. A run takes no place of
+`--live-rollouts`: a plan whose only hosts left to order are in their turn is not live.
 
 ## Host groups
 

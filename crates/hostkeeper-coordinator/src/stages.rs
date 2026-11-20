@@ -9,7 +9,8 @@
 //! into one.
 //!
 //! A host is eligible ([`View::of`]) when it is live, assigned the service, neither excluded nor
-//! held, not ordered by a standing force, has no failure of the desired version an operator
+//! held, not in its turn of a maintenance run (so a long drain holds no stage open, and the host
+//! takes its place after its turn), not ordered by a standing force, has no failure of the desired version an operator
 //! acknowledged (a cleared halt, a version set by hand), and could be ordered the desired
 //! version: it runs the service, or it is to install it and its agent takes installs and the
 //! version has a package for its platform. A host has started when it is updating, under an order, at the desired
@@ -610,6 +611,7 @@ fn eligible<'a>(
                 && fleet.is_assigned(def, id)
                 && !fleet.is_excluded(service, id)
                 && !fleet.is_held(service, id)
+                && !fleet.in_maintenance(id)
                 && !fleet.is_forced_in(def, id)
                 && !crate::picks::unpicked(fleet, service, &want.version, id)
                 && (installed || installable);
@@ -688,8 +690,9 @@ fn is_deferring(
 
 /// Whether ordering the host `id` would leave fewer live hosts of its role up for `def` than the
 /// desired state's `min_up` of the role. Every live host of the role that runs the service and
-/// is not excluded counts, held ones included: `min_up` is about what stays serving. A host that
-/// is not up now (unhealthy, or not running the service) takes nothing away by its order.
+/// is not excluded counts, held ones included: `min_up` is about what stays serving. A host in its
+/// turn of a maintenance run counts as down. A host that is not up now (unhealthy, or not running
+/// the service) takes nothing away by its order.
 fn below_min_up(
     def: &ServiceDef,
     want: &Desired,
@@ -714,6 +717,7 @@ fn below_min_up(
                 && h.role_name() == role
                 && h.beat.health != Health::Absent
                 && !fleet.is_excluded(service, o)
+                && !fleet.in_maintenance(o)
                 && fleet.is_up(service, o, h, now)
         })
         .count();

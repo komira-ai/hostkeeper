@@ -19,6 +19,11 @@
 //! ([`crate::bake::Found`]): a restart does not make a converged service live. So a service whose
 //! every host runs its desired version, with nothing updating or ordered, is live only while a
 //! host it saw update bakes.
+//!
+//! A maintenance run is no service and takes no place. A host in its turn of a run is no host of
+//! any plan ([`crate::stages`]) and is ordered nothing: a plan whose hosts left to order are all in
+//! their turn is not under way, so a long drain does not hold the place from another service's
+//! rollout. The host's update comes once its turn is over, when its plan has the place again.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
