@@ -233,6 +233,7 @@ pub(crate) fn failed(package: &str, running: &str, target: &str, phase: Phase) -
         reason: None,
         order_id: None,
         order_try: None,
+        detail: None,
     });
     one
 }

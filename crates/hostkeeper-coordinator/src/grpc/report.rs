@@ -550,8 +550,8 @@ fn service_beat(service: &str, beat: &Heartbeat) -> agent::ServiceBeat {
     }
 }
 
-/// A verdict of the host. The proto's start time, `forced` flag, detail and log lines have no
-/// source on the heartbeat wire.
+/// A verdict of the host, with the detail the host gave of it. The proto's start time, `forced`
+/// flag and log lines have no source on the heartbeat wire.
 pub(crate) fn update_result(result: &wire::UpdateResult) -> agent::UpdateResult {
     agent::UpdateResult {
         target: result.target.as_str().to_owned(),
@@ -566,7 +566,7 @@ pub(crate) fn update_result(result: &wire::UpdateResult) -> agent::UpdateResult 
         order_try: result.order_try,
         order_id: result.order_id.as_ref().map(|id| id.as_str().to_owned()),
         forced: false,
-        detail: None,
+        detail: result.detail.clone(),
         log_tail: Vec::new(),
     }
 }
