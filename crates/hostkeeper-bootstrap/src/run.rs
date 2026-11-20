@@ -10,9 +10,12 @@
 //! 3. `pkgutil --check-signature` must show a Developer ID Installer identity of the pinned Team ID
 //!    that Apple issued ([`crate::signer`]). A pkg that fails any check is deleted and nothing
 //!    else is written or run.
-//! 4. `hostkeeper.toml` and `macos-pkg.toml` are written when absent ([`crate::files`]), then
-//!    `installer -pkg <file> -target /` runs, whose postinstall loads the daemon's job; the daemon
-//!    finds its config and enrolls through the normal approval flow.
+//! 4. `hostkeeper.toml` and `macos-pkg.toml` are written when absent ([`crate::files`]), and so
+//!    is the update-account file when the settings name the update account
+//!    ([`crate::update_account`], root's, mode 0600; one that is there must be root's with mode
+//!    0600 and is kept). Then `installer -pkg <file> -target /` runs, whose postinstall loads the
+//!    daemon's job; the daemon finds its config and enrolls through the normal approval flow. When
+//!    a write or `installer` fails, the files this attempt made are removed.
 //!
 //! A failed attempt is retried after a pause until the sum of the pauses reaches `wait_secs`;
 //! then [`run`] gives up with the last error, the program exits non-zero and launchd starts it
@@ -28,10 +31,11 @@ use hostkeeper_install::tools::{Tool, ToolError, ToolOutput, Tools, last_line};
 use hostkeeper_launchd::plist::INSTALLED_BINARY;
 use hostkeeper_package::net::Transport;
 
-use crate::files::{FileError, Written, write_if_absent};
+use crate::files::{FileError, Written, write_if_absent, write_private};
 use crate::package::{self, PackageError};
 use crate::settings::{Bounds, Settings, SettingsError, Sources};
 use crate::signer::{self, SignerError};
+use crate::update_account::UPDATE_ACCOUNT_FILE;
 
 /// The current generation of the host certificate the daemon keeps
 /// (`hostkeeper_enroll::PkiDir`): its presence means the Mac enrolled before.
@@ -60,6 +64,8 @@ pub struct Paths {
     pub config_dir: PathBuf,
     /// The staging directory, made 0700 when it is not there.
     pub staging_dir: PathBuf,
+    /// The update-account file.
+    pub update_account: PathBuf,
 }
 
 impl Paths {
@@ -71,6 +77,7 @@ impl Paths {
             pki_current: PathBuf::from(PKI_CURRENT),
             config_dir: PathBuf::from(CONFIG_DIR),
             staging_dir: PathBuf::from(STAGING_DIR),
+            update_account: PathBuf::from(UPDATE_ACCOUNT_FILE),
         }
     }
 }
@@ -111,6 +118,8 @@ pub enum Outcome {
         version: String,
         daemon_config: Written,
         signers_file: Written,
+        /// The update-account file; `None` when the settings name no update account.
+        update_account: Option<Written>,
     },
 }
 
@@ -122,10 +131,17 @@ impl fmt::Display for Outcome {
                 version,
                 daemon_config,
                 signers_file,
-            } => write!(
-                f,
-                "installed hostkeeper {version} (hostkeeper.toml {daemon_config:?}, macos-pkg.toml {signers_file:?})"
-            ),
+                update_account,
+            } => {
+                write!(
+                    f,
+                    "installed hostkeeper {version} (hostkeeper.toml {daemon_config:?}, macos-pkg.toml {signers_file:?}, "
+                )?;
+                match update_account {
+                    Some(written) => write!(f, "update-account {written:?})"),
+                    None => f.write_str("no update account)"),
+                }
+            }
         }
     }
 }
@@ -317,12 +333,69 @@ fn stage_and_install(
         &settings.team_id,
     )?;
     let signers = signers_text(settings, &leaf)?;
-    let daemon_config = write_if_absent(
-        &paths.config_dir.join(DAEMON_CONFIG),
-        &settings.daemon_config(),
-        0o600,
-    )?;
-    let signers_file = write_if_absent(&paths.config_dir.join(SIGNERS_FILE), &signers, 0o644)?;
+    let mut made = Vec::new();
+    let written = write_and_install(paths, ports, settings, &signers, pkg_arg, &mut made);
+    if written.is_err() {
+        // The files this attempt made are not authoritative: the next attempt reads the
+        // settings again, so a corrected value is not shadowed by a stale file.
+        for path in made {
+            drop(fs::remove_file(path));
+        }
+    }
+    let (daemon_config, signers_file, update_account) = written?;
+    let marker = installed_marker(paths);
+    fs::write(&marker, b"").map_err(|source| Error::Staging {
+        path: marker.display().to_string(),
+        source,
+    })?;
+    Ok(Outcome::Installed {
+        version: located.version,
+        daemon_config,
+        signers_file,
+        update_account,
+    })
+}
+
+/// What [`write_and_install`] wrote: the daemon config, the signers file and the update-account
+/// file.
+type WrittenFiles = (Written, Written, Option<Written>);
+
+/// Writes the files of step 4, each path it made pushed to `made`, then runs `installer`.
+fn write_and_install(
+    paths: &Paths,
+    ports: &Ports<'_>,
+    settings: &Settings,
+    signers: &str,
+    pkg_arg: String,
+    made: &mut Vec<PathBuf>,
+) -> Result<WrittenFiles, Error> {
+    let mut note = |path: PathBuf, written: Written| {
+        if written == Written::Made {
+            made.push(path);
+        }
+        written
+    };
+    let config = paths.config_dir.join(DAEMON_CONFIG);
+    let daemon_config = note(
+        config.clone(),
+        write_if_absent(&config, &settings.daemon_config(), 0o600)?,
+    );
+    let signers_path = paths.config_dir.join(SIGNERS_FILE);
+    let signers_file = note(
+        signers_path.clone(),
+        write_if_absent(&signers_path, signers, 0o644)?,
+    );
+    let update_account = match &settings.update_account {
+        Some(keys) => Some(note(
+            paths.update_account.clone(),
+            write_private(
+                &paths.update_account,
+                &keys.file_text(),
+                paths.sources.trusted_uid,
+            )?,
+        )),
+        None => None,
+    };
     let installed = run_tool(
         ports,
         Tool::Installer,
@@ -333,35 +406,12 @@ fn stage_and_install(
             "/".to_owned(),
         ],
         settings.bounds.installer_timeout_secs,
-    );
-    let installed = match installed {
-        Ok(output) if output.code == Some(0) => output,
-        failed => {
-            // The files this attempt made are not authoritative: the next attempt reads the
-            // settings again, so a corrected value is not shadowed by a stale file.
-            for (written, name) in [(daemon_config, DAEMON_CONFIG), (signers_file, SIGNERS_FILE)] {
-                if written == Written::Made {
-                    drop(fs::remove_file(paths.config_dir.join(name)));
-                }
-            }
-            return Err(match failed {
-                Ok(output) => Error::Installer {
-                    code: output.code,
-                    last: last_line(&output),
-                },
-                Err(error) => error,
-            });
-        }
-    };
-    drop(installed);
-    let marker = installed_marker(paths);
-    fs::write(&marker, b"").map_err(|source| Error::Staging {
-        path: marker.display().to_string(),
-        source,
-    })?;
-    Ok(Outcome::Installed {
-        version: located.version,
-        daemon_config,
-        signers_file,
-    })
+    )?;
+    if installed.code != Some(0) {
+        return Err(Error::Installer {
+            code: installed.code,
+            last: last_line(&installed),
+        });
+    }
+    Ok((daemon_config, signers_file, update_account))
 }

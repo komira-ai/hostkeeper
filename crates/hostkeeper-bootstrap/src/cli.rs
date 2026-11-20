@@ -42,6 +42,9 @@ pub struct Args {
     /// The binary hostkeeper's pkg installs; the bootstrap does nothing when it is there.
     #[arg(long, default_value = hostkeeper_launchd::plist::INSTALLED_BINARY)]
     pub installed_binary: PathBuf,
+    /// The update-account file, written when the settings name the update account.
+    #[arg(long, default_value = crate::update_account::UPDATE_ACCOUNT_FILE)]
+    pub update_account_file: PathBuf,
 }
 
 impl Args {
@@ -53,6 +56,7 @@ impl Args {
         paths.config_dir = self.config_dir;
         paths.staging_dir = self.staging_dir;
         paths.binary = self.installed_binary;
+        paths.update_account = self.update_account_file;
         paths
     }
 }

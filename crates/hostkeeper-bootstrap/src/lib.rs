@@ -9,6 +9,7 @@
 //! - [`package`]: the descriptor and the pointer name the pkg; the download is hashed as written.
 //! - [`signer`]: `pkgutil --check-signature` pinned to a Team ID.
 //! - [`files`]: a config written only when it is absent.
+//! - [`update_account`]: the update account's four keys and the update-account file's text.
 //! - [`run`]: the steps, the bounded wait and the ports. [`cli`]: the flags and the host's ports.
 //!
 //! The network, the Mac's tools and the pause are ports, so Linux measures every step against
@@ -20,5 +21,6 @@ pub mod package;
 pub mod run;
 pub mod settings;
 pub mod signer;
+pub mod update_account;
 
 pub use cli::{execute, main};
