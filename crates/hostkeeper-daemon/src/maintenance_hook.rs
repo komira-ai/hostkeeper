@@ -23,14 +23,18 @@
 //!   boot id, the reboot was asked for and has not happened: it is asked for again, and nothing is
 //!   installed again. A `reboot` kind after a kind whose reboot the same `cutover` saw finished is
 //!   recorded applied without a second reboot.
-//! - `verify` fails `not_applied` for a kind the run record does not hold applied, and otherwise
-//!   runs each kind's `verify`.
+//! - `verify` checks each kind of the run in turn and ends at the first wrong fact: it fails
+//!   `not_applied` for a kind the run record does not hold applied, `not_rebooted` for a kind
+//!   applied after a reboot while the host still runs the boot that reboot was asked in, and
+//!   otherwise runs the kind's `verify`. A kind not in the run is not checked. On Linux, `linux`
+//!   and `reboot` are checked by [`LinuxCheck`] (the module [`linux`]).
 //!
 //! **Outcome.** The exit code is the hook contract's: `0` done, `75` deferred (the kind touched
 //! nothing), `1` failed. The last line of standard output is the contract's JSON report: the
 //! reason a token, the detail at most [`MAX_DETAIL`] bytes.
 
 mod kind;
+pub mod linux;
 mod params;
 mod ports;
 mod registry;
@@ -46,6 +50,7 @@ use hostkeeper_proto::maintenance::MAX_HALTED_REASON;
 use hostkeeper_steps::{BootId, BootIdSource};
 
 pub use kind::{Cutover, KindError, MaintenanceKind, REASON_UNSUPPORTED_KIND, Unsupported};
+pub use linux::LinuxCheck;
 pub use params::{Kind, MAX_PARAMS_BYTES, MaintainParams, ParamsError};
 pub use ports::{KindState, RebootError, Rebooter, RecordError, RunRecord, Unwired};
 pub use registry::Registry;
@@ -68,6 +73,9 @@ pub const REASON_REBOOT_FAILED: &str = "reboot_failed";
 pub const REASON_REBOOT_UNDER_WAY: &str = "reboot_under_way";
 /// The reason of a `verify` of a kind the run record does not hold applied.
 pub const REASON_NOT_APPLIED: &str = "not_applied";
+/// The reason of a `verify` of a kind applied after a reboot while the host still runs the boot
+/// that reboot was asked in.
+pub const REASON_NOT_REBOOTED: &str = "not_rebooted";
 /// The reason given in place of a kind's reason that is not a token.
 pub const REASON_KIND_FAILED: &str = "kind_failed";
 
@@ -177,12 +185,13 @@ fn bounded(detail: &str) -> String {
     detail[..end].to_owned()
 }
 
-/// `hostkeeper maintenance-hook` on this host: the kinds of its platform, the boot id of the
+/// `hostkeeper maintenance-hook` on this host: the kinds of its platform (on Linux, `linux` and
+/// `reboot` checked by the host's [`LinuxCheck`], [`linux::host_kinds`]), the boot id of the
 /// system the binary was built for, and no run record or reboot yet ([`Unwired`]); the parameters
 /// from the file `args` names or from the process's standard input, the report to its standard
 /// output.
 pub fn host_main(args: &HookArgs) -> Outcome {
-    let kinds = Registry::for_platform(Platform::host().kind);
+    let kinds = linux::host_kinds(&Platform::host(), env!("CARGO_PKG_VERSION"));
     let boot_id = crate::adapters::host_boot_id();
     let ports = HookPorts {
         kinds: &kinds,
@@ -253,7 +262,7 @@ fn cutover(params: &MaintainParams, ports: &HookPorts<'_>) -> Result<Ending, End
     let mut rebooted: Option<BootId> = None;
     for kind in params.kinds() {
         match record.state(run_id, kind).map_err(record_failed)? {
-            KindState::Applied => {}
+            KindState::Applied | KindState::AppliedAfterReboot { .. } => {}
             KindState::RebootUnderWay { boot } => {
                 let now = boot_id(ports.boot_id)?;
                 if now == boot {
@@ -287,18 +296,34 @@ fn cutover(params: &MaintainParams, ports: &HookPorts<'_>) -> Result<Ending, End
     Ok(Ending::done())
 }
 
-/// Each kind's `verify`, once the run record holds every kind applied.
+/// Each kind's check, in the run's order, to the first wrong fact: the kind recorded applied,
+/// the host booted again since the reboot it needed was asked for, and the kind's own `verify`.
 fn verify(params: &MaintainParams, ports: &HookPorts<'_>) -> Result<Ending, Ending> {
     for kind in params.kinds() {
         let state = ports
             .record
             .state(params.run_id(), kind)
             .map_err(record_failed)?;
-        if state != KindState::Applied {
-            return Err(Ending::failed(
-                REASON_NOT_APPLIED,
-                format!("{kind} is not recorded applied"),
-            ));
+        match state {
+            KindState::Applied => {}
+            KindState::AppliedAfterReboot { asked_in } => {
+                if boot_id(ports.boot_id)? == asked_in {
+                    return Err(Ending::failed(
+                        REASON_NOT_REBOOTED,
+                        format!(
+                            "{kind} needed a reboot, and the host still runs the boot {} it was \
+                             asked in",
+                            asked_in.as_str()
+                        ),
+                    ));
+                }
+            }
+            KindState::Pending | KindState::RebootUnderWay { .. } => {
+                return Err(Ending::failed(
+                    REASON_NOT_APPLIED,
+                    format!("{kind} is not recorded applied"),
+                ));
+            }
         }
         ports.kinds.get(kind)?.verify(params)?;
     }

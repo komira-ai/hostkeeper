@@ -1,6 +1,7 @@
-//! The kinds of maintenance a platform has work for ([`Registry::for_platform`]). Each is a stub
-//! ([`Unsupported`]) until its platform's work is written; that work is a file of its own beside
-//! this one, and putting it in its place here is the one line it changes.
+//! The kinds of maintenance a platform has work for ([`Registry::for_platform`]), each a stub
+//! ([`Unsupported`]). A platform's work is a file of its own beside this one, which puts it in
+//! the stub's place: on Linux, `linux` and `reboot` are checked by [`super::linux`]'s
+//! `LinuxCheck` ([`super::linux::host_kinds`]); their other steps are stubs still.
 
 use std::collections::BTreeMap;
 

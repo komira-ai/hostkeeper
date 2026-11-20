@@ -403,9 +403,9 @@ fn the_command_line_takes_the_three_steps_and_the_params_file() {
     assert_eq!(refused.exit_code(), 2);
 }
 
-/// Proves: the binary's command line runs the hook on this host's kinds, stubs today, and exits
-/// with the step's code (1, `unsupported_kind`); started from a packaged path, the hook is run
-/// there and not handed to `current` as the daemon is.
+/// Proves: the binary's command line runs the hook on this host's kinds, whose `prepare` is a stub
+/// today, and exits with the step's code (1, `unsupported_kind`); started from a packaged path,
+/// the hook is run there and not handed to `current` as the daemon is.
 ///
 /// Catches: `maintenance-hook` dispatched to the daemon, or exec'd into another binary.
 #[test]
