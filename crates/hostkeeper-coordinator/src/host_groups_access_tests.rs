@@ -69,6 +69,20 @@ fn the_keys_two_policies_differ_in_are_named_in_the_policys_order() {
         other.changed_keys(&base),
         ["bake_beats", "rollback", "min_up", "live_rollouts"]
     );
+    let tabled = Policy {
+        maintenance: crate::maintenance_policy::Maintenance {
+            macos_major: true,
+            ..Default::default()
+        },
+        ..Policy::default()
+    };
+    assert_eq!(tabled.changed_keys(&base), ["maintenance"]);
+    assert_eq!(base.changed_keys(&tabled), ["maintenance"]);
+    let both = Policy {
+        live_rollouts: Some(3),
+        ..tabled.clone()
+    };
+    assert_eq!(both.changed_keys(&base), ["live_rollouts", "maintenance"]);
 }
 
 /// A group of `hostkeeper` and `svc`.
