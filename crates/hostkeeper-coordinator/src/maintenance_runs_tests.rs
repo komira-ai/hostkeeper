@@ -370,7 +370,9 @@ fn full_run_json() {
     let value = json!({
         "id": "run-1900000000-1",
         "kinds": ["macos", "linux"],
-        "host_ids": ["host-a", "host-b", "host-c", "host-d", "host-e"],
+        "host_ids": [
+            "host-a", "host-b", "host-c", "host-d", "host-e", "host-e1", "host-e2", "host-e3",
+        ],
         "window_start_unix": 1_900_000_100u64,
         "window_end_unix": 1_900_003_600u64,
         "batch": 2,
@@ -390,6 +392,12 @@ fn full_run_json() {
              "skipped_because": "excluded"},
             {"host_id": "host-e", "host_group": "web", "step": "not_reached",
              "since_unix": 1_900_000_050u64, "kinds": ["macos"]},
+            {"host_id": "host-e1", "host_group": "web", "step": "skipped", "since_unix": 0,
+             "kinds": ["macos"], "skipped_because": "mdm_conflict"},
+            {"host_id": "host-e2", "host_group": "web", "step": "waiting", "since_unix": 0,
+             "kinds": ["xcode"], "skipped_because": "no_update_account"},
+            {"host_id": "host-e3", "host_group": "web", "step": "skipped", "since_unix": 0,
+             "kinds": ["macos"], "skipped_because": "filevault_not_ready"},
         ],
     });
     let first = sample().remove(0);
