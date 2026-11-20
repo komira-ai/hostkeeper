@@ -314,7 +314,7 @@ fn a_failed_refresh_defers_with_its_first_error_line() {
         ran(
             100,
             "",
-            "E: The repository 'http://x noble Release' is not signed.\n",
+            "E: The repository 'http://archive.example.com noble Release' is not signed.\n",
         ),
     );
     let outcome = fake.stage(&root, 300).run(&params(WireScope::Security));
@@ -322,7 +322,7 @@ fn a_failed_refresh_defers_with_its_first_error_line() {
         outcome,
         deferred(
             REASON_LISTING_FAILED,
-            "apt-get update failed with exit code 100: E: The repository 'http://x noble Release' is not signed."
+            "apt-get update failed with exit code 100: E: The repository 'http://archive.example.com noble Release' is not signed."
         )
     );
     assert_eq!(fake.arg_lists(), vec![update()]);
@@ -395,15 +395,23 @@ fn download_bytes_sums_the_archive_sizes() {
     assert_eq!(download_bytes(&lines(URIS)), Some(7000));
     assert_eq!(download_bytes(&lines("\n  \n")), Some(0));
     assert_eq!(
-        download_bytes(&lines("http://x/a.deb a.deb 10 SHA512:1")),
+        download_bytes(&lines("http://archive.example.com/a.deb a.deb 10 SHA512:1")),
         None
     );
-    assert_eq!(download_bytes(&lines("'http://x/a.deb' a.deb")), None);
     assert_eq!(
-        download_bytes(&lines("'http://x/a.deb' a.deb ten SHA512:1")),
+        download_bytes(&lines("'http://archive.example.com/a.deb' a.deb")),
         None
     );
-    assert_eq!(download_bytes(&lines("'http://x/a.deb a.deb 10")), None);
+    assert_eq!(
+        download_bytes(&lines(
+            "'http://archive.example.com/a.deb' a.deb ten SHA512:1"
+        )),
+        None
+    );
+    assert_eq!(
+        download_bytes(&lines("'http://archive.example.com/a.deb a.deb 10")),
+        None
+    );
     let max = format!("'u' a.deb {} h\n'u' b.deb 1 h", u64::MAX);
     assert_eq!(download_bytes(&lines(&max)), None);
 }

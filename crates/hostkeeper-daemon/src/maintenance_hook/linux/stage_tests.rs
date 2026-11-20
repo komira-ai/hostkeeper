@@ -34,7 +34,11 @@ fn apt_host() -> FakeHost {
             "--only-upgrade",
             "openssl",
         ]),
-        ran(0, "'http://x/openssl.deb' openssl.deb 10 SHA512:1\n", ""),
+        ran(
+            0,
+            "'http://archive.example.com/openssl.deb' openssl.deb 10 SHA512:1\n",
+            "",
+        ),
     );
     fake
 }

@@ -176,7 +176,7 @@ impl Disk for HostDisk {
 
     /// The filesystem's available blocks (`f_bavail`) times its fragment size (`f_frsize`).
     fn free_bytes(&self, dir: &str) -> Result<u64, String> {
-        let stat = rustix::fs::statvfs(&self.0.path(dir))
+        let stat = rustix::fs::statvfs(self.0.path(dir))
             .map_err(|error| format!("the free space of {dir} could not be read: {error}"))?;
         Ok(stat.f_bavail.saturating_mul(stat.f_frsize))
     }
