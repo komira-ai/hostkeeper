@@ -39,7 +39,7 @@ fn host(simulation: &str, lock: u64) -> Host {
     );
     let mark = FakeLaunchctl::new();
     mark.always(
-        &args(&["-o", &timeout, "hold", "hostkeeper"]),
+        &args(&["hold", "hostkeeper"]),
         Ok(LaunchctlOutput::success("")),
     );
     let install = FakeLaunchctl::new();
@@ -129,15 +129,7 @@ fn security_scope_installs_the_security_list_after_holding_the_own_package() {
             "dist-upgrade"
         ])]
     );
-    assert_eq!(
-        host.mark.calls(),
-        vec![args(&[
-            "-o",
-            "DPkg::Lock::Timeout=300",
-            "hold",
-            "hostkeeper"
-        ])]
-    );
+    assert_eq!(host.mark.calls(), vec![args(&["hold", "hostkeeper"])]);
     let mut expected = install_prefix(300);
     expected.extend(args(&[
         "install",
@@ -193,15 +185,7 @@ Inst hostkeeper:amd64 [1.4.0-1] (1.5.0-1 hostkeeper:stable [amd64])
     let host = host(simulation, 300);
     ok_install(&host, &["install", "--only-upgrade", "libc6:i386"], 300);
     assert_eq!(run(&host, LinuxScope::Security), Ok(()));
-    assert_eq!(
-        host.mark.calls(),
-        vec![args(&[
-            "-o",
-            "DPkg::Lock::Timeout=300",
-            "hold",
-            "hostkeeper"
-        ])]
-    );
+    assert_eq!(host.mark.calls(), vec![args(&["hold", "hostkeeper"])]);
     assert_eq!(host.install.calls().len(), 1);
 }
 
@@ -277,7 +261,7 @@ fn a_failed_hold_runs_no_install() {
     let host = host(UBUNTU, 300);
     let mark = FakeLaunchctl::new();
     mark.always(
-        &args(&["-o", "DPkg::Lock::Timeout=300", "hold", "hostkeeper"]),
+        &args(&["hold", "hostkeeper"]),
         Ok(LaunchctlOutput::exit(100, "E: Unable to lock")),
     );
     let apt = AptUpgrade::new(
@@ -308,14 +292,12 @@ fn the_lock_wait_reaches_every_program() {
     let host = host(UBUNTU, 42);
     ok_install(&host, &["dist-upgrade"], 42);
     assert_eq!(run(&host, LinuxScope::All), Ok(()));
-    for calls in [
-        host.refresh.calls(),
-        host.simulate.calls(),
-        host.mark.calls(),
-    ] {
+    for calls in [host.refresh.calls(), host.simulate.calls()] {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0][..2], args(&["-o", "DPkg::Lock::Timeout=42"])[..]);
     }
+    // apt-mark has no lock timeout of its own: its hold is given no option.
+    assert_eq!(host.mark.calls(), vec![args(&["hold", "hostkeeper"])]);
     assert_eq!(host.install.calls(), {
         let mut expected = install_prefix(42);
         expected.push("dist-upgrade".to_owned());
@@ -349,4 +331,44 @@ fn the_install_environment_is_a_path_no_questions_and_needrestart_suspended() {
             "NEEDRESTART_MODE=l",
         ]
     );
+}
+
+/// Proves a simulation that fails stops the install: it names the simulation and its exit, and
+/// nothing is held or installed.
+#[test]
+fn a_failed_simulation_runs_no_hold_and_no_install() {
+    let host = host(UBUNTU, 300);
+    let simulate = FakeLaunchctl::new();
+    simulate.always(
+        &args(&[
+            "-o",
+            "DPkg::Lock::Timeout=300",
+            "--simulate",
+            "-qq",
+            "dist-upgrade",
+        ]),
+        Ok(LaunchctlOutput::exit(100, "E: Broken packages")),
+    );
+    let apt = AptUpgrade::new(
+        Box::new(host.refresh.clone()),
+        Box::new(simulate),
+        Box::new(host.mark.clone()),
+        Box::new(host.install.clone()),
+        300,
+    );
+    let own = own();
+    let result = apt.upgrade(&Upgrade {
+        scope: LinuxScope::All,
+        own_packages: &own,
+    });
+    assert_eq!(
+        result,
+        Err(KindError::Failed {
+            reason: REASON_INSTALL_FAILED,
+            detail: "apt-get dist-upgrade simulation failed with exit code 100: E: Broken packages"
+                .to_owned(),
+        })
+    );
+    assert!(host.mark.calls().is_empty());
+    assert!(host.install.calls().is_empty());
 }

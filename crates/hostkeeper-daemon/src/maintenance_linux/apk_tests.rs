@@ -232,3 +232,57 @@ fn name_is_apk() {
 fn at_host_builds_with_the_largest_lock_wait() {
     assert_eq!(ApkUpgrade::at_host(u64::MAX).name(), "apk");
 }
+
+/// Proves a listing that fails stops the install: it names `apk version` and its exit, and
+/// nothing is pinned or upgraded.
+#[test]
+fn failed_listing_pins_and_upgrades_nothing() {
+    let (upgrader, ports) = installer(LISTING, 300, &[]);
+    ports.list.always(
+        &args(&["version", "-l", "<"]),
+        Ok(LaunchctlOutput::exit(1, "ERROR: No such file or directory")),
+    );
+    assert_eq!(
+        run(&upgrader, LinuxScope::All),
+        Err(KindError::Failed {
+            reason: REASON_INSTALL_FAILED,
+            detail: "apk version failed with exit code 1: ERROR: No such file or directory"
+                .to_owned(),
+        })
+    );
+    assert_eq!(ports.install.calls(), Vec::<Vec<String>>::new());
+}
+
+/// Proves a pin that fails stops the install before the upgrade: it names `apk add (pin)`, and
+/// no upgrade runs, so hostkeeper's package is never upgraded unpinned.
+#[test]
+fn failed_pin_runs_no_upgrade() {
+    let (upgrader, ports) = installer(LISTING, 300, &[]);
+    let pin = args(&["--wait", "300", "add", "-q", "hostkeeper=0.1.80-r0"]);
+    ports
+        .install
+        .always(&pin, Ok(LaunchctlOutput::exit(1, "ERROR: unable to lock")));
+    assert_eq!(
+        run(&upgrader, LinuxScope::All),
+        Err(KindError::Failed {
+            reason: REASON_INSTALL_FAILED,
+            detail: "apk add (pin) failed with exit code 1: ERROR: unable to lock".to_owned(),
+        })
+    );
+    assert_eq!(ports.install.calls(), vec![pin]);
+}
+
+/// Proves a kernel package that hostkeeper itself installs is pinned and not upgraded under the
+/// security scope, which then upgrades nothing.
+#[test]
+fn an_own_kernel_is_pinned_and_not_upgraded() {
+    let pin = ["--wait", "300", "add", "-q", "linux-lts=6.12.1-r0"];
+    let (upgrader, ports) = installer(NO_OWN_LISTING, 300, &[&pin]);
+    let own: BTreeSet<String> = ["linux-lts".to_owned()].into();
+    let result = upgrader.upgrade(&Upgrade {
+        scope: LinuxScope::Security,
+        own_packages: &own,
+    });
+    assert_eq!(result, Ok(()));
+    assert_eq!(ports.install.calls(), vec![args(&pin)]);
+}

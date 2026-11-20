@@ -7,7 +7,8 @@
 //! `--force-confold` keeps a file the host changed and takes the package's default only for a
 //! file nobody changed, so no `dpkg` prompt is raised. The dpkg lock is waited for by `apt-get`
 //! itself (`DPkg::Lock::Timeout`, the hook's `--package-lock-wait-secs`), and each program's
-//! deadline is its own plus that wait. Only the install runs package scripts, so only it is run
+//! deadline is its own plus that wait; `apt-mark` has no lock timeout, so a hold that finds the
+//! lock held fails at once. Only the install runs package scripts, so only it is run
 //! through `/usr/bin/env` with [`SCRIPTS_ENV`].
 
 use std::collections::BTreeSet;
@@ -57,7 +58,7 @@ pub struct AptUpgrade {
 impl AptUpgrade {
     /// An upgrader refreshing the index with `refresh`, simulating with `simulate`, holding with
     /// `mark` (an `apt-mark`) and installing with `install` (an `env` that runs `apt-get`); each
-    /// `apt-get` and `apt-mark` waits up to `lock_wait_secs` for the dpkg lock.
+    /// `apt-get` is given `lock_wait_secs` as its dpkg lock timeout.
     #[must_use]
     pub fn new(
         refresh: Box<dyn Launchctl>,
@@ -95,7 +96,7 @@ impl AptUpgrade {
         )
     }
 
-    /// The option that makes `apt-get` and `apt-mark` wait for the dpkg lock.
+    /// The option that makes `apt-get` wait for the dpkg lock.
     fn lock_option(&self) -> String {
         format!("DPkg::Lock::Timeout={}", self.lock_wait_secs)
     }
@@ -130,7 +131,8 @@ fn steps(apt: &AptUpgrade, upgrade: &Upgrade<'_>) -> Result<(), String> {
 
     let held = moving_own(&updates, upgrade.own_packages);
     if !held.is_empty() {
-        let mut args = vec!["-o", lock.as_str(), "hold"];
+        // apt-mark has no lock timeout of its own; a held lock fails the hold at once.
+        let mut args = vec!["hold"];
         args.extend(held.iter().map(String::as_str));
         listing(&*apt.mark, "apt-mark hold", &args, &[0])?;
     }
