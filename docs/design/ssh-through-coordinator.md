@@ -20,7 +20,7 @@ Tags: **Built** is code on `main` with a path. **Designed** is this document. **
 3a. **A certificate is for one host.** Its principal is `hk-host-<host id>`, and each host's principals file lists only its own, so a certificate minted for one host is refused by every other (section 5).
 3b. **Default deny.** Without an operators file the coordinator signs and tunnels nothing; the file names each operator and the hosts, groups or classes that operator may reach (section 5).
 4. **The tunnel is a gRPC bidirectional stream** `Ssh/Tunnel` on the private listener, through Envoy, to `<host address>:22`. The host address is the peer address of the host's last heartbeat, never a name the host sends, and the operator's ssh checks the host key that was pinned at enrollment, so a misdirected dial fails before any credential is shown (section 7).
-5. **`hkctl` stays a bash script** (`crates/hostkeeper-hkctl/src/lib.rs`: generated, bash 3.2, `curl` only). The calls that are unary (`Ssh/SignUserCert`, `Ssh/Revoke`) go through its existing gateway path. The byte stream cannot, so a small Rust binary, `hkssh`, ships beside `hkctl` and `hkctl ssh-proxy` execs it (section 8).
+5. **`hkctl` stays a bash script** (`crates/hostkeeper-hkctl/src/lib.rs`: generated, bash 3.2, `curl` only). The calls that are unary (`Ssh/SignUserCert`, `Ssh/Revoke`) go through its existing gateway path. The byte stream cannot, so a small Rust binary, `hkssh` (a Linux release asset of its own, `hkssh-<version>-<linux-platform>.tar.gz`, unpacked beside `hkctl` or onto the PATH), and `hkctl ssh-proxy` execs it (section 8).
 
 ## 3. Host setup (sequence)
 

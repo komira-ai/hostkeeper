@@ -10,6 +10,7 @@
 //!   `StrictHostKeyChecking yes`).
 //! - `revoke` and `status`: `Ssh/Revoke`, and `Ssh/HostKeys` with the certificate held.
 //! - `known-host`: the command ssh runs to ask whether a key is the pinned one.
+//! - [`stamp`]: the version `hkssh --version` prints, with the commit of a release build.
 //!
 //! Every setting is a flag. The operator's token is read from the file `--token-file` names for
 //! each run, and is in no argument, no file of this program and no environment. `hkctl ssh`,
@@ -21,6 +22,7 @@ mod client;
 mod error;
 mod programs;
 mod run;
+pub mod stamp;
 mod state;
 mod tunnel;
 

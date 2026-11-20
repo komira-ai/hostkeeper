@@ -14,6 +14,12 @@
 SHA256SUMS
 hkctl-<version>
 hkctl-<version>.sigstore.json
+hkssh-<version>-linux-arm64.cdx.json
+hkssh-<version>-linux-arm64.tar.gz
+hkssh-<version>-linux-arm64.tar.gz.sigstore.json
+hkssh-<version>-linux-x86_64.cdx.json
+hkssh-<version>-linux-x86_64.tar.gz
+hkssh-<version>-linux-x86_64.tar.gz.sigstore.json
 hostkeeper-<version>-1.aarch64.rpm
 hostkeeper-<version>-1.aarch64.rpm.sigstore.json
 hostkeeper-<version>-1.x86_64.rpm

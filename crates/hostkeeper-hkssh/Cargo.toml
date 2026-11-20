@@ -9,7 +9,8 @@ publish.workspace = true
 description = "`hkssh`: the operator's side of SSH through the coordinator: the byte-stream proxy to a host's sshd, `ssh` with a short-lived certificate, revoking certificates, and the status of a host's pins."
 
 # docs/design/ssh-through-coordinator.md section 8. `hkctl ssh`, `hkctl ssh-proxy`,
-# `hkctl ssh-revoke` and `hkctl ssh-status` run this binary; it ships beside `hkctl`. It holds the
+# `hkctl ssh-revoke` and `hkctl ssh-status` run this binary; it is a Linux release asset of its own
+# (`hkssh-<version>-<linux-platform>.tar.gz`), unpacked beside `hkctl` or onto the PATH. It holds the
 # operator's token only as the file the flag names, reads it for each call and never puts it in
 # an argument or a file of its own.
 [[bin]]

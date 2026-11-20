@@ -104,10 +104,13 @@ and the time of its next try has come.
    the package and a developer directory is `PRESENT`.
 2. *Install,* when the package is not installed: the state is `INSTALLING`; the marker file
    `/tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress` is made (never through a link),
-   which makes `softwareupdate` offer the tools; `softwareupdate --list` names them, as
-   `* Label: Command Line Tools for Xcode-<version>` lines, and the label of the highest version is
-   installed with `softwareupdate --install <label>`; the marker is removed whatever happened after
-   it was made; then step 1 must find them.
+   which makes `softwareupdate` offer the tools; `softwareupdate --list` names them in `* Label: `
+   lines, as `Command Line Tools for Xcode-<version>` (older catalogs) or
+   `Command Line Tools for Xcode <version>-<version>` (current ones, the last version being the
+   tools'), and the label of the highest version is installed with `softwareupdate --install
+   <label>`; the marker is removed whatever happened after it was made; then step 1 must find them.
+   A listing with no label of the tools fails with a reason that names the labels it listed or,
+   with none, the first line of `softwareupdate`'s standard error.
 3. Each program is run as a child with an empty environment and no input, its output kept to
    64 KiB, and killed when it runs past its deadline: 1 minute for `pkgutil` and `xcode-select`,
    15 minutes for `softwareupdate --list`, 2 hours for `softwareupdate --install`.
