@@ -1,20 +1,16 @@
 //! What the Linux kinds' `verify` reads of the services a host runs ([`HostServices`]): each
 //! installed service's health as the heartbeat reports it, over the daemon's observer (here the
-//! rig's, reading fakes); and the kinds a host that cannot be checked holds ([`host_kinds`]).
+//! rig's, reading fakes).
 
 mod support;
 
 use std::fs;
 
-use hostkeeper_daemon::maintenance_hook::linux::{HostServices, ServiceHealth, host_kinds};
-use hostkeeper_daemon::maintenance_hook::{Kind, KindError, MaintainParams};
+use hostkeeper_daemon::maintenance_hook::linux::{HostServices, ServiceHealth};
 use hostkeeper_daemon::selfupdate::binary_dir;
 use hostkeeper_daemon::testing::manifest;
-use hostkeeper_launchd::Platform;
 use hostkeeper_observe::{ActiveState, ExeStat};
-use hostkeeper_proto::hostkeeper::agent::v1::{
-    Health, Maintain, MaintainAction, MaintenanceKind as WireKind,
-};
+use hostkeeper_proto::hostkeeper::agent::v1::Health;
 use support::{OWN, Rig, d};
 
 /// The digest of the executable the live service runs.
@@ -97,36 +93,4 @@ fn no_packages_directory_is_no_service_and_an_unreadable_one_is_an_error() {
         services_of(&rig).services(),
         Err(format!("{}: {error}", rig.packages.display()))
     );
-}
-
-/// Proves: a Mac, and a build whose own version is not `major.minor.patch`, hold their
-/// platform's stubs, whose `verify` fails `unsupported_kind` without reading the host.
-///
-/// Catches: a host that cannot be checked made to look checked.
-#[test]
-fn a_host_that_cannot_be_checked_holds_the_stubs() {
-    let params = MaintainParams::new(Maintain {
-        run_id: "run-1".to_owned(),
-        action: MaintainAction::Run.into(),
-        kinds: vec![WireKind::Reboot.into()],
-        ..Maintain::default()
-    })
-    .expect("valid parameters");
-    let cases = [
-        (
-            host_kinds(&Platform::macos(), "0.1.0"),
-            vec![Kind::Macos, Kind::Xcode, Kind::Reboot],
-        ),
-        (
-            host_kinds(&Platform::linux(), "0.1"),
-            vec![Kind::Linux, Kind::Reboot],
-        ),
-    ];
-    for (registry, kinds) in cases {
-        assert_eq!(registry.kinds().collect::<Vec<_>>(), kinds);
-        for kind in kinds {
-            let work = registry.get(kind).expect("held");
-            assert_eq!(work.verify(&params), Err(KindError::unsupported(kind)));
-        }
-    }
 }

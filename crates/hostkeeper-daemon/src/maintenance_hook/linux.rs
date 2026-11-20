@@ -1,6 +1,6 @@
-//! The Linux kinds of the maintenance hook, `linux` and `reboot` ([`kinds`]): their `verify` is
-//! [`LinuxCheck`] (docs/design/maintenance-updates.md, section 5.6); their `prepare`, `cutover`
-//! and `after_reboot` are not written yet and fail `unsupported_kind` as [`Unsupported`] does.
+//! The check of the Linux kinds of the maintenance hook, `linux` and `reboot`: their `verify` is
+//! [`LinuxCheck`] (docs/design/maintenance-updates.md, section 5.6), put in front of the kinds that
+//! install and reboot ([`crate::maintenance_linux`]) by [`kinds`].
 //!
 //! **What the check reads.** The collectors of the maintenance look, run again
 //! ([`crate::maintenance_collect`]): the host's facts ([`HostFacts`]: `uname -r` and the newest
@@ -33,14 +33,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use hostkeeper_config::manifest::HostkeeperVersion;
-use hostkeeper_launchd::{Platform, PlatformKind};
 use hostkeeper_observe::{Observer, beat_health};
 use hostkeeper_placed::roots::STATE_DIR;
 use hostkeeper_placed::{RealFs, Roots};
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use hostkeeper_proto::hostkeeper::agent::v1::Health;
 
-use super::kind::{Cutover, KindError, MaintenanceKind, Unsupported};
+use super::kind::{Cutover, KindError, MaintenanceKind};
 use super::params::{Kind, MaintainParams};
 use super::registry::Registry;
 use crate::Placement;
@@ -292,23 +291,25 @@ fn failed(reason: &'static str, detail: String) -> KindError {
     KindError::Failed { reason, detail }
 }
 
-/// One Linux kind: its `verify` is the shared [`LinuxCheck`], its other steps [`Unsupported`].
-struct LinuxKind {
+/// One Linux kind: its `prepare`, `cutover` and `after_reboot` are `work`'s, its `verify` the
+/// shared [`LinuxCheck`].
+struct Checked {
     kind: Kind,
+    work: Box<dyn MaintenanceKind>,
     check: Arc<LinuxCheck>,
 }
 
-impl MaintenanceKind for LinuxKind {
+impl MaintenanceKind for Checked {
     fn prepare(&self, params: &MaintainParams) -> Result<(), KindError> {
-        Unsupported(self.kind).prepare(params)
+        self.work.prepare(params)
     }
 
     fn cutover(&self, params: &MaintainParams) -> Result<Cutover, KindError> {
-        Unsupported(self.kind).cutover(params)
+        self.work.cutover(params)
     }
 
     fn after_reboot(&self, params: &MaintainParams) -> Result<String, KindError> {
-        Unsupported(self.kind).after_reboot(params)
+        self.work.after_reboot(params)
     }
 
     fn verify(&self, params: &MaintainParams) -> Result<(), KindError> {
@@ -316,37 +317,26 @@ impl MaintenanceKind for LinuxKind {
     }
 }
 
-/// The kinds of a Linux host, `linux` and `reboot`, each checked by `check`.
+/// The kinds of a Linux host, `linux` and `reboot`: the steps but `verify` of each are `linux`'s
+/// and `reboot`'s (on a host, [`crate::maintenance_linux`]'s kinds), and both are checked by
+/// `check`.
 #[must_use]
-pub fn kinds(check: LinuxCheck) -> Registry {
+pub fn kinds(
+    check: LinuxCheck,
+    linux: Box<dyn MaintenanceKind>,
+    reboot: Box<dyn MaintenanceKind>,
+) -> Registry {
     let check = Arc::new(check);
-    [Kind::Linux, Kind::Reboot]
+    [(Kind::Linux, linux), (Kind::Reboot, reboot)]
         .into_iter()
-        .fold(Registry::new(), |registry, kind| {
+        .fold(Registry::new(), |registry, (kind, work)| {
             registry.with(
                 kind,
-                Box::new(LinuxKind {
+                Box::new(Checked {
                     kind,
+                    work,
                     check: Arc::clone(&check),
                 }),
             )
         })
-}
-
-/// The kinds of this host, of `platform`, for a daemon of version `own` (`major.minor.patch`):
-/// on Linux, under systemd or OpenRC, [`kinds`] over [`LinuxCheck::at_host`] with the platform's
-/// adapters; on a Mac, on a platform this build has no adapters for, or when `own` is not a
-/// version (which the daemon itself refuses to start with), the platform's stubs
-/// ([`Registry::for_platform`]).
-#[must_use]
-pub fn host_kinds(platform: &Platform, own: &str) -> Registry {
-    match (
-        HostkeeperVersion::parse(own),
-        Adapters::for_platform(platform),
-    ) {
-        (Ok(own), Ok(adapters)) if adapters.kind != PlatformKind::Macos => {
-            kinds(LinuxCheck::at_host(adapters, own))
-        }
-        _ => Registry::for_platform(platform.kind),
-    }
 }

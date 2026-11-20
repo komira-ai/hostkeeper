@@ -7,9 +7,12 @@
 //! ([`MaintainParams`]). No argument carries a parameter, and nothing the hook writes holds one.
 //!
 //! **Kinds.** Each kind of the run (`macos`, `xcode`, `linux`, `reboot`) is the work of a
-//! [`MaintenanceKind`], found in the host platform's [`Registry`]; a kind the platform has no work
-//! for fails `unsupported_kind`. The steps run each kind of the run in [`Kind::ALL`]'s order,
-//! macOS before Xcode, whatever order the parameters give:
+//! [`MaintenanceKind`], found in the host platform's [`Registry`] ([`registry_for`]); a kind the
+//! platform has no work for fails `unsupported_kind`. On a Linux host (systemd or OpenRC) the
+//! `cutover` and the `after_reboot` of `linux` and `reboot` are written
+//! ([`crate::maintenance_linux`]), and so is their `verify` ([`LinuxCheck`], the module
+//! [`linux`]); every other step of every kind is `unsupported_kind` until its own change. The steps run each kind of the run in [`Kind::ALL`]'s order, macOS before Xcode,
+//! whatever order the parameters give:
 //!
 //! - `prepare` runs each kind's `prepare`, and ends at the first that does not succeed. It writes
 //!   nothing to the run record and reboots nothing.
@@ -26,8 +29,11 @@
 //! - `verify` checks each kind of the run in turn and ends at the first wrong fact: it fails
 //!   `not_applied` for a kind the run record does not hold applied, `not_rebooted` for a kind
 //!   applied after a reboot while the host still runs the boot that reboot was asked in, and
-//!   otherwise runs the kind's `verify`. A kind not in the run is not checked. On Linux, `linux`
-//!   and `reboot` are checked by [`LinuxCheck`] (the module [`linux`]).
+//!   otherwise runs the kind's `verify`. A kind not in the run is not checked.
+//!
+//! **The run record.** A host keeps none yet ([`Unwired`]): a `cutover` there would install and
+//! then fail to record it, so [`host_main`] refuses the step first, before any kind runs, failing
+//! `run_record_failed` ([`unwired_record`]). `prepare` and `verify` are run as before.
 //!
 //! **Outcome.** The exit code is the hook contract's: `0` done, `75` deferred (the kind touched
 //! nothing), `1` failed. The last line of standard output is the contract's JSON report: the
@@ -42,12 +48,22 @@ mod registry;
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use clap::{Args, ValueEnum};
+use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_hook::{Class, Outcome, Report, is_reason_token};
-use hostkeeper_launchd::Platform;
+use hostkeeper_launchd::{Platform, PlatformKind};
+use hostkeeper_placed::{RealFs, Roots};
 use hostkeeper_proto::maintenance::MAX_HALTED_REASON;
 use hostkeeper_steps::{BootId, BootIdSource};
+
+use crate::Placement;
+use crate::adapters::Adapters;
+use crate::cli;
+use crate::maintenance_linux::kinds::{LinuxKind, RebootKind};
+use crate::maintenance_linux::rebooter::HostRebooter;
+use crate::maintenance_own::PlacedPackages;
 
 pub use kind::{Cutover, KindError, MaintenanceKind, REASON_UNSUPPORTED_KIND, Unsupported};
 pub use linux::LinuxCheck;
@@ -100,6 +116,15 @@ pub struct HookArgs {
     /// standard input.
     #[arg(long)]
     pub params: PathBuf,
+    /// The seconds a package manager's program waits at most for the host's package manager's
+    /// lock, from 1 to 3600, as the daemon's flag of the same name: on top of the deadline of
+    /// each program the Linux install runs.
+    #[arg(
+        long,
+        default_value_t = cli::DEFAULT_PACKAGE_LOCK_WAIT_SECS,
+        value_parser = clap::value_parser!(u64).range(1..=cli::MAX_PACKAGE_LOCK_WAIT_SECS),
+    )]
+    pub package_lock_wait_secs: u64,
 }
 
 /// What the hook works through: the kinds of the host, its run record, its reboot and its boot
@@ -185,18 +210,79 @@ fn bounded(detail: &str) -> String {
     detail[..end].to_owned()
 }
 
-/// `hostkeeper maintenance-hook` on this host: the kinds of its platform (on Linux, `linux` and
-/// `reboot` checked by the host's [`LinuxCheck`], [`linux::host_kinds`]), the boot id of the
-/// system the binary was built for, and no run record or reboot yet ([`Unwired`]); the parameters
-/// from the file `args` names or from the process's standard input, the report to its standard
-/// output.
+/// The kinds of a host of `platform`, for a build of version `own` (`major.minor.patch`):
+/// [`Registry::for_platform`]'s, with `linux` and `reboot` of a Linux host (systemd or OpenRC) put
+/// in place of their stubs: installed and rebooted by [`LinuxKind`] and [`RebootKind`], the
+/// install waiting up to `lock_wait_secs` for the package manager's lock and leaving untouched the
+/// packages recorded in the daemon's `placed.json`, and checked by the host's [`LinuxCheck`]
+/// ([`linux::kinds`]). When `own` is not a version (which the daemon itself refuses to start
+/// with), or the build has no adapters for the platform, their `verify` stays `unsupported_kind`.
+/// A Mac keeps its stubs.
+pub fn registry_for(platform: &Platform, lock_wait_secs: u64, own: &str) -> Registry {
+    let registry = Registry::for_platform(platform.kind);
+    match platform.kind {
+        PlatformKind::Linux | PlatformKind::Openrc => {
+            let placement = Placement {
+                roots: Roots::new(
+                    Path::new(hostkeeper_placed::roots::STATE_DIR),
+                    &platform.unit_dir,
+                    Path::new(cli::DEFAULT_PACKAGES_DIR),
+                ),
+                fs: Arc::new(RealFs::new(Path::new("/"))),
+            };
+            let packages = Box::new(PlacedPackages::new(&placement));
+            let linux_work = Box::new(LinuxKind::at_host(lock_wait_secs, packages));
+            let reboot_work = Box::new(RebootKind::at_host());
+            match (
+                HostkeeperVersion::parse(own),
+                Adapters::for_platform(platform),
+            ) {
+                (Ok(own), Ok(adapters)) => {
+                    linux::kinds(LinuxCheck::at_host(adapters, own), linux_work, reboot_work)
+                }
+                _ => registry
+                    .with(Kind::Linux, linux_work)
+                    .with(Kind::Reboot, reboot_work),
+            }
+        }
+        PlatformKind::Macos => registry,
+    }
+}
+
+/// The ending of a `cutover`, which a host with no run record ([`Unwired`]) refuses before any
+/// kind runs: failed `run_record_failed`, saying the host keeps no run record. `None` for the
+/// other steps.
+pub fn unwired_record(step: HookStep) -> Option<Ending> {
+    (step == HookStep::Cutover).then(|| record_failed(RecordError::NotWired))
+}
+
+/// `hostkeeper maintenance-hook` on this host: the kinds of its platform ([`registry_for`]), the
+/// boot id of the system the binary was built for, the platform's reboot ([`HostRebooter`]; none
+/// on a Mac) and no run record yet ([`Unwired`]), so a `cutover` is refused ([`unwired_record`])
+/// before its parameters are read; the parameters from the file `args` names or from the
+/// process's standard input, the report to its standard output.
 pub fn host_main(args: &HookArgs) -> Outcome {
-    let kinds = linux::host_kinds(&Platform::host(), env!("CARGO_PKG_VERSION"));
+    if let Some(ending) = unwired_record(args.step) {
+        let _unwritten = ending.report().write_to(&mut io::stdout().lock());
+        return ending.outcome;
+    }
+    let platform = Platform::host();
+    let kinds = registry_for(
+        &platform,
+        args.package_lock_wait_secs,
+        env!("CARGO_PKG_VERSION"),
+    );
     let boot_id = crate::adapters::host_boot_id();
+    let host_rebooter = HostRebooter::for_platform(platform.kind);
+    let rebooter = host_rebooter
+        .as_ref()
+        .map_or(&Unwired as &dyn Rebooter, |rebooter| {
+            rebooter as &dyn Rebooter
+        });
     let ports = HookPorts {
         kinds: &kinds,
         record: &Unwired,
-        rebooter: &Unwired,
+        rebooter,
         boot_id: boot_id.as_ref(),
     };
     main_with(

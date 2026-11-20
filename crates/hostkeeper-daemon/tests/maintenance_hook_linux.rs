@@ -16,8 +16,8 @@ use hostkeeper_daemon::maintenance_hook::linux::{
     REASON_REBOOT_NEEDED, REASON_SERVICE_UNHEALTHY, REASON_UPDATE_DUE, ServiceHealth,
 };
 use hostkeeper_daemon::maintenance_hook::{
-    HookArgs, HookStep, Kind, KindState, MaintainParams, REASON_NOT_APPLIED, REASON_NOT_REBOOTED,
-    main_with, run_step,
+    HookArgs, HookStep, Kind, KindError, KindState, MaintainParams, REASON_NOT_APPLIED,
+    REASON_NOT_REBOOTED, Unsupported, main_with, run_step,
 };
 use hostkeeper_daemon::maintenance_own::OwnPackages;
 use hostkeeper_hook::Outcome;
@@ -27,7 +27,8 @@ use hostkeeper_proto::hostkeeper::agent::v1::{
 };
 use hostkeeper_steps::BootId;
 use support_maintenance::{
-    BOOT_A, BOOT_B, Effects, Ending, Host, RUN, done, failed, maintain, push, rebooting, taken,
+    BOOT_A, BOOT_B, Effects, Ending, FakeKind, Host, RUN, done, failed, maintain, push, rebooting,
+    taken,
 };
 
 /// The kernel the host runs.
@@ -113,8 +114,8 @@ impl Facts {
         }
     }
 
-    /// The host of fakes answering these facts, every kind of `applied` recorded applied.
-    fn host(self, effects: &Effects, applied: &[Kind]) -> Host {
+    /// The check over fakes answering these facts, each logging to `effects`.
+    fn check(self, effects: &Effects) -> LinuxCheck {
         let collector =
             |name: &'static str, answer: Result<Section, String>| -> Box<dyn Collector> {
                 Box::new(FakeCollector {
@@ -123,7 +124,7 @@ impl Facts {
                     effects: effects.clone(),
                 })
             };
-        let check = LinuxCheck::new(
+        LinuxCheck::new(
             collector("host", self.host),
             collector("reboot", self.reboot),
             self.packages.map(|answer| collector("packages", answer)),
@@ -135,9 +136,18 @@ impl Facts {
                 answer: self.services,
                 effects: effects.clone(),
             }),
-        );
+        )
+    }
+
+    /// The host of fakes answering these facts, the kinds' other steps stubs, every kind of
+    /// `applied` recorded applied.
+    fn host(self, effects: &Effects, applied: &[Kind]) -> Host {
         let host = Host {
-            kinds: linux::kinds(check),
+            kinds: linux::kinds(
+                self.check(effects),
+                Box::new(Unsupported(Kind::Linux)),
+                Box::new(Unsupported(Kind::Reboot)),
+            ),
             ..Host::new(effects, Vec::new())
         };
         host.boot.set(BOOT_B);
@@ -288,11 +298,7 @@ fn verify_compares_the_boot_with_the_one_the_cutover_recorded_its_reboot_in() {
     let effects = Effects::default();
     let host = Host::new(
         &effects,
-        vec![support_maintenance::FakeKind::rebooting(
-            Kind::Linux,
-            NEWER,
-            &effects,
-        )],
+        vec![FakeKind::rebooting(Kind::Linux, NEWER, &effects)],
     );
     let kinds = [WireKind::Linux];
     assert_eq!(host.run(HookStep::Cutover, &kinds), rebooting("linux"));
@@ -610,4 +616,59 @@ fn a_fact_that_cannot_be_read_fails_verify_naming_it() {
         assert_eq!(ended, failed(reason, detail));
         assert_eq!(ended.outcome, Outcome::Failure);
     }
+}
+
+/// Proves: the Linux kinds put the check in front of the work they are given: `prepare`,
+/// `cutover` and `after_reboot` are the work's (a cutover across a reboot records the version the
+/// work answers after it), and `verify` is the check's, the work's own `verify` never asked.
+///
+/// Catches: the check wired in place of the install, or the install's stub `verify` left in
+/// front of the check, either of which leaves a host never updated or never checked.
+#[test]
+fn the_check_is_put_in_front_of_the_work_of_each_kind() {
+    let effects = Effects::default();
+    let mut linux_work = FakeKind::rebooting(Kind::Linux, NEWER, &effects);
+    linux_work.verify = Err(KindError::Failed {
+        reason: "work_verify",
+        detail: "the work's verify was asked".to_owned(),
+    });
+    let reboot_work = FakeKind::applying(Kind::Reboot, NEWER, &effects);
+    let host = Host {
+        kinds: linux::kinds(
+            Facts::good().check(&effects),
+            Box::new(linux_work),
+            Box::new(reboot_work),
+        ),
+        ..Host::new(&effects, Vec::new())
+    };
+    let kinds = [WireKind::Linux];
+    assert_eq!(
+        host.run(HookStep::Prepare, &[WireKind::Linux, WireKind::Reboot]),
+        done()
+    );
+    assert_eq!(taken(&effects), ["linux prepare", "reboot prepare"]);
+    assert_eq!(host.run(HookStep::Cutover, &kinds), rebooting("linux"));
+    host.boot.set(BOOT_B);
+    assert_eq!(host.run(HookStep::Cutover, &kinds), done());
+    assert_eq!(
+        taken(&effects),
+        [
+            "linux cutover".to_owned(),
+            format!("record {RUN} linux reboot_under_way {BOOT_A}"),
+            "reboot".to_owned(),
+            "linux after_reboot".to_owned(),
+            format!("record {RUN} linux applied {NEWER}"),
+        ]
+    );
+    assert_eq!(host.run(HookStep::Verify, &kinds), done());
+    assert_eq!(
+        taken(&effects),
+        [
+            "host Security []",
+            "reboot Security []",
+            "own packages",
+            "packages Security [hostkeeper,js-agent]",
+            "services",
+        ]
+    );
 }
