@@ -8,6 +8,7 @@ mod support_maintenance;
 use std::io::{self, Read};
 use std::path::PathBuf;
 
+use hostkeeper_daemon::cli::DEFAULT_PACKAGE_LOCK_WAIT_SECS;
 use hostkeeper_daemon::maintenance_hook::{
     HookArgs, HookPorts, HookStep, Kind, KindError, KindState, REASON_BOOT_ID_UNREADABLE,
     REASON_REBOOT_FAILED, REASON_RUN_RECORD_FAILED, REASON_UNSUPPORTED_KIND, RecordError, Unwired,
@@ -205,6 +206,7 @@ fn unreadable_parameters_fail_and_run_nothing() {
     let args = HookArgs {
         step: HookStep::Prepare,
         params: PathBuf::from("-"),
+        package_lock_wait_secs: DEFAULT_PACKAGE_LOCK_WAIT_SECS,
     };
     let mut stdout = Vec::new();
     let outcome = main_with(&args, &host.ports(), &mut Broken, &mut stdout);
