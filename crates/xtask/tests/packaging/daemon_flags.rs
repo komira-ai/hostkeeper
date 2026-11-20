@@ -38,7 +38,9 @@ pub fn parse(words: &[String]) -> Result<Command, String> {
 
 /// The flags of a command line of the daemon, as the binary parses them ([`parse`]).
 pub fn parse_flags(words: &[String]) -> Result<DaemonFlags, String> {
-    let Command::Daemon(flags) = parse(words)?;
+    let Command::Daemon(flags) = parse(words)? else {
+        return Err("the command line is not `hostkeeper daemon`".to_owned());
+    };
     Ok(flags)
 }
 

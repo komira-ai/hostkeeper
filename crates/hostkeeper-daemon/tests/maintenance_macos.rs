@@ -66,7 +66,9 @@ fn reported(
 ) -> pb::MaintenanceReport {
     let mut line = vec!["hostkeeper", "daemon"];
     line.extend_from_slice(argv);
-    let Command::Daemon(flags) = Cli::try_parse_from(line).expect("the flags parse").command;
+    let Command::Daemon(flags) = Cli::try_parse_from(line).expect("the flags parse").command else {
+        panic!("`hostkeeper daemon` is the daemon verb");
+    };
 
     let rig = Rig::new(name);
     let daemon = Arc::new(Daemon::new(

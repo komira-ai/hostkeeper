@@ -1,4 +1,6 @@
-//! The command line of the `hostkeeper` binary: `hostkeeper daemon` and its flags.
+//! The command line of the `hostkeeper` binary: `hostkeeper daemon` and its flags, and
+//! `hostkeeper maintenance-hook`, the maintenance hook the daemon runs as a step
+//! ([`crate::maintenance_hook`]), which exits with the hook contract's codes.
 //! Configuration comes in as flags only, never from the environment (AGENTS.md S2); every
 //! default is a constant here.
 //!
@@ -69,6 +71,7 @@ use crate::links::{DaemonLog, HostLink, Links};
 use crate::mac::HostIoreg;
 use crate::maintenance_collect::{Collector, LinuxScope};
 use crate::maintenance_facts::MaintenanceFacts;
+use crate::maintenance_hook::HookArgs;
 use crate::maintenance_softwareupdate::MacosMajor;
 use crate::notify::{
     NoNotifier, NoWatchdog, ReadyFile, ReadyNotifier, SystemdNotifier, SystemdWatchdog, Watchdog,
@@ -149,6 +152,9 @@ pub struct Cli {
 pub enum Command {
     /// Run the daemon: the one root process of the host.
     Daemon(DaemonFlags),
+    /// Run a step of the maintenance hook: the OS work of a maintenance run, which the daemon
+    /// runs as it runs a hook's step.
+    MaintenanceHook(HookArgs),
 }
 
 /// The flags of `hostkeeper daemon`.
@@ -253,15 +259,16 @@ pub fn run_from(
     exec: crate::packaged::Exec<'_>,
 ) -> ExitCode {
     let cli = Cli::parse_from(&args);
-    let Command::Daemon(flags) = &cli.command;
-    if let Some(error) = crate::packaged::start(
-        exe,
-        packaged,
-        &flags.state_dir,
-        env!("CARGO_PKG_VERSION"),
-        args.get(1..).unwrap_or_default(),
-        exec,
-    ) {
+    if let Command::Daemon(flags) = &cli.command
+        && let Some(error) = crate::packaged::start(
+            exe,
+            packaged,
+            &flags.state_dir,
+            env!("CARGO_PKG_VERSION"),
+            args.get(1..).unwrap_or_default(),
+            exec,
+        )
+    {
         eprintln!("hostkeeper daemon: {error}");
         return ExitCode::from(error.exit_code());
     }
@@ -287,9 +294,15 @@ pub fn run(cli: Cli) -> ExitCode {
 }
 
 /// Runs a parsed command line to its exit status; `systemd` is what systemd set for the process,
-/// used with `--notify-systemd` only.
+/// used with `--notify-systemd` only. `maintenance-hook` runs its step on this host
+/// ([`crate::maintenance_hook::host_main`]) and exits with the step's outcome.
 pub fn run_with(cli: Cli, systemd: SystemdVars) -> ExitCode {
-    let Command::Daemon(flags) = cli.command;
+    let flags = match cli.command {
+        Command::Daemon(flags) => flags,
+        Command::MaintenanceHook(args) => {
+            return ExitCode::from(crate::maintenance_hook::host_main(&args));
+        }
+    };
     let period = flags.link.heartbeat_secs;
     let watchdog = watchdog(&flags, &systemd);
     let served = notifier(&flags, systemd.notify_socket).and_then(|notifier| {

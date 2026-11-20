@@ -373,9 +373,12 @@ changes keep it so:
   `[hook] resume`, as it names `[hook] boot` today (Built: `crates/hostkeeper-config/src/manifest.rs`). `drain` takes the service out of
   service and returns when it has no work; `resume` puts it back. Both are safe to run twice. A package that names neither is left alone.
   The conformance harness (Built: `hostkeeper-hook`'s `conformance` feature) gains checks for them.
-- **The maintenance hook (New).** The OS work is a hook too, a subcommand of hostkeeper's own binary, `hostkeeper maintenance-hook
-  <step>`, launched the way the step runner launches a step (Built: `hostkeeper_steps` launchers: a transient systemd unit, a launchd job on a
-  Mac, a process group under OpenRC).
+- **The maintenance hook (Built: the command and its skeleton, `crates/hostkeeper-daemon/src/maintenance_hook.rs`; each kind's work
+  New).** The OS work is a hook too, a subcommand of hostkeeper's own binary, `hostkeeper maintenance-hook <prepare|cutover|verify>
+  --params <file>`, launched the way the step runner launches a step (Built: `hostkeeper_steps` launchers: a transient systemd unit, a
+  launchd job on a Mac, a process group under OpenRC). Its parameters are the `maintain` order's fields as JSON, in a file or on standard
+  input (`--params -`), never in an argument. Each kind is the work of a `MaintenanceKind`, found by the host's platform; until a kind's
+  work is written its step fails `unsupported_kind`.
 
 The step runner's sequence does not fit as it stands: it runs `rollback` after a failed `prepare`, `cutover` or `verify`, its reboot row
 restarts a new release's units, and only `prepare` may run unbounded (Built: `hostkeeper-hook` `next.rs`, `hostkeeper-steps`
@@ -387,7 +390,7 @@ after each step, so a crash, a reboot or a daemon that restarts as a newer relea
 |---|---|---|---|
 | 1 | stage | maintenance hook `prepare`: check free space (twice the download, at least), then download what can be downloaded (`softwareupdate --download`, `softwareupdate --fetch-full-installer` for a major upgrade, `apt-get --download-only`, `dnf --downloadonly`, the Xcode archive copied from the store and expanded into staging) | deferred: nothing was touched, the host never left service; the run goes on |
 | 2 | drain | each installed service's `drain`, in the group's package order, unbounded unless the run sets a deadline (5.3). js-agent's cordons the host and waits for its leases to end | halt (5.4) |
-| 3 | apply | maintenance hook `cutover <kind>`, once per kind of the run, macOS first (section 5.5). When a kind needs a reboot (`Action: restart`, `reboot-required`, a new kernel), the hook records that the kind's reboot is under way, then reboots (on a Mac, section 5.5: `softwareupdate --install ... --restart`; with FileVault on, `--install` then `fdesetup authrestart`; `startosinstall` for a major upgrade; or only a wait when device management installs it; `systemctl reboot`, or OpenRC's `reboot`, on Linux). After the reboot the daemon reads the record and the changed boot id, records the kind applied once it reads the new version, and goes on with the next kind. A major upgrade on a Mac with FileVault on is not ordered until MP shows `startosinstall` restarts it authenticated | halt; `maintenance_not_back` when silent past `return_secs` |
+| 3 | apply | maintenance hook `cutover`, which applies each kind of the run once (by the run record), macOS first (section 5.5). When a kind needs a reboot (`Action: restart`, `reboot-required`, a new kernel), the hook records that the kind's reboot is under way, then reboots (on a Mac, section 5.5: `softwareupdate --install ... --restart`; with FileVault on, `--install` then `fdesetup authrestart`; `startosinstall` for a major upgrade; or only a wait when device management installs it; `systemctl reboot`, or OpenRC's `reboot`, on Linux). After the reboot the daemon runs `cutover` again: it reads the record and the changed boot id, records the kind applied once it reads the new version, and goes on with the next kind, never installing the first again. A major upgrade on a Mac with FileVault on is not ordered until MP shows `startosinstall` restarts it authenticated | halt; `maintenance_not_back` when silent past `return_secs` |
 | 4 | check | maintenance hook `verify` (section 5.6) | halt |
 | 5 | put back | each drained service's `resume`, in reverse order. js-agent's re-reads its facts (the new Xcode set) and then uncordons | halt |
 | 6 | done | the run record is closed; the next heartbeat's report shows nothing due of the kinds run | |

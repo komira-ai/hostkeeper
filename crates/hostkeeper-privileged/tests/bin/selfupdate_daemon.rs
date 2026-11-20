@@ -144,7 +144,9 @@ fn main() -> ExitCode {
         Ok(cli) => cli,
         Err(error) => error.exit(),
     };
-    let Command::Daemon(flags) = cli.command;
+    let Command::Daemon(flags) = cli.command else {
+        return usage("`daemon` is the only verb of this program");
+    };
     daemon_verb(&fixture, &flags)
 }
 
