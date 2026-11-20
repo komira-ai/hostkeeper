@@ -36,7 +36,8 @@ message AuditEntry {
   // layout `layout_name_put`, `layout_row_add`, `layout_row_remove`, `layout_rack_put`, `layout_rack_remove`,
   // `layout_place`, `layout_unplace`; and from a coordinator that runs maintenance
   // `maintenance_schedule`, `maintenance_cancel`, `maintenance_retry_host`,
-  // `maintenance_put_back`). Open: a later coordinator adds
+  // `maintenance_put_back`, and the coordinator's `maintenance_start` and `maintenance_step`).
+  // Open: a later coordinator adds
   // actions.
   string action = 3;
   // The service, when the change is about one.

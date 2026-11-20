@@ -116,7 +116,7 @@ fn put_reason(old: Option<&HostGroup>, new: &HostGroup, why: &str) -> String {
 impl Coordinator {
     /// The group of every enrolled host: node id and membership, by node id; none without
     /// enrollment.
-    fn memberships(&self) -> Result<Vec<(String, Membership)>, Refusal> {
+    pub(crate) fn memberships(&self) -> Result<Vec<(String, Membership)>, Refusal> {
         let Some(enrollment) = self.enrollment() else {
             return Ok(Vec::new());
         };

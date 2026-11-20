@@ -2,7 +2,7 @@
 //! section 8), of the MDM setup's (`docs/design/coordinator-mdm.md`, section 4.9, the `mdm_*`
 //! ones), of the console's (`docs/design/console-broker.md`, decision D4), of the Xcode store's
 //! (`xcode_put`, `xcode_remove`) and of the maintenance runs' (`maintenance_schedule`,
-//! `maintenance_cancel`). Each is an additive string of the existing `action` field; `by` and
+//! `maintenance_cancel`, and the coordinator's `maintenance_start` and `maintenance_step`). Each is an additive string of the existing `action` field; `by` and
 //! `subject` say who did it and whom or what it concerned.
 //!
 //! The console's lines change no operations state: they are appended with
@@ -113,6 +113,15 @@ pub const MAINTENANCE_SCHEDULE: &str = "maintenance_schedule";
 /// An operator's `Maintenance.Cancel` cancelled a run: the reason is the operator's followed by
 /// `run <id>`.
 pub const MAINTENANCE_CANCEL: &str = "maintenance_cancel";
+/// The coordinator started a host's turn of a run: it sent the host the run's `maintain` and
+/// stored its step as `staging` (`crate::decide_maintenance`). By `coordinator`, with the host as
+/// the entry's `node_id`, its group as its `host_group` when it is in one, and the reason
+/// `run <id>`.
+pub const MAINTENANCE_START: &str = "maintenance_start";
+/// A host's daemon reported its turn of a run at another step, or with other kinds applied or
+/// another reason, and the coordinator stored it. By `coordinator`, with the host as the entry's
+/// `node_id`, its group as its `host_group` when it is in one, and the reason `run <id> <step>`.
+pub const MAINTENANCE_STEP: &str = "maintenance_step";
 
 /// The action of an audit line that changes no operations state: one of the console's, which
 /// [`crate::ops::OpsStore::append_audit_only`] appends outside the `/v1/status` ring.
