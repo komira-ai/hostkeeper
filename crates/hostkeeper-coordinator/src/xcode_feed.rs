@@ -227,7 +227,7 @@ fn release_of(entry: Entry) -> Option<XcodeRelease> {
             && text.len() <= 32
             && text.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.')
     };
-    (fits(&build) && fits(&requires)).then(|| XcodeRelease {
+    (fits(&build) && fits(&requires)).then_some(XcodeRelease {
         id: XcodeId {
             version: number,
             build,
@@ -238,7 +238,7 @@ fn release_of(entry: Entry) -> Option<XcodeRelease> {
 }
 
 /// The releases of the list `body` (the Xcode Releases site's `data.json`): of each entry its
-/// `version.number`, `version.build`, the one key of `version.release` and `requires`, and nothing
+/// version's `number`, its `build`, the one key of its `release`, and `requires`, and nothing
 /// else. An entry that lacks one, or whose release type is not `release`, `beta`, `dp`, `rc`,
 /// `gm` or `gmSeed`, is left out and counted.
 ///
@@ -586,14 +586,15 @@ impl Coordinator {
 /// once, then every `every`, for as long as the future is polled. Without `--xcode-feed-url` it
 /// reads nothing and waits for ever. It never returns.
 pub(crate) async fn read_every(coordinator: Arc<Coordinator>, every: Duration) -> Infallible {
-    if !coordinator.reads_xcode_feed() {
-        return std::future::pending().await;
-    }
-    let mut ticks = tokio::time::interval(every);
-    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    loop {
-        ticks.tick().await;
-        coordinator.xcode_feed_job().await;
+    if coordinator.reads_xcode_feed() {
+        let mut ticks = tokio::time::interval(every);
+        ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            ticks.tick().await;
+            coordinator.xcode_feed_job().await;
+        }
+    } else {
+        std::future::pending().await
     }
 }
 

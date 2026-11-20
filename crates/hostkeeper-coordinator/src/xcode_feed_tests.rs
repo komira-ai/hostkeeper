@@ -286,7 +286,7 @@ fn versions_are_ordered_by_their_numbers() {
 fn a_version_keeps_its_text() {
     assert_eq!(version("16.4.1").as_str(), "16.4.1");
     assert_eq!(version("27").to_string(), "27");
-    assert_eq!(version("1.2.3.4").to_string(), "1.2.3.4");
+    assert_eq!(version("16.4.1.1000").to_string(), "16.4.1.1000");
 }
 
 /// Proves: a version that is empty, ends in a dot, has a part that is not decimal digits (letters,
@@ -314,7 +314,7 @@ fn a_bad_version_is_refused() {
         );
     }
     assert!(XcodeVersion::parse("4294967295").is_ok());
-    assert!(XcodeVersion::parse("1.2.3.4").is_ok());
+    assert!(XcodeVersion::parse("16.4.1.1000").is_ok());
 }
 
 /// Proves: a channel has the token `release`, `beta` or `rc`, and the store's token is read back to
@@ -440,7 +440,7 @@ fn a_feed_url_is_a_base_and_a_file() {
 }
 
 /// Proves: `http://`, a query, a user, a fragment, a text that is no URL and an address with no
-/// file (`https://h/`, `https://h`) are each refused with the error that names it.
+/// file (`https://h.example/`, `https://h.example`) are each refused with the error that names it.
 ///
 /// Catches: a list read over plain HTTP, or an address whose file was lost, which would read the
 /// host's root page.
