@@ -46,7 +46,9 @@ use crate::host_facts::PushedFacts;
 use crate::host_ssh::{PushedSsh, SshReport};
 use crate::names::{OrderId, PackageDigest};
 use crate::operator_keys::{KeysReport, PushedKeys};
-use crate::order::{DeferredReport, Entry, Order, OrderResult, Outcome, Reply, Target, Verb};
+use crate::order::{
+    DeferredReport, Entry, MaintainOrder, Order, OrderResult, Outcome, Reply, Target, Verb,
+};
 use crate::ports::{Drift, Unsendable};
 use crate::prerequisites::{
     PrerequisiteState, PrerequisiteStatus, PrerequisitesReport, PushedPrerequisites,
@@ -56,8 +58,7 @@ use crate::repositories::{PushedSet, RepositoriesReport};
 use crate::wire_map::acknowledged;
 
 /// Why an order whose verb the daemon does not run, or that has none, is not run.
-pub(crate) const NOT_RUN: &str =
-    "the daemon runs only update, force, install, uninstall, abort and clear_record orders";
+pub(crate) const NOT_RUN: &str = "the daemon runs only update, force, install, uninstall, abort, clear_record and maintain orders";
 /// Why an order whose words the daemon's grammars refuse is not run.
 pub(crate) const NOT_READ: &str =
     "its service, version, order id or digest is not one the daemon reads";
@@ -408,9 +409,33 @@ pub(crate) fn reply(response: pb::HeartbeatResponse) -> Mapped {
         .iter()
         .filter_map(|ack| acknowledged(&ack.service, &ack.order_id, ack.order_try))
         .collect();
-    let (order, dropped) = match order {
-        Some(order) => order_of(order),
-        None => (None, None),
+    let (order, maintain, dropped) = match order {
+        Some(pb::Order {
+            order_id,
+            r#try: order_try,
+            verb: Some(pb::order::Verb::Maintain(maintain)),
+        }) => match OrderId::new(&order_id) {
+            Ok(id) => {
+                let order = MaintainOrder {
+                    id,
+                    order_try,
+                    maintain,
+                };
+                (None, Some(order), None)
+            }
+            Err(_) => {
+                let dropped = Dropped {
+                    what: format!("maintain order {order_id:?}"),
+                    why: NOT_READ,
+                };
+                (None, None, Some(dropped))
+            }
+        },
+        Some(order) => {
+            let (order, dropped) = order_of(order);
+            (order, None, dropped)
+        }
+        None => (None, None, None),
     };
     Mapped {
         reply: Reply {
@@ -438,6 +463,7 @@ pub(crate) fn reply(response: pb::HeartbeatResponse) -> Mapped {
                 digest: set.digest,
                 names: set.names,
             }),
+            maintain,
         },
         dropped,
     }
