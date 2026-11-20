@@ -335,10 +335,12 @@ impl XcodeStore {
             serde_json::from_slice(&text).map_err(|why| invalid(why.to_string()))?;
         let version =
             XcodeVersion::parse(&record.version).map_err(|why| invalid(why.to_string()))?;
-        match fs::metadata(self.archive_path(sha256)) {
-            Ok(_) => {}
-            Err(why) if why.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(why) => return Err(Self::io(&self.archive_path(sha256), why)),
+        let archive = self.archive_path(sha256);
+        if !archive
+            .try_exists()
+            .map_err(|why| Self::io(&archive, why))?
+        {
+            return Ok(None);
         }
         Ok(Some(Archive {
             sha256: sha256.to_owned(),

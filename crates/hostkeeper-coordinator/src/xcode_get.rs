@@ -173,20 +173,29 @@ fn caller(coordinator: &Coordinator, peer: &Peer) -> Result<Identity, &'static s
 /// The file being read: where it stands and how much of it is left to give.
 struct Reading {
     file: File,
+    /// Where the first read starts; 0 once the file is there.
+    from: u64,
     left: u64,
     /// Keeps the connection while the body is read.
     _hold: Option<ConnectionHold>,
 }
 
-/// The body of `reading`: its next bytes, at most [`CHUNK`] a frame, until none is left. A read
-/// that fails, or a file that ends early, ends the body with an error.
+/// The body of `reading`: its next bytes, at most [`CHUNK`] a frame, from its start until none is
+/// left. A seek or a read that fails, or a file that ends early, ends the body with an error.
 fn body_of(reading: Reading) -> RouteBody {
     let frames = stream::unfold(reading, |mut reading| async move {
         if reading.left == 0 {
             return None;
         }
         let mut chunk = vec![0_u8; usize::try_from(reading.left.min(CHUNK)).unwrap_or(0)];
-        let read = match reading.file.read(&mut chunk).await {
+        let read = async {
+            if reading.from > 0 {
+                reading.file.seek(SeekFrom::Start(reading.from)).await?;
+                reading.from = 0;
+            }
+            reading.file.read(&mut chunk).await
+        };
+        let read = match read.await {
             Ok(0) => Err(io::Error::from(io::ErrorKind::UnexpectedEof)),
             other => other,
         };
@@ -263,7 +272,7 @@ async fn serve(
         let size = file.metadata().await?.len();
         Ok::<_, io::Error>((file, size))
     };
-    let (mut file, size) = match opened.await {
+    let (file, size) = match opened.await {
         Ok(opened) => opened,
         Err(why) if why.kind() == io::ErrorKind::NotFound => {
             return refused(StatusCode::NOT_FOUND, "not_found");
@@ -292,12 +301,6 @@ async fn serve(
             );
         }
     };
-    if first > 0
-        && let Err(why) = file.seek(SeekFrom::Start(first)).await
-    {
-        tracing::error!(%why, path = %path.display(), "an Xcode archive could not be read");
-        return refused(StatusCode::INTERNAL_SERVER_ERROR, "store_failed");
-    }
     let mut builder = Response::builder()
         .status(status)
         .header(ACCEPT_RANGES, "bytes")
@@ -311,6 +314,7 @@ async fn serve(
         builder,
         body_of(Reading {
             file,
+            from: first,
             left: length,
             _hold: hold,
         }),

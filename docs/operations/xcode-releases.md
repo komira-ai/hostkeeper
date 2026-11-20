@@ -95,7 +95,7 @@ application/octet-stream`, `Accept-Ranges: bytes`, `ETag: "<sha256>"` and the fi
 ## What stays: the prune
 
 The store keeps the newest releases, as many as the largest `xcode_keep` of any host group's maintenance
-policy (and at least one), and removes the rest, oldest first. A release older than those the store keeps
+policy (and at least one), and removes the rest, newest first, each removal audited before it is made. A release older than those the store keeps
 is refused `not_kept` when it is pushed, before its body is read and again under the store's lock
 before it is stored, so the release just pushed always stays. A
 release a host reports installed is never removed; no host reports its installed Xcodes yet, so today

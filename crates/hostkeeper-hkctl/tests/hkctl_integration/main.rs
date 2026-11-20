@@ -22,7 +22,9 @@
 //!   the script took and the path of the token file, and the methods of the service `ssh`, which
 //!   stay gateway calls;
 //! - `surface`: the curl arguments, the hold of a `wait_secs` field, the help, the version, the
-//!   global flags' usage errors, and a new RPC of the fixture appearing with no edit.
+//!   global flags' usage errors, and a new RPC of the fixture appearing with no edit;
+//! - `xcode`: `xcode list` and `xcode remove`: the path each posts to, the body curl reads, the
+//!   answer and the refusal `unknown_archive`.
 
 mod accounts;
 mod answers;
@@ -39,3 +41,4 @@ mod services_repository;
 mod ssh;
 mod ssh_methods;
 mod surface;
+mod xcode;

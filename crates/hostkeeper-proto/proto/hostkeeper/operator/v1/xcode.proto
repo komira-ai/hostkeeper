@@ -19,8 +19,11 @@
 //
 // Refusals: a gRPC status whose message is exactly one token of `XcodeRefusal`, written as the
 // value's name without the prefix, in lower case; the status code is the one each value names. A
-// refused request changes nothing; a call that cannot write its audit line changes nothing
-// either (`audit_unavailable`).
+// call refused for its credential or its request (`unauthorized`, `forbidden`,
+// `invalid_request`, `no_store`, `unknown_archive`) changes nothing, and so does one that cannot
+// write its audit line (`audit_unavailable`). A `Remove` whose files cannot be removed after its
+// audit line is written is `store_failed`: the line stands, and the archive may be partly
+// removed (its file gone, its record left).
 //
 // Units: as operator.proto says; times are unix seconds and sizes are bytes. A SHA-256 is 64
 // lower-case hex characters, that of the archive's bytes. A version is the digits and dots of
