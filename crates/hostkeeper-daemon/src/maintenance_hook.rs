@@ -26,6 +26,13 @@
 //! - `verify` fails `not_applied` for a kind the run record does not hold applied, and otherwise
 //!   runs each kind's `verify`.
 //!
+//! **Run record.** The record is the maintenance run record in the directory of the `--params` file
+//! ([`StoreRecord`]), where the daemon puts the parameters; with the parameters on standard input
+//! there is no such directory and the record is [`Unwired`]. The daemon's sequencer
+//! ([`crate::maintenance_run`]) launches `cutover` with the parameters of one kind at a time, and
+//! applies a kind whose reboot was under way itself once it reads a new boot id: it launches no
+//! `cutover` after the reboot, except on the same boot, to ask for the reboot again.
+//!
 //! **Outcome.** The exit code is the hook contract's: `0` done, `75` deferred (the kind touched
 //! nothing), `1` failed. The last line of standard output is the contract's JSON report: the
 //! reason a token, the detail at most [`MAX_DETAIL`] bytes.
@@ -34,6 +41,7 @@ mod kind;
 mod params;
 mod ports;
 mod registry;
+mod store;
 
 use std::fs::File;
 use std::io::{self, Read, Write};
@@ -49,6 +57,8 @@ pub use kind::{Cutover, KindError, MaintenanceKind, REASON_UNSUPPORTED_KIND, Uns
 pub use params::{Kind, MAX_PARAMS_BYTES, MaintainParams, ParamsError};
 pub use ports::{KindState, RebootError, Rebooter, RecordError, RunRecord, Unwired};
 pub use registry::Registry;
+pub use store::StoreRecord;
+pub(crate) use store::record_kind;
 
 /// The `--params` that names standard input.
 pub const STDIN_PARAMS: &str = "-";
@@ -178,15 +188,19 @@ fn bounded(detail: &str) -> String {
 }
 
 /// `hostkeeper maintenance-hook` on this host: the kinds of its platform, the boot id of the
-/// system the binary was built for, and no run record or reboot yet ([`Unwired`]); the parameters
-/// from the file `args` names or from the process's standard input, the report to its standard
-/// output.
+/// system the binary was built for, the run record beside the parameters file
+/// ([`StoreRecord::beside_params`]; with the parameters on standard input there is none and the
+/// record is [`Unwired`]) and no reboot yet ([`Unwired`]); the parameters from the file `args`
+/// names or from the process's standard input, the report to its standard output.
 pub fn host_main(args: &HookArgs) -> Outcome {
     let kinds = Registry::for_platform(Platform::host().kind);
     let boot_id = crate::adapters::host_boot_id();
+    let store_record = StoreRecord::beside_params(&args.params);
     let ports = HookPorts {
         kinds: &kinds,
-        record: &Unwired,
+        record: store_record
+            .as_ref()
+            .map_or(&Unwired as &dyn RunRecord, |r| r as &dyn RunRecord),
         rebooter: &Unwired,
         boot_id: boot_id.as_ref(),
     };

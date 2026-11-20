@@ -839,7 +839,8 @@ message Order {
     // a daemon that announced `clear-record-v1`.
     ClearRecord clear_record = 10;
     // Run, retry or put back the host's turn of a maintenance run (maintenance.proto). Only for a
-    // daemon that announced `maintenance-v1`; this release's daemon runs none.
+    // daemon that announced `maintenance-v1`; this release's daemon runs `RUN` and refuses the
+    // other actions `order_invalid`.
     Maintain maintain = 11;
   }
 }

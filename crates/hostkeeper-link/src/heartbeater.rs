@@ -116,12 +116,14 @@ use crate::deferral::{Book, Deferral};
 use crate::host_facts::PushedFacts;
 use crate::host_ssh::PushedSsh;
 use crate::names::Reason;
-use crate::order::{Acknowledged, Order, OrderRef, OrderResult, Outcome, Reply, Verb};
+use crate::order::{
+    Acknowledged, MaintainOrder, Order, OrderRef, OrderResult, Outcome, Reply, Verb,
+};
 use crate::ports::{
     BmcSource, CertSource, CertState, CoordinatorLink, Dispatch, FactsSink, HeldHalts, LinkError,
-    Log, MaintenanceSource, OperatorKeysSink, OrderSink, PrerequisitesSink, RecordedService,
-    RemoteLoginProbeSource, RenewalSource, RepositorySink, ServiceObserver, ServiceRecords,
-    Sleeper, SshSink, Tick, TrustedRootSource, UnixClock,
+    Log, MaintainSink, MaintenanceSource, OperatorKeysSink, OrderSink, PrerequisitesSink,
+    RecordedService, RemoteLoginProbeSource, RenewalSource, RepositorySink, ServiceObserver,
+    ServiceRecords, Sleeper, SshSink, Tick, TrustedRootSource, UnixClock,
 };
 
 /// The period when the daemon is given none: 15 seconds.
@@ -199,8 +201,12 @@ pub struct Ports {
     /// The host's BMC; none on a host whose daemon reads none (a Mac), which then sends none.
     pub bmc: Option<Arc<dyn BmcSource>>,
     /// The host's maintenance facts; none on a host that reads none (a Mac, for now), which then
-    /// announces no `maintenance-v1` and sends no report.
+    /// announces no `maintenance-v1` and sends no report; nor does a host with no
+    /// [`Ports::maintain`].
     pub maintenance: Option<Arc<dyn MaintenanceSource>>,
+    /// The daemon's runner of `maintain` orders; none on a host that runs none, which then
+    /// announces no `maintenance-v1`.
+    pub maintain: Option<Arc<dyn MaintainSink>>,
 }
 
 /// What one heartbeat came to.
@@ -587,7 +593,7 @@ impl Heartbeater {
                 .ports
                 .maintenance
                 .as_ref()
-                .filter(|_| self.advertised.has(Feature::MaintenanceV1))
+                .filter(|_| self.maintains())
                 .map(|source| source.report()),
         })
     }
@@ -600,8 +606,9 @@ impl Heartbeater {
     /// the coordinator's last reply advertised `ssh-v1`, and `maintenance-v1` when it reads the
     /// host's maintenance and the last reply advertised `maintenance-v1`: a coordinator of a
     /// release before `ssh-v1` reads at most 16 names and drops a longer list whole, and a daemon
-    /// with every port names 17 to it (18 to one that advertises `maintenance-v1`). It takes no
-    /// `maintain` order: the order is dropped unrun.
+    /// with every port names 17 to it (18 to one that advertises `maintenance-v1`). A daemon that
+    /// reads the host's maintenance but has no runner of `maintain` orders announces no
+    /// `maintenance-v1`.
     fn announced(&self) -> Vec<Feature> {
         let mut features = ANNOUNCED.to_vec();
         if self.ports.repositories.is_some() {
@@ -622,10 +629,18 @@ impl Heartbeater {
         if self.ports.ssh.is_some() && self.advertised.has(Feature::SshV1) {
             features.push(SSH);
         }
-        if self.ports.maintenance.is_some() && self.advertised.has(Feature::MaintenanceV1) {
+        if self.maintains() {
             features.push(MAINTENANCE);
         }
         features
+    }
+
+    /// Whether the heartbeat announces `maintenance-v1` and sends the maintenance report: the
+    /// host reads its maintenance and runs `maintain` orders, and the last reply advertised it.
+    fn maintains(&self) -> bool {
+        self.ports.maintenance.is_some()
+            && self.ports.maintain.is_some()
+            && self.advertised.has(Feature::MaintenanceV1)
     }
 
     /// The verdict of `name` the heartbeat carries: of those not yet acknowledged, the oldest to
@@ -691,6 +706,7 @@ impl Heartbeater {
             operator_keys,
             ssh,
             prerequisites,
+            maintain,
         } = reply;
         self.advertised = Features::of(&features);
         let facts_held = self.write_facts(facts);
@@ -768,6 +784,9 @@ impl Heartbeater {
                     .collect(),
             );
         }
+        if let Some(order) = maintain {
+            self.give_maintain(order);
+        }
         if let Some(order) = order {
             if facts_held || matches!(order.verb, Verb::Abort(_)) {
                 self.dispatch(order);
@@ -780,6 +799,33 @@ impl Heartbeater {
                 ));
             }
         }
+    }
+
+    /// Hands a `maintain` order to the [`MaintainSink`] on a worker, when the reply advertises
+    /// `maintenance-v1` and the host has a sink; otherwise says it is not run. It touches no
+    /// service's order state and waits for no facts.
+    fn give_maintain(&self, order: MaintainOrder) {
+        let named = format!(
+            "maintain order {} try {}",
+            order.id.as_str(),
+            order.order_try
+        );
+        let Some(sink) = &self.ports.maintain else {
+            self.log(&format!(
+                "{named} is not run: this host has no runner of it"
+            ));
+            return;
+        };
+        if !self.advertised.has(Feature::MaintenanceV1) {
+            self.log(&format!(
+                "{named} is not run: the coordinator does not advertise maintenance-v1"
+            ));
+            return;
+        }
+        let sink = Arc::clone(sink);
+        self.ports
+            .dispatch
+            .start(Box::new(move || sink.maintain(&order)));
     }
 
     /// Gives the host's `facts` of a reply to the [`FactsSink`], when the reply advertises

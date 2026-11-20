@@ -58,9 +58,9 @@ use hostkeeper_config::names::Version;
 use hostkeeper_enroll::{Enroller, RETRY_SECS};
 use hostkeeper_link::{
     BmcSource, CertSource, ClientIdentity, CoordinatorLink, Dispatch, GrpcLinkError, GrpcMtlsLink,
-    Heartbeat, Heartbeater, JsonMtlsLink, LinkError, LoopConfig, MaintenanceSource, NegotiatedLink,
-    OperatorKeysSink, Platform, Ports, PrerequisitesSink, RemoteLoginProbeSource, Reply,
-    RepositorySink, Sleeper, SshSink, StopFlag, TcpDial, TcpTransport, Tick, UnixClock,
+    Heartbeat, Heartbeater, JsonMtlsLink, LinkError, LoopConfig, MaintainSink, MaintenanceSource,
+    NegotiatedLink, OperatorKeysSink, Platform, Ports, PrerequisitesSink, RemoteLoginProbeSource,
+    Reply, RepositorySink, Sleeper, SshSink, StopFlag, TcpDial, TcpTransport, Tick, UnixClock,
 };
 use hostkeeper_observe::ProcessRunner;
 use hostkeeper_observe::command::MAX_STDOUT;
@@ -71,7 +71,8 @@ use crate::executor::Daemon;
 use crate::facts_file::FactsFile;
 use crate::host_identity::HostIdentity;
 use crate::link_adapters::{
-    DaemonHalts, DaemonObserver, DaemonOrders, DaemonRecords, DaemonRenewal, NoTrustedRoot,
+    DaemonHalts, DaemonMaintain, DaemonObserver, DaemonOrders, DaemonRecords, DaemonRenewal,
+    NoTrustedRoot,
 };
 use crate::node::NodeState;
 use crate::notify::Watchdog;
@@ -153,7 +154,8 @@ pub struct Links {
     pub prerequisites: Option<Arc<dyn PrerequisitesSink>>,
     /// The host's maintenance facts ([`crate::maintenance_facts`]), which every heartbeat to a
     /// coordinator that advertises `maintenance-v1` reports. A daemon that has them announces
-    /// `maintenance-v1`; none on a host with no collector (a Mac today).
+    /// `maintenance-v1` and runs `maintain` orders ([`DaemonMaintain`]); none on a host with no
+    /// collector (a Mac today), which takes no `maintain` order.
     pub maintenance: Option<Arc<dyn MaintenanceSource>>,
     /// The host's BMC ([`crate::bmc`]), which every heartbeat reports; none on a Mac.
     pub bmc: Option<Arc<dyn BmcSource>>,
@@ -245,6 +247,9 @@ impl Links {
                 ssh: ssh_setup(PLATFORM, rustix::process::geteuid().as_raw(), &self.log),
                 prerequisites: self.prerequisites.clone(),
                 maintenance: self.maintenance.clone(),
+                maintain: self.maintenance.as_ref().map(|_| {
+                    Arc::new(DaemonMaintain::new(Arc::clone(daemon))) as Arc<dyn MaintainSink>
+                }),
                 bmc: self.bmc.clone(),
             },
         )
