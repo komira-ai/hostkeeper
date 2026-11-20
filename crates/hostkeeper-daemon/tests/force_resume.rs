@@ -238,8 +238,8 @@ fn versions(rig: &NativeHost) -> Vec<String> {
 }
 
 /// Catches a prune that is skipped after a switch, run without one, or allowed to change the
-/// verdict (design section 4.7). The test gives the force the host's prune behind a recorder: a
-/// force that moves `current` from 2.0.0 to 3.0.0 leaves 2.0.0 and 3.0.0 of three; a force to
+/// verdict (design section 4.7). The test gives the force the host's prune behind a recorder,
+/// keeping no newest others (`--keep-versions 0`): a force that moves `current` from 2.0.0 to 3.0.0 leaves 2.0.0 and 3.0.0 of three; a force to
 /// the version `current` names prunes nothing; and a prune that fails leaves the force
 /// `Succeeded`, with an alert.
 #[test]
@@ -253,7 +253,9 @@ fn force_prunes_to_current_and_previous_only_when_current_moved() {
     rig.forced(&daemon, "2.0.0", 2);
     assert_eq!(versions(&rig), ["1.0.0", "2.0.0"]);
     let pruner = RecordingPrune::new();
-    let pruning = rig.daemon_on(rig.placed_fs.clone(), pruner.clone());
+    let pruning = rig
+        .daemon_on(rig.placed_fs.clone(), pruner.clone())
+        .keeping_versions(0);
     assert_eq!(pruning.order(&rig.force(WEB, "3.0.0", 3, 0)), succeeded());
     assert_eq!(versions(&rig), ["2.0.0", "3.0.0"]);
     assert!(!rig.packages.join(WEB).join("1.0.0.seal").exists());

@@ -1,7 +1,9 @@
 //! The prune after a confirmed switch (design sections 4.7, 5.6 step 18 and 8.7): an update that
 //! ends `Succeeded` and a force that moved `current` prune the service's package directory to
 //! `current` and `previous`, under the service's lock alone, keeping what the records still use;
-//! nothing else prunes.
+//! nothing else prunes. Every daemon here keeps no newest others (`--keep-versions 0`), so what is
+//! left is exactly what these reasons keep; the pin, the newest others and the trial are
+//! `prune_keep.rs`.
 
 mod support;
 mod support_apt;
@@ -51,7 +53,7 @@ fn daemon_on(farm: &NativeHost, fs: Arc<FaultFs>, prune: Arc<dyn Prune>) -> Daem
         prune,
         ..farm.ports()
     };
-    Daemon::new(config(), farm.rig().dirs(), ports, OWN)
+    Daemon::new(config(), farm.rig().dirs(), ports, OWN).keeping_versions(0)
 }
 
 /// A daemon on the host whose prune is the host's, behind a recorder.
@@ -169,7 +171,7 @@ fn a_confirmed_switch_leaves_exactly_current_and_previous() {
         prune: Arc::new(LayoutPrune),
         ..rig.ports()
     };
-    let daemon = Daemon::new(config(), rig.dirs(), ports, OWN);
+    let daemon = Daemon::new(config(), rig.dirs(), ports, OWN).keeping_versions(0);
     let ctx = daemon.ctx();
     let service = name(WEB);
     let layout = Layout::package(&rig.packages.join(WEB));
@@ -320,7 +322,7 @@ fn racing(farm: &NativeHost) -> (Arc<Daemon>, Arc<Racer>) {
         force_lock_point: racer.clone(),
         ..farm.ports()
     };
-    let daemon = Arc::new(Daemon::new(config(), farm.rig().dirs(), ports, OWN));
+    let daemon = Arc::new(Daemon::new(config(), farm.rig().dirs(), ports, OWN).keeping_versions(0));
     racer.daemon.set(Arc::downgrade(&daemon)).expect("set once");
     (daemon, racer)
 }
@@ -401,10 +403,11 @@ fn confirm(daemon: &Daemon) -> Option<PruneReport> {
 }
 
 /// Catches a prune that deletes the release an unfinished update may still return to, or keeps
-/// it for good: a running record whose `previous_digest` is the tree of 4.0.0 (neither `current`
-/// nor `previous`) keeps 4.0.0; the same record closed lets it go, which shows the record, not a
-/// blanket keep, protected it; and a running record with no previous release keeps nothing
-/// extra. A seal that does not read names no release.
+/// it for good: a running record in the post-success watch (the one unfinished record a prune
+/// runs under; any other is a trial, `prune_keep.rs`) whose `previous_digest` is the tree of
+/// 4.0.0 (neither `current` nor `previous`) keeps 4.0.0; the same record closed lets it go, which
+/// shows the record, not a blanket keep, protected it; and a watched record with no previous
+/// release keeps nothing extra. A seal that does not read names no release.
 #[test]
 fn prune_never_removes_the_previous_release_of_an_unfinished_record() {
     let farm = NativeHost::new("prune-unfinished");
@@ -414,6 +417,7 @@ fn prune_never_removes_the_previous_release_of_an_unfinished_record() {
     let digest = tree_digest(&rig.packages.join(WEB).join("4.0.0")).expect("a digest");
     fs::write(rig.packages.join(WEB).join("5.0.0.seal"), "not a seal").expect("a bad seal");
     rec.previous_digest = Some(digest);
+    rec.progress.watching = Some(Stamp::now(&*rig.clock));
     rec.state = State::Running {
         started: Stamp::now(&*rig.clock),
         deadline_secs: 100,
@@ -775,8 +779,8 @@ fn prune_adds_no_persisted_field() {
 
 /// Catches a prune that guesses when it cannot read what protects a version: a step record of a
 /// newer schema, a step record that does not parse, a `placed.json` that does not parse, and an
-/// unfinished record of a service with no package directory each make the confirmed switch an
-/// alert, with nothing deleted.
+/// unfinished record in the post-success watch of a service with no package directory each make
+/// the confirmed switch an alert, with nothing deleted.
 #[test]
 fn a_record_that_cannot_be_read_prunes_nothing() {
     let farm = NativeHost::new("prune-unreadable");
@@ -802,6 +806,7 @@ fn a_record_that_cannot_be_read_prunes_nothing() {
     let mut unfinished = rec.clone();
     unfinished.service = "ghost".to_owned();
     unfinished.state = State::Pending;
+    unfinished.progress.watching = Some(Stamp::now(&*rig.clock));
     fs::create_dir_all(rig.state.join("ghost")).expect("its state directory");
     save(rig, "ghost", &unfinished);
     let ctx = daemon.ctx();
