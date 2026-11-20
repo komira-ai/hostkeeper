@@ -1,13 +1,15 @@
 //! The `launchctl` port: one `launchctl` command, its real adapter, and the reading of
 //! `launchctl print system/<label>`.
 //!
-//! The real adapter is [`LaunchctlProcess`], the only code of the crate that starts a process.
+//! The real adapter is [`LaunchctlProcess`], which with [`StdinProcess`](crate::StdinProcess)
+//! (`stdin_process`) is the only code of the crate that starts a process; the two collect a
+//! child's output the same way (`collect`).
 //! The text `launchctl print` writes is Apple's, not a stable interface; [`parse_print`] reads the
 //! few lines of it this daemon needs and ignores the rest.
 
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -139,6 +141,36 @@ fn read_capped<R: Read + Send + 'static>(
     });
 }
 
+/// Reads `child`'s standard output and standard error, each to [`OUTPUT_MAX`] bytes, waiting at
+/// most `deadline` for both to end, then waits for the child and returns how it ended. `None`
+/// when the streams had not ended by the deadline: the child is then killed and reaped.
+pub(crate) fn collect(child: &mut Child, deadline: Duration) -> Option<LaunchctlOutput> {
+    let end = Instant::now() + deadline;
+    let (sent, read) = mpsc::channel();
+    read_capped(child.stdout.take(), 0, sent.clone());
+    read_capped(child.stderr.take(), 1, sent);
+    let mut streams: [Vec<u8>; 2] = Default::default();
+    for _ in 0..2 {
+        let left = end.saturating_duration_since(Instant::now());
+        match read.recv_timeout(left) {
+            Ok((which, bytes)) => streams[which] = bytes,
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+    let [stdout, stderr] = streams;
+    // A wait that fails leaves the exit code unknown, as a signal does.
+    let code = child.wait().ok().and_then(|status| status.code());
+    Some(LaunchctlOutput {
+        code,
+        stdout,
+        stderr,
+    })
+}
+
 impl Launchctl for LaunchctlProcess {
     fn run(&self, args: &[String]) -> Result<LaunchctlOutput, LaunchctlError> {
         let joined = args.join(" ");
@@ -153,30 +185,7 @@ impl Launchctl for LaunchctlProcess {
                 args: joined.clone(),
                 why: e.to_string(),
             })?;
-        let end = Instant::now() + self.deadline;
-        let (sent, read) = mpsc::channel();
-        read_capped(child.stdout.take(), 0, sent.clone());
-        read_capped(child.stderr.take(), 1, sent);
-        let mut streams: [Vec<u8>; 2] = Default::default();
-        for _ in 0..2 {
-            let left = end.saturating_duration_since(Instant::now());
-            match read.recv_timeout(left) {
-                Ok((which, bytes)) => streams[which] = bytes,
-                Err(_) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(LaunchctlError::TimedOut { args: joined });
-                }
-            }
-        }
-        let [stdout, stderr] = streams;
-        // A wait that fails leaves the exit code unknown, as a signal does.
-        let code = child.wait().ok().and_then(|status| status.code());
-        Ok(LaunchctlOutput {
-            code,
-            stdout,
-            stderr,
-        })
+        collect(&mut child, self.deadline).ok_or(LaunchctlError::TimedOut { args: joined })
     }
 }
 
