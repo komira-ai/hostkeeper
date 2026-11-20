@@ -321,12 +321,21 @@ pub(crate) fn derive_in(
     alerts
 }
 
-/// Who raised `halt`: an operator, or the host and the check that reported it.
+/// Who raised `halt`: an operator, or the host and the check that reported it, with what the
+/// host said of it (the report's `detail`, which the reader cut to `MAX_DETAIL_BYTES`) when it
+/// said anything.
 fn halted_by(halt: &Halt) -> String {
     if halt.origin == HaltOrigin::Operator {
-        "an operator".to_owned()
-    } else {
-        format!("{}, check {}", halt.node_id, halt.check)
+        return "an operator".to_owned();
+    }
+    let said = halt
+        .report
+        .as_ref()
+        .and_then(|report| report.detail.as_deref());
+    match said.filter(|text| !text.is_empty()) {
+        // Quoted and escaped: a quote or a line break of the hook's stays inside the alert line.
+        Some(text) => format!("{}, check {} ({text:?})", halt.node_id, halt.check),
+        None => format!("{}, check {}", halt.node_id, halt.check),
     }
 }
 

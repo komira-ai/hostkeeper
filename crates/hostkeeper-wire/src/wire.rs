@@ -59,7 +59,12 @@ pub enum Outcome {
 }
 
 /// The last update the host ran.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Two results are equal when every field but [`UpdateResult::detail`] is: the detail is prose
+/// for people, and the halts, acknowledgements and set-aside reports that compare results keep
+/// their identity whether or not the copy they hold has it (one stored before the field
+/// existed has none).
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UpdateResult {
     /// The version it was told to run.
     pub target: Version,
@@ -103,7 +108,68 @@ pub struct UpdateResult {
         deserialize_with = "lenient"
     )]
     pub order_try: Option<u64>,
+    /// What the hook or the updater said of the outcome, in prose (the hook's `detail`), cut to
+    /// [`MAX_DETAIL_BYTES`] at a character boundary when it is read. Absent from an updater that
+    /// predates it, on the frozen JSON route (whose agents send none) and when nothing was said;
+    /// a value that is not a string reads as `None`. The coordinator fills it from the gRPC
+    /// heartbeat's `UpdateResult.detail`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "detail_text"
+    )]
+    pub detail: Option<String>,
 }
+
+/// The most bytes of an [`UpdateResult::detail`] a reader keeps.
+pub const MAX_DETAIL_BYTES: usize = 256;
+
+/// `text` cut to at most `max` bytes, at a character boundary.
+pub(crate) fn cut_text(text: &str, max: usize) -> &str {
+    let mut end = text.len().min(max);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
+/// A detail as [`UpdateResult::detail`] reads it: a string cut to [`MAX_DETAIL_BYTES`], and
+/// `None` for anything else.
+fn detail_text<'de, D>(d: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let text: Option<String> = lenient(d)?;
+    Ok(text.map(|text| cut_text(&text, MAX_DETAIL_BYTES).to_owned()))
+}
+
+impl PartialEq for UpdateResult {
+    fn eq(&self, other: &Self) -> bool {
+        // Every field but `detail` (see the type's doc).
+        let Self {
+            target,
+            outcome,
+            phase,
+            class,
+            reason,
+            order_id,
+            order_try,
+            detail: _,
+        } = self;
+        (target, outcome, phase, class, reason, order_id, order_try)
+            == (
+                &other.target,
+                &other.outcome,
+                &other.phase,
+                &other.class,
+                &other.reason,
+                &other.order_id,
+                &other.order_try,
+            )
+    }
+}
+
+impl Eq for UpdateResult {}
 
 /// The reasons of the refusals a daemon gives an order for its try alone (design 8.3): the same
 /// try as its step record's for another package (`try_conflict`), or a lower one (`stale_try`).
@@ -154,6 +220,7 @@ impl UpdateResult {
             reason: None,
             order_id: None,
             order_try: None,
+            detail: None,
         }
     }
 }

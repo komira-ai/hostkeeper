@@ -134,6 +134,7 @@ fn full_update() -> UpdateResult {
         reason: Token::parse("drain_bound"),
         order_id: OrderId::parse("ord-7"),
         order_try: Some(2),
+        detail: Some("the state root is owned by uid 501".to_owned()),
     }
 }
 
@@ -146,6 +147,7 @@ fn full_update_proto() -> agent::UpdateResult {
         reason: "drain_bound".to_owned(),
         order_try: Some(2),
         order_id: Some("ord-7".to_owned()),
+        detail: Some("the state root is owned by uid 501".to_owned()),
         ..Default::default()
     }
 }

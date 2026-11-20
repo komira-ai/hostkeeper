@@ -66,6 +66,7 @@ fn cleared(outcome: Outcome, reason: &str) -> UpdateResult {
         reason: Token::parse(reason),
         order_id: OrderId::parse("clear-record-7"),
         order_try: Some(1),
+        detail: None,
     }
 }
 

@@ -94,6 +94,7 @@ fn expected(name: &str) -> Record {
                 awaiting_restart: None,
                 report_order_id: None,
                 activate: None,
+                detail: None,
             },
             ..base("api", "1.4.2", 12, Step::Rollback)
         },
@@ -306,6 +307,7 @@ fn kbf_ci_record() -> Record {
             awaiting_restart: None,
             report_order_id: None,
             activate: None,
+            detail: None,
         },
         order_try: None,
         forced: false,
