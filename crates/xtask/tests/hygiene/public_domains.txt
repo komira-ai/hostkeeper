@@ -231,3 +231,9 @@ fleetdm.com
 n.attrs.name
 y.name
 span.mini
+
+# Not hosts: the names of Xcode's application bundles (`Xcode.app`, `Xcode-beta.app`), which the
+# Xcode stage of the maintenance hook names as the app `xip --expand` makes and the app it stages
+# (crates/hostkeeper-daemon/src/maintenance_hook/xcode/stage.rs and its tests).
+=xcode.app
+=xcode-beta.app

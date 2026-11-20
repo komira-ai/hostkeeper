@@ -397,7 +397,7 @@ fn a_good_archive_ends_with_a_verified_app_in_staging_and_nothing_in_application
     );
     assert_eq!(*lock(&mac.runner.archives), [ARCHIVE_BYTES.to_vec()]);
     assert_eq!(mac.names(APPLICATIONS), [".hostkeeper-staging"]);
-    assert_eq!(mac.names(STAGING), [entry.sha256.clone()]);
+    assert_eq!(mac.names(STAGING), [entry.sha256.as_str()]);
     assert_eq!(mac.names(&dir), ["Xcode.app"]);
     assert_eq!(
         fs::read(mac.path(&format!("{dir}/Xcode.app/Contents/version.plist"))).expect("read"),
@@ -914,7 +914,7 @@ fn a_staging_directory_the_stage_did_not_make_is_replaced_and_not_followed() {
             _ => mac.file(STAGING, b"a file"),
         }
         assert_eq!(mac.run(std::slice::from_ref(&entry)), Ok(()), "{case}");
-        assert_eq!(mac.names(STAGING), [entry.sha256.clone()], "{case}");
+        assert_eq!(mac.names(STAGING), [entry.sha256.as_str()], "{case}");
         let meta = fs::symlink_metadata(mac.path(STAGING)).expect("the staging directory");
         assert!(meta.is_dir(), "{case}");
         assert_eq!(meta.permissions().mode() & 0o777, 0o700, "{case}");
