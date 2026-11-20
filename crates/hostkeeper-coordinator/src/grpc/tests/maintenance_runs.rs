@@ -632,11 +632,12 @@ async fn only_the_operator_reaches_the_maintenance_calls() {
         let world = Wired::new(&format!("grpc-maintenance-runs-callers-{n}"));
         world.beat("a1", &[agent::MaintenanceKind::Linux]).await;
         let base = world.audited();
-        let ci = ci_token();
-        for (bearer, code, token) in [
-            (Some(ci.as_str()), Code::PermissionDenied, "forbidden"),
-            (None, Code::Unauthenticated, "unauthorized"),
+        for (ci, code, token) in [
+            (true, Code::PermissionDenied, "forbidden"),
+            (false, Code::Unauthenticated, "unauthorized"),
         ] {
+            // A CI token's id is spent by its first call, so each call is given a fresh one: a
+            // token used twice is a replay, refused `unauthorized` whatever the method.
             let coordinator = &world.coordinator;
             let answers = [
                 (
@@ -645,7 +646,7 @@ async fn only_the_operator_reaches_the_maintenance_calls() {
                         coordinator,
                         wire,
                         SCHEDULE,
-                        bearer,
+                        ci.then(ci_token).as_deref(),
                         &hosts_run(&["a1"]),
                     )
                     .await,
@@ -656,23 +657,37 @@ async fn only_the_operator_reaches_the_maintenance_calls() {
                         coordinator,
                         wire,
                         LIST,
-                        bearer,
+                        ci.then(ci_token).as_deref(),
                         &proto::ListMaintenanceRunsRequest::default(),
                     )
                     .await,
                 ),
                 (
                     GET,
-                    rpc(coordinator, wire, GET, bearer, &get_of(FIRST)).await,
+                    rpc(
+                        coordinator,
+                        wire,
+                        GET,
+                        ci.then(ci_token).as_deref(),
+                        &get_of(FIRST),
+                    )
+                    .await,
                 ),
                 (
                     CANCEL,
-                    rpc(coordinator, wire, CANCEL, bearer, &cancel_of(FIRST, "why")).await,
+                    rpc(
+                        coordinator,
+                        wire,
+                        CANCEL,
+                        ci.then(ci_token).as_deref(),
+                        &cancel_of(FIRST, "why"),
+                    )
+                    .await,
                 ),
             ];
             for (path, answer) in answers {
                 let answer = answer.expect_err("refused");
-                assert_eq!(answer, refused(code, token), "{path} {bearer:?} {wire:?}");
+                assert_eq!(answer, refused(code, token), "{path} ci {ci} {wire:?}");
             }
         }
         assert_eq!((world.stored(), world.audited()), (0, base), "{wire:?}");
