@@ -82,7 +82,13 @@ fn quoted(path: &Path) -> String {
 }
 
 fn cargo(args: &[&str]) -> Command {
-    let mut command = Command::new(env!("CARGO"));
+    // Cargo names itself to every test it builds. buildrules' Buck2 build (docs/farm.md), which
+    // never runs this crate's tests, compiles them with no `CARGO`: `option_env!` lets that build
+    // compile and lint the file, and changes nothing under cargo.
+    let Some(cargo) = option_env!("CARGO") else {
+        panic!("cargo names itself (CARGO) to the tests it builds");
+    };
+    let mut command = Command::new(cargo);
     command.args(args);
     for name in LEAKS {
         command.env_remove(name);

@@ -17,7 +17,9 @@ fn adapter(deadline: Duration) -> LineProcess {
 }
 
 fn helper(name: &str) -> Vec<String> {
-    [name, "--exact", "--ignored", "--nocapture"]
+    // Two test threads, whatever the machine: on one, libtest writes `test <name> ... ` before the
+    // child's own output, on the child's first line (a one-CPU build worker), and on more it does not.
+    [name, "--exact", "--ignored", "--nocapture", "--test-threads=2"]
         .map(str::to_owned)
         .to_vec()
 }

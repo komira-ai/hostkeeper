@@ -211,3 +211,15 @@ incremental = false
 [profile.test]
 debug = "line-tables-only"
 incremental = false
+
+# The policy of the Buck2 build through buildrules (docs/farm.md): `//:ci` is every member's clippy
+# (`:lint`, warnings as errors, as ci.yml's) and its tests (`:test`), but where a member's own
+# `[package.metadata.buildrules]` keeps its tests in ci.yml. Cargo ignores this table.
+[workspace.metadata.buildrules]
+default-action = "ci"
+
+[workspace.metadata.buildrules.actions]
+ci = ["lint", "test"]
+
+[workspace.metadata.buildrules.lint]
+deny-warnings = true

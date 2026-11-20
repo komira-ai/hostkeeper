@@ -84,3 +84,11 @@ tonic = { workspace = true, features = ["server", "tls-ring"] }
 
 [lints]
 workspace = true
+
+[package.metadata.buildrules]
+# The farm lane's `//:ci` (docs/farm.md) builds and lints this package but does not run its tests.
+# Its ssh tests run ssh, ssh-agent, ssh-add and ssh-keygen, which a farm action does not have: its tests
+# run in ci.yml alone (docs/farm.md).
+
+[package.metadata.buildrules.actions]
+ci = ["lint"]

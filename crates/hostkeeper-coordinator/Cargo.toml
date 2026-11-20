@@ -114,3 +114,11 @@ tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-th
 
 [lints]
 workspace = true
+
+[package.metadata.buildrules]
+# The farm lane's `//:ci` (docs/farm.md) builds and lints this package but does not run its tests.
+# Its store tests need a Postgres server (HOSTKEEPER_TEST_POSTGRES_URL), which a farm action does not have
+# until buildrules gives a test one: its tests run in ci.yml alone until then (docs/farm.md).
+
+[package.metadata.buildrules.actions]
+ci = ["lint"]

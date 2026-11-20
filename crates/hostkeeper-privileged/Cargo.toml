@@ -195,3 +195,11 @@ socket2.workspace = true
 
 [lints]
 workspace = true
+
+[package.metadata.buildrules]
+# The farm lane's `//:ci` (docs/farm.md) builds and lints this package but does not run its tests.
+# Its tests run as root against systemd, OpenRC, Docker and apt: they run in privileged.yml and
+# pr-device.yml alone (docs/farm.md).
+
+[package.metadata.buildrules.actions]
+ci = ["lint"]
