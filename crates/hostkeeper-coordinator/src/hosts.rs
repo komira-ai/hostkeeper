@@ -124,6 +124,7 @@ impl Coordinator {
                         self.show_operator_keys(&fleet, &id, &mut host);
                         self.show_ssh_report(&fleet, &id, &mut host);
                         self.show_prerequisites(&fleet, &id, &mut host);
+                        crate::maintenance::show_maintenance(&fleet, &id, &mut host, unix_now);
                         host
                     });
                     (id, heard)
@@ -178,6 +179,7 @@ impl Coordinator {
             self.show_operator_keys(&fleet, &id, &mut host);
             self.show_ssh_report(&fleet, &id, &mut host);
             self.show_prerequisites(&fleet, &id, &mut host);
+            crate::maintenance::show_maintenance(&fleet, &id, &mut host, unix_now);
             // The verdict of a `clear_record` the host reported, which no rule reads.
             for one in &mut host.services {
                 if let Some(cleared) = fleet.clear_records.shown(&id, &one.service) {

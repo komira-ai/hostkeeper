@@ -44,11 +44,15 @@ impl Book {
 }
 
 /// The key of `alert`'s subject in the rows.
-fn key(alert: &Alert) -> Key {
+pub(super) fn key(alert: &Alert) -> Key {
     let subject = &alert.subject;
     [
         subject.kind.log_token().to_owned(),
-        subject.service.clone(),
+        if subject.group.is_empty() {
+            subject.service.clone()
+        } else {
+            subject.group.clone()
+        },
         subject.host.clone(),
         subject.version.clone(),
         subject.request.clone(),

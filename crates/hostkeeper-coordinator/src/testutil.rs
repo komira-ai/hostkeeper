@@ -193,6 +193,7 @@ pub fn native(fleet: &Fleet, wants: &BTreeMap<String, Desired>) -> Fleet {
             last_renew_error: None,
             trusted_root: crate::trusted_root::TrustedRootSaid::default(),
             skewed_beats: 0,
+            maintenance: None,
         });
         node.features.retain(|f| f != TARGET_FEATURE);
         node.features.push(TARGET_FEATURE.to_owned());
@@ -259,6 +260,7 @@ pub fn beat(running: &str) -> Heartbeat {
         cert_not_after_unix: None,
         last_renew_error: None,
         record_try: None,
+        maintenance: None,
     }
 }
 
