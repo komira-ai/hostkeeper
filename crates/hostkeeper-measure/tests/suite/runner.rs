@@ -225,7 +225,7 @@ fn an_answer_the_run_needs_and_does_not_get_stops_the_run() {
         (
             "hosts list",
             refused(3, "unauthorized"),
-            "`hkctl hosts list` failed (exit 3, refused: unauthorized), and the run needs its answer",
+            "`hk hosts list` failed (exit 3, refused: unauthorized), and the run needs its answer",
         ),
         (
             "hosts list",
@@ -234,12 +234,12 @@ fn an_answer_the_run_needs_and_does_not_get_stops_the_run() {
                 stdout: String::new(),
                 stderr: "curl: (7)\n".to_owned(),
             },
-            "`hkctl hosts list` failed (exit 1), and the run needs its answer",
+            "`hk hosts list` failed (exit 1), and the run needs its answer",
         ),
         (
             "audit list --newest",
             refused(3, "forbidden"),
-            "`hkctl audit list --newest true --limit 1` failed (exit 3, refused: forbidden), and the run needs its answer",
+            "`hk audit list --newest true --limit 1` failed (exit 3, refused: forbidden), and the run needs its answer",
         ),
         (
             "hosts list",
@@ -248,7 +248,7 @@ fn an_answer_the_run_needs_and_does_not_get_stops_the_run() {
                 stdout: "not json".to_owned(),
                 stderr: String::new(),
             },
-            "`hkctl hosts list --limit 256` answered what is not the gateway's JSON: expected ident at line 1 column 2",
+            "`hk hosts list --limit 256` answered what is not the gateway's JSON: expected ident at line 1 column 2",
         ),
     ];
     for (prefix, answer, want) in cases {
@@ -673,7 +673,7 @@ fn the_dry_run_prints_every_step_of_every_repetition_and_calls_nothing() {
     dry_run(&plan, &params, &mut out).expect("the dry run");
     let out = String::from_utf8(out).expect("text");
     let first = format!(
-        "plan update-rollback: An update and a rollback on one host\nhosts: The one host hello is assigned to (label one host demo=yes and no other): host-1 in the records.\nrepetitions: 5\nevery call is `hkctl --endpoint <endpoint> --ca-file <ca file> --token-file <token file> <command>`\nrepetition 1:\n  start: hkctl hosts list (the hosts of hello), then hkctl audit list --newest true --limit 1\n  update: call `hkctl releases set-desired --request <file: {{\"desired\":{{\"version\":\"v2\"}},\"releaseIndex\":\"<the text of {}>\",\"releaseIndexDigest\":\"ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356\",\"service\":\"hello\"}}>`; stamped by its audit entry set_desired\n  updated: watch every 1 s, at most 900 s (a timeout ends the repetition): every host lists hello v2 installed by a succeeded update, healthy\n  rollback: call `hkctl releases force --service hello --version v1 --reason 'measurement: roll back to the previous version' --request <file: {{\"hosts\":{{\"nodeIds\":[\"<host>\"]}}}}>`; stamped by its audit entry force\n  rolled-back: watch every 1 s, at most 900 s (a timeout ends the repetition): every host lists hello v1 installed by a succeeded update, healthy\nrepetition 2:\n",
+        "plan update-rollback: An update and a rollback on one host\nhosts: The one host hello is assigned to (label one host demo=yes and no other): host-1 in the records.\nrepetitions: 5\nevery call is `hk --endpoint <endpoint> --ca-file <ca file> --token-file <token file> <command>`\nrepetition 1:\n  start: hk hosts list (the hosts of hello), then hk audit list --newest true --limit 1\n  update: call `hk releases set-desired --request <file: {{\"desired\":{{\"version\":\"v2\"}},\"releaseIndex\":\"<the text of {}>\",\"releaseIndexDigest\":\"ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356\",\"service\":\"hello\"}}>`; stamped by its audit entry set_desired\n  updated: watch every 1 s, at most 900 s (a timeout ends the repetition): every host lists hello v2 installed by a succeeded update, healthy\n  rollback: call `hk releases force --service hello --version v1 --reason 'measurement: roll back to the previous version' --request <file: {{\"hosts\":{{\"nodeIds\":[\"<host>\"]}}}}>`; stamped by its audit entry force\n  rolled-back: watch every 1 s, at most 900 s (a timeout ends the repetition): every host lists hello v1 installed by a succeeded update, healthy\nrepetition 2:\n",
         index.display()
     );
     assert!(out.starts_with(&first), "{out}");
@@ -687,11 +687,11 @@ fn the_dry_run_prints_every_step_of_every_repetition_and_calls_nothing() {
     let cases = [
         (
             "coordinator-restart",
-            "  start: hkctl hosts list (the live hosts)\n  steady: watch every 5 s, at most 120 s (a timeout ends the repetition): every host is live\n  restart: ask the operator: Press Enter, then restart the coordinator on its Postgres store within two minutes (docker compose --profile postgres restart coordinator, as docs/deploy/coordinator/README.md says).\n  back: watch every 1 s, at most 900 s (a timeout ends the repetition): the coordinator goes away (a failed call or a host not live) and every host is live again with a newer heartbeat\n",
+            "  start: hk hosts list (the live hosts)\n  steady: watch every 5 s, at most 120 s (a timeout ends the repetition): every host is live\n  restart: ask the operator: Press Enter, then restart the coordinator on its Postgres store within two minutes (docker compose --profile postgres restart coordinator, as docs/deploy/coordinator/README.md says).\n  back: watch every 1 s, at most 900 s (a timeout ends the repetition): the coordinator goes away (a failed call or a host not live) and every host is live again with a newer heartbeat\n",
         ),
         (
             "enrollment-mac",
-            "  start: no hosts: the steps find them, then hkctl audit list --newest true --limit 1\n  erase: ask the operator: Erase the Mac and let it enroll through Automated Device Enrollment; press Enter when the erase starts.\n  mdm: watch every 5 s, at most 7200 s (a timeout ends the repetition): a Mac enrolls with the MDM gate\n  install-sent: watch every 2 s, at most 1800 s (a timeout ends the repetition): an audit entry mdm_install_sent\n",
+            "  start: no hosts: the steps find them, then hk audit list --newest true --limit 1\n  erase: ask the operator: Erase the Mac and let it enroll through Automated Device Enrollment; press Enter when the erase starts.\n  mdm: watch every 5 s, at most 7200 s (a timeout ends the repetition): a Mac enrolls with the MDM gate\n  install-sent: watch every 2 s, at most 1800 s (a timeout ends the repetition): an audit entry mdm_install_sent\n",
         ),
         (
             "enrollment",
@@ -728,11 +728,11 @@ fn the_dry_run_prints_every_step_of_every_repetition_and_calls_nothing() {
     .expect("the dry run");
     let out = String::from_utf8(out).expect("text");
     assert!(
-        out.contains("call `hkctl releases set-desired --x ''"),
+        out.contains("call `hk releases set-desired --x ''"),
         "{out}"
     );
     assert!(
-        out.contains("call `hkctl releases set-desired --x 'it'\\''s'"),
+        out.contains("call `hk releases set-desired --x 'it'\\''s'"),
         "{out}"
     );
     let mut out = Vec::new();

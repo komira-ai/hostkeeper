@@ -194,7 +194,7 @@ fn the_release_has_the_macos_stage_and_it_passes_every_rule() {
     );
     assert!(
         !crates.contains("hostkeeper-ci"),
-        "the binary has no `ci` verb: CI runs hkctl"
+        "the binary has no `ci` verb: CI runs hk"
     );
     assert_eq!(crate_problems(&text, &crates), Vec::<String>::new());
 }

@@ -2,11 +2,11 @@
 
 Plan [`coordinator-restart`](../../../crates/hostkeeper-measure/plans/coordinator-restart.toml), run `fake-run`: 3 of 3 repetitions started, 3 complete.
 
-What a restart of the coordinator on its Postgres store costs the fleet: the operator's requests that fail while it restarts, how long it does not answer, the longest gap between two heartbeats of a host it records, and the time until every host is back in `hkctl hosts list`, live with a heartbeat newer than its last before the restart. A daemon that cannot reach the coordinator tries again at its next heartbeat and resends the verdicts the coordinator has not acknowledged, so a heartbeat is delayed rather than lost; the gap shows by how much.
+What a restart of the coordinator on its Postgres store costs the fleet: the operator's requests that fail while it restarts, how long it does not answer, the longest gap between two heartbeats of a host it records, and the time until every host is back in `hk hosts list`, live with a heartbeat newer than its last before the restart. A daemon that cannot reach the coordinator tries again at its next heartbeat and resends the verdicts the coordinator has not acknowledged, so a heartbeat is delayed rather than lost; the gap shows by how much.
 
 **Hosts.** Every host the coordinator lists as live when the repetition starts: host-1 to host-N in the records.
 
-**Recorded.** Every poll of `hkctl hosts list` that fails, and the first that answers after failures; the moment the runner first sees the coordinator gone (a failed poll, or a host no longer listed live); each host's heartbeat stamp each time it changes; and each host's return. The runner polls every second, from just before the restart until every host is back.
+**Recorded.** Every poll of `hk hosts list` that fails, and the first that answers after failures; the moment the runner first sees the coordinator gone (a failed poll, or a host no longer listed live); each host's heartbeat stamp each time it changes; and each host's return. The runner polls every second, from just before the restart until every host is back.
 
 | Measure | What | Unit | n | Missing | Min | Median | Max | Clock |
 |---|---|---|---|---|---|---|---|---|
@@ -21,7 +21,7 @@ A coordinator time is the difference of two of the coordinator's stamps, which a
 **What the report states from it.**
 
 - While the coordinator restarted, the runner's requests failed for 8 s (median of 3 repetitions, from 4 s to 17 s), at most 17 polls in one repetition.
-- Every host was back in hkctl hosts list 22 s after the runner saw the coordinator gone (from 18 s to 31 s).
+- Every host was back in hk hosts list 22 s after the runner saw the coordinator gone (from 18 s to 31 s).
 - The longest gap between two heartbeats of one host was 45 s (median 30 s over 9 hosts and repetitions).
 
 **Repetitions that ended early.** None.

@@ -30,8 +30,7 @@ const MEASURE: &str = "hostkeeper-measure";
 const PXE: &str = "hostkeeper-pxe";
 const PXE_PACKETS: &str = "hostkeeper-pxe-packets";
 const PROTO: &str = "hostkeeper-proto";
-const HKCTL: &str = "hostkeeper-hkctl";
-const HKSSH: &str = "hostkeeper-hkssh";
+const HK: &str = "hostkeeper-hk";
 const DAEMON: &str = "hostkeeper-daemon";
 const ENROLL: &str = "hostkeeper-enroll";
 const LINK: &str = "hostkeeper-link";
@@ -58,7 +57,7 @@ pub type Layer = (
 /// (a fake issuer), which a dev-dependency can do and a normal dependency must not; the daemon's and the link's tests run a
 /// coordinator in process, behind a listener's TLS (`hostkeeper-tls`), and the daemon's run the
 /// example service hello's hook in process;
-/// hello's tests read its output with the hook contract; `hkctl`'s tests forward the script's calls to a coordinator built from its
+/// hello's tests read its output with the hook contract; `hk`'s tests forward its calls to a coordinator built from its
 /// flags, whose CI allow-list is `hostkeeper-oidc`'s testkit issuer's; the observer's tests run
 /// hooks through the step runner; the CLI crates' tests read the protobuf descriptors, and the
 /// web app's send each of its calls to a coordinator built from its flags, whose CI allow-list
@@ -89,7 +88,7 @@ pub type Layer = (
 /// (`hostkeeper-release`), and is read by no crate. The coordinator serves the console through
 /// `hostkeeper-console`, and its tests script that crate's BMC tool port with the double of its
 /// feature `testing`.
-pub const LAYERS: [Layer; 31] = [
+pub const LAYERS: [Layer; 30] = [
     (BINARY, &[DAEMON], &[LAUNCHD]),
     (
         BOOTSTRAP,
@@ -114,8 +113,7 @@ pub const LAYERS: [Layer; 31] = [
     (ENROLL, &[CONFIG, PROTO, STEPS], &[COORDINATOR, ENROLLMENT]),
     (ENROLLMENT, &[], &[]),
     (HELLO, &[], &[HOOK]),
-    (HKCTL, &[PROTO], &[COORDINATOR, OIDC]),
-    (HKSSH, &[PROTO], &[]),
+    (HK, &[PROTO], &[COORDINATOR, OIDC]),
     (HOOK, &[], &[]),
     (INSTALL, &[CONFIG, LAUNCHD, PROTO, RELEASE, STEPS], &[]),
     (LAUNCHD, &[HOOK, OBSERVE, PLACED, STEPS], &[]),

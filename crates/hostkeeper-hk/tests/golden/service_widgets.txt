@@ -1,0 +1,13 @@
+hk widgets: the service `Widgets` of the package `hostkeeper.fixture.v1`. Widgets, for the tests.
+
+Usage: hk [global flags] widgets <method> [flags]
+
+Methods:
+  make
+      Make a widget from every kind of field.
+  brand-new-method
+      A method no real proto has: it appears in the script with no hand edit.
+  login
+      Log in with secrets.
+  wait
+      Hold the call for 'wait_secs', as Releases.WaitConverged does.

@@ -11,8 +11,8 @@ service installed, healthy and not updating. Every step is timed by the coordina
 stamps. Run it when a host is enrolled, with no other enrollment pending."""
 records = """
 The audit entries `enroll_requested`, `enroll_approve` (or `enrollment.auto_approved`) and \
-`enroll_issued`, each with its time, read with `hkctl audit list`; then the host's \
-`firstHeartbeatUnix` and `firstServingUnix`, read with `hkctl hosts get`. The runner polls every \
+`enroll_issued`, each with its time, read with `hk audit list`; then the host's \
+`firstHeartbeatUnix` and `firstServingUnix`, read with `hk hosts get`. The runner polls every \
 2 s."""
 repetitions = 1
 states = [
@@ -27,7 +27,7 @@ pick = "none"
 [[step]]
 id = "start"
 do = "operator"
-says = "Bootstrap the new host and start its daemon, as for any host the lab adopts; approve its request with hkctl enrollment approve, naming its first service, once hkctl enrollment list shows it."
+says = "Bootstrap the new host and start its daemon, as for any host the lab adopts; approve its request with hk enrollment approve, naming its first service, once hk enrollment list shows it."
 
 [[step]]
 id = "requested"

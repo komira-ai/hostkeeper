@@ -175,10 +175,10 @@ this repository).
 Unchanged code, as [operations/enrollment.md](../operations/enrollment.md) "The Mac path" says it. A Mac's request is approved in one of two ways
 (**Q3 and Q6, default, owner may change**: an operator's click is acceptable for every Mac, and a re-imaged Mac takes `--replace true`):
 
-- **Inventory record by serial.** `hkctl enrollment add-record --host-id mac-03 --host-group build --serial <serial>`. A record that names a group is
+- **Inventory record by serial.** `hk enrollment add-record --host-id mac-03 --host-group build --serial <serial>`. A record that names a group is
   the approval, for a window (24 hours by default, 7 days at most) and once; the request must match exactly one record and no other pending request
   may contest it. The coordinator approves it itself, in the record's group, and audits `enrollment.auto_approved`.
-- **An operator** on the Enrollment page or `hkctl enrollment approve`, naming the key's hash and the `host_group`. The coordinator then writes
+- **An operator** on the Enrollment page or `hk enrollment approve`, naming the key's hash and the `host_group`. The coordinator then writes
   the Mac's inventory record from its serial, added by `coordinator`, with no group and no window, so the Mac is listed in the inventory and the
   record approves nothing ([operations/enrollment.md](../operations/enrollment.md#a-host-approved-without-a-record)); a Mac approved so before
   this is recorded at the coordinator's next start.

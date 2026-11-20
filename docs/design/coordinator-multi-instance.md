@@ -840,6 +840,8 @@ sequenceDiagram
 | `--migrate-retry-secs`, `--migrate-attempts` | 5, 6 | the wait between and number of attempts of a rolled-back migration before the instance exits |
 | `--job-tick-secs` | 5 | how often an instance claims due periodic jobs (section 9; Built, M8) |
 | `--job-every name=secs` (repeatable) | `alerts=15`, `request-expiry=15`, `prune=3600`, `xcode-feed=86400` (claimed only with `--xcode-feed-url`) | the period of each periodic job (Built, M8) |
+| `--xcode-dir` | none | the directory of the private Xcode store; it must exist, and every instance mounts the same one (the store is files, not rows). Without it no instance has a store. Built |
+| `--xcode-max-bytes` | 21474836480 (20 GiB) | the most bytes of one Xcode archive an upload may have; at least 1. Built |
 | `--connection-max-age-secs` | 300 | a server-side maximum age of an agent connection, besides TCP keep-alive |
 | existing: `--quiet-secs` (floor in `config.rs:512`), `--tls-reload-secs` | unchanged | the cluster's quiet rule uses `--quiet-secs` |
 

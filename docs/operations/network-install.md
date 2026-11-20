@@ -6,7 +6,7 @@ manual step of its own: enter its record, which is also its approval
 board that does not try network boot before its disk. The design, and the
 reason for every rule below, is [network-install.md](../design/network-install.md) (cited here as
 "the design"). Enrolling the machine once it has posted its request is
-[enrollment.md](enrollment.md), and every `hkctl` command and flag is
+[enrollment.md](enrollment.md), and every `hk` command and flag is
 [cli.md](../cli.md).
 
 The parts:
@@ -22,15 +22,15 @@ The parts:
 - The coordinator, which `serve` reads before every answer to learn which machines may be
   installed, and which the installed daemon enrolls with over its LAN listener.
 
-The commands of `hkctl` below reach the coordinator's private listener, as in
-[enrollment.md](enrollment.md), which also says where `hkctl` comes from:
+The commands of `hk` below reach the coordinator's private listener, as in
+[enrollment.md](enrollment.md), which also says where `hk` comes from:
 `https://<private-listener>` is its address, `<ca.pem>` the CA its certificate chains to, and
 `<token-file>` a file holding an operator token. The examples use the documentation addresses
 `192.0.2.0/24` for the farm LAN and `00:00:5e:00:53:xx` for MACs; put your own in their place.
 
 **The record's platform.** Router mode chooses the shim and the boot set by the record's platform,
 since the machine's own packets may state none, so every record of a machine to install in router
-mode names it: `hkctl enrollment add-record --platform linux_x86_64` or
+mode names it: `hk enrollment add-record --platform linux_x86_64` or
 `--platform linux_arm64` ([enrollment.md](enrollment.md#record-the-server)). A record with no
 platform is still read, and `serve` logs `has no platform, which router mode needs` for its MACs:
 router mode installs nothing for it, and it gets the menu that boots its local disk. Proxy mode
@@ -69,7 +69,7 @@ can stay in the inventory: its `hostHeld` keeps the machine from being installed
 what `serve` will see:
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment list-records --enrolled false
 ```
 
@@ -363,7 +363,7 @@ true when `serve` logs a `dhcp:` line for a booting machine's MAC.
 
 Once, on the coordinator. `pxe` runs on the hosts of a host group that lists it
 ([hostgroups.md](hostgroups.md)). Make a group for the boot host, `pxe-boot`, that lists every
-package the boot host runs now (`hkctl host-groups get` of its group shows them; a move uninstalls
+package the boot host runs now (`hk host-groups get` of its group shows them; a move uninstalls
 what the new group does not list) and `pxe` after them, in the order they install:
 
 ```json
@@ -371,7 +371,7 @@ what the new group does not list) and `pxe` after them, in the order they instal
 ```
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     host-groups put --request pxe-boot.json --reason "the boot server's host"
 ```
 
@@ -389,7 +389,7 @@ cargo xtask release targets --service pxe --version <version> --dir <assets> \
   | sed -n 's/^targets=//p' > targets.json
 jq -n --arg version <version> --slurpfile targets targets.json \
   '{desired: {version: $version}, targets: $targets[0]}' > desired.json
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     releases set-desired --service pxe --request desired.json
 ```
 
@@ -404,7 +404,7 @@ Move the boot host into `pxe-boot`. The daemon installs the package at its next 
 after the move has admitted it ([hostgroups.md](hostgroups.md#moving-a-host)):
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     host-groups move --node-id <boot-host> --host-group pxe-boot --reason "install window"
 ```
 
@@ -461,7 +461,7 @@ group, which does not list `pxe`: the move orders the uninstall of `pxe` (an uni
 [hostgroups.md](hostgroups.md#uninstalls)):
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     host-groups move --node-id <boot-host> --host-group <its-own-group> --reason "window over"
 ```
 
@@ -561,7 +561,7 @@ with no further step ([enrollment.md](enrollment.md#the-record-is-the-approval))
 before the machine boots.
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment add-record --host-id web-17 --host-group web \
     --data-macs 00:00:5e:00:53:01 --data-macs 00:00:5e:00:53:02 \
     --bmc-mac 00:00:5e:00:53:a1 --serial SN-0042 --platform linux_x86_64 \
@@ -598,7 +598,7 @@ daemon logs `enrolled as host:web-17`, and the record is used: `list-records` sh
 `RECORD_STATE_USED`, with the request that used it.
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment list-records --limit 50
 ```
 
@@ -612,12 +612,12 @@ than the record's, or is contested by another request. Approve those by hand, by
 the console, as in [enrollment.md](enrollment.md#approve):
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment list --limit 50
 ```
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment approve --request-id <request-id> --key-sha256 <key-sha256> \
     --host-group web --reason "network install, key checked on the console"
 ```
@@ -647,7 +647,7 @@ components record; nothing is timed by hand. Keep three files of that machine:
   `pending.json`. The request leaves the list at its approval, and its `firstSeenUnix` with it.
 
   ```
-  hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+  hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
       enrollment list --limit 50
   ```
 
@@ -657,7 +657,7 @@ components record; nothing is timed by hand. Keep three files of that machine:
   it under way; until then take it again.
 
   ```
-  hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+  hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
       hosts get --node-id web-17
   ```
 
@@ -723,7 +723,7 @@ to set one on a record, remove the record and add it again.
    is refused `host_group_differs`):
 
    ```
-   hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+   hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
        enrollment approve --request-id <request-id> --key-sha256 <key-sha256> \
        --host-id web-17 --host-group web --replace true \
        --reason "web-17 reinstalled from the network, key checked on the console"

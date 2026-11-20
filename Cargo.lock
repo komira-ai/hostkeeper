@@ -1904,13 +1904,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "hostkeeper-hkctl"
+name = "hostkeeper-hk"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
  "bytes",
  "clap",
  "hostkeeper-coordinator",
- "hostkeeper-hkctl",
+ "hostkeeper-hk",
  "hostkeeper-oidc",
  "hostkeeper-proto",
  "hostkeeper-testkit",
@@ -1919,26 +1920,15 @@ dependencies = [
  "prost-reflect",
  "protox",
  "rcgen",
- "regex",
  "rustls",
+ "rustls-native-certs",
  "serde_json",
  "sha2 0.11.0",
  "thiserror",
  "tokio",
-]
-
-[[package]]
-name = "hostkeeper-hkssh"
-version = "0.1.0"
-dependencies = [
- "clap",
- "hostkeeper-proto",
- "hostkeeper-testkit",
- "rcgen",
- "thiserror",
- "tokio",
  "tokio-stream",
  "tonic",
+ "ureq",
 ]
 
 [[package]]
@@ -6159,7 +6149,7 @@ dependencies = [
  "hex",
  "hostkeeper-config",
  "hostkeeper-daemon",
- "hostkeeper-hkctl",
+ "hostkeeper-hk",
  "hostkeeper-install",
  "hostkeeper-launchd",
  "hostkeeper-link",

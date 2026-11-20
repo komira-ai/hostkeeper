@@ -262,7 +262,7 @@ there (section 3.2), and the rollout gate stops on it.
 `hostkeeper.release.v1.Repository`: a name (`komira`), the package manager (`apt`; the shape takes `dnf` and others
 later), an `https://` URI, its suites (`testing`, `stable`), its components (`main`), the fingerprints of the keys that
 sign it and the binary keyring that holds them. The operator sets it through `Repositories` (repositories.proto, over
-gRPC and the JSON gateway, and `hkctl repositories`): `List`, `Get`, `Put` and `Remove`, `Put` and `Remove` each an
+gRPC and the JSON gateway, and `hk repositories`): `List`, `Get`, `Put` and `Remove`, `Put` and `Remove` each an
 audit entry (`repository_put`, `repository_remove`) and one more registry generation. `Put` refuses a keyring that is
 not a binary keyring of public keys, a listed fingerprint the keyring lacks, and a primary key of the keyring none of
 whose fingerprints is listed (`keyring_invalid`), so the operator states every key the hosts will trust. Each service

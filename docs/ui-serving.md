@@ -88,7 +88,7 @@ by their route and are not in the menu.
   the text is sent as typed). Setting the desired version asks first. It still shows the Assign and
   Unassign buttons, but a coordinator places by host group alone, so it refuses both with
   `placed_by_host_group`, and the page shows that refusal as it is; put a package in a group with
-  `hkctl host-groups put` instead.
+  `hk host-groups put` instead.
   The section also shows the service's update plan from `Releases.Status`: the stage sizes with
   their percents (a stage an operator enters is marked manual) against the eligible hosts, the
   stage the plan is in ("2 of 3"), why it waits (and for which stage, or that an operator paused
