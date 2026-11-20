@@ -309,7 +309,7 @@ fn the_sealed_digest_of_an_apt_version_is_that_of_its_program_in_the_tree() {
 }
 
 /// Proves an apt update that succeeds prunes the old version directories like any: after three
-/// updates only `current` and `previous` are left, and nothing is asked of the package manager
+/// updates, keeping no newest others (`--keep-versions 0`), only `current` and `previous` are left, and nothing is asked of the package manager
 /// for the versions deleted.
 ///
 /// Catches: version directories of an apt service that pile up, or a prune that purges or
@@ -321,7 +321,7 @@ fn updates_of_an_apt_service_prune_all_but_current_and_previous() {
         prune: Arc::new(LayoutPrune),
         ..apt.ports()
     };
-    let daemon = Daemon::new(support::config(), apt.rig.dirs(), ports, OWN);
+    let daemon = Daemon::new(support::config(), apt.rig.dirs(), ports, OWN).keeping_versions(0);
     let pins: Vec<String> = ["1.0.0-1", "2.0.0-1", "3.0.0-1"]
         .iter()
         .map(|v| apt.publish(package(v)))

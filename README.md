@@ -121,7 +121,7 @@ flag or a value hk does not take.
 The items B1 to B28 of section 12.2 of the design, by theme. "Built" means the code is on `main`.
 
 - **Host daemon.** Built: B2 (the config and manifest loaders), B4 (the daemon; its admin
-  socket was deleted by K3 of [two-programs](docs/design/two-programs.md)), B8 (the service observer), B9 (the heartbeat loop), B13 (pruning to two versions),
+  socket was deleted by K3 of [two-programs](docs/design/two-programs.md)), B8 (the service observer), B9 (the heartbeat loop), B13 (pruning to the kept versions),
   B22 (self-update of hostkeeper), B3 (`SystemdLauncher`, in `hostkeeper-steps`, which the daemon
   runs each hook step through), B20 (the verbs `abort`, `clear_halt` and `clear_record`, see
   [Operator verbs on the host](#operator-verbs-on-the-host)).
@@ -172,6 +172,7 @@ only, never from the environment:
 | `--notify-systemd` | off | once the boot work is over, send `READY=1` to the notify socket systemd sets for a `Type=notify` unit; without that socket the daemon exits 1 |
 | `--ready-file <file>` | none | once the boot work is over, write the file with the daemon's pid: the readiness notice the OpenRC init script removes before a start and waits for after; not with `--notify-systemd` |
 | `--package-lock-wait-secs` | `300` | seconds a step of the repository installer (`apt`) waits at most for the host's package manager's lock, from 1 to 3600: apt's own wait (`DPkg::Lock::Timeout`) for an install, a try every 2 seconds for `dpkg --purge` and `apt-mark`, whose wait is logged (`alert=lock_wait`) at its start and every 30 seconds (apt's own wait is not); a lock still held then defers the order (`package_manager_busy`), which halts nothing |
+| `--keep-versions` | `4` | how many versions of each service the host keeps besides `current`, `previous`, the one its pin names and the ones an unfinished update or force still uses, from 0 to 32: the newest, by the time each was staged. The pin is the file `pins/<service>` beside the state directory (`/var/lib/updater/pins/<service>`): one version, with one newline or none; a pin that cannot be read or holds anything else deletes nothing and is the alert `prune_failed`. The prune after a confirmed switch deletes the rest, and nothing while an update of the service is on trial |
 | `--maintenance-linux-scope` | `security` | which Linux updates the host reports due in its heartbeat (`maintenance-v1`): `security`, security updates and newer kernels; `all`, every update. A package of hostkeeper's own is never reported; the flag applies to a Linux host alone |
 | `--maintenance-macos-major` | off | on a Mac, report the newest major upgrade of macOS due in the heartbeat (`maintenance-v1`), from `softwareupdate --list` and `--list-full-installers`; off, a major upgrade is never due, though `softwareupdate` lists it, and only the minor updates it lists are. A Linux host ignores it |
 | `--heartbeat-secs` | `15` | seconds between two heartbeats, at least 1; the end of a running order is reported within a second, without waiting for the period |
@@ -293,7 +294,7 @@ own.
 | 15. Wait until each is active | each must be seen active once within `force_start_secs`, polled every second | nothing more | again from step 9 |
 | 16. Record the verdict | phase `verdicted` with `Succeeded`, or `Failed` with its reason | the verdict | nothing: a resend is answered from it |
 | 17. Report | the verdict, with the order's id and try, is what the daemon's status gives the heartbeat until the next order | the verdict | nothing |
-| 18. Prune | when `current` moved, the versions but `current` and `previous` are deleted (see below); a failed prune is an alert and leaves the verdict | a version renamed to `.stage-prune-*`, or a seal with no tree, both removed later | nothing; the next confirmed switch prunes again |
+| 18. Prune | when `current` moved, the versions the host does not keep are deleted (see below); a failed prune is an alert and leaves the verdict | a version renamed to `.stage-prune-*`, or a seal with no tree, both removed later | nothing; the next confirmed switch prunes again |
 
 The reasons a force reports: before anything changed, `Failed` before the commit with the
 reason of what refused it (`digest_mismatch`, `package_not_found`, `no_space`, `package_failed`,
@@ -305,19 +306,26 @@ stays where it is: nothing is rolled back and the daemon does not try again. The
 second force, for instance to the version `previous` names, which is on the host and needs no
 fetch.
 
-## Two versions on a host
+## The versions a host keeps
 
-A host keeps two versions of each service: the one `current` names and the one `previous`
-names, so a rollback to `previous` is a local switch with no fetch, and anything older is
-fetched again. No setting changes this. After a confirmed switch (an update that ends
+A host keeps, of each service, the version `current` names and the one `previous` names, so a
+rollback to `previous` is a local switch with no fetch; the version its pin names
+(`/var/lib/updater/pins/<service>`, one version and at most one newline); and the newest
+`--keep-versions` others (4 by default, 0 to 32), newest by the time each was staged. Only a
+whole version (its directory and its seal) is kept for being new; anything else is fetched
+again. A pin that cannot be read, or holds anything but a version, deletes nothing and is the
+alert `prune_failed`. After a confirmed switch (an update that ends
 `Succeeded`, `promotion_pending` or not, or a force that moved `current`, whatever its verdict)
 the daemon deletes every other version directory of the service, with its seal, under the
 service's lock and no other. It keeps the target of the switch, and anything a record says is
 still in use: the release an unfinished update replaces, the target of a switch under way, and
 a version `placed.json` still lists as `pending`. A version staged by an update that did not
 switch stays until the next confirmed switch, so a retry needs no fetch. Nothing is pruned
-after a failed, deferred, halted or `forced_over` update, at start, or to make room: the disk
-need is two trees per service plus the one being staged. When `current` or `previous` is
+after a failed, deferred, halted or `forced_over` update, at start, to make room, or while the
+service's step record holds an update that is not over and not in the post-success watch (a
+trial, which may still switch back): the disk need is `--keep-versions` plus two trees per
+service, the pinned one, and the one being staged. `--keep-versions 0` keeps `current` and
+`previous` alone. When `current` or `previous` is
 missing or names no version, nothing is deleted. A version is renamed to `.stage-prune-*`, then
 its seal is removed, then the tree, so a crash never leaves a half-deleted version; the next
 prune, or the unpack's own clean-up, finishes the job. A removal that fails is an alert and
