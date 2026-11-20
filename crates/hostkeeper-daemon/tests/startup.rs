@@ -18,6 +18,7 @@ use hostkeeper_daemon::cli::{
     MAX_PACKAGE_LOCK_WAIT_SECS, UNWIRED, Unwired,
 };
 use hostkeeper_daemon::maintenance_collect::LinuxScope;
+use hostkeeper_daemon::prune::DEFAULT_KEEP_VERSIONS;
 use hostkeeper_daemon::start::{self, LOCK_FILE, StartError, Started};
 use hostkeeper_link::{DEFAULT_HEARTBEAT_SECS, LoopFlags};
 use hostkeeper_placed::{UnitControl, UnitControlError};
@@ -184,6 +185,7 @@ fn daemon_flag_defaults_are_the_documented_ones() {
             notify_systemd: false,
             ready_file: None,
             package_lock_wait_secs: DEFAULT_PACKAGE_LOCK_WAIT_SECS,
+            keep_versions: DEFAULT_KEEP_VERSIONS,
             maintenance_linux_scope: LinuxScope::Security,
             maintenance_macos_major: false,
             link: LoopFlags {
@@ -196,6 +198,7 @@ fn daemon_flag_defaults_are_the_documented_ones() {
         flags.settings().package_lock_wait_secs,
         DEFAULT_PACKAGE_LOCK_WAIT_SECS
     );
+    assert_eq!(flags.settings().keep_versions, DEFAULT_KEEP_VERSIONS);
     let readme = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../README.md"))
         .expect("the README");
     let documented = [
@@ -206,6 +209,7 @@ fn daemon_flag_defaults_are_the_documented_ones() {
         "`--notify-systemd` | off".to_owned(),
         "`--maintenance-macos-major` | off".to_owned(),
         format!("`--package-lock-wait-secs` | `{DEFAULT_PACKAGE_LOCK_WAIT_SECS}`"),
+        format!("`--keep-versions` | `{DEFAULT_KEEP_VERSIONS}`"),
         format!("`--heartbeat-secs` | `{DEFAULT_HEARTBEAT_SECS}`"),
         format!("| {EXIT_FAILED} |"),
         "| 2 |".to_owned(),
