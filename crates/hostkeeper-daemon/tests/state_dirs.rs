@@ -24,6 +24,7 @@ fn settings(root: &Path) -> Settings {
         run_dir: root.join("run"),
         trusted_uid: 0,
         package_lock_wait_secs: hostkeeper_daemon::cli::DEFAULT_PACKAGE_LOCK_WAIT_SECS,
+        keep_versions: hostkeeper_daemon::prune::DEFAULT_KEEP_VERSIONS,
     }
 }
 

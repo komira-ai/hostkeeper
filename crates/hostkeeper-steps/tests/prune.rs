@@ -1,14 +1,16 @@
 //! Pruning a package directory to `current` and `previous` (design section 4.7): the rule, a
 //! pure function of what the directory holds, and the deletion, which renames a version out of
-//! the way, removes its seal, then removes its tree, never following a link.
+//! the way, removes its seal, then removes its tree, never following a link. These keep no newest
+//! others (`Protected::newest` is 0); the newest and the pin are `prune_newest.rs`.
 
 mod support;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use hostkeeper_steps::selfupdate::Layout;
 use hostkeeper_steps::{
@@ -102,6 +104,14 @@ fn snapshot(dir: &Path) -> Vec<(PathBuf, String)> {
     out
 }
 
+/// `names`, each sealed at the same time.
+fn sealed(names: &[&str]) -> BTreeMap<String, SystemTime> {
+    names
+        .iter()
+        .map(|name| ((*name).to_owned(), UNIX_EPOCH))
+        .collect()
+}
+
 /// What the rule plans for `versions` with directories, `seals`, the links and `protected`.
 fn plan(
     versions: &[&str],
@@ -112,7 +122,7 @@ fn plan(
 ) -> PrunePlan {
     prune_plan(&PruneInputs {
         versions: set(versions),
-        seals: set(seals),
+        seals: sealed(seals),
         leftovers: set(&[".stage-prune-0011223344556677"]),
         current: current.map(str::to_owned),
         previous: previous.map(str::to_owned),
@@ -131,6 +141,7 @@ fn the_rule_keeps_current_previous_and_the_protected_and_deletes_the_rest() {
         previous_releases: set(&["D"]),
         switch_targets: set(&["E"]),
         staged: set(&["H"]),
+        ..Protected::default()
     };
     let planned = plan(
         &["A", "B", "C", "D", "E", "G", "H"],
@@ -191,18 +202,21 @@ fn the_rule_deletes_nothing_when_a_link_does_not_resolve() {
     }
 }
 
-/// Catches a protection that holds for one kind only.
+/// Catches a protection that holds for one kind only, the pin's included; a count of newest
+/// versions names none.
 #[test]
-fn protected_holds_each_of_its_three_kinds() {
+fn protected_holds_each_of_its_kinds() {
     let protected = Protected {
         previous_releases: set(&["1"]),
         switch_targets: set(&["2"]),
         staged: set(&["3"]),
+        pinned: set(&["4"]),
+        newest: 9,
     };
-    for version in ["1", "2", "3"] {
+    for version in ["1", "2", "3", "4"] {
         assert!(protected.contains(version), "{version}");
     }
-    assert!(!protected.contains("4"));
+    assert!(!protected.contains("5"));
 }
 
 /// Catches a prune that leaves a seal or a tree of a doomed version, touches a name that is not
@@ -604,8 +618,8 @@ fn delete_version_never_follows_a_link_and_refuses_a_bad_name_and_a_binary_direc
 }
 
 /// Catches the inputs of a prune read from names instead of what the entries are: a version is a
-/// real directory, a seal is anything but a directory named `<version>.seal`, and the links are
-/// read as their plain targets.
+/// real directory, a seal is anything but a directory named `<version>.seal`, read with the time
+/// it was last written, and the links are read as their plain targets.
 #[test]
 fn the_inputs_are_read_from_what_the_entries_are() {
     let s = Scratch::new("prune-inputs");
@@ -613,6 +627,15 @@ fn the_inputs_are_read_from_what_the_entries_are() {
     holding(&layout, &["1", "2"], "2", "1");
     fs::write(layout.seal_path("3"), "").unwrap();
     symlink("1", layout.dir().join("4")).unwrap();
+    let at = |secs: u64| UNIX_EPOCH + Duration::from_secs(secs);
+    for (version, secs) in [("1", 30), ("2", 10), ("3", 20)] {
+        fs::File::options()
+            .write(true)
+            .open(layout.seal_path(version))
+            .unwrap()
+            .set_modified(at(secs))
+            .unwrap();
+    }
     let protected = Protected {
         staged: set(&["9"]),
         ..Protected::default()
@@ -622,7 +645,10 @@ fn the_inputs_are_read_from_what_the_entries_are() {
         inputs,
         PruneInputs {
             versions: set(&["1", "2"]),
-            seals: set(&["1", "2", "3"]),
+            seals: [("1", at(30)), ("2", at(10)), ("3", at(20))]
+                .into_iter()
+                .map(|(version, time)| (version.to_owned(), time))
+                .collect(),
             leftovers: BTreeSet::new(),
             current: Some("2".to_owned()),
             previous: Some("1".to_owned()),
