@@ -1,6 +1,7 @@
 //! The ports of the maintenance hook: the run record it keeps each kind's progress in
-//! ([`RunRecord`]) and the reboot it asks for ([`Rebooter`]). [`Unwired`] stands in for the run record
-//! until it is written, and for the reboot of a platform that has none here (a Mac).
+//! ([`RunRecord`]) and the reboot it asks for ([`Rebooter`]). [`Unwired`] stands in for the run
+//! record where the hook has no directory to keep it in (parameters on standard input), and for
+//! the reboot of a platform that has none here (a Mac).
 
 use hostkeeper_steps::BootId;
 
@@ -13,8 +14,11 @@ pub enum KindState {
     Pending,
     /// Installed; the reboot it needs was asked for in the boot `boot`.
     RebootUnderWay { boot: BootId },
-    /// Applied.
+    /// Applied, with no reboot of it asked for.
     Applied,
+    /// Applied after the reboot it needed, which was asked for in the boot `asked_in`: `verify`
+    /// checks that the host no longer runs that boot.
+    AppliedAfterReboot { asked_in: BootId },
 }
 
 /// Why the run record could not be read or written.
@@ -23,7 +27,7 @@ pub enum RecordError {
     /// The record failed; the text says where and how, never a parameter's value.
     #[error("the run record failed: {0}")]
     Failed(String),
-    /// This host has no run record yet.
+    /// The hook has no run record: its parameters came on standard input.
     #[error("this host keeps no run record yet")]
     NotWired,
 }
@@ -35,7 +39,9 @@ pub trait RunRecord {
     fn state(&self, run_id: &str, kind: Kind) -> Result<KindState, RecordError>;
     /// Records that the reboot `kind` needs is under way, asked for in the boot `boot`.
     fn reboot_under_way(&self, run_id: &str, kind: Kind, boot: &BootId) -> Result<(), RecordError>;
-    /// Records `kind` applied, the host running `version` of it.
+    /// Records `kind` applied, the host running `version` of it. A kind whose reboot was under
+    /// way is then held [`KindState::AppliedAfterReboot`], with the boot its reboot was asked in;
+    /// any other, [`KindState::Applied`].
     fn applied(&self, run_id: &str, kind: Kind, version: &str) -> Result<(), RecordError>;
 }
 
@@ -57,7 +63,8 @@ pub trait Rebooter {
     fn reboot(&self) -> Result<(), RebootError>;
 }
 
-/// The run record and the reboot of a host that has neither yet: the record holds nothing (every
+/// The run record of a hook with no directory to keep it in and the reboot of a host that has none
+/// yet: the record holds nothing (every
 /// kind [`KindState::Pending`]) and refuses every write, and the reboot is refused, each
 /// [`RecordError::NotWired`] or [`RebootError::NotWired`]. The binary refuses a `cutover` before
 /// any kind runs while its record is this one ([`super::unwired_record`]), so no install is made

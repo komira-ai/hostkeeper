@@ -53,8 +53,9 @@
 //!   loop at `/var/lib/hostkeeper/identity` for the group `hostkeeper-identity`
 //!   ([`identity_group`]), for the services of the host (docs/design/host-identity.md).
 //! - [`prune`]: after a confirmed switch (an update that ends `Succeeded`, a force that moved
-//!   `current`), the service's version directories but `current` and `previous` are deleted,
-//!   under the lock the order already holds.
+//!   `current`), the service's version directories but `current`, `previous`, the pinned one
+//!   ([`pin`]), the ones the records use and the newest `--keep-versions` others are deleted,
+//!   under the lock the order already holds, and none while an update of the service is on trial.
 //! - [`halt`]: the generation a halt of each service is held under, persisted while the halt stands.
 //! - [`hook_log`]: what the host's step launcher kept of a hook's standard error, as lines of the
 //!   daemon's log under the step's unit.
@@ -71,7 +72,8 @@
 //!   as the host's repository configuration and taken into use without a restart.
 //! - [`facts_file`]: the host's facts file, written from the facts the coordinator sends.
 //! - [`maintenance_state`]: the run state of the maintenance report, read from the host's
-//!   maintenance run record (`hostkeeper_steps::maintenance`).
+//!   maintenance run record (`hostkeeper_steps::maintenance`), which [`maintenance_run`]'s
+//!   sequencer drives through a `maintain` order's steps ([`verbs::maintain`]), across a reboot.
 //! - [`operator_keys`]: the operator keys the coordinator sends (`operator-keys-v1`), put in the
 //!   managed block of the login account's `authorized_keys` ([`authorized_keys`], the block and the
 //!   file) and reported by digest in every heartbeat; [`login_account`] finds the account (root on
@@ -106,8 +108,10 @@
 //!   only forwards to it.
 //! - [`maintenance_hook`]: `hostkeeper maintenance-hook <prepare|cutover|verify>`, the OS work of
 //!   a maintenance run: the parameters of the run's `maintain` order, the work of each kind
-//!   (`macos`, `xcode`, `linux`, `reboot`) found by the host's platform, and the reboot recorded
-//!   in the run record before it is asked for.
+//!   (`macos`, `xcode`, `linux`, `reboot`) found by the host's platform (on a Mac, the `macos`
+//!   kind's stage: `softwareupdate --download` or `--fetch-full-installer` after a free-space
+//!   check), the reboot recorded in the run record before it is asked for, and the Linux kinds'
+//!   `verify`: the host booted again, nothing of the run still due and every service healthy.
 //! - [`maintenance_linux`]: the `linux` and `reboot` kinds of that hook on a Linux host: the
 //!   install of the host's package manager (`apt`, `dnf` or `apk`), the question whether the host
 //!   then needs a reboot, the kernel it runs after the reboot, and the reboot itself.
@@ -181,6 +185,7 @@ pub mod maintenance_mdm;
 pub mod maintenance_own;
 pub mod maintenance_plist;
 pub mod maintenance_reboot;
+pub mod maintenance_run;
 pub mod maintenance_softwareupdate;
 pub mod maintenance_state;
 pub mod maintenance_xcode;
@@ -192,6 +197,7 @@ pub mod operator_keys;
 pub mod own_package;
 pub mod packaged;
 pub mod packages;
+pub mod pin;
 pub mod place;
 pub mod prerequisites;
 pub mod prune;

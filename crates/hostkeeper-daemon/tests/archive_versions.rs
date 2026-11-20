@@ -437,7 +437,8 @@ fn a_delete_failure_is_an_alert_and_the_start_goes_on() {
 /// Catches a deletion a crash cut short that the next start does not finish: after the link is
 /// gone and the tree renamed to its temporary name, the start's sweep of leftovers removes the
 /// renamed tree and the seal, and nothing more is deleted; after the link is gone with the
-/// version whole, the next confirmed switch's prune deletes it.
+/// version whole, the next confirmed switch's prune, keeping no newest others
+/// (`--keep-versions 0`), deletes it.
 #[test]
 fn a_deletion_a_crash_cut_short_is_finished_by_the_next_start() {
     let apt = moved("archive-crash");
@@ -471,7 +472,7 @@ fn a_deletion_a_crash_cut_short_is_finished_by_the_next_start() {
         prune: Arc::new(LayoutPrune),
         ..apt.ports()
     };
-    let daemon = Daemon::new(support::config(), apt.rig.dirs(), ports, OWN);
+    let daemon = Daemon::new(support::config(), apt.rig.dirs(), ports, OWN).keeping_versions(0);
     assert_eq!(
         daemon.order(&update_of("3.0.0", "3.0.0", &three, 2)),
         support_apt::seen::succeeded()

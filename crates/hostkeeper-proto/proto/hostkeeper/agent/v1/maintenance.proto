@@ -6,7 +6,8 @@
 // apart to shorten agent.proto. A Linux or Mac daemon sends a report to a coordinator that
 // advertises `maintenance-v1`; a coordinator keeps the last report a daemon that announces it sent
 // (over gRPC, or over the JSON route as base64 of its encoding in the key `maintenance`) and shows
-// it in the operator API. No daemon runs a `maintain` and no coordinator sends one yet.
+// it in the operator API. A daemon that announces `maintenance-v1` runs a `maintain` whose action
+// is `RUN`; no coordinator sends one yet.
 //
 // Served by: the coordinator, on its heartbeat listener, as agent.proto says.
 //
@@ -250,6 +251,11 @@ message Maintain {
   // How long the host may be silent while it reboots, or, on the `wait` path, take to report the
   // new build, before its turn halts.
   uint64 return_secs = 10;
+  // For `macos`: whether the run may stage and install a major upgrade of macOS, the newest full
+  // installer the Mac's own `softwareupdate --list-full-installers` offers (the group's
+  // `macos_major`); false, the default and what a coordinator that does not know the field sends:
+  // only updates within the major version the Mac runs.
+  bool macos_major = 11;
 }
 
 // What a `maintain` does with the host's turn.
