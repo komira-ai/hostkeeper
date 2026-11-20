@@ -17,13 +17,13 @@ use hostkeeper_proto::FILE_DESCRIPTOR_SET;
 use hostkeeper_proto::hostkeeper::agent::v1::Platform;
 use hostkeeper_proto::hostkeeper::operator::v1::{
     AddRecordRequest, ApproveRequest, ConvergeRequest, DesiredState, ForceRequest,
-    GetHostGroupRequest, GetHostRequest, HostGroup, HostList, ListHostsRequest, ListPendingRequest,
-    ListRecordsRequest, ListServicesRequest, PutHostGroupRequest, PutRepositoryRequest,
-    RetireRequest, SetDesiredRequest, SetRepositoryRequest, StatusRequest,
-    enrollment_client::EnrollmentClient, force_request::Targets,
-    host_groups_client::HostGroupsClient, hosts_client::HostsClient,
-    releases_client::ReleasesClient, repositories_client::RepositoriesClient,
-    services_client::ServicesClient,
+    GetHostGroupRequest, GetHostRequest, HoldRequest, HoldScope, HostGroup, HostList,
+    ListHostsRequest, ListPendingRequest, ListRecordsRequest, ListServicesRequest, MarkBadRequest,
+    PutHostGroupRequest, PutRepositoryRequest, RetireRequest, SetDesiredRequest,
+    SetRepositoryRequest, StatusRequest, enrollment_client::EnrollmentClient,
+    force_request::Targets, hold_scope::Scope, host_groups_client::HostGroupsClient,
+    hosts_client::HostsClient, releases_client::ReleasesClient,
+    repositories_client::RepositoriesClient, services_client::ServicesClient,
 };
 use hostkeeper_proto::hostkeeper::release::v1::{Repository, TargetList};
 use hostkeeper_testkit::operator::{Operator, canonical_json};
@@ -321,13 +321,15 @@ impl OperatorApi {
         )
     }
 
-    /// `Releases.Force` of `service` to `version` on the host `node_id`.
+    /// `Releases.Force` of `service` to `version` on the host `node_id`; with `include_held`, also
+    /// when an operator holds the service on that host.
     pub fn force(
         &self,
         service: &str,
         version: &str,
         node_id: &str,
         reason: &str,
+        include_held: bool,
     ) -> Result<Value, Status> {
         rpc!(
             self,
@@ -339,9 +341,40 @@ impl OperatorApi {
                 targets: Some(Targets::Hosts(HostList {
                     node_ids: vec![node_id.to_owned()],
                 })),
+                include_held,
                 ..ForceRequest::default()
             },
             "ForceResponse"
+        )
+    }
+
+    /// `Releases.MarkBad` of `version` of `service`.
+    pub fn mark_bad(&self, service: &str, version: &str, reason: &str) -> Result<Value, Status> {
+        rpc!(
+            self,
+            ReleasesClient.mark_bad,
+            MarkBadRequest {
+                service: service.to_owned(),
+                version: version.to_owned(),
+                reason: reason.to_owned(),
+            },
+            "MarkBadResponse"
+        )
+    }
+
+    /// `Services.Hold` of `service` on the host `node_id`.
+    pub fn hold_host(&self, service: &str, node_id: &str, reason: &str) -> Result<Value, Status> {
+        rpc!(
+            self,
+            ServicesClient.hold,
+            HoldRequest {
+                scope: Some(HoldScope {
+                    scope: Some(Scope::Host(node_id.to_owned())),
+                }),
+                service: service.to_owned(),
+                reason: reason.to_owned(),
+            },
+            "HoldResponse"
         )
     }
 
