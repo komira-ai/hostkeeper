@@ -6,13 +6,13 @@
 
 mod support;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use hostkeeper_daemon::executor::Daemon;
 use hostkeeper_daemon::links::Links;
 use hostkeeper_daemon::prerequisites::Prerequisites;
-use hostkeeper_daemon::xcode_clt::{CommandLineTools, DEVELOPER_DIR};
+use hostkeeper_daemon::xcode_clt::{CommandLineTools, DEVELOPER_DIR, FileCheck, Ports};
 use hostkeeper_launchd::{FakeLaunchctl, LaunchctlOutput};
 use hostkeeper_link::testing::{
     FakeCerts, FakeClock, FakeLink, ManualDispatch, RecordingLog, ScriptedSleeper, identity,
@@ -49,6 +49,15 @@ fn words(words: &[&str]) -> Vec<String> {
     words.iter().map(|word| (*word).to_owned()).collect()
 }
 
+/// A disk with no files: the receipt is what the look finds here.
+struct NoFiles;
+
+impl FileCheck for NoFiles {
+    fn is_file(&self, _: &Path) -> bool {
+        false
+    }
+}
+
 /// A Mac that has the tools, over scripted programs, and the fake behind `pkgutil`.
 fn mac(marker: PathBuf) -> (Arc<Prerequisites>, FakeLaunchctl) {
     let pkgutil = FakeLaunchctl::new();
@@ -59,13 +68,16 @@ fn mac(marker: PathBuf) -> (Arc<Prerequisites>, FakeLaunchctl) {
     let select = FakeLaunchctl::new();
     select.always(&words(&["-p"]), Ok(LaunchctlOutput::success(DEVELOPER_DIR)));
     let none = FakeLaunchctl::new();
-    let tools = CommandLineTools::new(
-        Box::new(pkgutil.clone()),
-        Box::new(select),
-        Box::new(none.clone()),
-        Box::new(none),
+    let tools = CommandLineTools::new(Ports {
+        pkgutil: Box::new(pkgutil.clone()),
+        xcode_select: Box::new(select),
+        xcodebuild: Box::new(none.clone()),
+        sw_vers: Box::new(none.clone()),
+        list: Box::new(none.clone()),
+        install: Box::new(none),
+        files: Box::new(NoFiles),
         marker,
-    );
+    });
     let sink = Prerequisites::new(
         Some(tools),
         Arc::new(FakeClock::new(2_000_000_000, 7)),

@@ -24,7 +24,8 @@ pub const MAX_NAME_BYTES: usize = 64;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Prerequisite {
     /// Apple's Command Line Tools for Xcode (`xcode-select -p` names a developer directory, and
-    /// `pkgutil` knows the package `com.apple.pkg.CLTools_Executables`), on macOS only.
+    /// `pkgutil` knows the package `com.apple.pkg.CLTools_Executables`, the tools' compiler is on
+    /// disk, or the directory is a ready Xcode's), on macOS only.
     XcodeCommandLineTools,
 }
 

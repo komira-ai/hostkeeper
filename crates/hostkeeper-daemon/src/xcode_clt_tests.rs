@@ -1,5 +1,6 @@
-//! The tests of `xcode_clt`: the four programs as scripted ports that count their calls, and a
-//! scratch marker file; the exact arguments of each step, the label chosen and the errors.
+//! The tests of `xcode_clt`: the programs as scripted ports that count their calls, a scripted
+//! disk behind the file port, and a scratch marker file; the exact arguments of each step, the
+//! label chosen, the look's three ways to find the tools and the errors, reasons by equality.
 
 use std::os::unix::fs::symlink;
 use std::sync::{Arc, Mutex};
@@ -23,6 +24,13 @@ fn scratch(name: &str) -> Scratch {
 const INFO: &str =
     "package-id: com.apple.pkg.CLTools_Executables\nversion: 15.3.0.0.1.1708646388\nvolume: /\n";
 
+/// What `sw_vers` writes on the Macs of these tests.
+const SW_VERS_OUT: &str =
+    "ProductName:\t\tmacOS\nProductVersion:\t\t15.1\nBuildVersion:\t\t24B83\n";
+
+/// The developer directory of a full Xcode, as `xcode-select -p` names it.
+const XCODE_DIR: &str = "/Applications/Xcode.app/Contents/Developer";
+
 /// How a [`Hook`] answers: a function of the arguments.
 type Answer = Box<dyn Fn(&[String]) -> Result<LaunchctlOutput, LaunchctlError> + Send + Sync>;
 
@@ -35,13 +43,46 @@ impl Launchctl for Hook {
     }
 }
 
-/// The Command Line Tools over scripted programs, and the fakes behind them.
+/// A scripted disk: the paths that are files, and every path asked about, in order.
+#[derive(Clone, Default)]
+struct Disk {
+    files: Arc<Mutex<Vec<PathBuf>>>,
+    asked: Arc<Mutex<Vec<PathBuf>>>,
+}
+
+impl Disk {
+    fn put(&self, path: &str) {
+        self.files
+            .lock()
+            .expect("the disk")
+            .push(PathBuf::from(path));
+    }
+
+    fn asked(&self) -> Vec<PathBuf> {
+        self.asked.lock().expect("the disk").clone()
+    }
+}
+
+impl FileCheck for Disk {
+    fn is_file(&self, path: &Path) -> bool {
+        self.asked.lock().expect("the disk").push(path.to_owned());
+        self.files
+            .lock()
+            .expect("the disk")
+            .iter()
+            .any(|file| file == path)
+    }
+}
+
+/// The scripted programs and disk of a Mac, from which the tools are built.
 struct Rig {
-    tools: CommandLineTools,
     pkgutil: FakeLaunchctl,
     select: FakeLaunchctl,
+    xcodebuild: FakeLaunchctl,
+    sw_vers: FakeLaunchctl,
     list: FakeLaunchctl,
     install: FakeLaunchctl,
+    disk: Disk,
     marker: PathBuf,
     log: RecordingLog,
     _scratch: Scratch,
@@ -50,22 +91,16 @@ struct Rig {
 fn rig(name: &str) -> Rig {
     let scratch = scratch(name);
     let marker = scratch.path().join("marker");
-    let pkgutil = FakeLaunchctl::new();
-    let select = FakeLaunchctl::new();
-    let list = FakeLaunchctl::new();
-    let install = FakeLaunchctl::new();
+    let sw_vers = FakeLaunchctl::new();
+    sw_vers.always(&[], Ok(LaunchctlOutput::success(SW_VERS_OUT)));
     Rig {
-        tools: CommandLineTools::new(
-            Box::new(pkgutil.clone()),
-            Box::new(select.clone()),
-            Box::new(list.clone()),
-            Box::new(install.clone()),
-            marker.clone(),
-        ),
-        pkgutil,
-        select,
-        list,
-        install,
+        pkgutil: FakeLaunchctl::new(),
+        select: FakeLaunchctl::new(),
+        xcodebuild: FakeLaunchctl::new(),
+        sw_vers,
+        list: FakeLaunchctl::new(),
+        install: FakeLaunchctl::new(),
+        disk: Disk::default(),
         marker,
         log: RecordingLog::default(),
         _scratch: scratch,
@@ -73,6 +108,66 @@ fn rig(name: &str) -> Rig {
 }
 
 impl Rig {
+    /// The tools over the rig's programs, disk and marker, with `install` for
+    /// `softwareupdate --install`.
+    fn tools_with(&self, install: Box<dyn Launchctl>) -> CommandLineTools {
+        CommandLineTools::new(Ports {
+            pkgutil: Box::new(self.pkgutil.clone()),
+            xcode_select: Box::new(self.select.clone()),
+            xcodebuild: Box::new(self.xcodebuild.clone()),
+            sw_vers: Box::new(self.sw_vers.clone()),
+            list: Box::new(self.list.clone()),
+            install,
+            files: Box::new(self.disk.clone()),
+            marker: self.marker.clone(),
+        })
+    }
+
+    /// The tools over the rig's programs, disk and marker.
+    fn tools(&self) -> CommandLineTools {
+        self.tools_with(Box::new(self.install.clone()))
+    }
+
+    /// No receipt: `pkgutil` does not know the package.
+    fn no_receipt(&self) {
+        self.pkgutil.always(
+            &self.info(),
+            Ok(LaunchctlOutput::exit(
+                1,
+                "No receipt for 'com.apple.pkg.CLTools_Executables' found",
+            )),
+        );
+    }
+
+    /// `xcode-select -p` exits 0 and names `directory`.
+    fn selects(&self, directory: &str) {
+        self.select.always(
+            &words(&["-p"]),
+            Ok(LaunchctlOutput::success(&format!("{directory}\n"))),
+        );
+    }
+
+    /// `xcodebuild` answers its licence check, first-launch check and version with these codes.
+    fn xcode(&self, licence: i32, first_launch: i32, version: i32) {
+        let answer = |code: i32, stdout: &str| {
+            Ok(LaunchctlOutput {
+                code: Some(code),
+                stdout: stdout.as_bytes().to_vec(),
+                stderr: Vec::new(),
+            })
+        };
+        self.xcodebuild
+            .always(&words(&["-license", "check"]), answer(licence, ""));
+        self.xcodebuild.always(
+            &words(&["-checkFirstLaunchStatus"]),
+            answer(first_launch, ""),
+        );
+        self.xcodebuild.always(
+            &words(&["-version"]),
+            answer(version, "Xcode 16.1\nBuild version 16B40\n"),
+        );
+    }
+
     /// The package is installed, with a developer directory.
     fn present(&self) {
         self.pkgutil
@@ -103,7 +198,7 @@ impl Rig {
     }
 
     fn installed(&self) -> Result<String, CommandLineToolsError> {
-        self.tools.install(&self.log)
+        self.tools().install(&self.log)
     }
 }
 
@@ -114,7 +209,7 @@ fn an_installed_package_with_a_developer_directory_is_present() {
     let rig = rig("clt-present");
     rig.present();
     assert_eq!(
-        rig.tools.check(),
+        rig.tools().check(),
         Ok(Some("15.3.0.0.1.1708646388".to_owned()))
     );
     assert_eq!(rig.pkgutil.calls(), [rig.info()]);
@@ -129,23 +224,22 @@ fn a_package_that_names_no_version_is_present_with_none() {
     rig.present();
     rig.pkgutil
         .always(&rig.info(), Ok(LaunchctlOutput::success("package-id: x\n")));
-    assert_eq!(rig.tools.check(), Ok(Some(String::new())));
+    assert_eq!(rig.tools().check(), Ok(Some(String::new())));
 }
 
-/// Proves a package that `pkgutil` does not know is absent, whatever its exit code, and
-/// `xcode-select` is not asked.
+/// Proves a package that `pkgutil` does not know, whatever its exit code, with no compiler on disk
+/// and no developer directory selected, is absent: `xcode-select -p` is asked once, and neither
+/// `xcode-select --switch` nor `xcodebuild` is run.
 #[test]
 fn a_package_pkgutil_does_not_know_is_absent() {
     let rig = rig("clt-absent");
-    rig.pkgutil.always(
-        &rig.info(),
-        Ok(LaunchctlOutput::exit(
-            1,
-            "No receipt for 'com.apple.pkg.CLTools_Executables' found",
-        )),
-    );
-    assert_eq!(rig.tools.check(), Ok(None));
-    assert!(rig.select.calls().is_empty());
+    rig.no_receipt();
+    rig.select
+        .always(&words(&["-p"]), Ok(LaunchctlOutput::exit(2, "")));
+    assert_eq!(rig.tools().check(), Ok(None));
+    assert_eq!(rig.select.calls(), [words(&["-p"])]);
+    assert_eq!(rig.disk.asked(), [PathBuf::from(CLANG)]);
+    assert!(rig.xcodebuild.calls().is_empty());
     rig.pkgutil.always(
         &rig.info(),
         Ok(LaunchctlOutput {
@@ -154,7 +248,7 @@ fn a_package_pkgutil_does_not_know_is_absent() {
             stderr: Vec::new(),
         }),
     );
-    assert_eq!(rig.tools.check(), Ok(None));
+    assert_eq!(rig.tools().check(), Ok(None));
 }
 
 /// Proves an installed package with no developer directory selected has it selected with
@@ -172,7 +266,7 @@ fn a_package_with_no_developer_directory_is_switched_to_it() {
         Ok(LaunchctlOutput::success("")),
     );
     assert_eq!(
-        rig.tools.check(),
+        rig.tools().check(),
         Ok(Some("15.3.0.0.1.1708646388".to_owned()))
     );
     assert_eq!(
@@ -201,7 +295,7 @@ fn a_switch_that_fails_is_an_error_with_its_first_line() {
         )),
     );
     assert_eq!(
-        rig.tools.check().expect_err("fails").to_string(),
+        rig.tools().check().expect_err("fails").to_string(),
         "xcode-select --switch failed with exit code 1: xcode-select: error: boom"
     );
 }
@@ -218,7 +312,7 @@ fn a_developer_directory_still_missing_after_the_switch_is_an_error() {
         Ok(LaunchctlOutput::success("")),
     );
     assert_eq!(
-        rig.tools.check().expect_err("fails").to_string(),
+        rig.tools().check().expect_err("fails").to_string(),
         "xcode-select -p names no developer directory after its switch"
     );
 }
@@ -229,13 +323,13 @@ fn a_developer_directory_still_missing_after_the_switch_is_an_error() {
 fn a_program_that_does_not_run_is_an_error_naming_its_step() {
     let rig = rig("clt-no-run");
     assert_eq!(
-        rig.tools.check().expect_err("fails").to_string(),
+        rig.tools().check().expect_err("fails").to_string(),
         "pkgutil --pkg-info could not be run: the fake has no answer"
     );
     rig.pkgutil
         .always(&rig.info(), Ok(LaunchctlOutput::success(INFO)));
     assert_eq!(
-        rig.tools.check().expect_err("fails").to_string(),
+        rig.tools().check().expect_err("fails").to_string(),
         "xcode-select -p could not be run: the fake has no answer"
     );
     rig.select
@@ -247,7 +341,7 @@ fn a_program_that_does_not_run_is_an_error_naming_its_step() {
         }),
     );
     assert_eq!(
-        rig.tools.check().expect_err("fails").to_string(),
+        rig.tools().check().expect_err("fails").to_string(),
         "xcode-select --switch did not finish within its deadline"
     );
 }
@@ -312,7 +406,7 @@ fn a_listing_with_no_tools_fails_the_install() {
     rig.offers("No new software available.\n");
     assert_eq!(
         rig.installed().expect_err("fails").to_string(),
-        "softwareupdate --list offered no Command Line Tools for Xcode"
+        "softwareupdate --list offered no Command Line Tools for Xcode; macOS 15.1 24B83; stdout: No new software available.; stderr empty"
     );
     assert!(rig.install.calls().is_empty());
     assert!(!rig.marker.exists());
@@ -388,22 +482,23 @@ fn both_label_forms_are_compared_and_near_misses_are_ignored() {
     );
 }
 
-/// Proves a listing with labels but none of the tools fails with a reason that names every label it
-/// listed, in its order, and `softwareupdate --install` is never run.
+/// Proves a listing with labels but none that holds `Command Line Tools` fails with a reason that
+/// names every label it listed, in its order (a macOS update offered with no tools), and
+/// `softwareupdate --install` is never run.
 #[test]
 fn no_tools_among_listed_labels_names_the_labels() {
     let rig = rig("clt-other-labels");
-    rig.offers("* Label: macOS Tahoe 26.1-25B78\n* Label: Safari 26.1\n* Label: Command Line Tools beta 2 for Xcode 26.0-26.0\n");
+    rig.offers("* Label: macOS Tahoe 26.1-25B78\n* Label: Safari 26.1\n");
     assert_eq!(
         rig.installed().expect_err("fails").to_string(),
-        "softwareupdate --list offered no Command Line Tools for Xcode; it listed: macOS Tahoe 26.1-25B78; Safari 26.1; Command Line Tools beta 2 for Xcode 26.0-26.0"
+        "softwareupdate --list offered no Command Line Tools for Xcode; macOS 15.1 24B83; stdout: * Label: macOS Tahoe 26.1-25B78; stderr empty; it listed: macOS Tahoe 26.1-25B78; Safari 26.1"
     );
     assert!(rig.install.calls().is_empty());
     assert!(!rig.marker.exists());
 }
 
-/// Proves a listing with no label at all fails with a reason that names the first line of
-/// `softwareupdate`'s standard error that is not blank, where it says that nothing is offered.
+/// Proves a listing with no label at all fails with a reason that names the first line of each of
+/// `softwareupdate`'s streams that is not blank, where it says that nothing is offered.
 #[test]
 fn no_label_at_all_names_the_first_line_of_standard_error() {
     let rig = rig("clt-stderr");
@@ -417,13 +512,14 @@ fn no_label_at_all_names_the_first_line_of_standard_error() {
     );
     assert_eq!(
         rig.installed().expect_err("fails").to_string(),
-        "softwareupdate --list offered no Command Line Tools for Xcode; standard error: No new software available."
+        "softwareupdate --list offered no Command Line Tools for Xcode; macOS 15.1 24B83; stdout: Software Update Tool; stderr: No new software available."
     );
     assert!(rig.install.calls().is_empty());
     assert!(!rig.marker.exists());
 }
 
-/// Proves a list ended by a signal is an error that says so, and the marker is removed.
+/// Proves a list ended by a signal is an error that says so, with what the Mac is and was offered,
+/// and the marker is removed.
 #[test]
 fn a_list_ended_by_a_signal_is_an_error() {
     let rig = rig("clt-list-signal");
@@ -437,14 +533,15 @@ fn a_list_ended_by_a_signal_is_an_error() {
     );
     assert_eq!(
         rig.installed().expect_err("fails").to_string(),
-        "softwareupdate --list was ended by a signal"
+        "softwareupdate --list was ended by a signal; macOS 15.1 24B83; stdout empty; stderr empty"
     );
     assert!(rig.install.calls().is_empty());
     assert!(!rig.marker.exists());
 }
 
-/// Proves a list that exits non-zero and an install that exits non-zero are errors naming the step
-/// and the first line of its standard error, and the marker is removed in both.
+/// Proves a list that exits non-zero and an install that exits non-zero are errors naming the step,
+/// its exit code and the first line of its standard error (the list's with the macOS version and
+/// its standard output too), and the marker is removed in both.
 #[test]
 fn a_failing_list_or_install_is_an_error_and_the_marker_is_removed() {
     let rig = rig("clt-fails");
@@ -454,7 +551,7 @@ fn a_failing_list_or_install_is_an_error_and_the_marker_is_removed() {
     );
     assert_eq!(
         rig.installed().expect_err("fails").to_string(),
-        "softwareupdate --list failed with exit code 1: Software Update: no network"
+        "softwareupdate --list failed with exit code 1; macOS 15.1 24B83; stdout empty; stderr: Software Update: no network"
     );
     assert!(!rig.marker.exists());
     rig.offers("* Label: Command Line Tools for Xcode-15.3\n");
@@ -478,6 +575,8 @@ fn tools_still_missing_after_the_install_are_an_error() {
     rig.installs("Command Line Tools for Xcode-15.3");
     rig.pkgutil
         .always(&rig.info(), Ok(LaunchctlOutput::exit(1, "")));
+    rig.select
+        .always(&words(&["-p"]), Ok(LaunchctlOutput::exit(2, "")));
     assert_eq!(
         rig.installed().expect_err("fails").to_string(),
         "the Command Line Tools are not installed after softwareupdate"
@@ -552,16 +651,10 @@ fn a_left_over_marker_is_reused_and_one_already_gone_is_no_error() {
     assert!(rig.installed().is_ok());
     assert!(!rig.marker.exists());
     let marker = rig.marker.clone();
-    let gone = CommandLineTools::new(
-        Box::new(rig.pkgutil.clone()),
-        Box::new(rig.select.clone()),
-        Box::new(rig.list.clone()),
-        Box::new(Hook(Box::new(move |_| {
-            fs::remove_file(&marker).expect("the marker is there while softwareupdate runs");
-            Ok(LaunchctlOutput::success(""))
-        }))),
-        rig.marker.clone(),
-    );
+    let gone = rig.tools_with(Box::new(Hook(Box::new(move |_| {
+        fs::remove_file(&marker).expect("the marker is there while softwareupdate runs");
+        Ok(LaunchctlOutput::success(""))
+    }))));
     assert!(gone.install(&rig.log).is_ok());
     assert!(rig.log.lines().is_empty());
 }
@@ -575,18 +668,12 @@ fn a_marker_that_cannot_be_removed_is_logged_not_fatal() {
     let marker = rig.marker.clone();
     let seen = Arc::new(Mutex::new(false));
     let note = Arc::clone(&seen);
-    let tools = CommandLineTools::new(
-        Box::new(rig.pkgutil.clone()),
-        Box::new(rig.select.clone()),
-        Box::new(rig.list.clone()),
-        Box::new(Hook(Box::new(move |_| {
-            fs::remove_file(&marker).expect("the marker");
-            fs::create_dir(&marker).expect("a directory in its place");
-            *note.lock().expect("the note") = true;
-            Ok(LaunchctlOutput::success(""))
-        }))),
-        rig.marker.clone(),
-    );
+    let tools = rig.tools_with(Box::new(Hook(Box::new(move |_| {
+        fs::remove_file(&marker).expect("the marker");
+        fs::create_dir(&marker).expect("a directory in its place");
+        *note.lock().expect("the note") = true;
+        Ok(LaunchctlOutput::success(""))
+    }))));
     assert_eq!(
         tools.install(&rig.log),
         Ok("15.3.0.0.1.1708646388".to_owned())
@@ -623,7 +710,7 @@ fn a_look_that_cannot_run_after_a_switch_or_an_install_is_an_error() {
         Ok(LaunchctlOutput::success("")),
     );
     assert_eq!(
-        rig.tools.check().expect_err("fails").to_string(),
+        rig.tools().check().expect_err("fails").to_string(),
         "xcode-select -p after its switch could not be run: the fake has no answer"
     );
     let rig = self::rig("clt-look-after-install");
@@ -634,4 +721,224 @@ fn a_look_that_cannot_run_after_a_switch_or_an_install_is_an_error() {
         "pkgutil --pkg-info could not be run: the fake has no answer"
     );
     assert!(!rig.marker.exists());
+}
+
+/// Proves tools on disk with no receipt, the compiler there and `xcode-select -p` exiting 0, are
+/// present with no version, and nothing is listed, installed or asked of `xcodebuild`. Catches a
+/// look that knows only the receipt, which sends such a Mac to `softwareupdate` for nothing.
+#[test]
+fn tools_on_disk_without_a_receipt_are_present_and_nothing_is_installed() {
+    let rig = rig("clt-on-disk");
+    rig.no_receipt();
+    rig.disk.put(CLANG);
+    rig.selects(DEVELOPER_DIR);
+    assert_eq!(rig.tools().check(), Ok(Some(String::new())));
+    assert_eq!(rig.disk.asked(), [PathBuf::from(CLANG)]);
+    assert_eq!(rig.select.calls(), [words(&["-p"])]);
+    assert!(rig.xcodebuild.calls().is_empty());
+    assert!(rig.list.calls().is_empty() && rig.install.calls().is_empty());
+}
+
+/// Proves the compiler on disk with no receipt is absent when `xcode-select -p` does not exit 0,
+/// and no switch is made: the receipt alone earns the switch.
+#[test]
+fn tools_on_disk_with_no_developer_directory_are_absent() {
+    let rig = rig("clt-on-disk-unselected");
+    rig.no_receipt();
+    rig.disk.put(CLANG);
+    rig.select
+        .always(&words(&["-p"]), Ok(LaunchctlOutput::exit(2, "")));
+    assert_eq!(rig.tools().check(), Ok(None));
+    assert_eq!(rig.select.calls(), [words(&["-p"])]);
+}
+
+/// Proves a selected Xcode whose licence is accepted and whose first launch ran is present with the
+/// first line of `xcodebuild -version` as the version, with no receipt and no compiler of the tools
+/// on disk; the three `xcodebuild` steps run in order and nothing is listed or installed.
+#[test]
+fn a_ready_selected_xcode_is_present() {
+    let rig = rig("clt-xcode");
+    rig.no_receipt();
+    rig.selects(XCODE_DIR);
+    rig.xcode(0, 0, 0);
+    assert_eq!(rig.tools().check(), Ok(Some("Xcode 16.1".to_owned())));
+    assert_eq!(
+        rig.xcodebuild.calls(),
+        [
+            words(&["-license", "check"]),
+            words(&["-checkFirstLaunchStatus"]),
+            words(&["-version"]),
+        ]
+    );
+    assert!(rig.list.calls().is_empty() && rig.install.calls().is_empty());
+}
+
+/// Proves a selected Xcode is absent when its licence is not accepted, when its first launch did not
+/// run, or when it gives no version, and each `xcodebuild` step after the one that failed is not
+/// run. Catches a look that counts any selected Xcode.
+#[test]
+fn an_xcode_not_ready_is_absent() {
+    let cases: [((i32, i32, i32), usize); 3] = [((1, 0, 0), 1), ((0, 69, 0), 2), ((0, 0, 1), 3)];
+    for ((licence, first_launch, version), steps) in cases {
+        let rig = rig(&format!("clt-xcode-not-ready-{steps}"));
+        rig.no_receipt();
+        rig.selects(&format!("{XCODE_DIR}/"));
+        rig.xcode(licence, first_launch, version);
+        assert_eq!(
+            rig.tools().check(),
+            Ok(None),
+            "{licence} {first_launch} {version}"
+        );
+        assert_eq!(rig.xcodebuild.calls().len(), steps);
+    }
+}
+
+/// Proves a selected directory that is no Xcode's, with no receipt and no compiler there, is
+/// absent and `xcodebuild` is never asked: the tools' own directory, an empty answer and a
+/// directory that only holds the word.
+#[test]
+fn a_selected_directory_that_is_no_xcode_is_absent() {
+    for (n, directory) in [
+        DEVELOPER_DIR,
+        "",
+        "/Applications/Xcode.app/Contents",
+        "/opt/Xcode.app/Contents/Developer/bin",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let rig = rig(&format!("clt-not-xcode-{n}"));
+        rig.no_receipt();
+        rig.selects(directory);
+        rig.xcode(0, 0, 0);
+        assert_eq!(rig.tools().check(), Ok(None), "{directory}");
+        assert!(rig.xcodebuild.calls().is_empty(), "{directory}");
+    }
+}
+
+/// Proves the steps of the look with no receipt that cannot run are errors naming the step:
+/// `xcode-select -p` and `xcodebuild`.
+#[test]
+fn a_look_without_a_receipt_that_cannot_run_is_an_error_naming_its_step() {
+    let rig = rig("clt-no-receipt-no-run");
+    rig.no_receipt();
+    assert_eq!(
+        rig.tools().check().expect_err("fails").to_string(),
+        "xcode-select -p could not be run: the fake has no answer"
+    );
+    rig.selects(XCODE_DIR);
+    assert_eq!(
+        rig.tools().check().expect_err("fails").to_string(),
+        "xcodebuild -license check could not be run: the fake has no answer"
+    );
+}
+
+/// Proves the reason of a listing with no tools names the macOS version and build, the first line
+/// of each stream that is not blank, and every label that holds `Command Line Tools` in any case,
+/// in its order, and no other label, by equality on a fixture of a listing whose label of the
+/// tools is of a spelling the parser does not take.
+#[test]
+fn a_failed_listing_names_the_mac_both_streams_and_the_tools_labels() {
+    let rig = rig("clt-reason-fixture");
+    rig.list.always(
+        &words(&["--list"]),
+        Ok(LaunchctlOutput {
+            code: Some(0),
+            stdout: concat!(
+                "\nSoftware Update Tool\n\nFinding available software\n",
+                "Software Update found the following new or updated software:\n",
+                "* Label: macOS Sequoia 15.7.2-24G325\n",
+                "\tTitle: macOS Sequoia 15.7.2, Version: 15.7.2, Size: 5000000KiB, Recommended: YES, Action: restart,\n",
+                "* Label: Command Line Tools beta 2 for Xcode 26.0-26.0\n",
+                "* Label: command line tools for Xcode (26.1)\n",
+            )
+            .as_bytes()
+            .to_vec(),
+            stderr: b"  \nscan done\nsecond line\n".to_vec(),
+        }),
+    );
+    assert_eq!(
+        rig.installed().expect_err("fails").to_string(),
+        "softwareupdate --list offered no Command Line Tools for Xcode; macOS 15.1 24B83; stdout: Software Update Tool; stderr: scan done; Command Line Tools labels: Command Line Tools beta 2 for Xcode 26.0-26.0; command line tools for Xcode (26.1)"
+    );
+    assert!(rig.install.calls().is_empty());
+    assert_eq!(rig.sw_vers.calls(), [Vec::<String>::new()]);
+}
+
+/// Proves the reason of a huge listing stays within the bound the coordinator reads and ends at a
+/// character boundary: each stream's first line is cut to its own bound, and labels follow while
+/// the bound allows.
+#[test]
+fn the_reason_of_a_huge_listing_stays_within_its_bound() {
+    let rig = rig("clt-reason-bound");
+    let long = "é".repeat(500);
+    let mut listing = format!("{long}\n");
+    for n in 0..5_000 {
+        listing.push_str(&format!("* Label: Command Line Tools {n} {long}\n"));
+    }
+    rig.list.always(
+        &words(&["--list"]),
+        Ok(LaunchctlOutput {
+            code: Some(0),
+            stdout: listing.into_bytes(),
+            stderr: format!("{long}\n").into_bytes(),
+        }),
+    );
+    let reason = rig.installed().expect_err("fails").to_string();
+    let line = "é".repeat(LINE_MAX / 2);
+    let head = format!(
+        "softwareupdate --list offered no Command Line Tools for Xcode; macOS 15.1 24B83; stdout: {line}; stderr: {line}; Command Line Tools labels: Command Line Tools 0 éé"
+    );
+    assert!(reason.starts_with(&head), "{reason}");
+    assert!(
+        reason.len() <= MAX_PREREQUISITE_REASON && reason.len() >= MAX_PREREQUISITE_REASON - 1,
+        "{}",
+        reason.len()
+    );
+}
+
+/// Proves a `sw_vers` that does not run, exits non-zero, or names no version or build is said as
+/// such in the reason, and the reason is still given.
+#[test]
+fn a_macos_version_that_cannot_be_read_is_said_so() {
+    let rig = rig("clt-sw-vers");
+    rig.offers("");
+    let reason = |rig: &Rig| rig.installed().expect_err("fails").to_string();
+    let tail = "; stdout empty; stderr empty";
+    for answer in [
+        Err(LaunchctlError::TimedOut {
+            args: String::new(),
+        }),
+        Ok(LaunchctlOutput::exit(1, "")),
+    ] {
+        rig.sw_vers.always(&[], answer);
+        assert_eq!(reason(&rig), format!("{NONE_OFFERED}; macOS unknown{tail}"));
+    }
+    rig.sw_vers.always(
+        &[],
+        Ok(LaunchctlOutput::success(
+            "ProductName: macOS\nBuildVersion:\n",
+        )),
+    );
+    assert_eq!(reason(&rig), format!("{NONE_OFFERED}; macOS ? ?{tail}"));
+}
+
+/// Proves the host's file port says a regular file is one, and a directory or a missing path is
+/// not.
+#[test]
+fn the_host_file_port_tells_a_file_from_anything_else() {
+    let scratch = scratch("clt-host-files");
+    let file = scratch.path().join("clang");
+    fs::write(&file, "").expect("the file");
+    assert!(HostFiles.is_file(&file));
+    assert!(!HostFiles.is_file(scratch.path()));
+    assert!(!HostFiles.is_file(&scratch.path().join("missing")));
+}
+
+/// Proves a cut ends at a character boundary at or below its bound, and leaves a shorter text whole.
+#[test]
+fn a_cut_ends_at_a_character_boundary() {
+    assert_eq!(cut("éé", 3), "é");
+    assert_eq!(cut("ab", 9), "ab");
+    assert_eq!(cut("abc", 2), "ab");
 }
