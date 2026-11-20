@@ -3,6 +3,10 @@
 //! Apple offers now can be installed"). It runs while the Mac still serves, so it never fills the
 //! disk and installs nothing:
 //!
+//! On the order's path `wait` (`Maintain.macos_path`: device management installs the update) the
+//! daemon runs no Apple program for `macos`, so the stage runs nothing and succeeds; on any other
+//! path it stages:
+//!
 //! 1. What the Mac runs (`sw_vers`) and what Apple offers it now: `softwareupdate --list`, and,
 //!    only when the order allows a major upgrade (`Maintain.macos_major`), `softwareupdate
 //!    --list-full-installers`, both read by the maintenance look's parser
@@ -12,8 +16,10 @@
 //! 2. What to stage ([`plan`]): when the order allows a major upgrade and the Mac is offered a full
 //!    installer of a higher major version, the newest such installer, alone (the upgrade replaces
 //!    the system, so an update of the old major is not staged beside it); otherwise every macOS
-//!    update `--list` offers within the running major version, as the look makes them due
-//!    ([`crate::maintenance_softwareupdate::macos_due`]). When neither is offered, the update the
+//!    update `--list` offers within the running major version, by the rule by which the look makes
+//!    them due ([`crate::maintenance_softwareupdate::macos_due`]: a title starting `macOS ` and the
+//!    running major version). A major upgrade `--list` offers but `--list-full-installers` does not
+//!    cannot be fetched, and is not staged. When neither is offered, the update the
 //!    run was ordered for is no longer offered, and the stage defers `macos_update_not_listed`.
 //! 3. The free space of the data volume ([`FreeSpace`], `statvfs`): at least twice the bytes the
 //!    listings give for what is staged, or the stage defers `free_space_short` and downloads
@@ -38,6 +44,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use hostkeeper_launchd::{Launchctl, LaunchctlOutput, LaunchctlProcess};
+use hostkeeper_proto::hostkeeper::agent::v1::MacosPath;
 
 use crate::login_account::{exit_failure, run};
 use crate::maintenance_collect::{compare_versions, listing};
@@ -234,6 +241,9 @@ impl Stage {
     /// # Errors
     /// The deferral of the step that did not succeed.
     pub fn run(&self, params: &MaintainParams) -> Result<(), KindError> {
+        if params.maintain().macos_path() == MacosPath::Wait {
+            return Ok(());
+        }
         let major_allowed = params.maintain().macos_major;
         let running = self.running_major()?;
         let mut offered = self.offered(&LIST_ARGS)?;

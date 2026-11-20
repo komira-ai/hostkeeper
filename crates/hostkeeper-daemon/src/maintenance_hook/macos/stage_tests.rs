@@ -244,6 +244,15 @@ fn params(major: bool) -> MaintainParams {
     .expect("valid parameters")
 }
 
+/// The parameters of a `macos` run on `path`, no major upgrade allowed.
+fn on_path(path: MacosPath) -> MaintainParams {
+    MaintainParams::new(Maintain {
+        macos_path: path.into(),
+        ..params(false).maintain().clone()
+    })
+    .expect("valid parameters")
+}
+
 /// The stage's deferral of `reason` with exactly `detail`.
 fn deferral(reason: &'static str, detail: &str) -> Result<(), KindError> {
     Err(KindError::Deferred {
@@ -853,4 +862,92 @@ fn the_host_programs_run_with_exactly_their_arguments_and_an_empty_environment()
         .collect();
     let expected: Vec<String> = helper.iter().map(|arg| format!("arg:{arg}")).collect();
     assert_eq!(reported, expected);
+}
+
+/// Proves: on the order's path `wait` (device management installs the update) the stage runs no
+/// program and reads no disk, and succeeds; on the path `install` it stages as on an order that
+/// names no path.
+///
+/// Catches: the daemon running `softwareupdate` for `macos` on the path where it must run no Apple
+/// program.
+#[test]
+fn the_wait_path_runs_no_apple_program() {
+    let mac = Mac::on_26(Ok(u64::MAX), LIST_MAJOR);
+    assert_eq!(mac.stage().run(&on_path(MacosPath::Wait)), Ok(()));
+    assert_eq!(mac.runs(), Vec::new());
+    assert_eq!(mac.free_reads(), 0);
+
+    mac.answer(SOFTWAREUPDATE, &["--download", TAHOE_26_7], ok(""));
+    assert_eq!(mac.stage().run(&on_path(MacosPath::Install)), Ok(()));
+    assert_eq!(
+        mac.runs(),
+        vec![sw_vers_ran(), list_ran(), download_ran(TAHOE_26_7)]
+    );
+}
+
+/// Proves: with a major upgrade allowed but no full installer of a higher major offered, the
+/// minor update `--list` offers is staged; and a major upgrade `--list` offers that
+/// `--list-full-installers` does not is never fetched: with no minor beside it the stage defers.
+///
+/// Catches: an allowed but unoffered upgrade blocking the minor update, or a major upgrade
+/// fetched by the version of a `--list` entry the installer catalog does not hold.
+#[test]
+fn an_allowed_upgrade_that_is_not_offered_as_an_installer_is_not_fetched() {
+    let only_old = "* Title: macOS Tahoe, Version: 26.7, Size: 15204352KiB, Build: 25H62, \
+                    Deferred: NO\n";
+    let mac = Mac::on_26(Ok(2 * TAHOE_26_7_BYTES), LIST_MAJOR);
+    mac.answer(SOFTWAREUPDATE, &["--list-full-installers"], ok(only_old));
+    mac.answer(SOFTWAREUPDATE, &["--download", TAHOE_26_7], ok(""));
+    assert_eq!(mac.stage().run(&params(true)), Ok(()));
+    assert_eq!(
+        mac.runs(),
+        vec![
+            sw_vers_ran(),
+            list_ran(),
+            full_ran(),
+            download_ran(TAHOE_26_7)
+        ]
+    );
+
+    let mac = Mac::on_26(Ok(u64::MAX), LIST_ONLY_MAJOR);
+    mac.answer(SOFTWAREUPDATE, &["--list-full-installers"], ok(only_old));
+    assert_eq!(
+        mac.stage().run(&params(true)),
+        deferral(
+            REASON_NOT_LISTED,
+            "softwareupdate offers no update of macOS 26 and no full installer of a later major \
+             version"
+        )
+    );
+    assert_eq!(mac.runs(), vec![sw_vers_ran(), list_ran(), full_ran()]);
+}
+
+/// Proves: sizes whose sum is more than `u64` holds never pass the check, even with every byte
+/// of a `u64` free: the stage defers `free_space_short` with the whole sum, and downloads nothing.
+///
+/// Catches: the sum or its double wrapped (or saturated) in `u64`, so a check passes on a number
+/// that is not the download.
+#[test]
+fn sizes_beyond_u64_never_pass_the_check() {
+    let kib = u64::MAX / KIB;
+    let list = format!(
+        "* Label: macOS Tahoe 26.6.1-25G110\n\
+         \tTitle: macOS Tahoe 26.6.1, Version: 26.6.1, Size: {kib}KiB, \n\
+         * Label: macOS Tahoe 26.7-25H62\n\
+         \tTitle: macOS Tahoe 26.7, Version: 26.7, Size: {kib}KiB, \n"
+    );
+    let mac = Mac::on_26(Ok(u64::MAX), &list);
+    let bytes = 2 * u128::from(kib * KIB);
+    assert_eq!(
+        mac.stage().run(&params(false)),
+        Err(KindError::Deferred {
+            reason: REASON_SPACE_SHORT,
+            detail: format!(
+                "/System/Volumes/Data has {} bytes free, less than twice the {bytes} bytes to \
+                 download",
+                u64::MAX
+            ),
+        })
+    );
+    assert_eq!(mac.runs(), vec![sw_vers_ran(), list_ran()]);
 }
