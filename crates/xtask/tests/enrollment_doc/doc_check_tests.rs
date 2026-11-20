@@ -1,5 +1,6 @@
 //! The operator-doc check on the hand verbs of `hk` (`ssh`, `ssh-proxy`, `ssh-revoke`,
-//! `ssh-status`), which are not in the command table, and on a fenced `hkctl` line.
+//! `ssh-status`, `xcode-push`), which are not in the command table, and on a fenced `hkctl`
+//! line.
 
 use super::*;
 
@@ -124,4 +125,43 @@ fn the_doc_check_refuses_a_fenced_hkctl_line() {
     );
     let prose = "`hkctl` is not a program of this repository; `hkctl hosts nonsense` is not one.\n";
     assert_eq!(doc_problems("docs/x.md", prose), Vec::<String>::new());
+}
+
+/// Catches the doc check refusing `hk xcode-push` with a version or an archive (in a fenced line
+/// or a span, `--help` too), and passing it with no argument or two, a flag it has not, or a
+/// token that is not a file.
+#[test]
+fn the_doc_check_reads_xcode_push() {
+    let good = fenced_call("xcode-push 27.2")
+        + &fenced_call("xcode-push ~/Downloads/Xcode_27.2.xip")
+        + "`hk xcode-push`, `hk xcode-push 27.2`, `hk xcode-push --help` and \
+           `hk xcode-push <version> | <archive.xip>`.\n";
+    assert_eq!(doc_problems("docs/x.md", &good), Vec::<String>::new());
+    assert_eq!(
+        command_of(&format!("{CALL} xcode-push 27.2")),
+        Ok(Some("xcode-push".to_owned()))
+    );
+    let one = "hk xcode-push takes one Xcode version (27.2) or the path of an archive \
+               (~/Downloads/Xcode_27.2.xip)";
+    let token = "hk xcode-push takes --token-file only: --token-stdin, --github-oidc-audience \
+                 and --response-file are not for it (stdin is the terminal xcodes asks a \
+                 two-factor code on)";
+    let line = |rest: &str| format!("{CALL} {rest}");
+    let cases = [
+        (line("xcode-push"), one),
+        (line("xcode-push 27.2 27.1"), one),
+        (
+            line("xcode-push 27.2 --force"),
+            "xcode-push has no flag --force",
+        ),
+        (format!("{CALL} --response-file r xcode-push 27.2"), token),
+    ];
+    for (line, problem) in cases {
+        let error = command_of(&line).expect_err(&line);
+        assert_eq!(error, format!("{line}\n{problem}"));
+    }
+    assert_eq!(
+        doc_problems("docs/x.md", "`hk xcode-push 27.2 --force`"),
+        ["docs/x.md: `hk xcode-push 27.2 --force`: xcode-push has no flag --force"]
+    );
 }

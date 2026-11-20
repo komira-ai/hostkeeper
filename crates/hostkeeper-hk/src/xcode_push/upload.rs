@@ -10,7 +10,7 @@
 //! 4xx (the request), 1 for anything else.
 
 use std::fs::File;
-use std::io::{Seek as _, SeekFrom, Write as _};
+use std::io::{Seek as _, SeekFrom};
 use std::time::Duration;
 
 use super::{Target, failed, say};

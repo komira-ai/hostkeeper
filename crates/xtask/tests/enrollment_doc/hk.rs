@@ -1,8 +1,8 @@
 //! `hk`'s command line, read as `hk` reads it: the global flags of `docs/cli.md`'s table
 //! (written by `hostkeeper_hk::markdown`), then a service and a method of the command table
 //! hk serves (`hostkeeper_hk::is_served`), then that method's flags; or one of the hand verbs
-//! of the ssh tunnel, `ssh <host-id>`, `ssh-proxy`, `ssh-revoke` and `ssh-status`, which are not
-//! in the table (a word after `ssh` that is a method of the service `ssh` is that method, any
+//! of the ssh tunnel, `ssh <host-id>`, `ssh-proxy`, `ssh-revoke` and `ssh-status`, or
+//! `xcode-push <version>|<archive>`, which are not in the table (a word after `ssh` that is a method of the service `ssh` is that method, any
 //! other is a host id).
 //!
 //! The rules are those of hk's own parser (`crates/hostkeeper-hk/src/dispatch.rs`), each word in
@@ -379,8 +379,12 @@ fn encode(field: &Field, value: &str) -> Result<(), String> {
     }
 }
 
-/// The ssh verbs hk has by hand, besides `ssh` with a host id: not in the command table.
-pub(crate) const HAND_VERBS: &[&str] = &["ssh-proxy", "ssh-revoke", "ssh-status"];
+/// The verbs hk has by hand, besides `ssh` with a host id: not in the command table.
+pub(crate) const HAND_VERBS: &[&str] = &["ssh-proxy", "ssh-revoke", "ssh-status", "xcode-push"];
+
+/// What `hk xcode-push` says when it is not given exactly one version or archive.
+const XCODE_PUSH_ONE: &str = "hk xcode-push takes one Xcode version (27.2) or the path of an \
+                              archive (~/Downloads/Xcode_27.2.xip)";
 
 /// The flags of a hand verb of its own, as `hk ssh --identity FILE --reason TEXT <host-id>`:
 /// those of `ssh` and `ssh-proxy`, and those of `ssh-revoke`.
@@ -398,8 +402,9 @@ pub(crate) fn hand_flags(verb: &str) -> &'static [&'static str] {
 
 /// What `words` (the words after the hand verb `verb`) ask for: `ssh <host-id>` with its flags
 /// and, after `--`, ssh's own arguments, `ssh-proxy <host-id>`, `ssh-revoke` with one of
-/// `--operator`, `--serial` and `--host`, `ssh-status <host-id>`. They take `--token-file` alone
-/// of the credentials and no `--response-file`, and need the endpoint and the CA file.
+/// `--operator`, `--serial` and `--host`, `ssh-status <host-id>`, `xcode-push` with one version
+/// or archive path. They take `--token-file` alone of the credentials and no `--response-file`,
+/// and need the endpoint and the CA file.
 fn hand(line: &mut Line<'_>, verb: &str, words: &[String]) -> Result<Parsed, String> {
     let own = hand_flags(verb);
     let mut host: Option<&str> = None;
@@ -437,6 +442,9 @@ fn hand(line: &mut Line<'_>, verb: &str, words: &[String]) -> Result<Parsed, Str
         } else if verb == "ssh-revoke" {
             return Err(format!("{verb} takes no argument; it has flags only"));
         } else if host.replace(word.as_str()).is_some() {
+            if verb == "xcode-push" {
+                return Err(XCODE_PUSH_ONE.to_owned());
+            }
             return Err(format!("{verb} takes one host id"));
         } else {
             at += 1;
@@ -448,10 +456,22 @@ fn hand(line: &mut Line<'_>, verb: &str, words: &[String]) -> Result<Parsed, Str
                 "ssh-revoke takes exactly one of --operator, --serial and --host".to_owned(),
             );
         }
+    } else if host.is_none() && verb == "xcode-push" {
+        return Err(XCODE_PUSH_ONE.to_owned());
     } else if host.is_none() {
         return Err(format!("{verb} needs a host id"));
     }
     let has = |name: &str| line.given.iter().any(|g| g == name);
+    if (has("token-stdin") || has("github-oidc-audience") || has("response-file"))
+        && verb == "xcode-push"
+    {
+        return Err(
+            "hk xcode-push takes --token-file only: --token-stdin, --github-oidc-audience and \
+             --response-file are not for it (stdin is the terminal xcodes asks a two-factor code \
+             on)"
+            .to_owned(),
+        );
+    }
     if has("token-stdin") || has("github-oidc-audience") || has("response-file") {
         return Err(format!(
             "{verb} takes --token-file only: --token-stdin, --github-oidc-audience and \

@@ -27,7 +27,6 @@ mod tests;
 pub(crate) mod upload;
 
 use std::ffi::OsString;
-use std::io::Write as _;
 use std::os::unix::ffi::OsStringExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;

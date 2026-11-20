@@ -39,8 +39,8 @@ When the alert `xcode_release_waiting` names a release, an operator brings it in
 their own Mac, the one signed in to the organisation's Apple developer account:
 
 ```
-hk --endpoint URL --ca-file PATH --token-file PATH xcode-push 27.2
-hk --endpoint URL --ca-file PATH --token-file PATH xcode-push ~/Downloads/Xcode_27.2.xip
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> xcode-push 27.2
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> xcode-push ~/Downloads/Xcode_27.2.xip
 ```
 
 It runs on macOS only (anywhere else it says so and stops) and needs `xcodes` on the `PATH` for the
