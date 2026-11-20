@@ -144,6 +144,7 @@ pub mod config_xcode;
 pub(crate) mod console;
 pub mod converge;
 pub mod decide;
+pub(crate) mod decide_maintenance;
 pub mod defer;
 pub mod desired;
 pub mod enrollment;

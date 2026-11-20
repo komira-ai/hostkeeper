@@ -29,7 +29,8 @@ use crate::{halt, verdict_file};
 /// the password policy and its revoked serials) in every answer until it reports its generation
 /// ([`crate::ssh_heartbeat`]); advertised always, and acted on only while the coordinator holds an
 /// SSH user CA. `maintenance-v1`: the `maintenance` report of a heartbeat is read, kept with the host
-/// and shown in `Hosts.List` and `Hosts.Get` ([`crate::maintenance`]); no `maintain` order is sent.
+/// and shown in `Hosts.List` and `Hosts.Get` ([`crate::maintenance`]), and the host is sent the
+/// `maintain` that starts its turn of a maintenance run over gRPC ([`crate::decide_maintenance`]).
 pub const FEATURES: &[&str] = &[
     "deferred-v1",
     halt::FEATURE,

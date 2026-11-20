@@ -12,7 +12,8 @@
 //! its step and since when, the kinds its turn applies and, for a host left out, why. The one
 //! ending it stores is a cancel ([`Run::cancelled_unix`]); where it stands otherwise
 //! ([`Run::state_at`]) is read from its hosts' steps and the clock, so a window that ends needs
-//! no write. No host is ordered by a run yet: every host of a run waits, or is left out.
+//! no write. A host's turn is started, and its step then follows what its daemon reports, by
+//! [`crate::decide_maintenance`].
 
 use hostkeeper_proto::hostkeeper::agent::v1::MaintenanceKind;
 use hostkeeper_proto::hostkeeper::operator::v1::{
@@ -256,7 +257,7 @@ fn is_false(b: &bool) -> bool {
 
 impl Run {
     /// Whether its window has ended at `now`.
-    fn window_ended(&self, now: u64) -> bool {
+    pub(crate) fn window_ended(&self, now: u64) -> bool {
         self.window_end_unix != 0 && now >= self.window_end_unix
     }
 
