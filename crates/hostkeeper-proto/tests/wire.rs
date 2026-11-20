@@ -40,7 +40,7 @@ fn older_pool() -> DescriptorPool {
     let agent = set
         .file
         .iter_mut()
-        .find(|f| f.package() == "hostkeeper.agent.v1")
+        .find(|f| f.name() == "hostkeeper/agent/v1/agent.proto")
         .expect("the agent file");
     let result = agent
         .message_type

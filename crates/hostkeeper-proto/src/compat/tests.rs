@@ -658,7 +658,7 @@ fn the_baseline_check_refuses_the_real_set_with_a_field_taken_out() {
     let agent = set
         .file
         .iter_mut()
-        .find(|f| f.package() == "hostkeeper.agent.v1")
+        .find(|f| f.name() == "hostkeeper/agent/v1/agent.proto")
         .expect("the agent file");
     let beat = agent
         .message_type
