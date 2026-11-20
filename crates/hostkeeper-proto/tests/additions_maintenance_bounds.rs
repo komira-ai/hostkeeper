@@ -102,7 +102,7 @@ fn run(report: &mut agent::MaintenanceReport) -> &mut agent::MaintenanceRunState
 /// or text, its size and its bound. The refusal's words name them too.
 #[test]
 fn a_report_one_over_any_bound_is_refused_naming_it() {
-    let breaches: [Breach; 22] = [
+    let breaches: [Breach; 23] = [
         (
             |r| r.xcodes.push(r.xcodes[0].clone()),
             too_many("xcodes", MAX_XCODES),

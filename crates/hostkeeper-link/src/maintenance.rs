@@ -59,7 +59,7 @@ pub(crate) fn maintenance_json(report: &pb::MaintenanceReport) -> Value {
 
 /// What a macOS update needs, as `mac`.
 fn mac_json(mac: &pb::MacUpdateFacts) -> Value {
-    let account = mac.update_account.clone().unwrap_or_default();
+    let account = mac.update_account.unwrap_or_default();
     let tools = mac.command_line_tools.clone().unwrap_or_default();
     json!({
         "filevault": mac.filevault().as_str_name(),
