@@ -271,7 +271,11 @@ async fn every_operator_method_admits_exactly_its_credential() {
     let paths = operator_paths();
     let services: BTreeSet<&str> = COMMANDS
         .iter()
-        .filter(|command| command.package == "hostkeeper.operator.v1" && command.service != RETIRED)
+        .filter(|command| {
+            command.package == "hostkeeper.operator.v1"
+                && command.service != RETIRED
+                && !PENDING.contains(&command.path)
+        })
         .map(|command| command.service)
         .collect();
     assert_eq!(

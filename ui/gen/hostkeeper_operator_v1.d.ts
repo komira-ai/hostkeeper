@@ -94,6 +94,8 @@ export namespace hostkeeper_operator_v1 {
   }
   export type BootDevice = "BOOT_DEVICE_UNSPECIFIED" | "BOOT_DEVICE_PXE" | "BOOT_DEVICE_DISK" | "BOOT_DEVICE_BIOS";
   export interface Canary { count?: number; }
+  export interface CancelMaintenanceRunRequest { runId?: string; reason?: string; }
+  export interface CancelMaintenanceRunResponse { run?: hostkeeper_operator_v1.MaintenanceRun; entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface ClearHaltRequest { service?: string; reason?: string; }
   export interface ClearHaltResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface ClearRecordRequest { nodeId?: string; service?: string; }
@@ -227,6 +229,8 @@ export namespace hostkeeper_operator_v1 {
     devices?: hostkeeper_operator_v1.NetworkDevice[];
     sleds?: hostkeeper_operator_v1.LayoutSled[];
   }
+  export interface GetMaintenanceRunRequest { runId?: string; }
+  export interface GetMaintenanceRunResponse { run?: hostkeeper_operator_v1.MaintenanceRun; hosts?: hostkeeper_operator_v1.MaintenanceHost[]; }
   export interface GetReleaseRequest { service?: string; version?: string; hostGroup?: string; }
   export interface GetReleaseResponse { targets?: { [key: string]: hostkeeper_release_v1.TargetList }; releaseIndexDigest?: string; }
   export interface GetRepositoryRequest { name?: string; }
@@ -334,6 +338,8 @@ export namespace hostkeeper_operator_v1 {
   export interface ListHostGroupsResponse { hostGroups?: hostkeeper_operator_v1.HostGroupState[]; nextPageToken?: string; }
   export interface ListHostsRequest { limit?: number; pageToken?: string; }
   export interface ListHostsResponse { hosts?: hostkeeper_operator_v1.Host[]; nextPageToken?: string; }
+  export interface ListMaintenanceRunsRequest { states?: hostkeeper_operator_v1.MaintenanceState[]; limit?: number; }
+  export interface ListMaintenanceRunsResponse { runs?: hostkeeper_operator_v1.MaintenanceRun[]; }
   export interface ListPendingRequest { limit?: number; pageToken?: string; unenrolled?: boolean; }
   export interface ListPendingResponse { requests?: hostkeeper_operator_v1.PendingEnrollment[]; nextPageToken?: string; }
   export interface ListRecordsRequest { limit?: number; pageToken?: string; enrolled?: boolean; }
@@ -352,6 +358,31 @@ export namespace hostkeeper_operator_v1 {
   export interface ListUsersResponse { users?: hostkeeper_operator_v1.UserInfo[]; }
   export type LiveReason = "LIVE_REASON_UNSPECIFIED" | "LIVE_REASON_UPDATING" | "LIVE_REASON_PROMOTION_PENDING" | "LIVE_REASON_ORDERED" | "LIVE_REASON_BAKING" | "LIVE_REASON_PLAN_UNDER_WAY" | "LIVE_REASON_QUEUED";
   export interface LiveRollout { service?: string; reason?: hostkeeper_operator_v1.LiveReason; nodeId?: string; }
+  export interface MaintenanceHost {
+    hostId?: string;
+    hostGroup?: string;
+    step?: hostkeeper_operator_v1.MaintenanceHostStep;
+    sinceUnix?: string;
+    kinds?: hostkeeper_agent_v1.MaintenanceKind[];
+    applied?: hostkeeper_agent_v1.MaintenanceKind[];
+    skippedBecause?: hostkeeper_operator_v1.MaintenanceSkip;
+    reason?: string;
+  }
+  export type MaintenanceHostStep =
+    | "MAINTENANCE_HOST_STEP_UNSPECIFIED"
+    | "MAINTENANCE_HOST_STEP_WAITING"
+    | "MAINTENANCE_HOST_STEP_STAGING"
+    | "MAINTENANCE_HOST_STEP_DRAINING"
+    | "MAINTENANCE_HOST_STEP_APPLYING"
+    | "MAINTENANCE_HOST_STEP_REBOOTING"
+    | "MAINTENANCE_HOST_STEP_CHECKING"
+    | "MAINTENANCE_HOST_STEP_PUTTING_BACK"
+    | "MAINTENANCE_HOST_STEP_DONE"
+    | "MAINTENANCE_HOST_STEP_DEFERRED"
+    | "MAINTENANCE_HOST_STEP_HALTED"
+    | "MAINTENANCE_HOST_STEP_NOT_BACK"
+    | "MAINTENANCE_HOST_STEP_NOT_REACHED"
+    | "MAINTENANCE_HOST_STEP_SKIPPED";
   export interface MaintenancePolicy {
     xcodeKeep?: number;
     xcodeDefault?: string;
@@ -362,6 +393,42 @@ export namespace hostkeeper_operator_v1 {
     drainDeadlineSecs?: string;
     returnSecs?: string;
   }
+  export interface MaintenanceRun {
+    id?: string;
+    state?: hostkeeper_operator_v1.MaintenanceState;
+    kinds?: hostkeeper_agent_v1.MaintenanceKind[];
+    hostIds?: string[];
+    hostGroup?: string;
+    windowStartUnix?: string;
+    windowEndUnix?: string;
+    batch?: number;
+    drainDeadlineSecs?: string;
+    takeLastHost?: boolean;
+    reason?: string;
+    byName?: string;
+    scheduledUnix?: string;
+    endedUnix?: string;
+    haltedGroups?: string[];
+    hostCount?: number;
+  }
+  export type MaintenanceSkip =
+    | "MAINTENANCE_SKIP_UNSPECIFIED"
+    | "MAINTENANCE_SKIP_NO_MAINTENANCE_V1"
+    | "MAINTENANCE_SKIP_HELD"
+    | "MAINTENANCE_SKIP_EXCLUDED"
+    | "MAINTENANCE_SKIP_MDM_CONFLICT"
+    | "MAINTENANCE_SKIP_NO_UPDATE_ACCOUNT"
+    | "MAINTENANCE_SKIP_IN_PACKAGE_UPDATE"
+    | "MAINTENANCE_SKIP_GROUP_CHANGED"
+    | "MAINTENANCE_SKIP_FILEVAULT_NOT_READY";
+  export type MaintenanceState =
+    | "MAINTENANCE_STATE_UNSPECIFIED"
+    | "MAINTENANCE_STATE_SCHEDULED"
+    | "MAINTENANCE_STATE_RUNNING"
+    | "MAINTENANCE_STATE_HALTED"
+    | "MAINTENANCE_STATE_DONE"
+    | "MAINTENANCE_STATE_CANCELLED"
+    | "MAINTENANCE_STATE_WINDOW_ENDED";
   export interface MarkBadRequest { service?: string; version?: string; reason?: string; }
   export interface MarkBadResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface MdmAbmCheck { result?: hostkeeper_operator_v1.MdmAbmResult; organization?: string; detail?: string; }
@@ -523,6 +590,8 @@ export namespace hostkeeper_operator_v1 {
   export type PowerState = "POWER_STATE_UNSPECIFIED" | "POWER_STATE_ON" | "POWER_STATE_OFF";
   export interface PutAbmTokenRequest { tokenJson?: string; tokenP7m?: string; }
   export interface PutAbmTokenResponse { secret?: hostkeeper_operator_v1.SecretInfo; serverName?: string; orgName?: string; }
+  export interface PutBackMaintenanceHostRequest { runId?: string; hostId?: string; reason?: string; }
+  export interface PutBackMaintenanceHostResponse { host?: hostkeeper_operator_v1.MaintenanceHost; entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface PutHostGroupRequest { hostGroup?: hostkeeper_operator_v1.HostGroup; ifGeneration?: string; reason?: string; }
   export interface PutHostGroupResponse { entry?: hostkeeper_operator_v1.AuditEntry; generation?: string; }
   export interface PutLayoutDeviceRequest { id?: string; name?: string; role?: hostkeeper_operator_v1.NetworkRole; consoleHost?: string; consoleDevice?: string; managementMac?: string; notes?: string; reason?: string; }
@@ -578,6 +647,8 @@ export namespace hostkeeper_operator_v1 {
   export interface ResumeResponse { entry?: hostkeeper_operator_v1.AuditEntry; plan?: hostkeeper_operator_v1.RolloutPlan; }
   export interface RetireRequest { nodeId?: string; reason?: string; }
   export interface RetireResponse { entry?: hostkeeper_operator_v1.AuditEntry; updateInFlight?: boolean; }
+  export interface RetryMaintenanceHostRequest { runId?: string; hostId?: string; reason?: string; }
+  export interface RetryMaintenanceHostResponse { host?: hostkeeper_operator_v1.MaintenanceHost; entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface RetryRequest { nodeId?: string; service?: string; }
   export interface RetryResponse { setAside?: hostkeeper_agent_v1.UpdateResult; entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface RevokeApiTokenRequest { name?: string; }
@@ -614,6 +685,19 @@ export namespace hostkeeper_operator_v1 {
     maintenance?: hostkeeper_operator_v1.MaintenancePolicy;
   }
   export interface RunningService { service?: string; version?: string; installer?: string; }
+  export interface ScheduleMaintenanceRequest {
+    kinds?: hostkeeper_agent_v1.MaintenanceKind[];
+    hostIds?: string[];
+    hostGroup?: string;
+    windowStartUnix?: string;
+    windowEndUnix?: string;
+    batch?: number;
+    drainDeadlineSecs?: string;
+    reason?: string;
+    takeLastHost?: boolean;
+    confirm?: boolean;
+  }
+  export interface ScheduleMaintenanceResponse { run?: hostkeeper_operator_v1.MaintenanceRun; hosts?: hostkeeper_operator_v1.MaintenanceHost[]; entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface SecretInfo { kind?: string; version?: number; fingerprintSha256?: string; notAfterUnix?: string; createdUnix?: string; supersededUnix?: string; }
   export interface ServiceEntry {
     service?: string;

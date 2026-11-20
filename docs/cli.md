@@ -678,6 +678,98 @@ Removes a sled that holds nothing: refused `in_use`, naming what stands on it, o
 | `--id` | STRING |  |
 | `--reason` | STRING |  |
 
+### `maintenance`
+
+The service `Maintenance` of the package `hostkeeper.operator.v1`. The maintenance runs. Described and not yet served: every call answers `UNIMPLEMENTED` until its handler lands. Each call that changes something takes a reason and answers the audit entry it wrote, under the caller's name, with the caller's reason followed by `run <id>`: `maintenance_schedule` (with the host group as the entry's `host_group` when the run names one), `maintenance_cancel`, `maintenance_retry_host` and `maintenance_put_back` (each with the host as the entry's `node_id`). `List`, `Get` and a `Schedule` without `confirm` change nothing and write no audit entry.
+
+#### `hkctl maintenance schedule`
+
+`/hostkeeper.operator.v1.Maintenance/Schedule`
+
+Schedule a run: of the kinds asked (all that are due, when none is named), on the hosts named
+or every host of a host group, now or in a window, with the group's batch and drain deadline
+unless the request names its own. The run takes the hosts that have something due of its
+kinds; a host it cannot order is listed skipped, with why. Without `confirm` nothing is stored
+and the answer is the run as it would be, with no id; it is refused as the stored run would
+be.
+
+| flag | value | meaning |
+|---|---|---|
+| `--kinds` | VALUE | The kinds to apply, each at most once; empty: every kind that is due on each host. One of: macos, xcode, linux, reboot. Repeat the flag for more. |
+| `--host-ids` | STRING | The hosts, 1 to 32, by node id: one host, or a selection. Empty when `host_group` is set. Repeat the flag for more. |
+| `--host-group` | STRING | Every host of this host group. Empty when `host_ids` is set. |
+| `--window-start-unix` | UINT64 | When the window opens; 0: now. |
+| `--window-end-unix` | UINT64 | When the window ends: no host starts its turn after it, and a host in its turn finishes; 0: no end. Set whenever `window_start_unix` is. |
+| `--batch` | UINT32 | How many hosts of each group may be in their turn at once, 1 to 10000; absent: the group's `batch`. |
+| `--drain-deadline-secs` | UINT64 | How long a host's drain may wait before the host is put back as it was and deferred; 0: no deadline; absent: the group's `drain_deadline_secs`. |
+| `--reason` | STRING | Why; the audit entry carries it. Needed with `confirm`; a call without it may leave it out. |
+| `--take-last-host` | true\|false | Take every host of a group, the one host of a group of one included; otherwise such a run is refused (`last_host`). |
+| `--confirm` | true\|false | Store the run. Without it nothing is stored, no host is ordered, and the answer is the run as it would be. |
+
+#### `hkctl maintenance list`
+
+`/hostkeeper.operator.v1.Maintenance/List`
+
+The newest runs, newest first, as many as `limit` allows, with no hosts; every run, or those
+in the states asked. Changes nothing.
+
+| flag | value | meaning |
+|---|---|---|
+| `--states` | VALUE | Only the runs in these states; empty: every run. One of: scheduled, running, halted, done, cancelled, window_ended. Repeat the flag for more. |
+| `--limit` | UINT32 | At most this many of the newest runs. |
+
+#### `hkctl maintenance get`
+
+`/hostkeeper.operator.v1.Maintenance/Get`
+
+One run, with each of its hosts, by node id: its step, since when, and why it halted,
+deferred or was skipped. Changes nothing.
+
+| flag | value | meaning |
+|---|---|---|
+| `--run-id` | STRING | The run's id. |
+
+#### `hkctl maintenance cancel`
+
+`/hostkeeper.operator.v1.Maintenance/Cancel`
+
+Cancel a run: no host of it starts its turn from now on; a host in its turn finishes it, and
+the hosts that had not started end as not reached. A halted host stays halted, and cordoned,
+until it is put back: `PutBack` is still taken. Audited `maintenance_cancel`.
+
+| flag | value | meaning |
+|---|---|---|
+| `--run-id` | STRING | The run's id. |
+| `--reason` | STRING | Why; the audit entry carries it. |
+
+#### `hkctl maintenance retry-host`
+
+`/hostkeeper.operator.v1.Maintenance/RetryHost`
+
+Retry a halted host's turn from the step that failed: its daemon is ordered the run again
+(`MAINTAIN_ACTION_RETRY`) with a new try. Audited `maintenance_retry_host`.
+
+| flag | value | meaning |
+|---|---|---|
+| `--run-id` | STRING | The run's id. |
+| `--host-id` | STRING | The halted host, by node id. |
+| `--reason` | STRING | Why; the audit entry carries it. |
+
+#### `hkctl maintenance put-back`
+
+`/hostkeeper.operator.v1.Maintenance/PutBack`
+
+Put a halted host back: its daemon runs the drained services' `resume`
+(`MAINTAIN_ACTION_PUT_BACK`) and leaves the update as far as it got; the host's turn ends, and
+the run goes on in its group. Taken in a run that has ended too (cancelled, or past its
+window), for a host still halted there. Audited `maintenance_put_back`.
+
+| flag | value | meaning |
+|---|---|---|
+| `--run-id` | STRING | The run's id. |
+| `--host-id` | STRING | The halted host, by node id. |
+| `--reason` | STRING | Why; the audit entry carries it. |
+
 ### `mdm`
 
 The service `Mdm` of the package `hostkeeper.operator.v1`. No longer served: every method answers UNIMPLEMENTED, the coordinator's MDM having been removed (2026-11-14). The devices of the MDM policy gate, as it was.

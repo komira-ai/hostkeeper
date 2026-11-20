@@ -70,6 +70,14 @@ export function createClient(call) {
       putSled: (request) => call("hostkeeper.operator.v1.Layout/PutSled", request),
       removeSled: (request) => call("hostkeeper.operator.v1.Layout/RemoveSled", request),
     }),
+    maintenance: Object.freeze({
+      schedule: (request) => call("hostkeeper.operator.v1.Maintenance/Schedule", request),
+      list: (request) => call("hostkeeper.operator.v1.Maintenance/List", request),
+      get: (request) => call("hostkeeper.operator.v1.Maintenance/Get", request),
+      cancel: (request) => call("hostkeeper.operator.v1.Maintenance/Cancel", request),
+      retryHost: (request) => call("hostkeeper.operator.v1.Maintenance/RetryHost", request),
+      putBack: (request) => call("hostkeeper.operator.v1.Maintenance/PutBack", request),
+    }),
     mdm: Object.freeze({
       listDevices: (request) => call("hostkeeper.operator.v1.Mdm/ListDevices", request),
       putSecret: (request) => call("hostkeeper.operator.v1.Mdm/PutSecret", request),
