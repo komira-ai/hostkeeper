@@ -116,6 +116,14 @@ pub fn entry_of(service: &str, version: &str, manifest: &str) -> (Target, bool) 
                 .and_then(|hook| hook.get("boot"))
                 .and_then(toml::Value::as_str)
                 .map(str::to_owned),
+            drain: hook
+                .and_then(|hook| hook.get("drain"))
+                .and_then(toml::Value::as_str)
+                .map(str::to_owned),
+            resume: hook
+                .and_then(|hook| hook.get("resume"))
+                .and_then(toml::Value::as_str)
+                .map(str::to_owned),
             timeout_secs: step_bounds,
             verify_deadline_secs: hook.map_or(0, |hook| secs(hook, "verify_deadline_secs")),
             promotion_ceiling_secs: hook

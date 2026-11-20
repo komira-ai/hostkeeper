@@ -156,7 +156,7 @@ Every item is **Built** at the path given.
   calls **closed-world removal**: hostkeeper removes what it put on the host, all of it, and nothing else.
 - **The hook.** A program of the package, named by `[hook] command`, run as root in a bounded transient unit
   (`crates/hostkeeper-steps/src/systemd.rs`): `prepare`, `cutover`, `verify`, `rollback`, `cleanup`, and the additive
-  `uninstall` and `boot` (`crates/hostkeeper-hook`). Before `cutover` the daemon switches `current` and relinks
+  `uninstall`, `boot`, `drain` and `resume` (`crates/hostkeeper-hook`). Before `cutover` the daemon switches `current` and relinks
   (`hooked_switch`, `crates/hostkeeper-daemon/src/place.rs`).
 - **The coordinator.** `Releases.SetDesired` takes `package_digest` (one package for every host) or `release_index` with
   `release_index_digest` (`operator.proto`). It orders each host the digest of its platform's entry and skips a host
@@ -403,7 +403,7 @@ message Manifest {                    // the installer is the entry's (Target.in
 }
 message Hook {
   repeated string command = 1;        // a program in the staged tree and its leading arguments; empty: built-in steps
-  optional string boot = 2; StepBounds timeout_secs = 3; uint64 verify_deadline_secs = 4;
+  optional string boot = 2; optional string drain = 7; optional string resume = 8; StepBounds timeout_secs = 3; uint64 verify_deadline_secs = 4;
   optional uint64 promotion_ceiling_secs = 5; optional uint32 cleanup_retries = 6;
 }
 message StepBounds { uint64 prepare = 1; uint64 cutover = 2; uint64 verify = 3; uint64 rollback = 4;
@@ -449,8 +449,8 @@ checks are today's `Manifest::load` rules moved to the message, plus those for i
   `rollback`; `promotion_ceiling_secs` not 0. Each installer bound from 1 up to 3600 seconds.
 - **The hook program.** `command[0]` is, for `hostkeeper-archive` and `tarball`, a relative path of plain names in
   `tree/` (section 6.1), a regular file there reached through no link; for `apt` and `macos-pkg`, an absolute path of
-  an executable file the package installs, run from its sealed copy (packages-native.md section 10.2). `boot` needs a
-  command. For `oci-image`, `command` must be empty. No rule applies to a native package's files or scripts.
+  an executable file the package installs, run from its sealed copy (packages-native.md section 10.2). `boot`, `drain` and `resume` need a
+  command; `drain` and `resume` are both named or neither, and no two of `boot`, `drain` and `resume` name one step. For `oci-image`, `command` must be empty. No rule applies to a native package's files or scripts.
 - **Names.** Each `run` entry and each container's `unit` is a unit of the service, by today's rules (`names.rs`): for
   systemd, a base of `<service>` or `<service>-…`, an optional `@<instance>`, and a suffix `.service`, `.socket` or
   `.timer`; for launchd, a label `<service>` or `<service>.…`. A unit `place` entry's `path` is such a name too. Every

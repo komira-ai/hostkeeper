@@ -1,9 +1,10 @@
-//! The five steps of an update, the `uninstall` step, and the command line a hook is run with.
+//! The five steps of an update, the `uninstall`, `drain` and `resume` steps, and the command line
+//! a hook is run with.
 //!
 //! The updater runs `<executable> <hook_args> <step> [args]`. `hook_args` are the elements of the
 //! manifest's `[hook] command` after the executable (our own services use `["update-hook"]`);
 //! everything from the step on is what [`Invocation`] parses and prints: `prepare <artifact> [--params <file>]` and
-//! `<cutover|verify|rollback|cleanup|uninstall> [--params <file>]`.
+//! `<cutover|verify|rollback|cleanup|uninstall|drain|resume> [--params <file>]`.
 
 use std::ffi::OsString;
 use std::fmt;
@@ -13,12 +14,22 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 
 /// One of the five steps of an update, in the order a successful update runs them (`Rollback`
-/// runs instead of the rest after a failure), or `Uninstall`.
+/// runs instead of the rest after a failure), or `Uninstall`, `Drain` or `Resume`.
 ///
 /// `Uninstall` is additive: it is no step of an update, and the updater runs it once, from the
 /// installed release, when the service is removed from the host (design section 4.7,
 /// "Uninstall"), bounded by the manifest's `[hook.timeout_secs] uninstall`. A manifest without
 /// that bound does not run it, and the updater refuses the uninstall.
+///
+/// `Drain` and `Resume` are additive too, and no step of an update: a maintenance run of the
+/// host runs them from the installed release, `drain` before the host's own update and `resume`
+/// after it (maintenance-updates.md section 5.2). `drain` takes the service out of service and
+/// returns once it has no work; `resume` puts it back. Both are safe to run twice, and `resume`
+/// with no `drain` before it succeeds and changes nothing. A `drain` given a deadline
+/// ([`crate::DRAIN_DEADLINE_KEY`]) that passes while work is left resumes the service, cuts no
+/// work, and exits `75`. A manifest names the words the daemon runs them by in `[hook] drain`
+/// and `[hook] resume`; a hook that parses its command line with [`Invocation`] names `drain`
+/// and `resume`, the words below. A manifest that names neither is left alone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Step {
@@ -28,11 +39,13 @@ pub enum Step {
     Rollback,
     Cleanup,
     Uninstall,
+    Drain,
+    Resume,
 }
 
 impl Step {
-    /// The five steps of an update, in the order of the table of the contract. `Uninstall` is
-    /// not among them.
+    /// The five steps of an update, in the order of the table of the contract. `Uninstall`,
+    /// `Drain` and `Resume` are not among them.
     pub const ALL: [Step; 5] = [
         Step::Prepare,
         Step::Cutover,
@@ -50,6 +63,8 @@ impl Step {
             Step::Rollback => "rollback",
             Step::Cleanup => "cleanup",
             Step::Uninstall => "uninstall",
+            Step::Drain => "drain",
+            Step::Resume => "resume",
         }
     }
 }
@@ -66,7 +81,7 @@ impl FromStr for Step {
     fn from_str(s: &str) -> Result<Step, ArgsError> {
         Step::ALL
             .into_iter()
-            .chain([Step::Uninstall])
+            .chain([Step::Uninstall, Step::Drain, Step::Resume])
             .find(|step| step.name() == s)
             .ok_or_else(|| ArgsError::UnknownStep(s.to_owned()))
     }

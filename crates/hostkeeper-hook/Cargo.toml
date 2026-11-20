@@ -9,7 +9,7 @@ publish.workspace = true
 description = "The contract between a host updater and the update hook a service ships, and the conformance harness that proves a hook keeps it."
 
 # The contract between a host updater and the update hook a service ships (docs/design/host-updates.md,
-# sections 3.2 and 9): the five steps and their arguments, the exit codes, the JSON last line, the
+# sections 3.2 and 9): the five steps and their arguments (and the `uninstall`, `drain` and `resume` that are no step of an update), the exit codes, the JSON last line, the
 # `--params` table, what the updater runs next after each outcome, and, behind the feature
 # `conformance`, the harness a service uses in its own tests to prove its hook keeps the contract.
 # The crate depends on no other crate of this workspace, so a service can depend on the contract
