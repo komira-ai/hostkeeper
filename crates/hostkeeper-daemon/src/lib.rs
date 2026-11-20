@@ -70,6 +70,8 @@
 //!   with no hook program; [`mirror`] the files of a private repository, read from the coordinator into a local copy apt reads; [`repository_push`] the repository sets the coordinator pushes, written
 //!   as the host's repository configuration and taken into use without a restart.
 //! - [`facts_file`]: the host's facts file, written from the facts the coordinator sends.
+//! - [`maintenance_state`]: the run state of the maintenance report, read from the host's
+//!   maintenance run record (`hostkeeper_steps::maintenance`).
 //! - [`operator_keys`]: the operator keys the coordinator sends (`operator-keys-v1`), put in the
 //!   managed block of the login account's `authorized_keys` ([`authorized_keys`], the block and the
 //!   file) and reported by digest in every heartbeat; [`login_account`] finds the account (root on
@@ -165,6 +167,7 @@ pub mod maintenance_hook;
 pub mod maintenance_host;
 pub mod maintenance_own;
 pub mod maintenance_reboot;
+pub mod maintenance_state;
 pub mod mirror;
 pub mod node;
 pub mod notify;

@@ -85,8 +85,7 @@ fn report(target: &str, reason: &str) -> serde_json::Value {
     json!({"target": target, "outcome": "failed", "phase": "halt", "reason": reason})
 }
 
-/// An operations state with something in every list, lists out of any sorted order, and entries
-/// at their default; one inventory record states its platform.
+/// An operations state with something in every list (runs too), out of order, entries at default.
 pub(crate) fn rich_ops() -> OpsState {
     let mut state: OpsState = serde_json::from_value(json!({
         "schema": 1,
@@ -139,6 +138,7 @@ pub(crate) fn rich_ops() -> OpsState {
     }))
     .expect("plan positions");
     state.inventory[0].platform = Some(hostkeeper_wire::Platform::LinuxArm64);
+    state.maintenance_runs = crate::maintenance_runs::tests::sample();
     state
 }
 
