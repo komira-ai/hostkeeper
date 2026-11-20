@@ -7,6 +7,7 @@ mod support_maintenance;
 
 use std::path::PathBuf;
 
+use hostkeeper_daemon::cli::DEFAULT_PACKAGE_LOCK_WAIT_SECS;
 use hostkeeper_daemon::maintenance_hook::{
     HookArgs, HookStep, Kind, KindError, KindState, MAX_DETAIL, MaintainParams, REASON_KIND_FAILED,
     REASON_NOT_APPLIED, REASON_UNSUPPORTED_KIND, Registry, main_with,
@@ -248,6 +249,7 @@ fn main_on_stdin(host: &Host, step: HookStep, json: &str) -> (Outcome, String) {
     let args = HookArgs {
         step,
         params: PathBuf::from("-"),
+        package_lock_wait_secs: DEFAULT_PACKAGE_LOCK_WAIT_SECS,
     };
     let mut stdout = Vec::new();
     let outcome = main_with(&args, &host.ports(), &mut json.as_bytes(), &mut stdout);

@@ -1,7 +1,7 @@
 //! The ports of the maintenance hook: the run record it keeps each kind's progress in
 //! ([`RunRecord`]) and the reboot it asks for ([`Rebooter`]). [`Unwired`] stands in for the run
-//! record where the hook has no directory to keep it in (parameters on standard input) and for the
-//! reboot until each platform's reboot is written.
+//! record where the hook has no directory to keep it in (parameters on standard input), and for
+//! the reboot of a platform that has none here (a Mac).
 
 use hostkeeper_steps::BootId;
 
@@ -24,7 +24,7 @@ pub enum RecordError {
     /// The record failed; the text says where and how, never a parameter's value.
     #[error("the run record failed: {0}")]
     Failed(String),
-    /// This host has no run record yet.
+    /// The hook has no run record: its parameters came on standard input.
     #[error("this host keeps no run record yet")]
     NotWired,
 }
@@ -61,8 +61,9 @@ pub trait Rebooter {
 /// The run record of a hook with no directory to keep it in and the reboot of a host that has none
 /// yet: the record holds nothing (every
 /// kind [`KindState::Pending`]) and refuses every write, and the reboot is refused, each
-/// [`RecordError::NotWired`] or [`RebootError::NotWired`]. With every kind a stub, no step of the
-/// hook gets as far as a write or a reboot.
+/// [`RecordError::NotWired`] or [`RebootError::NotWired`]. The binary refuses a `cutover` before
+/// any kind runs while its record is this one ([`super::unwired_record`]), so no install is made
+/// that it could not record.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Unwired;
 

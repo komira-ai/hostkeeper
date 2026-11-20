@@ -266,6 +266,7 @@ fn a_cutover_records_its_reboot_in_the_file_beside_its_parameters() {
     let args = HookArgs {
         step: HookStep::Cutover,
         params: params.clone(),
+        package_lock_wait_secs: hostkeeper_daemon::cli::DEFAULT_PACKAGE_LOCK_WAIT_SECS,
     };
     let run = || {
         let mut stdout = Vec::new();

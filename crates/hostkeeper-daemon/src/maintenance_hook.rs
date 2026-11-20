@@ -7,9 +7,12 @@
 //! ([`MaintainParams`]). No argument carries a parameter, and nothing the hook writes holds one.
 //!
 //! **Kinds.** Each kind of the run (`macos`, `xcode`, `linux`, `reboot`) is the work of a
-//! [`MaintenanceKind`], found in the host platform's [`Registry`]; a kind the platform has no work
-//! for fails `unsupported_kind`. The steps run each kind of the run in [`Kind::ALL`]'s order,
-//! macOS before Xcode, whatever order the parameters give:
+//! [`MaintenanceKind`], found in the host platform's [`Registry`] ([`registry_for`]); a kind the
+//! platform has no work for fails `unsupported_kind`. On a Linux host (systemd or OpenRC) the
+//! `cutover` and the `after_reboot` of `linux` and `reboot` are written
+//! ([`crate::maintenance_linux`]); every other step of every kind is `unsupported_kind` until its
+//! own change. The steps run each kind of the run in [`Kind::ALL`]'s order, macOS before Xcode,
+//! whatever order the parameters give:
 //!
 //! - `prepare` runs each kind's `prepare`, and ends at the first that does not succeed. It writes
 //!   nothing to the run record and reboots nothing.
@@ -26,12 +29,15 @@
 //! - `verify` fails `not_applied` for a kind the run record does not hold applied, and otherwise
 //!   runs each kind's `verify`.
 //!
-//! **Run record.** The record is the maintenance run record in the directory of the `--params` file
-//! ([`StoreRecord`]), where the daemon puts the parameters; with the parameters on standard input
-//! there is no such directory and the record is [`Unwired`]. The daemon's sequencer
-//! ([`crate::maintenance_run`]) launches `cutover` with the parameters of one kind at a time, and
-//! applies a kind whose reboot was under way itself once it reads a new boot id: it launches no
-//! `cutover` after the reboot, except on the same boot, to ask for the reboot again.
+//! **The run record.** The record is the maintenance run record in the directory of the
+//! `--params` file ([`StoreRecord`]), where the daemon puts the parameters. With the parameters on
+//! standard input there is no such directory and the record is [`Unwired`]: a `cutover` there
+//! would install and then fail to record it, so [`host_main`] refuses the step first, before any
+//! kind runs, failing `run_record_failed` ([`unwired_record`]); `prepare` and `verify` run. The
+//! daemon's sequencer ([`crate::maintenance_run`]) launches `cutover` with the parameters of one
+//! kind at a time, and applies a kind whose reboot was under way itself once it reads a new boot
+//! id: it launches no `cutover` after the reboot, except on the same boot, to ask for the reboot
+//! again.
 //!
 //! **Outcome.** The exit code is the hook contract's: `0` done, `75` deferred (the kind touched
 //! nothing), `1` failed. The last line of standard output is the contract's JSON report: the
@@ -46,12 +52,20 @@ mod store;
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use clap::{Args, ValueEnum};
 use hostkeeper_hook::{Class, Outcome, Report, is_reason_token};
-use hostkeeper_launchd::Platform;
+use hostkeeper_launchd::{Platform, PlatformKind};
+use hostkeeper_placed::{RealFs, Roots};
 use hostkeeper_proto::maintenance::MAX_HALTED_REASON;
 use hostkeeper_steps::{BootId, BootIdSource};
+
+use crate::Placement;
+use crate::cli;
+use crate::maintenance_linux::kinds::{LinuxKind, RebootKind};
+use crate::maintenance_linux::rebooter::HostRebooter;
+use crate::maintenance_own::PlacedPackages;
 
 pub use kind::{Cutover, KindError, MaintenanceKind, REASON_UNSUPPORTED_KIND, Unsupported};
 pub use params::{Kind, MAX_PARAMS_BYTES, MaintainParams, ParamsError};
@@ -102,6 +116,15 @@ pub struct HookArgs {
     /// standard input.
     #[arg(long)]
     pub params: PathBuf,
+    /// The seconds a package manager's program waits at most for the host's package manager's
+    /// lock, from 1 to 3600, as the daemon's flag of the same name: on top of the deadline of
+    /// each program the Linux install runs.
+    #[arg(
+        long,
+        default_value_t = cli::DEFAULT_PACKAGE_LOCK_WAIT_SECS,
+        value_parser = clap::value_parser!(u64).range(1..=cli::MAX_PACKAGE_LOCK_WAIT_SECS),
+    )]
+    pub package_lock_wait_secs: u64,
 }
 
 /// What the hook works through: the kinds of the host, its run record, its reboot and its boot
@@ -187,21 +210,68 @@ fn bounded(detail: &str) -> String {
     detail[..end].to_owned()
 }
 
-/// `hostkeeper maintenance-hook` on this host: the kinds of its platform, the boot id of the
-/// system the binary was built for, the run record beside the parameters file
-/// ([`StoreRecord::beside_params`]; with the parameters on standard input there is none and the
-/// record is [`Unwired`]) and no reboot yet ([`Unwired`]); the parameters from the file `args`
-/// names or from the process's standard input, the report to its standard output.
+/// The kinds of a host of `platform`: [`Registry::for_platform`]'s, with `linux` and `reboot` of a
+/// Linux host (systemd or OpenRC) put in place of their stubs ([`LinuxKind`], [`RebootKind`]), the
+/// install waiting up to `lock_wait_secs` for the package manager's lock and leaving untouched the
+/// packages recorded in the daemon's `placed.json`. A Mac keeps its stubs.
+pub fn registry_for(platform: &Platform, lock_wait_secs: u64) -> Registry {
+    let registry = Registry::for_platform(platform.kind);
+    match platform.kind {
+        PlatformKind::Linux | PlatformKind::Openrc => {
+            let placement = Placement {
+                roots: Roots::new(
+                    Path::new(hostkeeper_placed::roots::STATE_DIR),
+                    &platform.unit_dir,
+                    Path::new(cli::DEFAULT_PACKAGES_DIR),
+                ),
+                fs: Arc::new(RealFs::new(Path::new("/"))),
+            };
+            let own = Box::new(PlacedPackages::new(&placement));
+            registry
+                .with(
+                    Kind::Linux,
+                    Box::new(LinuxKind::at_host(lock_wait_secs, own)),
+                )
+                .with(Kind::Reboot, Box::new(RebootKind::at_host()))
+        }
+        PlatformKind::Macos => registry,
+    }
+}
+
+/// The ending of a `cutover`, which a hook with no run record ([`Unwired`]: its parameters on
+/// standard input) refuses before any kind runs: failed `run_record_failed`, saying the host keeps
+/// no run record. `None` for the other steps.
+pub fn unwired_record(step: HookStep) -> Option<Ending> {
+    (step == HookStep::Cutover).then(|| record_failed(RecordError::NotWired))
+}
+
+/// `hostkeeper maintenance-hook` on this host: the kinds of its platform ([`registry_for`]), the
+/// boot id of the system the binary was built for, the platform's reboot ([`HostRebooter`]; none
+/// on a Mac) and the run record beside the parameters file ([`StoreRecord::beside_params`]); with
+/// the parameters on standard input there is no record ([`Unwired`]), so a `cutover` is refused
+/// ([`unwired_record`]) before its parameters are read. The parameters come from the file `args`
+/// names or from the process's standard input, the report goes to its standard output.
 pub fn host_main(args: &HookArgs) -> Outcome {
-    let kinds = Registry::for_platform(Platform::host().kind);
-    let boot_id = crate::adapters::host_boot_id();
     let store_record = StoreRecord::beside_params(&args.params);
+    if let Some(ending) = unwired_record(args.step).filter(|_| store_record.is_none()) {
+        let _unwritten = ending.report().write_to(&mut io::stdout().lock());
+        return ending.outcome;
+    }
+    let platform = Platform::host();
+    let kinds = registry_for(&platform, args.package_lock_wait_secs);
+    let boot_id = crate::adapters::host_boot_id();
+    let host_rebooter = HostRebooter::for_platform(platform.kind);
+    let rebooter = host_rebooter
+        .as_ref()
+        .map_or(&Unwired as &dyn Rebooter, |rebooter| {
+            rebooter as &dyn Rebooter
+        });
     let ports = HookPorts {
         kinds: &kinds,
         record: store_record
             .as_ref()
             .map_or(&Unwired as &dyn RunRecord, |r| r as &dyn RunRecord),
-        rebooter: &Unwired,
+        rebooter,
         boot_id: boot_id.as_ref(),
     };
     main_with(

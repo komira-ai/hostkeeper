@@ -373,8 +373,8 @@ changes keep it so:
   `[hook] resume`, as it names `[hook] boot` today (Built: `crates/hostkeeper-config/src/manifest.rs`). `drain` takes the service out of
   service and returns when it has no work; `resume` puts it back. Both are safe to run twice. A package that names neither is left alone.
   The conformance harness (Built: `hostkeeper-hook`'s `conformance` feature) gains checks for them.
-- **The maintenance hook (Built: the command and its skeleton, `crates/hostkeeper-daemon/src/maintenance_hook.rs`; each kind's work
-  New).** The OS work is a hook too, a subcommand of hostkeeper's own binary, `hostkeeper maintenance-hook <prepare|cutover|verify>
+- **The maintenance hook (Built: the command and its skeleton, `crates/hostkeeper-daemon/src/maintenance_hook.rs`; the `cutover`
+  of `linux` and `reboot`, `crates/hostkeeper-daemon/src/maintenance_linux.rs`; the other kinds' work and steps New).** The OS work is a hook too, a subcommand of hostkeeper's own binary, `hostkeeper maintenance-hook <prepare|cutover|verify>
   --params <file>`, launched the way the step runner launches a step (Built: `hostkeeper_steps` launchers: a transient systemd unit, a
   launchd job on a Mac, a process group under OpenRC). Its parameters are the `maintain` order's fields as JSON, in a file or on standard
   input (`--params -`), never in an argument. Each kind is the work of a `MaintenanceKind`, found by the host's platform; until a kind's
@@ -430,8 +430,9 @@ drain was never asked for is never held.
 ### 5.5 Apply
 
 - **Linux.** apt: `apt-get install --only-upgrade` of the security packages and the kernel (`linux_scope = security`) or `apt-get
-  dist-upgrade` (`all`), non-interactive, keeping existing configuration files; dnf: `dnf upgrade --security` or `dnf upgrade`; apk:
-  `apk upgrade`. The package lock is waited for as the installers wait today (Built: `--package-lock-wait-secs`).
+  dist-upgrade` (`all`), non-interactive, keeping existing configuration files; dnf: `dnf upgrade --security`, then a newer kernel
+  by name, or `dnf upgrade`; apk: `apk upgrade`, under `security` the kernel alone (apk names no security origin). The package lock is
+  waited for as the installers wait today (Built: `--package-lock-wait-secs`, also a flag of `maintenance-hook`).
 - **macOS.** Apple silicon installs a macOS update or upgrade only with a *volume owner's* authorisation: an administrator holding a
   Secure Token. Root alone is not one, and the bootstrap token, which is one, can be redeemed only by a device-management service, not by
   a local daemon. Two paths follow, and one coordinator flag says which is live (section 5.5.2):
