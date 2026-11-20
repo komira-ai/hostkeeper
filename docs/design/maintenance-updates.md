@@ -351,7 +351,7 @@ and decided where packages are: in `decide()`, per heartbeat, in one transaction
 `crates/hostkeeper-coordinator/src/decide.rs`, `store/decision.rs`). One rule is shared with packages, as it stands: **one thing at a
 time on a host** (Built: `busy_elsewhere`). A host with a package order outstanding is not given maintenance, and a host in a run is
 given no package order until its run ends there. The other rules are maintenance's own (New), because the package rules (halt,
-exclusion, `min_up`) are kept per package and count a cordoned host as up:
+exclusion, `min_up`) are kept per package and, before the last rule below, counted a cordoned host as up:
 
 - **Serving count:** a host is not taken while fewer than `min_serving + 1` hosts of its group are serving. A host counts as serving when
   it is live and healthy and not between drain and done in a run, so a draining, rebooting or halted host never counts.
@@ -364,9 +364,14 @@ exclusion, `min_up`) are kept per package and count a cordoned host as up:
   Schedule form, never ordered), a host whose group changes while it waits, and,
   for `macos`, a Mac that reports an `mdm_conflict` (5.8), or, while the path is `daemon`, a Mac with `no_update_account` (5.5); the
   `apple-business` path needs no update account.
-- **Packages wait, not the reverse:** a host between drain and done is left out of the hosts a package plan counts for its stage, so a long
-  drain does not hold a stage open; it gets its package updates after its turn. A maintenance run does not count against
-  `--live-rollouts`. `HostGroups.Move` of a host in its turn is refused `host_in_maintenance`.
+- **Packages wait, not the reverse** (Built: `crates/hostkeeper-coordinator/src/stages.rs`, `live.rs`, `decide.rs`, `moving.rs`, the
+  hosts in their turn kept in the fleet's marks by `holds.rs`): a host in its turn (from the order that starts it until it is done,
+  deferred or put back) is told `busy_elsewhere` for every package. One that has not taken its place in a package's plan is left out of
+  the hosts the plan counts for its stage, neither failed nor left to order, so a long drain does not hold a stage open; it gets its
+  package updates after its turn. One already at the desired version keeps its place and counts as done, and one that failed the
+  version stays failed. `min_up` counts it down. A maintenance run does not count against `--live-rollouts`, and a host in its turn
+  bakes nothing that makes a rollout live. A host moving into a group is not admitted to a plan while in its turn. `HostGroups.Move` of
+  a host in its turn is refused `host_in_maintenance` (New: not built).
 
 The coordinator sends one order, `maintain` (New, a case of `Order.verb`, with an `order_id` and `try` like the others): the run, the
 kinds, for `xcode` the store entries (version, build, size, SHA-256) and the versions to remove and the default, the Linux scope, the

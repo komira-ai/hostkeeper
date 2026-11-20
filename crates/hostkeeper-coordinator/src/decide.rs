@@ -537,9 +537,9 @@ pub(crate) fn consider(
 
 /// The uninstall of `def` the host `id` is ordered by `order_id`, or the first rule that holds
 /// it back: the host must still list the service, and the hold, the quiet start, the one thing
-/// at a time on the host (an update, an order or a maintenance turn), its failure or deferral of this uninstall, an uninstall of a package of
-/// its group that goes before it (`uninstall_order`) and the other services' live rollouts hold
-/// it.
+/// at a time on the host (an update, an order or a maintenance turn), its failure or deferral of
+/// this uninstall, an uninstall of a package of its group that goes before it (`uninstall_order`)
+/// and the other services' live rollouts hold it.
 fn uninstall(
     services: &Services,
     def: &ServiceDef,

@@ -43,16 +43,21 @@ at a time sets `max_updating` of 1. A group whose `min_up` equals its host
 count never has a host ordered.
 
 A host is eligible for a plan when it is live, its group lists the package, it is neither
-excluded nor held there, it is not in its turn of a maintenance run, no standing force covers it,
-and the coordinator could order it the package. A held, excluded or forced host is in no stage and
-does not stop one from being done.
+excluded nor held there, no standing force covers it, and the coordinator could order it the
+package. A held, excluded or forced host is in no stage and does not stop one from being done.
 
 A host in its turn of a maintenance run (from the `maintain` order that starts it until the turn
-is done, deferred or put back, a halted turn included) is in no stage of any package's plan, so a
-long drain does not hold a stage open: the stage is done once its other hosts are. The host is
-ordered no package update during its turn (`busy_elsewhere`) and takes its place in the plan, and
-gets the update, after its turn. `min_up` counts it as down. A run takes no place of
-`--live-rollouts`: a plan whose only hosts left to order are in their turn is not live.
+is done, deferred or put back, a halted turn included) is ordered no package update, install or
+uninstall (`busy_elsewhere`), so a long drain must not hold a stage open, and it does not:
+
+- A host that has not taken its place in the plan (it does not run the desired version) is in no
+  stage until its turn ends: the stage is done once its other hosts are, and the host takes its
+  place, and gets the update, after its turn.
+- A host already at the desired version keeps its place and counts as done, though it is down or
+  has not finished its bake while it drains and reboots; one that failed the version stays failed.
+- `min_up` counts it as down.
+- A run takes no place of `--live-rollouts`: a plan whose only hosts left to order are in their
+  turn is not live, and a host in its turn bakes nothing that makes it live.
 
 ## Host groups
 

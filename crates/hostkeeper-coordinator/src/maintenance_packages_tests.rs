@@ -6,6 +6,7 @@
 //! enrolled hosts of one group, with the hosts' turns seeded in the store as a run leaves them.
 
 use hostkeeper_proto::hostkeeper::agent::v1::MaintenanceStep;
+use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_wire::wire::{Health, Heartbeat, ServiceReply};
 
 use crate::decide::{Gate, Why};
@@ -14,7 +15,7 @@ use crate::group_decision_support::{Farm, policy, stages};
 use crate::host_groups_support::{SELF, UNIX};
 use crate::maintenance_calls_tests::{GROUP, edit_runs, host_at, run_of};
 use crate::maintenance_runs::{Kind, Step};
-use crate::marks_support::{ask_typed, runs, update};
+use crate::marks_support::{INSTALLER, ask_typed, beat_of, runs, update};
 use crate::orders::Order;
 
 const NOTHING: ServiceReply = ServiceReply::Nothing;
@@ -28,7 +29,7 @@ fn farm(
     name: &str,
     packages: &[&str],
     hosts: &[&str],
-    edit: impl FnOnce(&mut hostkeeper_proto::hostkeeper::operator::v1::RolloutPolicy),
+    edit: impl FnOnce(&mut proto::RolloutPolicy),
 ) -> Farm {
     let farm = Farm::new(name);
     farm.group(
@@ -126,10 +127,9 @@ fn a_stage_is_done_without_the_draining_host_which_updates_after_its_turn() {
 }
 
 /// Proves: a host of the current stage that runs the desired version and went down while it drains
-/// in its turn does not hold the stage open: with stages of half and every host, the next host
-/// takes its place in the first stage, the host after it waits `stage_wait` for that stage, and is
-/// ordered once the stage is done; the drained host, back up at the version after its turn, is
-/// told nothing more.
+/// in its turn does not hold the stage open: with stages of half and every host, the first stage
+/// (it and one other host at the version) is done, and both hosts of the second stage are ordered
+/// at once; the drained host, back up at the version after its turn, is told nothing more.
 ///
 /// Catches: a stage that counts a draining host as an update still running, so no later host of the
 /// group is ordered until the drain, the reboot and the checks are over.
@@ -151,15 +151,41 @@ fn a_host_down_in_its_turn_holds_no_stage_open() {
     );
 
     assert_eq!(farm.tell("a3", &[("web", "1.0")]), update("web", "2.0"));
-    assert_eq!(farm.tell("a4", &[("web", "1.0")]), NOTHING);
-    assert_eq!(farm.why("a4", "web"), Some(Why::Gate(Gate::StageWait)));
-    assert_eq!(farm.tell("a3", &[("web", "2.0")]), NOTHING);
     assert_eq!(farm.tell("a4", &[("web", "1.0")]), update("web", "2.0"));
-
     assert_eq!(
         reply(&farm, "a2", turn_done(&farm, &[("web", "2.0")])),
         NOTHING
     );
+}
+
+/// Proves: a host that took its place in a stage keeps it through its turn: with a first stage of
+/// one host and a second an operator enters, the host done in the first stage starts its turn and
+/// the next host is still told `advance_wait`, not ordered in its place.
+///
+/// Catches: a done host left out of its stage when its turn starts, which frees its place and
+/// orders a second host past the operator's Advance (or past a canary of one).
+#[test]
+fn a_host_keeps_the_place_it_took_through_its_turn() {
+    let farm = farm("mp-kept-place", &["web"], &["a1", "a2", "a3", "a4"], |p| {
+        p.stages = vec![
+            proto::PolicyStage {
+                percent: 25,
+                advance: proto::StageAdvance::Auto.into(),
+            },
+            proto::PolicyStage {
+                percent: 100,
+                advance: proto::StageAdvance::Manual.into(),
+            },
+        ];
+    });
+    farm.want(GROUP, "web", "2.0");
+    assert_eq!(farm.tell("a1", &[("web", "1.0")]), update("web", "2.0"));
+    assert_eq!(farm.tell("a1", &[("web", "2.0")]), NOTHING);
+    assert_eq!(farm.why("a2", "web"), Some(Why::Gate(Gate::AdvanceWait)));
+
+    in_run(&farm, &[("a1", Step::Draining)]);
+    assert_eq!(farm.tell("a2", &[("web", "1.0")]), NOTHING);
+    assert_eq!(farm.why("a2", "web"), Some(Why::Gate(Gate::AdvanceWait)));
 }
 
 /// Proves: `min_up` counts a host in its turn as down, though it still reports the package healthy:
@@ -282,4 +308,36 @@ fn an_uninstall_waits_for_the_hosts_turn() {
         farm.order_on("a1", done),
         Some(Order::Uninstall { service, .. }) if service == "cfg"
     ));
+}
+
+/// Proves: a host moved into a group is not admitted to the group's plans while it is in its turn
+/// (it is told `moving`, its old group's packages included), and is admitted, and told its first
+/// uninstall, at the heartbeat that reports its turn done.
+///
+/// Catches: a moving host admitted while no plan counts it, which skips the check of a place and
+/// lets it update past the plan's stage, `max_updating` and `min_up` after its turn.
+#[tokio::test]
+async fn a_moving_host_is_not_admitted_during_its_turn() {
+    use crate::moving_tests::{MOVING, OLD, farm_of, told, wide};
+    let farm = farm_of("mp-moving", wide()).await;
+    farm.world.move_to("m1", "new").expect("moved");
+    in_run(&farm, &[("m1", Step::Draining)]);
+
+    assert_eq!(told(&farm, "m1", &OLD), None);
+    assert_eq!(farm.why("m1", "svc"), MOVING);
+    assert_eq!(farm.why("m1", "oldcfg"), MOVING);
+
+    let listed = std::iter::once((SELF, "1.0"))
+        .chain(OLD)
+        .map(|(name, at)| runs(name, at))
+        .collect();
+    let mut done = beat_of(INSTALLER, listed);
+    done.agent_features
+        .push(crate::maintenance::FEATURE.to_owned());
+    done.maintenance = at_step(MaintenanceStep::Done).maintenance;
+    let order = farm.order_on("m1", done);
+    assert!(
+        matches!(&order, Some(Order::Uninstall { service, .. }) if service == "oldcfg"),
+        "{order:?}"
+    );
 }

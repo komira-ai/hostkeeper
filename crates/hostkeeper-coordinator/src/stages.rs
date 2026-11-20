@@ -9,8 +9,7 @@
 //! into one.
 //!
 //! A host is eligible ([`View::of`]) when it is live, assigned the service, neither excluded nor
-//! held, not in its turn of a maintenance run (so a long drain holds no stage open, and the host
-//! takes its place after its turn), not ordered by a standing force, has no failure of the desired version an operator
+//! held, not ordered by a standing force, has no failure of the desired version an operator
 //! acknowledged (a cleared halt, a version set by hand), and could be ordered the desired
 //! version: it runs the service, or it is to install it and its agent takes installs and the
 //! version has a package for its platform. A host has started when it is updating, under an order, at the desired
@@ -18,7 +17,9 @@
 //! stage; its free places go to the eligible hosts that have not started as they ask, the first
 //! to ask first (a host that declined the update and waits does not ask: it is passed over).
 //! A stage is done when as many hosts are up at the desired version and have baked (or were
-//! recorded done) as it holds.
+//! recorded done) as it holds. A host in its turn of a maintenance run is no member until its
+//! turn ends, unless it took its place already: one at the desired version counts as done, so a
+//! long drain holds no stage open, and a failed one stays failed.
 //!
 //! Where the plan stands is the number of stages of the rollout file it has entered, kept per
 //! service in the ops store ([`crate::rollouts`]); none kept for the desired version is the
@@ -402,7 +403,7 @@ impl View {
     ) -> Self {
         let mut members: Vec<Member> = eligible(def, want, fleet, now)
             .into_iter()
-            .map(|(id, host)| {
+            .filter_map(|(id, host)| {
                 let mut state = state_of(def, want, &done, fleet, &id, host, now);
                 // A host admitted to its move at this version holds a place of the plan before it
                 // is ordered ([`crate::moving`]).
@@ -410,15 +411,27 @@ impl View {
                 {
                     state = HostState::Updating;
                 }
+                // A host in its turn of a maintenance run keeps a failure, and a place it took
+                // at the desired version as done (its drain holds no stage open); else it is no
+                // member until its turn ends.
+                if fleet.in_maintenance(&id) && state != HostState::Failed {
+                    let at = host.is_some_and(|h| {
+                        h.beat.health != Health::Absent && h.beat.version == want.version
+                    });
+                    if !at {
+                        return None;
+                    }
+                    state = HostState::Done;
+                }
                 let deferring =
                     state == HostState::Waiting && is_deferring(def, want, fleet, &id, now);
-                Member {
+                Some(Member {
                     role: fleet.role_in(&def.name, &id).to_owned(),
                     id,
                     state,
                     stage: 0,
                     deferring,
-                }
+                })
             })
             .collect();
         // The hosts that started fill the stages first, the done ones first; then the hosts
@@ -611,7 +624,6 @@ fn eligible<'a>(
                 && fleet.is_assigned(def, id)
                 && !fleet.is_excluded(service, id)
                 && !fleet.is_held(service, id)
-                && !fleet.in_maintenance(id)
                 && !fleet.is_forced_in(def, id)
                 && !crate::picks::unpicked(fleet, service, &want.version, id)
                 && (installed || installable);
