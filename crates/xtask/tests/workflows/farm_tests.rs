@@ -129,7 +129,10 @@ fn no_other_write_scope_is_allowed_in_the_job() {
             "    permissions:\n      contents: read\n      # For farm-connect's tailnet join alone: the OIDC token the farm's network trusts.\n      id-token: write\n",
             "    permissions: read-all\n"
         ),
-        ["job build: `permissions` is not a mapping of scopes", PERMISSIONS]
+        [
+            "job build: `permissions` is not a mapping of scopes",
+            PERMISSIONS
+        ]
     );
 }
 
@@ -186,7 +189,9 @@ fn exactly_one_step_uses_farm_connect() {
             &format!("{FARM_CONNECT}@a26616d62db17ee8aff67ee9c12d411c2fad7609"),
             "example/join@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa # v1.0.0"
         ),
-        [format!("job build: exactly one step must use {FARM_CONNECT}")]
+        [format!(
+            "job build: exactly one step must use {FARM_CONNECT}"
+        )]
     );
     // A name that only starts with farm-connect's is another action: it needs a version comment,
     // and the step is no farm-connect step.
@@ -227,7 +232,10 @@ fn the_triggers_are_every_pull_request_and_a_push_to_main() {
     // Catches: a filter that skips pull requests (paths, branches), a push from any branch (whose
     // token the farm would trust as main's), or another trigger.
     let cases = [
-        ("  pull_request:\n", "  pull_request:\n    paths: [crates/**]\n"),
+        (
+            "  pull_request:\n",
+            "  pull_request:\n    paths: [crates/**]\n",
+        ),
         ("    branches: [main]\n", "    branches: [main, dev]\n"),
         ("    branches: [main]\n", "    branches: main\n"),
         (

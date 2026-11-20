@@ -26,8 +26,8 @@ fn helper(name: &str) -> Vec<String> {
         "--nocapture",
         "--test-threads=2",
     ]
-        .map(str::to_owned)
-        .to_vec()
+    .map(str::to_owned)
+    .to_vec()
 }
 
 /// The lines `run_lines` hands over, and how the run ended.

@@ -91,7 +91,10 @@ fn no_workflow_that_runs_for_a_pull_request_runs_a_macos_job() {
             .map(str::to_owned);
         assert_eq!(mac, None, "{file} runs for a pull request and names macOS");
     }
-    assert_eq!(pull_request_workflows, ["ci.yml", "farm.yml", "pr-device.yml"]);
+    assert_eq!(
+        pull_request_workflows,
+        ["ci.yml", "farm.yml", "pr-device.yml"]
+    );
 }
 
 #[test]

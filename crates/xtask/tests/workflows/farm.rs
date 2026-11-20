@@ -45,11 +45,15 @@ pub const CONNECT_INPUTS: [(&str, &str); 6] = [
     ("ts-audience", "${{ vars.TS_AUDIENCE }}"),
     ("farm-address", "${{ vars.FARM_ADDRESS }}"),
     ("farm-instance", "${{ vars.FARM_INSTANCE }}"),
-    ("farm-properties", "${{ vars.FARM_LINUX_X86_64_PROPERTIES }}"),
+    (
+        "farm-properties",
+        "${{ vars.FARM_LINUX_X86_64_PROPERTIES }}",
+    ),
     ("tls", "${{ vars.FARM_TLS || 'false' }}"),
 ];
 /// The build step's `run:`.
-pub const BUILD_RUN: &str = "set -o pipefail; \"$RUNNER_TEMP/bin/buck2\" build //:ci 2>&1 | tee \"$RUNNER_TEMP/build.log\"";
+pub const BUILD_RUN: &str =
+    "set -o pipefail; \"$RUNNER_TEMP/bin/buck2\" build //:ci 2>&1 | tee \"$RUNNER_TEMP/build.log\"";
 /// The `run:` of the step after the build: no action ran on the runner.
 pub const LOCAL_ZERO_RUN: &str = "grep -Eq 'Commands: [0-9]+ \\(.*local: 0\\)' \"$RUNNER_TEMP/build.log\" || { echo \"::error::the build's summary line does not say local: 0\"; exit 1; }";
 
@@ -163,7 +167,9 @@ fn job_problems(job: &Node) -> Vec<String> {
         [_] => problems.push(format!(
             "job {JOB}: the farm-connect step's `with:` must be exactly {CONNECT_INPUTS:?}"
         )),
-        _ => problems.push(format!("job {JOB}: exactly one step must use {FARM_CONNECT}")),
+        _ => problems.push(format!(
+            "job {JOB}: exactly one step must use {FARM_CONNECT}"
+        )),
     }
     let runs: Vec<Option<&str>> = steps
         .iter()
