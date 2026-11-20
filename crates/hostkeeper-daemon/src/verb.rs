@@ -122,8 +122,9 @@ pub enum Verb {
     Maintain(Box<Maintained>),
 }
 
-/// The arguments of a `maintain` (docs/design/maintenance-updates.md, section 5.1): the order's
-/// id and try, and its terms, checked as the maintenance hook reads them.
+/// The arguments of a `maintain` (docs/design/maintenance-updates.md, sections 4.2 and 5.1): the
+/// order's id and try, what it does with the host's turn, and its terms, checked as the
+/// maintenance hook reads them.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Maintained {
     /// The coordinator's id of the order: 1 to [`MAX_RUN_ID`] bytes, the bound the report gives
@@ -131,8 +132,24 @@ pub struct Maintained {
     pub order_id: String,
     /// The coordinator's try of the order, from 1.
     pub order_try: NonZeroU64,
-    /// The run: its id and kinds checked ([`MaintainParams::new`]), its action `RUN`.
+    /// What the order does with the host's turn (`Maintain.action`).
+    pub action: TurnAction,
+    /// The run: its id and kinds checked ([`MaintainParams::new`]), whatever the action. A
+    /// [`TurnAction::Retry`] or [`TurnAction::PutBack`] uses its run id alone: the turn's steps
+    /// read the parameters its `RUN` wrote.
     pub params: MaintainParams,
+}
+
+/// What a `maintain` does with the host's turn (`Maintain.action`, section 4.2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TurnAction {
+    /// `RUN`: start the turn (stage, drain, apply, check, put back).
+    Run,
+    /// `RETRY`: launch the halted turn's failed step again, and go on from there.
+    Retry,
+    /// `PUT_BACK`: resume the halted turn's drained services and end the turn, the update left as
+    /// far as it got.
+    PutBack,
 }
 
 /// Why an order could not be decoded: the field, dotted (`update.version`), and its rule.
@@ -155,9 +172,8 @@ pub const VERSION_RULE: &str = hostkeeper_config::names::VERSION_RULE;
 pub const DIGEST_RULE: &str = "is not a SHA-256 of 64 lower-case hex digits";
 /// What the order id of a `maintain` breaks.
 pub const ORDER_ID_RULE: &str = "is not 1 to 64 bytes";
-/// What a `maintain` whose action is not `RUN` breaks.
-pub const ACTION_RULE: &str =
-    "is not RUN: this daemon runs a host's turn, and no retry or put back";
+/// What a `maintain` whose action is none of `RUN`, `RETRY` and `PUT_BACK` breaks.
+pub const ACTION_RULE: &str = "is not RUN, RETRY or PUT_BACK";
 /// What the run id of a `maintain` breaks.
 pub const RUN_ID_RULE: &str = "is not 1 to 64 bytes";
 /// What the kinds of a `maintain` break.
@@ -174,9 +190,14 @@ fn maintained(
             rule: ORDER_ID_RULE,
         });
     }
-    if maintain.action != i32::from(MaintainAction::Run) {
-        return Err(bad("maintain", "action", ACTION_RULE));
-    }
+    let action = match MaintainAction::try_from(maintain.action) {
+        Ok(MaintainAction::Run) => TurnAction::Run,
+        Ok(MaintainAction::Retry) => TurnAction::Retry,
+        Ok(MaintainAction::PutBack) => TurnAction::PutBack,
+        Ok(MaintainAction::Unspecified) | Err(_) => {
+            return Err(bad("maintain", "action", ACTION_RULE));
+        }
+    };
     let params = MaintainParams::new(maintain.clone()).map_err(|error| match error {
         ParamsError::RunId => bad("maintain", "run_id", RUN_ID_RULE),
         _ => bad("maintain", "kinds", KINDS_RULE),
@@ -184,6 +205,7 @@ fn maintained(
     Ok(Maintained {
         order_id: order_id.to_owned(),
         order_try,
+        action,
         params,
     })
 }
