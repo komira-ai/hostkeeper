@@ -26,7 +26,7 @@
     { "function": "hosts.exclude", "method": "hostkeeper.operator.v1.Hosts/Exclude", "pages": ["host"] },
     { "function": "hosts.get", "method": "hostkeeper.operator.v1.Hosts/Get", "pages": ["host"] },
     { "function": "hosts.include", "method": "hostkeeper.operator.v1.Hosts/Include", "pages": ["host"] },
-    { "function": "hosts.list", "method": "hostkeeper.operator.v1.Hosts/List", "pages": ["home", "inventory", "package", "release", "rollout"] },
+    { "function": "hosts.list", "method": "hostkeeper.operator.v1.Hosts/List", "pages": ["home", "inventory", "maintenance", "package", "release", "rollout"] },
     { "function": "hosts.retire", "method": "hostkeeper.operator.v1.Hosts/Retire", "pages": ["host"] },
     { "function": "hosts.retry", "method": "hostkeeper.operator.v1.Hosts/Retry", "pages": ["host"] },
     { "function": "hosts.setLabels", "method": "hostkeeper.operator.v1.Hosts/SetLabels", "pages": ["host"] },
