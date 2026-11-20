@@ -180,10 +180,10 @@ impl Stage {
             }
         }
         let staging = self.root.path(STAGING);
-        if !trusted(&staging) {
-            remove(&staging)?;
+        match trusted(&staging) {
+            true => self.remove_others(entries)?,
+            false => remove(&staging)?,
         }
-        self.remove_others(entries)?;
         let mut plans = Vec::new();
         for entry in entries {
             plans.push(self.plan(entry)?);
@@ -206,14 +206,11 @@ impl Stage {
         self.root.path(&entry_host_dir(entry))
     }
 
-    /// Removes from the staging directory what is not the directory of an entry.
+    /// Removes from the (trusted) staging directory what is not the directory of an entry.
     fn remove_others(&self, entries: &[XcodeEntry]) -> Result<(), KindError> {
         let staging = self.root.path(STAGING);
-        let listed = match fs::read_dir(&staging) {
-            Ok(listed) => listed,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-            Err(error) => return Err(staging_failed(&staging, "read", &error)),
-        };
+        let listed =
+            fs::read_dir(&staging).map_err(|error| staging_failed(&staging, "read", &error))?;
         for item in listed {
             let item = item.map_err(|error| staging_failed(&staging, "read", &error))?;
             let name = item.file_name();

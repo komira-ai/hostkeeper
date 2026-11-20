@@ -173,16 +173,6 @@ impl Runner for FakeRunner {
     }
 }
 
-/// A program that exits 0.
-fn exits_zero() -> Program {
-    Box::new(|_| {
-        Ok(Ran {
-            code: Some(0),
-            ..Ran::default()
-        })
-    })
-}
-
 /// A program that exits `code` saying `stderr`.
 fn exits(code: i32, stderr: &str) -> Program {
     let stderr = stderr.as_bytes().to_vec();
@@ -213,11 +203,18 @@ fn xip_making(name: &'static str, plist: &'static [u8]) -> Program {
 struct FakeSpace {
     free: Result<u64, String>,
     reads: Arc<Mutex<u32>>,
+    /// A directory made, mode 0755, when the space is read: one put in the staging directory's
+    /// place between the stage's first look at it and the fetch.
+    swap_in: Option<PathBuf>,
 }
 
 impl FreeSpace for FakeSpace {
     fn free_bytes(&self) -> Result<u64, String> {
         *lock(&self.reads) += 1;
+        if let Some(dir) = &self.swap_in {
+            fs::create_dir(dir).expect("the swapped-in directory");
+            fs::set_permissions(dir, fs::Permissions::from_mode(0o755)).expect("its mode");
+        }
         self.free.clone()
     }
 }
@@ -242,7 +239,7 @@ impl Mac {
     fn new(name: &str) -> Mac {
         let runner = FakeRunner::default();
         runner.answers(XIP, xip_making("Xcode.app", V27));
-        runner.answers(CODESIGN, exits_zero());
+        runner.answers(CODESIGN, exits(0, ""));
         let clock: Arc<dyn Clock> = FakeClock::new();
         let root = scratch(name);
         fs::create_dir(root.path().join("Applications")).expect("the Applications directory");
@@ -253,6 +250,7 @@ impl Mac {
             space: FakeSpace {
                 free: Ok(needed()),
                 reads: Arc::default(),
+                swap_in: None,
             },
             clock,
         }
@@ -406,7 +404,8 @@ fn a_good_archive_ends_with_a_verified_app_in_staging_and_nothing_in_application
 }
 
 /// Proves: one byte less free than the archive and its expansion need defers
-/// `free_space_short` before the store is read or any program runs, and leaves nothing.
+/// `free_space_short` before the store is read or any program runs, and leaves nothing; a free
+/// space that cannot be read defers `free_space_unreadable` and fetches nothing.
 #[test]
 fn a_short_disk_defers_and_fetches_nothing() {
     let mut mac = Mac::new("xcs-short");
@@ -426,11 +425,7 @@ fn a_short_disk_defers_and_fetches_nothing() {
     assert!(mac.store.asked().is_empty());
     assert!(mac.runner.ran().is_empty());
     mac.assert_clean();
-}
 
-/// Proves: a free space that cannot be read defers `free_space_unreadable` and fetches nothing.
-#[test]
-fn an_unreadable_free_space_defers_and_fetches_nothing() {
     let mut mac = Mac::new("xcs-space-unreadable");
     mac.space.free = Err("statvfs of /Applications failed: denied".to_owned());
     assert_eq!(
@@ -441,7 +436,6 @@ fn an_unreadable_free_space_defers_and_fetches_nothing() {
         )
     );
     assert!(mac.store.asked().is_empty());
-    mac.assert_clean();
 }
 
 /// Proves: an archive of another size or another SHA-256 than the order's is refused
@@ -579,8 +573,8 @@ fn a_copy_left_by_an_interrupted_stage_resumes_from_its_length() {
 /// Proves: the order's SHA-256 is the only path the store is read by. An entry whose SHA-256 is
 /// not 64 lower-case hex characters (a path, upper case, too short), whose version or build is
 /// not one the stage takes, or whose size is 0 defers `xcode_order_invalid` before the store is
-/// read, the space measured or any program run; and with a valid order every read is of
-/// `/v1/xcode/<the order's sha256>`.
+/// read, the space measured or any program run; with a valid order every read is of
+/// `/v1/xcode/<the order's sha256>`; an order naming one archive twice defers too.
 #[test]
 fn the_orders_sha256_is_the_only_fetch_path_used() {
     let good = entry_of(ARCHIVE_BYTES);
@@ -625,6 +619,15 @@ fn the_orders_sha256_is_the_only_fetch_path_used() {
         .map(|(path, _)| path)
         .collect();
     assert_eq!(paths, vec![format!("/v1/xcode/{}", good.sha256); 2]);
+    let mac = Mac::new("xcs-twice");
+    assert_eq!(
+        mac.run(&[good.clone(), good.clone()]),
+        deferral(
+            REASON_ORDER_INVALID,
+            &format!("the order names the archive {} twice", good.sha256)
+        )
+    );
+    assert!(mac.store.asked().is_empty());
 }
 
 /// Proves: an expanded app whose build or version is not the order's, or whose version list
@@ -696,7 +699,7 @@ fn a_failed_expansion_defers_and_removes_staging() {
         })
     });
     let unstartable: Program = Box::new(|_| Err(io::Error::other("no such program")));
-    let none: Program = exits_zero();
+    let none: Program = exits(0, "");
     let two: Program = Box::new(|spawn| {
         for name in ["Xcode.app", "Xcode-beta.app"] {
             fs::create_dir_all(spawn.cwd.join(name))?;
@@ -706,11 +709,12 @@ fn a_failed_expansion_defers_and_removes_staging() {
             ..Ran::default()
         })
     });
-    let cases: [(Program, &str); 6] = [
+    let cases: [(Program, &str); 7] = [
         (
             exits(1, "xip: error: The archive is damaged\n"),
             "xip --expand exited 1: xip: error: The archive is damaged",
         ),
+        (exits(2, "\nxip: the second line"), "xip --expand exited 2"),
         (killed, "xip --expand was killed at its deadline"),
         (signalled, "xip --expand was ended by a signal: terminated"),
         (unstartable, "xip --expand could not start: no such program"),
@@ -968,18 +972,24 @@ fn a_staging_directory_that_cannot_be_written_defers() {
     mac.assert_clean();
 }
 
-/// Proves: an order naming one archive twice is deferred `xcode_order_invalid` before the store
-/// is read.
+/// Proves: a directory put in the staging directory's place after the stage first looked at it
+/// (here, while the free space is read) and before the fetch is not written through: the stage
+/// defers `xcode_staging_failed` naming it, and nothing is fetched.
 #[test]
-fn an_order_naming_one_archive_twice_defers() {
-    let mac = Mac::new("xcs-twice");
-    let entry = entry_of(ARCHIVE_BYTES);
+fn a_staging_directory_swapped_in_before_the_fetch_is_refused() {
+    let mut mac = Mac::new("xcs-swapped");
+    mac.space.swap_in = Some(mac.path(STAGING));
     assert_eq!(
-        mac.run(&[entry.clone(), entry.clone()]),
+        mac.run(&[entry_of(ARCHIVE_BYTES)]),
         deferral(
-            REASON_ORDER_INVALID,
-            &format!("the order names the archive {} twice", entry.sha256)
+            REASON_STAGING_FAILED,
+            &format!(
+                "{} is not a directory only this process's user can write",
+                mac.path(STAGING).display()
+            )
         )
     );
     assert!(mac.store.asked().is_empty());
+    assert!(mac.runner.ran().is_empty());
+    mac.assert_clean();
 }
