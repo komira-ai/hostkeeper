@@ -59,16 +59,15 @@ Copy every output off the Mac before a step that cannot be undone. A step that c
 
 ## 1. Before the proof: one Mac, drained, in a group of its own, with a root shell
 
-These steps settle no [V] by themselves. They make the Mac the later sections need: moved to its own group (section 8, row MP), idle, with a root shell and a way to run a command from launchd with nobody logged in. In every step the Mac is `NODE=<node id>`. "Expected" lines are not results.
+These steps settle no [V] by themselves. They make the Mac the later sections need: moved to its own group (section 8, row MP), idle, with a root shell and a way to run a command from launchd with nobody logged in. In every step the Mac is `<node-id>`. "Expected" lines are not results.
 
 ### MP-E1 Read what the coordinator holds for the Macs
 Settles: none; the baseline that MP-E5 and section 7 compare with (design 4.1). Runs: an operator on the coordinator side with hk. Needs: an operator token file (0600), the coordinator's private URL and CA file. Nothing on a Mac changes.
 ```sh
 # the preamble of every operator-side shell (paste it; it writes no file):
-P=<the proof's scratch directory>; EP=<coordinator private URL>; CA=<the coordinator's CA file>; TOKF=<the operator token file, 0600>
-hkc() { hk --endpoint "$EP" --ca-file "$CA" --token-file "$TOKF" "$@"; }
-umask 077; mkdir -p "$P"; NODE=<node id>
-hkc hosts get --node-id "$NODE" > $P/get-before.json
+P=<the proof's scratch directory>; umask 077; mkdir -p "$P"
+# every hk call names the coordinator's private listener, its CA file and the operator token file (0600); <node-id> is the Mac
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> --response-file $P/get-before.json hosts get --node-id <node-id>
 jq '(.host // .) | {hostGroup, live, agent: .heartbeat.agent, m: .heartbeat.maintenance, operatorKeys: .heartbeat.operatorKeys, ssh: .heartbeat.ssh}' $P/get-before.json
 ```
 Record: node id, group, agent version, host.osVersion/osBuild/bootId, mac.filevault, authrestartSupported, updateAccount, commandLineTools, mdmConflicts, xcodes, due, lookFailed, operatorKeys, ssh.state. Keep `get-before.json`.
@@ -82,8 +81,8 @@ Settles: none; avoids a lockout. Runs: the coordinator's deploy owner, on the co
 # operator-keys.toml: [host-groups."mac-proof"] with the same keys as the Mac's current group
 # ssh operators file: add "mac-proof" to the proof operator's classes
 # host-prerequisites file: copy the Mac's current group table to [host-groups."mac-proof"]
-# the preamble of MP-E1, then:
-hkc host-groups get --host-group <current group> > $P/group-current.json
+# P set as in MP-E1, then:
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> --response-file $P/group-current.json host-groups get --host-group <current-group>
 ```
 Record: the three diffs (names only, no keys), the time they were in force.
 Decides:
@@ -92,14 +91,15 @@ Decides:
 ### MP-E3 Move the Mac into a group of its own
 Settles: none. Runs: an operator on the coordinator side with hk. Needs: MP-E2 in force (wait one `--tls-reload-secs`); the owner agrees the Mac leaves builds. The new group lists the same packages and the same desired versions, so the move is not also an update (`docs/operations/hostgroups.md`: a package the new group omits is uninstalled).
 ```sh
-# the preamble of MP-E1
+# P set as in MP-E1
 # write $P/group.json from group-current.json: { "hostGroup": { "name": "mac-proof", "packages": [..same..], "policy": {..same..} } }
-hkc host-groups put --request $P/group.json --reason "Mac proof: one Mac in a group of its own"
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> host-groups put --request $P/group.json --reason "Mac proof: one Mac in a group of its own"
 # per package: $P/desired-<service>.json = { "desired": <its desired object> }
-hkc releases set-desired --service hostkeeper --host-group mac-proof --request $P/desired-hostkeeper.json
-hkc releases converge --service hostkeeper --host-group mac-proof
-hkc host-groups move --node-id "$NODE" --host-group mac-proof --reason "Mac proof: taken out of its group"
-hkc hosts get --node-id "$NODE" | jq '(.host // .) | {hostGroup, operatorKeys: .heartbeat.operatorKeys, services}'
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> releases set-desired --service hostkeeper --host-group mac-proof --request $P/desired-hostkeeper.json
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> releases converge --service hostkeeper --host-group mac-proof
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> host-groups move --node-id <node-id> --host-group mac-proof --reason "Mac proof: taken out of its group"
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> --response-file $P/get-moved.json hosts get --node-id <node-id>
+jq '(.host // .) | {hostGroup, operatorKeys: .heartbeat.operatorKeys, services}' $P/get-moved.json
 ```
 Record: exit codes, the group's generation, operatorKeys digest (equal to MP-E1), services, the audit entry `host_move`.
 Decides:
@@ -109,12 +109,15 @@ Decides:
 ### MP-E4 Get a root shell
 Settles: none. Runs: an operator on the coordinator side with hk, then in a root shell on the proof Mac. Needs: MP-E3; the operator listed for `mac-proof` (MP-E2). The administrator's password is typed at sudo's own prompt by the owner.
 ```sh
-# the preamble of MP-E1
-hkc hosts get --node-id "$NODE" | jq '(.host // .) | {operatorKeys: .heartbeat.operatorKeys, ssh: .heartbeat.ssh}'
-hk --endpoint "$EP" --ca-file "$CA" --token-file "$TOKF" ssh "$NODE" --reason "Mac proof shell" -- -t   # hk ssh: docs/cli.md:19
+# P set as in MP-E1
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> --response-file $P/get-ssh.json hosts get --node-id <node-id>
+jq '(.host // .) | {operatorKeys: .heartbeat.operatorKeys, ssh: .heartbeat.ssh}' $P/get-ssh.json
+# hk ssh (docs/cli.md):
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> ssh <node-id> --reason "Mac proof shell" -- -t
 # on the Mac, as the administrator:
 id; sw_vers; sudo -n true; echo "sudo-n exit=$?"
-sudo /bin/bash   # every block of this runbook assumes bash (its `read -s -p`), not the login shell
+sudo /bin/bash   # every block of this runbook assumes bash, not the login shell
+D=/var/root/hk-proof; U=/Users   # U: where dscl keeps the local accounts' records; set it again in every new root shell
 mkdir -p /var/root/hk-proof && chmod 700 /var/root/hk-proof
 ```
 Record: hk ssh exit and refusal token, login name, ProductVersion/BuildVersion, whether `sudo -n` exits 0.
@@ -129,12 +132,12 @@ Settles: none; checks that the collectors read the Mac as it is (design 5.8). Ru
 cd /var/root/hk-proof
 { date -u; sw_vers; /usr/sbin/sysctl -n hw.model kern.bootsessionuuid; /usr/bin/xcode-select -p; } > base-1.txt 2>&1
 { /usr/bin/fdesetup status; /usr/bin/fdesetup supportsauthrestart; /usr/bin/fdesetup list -extended; /usr/sbin/diskutil apfs listUsers /; } > base-2.txt 2>&1
-{ /usr/bin/dscl . -read /Groups/admin GroupMembership; for u in $(/usr/bin/dscl . -list /Users UniqueID | awk '$2>=501{print $1}'); do echo "== $u"; /usr/bin/dscl . -read /Users/$u RecordName IsHidden; /usr/sbin/sysadminctl -secureTokenStatus $u; done; } > base-3.txt 2>&1
+{ /usr/bin/dscl . -read /Groups/admin GroupMembership; for u in $(/usr/bin/dscl . -list /Users UniqueID | awk '$2>=501{print $1}'); do echo "== $u"; /usr/bin/dscl . -read "$U/$u" RecordName IsHidden; /usr/sbin/sysadminctl -secureTokenStatus $u; done; } > base-3.txt 2>&1
 { /usr/sbin/softwareupdate --list; /usr/sbin/softwareupdate --list-full-installers; } > base-4.txt 2>&1
 { ls -la "/Library/Managed Preferences" /var/db/softwareupdate; /usr/bin/profiles status -type enrollment; /usr/bin/plutil -p /var/db/softwareupdate/SoftwareUpdateDDMStatePersistence.plist; } > base-5.txt 2>&1
 grep -il pass base-*.txt   # must print nothing
 ```
-Record: the five files, and a table of each against the coordinator's reading (`hkc hosts get`, as in MP-E1): sw_vers vs osVersion; fdesetup vs filevault; Secure Token vs updateAccount; softwareupdate vs due; Managed Preferences and the DDM file vs mdmConflicts. Expected (Apple's documentation, https://support.apple.com/guide/deployment/dep24dbdcf9e/web): `fdesetup list -extended` and `diskutil apfs listUsers /` show the volume owners.
+Record: the five files, and a table of each against the coordinator's reading (`hk hosts get`, as in MP-E1): sw_vers vs osVersion; fdesetup vs filevault; Secure Token vs updateAccount; softwareupdate vs due; Managed Preferences and the DDM file vs mdmConflicts. Expected (Apple's documentation, https://support.apple.com/guide/deployment/dep24dbdcf9e/web): `fdesetup list -extended` and `diskutil apfs listUsers /` show the volume owners.
 Decides:
 - if any pair differs -> fix the collector (`maintenance_mac.rs`, `maintenance_account.rs`, `maintenance_softwareupdate.rs`, `maintenance_mdm.rs`) before apply code uses that fact.
 - if `sysadminctl -secureTokenStatus` prints wording other than the `TOKEN_ENABLED`/`TOKEN_DISABLED` the daemon matches -> change those constants in `maintenance_account.rs`.
@@ -159,7 +162,7 @@ Decides:
 Settles: none; the "nobody logged in" state for design 5.5. Runs: a root shell on the proof Mac. Needs: MP-E6 idle; the owner agrees to end a standing session. Do not touch `/etc/kcpassword` or `autoLoginUser`.
 ```sh
 cd /var/root/hk-proof
-{ /usr/bin/stat -f %Su /dev/console; /usr/bin/who; echo 'show State:/Users/ConsoleUser' | /usr/sbin/scutil; /usr/bin/defaults read /Library/Preferences/com.apple.loginwindow autoLoginUser; ls -l /etc/kcpassword; } > session-1.txt 2>&1
+{ /usr/bin/stat -f %Su /dev/console; /usr/bin/who; echo "show State:$U/ConsoleUser" | /usr/sbin/scutil; /usr/bin/defaults read /Library/Preferences/com.apple.loginwindow autoLoginUser; ls -l /etc/kcpassword; } > session-1.txt 2>&1
 CU=$(/usr/bin/stat -f %Su /dev/console); [ "$CU" != root ] && [ "$CU" != _mbsetupuser ] && launchctl bootout "gui/$(/usr/bin/id -u "$CU")"
 sleep 5; { /usr/bin/stat -f %Su /dev/console; /usr/bin/who; } | tee session-2.txt
 ```
@@ -218,8 +221,8 @@ Settles: none; the order of the account steps in design 5.5. Runs: a root shell 
 ```sh
 /usr/bin/dscl . -list /Users UniqueID | awk '$2>=501'
 # MP-A2 creates hkproof and hides it in the same job; right after it, check:
-/usr/bin/dscl . -read /Users/hkproof RecordName IsHidden
-# then from the operator side: hkc hosts get --node-id <node id> | jq '(.host // .) | {operatorKeys: .heartbeat.operatorKeys, ssh: .heartbeat.ssh}'
+/usr/bin/dscl . -read "$U/hkproof" RecordName IsHidden
+# then from the operator side: the hosts get and jq lines of MP-E4, at each heartbeat across the window
 ```
 Record: the time from creation to hiding; operatorKeys and ssh at each heartbeat across the window; whether `IsHidden 1` alone satisfies the daemon's next report.
 Decides:
@@ -232,7 +235,7 @@ Decides:
 Every step here runs as the operator's normal user in Terminal on the operator's own Mac, not on a proof Mac. Set
 `P=<the proof's scratch directory>` first (see "Where the files go"). All steps
 are read-only on the archive; they only make files under `$P`. Put the newest Xcode `.xip` (and one older release
-if available) at `$P/Xcode_NEW.xip`, in an otherwise empty directory. Use `NODE=<node id>` style placeholders for
+if available) at `$P/Xcode_NEW.xip`, in an otherwise empty directory. Use `<node-id>` style placeholders for
 anything host-specific; nothing here needs a farm host. No step runs as root, so no launchd harness is used here (the harness
 of MP-E8 is for the farm-side lane; see the pointer at the end).
 
@@ -482,13 +485,13 @@ cd /var/root/hk-proof && tmutil localsnapshot
 pkgutil --pkgs | sort > i3-pkgs-before.txt
 find /Library/Developer /Library/Apple /Library/Frameworks /Library/PrivilegedHelperTools /Library/LaunchDaemons -maxdepth 2 2>/dev/null | sort > i3-find-before.txt
 mv /Applications/.hostkeeper-staging/good/Xcode*.app /Applications/Xcode-VER.app
-D=/Applications/Xcode-VER.app/Contents/Developer
-$D/usr/bin/xcodebuild -license accept; echo "license exit=$?"
-"$D/usr/bin/xcodebuild" -checkFirstLaunchStatus; echo "status exit=$?"
+DEV=/Applications/Xcode-VER.app/Contents/Developer
+$DEV/usr/bin/xcodebuild -license accept; echo "license exit=$?"
+"$DEV/usr/bin/xcodebuild" -checkFirstLaunchStatus; echo "status exit=$?"
 # job i3, after the console line:
-D=/Applications/Xcode-VER.app/Contents/Developer; date
-$D/usr/bin/xcodebuild -runFirstLaunch; echo "runFirstLaunch exit=$?"; date
-"$D/usr/bin/xcodebuild" -checkFirstLaunchStatus; echo "status exit=$?"
+DEV=/Applications/Xcode-VER.app/Contents/Developer; date
+$DEV/usr/bin/xcodebuild -runFirstLaunch; echo "runFirstLaunch exit=$?"; date
+"$DEV/usr/bin/xcodebuild" -checkFirstLaunchStatus; echo "status exit=$?"
 # after the job:
 pkgutil --pkgs | sort > i3-pkgs-after.txt; diff i3-pkgs-before.txt i3-pkgs-after.txt | tee i3-pkgs.diff
 find /Library/Developer /Library/Apple /Library/Frameworks /Library/PrivilegedHelperTools /Library/LaunchDaemons -maxdepth 2 2>/dev/null | sort | diff i3-find-before.txt -
@@ -518,14 +521,14 @@ shell, then a launchd job. Precondition: MP-I3 done. The export needs Apple and 
 reachable, never in a drained turn. Not built: `hk xcode-push` uploads only the `.xip` (`crates/hostkeeper-hk/src/xcode_push/mod.rs`).
 
 ```sh
-D=/Applications/Xcode-VER.app/Contents/Developer
-$D/usr/bin/xcodebuild -help 2>&1 | grep -i -n 'platform\|export\|import'
-$D/usr/bin/xcodebuild -exportPlatform 2>&1 | head -5; $D/usr/bin/xcodebuild -importPlatform 2>&1 | head -5
+DEV=/Applications/Xcode-VER.app/Contents/Developer
+$DEV/usr/bin/xcodebuild -help 2>&1 | grep -i -n 'platform\|export\|import'
+$DEV/usr/bin/xcodebuild -exportPlatform 2>&1 | head -5; $DEV/usr/bin/xcodebuild -importPlatform 2>&1 | head -5
 mkdir -p /var/root/hk-proof/platforms && cd /var/root/hk-proof/platforms
-$D/usr/bin/xcodebuild -downloadPlatform iOS -exportPath /var/root/hk-proof/platforms > ../i4-export.txt 2>&1; echo "exit=$?" >> ../i4-export.txt
+$DEV/usr/bin/xcodebuild -downloadPlatform iOS -exportPath /var/root/hk-proof/platforms > ../i4-export.txt 2>&1; echo "exit=$?" >> ../i4-export.txt
 shasum -a 256 /var/root/hk-proof/platforms/* > ../i4-sha.txt; xcrun simctl runtime list > ../i4-runtimes-before.txt 2>&1
 # job i4-import, after the console line (network off as in MP-I2; NAME is the file the export wrote):
-$D/usr/bin/xcodebuild -importPlatform /var/root/hk-proof/platforms/NAME.dmg; echo "exit=$?"; xcrun simctl runtime list
+$DEV/usr/bin/xcodebuild -importPlatform /var/root/hk-proof/platforms/NAME.dmg; echo "exit=$?"; xcrun simctl runtime list
 ```
 
 Expected (recalled, not checked): `-downloadPlatform <name> -exportPath <dir>` and `-importPlatform <file>` exist. The published
@@ -628,7 +631,7 @@ printf 'admin password: '; IFS= read -rs PW; echo; printf '%s\n' "$PW" > pw-admi
 cat pw-proof pw-admin > in-proof-admin; cat pw-admin pw-proof > in-admin-proof
 A=$(cat admin-name)
 for who in hkproof "$A"; do
-  /usr/bin/dscl . -read "/Users/$who" RecordName IsHidden >a1-dscl.out 2>a1-dscl.err; echo "dscl $who exit=$?"; cat a1-dscl.out a1-dscl.err
+  /usr/bin/dscl . -read "$U/$who" RecordName IsHidden >a1-dscl.out 2>a1-dscl.err; echo "dscl $who exit=$?"; cat a1-dscl.out a1-dscl.err
   /usr/sbin/sysadminctl -secureTokenStatus "$who" >a1-st.out 2>a1-st.err; echo "token $who exit=$?"; echo '-- stdout'; cat a1-st.out; echo '-- stderr'; cat a1-st.err
 done
 /usr/bin/dscl . -read /Groups/admin GroupMembership; /usr/bin/fdesetup status
@@ -647,13 +650,13 @@ Settles section 5.5 line 468-470 ([V]: `-password -` read from standard input wi
 
 ```sh
 # variant A, harness of MP-E8, stdin /var/root/hk-proof/pw-proof
-CMD='stat -f %Su /dev/console; sw_vers; /usr/sbin/sysadminctl -addUser hkproof -password - -admin; echo rc=$?; tty; /usr/bin/dscl . -create /Users/hkproof IsHidden 1; /usr/bin/dscl . -create /Users/hkproof UserShell /usr/bin/false'
+CMD='U=/Users; stat -f %Su /dev/console; sw_vers; /usr/sbin/sysadminctl -addUser hkproof -password - -admin; echo rc=$?; tty; /usr/bin/dscl . -create "$U/hkproof" IsHidden 1; /usr/bin/dscl . -create "$U/hkproof" UserShell /usr/bin/false'
 # variant B (only if A failed): stdin /dev/null, a pipe
 CMD='stat -f %Su /dev/console; sw_vers; /bin/cat /var/root/hk-proof/pw-proof | /usr/sbin/sysadminctl -addUser hkproof -password - -admin; echo rc=$?'
 # variant D (only if A and B failed): stdin pw-proof, a pty from /usr/bin/script; add the two dscl calls of A after it
 CMD='stat -f %Su /dev/console; sw_vers; /usr/bin/script -q /dev/null /usr/sbin/sysadminctl -addUser hkproof -password - -admin; echo rc=$?'
 # after the job, in the root shell
-/usr/bin/dscl . -read /Users/hkproof RecordName UniqueID UserShell NFSHomeDirectory IsHidden AuthenticationAuthority; echo "exit=$?"
+/usr/bin/dscl . -read "$U/hkproof" RecordName UniqueID UserShell NFSHomeDirectory IsHidden AuthenticationAuthority; echo "exit=$?"
 /usr/bin/dscl . -read /Groups/admin GroupMembership
 grep -l -F -f /var/root/hk-proof/pw-proof /var/root/hk-proof/*.out /var/root/hk-proof/*.err   # file names only; must print nothing, for every variant
 ```
@@ -697,7 +700,7 @@ A=$(cat /var/root/hk-proof/admin-name)
 for who in hkproof "$A"; do /usr/sbin/sysadminctl -secureTokenStatus "$who" 2>&1; echo "exit=$?"; done
 /usr/sbin/diskutil apfs listCryptoUsers /; echo "exit=$?"
 /usr/bin/fdesetup list; echo "exit=$?"
-/usr/bin/dscl . -read /Users/hkproof AuthenticationAuthority GeneratedUID
+/usr/bin/dscl . -read "$U/hkproof" AuthenticationAuthority GeneratedUID
 /usr/bin/fdesetup status
 ```
 
@@ -712,16 +715,16 @@ Decides:
 Settles section 5.5 line 470-471 (hidden, no login shell, not in `com.apple.access_ssh`). Root shell. Needs A2 (the hide was done there). Built reads: `login_account.rs:210-213` (`is_hidden`), `maintenance_account.rs:174-182`; nothing built writes `IsHidden`.
 
 ```sh
-/usr/bin/dscl . -read /Users/hkproof RecordName IsHidden; echo "exit=$?"
+/usr/bin/dscl . -read "$U/hkproof" RecordName IsHidden; echo "exit=$?"
 /usr/sbin/dseditgroup -o checkmember -m hkproof com.apple.access_ssh; echo "ssh-group exit=$?"
 /usr/bin/defaults read /Library/Preferences/com.apple.loginwindow HiddenUsersList 2>&1
-/usr/bin/dscl . -list /Users UniqueID | awk '$2>=500'; ls -ld /Users/hkproof
+/usr/bin/dscl . -list /Users UniqueID | awk '$2>=500'; ls -ld "$U/hkproof"
 /usr/sbin/sysadminctl -secureTokenStatus hkproof 2>&1; /usr/bin/dscl . -read /Groups/admin GroupMembership
 ```
 
 Record: the `IsHidden` line and exit; the home path; the ssh-group text and exit; whether the account is still an administrator and still holds the token after the hide and the shell change; at the console (owner at the Mac), whether the login window or Users & Groups shows it.
 Decides:
-- `IsHidden: 1` -> `is_hidden()` stays; the creating step runs `dscl . -create /Users/hkproof IsHidden 1` as in A2 (with the production name).
+- `IsHidden: 1` -> `is_hidden()` stays; the creating step runs `dscl . -create "$U/hkproof" IsHidden 1` as in A2 (with the production name).
 - The login window still lists it -> add `HiddenUsersList` (`defaults write`) to the creating step.
 - In `com.apple.access_ssh` -> add `dseditgroup -o edit -d <name> -t user com.apple.access_ssh` to the creating code.
 
@@ -811,7 +814,7 @@ CMD='stat -f %Su /dev/console; sw_vers; /usr/bin/fdesetup disable -inputplist; e
 /usr/bin/fdesetup status
 # b: the account; if it refuses for the token, same CMD shape with -adminUser "$A" -adminPassword - and stdin pw-admin
 /usr/sbin/sysadminctl -deleteUser hkproof; echo "rc=$?"
-/usr/bin/dscl . -read /Users/hkproof 2>&1; echo "dscl rc=$? (56 expected)"; /usr/bin/fdesetup list
+/usr/bin/dscl . -read "$U/hkproof" 2>&1; echo "dscl rc=$? (56 expected)"; /usr/bin/fdesetup list
 # c: secrets (the proof's directory stays for the other sections)
 rm -P pw-proof pw-admin admin-name in-proof-admin in-admin-proof fv-*.plist recovery-key.txt 2>/dev/null; ls
 ```
@@ -840,7 +843,7 @@ Every job below uses the harness of MP-E8 (one job per step, label `hk-proof-<st
 ### MP-U1. Baseline and password file
 
 Settles: 5.5 (the update account, the Secure Token, "nobody logged in"). Who: a root shell on the proof Mac.
-Preconditions: the hidden administrator `hkproof` holds a Secure Token (MP-A2, MP-A3); the account file exists, root 0600, naming it (the bootstrap writes it only when given the keys; if it is missing, write it as the first command below does); the harness of MP-E8 exists. Use one root shell; in every new one (after each restart too) paste the preamble first: `D=/var/root/hk-proof; F='/Library/Application Support/hostkeeper/update-account'; ACCT=$(sed -n 's/^name=//p' "$F")`.
+Preconditions: the hidden administrator `hkproof` holds a Secure Token (MP-A2, MP-A3); the account file exists, root 0600, naming it (the bootstrap writes it only when given the keys; if it is missing, write it as the first command below does); the harness of MP-E8 exists. Use one root shell; in every new one (after each restart too) paste the preamble first: `D=/var/root/hk-proof; U=/Users; F='/Library/Application Support/hostkeeper/update-account'; ACCT=$(sed -n 's/^name=//p' "$F")`.
 
 ```sh
 D=/var/root/hk-proof; mkdir -p "$D"; chmod 700 "$D"
@@ -850,7 +853,7 @@ F='/Library/Application Support/hostkeeper/update-account'; ls -le "$F"; stat -f
 { date -u +%FT%TZ; sw_vers; uname -m; sysctl -n kern.boottime
   fdesetup status; fdesetup supportsauthrestart; fdesetup list
   diskutil apfs listUsers /; sysadminctl -secureTokenStatus "$ACCT"
-  dscl . -read "/Users/$ACCT" IsHidden; stat -f 'console: %Su' /dev/console
+  dscl . -read "$U/$ACCT" IsHidden; stat -f 'console: %Su' /dev/console
   defaults read /Library/Preferences/com.apple.loginwindow autoLoginUser
   profiles status -type enrollment; softwareupdate --list; softwareupdate --list-full-installers
 } > "$D/baseline.txt" 2>&1; cat "$D/baseline.txt"
@@ -897,7 +900,7 @@ Reversible: a staged update can stay.
 
 ### MP-U3. Minor update, FileVault off
 
-Settles: 5.5 macOS bullet. Who: a root shell on the proof Mac, then the coordinator side for the heartbeat time (`hk`, host page, NODE=<node id>).
+Settles: 5.5 macOS bullet. Who: a root shell on the proof Mac, then the coordinator side for the heartbeat time (`hk`, host page, <node-id>).
 Preconditions: MP-U2; `fdesetup status` says `FileVault is Off.`; nobody logged in; someone can reach the Mac out of band.
 
 ```sh
@@ -1046,9 +1049,9 @@ Preconditions: after each of MP-U3, MP-U4, MP-U7 or MP-U8, without touching the 
 
 ```sh
 D=/var/root/hk-proof; date -u +%FT%TZ; sw_vers; uptime; stat -f 'console: %Su' /dev/console
-scutil <<< 'show State:/Users/ConsoleUser'; launchctl managername; launchctl list | grep -i hostkeeper
+scutil <<< "show State:$U/ConsoleUser"; launchctl managername; launchctl list | grep -i hostkeeper
 ps -axo user,pid,etime,command | grep -i -E 'Setup Assistant|SetupAssistant|loginwindow|softwareupdate' | grep -v grep
-for u in $(dscl . -list /Users | grep -v '^_' | grep -v -E '^(daemon|nobody|root)$'); do echo "== $u"; defaults read "/Users/$u/Library/Preferences/com.apple.SetupAssistant" 2>&1 | head -20; done
+for u in $(dscl . -list /Users | grep -v '^_' | grep -v -E '^(daemon|nobody|root)$'); do echo "== $u"; defaults read "$U/$u/Library/Preferences/com.apple.SetupAssistant" 2>&1 | head -20; done
 log show --last 2h --info --debug --predicate 'process == "Setup Assistant" OR process == "loginwindow" OR process == "softwareupdated" OR subsystem == "com.apple.SoftwareUpdate"' > "$D/post-update-log.txt" 2>&1
 grep -i -E 'wait|blocked|user input|consent|terms|pane|FileVault|authenticat' "$D/post-update-log.txt" | tail -n 80
 tail -n 200 /var/log/install.log | grep -i -E 'setup|finish|complete|restart|user'
@@ -1223,8 +1226,9 @@ once the Mac runs a release with `maintenance-v1`, so no proof job repeats the r
 ```sh
 # in the root shell, with the setting still set:
 cd /var/root/hk-proof/mdm && snap 50-root-shell
-# on the operator side (section 1's variables), after the daemon's next hourly look or a restart of the daemon:
-hkc hosts get --node-id "$NODE" | jq '(.host // .) | .heartbeat.maintenance | {mdmConflicts: .mac.mdmConflicts, lookFailed: .lookFailed}'
+# on the operator side (P set as in MP-E1), after the daemon's next hourly look or a restart of the daemon:
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> --response-file $P/get-m6.json hosts get --node-id <node-id>
+jq '(.host // .) | .heartbeat.maintenance | {mdmConflicts: .mac.mdmConflicts, lookFailed: .lookFailed}' $P/get-m6.json
 ```
 
 - Record: the console owner when the daemon looked (`root` shows nobody is logged in), the daemon's `mdmConflicts` and `lookFailed` against the root shell's `50-root-shell` files.
@@ -1265,10 +1269,10 @@ launchctl print system | grep -c 'hk-proof'   # must print 0
 # remove proof accounts: sysadminctl -deleteUser hkproof (admin password at the prompt)
 # if MP-U1 wrote the update-account file (it names hkproof), remove it: rm -P '/Library/Application Support/hostkeeper/update-account'
 # copy the *.txt, *.out, *.err files off the Mac, then remove them one by one with rm -P
-# the preamble of MP-E1
-hkc host-groups move --node-id "$NODE" --host-group <original group> --reason "Mac proof finished: back in its group"
-hkc hosts get --node-id "$NODE" > $P/get-after.json
-hkc host-groups remove --host-group mac-proof --reason "Mac proof finished: group not needed"
+# P set as in MP-E1
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> host-groups move --node-id <node-id> --host-group <original-group> --reason "Mac proof finished: back in its group"
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> --response-file $P/get-after.json hosts get --node-id <node-id>
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> host-groups remove --host-group mac-proof --reason "Mac proof finished: group not needed"
 ```
 Record: after against `get-before.json` (group, operatorKeys digest, services, macOS version, FileVault, Xcodes, due); no `hk-proof` job; the scheduler's owner confirms leases are taken again and the cordon list is empty; the three coordinator files no longer name `mac-proof` (deploy owner reverses MP-E2).
 Decides:
