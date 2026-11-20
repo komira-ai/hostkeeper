@@ -39,7 +39,7 @@ function isKernel(item) {
 // The phrase of one `macos` item: "macOS 26.1 to 26.2, restart". Without a `from`, "macOS 26.2";
 // without a `to`, the label stands for it, and without either, "update".
 function macosPhrase(item) {
-  const to = said(item.to) || said(item.label) || "update";
+  const to = said(item["to"]) || said(item.label) || "update";
   const from = said(item.from);
   const what = from === "" ? `macOS ${to}` : `macOS ${from} to ${to}`;
   return item.needsReboot === true ? `${what}, restart` : what;
@@ -56,7 +56,7 @@ export function duePhrases(report) {
     out.push("restart needed");
   }
   const linux = due.filter((item) => item.kind === `${KIND}LINUX` && !isKernel(item));
-  const security = linux.filter((item) => item.security === true).length;
+  const security = linux.filter((item) => item["security"] === true).length;
   if (security > 0) {
     out.push(counted(security, "security update"));
   }
@@ -67,7 +67,7 @@ export function duePhrases(report) {
     if (item.kind === `${KIND}MACOS`) {
       out.push(macosPhrase(item));
     } else if (item.kind === `${KIND}XCODE`) {
-      out.push(`Xcode ${said(item.to) || said(item.label) || "update"} available`);
+      out.push(`Xcode ${said(item["to"]) || said(item.label) || "update"} available`);
     } else if (![`${KIND}LINUX`, `${KIND}REBOOT`].includes(item.kind)) {
       out.push(`update ${said(item.label) || "of a kind this page does not know"}`);
     }
@@ -167,7 +167,7 @@ function facts(rows, name) {
 
 // What the host runs and when its daemon last looked.
 function hostFacts(host, report) {
-  const at = report.host || {};
+  const at = report["host"] || {};
   const os = [said(at.osName), said(at.osVersion)].filter((part) => part !== "").join(" ");
   const build = said(at.osBuild);
   const rows = [
@@ -214,8 +214,8 @@ function dueTable(host, report) {
   const left = Number(report.dueLeftOut || 0);
   return [
     table(["Kind", "From", "To", "Restart", "Security", "Label"], due.map((item) => row([
-      enumLabel(item.kind, KIND), said(item.from) || "-", said(item.to) || "-", yes(item.needsReboot),
-      yes(item.security), said(item.label) || "-",
+      enumLabel(item.kind, KIND), said(item.from) || "-", said(item["to"]) || "-", yes(item.needsReboot),
+      yes(item["security"]), said(item.label) || "-",
     ]))),
     left > 0 ? h("p", { class: "note" }, `${counted(left, "more item")} due that the report leaves out.`) : null,
   ];
@@ -228,7 +228,7 @@ function xcodeTable(report) {
     return h("p", { class: "quiet" }, "No Xcode is installed in /Applications.");
   }
   return table(["Version", "Build", "Path", "Selected"], xcodes.map((x) => row([
-    said(x.version) || "-", said(x.build) || "-", said(x.path) || "-", yes(x.selected),
+    said(x.version) || "-", said(x["build"]) || "-", said(x.path) || "-", yes(x.selected),
   ])));
 }
 
