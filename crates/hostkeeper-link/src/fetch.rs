@@ -14,6 +14,14 @@
 //!   [`GetError::Status`]. A 200 must carry exactly one `Content-Length`, which must not pass
 //!   the caller's [`Limit::max_bytes`]; its body goes to the sink in chunks as it arrives, and
 //!   a body shorter or longer than its length is refused.
+//! - **A range.** [`CoordinatorGet::get_from`] with a `first` over 0 adds the line
+//!   `Range: bytes=<first>-` and takes a 206 instead of a 200: exactly one `Content-Length`
+//!   and exactly one `Content-Range: bytes <first>-<last>/<size>` with the same `first`,
+//!   `last` the size less one, and a length of `size - first`, else the reply is malformed.
+//!   The part's length is bounded by [`Limit::max_bytes`] and is what [`Got::Body`] counts. A
+//!   200 (the server ignored the range), a 416 and any other status are [`GetError::Status`];
+//!   a 404 is [`Got::NotFound`]. With a `first` of 0 the call is [`CoordinatorGet::get`], and
+//!   a 206 is a [`GetError::Status`].
 //! - **How long it may take.** [`Limit::deadline_secs`] on the injected clock, from the start of
 //!   the call, checked before every read; the connection is made with the same bound
 //!   ([`Transport::connect_within`]), so a read or write that blocks ends at it too.
@@ -125,6 +133,26 @@ impl CoordinatorGet {
         limit: Limit,
         sink: &mut dyn FnMut(&[u8]) -> io::Result<()>,
     ) -> Result<Got, GetError> {
+        self.get_from(path, 0, limit, sink)
+    }
+
+    /// Reads `path` from its byte `first` on, giving the part to `sink` in chunks. With a
+    /// `first` of 0 it is [`CoordinatorGet::get`]. Otherwise the request carries
+    /// `Range: bytes=<first>-` and only a 206 whose `Content-Range` starts at `first` and runs
+    /// to the end of the file is taken; the `limit`'s `max_bytes` bounds the part, and
+    /// [`Got::Body`] is the part's length. A 200 is [`GetError::Status`]: the server ignored the
+    /// range, and the caller must not append a whole body to its partial copy.
+    ///
+    /// # Errors
+    /// [`GetError`]: see its variants. A sink that fails ends the call with
+    /// [`GetError::Sink`]; what it was already given stays with the caller.
+    pub fn get_from(
+        &self,
+        path: &str,
+        first: u64,
+        limit: Limit,
+        sink: &mut dyn FnMut(&[u8]) -> io::Result<()>,
+    ) -> Result<Got, GetError> {
         if !path_ok(path) {
             return Err(GetError::Path(path.chars().take(64).collect()));
         }
@@ -147,19 +175,24 @@ impl CoordinatorGet {
                 .complete_io(&mut tls.sock)
                 .map_err(|e| GetError::Link(failed(&e)))?;
         }
+        let range = if first == 0 {
+            String::new()
+        } else {
+            format!("Range: bytes={first}-\r\n")
+        };
         let request = format!(
-            "GET {path} HTTP/1.1\r\nHost: {}\r\nAccept: */*\r\nConnection: close\r\n\r\n",
+            "GET {path} HTTP/1.1\r\nHost: {}\r\nAccept: */*\r\n{range}Connection: close\r\n\r\n",
             self.endpoint.authority
         );
         tls.write_all(request.as_bytes())
             .and_then(|()| tls.flush())
             .map_err(|e| GetError::Link(failed(&e)))?;
         let (head, rest) = self.read_head(&mut tls, deadline)?;
+        let malformed = GetError::Link(LinkError::BadReply(ReplyFault::Malformed));
         let length = match head.status {
             404 => return Ok(Got::NotFound),
-            200 => head
-                .length
-                .ok_or(GetError::Link(LinkError::BadReply(ReplyFault::Malformed)))?,
+            200 if first == 0 => head.length.ok_or(malformed)?,
+            206 if first > 0 => part_length(&head, first).ok_or(malformed)?,
             other => return Err(GetError::Status(other)),
         };
         if length > limit.max_bytes {
@@ -262,16 +295,37 @@ fn path_ok(path: &str) -> bool {
     path.starts_with('/') && path.len() <= PATH_MAX && path.bytes().all(|b| b.is_ascii_graphic())
 }
 
+/// The length of the part a 206 carries for a request from byte `first`: the one
+/// `Content-Length`, when the one `Content-Range` is `bytes <first>-<last>/<size>` with `last`
+/// the size less one and the length is `size - first`. None when the head is not that.
+fn part_length(head: &Head, first: u64) -> Option<u64> {
+    let length = head.length?;
+    let (from, rest) = head
+        .range
+        .as_deref()?
+        .strip_prefix("bytes ")?
+        .split_once('-')?;
+    let (last, size) = rest.split_once('/')?;
+    let from = from.parse::<u64>().ok()?;
+    let last = last.parse::<u64>().ok()?;
+    let size = size.parse::<u64>().ok()?;
+    let ends = size.checked_sub(1)?;
+    (from == first && last == ends && size.checked_sub(first) == Some(length)).then_some(length)
+}
+
 /// The status and the framing of an answer's head.
 struct Head {
     status: u16,
     /// The one `Content-Length`; none when the head gave none.
     length: Option<u64>,
+    /// The value of the one `Content-Range`; none when the head gave none.
+    range: Option<String>,
 }
 
 impl Head {
     /// The head `raw` (without the blank line): `HTTP/1.1 <code> ...`, headers of `name:
-    /// value`, no `Transfer-Encoding`, at most one `Content-Length`. None when it is not that.
+    /// value`, no `Transfer-Encoding`, at most one `Content-Length` and at most one
+    /// `Content-Range`. None when it is not that.
     fn parse(raw: &[u8]) -> Option<Head> {
         let text = std::str::from_utf8(raw).ok()?;
         let mut lines = text.split("\r\n");
@@ -282,6 +336,7 @@ impl Head {
             .parse::<u16>()
             .ok()?;
         let mut length = None;
+        let mut range = None;
         for line in lines {
             let (name, value) = line.split_once(':')?;
             match name.to_ascii_lowercase().as_str() {
@@ -292,9 +347,19 @@ impl Head {
                     }
                     length = Some(value.trim().parse::<u64>().ok()?);
                 }
+                "content-range" => {
+                    if range.is_some() {
+                        return None;
+                    }
+                    range = Some(value.trim().to_owned());
+                }
                 _ => {}
             }
         }
-        Some(Head { status, length })
+        Some(Head {
+            status,
+            length,
+            range,
+        })
     }
 }
