@@ -290,7 +290,8 @@ async fn every_operator_method_admits_exactly_its_credential() {
             "Rollouts",
             "Services",
             "Ssh",
-            "Users"
+            "Users",
+            "Xcode"
         ])
     );
     let ci_methods = [SET_DESIRED, CONVERGE, WAIT_CONVERGED, GET_RELEASE];

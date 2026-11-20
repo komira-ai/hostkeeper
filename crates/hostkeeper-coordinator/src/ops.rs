@@ -325,7 +325,9 @@ pub struct AuditEntry {
     /// `enroll_requested`, `enroll_issued`, `cert_renewed` and `request_expired`; the MDM gate's
     /// `mdm_nonce_pushed`, `mdm_install_sent` and `mdm_baseline`, by `mdm-gate`; `state_imported`, by
     /// `coordinator`, the last row an earlier release's `import` wrote into the database; this
-    /// release writes none; the console's `console_open`, `console_close`, `console_denied`,
+    /// release writes none; the Xcode store's `xcode_put` (an operator's upload) and `xcode_remove`
+    /// (an operator's `Xcode.Remove` or the coordinator's pruning); the console's `console_open`,
+    /// `console_close`, `console_denied`,
     /// `power_action`, `boot_device_set` and `console_coordinator_start`, lines that change no
     /// state and never enter the ring, [`OpsStore::append_audit_only`]).
     pub action: String,

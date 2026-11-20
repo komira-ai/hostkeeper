@@ -16,7 +16,8 @@
 //! - `ssh`: the ssh commands, which hand their flags and the path of the token file to the ssh
 //!   module, and the methods of the service `ssh`, which stay gateway calls;
 //! - `golden`: the help texts of the fixture's table against their files;
-//! - `methods`: the requests of the methods of the real protos that the operator's tools use.
+//! - `methods`: the requests of the methods of the real protos that the operator's tools use;
+//! - `xcode`: the commands of the service `xcode`: their paths, bodies, answers and a refusal.
 
 mod answers;
 mod flags;
@@ -31,3 +32,4 @@ mod secrets;
 mod ssh;
 mod surface;
 mod transport;
+mod xcode;

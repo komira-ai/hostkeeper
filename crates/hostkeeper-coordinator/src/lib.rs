@@ -258,6 +258,10 @@ pub(crate) mod websocket;
 pub(crate) mod write_record;
 pub(crate) mod xcode_feed;
 pub(crate) mod xcode_files;
+pub(crate) mod xcode_get;
+pub(crate) mod xcode_put;
+pub(crate) mod xcode_service;
+pub(crate) mod xcode_store;
 
 #[cfg(test)]
 mod agent_service_tests;
