@@ -282,10 +282,29 @@ fn the_host_disk_makes_and_measures_under_its_root() {
     assert!(made.starts_with("/file/sub could not be made: "), "{made}");
 }
 
-/// Proves: the host's wait returns for a wait of no time (it sleeps the thread; nothing is timed).
+/// Proves: a wait of `secs` seconds asks its sleep for exactly that duration, once per wait, in
+/// order (the sleep is injected and records what it is asked; nothing is timed).
+///
+/// Catches: a wait that does not sleep (a busy retry of the package manager), or one that sleeps
+/// a duration other than the seconds asked for (milliseconds, or the whole bound at once).
 #[test]
-fn the_host_wait_returns() {
-    SleepWaiter.wait(0);
+fn a_wait_asks_its_sleep_for_the_seconds_given() {
+    let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let record = std::sync::Arc::clone(&asked);
+    let waiter = SleepWaiter::new(Box::new(move |duration: Duration| {
+        record.lock().expect("the record").push(duration);
+    }));
+    waiter.wait(2);
+    waiter.wait(1);
+    waiter.wait(0);
+    assert_eq!(
+        *asked.lock().expect("the record"),
+        vec![
+            Duration::from_secs(2),
+            Duration::from_secs(1),
+            Duration::from_secs(0)
+        ]
+    );
 }
 
 /// The environment this process has, without what an instrumented build sets by itself in each

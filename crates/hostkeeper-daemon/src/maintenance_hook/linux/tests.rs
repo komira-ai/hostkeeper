@@ -2,16 +2,20 @@
 //! (a short disk is a deferral, exit 75); its other steps are not written yet; and the host's
 //! registry holds it on Linux alone.
 
-use hostkeeper_hook::Outcome;
+use clap::Parser;
+use hostkeeper_hook::{Class, Outcome, Report};
 use hostkeeper_launchd::PlatformKind;
 use hostkeeper_proto::hostkeeper::agent::v1::LinuxScope as WireScope;
 use hostkeeper_steps::ProcBootId;
 
 use super::*;
+use crate::cli::{Cli, Command};
+use crate::maintenance_hook::linux::stage::REASON_BUSY;
 use crate::maintenance_hook::linux::stage::REASON_SPACE_SHORT;
 use crate::maintenance_hook::linux::testing::{FakeHost, args, host_with, params, ran};
 use crate::maintenance_hook::{
-    Ending, HookPorts, HookStep, REASON_UNSUPPORTED_KIND, Registry, Unwired, run_step,
+    Ending, HookArgs, HookPorts, HookStep, REASON_UNSUPPORTED_KIND, Registry, Unwired, main_with,
+    run_step,
 };
 
 const APT: &str = "/usr/bin/apt-get";
@@ -150,4 +154,139 @@ fn the_hosts_registry_holds_the_linux_kind_on_linux() {
         mac.kinds().collect::<Vec<_>>(),
         vec![Kind::Macos, Kind::Xcode, Kind::Reboot]
     );
+}
+
+/// The download apt is asked for by [`apt_host`]'s stage.
+fn download() -> Vec<String> {
+    args(&[
+        "--download-only",
+        "-y",
+        "-qq",
+        "-o",
+        "Dpkg::Options::=--force-confold",
+        "install",
+        "--only-upgrade",
+        "openssl",
+    ])
+}
+
+/// The arguments of `hostkeeper maintenance-hook prepare --params <file> --package-lock-wait-secs
+/// <secs>`, parsed by the binary's own command line.
+fn parsed(file: &std::path::Path, secs: &str) -> HookArgs {
+    let words = [
+        "hostkeeper".into(),
+        "maintenance-hook".into(),
+        "prepare".into(),
+        "--params".into(),
+        file.as_os_str().to_owned(),
+        "--package-lock-wait-secs".into(),
+        secs.into(),
+    ];
+    let cli = Cli::try_parse_from::<_, std::ffi::OsString>(words).expect("parses");
+    let Command::MaintenanceHook(args) = cli.command else {
+        panic!("not the maintenance hook: {:?}", cli.command);
+    };
+    args
+}
+
+/// Runs the hook's entry ([`main_with`]) with `args` over a registry whose `linux` kind is the
+/// stage of `fake`, its lock waited for the seconds `args` names: the outcome and the standard
+/// output.
+fn run_hook(
+    fake: &FakeHost,
+    root: &hostkeeper_testkit::Scratch,
+    args: &HookArgs,
+) -> (Outcome, String) {
+    let kind = Linux::new(fake.stage(root, args.package_lock_wait_secs));
+    let registry = Registry::new().with(Kind::Linux, Box::new(kind));
+    let boot = ProcBootId::at(&root.path().join("boot_id"));
+    let ports = HookPorts {
+        kinds: &registry,
+        record: &Unwired,
+        rebooter: &Unwired,
+        boot_id: &boot,
+    };
+    let mut stdout = Vec::new();
+    let outcome = main_with(args, &ports, &mut std::io::empty(), &mut stdout);
+    (outcome, String::from_utf8(stdout).expect("utf-8"))
+}
+
+/// The report line of an ending of `class`, `reason` and `detail`.
+fn line(class: Class, reason: Option<&str>, detail: Option<&str>) -> String {
+    let report = Report {
+        class,
+        reason: reason.map(str::to_owned),
+        detail: detail.map(str::to_owned),
+        ..Report::default()
+    };
+    format!("{}\n", report.to_line())
+}
+
+/// Proves, from the command line to the report: `maintenance-hook prepare --params <file>
+/// --package-lock-wait-secs 3` of a `linux` run, parsed by the binary's own command line and
+/// run by the hook's entry over a fake host's programs and disk,
+/// - with room, runs apt's download with exactly its arguments, exits done and reports nothing
+///   else;
+/// - one byte short of twice the download, runs no download and exits deferred (75) with the
+///   report of class `environment`, reason `free_space_short` and its detail;
+/// - with the lock held throughout, waits 2 then 1 seconds (the 3 the flag gave) and exits
+///   deferred, reason `package_manager_busy`.
+///
+/// Catches: a prepare whose download is not run from the hook's entry, a deferral reported as a
+/// failure (which would halt a host that was never touched), or a flag that does not reach the
+/// stage's wait.
+#[test]
+fn the_hook_command_line_runs_the_linux_stage_to_its_report() {
+    let root = host_with("linux-kind-hook", APT);
+    let file = root.path().join("params.json");
+    std::fs::write(
+        &file,
+        r#"{"runId":"run-1","kinds":["MAINTENANCE_KIND_LINUX"],"linuxScope":"LINUX_SCOPE_SECURITY"}"#,
+    )
+    .expect("the params");
+    let hook = parsed(&file, "3");
+    assert_eq!(hook.step, HookStep::Prepare);
+    assert_eq!(hook.package_lock_wait_secs, 3);
+
+    let fake = apt_host();
+    fake.free(Ok(20));
+    let (outcome, stdout) = run_hook(&fake, &root, &hook);
+    assert_eq!(outcome, Outcome::Success);
+    assert_eq!(stdout, line(Class::Release, None, None));
+    assert_eq!(fake.arg_lists().last(), Some(&download()));
+
+    let short = apt_host();
+    short.free(Ok(19));
+    let (outcome, stdout) = run_hook(&short, &root, &hook);
+    assert_eq!(outcome, Outcome::Deferred);
+    assert_eq!(
+        stdout,
+        line(
+            Class::Environment,
+            Some(REASON_SPACE_SHORT),
+            Some("/var/cache/apt/archives has 19 bytes free; the download of 10 bytes needs 20")
+        )
+    );
+    assert!(!short.arg_lists().contains(&download()));
+
+    let locked = apt_host();
+    locked.always(
+        &args(&["update", "-qq"]),
+        ran(
+            100,
+            "",
+            "E: Could not get lock /var/lib/apt/lists/lock. It is held by process 7 (apt)",
+        ),
+    );
+    let (outcome, stdout) = run_hook(&locked, &root, &hook);
+    assert_eq!(outcome, Outcome::Deferred);
+    assert_eq!(
+        stdout,
+        line(
+            Class::Environment,
+            Some(REASON_BUSY),
+            Some("the package manager's lock was held for 3s of 3s (apt-get update)")
+        )
+    );
+    assert_eq!(locked.waits(), vec![2, 1]);
 }

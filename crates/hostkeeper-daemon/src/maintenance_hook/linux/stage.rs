@@ -188,13 +188,27 @@ pub trait LockWaiter: Send + Sync {
     fn wait(&self, secs: u64);
 }
 
-/// The host's wait: the thread sleeps.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct SleepWaiter;
+/// A wait made by a sleep: the host's is the thread's ([`SleepWaiter::host`]).
+pub struct SleepWaiter {
+    sleep: Box<dyn Fn(Duration) + Send + Sync>,
+}
+
+impl SleepWaiter {
+    /// The wait that asks `sleep` for each wait's duration.
+    pub fn new(sleep: Box<dyn Fn(Duration) + Send + Sync>) -> SleepWaiter {
+        SleepWaiter { sleep }
+    }
+
+    /// The host's wait: the thread sleeps ([`std::thread::sleep`]).
+    pub fn host() -> SleepWaiter {
+        SleepWaiter::new(Box::new(std::thread::sleep))
+    }
+}
 
 impl LockWaiter for SleepWaiter {
+    /// Sleeps `secs` seconds.
     fn wait(&self, secs: u64) {
-        std::thread::sleep(Duration::from_secs(secs));
+        (self.sleep)(Duration::from_secs(secs));
     }
 }
 
@@ -402,7 +416,7 @@ impl Stage {
             HostRoot::host(),
             Box::new(HostPrograms),
             Box::new(HostDisk::new(HostRoot::host())),
-            Box::new(SleepWaiter),
+            Box::new(SleepWaiter::host()),
             Box::new(PlacedPackages::new(&placement)),
             lock_wait_secs,
         )
