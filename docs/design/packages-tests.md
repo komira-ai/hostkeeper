@@ -259,7 +259,7 @@ only in the device jobs, against a signed fixture repository and signed fixture 
   it after the package was purged; a command that is a link inside the tree is followed inside the tree, not through
   the host. An entry with an empty command gets the built-in steps. A command naming a missing file, a directory, a
   link that leaves the tree or a file that is not executable is `manifest_invalid` at `stage`, with the command and the
-  reason in the failure text; `hook.boot` with no command is `manifest_invalid` for every installer; `params` with no
+  reason in the failure text; `hook.boot`, `hook.drain` or `hook.resume` with no command is `manifest_invalid` for every installer; `params` with no
   command goes on. A `.deb` whose control archive holds each of `preinst`, `postinst`, `prerm`, `postrm`, `config` and
   `triggers`, one case each, and a `.pkg` with a `Scripts` archive, are accepted, and a file at any path, an enablement
   link, a drop-in and a unit of another name go on. `policy-rc.d`: `/usr/sbin/policy-rc.d` exists with `exit 101` while
@@ -282,7 +282,7 @@ only in the device jobs, against a signed fixture repository and signed fixture 
   a release with a native entry carries that. `hostkeeper`'s list: its native entry alone accepted, any archive entry
   beside it `target_invalid`. A `macos-pkg`
   entry with an attestation, and a native entry whose hook command is not an absolute path, are `target_invalid`; a native entry with an
-  absolute hook command is accepted, and `boot` with an empty command is `target_invalid` for every installer. `Hosts.List` gives each host's services with their installer, for a host that
+  absolute hook command is accepted, and `boot`, `drain` or `resume` with an empty command is `target_invalid` for every installer. `Hosts.List` gives each host's services with their installer, for a host that
   heartbeats and for one that has not since the coordinator's start; `additions_hosts.rs` is the B8 test of the new
   field in both directions.
 - **hostkeeper's own update (A19; `crates/hostkeeper-daemon/tests/selfupdate_native.rs`, device tests

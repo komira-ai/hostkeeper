@@ -113,10 +113,18 @@ pub fn resume_action(rec: &Record, rebooted: bool) -> ResumeAction {
         (Step::Verify, true, true) => ContinueVerifyFreshWindow,
         // | `rollback` or `cleanup` running | run it again | run it again |
         // (After a reboot its unit ended with the host: nothing is left to stop.)
-        // `uninstall` is no step of an update and no record of one holds it; were one to, it is
-        // read as these two are: run again.
-        (Step::Rollback | Step::Cleanup | Step::Uninstall, _, false) => again,
-        (Step::Rollback | Step::Cleanup | Step::Uninstall, _, true) => RerunStep,
+        // `uninstall`, `drain` and `resume` are no steps of an update and no record of one holds
+        // them; were one to, each is read as these two are: run again.
+        (
+            Step::Rollback | Step::Cleanup | Step::Uninstall | Step::Drain | Step::Resume,
+            _,
+            false,
+        ) => again,
+        (
+            Step::Rollback | Step::Cleanup | Step::Uninstall | Step::Drain | Step::Resume,
+            _,
+            true,
+        ) => RerunStep,
     }
 }
 
