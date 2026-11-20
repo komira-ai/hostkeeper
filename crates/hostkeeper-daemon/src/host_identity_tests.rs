@@ -29,6 +29,23 @@ fn owner() -> IdentityOwner {
     }
 }
 
+/// The system's reason for a name longer than it allows, as the log line spells it: the number of
+/// `ENAMETOOLONG` is the platform's own (36 on Linux, 63 on macOS).
+fn name_too_long() -> String {
+    std::io::Error::from_raw_os_error(libc::ENAMETOOLONG).to_string()
+}
+
+/// Proves the expected reason for a name too long is the platform's own text: the number Linux and
+/// macOS give `ENAMETOOLONG`, so the two tests that expect it hold on a Linux host and on a Mac.
+#[test]
+fn the_reason_for_a_name_too_long_is_the_platforms_own() {
+    let number = if cfg!(target_os = "macos") { 63 } else { 36 };
+    assert_eq!(
+        name_too_long(),
+        format!("File name too long (os error {number})")
+    );
+}
+
 fn pair(cert: &str, key: &str) -> CertState {
     CertState::Enrolled(ClientIdentity::new(
         cert.as_bytes().to_vec(),
@@ -353,8 +370,9 @@ fn a_directory_that_cannot_be_opened_for_the_removal_is_an_error() {
     assert_eq!(
         rig.log.lines(),
         vec![format!(
-            "{IDENTITY_NOT_REMOVED}{}: File name too long (os error 36)",
-            long.display()
+            "{IDENTITY_NOT_REMOVED}{}: {}",
+            long.display(),
+            name_too_long()
         )]
     );
 }
@@ -710,12 +728,15 @@ fn a_parent_directory_that_refuses_is_an_error_naming_the_directory() {
     let parent = rig.scratch.path().join("parent");
     fs::create_dir(&parent).expect("the parent");
     for (dir, reason) in [
-        (blocked.join("identity"), "Not a directory (os error 20)"),
+        (
+            blocked.join("identity"),
+            "Not a directory (os error 20)".to_owned(),
+        ),
         (
             blocked.join("above").join("identity"),
-            "Not a directory (os error 20)",
+            "Not a directory (os error 20)".to_owned(),
         ),
-        (parent.join(&long), "File name too long (os error 36)"),
+        (parent.join(&long), name_too_long()),
     ] {
         rig.copy.dir = dir.clone();
         rig.copy.logged = None;
