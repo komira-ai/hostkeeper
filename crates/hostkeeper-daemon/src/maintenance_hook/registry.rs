@@ -1,14 +1,13 @@
 //! The kinds of maintenance a platform has work for ([`Registry::for_platform`]). Each is a stub
-//! ([`Unsupported`]) until its platform's work is written; that work is a file of its own beside
-//! this one, put in its place by [`Registry::at_host`]: on a Mac, the `macos` kind's stage
-//! ([`MacosKind`]).
+//! ([`Unsupported`]) until its platform's work is written; `super::registry_for` puts the work
+//! that is written (a Linux host's `linux` and `reboot`, a Mac's `macos`) in place of the stub on a
+//! host.
 
 use std::collections::BTreeMap;
 
 use hostkeeper_launchd::PlatformKind;
 
 use super::kind::{KindError, MaintenanceKind, Unsupported};
-use super::macos::MacosKind;
 use super::params::Kind;
 
 /// The work of each kind a host has; a kind it does not hold fails `unsupported_kind`.
@@ -33,17 +32,6 @@ impl Registry {
         kinds.iter().fold(Registry::new(), |registry, kind| {
             registry.with(*kind, Box::new(Unsupported(*kind)))
         })
-    }
-
-    /// The kinds of a host of `platform`, as [`Registry::for_platform`] has them, with the work
-    /// written so far in place of its stub: on a Mac, the `macos` kind ([`MacosKind`]), whose
-    /// `prepare` is written.
-    pub fn at_host(platform: PlatformKind) -> Registry {
-        let registry = Registry::for_platform(platform);
-        match platform {
-            PlatformKind::Macos => registry.with(Kind::Macos, Box::new(MacosKind::at_host())),
-            PlatformKind::Linux | PlatformKind::Openrc => registry,
-        }
     }
 
     /// This registry with `work` as the work of `kind`, in place of what it held.

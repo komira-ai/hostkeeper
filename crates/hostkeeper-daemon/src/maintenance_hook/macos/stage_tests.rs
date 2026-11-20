@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use hostkeeper_hook::Outcome;
-use hostkeeper_launchd::{LaunchctlError, PlatformKind};
+use hostkeeper_launchd::LaunchctlError;
 use hostkeeper_proto::hostkeeper::agent::v1::{
     Maintain, MaintainAction, MaintenanceKind as WireKind,
 };
@@ -707,39 +707,6 @@ fn the_macos_kind_stages_and_its_other_steps_are_unsupported() {
     assert_eq!(kind.verify(&params), Err(unsupported));
 }
 
-/// Proves: the registry of a host holds the kinds of its platform with the work written so far:
-/// on a Mac `macos`, `xcode` and `reboot`, of which `xcode` and `reboot` are still the stub; on
-/// Linux, under systemd or OpenRC, `linux` and `reboot`, and no `macos`.
-///
-/// Catches: the Mac's stage put in the registry of a Linux host, or in place of another kind.
-#[test]
-fn the_registry_of_a_host_holds_the_kinds_of_its_platform() {
-    let on_mac = Registry::at_host(PlatformKind::Macos);
-    assert_eq!(
-        on_mac.kinds().collect::<Vec<_>>(),
-        [Kind::Macos, Kind::Xcode, Kind::Reboot]
-    );
-    let params = params(false);
-    for kind in [Kind::Xcode, Kind::Reboot] {
-        assert_eq!(
-            on_mac.get(kind).map(|work| work.prepare(&params)),
-            Ok(Err(KindError::unsupported(kind))),
-            "{kind}"
-        );
-    }
-    for platform in [PlatformKind::Linux, PlatformKind::Openrc] {
-        let on_linux = Registry::at_host(platform);
-        assert_eq!(
-            on_linux.kinds().collect::<Vec<_>>(),
-            [Kind::Linux, Kind::Reboot]
-        );
-        assert_eq!(
-            on_linux.get(Kind::Macos).err(),
-            Some(KindError::unsupported(Kind::Macos))
-        );
-    }
-}
-
 /// A boot id the hook's `prepare` has no need of.
 struct Boot;
 
@@ -762,6 +729,7 @@ fn hook(mac: &Mac, json: &str) -> (Outcome, String) {
     let args = HookArgs {
         step: HookStep::Prepare,
         params: PathBuf::from(STDIN_PARAMS),
+        package_lock_wait_secs: crate::cli::DEFAULT_PACKAGE_LOCK_WAIT_SECS,
     };
     let mut stdout = Vec::new();
     let outcome = main_with(&args, &ports, &mut json.as_bytes(), &mut stdout);

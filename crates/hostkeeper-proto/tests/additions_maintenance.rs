@@ -654,7 +654,7 @@ fn the_maintenance_fields_have_their_numbers_and_types() {
         .iter()
         .map(|name| message(&now, name).fields().count())
         .collect();
-    assert_eq!(counts, [9, 8, 4, 6, 3, 3, 6, 5, 10, 4]);
+    assert_eq!(counts, [9, 8, 4, 6, 3, 3, 6, 5, 11, 4]);
 }
 
 /// The values of the enum `name` of `pool`, by name and number.
