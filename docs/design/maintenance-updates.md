@@ -148,7 +148,15 @@ alternative source; 2.3 is the fetcher's sign-in.
 
 **The design (owner's direction, 2026-11-20).** The operator whose own Mac is already signed in to Apple's developer site brings each new
 Xcode in with one command there, prompted by the warning alert `xcode_release_waiting` (New: the feed of section 1.1 lists a release the
-store lacks):
+store lacks).
+
+**The Apple Account** (owner's direction, 2026-11-20) is the organisation's developer account, the one shared engineering account of the
+organisation (its address is in the operator runbook, not in this public document), never a person's own, and no extra or dummy account
+is made for this. Its two-factor codes go to the owner's phone. The push runs on the owner's own Mac, signed in to that account (with
+`xcodes`, or in a browser on Apple's developer site), so a code is needed only when Apple ends that session. hostkeeper never holds the
+account or its password: `xcodes` keeps the session in that Mac's Keychain. **The farm Macs need no Apple Account at all**: everything they
+do with the archive (2.4: expand it, check Apple's signature, move it into place, accept the licence, run the first launch, `xcode-select`)
+runs as root with no sign-in.
 
 ```
 hkctl xcode-push 27.2            # downloads with xcodes in the operator's own session, then uploads
@@ -238,12 +246,13 @@ download fails because the session ended, the coordinator raises the warning ale
 the release; the fetch stays pending and is tried again every hour, so after the operator signs in the next attempt downloads it and the
 alert clears. Any other failure (network, a wrong build, disk) is retried later and later, from 30 minutes doubling to a day, like a
 failed prerequisite (Built: `prerequisites.rs`). The Apple Account is the organisation's developer
-account, never a person's own, and it is never stored by hostkeeper: `xcodes` keeps it in that Mac's Keychain.
+account of section 2.0, never a person's own, and it is never stored by hostkeeper: `xcodes` keeps it in that Mac's Keychain.
 
 ### 2.4 The install (in the maintenance hook, section 5.2)
 
 Xcode needs tens of GB free while it installs (the archive, its expansion and the Xcode kept beside it), so stage checks the free space
 first and defers when it is short. Nothing reaches `/Applications/Xcode-<version>.app` before Apple's signature and the build are checked.
+No step below needs an Apple Account: the daemon runs each as root.
 
 1. **Stage, while the host serves:** fetch the archive from the store, check it, expand it into a staging directory on the same volume
    (`/Applications/.hostkeeper-staging/`) with `xip --expand`, which checks Apple's signature **[V]** (or, for an encrypted archive,
