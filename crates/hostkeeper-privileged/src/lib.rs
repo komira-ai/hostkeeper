@@ -25,13 +25,15 @@
 //! process) and the real daemon (`hostkeeper-device-daemon`, under a `Type=notify` unit) update a
 //! tierstore-shaped package (the program `tierstore-like` and `fixtures/tierstore-shaped/`, built
 //! into a `.deb` in a signed apt repository the test makes) through its `apt` entry, roll it back
-//! on a failed `verify` and force it back with the repository gone; its rig is `tests/e2e/`, test
-//! code outside the measured set, whose root-free parts `tests/tierstore_rig.rs` runs in the
-//! pull-request set. On a Mac the daemon announces `macos-pkg` (its signers file, `installer` and
-//! `pkgutil`), and the same two end-to-end paths run through it: `tests/device_mac_e2e.rs` (a
-//! macOS file, in the job `macos-device`) has the real coordinator (in process) install, update,
-//! roll back on a failed `verify` and uninstall hello's `.pkg` (the program `hello-e2e`, whose
-//! rig is `tests/e2e/hello.rs` and `tests/e2e/mac_host.rs`), and
+//! on a failed `verify`, force it back past the halt of a `verify` that halts and a bad mark (past
+//! an operator's hold only with `include_held`) and force it back with the repository gone; its
+//! rig is `tests/e2e/`, test code outside the measured set, whose root-free parts
+//! `tests/tierstore_rig.rs` runs in the pull-request set. On a Mac the daemon announces
+//! `macos-pkg` (its signers file, `installer` and `pkgutil`), and the same two end-to-end paths
+//! run through it: `tests/device_mac_e2e.rs` (a macOS file, in the job `macos-device`) has the
+//! real coordinator (in process) install, update, roll back on a failed `verify` and uninstall
+//! hello's `.pkg` (the program `hello-e2e`, whose rig is `tests/e2e/hello.rs` and
+//! `tests/e2e/mac_host.rs`), and
 //! `tests/device_mac_selfupdate.rs` (a macOS file, in the job `macos-device`) has hostkeeper
 //! update itself through its `.pkg` under launchd (the program `hostkeeper-selfupdate-daemon`
 //! on the Mac's adapters, `tests/mac_self_update/`); no package is signed on a runner, so the

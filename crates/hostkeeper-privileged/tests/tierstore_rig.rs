@@ -13,7 +13,7 @@ use std::process::{Child, Command};
 use std::{io, io::Write};
 
 use e2e::aptrepo;
-use e2e::package::{FixtureVersion, PackageBuilder};
+use e2e::package::{FixtureVersion, PackageBuilder, Verify};
 use e2e::{
     FIXTURE_BINARY, HeldPort, REPOSITORY_NAME, SERVICE, UNIT_TEMPLATE, instance, served_version,
     wait_for,
@@ -63,7 +63,7 @@ fn fixture_package_builds_the_deb_shape_the_daemon_accepts() {
     let fixture = FixtureVersion {
         version: "1.0.0",
         ports: [e2e::free_port(), e2e::free_port()],
-        fail_verify: false,
+        verify: Verify::Serves,
     };
     let builder = PackageBuilder::new(&records, Path::new(FIXTURE_BINARY));
     let deb = builder.deb(&fixture);
