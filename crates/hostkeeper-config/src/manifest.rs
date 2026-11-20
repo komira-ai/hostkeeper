@@ -176,8 +176,8 @@ pub struct Hook {
     /// The step run from `current` at daemon start, if any.
     pub boot: Option<String>,
     /// The step a maintenance run takes the service out of service with, before the host's own
-    /// update, if any; named with [`Hook::resume`] or not at all. Nothing runs it yet but the
-    /// conformance harness.
+    /// update, if any; named with [`Hook::resume`] or not at all. The daemon's maintenance
+    /// sequencer runs it, and the conformance harness checks it.
     pub drain: Option<String>,
     /// The step a maintenance run puts the service back with, after the host's own update.
     pub resume: Option<String>,

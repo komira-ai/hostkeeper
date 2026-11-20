@@ -3,11 +3,14 @@
 //! is tested in `proto_map`.
 
 use hostkeeper_link::testing::World;
-use hostkeeper_link::{BeatOutcome, Feature};
+use hostkeeper_link::{
+    BeatOutcome, DEFAULT_HEARTBEAT_SECS, Feature, Heartbeater, LoopConfig, MaintainOrder, Platform,
+    Reply,
+};
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use serde_json::json;
 
-use crate::{Rig, reply};
+use crate::{Rig, order_id, reply, version};
 
 /// A report with every part of it set, as a Mac's daemon in the middle of a run would send it.
 fn full_report() -> pb::MaintenanceReport {
@@ -196,4 +199,128 @@ fn a_report_is_counted_as_json_with_the_names_of_the_message() {
     beat.maintenance = None;
     assert_eq!(beat.to_json().get("maintenance"), None);
     assert!(with > beat.encoded_len());
+}
+
+/// A reply that carries the `maintain` order `o-1` try 1 and advertises `features`.
+fn maintaining(features: &[Feature]) -> (Reply, MaintainOrder) {
+    let order = MaintainOrder {
+        id: order_id("o-1"),
+        order_try: 1,
+        maintain: pb::Maintain {
+            run_id: "run-1".to_owned(),
+            action: pb::MaintainAction::Run.into(),
+            kinds: vec![pb::MaintenanceKind::Linux.into()],
+            ..pb::Maintain::default()
+        },
+    };
+    let carrying = Reply {
+        maintain: Some(order.clone()),
+        features: features.to_vec(),
+        ..Reply::default()
+    };
+    (carrying, order)
+}
+
+/// Proves a `maintain` order of a reply that advertises `maintenance-v1` is given to the
+/// daemon's runner on a worker of the dispatcher, once per reply: the heartbeat that takes it
+/// gives nothing yet, running the worker gives the order unchanged, and the same order in a
+/// second reply is given again, for the daemon to recognise by its id and try.
+///
+/// Catches: a `maintain` order dropped, run on the loop's own thread, or kept back as a resend.
+#[test]
+fn a_maintain_order_goes_to_the_runner_on_a_worker_once_per_reply() {
+    let rig = Rig::with_world("maintain-given", World::default().keeping_maintenance());
+    let mut heartbeater = rig.heartbeater();
+    let (carrying, order) = maintaining(&[Feature::MaintenanceV1]);
+    rig.world.link.answer(Ok(carrying.clone()));
+    rig.world.link.answer(Ok(carrying));
+    heartbeater.beat_once();
+    assert_eq!(rig.world.dispatch.pending(), 1);
+    assert_eq!(rig.world.maintain.given(), Vec::new());
+    assert!(rig.world.dispatch.run_next());
+    assert_eq!(rig.world.maintain.given(), vec![order.clone()]);
+    heartbeater.beat_once();
+    assert!(rig.world.dispatch.run_next());
+    assert_eq!(rig.world.maintain.given(), vec![order.clone(), order]);
+    assert_eq!(rig.world.orders.orders(), Vec::new());
+    assert_eq!(rig.world.log.lines(), Vec::<String>::new());
+}
+
+/// Proves a `maintain` order from a coordinator that does not advertise `maintenance-v1` is not
+/// given to the runner, and the loop says so.
+///
+/// Catches: an order run for a coordinator that did not say it speaks maintenance.
+#[test]
+fn a_maintain_order_without_the_feature_is_not_given_and_is_logged() {
+    let rig = Rig::with_world(
+        "maintain-unadvertised",
+        World::default().keeping_maintenance(),
+    );
+    let mut heartbeater = rig.heartbeater();
+    rig.world.link.answer(Ok(maintaining(&[]).0));
+    heartbeater.beat_once();
+    assert_eq!(rig.world.dispatch.pending(), 0);
+    assert_eq!(rig.world.maintain.given(), Vec::new());
+    assert_eq!(
+        rig.world.log.lines(),
+        vec![
+            "maintain order o-1 try 1 is not run: the coordinator does not advertise maintenance-v1"
+                .to_owned()
+        ]
+    );
+}
+
+/// Proves a `maintain` order on a host with no runner is not run, whatever the coordinator
+/// advertises, and the loop says so.
+///
+/// Catches: a host with no runner that starts a job for the order all the same.
+#[test]
+fn a_maintain_order_on_a_host_with_no_runner_is_not_run_and_is_logged() {
+    let rig = Rig::new("maintain-no-runner");
+    let mut heartbeater = rig.heartbeater();
+    rig.world
+        .link
+        .answer(Ok(maintaining(&[Feature::MaintenanceV1]).0));
+    heartbeater.beat_once();
+    assert_eq!(rig.world.dispatch.pending(), 0);
+    assert_eq!(
+        rig.world.log.lines(),
+        vec!["maintain order o-1 try 1 is not run: this host has no runner of it".to_owned()]
+    );
+}
+
+/// Proves a daemon that reads the host's maintenance but has no runner of `maintain` orders
+/// announces no `maintenance-v1`, and sends no report, to a coordinator that advertises it.
+///
+/// Catches: the feature announced on the source alone, so the coordinator orders a run no
+/// daemon takes.
+#[test]
+fn a_source_without_a_runner_announces_no_maintenance() {
+    let rig = Rig::with_world(
+        "maintain-source-only",
+        World::default().keeping_maintenance(),
+    );
+    let mut ports = rig.world.ports();
+    ports.maintain = None;
+    let mut heartbeater = Heartbeater::new(
+        LoopConfig {
+            platform: Platform::LinuxX86_64,
+            agent_version: version("0.9.0"),
+            state_dir: rig.state().to_path_buf(),
+            period_secs: DEFAULT_HEARTBEAT_SECS,
+            installers: Vec::new(),
+            private_repository: false,
+        },
+        ports,
+    );
+    rig.world
+        .link
+        .answer(Ok(reply(None, &[Feature::MaintenanceV1])));
+    heartbeater.beat_once();
+    heartbeater.beat_once();
+    for beat in rig.world.link.beats() {
+        assert_eq!(beat.maintenance, None);
+        assert!(!beat.features.contains(&Feature::MaintenanceV1));
+    }
+    assert_eq!(rig.world.maintenance.asked(), 0);
 }
