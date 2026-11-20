@@ -31,7 +31,7 @@ const MOVE_TIMEOUTS: Timeouts = Timeouts {
 /// own record, and the bookkeeping (`schema_version`, `lease`, `enrollment_serial`, and
 /// `rollout_gate`, `state_versions` and `audit_counter` of `0023`) is not here: a start sets the
 /// audit counter past the newest line, an imported one among them.
-pub(crate) const STATE_TABLES: [&str; 45] = [
+pub(crate) const STATE_TABLES: [&str; 47] = [
     "desired",
     "desired_digests",
     "releases",
@@ -77,6 +77,8 @@ pub(crate) const STATE_TABLES: [&str; 45] = [
     "lab_devices",
     "lab_sleds",
     "lab_sled_items",
+    "maintenance_runs",
+    "maintenance_hosts",
 ];
 
 /// The rows of each state table, in [`STATE_TABLES`]' order.
