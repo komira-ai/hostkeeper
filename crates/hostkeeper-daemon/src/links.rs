@@ -155,7 +155,7 @@ pub struct Links {
     /// The host's maintenance facts ([`crate::maintenance_facts`]), which every heartbeat to a
     /// coordinator that advertises `maintenance-v1` reports. A daemon that has them announces
     /// `maintenance-v1` and runs `maintain` orders ([`DaemonMaintain`]); none on a host with no
-    /// collector (a Mac today), which takes no `maintain` order.
+    /// collector, which takes no `maintain` order.
     pub maintenance: Option<Arc<dyn MaintenanceSource>>,
     /// The host's BMC ([`crate::bmc`]), which every heartbeat reports; none on a Mac.
     pub bmc: Option<Arc<dyn BmcSource>>,

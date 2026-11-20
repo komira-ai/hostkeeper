@@ -4,7 +4,8 @@
 //! A Linux host, under systemd or OpenRC, reads the host's facts ([`HostFacts`]), whether it
 //! needs a reboot ([`RebootNeed`]) and the updates its package manager lists: `apt-get` when the
 //! host has it, else `dnf`, else `apk`; a host with none of the three has no package collector. A
-//! Mac has none yet, so it announces nothing and sends nothing.
+//! Mac reads what it runs and which macOS updates are due ([`Macos`], under the host's
+//! [`MacosMajor`]), then what an update needs of it ([`MacReadiness`]).
 
 use hostkeeper_launchd::PlatformKind;
 
@@ -13,16 +14,28 @@ use crate::maintenance_apt::{self, Apt};
 use crate::maintenance_collect::{Collector, HostRoot};
 use crate::maintenance_dnf::{self, Dnf};
 use crate::maintenance_host::HostFacts;
+use crate::maintenance_mac::MacReadiness;
+use crate::maintenance_macos::Macos;
 use crate::maintenance_reboot::RebootNeed;
+use crate::maintenance_softwareupdate::MacosMajor;
 
 /// The collectors of a host of `kind`, over the host's own programs and files, in the order its
-/// look reads them.
+/// look reads them; a Mac's under `major`.
 #[must_use]
-pub fn at_host(kind: PlatformKind) -> Vec<Box<dyn Collector>> {
+pub fn at_host(kind: PlatformKind, major: MacosMajor) -> Vec<Box<dyn Collector>> {
     match kind {
         PlatformKind::Linux | PlatformKind::Openrc => linux_under(&HostRoot::host()),
-        PlatformKind::Macos => Vec::new(),
+        PlatformKind::Macos => mac(major),
     }
+}
+
+/// The collectors of a Mac, over its own programs and files: `macos` under `major`, then `mac`.
+#[must_use]
+pub fn mac(major: MacosMajor) -> Vec<Box<dyn Collector>> {
+    vec![
+        Box::new(Macos::at_host(major)),
+        Box::new(MacReadiness::at_host()),
+    ]
 }
 
 /// The collectors of a Linux host: the host's facts, the reboot need, and the package manager

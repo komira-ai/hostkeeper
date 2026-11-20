@@ -289,6 +289,7 @@ async fn every_operator_method_admits_exactly_its_credential() {
             "HostGroups",
             "Hosts",
             "Layout",
+            "Maintenance",
             "Releases",
             "Repositories",
             "Rollouts",

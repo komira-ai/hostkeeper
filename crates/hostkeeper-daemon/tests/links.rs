@@ -551,6 +551,7 @@ fn the_host_links_read_the_pki_directory_and_log_through_the_daemon() {
         period,
         PlatformKind::Linux,
         hostkeeper_daemon::maintenance_collect::LinuxScope::default(),
+        hostkeeper_daemon::maintenance_softwareupdate::MacosMajor::default(),
         Box::new(NoWatchdog),
     );
     assert_eq!(links.period, period);

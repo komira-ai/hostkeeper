@@ -72,6 +72,7 @@ use crate::mac::HostIoreg;
 use crate::maintenance_collect::{Collector, LinuxScope};
 use crate::maintenance_facts::MaintenanceFacts;
 use crate::maintenance_hook::HookArgs;
+use crate::maintenance_softwareupdate::MacosMajor;
 use crate::maintenance_state::RunReported;
 use crate::notify::{
     NoNotifier, NoWatchdog, ReadyFile, ReadyNotifier, SystemdNotifier, SystemdWatchdog, Watchdog,
@@ -196,6 +197,11 @@ pub struct DaemonFlags {
     /// security updates and newer kernels; `all`, every update. A Mac reports none of them.
     #[arg(long, value_enum, default_value_t = LinuxScope::Security)]
     pub maintenance_linux_scope: LinuxScope,
+    /// Whether a Mac reports the newest major upgrade of macOS due (`maintenance-v1`); without
+    /// the flag, a major upgrade is never due, though `softwareupdate` lists it. A Linux host
+    /// ignores it.
+    #[arg(long)]
+    pub maintenance_macos_major: bool,
     /// The heartbeat loop's flag: `--heartbeat-secs`.
     #[command(flatten)]
     pub link: LoopFlags,
@@ -305,6 +311,7 @@ pub fn run_with(cli: Cli, systemd: SystemdVars) -> ExitCode {
             &flags.settings(),
             period,
             flags.maintenance_linux_scope,
+            MacosMajor::from_flag(flags.maintenance_macos_major),
             notifier.as_ref(),
             watchdog,
         )
@@ -363,6 +370,7 @@ fn daemon(
     settings: &Settings,
     period: NonZeroU64,
     scope: LinuxScope,
+    major: MacosMajor,
     notifier: &dyn ReadyNotifier,
     watchdog: Box<dyn Watchdog>,
 ) -> Result<(), StartError> {
@@ -377,6 +385,7 @@ fn daemon(
         settings,
         period,
         scope,
+        major,
         own_version,
         notifier,
         watchdog,
@@ -387,6 +396,7 @@ async fn start_and_serve(
     settings: &Settings,
     period: NonZeroU64,
     scope: LinuxScope,
+    major: MacosMajor,
     own_version: HostkeeperVersion,
     notifier: &dyn ReadyNotifier,
     watchdog: Box<dyn Watchdog>,
@@ -400,6 +410,7 @@ async fn start_and_serve(
         period,
         platform.kind,
         scope,
+        major,
         watchdog,
     );
     start::serve(started, links).await;
@@ -432,9 +443,10 @@ async fn start_and_serve(
 ///   account's `authorized_keys` ([`OperatorKeys::at_host`]);
 /// - every host keeps the host prerequisites the coordinator sends, which a Mac installs and a
 ///   Linux host only reports ([`Prerequisites::at_host`]);
-/// - a Linux host reports what it last found of its maintenance, under `scope`, from the packages
-///   `placed.json` records and its package manager ([`maintenance_source`] over
-///   [`crate::maintenance_collectors::at_host`]); a Mac has none;
+/// - every host reports what it last found of its maintenance ([`maintenance_source`] over
+///   [`crate::maintenance_collectors::at_host`]): a Linux host under `scope`, from the packages
+///   `placed.json` records and its package manager; a Mac from `sw_vers`, `softwareupdate`,
+///   `fdesetup`, its data volume and its Command Line Tools, a major upgrade due under `major`;
 /// - every heartbeat of a Linux host reports its BMC's address and MAC, read through
 ///   `/dev/ipmi0` ([`crate::bmc::at_host`]);
 /// - when `files` names a console, the enrollment loop writes its issue file, naming the daemon
@@ -447,6 +459,7 @@ pub fn host_links(
     period: NonZeroU64,
     kind: PlatformKind,
     scope: LinuxScope,
+    major: MacosMajor,
     watchdog: Box<dyn Watchdog>,
 ) -> Links {
     let ctx = daemon.ctx();
@@ -487,7 +500,7 @@ pub fn host_links(
     let maintenance = maintenance_source(
         daemon,
         scope,
-        crate::maintenance_collectors::at_host(kind),
+        crate::maintenance_collectors::at_host(kind, major),
         Arc::new(SystemUnixClock),
         Arc::new(ThreadDispatch),
         log.clone(),
@@ -519,8 +532,8 @@ pub fn host_links(
 /// The maintenance facts `daemon`'s heartbeats report (`maintenance-v1`): looks by `collectors`
 /// under `scope` (`--maintenance-linux-scope`), leaving out the packages of the daemon's own
 /// `placed.json` ([`crate::Placement`] of its context), timed by `clock` and run on `dispatch`;
-/// none when there is no collector (a Mac today), which then announces and sends nothing. The
-/// report carries the run state of the host's maintenance turn ([`RunReported`]).
+/// none when there is no collector, which then announces and sends nothing. The report carries
+/// the run state of the host's maintenance turn ([`RunReported`]).
 pub fn maintenance_source(
     daemon: &Arc<Daemon>,
     scope: LinuxScope,

@@ -430,5 +430,9 @@ mod files_layout_tests;
 mod files_host_groups_tests;
 
 #[cfg(test)]
+#[path = "files_maintenance_tests.rs"]
+mod files_maintenance_tests;
+
+#[cfg(test)]
 #[path = "store_tests.rs"]
 mod tests;

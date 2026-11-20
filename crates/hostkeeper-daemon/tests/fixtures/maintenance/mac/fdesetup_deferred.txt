@@ -1,0 +1,2 @@
+FileVault is Off, but will be enabled after the next restart.
+Deferred enablement appears to be active for user 'admin'.

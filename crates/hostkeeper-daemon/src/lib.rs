@@ -91,7 +91,10 @@
 //!   platform's list), which are [`maintenance_collect`]'s `Collector`s: [`maintenance_host`] (the
 //!   OS, the kernels, the boot), [`maintenance_reboot`] (a reboot the host asks for) and the
 //!   package managers [`maintenance_apt`], [`maintenance_dnf`] and [`maintenance_apk`], with
-//!   [`maintenance_own`] naming the packages hostkeeper itself installs, which are never due.
+//!   [`maintenance_own`] naming the packages hostkeeper itself installs, which are never due; on a
+//!   Mac, [`maintenance_macos`] (`sw_vers`, the hardware serial, and the macOS updates
+//!   `softwareupdate` lists, read by [`maintenance_softwareupdate`]) and [`maintenance_mac`]
+//!   (FileVault, the data volume's free space, the Command Line Tools).
 //! - [`update_account`]: a Mac's update account, read from its root-only file, and the update
 //!   call, which gives its password to the program on its standard input alone.
 //! - [`observer`]: what [`Daemon::status`] reports of a running service.
@@ -165,9 +168,12 @@ pub mod maintenance_dnf;
 pub mod maintenance_facts;
 pub mod maintenance_hook;
 pub mod maintenance_host;
+pub mod maintenance_mac;
+pub mod maintenance_macos;
 pub mod maintenance_own;
 pub mod maintenance_reboot;
 pub mod maintenance_run;
+pub mod maintenance_softwareupdate;
 pub mod maintenance_state;
 pub mod mirror;
 pub mod node;
