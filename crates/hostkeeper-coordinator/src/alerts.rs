@@ -47,7 +47,8 @@
 //! - `xcode_release_waiting`: the list of Xcode releases the coordinator reads once a day
 //!   ([`crate::xcode_feed`]) lists a release, no beta and no release candidate, newer than any its
 //!   Xcode store holds; one alert with the release's version, until the store holds it or a newer
-//!   one.
+//!   one;
+//! - `updates_due`: one alert per host group with hosts whose kept report has updates due.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
@@ -124,6 +125,8 @@ pub enum Kind {
     PrerequisiteFailed,
     /// The list of Xcode releases has a release newer than any the Xcode store holds.
     XcodeReleaseWaiting,
+    /// Hosts of a host group have updates due.
+    UpdatesDue,
 }
 
 impl Kind {
@@ -146,6 +149,7 @@ impl Kind {
             Self::TrustedRoot => "trusted_root",
             Self::PrerequisiteFailed => "prerequisite_failed",
             Self::XcodeReleaseWaiting => "xcode_release_waiting",
+            Self::UpdatesDue => "updates_due",
         }
     }
 
@@ -164,7 +168,8 @@ impl Kind {
             | Self::CertNearExpiry
             | Self::TrustedRoot
             | Self::PrerequisiteFailed
-            | Self::XcodeReleaseWaiting => proto::AlertSeverity::Warning,
+            | Self::XcodeReleaseWaiting
+            | Self::UpdatesDue => proto::AlertSeverity::Warning,
         }
     }
 
@@ -185,6 +190,7 @@ impl Kind {
             Self::TrustedRoot => proto::AlertKind::TrustedRoot,
             Self::PrerequisiteFailed => proto::AlertKind::PrerequisiteFailed,
             Self::XcodeReleaseWaiting => proto::AlertKind::XcodeReleaseWaiting,
+            Self::UpdatesDue => proto::AlertKind::UpdatesDue,
         }
     }
 }
@@ -205,6 +211,8 @@ pub struct Subject {
     pub request: String,
     /// The enrolled host a duplicate claim collides with.
     pub other_host: String,
+    /// The host group, for the alerts that count its hosts.
+    pub group: String,
 }
 
 impl Subject {
@@ -216,6 +224,7 @@ impl Subject {
             version: String::new(),
             request: String::new(),
             other_host: String::new(),
+            group: String::new(),
         }
     }
 }
@@ -261,6 +270,8 @@ pub struct EnrollmentFacts {
     /// The release the alert `xcode_release_waiting` names, of the list kept and the Xcode store
     /// ([`crate::xcode_feed::Xcode::release_waiting`]); none without a feed.
     pub(crate) xcode_waiting: Option<crate::xcode_feed::XcodeRelease>,
+    /// The host group of each heard host with a kept maintenance report ([`updates`]).
+    pub(crate) groups: Option<BTreeMap<HostId, String>>,
 }
 
 /// When an observation is made: by the coordinator's clock (since its start, the clock the
@@ -329,6 +340,7 @@ pub(crate) fn derive_in(
     alerts.extend(trusted_roots(fleet));
     alerts.extend(prerequisite_failures(fleet, &enrollment.prerequisites));
     alerts.extend(xcode_release_waiting(enrollment));
+    alerts.extend(updates::updates_due(fleet, enrollment.groups.as_ref()));
     alerts.sort_by(|a, b| a.subject.cmp(&b.subject));
     alerts.dedup_by(|a, b| a.subject == b.subject);
     alerts
@@ -818,6 +830,7 @@ fn alert_proto(observed: Observed) -> proto::Alert {
         first_observed_unix: first_unix,
         request_id: subject.request,
         other_host_id: subject.other_host,
+        host_group: subject.group,
     }
 }
 
@@ -858,6 +871,7 @@ impl Coordinator {
         let enrollment = EnrollmentFacts {
             prerequisites: self.prerequisites.reports(),
             xcode_waiting: self.xcode.release_waiting(),
+            groups: self.groups_of_reports(),
             ..enrollment
         };
         let at = At {
@@ -938,8 +952,7 @@ impl Coordinator {
                 .cloned()
                 .collect(),
             server_not_after: Some(enrollment.server_certificate().not_after),
-            prerequisites: BTreeMap::new(),
-            xcode_waiting: None,
+            ..EnrollmentFacts::default()
         })
     }
 }
@@ -982,3 +995,5 @@ mod group_alerts;
 
 #[path = "alerts_rows.rs"]
 mod rows;
+#[path = "alerts_updates.rs"]
+mod updates;

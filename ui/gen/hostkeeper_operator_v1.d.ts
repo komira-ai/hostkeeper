@@ -37,6 +37,7 @@ export namespace hostkeeper_operator_v1 {
     firstObservedUnix?: string;
     requestId?: string;
     otherHostId?: string;
+    hostGroup?: string;
   }
   export type AlertKind =
     | "ALERT_KIND_UNSPECIFIED"
@@ -56,7 +57,8 @@ export namespace hostkeeper_operator_v1 {
     | "ALERT_KIND_MDM_DNS_CREDENTIAL_REJECTED"
     | "ALERT_KIND_MDM_IDENTITY_NEAR_EXPIRY"
     | "ALERT_KIND_PREREQUISITE_FAILED"
-    | "ALERT_KIND_XCODE_RELEASE_WAITING";
+    | "ALERT_KIND_XCODE_RELEASE_WAITING"
+    | "ALERT_KIND_UPDATES_DUE";
   export type AlertSeverity = "ALERT_SEVERITY_UNSPECIFIED" | "ALERT_SEVERITY_CRITICAL" | "ALERT_SEVERITY_WARNING";
   export interface ApiTokenInfo { name?: string; source?: hostkeeper_operator_v1.ApiTokenSource; createdBy?: string; createdUnix?: string; owner?: string; }
   export type ApiTokenSource = "API_TOKEN_SOURCE_UNSPECIFIED" | "API_TOKEN_SOURCE_STORE" | "API_TOKEN_SOURCE_TOKENS_FILE";
@@ -266,6 +268,8 @@ export namespace hostkeeper_operator_v1 {
     repositories?: hostkeeper_operator_v1.HostRepositories;
     hostGroup?: string;
     maintenance?: hostkeeper_agent_v1.MaintenanceReport;
+    maintenanceLookAgeSecs?: string;
+    maintenanceStale?: boolean;
   }
   export interface HostCounts { missing?: number; absent?: number; excluded?: number; unmanaged?: number; deferred?: number; picked?: number; noTarget?: number; noBuildForHost?: number; installerDropped?: number; }
   export interface HostGroup { name?: string; packages?: string[]; policy?: hostkeeper_operator_v1.RolloutPolicy; }

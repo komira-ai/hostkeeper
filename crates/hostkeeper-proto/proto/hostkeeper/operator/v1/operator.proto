@@ -550,8 +550,18 @@ message Host {
   // The last maintenance report of the host's daemon (`HeartbeatRequest.maintenance`) the
   // coordinator kept: what the host runs, what is due on it and the maintenance run it holds.
   // Absent while the coordinator keeps none: the host's daemon has not announced `maintenance-v1`,
-  // or has sent no report the coordinator read.
+  // or has sent no report the coordinator read. The coordinator keeps the last report that kept
+  // every bound of `MaintenanceReport`; a report that breaks one is dropped and the last one read
+  // stays.
   optional hostkeeper.agent.v1.MaintenanceReport maintenance = 26;
+  // For a host with a kept `maintenance` report whose `looked_unix` is not 0: the seconds between
+  // that last look and the coordinator's clock when it answered; 0 when the look is ahead of the
+  // coordinator's clock. Absent without a kept report and when `looked_unix` is 0.
+  optional uint64 maintenance_look_age_secs = 27;
+  // True when the coordinator keeps a `maintenance` report and its last look is 0, older than 7200
+  // seconds, or more than 300 seconds ahead of the coordinator's clock: an empty `due` in it then
+  // does not mean nothing is due. False without a report.
+  bool maintenance_stale = 28;
 }
 
 // One service a host runs, as its daemon said in a heartbeat (packages-native.md section 10.6).
@@ -1449,6 +1459,9 @@ message Alert {
   // For `ALERT_KIND_DUPLICATE_CLAIM_PENDING`: the enrolled host whose identity the request also
   // claims; empty when that is another pending request, or not known.
   string other_host_id = 9;
+  // For `ALERT_KIND_UPDATES_DUE`: the host group it concerns; empty for every other kind and for
+  // hosts in no host group.
+  string host_group = 10;
 }
 
 // What an `Alert` is about. These spellings are public; the `alert=` field of the coordinator's
@@ -1530,6 +1543,13 @@ enum AlertKind {
   // store holds that release or a newer one; its `version` is the release's version. Log token
   // `xcode_release_waiting`.
   ALERT_KIND_XCODE_RELEASE_WAITING = 17;
+  // The last maintenance report of one or more hosts of a host group (or of no host group) holds
+  // an item that is due (`MaintenanceReport.due` is not empty, or `due_left_out` is not 0). The
+  // message counts the hosts: `Updates due on 2 hosts of web`, or `Updates due on 1 host in no host
+  // group`; a stale report that holds due items still counts. One alert for each group, with the
+  // group in `host_group`; it stands while a host of the group is due and clears when the last
+  // beats of its hosts report nothing due. Log token `updates_due`.
+  ALERT_KIND_UPDATES_DUE = 19;
 }
 
 // How soon an `Alert` needs a person.
