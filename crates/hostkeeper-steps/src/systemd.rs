@@ -34,9 +34,10 @@
 //!     --property=RuntimeMaxSec=<secs|infinity> -- <executable> <hook_args...> <step> --params <file>
 //! ```
 //!
-//! A `timeout_secs` of 0 is no bound (`infinity`), as for a `prepare` whose manifest timeout is 0.
-//! Its exit, its last line, its log and a [`StepLauncher::stop`] of its unit while it runs are
-//! read as for a step.
+//! Its `RuntimeMaxSec=` is the call's [`AdditiveCall::bound`]: the seconds, or `infinity` for
+//! [`Bound::Unbounded`] (a `drain` whose run names no deadline), as for a `prepare` whose
+//! manifest timeout is 0. Its exit, its last line, its log and a [`StepLauncher::stop`] of its
+//! unit while it runs are read as for a step.
 //!
 //! A tool run ([`tool_command`]) has the line
 //!
@@ -161,11 +162,11 @@ pub fn command(call: &StepCall<'_>) -> Result<Vec<OsString>, LaunchError> {
 }
 
 /// The arguments of `systemd-run` that run one additive step:
-/// `<executable> <hook_args...> <step> --params <params>`, bounded by its `timeout_secs` (0 is no
-/// bound: `infinity`). A relative executable or params file is refused, as for [`command`].
+/// `<executable> <hook_args...> <step> --params <params>`, bounded by its [`AdditiveCall::bound`]
+/// (`infinity` for [`Bound::Unbounded`]). A relative executable or params file is refused, as for
+/// [`command`].
 pub fn additive_command(call: &AdditiveCall<'_>) -> Result<Vec<OsString>, LaunchError> {
     absolute_hook(call.executable, Some(call.params))?;
-    let bound = NonZeroU64::new(call.timeout_secs).map_or(Bound::Unbounded, Bound::Secs);
     let rest = call.hook_args.iter().map(OsString::from).chain([
         OsString::from(call.step),
         OsString::from("--params"),
@@ -173,7 +174,7 @@ pub fn additive_command(call: &AdditiveCall<'_>) -> Result<Vec<OsString>, Launch
     ]);
     Ok(unit_line(
         call.unit,
-        &runtime_max_sec(bound),
+        &runtime_max_sec(call.bound),
         &[],
         &[],
         call.executable,

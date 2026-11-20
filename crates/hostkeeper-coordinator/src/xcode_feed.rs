@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::origin_https::OriginUrl;
 use crate::service::Coordinator;
+use crate::xcode_store::XcodeStore;
 
 /// The period of the job `xcode-feed`: a day.
 pub(crate) const FEED_EVERY: Duration = Duration::from_secs(86_400);
@@ -410,8 +411,11 @@ pub(crate) struct Xcode {
     pub(crate) feed: Option<FeedUrl>,
     /// The list read last.
     pub(crate) known: Arc<dyn KnownReleases>,
-    /// The Xcode store.
+    /// What the Xcode store holds.
     pub(crate) held: Arc<dyn XcodeHeld>,
+    /// The Xcode store of `--xcode-dir`; none without the flag, when the store's routes are not
+    /// served.
+    pub(crate) store: Option<Arc<XcodeStore>>,
 }
 
 impl Default for Xcode {
@@ -420,6 +424,7 @@ impl Default for Xcode {
             feed: None,
             known: Arc::new(MemoryReleases::default()),
             held: Arc::new(NoXcodeStore),
+            store: None,
         }
     }
 }
@@ -518,6 +523,15 @@ impl Coordinator {
         self
     }
 
+    /// The same coordinator keeping Xcode archives in `store` (`--xcode-dir`): it serves the
+    /// store's routes, and the store says which releases it holds.
+    #[must_use]
+    pub(crate) fn with_xcode_store(mut self, store: Arc<XcodeStore>) -> Self {
+        self.xcode.held = Arc::clone(&store) as Arc<dyn XcodeHeld>;
+        self.xcode.store = Some(store);
+        self
+    }
+
     /// Whether the job `xcode-feed` runs: `--xcode-feed-url` is not empty.
     #[must_use]
     pub(crate) fn reads_xcode_feed(&self) -> bool {
@@ -564,9 +578,13 @@ impl Coordinator {
     }
 
     /// The job `xcode-feed`: [`Self::read_xcode_feed`], whose failure is a log line and no alert;
-    /// the next run is a period later.
+    /// the next run is a period later. It then prunes the Xcode store
+    /// ([`Self::prune_xcode_store`]), so that a group's lowered `xcode_keep` takes effect within a
+    /// day.
     pub(crate) async fn xcode_feed_job(&self) {
-        if let Err(why) = self.read_xcode_feed().await {
+        let read = self.read_xcode_feed().await;
+        self.prune_xcode_store();
+        if let Err(why) = read {
             let url = self
                 .xcode
                 .feed

@@ -15,6 +15,7 @@ fn subject(kind: Kind, service: &str, host: &str, version: &str) -> Subject {
         version: version.to_owned(),
         request: String::new(),
         other_host: String::new(),
+        group: String::new(),
     }
 }
 

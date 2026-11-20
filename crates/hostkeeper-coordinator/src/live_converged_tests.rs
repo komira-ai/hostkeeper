@@ -90,6 +90,7 @@ fn hear(
         last_renew_error: None,
         trusted_root: crate::trusted_root::TrustedRootSaid::default(),
         skewed_beats: 0,
+        maintenance: None,
     };
     let request = agent::HeartbeatRequest {
         features: vec![TARGET_FEATURE.to_owned()],

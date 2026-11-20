@@ -15,10 +15,10 @@ use std::sync::{Arc, Mutex};
 
 use hostkeeper_steps::systemd::additive_command;
 use hostkeeper_steps::{
-    AdditiveCall, Captured, LaunchError, Program, Ring, Spawner, StepExit, StepLauncher,
+    AdditiveCall, Bound, Captured, LaunchError, Program, Ring, Spawner, StepExit, StepLauncher,
     SystemdLauncher,
 };
-use support::Scratch;
+use support::{Scratch, secs};
 
 /// A spawner that records each program and its arguments, and answers from a script.
 #[derive(Default)]
@@ -85,7 +85,7 @@ fn uninstall<'a>(
     executable: &'a Path,
     hook_args: &'a [String],
     params: &'a Path,
-    timeout_secs: u64,
+    bound: Bound,
 ) -> AdditiveCall<'a> {
     AdditiveCall {
         service: "svc",
@@ -94,7 +94,7 @@ fn uninstall<'a>(
         params,
         executable,
         unit: UNIT,
-        timeout_secs,
+        bound,
     }
 }
 
@@ -121,8 +121,8 @@ fn line(executable: &Path, max: &str, rest: &[&str]) -> Vec<String> {
 /// Catches an additive step not run, or run with other arguments, another unit or another bound:
 /// the line is exactly the documented one, with the hook command's own arguments before the
 /// step's name and `--params <file>` after it; `RuntimeMaxSec=` is the step's bound, and a bound
-/// of 0 is `infinity`; a hook command with no arguments gives the step's name right after the
-/// executable. `additive_command` gives the same line as the run.
+/// of `Bound::Unbounded` is `infinity`; a hook command with no arguments gives the step's name
+/// right after the executable. `additive_command` gives the same line as the run.
 #[test]
 fn the_additive_step_runs_in_its_bounded_transient_unit() {
     let (_scratch, hook, params) = hook_file("additive-line");
@@ -134,13 +134,13 @@ fn the_additive_step_runs_in_its_bounded_transient_unit() {
     ]);
     let launcher = SystemdLauncher::new(&recorder);
     launcher
-        .run_additive(&uninstall(&hook, &args, &params, 60))
+        .run_additive(&uninstall(&hook, &args, &params, secs(60)))
         .unwrap();
     launcher
-        .run_additive(&uninstall(&hook, &args, &params, 0))
+        .run_additive(&uninstall(&hook, &args, &params, Bound::Unbounded))
         .unwrap();
     launcher
-        .run_additive(&uninstall(&hook, &[], &params, 5))
+        .run_additive(&uninstall(&hook, &[], &params, secs(5)))
         .unwrap();
     let file = params.to_str().unwrap();
     assert_eq!(
@@ -164,7 +164,7 @@ fn the_additive_step_runs_in_its_bounded_transient_unit() {
             ),
         ]
     );
-    let made: Vec<String> = additive_command(&uninstall(&hook, &args, &params, 60))
+    let made: Vec<String> = additive_command(&uninstall(&hook, &args, &params, secs(60)))
         .unwrap()
         .into_iter()
         .map(|a| a.into_string().unwrap())
@@ -173,6 +173,49 @@ fn the_additive_step_runs_in_its_bounded_transient_unit() {
         made,
         line(&hook, "60", &["update-hook", "uninstall", "--params", file])
     );
+}
+
+/// Catches a maintenance `drain` given a bound it was not asked for: a `drain` with no deadline
+/// (`Bound::Unbounded`) is the documented line with `RuntimeMaxSec=infinity`, and one with a
+/// deadline of 5400 seconds is the same line with `RuntimeMaxSec=5400`, the run and
+/// `additive_command` agreeing.
+#[test]
+fn a_drain_runs_unbounded_or_to_its_deadline() {
+    let (_scratch, hook, params) = hook_file("additive-drain");
+    let args = vec!["update-hook".to_owned()];
+    let drain = |bound: Bound| AdditiveCall {
+        service: "svc",
+        step: "drain",
+        hook_args: &args,
+        params: &params,
+        executable: &hook,
+        unit: UNIT,
+        bound,
+    };
+    let recorder = Recorder::answering(vec![
+        Ok(captured(Some(0), b"{}\n", b"")),
+        Ok(captured(Some(0), b"{}\n", b"")),
+    ]);
+    let launcher = SystemdLauncher::new(&recorder);
+    launcher.run_additive(&drain(Bound::Unbounded)).unwrap();
+    launcher.run_additive(&drain(secs(5400))).unwrap();
+    let file = params.to_str().unwrap();
+    let rest = ["update-hook", "drain", "--params", file];
+    assert_eq!(
+        recorder.calls(),
+        [
+            (Program::SystemdRun, line(&hook, "infinity", &rest)),
+            (Program::SystemdRun, line(&hook, "5400", &rest)),
+        ]
+    );
+    for (bound, max) in [(Bound::Unbounded, "infinity"), (secs(5400), "5400")] {
+        let made: Vec<String> = additive_command(&drain(bound))
+            .unwrap()
+            .into_iter()
+            .map(|a| a.into_string().unwrap())
+            .collect();
+        assert_eq!(made, line(&hook, max, &rest));
+    }
 }
 
 /// Catches an additive step started from a hook or params file that cannot be used: a relative
@@ -190,7 +233,7 @@ fn a_hook_that_cannot_run_is_refused_before_anything_is_spawned() {
     let launcher = SystemdLauncher::new(&recorder);
 
     let err = launcher
-        .run_additive(&uninstall(Path::new("bin/hook"), &[], &params, 5))
+        .run_additive(&uninstall(Path::new("bin/hook"), &[], &params, secs(5)))
         .unwrap_err();
     assert!(
         matches!(&err, LaunchError::Launcher(text)
@@ -198,7 +241,7 @@ fn a_hook_that_cannot_run_is_refused_before_anything_is_spawned() {
         "{err:?}"
     );
     let err = launcher
-        .run_additive(&uninstall(&hook, &[], Path::new("params.toml"), 5))
+        .run_additive(&uninstall(&hook, &[], Path::new("params.toml"), secs(5)))
         .unwrap_err();
     assert!(
         matches!(&err, LaunchError::Launcher(text)
@@ -206,7 +249,7 @@ fn a_hook_that_cannot_run_is_refused_before_anything_is_spawned() {
         "{err:?}"
     );
     let err = launcher
-        .run_additive(&uninstall(&missing, &[], &params, 5))
+        .run_additive(&uninstall(&missing, &[], &params, secs(5)))
         .unwrap_err();
     let want = format!(
         "{}: No such file or directory (os error 2)",
@@ -217,7 +260,7 @@ fn a_hook_that_cannot_run_is_refused_before_anything_is_spawned() {
         "{err:?}"
     );
     let err = launcher
-        .run_additive(&uninstall(&plain, &[], &params, 5))
+        .run_additive(&uninstall(&plain, &[], &params, secs(5)))
         .unwrap_err();
     let want = format!("{} is not an executable file", plain.display());
     assert!(
@@ -228,7 +271,7 @@ fn a_hook_that_cannot_run_is_refused_before_anything_is_spawned() {
 
     let recorder = Recorder::answering(vec![Err(io::Error::other("no such program"))]);
     let err = SystemdLauncher::new(&recorder)
-        .run_additive(&uninstall(&hook, &[], &params, 5))
+        .run_additive(&uninstall(&hook, &[], &params, secs(5)))
         .unwrap_err();
     assert!(
         matches!(&err, LaunchError::Launcher(text) if text == "SystemdRun could not be run: no such program"),
@@ -263,7 +306,7 @@ fn the_exit_and_last_line_of_systemd_run_are_the_additive_step_exit() {
     let exits: Vec<StepExit> = (0..3)
         .map(|_| {
             launcher
-                .run_additive(&uninstall(&hook, &[], &params, 5))
+                .run_additive(&uninstall(&hook, &[], &params, secs(5)))
                 .unwrap()
         })
         .collect();
@@ -290,7 +333,7 @@ fn the_exit_and_last_line_of_systemd_run_are_the_additive_step_exit() {
 
     let recorder = Recorder::answering(vec![Ok(captured(Some(3), b"x\n", b""))]);
     let exit = SystemdLauncher::new(&recorder)
-        .run_additive(&uninstall(&hook, &[], &params, 5))
+        .run_additive(&uninstall(&hook, &[], &params, secs(5)))
         .unwrap();
     assert_eq!(
         exit,

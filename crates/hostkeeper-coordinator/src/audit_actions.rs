@@ -1,8 +1,8 @@
 //! The `action` strings of the operator login's audit entries (`docs/design/operator-login.md`
 //! section 8), of the MDM setup's (`docs/design/coordinator-mdm.md`, section 4.9, the `mdm_*`
-//! ones) and of the console's (`docs/design/console-broker.md`, decision D4). Each is an additive
-//! string of the existing `action` field; `by` and `subject` say who did it and whom or what it
-//! concerned.
+//! ones), of the console's (`docs/design/console-broker.md`, decision D4) and of the Xcode store's
+//! (`xcode_put`, `xcode_remove`). Each is an additive string of the existing `action` field; `by`
+//! and `subject` say who did it and whom or what it concerned.
 //!
 //! The console's lines change no operations state: they are appended with
 //! [`crate::ops::OpsStore::append_audit_only`], which takes their action as an [`AuditOnly`], and
@@ -97,6 +97,14 @@ pub const POWER_ACTION: &str = "power_action";
 pub const BOOT_DEVICE_SET: &str = "boot_device_set";
 /// The coordinator started, by `coordinator`: every console session open before it ended there.
 pub const CONSOLE_COORDINATOR_START: &str = "console_coordinator_start";
+
+/// An operator's upload of an Xcode archive was stored (`PUT /v1/xcode/<sha256>`): the reason names
+/// the release, the archive's SHA-256 and its size.
+pub const XCODE_PUT: &str = "xcode_put";
+/// An Xcode archive was removed from the store: by an operator's `Xcode.Remove`, whose reason is
+/// the operator's, or by `coordinator`, which prunes the releases the store no longer keeps and
+/// whose reason names the release and the archive's SHA-256.
+pub const XCODE_REMOVE: &str = "xcode_remove";
 
 /// The action of an audit line that changes no operations state: one of the console's, which
 /// [`crate::ops::OpsStore::append_audit_only`] appends outside the `/v1/status` ring.

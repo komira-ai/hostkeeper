@@ -341,6 +341,16 @@ pub struct Heartbeat {
         deserialize_with = "lenient"
     )]
     pub local_halt: Option<LocalHalt>,
+    /// The host's maintenance report: the protobuf encoding of `hostkeeper.agent.v1.MaintenanceReport`
+    /// as standard padded base64. This crate keeps the text and does not decode it; the
+    /// coordinator does. Absent from an agent that predates it; a value that is no text reads
+    /// as `None`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient"
+    )]
+    pub maintenance: Option<String>,
 }
 
 /// The most bytes of a heartbeat's `last_renew_error` that are sent and read.
@@ -516,6 +526,7 @@ impl ServiceBeat {
             last_renew_error: None,
             record_try: self.record_try,
             local_halt: self.local_halt.clone(),
+            maintenance: None,
         }
     }
 }
@@ -692,6 +703,8 @@ struct HeartbeatLoose {
     record_try: Option<u64>,
     #[serde(default, deserialize_with = "lenient")]
     local_halt: Option<LocalHalt>,
+    #[serde(default, deserialize_with = "lenient")]
+    maintenance: Option<String>,
 }
 
 /// One droppable value read as `T`: its default, and the reason, when it is bad.
@@ -787,6 +800,7 @@ fn without_droppable(bytes: &[u8]) -> Option<HeartbeatRead> {
         last_renew_error: rest.last_renew_error,
         record_try: rest.record_try,
         local_halt: rest.local_halt,
+        maintenance: rest.maintenance,
     };
     let mut facts: Vec<&'static str> = extras.iter().map(|(fact, _)| *fact).collect();
     facts.sort_unstable();

@@ -88,6 +88,7 @@ fn alert() -> op::Alert {
         first_observed_unix: 1_800_000_000,
         request_id: "ab".repeat(32),
         other_host_id: "db-1".to_owned(),
+        host_group: "db-hosts".to_owned(),
     }
 }
 

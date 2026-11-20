@@ -1,6 +1,8 @@
-//! The maintenance run record and its state machine: the daemon's memory of one host's turn of a
-//! maintenance run, and the pure rules of what comes next (docs/design/maintenance-updates.md,
-//! sections 5.2 to 5.7).
+//! A host's turn of a maintenance run (docs/design/maintenance-updates.md, sections 5.2 to 5.7):
+//! the run record and its state machine, the daemon's memory of the turn and the pure rules of
+//! what comes next ([`MaintenanceRecord`], [`transition`]), and the run of one service's `drain`
+//! or `resume` through the launcher of the host ([`run_maintenance_step`], in `step.rs`, whose
+//! documentation gives how each end of such a step is read).
 //!
 //! The step runner's sequence does not fit an OS update (it has no release to restart and no
 //! rollback), so a `maintain` order is run by a small sequencer of the daemon's own. This module is
@@ -72,6 +74,7 @@
 
 mod machine;
 mod record;
+mod step;
 
 pub use machine::{
     Action, Ending, Event, Launch, Outcome, TransitionError, next_action, transition,
@@ -80,4 +83,8 @@ pub use record::{
     InvalidRecord, Kind, KindProgress, MAINTENANCE_CORRUPT_FILE, MAINTENANCE_DIR,
     MAINTENANCE_RECORD_FILE, MAINTENANCE_SCHEMA, MaintenanceLoaded, MaintenanceRecord,
     MaintenanceRecordError, MaintenanceStore, RunStep,
+};
+pub use step::{
+    MaintenanceCall, MaintenanceExit, MaintenanceOutcome, MaintenanceStep, RESUME_BOUND_SECS,
+    run_maintenance_step,
 };
