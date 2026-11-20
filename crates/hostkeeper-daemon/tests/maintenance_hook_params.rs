@@ -405,9 +405,11 @@ fn the_command_line_takes_the_three_steps_and_the_params_file() {
     assert_eq!(refused.exit_code(), 2);
 }
 
-/// Proves: the binary's command line runs the hook on this host's kinds (the `prepare` of `linux`
-/// is not written yet) and exits with the step's code (1, `unsupported_kind`); started from a packaged path, the hook is run
-/// there and not handed to `current` as the daemon is.
+/// Proves: the binary's command line runs the hook on this host and exits with the step's code
+/// (1: `verify` over the host's run record, not wired yet, finds the kind not applied before any
+/// kind's work runs, so nothing of the test host is touched; a `prepare` of `linux` would run the
+/// host's own package manager); started from a packaged path, the hook is run there and not
+/// handed to `current` as the daemon is.
 ///
 /// Catches: `maintenance-hook` dispatched to the daemon, or exec'd into another binary.
 #[test]
@@ -418,7 +420,7 @@ fn the_binary_runs_the_hook_and_exits_with_its_code() {
     let words = [
         OsString::from("hostkeeper"),
         "maintenance-hook".into(),
-        "prepare".into(),
+        "verify".into(),
         "--params".into(),
         file.clone().into_os_string(),
     ];
@@ -512,13 +514,14 @@ fn a_cutover_is_refused_while_the_host_keeps_no_run_record() {
     assert_eq!(format!("{code:?}"), format!("{:?}", ExitCode::from(1)));
 }
 
-/// Proves: a Linux host's registry holds the `linux` and `reboot` kinds and a Mac's its three:
-/// a Linux `prepare` still answers `unsupported_kind`, as does a Mac's `macos` `prepare`; a
+/// Proves: a Linux host's registry holds the `linux` and `reboot` kinds and a Mac's its three: a
+/// Linux `prepare` is the stage, which defers a run with no `linux_scope` before it runs any
+/// program; `reboot`'s `prepare` answers `unsupported_kind`, as does a Mac's `macos` `prepare`; a
 /// build whose version is not `major.minor.patch` cannot check its host, so the `verify` of its
 /// `linux` and `reboot` answers `unsupported_kind` (the check itself is
-/// `maintenance_hook_linux.rs`'s, over fakes: a host's reads the host); a Mac's `xcode` stages
-/// (an order with no Xcode stages nothing and succeeds) and its `cutover`, `after_reboot` and
-/// `verify` answer `unsupported_kind`.
+/// `maintenance_hook_linux.rs`'s, over fakes: a host's reads the host); a Mac's `xcode` stages (an
+/// order with no Xcode stages nothing and succeeds) and its `cutover`, `after_reboot` and `verify`
+/// answer `unsupported_kind`.
 ///
 /// Catches: a platform's kinds put in the wrong platform's registry, or a host that cannot be
 /// checked made to look checked.
@@ -542,8 +545,14 @@ fn the_registry_of_a_platform_holds_its_kinds() {
         ..Maintain::default()
     })
     .expect("valid");
-    let refused = linux.get(Kind::Linux).expect("held").prepare(&params);
-    assert_eq!(refused, Err(KindError::unsupported(Kind::Linux)));
+    let deferred = linux.get(Kind::Linux).expect("held").prepare(&params);
+    assert_eq!(
+        deferred,
+        Err(KindError::Deferred {
+            reason: "linux_scope_invalid",
+            detail: "linux_scope 0 is not security or all".to_owned(),
+        })
+    );
     let reboot = linux.get(Kind::Reboot).expect("held");
     assert_eq!(
         reboot.prepare(&params),
