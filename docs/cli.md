@@ -682,7 +682,7 @@ Removes a sled that holds nothing: refused `in_use`, naming what stands on it, o
 
 ### `maintenance`
 
-The service `Maintenance` of the package `hostkeeper.operator.v1`. The maintenance runs. Described and not yet served: every call answers `UNIMPLEMENTED` until its handler lands. Each call that changes something takes a reason and answers the audit entry it wrote, under the caller's name, with the caller's reason followed by `run <id>`: `maintenance_schedule` (with the host group as the entry's `host_group` when the run names one), `maintenance_cancel`, `maintenance_retry_host` and `maintenance_put_back` (each with the host as the entry's `node_id`). `List`, `Get` and a `Schedule` without `confirm` change nothing and write no audit entry.
+The service `Maintenance` of the package `hostkeeper.operator.v1`. The maintenance runs. `Schedule`, `List`, `Get` and `Cancel` are served; `RetryHost` and `PutBack` answer `UNIMPLEMENTED` until their handlers land. Each call that changes something takes a reason and answers the audit entry it wrote, under the caller's name, with the caller's reason followed by `run <id>`: `maintenance_schedule` (with the host group as the entry's `host_group` when the run names one), `maintenance_cancel`, `maintenance_retry_host` and `maintenance_put_back` (each with the host as the entry's `node_id`). `List`, `Get` and a `Schedule` without `confirm` change nothing and write no audit entry.
 
 #### `hk maintenance schedule`
 

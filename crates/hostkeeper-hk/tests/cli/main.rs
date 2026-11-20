@@ -18,7 +18,8 @@
 //! - `golden`: the help texts of the fixture's table against their files;
 //! - `methods`: the requests of the methods of the real protos that the operator's tools use;
 //! - `maintenance`: the `Maintenance` calls' requests, their enum flags' usage errors, and the
-//!   `UNIMPLEMENTED` answer of every one through the real gateway;
+//!   answer of every one through the real gateway of an empty coordinator (`retry-host` and
+//!   `put-back` `UNIMPLEMENTED`);
 //! - `xcode`: the commands of the service `xcode`: their paths, bodies, answers and a refusal;
 //! - `xcode_push`: `hk xcode-push`, on stand-ins for the Mac's programs and a fake Xcode store.
 
