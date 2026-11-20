@@ -345,7 +345,7 @@ fn services_have_repository(database: &Database) -> bool {
 
 /// Proves: a `serve` with no `--rollout-file` starts on a database at the schema of the release
 /// before (0.1.252: migrations `0001` to `0008`, no `repository` column on `services`): it runs
-/// `0009` to `0027`, so `schema_version` holds 1 to 27 and the column is there, and an operator's change is
+/// `0009` to `0028`, so `schema_version` holds 1 to 28 and the column is there, and an operator's change is
 /// held by the audit table.
 ///
 /// Catches: a release that cannot start on the database the release before left, or that starts
@@ -362,7 +362,7 @@ fn a_serve_starts_on_a_database_at_the_schema_of_the_release_before() {
 
     drop(start(args.clone()));
     database.lock_is_free();
-    // The schema of 0.1.252: `0009` to `0027` taken back, the column, the tables and their
+    // The schema of 0.1.252: `0009` to `0028` taken back, the column, the tables and their
     // `schema_version` rows.
     run(
         &database,
@@ -377,6 +377,7 @@ fn a_serve_starts_on_a_database_at_the_schema_of_the_release_before() {
          DROP TABLE rollout_gate, state_versions, audit_counter; \
          DROP TABLE fleet_hosts, fleet_bakes, fleet_orders, cluster_quiet; \
          DROP TABLE sessions, login_failures, login_gate, periodic_jobs, alerts; \
+         DROP TABLE xcode_releases; \
          DROP TABLE fleet_tries; DROP SEQUENCE desired_seq; \
          ALTER TABLE desired DROP COLUMN set_seq, DROP COLUMN set_for; \
          ALTER TABLE group_desired DROP COLUMN set_seq, DROP COLUMN set_for; \
@@ -387,7 +388,7 @@ fn a_serve_starts_on_a_database_at_the_schema_of_the_release_before() {
     assert!(!services_have_repository(&database));
 
     let parts = start(args);
-    assert_eq!(schema_versions(&database), (1..=27).collect::<Vec<i32>>());
+    assert_eq!(schema_versions(&database), (1..=28).collect::<Vec<i32>>());
     assert!(services_have_repository(&database));
     let done = parts
         .coordinator
@@ -403,7 +404,7 @@ fn a_serve_starts_on_a_database_at_the_schema_of_the_release_before() {
 }
 
 /// Proves: a `serve` is refused on a database that holds a migration newer than this release's
-/// that says `refuse`, with the exact text of the database's refusal naming migration 28; a newer
+/// that says `refuse`, with the exact text of the database's refusal naming migration 29; a newer
 /// one that says `may-run` is taken.
 ///
 /// Catches: a coordinator that starts on, and writes to, a schema a newer release changed in a
@@ -417,17 +418,17 @@ fn a_serve_refuses_a_database_newer_than_this_release() {
     database.lock_is_free();
 
     let put = "INSERT INTO schema_version (version, name, older_releases) \
-               VALUES (28, 'from_the_future', ";
+               VALUES (29, 'from_the_future', ";
     run(&database, &format!("{put}'refuse')"));
     let why = refusal(args.clone());
     assert!(matches!(&why, StartError::Database(_)), "{why}");
     assert_eq!(
         why.to_string(),
-        "the database's schema is newer than this coordinator (migration 28, from_the_future)"
+        "the database's schema is newer than this coordinator (migration 29, from_the_future)"
     );
     database.lock_is_free();
 
-    run(&database, "DELETE FROM schema_version WHERE version = 28");
+    run(&database, "DELETE FROM schema_version WHERE version = 29");
     run(&database, &format!("{put}'may-run')"));
     drop(start(args));
 }
@@ -615,4 +616,37 @@ fn a_serve_over_the_database_adopts_the_initial_admin_file_once() {
         "the user is read back from the row"
     );
     drop(parts);
+}
+
+/// The names of the jobs `periodic_jobs` holds, in order.
+fn job_names(database: &Database) -> Vec<String> {
+    in_schema(database)
+        .query("SELECT name FROM periodic_jobs ORDER BY name", &[])
+        .expect("periodic_jobs")
+        .iter()
+        .map(|row| row.get(0))
+        .collect()
+}
+
+/// Proves: a `serve` on a database without `--xcode-feed-url` holds no row for the job
+/// `xcode-feed`, and a `serve` on it with the flag adds the row.
+///
+/// Catches: a database-backed start that does not pass the feed address on to the jobs it claims,
+/// or one that claims the job with no address to read.
+#[test]
+fn a_serve_on_a_database_claims_the_xcode_feed_job_only_with_its_address() {
+    let files = Files::new("database-xcode-feed");
+    let database = Database::new();
+    let args = database_args(&files, &database);
+
+    drop(start(args.clone()));
+    assert!(!job_names(&database).contains(&"xcode-feed".to_owned()));
+
+    let mut with_feed = args;
+    with_feed.extend(flags(&[(
+        "--xcode-feed-url",
+        "https://xcodereleases.com/data.json",
+    )]));
+    drop(start(with_feed));
+    assert!(job_names(&database).contains(&"xcode-feed".to_owned()));
 }

@@ -54,6 +54,7 @@ pub(crate) mod ssh_book;
 pub(crate) mod state;
 pub(crate) mod transfer;
 pub(crate) mod writer;
+pub(crate) mod xcode_rows;
 
 use std::io;
 use std::num::NonZeroUsize;
