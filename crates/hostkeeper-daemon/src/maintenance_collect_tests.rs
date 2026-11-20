@@ -323,3 +323,50 @@ fn versions_compare_by_runs_of_digits_and_of_text() {
         );
     }
 }
+
+/// Proves a host with no `/Applications` has no Xcode.
+#[test]
+fn a_host_without_applications_has_no_xcode() {
+    let scratch = scratch("xcode-none");
+    assert_eq!(xcode_apps(&HostRoot::at(scratch.path())), Ok(Vec::new()));
+}
+
+/// Proves the Xcodes are the directories named `Xcode*.app`, sorted: not another application, a
+/// name without `.app`, a file with an Xcode's name, nor the staging directory.
+#[test]
+fn the_xcodes_are_the_xcode_app_directories_sorted() {
+    let scratch = scratch("xcode-apps");
+    let applications = scratch.path().join("Applications");
+    for name in [
+        "Xcode-beta.app",
+        "Xcode.app",
+        "Xcode-27.2.app",
+        "Safari.app",
+        "XcodeHelper",
+        ".hostkeeper-staging",
+    ] {
+        std::fs::create_dir_all(applications.join(name)).expect("the directory");
+    }
+    std::fs::write(applications.join("Xcode-9.app"), "").expect("the file");
+    assert_eq!(
+        xcode_apps(&HostRoot::at(scratch.path())),
+        Ok(vec![
+            "Xcode-27.2.app".to_owned(),
+            "Xcode-beta.app".to_owned(),
+            "Xcode.app".to_owned(),
+        ])
+    );
+}
+
+/// Proves an `/Applications` that is there and cannot be listed (here a file) is the reason, not
+/// an empty list.
+#[test]
+fn an_applications_that_cannot_be_listed_is_an_error() {
+    let scratch = scratch("xcode-unlistable");
+    std::fs::write(scratch.path().join("Applications"), "").expect("the file");
+    let reason = io::Error::from_raw_os_error(libc::ENOTDIR);
+    assert_eq!(
+        xcode_apps(&HostRoot::at(scratch.path())),
+        Err(format!("/Applications could not be read: {reason}"))
+    );
+}
