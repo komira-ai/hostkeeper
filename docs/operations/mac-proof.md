@@ -26,6 +26,19 @@ Mac that takes builds.
 | 10 | MP-U6, then MP-U7 or MP-U8 | the proof Mac | **Irreversible**: a major upgrade; the owner chooses the Mac |
 | 11 | MP-U9 after each install; MP-A9; section 7 | the proof Mac, then the coordinator side | root shell, then the operator |
 
+## Where the files go
+
+Each machine has one scratch directory for the proof, named once and passed to every command as a variable; nothing is written
+anywhere else, and nothing under `/tmp`:
+
+- `$P` on the operator's side (the coordinator-side shell and the operator's own Mac): set in the preamble of MP-E1 (section 2
+  sets it the same way), mode 0700, a path with no spaces. Operator credential files stay where they are and are named by path.
+- `/var/root/hk-proof` on the proof Mac (`$D` in the steps): root's own, mode 0700, where the root-only password files (0600) and
+  the harness's plists live. A launchd plist needs absolute paths, so the steps spell it out there.
+
+No script file is written on either machine: the commands are pasted into the shell, the two helpers (`probe` in MP-I5, `snap`
+in MP-M1) are functions of the root shell, and a launchd job's command is written into its plist.
+
 ## How a result is recorded
 
 For each step, keep:
@@ -51,16 +64,12 @@ These steps settle no [V] by themselves. They make the Mac the later sections ne
 ### MP-E1 Read what the coordinator holds for the Macs
 Settles: none; the baseline that MP-E5 and section 7 compare with (design 4.1). Runs: an operator on the coordinator side with hk. Needs: an operator token file (0600), the coordinator's private URL and CA file. Nothing on a Mac changes.
 ```sh
-umask 077; mkdir -p ~/hk-proof
-cat > ~/hk-proof/env.sh <<'X'
-EP=<coordinator private URL>
-CA=$HOME/hk-proof/ca.pem
-TOKF=$HOME/hk-proof/operator-token
+# the preamble of every operator-side shell (paste it; it writes no file):
+P=<the proof's scratch directory>; EP=<coordinator private URL>; CA=<the coordinator's CA file>; TOKF=<the operator token file, 0600>
 hkc() { hk --endpoint "$EP" --ca-file "$CA" --token-file "$TOKF" "$@"; }
-X
-. ~/hk-proof/env.sh; NODE=<node id>
-hkc hosts get --node-id "$NODE" > ~/hk-proof/get-before.json
-jq '(.host // .) | {hostGroup, live, agent: .heartbeat.agent, m: .heartbeat.maintenance, operatorKeys: .heartbeat.operatorKeys, ssh: .heartbeat.ssh}' ~/hk-proof/get-before.json
+umask 077; mkdir -p "$P"; NODE=<node id>
+hkc hosts get --node-id "$NODE" > $P/get-before.json
+jq '(.host // .) | {hostGroup, live, agent: .heartbeat.agent, m: .heartbeat.maintenance, operatorKeys: .heartbeat.operatorKeys, ssh: .heartbeat.ssh}' $P/get-before.json
 ```
 Record: node id, group, agent version, host.osVersion/osBuild/bootId, mac.filevault, authrestartSupported, updateAccount, commandLineTools, mdmConflicts, xcodes, due, lookFailed, operatorKeys, ssh.state. Keep `get-before.json`.
 Decides:
@@ -73,7 +82,8 @@ Settles: none; avoids a lockout. Runs: the coordinator's deploy owner, on the co
 # operator-keys.toml: [host-groups."mac-proof"] with the same keys as the Mac's current group
 # ssh operators file: add "mac-proof" to the proof operator's classes
 # host-prerequisites file: copy the Mac's current group table to [host-groups."mac-proof"]
-. ~/hk-proof/env.sh; hkc host-groups get --host-group <current group> > ~/hk-proof/group-current.json
+# the preamble of MP-E1, then:
+hkc host-groups get --host-group <current group> > $P/group-current.json
 ```
 Record: the three diffs (names only, no keys), the time they were in force.
 Decides:
@@ -82,11 +92,11 @@ Decides:
 ### MP-E3 Move the Mac into a group of its own
 Settles: none. Runs: an operator on the coordinator side with hk. Needs: MP-E2 in force (wait one `--tls-reload-secs`); the owner agrees the Mac leaves builds. The new group lists the same packages and the same desired versions, so the move is not also an update (`docs/operations/hostgroups.md`: a package the new group omits is uninstalled).
 ```sh
-. ~/hk-proof/env.sh; NODE=<node id>
-# write ~/hk-proof/group.json from group-current.json: { "hostGroup": { "name": "mac-proof", "packages": [..same..], "policy": {..same..} } }
-hkc host-groups put --request ~/hk-proof/group.json --reason "Mac proof: one Mac in a group of its own"
-# per package: ~/hk-proof/desired-<service>.json = { "desired": <its desired object> }
-hkc releases set-desired --service hostkeeper --host-group mac-proof --request ~/hk-proof/desired-hostkeeper.json
+# the preamble of MP-E1
+# write $P/group.json from group-current.json: { "hostGroup": { "name": "mac-proof", "packages": [..same..], "policy": {..same..} } }
+hkc host-groups put --request $P/group.json --reason "Mac proof: one Mac in a group of its own"
+# per package: $P/desired-<service>.json = { "desired": <its desired object> }
+hkc releases set-desired --service hostkeeper --host-group mac-proof --request $P/desired-hostkeeper.json
 hkc releases converge --service hostkeeper --host-group mac-proof
 hkc host-groups move --node-id "$NODE" --host-group mac-proof --reason "Mac proof: taken out of its group"
 hkc hosts get --node-id "$NODE" | jq '(.host // .) | {hostGroup, operatorKeys: .heartbeat.operatorKeys, services}'
@@ -99,7 +109,7 @@ Decides:
 ### MP-E4 Get a root shell
 Settles: none. Runs: an operator on the coordinator side with hk, then in a root shell on the proof Mac. Needs: MP-E3; the operator listed for `mac-proof` (MP-E2). The administrator's password is typed at sudo's own prompt by the owner.
 ```sh
-. ~/hk-proof/env.sh; NODE=<node id>
+# the preamble of MP-E1
 hkc hosts get --node-id "$NODE" | jq '(.host // .) | {operatorKeys: .heartbeat.operatorKeys, ssh: .heartbeat.ssh}'
 hk --endpoint "$EP" --ca-file "$CA" --token-file "$TOKF" ssh "$NODE" --reason "Mac proof shell" -- -t   # hk ssh: docs/cli.md:19
 # on the Mac, as the administrator:
@@ -219,9 +229,10 @@ Decides:
 
 ## 2. xcode-push on the operator's Mac (section 2.0)
 
-Every step here runs as the operator's normal user in Terminal on the operator's own Mac, not on a proof Mac. All steps
-are read-only on the archive; they only make files under `~/hk-proof`. Put the newest Xcode `.xip` (and one older release
-if available) at `~/hk-proof/Xcode_NEW.xip`, in an otherwise empty directory. Use `NODE=<node id>` style placeholders for
+Every step here runs as the operator's normal user in Terminal on the operator's own Mac, not on a proof Mac. Set
+`P=<the proof's scratch directory>` first (see "Where the files go"). All steps
+are read-only on the archive; they only make files under `$P`. Put the newest Xcode `.xip` (and one older release
+if available) at `$P/Xcode_NEW.xip`, in an otherwise empty directory. Use `NODE=<node id>` style placeholders for
 anything host-specific; nothing here needs a farm host. No step runs as root, so no launchd harness is used here (the harness
 of MP-E8 is for the farm-side lane; see the pointer at the end).
 
@@ -235,7 +246,7 @@ Built code is cited as file:line in `crates/hostkeeper-hk/src/xcode_push/`. Desi
   The built code runs no `shasum` or `curl` (it hashes in Rust and uploads with `ureq`), so the design's "shasum and curl" is stale (P10).
 
 ```sh
-mkdir -p ~/hk-proof
+mkdir -p $P
 sw_vers; uname -sm
 ls -l /usr/sbin/pkgutil /usr/bin/xip /usr/bin/plutil /usr/bin/xar
 command -v xcodes && xcodes version
@@ -253,12 +264,12 @@ man xip | col -b | sed -n 1,60p
 ### MP-X2. Apple's signature, the positive case
 
 - Settles: [V] section 2.0 step 2 (and 2.4 "check Apple's signature").
-- Run by: the operator, at their Mac. Precondition: a genuine Apple `.xip` at `~/hk-proof/Xcode_NEW.xip`.
+- Run by: the operator, at their Mac. Precondition: a genuine Apple `.xip` at `$P/Xcode_NEW.xip`.
 - Built: argv `/usr/sbin/pkgutil --check-signature <path>`, stdin null (`signature.rs:116-127`). The verdict wants the line `Status: signed Apple Software`
   exactly (`signature.rs:27`), a last chain entry named `Apple Root CA` (`signature.rs:30`) and its SHA-256 fingerprint (`signature.rs:34`).
 
 ```sh
-cd ~/hk-proof && sw_vers > x2.txt
+cd $P && sw_vers > x2.txt
 /usr/sbin/pkgutil --check-signature Xcode_NEW.xip > x2-sig.txt 2> x2-sig.err; echo "exit=$?" >> x2.txt
 cat x2.txt x2-sig.txt x2-sig.err
 grep -n -E '^ *Status:' x2-sig.txt
@@ -280,11 +291,11 @@ openssl x509 -inform der -in AppleIncRootCertificate.cer -noout -fingerprint -sh
 ### MP-X3. Negative cases for the signature check
 
 - Settles: [V] section 2.0 step 2 ("anything else stops the push and uploads nothing"). Run by: the operator, at their Mac.
-- Precondition: MP-X2 done; free space of at least the archive's size in `~/hk-proof`.
+- Precondition: MP-X2 done; free space of at least the archive's size in `$P`.
 - Built: `signature.rs:verdict`; a non-zero exit becomes a stop through `finish()` (`mod.rs:98`).
 
 ```sh
-cd ~/hk-proof
+cd $P
 printf 'not an archive\n' > fake.xip
 /usr/sbin/pkgutil --check-signature fake.xip; echo "exit=$?"
 cp Xcode_NEW.xip corrupt.xip
@@ -299,7 +310,7 @@ ls /Library/Developer/CommandLineTools/Packages/*.pkg 2>/dev/null && /usr/sbin/p
   - if `corrupt.xip` exits 0 with `signed Apple Software` -> the signature does not cover the bytes; say so in section 2.0, and make the expansion (MP-X5) and the SHA-256 the coordinator recomputes the integrity check; the daemon's 2.4 check must rely on `xip --expand` exit 0, not on pkgutil alone.
   - if a developer-signed package ends at Apple Root CA but has another status -> confirms `verdict()` needs both status and chain; cite it in the design.
 - Expected (recalled, not checked): a damaged archive reports a checksum that did not verify (forum thread https://developer.apple.com/forums/thread/667468).
-- Cleanup by hand afterwards: `rm ~/hk-proof/fake.xip ~/hk-proof/corrupt.xip`.
+- Cleanup by hand afterwards: `rm $P/fake.xip $P/corrupt.xip`.
 
 ### MP-X4. Can the version and build be read without expanding?
 
@@ -307,7 +318,7 @@ ls /Library/Developer/CommandLineTools/Packages/*.pkg 2>/dev/null && /usr/sbin/p
 - Built: none. `archive.rs:155` (`release`) expands first, then reads the plists (MP-X5). The design's "xip lists it" has no built counterpart.
 
 ```sh
-cd ~/hk-proof
+cd $P
 /usr/bin/xip --list Xcode_NEW.xip > x4-list.txt 2>&1; echo "exit=$?"; head -5 x4-list.txt
 /usr/bin/xar -tf Xcode_NEW.xip 2>&1 | head -20
 /usr/bin/xar --dump-toc=toc.xml -f Xcode_NEW.xip; head -c 3000 toc.xml
@@ -321,7 +332,7 @@ mkdir -p meta && cd meta && /usr/bin/xar -xf ../Xcode_NEW.xip Metadata; file Met
   - if `Metadata` or the TOC carries the version -> use it only as a cheap advisory unless MP-X3 showed it is inside the signed region; `ProductBuildVersion` after expansion stays the authority; keep the order (signature first).
   - if only the file name carries it -> never trust it; say so in section 2.0 step 3.
 - Expected (a copy of `man xip` from an older macOS, not checked on macOS 26): only `--expand`. Expected (recalled, not checked): a `.xip` is a xar (https://developer.apple.com/forums/thread/133985) with `Metadata` and `Content` members.
-- Cleanup by hand: `rm -r ~/hk-proof/meta`.
+- Cleanup by hand: `rm -r $P/meta`.
 
 ### MP-X5. The built expansion and version read, exactly
 
@@ -331,7 +342,7 @@ mkdir -p meta && cd meta && /usr/bin/xar -xf ../Xcode_NEW.xip Metadata; file Met
   (`archive.rs:183-195`); then `/usr/bin/plutil -extract <key> raw -o - <file>` (`archive.rs:134-140`) for `CFBundleShortVersionString` in `Contents/Info.plist` (digits and dots only) and `ProductBuildVersion` in `Contents/version.plist`.
 
 ```sh
-cd ~/hk-proof && df -h . > x5.txt; ls -l Xcode_NEW.xip >> x5.txt; cat x5.txt
+cd $P && df -h . > x5.txt; ls -l Xcode_NEW.xip >> x5.txt; cat x5.txt
 mkdir .hk-xcode-push-expansion && cd .hk-xcode-push-expansion
 time /usr/bin/xip --expand "$HOME/hk-proof/Xcode_NEW.xip"; echo "exit=$?"
 ls -d *.app | wc -l
@@ -359,9 +370,9 @@ cd .. && rm -r .hk-xcode-push-expansion
 - Built: `archive.rs:56-60` (`xcodes download <version> --directory <dir>`); the filter at `archive.rs:71` keeps only `.xip`. Anything else stops with "left no .xip". The `aea`/`archiveutil` argv below are **design argv, not built**.
 
 ```sh
-cd ~/hk-proof && mkdir -p dl
+cd $P && mkdir -p dl
 xcodes list 2>&1 | head -15
-xcodes download NEW --directory ~/hk-proof/dl; echo "exit=$?"
+xcodes download NEW --directory $P/dl; echo "exit=$?"
 ls -l dl
 cd dl && for f in *; do echo "== $f"; file "$f"; head -c 16 "$f" | xxd; /usr/sbin/pkgutil --check-signature "$f" 2>&1 | head -8; done
 ls /usr/bin/archiveutil /usr/bin/aa /usr/bin/aea 2>&1
@@ -374,7 +385,7 @@ for f in *.aea; do [ -e "$f" ] && /usr/bin/aea id -i "$f"; done
   - if a `.aar` or `.aea` exists -> sections 2.0 steps 2-3 and 2.4 need that variant: new code in `archive.rs` (the download filter, the expansion command, a different signature check, the store's `<sha256>.xip` name in `docs/operations/xcode-releases.md`); copy the commands from this output, do not invent them.
   - if `xcodes` calls a helper tool for such archives -> name that dependency in `docs/operations/xcode-releases.md`.
 - Expected (recalled, not checked): only `.xip` for Xcode; `man aa` and `man aea` exist on macOS 12 and later (https://developer.apple.com/documentation/applearchive).
-- Cleanup by hand: `rm -r ~/hk-proof/dl`, then `rm` the remaining files of `~/hk-proof`.
+- Cleanup by hand: `rm -r $P/dl`, then `rm` the remaining files of `$P`.
 
 ### MP-X7. Pointer: the same read as root with nobody logged in
 
@@ -384,11 +395,11 @@ Not a step here. Whether `pkgutil --check-signature` and `xip --expand` work as 
 
 None of the install is built: `crates/hostkeeper-daemon/src/maintenance_xcode.rs` is only the collector. The argv below are
 "design argv, not built" unless a step cites file:line. Every step runs on one drained proof Mac (Apple silicon, macOS 26.x),
-in a group of its own, with nobody logged in, and has a root shell. Each launchd job uses the harness of MP-E8 with the command
-`/bin/sh /var/root/hk-proof/<name>.sh`, and each script starts with `stat -f %Su /dev/console; sw_vers` so the result shows
+in a group of its own, with nobody logged in, and has a root shell. Each launchd job uses the harness of MP-E8: the lines shown under `# job <name>` are its `<command>`, written into the
+plist as they are (no script file is written), after `stat -f %Su /dev/console; sw_vers` so the result shows
 nobody was logged in. Needed: 120 GB free on the volume of `/Applications`, and one real Apple Xcode `.xip` at
 `/var/root/hk-proof/Xcode_VER.xip` (mode 0600, as Apple ships it, never repackaged). No Apple Account is used on the Mac.
-Copy it there from the operator's Mac (section 2), for example `scp ~/hk-proof/Xcode_NEW.xip <admin>@<proof Mac>:` and then, as root, `mv` it into `/var/root/hk-proof/Xcode_VER.xip` and `chmod 600` it; check its `shasum -a 256` on both sides.
+Copy it there from the operator's Mac (section 2), for example `scp $P/Xcode_NEW.xip <admin>@<proof Mac>:` and then, as root, `mv` it into `/var/root/hk-proof/Xcode_VER.xip` and `chmod 600` it; check its `shasum -a 256` on both sides.
 
 ### MP-I1. Expand the archive from launchd; refuse a tampered one
 
@@ -402,12 +413,12 @@ mkdir -p /Applications/.hostkeeper-staging/good /Applications/.hostkeeper-stagin
 cp Xcode_VER.xip Xcode_VER.tampered.xip
 printf '\377' | dd of=Xcode_VER.tampered.xip bs=1 seek=$(( $(stat -f %z Xcode_VER.xip) / 2 )) conv=notrunc
 shasum -a 256 Xcode_VER.xip Xcode_VER.tampered.xip > i1-sha.txt
-# job i1-good.sh, after the console line:
+# job i1-good, after the console line:
 cd /Applications/.hostkeeper-staging/good && /usr/bin/time -l /usr/bin/xip --expand /var/root/hk-proof/Xcode_VER.xip
 plutil -extract CFBundleShortVersionString raw -o - Xcode*.app/Contents/Info.plist
 plutil -extract ProductBuildVersion raw -o - Xcode*.app/Contents/version.plist
 /usr/bin/codesign --verify --deep --strict --verbose=2 Xcode*.app; echo "codesign exit=$?"
-# job i1-bad.sh: the same xip line with cwd .../bad and Xcode_VER.tampered.xip, then ls -laR .../bad
+# job i1-bad: the same xip line with cwd .../bad and Xcode_VER.tampered.xip, then ls -laR .../bad
 /usr/bin/xip --help 2>&1 | head -30     # root shell: is there a switch that skips the signature
 ```
 
@@ -438,7 +449,7 @@ Precondition: MP-I1 done; an Xcode in the encrypted form. If none exists, run on
 ls -l /usr/bin/archiveutil; /usr/bin/archiveutil extractXcodeAEA 2>&1 | head -10    # usage text
 head -c 4 /var/root/hk-proof/Xcode_AEA.aea | xxd     # expected (recalled, not checked): xip "xar!", aea "AA01"
 mkdir -p /Applications/.hostkeeper-staging/aea
-# job i2.sh, after the console line (run it online, then again with the network off):
+# job i2, after the console line (run it online, then again with the network off):
 cd /Applications/.hostkeeper-staging/aea && /usr/bin/archiveutil extractXcodeAEA /var/root/hk-proof/Xcode_AEA.aea
 /usr/bin/codesign --verify --deep --strict --verbose=2 Xcode*.app; echo "codesign exit=$?"
 ```
@@ -473,11 +484,11 @@ find /Library/Developer /Library/Apple /Library/Frameworks /Library/PrivilegedHe
 mv /Applications/.hostkeeper-staging/good/Xcode*.app /Applications/Xcode-VER.app
 D=/Applications/Xcode-VER.app/Contents/Developer
 $D/usr/bin/xcodebuild -license accept; echo "license exit=$?"
-DEVELOPER_DIR=$D /usr/bin/xcodebuild -checkFirstLaunchStatus; echo "status exit=$?"
-# job i3.sh, after the console line:
+"$D/usr/bin/xcodebuild" -checkFirstLaunchStatus; echo "status exit=$?"
+# job i3, after the console line:
 D=/Applications/Xcode-VER.app/Contents/Developer; date
 $D/usr/bin/xcodebuild -runFirstLaunch; echo "runFirstLaunch exit=$?"; date
-DEVELOPER_DIR=$D /usr/bin/xcodebuild -checkFirstLaunchStatus; echo "status exit=$?"
+"$D/usr/bin/xcodebuild" -checkFirstLaunchStatus; echo "status exit=$?"
 # after the job:
 pkgutil --pkgs | sort > i3-pkgs-after.txt; diff i3-pkgs-before.txt i3-pkgs-after.txt | tee i3-pkgs.diff
 find /Library/Developer /Library/Apple /Library/Frameworks /Library/PrivilegedHelperTools /Library/LaunchDaemons -maxdepth 2 2>/dev/null | sort | diff i3-find-before.txt -
@@ -513,7 +524,7 @@ $D/usr/bin/xcodebuild -exportPlatform 2>&1 | head -5; $D/usr/bin/xcodebuild -imp
 mkdir -p /var/root/hk-proof/platforms && cd /var/root/hk-proof/platforms
 $D/usr/bin/xcodebuild -downloadPlatform iOS -exportPath /var/root/hk-proof/platforms > ../i4-export.txt 2>&1; echo "exit=$?" >> ../i4-export.txt
 shasum -a 256 /var/root/hk-proof/platforms/* > ../i4-sha.txt; xcrun simctl runtime list > ../i4-runtimes-before.txt 2>&1
-# job i4-import.sh, after the console line (network off as in MP-I2; NAME is the file the export wrote):
+# job i4-import, after the console line (network off as in MP-I2; NAME is the file the export wrote):
 $D/usr/bin/xcodebuild -importPlatform /var/root/hk-proof/platforms/NAME.dmg; echo "exit=$?"; xcrun simctl runtime list
 ```
 
@@ -546,31 +557,33 @@ lines and the builds in its next hello after each step.
 
 ```sh
 cd /var/root/hk-proof
-cat > probe.sh <<'PROBE'
-echo "### $(date)"; ls -d /Applications/Xcode*.app /Applications/.hostkeeper* 2>&1
-for A in /Applications/Xcode*.app; do echo "== $A"
-  plutil -extract CFBundleShortVersionString raw -o - "$A/Contents/version.plist"; echo
-  plutil -extract ProductBuildVersion raw -o - "$A/Contents/version.plist"; echo; done
-/usr/bin/xcode-select -p; echo "select -p exit=$?"; /usr/bin/xcodebuild -version; echo "version exit=$?"
-PROBE
-chmod 700 probe.sh; ./probe.sh > i5-0-start.txt 2>&1
+# the probe: a function of this root shell, written to no file
+probe() {
+  echo "### $(date)"; ls -d /Applications/Xcode*.app /Applications/.hostkeeper* 2>&1
+  for A in /Applications/Xcode*.app; do echo "== $A"
+    plutil -extract CFBundleShortVersionString raw -o - "$A/Contents/version.plist"; echo
+    plutil -extract ProductBuildVersion raw -o - "$A/Contents/version.plist"; echo; done
+  /usr/bin/xcode-select -p; echo "select -p exit=$?"; /usr/bin/xcodebuild -version; echo "version exit=$?"
+}
+probe > i5-0-start.txt 2>&1
 cur=$(/usr/bin/xcode-select -p); /usr/bin/xcode-select --reset; /usr/bin/xcode-select -p; echo "none set: -p exit=$?"
 /usr/bin/xcode-select -s "$cur"; /usr/bin/xcode-select -p
-./probe.sh > i5-1-before-install.txt 2>&1
+probe > i5-1-before-install.txt 2>&1
 mv /Applications/.hostkeeper-staging/good2/Xcode*.app /Applications/Xcode-VER2.app
-./probe.sh > i5-2-after-install.txt 2>&1; diff i5-1-before-install.txt i5-2-after-install.txt
-# job i5-swap.sh, after the console line:
-cd /var/root/hk-proof; ./probe.sh > i5-3-before-swap.txt 2>&1
+probe > i5-2-after-install.txt 2>&1; diff i5-1-before-install.txt i5-2-after-install.txt
+probe > i5-3-before-swap.txt 2>&1
+# job i5-swap, after the console line:
 /usr/bin/xcode-select -s /Applications/Xcode-VER2.app; echo "app exit=$?"; /usr/bin/xcode-select -p
 /usr/bin/xcode-select -s /Applications/Xcode-VER.app/Contents/Developer; echo "dev exit=$?"; /usr/bin/xcode-select -p
-./probe.sh > i5-4-after-swap.txt 2>&1
+# after the job, in the root shell:
+probe > i5-4-after-swap.txt 2>&1
 # remove the one not selected (by hand; the daemon will use the scratch-removal tool)
-./probe.sh > i5-5-before-remove.txt 2>&1; lsof +D /Applications/Xcode-VER2.app | head -5
-time /bin/rm -R /Applications/Xcode-VER2.app; ./probe.sh > i5-6-after-remove.txt 2>&1
+probe > i5-5-before-remove.txt 2>&1; lsof +D /Applications/Xcode-VER2.app | head -5
+time /bin/rm -R /Applications/Xcode-VER2.app; probe > i5-6-after-remove.txt 2>&1
 # negative: the selected one goes away, then comes back
-mv /Applications/Xcode-VER.app /Applications/Xcode-VER.app.moved; ./probe.sh > i5-7-selected-gone.txt 2>&1
+mv /Applications/Xcode-VER.app /Applications/Xcode-VER.app.moved; probe > i5-7-selected-gone.txt 2>&1
 mv /Applications/Xcode-VER.app.moved /Applications/Xcode-VER.app
-/usr/bin/xcode-select -s /Applications/Xcode-VER.app; ./probe.sh > i5-8-restored.txt 2>&1
+/usr/bin/xcode-select -s /Applications/Xcode-VER.app; probe > i5-8-restored.txt 2>&1
 ```
 
 Design argv, not built. Expected (recalled, not checked): `xcode-select -s <path>` sets and `--reset` clears the developer
@@ -610,8 +623,8 @@ Settles section 5.5 (the built reads, [V] in `maintenance_account.rs` line 6 and
 ```sh
 umask 077; cd /var/root/hk-proof
 printf 'admin name: '; IFS= read -r A; printf '%s\n' "$A" > admin-name; unset A
-printf 'hkproof password (throwaway): '; IFS= read -rs P; echo; printf '%s\n' "$P" > pw-proof; unset P
-printf 'admin password: '; IFS= read -rs P; echo; printf '%s\n' "$P" > pw-admin; unset P
+printf 'hkproof password (throwaway): '; IFS= read -rs PW; echo; printf '%s\n' "$PW" > pw-proof; unset PW
+printf 'admin password: '; IFS= read -rs PW; echo; printf '%s\n' "$PW" > pw-admin; unset PW
 cat pw-proof pw-admin > in-proof-admin; cat pw-admin pw-proof > in-admin-proof
 A=$(cat admin-name)
 for who in hkproof "$A"; do
@@ -790,9 +803,9 @@ Decides:
 Settles nothing; undoes A2 to A8. Root shell. Needs the results copied off the Mac. **Irreversible**: deleting the account and its home, and the secret files, cannot be undone; it is the cleanup of the proof Mac only. Turn FileVault off only if A1 found it off. Design argv, not built.
 
 ```sh
-cd /var/root/hk-proof; umask 077; A=$(cat admin-name); P=$(cat pw-admin)
+cd /var/root/hk-proof; umask 077; A=$(cat admin-name); PW=$(cat pw-admin)
 /usr/bin/fdesetup remove -user hkproof; echo "remove rc=$?"
-printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>Username</key><string>%s</string><key>Password</key><string>%s</string></dict></plist>\n' "$A" "$P" > fv-off.plist; unset P
+printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>Username</key><string>%s</string><key>Password</key><string>%s</string></dict></plist>\n' "$A" "$PW" > fv-off.plist; unset PW
 # harness of MP-E8, stdin fv-off.plist
 CMD='stat -f %Su /dev/console; sw_vers; /usr/bin/fdesetup disable -inputplist; echo rc=$?'
 /usr/bin/fdesetup status
@@ -819,7 +832,7 @@ Built pieces used: the account file (`crates/hostkeeper-bootstrap/src/update_acc
 1. MP-U1 baseline, MP-U2 download, MP-U3 minor update with FileVault off.
 2. Turn FileVault on (MP-A7), with the update account a FileVault user.
 3. MP-U4 and MP-U5 on later minor updates. Each needs a fresh minor update. If Apple has shipped only one, wait for the next, or use a second proof Mac held on an older minor.
-4. Major last: MP-U6 fetch, then MP-U7 (FileVault off) or MP-U8 (FileVault on). They are alternatives on one Mac. Do both only with two Macs on an older major. Before any major, copy `baseline.txt`, `sw_vers` and `fdesetup list` off the Mac (`scp` to `~/hk-proof` on the operator's Mac), as the old state is gone after.
+4. Major last: MP-U6 fetch, then MP-U7 (FileVault off) or MP-U8 (FileVault on). They are alternatives on one Mac. Do both only with two Macs on an older major. Before any major, copy `baseline.txt`, `sw_vers` and `fdesetup list` off the Mac (`scp` to `$P` on the operator's Mac), as the old state is gone after.
 5. MP-U9 after each install, with no one touching the Mac.
 
 Every job below uses the harness of MP-E8 (one job per step, label `hk-proof-<step>` such as `hk-proof-u3`, `ProgramArguments` `/bin/sh -c '<command>'`, plist in `/var/root/hk-proof`, loaded with `launchctl bootstrap system <path>`, removed with `launchctl bootout system/<label>`). The harness records `stat -f %Su /dev/console` and `sw_vers` inside the job; a run with a console owner other than `root` is not the case the design claims, and the record says so. The `/bin/sh -c` wrapper is the harness only; the daemon would run the argv directly. Set the harness's `StandardInPath` as each step says. After each run copy its output files to `$D/<step>.out` and `$D/<step>.err`, then run `grep -l -F -f "$D/pw.stdin" "$D"/*.out "$D"/*.err` and record that no file is listed (a hit means the password was echoed: delete that file with `rm -P`). Never print a password, never `env`-dump in a step that holds one. Plists stay in `/var/root/hk-proof`, never `/Library/LaunchDaemons`, so a job with `RunAtLoad` cannot run again after the restart. A job whose command restarts the Mac (MP-U3, MP-U4 step 2, MP-U5, MP-U7, MP-U8) also starts, after the console line, with `/bin/rm -P <its own plist>`, so nothing is left for a boot to load.
@@ -1070,30 +1083,28 @@ on the proof Mac only reads. Output goes to `/var/root/hk-proof/mdm` (root, 0700
 ```sh
 mkdir -p /var/root/hk-proof/mdm && chmod 700 /var/root/hk-proof/mdm && cd /var/root/hk-proof/mdm
 { sw_vers; softwareupdate --version 2>&1 | head -1; date -u; } > baseline-env.txt 2>&1
-cat > snap.sh <<'EOT'
-#!/bin/sh
-# usage: snap.sh LABEL  (read-only; writes /var/root/hk-proof/mdm/LABEL/*)
-set -u
-D=/var/root/hk-proof/mdm/$1; mkdir -p "$D"
-{ date -u; sw_vers; stat -f %Su /dev/console; } > "$D/when.txt" 2>&1
-ls -laeO@ "/Library/Managed Preferences" > "$D/mp-ls.txt" 2>&1
-for f in com.apple.applicationaccess com.apple.SoftwareUpdate; do
-  p="/Library/Managed Preferences/$f.plist"
-  if [ -e "$p" ]; then plutil -p "$p" > "$D/$f.txt" 2>&1; file "$p" > "$D/$f.type.txt"; else echo ABSENT > "$D/$f.txt"; fi
-done
-DDM=/var/db/softwareupdate/SoftwareUpdateDDMStatePersistence.plist
-ls -la /var/db/softwareupdate > "$D/swu-dir.txt" 2>&1
-if [ -e "$DDM" ]; then file "$DDM" > "$D/ddm.type.txt"; plutil -p "$DDM" > "$D/ddm.txt" 2>&1; else echo ABSENT > "$D/ddm.txt"; fi
-profiles status -type enrollment > "$D/profiles-status.txt" 2>&1
-profiles show -type configuration > "$D/profiles-show-config.txt" 2>&1
-profiles show -output stdout-xml > "$D/profiles-show-xml.txt" 2>&1
-profiles list -output stdout-xml > "$D/profiles-list-xml.txt" 2>&1
-ls -laR /var/db/ConfigurationProfiles > "$D/cfgprofiles-ls.txt" 2>&1
-defaults read /Library/Preferences/com.apple.SoftwareUpdate > "$D/defaults-swu.txt" 2>&1
-log show --last 15m --style compact --predicate 'process == "remotemanagementd" OR process == "softwareupdated" OR process == "mdmclient"' > "$D/log.txt" 2>&1
-softwareupdate --list > "$D/swu-list.txt" 2>&1; echo "exit=$?" >> "$D/swu-list.txt"
-EOT
-chmod 700 snap.sh && sh -n snap.sh && ./snap.sh 00-baseline
+# the snapshot: a function of this root shell, written to no file; `snap LABEL` reads only and writes /var/root/hk-proof/mdm/LABEL/*
+snap() {
+  local D=/var/root/hk-proof/mdm/$1; mkdir -p "$D"
+  { date -u; sw_vers; stat -f %Su /dev/console; } > "$D/when.txt" 2>&1
+  ls -laeO@ "/Library/Managed Preferences" > "$D/mp-ls.txt" 2>&1
+  for f in com.apple.applicationaccess com.apple.SoftwareUpdate; do
+    p="/Library/Managed Preferences/$f.plist"
+    if [ -e "$p" ]; then plutil -p "$p" > "$D/$f.txt" 2>&1; file "$p" > "$D/$f.type.txt"; else echo ABSENT > "$D/$f.txt"; fi
+  done
+  DDM=/var/db/softwareupdate/SoftwareUpdateDDMStatePersistence.plist
+  ls -la /var/db/softwareupdate > "$D/swu-dir.txt" 2>&1
+  if [ -e "$DDM" ]; then file "$DDM" > "$D/ddm.type.txt"; plutil -p "$DDM" > "$D/ddm.txt" 2>&1; else echo ABSENT > "$D/ddm.txt"; fi
+  profiles status -type enrollment > "$D/profiles-status.txt" 2>&1
+  profiles show -type configuration > "$D/profiles-show-config.txt" 2>&1
+  profiles show -output stdout-xml > "$D/profiles-show-xml.txt" 2>&1
+  profiles list -output stdout-xml > "$D/profiles-list-xml.txt" 2>&1
+  ls -laR /var/db/ConfigurationProfiles > "$D/cfgprofiles-ls.txt" 2>&1
+  defaults read /Library/Preferences/com.apple.SoftwareUpdate > "$D/defaults-swu.txt" 2>&1
+  log show --last 15m --style compact --predicate 'process == "remotemanagementd" OR process == "softwareupdated" OR process == "mdmclient"' > "$D/log.txt" 2>&1
+  softwareupdate --list > "$D/swu-list.txt" 2>&1; echo "exit=$?" >> "$D/swu-list.txt"
+}
+snap 00-baseline
 ```
 
 - Record: all of `00-baseline` and `baseline-env.txt` (the `profiles` and `log` files can hold the management server's address and enrolment identifiers: keep every snapshot on the Mac, and copy one off only after the owner has removed those lines): whether the DDM file and either Managed Preferences file exist on a clean
@@ -1112,10 +1123,10 @@ chmod 700 snap.sh && sh -n snap.sh && ./snap.sh 00-baseline
 ```sh
 cd /var/root/hk-proof/mdm
 # wait for the Mac's own check-in (no `profiles renew`: the root shell only reads), then:
-./snap.sh 10-restrictions-A-set
-P="/Library/Managed Preferences/com.apple.applicationaccess.plist"
+snap 10-restrictions-A-set
+PL="/Library/Managed Preferences/com.apple.applicationaccess.plist"
 for k in forceDelayedSoftwareUpdates forceDelayedMajorSoftwareUpdates forceDelayedAppSoftwareUpdates enforcedSoftwareUpdateDelay enforcedSoftwareUpdateMajorOSDeferredInstallDelay enforcedSoftwareUpdateMinorOSDeferredInstallDelay enforcedSoftwareUpdateNonOSDeferredInstallDelay; do
-  printf '%s: ' "$k"; plutil -type "$k" "$P" 2>&1; plutil -extract "$k" raw "$P" 2>&1
+  printf '%s: ' "$k"; plutil -type "$k" "$PL" 2>&1; plutil -extract "$k" raw "$PL" 2>&1
 done
 softwareupdate --list 2>&1 | tee swu-list-under-deferral.txt   # argv as maintenance_macos.rs:31
 ```
@@ -1127,7 +1138,7 @@ softwareupdate --list 2>&1 | tee swu-list-under-deferral.txt   # argv as mainten
   - if the file appears only under a per-user subdirectory -> `managed()` reads the top level only; extend `maintenance_mdm.rs` or accept the gap in 5.8.
   - if the keys never arrive or the console cannot set them -> mark "not reproducible" in 5.8; keep the read.
   - if a deferral hides nothing from `softwareupdate --list` -> reword the 5.8 sentence that any period hides updates.
-- Expected (recalled, not checked): the keys are the restrictions payload's, deprecated in macOS 26 in favour of the software-update settings declaration, with a 90-day limit. Reversible: the owner removes the setting; confirm with `snap.sh` that the keys are gone before the next step.
+- Expected (recalled, not checked): the keys are the restrictions payload's, deprecated in macOS 26 in favour of the software-update settings declaration, with a 90-day limit. Reversible: the owner removes the setting; confirm with `snap` that the keys are gone before the next step.
 
 ### MP-M3. com.apple.SoftwareUpdate keys (5.8)
 
@@ -1136,10 +1147,10 @@ softwareupdate --list 2>&1 | tee swu-list-under-deferral.txt   # argv as mainten
 
 ```sh
 cd /var/root/hk-proof/mdm
-sleep 60; ./snap.sh 20-swu-A-set
-P="/Library/Managed Preferences/com.apple.SoftwareUpdate.plist"
+sleep 60; snap 20-swu-A-set
+PL="/Library/Managed Preferences/com.apple.SoftwareUpdate.plist"
 for k in CatalogURL AllowPreReleaseInstallation AutomaticallyInstallMacOSUpdates restrict-software-update-require-admin-to-install; do
-  printf '%s: ' "$k"; plutil -type "$k" "$P" 2>&1; plutil -extract "$k" raw "$P" 2>&1
+  printf '%s: ' "$k"; plutil -type "$k" "$PL" 2>&1; plutil -extract "$k" raw "$PL" 2>&1
 done
 defaults read /Library/Preferences/com.apple.SoftwareUpdate > swu-system-prefs-now.txt 2>&1
 softwareupdate --list 2>&1 | tee swu-list-now.txt
@@ -1160,7 +1171,7 @@ softwareupdate --list 2>&1 | tee swu-list-now.txt
 
 ```sh
 cd /var/root/hk-proof/mdm
-sleep 90; ./snap.sh 30-ddm-E-set
+sleep 90; snap 30-ddm-E-set
 diff 00-baseline/ddm.txt 30-ddm-E-set/ddm.txt
 grep -n 'TargetOSVersion\|TargetBuildVersion\|TargetLocalDateTime\|DetailsURL\|SUCorePersistedStatePolicyFields\|SUCoreDDMDeclarationGlobalSettings' 30-ddm-E-set/ddm.txt | head -50
 cat 30-ddm-E-set/ddm.type.txt
@@ -1177,12 +1188,12 @@ ls -la /var/db/RemoteManagement* /var/db/softwareupdate 2>&1 | head -60
   - if the file is root-only -> fine for a root daemon; confirm with `ps` on the real daemon.
   - if keys show only as pending, not applied -> record which; treat a pending declaration as a conflict in "no macOS order while one stands".
 - Expected (recalled, not checked): the enforcement declaration takes a target version, a local date-time deadline and an optional details URL, on macOS 14 and later, supervised only; the settings declaration holds deferrals, automatic actions and beta. Apple does not say where macOS keeps them.
-- Reversible, but a left-over target can force an install and restart: remove E before ending and confirm with `snap.sh` that the listing and the file show it gone.
+- Reversible, but a left-over target can force an install and restart: remove E before ending and confirm with `snap` that the listing and the file show it gone.
 
 ### MP-M5. Other read routes (5.8)
 
 - Settles: 5.8, that `profiles show -type configuration`, `profiles status`, `profiles show -output stdout-xml`, `/var/db/ConfigurationProfiles` and `log show` can show the same settings if the DDM file proves wrong. Design argv, not built: the daemon runs no `profiles` command.
-- Runs: a root shell. Precondition: MP-M2 to MP-M4 done; `snap.sh` already ran these routes at every step. This step only reads.
+- Runs: a root shell. Precondition: MP-M2 to MP-M4 done; `snap` already ran these routes at every step. This step only reads.
 
 ```sh
 cd /var/root/hk-proof/mdm
@@ -1204,29 +1215,28 @@ grep -rIl 'TargetOSVersion\|forceDelayedSoftwareUpdates' /var/db/ConfigurationPr
 
 - Settles: 5.8, that the daemon (root under launchd, no login) sees the same files as a root shell (`collect()`, `maintenance_mdm.rs:126-148`; `HostPlists` opens with `std::fs`).
 - Runs: a root shell, over ssh, with the Mac at the login window (note the FileVault state). Precondition: one setting from MP-M4 step E is set again with the owner. No password is used.
-- Uses the harness of MP-E8: job `hk-proof-m6`, command below, plist under `/var/root/hk-proof`, loaded with `launchctl bootstrap system <path>` and removed with `launchctl bootout system/<label>`.
+- Needs: the Mac and the coordinator on a release with `maintenance-v1` (design 10.1); until then this step cannot be shown, and the record says so.
+
+The launchd view is the daemon's own: its Rust collector (`maintenance_mdm.rs`, root under launchd) reports what it read in the heartbeat
+once the Mac runs a release with `maintenance-v1`, so no proof job repeats the reads.
 
 ```sh
-# command for the harness of MP-E8
-/usr/bin/stat -f %Su /dev/console; /usr/bin/sw_vers; /usr/bin/id; /bin/sh /var/root/hk-proof/mdm/snap.sh 50-launchd
+# in the root shell, with the setting still set:
+cd /var/root/hk-proof/mdm && snap 50-root-shell
+# on the operator side (section 1's variables), after the daemon's next hourly look or a restart of the daemon:
+hkc hosts get --node-id "$NODE" | jq '(.host // .) | .heartbeat.maintenance | {mdmConflicts: .mac.mdmConflicts, lookFailed: .lookFailed}'
 ```
 
-```sh
-cd /var/root/hk-proof/mdm
-diff -r 30-ddm-E-set 50-launchd | head -60       # ignore times
-launchctl list | grep -i hostkeeper; ls /Library/LaunchDaemons | grep -i hostkeeper
-```
-
-- Record: the job's output and error files, the console owner (`root` shows nobody is logged in), the diff apart from times, and the real daemon's UID.
+- Record: the console owner when the daemon looked (`root` shows nobody is logged in), the daemon's `mdmConflicts` and `lookFailed` against the root shell's `50-root-shell` files.
 - Decides:
-  - if the two snapshots match -> no change.
-  - if a file differs or is unreadable under launchd (for example a privacy block) -> the daemon needs another route; add it to 5.8 and change `HostPlists` in `maintenance_plist.rs`.
-- Expected (recalled, not checked): a system job runs as root with the same file view. Reversible: `bootout` removes the job; delete its plist.
+  - if they match -> no change.
+  - if the daemon reports `look_failed` for a file the root shell reads (for example a privacy block on `/var/db/softwareupdate`) -> the daemon needs another route; add it to 5.8 and change `HostPlists` in `maintenance_plist.rs`.
+- Expected (recalled, not checked): a system job runs as root with the same file view. Read-only.
 
 ### MP-M7. Is the software-update Configuration the enforcement declaration (5.5.1) [V]
 
 - Settles: 5.5.1 (design section 5.5.1, "is not shown [V]"): whether Apple Business's SOFTWARE_UPDATE Configuration is `com.apple.configuration.softwareupdate.enforcement.specific`. Not built: the `apple-business` value of `--macos-update-via` is refused until the API call exists (5.5.2); the daemon reads only the trace (`maintenance_mdm.rs:55-56,127-130`).
-- Runs: the owner and a root shell, reusing MP-M4 step E (far-off deadline), then D, AA and B. The owner also saves a screenshot of the console form and, on the operator's own Mac, reads the Configuration by the API with a GET only; the API key sits in a 0600 file in `~/hk-proof`, passed with `curl -H @file`, never on a command line, and removed with `rm -P` afterwards.
+- Runs: the owner and a root shell, reusing MP-M4 step E (far-off deadline), then D, AA and B. The owner also saves a screenshot of the console form and, on the operator's own Mac, reads the Configuration by the API with a GET only; the API key sits in a 0600 file in `$P`, passed with `curl -H @file`, never on a command line, and removed with `rm -P` afterwards.
 
 ```sh
 cd /var/root/hk-proof/mdm
@@ -1242,7 +1252,7 @@ defaults read /Library/Preferences/com.apple.SoftwareUpdate 2>&1 | head -40
   - if it shows nothing or another key set -> rewrite 5.5.1 (lines 506-509); if the declaration is not `enforcement.specific`, drop `ENFORCED` and `TARGETS` (`maintenance_mdm.rs:55-56,164`) as the detector, and the Blueprint list in Apple Business becomes the only check.
   - if the Configuration installs at its deadline regardless of drain -> confirms the reason for 5.8; no code change.
 - Expected (recalled, not checked): the declaration is for macOS 14 and later, supervised; whether Apple Business's Configuration maps one to one onto it is not published, and the design's reading of the API reference says it cannot be created by the API.
-- Reversible: the owner removes the Configuration and confirms with `snap.sh` that the declaration is gone. A deadline in the past or near would force an install and restart, so keep it far out and record the time of removal.
+- Reversible: the owner removes the Configuration and confirms with `snap` that the declaration is gone. A deadline in the past or near would force an install and restart, so keep it far out and record the time of removal.
 
 ## 7. Put the Mac back
 
@@ -1255,9 +1265,9 @@ launchctl print system | grep -c 'hk-proof'   # must print 0
 # remove proof accounts: sysadminctl -deleteUser hkproof (admin password at the prompt)
 # if MP-U1 wrote the update-account file (it names hkproof), remove it: rm -P '/Library/Application Support/hostkeeper/update-account'
 # copy the *.txt, *.out, *.err files off the Mac, then remove them one by one with rm -P
-. ~/hk-proof/env.sh; NODE=<node id>
+# the preamble of MP-E1
 hkc host-groups move --node-id "$NODE" --host-group <original group> --reason "Mac proof finished: back in its group"
-hkc hosts get --node-id "$NODE" > ~/hk-proof/get-after.json
+hkc hosts get --node-id "$NODE" > $P/get-after.json
 hkc host-groups remove --host-group mac-proof --reason "Mac proof finished: group not needed"
 ```
 Record: after against `get-before.json` (group, operatorKeys digest, services, macOS version, FileVault, Xcodes, due); no `hk-proof` job; the scheduler's owner confirms leases are taken again and the cordon list is empty; the three coordinator files no longer name `mac-proof` (deploy owner reverses MP-E2).
