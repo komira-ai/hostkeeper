@@ -7,8 +7,8 @@
 // a host's step is what its daemon's run record says. The rest of the package, `Enrollment` and
 // `EnrollmentRefusal` (enrollment.proto) and `Audit` and `AuditRefusal` among it, is
 // operator.proto, which imports this file publicly; this file is the same package and API, kept
-// apart so that each file stays short. No coordinator of this release serves `Maintenance`: each of
-// its calls answers `UNIMPLEMENTED`; these are the shapes the release that runs maintenance speaks.
+// apart so that each file stays short. A coordinator of this release serves `Schedule`, `List`,
+// `Get` and `Cancel`; `RetryHost` and `PutBack` answer `UNIMPLEMENTED` until their handlers land.
 //
 // Served by: the coordinator, on its control listener, as operator.proto says.
 //
@@ -40,9 +40,10 @@ import "hostkeeper/agent/v1/maintenance.proto";
 // `AuditEntry`, which each call that changes something answers.
 import "hostkeeper/operator/v1/entry.proto";
 
-// The maintenance runs. Described and not yet served: every call answers `UNIMPLEMENTED` until
-// its handler lands. Each call that changes something takes a reason and answers the audit
-// entry it wrote, under the caller's name, with the caller's reason followed by `run <id>`:
+// The maintenance runs. `Schedule`, `List`, `Get` and `Cancel` are served; `RetryHost` and
+// `PutBack` answer `UNIMPLEMENTED` until their handlers land. Each call that changes something
+// takes a reason and answers the audit entry it wrote, under the caller's name, with the
+// caller's reason followed by `run <id>`:
 // `maintenance_schedule` (with the host group as the entry's `host_group` when the run names
 // one), `maintenance_cancel`, `maintenance_retry_host` and `maintenance_put_back` (each with the
 // host as the entry's `node_id`). `List`, `Get` and a `Schedule` without `confirm` change nothing
@@ -86,8 +87,9 @@ enum MaintenanceRefusal {
   // INVALID_ARGUMENT: a field breaks its rule: a host id, a host group's name, a run id, a reason
   // (missing from a call that changes something, over 256 bytes once trimmed, or with a control
   // character), a kind unspecified or named twice, both or neither of `host_ids` and `host_group`,
-  // more than 32 host ids or one twice, a batch of 0, a window start without an end, or an end not
-  // after its start; or the request is over its size.
+  // more than 32 host ids or one twice, a batch of 0 or above 10000, a window start without an
+  // end, an end not after its start, or an end or a drain deadline above 9223372036854775807
+  // seconds; or the request is over its size.
   MAINTENANCE_REFUSAL_INVALID_REQUEST = 3;
   // NOT_FOUND: `Schedule` names a host group the coordinator does not hold.
   MAINTENANCE_REFUSAL_UNKNOWN_GROUP = 4;

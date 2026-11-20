@@ -39,6 +39,7 @@ mod groups;
 mod instance;
 mod layout;
 pub(crate) mod login_rows;
+mod maintenance_rows;
 pub(crate) mod migrate;
 pub(crate) mod parts;
 pub(crate) mod periodic;
