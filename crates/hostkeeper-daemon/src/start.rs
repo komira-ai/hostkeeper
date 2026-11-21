@@ -5,7 +5,8 @@
 //! file); take the exclusive lock on `<state-dir>/lock`, held for the daemon's life (a second
 //! daemon on the same state directory gets [`StartError::Locked`]); remove the registration
 //! socket kbf's agent may have left ([`Settings::kbf_run_dir`]), before any unit is touched;
-//! [`settle_self_update`]; the `activate` of hostkeeper's own package that its new binary owes,
+//! close the package directories an earlier release left open to other users
+//! ([`crate::package_dirs`]), before anything is staged; [`settle_self_update`]; the `activate` of hostkeeper's own package that its new binary owes,
 //! retried every minute by a thread of its own while it defers, and the adoption of the package
 //! the host was set up with ([`crate::own_package`]); [`remove_dangling_unit_links`];
 //! [`before_records`], [`boot_pass`] and
@@ -300,6 +301,7 @@ pub fn startup_notifying(
     let daemon = Arc::new(
         Daemon::new(config, dirs, ports, own_version).keeping_versions(settings.keep_versions),
     );
+    report.closed_package_dirs = crate::package_dirs::close(daemon.ctx());
     daemon.clear_policy_rc_d(&mut report);
     settle_self_update(&daemon, &mut report);
     activate_own_package(&daemon, &mut report);

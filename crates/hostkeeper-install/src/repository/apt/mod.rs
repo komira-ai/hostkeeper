@@ -14,10 +14,15 @@
 //! The two runs that run package scripts, the install and the purge, are given the environment
 //! of `scripts`: no question asked, and needrestart's apt hook suspended, so that no hook of
 //! the package manager restarts a service while the update moves it (the update starts and stops
-//! the service's units itself, in its own order). The download writes into the archives
-//! directory, which is first given the owner, group and mode apt gave its own download directory,
-//! the lists' `partial/` (`sandbox_archives`): apt run as root downloads as its sandbox user
-//! (`_apt`) only into a directory that user can write, and otherwise downloads as root.
+//! the service's units itself, in its own order).
+//!
+//! What a run keeps is root's alone: every directory this backend makes is 0700 and every file
+//! it writes or copies 0600, from its creation, since a package may carry a secret and its
+//! `.deb` holds that file as it is. So apt is told to run as root throughout
+//! (`APT::Sandbox::User=root`): its sandbox user (`_apt`) could not read a private repository's
+//! mirror or write a closed work directory, and apt would fall back to root by itself, with a
+//! notice. Each run is a transient unit that sees the system read-only and may write only the
+//! work directory ([`super::launcher`]), and every index is checked against the entry's keyring.
 //!
 //! | Work directory              | Version directory's `apt/` |
 //! |-----------------------------|----------------------------|
@@ -31,7 +36,7 @@ pub mod version;
 
 use std::fs;
 use std::io;
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use hostkeeper_release::Installer;
@@ -76,6 +81,7 @@ pub fn options(work: &Path, lock_secs: u64) -> Vec<String> {
         "APT::Install-Recommends=false".to_owned(),
         "APT::Install-Suggests=false".to_owned(),
         format!("DPkg::Lock::Timeout={lock_secs}"),
+        "APT::Sandbox::User=root".to_owned(),
     ]
     .into_iter()
     .flat_map(|option| ["-o".to_owned(), option])
@@ -117,21 +123,6 @@ fn scripts(run: Run) -> Run {
         .with_env("NEEDRESTART_MODE", "l")
 }
 
-/// Gives the archives directory of `work` the owner, group and mode of the lists' `partial/`,
-/// which `apt-get update` made its own download directory (as root: its sandbox user `_apt`,
-/// group root, mode 0700). `apt-get download` writes into the archives directory, its working
-/// directory, and apt downloads as its sandbox user only when that user can write there; else it
-/// downloads as root and warns that it does.
-fn sandbox_archives(work: &Path) -> io::Result<()> {
-    let partial = fs::metadata(work.join(LISTS).join(PARTIAL))?;
-    let archives = work.join(ARCHIVES);
-    std::os::unix::fs::chown(&archives, Some(partial.uid()), Some(partial.gid()))?;
-    fs::set_permissions(
-        &archives,
-        fs::Permissions::from_mode(partial.mode() & 0o7777),
-    )
-}
-
 /// Runs `run`, a tool that could not run being the host's failure.
 fn run(tools: &dyn Tools, run: &Run) -> Result<ToolOutput, Failure> {
     tools.run(run).map_err(|e| {
@@ -142,10 +133,36 @@ fn run(tools: &dyn Tools, run: &Run) -> Result<ToolOutput, Failure> {
     })
 }
 
-/// Makes the directories of `dirs`, each with its parents.
+/// The mode of a directory this backend makes, and of a file it writes or copies.
+const DIR_MODE: u32 = 0o700;
+const FILE_MODE: u32 = 0o600;
+
+/// Makes the directories of `dirs`, each with its missing parents, mode [`DIR_MODE`] (a umask
+/// can only take bits away from it); an existing one is left as it is.
 fn make_dirs(dirs: &[PathBuf]) -> io::Result<()> {
-    dirs.iter()
-        .try_for_each(|dir| fs::DirBuilder::new().recursive(true).create(dir))
+    dirs.iter().try_for_each(|dir| {
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(DIR_MODE)
+            .create(dir)
+    })
+}
+
+/// Writes `bytes` to the new file `to`, created [`FILE_MODE`] and set so after, whatever the
+/// umask: a file apt or dpkg then reads as root.
+fn write_closed(to: &Path, bytes: &mut dyn io::Read) -> io::Result<()> {
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(FILE_MODE)
+        .open(to)?;
+    io::copy(bytes, &mut file)?;
+    file.set_permissions(fs::Permissions::from_mode(FILE_MODE))
+}
+
+/// Copies the file `from` to the new file `to` ([`write_closed`]).
+fn copy_closed(from: &Path, to: &Path) -> io::Result<()> {
+    write_closed(to, &mut fs::File::open(from)?)
 }
 
 /// Copies every regular file of `from` that is not in [`NOT_KEPT`] into `to`, a link to a regular
@@ -161,7 +178,7 @@ fn copy_files(from: &Path, to: &Path) -> io::Result<()> {
         .collect();
     names.sort();
     for name in names {
-        fs::copy(from.join(&name), to.join(&name))?;
+        copy_closed(&from.join(&name), &to.join(&name))?;
     }
     Ok(())
 }
@@ -210,10 +227,11 @@ impl Backend for Apt {
             work.join(LISTS).join(PARTIAL),
             work.join(ARCHIVES).join(PARTIAL),
         ])?;
-        fs::write(
-            work.join(SOURCES)
+        write_closed(
+            &work
+                .join(SOURCES)
                 .join(format!("{}.sources", repository.name)),
-            &repository.text,
+            &mut repository.text.as_bytes(),
         )
     }
 
@@ -270,12 +288,6 @@ impl Backend for Apt {
     ) -> Result<PathBuf, Failure> {
         let one = pinned(package, version);
         let archives = work.join(ARCHIVES);
-        sandbox_archives(work).map_err(|e| {
-            Failure::new(
-                Reason::IoError,
-                format!("the archives directory could not be given apt's download owner: {e}"),
-            )
-        })?;
         let call = apt(Tool::AptGet, work, bound, &["download", &one])
             .fetching()
             .writing(vec![work.to_path_buf()])
@@ -342,12 +354,12 @@ impl Backend for Apt {
     fn keep(&self, work: &Path, file: &Path, meta: &Path, repository: &str) -> io::Result<()> {
         make_dirs(&[meta.join(LISTS), meta.join(ARCHIVES)])?;
         let sources = format!("{repository}.sources");
-        fs::copy(work.join(SOURCES).join(&sources), meta.join(&sources))?;
+        copy_closed(&work.join(SOURCES).join(&sources), &meta.join(&sources))?;
         copy_files(&work.join(LISTS), &meta.join(LISTS))?;
         let name = file
             .file_name()
             .ok_or_else(|| io::Error::other("the package file has no name"))?;
-        fs::copy(file, meta.join(ARCHIVES).join(name))?;
+        copy_closed(file, &meta.join(ARCHIVES).join(name))?;
         Ok(())
     }
 

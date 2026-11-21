@@ -15,7 +15,7 @@ length  = u64, little-endian: the length of header plus, for a file or a link, i
 header  = kind NUL name NUL mode NUL size NUL
 kind    = "f" (a regular file), "d" (a directory) or "l" (a symbolic link)
 name    = the full relative name, as bytes, "/" between components
-mode    = the permission bits (mode & 0o7777), four octal digits: "0555" or "0444"; "0000" for a link
+mode    = the permission bits (mode & 0o7777), four octal digits, such as "0400" or "0644"; "0000" for a link
 size    = the size in bytes, in decimal; "0" for a directory; the length of the target text for a link
 bytes   = the file's contents (files only); the link's target text (links only)
 ```
@@ -34,7 +34,7 @@ must not pass through a link. A tree with no link has the digest it had before l
 
 ## The seal
 
-`packages/<service>/<version>.seal`, root-owned, mode 0444:
+`packages/<service>/<version>.seal`, root-owned, mode 0400 (0444 when an earlier release wrote it):
 
 ```json
 {"schema":1,"tree_digest":"<64 hex digits>","package_digest":"<64 hex digits>"}
@@ -58,9 +58,12 @@ it with the seal; a version that changed is not run. A reader ignores fields it 
 
 The links' targets are relative (`1.5.0`, not a path). No version starts with `.`, so the names
 of a placement under way cannot be a version, and a version is never `current`, `previous` or a
-name ending in `.seal` or `.tmp` (refused as `reserved_version`). The service directory is
-0755, so the service's users reach their version; a `.stage-*` directory is 0700 until it
-becomes the version.
+name ending in `.seal` or `.tmp` (refused as `reserved_version`). The packages directory, each
+service directory and each version directory are 0700, root's alone: a package may carry a
+secret, and no other user reads what is kept of it. A `.stage-*` directory is made 0700 and stays
+so as the version. An earlier release left these directories open (0755, and 0555 for a version);
+the daemon closes them at its start, and a version found again for its order is closed then too.
+Only the directories are changed: the modes below a version are part of its digest.
 
 One placement of a service runs at a time: a placement holds an exclusive lock (`flock`) on the
 service directory from before it removes orphans until it has published, and `remove_orphans`
@@ -71,19 +74,19 @@ The publish keeps a version directory whole or absent:
 
 1. Write `.<version>.seal.tmp`, fsync it.
 2. Rename it to `<version>.seal`; fsync the service directory.
-3. Rename `.stage-<random>` (still 0700, every directory below it already 0555) to
-   `<version>`; fsync the service directory.
-4. Make `<version>` 0555; fsync it.
+3. Rename `.stage-<random>` (0700) to `<version>`; fsync the service directory.
+4. Make `<version>` 0700 (as the stage was made); fsync it.
 
-The tree is renamed before its top directory is made read-only because macOS refuses to rename
-a directory its caller cannot write, even to a new name in the same parent; the mode of the top
-directory is not part of the tree digest, so the seal is the same either way. A version directory
-therefore never exists without its seal. What a crash leaves (a
+The top directory is writable by its owner when it is renamed, as macOS requires (it refuses to
+rename a directory its caller cannot write, even to a new name in the same parent); the mode of
+the top directory is not part of the tree digest, so the seal is the same whatever it is. A
+version directory therefore never exists without its seal. What a crash leaves (a
 `.stage-*` directory, a `.<version>.seal.tmp`, a seal with no version beside it) is an orphan:
 every placement removes the orphans of its service before it stages, and `remove_orphans` is the
 same removal for the daemon to run at start and before each fetch of that service. A version that is already on the host,
-sealed for the same package and unchanged, is used as it is, its directory made 0555 (finishing
-step 4 when a crash came between it and step 3).
+sealed for the same package and unchanged, is used as it is, its directory made 0700 (finishing
+step 4 when a crash came between it and step 3, and closing a version an earlier release left
+0555).
 
 ## Changing the format
 

@@ -263,7 +263,10 @@ pub fn open_up(dir: &std::path::Path) {
     if !meta.is_dir() {
         return;
     }
-    fs::set_permissions(dir, fs::Permissions::from_mode(0o755)).expect("its mode");
+    // Only the owner's bits are added: a directory that has them keeps its mode, which the
+    // digest of a sealed tree holds.
+    let mode = meta.permissions().mode() | 0o700;
+    fs::set_permissions(dir, fs::Permissions::from_mode(mode)).expect("its mode");
     for entry in fs::read_dir(dir).expect("a directory").flatten() {
         open_up(&entry.path());
     }

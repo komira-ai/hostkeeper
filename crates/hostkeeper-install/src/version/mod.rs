@@ -14,9 +14,10 @@
 //! on this crate:
 //!
 //! ```text
-//! packages/<service>/<version>/        the tree the caller filled: dirs and executables 0555,
-//!                                      other files 0444, root-owned
-//! packages/<service>/<version>.seal    {"schema":1,"tree_digest":..,"package_digest":..}
+//! packages/                            0700, root-owned: what is kept of a package is root's
+//! packages/<service>/                  0700
+//! packages/<service>/<version>/        0700, the tree the caller filled, root-owned
+//! packages/<service>/<version>.seal    0400, {"schema":1,"tree_digest":..,"package_digest":..}
 //! packages/<service>/.stage-<random>/  a publish under way (removed when orphaned)
 //! packages/<service>/current  -> <version>
 //! packages/<service>/previous -> <version>

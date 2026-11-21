@@ -106,7 +106,7 @@ fn tree(dir: &Path) -> Vec<(PathBuf, u32, Vec<u8>)> {
 /// The whole path from a desired version to a running new release, with the drain holding the
 /// old release up until it is released: `1.0.0` installed and serving, the drain gate busy, the
 /// coordinator told `1.1.0`. The daemon stages `1.1.0` from the repository once, extracts it
-/// root-owned and mode 0555 with a seal naming the package's pin and a `target.json` that is the
+/// root-owned and mode 0700 with a seal naming the package's pin and a `target.json` that is the
 /// entry it was ordered through, and runs `prepare`, which waits while the old instances keep
 /// serving `1.0.0`; once the gate is idle, `current` is `1.1.0` and `previous` `1.0.0`, dpkg has
 /// `1.1.0` held, the new instances serve `1.1.0` and are active, the old ones are stopped, the
@@ -129,7 +129,7 @@ fn a_tierstore_shaped_package_updates_end_to_end() {
     });
     let meta = fs::metadata(&dir).expect("the version directory");
     assert_eq!(meta.uid(), 0, "the version directory is root's");
-    assert_eq!(meta.permissions().mode() & 0o7777, 0o555);
+    assert_eq!(meta.permissions().mode() & 0o7777, 0o700);
     assert_eq!(s.seal(V2)["package_digest"], new.sha256.as_str());
     assert_eq!(
         hostkeeper_daemon::target::read(&dir)

@@ -23,6 +23,9 @@ use std::path::{Component, Path, PathBuf};
 use rustix::fs::{AtFlags, Dir, FileType, Gid, Mode, OFlags, Uid};
 use rustix::io::Errno;
 
+/// The mode of a service directory: open to its owner alone, made that way by `mkdirat`.
+pub(crate) const SERVICE_MODE: rustix::fs::RawMode = 0o700;
+
 /// The calls a publish makes on the disk. Paths are relative to the packages directory.
 pub trait PackageFs {
     /// The names in the directory `dir` (not `.` and `..`).
@@ -32,8 +35,9 @@ pub trait PackageFs {
     fn exists(&self, path: &Path) -> io::Result<bool>;
     /// Makes the service directory `<service>` ready: creates it when it is missing, then, on
     /// every call, opens it without following a link (a link or a file there is an error),
-    /// gives it to the owner with mode 0755 (service users pass through it to their version)
-    /// and makes its entry in the packages directory durable. So a call stopped half-way, by a
+    /// gives it to the owner with mode 0700 (what is kept of a package is read by root alone,
+    /// and an earlier release's 0755 is closed here) and makes its entry in the packages
+    /// directory durable. So a call stopped half-way, by a
     /// crash or a failed fsync, is finished by the next one.
     fn create_service(&self, service: &Path) -> io::Result<()>;
     /// Takes the exclusive publish lock of the service directory `<service>`, without waiting:
@@ -190,13 +194,13 @@ impl PackageFs for HostFs {
 
     fn create_service(&self, service: &Path) -> io::Result<()> {
         let (at, name) = self.parent(service)?;
-        match rustix::fs::mkdirat(&at, name, Mode::from_raw_mode(0o700)) {
+        match rustix::fs::mkdirat(&at, name, Mode::from_raw_mode(SERVICE_MODE)) {
             Err(Errno::EXIST) => {}
             made => made?,
         }
         let fd = rustix::fs::openat(&at, name, dir_flags(), Mode::empty())?;
         self.give(&fd)?;
-        rustix::fs::fchmod(&fd, Mode::from_raw_mode(0o755))?;
+        rustix::fs::fchmod(&fd, Mode::from_raw_mode(SERVICE_MODE))?;
         Ok(rustix::fs::fsync(&at)?)
     }
 

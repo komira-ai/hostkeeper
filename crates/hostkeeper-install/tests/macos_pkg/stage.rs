@@ -185,9 +185,10 @@ fn stage_accepts(pkg: FakePkg, name: &str) {
     assert_eq!(names(&dir), ["artifact", "macos-pkg", "tree"]);
     assert_eq!(fs::read(dir.join("artifact")).unwrap(), b"fake-pkg:svc-1.0");
     let mode = |p: &str| fs::metadata(dir.join(p)).unwrap().permissions().mode() & 0o777;
-    assert_eq!(mode("artifact"), 0o444);
-    assert_eq!(mode("macos-pkg/PackageInfo"), 0o444);
-    assert_eq!(mode("macos-pkg/Bom"), 0o444);
+    assert_eq!(mode("artifact"), 0o400);
+    assert_eq!(mode("macos-pkg"), 0o700);
+    assert_eq!(mode("macos-pkg/PackageInfo"), 0o400);
+    assert_eq!(mode("macos-pkg/Bom"), 0o400);
     assert_eq!(
         names(&dir.join("macos-pkg")),
         ["Bom", "PackageInfo", "artifact.pkg"]
@@ -230,7 +231,9 @@ fn stage_accepts(pkg: FakePkg, name: &str) {
     assert!(rig.records.all().is_empty());
 }
 
-/// Catches: a staged version missing its artifact, tree or meta files, a kept file that is writable, or a tool run that installs or fetches.
+/// Catches: a staged version missing its artifact, tree or meta files, a kept file that is
+/// writable or readable by another user (the `.pkg` holds every file of the package, a secret
+/// included), or a tool run that installs or fetches.
 #[test]
 fn stage_of_a_component_package_keeps_the_artifact_the_tree_and_the_two_meta_files() {
     stage_accepts(v1(), "stage-component");
