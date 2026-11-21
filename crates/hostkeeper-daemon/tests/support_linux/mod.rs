@@ -29,8 +29,10 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use clap::Parser as _;
+use hostkeeper_coordinator::config::{Cli, Command, build};
 use hostkeeper_coordinator::desired::DesiredStore;
-use hostkeeper_coordinator::enrollment::{Setup, StoreAt, os_random, setup};
+use hostkeeper_coordinator::enrollment::Enrollment;
 use hostkeeper_coordinator::http::{Peer, Surface};
 use hostkeeper_coordinator::operator::Caller;
 use hostkeeper_coordinator::ops::OpsStore;
@@ -53,8 +55,6 @@ use hostkeeper_daemon::maintenance_reboot::RebootNeed;
 use hostkeeper_daemon::maintenance_run::Driven;
 use hostkeeper_daemon::start::{self, Started};
 use hostkeeper_daemon::{Daemon, Ports};
-use hostkeeper_enrollment::fs::RealFs;
-use hostkeeper_enrollment::validity::UnixClock as EnrollmentClock;
 use hostkeeper_hook::Outcome;
 use hostkeeper_launchd::{Launchctl, LaunchctlError, LaunchctlOutput};
 use hostkeeper_link::testing::{
@@ -67,7 +67,7 @@ use hostkeeper_link::{
 use hostkeeper_oidc::testkit::{
     STATIC_ISSUER, StaticKeys, clock as oidc_clock, config_text, jwks_of, keys, spent,
 };
-use hostkeeper_oidc::{OidcConfig, Verifier};
+use hostkeeper_oidc::{OidcConfig, Roots, Verifier};
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use hostkeeper_proto::hostkeeper::operator::v1 as op;
 use hostkeeper_steps::maintenance::{MaintenanceLoaded, MaintenanceRecord, MaintenanceStore};
@@ -82,8 +82,10 @@ use prost::Message;
 use rcgen::{
     CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, KeyPair, SanType,
 };
+use rustls::pki_types::CertificateDer;
 
 use crate::support::coordinated::OPERATOR;
+use crate::support::pki::Ca;
 use crate::support::typed::{call, request_of};
 use crate::support::{OWN, Rig, Scratch, config, manifest_with};
 use crate::support_maintain::DRAINS;

@@ -9,13 +9,67 @@ fn operator() -> Caller {
     ))
 }
 
-/// The wall clock of the coordinator's enrollment, which the test holds still.
-struct Still;
-
-impl EnrollmentClock for Still {
-    fn now_unix(&self) -> u64 {
-        2_000_000_000
-    }
+/// The coordinator's enrollment over the files of `dir` (its store, its CA, made at the first
+/// start, and its server certificate), as the coordinator's own start makes it from its flags:
+/// a coordinator is built from the flags of `serve` (its other files in `dir/start`, listening
+/// nowhere, no address dialled) and its enrollment kept; the rest of it is dropped.
+fn enrollment_of(dir: &Path) -> Arc<Enrollment> {
+    let start = dir.join("start");
+    fs::create_dir_all(&start).expect("the directory of the start's files");
+    let put = |name: &str, text: &str, mode: u32| -> std::ffi::OsString {
+        let path = start.join(name);
+        fs::write(&path, text).expect("written");
+        fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(mode))
+            .expect("its mode");
+        path.into_os_string()
+    };
+    let listener = Ca::new("private listener CA").coordinator();
+    let at = |name: &str| dir.join(name).into_os_string();
+    let args: Vec<std::ffi::OsString> = vec![
+        "hostkeeper-coordinator".into(),
+        "serve".into(),
+        // Documentation addresses: nothing is bound or dialled.
+        "--heartbeat-listen".into(),
+        "192.0.2.1:1".into(),
+        "--private-listen".into(),
+        "192.0.2.1:2".into(),
+        "--tls-cert".into(),
+        put("tls.pem", &listener.cert_pem, 0o644),
+        "--tls-key".into(),
+        put("tls.key", &listener.key_pem, 0o600),
+        "--client-ca".into(),
+        put("ca.pem", &Ca::new("farm CA").pem, 0o644),
+        "--state-file".into(),
+        start.join("desired.json").into_os_string(),
+        "--oidc-config".into(),
+        put("oidc.toml", &config_text(STATIC_ISSUER), 0o644),
+        "--operator-token-file".into(),
+        put("operator.token", OPERATOR, 0o600),
+        "--legacy-service".into(),
+        "kbf".into(),
+        "--enrollment-dir".into(),
+        at("enrollment"),
+        "--ca-key-file".into(),
+        at("ca.key"),
+        "--ca-init".into(),
+        "--server-cert-file".into(),
+        at("server.pem"),
+        "--server-name".into(),
+        "coordinator.example".into(),
+    ];
+    let Command::Serve(flags) = Cli::try_parse_from(args).expect("the flags").command else {
+        panic!("the verb is serve");
+    };
+    let roots = Roots::Given(vec![CertificateDer::from(Ca::new("issuer roots").der)]);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a runtime");
+    let parts = {
+        let _entered = runtime.enter();
+        build(&flags, roots).expect("the coordinator starts")
+    };
+    Arc::clone(parts.coordinator.enrollment().expect("enrollment"))
 }
 
 /// The certificate of the updater `host` of the role `role`, as the coordinator reads the peer
@@ -70,28 +124,14 @@ impl World {
             oidc_now,
             spent(),
         );
-        let names = vec!["coordinator.example".to_owned()];
-        let enrollment = setup(
-            Arc::new(RealFs),
-            &Setup {
-                store: StoreAt::Dir(&dir.join("enrollment")),
-                ca_key: &dir.join("ca.key"),
-                ca_init: true,
-                server_cert: &dir.join("server.pem"),
-                server_names: &names,
-                server_ips: &[],
-            },
-            Arc::new(Still),
-            os_random(),
-        )
-        .expect("enrollment starts");
+        let enrollment = enrollment_of(dir);
         let clock: Clock = Arc::new(|| Duration::from_secs(1_000));
         Arc::new(
             Coordinator::new(desired, Arc::new(verifier), OPERATOR.to_owned(), clock)
                 .with_quiet(Duration::ZERO)
                 .with_ops(ops)
                 .with_verdicts(verdicts)
-                .with_enrollment(Arc::new(enrollment)),
+                .with_enrollment(enrollment),
         )
     }
 

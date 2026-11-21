@@ -101,9 +101,6 @@ base64.workspace = true
 # identity. Its CI tokens come from the fake issuer of `hostkeeper-oidc`'s `testkit`.
 bytes.workspace = true
 hostkeeper-coordinator = { path = "../hostkeeper-coordinator" }
-# tests/maintenance_linux_e2e.rs: the coordinator's enrollment started over files of the test
-# (its filesystem and its clock are this crate's types), so that hosts enroll into a group.
-hostkeeper-enrollment = { path = "../hostkeeper-enrollment" }
 hostkeeper-oidc = { path = "../hostkeeper-oidc", features = ["testkit"] }
 # The public key of the enrollment request's CSR, whose SHA-256 is the request id the fake
 # coordinator of tests/bmc_claim.rs answers with.

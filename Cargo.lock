@@ -1823,7 +1823,6 @@ dependencies = [
  "hostkeeper-coordinator",
  "hostkeeper-daemon",
  "hostkeeper-enroll",
- "hostkeeper-enrollment",
  "hostkeeper-hook",
  "hostkeeper-install",
  "hostkeeper-launchd",
