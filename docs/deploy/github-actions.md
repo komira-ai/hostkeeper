@@ -161,7 +161,7 @@ federation's client ID are all public values, so they are variables, not secrets
 | `HOSTKEEPER_CI_AUDIENCE` | The audience of the OIDC token, as the allow-list entry names it (shared). |
 | `HOSTKEEPER_TAILNET_CLIENT_ID` | The client ID of the tailnet's federated identity (shared). Set: both calls of the CI client and the job `coordinator` join the tailnet. Empty: none joins, and the coordinator must be reachable from the runner some other way. |
 | `HOSTKEEPER_TAILNET_AUDIENCE` | The audience of that federated identity (shared). |
-| `HOSTKEEPER_TAILNET_COORDINATOR` | The coordinator's name on the tailnet, which the CI client's join pings until it answers (shared). |
+| `HOSTKEEPER_TAILNET_COORDINATOR` | The coordinator's name on the tailnet (shared). The CI client no longer reads it (its join pings nothing; it waits for the coordinator at `HOSTKEEPER_COORDINATOR_URL`); its callers still pass it. |
 | `HOSTKEEPER_TAILNET_TAG` | The tag the join gives the runner's node, the one the federation's trust credential issues: `tag:ci` (shared). Both callers pass it as `tailnet_tag`. It must be set, even with `HOSTKEEPER_TAILNET_CLIENT_ID` empty: the CI client checks the tag at its first step, with or without the join, and an empty one ends the job there, before anything is downloaded or set. |
 
 The tailnet, its tag (`HOSTKEEPER_TAILNET_TAG`, `tag:ci`), its ACL and its federation

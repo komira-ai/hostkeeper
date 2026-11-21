@@ -62,8 +62,8 @@ fn the_real_file_keeps_every_rule_of_the_calls() {
 fn a_call_takes_the_jobs_own_token_and_no_other() {
     // Catches: a call given a token file or stdin (a token the job would have to hold), the
     // fresh OIDC token dropped, and a global flag beyond those a call needs.
-    let token_file = "step 11 (`set-desired`) passes `--token-file`: a call takes the job's own OIDC token, by `--github-oidc-audience`";
-    let no_audience = "step 11 (`set-desired`) does not pass `--github-oidc-audience \"$AUDIENCE\"` before the method exactly once";
+    let token_file = "step 12 (`set-desired`) passes `--token-file`: a call takes the job's own OIDC token, by `--github-oidc-audience`";
+    let no_audience = "step 12 (`set-desired`) does not pass `--github-oidc-audience \"$AUDIENCE\"` before the method exactly once";
     assert_client(
         &set_with(
             AUDIENCE,
@@ -78,7 +78,7 @@ fn a_call_takes_the_jobs_own_token_and_no_other() {
             "            --service \"$SERVICE\" \\\n            --token-stdin \\\n            --request",
         ),
         &[
-            "step 11 (`set-desired`) passes `--token-stdin`: a call takes the job's own OIDC token, by `--github-oidc-audience`",
+            "step 12 (`set-desired`) passes `--token-stdin`: a call takes the job's own OIDC token, by `--github-oidc-audience`",
         ],
     );
     // A switch before the method takes no value: the method after it is still read.
@@ -88,12 +88,12 @@ fn a_call_takes_the_jobs_own_token_and_no_other() {
             &format!("{SET_RESPONSE}            --token-stdin \\\n"),
         ),
         &[
-            "step 11 (`set-desired`) passes `--token-stdin`: a call takes the job's own OIDC token, by `--github-oidc-audience`",
+            "step 12 (`set-desired`) passes `--token-stdin`: a call takes the job's own OIDC token, by `--github-oidc-audience`",
         ],
     );
     assert_client(&set_with(AUDIENCE, ""), &[no_audience]);
     // Given twice, or with another value.
-    let wait_audience = "step 12 (`wait`) does not pass `--github-oidc-audience \"$AUDIENCE\"` before the method exactly once";
+    let wait_audience = "step 13 (`wait`) does not pass `--github-oidc-audience \"$AUDIENCE\"` before the method exactly once";
     let waited = |to: &str| {
         let start = CLIENT.find("      - id: wait\n").expect("the wait step");
         let (head, tail) = CLIENT.split_at(start);
@@ -109,7 +109,7 @@ fn a_call_takes_the_jobs_own_token_and_no_other() {
             AUDIENCE,
             &format!("{AUDIENCE}            --timeout-secs 5 \\\n"),
         ),
-        &["step 11 (`set-desired`) passes `--timeout-secs` before the method, which no call needs"],
+        &["step 12 (`set-desired`) passes `--timeout-secs` before the method, which no call needs"],
     );
     assert_client(
         &set_with(
@@ -117,7 +117,7 @@ fn a_call_takes_the_jobs_own_token_and_no_other() {
             "            --endpoint https://coordinator.example \\\n",
         ),
         &[
-            "step 11 (`set-desired`) does not pass `--endpoint \"$COORDINATOR_URL\"` before the method exactly once",
+            "step 12 (`set-desired`) does not pass `--endpoint \"$COORDINATOR_URL\"` before the method exactly once",
         ],
     );
     assert_client(
@@ -126,7 +126,7 @@ fn a_call_takes_the_jobs_own_token_and_no_other() {
             "",
         ),
         &[
-            "step 11 (`set-desired`) does not pass `--ca-file \"$RUNNER_TEMP/hk-coordinator-ca.pem\"` before the method exactly once",
+            "step 12 (`set-desired`) does not pass `--ca-file \"$RUNNER_TEMP/hk-coordinator-ca.pem\"` before the method exactly once",
         ],
     );
 }
@@ -138,7 +138,7 @@ fn a_call_is_one_hk_command_of_the_table_into_its_own_files() {
     // token's mask line is) or into another file, and its diagnostics not in the file the
     // outputs step reads.
     let not_one =
-        "step 11 (`set-desired`) does not run `$RUNNER_TEMP/hk-release/hk` as its one command";
+        "step 12 (`set-desired`) does not run `$RUNNER_TEMP/hk-release/hk` as its one command";
     let first = "          \"$RUNNER_TEMP/hk-release/hk\" \\\n            --endpoint";
     assert_client(
         &set_with(first, &format!("          echo calling\n{first}")),
@@ -157,11 +157,11 @@ fn a_call_is_one_hk_command_of_the_table_into_its_own_files() {
     );
     assert_client(
         &with_in(CLIENT, "releases set-desired \\", "releases set-desire \\"),
-        &["step 11 (`set-desired`) does not call `releases set-desired`"],
+        &["step 12 (`set-desired`) does not call `releases set-desired`"],
     );
     assert_client(
         &with_in(CLIENT, "releases wait-converged \\", "releases converge \\"),
-        &["step 12 (`wait`) does not call `releases wait-converged`"],
+        &["step 13 (`wait`) does not call `releases wait-converged`"],
     );
     assert_client(
         &with_in(
@@ -170,13 +170,13 @@ fn a_call_is_one_hk_command_of_the_table_into_its_own_files() {
             &format!("{WAIT_SECS}            --max-polls \"$MAX_POLLS\" \\\n"),
         ),
         &[
-            "step 12 (`wait`) passes `--max-polls`, which is not a flag of `releases wait-converged`",
+            "step 13 (`wait`) passes `--max-polls`, which is not a flag of `releases wait-converged`",
         ],
     );
     assert_client(
         &set_with(SET_RESPONSE, ""),
         &[
-            "step 11 (`set-desired`) does not pass `--response-file \"$RUNNER_TEMP/hk-set.json\"` before the method exactly once",
+            "step 12 (`set-desired`) does not pass `--response-file \"$RUNNER_TEMP/hk-set.json\"` before the method exactly once",
         ],
     );
     // The response flag after the method is a flag of no method.
@@ -187,11 +187,11 @@ fn a_call_is_one_hk_command_of_the_table_into_its_own_files() {
             &format!("            --service \"$SERVICE\" \\\n{SET_RESPONSE}            --request"),
         ),
         &[
-            "step 11 (`set-desired`) does not pass `--response-file \"$RUNNER_TEMP/hk-set.json\"` before the method exactly once",
-            "step 11 (`set-desired`) passes `--response-file`, which is not a flag of `releases set-desired`",
+            "step 12 (`set-desired`) does not pass `--response-file \"$RUNNER_TEMP/hk-set.json\"` before the method exactly once",
+            "step 12 (`set-desired`) passes `--response-file`, which is not a flag of `releases set-desired`",
         ],
     );
-    let no_err = "step 11 (`set-desired`) does not end with `2> >(tee \"$RUNNER_TEMP/hk-set.err\" >&2)`, which sends its diagnostics to `$RUNNER_TEMP/hk-set.err`, the file the outputs step reads";
+    let no_err = "step 12 (`set-desired`) does not end with `2> >(tee \"$RUNNER_TEMP/hk-set.err\" >&2)`, which sends its diagnostics to `$RUNNER_TEMP/hk-set.err`, the file the outputs step reads";
     // The diagnostics not sent anywhere: the outputs step reads nothing and the log shows them.
     assert_client(
         &set_with(
@@ -224,7 +224,7 @@ fn a_call_is_one_hk_command_of_the_table_into_its_own_files() {
             "2> >(tee \"$RUNNER_TEMP/hk-wait.err\" >&2)\n",
         ),
         &[
-            "step 12 (`wait`) does not end with `2> \"$RUNNER_TEMP/hk-wait.err\"`, which sends its diagnostics to `$RUNNER_TEMP/hk-wait.err`, the file the outputs step reads",
+            "step 13 (`wait`) does not end with `2> \"$RUNNER_TEMP/hk-wait.err\"`, which sends its diagnostics to `$RUNNER_TEMP/hk-wait.err`, the file the outputs step reads",
         ],
     );
 }
@@ -235,7 +235,7 @@ fn the_set_sends_the_request_and_the_wait_is_bounded_by_max_polls() {
     // writing elsewhere, and the wait held without its bound, with a bound that is not ten times
     // `max_polls`, or with `max_polls` taken from anything but its input.
     let request = "            --request \"$RUNNER_TEMP/hk-request.json\" \\\n";
-    let no_request = "step 11 (`set-desired`) does not pass `--request \"$RUNNER_TEMP/hk-request.json\"` exactly once";
+    let no_request = "step 12 (`set-desired`) does not pass `--request \"$RUNNER_TEMP/hk-request.json\"` exactly once";
     assert_client(&with_in(CLIENT, request, ""), &[no_request]);
     assert_client(
         &with_in(CLIENT, request, &format!("{request}{request}")),
@@ -251,7 +251,7 @@ fn the_set_sends_the_request_and_the_wait_is_bounded_by_max_polls() {
             "the request step does not end by writing `\"$RUNNER_TEMP/hk-request.json\"`, the file the set step reads",
         ],
     );
-    let no_bound = "step 12 (`wait`) does not pass `--wait-secs \"${MAX_POLLS}0\"` exactly once";
+    let no_bound = "step 13 (`wait`) does not pass `--wait-secs \"${MAX_POLLS}0\"` exactly once";
     for changed in [
         String::new(),
         "            --wait-secs 1800 \\\n".to_owned(),
@@ -266,7 +266,7 @@ fn the_set_sends_the_request_and_the_wait_is_bounded_by_max_polls() {
             "MAX_POLLS: ${{ inputs.max_polls }}",
             "MAX_POLLS: 180",
         ),
-        &["step 12 (`wait`)'s `MAX_POLLS` is not `${{ inputs.max_polls }}`"],
+        &["step 13 (`wait`)'s `MAX_POLLS` is not `${{ inputs.max_polls }}`"],
     );
     assert_client(
         &with_in(CLIENT, "        type: number\n", "        type: string\n"),
@@ -284,7 +284,7 @@ fn only_the_two_calls_run_on_past_a_failure_and_the_outputs_run_always() {
     assert_client(
         &with_in(CLIENT, &format!("{set}{continues}"), set),
         &[
-            "step 11 (`set-desired`) does not have `continue-on-error: true`: the outputs step reads how it ended",
+            "step 12 (`set-desired`) does not have `continue-on-error: true`: the outputs step reads how it ended",
         ],
     );
     let wait_if = format!("        if: {WAIT_IF}\n");
@@ -295,7 +295,7 @@ fn only_the_two_calls_run_on_past_a_failure_and_the_outputs_run_always() {
             &format!("{wait_if}        continue-on-error: false\n"),
         ),
         &[
-            "step 12 (`wait`) does not have `continue-on-error: true`: the outputs step reads how it ended",
+            "step 13 (`wait`) does not have `continue-on-error: true`: the outputs step reads how it ended",
         ],
     );
     let download = "      - id: download\n";
@@ -306,7 +306,7 @@ fn only_the_two_calls_run_on_past_a_failure_and_the_outputs_run_always() {
     let always = format!("        if: {ALWAYS_IF}\n");
     assert_client(
         &with_in(CLIENT, &always, &format!("{always}{continues}")),
-        &["step 13 (`outputs`) has `continue-on-error`, which could run the job on past it"],
+        &["step 14 (`outputs`) has `continue-on-error`, which could run the job on past it"],
     );
     for to in [
         String::new(),
@@ -315,10 +315,10 @@ fn only_the_two_calls_run_on_past_a_failure_and_the_outputs_run_always() {
     ] {
         assert_client(
             &with_in(CLIENT, &wait_if, &to),
-            &[&format!("step 12 (`wait`) does not have `if: {WAIT_IF}`")],
+            &[&format!("step 13 (`wait`) does not have `if: {WAIT_IF}`")],
         );
     }
-    let no_always = format!("step 13 (`outputs`) does not have `if: {ALWAYS_IF}`");
+    let no_always = format!("step 14 (`outputs`) does not have `if: {ALWAYS_IF}`");
     for to in ["", "        if: ${{ !cancelled() }}\n"] {
         assert_client(&with_in(CLIENT, &always, to), &[&no_always]);
     }
@@ -329,7 +329,7 @@ fn only_the_two_calls_run_on_past_a_failure_and_the_outputs_run_always() {
             request,
             &format!("{request}        if: ${{{{ always() }}}}\n"),
         ),
-        &["step 10 (`request`) has `if`, which could run the job on past it"],
+        &["step 11 (`request`) has `if`, which could run the job on past it"],
     );
     // A second call step of the same id is one problem, not a stray `continue-on-error` too.
     assert_client(
@@ -366,7 +366,7 @@ fn the_calls_come_after_what_they_read_and_the_outputs_come_last() {
     assert_client(
         &request,
         &[
-            "the set step `set-desired` (step 10) comes before `request` (step 11), whose file it reads",
+            "the set step `set-desired` (step 11) comes before `request` (step 12), whose file it reads",
         ],
     );
     let wait_first = moved(
@@ -377,7 +377,7 @@ fn the_calls_come_after_what_they_read_and_the_outputs_come_last() {
     );
     assert_client(
         &wait_first,
-        &["the wait step `wait` (step 11) comes before the set step `set-desired` (step 12)"],
+        &["the wait step `wait` (step 12) comes before the set step `set-desired` (step 13)"],
     );
     let outputs = &CLIENT[CLIENT.find("      - id: outputs\n").expect("outputs")..];
     let without = with_in(CLIENT, outputs, "");
@@ -389,12 +389,12 @@ fn the_calls_come_after_what_they_read_and_the_outputs_come_last() {
     );
     assert_client(
         &outputs_early,
-        &["the outputs step `outputs` (step 12) is not the last step"],
+        &["the outputs step `outputs` (step 13) is not the last step"],
     );
     let late = format!("{CLIENT}      - id: after\n        run: echo done\n");
     assert_client(
         &late,
-        &["the outputs step `outputs` (step 13) is not the last step"],
+        &["the outputs step `outputs` (step 14) is not the last step"],
     );
 }
 
@@ -410,7 +410,7 @@ fn no_step_hands_a_token_or_an_environment_on() {
             wait_env,
             &format!("{wait_env}          URL: ${{{{ env.ACTIONS_ID_TOKEN_REQUEST_URL }}}}\n"),
         ),
-        &["step 12 (`wait`)'s `env` names the OIDC token request"],
+        &["step 13 (`wait`)'s `env` names the OIDC token request"],
     );
     assert_client(
         &with_in(
@@ -434,7 +434,7 @@ fn no_step_hands_a_token_or_an_environment_on() {
                 ),
             ),
             &[&format!(
-                "step 10 (`request`) has a `{word}` loop: the wait is one call the coordinator holds"
+                "step 11 (`request`) has a `{word}` loop: the wait is one call the coordinator holds"
             )],
         );
     }
@@ -526,10 +526,10 @@ fn the_calls_name_the_callers_service_and_version_and_the_outputs_reach_the_call
     let service = "            --service \"$SERVICE\" \\\n";
     assert_client(
         &set_with(service, "            --service hello \\\n"),
-        &["step 11 (`set-desired`) does not pass `--service \"$SERVICE\"` exactly once"],
+        &["step 12 (`set-desired`) does not pass `--service \"$SERVICE\"` exactly once"],
     );
     let version = "            --version \"$VERSION\" \\\n";
-    let no_version = "step 12 (`wait`) does not pass `--version \"$VERSION\"` exactly once";
+    let no_version = "step 13 (`wait`) does not pass `--version \"$VERSION\"` exactly once";
     assert_client(&with_in(CLIENT, version, ""), &[no_version]);
     assert_client(
         &with_in(CLIENT, version, "            --version \"$OTHER\" \\\n"),
@@ -540,11 +540,11 @@ fn the_calls_name_the_callers_service_and_version_and_the_outputs_reach_the_call
             "          SERVICE: ${{ inputs.service }}\n",
             "          SERVICE: ${{ inputs.version }}\n",
         ),
-        &["step 11 (`set-desired`)'s `SERVICE` is not `${{ inputs.service }}`"],
+        &["step 12 (`set-desired`)'s `SERVICE` is not `${{ inputs.service }}`"],
     );
     assert_client(
         &set_with("          AUDIENCE: ${{ inputs.audience }}\n", ""),
-        &["step 11 (`set-desired`)'s `AUDIENCE` is not `${{ inputs.audience }}`"],
+        &["step 12 (`set-desired`)'s `AUDIENCE` is not `${{ inputs.audience }}`"],
     );
     let wait_version = "          VERSION: ${{ inputs.version }}\n          HOST_GROUP";
     assert_client(
@@ -553,7 +553,7 @@ fn the_calls_name_the_callers_service_and_version_and_the_outputs_reach_the_call
             wait_version,
             "          VERSION: ${{ inputs.service }}\n          HOST_GROUP",
         ),
-        &["step 12 (`wait`)'s `VERSION` is not `${{ inputs.version }}`"],
+        &["step 13 (`wait`)'s `VERSION` is not `${{ inputs.version }}`"],
     );
     assert_client(
         &with_in(
@@ -825,8 +825,8 @@ fn the_host_group_is_passed_only_as_the_one_conditional_word_in_both_calls() {
             "{who} passes `--host-group` unconditionally: an empty `HOST_GROUP` must send no field, so pass it only as the one word `{word}`"
         )
     };
-    let set = "step 11 (`set-desired`)";
-    let wait = "step 12 (`wait`)";
+    let set = "step 12 (`set-desired`)";
+    let wait = "step 13 (`wait`)";
     assert_client(
         &set_with(
             HOST_GROUP_WORD,
@@ -892,7 +892,7 @@ fn the_host_group_is_passed_only_as_the_one_conditional_word_in_both_calls() {
             ),
         ),
         &[
-            "step 11 (`set-desired`) does not end with `2> >(tee \"$RUNNER_TEMP/hk-set.err\" >&2)`, which sends its diagnostics to `$RUNNER_TEMP/hk-set.err`, the file the outputs step reads",
+            "step 12 (`set-desired`) does not end with `2> >(tee \"$RUNNER_TEMP/hk-set.err\" >&2)`, which sends its diagnostics to `$RUNNER_TEMP/hk-set.err`, the file the outputs step reads",
         ],
     );
     // The variable comes from the input, in both steps.
@@ -901,7 +901,7 @@ fn the_host_group_is_passed_only_as_the_one_conditional_word_in_both_calls() {
             "          HOST_GROUP: ${{ inputs.host_group }}\n",
             "          HOST_GROUP: web\n",
         ),
-        &["step 11 (`set-desired`)'s `HOST_GROUP` is not `${{ inputs.host_group }}`"],
+        &["step 12 (`set-desired`)'s `HOST_GROUP` is not `${{ inputs.host_group }}`"],
     );
     assert_client(
         &with_in(
@@ -909,7 +909,7 @@ fn the_host_group_is_passed_only_as_the_one_conditional_word_in_both_calls() {
             "          HOST_GROUP: ${{ inputs.host_group }}\n          COORDINATOR_URL: ${{ inputs.coordinator_url }}\n          AUDIENCE: ${{ inputs.audience }}\n          MAX_POLLS",
             "          COORDINATOR_URL: ${{ inputs.coordinator_url }}\n          AUDIENCE: ${{ inputs.audience }}\n          MAX_POLLS",
         ),
-        &["step 12 (`wait`)'s `HOST_GROUP` is not `${{ inputs.host_group }}`"],
+        &["step 13 (`wait`)'s `HOST_GROUP` is not `${{ inputs.host_group }}`"],
     );
 }
 

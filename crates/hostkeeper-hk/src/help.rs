@@ -1,4 +1,4 @@
-//! The help texts: of `hk`, of a service, of a method, of the ssh commands and of `xcode-push`. All of it is
+//! The help texts: of `hk`, of a service, of a method, of the ssh commands, of `xcode-push` and of `tailnet-wait`. All of it is
 //! written from the command table and says `hk`, whatever name the program is called by.
 
 use std::fmt::Write as _;
@@ -58,7 +58,15 @@ at the terminal); given a file, it takes the file. Apple's signature must be on 
 its version and build are read from the app `xip --expand` makes, and it is uploaded unmodified \
 and streamed, `PUT /v1/xcode/<sha256>?version=<version>&build=<build>`; a step that fails \
 uploads nothing. It needs --endpoint, --ca-file and --token-file, and takes no other \
-credential; `hk xcode-push --help` says each step.";
+credential; `hk xcode-push --help` says each step.
+
+`hk tailnet-wait [--attempts N] [--interval-secs S]` is not a gateway call either: run by a CI \
+job right after it joined the tailnet, it asks the coordinator's `GET /v1/version`, with no \
+token, up to N times (6 by default) with S seconds between two tries (10 by default), until \
+any HTTP answer comes; when none does, it runs `tailscale down`, then `tailscale up`, and asks \
+as many times again. It ends 0 at the first answer, with one line saying which try it was, and \
+1 when neither round had one, saying how each ended. It needs --endpoint and --ca-file, takes \
+--timeout-secs for each try, and takes no token; `hk tailnet-wait --help` says each step.";
 
 /// The top-level help; `stamp` is the version, `<version>+<12 hex of the commit>` for a release.
 pub(crate) fn top_help(commands: &[&Command], stamp: &str) -> String {
@@ -166,6 +174,26 @@ hk ssh-known-host <pins-file> %H %t %K %f
 These take the global flags --endpoint, --ca-file, --token-file and --timeout-secs, all but the
 last required, and are built into hk. The token is read from the file; --token-stdin,
 --github-oidc-audience and --response-file are not taken.";
+
+/// The help of `hk tailnet-wait`.
+pub(crate) const TAILNET_WAIT_HELP: &str = "\
+hk tailnet-wait [--attempts N] [--interval-secs S]
+    Waits, right after a CI runner joined the tailnet, until the coordinator answers at
+    --endpoint, and rejoins the tailnet once when it does not. In order:
+    1. Round 1: up to N requests GET <endpoint>/v1/version, with no token, trusting --ca-file
+       alone, each limited by --timeout-secs, S seconds apart. Any HTTP status is an answer. A
+       request with none prints one line on stderr saying why.
+    2. When round 1 had no answer: tailscale down, then tailscale up with no flag (the settings
+       of the join), each stopped after 120 seconds. The join must have made this user the
+       node's operator (tailscale up --operator=<user>), so neither needs root.
+    3. Round 2: as round 1.
+    It exits 0 at the first answer, printing one line on stdout that says which attempt of
+    which round it was; and 1 when neither round had one, or the rejoin failed, with one line
+    that says how each ended.
+
+--attempts N is 1 to 100, 6 by default; --interval-secs S is 0 to 600, 10 by default. It takes
+the global flags --endpoint and --ca-file, both required, and --timeout-secs. It takes no token:
+--token-file, --token-stdin, --github-oidc-audience and --response-file are not taken.";
 
 /// The help of `hk xcode-push`.
 pub(crate) const XCODE_PUSH_HELP: &str = "\

@@ -459,7 +459,8 @@ jobs:
   #          deploy is replacing answers 409); while either is empty (cp-deploy skipped for that)
   #          it runs after targets alone; when cp-deploy failed, was cancelled, or was skipped
   #          for a failure before it, the job is skipped, and set-desired with it.
-  #          The job joins the tailnet as set-desired does, and asks the private listener
+  #          The job joins the tailnet as set-desired does, with no ping (one unanswered ping
+  #          would fail the job; the wait below is the one that counts), and asks the private listener
   #          `GET /v1/version?at_least=<version>`, which takes no token: 200 once the coordinator
   #          is at least that version, 409 while it is older, 404 from a coordinator before the
   #          route; curl retries every failed answer (`--fail`, `--retry-all-errors`) for 30
@@ -496,7 +497,6 @@ jobs:
           version: 1.94.2
           sha256sum: c6f99a5d774c7783b56902188d69e9756fc3dddfb08ac6be4cb2585f3fecdc32
           use-cache: false
-          ping: ${{ vars.HOSTKEEPER_TAILNET_COORDINATOR }}
       - name: Write the coordinator's CA
         id: ca
         env:

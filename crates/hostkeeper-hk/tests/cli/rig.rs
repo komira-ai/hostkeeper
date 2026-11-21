@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 
 use hostkeeper_hk::ssh::{Coordinator, Launch, Verb};
+use hostkeeper_hk::tailnet_wait::Tailnet;
 use hostkeeper_hk::xcode_push::Mac;
 use hostkeeper_hk::{World, run};
 use hostkeeper_proto::ctl::Command;
@@ -453,6 +454,9 @@ pub struct Opts<'a> {
     pub ssh: Option<&'a Recorder>,
     /// The system and the programs of `hk xcode-push`; the real ones when `None`.
     pub mac: Option<&'a Mac>,
+    /// The `tailscale` and the wait of `hk tailnet-wait`; when `None`, a `tailscale` that does
+    /// not exist and a wait that returns at once, so no test runs the host's own.
+    pub tailnet: Option<&'a Tailnet<'a>>,
 }
 
 impl<'a> Opts<'a> {
@@ -468,6 +472,7 @@ impl<'a> Opts<'a> {
             no_home: false,
             ssh: None,
             mac: None,
+            tailnet: None,
         }
     }
 
@@ -502,6 +507,11 @@ impl<'a> Opts<'a> {
 
     pub fn mac(mut self, mac: &'a Mac) -> Self {
         self.mac = Some(mac);
+        self
+    }
+
+    pub fn tailnet(mut self, tailnet: &'a Tailnet<'a>) -> Self {
+        self.tailnet = Some(tailnet);
         self
     }
 
@@ -594,6 +604,12 @@ impl Rig {
         };
         let default_mac = Mac::system();
         let mac = opts.mac.unwrap_or(&default_mac);
+        let default_tailnet = Tailnet {
+            tailscale: self.path("no-tailscale"),
+            limit: std::time::Duration::from_secs(3600),
+            wait: &|_| {},
+        };
+        let tailnet = opts.tailnet.unwrap_or(&default_tailnet);
         let mut world = World {
             table: opts.table,
             stamp: opts.stamp,
@@ -610,6 +626,7 @@ impl Rig {
             web_roots: &web_roots,
             ssh,
             mac,
+            tailnet,
         };
         let code = run(&mut world, args);
         Ran {

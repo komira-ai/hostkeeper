@@ -5,11 +5,15 @@
 //! POST of the request the flags make, with the exit code of the gateway's answer. The SSH tunnel
 //! is built in: [`ssh`] is `hk ssh`, `hk ssh-proxy`, `hk ssh-revoke`, `hk ssh-status` and the
 //! `hk ssh-known-host` that ssh runs. [`xcode_push`] is `hk xcode-push`, which brings an Xcode
-//! release into the coordinator's Xcode store from the operator's own Mac.
+//! release into the coordinator's Xcode store from the operator's own Mac. [`tailnet_wait`] is
+//! `hk tailnet-wait`, which waits for the coordinator after a CI runner joined the tailnet and
+//! rejoins it once when the coordinator does not answer.
 //!
 //! - [`run`]: a command line against a [`World`], which holds everything it reads and writes: the
 //!   command table, the streams, the home directory, the runner's token request, the program
-//!   that runs the ssh verbs and the programs of the Mac that `hk xcode-push` runs. The tests of this crate run it with fakes for all of them.
+//!   that runs the ssh verbs, the programs of the Mac that `hk xcode-push` runs and the
+//!   `tailscale` and the clock of `hk tailnet-wait`. The tests of this crate run it with fakes for
+//!   all of them.
 //! - [`main`]: the program's `main`, which builds the real [`World`] from the process.
 //! - [`markdown`]: `docs/cli.md`, from a command table.
 //! - [`stamp`]: the version `hk --version` prints, with the commit of a release build.
@@ -31,6 +35,7 @@ mod send;
 pub mod ssh;
 pub mod stamp;
 mod table;
+pub mod tailnet_wait;
 #[cfg(test)]
 mod tests;
 pub mod xcode_push;
@@ -75,6 +80,8 @@ pub struct World<'a> {
     pub ssh: &'a dyn ssh::Launch,
     /// The system and the programs `hk xcode-push` runs.
     pub mac: &'a xcode_push::Mac,
+    /// The `tailscale` program and the wait of `hk tailnet-wait`.
+    pub tailnet: &'a tailnet_wait::Tailnet<'a>,
 }
 
 /// Why a command line stopped before its answer: a usage error (exit 2), a failure (exit 1), or
@@ -160,6 +167,7 @@ pub fn main() -> ExitCode {
         web_roots: &system_roots,
         ssh: &ssh::System,
         mac: &xcode_push::Mac::system(),
+        tailnet: &tailnet_wait::Tailnet::system(),
     };
     ExitCode::from(run(&mut world, &args))
 }

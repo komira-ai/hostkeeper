@@ -280,7 +280,7 @@ in order lands when that pin moves to a revision that has the input, and the cal
 | `version` | string | yes |  | The version of the service to set. |
 | `targets` | string | no |  | The targets of the version: one JSON object keyed by platform (`linux-x86_64`, `linux-arm64`, `macos-arm64`), each value `{"entries": [...]}` in the order the service prefers, under 128 KiB, the most the runner passes in one environment value or argument ([Targets](#targets)). Needs a coordinator that takes `SetDesired` with targets. |
 | `host_group` | string | no |  | The host group the version is set in and waited on, as the coordinator names it ([Host groups](#host-groups)). Empty: each group that lists the service (for a token whose allow-list entry names `host_groups`, each of those that lists it), the call sending no group, as before this input. A non-empty value needs a coordinator that holds host groups and the `hk` of a hostkeeper release that has `--host-group`. The coordinator has no built-in group: a name it does not hold, `all` included, is refused `unknown_host_group`. |
-| `hostkeeper_version` | string | yes |  | The hostkeeper release whose command line, `hk`, makes the calls. |
+| `hostkeeper_version` | string | yes |  | The hostkeeper release whose command line, `hk`, makes the calls. With `join_tailnet`, its hk must have `hk tailnet-wait`: pin the release built from the commit of `set-desired.yml` you pin, as [Pinning hostkeeper](#pinning-hostkeeper) says. |
 | `hostkeeper_commit` | string | yes |  | The commit of `komira-ai/hostkeeper` that release was built from, 40 lower-case hex digits. |
 | `coordinator_url` | string | yes |  | The coordinator's private listener, as `https://<host>[:<port>]`. |
 | `coordinator_ca` | string | yes |  | The PEM certificates of the CA the coordinator's certificate must chain to. No other root is trusted. |
@@ -290,7 +290,7 @@ in order lands when that pin moves to a revision that has the input, and the cal
 | `join_tailnet` | boolean | no | `false` | Whether to join the tailnet after the verification, so that a GitHub-hosted runner can reach a `coordinator_url` on it ([Reaching the coordinator](#reaching-the-coordinator)). |
 | `tailnet_client_id` | string | no |  | The client ID of the tailnet's federated identity for the calling repository. Not a secret. Needed when `join_tailnet` is true. |
 | `tailnet_audience` | string | no |  | The audience of that federated identity. Not a secret. Needed when `join_tailnet` is true. |
-| `tailnet_coordinator` | string | no |  | The coordinator's name or address on the tailnet. With `join_tailnet`, the join waits until it answers a `tailscale ping` (at most 3 minutes), so the first call does not race the tailnet's spread of the new node. Empty: no wait. |
+| `tailnet_coordinator` | string | no |  | Not read. The join used to `tailscale ping` it and failed the job when one ping went unanswered; the job now waits for the coordinator at `coordinator_url` instead ([Reaching the coordinator](#reaching-the-coordinator)). Kept so that a caller that passes it is not refused. |
 | `tailnet_tag` | string | no | `tag:hk-ci` | The tag the join gives the runner's node: the tag the federated identity's trust credential issues ([The tag and the ACL](#the-tag-and-the-acl)). `tag:` followed by a lower-case letter, then lower-case letters, digits and `-`; one tag, not a list. Any other value, the empty one included, ends the job at its first step, whether or not it joins. |
 
 ## Outputs
@@ -366,7 +366,16 @@ verification step and before the client runs:
   for the federated identity's audience and exchanges it with Tailscale. No auth key or OAuth
   secret exists, in this repository or in the caller's secrets;
 - the node is ephemeral and pre-approved, tagged `tailnet_tag` (`tag:hk-ci` unless the caller
-  passes another), and logged out when the job ends; Tailscale removes it soon after.
+  passes another), and logged out when the job ends; Tailscale removes it soon after;
+- the join does not ping anything. Once the CA is written, the step "Wait for the coordinator on
+  the tailnet" runs the verified hk's `tailnet-wait`: it asks `GET /v1/version` at
+  `coordinator_url`, the address the calls talk to, with no token, up to 6 times 10 seconds
+  apart, until any HTTP answer comes. With none, it leaves the tailnet and joins it again
+  (`tailscale down`, then `tailscale up`, each stopped after 2 minutes) and asks up to 6 times
+  more. The job fails there only when neither round had an answer, or the rejoin failed; the step's
+  log has one line per attempt with no answer and a last line that says how both rounds ended.
+  The join passes `--operator=runner` to `tailscale up`, so that the runner's user may run those
+  two commands without root.
 
 Leave `join_tailnet` false when the coordinator's private listener is reachable from the runner
 some other way; then the step is skipped and no action runs in the job.
@@ -380,7 +389,6 @@ some other way; then the step is skipped and no action runs in the job.
       join_tailnet: true
       tailnet_client_id: ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID }}
       tailnet_audience: ${{ vars.HOSTKEEPER_TAILNET_AUDIENCE }}
-      tailnet_coordinator: hk-coordinator
       # The tag the trust credential issues; tag:hk-ci when the variable is empty.
       tailnet_tag: ${{ vars.HOSTKEEPER_TAILNET_TAG || 'tag:hk-ci' }}
 ```
@@ -470,7 +478,10 @@ was verified, only what runs after), only when `join_tailnet` is true, and only 
 `set-desired.yml` pins: moving that pin is a reviewed change to this repository, and a service
 picks it up only when it moves its own pin of `set-desired.yml`. The tailnet token the action gets
 can add only ephemeral nodes of the credential's tag, which reach what the ACL grants that tag:
-with `tag:hk-ci` and the stanza above, only the coordinator's private listener.
+with `tag:hk-ci` and the stanza above, only the coordinator's private listener. Making the
+runner's user the node's operator lets every later step of the job, not only the wait, change the
+node's settings or take it down; any step can already do that with `sudo` on a GitHub-hosted
+runner, so it gives no step a right it did not have.
 
 ### Not chosen: a reverse proxy
 
@@ -611,7 +622,8 @@ them.
 | Compare the attested source commit | An attestation names another source commit than `hostkeeper_commit` (`jq` prints `false`). The version is not set. | As above. |
 | Unpack the verified hk | The runner could not write the file. The version is not set. | Run the job again. |
 | Check the version of the verified hk | hk does not say `hk <hostkeeper_version>+<first 12 hex digits of hostkeeper_commit>`. The version is not set. | Check the two pins belong together. |
-| Join the tailnet | Only with `join_tailnet`. Tailscale refused the federated identity (no credential for this client ID and audience, a subject that does not match the job, or a `tailnet_tag` the credential does not issue), or `tailnet_coordinator` did not answer a ping within 3 minutes. The version is not set. | Check the [federation](#the-federation-set-up-once-by-a-tailnet-admin) and the [ACL](#the-tag-and-the-acl). |
+| Join the tailnet | Only with `join_tailnet`. Tailscale refused the federated identity (no credential for this client ID and audience, a subject that does not match the job, or a `tailnet_tag` the credential does not issue). The version is not set. | Check the [federation](#the-federation-set-up-once-by-a-tailnet-admin) and the [ACL](#the-tag-and-the-acl). |
+| Wait for the coordinator on the tailnet | Only with `join_tailnet`. The coordinator gave no HTTP answer at `coordinator_url` in either round, before and after the rejoin, or the rejoin itself failed (`tailscale down` or `tailscale up` exited non-zero or did not end within 2 minutes); the last line of the step says how each ended, and a line per attempt says why it had no answer (no route, a refused connection, a TLS error against `coordinator_ca`). `hk: no service tailnet-wait` is an hk older than the command: `hostkeeper_version` is not the release of the pinned commit. `reason` is empty. The version is not set. | A TLS error: check `coordinator_ca` and the name in `coordinator_url`. No route or no connection: check the [ACL](#the-tag-and-the-acl) and that the coordinator is up, then run the job again. |
 | Write the request of the set | `targets` is empty or is not one JSON object (jq's error names the rule). `reason` is empty. The version is not set. | Give the targets of the release as one JSON object. |
 | Set the desired version | The coordinator refused the call, and `reason` is its token: `unauthorized` or `forbidden` (no trusted publisher of the service admits this repository, workflow file, branch or environment, or the allow-list does not accept the audience), `unknown_service`, `invalid_request` (a service or version the coordinator does not take), `not_in_host_group` (the group does not exist or does not list the service, or, with no `host_group`, no group lists it), `invalid_request` also when `host_group` is not a host group name, `ambiguous_host_group` (no `host_group`, and the set carries a generation while more than one group lists the service), `limits_in_host_group` (the request carries `max_updating` or `min_up`, which belong to the group's policy), `forbidden` also when the entry's `host_groups` do not include the group, or, with no `host_group`, include none that lists the service ([Host groups](#host-groups)), `held_bad` (the version is marked bad; only an operator can lift the mark, design 8.1), `keys_unavailable` (retry later), `coordinator_older` (the coordinator is older than the hostkeeper release whose hk made the call: it refused a field it does not know, and hk's one more call to the coordinator's `GET /v1/version` showed it older; do not retry, update the coordinator, [coordinator-update.md](coordinator-update.md), then run the job again), `target_invalid` (the targets break a rule of a release, [Targets](#targets)), `release_exists` (the version was set before with other targets; do not retry). `no_answer`: the coordinator could not be reached (with `join_tailnet` false this is what a GitHub-hosted runner gets, because the private listener is not reachable from it, [Reaching the coordinator](#reaching-the-coordinator)), GitHub issued no token (the calling job does not grant `id-token: write`), or hk refused a flag. `not_stored`: it answered with another version. The version is not set, except for `not_stored` and possibly `no_answer`: read `hk releases status --service <service>` before you retry. | Fix what the token names, then run the job again. |
 | Wait for the fleet to converge | The version is set. `halted`: a host halted the service, and no host is ordered until an operator clears the halt (a halt whose host reports the service absent clears itself once, and the host is ordered the install again). `superseded`: the desired version changed while the job waited (an automatic rollback, or a newer release). `not_converged`: `max_polls` times 10 seconds passed and the fleet had not converged; the roll goes on. `invalid_wait`: `max_polls` is above 180 (or below 1). `too_many_waits`: the coordinator already holds 16 waits on its listener; run the job again. `no_answer`: the wait was cut (a restart of the coordinator, the network) or got no token. | Look at the service in the coordinator's UI or with `hk releases status`. |
