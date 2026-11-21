@@ -481,7 +481,11 @@ async fn a_heartbeat_is_answered_with_the_order_and_the_features_the_decision_na
     announced.installers = vec!["apt".to_owned()];
     let reply = beat(&farm.coordinator, &who, &announced).await;
     let response: proto::HeartbeatResponse = reply.decode();
-    assert_eq!(response.features, ["order-v1", "target-v1"]);
+    // With the feature the coordinator offers to every agent that announces features.
+    assert_eq!(
+        response.features,
+        ["order-v1", "target-v1", "maintenance-v1"]
+    );
     let order = response.order.expect("an update order");
     assert_eq!(order.r#try, 1);
     assert!(order.order_id.starts_with("update-"));

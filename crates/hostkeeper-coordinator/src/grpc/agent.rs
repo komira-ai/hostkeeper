@@ -129,6 +129,11 @@ impl Api for AgentService {
         // The sets are made once the heartbeat is taken (a retiring host's is refused, so it is
         // sent none): the host's announced features are the ones this heartbeat said.
         let mut response = response_of(answer, order);
+        // The feature it offers goes to every agent that announces features, named or not
+        // ([`crate::features::OFFERED`]).
+        response.features = self
+            .coordinator
+            .offering(&request.get_ref().features, &response.features);
         response.repositories = self.coordinator.repository_set(&host_id);
         response.facts = facts;
         response.operator_keys = self

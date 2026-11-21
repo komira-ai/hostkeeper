@@ -61,7 +61,7 @@ pub fn peer(host: &str) -> Peer {
 }
 
 /// One gRPC call through the router: the status code, its message and the response message.
-fn call(
+pub fn call(
     coordinator: &Arc<Coordinator>,
     surface: Surface,
     peer: &Peer,
@@ -238,7 +238,7 @@ fn verdict(result: &OrderResult) -> Option<pb::UpdateResult> {
 }
 
 /// The loop's heartbeat as the request `Coordinator.Heartbeat` carries: the features and the
-/// installers announced, and every service with its installer.
+/// installers announced, every service with its installer, and the maintenance report.
 pub fn request_of(beat: &Heartbeat) -> pb::HeartbeatRequest {
     pb::HeartbeatRequest {
         installers: beat.installers.clone(),
@@ -283,6 +283,7 @@ pub fn request_of(beat: &Heartbeat) -> pb::HeartbeatRequest {
             .collect(),
         sent_unix: Some(beat.sent_unix),
         trusted_root_reason: pb::TrustedRootReason::Unspecified.into(),
+        maintenance: beat.maintenance.clone(),
         ..pb::HeartbeatRequest::default()
     }
 }

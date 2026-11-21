@@ -62,10 +62,12 @@ async fn the_grpc_response_advertises_forced_v1_with_the_force() {
     assert_eq!(every.features, FEATURES);
 
     let forced = ["heartbeat-v2", "forced-v1", "target-v1"];
+    // What it is answered: those, and the feature offered to every agent that announces any.
+    let answered = ["heartbeat-v2", "forced-v1", "target-v1", "maintenance-v1"];
     let response: proto::HeartbeatResponse = beat(&farm.coordinator, &who, &daemon_beat(&forced))
         .await
         .decode();
-    assert_eq!(response.features, forced);
+    assert_eq!(response.features, answered);
     let caller = farm.coordinator.caller(Some(OPERATOR)).await;
     let made = farm
         .coordinator
@@ -88,7 +90,7 @@ async fn the_grpc_response_advertises_forced_v1_with_the_force() {
     let response: proto::HeartbeatResponse = beat(&farm.coordinator, &who, &daemon_beat(&forced))
         .await
         .decode();
-    assert_eq!(response.features, forced);
+    assert_eq!(response.features, answered);
     let order = response.order.expect("the force");
     assert_eq!((order.order_id.as_str(), order.r#try), ("force-1", 1));
     assert_eq!(

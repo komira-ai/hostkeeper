@@ -398,6 +398,23 @@ impl Coordinator {
         self
     }
 
+    /// The features of the answer to a gRPC heartbeat that announced `announced`, whose answer
+    /// agreed `agreed` (those it named that this coordinator advertises): with them, the features
+    /// of [`crate::features::OFFERED`] this coordinator advertises, in its order. An agent that announced none is
+    /// answered none.
+    pub(crate) fn offering(&self, announced: &[String], agreed: &[String]) -> Vec<String> {
+        if announced.is_empty() {
+            return Vec::new();
+        }
+        self.features
+            .iter()
+            .filter(|name| {
+                agreed.contains(name) || crate::features::OFFERED.contains(&name.as_str())
+            })
+            .cloned()
+            .collect()
+    }
+
     /// The fleet's lock, which every decision and order is made under, with the operator's
     /// marks the decisions read refreshed from the ops store ([`crate::holds::marks_of`]). The
     /// lock order is the fleet's, then the ops store's.
