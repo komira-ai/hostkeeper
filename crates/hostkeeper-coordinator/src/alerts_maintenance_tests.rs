@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 
-use crate::alerts::{Alert, At, EnrollmentFacts, Kind, Subject, Thresholds, derive};
+use crate::alerts::{Alert, At, EnrollmentFacts, Kind, Said, Subject, Thresholds, derive};
 use crate::fleet::{Fleet, QUIET_START};
 use crate::host_groups_support::UNIX;
 use crate::maintenance_calls_tests::{host_at, run_of};
@@ -87,6 +87,7 @@ fn a_halted_turn_raises_a_critical_alert_naming_the_host_the_run_the_group_and_t
                 "h1 halted in its turn of maintenance run run-1, in host group alpha: its daemon \
                  said \"apply linux: exit 1\"{HALTED_TAIL}"
             ),
+            said: Said::default(),
         }]
     );
     assert_eq!(
@@ -120,6 +121,7 @@ fn a_halted_turn_with_no_reason_and_no_group_says_so() {
                 "h1 halted in its turn of maintenance run run-2, in no host group: its daemon \
                  gave no reason{HALTED_TAIL}"
             ),
+            said: Said::default(),
         }]
     );
 }
@@ -182,6 +184,7 @@ fn a_turn_stored_not_back_raises_a_critical_alert_and_a_rebooting_one_none() {
                  noted at unix {UNIX}; it stays cordoned (its hold file keeps it so), no further \
                  host of its group starts in the run, and its turn goes on when it reports again"
             ),
+            said: Said::default(),
         }]
     );
     assert_eq!(

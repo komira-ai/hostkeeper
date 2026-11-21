@@ -14,6 +14,7 @@ use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_wire::wire::{Health, Outcome, UpdateResult};
 use hostkeeper_wire::{HostId, Platform};
 
+use super::Said;
 use super::{
     Alert, At, EnrollmentFacts, Kind, Subject, Thresholds, Waiting, collides_with, derive,
 };
@@ -167,6 +168,7 @@ fn a_halted_service_is_a_halt() {
             message: "kbf is halted at 2.0 by d1, check disk_full: nothing is ordered for it \
                       until an operator clears the halt"
                 .to_owned(),
+            said: Said::default(),
         }]
     );
 
@@ -187,6 +189,7 @@ fn a_halted_service_is_a_halt() {
             message: "kbf is halted at 2.0 by an operator: nothing is ordered for it until an \
                       operator clears the halt"
                 .to_owned(),
+            said: Said::default(),
         }]
     );
 
@@ -264,6 +267,7 @@ fn a_pending_request_waits_for_an_operator() {
                     "ab".repeat(32),
                     UNIX + 10
                 ),
+                said: Said::default(),
             },
             Alert {
                 subject: Subject {
@@ -276,6 +280,7 @@ fn a_pending_request_waits_for_an_operator() {
                     "cd".repeat(32),
                     UNIX + 10
                 ),
+                said: Said::default(),
             },
         ]
     );
@@ -296,6 +301,7 @@ fn a_host_two_daemons_report_is_a_duplicate() {
             message: "two live daemons report the identity of d1 (a cloned disk): it is \
                       ordered nothing until a new key replaces it"
                 .to_owned(),
+            said: Said::default(),
         }]
     );
     assert_eq!(
@@ -329,6 +335,7 @@ fn a_pending_duplicate_claim_names_both_hosts() {
                      leave it",
                     "ab".repeat(32)
                 ),
+                said: Said::default(),
             },
             Alert {
                 subject: Subject {
@@ -340,6 +347,7 @@ fn a_pending_duplicate_claim_names_both_hosts() {
                      only with replace, or leave it",
                     "cd".repeat(32)
                 ),
+                said: Said::default(),
             },
         ]
     );
@@ -364,6 +372,7 @@ fn a_failed_canary_names_its_host_while_its_version_is_bad() {
         vec![Alert {
             subject: subject(Kind::FailedCanary, "kbf", "d1", "2.0"),
             message: "d1, a canary of kbf, failed 2.0: it is marked bad and rolled back".to_owned(),
+            said: Said::default(),
         }]
     );
     let unmarked = marked(ServiceOps::default());
@@ -410,6 +419,7 @@ fn a_held_host_on_a_bad_version_is_held_on_bad_version() {
             message: "an operator holds d1 on kbf 2.0, which is marked bad: it is not ordered \
                       off it until the hold is released"
                 .to_owned(),
+            said: Said::default(),
         }]
     );
 }
@@ -480,6 +490,7 @@ fn a_host_abandoned_while_updating_stands_while_excluded() {
                           gone; possibly_mid_update): its update slot was freed, and it stays \
                           excluded until included"
                     .to_owned(),
+                said: Said::default(),
             },
             Alert {
                 subject: subject(Kind::AbandonedWhileUpdating, "kbf", "d2", ""),
@@ -487,6 +498,7 @@ fn a_host_abandoned_while_updating_stands_while_excluded() {
                           reason): its update slot was freed, and it stays excluded until \
                           included"
                     .to_owned(),
+                said: Said::default(),
             },
         ]
     );
@@ -520,6 +532,7 @@ fn a_host_silent_for_the_threshold_is_silent_and_one_just_inside_is_not() {
         vec![Alert {
             subject: subject(Kind::SilentHost, "", "d1", ""),
             message: "d1 has not heartbeated for 300 s (the threshold is 300 s)".to_owned(),
+            said: Said::default(),
         }]
     );
     let earlier = derive(
@@ -570,6 +583,7 @@ fn a_cert_inside_the_window_is_near_expiry_and_one_outside_is_not() {
                  its renewal is failing (see the coordinator's log)",
                 now + 599
             ),
+            said: Said::default(),
         }]
     );
     assert_eq!(cert_alerts(Some(now + 600)), Vec::new());
@@ -581,6 +595,7 @@ fn a_cert_inside_the_window_is_near_expiry_and_one_outside_is_not() {
                 "the certificate the coordinator serves its hosts expired at unix {now}: its \
                  renewal is failing (see the coordinator's log)"
             ),
+            said: Said::default(),
         }]
     );
     assert_eq!(cert_alerts(None), Vec::new());
@@ -639,6 +654,8 @@ fn alerts_come_by_kind_then_service_and_host() {
         Kind::XcodeReleaseWaiting,
         Kind::XcodeVersionTaken,
         Kind::UpdatesDue,
+        Kind::FailedUpdate,
+        Kind::HostHalt,
         Kind::MaintenanceHalted,
         Kind::MaintenanceNotBack,
     ];
@@ -660,13 +677,17 @@ fn alerts_come_by_kind_then_service_and_host() {
             "xcode_release_waiting",
             "xcode_version_taken",
             "updates_due",
+            "failed_update",
+            "host_halt",
             "maintenance_halted",
             "maintenance_not_back",
         ]
     );
     assert_eq!(
         all.map(|kind| kind.proto() as i32),
-        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 16, 17, 18, 19, 20, 21]
+        [
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 16, 17, 18, 19, 20, 21, 22, 23
+        ]
     );
     let critical: Vec<Kind> = all
         .into_iter()
@@ -679,6 +700,8 @@ fn alerts_come_by_kind_then_service_and_host() {
             Kind::Duplicate,
             Kind::FailedCanary,
             Kind::StoreUnreachable,
+            Kind::FailedUpdate,
+            Kind::HostHalt,
             Kind::MaintenanceHalted,
             Kind::MaintenanceNotBack
         ]

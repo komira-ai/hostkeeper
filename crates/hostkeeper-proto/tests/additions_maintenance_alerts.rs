@@ -1,6 +1,6 @@
 //! What the maintenance alerts add to the operator API, new since the committed baseline
-//! (`proto/compat/baseline.binpb`, the release before): `AlertKind.MAINTENANCE_HALTED` (20) and
-//! `AlertKind.MAINTENANCE_NOT_BACK` (21). `Alert` and `AlertKind` are new since the baseline, so
+//! (`proto/compat/baseline.binpb`, the release before): `AlertKind.MAINTENANCE_HALTED` (22) and
+//! `AlertKind.MAINTENANCE_NOT_BACK` (23). `Alert` and `AlertKind` are new since the baseline, so
 //! no reader of the release before has them: what is proved is that the two values are on the wire
 //! as written, that a reader that does not know a kind's number keeps it as the number and writes
 //! it back byte for byte, and that an alert of a kind of the release before still reads as it was
@@ -44,24 +44,24 @@ fn the_two_kinds_have_their_numbers_and_the_release_before_has_no_alert() {
         .get_enum_by_name("hostkeeper.operator.v1.AlertKind")
         .expect("AlertKind");
     for (name, number) in [
-        ("ALERT_KIND_MAINTENANCE_HALTED", 20),
-        ("ALERT_KIND_MAINTENANCE_NOT_BACK", 21),
+        ("ALERT_KIND_MAINTENANCE_HALTED", 22),
+        ("ALERT_KIND_MAINTENANCE_NOT_BACK", 23),
     ] {
         let value = kind.get_value_by_name(name).expect("value");
         assert_eq!(value.number(), number, "{name}");
     }
-    assert_eq!(op::AlertKind::MaintenanceHalted as i32, 20);
-    assert_eq!(op::AlertKind::MaintenanceNotBack as i32, 21);
+    assert_eq!(op::AlertKind::MaintenanceHalted as i32, 22);
+    assert_eq!(op::AlertKind::MaintenanceNotBack as i32, 23);
 }
 
 /// Catches: an alert of a new kind, or its host group, lost or read as another kind: proves the
-/// tag on the wire, field 1 (`0x08`) holding 20 or 21, and the group in field 10 (`0x52`), read
+/// tag on the wire, field 1 (`0x08`) holding 22 or 23, and the group in field 10 (`0x52`), read
 /// back as written by this build and by a reader that builds the message from the descriptor.
 #[test]
 fn a_maintenance_alert_reads_back_as_written() {
     for (kind, number) in [
-        (op::AlertKind::MaintenanceHalted, 20),
-        (op::AlertKind::MaintenanceNotBack, 21),
+        (op::AlertKind::MaintenanceHalted, 22),
+        (op::AlertKind::MaintenanceNotBack, 23),
     ] {
         let alert = op::Alert {
             kind: kind.into(),
@@ -91,14 +91,14 @@ fn a_maintenance_alert_reads_back_as_written() {
 }
 
 /// Catches: a reader that does not know a kind's number, as a reader of the release before does
-/// not know 20 and 21, that refuses the alert, drops it or writes it back changed: the number is
-/// kept as the number (23 stands for a kind no release has yet) and the alert's other fields read
+/// not know 22 and 23, that refuses the alert, drops it or writes it back changed: the number is
+/// kept as the number (30 stands for a kind no release has yet) and the alert's other fields read
 /// as written.
 #[test]
 fn a_reader_that_does_not_know_a_kind_keeps_its_number_and_the_alert() {
-    assert!(op::AlertKind::try_from(23).is_err(), "23 is no kind yet");
+    assert!(op::AlertKind::try_from(30).is_err(), "30 is no kind yet");
     let alert = op::Alert {
-        kind: 23,
+        kind: 30,
         severity: op::AlertSeverity::Critical.into(),
         host_id: "h1".to_owned(),
         message: "a later kind".to_owned(),
@@ -108,7 +108,7 @@ fn a_reader_that_does_not_know_a_kind_keeps_its_number_and_the_alert() {
     let bytes = alert.encode_to_vec();
     let read = op::Alert::decode(bytes.as_slice()).expect("decodes");
     assert_eq!(read, alert);
-    assert_eq!(read.kind, 23);
+    assert_eq!(read.kind, 30);
     assert_eq!(read.host_id, "h1");
     assert_eq!(read.encode_to_vec(), bytes, "written back byte for byte");
 }

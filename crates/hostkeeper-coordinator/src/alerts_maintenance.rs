@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use hostkeeper_wire::{HostId, Platform};
 
-use super::{Alert, Kind, Subject};
+use super::{Alert, Kind, Said, Subject};
 use crate::audit_actions::MAINTENANCE_STEP;
 use crate::fleet::Fleet;
 use crate::maintenance_effective::effective_of;
@@ -68,6 +68,7 @@ pub(super) fn halted(ops: &OpsState) -> Vec<Alert> {
                     run.id,
                     place(turn)
                 ),
+                said: Said::default(),
             }
         })
         .collect()
@@ -94,6 +95,7 @@ pub(super) fn not_back(ops: &OpsState) -> Vec<Alert> {
                     place(turn),
                     turn.since_unix
                 ),
+                said: Said::default(),
             }
         })
         .collect()
@@ -132,6 +134,7 @@ pub(super) fn silent_hosts(
                     silent.as_secs(),
                     silent_after.as_secs()
                 ),
+                said: Said::default(),
             })
         })
         .collect()

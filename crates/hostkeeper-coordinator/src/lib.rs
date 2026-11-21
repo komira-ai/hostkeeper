@@ -208,6 +208,7 @@ pub mod operator_repositories;
 pub mod ops;
 pub(crate) mod ops_file;
 pub mod order_terms;
+mod orderable;
 pub mod orders;
 pub mod origin_https;
 pub mod password;
@@ -341,6 +342,8 @@ mod desired_tests;
 mod extras_dropped_tests;
 #[cfg(test)]
 mod facts_tests;
+#[cfg(test)]
+mod failure_alerts_tests;
 #[cfg(test)]
 mod first_heartbeat_tests;
 #[cfg(test)]
@@ -584,6 +587,8 @@ mod state_safety_rollout_tests;
 mod status_service_tests;
 #[cfg(test)]
 mod store_orders_tests;
+#[cfg(test)]
+mod stuck_rollouts_tests;
 #[cfg(test)]
 mod testutil;
 #[cfg(test)]

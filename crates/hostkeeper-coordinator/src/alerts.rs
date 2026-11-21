@@ -52,18 +52,19 @@
 //!   refused ([`crate::xcode_store`]); one alert per version, until the held archive of that version
 //!   is removed (the coordinator's memory, like a failed canary's);
 //! - `updates_due`: one alert per host group with hosts whose kept report has updates due;
-//! - `maintenance_halted`: a host whose turn of a maintenance run is stored halted (the ops
-//!   state), one alert per host naming the run and the reason its daemon gave; it stands until the
-//!   host's daemon reports its turn at another step, after an operator's `RetryHost` or `PutBack`
-//!   ([`maintenance_alerts`]);
-//! - `maintenance_not_back`: a host whose turn is stored not back: it was rebooting and stayed
-//!   silent for its group's `return_secs`, which each observation checks first
-//!   ([`Coordinator::note_not_back`]); it clears when the host reports again. A host rebooting in
-//!   its turn, or not back, raises no `silent_host`.
+//! - `failed_update`: a host whose last report of a service is a failure of the version its group
+//!   wants of it, with the report's reason, detail and try ([`failures`]), until the host reports
+//!   another outcome or another version is wanted;
+//! - `host_halt`: a host that holds a halt of a service of its own (its beat's `local_halt`), with
+//!   its reason and when the host wrote it, stale or not ([`failures`]), until it no longer reports
+//!   it;
+//! - `maintenance_halted` and `maintenance_not_back`: a host whose maintenance turn is stored
+//!   halted or not back ([`maintenance_alerts`]); a host rebooting in its turn raises no
+//!   `silent_host`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 use std::time::Duration;
 
 use hostkeeper_enrollment::enroll::{RecordedApproval, RequestState, RequestView, StoreError};
@@ -140,6 +141,10 @@ pub enum Kind {
     XcodeVersionTaken,
     /// Hosts of a host group have updates due.
     UpdatesDue,
+    /// A host failed its update or install of a service's desired version.
+    FailedUpdate,
+    /// A host holds a halt of a service of its own.
+    HostHalt,
     /// A host's turn of a maintenance run halted.
     MaintenanceHalted,
     /// A host rebooting in its turn of a maintenance run is silent past its group's
@@ -169,6 +174,8 @@ impl Kind {
             Self::XcodeReleaseWaiting => "xcode_release_waiting",
             Self::XcodeVersionTaken => "xcode_version_taken",
             Self::UpdatesDue => "updates_due",
+            Self::FailedUpdate => "failed_update",
+            Self::HostHalt => "host_halt",
             Self::MaintenanceHalted => "maintenance_halted",
             Self::MaintenanceNotBack => "maintenance_not_back",
         }
@@ -182,6 +189,8 @@ impl Kind {
             | Self::Duplicate
             | Self::FailedCanary
             | Self::StoreUnreachable
+            | Self::FailedUpdate
+            | Self::HostHalt
             | Self::MaintenanceHalted
             | Self::MaintenanceNotBack => proto::AlertSeverity::Critical,
             Self::WaitingForOperator
@@ -217,6 +226,8 @@ impl Kind {
             Self::XcodeReleaseWaiting => proto::AlertKind::XcodeReleaseWaiting,
             Self::XcodeVersionTaken => proto::AlertKind::XcodeVersionTaken,
             Self::UpdatesDue => proto::AlertKind::UpdatesDue,
+            Self::FailedUpdate => proto::AlertKind::FailedUpdate,
+            Self::HostHalt => proto::AlertKind::HostHalt,
             Self::MaintenanceHalted => proto::AlertKind::MaintenanceHalted,
             Self::MaintenanceNotBack => proto::AlertKind::MaintenanceNotBack,
         }
@@ -265,6 +276,23 @@ pub struct Alert {
     pub subject: Subject,
     /// What happened and what a person does about it.
     pub message: String,
+    /// What the host said of it, for the alerts of one host's update or halt.
+    pub said: Said,
+}
+
+/// What a host said of the condition of its alert ([`failures`]); empty for the other kinds.
+/// Not part of the alert's identity: a new try of a failed update is the same alert.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Said {
+    /// The reason token of the host's failed report, or of the halt it holds.
+    pub reason: String,
+    /// What the host said of the failure in its report's `detail`.
+    pub detail: String,
+    /// The try of the order that failed (1 for the first); 0 when the host's agent names none.
+    pub tries: u64,
+    /// When the host wrote the halt it holds, unix seconds by its own count of its age; 0 when it
+    /// says nothing of it.
+    pub since_unix: u64,
 }
 
 /// A pending enrollment request, as the alerts read it.
@@ -304,6 +332,9 @@ pub struct EnrollmentFacts {
     pub(crate) xcode_taken: Vec<crate::xcode_store::Taken>,
     /// The host group of each heard host with a kept maintenance report ([`updates`]).
     pub(crate) groups: Option<BTreeMap<HostId, String>>,
+    /// For a coordinator with no host group, the desired version of each service that has one
+    /// ([`failures`]); a group's are its own.
+    pub(crate) wanted: BTreeMap<String, hostkeeper_wire::version::Version>,
 }
 
 /// When an observation is made: by the coordinator's clock (since its start, the clock the
@@ -382,6 +413,13 @@ pub(crate) fn derive_in(
     alerts.extend(xcode_release_waiting(enrollment));
     alerts.extend(crate::xcode_service::version_taken(&enrollment.xcode_taken));
     alerts.extend(updates::updates_due(fleet, enrollment.groups.as_ref()));
+    alerts.extend(failures::failed_updates(
+        fleet,
+        services,
+        groups,
+        &enrollment.wanted,
+    ));
+    alerts.extend(failures::host_halts(fleet, ops, services, groups, at));
     alerts.extend(maintenance_alerts::halted(ops));
     alerts.extend(maintenance_alerts::not_back(ops));
     alerts.sort_by(|a, b| a.subject.cmp(&b.subject));
@@ -441,6 +479,7 @@ fn halts(ops: &OpsState, services: &Services) -> Vec<Alert> {
                      clears the halt",
                     def.name, halt.target
                 ),
+                said: Said::default(),
             })
         })
         .collect()
@@ -467,6 +506,7 @@ fn waiting_for_operator(enrollment: &EnrollmentFacts) -> Vec<Alert> {
                     "request {} ({what}, received at unix {}) waits for an operator's approval",
                     request.request_id, request.posted_unix
                 ),
+                said: Said::default(),
             }
         })
         .collect()
@@ -486,6 +526,7 @@ fn duplicates(enrollment: &EnrollmentFacts) -> Vec<Alert> {
                 "two live daemons report the identity of {host} (a cloned disk): it is ordered \
                  nothing until a new key replaces it"
             ),
+            said: Said::default(),
         })
         .collect()
 }
@@ -513,6 +554,7 @@ fn duplicate_claims(enrollment: &EnrollmentFacts) -> Vec<Alert> {
                      or leave it",
                     request.request_id
                 ),
+                said: Said::default(),
             }
         })
         .collect()
@@ -542,6 +584,7 @@ fn failed_canaries(fleet: &Fleet, ops: &OpsState, packages: &BTreeSet<String>) -
                         "{node}, a canary of {name}, failed {version}: it is marked bad and rolled \
                          back"
                     ),
+                    said: Said::default(),
                 })
                 .collect::<Vec<_>>()
         })
@@ -568,6 +611,7 @@ fn held_on_bad_versions(fleet: &Fleet, ops: &OpsState, packages: &BTreeSet<Strin
                             "an operator holds {id} on {name} {version}, which is marked bad: it is \
                              not ordered off it until the hold is released"
                         ),
+                        said: Said::default(),
                     })
                 })
                 .collect::<Vec<_>>()
@@ -609,6 +653,7 @@ fn abandoned(ops: &OpsState, packages: &BTreeSet<String>) -> Vec<Alert> {
                          ({}): its update slot was freed, and it stays excluded until included",
                         entry.reason.as_deref().unwrap_or("no reason")
                     ),
+                    said: Said::default(),
                 })
         })
         .collect()
@@ -619,6 +664,7 @@ fn store_unreachable(fleet: &Fleet) -> Option<Alert> {
     fleet.store_lost.then(|| Alert {
         subject: Subject::of(Kind::StoreUnreachable),
         message: "the session with the database is lost: nothing is ordered, a change that lowers protection is refused, and one that raises it stands in memory until the session is back".to_owned(),
+        said: Said::default(),
     })
 }
 
@@ -648,6 +694,7 @@ fn trusted_roots(fleet: &Fleet) -> Vec<Alert> {
                     "{id} reports its Sigstore trusted root {reason} ({age}): {then}; update \
                      hostkeeper on it, or copy a current root to it"
                 ),
+                said: Said::default(),
             })
         })
         .collect()
@@ -663,6 +710,7 @@ fn xcode_release_waiting(enrollment: &EnrollmentFacts) -> Option<Alert> {
             ..Subject::of(Kind::XcodeReleaseWaiting)
         },
         message: crate::xcode_feed::waiting_message(release),
+        said: Said::default(),
     })
 }
 
@@ -684,6 +732,7 @@ fn cert_near_expiry(enrollment: &EnrollmentFacts, unix: u64, window: u64) -> Vec
                     "the certificate the coordinator serves its hosts {when}: its renewal is \
                      failing (see the coordinator's log)"
                 ),
+                said: Said::default(),
             }
         })
         .into_iter()
@@ -717,71 +766,6 @@ fn collides_with(view: &RequestView, approvals: &[RecordedApproval]) -> Option<S
         .map(|approval| approval.host_id.clone())
 }
 
-/// An alert as an observation found it: with when it was first observed, unix seconds.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Observed {
-    /// The alert.
-    pub alert: Alert,
-    /// When it was first observed.
-    pub first_unix: u64,
-}
-
-/// The alerts the last observation found, each with when it was first observed: in memory, and,
-/// over a database, in its rows too ([`Book::over`]), which decide which coordinator logs an alert.
-#[derive(Debug, Default)]
-pub struct Book {
-    thresholds: Thresholds,
-    seen: Mutex<BTreeMap<Subject, u64>>,
-    rows: Option<crate::store::postgres::alert_rows::PgAlerts>,
-}
-
-impl Book {
-    /// A book that derives with `thresholds`.
-    #[must_use]
-    pub fn new(thresholds: Thresholds) -> Self {
-        Self {
-            thresholds,
-            seen: Mutex::new(BTreeMap::new()),
-            rows: None,
-        }
-    }
-
-    /// Notes the alerts `find` finds, with the unix time it found them at, under the book's lock,
-    /// so that two observations (the tick and an `Alerts.List`) are made one after the other and
-    /// an older finding never follows a newer one: an alert the last observation did not find is
-    /// first observed now and logged; one it found keeps its time; one it found and this did not
-    /// is forgotten. When `find` fails nothing is noted.
-    fn observe_with<E>(
-        &self,
-        find: impl FnOnce() -> Result<(Vec<Alert>, u64), E>,
-    ) -> Result<Vec<Observed>, E> {
-        let mut seen = self.seen.lock().unwrap_or_else(PoisonError::into_inner);
-        let (alerts, unix) = find()?;
-        if let Some(observed) = rows::observed(self.rows.as_ref(), &alerts, unix) {
-            *seen = observed
-                .iter()
-                .map(|one| (one.alert.subject.clone(), one.first_unix))
-                .collect();
-            return Ok(observed);
-        }
-        let observed: Vec<Observed> = alerts
-            .into_iter()
-            .map(|alert| {
-                let first_unix = seen.get(&alert.subject).copied().unwrap_or_else(|| {
-                    log(&alert);
-                    unix
-                });
-                Observed { alert, first_unix }
-            })
-            .collect();
-        *seen = observed
-            .iter()
-            .map(|one| (one.alert.subject.clone(), one.first_unix))
-            .collect();
-        Ok(observed)
-    }
-}
-
 /// The error log line of `alert`, with its `alert=` field.
 fn log(alert: &Alert) {
     let subject = &alert.subject;
@@ -812,6 +796,10 @@ fn alert_proto(observed: Observed) -> proto::Alert {
         request_id: subject.request,
         other_host_id: subject.other_host,
         host_group: subject.group,
+        reason: alert.said.reason,
+        detail: alert.said.detail,
+        tries: alert.said.tries,
+        since_unix: alert.said.since_unix,
     }
 }
 
@@ -856,6 +844,12 @@ impl Coordinator {
             xcode_waiting: self.xcode.release_waiting(),
             xcode_taken: self.xcode_taken(),
             groups: self.groups_of_reports(),
+            wanted: self
+                .desired
+                .all()
+                .into_iter()
+                .map(|(name, want)| (name, want.version))
+                .collect(),
             ..enrollment
         };
         let at = At {
@@ -982,6 +976,17 @@ mod maintenance_alerts;
 
 #[path = "alerts_prerequisites.rs"]
 mod prerequisite_alerts;
+
+#[path = "alerts_book.rs"]
+mod book;
+
+#[path = "alerts_failures.rs"]
+mod failures;
+
+#[cfg(test)]
+#[path = "alerts_failures_tests.rs"]
+mod failures_tests;
+pub use book::{Book, Observed};
 
 #[path = "alerts_rows.rs"]
 mod rows;

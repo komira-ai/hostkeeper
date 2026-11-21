@@ -361,6 +361,10 @@ and takes no place in its plan, whichever stage each plan is in. So a config pac
 its service is never ordered to a host that does not run the service. A package that is not
 installed because a halt, a hold, an exclusion, a version marked bad, the quiet start or a gate of
 its plan holds it also holds the later ones back. Updates are not ordered by the list.
+A later package whose every host left to order waits `install_order` (behind an earlier package
+that failed its install on one host, say, and waits `stage_failed` on the others) has nothing to
+order: it takes no place of `--live-rollouts` and holds no other service of any group, and its plan
+says `nothing_to_order` ([rollout-plans.md](rollout-plans.md#across-services---live-rollouts)).
 
 The uninstall of a package waits, told `uninstall_order`, while a package whose intent was
 written before it (which the group listed after it) is still on the host, whatever holds that
@@ -525,7 +529,10 @@ shows, per package, the groups that list it (`host_groups`), their hosts and min
 leaves `roles` and `assignments` empty. `Alerts.List` derives a `halt` alert from each group's
 halt (groups with the same halt of a package, host and version are one alert that names them
 all), and the failed-canary, held-on-bad-version and abandoned-host alerts cover the packages
-that only a group lists.
+that only a group lists. A host of a group whose last report of a package is a failure of the
+group's desired version is a `failed_update` alert, and a host that holds a halt of a package of
+its own is a `host_halt` alert, each naming the group in its message
+([rollout-plans.md](rollout-plans.md#a-failed-host)).
 
 ## The audit log
 

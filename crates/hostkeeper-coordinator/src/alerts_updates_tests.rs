@@ -8,6 +8,7 @@ use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_wire::Platform;
 use hostkeeper_wire::wire::{Health, Heartbeat};
 
+use crate::alerts::Said;
 use crate::alerts::{
     Alert, At, Book, EnrollmentFacts, Kind, Observed, Subject, Thresholds, alert_proto, derive,
     rows,
@@ -111,6 +112,7 @@ fn alert(group: &str, message: &str) -> Alert {
             ..Subject::of(Kind::UpdatesDue)
         },
         message: message.to_owned(),
+        said: Said::default(),
     }
 }
 
@@ -268,6 +270,7 @@ fn the_row_key_holds_the_group_in_the_service_column() {
             ..Subject::of(Kind::Halt)
         },
         message: "m".to_owned(),
+        said: Said::default(),
     };
     assert_eq!(
         rows::key(&service)[..2],

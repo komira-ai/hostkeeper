@@ -12,8 +12,10 @@ pub enum Cutover {
     /// The kind is applied, and the host now runs `version` of it (the macOS build, the Xcode
     /// version, the kernel).
     Applied { version: String },
-    /// The kind is installed and takes effect only after a reboot: the hook records that the
-    /// kind's reboot is under way and reboots ([`super::Rebooter`]). The next `cutover`, in the
+    /// The kind takes effect only after a reboot: the hook records that the kind's reboot is under
+    /// way, then reboots, by the kind's own [`MaintenanceKind::restart`] when it has one (a Mac's
+    /// update, whose install restarts the Mac: the kind is then ready to install, not installed),
+    /// else by the host's [`super::Rebooter`] (the kind is installed). The next `cutover`, in the
     /// next boot, asks the kind for its version ([`MaintenanceKind::after_reboot`]).
     NeedsReboot,
 }
@@ -57,6 +59,15 @@ pub trait MaintenanceKind {
     /// Apply, on the drained host. Run once per run: the hook does not call it again once the
     /// kind is recorded applied or its reboot under way.
     fn cutover(&self, params: &MaintainParams) -> Result<Cutover, KindError>;
+    /// The reboot a [`Cutover::NeedsReboot`] asked for, when the kind makes it itself: run by the
+    /// hook only after it recorded the kind's reboot under way, and again in place of a reboot
+    /// asked for in the boot the host still runs. A Mac's update restarts the Mac as it installs
+    /// (the design's section 5.5), so its install runs here. `Ok` once the restart is under way.
+    /// `None`, the default: the kind has no restart of its own, and the host's
+    /// [`super::Rebooter`] makes it.
+    fn restart(&self, _params: &MaintainParams) -> Option<Result<(), KindError>> {
+        None
+    }
     /// After the reboot a [`Cutover::NeedsReboot`] asked for: the version the host now runs, or
     /// why the kind did not take.
     fn after_reboot(&self, params: &MaintainParams) -> Result<String, KindError>;
