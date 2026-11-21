@@ -1,0 +1,12 @@
+load("//:buildrules.bzl", "cargo_package")
+
+# What this package reads beyond its unit's own sources, which a Buck2 action sees only when declared:
+# its library includes test fixtures, and a test reads the README's list of outcome tokens.
+cargo_package(
+    path = ".",
+    extra_srcs = [
+        "README.md",
+        "tests/fixtures/captured",
+        "tests/fixtures/tls",
+    ],
+)

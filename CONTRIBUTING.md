@@ -38,8 +38,11 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 ```
 
-There is no other build system in this repository. Tests are hermetic: they need no network,
-no fixed port and no root, and they write only under Cargo's target directory.
+Cargo is the build of record: CI's gate, the coverage and every release use it. The same
+workspace also builds with Buck2 through [buildrules](https://github.com/komira-ai/buildrules),
+on a remote-execution build farm, in the advisory farm lane ([docs/farm.md](docs/farm.md)). Tests
+are hermetic: they need no network, no fixed port and no root, and they write only under Cargo's
+target directory.
 
 ## What CI checks on a pull request
 
@@ -81,14 +84,25 @@ Nothing for macOS or linux-arm64 runs on a pull request, and nothing privileged 
 a job on any other platform in any workflow that runs on `pull_request`, refuses a job as root
 (`sudo`, a privileged container) in any workflow but `privileged.yml`, `net-install.yml`, the two
 copies of `privileged.yml`'s jobs in `pr-device.yml` and the job `macos-device` of `release.yml`,
-refuses a write scope, a secret or the token in every workflow that runs on `pull_request`, and it
+refuses a write scope, a secret or the token in every workflow that runs on `pull_request` (but
+the `id-token: write` of `farm.yml`'s job `build`, below), and it
 also refuses an action that is not pinned
 by commit SHA, a runner that is not GitHub-hosted, a workflow without a top-level
 `permissions: {}`, `pull_request_target` and `secrets: inherit`. It also holds
 `set-desired.yml`, the CI client services call ([docs/deploy/ci-client.md](docs/deploy/ci-client.md)),
 to the order of its steps: the release is verified before any step can request an OIDC token or
-run the hostkeeper program. Besides `artifacts.yml`'s `attest`, which signs, that job is the only
-one that may hold `id-token: write`.
+run the hostkeeper program. Besides `artifacts.yml`'s `attest`, which signs, and `farm.yml`'s
+`build`, which joins the build farm's network (below), that job is the only one that may hold
+`id-token: write`.
+
+`.github/workflows/farm.yml` is the farm lane: `buck2 build //:ci` of the workspace on the build
+farm, with `local: 0` asserted, on every push to `main` and every pull request from a branch of
+this repository. It is advisory, never required: `ci.yml` stays the gate. Its job holds
+`id-token: write` so that komira's farm-connect action can join the farm's private network with
+the job's OIDC token, under the exact `if:` the workflow lint gives it (a fork's pull request and
+Dependabot's are skipped; a fork's gets no OIDC token), and the lint holds that action's inputs to the organisation's variables
+of their names. What it builds, what it leaves to `ci.yml` and why, and how to run it yourself:
+[docs/farm.md](docs/farm.md).
 
 ## The privileged workflow: real systemd, after a merge
 

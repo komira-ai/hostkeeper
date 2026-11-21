@@ -1,0 +1,44 @@
+load("@buildrules//rules/rust:cargo_unit.bzl", "stamp_file")
+load("//:buildrules.bzl", "cargo_package")
+
+# The commit build.rs stamps as HOSTKEEPER_BUILD_COMMIT (src/stamp.rs), given as a file: a build script on the
+# farm finds no `git` and no checkout. The committed text is `unknown`, what build.rs says for a source
+# archive, so the coordinator's units keep one cache key across commits; a build that wants its commit in
+# `--version` writes its 12 hex digits here first.
+stamp_file(name = "build_commit", src = "build_commit.txt")
+
+# What this package reads beyond src/, tests/ and build.rs, which a Buck2 action sees only when
+# declared (a unit sees its own src/, tests/ or build.rs alone). Tests read the web app's fixtures, the hello host group, the docs and the packaging they are held to.
+cargo_package(
+    path = ".",
+    stamp_rustc_env = {"HOSTKEEPER_BUILD_COMMIT": ":build_commit"},
+    extra_srcs = [
+        "tests/fixtures/audit",
+        "tests/fixtures/recorded",
+        "tests/fixtures/xcode",
+        "tests/support/readers.rs",
+        "//:README.md",
+        "//:docs/deploy/coordinator",
+        "//:docs/design/models/coordinator-multi-instance.md",
+        "//:docs/gateway.md",
+        "//:packaging/container/Dockerfile",
+        "//:packaging/coordinator/serve.toml.template",
+        "//crates/hostkeeper-ui-tests:tests/fixtures/alerts_list.json",
+        "//crates/hostkeeper-ui-tests:tests/fixtures/hosts_list.json",
+        "//crates/xtask:tests/workflows/yaml.rs",
+        "//examples/hello:host-group.json",
+    ],
+)
+
+# Read by other members (their extra_srcs); exported by reference, so each stays at its path.
+[
+    export_file(
+        name = path,
+        src = path,
+        mode = "reference",
+        visibility = ["PUBLIC"],
+    )
+    for path in [
+        "tests/fixtures/recorded/sequences",
+    ]
+]

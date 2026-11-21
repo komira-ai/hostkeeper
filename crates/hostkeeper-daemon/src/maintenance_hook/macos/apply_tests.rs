@@ -913,11 +913,14 @@ fn child_prints_its_arguments_environment_and_input() {
 #[test]
 fn the_host_installers_run_with_exactly_their_arguments_input_and_an_empty_environment() {
     let exe = std::env::current_exe().expect("the test binary");
+    // Two test threads, whatever the machine: on one, libtest writes `test <name> ... ` before the
+    // child's own output, on the line of its first argument (a one-CPU build worker).
     let helper = strings(&[
         "maintenance_hook::macos::apply::tests::child_prints_its_arguments_environment_and_input",
         "--exact",
         "--ignored",
         "--nocapture",
+        "--test-threads=2",
     ]);
     let output = HostInstallers
         .runner(&exe, Duration::from_secs(60))
