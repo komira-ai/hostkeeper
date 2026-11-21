@@ -119,6 +119,16 @@ impl Cluster {
         )
     }
 
+    /// The entries of the packages of the group `group`, in the group's order.
+    pub(crate) fn in_group<'a>(
+        &'a self,
+        group: &'a crate::host_groups::GroupName,
+    ) -> impl Iterator<Item = &'a Entry> {
+        self.entries
+            .iter()
+            .filter(move |e| e.def.group() == Some(group))
+    }
+
     /// The entries of the service `name`.
     pub(crate) fn of<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a Entry> {
         self.entries.iter().filter(move |e| e.def.name == name)
@@ -151,15 +161,21 @@ impl Cluster {
 
     /// The services queued ahead of `name`, first in line first, each once: those with work left
     /// whose rollout is not live and that something can still order (a service that is halted, at
-    /// a version marked bad, paused, held by a failed host, waiting for an Advance or for `min_up`, or whose every host that has not
-    /// started defers, takes no place), that were set before `name`. Empty when `name` has no
+    /// a version marked bad, paused, held by a failed host, waiting for an Advance or for `min_up`,
+    /// or whose every host that has not started defers or is held by a rule before the plan's gate,
+    /// [`crate::orderable`], takes no place), that were set before `name`. Empty when `name` has no
     /// entry.
     pub(crate) fn ahead_of(&self, name: &str, fleet: &Fleet, now: Duration) -> Vec<String> {
         // The place of the service is that of its entries something can order; a service with
         // none holds the place of its first entry.
         let own: Vec<(bool, Order)> = self
             .of(name)
-            .map(|e| (orderable(e, fleet, now), self.order(e)))
+            .map(|e| {
+                (
+                    orderable(&e.def, e.want.as_ref(), fleet, now),
+                    self.order(e),
+                )
+            })
             .collect();
         let ready = own.iter().filter(|(ok, _)| *ok).map(|(_, order)| order);
         let Some(mine) = ready.min().or_else(|| own.iter().map(|(_, o)| o).min()) else {
@@ -168,7 +184,7 @@ impl Cluster {
         let mut waiting: BTreeMap<Order, &str> = BTreeMap::new();
         for entry in self.entries.iter().filter(|e| e.def.name != name) {
             let order = self.order(entry);
-            if order < *mine && orderable(entry, fleet, now) {
+            if order < *mine && orderable(&entry.def, entry.want.as_ref(), fleet, now) {
                 waiting.entry(order).or_insert(entry.def.name.as_str());
             }
         }
@@ -181,13 +197,18 @@ impl Cluster {
     }
 }
 
-/// Whether `entry` waits for its turn: no live rollout, a desired version not on every host, and a
-/// host something can order now (not a plan that waits for an Advance or for `min_up`).
-fn orderable(entry: &Entry, fleet: &Fleet, now: Duration) -> bool {
-    let Some(want) = entry.want.as_ref() else {
+/// Whether `def`, wanted at `want`, waits for its turn: no live rollout, a desired version not on
+/// every host, and a host something can order now (not a plan that waits for an Advance or for
+/// `min_up`, and a host no rule before the plan's gate holds, [`crate::orderable`]).
+pub(crate) fn orderable(
+    def: &ServiceDef,
+    want: Option<&Desired>,
+    fleet: &Fleet,
+    now: Duration,
+) -> bool {
+    let Some(want) = want else {
         return false;
     };
-    let def = &entry.def;
     if fleet.is_stopped_in(def, &want.version) || why_live(def, Some(want), fleet, now).is_some() {
         return false;
     }
@@ -202,8 +223,5 @@ fn orderable(entry: &Entry, fleet: &Fleet, now: Duration) -> bool {
         && !view.finished()
         && view.paused.is_none()
         && !view.members.iter().any(|m| m.state == HostState::Failed)
-        && view
-            .members
-            .iter()
-            .any(|m| m.state == HostState::Waiting && !m.deferring)
+        && crate::orderable::can_order(def, want, &view, fleet, now)
 }

@@ -39,11 +39,28 @@ pub(crate) fn waits(
     id: &HostId,
     now: Duration,
 ) -> bool {
+    let group: Vec<(&ServiceDef, Option<&Desired>)> = services
+        .defs()
+        .map(|earlier| (earlier, all.get(&earlier.name)))
+        .collect();
+    waits_among(&group, def, fleet, id, now)
+}
+
+/// [`waits`] over `group`, the packages of the group `def` was made for, each with its desired
+/// state.
+pub(crate) fn waits_among(
+    group: &[(&ServiceDef, Option<&Desired>)],
+    def: &ServiceDef,
+    fleet: &Fleet,
+    id: &HostId,
+    now: Duration,
+) -> bool {
     def.scope.is_some()
-        && services
-            .defs()
-            .filter(|earlier| earlier.priority > def.priority && !earlier.roles.is_empty())
-            .any(|earlier| holds_back(earlier, all, fleet, id, now))
+        && group.iter().any(|(earlier, want)| {
+            earlier.priority > def.priority
+                && !earlier.roles.is_empty()
+                && holds_back(earlier, *want, fleet, id, now)
+        })
 }
 
 /// Whether the uninstall of `def` on the host `id` waits for the uninstall of a package that goes
@@ -74,7 +91,7 @@ pub(crate) fn uninstall_waits(
 /// cannot be.
 fn holds_back(
     earlier: &ServiceDef,
-    all: &BTreeMap<String, Desired>,
+    want: Option<&Desired>,
     fleet: &Fleet,
     id: &HostId,
     now: Duration,
@@ -86,7 +103,7 @@ fn holds_back(
     if fleet.is_halted_in(earlier) {
         return true;
     }
-    let Some(want) = all.get(name) else {
+    let Some(want) = want else {
         return false;
     };
     if fleet.is_excluded(name, id) {
