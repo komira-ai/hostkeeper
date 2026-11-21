@@ -6,8 +6,10 @@
 //! the install from the Mac's own listings and keeps it; the kind's own restart, which the hook
 //! runs once it recorded the reboot under way, installs it with the update account's password on
 //! the program's standard input (`softwareupdate --install ... --restart`, or the installer app's
-//! `startosinstall`), which restarts the Mac; `after_reboot` reads the build; `verify` checks the
-//! target build and then removes a major upgrade's installer app.
+//! `startosinstall`), which restarts the Mac, or, with FileVault on, a minor update's
+//! `softwareupdate --install` without `--restart` and then `fdesetup authrestart -inputplist`;
+//! `after_reboot` reads the build; `verify` checks the target build and then removes a major
+//! upgrade's installer app.
 
 mod apply;
 mod plan;
