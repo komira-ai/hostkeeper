@@ -20,8 +20,8 @@ const NOW: u64 = 1_900_000_000;
 /// returns these runs equal, field for field and in the same order.
 ///
 /// The first run names hosts and has a window, a batch, a drain deadline of 0 and takes the last
-/// host; its hosts, sorted by id, are waiting, left out for each [`Skip`] (one without a group)
-/// and not reached. The second names a host group, has no window, batch or drain deadline, was
+/// host; its hosts, sorted by id, are waiting, left out for each [`Skip`] (one without a group),
+/// not reached, and waiting with `macos` left out (`skipped_because` beside the step `waiting`). The second names a host group, has no window, batch or drain deadline, was
 /// cancelled, and has a done host that applied kinds and a halted one with a reason. The third
 /// names one host, has a batch of 1 and a drain deadline of 900, and a host staging.
 pub(crate) fn sample() -> Vec<Run> {
@@ -42,9 +42,11 @@ pub(crate) fn sample() -> Vec<Run> {
     let first = Run {
         id: "run-1900000000-1".to_owned(),
         kinds: vec![Kind::Macos, Kind::Linux],
-        host_ids: ["host-a", "host-b", "host-c", "host-d", "host-e"]
-            .map(str::to_owned)
-            .to_vec(),
+        host_ids: [
+            "host-a", "host-b", "host-c", "host-d", "host-e", "host-e1", "host-e2", "host-e3",
+        ]
+        .map(str::to_owned)
+        .to_vec(),
         host_group: String::new(),
         window_start_unix: 1_900_000_100,
         window_end_unix: 1_900_003_600,
@@ -73,6 +75,12 @@ pub(crate) fn sample() -> Vec<Run> {
                 1_900_000_050,
                 &[Kind::Macos],
             ),
+            skipped("host-e1", "web", Skip::MdmConflict, &[Kind::Macos]),
+            RunHost {
+                skipped_because: Some(Skip::NoUpdateAccount),
+                ..host("host-e2", "web", Step::Waiting, 0, &[Kind::Xcode])
+            },
+            skipped("host-e3", "web", Skip::FilevaultNotReady, &[Kind::Macos]),
         ],
     };
     let second = Run {
@@ -273,6 +281,21 @@ fn skip_names_and_proto() {
         ),
         (Skip::Held, "held", MaintenanceSkip::Held),
         (Skip::Excluded, "excluded", MaintenanceSkip::Excluded),
+        (
+            Skip::MdmConflict,
+            "mdm_conflict",
+            MaintenanceSkip::MdmConflict,
+        ),
+        (
+            Skip::NoUpdateAccount,
+            "no_update_account",
+            MaintenanceSkip::NoUpdateAccount,
+        ),
+        (
+            Skip::FilevaultNotReady,
+            "filevault_not_ready",
+            MaintenanceSkip::FilevaultNotReady,
+        ),
     ];
     assert_eq!(Skip::ALL.len(), expected.len());
     for (skip, name, proto) in expected {
@@ -347,7 +370,9 @@ fn full_run_json() {
     let value = json!({
         "id": "run-1900000000-1",
         "kinds": ["macos", "linux"],
-        "host_ids": ["host-a", "host-b", "host-c", "host-d", "host-e"],
+        "host_ids": [
+            "host-a", "host-b", "host-c", "host-d", "host-e", "host-e1", "host-e2", "host-e3",
+        ],
         "window_start_unix": 1_900_000_100u64,
         "window_end_unix": 1_900_003_600u64,
         "batch": 2,
@@ -367,6 +392,12 @@ fn full_run_json() {
              "skipped_because": "excluded"},
             {"host_id": "host-e", "host_group": "web", "step": "not_reached",
              "since_unix": 1_900_000_050u64, "kinds": ["macos"]},
+            {"host_id": "host-e1", "host_group": "web", "step": "skipped", "since_unix": 0,
+             "kinds": ["macos"], "skipped_because": "mdm_conflict"},
+            {"host_id": "host-e2", "host_group": "web", "step": "waiting", "since_unix": 0,
+             "kinds": ["xcode"], "skipped_because": "no_update_account"},
+            {"host_id": "host-e3", "host_group": "web", "step": "skipped", "since_unix": 0,
+             "kinds": ["macos"], "skipped_because": "filevault_not_ready"},
         ],
     });
     let first = sample().remove(0);
