@@ -472,7 +472,11 @@ fn staging_problems_are_errors_of_the_attempt() {
     // the staging directory itself cannot be made, and nothing more is fetched.
     #[cfg(target_os = "macos")]
     {
-        assert!(matches!(gave_up.last, Error::Staging { .. }), "{gave_up}");
+        // 92 is EILSEQ on macOS.
+        assert!(
+            matches!(&gave_up.last, Error::Staging { source, .. } if source.raw_os_error() == Some(92)),
+            "{gave_up}"
+        );
         assert!(world.repo.asked.borrow().is_empty());
     }
     #[cfg(not(target_os = "macos"))]
