@@ -508,6 +508,10 @@ fn a_start_under_a_stale_order_id_stores_and_sends_nothing() {
     let next = world.coordinator().start_turn(&id, ordered(ORDER_2), UNIX);
     assert!(matches!(next, Next::Order(_)));
     assert_eq!(turn_of(&world, "h1").offered_again, 1);
+    let before = (world.ops().maintenance_runs, world.audit().len());
+    let next = world.coordinator().start_turn(&id, ordered(ORDER_2), UNIX);
+    assert!(matches!(next, Next::Busy), "h1 is in its turn already");
+    assert_eq!((world.ops().maintenance_runs, world.audit().len()), before);
 }
 
 /// Proves: a bake count the store refuses leaves the count held and the place taken; once the
@@ -598,4 +602,47 @@ fn a_host_in_two_runs_holds_one_place_and_bakes_only_out_of_its_turn() {
         1,
         "both bake"
     );
+}
+
+/// Proves: a deferred host still in its backoff holds back no host that waits: the next host of
+/// the group is started while it backs off.
+///
+/// Catches: a deferred host that takes a free place, or blocks the order of hosts, before its
+/// backoff has passed.
+#[test]
+fn a_deferred_host_in_its_backoff_holds_back_no_waiting_host() {
+    let world = scheduled("mt-backoff-others", table(1, 0), &["h1", "h2"], |_| {});
+    assert!(starts(&world, "h1"));
+    tell(&world, "h1", report(ORDER, MaintenanceStep::Deferred, ""));
+    assert!(starts(&world, "h2"), "h1 backs off: h2 is next");
+    assert_eq!(turn_of(&world, "h1").step, Step::Deferred);
+}
+
+/// Proves: a bake count decided on a run that, by the time it is stored, is no longer at the
+/// place it was read at (another change put a run before it) writes no count and no audit entry;
+/// the next heartbeat counts it.
+///
+/// Catches: a count written to another run's host.
+#[test]
+fn a_bake_decided_on_a_run_that_moved_writes_nothing() {
+    let world = baking("mt-bake-moved", table(1, 0), 2, &["h1", "h2"]);
+    assert!(starts(&world, "h1"));
+    tell(&world, "h1", at_step(MaintenanceStep::Done));
+    let audited = world.audit().len();
+    let coordinator = world.coordinator();
+    coordinator.ops().interleave(|state| {
+        state
+            .maintenance_runs
+            .insert(0, run_of("run-1-1", Vec::new()));
+    });
+    {
+        let fleet = coordinator.lock_fleet();
+        coordinator.bake_maintenance(&fleet, &crate::testutil::id("h1"));
+    }
+    let runs = world.ops().maintenance_runs;
+    assert_eq!(runs[0].id, "run-1-1");
+    assert_eq!(runs[1].hosts[0].baked_beats, 0);
+    assert_eq!(world.audit().len(), audited);
+    tell(&world, "h1", at_step(MaintenanceStep::Done));
+    assert_eq!(world.ops().maintenance_runs[1].hosts[0].baked_beats, 1);
 }
