@@ -64,10 +64,11 @@ by their route and are not in the menu.
   picking it up (or dragging it) and putting it on a free U of a rack, or taking it out of its rack. A row or a rack that still
   holds servers is not removed, and the page names them. A refusal is told in words. An empty lab says so and offers "Add a row".
   Above the alerts, the updates notice: when `Alerts.List` answers `updates_due` alerts (one per host group with hosts that have
-  updates due, "Updates due on 4 hosts of mac-build"), it shows each one's words and an **Open Maintenance** button that opens
+  updates due, "Updates due on 4 hosts of mac-build"), it shows each one's words with an **Update** button (one `Maintenance.Schedule` call for the group, with the one
+  Reason field of the notice, after one confirmation) and an **Open Maintenance** button that opens
   the Maintenance page; these alerts are not repeated in the alerts strip, and with none the notice is not shown.
   Calls: `Hosts.List`, `Releases.Status`, `Alerts.List`, `Layout.Get`, `Enrollment.ListRecords`; on a button `Layout.PutName`,
-  `AddRow`, `RemoveRow`, `PutRack`, `RemoveRack`, `Place` and `Unplace`.
+  `AddRow`, `RemoveRow`, `PutRack`, `RemoveRack`, `Place` and `Unplace`; on the notice's Update `Maintenance.Schedule`.
 - **Enrollment** (approval): besides the host group, the Height (1U to 4U, 1U by default), Row, Rack and U position of the server.
   All four are choices from the layout, the U position only among the free slots of the rack for that height; Row's first choice,
   Unplaced, places nothing. The placement is sent with the approval, which is refused whole when the slot is taken.
@@ -91,12 +92,22 @@ by their route and are not in the menu.
   system and its build, the running and newest installed kernel, when the host booted, the last look and how old it is, each due
   item (kind, from, to, whether it needs a restart, whether it is a security update, label), and on a Mac what an update needs
   (FileVault, authrestart, free space, the update account, the Command Line Tools, device-management conflicts) and the Xcodes
-  installed. It is read only and makes no call of its own.
+  installed. For a host with a report the tab also has an **Update** button with a Reason field (one `Maintenance.Schedule` call for
+  the host, after one confirmation: everything due, now, the group's batch) and the **Schedule** form (`ui/schedule.js`): which
+  kinds, which hosts, now or in a window (typed in the operator's time zone, shown in UTC), batch, drain deadline, whether to take
+  the group's last host (at most 32 hosts when they are ticked one by one), a reason, a **Check** that sends the request without `confirm` and shows which hosts would be taken and
+  which are left out and why (a second Check names the hosts ticked again), and **Schedule**, which stores the run. `ui/updates.js` itself makes no call.
 - **Maintenance** (`ui/pages/maintenance.js`): the fleet's count ("Updates due on 7 hosts in 2 groups"), then each host group
   (in name order, Unassigned last) with its hosts, those with something due first, each with what is due, its last look and how
   old it is (", stale" for a stale one), and a link to its Host page; a host whose daemon sends no report says "no report". It
   reads `Hosts.List` (every page) when opened and again every 60 seconds; a read again that fails keeps the last answer and
-  says so. It is read only.
+  says so. After the fleet's count comes the runs (`ui/runs.js`): `Maintenance.List` (the last 10) and `Maintenance.Get` of each
+  run that is not done, read when opened, every 10 seconds (the page is drawn again only when the runs changed) and after a stored run; a list that fails is said there and the rest of
+  the page stays. Each run shows its state, scope, window, batch, reason and its hosts with each one's step, with a Console or
+  Desktop link while it restarts, and **Cancel** (a run not ended), **Retry** and **Put back** (a halted host), each with a reason
+  and one confirmation, one call per click. Each group's card has an **Update** button on each due host's row, a Reason field,
+  **Update the group** (not for Unassigned) and **Schedule...**, which opens the Schedule form for the group's hosts after reading
+  the group's maintenance policy with `HostGroups.Get`.
 
 ## What the pages do for services
 
