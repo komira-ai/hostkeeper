@@ -619,7 +619,8 @@ pub fn host_enroller(
 /// their domains when those are there ([`crate::mac_files`]); the config is loaded, the platform's adapters are chosen
 /// ([`Adapters::for_platform`]), the ports are built ([`host_ports`]) and the start runs
 /// ([`start::startup_notifying`]). A Mac's start also keeps the Mac awake once the config is loaded
-/// ([`crate::keep_awake::at_host_start`]).
+/// ([`crate::keep_awake::at_host_start`]), then makes the update account when it is missing, hides
+/// it and gives it a Secure Token (`update_account_make`).
 pub fn start_with(
     settings: &Settings,
     files: &HostFiles,
@@ -642,6 +643,7 @@ pub fn start_with(
     }
     let config = start::load_config(settings)?;
     crate::keep_awake::at_host_start(&config, platform.kind);
+    crate::update_account_make::at_host_start(platform.kind);
     crate::layout::ensure_state_dirs(settings)?;
     Adapters::for_platform(platform)
         .and_then(|adapters| host_ports(&config, settings, files, own_version, adapters))

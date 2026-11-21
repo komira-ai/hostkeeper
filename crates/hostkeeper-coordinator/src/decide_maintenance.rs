@@ -6,25 +6,35 @@
 //! the order that starts it until it is done, deferred, or put back: [`Step::in_turn`]) is given no
 //! package order, and a host with a package update running, or a package order outstanding
 //! ([`Fleet::is_busy_besides`]), is not started. The other rules are maintenance's own, checked
-//! for a host whose turn waits ([`Step::Waiting`]) in a run that has not ended, in this order:
+//! for a host whose turn waits ([`Step::Waiting`]), or deferred ([`Step::Deferred`]), in a run that
+//! has not ended, in this order:
 //!
 //! 1. **Quiet start and window:** no host starts while the coordinator is in its quiet start
 //!    (`--quiet-secs`: the fleet it counts is still being rebuilt from heartbeats, [`Hold::Quiet`]),
 //!    nor before the run's window opens or once it has ended ([`Hold::Window`]). A host already
 //!    started finishes: nothing below is asked of it.
 //! 2. **Halt:** once a host of the run halted or is not back in a group, no further host of that
-//!    group starts ([`Hold::Halted`]).
-//! 3. **The host itself** ([`eligible`]): it is live, its daemon announces `maintenance-v1`
+//!    group starts ([`Hold::Halted`]); the run's other groups go on. The halted host keeps its
+//!    batch place.
+//! 3. **Backoff:** a host that deferred its turn (its stage failed, or its drain deadline
+//!    passed) waits its group's `defer_backoff` since, the n-th deferral of the turn longer than
+//!    the one before ([`crate::defer::DeferBackoff::wait`], [`Hold::Backoff`]).
+//! 4. **The host itself** ([`eligible`]): it is live, its daemon announces `maintenance-v1`
 //!    ([`Hold::NoFeature`]), no hold stands on it and it is excluded from no package ([`Hold::Held`],
 //!    [`Hold::Excluded`]), its group is still the one the run took it in ([`Hold::GroupChanged`]),
 //!    and it runs no package update and has no package order outstanding
 //!    ([`Hold::InPackageUpdate`]). These are read afresh at each heartbeat and stored nowhere: a
 //!    hold released, or a package update ended, lets the host go at a later heartbeat.
-//! 4. **Batch:** at most `batch` hosts of a group (the run's, else the group's) are in their turn,
-//!    over every run; groups go in parallel ([`Hold::Batch`]).
-//! 5. **Order of hosts:** the free places go to the run's hosts of the group that wait and are
-//!    eligible now (rule 3), by node id; a host past them waits ([`Hold::NotNext`]).
-//! 6. **Serving count:** a host is not taken while fewer than `min_serving + 1` hosts of its group
+//! 5. **Batch:** at most `batch` hosts of a group (the run's, else the group's) hold a place, over
+//!    every run; groups go in parallel ([`Hold::Batch`]). A host holds its place in its turn (a
+//!    halted or not back host included) and, once done, until it has sent its group's
+//!    `bake_beats` healthy heartbeats in a row ([`baked`], design section 5.6); a deferred host
+//!    holds none.
+//! 6. **Order of hosts:** the free places go to the run's hosts of the group that wait, or deferred
+//!    and have backed off, and are eligible now (rule 4): first the hosts that wait, by node id,
+//!    then the deferred ones, the fewest offers first, then by node id, so a deferred host is
+//!    offered again after the group's other hosts; a host past them waits ([`Hold::NotNext`]).
+//! 7. **Serving count:** a host is not taken while fewer than `min_serving + 1` hosts of its group
 //!    are serving ([`Hold::Serving`]): live, no service reporting unhealthy, and not in a turn of any
 //!    run, so a host staging, draining, rebooting, halted or not back never counts. In a run that
 //!    may take a group's last host (`take_last_host`, which `Schedule` asks for whenever the run
@@ -33,19 +43,29 @@
 //!    a group of one is taken, and a larger group still keeps `min_serving` while its hosts' turns
 //!    overlap.
 //!
-//! A host that passes every rule is sent a `maintain` with the action `RUN`, the order id
-//! `maintain-<run id>` ([`order_id`]) and try 1 ([`Ordered`]); the caller stores its step as
+//! A host that passes every rule and whose turn holds `macos` is then read against its last kept
+//! report ([`crate::maintenance_mac::macos_skip`]): when it may not be ordered `macos`
+//! (`mdm_conflict`, `no_update_account`, `filevault_not_ready`), it is sent no `maintain` at this
+//! heartbeat ([`Verdict::Skip`]), and the caller stores why on its turn: without `macos`, the turn
+//! waits for its other kinds, which a later heartbeat starts; with only `macos`, the turn ends
+//! skipped. A host's other kinds are never held back by these rules.
+//!
+//! A host that passes every rule is sent a `maintain` with the action `RUN`, the order id of its
+//! offer ([`RunHost::next_order_id`]: `maintain-<run id>` the first time, `maintain-<run id>-<n>`
+//! for the n-th offer after a deferral, since a daemon answers an order it holds with the end of
+//! that order's turn) and try 1 ([`Ordered`]); the caller stores its step as
 //! [`Step::Staging`] in the same change, so it holds its batch place and is out of the serving
 //! count from the order on. The step then follows what the host's daemon reports of the run
-//! ([`folded`]): a report that names the run and the order id moves it; a daemon's
+//! ([`folded`]): a report that names the run and the order id of the host's offer moves it (so the
+//! record of an earlier offer, deferred, does not take a host offered again back); a daemon's
 //! `MAINTENANCE_STEP_WAITING` (ordered, not started) keeps it at staging. Until the daemon reports
 //! the order id, each heartbeat of the host is sent the same order again (the same id and try), so
 //! an answer that was lost is not a run that never starts, and a daemon that holds the order
 //! recognises it and does not start it twice; once it reports the id, nothing more is sent, also
 //! after a coordinator restart, since the step is stored with the run.
 //!
-//! A deferred host is not offered again by this module: offering it again needs a new try of its
-//! order, which the run does not keep yet.
+//! A run whose window ended, or that was cancelled, starts no host: its hosts that had not started
+//! (waiting, or deferred) are not reached ([`Run::shown`], [`Run::cancel`]).
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -54,22 +74,14 @@ use hostkeeper_proto::hostkeeper::agent::v1 as agent;
 use hostkeeper_wire::HostId;
 use hostkeeper_wire::wire::Health;
 
+use crate::defer::DeferBackoff;
 use crate::fleet::{Fleet, Node};
-use crate::maintenance::FEATURE;
+use crate::maintenance::{FEATURE, Kept};
 use crate::maintenance_effective::effective_of;
 use crate::maintenance_policy::{LinuxScope, Maintenance as Policy};
-use crate::maintenance_runs::{Kind, Run, RunHost, Skip, Step};
+use crate::maintenance_runs::{Kind, MAX_OFFERED_AGAIN, Run, RunHost, Skip, Step};
 use crate::ops::OpsState;
 use crate::orders::Maintain;
-
-/// What the order id of a run's `maintain` begins with: then the run's id.
-pub(crate) const ORDER_PREFIX: &str = "maintain-";
-
-/// The order id of the `maintain` that starts a host's turn of the run `run_id`: at most 9 + 45
-/// bytes for an id [`crate::maintenance_runs::new_id`] makes, within an order id's 64.
-pub(crate) fn order_id(run_id: &str) -> String {
-    format!("{ORDER_PREFIX}{run_id}")
-}
 
 /// Why a host whose turn waits is not started at this heartbeat. Nothing of it is stored: the host
 /// is asked again at its next heartbeat.
@@ -81,6 +93,8 @@ pub(crate) enum Hold {
     Window,
     /// A host of the run halted or is not back in the host's group.
     Halted,
+    /// The host deferred its turn, and its group's `defer_backoff` since has not passed.
+    Backoff,
     /// The host's daemon does not announce `maintenance-v1`.
     NoFeature,
     /// A hold stands on the host for a package.
@@ -116,6 +130,21 @@ pub(crate) enum Verdict {
     Waits(Hold),
     /// Start the host's turn: send it the order and store its step as staging.
     Start(Ordered),
+    /// The host's turn holds `macos`, which its report says it may not be ordered: send it no
+    /// `maintain`, and store why on its turn; packages are decided as ever, since the host is in
+    /// no turn.
+    Skip(Skipping),
+}
+
+/// The `macos` of a host's turn left out at a heartbeat, and why.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Skipping {
+    /// The run's id.
+    pub(crate) run_id: String,
+    /// The group the run took the host in; empty: none.
+    pub(crate) host_group: String,
+    /// Why.
+    pub(crate) why: Skip,
 }
 
 /// A `maintain` decided for a host, with where its turn is held.
@@ -142,6 +171,11 @@ pub(crate) struct View<'a> {
     /// The maintenance table of the group the host's turn is in ([`turn_group`]): the group's,
     /// or every default for a host in none.
     pub(crate) policy: &'a Policy,
+    /// That group's `bake_beats`: the healthy heartbeats a done host holds its batch place for
+    /// (0 for a host in none).
+    pub(crate) bake_beats: u32,
+    /// That group's `defer_backoff`: how long a deferred host waits before it is offered again.
+    pub(crate) defer_backoff: DeferBackoff,
     /// The ops store's clock, in unix seconds: what the runs' windows are read against.
     pub(crate) unix_now: u64,
     /// The coordinator's clock: what the fleet's liveness and orders are read against.
@@ -167,7 +201,8 @@ fn turn(state: &OpsState, fleet: &Fleet, id: &HostId, unix_now: u64) -> Turn {
             .position(|host| host.host_id == id.as_str())
             && run.hosts[h].step.in_turn()
         {
-            let unreported = run.hosts[h].step == Step::Staging && !reported(fleet, id, run);
+            let unreported =
+                run.hosts[h].step == Step::Staging && !reported(fleet, id, run, &run.hosts[h]);
             return Turn::In {
                 run: r,
                 host: h,
@@ -181,10 +216,20 @@ fn turn(state: &OpsState, fleet: &Fleet, id: &HostId, unix_now: u64) -> Turn {
         .find_map(|(r, run)| {
             run.hosts
                 .iter()
-                .position(|host| host.host_id == id.as_str() && host.step == Step::Waiting)
+                .position(|host| host.host_id == id.as_str() && offered(host))
                 .map(|h| Turn::Waiting { run: r, host: h })
         })
         .unwrap_or(Turn::None)
+}
+
+/// Whether `host` has not started and may be offered its turn: it waits, or it deferred and has
+/// not been offered again [`MAX_OFFERED_AGAIN`] times.
+fn offered(host: &RunHost) -> bool {
+    match host.step {
+        Step::Waiting => true,
+        Step::Deferred => host.offered_again < MAX_OFFERED_AGAIN,
+        _ => false,
+    }
 }
 
 /// [`turn`]'s answer: indices into the ops state's runs and the run's hosts.
@@ -198,14 +243,14 @@ enum Turn {
         host: usize,
         unreported: bool,
     },
-    /// Waiting in a run that has not ended.
+    /// Waiting, or deferred, in a run that has not ended.
     Waiting { run: usize, host: usize },
 }
 
-/// Whether the host's daemon reports a run record of `run` taken by its order.
-fn reported(fleet: &Fleet, id: &HostId, run: &Run) -> bool {
+/// Whether the host's daemon reports a run record of `run` taken by the order of `host`'s turn.
+fn reported(fleet: &Fleet, id: &HostId, run: &Run, host: &RunHost) -> bool {
     reported_run(fleet.node(id))
-        .is_some_and(|said| said.run_id == run.id && said.order_id == order_id(&run.id))
+        .is_some_and(|said| said.run_id == run.id && said.order_id == host.order_id(&run.id))
 }
 
 /// The run record the host's last kept report names, if any.
@@ -213,7 +258,8 @@ fn reported_run(node: Option<&Node>) -> Option<&agent::MaintenanceRunState> {
     node?.maintenance.as_ref()?.report().run.as_ref()
 }
 
-/// The group the host `id`'s open turn was taken in ([`turn`]), and whether that turn waits; none
+/// The group the host `id`'s open turn was taken in ([`turn`]), and whether that turn waits (or
+/// deferred); none
 /// when it has none: what the caller reads the group's table for before it asks [`decide`].
 pub(crate) fn turn_group(
     state: &OpsState,
@@ -235,14 +281,29 @@ pub(crate) fn decide(view: &View<'_>, id: &HostId) -> Verdict {
     match turn(view.state, view.fleet, id, view.unix_now) {
         Turn::None => Verdict::Free,
         Turn::In {
-            run, unreported, ..
-        } => Verdict::InTurn {
-            resend: unreported.then(|| ordered(view, &runs[run], id)),
-        },
-        Turn::Waiting { run, host } => match start(view, &runs[run], &runs[run].hosts[host]) {
-            Ok(()) => Verdict::Start(ordered(view, &runs[run], id)),
-            Err(hold) => Verdict::Waits(hold),
-        },
+            run,
+            host,
+            unreported,
+        } => {
+            let (run, host) = (&runs[run], &runs[run].hosts[host]);
+            Verdict::InTurn {
+                resend: unreported.then(|| ordered(view, run, host, host.order_id(&run.id))),
+            }
+        }
+        Turn::Waiting { run, host } => {
+            let (run, host) = (&runs[run], &runs[run].hosts[host]);
+            match start(view, run, host) {
+                Ok(()) => match macos_skip(view, id, host) {
+                    Some(why) => Verdict::Skip(Skipping {
+                        run_id: run.id.clone(),
+                        host_group: host.host_group.clone(),
+                        why,
+                    }),
+                    None => Verdict::Start(ordered(view, run, host, host.next_order_id(&run.id))),
+                },
+                Err(hold) => Verdict::Waits(hold),
+            }
+        }
     }
 }
 
@@ -258,21 +319,31 @@ fn start(view: &View<'_>, run: &Run, host: &RunHost) -> Result<(), Hold> {
     if run.halted_groups().iter().any(|halted| halted == group) {
         return Err(Hold::Halted);
     }
+    if !backed_off(view, host) {
+        return Err(Hold::Backoff);
+    }
     eligible(view, host)?;
     let policy = view.policy;
     let batch = run.batch.unwrap_or(policy.batch) as usize;
-    let taken = in_turn_of(&view.state.maintenance_runs, group);
+    let taken = places_of(&view.state.maintenance_runs, group, view.bake_beats);
     let free = batch.saturating_sub(taken);
     if free == 0 {
         return Err(Hold::Batch);
     }
+    // The hosts that wait go first, by node id; then the deferred ones, the fewest offers first.
     let mut next: Vec<&RunHost> = run
         .hosts
         .iter()
-        .filter(|other| other.step == Step::Waiting && other.host_group == group)
-        .filter(|other| eligible(view, other).is_ok())
+        .filter(|other| offered(other) && other.host_group == group)
+        .filter(|other| backed_off(view, other) && eligible(view, other).is_ok())
         .collect();
-    next.sort_by(|a, b| a.host_id.cmp(&b.host_id));
+    next.sort_by_key(|other| {
+        (
+            other.step == Step::Deferred,
+            other.offered_again,
+            other.host_id.as_str(),
+        )
+    });
     if !next
         .iter()
         .take(free)
@@ -288,6 +359,33 @@ fn start(view: &View<'_>, run: &Run, host: &RunHost) -> Result<(), Hold> {
         return Err(Hold::Serving);
     }
     Ok(())
+}
+
+/// Whether `host`, when it deferred, has waited its group's `defer_backoff` since: the n-th
+/// deferral of its turn waits `initial_secs * factor^(n-1)`, capped at `max_secs`
+/// ([`DeferBackoff::wait`]). A host that waits has nothing to wait for.
+fn backed_off(view: &View<'_>, host: &RunHost) -> bool {
+    if host.step != Step::Deferred {
+        return true;
+    }
+    let wait = view
+        .defer_backoff
+        .wait(host.offered_again.saturating_add(1), 0);
+    view.unix_now >= host.since_unix.saturating_add(wait.as_secs())
+}
+
+/// Why the host `id`, whose turn is `host`, may not be ordered the `macos` its turn holds, by its
+/// last kept report; none when its turn holds no `macos`, or it may.
+fn macos_skip(view: &View<'_>, id: &HostId, host: &RunHost) -> Option<Skip> {
+    if !host.kinds.contains(&Kind::Macos) {
+        return None;
+    }
+    let report = view
+        .fleet
+        .node(id)
+        .and_then(|node| node.maintenance.as_ref())
+        .map(Kept::report);
+    crate::maintenance_mac::macos_skip(report)
 }
 
 /// Whether the waiting `host` may be started at all now, by what it is and does, whatever its
@@ -341,12 +439,19 @@ pub(crate) fn package_skip(state: &OpsState, id: &str, role: &str) -> Option<Ski
     }
 }
 
-/// How many hosts of `group` are in their turn, over every run of `runs`.
-fn in_turn_of(runs: &[Run], group: &str) -> usize {
-    runs.iter()
+/// How many batch places of `group` are held, over every run of `runs`: one by each host in its
+/// turn, or done and still baking for the group's `bake_beats`, however many runs hold it so.
+fn places_of(runs: &[Run], group: &str, bake_beats: u32) -> usize {
+    let mut holders: Vec<&str> = runs
+        .iter()
         .flat_map(|run| &run.hosts)
-        .filter(|host| host.host_group == group && host.step.in_turn())
-        .count()
+        .filter(|host| host.host_group == group)
+        .filter(|host| host.step.in_turn() || host.bakes(bake_beats))
+        .map(|host| host.host_id.as_str())
+        .collect();
+    holders.sort_unstable();
+    holders.dedup();
+    holders.len()
 }
 
 /// The hosts of `group` the coordinator has heard, live or not.
@@ -373,28 +478,27 @@ fn serving(view: &View<'_>, group: &str) -> usize {
         .count()
 }
 
-/// The `maintain` that starts the turn of the host `id` in `run`: its kinds, the Linux scope,
-/// `macos_major` and `return_secs` of its group's table ([`View::policy`]) for the host's platform, and the run's
-/// drain deadline, else the group's.
-fn ordered(view: &View<'_>, run: &Run, id: &HostId) -> Ordered {
-    let host = run.hosts.iter().find(|host| host.host_id == id.as_str());
-    let platform = view
-        .fleet
-        .node(id)
-        .map_or(hostkeeper_wire::Platform::LinuxX86_64, |node| node.platform);
+/// The `maintain` of `host`'s turn in `run` under the order id `order_id`: its kinds, the Linux
+/// scope, `macos_major` and `return_secs` of its group's table ([`View::policy`]) for the host's
+/// platform, and the run's drain deadline, else the group's.
+fn ordered(view: &View<'_>, run: &Run, host: &RunHost, order_id: String) -> Ordered {
+    let platform = host
+        .host_id
+        .parse::<HostId>()
+        .ok()
+        .and_then(|id| view.fleet.node(&id).map(|node| node.platform))
+        .unwrap_or(hostkeeper_wire::Platform::LinuxX86_64);
     let effective = effective_of(view.policy, platform);
     let drain_deadline_secs = match run.drain_deadline_secs {
         Some(0) => None,
         Some(secs) => Some(secs),
         None => effective.drain_deadline_secs,
     };
-    let kinds = host.map_or_else(Vec::new, |host| {
-        host.kinds.iter().map(|kind| kind.proto()).collect()
-    });
+    let kinds = host.kinds.iter().map(|kind| kind.proto()).collect();
     Ordered {
         run_id: run.id.clone(),
-        host_group: host.map_or_else(String::new, |host| host.host_group.clone()),
-        order_id: order_id(&run.id),
+        host_group: host.host_group.clone(),
+        order_id,
         maintain: Maintain {
             run_id: run.id.clone(),
             kinds,
@@ -439,9 +543,10 @@ fn kind_of(kind: i32) -> Option<Kind> {
 /// The host's turn as its daemon's report says it now, when that differs from what `runs` hold:
 /// the index of the run and of the host, and the host's turn with the step, the kinds applied and
 /// the reason the report gives (the step's time `unix_now` when the step changed). None when the
-/// host reports no run, a run of none of `runs`, a run taken by another order than the run's
-/// `maintain` ([`order_id`]), a step it does not name, or what is held already; and none for a turn
-/// that ended without the host (skipped, not reached) or is done.
+/// host reports no run, a run of none of `runs`, a run taken by another order than the one of the
+/// host's turn ([`RunHost::order_id`]: a deferred host offered again is not read back to deferred
+/// by the record of its earlier offer), a step it does not name, or what is held already; and none
+/// for a turn that ended without the host (skipped, not reached) or is done.
 pub(crate) fn folded(
     runs: &[Run],
     node: Option<&Node>,
@@ -450,15 +555,14 @@ pub(crate) fn folded(
 ) -> Option<(usize, usize, RunHost)> {
     let said = reported_run(node)?;
     let r = runs.iter().position(|run| run.id == said.run_id)?;
-    if said.order_id != order_id(&said.run_id) {
-        return None;
-    }
     let h = runs[r]
         .hosts
         .iter()
         .position(|host| host.host_id == id.as_str())?;
     let held = &runs[r].hosts[h];
-    if matches!(held.step, Step::Skipped | Step::NotReached | Step::Done) {
+    if said.order_id != held.order_id(&said.run_id)
+        || matches!(held.step, Step::Skipped | Step::NotReached | Step::Done)
+    {
         return None;
     }
     let step = step_of(said.step)?;
@@ -471,6 +575,41 @@ pub(crate) fn folded(
     turn.applied = applied;
     turn.reason.clone_from(&said.halted_reason);
     (turn != *held).then_some((r, h, turn))
+}
+
+/// The bake of the host `id` after its heartbeat, kept as `node`: for each turn of `runs` that
+/// is done and still bakes for its group's `bake_beats` (`bake_beats_of` the turn's group), the
+/// index of the run and of the host and the healthy heartbeats in a row it has sent since it was
+/// done: one more for a heartbeat in which every service it lists is healthy, none after any
+/// other (the count starts again); only the turns whose count changes. Nothing while the host is
+/// in a turn of any run: its heartbeats then prove that turn, not the one it is done with.
+pub(crate) fn baked(
+    runs: &[Run],
+    node: Option<&Node>,
+    id: &HostId,
+    bake_beats_of: impl Fn(&str) -> u32,
+) -> Vec<(usize, usize, u32)> {
+    let of_host = || {
+        runs.iter().enumerate().flat_map(|(r, run)| {
+            run.hosts
+                .iter()
+                .enumerate()
+                .filter(|(_, host)| host.host_id == id.as_str())
+                .map(move |(h, host)| (r, h, host))
+        })
+    };
+    if of_host().any(|(_, _, host)| host.step.in_turn()) {
+        return Vec::new();
+    }
+    let healthy = node.is_some_and(|node| node.announced.values().all(|h| *h == Health::Healthy));
+    of_host()
+        .filter(|(_, _, host)| host.bakes(bake_beats_of(&host.host_group)))
+        .filter_map(|(r, h, host)| {
+            let held = host.baked_beats;
+            let beats = if healthy { held.saturating_add(1) } else { 0 };
+            (beats != held).then_some((r, h, beats))
+        })
+        .collect()
 }
 
 #[cfg(test)]

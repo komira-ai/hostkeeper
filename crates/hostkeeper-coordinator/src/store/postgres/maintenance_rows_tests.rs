@@ -45,6 +45,8 @@ fn full(id: &str) -> Run {
                 applied: vec![Kind::Macos],
                 skipped_because: None,
                 reason: String::new(),
+                offered_again: 0,
+                baked_beats: 3,
             },
             RunHost {
                 host_id: "h1".to_owned(),
@@ -55,6 +57,8 @@ fn full(id: &str) -> Run {
                 applied: Vec::new(),
                 skipped_because: Some(Skip::Excluded),
                 reason: "why".to_owned(),
+                offered_again: 4,
+                baked_beats: 0,
             },
         ],
     }
@@ -85,6 +89,8 @@ fn bare(id: &str) -> Run {
             applied: Vec::new(),
             skipped_because: None,
             reason: String::new(),
+            offered_again: 0,
+            baked_beats: 0,
         }],
     }
 }
@@ -109,7 +115,8 @@ fn the_sample_runs_round_trip_through_their_rows() {
 
 /// Proves: a run with every value set is one row of `maintenance_runs` (kinds and hosts by name,
 /// the window, batch, drain deadline, cancel and position as numbers) and each of its hosts one
-/// row of `maintenance_hosts` (step and skip by name, an empty group `NULL`), and a run with
+/// row of `maintenance_hosts` (step and skip by name, an empty group `NULL`, its offers after a
+/// deferral and its bake as numbers), and a run with
 /// nothing set has `NULL` for its group, batch, drain deadline and cancel, and an empty list for
 /// its kinds and hosts.
 ///
@@ -165,6 +172,8 @@ fn the_rows_of_a_run_and_of_a_host_hold_the_values_by_name_and_null_for_none() {
             Val::Null,
             s(""),
             Val::Int(0),
+            Val::Int(0),
+            Val::Int(3),
         ]
     );
     assert_eq!(
@@ -178,6 +187,8 @@ fn the_rows_of_a_run_and_of_a_host_hold_the_values_by_name_and_null_for_none() {
             s("excluded"),
             s("why"),
             Val::Int(1),
+            Val::Int(4),
+            Val::Int(0),
         ]
     );
     assert_eq!(
@@ -324,8 +335,8 @@ fn a_run_row_this_build_cannot_read_is_refused_naming_the_run_and_the_reason() {
 /// Proves: a host row this build cannot read is refused at load naming
 /// `database:maintenance_hosts`, the run and the host and the reason: a step it does not know, a
 /// missing step, a reason for leaving it out it does not know, kinds or applied kinds it does not
-/// know, a counter that is negative, a position that is not a number, and a host of a run no row
-/// holds.
+/// know, a counter that is negative, a position that is not a number, an offer count or a bake
+/// above `u32::MAX` or below 0 (`u32::MAX` itself is read), and a host of a run no row holds.
 ///
 /// Catches: a host's turn read as another step than the one stored, and a host row kept for a
 /// run that is gone.
@@ -359,6 +370,26 @@ fn a_host_row_this_build_cannot_read_is_refused_naming_the_run_the_host_and_the_
     assert_eq!(
         edited(|t| set_host(t, 7, Val::Null)),
         at("a position is not a number")
+    );
+    for column in [8, 9] {
+        assert_eq!(
+            edited(|t| set_host(t, column, Val::Int(i64::from(u32::MAX) + 1))),
+            at("a count is above what a host's turn keeps"),
+            "column {column}"
+        );
+        assert_eq!(
+            edited(|t| set_host(t, column, Val::Int(-1))),
+            at("a counter is negative"),
+            "column {column}"
+        );
+    }
+    let mut ok = rows_of(&[full("run-a")]);
+    set_host(&mut ok, 8, Val::Int(i64::from(u32::MAX)));
+    set_host(&mut ok, 9, Val::Int(i64::from(u32::MAX)));
+    let largest = &runs_of(&ok).expect("the largest counts")[0].hosts[0];
+    assert_eq!(
+        (largest.offered_again, largest.baked_beats),
+        (u32::MAX, u32::MAX)
     );
     assert_eq!(
         edited(|t| {

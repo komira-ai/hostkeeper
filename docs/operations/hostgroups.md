@@ -134,7 +134,7 @@ with `web.json` the group's body, in the canonical JSON of the proto
 | `Get` | One group as `List` says it, with, per package, its minimum version and its convergence (as `Releases.Converge` answers it for the group), and a page of its hosts by node id (`limit` up to 256; the token is the last node id of the page before). | `unknown_host_group` |
 | `Put` | Creates a group, or replaces one whole. | `invalid_host_group` (the name), `invalid_package` (a name that breaks its rule, or a package twice), `invalid_policy`, `hostkeeper_not_listed` (an empty list included), `too_many_packages`, `generation_mismatch` |
 | `Remove` | Removes a group, with its desired versions and its marks. | `unknown_host_group`, `not_empty` |
-| `Move` | Moves a host into another group (below). | `unknown_host`, `unknown_host_group`, `same_host_group` |
+| `Move` | Moves a host into another group (below). | `unknown_host`, `unknown_host_group`, `same_host_group`, `host_in_maintenance` |
 
 A bad `limit` or `page_token`, a bad node id or a bad reason is `invalid_request`. The refusals
 are tokens of the status message, as for every operator call.
@@ -264,6 +264,7 @@ coordinator held groups, is put in one by `Move`. A host in a group is moved bac
 `Move` with an empty `host_group` (`hk host-groups move --host-group ""`, the blank choice of the
 **Host group** dropdown on the host's own page in the console):
 it is then unassigned: it is ordered nothing and keeps what it runs, so the host does not move; a host already in none is refused `same_host_group`.
+A host in its turn of a maintenance run (from the order that starts it until it is done or deferred, a halted host and one that is not back included) is refused `host_in_maintenance`, and nothing changes: move it once its turn has ended or the operator has put it back. A host that only waits for its turn can be moved, and the run leaves it out.
 In the console a host is moved on its Host page, whose **Host group**
 dropdown lists the groups held and a blank, Unassigned; the Host groups page lists each group's hosts, each a
 link to that page, and has no form that moves one.
@@ -488,9 +489,15 @@ A value out of range is refused `invalid_policy`, and the log names the key, `ma
 `Get` and `List` answer the table with every key named, a default included. A `Put` replaces the group
 whole, so a `Put` that leaves `maintenance` out sets every key back to its default. A maintenance run
 reads `batch` (unless the run names its own) and `min_serving` to decide when each host of the group
-starts its turn, and `linux_scope`, `drain_deadline_secs` (unless the run names its own) and
-`return_secs` for the `maintain` order it sends the host
-([maintenance-updates.md](../design/maintenance-updates.md), section 5.1).
+starts its turn, and `linux_scope`, `macos_major`, `drain_deadline_secs` (unless the run names its
+own) and `return_secs` for the `maintain` order it sends the host
+([maintenance-updates.md](../design/maintenance-updates.md), section 5.1). `Schedule` counts a
+major upgrade of macOS that a Mac reports as due only when its group's `macos_major` is true
+([macos.md](../macos.md), Maintenance facts). A run also reads two keys of the policy itself: a
+host whose turn is done holds its batch place until it has sent the group's `bake_beats` healthy
+heartbeats in a row (section 5.6), and a host whose turn deferred is offered again, after the
+run's other hosts of the group and while the window is open, once the group's `defer_backoff` has
+passed since it deferred, longer for each deferral of its turn (section 5.3).
 
 ## Incidents are per host and per group
 

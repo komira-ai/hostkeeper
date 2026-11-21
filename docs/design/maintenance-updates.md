@@ -423,7 +423,10 @@ No step of this sequence runs `rollback`; a failure stops it where it is.
 Work is never cut to finish an update (`docs/design/hostkeeper-design.md`, goal 6). A `drain` step runs with no time bound
 (`RuntimeMaxSec=infinity`, Built for `prepare`; for `drain` the launchers and `hostkeeper_steps::run_maintenance_step` are Built, and so is the sequencer that calls it, bounded by exactly the deadline when there is one, and reading a deadline that passed as exit 75) unless the run names `drain_deadline_secs`. When a deadline passes, the step exits 75 (deferred, Built
 outcome): the daemon runs `resume` for every service it drained, the host is back in service with nothing changed, it is marked `deferred`,
-and the run moves on to the next host; a deferred host is offered again when the run's other hosts are done, if the window is still open.
+and the run moves on to the next host; a deferred host is offered again when the run's other hosts are done, if the window is still open,
+once its group's `defer_backoff` (Built) has passed since it deferred, longer for each deferral of its turn, under a new order id
+(`maintain-<run id>-<n>`: a daemon answers an order it already holds with that order's end). Built in the coordinator
+(`crates/hostkeeper-coordinator/src/decide_maintenance.rs`), as are the bake of section 5.6 and the ends of section 5.7.
 Nothing stops a job.
 
 js-agent's `drain` (New in komira-ai/jobscheduler, section 7) cordons with the host's own credential on the lease server's own-host route
@@ -477,12 +480,15 @@ drain was never asked for is never held.
   Setup Assistant, once per Mac. The bootstrap's settings (New keys beside the farm values, `docs/design/mac-bootstrap.md`) carry the
   update account's name and password and that administrator's name and password; the bootstrap writes the update-account file (Built:
   `crates/hostkeeper-bootstrap/src/update_account.rs`, the keys `update_account_name`, `update_account_password`, `admin_name` and
-  `admin_password`, all four or none), and writes no copy of the administrator's password: the daemon is to read the two `admin_` keys from
+  `admin_password`, all four or none), and writes no copy of the administrator's password: the daemon reads the two `admin_` keys from
   the bootstrap's settings source at the start that makes the account (mac-bootstrap.md section 4). The
   daemon, at its next start, makes the account if it is missing: `sysadminctl -addUser hkupdate -password - -admin`, then
   `sysadminctl -secureTokenOn hkupdate -password - -adminUser <admin> -adminPassword -`, the passwords on standard input **[V]** (if
   `sysadminctl` reads `-` only from a terminal, the daemon gives it a pseudo-terminal it owns, never an argument), then hides it. The
-  administrator's password is used for that call and not kept. The report of section 1 says whether the account exists, is an
+  administrator's password is used for that call and not kept. (Built: `crates/hostkeeper-daemon/src/update_account_make.rs`, at every
+  start of a Mac's daemon: the passwords on a pipe, since MP-A2 has not run; the hide, `UserShell /usr/bin/false` and the removal from
+  `com.apple.access_ssh` right after `-addUser` and before the token call, each only when not so already; the account's password, then
+  the administrator's, in the order of the arguments; each `sysadminctl` call followed by a read that must show it took.) The report of section 1 says whether the account exists, is an
   administrator, holds a token and is hidden (Built: `maintenance_account.rs`, the name read from the update-account file); a Mac whose account lacks one is never ordered a macOS update (`no_update_account`, shown in the
   Schedule form).
 
