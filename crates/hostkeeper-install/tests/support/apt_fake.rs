@@ -293,8 +293,6 @@ pub struct Faults {
     /// An update leaves the index as a link to the repository's own file, outside the work
     /// directory, as apt does for an uncompressed index of a `file:` repository.
     pub index_as_link: bool,
-    /// An update that leaves no `lists/partial/`.
-    pub no_lists_partial: bool,
 }
 
 /// A package as the host's database holds it.
@@ -669,10 +667,6 @@ fn update(s: &State, run: &Run) -> ToolOutput {
         // run by any user can see.
         .and_then(|()| {
             fs::set_permissions(lists.join("partial"), fs::Permissions::from_mode(0o700))
-        })
-        .and_then(|()| match s.faults.no_lists_partial {
-            true => fs::remove_dir_all(lists.join("partial")),
-            false => Ok(()),
         });
     for dir in &s.faults.litter {
         let _ = fs::create_dir_all(work.join(dir));

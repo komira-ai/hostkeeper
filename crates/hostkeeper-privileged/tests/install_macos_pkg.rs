@@ -64,6 +64,8 @@ use hostkeeper_testkit::Scratch;
 
 #[path = "install_macos_pkg/daemon.rs"]
 mod daemon;
+#[path = "shared/other_user.rs"]
+mod other_user;
 
 const SERVICE: &str = "hk-a9-fixture";
 const IDENTIFIER: &str = "dev.hostkeeper.a9-fixture";
@@ -789,7 +791,8 @@ fn finished(reply: hostkeeper_daemon::Reply) -> (hostkeeper_hook::Verdict, Optio
 /// at `stage` with the real `pkgutil` (`Failed`, `environment`, `signature`, nothing staged,
 /// installed or received), installs the `.pkg` it is ordered (the receipt, the files root's,
 /// the version sealed with its `target.json`), updates it (a file the new version drops is
-/// deleted), and uninstalls it (no receipt, no file, no version directory).
+/// deleted), keeps no file of either version that another user than root can read, and
+/// uninstalls it (no receipt, no file, no version directory).
 ///
 /// Catches: a Mac daemon that announces `macos-pkg` without its signers file, does not announce
 /// it with one, stages an unsigned package, or does not run the `.pkg` it is ordered through the
@@ -867,6 +870,11 @@ fn a_mac_daemon_announces_macos_pkg_with_its_signers_file_and_installs_the_order
     assert_eq!(receipt_version().as_deref(), Some("1.2.0"));
     assert_installed(&format!("{SUPPORT}/lib/new.txt"), 0o644);
     assert_absent(&format!("{SUPPORT}/legacy.txt"));
+    // What the daemon keeps of both versions (each `.pkg`, its `Bom`, the tree with the
+    // package's own 0644 files) is root's alone, in a directory any user can pass through.
+    let base = mac.packages.parent().expect("the daemon's directory");
+    let tried = other_user::assert_root_only(base, &[&mac.packages]);
+    assert!(tried > 0, "the daemon keeps files of the package");
 
     assert_eq!(finished(mac.daemon.order(&daemon::uninstall(4))), succeeded);
     assert_eq!(receipt_version(), None);

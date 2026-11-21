@@ -66,11 +66,11 @@ pub(crate) fn is_dir(dir: &Path) -> io::Result<bool> {
     }
 }
 
-/// Makes `dir` (one level, mode 0755) unless it exists, and checks that it is a directory and
-/// not a link.
+/// Makes `dir` (one level, mode 0700: a download is a package's bytes, root's alone) unless it
+/// exists, and checks that it is a directory and not a link.
 pub(crate) fn make_dir(dir: &Path) -> io::Result<()> {
     if !is_dir(dir)? {
-        DirBuilder::new().mode(0o755).create(dir)?;
+        DirBuilder::new().mode(0o700).create(dir)?;
     }
     is_dir(dir).map(|_| ())
 }

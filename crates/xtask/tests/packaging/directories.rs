@@ -14,7 +14,7 @@ use crate::{Kind, TMPFILES, altered, read, refuses};
 const DIRECTORIES: [(&str, &str); 5] = [
     ("/run/hostkeeper", "0700"),
     ("/etc/hostkeeper", "0755"),
-    ("/var/lib/hostkeeper/packages", "0755"),
+    ("/var/lib/hostkeeper/packages", "0700"),
     ("/var/lib/updater/state", "0700"),
     ("/var/lib/updater/hooks", "0700"),
 ];

@@ -2,20 +2,26 @@
 //! staging directory the core then walks, checks and seals:
 //!
 //! ```text
-//! <staging>/artifact               the verified .pkg, 0444, kept for rollback
+//! <staging>/artifact               the verified .pkg, 0400, kept for rollback
 //! <staging>/tree/                  the component's payload, standing for /
-//! <staging>/macos-pkg/PackageInfo  the component's two files, as the expansion gave them
+//! <staging>/macos-pkg/             0700
+//! <staging>/macos-pkg/PackageInfo  the component's two files, as the expansion gave them, 0400
 //! <staging>/macos-pkg/Bom
 //! <staging>/macos-pkg/artifact.pkg the kept .pkg again (a hard link), the name installer takes
 //! ```
+//!
+//! Each file and directory `stage` makes is root's alone from its creation: a package may carry
+//! a secret (a file it installs 0600), and its `.pkg` is that file in a plain gzip. The payload
+//! keeps the modes its `Bom` gives it, which [`payload::check`] compares; the version directory
+//! around it is 0700 ([`crate::version`]), so no other user reaches it either.
 //!
 //! The hook program the order names, if any, is checked in the payload ([`program::check`]).
 //!
 //! No package script runs at `stage` and no tool fetches (`installer` runs a package's scripts at
 //! `activate`, not here): `pkgutil` only reads the file, and `lsbom` the `Bom`. The signature is checked before anything is expanded.
 
-use std::fs;
-use std::os::unix::fs::PermissionsExt;
+use std::fs::{self, DirBuilder, File, OpenOptions, Permissions};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
 use super::payload::{self, LSBOM_ARGS};
@@ -109,21 +115,37 @@ impl MacosPkg<'_> {
         }
 
         let meta = staging.join(META);
-        fs::create_dir(&meta).map_err(|e| io("the staging directory", e))?;
+        DirBuilder::new()
+            .mode(DIR_MODE)
+            .create(&meta)
+            .and_then(|()| fs::set_permissions(&meta, Permissions::from_mode(DIR_MODE)))
+            .map_err(|e| io("the staging directory", e))?;
         for name in ["PackageInfo", "Bom"] {
-            fs::copy(component.dir.join(name), meta.join(name)).map_err(|e| io(name, e))?;
-            set_mode(&meta.join(name), 0o444)?;
+            copy_closed(&component.dir.join(name), &meta.join(name)).map_err(|e| io(name, e))?;
         }
         fs::rename(component.payload(), staging.join(TREE)).map_err(|e| io("the payload", e))?;
         let kept = staging.join(ARTIFACT);
-        fs::copy(artifact, &kept).map_err(|e| io("the artifact", e))?;
-        set_mode(&kept, 0o444)?;
+        copy_closed(artifact, &kept).map_err(|e| io("the artifact", e))?;
         fs::hard_link(&kept, meta.join(INSTALLER_PKG))
             .map_err(|e| io("the artifact's .pkg name", e))?;
         remove_tree(&expanded).map_err(|e| io("the expansion", e))
     }
 }
 
-fn set_mode(path: &Path, mode: u32) -> Result<(), Failure> {
-    fs::set_permissions(path, fs::Permissions::from_mode(mode)).map_err(|e| io("a staged file", e))
+/// The mode of the directory `stage` makes, and of each file it copies: root's alone.
+const DIR_MODE: u32 = 0o700;
+const FILE_MODE: u32 = 0o400;
+
+/// Copies `from` to the new file `to`, created [`FILE_MODE`] (never open to another user, not
+/// even for the copy; `create_new` neither follows nor replaces what is there) and set so after,
+/// whatever the umask. The core makes it durable with the rest of the tree.
+fn copy_closed(from: &Path, to: &Path) -> std::io::Result<()> {
+    let mut source = File::open(from)?;
+    let mut copy = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(FILE_MODE)
+        .open(to)?;
+    std::io::copy(&mut source, &mut copy)?;
+    copy.set_permissions(Permissions::from_mode(FILE_MODE))
 }
