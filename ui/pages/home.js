@@ -7,7 +7,8 @@
 // their reasons grouped (`health.js`), each host a link to its page; below it, the servers not
 // placed yet. A server's row says, under Why, every reason its host is not healthy, in short.
 // The alerts `updates_due` (one per host group with hosts that have updates due) are not in the
-// alerts strip: they are a notice of their own, above it, that links the Maintenance page.
+// alerts strip: they are a notice of their own, above it, that starts the group's update and links the
+// Maintenance page.
 // `list` (true) shows every server in one compact list instead of the floor plan.
 // Breadcrumbs: Lab > Row > Rack > Host.
 //
@@ -33,6 +34,7 @@
 // gives the reasons of the degraded hosts that name them; the hosts' own reports give the rest), then Layout.Get
 // and Enrollment.ListRecords (the lab is shown without them when they fail, and says so); on a
 // button, Layout.PutName, AddRow, RemoveRow, PutRack, RemoveRack, PutSled, RemoveSled, Place or Unplace.
+// On the Update button of a host group in the updates notice, Maintenance.Schedule (after a confirm).
 
 import {
   h, action, allPages, describeError, enumLabel, errorView, field, fmtUnix, list, pill, table, trimmed,
@@ -43,6 +45,7 @@ import {
   subjectOf, usedU, worstState,
 } from "../lab.js";
 import { ApiError } from "../api.js";
+import { updateButton } from "../schedule.js";
 import { fleetHealth } from "../health.js";
 import { board, tip } from "../sleds.js";
 import { assignPanel, pick, selectionPanel } from "../sledpanels.js";
@@ -62,17 +65,27 @@ const DRAG_SLOP = 4;
 const UPDATES_DUE = "ALERT_KIND_UPDATES_DUE";
 
 // The updates notice: the coordinator's words of each `updates_due` alert (one per host group
-// with hosts that have updates due), and the button that opens the Maintenance page; nothing when
-// no such alert stands.
-function updatesNotice(ctx, reply) {
+// with hosts that have updates due), an Update button after each (Maintenance.Schedule for the group,
+// with the one Reason field `state` holds), and the button that opens the Maintenance page; nothing
+// when no such alert stands.
+function updatesNotice(ctx, reply, state) {
   const due = list(reply, "alerts").filter((alert) => alert.kind === UPDATES_DUE);
   if (due.length === 0) {
     return null;
   }
+  const env = {
+    ctx, state,
+    schedule: (request) => ctx.api.maintenance.schedule(request),
+    after: () => ctx.refresh(),
+  };
+  const groups = due.filter((alert) => typeof alert.hostGroup === "string" && alert.hostGroup !== "");
   return h("div", { class: "alert-strip warn", role: "status", name: "updates-due" },
     h("strong", { class: "alert-count" }, "Updates due"),
     h("ul", {}, due.map((alert) => h("li", { class: "alert", name: "updates-due-group" },
-      h("span", { class: "said" }, alert.message || "")))),
+      h("span", { class: "said" }, alert.message || ""),
+      typeof alert.hostGroup === "string" && alert.hostGroup !== ""
+        ? updateButton(env, { hostGroup: alert.hostGroup }, "Update") : null))),
+    groups.length === 0 ? null : field("Reason for an update", "update-reason", state, "reason", { maxlength: 256 }),
     h("button", {
       type: "button", class: "linklike", name: "open-maintenance",
       on: { click: () => ctx.navigate("maintenance", {}) },
@@ -792,7 +805,7 @@ export async function render(ctx) {
     : h("p", { class: "note" }, "The coordinator is in its quiet start: it orders nothing yet.");
   return lab(ctx, {
     layout, servers, failure, notes,
-    updates: inside ? null : updatesNotice(ctx, alerts),
+    updates: inside ? null : updatesNotice(ctx, alerts, { reason: "" }),
     alerts: inside ? null : alertsStrip(alerts, alertFailure),
     degraded: inside ? null : degradedStrip(ctx, hosts, alertList, alertFailure !== null),
   }, makeState());

@@ -104,8 +104,11 @@ export function redirected(name, params) {
 // events)` draws a Mac's screen in `element` from an opened socket (`screen.js`, over the vendored
 // noVNC) and returns `{sendCredentials, disconnect, focus}`. A page that needs one finds it as
 // `ctx.openSocket`, `ctx.openTerminal` or `ctx.viewScreen`, which is absent when none was given.
+// `localOffset(unixSeconds)` is the operator's offset from UTC at that instant, in seconds east of
+// UTC (`main.js` reads it from the browser); a page finds it as `ctx.localOffset`, which answers 0
+// (UTC) when none was given.
 // Returns the frame's controls, which the browser does not need.
-export function startApp({ doc, root, fetch, confirm, now, every, openSocket, openTerminal, viewScreen, prefs = NO_PREFS }) {
+export function startApp({ doc, root, fetch, confirm, now, every, openSocket, openTerminal, viewScreen, localOffset, prefs = NO_PREFS }) {
   // The operator's look, kept in memory: the theme (`prefs.apply(theme)` shows it) and whether the
   // side menu is collapsed to icons.
   let theme = "system";
@@ -360,6 +363,7 @@ export function startApp({ doc, root, fetch, confirm, now, every, openSocket, op
       openTerminal: typeof openTerminal === "function" ? (element, opened) => openTerminal(element, opened) : undefined,
       viewScreen: typeof viewScreen === "function" ? (element, opened, events) => viewScreen(element, opened, events) : undefined,
       now: () => now(),
+      localOffset: (unix) => (typeof localOffset === "function" ? localOffset(unix) : 0),
       navigate,
       // Runs `run` once when this rendering of the page stops being the latest: the operator
       // went to another page, signed out, or the page was drawn again; at once if it already has.

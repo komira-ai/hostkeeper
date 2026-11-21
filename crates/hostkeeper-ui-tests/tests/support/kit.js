@@ -51,11 +51,17 @@ export async function settle() {
 // The time a page context reads, in unix seconds, unless a test gives another.
 export const NOW = 1800000000;
 
+// The fake time zone a page context answers for every instant, in seconds east of UTC: UTC-05:00,
+// with no daylight saving.
+export const TEST_ZONE_OFFSET = -18000;
+
 // A page context over `client` that records what the page does. `answers` are the operator's
 // replies to the page's questions, in order; a question beyond them is answered no. Its clock
-// reads `now` (NOW when absent). `leave()` runs what the page asked to have run when it is left
-// (`ctx.onLeave`), as the app does when the operator goes to another page or signs out.
-export function recorder(client, params, answers, now) {
+// reads `now` (NOW when absent). Its `localOffset(unix)` is `zone(unix)` when a `zone` function is
+// given, else TEST_ZONE_OFFSET for every instant. `leave()` runs what the page asked to have run
+// when it is left (`ctx.onLeave`), as the app does when the operator goes to another page or signs
+// out.
+export function recorder(client, params, answers, now, zone) {
   const seen = {
     reports: [], refreshes: 0, navigations: [], questions: [], shown: [], repeats: [], sockets: [], terminals: [],
     viewers: [],
@@ -76,6 +82,9 @@ export function recorder(client, params, answers, now) {
     },
     now() {
       return now === undefined ? NOW : now;
+    },
+    localOffset(unix) {
+      return zone === undefined ? TEST_ZONE_OFFSET : zone(unix);
     },
     // A socket the test drives: nothing arrives by itself. The test calls `handlers.open()`,
     // `handlers.message(frame)` (a string, or a Uint8Array) and `handlers.close(closed)` itself;
