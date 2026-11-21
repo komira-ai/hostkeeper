@@ -2327,9 +2327,9 @@ jobs:
           key: cargo-${{ runner.os }}-${{ runner.arch }}-macos-device-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-macos-device-
       - name: Build the tests of the Mac's crates
-        run: cargo test --locked --no-run -p hello -p hostkeeper -p hostkeeper-config -p hostkeeper-daemon -p hostkeeper-enroll -p hostkeeper-hook -p hostkeeper-install -p hostkeeper-launchd -p hostkeeper-link -p hostkeeper-observe -p hostkeeper-openrc -p hostkeeper-package -p hostkeeper-placed -p hostkeeper-proto -p hostkeeper-release -p hostkeeper-steps -p hostkeeper-wire
+        run: cargo test --locked --no-run -p hello -p hostkeeper -p hostkeeper-bootstrap -p hostkeeper-config -p hostkeeper-daemon -p hostkeeper-enroll -p hostkeeper-hook -p hostkeeper-install -p hostkeeper-launchd -p hostkeeper-link -p hostkeeper-observe -p hostkeeper-openrc -p hostkeeper-package -p hostkeeper-placed -p hostkeeper-proto -p hostkeeper-release -p hostkeeper-steps -p hostkeeper-wire
       - name: Run the tests of the Mac's crates
-        run: cargo test --locked --no-fail-fast -p hello -p hostkeeper -p hostkeeper-config -p hostkeeper-daemon -p hostkeeper-enroll -p hostkeeper-hook -p hostkeeper-install -p hostkeeper-launchd -p hostkeeper-link -p hostkeeper-observe -p hostkeeper-openrc -p hostkeeper-package -p hostkeeper-placed -p hostkeeper-proto -p hostkeeper-release -p hostkeeper-steps -p hostkeeper-wire
+        run: cargo test --locked --no-fail-fast -p hello -p hostkeeper -p hostkeeper-bootstrap -p hostkeeper-config -p hostkeeper-daemon -p hostkeeper-enroll -p hostkeeper-hook -p hostkeeper-install -p hostkeeper-launchd -p hostkeeper-link -p hostkeeper-observe -p hostkeeper-openrc -p hostkeeper-package -p hostkeeper-placed -p hostkeeper-proto -p hostkeeper-release -p hostkeeper-steps -p hostkeeper-wire
 
   # macos-device: the stage above, privileged.yml's job of that name as it ran after a merge to
   # main until this stage took it over. It saves the cargo cache (its key holds the hashes of

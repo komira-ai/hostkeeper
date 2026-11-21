@@ -85,7 +85,8 @@ pub type Layer = (
 /// (`hostkeeper-bootstrap`) reads the daemon's config loader (`hostkeeper-config`), the macos-pkg
 /// installer's tool port and signature reader (`hostkeeper-install`, with the paths of
 /// `hostkeeper-launchd`), the HTTPS transport (`hostkeeper-package`) and the repository descriptor
-/// (`hostkeeper-release`), and is read by no crate. The coordinator serves the console through
+/// (`hostkeeper-release`), and is read by the daemon alone, whose Mac start reads the administrator
+/// of the bootstrap's settings to give the update account its Secure Token. The coordinator serves the console through
 /// `hostkeeper-console`, and its tests script that crate's BMC tool port with the double of its
 /// feature `testing`.
 pub const LAYERS: [Layer; 30] = [
@@ -105,8 +106,8 @@ pub const LAYERS: [Layer; 30] = [
     (
         DAEMON,
         &[
-            CONFIG, ENROLL, HOOK, INSTALL, LAUNCHD, LINK, OBSERVE, OPENRC, PACKAGE, PLACED, PROTO,
-            RELEASE, STEPS, WIRE,
+            BOOTSTRAP, CONFIG, ENROLL, HOOK, INSTALL, LAUNCHD, LINK, OBSERVE, OPENRC, PACKAGE,
+            PLACED, PROTO, RELEASE, STEPS, WIRE,
         ],
         &[COORDINATOR, HELLO, OIDC, TLS],
     ),
