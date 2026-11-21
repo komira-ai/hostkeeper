@@ -119,8 +119,11 @@ pub const MAINTENANCE_CANCEL: &str = "maintenance_cancel";
 /// `run <id>`.
 pub const MAINTENANCE_START: &str = "maintenance_start";
 /// A host's daemon reported its turn of a run at another step, or with other kinds applied or
-/// another reason, and the coordinator stored it. By `coordinator`, with the host as the entry's
-/// `node_id`, its group as its `host_group` when it is in one, and the reason `run <id> <step>`.
+/// another reason, and the coordinator stored it; or the coordinator left `macos` out of a host's
+/// waiting turn by the host's report. By `coordinator`, with the host as the entry's `node_id`,
+/// its group as its `host_group` when it is in one, and the reason `run <id> <step>`, followed,
+/// for `macos` left out, by why (`run <id> waiting mdm_conflict`, `run <id> skipped
+/// no_update_account`).
 pub const MAINTENANCE_STEP: &str = "maintenance_step";
 
 /// The action of an audit line that changes no operations state: one of the console's, which

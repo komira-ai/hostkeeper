@@ -25,7 +25,8 @@ pub(crate) const RUN: &str = "run-1900000000-1";
 pub(crate) const ORDER: &str = "maintain-run-1900000000-1";
 
 /// A heartbeat of a daemon that announces `maintenance-v1`, lists `web` healthy at 1.0, and
-/// reports `due`, and, when given, the run record `(run, order, step)`.
+/// reports `due` (with the Mac facts of `maintenance_calls_tests::mac_of`), and, when given, the
+/// run record `(run, order, step)`.
 pub(crate) fn beat(
     due: &[MaintenanceKind],
     record: Option<(&str, &str, MaintenanceStep)>,
@@ -49,6 +50,7 @@ pub(crate) fn beat(
             applied: Vec::new(),
             halted_reason: String::new(),
         }),
+        mac: crate::maintenance_calls_tests::mac_of(due),
         ..agent::MaintenanceReport::default()
     };
     beat.maintenance = Some(text_of(&report));

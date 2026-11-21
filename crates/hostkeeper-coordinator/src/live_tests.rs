@@ -357,3 +357,50 @@ fn hold_of_a1() -> HoldMark {
         at_unix: 1_800_000_000,
     }
 }
+
+/// Behaviour: a host in its turn of a maintenance run keeps in `a`'s plan only a place it took:
+/// healthy at 2.0 before its bake is over, or down at 2.0 while it drains, it is `done` and bakes
+/// nothing, so `a` is not live and `b` is ordered; a host that failed 2.0 stays `failed`; one at
+/// 1.0, which has taken no place, is no member and `a`'s plan is not under way. Catches a drain
+/// read as a bake or an update still running, which would hold the farm's one live rollout for
+/// the whole turn, or a place an in-turn host took handed to another host.
+#[test]
+fn a_host_in_its_maintenance_turn_keeps_only_the_place_it_took() {
+    let s = services();
+    let def = s.get("a").expect("a");
+    let in_turn = |mut f: Fleet| {
+        f.set_marks(Marks {
+            in_maintenance: BTreeSet::from([id("a1")]),
+            ..Marks::default()
+        });
+        f
+    };
+    let members = |f: &Fleet| {
+        let view = View::effective(def, &all()["a"], None, &native(f, &all()), secs(100));
+        view.members
+            .iter()
+            .map(|m| (m.id.to_string(), m.state))
+            .collect::<Vec<_>>()
+    };
+    let done = vec![("a1".to_owned(), HostState::Done)];
+    for (case, a_beat) in [
+        ("baking", beat("2.0")),
+        ("down while it drains", unhealthy(beat("2.0"))),
+    ] {
+        let f = in_turn(farm(a_beat));
+        assert_eq!(members(&f), done, "{case}");
+        assert!(!a_live(&f), "{case}");
+        assert_eq!(why(&f, "b", "b1"), go_b(), "{case}");
+    }
+
+    let f = in_turn(farm(failed("2.0")));
+    assert_eq!(
+        members(&f),
+        vec![("a1".to_owned(), HostState::Failed)],
+        "a failure is the operator's to resolve, turn or no turn"
+    );
+
+    let f = in_turn(farm(beat("1.0")));
+    assert_eq!(members(&f), Vec::new());
+    assert!(!a_live(&f));
+}

@@ -2,7 +2,10 @@
 //! daemon reports it, stored before anything is decided, then the `maintain` the host is sent, or
 //! the package orders it is not given.
 //!
-//! Both are the coordinator's changes of the ops state, audited by `coordinator`
+//! The host's `macos` left out by its report ([`decide_maintenance::Verdict::Skip`]) is stored the
+//! same way, in place of an order.
+//!
+//! Each is a coordinator's change of the ops state, audited by `coordinator`
 //! (`maintenance_step`, `maintenance_start`), made under the fleet's lock and, over a shared store,
 //! in the heartbeat's decision transaction, so a decision that does not land puts them back with
 //! the rest. A start is stored before the order is answered (storage first): a start that cannot
@@ -15,12 +18,13 @@ use hostkeeper_wire::HostId;
 
 use super::Coordinator;
 use crate::audit_actions::{MAINTENANCE_START, MAINTENANCE_STEP};
-use crate::decide_maintenance::{self, Ordered, Verdict, View};
+use crate::decide_maintenance::{self, Ordered, Skipping, Verdict, View};
 use crate::fleet::Fleet;
+use crate::holds::marks_of;
 use crate::host_groups::GroupName;
 use crate::maintenance::FEATURE;
 use crate::maintenance_policy::Maintenance as Policy;
-use crate::maintenance_runs::Step;
+use crate::maintenance_runs::{Kind, Step};
 use crate::ops::{AuditEntry, OpsError, Write};
 use crate::orders::Order;
 use crate::reconcile::COORDINATOR;
@@ -47,9 +51,12 @@ fn entry(action: &str, id: &HostId, group: &str, run_id: &str, then: &str) -> Au
 
 impl Coordinator {
     /// Stores the host `id`'s turn as its daemon's last kept report says it, when that differs
-    /// from what the run holds ([`decide_maintenance::folded`]), audited `maintenance_step`. A
-    /// change that cannot be stored is logged, and the next heartbeat's report folds it again.
-    pub(super) fn fold_maintenance(&self, fleet: &Fleet, id: &HostId) {
+    /// from what the run holds ([`decide_maintenance::folded`]), audited `maintenance_step`, and
+    /// refreshes the marks of `fleet` from it, so the packages of this heartbeat are decided over
+    /// the turn as stored ([`crate::fleet::Marks::in_maintenance`]): a host whose turn ended here
+    /// takes its place in its plans again at once. A change that cannot be stored is logged, and
+    /// the next heartbeat's report folds it again.
+    pub(super) fn fold_maintenance(&self, fleet: &mut Fleet, id: &HostId) {
         let unix_now = self.ops.unix_now();
         let Some((r, h, turn, run_id)) = self.ops.read(|state| {
             let runs = &state.maintenance_runs;
@@ -70,8 +77,11 @@ impl Coordinator {
                 *held = turn;
             }
         });
-        if let Err(why) = stored {
-            tracing::warn!(%why, node_id = %id, run = %run_id, "a host's maintenance step could not be stored: its next heartbeat reports it again");
+        match stored {
+            Ok(_) => fleet.set_marks(self.ops.read(marks_of)),
+            Err(why) => {
+                tracing::warn!(%why, node_id = %id, run = %run_id, "a host's maintenance step could not be stored: its next heartbeat reports it again");
+            }
         }
     }
 
@@ -136,6 +146,52 @@ impl Coordinator {
             Verdict::InTurn { resend: Some(_) } => Next::Busy,
             Verdict::Start(ordered) if sends => self.start_turn(id, ordered, unix_now),
             Verdict::Start(_) => Next::Free,
+            Verdict::Skip(skipping) => {
+                self.skip_macos(id, &skipping, unix_now);
+                Next::Free
+            }
+        }
+    }
+
+    /// Stores the `macos` of the host `id`'s waiting turn left out at `unix_now`, with why
+    /// ([`Verdict::Skip`]), audited `maintenance_step`: the turn waits without `macos`, or, when
+    /// `macos` was all it held, ends `skipped` with its kinds as they were. Nothing is stored when
+    /// the turn no longer waits with `macos` in a run that is not cancelled (an operator's
+    /// `Cancel` in between); a change the store refuses is logged, and the host's next heartbeat
+    /// decides it again.
+    pub(crate) fn skip_macos(&self, id: &HostId, skipping: &Skipping, unix_now: u64) {
+        let run_id = skipping.run_id.as_str();
+        let why = skipping.why;
+        let stored = self.ops.decide_change(Write::BeforeMemory, |state| {
+            let held = state
+                .maintenance_runs
+                .iter_mut()
+                .filter(|run| run.id == run_id && run.cancelled_unix.is_none())
+                .flat_map(|run| run.hosts.iter_mut())
+                .find(|host| {
+                    host.host_id == id.as_str()
+                        && host.step == Step::Waiting
+                        && host.kinds.contains(&Kind::Macos)
+                })
+                .ok_or(Unstarted::Gone)?;
+            held.skipped_because = Some(why);
+            if held.kinds == [Kind::Macos] {
+                held.step = Step::Skipped;
+                held.since_unix = unix_now;
+            } else {
+                held.kinds.retain(|kind| *kind != Kind::Macos);
+            }
+            let then = format!(" {} {}", held.step.as_str(), why.as_str());
+            Ok::<_, Unstarted>(entry(
+                MAINTENANCE_STEP,
+                id,
+                &skipping.host_group,
+                run_id,
+                &then,
+            ))
+        });
+        if let Err(Unstarted::Store(why)) = stored {
+            tracing::warn!(%why, node_id = %id, run = %run_id, "a host's macOS skip could not be stored: its next heartbeat decides it again");
         }
     }
 
@@ -169,9 +225,9 @@ impl Coordinator {
     }
 }
 
-/// Why a start was not stored.
+/// Why a start, or a skip of `macos`, was not stored.
 enum Unstarted {
-    /// The turn no longer waits in a run that is not cancelled.
+    /// The turn no longer waits in a run that is not cancelled (with `macos`, for a skip).
     Gone,
     /// The store refused the change.
     Store(OpsError),
@@ -195,3 +251,7 @@ fn order_of(ordered: Ordered) -> Order {
 #[cfg(test)]
 #[path = "service_maintain_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "maintenance_packages_tests.rs"]
+mod packages_tests;
