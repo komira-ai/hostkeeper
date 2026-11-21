@@ -333,13 +333,16 @@ fn child_prints_its_arguments_and_environment() {
     }
 }
 
-/// The arguments that run this module's helper child in this test binary.
+/// The arguments that run this module's helper child in this test binary. Two test threads,
+/// whatever the machine: on one, libtest writes `test <name> ... ` before the child's own output,
+/// on the line of its first argument (a one-CPU build worker).
 fn helper() -> Vec<String> {
     args(&[
         "maintenance_hook::linux::stage::tests::child_prints_its_arguments_and_environment",
         "--exact",
         "--ignored",
         "--nocapture",
+        "--test-threads=2",
     ])
 }
 
