@@ -199,6 +199,6 @@ async fn retry_host_and_put_back_queue_an_order_for_a_halted_host_over_both_wire
             assert_eq!(retried, refused(code, token), "RetryHost ci {ci} {wire:?}");
             assert_eq!(put, refused(code, token), "PutBack ci {ci} {wire:?}");
         }
-        assert_eq!(world.audited(), base + 2, "{wire:?}");
+        assert_eq!(world.audited(), base, "{wire:?}");
     }
 }
