@@ -418,7 +418,11 @@ fn the_group_stays_halted_until_the_host_reports_the_outcome() {
 fn a_host_offered_again_after_a_deferral_starts_under_try_one() {
     let world = halted_of("mo-offered-again", &["h1"]);
     retry(&world, RUN, "h1", REASON).expect("queued");
-    tell(&world, "h1", at(MaintenanceStep::Deferred, "stage: exit 75"));
+    tell(
+        &world,
+        "h1",
+        at(MaintenanceStep::Deferred, "stage: exit 75"),
+    );
     let held = turn_of(&world, "h1");
     assert_eq!(
         (held.step, held.queued, held.order_try),

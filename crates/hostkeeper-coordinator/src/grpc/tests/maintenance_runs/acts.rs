@@ -29,14 +29,7 @@ fn put_back_of(run: &str, host: &str, reason: &str) -> proto::PutBackMaintenance
 }
 
 /// `RetryHost` and `PutBack` of `host` in `run` over `wire`, each refused with `code` and `token`.
-async fn refused_both(
-    world: &Wired,
-    wire: Wire,
-    run: &str,
-    host: &str,
-    code: Code,
-    token: &str,
-) {
+async fn refused_both(world: &Wired, wire: Wire, run: &str, host: &str, code: Code, token: &str) {
     let retried = world
         .ask::<proto::RetryMaintenanceHostResponse>(wire, RETRY_HOST, &retry_of(run, host, "why"))
         .await

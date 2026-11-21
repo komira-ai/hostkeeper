@@ -35,10 +35,8 @@ fn halted(id: &str, group: &str, reason: &str) -> RunHost {
 
 /// The alerts of a coordinator that has heard no host, over `runs`.
 fn derived(runs: Vec<Run>) -> Vec<Alert> {
-    let ops = OpsState {
-        maintenance_runs: runs,
-        ..OpsState::default()
-    };
+    let mut ops = OpsState::default();
+    ops.maintenance_runs = runs;
     derive(
         &Fleet::new(Duration::ZERO, QUIET_START),
         &ops,

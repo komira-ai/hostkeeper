@@ -164,7 +164,13 @@ impl Coordinator {
     pub(super) fn note_not_back(&self) {
         let rebooting: Vec<Rebooting> = self.ops.read(|state| {
             turns_at(state, Step::Rebooting)
-                .map(|(run, turn)| (run.id.clone(), turn.host_id.clone(), turn.host_group.clone()))
+                .map(|(run, turn)| {
+                    (
+                        run.id.clone(),
+                        turn.host_id.clone(),
+                        turn.host_group.clone(),
+                    )
+                })
                 .collect()
         });
         if rebooting.is_empty() {

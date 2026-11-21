@@ -252,5 +252,8 @@ fn a_halted_hosts_queued_act_and_order_try_are_kept_in_the_ops_file() {
     let refused = files_over(plain.path())
         .load_ops()
         .expect_err("an unknown act is refused");
-    assert!(refused.to_string().contains("\"nap\" is not a Act"), "{refused}");
+    assert!(
+        refused.to_string().contains("\"nap\" is not a Act"),
+        "{refused}"
+    );
 }
