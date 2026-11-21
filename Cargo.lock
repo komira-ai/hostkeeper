@@ -1818,6 +1818,7 @@ dependencies = [
  "clap",
  "hello",
  "hex",
+ "hostkeeper-bootstrap",
  "hostkeeper-config",
  "hostkeeper-coordinator",
  "hostkeeper-daemon",

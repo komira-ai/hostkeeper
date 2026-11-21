@@ -24,9 +24,10 @@
 //!
 //! **The password** ([`Password`]) is not treated as a secret (section 5.5), but it goes to one
 //! place: the standard input of the update call ([`UpdateAccount::run`], over the [`StdinRun`]
-//! port), followed by a newline. It is never in an argument, the program's environment, a log line
-//! or an error: the type has no `Display`, its `Debug` prints `Password(withheld)`, and the call's
-//! error and log line name the step and the exit code alone.
+//! port), followed by a newline, and of the two `sysadminctl` calls that make the account at a
+//! Mac's start (the daemon's `update_account_make`). It is never in an argument, the program's
+//! environment, a log line or an error: the type has no `Display`, its `Debug` prints
+//! `Password(withheld)`, and the call's error and log line name the step and the exit code alone.
 
 use std::fmt;
 use std::fs::OpenOptions;
@@ -221,6 +222,13 @@ impl UpdateAccount {
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// The account's password, for the one place it goes besides [`UpdateAccount::run`]: the
+    /// standard input of the calls that make the account at a Mac's start
+    /// (the daemon's `update_account_make`).
+    pub(crate) fn password(&self) -> &[u8] {
+        &self.password.0
     }
 
     /// The update call: runs `args` through `runner`, the password and a newline on its standard
