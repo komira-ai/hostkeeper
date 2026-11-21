@@ -7,7 +7,8 @@
 //! `openrc_tests.rs`; those of `pr-device.yml`, the one workflow with jobs as root on a pull request, and of
 //! no secret and no macOS job on a pull request, in `pr_device_tests.rs`; those of the Mac's
 //! tests, the macOS stage of `release.yml` (no macOS job runs for a pull request), in
-//! `release_macos_tests.rs`; those of `advisories.yml`, the advisory
+//! `release_macos_tests.rs`; those of `farm.yml`, the farm lane and the one pull-request workflow
+//! whose job holds `id-token: write`, in `farm_tests.rs`; those of `advisories.yml`, the advisory
 //! monitor, in `advisories.rs`; those of `release-red.yml`, the alert of a red run of a suite that
 //! holds no release, in `release_red.rs`.
 
@@ -31,6 +32,8 @@ mod desired_tests;
 mod downloads;
 mod downloads_tests;
 mod expr;
+mod farm;
+mod farm_tests;
 mod hello_run_tests;
 mod hk_release_tests;
 mod image_push_tests;
@@ -49,6 +52,7 @@ mod one_command_tests;
 mod openrc;
 mod openrc_tests;
 mod packages;
+mod packages_stable_tests;
 mod packages_tests;
 mod pinned_cache;
 mod pinned_cache_tests;

@@ -64,7 +64,8 @@ uninstall (`busy_elsewhere`), so a long drain must not hold a stage open, and it
 A package has one plan for each group that lists it, over that group's hosts alone:
 
 - The plan's keys are the group's policy: `stages`, `canary`, `bake_beats`, `rollback`,
-  `rollback_after_failed`, `defer_backoff`, `max_updating`, `min_up` and `live_rollouts`
+  `rollback_after_failed`, `failed_hosts`, `defer_backoff`, `max_updating`, `min_up` and
+  `live_rollouts`
   ([hostgroups.md](hostgroups.md#policy)). The same policy applies to every package of the group.
 - The role of a host is the name of its group. `max_updating` and `min_up` are the group's, counted
   over the group's hosts, and so are the hosts a stage's percent is computed over. Two groups never
@@ -94,17 +95,20 @@ plan: its stages with their sizes and hosts, each host `waiting`, `updating`, `b
 | `rollout_elsewhere` | another service's rollout is live (see `--live-rollouts` below) |
 | `quiet` | the coordinator was started recently and has not heard the fleet, or (on the database store) the fleet's beats had a gap, or the database's link is lost |
 | `manual_advance` | the next stage is `manual`: it waits for `Rollouts.Advance` |
-| `failed_host` | a host of the current stage failed the desired version |
+| `failed_host` | failed hosts hold the plan: under `failed_hosts = FAILED_HOSTS_STOP` a host of the current stage failed the desired version; under `FAILED_HOSTS_CONTINUE` a canary host failed while the canary is the current stage, or as many hosts failed as the ceiling (see [A failed host](#a-failed-host)) |
 | `below_min_up` | ordering the next host would leave fewer hosts of its group up than `min_up` |
 | `updating` | the stage's hosts are updating |
 | `deferring` | the hosts left to order declined the update and wait out their backoff |
 | `baking` | the stage's hosts are updated and baking |
-| `nothing_to_order` | every host the plan has left to order is held by a rule of its own host (it holds a halt of its own, its install waits `install_order`, it is `moving`, another update runs on it): the plan takes no place of `--live-rollouts` (below), and each host's gate reason says which rule holds it |
+| `nothing_to_order` | every host the plan has left to order is held by a rule of its own host (it holds a halt of its own, its install waits `install_order`, it is `moving`, another update runs on it), or, under `FAILED_HOSTS_CONTINUE`, every host is done or failed: the plan takes no place of `--live-rollouts` (below), and each host's gate reason says which rule holds it |
 
 A plan that takes no place of `--live-rollouts` (it is not live and nothing of it can be ordered
 now: `failed_host`, `manual_advance`, `below_min_up`, `deferring`, `nothing_to_order`, a pause or a
 halt) says its own reason, never `rollout_elsewhere`: what holds it is its own, not the services
 that roll meanwhile.
+
+A failed host shows as `failed` in its stage. Under `FAILED_HOSTS_CONTINUE` a plan whose every host
+is done or failed has nothing left to order: it says `nothing_to_order` and takes no place.
 
 Each host's gate reason names its stage. `paused`, `advance_wait`, `stage_failed`, `stage_wait`,
 `below_min_up` and `rollout_elsewhere` are the reasons the plan adds; `no_slot` means the
@@ -189,10 +193,61 @@ Both also refuse `unknown_service`, `invalid_request`, `store_failed` and, for `
 
 ## A failed host
 
-A release failure below the rollback threshold does not stop the stage: its other hosts go on. But
-a stage with an eligible host that failed is not done (`failed_host`; the host's gate reason is
-`stage_failed`), so the next stage does not start. The plan waits for an operator to resolve the
-host, by one of:
+What a host that failed the desired version does to the rest of its plan is the group's policy key
+`failed_hosts` ([hostgroups.md](hostgroups.md#policy)):
+
+- `FAILED_HOSTS_CONTINUE`, the default (also what `FAILED_HOSTS_UNSPECIFIED` and a group put
+  before the key read as): the failed host stays at the version it runs and is an alert. Its stage
+  counts it as done, failed: a stage is done when as many of its hosts are done or failed as it
+  holds. The plan goes on ordering the other hosts, `max_updating` at a time, and the failed host
+  holds no slot of `max_updating`. The plan stays live, and takes the one place of
+  `--live-rollouts`, while it has hosts to order.
+- `FAILED_HOSTS_STOP`: the failed host holds its stage. The stage is not done (`failed_host`; the
+  gate reason of its other hosts, once its places are taken, is `stage_failed`), so the next stage
+  does not start until an operator resolves the host. A failed host that is not healthy (one halted
+  after its switch) keeps a slot of `max_updating`. This is what every group did before the key; a
+  group that relied on one failure stopping everything sets it, or a canary.
+
+A service of the rollout file (no host group) keeps `FAILED_HOSTS_STOP`, and gets no automatic
+retry.
+
+Under either, a failure among the canary hosts, while the canary is the current stage, holds the
+plan as `FAILED_HOSTS_STOP` does: nothing past the canary is ordered (and with `rollback =
+"automatic"` the canary's release failure rolls the version back, as before).
+
+**The ceiling.** Under `FAILED_HOSTS_CONTINUE`, `rollback_after_failed` is a ceiling: once as many
+of the plan's eligible hosts have failed as the larger of `min_hosts` and `percent` of those hosts
+(rounded up), the plan stops. A host whose failure it can clear by itself, which the coordinator
+retries (below), is not counted: it says nothing of the release. Every host not yet ordered waits
+`stage_failed`, the plan waits `failed_host` and takes no place; orders already given run to their
+end. This is the one case where a healthy host is left at its version. With the defaults (25 percent, 2 hosts):
+
+- a group of six hosts: the ceiling is 2 (25 percent of 6 is 1.5, rounded up to 2). One host
+  fails, and the other five are updated. A second failure stops the plan: with `stages = [50,
+  100]` and `max_updating = 1`, if the first two hosts ordered both fail, the other four are not
+  updated.
+- a group of four hosts: the ceiling is also 2 (25 percent of 4 is 1, and `min_hosts` is 2). One
+  host fails, and the other three are updated; a second failure stops the plan.
+
+Independently, with `rollback = "automatic"`, release failures that reach the same threshold (the
+larger of `rollback_after_failed.percent` of the service's live hosts and its `min_hosts`) mark the
+version bad, which halts the plan, and set the desired version back to the last good one; that is
+checked at every heartbeat that brings a verdict, so it can be reached in the middle of a stage.
+
+**Automatic retry.** In a host group, a failure whose reason the host can clear by itself
+(`busy`, `verify_unavailable`, `fetch_failed`, `package_manager_busy`, `no_space`), that failed with
+no phase or before the commit, is retried by the coordinator: once the group's `defer_backoff` has
+passed since the host reported it, its report is set aside, as `Hosts.Retry` sets one aside, and the
+host is ordered the version again at that heartbeat, at the next try. The n-th failure in a row of
+one version waits `initial_secs * factor^(n-1)`, capped at `max_secs`: 300 s, 600 s, 1200 s and so
+on up to 3600 s with the defaults. A run of failures ends when the host reports anything else: a
+success, a failure it cannot clear by itself, or the version running. Any other reason (`manifest_invalid`,
+`digest_mismatch`, `signature`, `config_missing` or another missing prerequisite, a halt) is not
+retried: it stands until an operator resolves the host. The runs are kept in memory only: after a
+restart the first report heard starts one, and the host is ordered again `initial_secs` after it.
+A deferral (the host declined the update for its moment) backs off by the same key, as before.
+
+An operator resolves a failed host by one of:
 
 - `Services.Hold` or `Hosts.Exclude` of the host for the service: it is no longer eligible, and the
   stage takes another host in its place;
@@ -208,23 +263,51 @@ host, by one of:
 Every failed host is an alert of `Alerts.List` (`hk alerts list`), so the operator's tooling that
 polls it tells a person at once: `failed_update`, critical, one for each host and service whose
 last report is a failure of the group's desired version, with the version, the report's `reason`
-and `detail` and its try (`tries`), first observed when this coordinator first saw it. It clears
-when the host reports another outcome (it reaches the version, or a new try is under way: a report
-`Hosts.Retry` set aside is none), when another version is set, or when the host is excluded or
-leaves its group. A host that holds a halt of its own is `host_halt` instead
-([holds-and-force.md](holds-and-force.md#marks)). A plan held by its failed host holds no other
-service: it says `failed_host`, and the other services of every group roll meanwhile.
+and `detail` and its try (`tries`), first observed when this coordinator first saw it. A failure
+the coordinator retries by itself stays listed through its tries, and its message says so ("the
+host can clear it by itself (2 in a row): it is ordered 2.0 again after the group's
+defer_backoff, longer after each failure"). It clears when the host reports another outcome (it
+reaches the version, a failure it cannot clear by itself replaces it, or a new try an operator
+asked for is under way: a report `Hosts.Retry` set aside is none), when another version is set, or
+when the host is excluded or leaves its group. A host that holds a halt of its own is `host_halt`
+instead ([holds-and-force.md](holds-and-force.md#marks)). A plan held by its failed hosts holds no
+other service: it says `failed_host`, and the other services of every group roll meanwhile.
 
-Failures that reach the rollback threshold (the larger of `rollback_after_failed.percent` of the
-service's live hosts and its `min_hosts`) mark the version bad, which halts the plan, and with
-`rollback = "automatic"` set the desired version back to the last good one; that is checked at
-every heartbeat that brings a verdict, so it can be reached in the middle of a stage.
+**A deferral that repeats.** A host that declines the group's desired version three times in a
+row, each time it is offered the version again after its wait, for the same reason, is the
+critical alert `repeated_deferral`: the reason may be one that does not clear by itself (a
+prerequisite the system refuses to set up, say). With the default backoff the third comes about
+15 minutes after the first (300 s, then 600 s). The alert names the host, the service, the version,
+the reason and how many times in a row (`tries`). It clears when the host updates, gives another
+reason, or another version is set. The host still waits out a longer backoff each time, and a
+deferring host never holds another host of its plan or another service's rollout: a plan whose
+hosts left to order all defer takes no place (`deferring`).
 
-## Example: one host fails
+## Example: one host fails, under `continue`
+
+A group `build` of six hosts, b1 to b6, with `stages = [50, 100]`, `max_updating = 1` and the
+default `failed_hosts`, rolls `web` 2.0; a group `two` has `db`, whose 2.0 is set after `web`'s.
+The coordinator runs at the default `--live-rollouts 1`.
+
+1. b1 is ordered `web` 2.0 (stage 1 of 2 holds three hosts). Its update fails before the commit
+   (`manifest_invalid`): b1 stays at 1.0, is `failed_here`, and `hk alerts list` answers one
+   `failed_update` alert for it.
+2. b1 holds no slot: b2 is ordered, and once it is done, b3. Stage 1 is then done (two done and
+   one failed of its three), and stage 2 orders b4, b5 and b6, one at a time.
+3. Meanwhile `db` waits `rollout_elsewhere` on `web`, which has hosts to order. Once b6 is done,
+   `web` has none (five done, one failed): its plan says `nothing_to_order`, takes no place, and
+   `db` is ordered.
+
+Had b2 failed too, the plan would be at its ceiling (two of six): b3 to b6 wait `stage_failed`,
+the plan waits `failed_host`, and `db` is ordered at once. Had b1's failure been `busy` instead,
+it would be retried by itself: b1 is ordered 2.0 again 300 s after it reported the failure.
+
+## Example: one host fails, under `stop`
 
 A fleet of two groups, the coordinator at the default `--live-rollouts 1`: `build` of six Linux
 build nodes listing `hostkeeper` and `tierstore`, with `stages = [50, 100]`, and `mac` of four
-Macs listing `hostkeeper`, `tierstore-config` and `tierstore`, with `stages = [25, 100]`. CI
+Macs listing `hostkeeper`, `tierstore-config` and `tierstore`, with `stages = [25, 100]` and
+`failed_hosts = FAILED_HOSTS_STOP`. CI
 sets `tierstore-config` 2.0 in `mac`, then `tierstore` 2.0 in `mac`, then `hostkeeper` 2.0 in both
 groups.
 
@@ -259,7 +342,7 @@ the number for its own packages, never raise it. The services that wait are queu
 their desired versions were set, and the coordinator orders them in that order: a later-set service
 is held (`rollout_elsewhere`, the status names the services ahead as `QUEUED` and gives the
 plan's `queue_position`) even when the earlier one has no host updating at the moment. A service
-that nothing can order (halted, at a version marked bad, paused, held by a failed host, waiting for an Advance or for `min_up`, or whose
+that nothing can order (halted, at a version marked bad, paused, held by its failed hosts, waiting for an Advance or for `min_up`, or whose
 hosts that have not started all defer or are held by a rule of their own host) takes no place in
 the queue. A host left to order is held by a rule of its own host when the decision would hold it
 before the plan's gate however the plan stood: it holds a halt of the service of its own
@@ -278,8 +361,10 @@ update (updating, its promotion pending, or under an order) or bakes the desired
 its plan has started a host and still has one it can order now (a paused plan and one waiting for an
 Advance are live). A plan under way whose every host left is held by a rule of its own host is not
 live: one host that keeps a halt of its own for hours holds no other service meanwhile. A failed
-host does not make its service live: it still counts against its own group's `max_updating`, but a
-halted service, a version marked bad, a plan held by a failed host and a service whose only
+host does not make its service live. Under `FAILED_HOSTS_STOP` a failed host that is not healthy
+still counts against its own group's `max_updating`; under `FAILED_HOSTS_CONTINUE` it counts against
+none, and its plan stays live while it has other hosts to order. A halted service, a version marked
+bad, a plan held by its failed hosts (see [A failed host](#a-failed-host)) and a service whose only
 occupants are failed hosts order nothing until an operator acts, so they hold no other service. A
 bake counts only for a host of the plan (live, in the group, neither excluded nor held, picked a
 package of the version) that the coordinator saw update: a host the release picks no package for

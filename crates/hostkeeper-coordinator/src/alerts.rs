@@ -54,13 +54,17 @@
 //! - `updates_due`: one alert per host group with hosts whose kept report has updates due;
 //! - `failed_update`: a host whose last report of a service is a failure of the version its group
 //!   wants of it, with the report's reason, detail and try ([`failures`]), until the host reports
-//!   another outcome or another version is wanted;
+//!   another outcome or another version is wanted; one the coordinator retries by itself stays
+//!   listed through its tries;
 //! - `host_halt`: a host that holds a halt of a service of its own (its beat's `local_halt`), with
 //!   its reason and when the host wrote it, stale or not ([`failures`]), until it no longer reports
 //!   it;
 //! - `maintenance_halted` and `maintenance_not_back`: a host whose maintenance turn is stored
 //!   halted or not back ([`maintenance_alerts`]); a host rebooting in its turn raises no
-//!   `silent_host`.
+//!   `silent_host`;
+//! - `repeated_deferral`: a host that declined a service's desired version
+//!   [`crate::defer::REPEATED_DEFERRALS`] times in a row for one reason ([`failures`]), until it
+//!   updates, gives another reason or another version is wanted.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
@@ -150,6 +154,8 @@ pub enum Kind {
     /// A host rebooting in its turn of a maintenance run is silent past its group's
     /// `return_secs`.
     MaintenanceNotBack,
+    /// A host declined a service's desired version several times in a row for one reason.
+    RepeatedDeferral,
 }
 
 impl Kind {
@@ -178,6 +184,7 @@ impl Kind {
             Self::HostHalt => "host_halt",
             Self::MaintenanceHalted => "maintenance_halted",
             Self::MaintenanceNotBack => "maintenance_not_back",
+            Self::RepeatedDeferral => "repeated_deferral",
         }
     }
 
@@ -192,7 +199,8 @@ impl Kind {
             | Self::FailedUpdate
             | Self::HostHalt
             | Self::MaintenanceHalted
-            | Self::MaintenanceNotBack => proto::AlertSeverity::Critical,
+            | Self::MaintenanceNotBack
+            | Self::RepeatedDeferral => proto::AlertSeverity::Critical,
             Self::WaitingForOperator
             | Self::DuplicateClaimPending
             | Self::HeldOnBadVersion
@@ -230,6 +238,7 @@ impl Kind {
             Self::HostHalt => proto::AlertKind::HostHalt,
             Self::MaintenanceHalted => proto::AlertKind::MaintenanceHalted,
             Self::MaintenanceNotBack => proto::AlertKind::MaintenanceNotBack,
+            Self::RepeatedDeferral => proto::AlertKind::RepeatedDeferral,
         }
     }
 }
@@ -413,13 +422,8 @@ pub(crate) fn derive_in(
     alerts.extend(xcode_release_waiting(enrollment));
     alerts.extend(crate::xcode_service::version_taken(&enrollment.xcode_taken));
     alerts.extend(updates::updates_due(fleet, enrollment.groups.as_ref()));
-    alerts.extend(failures::failed_updates(
-        fleet,
-        services,
-        groups,
-        &enrollment.wanted,
-    ));
-    alerts.extend(failures::host_halts(fleet, ops, services, groups, at));
+    let wanted = &enrollment.wanted;
+    alerts.extend(failures::of_hosts(fleet, ops, services, groups, wanted, at));
     alerts.extend(maintenance_alerts::halted(ops));
     alerts.extend(maintenance_alerts::not_back(ops));
     alerts.sort_by(|a, b| a.subject.cmp(&b.subject));

@@ -1,0 +1,15 @@
+load("//:buildrules.bzl", "cargo_package")
+
+# What this package reads beyond src/, tests/ and build.rs, which a Buck2 action sees only when
+# declared. The fixture binaries live under tests/bin; tests include the release pins and the packaging.
+cargo_package(
+    path = ".",
+    extra_srcs = [
+        "tests/bin",
+        "fixtures",
+        "linux-releases.toml",
+        "previous-release.toml",
+        "//:packaging/linux",
+        "//:packaging/pxe/deb/pxe.service",
+    ],
+)

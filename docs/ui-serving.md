@@ -104,7 +104,8 @@ by their route and are not in the menu.
   says so. After the fleet's count comes the runs (`ui/runs.js`): `Maintenance.List` (the last 10) and `Maintenance.Get` of each
   run that is not done, read when opened, every 10 seconds (the page is drawn again only when the runs changed) and after a stored run; a list that fails is said there and the rest of
   the page stays. Each run shows its state, scope, window, batch, reason and its hosts with each one's step, with a Console or
-  Desktop link while it restarts, and **Cancel** (a run not ended), **Retry** and **Put back** (a halted host), each with a reason
+  Desktop link while it restarts (the Console link names the page `serialconsole`, which the app does not
+  register, so it does not open the Console page; the Console button of the server's row in Home's List view does), and **Cancel** (a run not ended), **Retry** and **Put back** (a halted host), each with a reason
   and one confirmation, one call per click. Each group's card has an **Update** button on each due host's row, a Reason field,
   **Update the group** (not for Unassigned) and **Schedule...**, which opens the Schedule form for the group's hosts after reading
   the group's maintenance policy with `HostGroups.Get`.

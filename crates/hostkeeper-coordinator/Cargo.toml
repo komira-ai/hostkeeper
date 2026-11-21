@@ -114,3 +114,17 @@ tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-th
 
 [lints]
 workspace = true
+
+[package.metadata.buildrules]
+# The Buck2 build's policy for this package (docs/farm.md): every test target gets a private Postgres,
+# its URL in the variable the store tests read (hostkeeper-testkit's POSTGRES_URL_VAR), as ci.yml's
+# service container gives them one. The farm lane's `//:ci` checks the format of, builds and lints
+# this package but does not run its tests: buildrules' Postgres runs with fsync off, which the
+# coordinator's start refuses by design (src/store/postgres/session.rs), so every test that starts it
+# fails there (komira-ai/buildrules#166). They run in ci.yml alone until then.
+
+[package.metadata.buildrules.postgres]
+url-env = "HOSTKEEPER_TEST_POSTGRES_URL"
+
+[package.metadata.buildrules.actions]
+ci = ["fmt", "lint"]

@@ -1,0 +1,26 @@
+load("//:buildrules.bzl", "cargo_package")
+
+# What this package reads beyond src/, tests/ and build.rs, which a Buck2 action sees only when
+# declared. The build script compiles proto/ and includes the command generator (`#[path]`).
+cargo_package(
+    path = ".",
+    extra_srcs = [
+        "proto",
+        "src/ctl_gen.rs",
+    ],
+)
+
+# Read by other members (their extra_srcs); exported by reference, so each stays at its path.
+[
+    export_file(
+        name = path,
+        src = path,
+        mode = "reference",
+        visibility = ["PUBLIC"],
+    )
+    for path in [
+        "proto",
+        "src/ctl_gen",
+        "src/ctl_gen.rs",
+    ]
+]
