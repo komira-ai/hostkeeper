@@ -67,7 +67,8 @@ export namespace hostkeeper_operator_v1 {
     | "ALERT_KIND_FAILED_UPDATE"
     | "ALERT_KIND_HOST_HALT"
     | "ALERT_KIND_MAINTENANCE_HALTED"
-    | "ALERT_KIND_MAINTENANCE_NOT_BACK";
+    | "ALERT_KIND_MAINTENANCE_NOT_BACK"
+    | "ALERT_KIND_REPEATED_DEFERRAL";
   export type AlertSeverity = "ALERT_SEVERITY_UNSPECIFIED" | "ALERT_SEVERITY_CRITICAL" | "ALERT_SEVERITY_WARNING";
   export interface ApiTokenInfo { name?: string; source?: hostkeeper_operator_v1.ApiTokenSource; createdBy?: string; createdUnix?: string; owner?: string; }
   export type ApiTokenSource = "API_TOKEN_SOURCE_UNSPECIFIED" | "API_TOKEN_SOURCE_STORE" | "API_TOKEN_SOURCE_TOKENS_FILE";
@@ -171,6 +172,7 @@ export namespace hostkeeper_operator_v1 {
   export interface ExcludeResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface Exclusion { service?: string; reason?: string; }
   export interface FailThreshold { percent?: number; minHosts?: number; }
+  export type FailedHosts = "FAILED_HOSTS_UNSPECIFIED" | "FAILED_HOSTS_STOP" | "FAILED_HOSTS_CONTINUE";
   export interface FailureAck { nodeId?: string; report?: hostkeeper_agent_v1.UpdateResult; }
   export interface FleetTarget { confirmService?: string; }
   export interface ForceRecord { version?: string; generation?: string; reason?: string; }
@@ -701,6 +703,7 @@ export namespace hostkeeper_operator_v1 {
     minUp?: number;
     liveRollouts?: number;
     maintenance?: hostkeeper_operator_v1.MaintenancePolicy;
+    failedHosts?: hostkeeper_operator_v1.FailedHosts;
   }
   export interface RunningService { service?: string; version?: string; installer?: string; }
   export interface ScheduleMaintenanceRequest {

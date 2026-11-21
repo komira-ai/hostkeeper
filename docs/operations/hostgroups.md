@@ -362,8 +362,8 @@ its service is never ordered to a host that does not run the service. A package 
 installed because a halt, a hold, an exclusion, a version marked bad, the quiet start or a gate of
 its plan holds it also holds the later ones back. Updates are not ordered by the list.
 A later package whose every host left to order waits `install_order` (behind an earlier package
-that failed its install on one host, say, and waits `stage_failed` on the others) has nothing to
-order: it takes no place of `--live-rollouts` and holds no other service of any group, and its plan
+that failed its install on one host, say: on that host for good, and, under `failed_hosts =
+FAILED_HOSTS_STOP`, on the others too while they wait `stage_failed`) has nothing to order: it takes no place of `--live-rollouts` and holds no other service of any group, and its plan
 says `nothing_to_order` ([rollout-plans.md](rollout-plans.md#across-services---live-rollouts)).
 
 The uninstall of a package waits, told `uninstall_order`, while a package whose intent was
@@ -458,13 +458,16 @@ version, and the `targets` of the release).
 | `bake_beats` | 0 | 0 to 100 |
 | `rollback` | manual | `ROLLBACK_MODE_MANUAL` or `ROLLBACK_MODE_AUTOMATIC`; automatic sets the group's desired version back to the group's last good one |
 | `rollback_after_failed` | 25 percent, 2 hosts | `percent` 1 to 100, `min_hosts` 1 to 10000 |
-| `defer_backoff` | 300 s, factor 2, 3600 s | `initial_secs` at least 1, `factor` 1 to 16, `max_secs` from `initial_secs` to 604800 |
+| `failed_hosts` | continue | `FAILED_HOSTS_CONTINUE` or `FAILED_HOSTS_STOP`; continue counts a failed host as done, failed, and goes on ordering the others, up to the ceiling `rollback_after_failed`; stop holds the stage until an operator resolves the host ([rollout-plans.md](rollout-plans.md#a-failed-host)) |
+| `defer_backoff` | 300 s, factor 2, 3600 s | `initial_secs` at least 1, `factor` 1 to 16, `max_secs` from `initial_secs` to 604800; also the wait before a failure the host can clear by itself is retried |
 | `max_updating` | the whole stage | 0 to 10000; 0 holds the group; a number caps the hosts updating one package at once |
 | `min_up` | 0 | 0 to 10000 |
 | `live_rollouts` | the coordinator's `--live-rollouts` | 1 to 16; can only lower the coordinator's number |
 | `maintenance` | every key at its default | the keys of [Maintenance](#maintenance) below |
 
-A key left out takes its default. Each package of the group rolls by this one policy: its stages
+A key left out takes its default. A group put before `failed_hosts` existed reads as
+`FAILED_HOSTS_CONTINUE`: one failed host no longer holds its stage. A group that relied on one
+failure stopping everything sets `FAILED_HOSTS_STOP`, or a canary. Each package of the group rolls by this one policy: its stages
 are computed over the group's eligible hosts, `max_updating` caps the group's hosts updating that
 package at once (uninstalls count), `min_up` counts the group's live hosts up for it, and
 `live_rollouts` is how many services may roll at once, counted over every group and never above
@@ -530,9 +533,11 @@ leaves `roles` and `assignments` empty. `Alerts.List` derives a `halt` alert fro
 halt (groups with the same halt of a package, host and version are one alert that names them
 all), and the failed-canary, held-on-bad-version and abandoned-host alerts cover the packages
 that only a group lists. A host of a group whose last report of a package is a failure of the
-group's desired version is a `failed_update` alert, and a host that holds a halt of a package of
-its own is a `host_halt` alert, each naming the group in its message
-([rollout-plans.md](rollout-plans.md#a-failed-host)).
+group's desired version is a `failed_update` alert (one whose reason the host can clear by itself
+is retried after the group's `defer_backoff` and stays listed through its tries), a host that
+holds a halt of a package of its own is a `host_halt` alert, and a host that declined the group's
+desired version three times in a row for the same reason is a `repeated_deferral` alert, each
+naming the group in its message ([rollout-plans.md](rollout-plans.md#a-failed-host)).
 
 ## The audit log
 

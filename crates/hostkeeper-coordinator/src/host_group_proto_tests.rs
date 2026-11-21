@@ -6,6 +6,7 @@
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 
 use crate::defer::DeferBackoff;
+use crate::failed_hosts::FailedHosts;
 use crate::host_group_proto::{body_proto, policy_of, policy_proto};
 use crate::host_groups::{HostGroup, Policy, PolicyCanary, PolicyError, PolicyStage};
 use crate::maintenance_policy::{BadXcodeDefault, LinuxScope, Maintenance, XcodeDefault};
@@ -32,6 +33,7 @@ fn every_key() -> Policy {
             percent: 40,
             min_hosts: 5,
         },
+        failed_hosts: FailedHosts::Stop,
         defer_backoff: DeferBackoff {
             initial_secs: 60,
             factor: 3,
@@ -175,6 +177,7 @@ fn a_policy_reads_back_as_it_was_put_with_every_key_named() {
                 percent: Some(40),
                 min_hosts: Some(5),
             }),
+            failed_hosts: proto::FailedHosts::Stop.into(),
             defer_backoff: Some(proto::DeferBackoff {
                 initial_secs: Some(60),
                 factor: Some(3),
@@ -201,6 +204,10 @@ fn a_policy_reads_back_as_it_was_put_with_every_key_named() {
     assert_eq!(default.max_updating, None);
     assert_eq!(default.rollback, i32::from(proto::RollbackMode::Manual));
     assert_eq!(
+        default.failed_hosts,
+        i32::from(proto::FailedHosts::Continue)
+    );
+    assert_eq!(
         default.rollback_after_failed,
         Some(proto::FailThreshold {
             percent: Some(25),
@@ -211,9 +218,9 @@ fn a_policy_reads_back_as_it_was_put_with_every_key_named() {
     assert_eq!(policy_of(Some(&default)), Ok(Policy::default()));
 }
 
-/// Proves: an unspecified stage `advance` and an unspecified `rollback` read as the automatic
-/// advance and the manual rollback; a number the proto does not define is refused for its key,
-/// `stages` or `rollback`.
+/// Proves: an unspecified stage `advance`, `rollback` and `failed_hosts` read as the automatic
+/// advance, the manual rollback and `continue`; a number the proto does not define is refused for
+/// its key, `stages`, `rollback` or `failed_hosts`.
 ///
 /// Catches: a number outside the enum read as a mode, which would make a typo an unattended
 /// rollback.
@@ -251,6 +258,31 @@ fn an_enum_value_the_proto_does_not_define_is_refused_for_its_key() {
         PolicyError {
             key: "rollback",
             why: "9 is not a rollback mode".to_owned(),
+        }
+    );
+
+    let failed_hosts = |mode: i32| proto::RolloutPolicy {
+        failed_hosts: mode,
+        ..proto::RolloutPolicy::default()
+    };
+    assert_eq!(
+        policy_of(Some(&failed_hosts(0)))
+            .expect("unspecified")
+            .failed_hosts,
+        FailedHosts::Continue
+    );
+    assert_eq!(
+        policy_of(Some(&failed_hosts(1)))
+            .expect("stop")
+            .failed_hosts,
+        FailedHosts::Stop
+    );
+    let unknown = policy_of(Some(&failed_hosts(9))).expect_err("refused");
+    assert_eq!(
+        unknown,
+        PolicyError {
+            key: "failed_hosts",
+            why: "9 is not a failed-hosts mode".to_owned(),
         }
     );
 

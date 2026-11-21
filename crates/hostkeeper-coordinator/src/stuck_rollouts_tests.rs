@@ -24,6 +24,12 @@ fn at(farm: &Farm, secs: u64) {
     farm.world.rig.at(secs);
 }
 
+/// A group's policy whose failed hosts hold their stage, as every group's did before
+/// `failed_hosts`: the freezes below were seen under it.
+pub(crate) fn stops() -> proto::RolloutPolicy {
+    policy(|p| p.failed_hosts = proto::FailedHosts::Stop.into())
+}
+
 /// Takes the fleet's lock once, so the cluster stamps the desired versions set so far.
 fn stamp(farm: &Farm) {
     drop(farm.world.coordinator().lock_fleet());
@@ -184,7 +190,8 @@ fn a_host_that_holds_its_own_halt_holds_no_other_service() {
     assert_eq!(farm.tell("o2", &[("web", "1.0")]), update("web", "2.0"));
 }
 
-/// Proves: in a group listing `tierstore` before `js`, a host whose install of `tierstore` failed
+/// Proves: in a group listing `tierstore` before `js`, whose failed hosts hold their stage
+/// (`failed_hosts = stop`), a host whose install of `tierstore` failed
 /// (`failed_here`) and a host that waits behind it (`stage_failed`) leave `js` with no host it can
 /// order: both are `install_order`. `js` takes no place in the queue (`hostkeeper` of another group,
 /// set after `js`, is ordered, and waits on no service), and its plan says `nothing_to_order`.
@@ -196,7 +203,7 @@ fn a_host_that_holds_its_own_halt_holds_no_other_service() {
 async fn a_service_whose_hosts_all_wait_for_an_earlier_package_does_not_hold_the_queue() {
     let farm = Farm::new("stuck-install-order");
     farm.flag(1);
-    farm.group("mac", &["tierstore", "js"], None);
+    farm.group("mac", &["tierstore", "js"], Some(stops()));
     farm.group("two", &["db"], None);
     farm.host("m1", "mac");
     farm.host("m2", "mac");
@@ -246,8 +253,8 @@ async fn a_service_whose_hosts_all_wait_for_an_earlier_package_does_not_hold_the
     );
 }
 
-/// Proves: a new package whose first install failed on the first host of its group
-/// (`manifest_invalid`: the host `failed_here`, the other `stage_failed`) holds no service of
+/// Proves: a new package whose first install failed on the first host of its group, whose failed
+/// hosts hold their stage (`failed_hosts = stop`; `manifest_invalid`: the host `failed_here`, the other `stage_failed`) holds no service of
 /// another group, though the package listed after it in its group has no host it can order (each
 /// waits `install_order`): `db` in group `two`, set after both, is ordered, and the later package's
 /// plan says `nothing_to_order`.
@@ -258,7 +265,7 @@ async fn a_service_whose_hosts_all_wait_for_an_earlier_package_does_not_hold_the
 async fn a_package_that_failed_on_its_first_host_holds_nobody_else() {
     let farm = Farm::new("stuck-failed-first");
     farm.flag(1);
-    farm.group("one", &["cfg", "svc"], None);
+    farm.group("one", &["cfg", "svc"], Some(stops()));
     farm.group("two", &["db"], None);
     farm.host("o1", "one");
     farm.host("o2", "one");
@@ -300,8 +307,9 @@ async fn a_package_that_failed_on_its_first_host_holds_nobody_else() {
     );
 }
 
-/// Proves: two hosts of six that refused an update of `web` for a moment (`busy`, a refusal with
-/// no phase and no class) leave its plan held by its failed hosts (`failed_host`), a rule of the
+/// Proves: two hosts of six, in a group whose failed hosts hold their stage (`failed_hosts =
+/// stop`), that refused an update of `web` for a moment (`busy`, a refusal with no phase and no
+/// class) leave its plan held by its failed hosts (`failed_host`), a rule of the
 /// plan that is no halt: the version is not marked bad, a service of another group set after it is
 /// ordered, and the plan waits on no service.
 ///
@@ -317,6 +325,7 @@ fn hosts_that_refused_for_a_moment_hold_nobody_else() {
         Some(policy(|p| {
             p.stages = stages(&[100]);
             p.rollback = proto::RollbackMode::Automatic.into();
+            p.failed_hosts = proto::FailedHosts::Stop.into();
         })),
     );
     farm.group("two", &["db"], None);

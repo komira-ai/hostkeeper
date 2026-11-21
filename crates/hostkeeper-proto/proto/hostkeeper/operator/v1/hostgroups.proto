@@ -152,6 +152,11 @@ message RolloutPolicy {
   // start its hosts' turns, and `linux_scope`, `drain_deadline_secs` and `return_secs` for the
   // `maintain` it sends.
   MaintenancePolicy maintenance = 10;
+  // What a host that failed the desired version does to the rest of its stage: UNSPECIFIED is
+  // CONTINUE. Under either, a failure among the canary hosts stops the roll, and under CONTINUE
+  // `rollback_after_failed` is a ceiling: once as many of the plan's hosts have failed, the plan
+  // stops as under STOP.
+  FailedHosts failed_hosts = 11;
 }
 
 // The maintenance settings of a group's hosts. A key left out takes its default.
@@ -211,6 +216,18 @@ enum RollbackMode {
   ROLLBACK_MODE_MANUAL = 1;
   // The coordinator sets the group's last good version when a release fails on enough hosts.
   ROLLBACK_MODE_AUTOMATIC = 2;
+}
+
+// What a host that failed the desired version does to the rest of its stage.
+enum FailedHosts {
+  // CONTINUE, the default.
+  FAILED_HOSTS_UNSPECIFIED = 0;
+  // The failed host holds its stage: the next stage starts only once an operator resolves the
+  // host (holds, excludes or retries it, clears its halt, or sets another version).
+  FAILED_HOSTS_STOP = 1;
+  // The failed host stays at the version it runs and is an alert; its stage counts it as done,
+  // failed, and the plan goes on ordering the other hosts, `max_updating` at a time.
+  FAILED_HOSTS_CONTINUE = 2;
 }
 
 // How many hosts must fail a release before an automatic rollback: the larger of `min_hosts` and

@@ -52,6 +52,9 @@ export function policySummary(policy) {
     const t = p.rollbackAfterFailed;
     parts.push(`rollback after ${t.percent || 0}% failed, at least ${t.minHosts || 0} hosts`);
   }
+  if (p.failedHosts !== undefined) {
+    parts.push(`failed hosts ${enumLabel(p.failedHosts, "FAILED_HOSTS_")}`);
+  }
   if (p.deferBackoff) {
     const d = p.deferBackoff;
     parts.push(`defer backoff ${d.initialSecs || 0}s x${d.factor || 0} to ${d.maxSecs || 0}s`);
