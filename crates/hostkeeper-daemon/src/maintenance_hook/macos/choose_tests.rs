@@ -181,3 +181,47 @@ fn a_mac_with_no_applications_directory_has_no_installer() {
         )
     );
 }
+
+/// `softwareupdate --list` on macOS 26: the Command Line Tools, then macOS Tahoe 26.6.1.
+const LIST_TOOLS_AND_MINOR: &str =
+    include_str!("../../../tests/fixtures/maintenance/softwareupdate/macos26_list_restart.txt");
+
+/// Proves: an update that is not macOS (the Command Line Tools) is never installed by the
+/// `cutover`, though `--list` names it first: the macOS update after it is.
+///
+/// Catches: the first listed label installed whatever it is, so the Mac is restarted for the
+/// Command Line Tools and its macOS stays due.
+#[test]
+fn an_update_that_is_not_macos_is_not_chosen() {
+    let files = Files::new("macos-choose-not-macos");
+    let mac = Mac::on_26(LIST_TOOLS_AND_MINOR);
+    assert_eq!(
+        mac.apply(&files).cutover(&params(false)),
+        Ok(Cutover::NeedsReboot)
+    );
+    assert_eq!(
+        files.plan(),
+        minor_plan("25G110", "macOS Tahoe 26.6.1-25G110")
+    );
+}
+
+/// Proves: an app in `/Applications` whose name does not start `Install macOS ` (an Xcode) is not
+/// an installer: the one installer beside it is chosen.
+///
+/// Catches: any `.app` counted as an installer, so a Mac with an Xcode refuses every upgrade as
+/// holding two installers, or runs a `startosinstall` of another app.
+#[test]
+fn an_app_that_is_not_a_macos_installer_is_passed_over() {
+    let files = Files::new("macos-choose-other-app");
+    files.installer(concat!("Xcode-27.2-Release-Candidate", ".app"), true);
+    files.installer(APP_27, true);
+    let mac = Mac::on_26(LIST_MAJOR);
+    assert_eq!(
+        mac.apply(&files).cutover(&params(true)),
+        Ok(Cutover::NeedsReboot)
+    );
+    assert_eq!(
+        files.plan(),
+        format!(r#"{{"build":"26B70","installer":"{INSTALLER}","runId":"{RUN}"}}"#)
+    );
+}
