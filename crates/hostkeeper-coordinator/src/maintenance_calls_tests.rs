@@ -41,8 +41,28 @@ pub(crate) const FIRST: &str = "run-1900000000-1";
 /// What a fleet is: the hosts of a group, each with what its report lists as due.
 pub(crate) type Hosts<'a> = &'a [(&'a str, &'a [MaintenanceKind])];
 
+/// The Mac facts of a Mac that may be ordered `macos`: no device-management conflict, an update
+/// account that is present, an administrator and holds a Secure Token, and FileVault off.
+pub(crate) fn clean_mac() -> agent::MacUpdateFacts {
+    agent::MacUpdateFacts {
+        filevault: agent::FileVaultState::Off as i32,
+        update_account: Some(agent::UpdateAccountState {
+            present: true,
+            admin: true,
+            secure_token: true,
+            hidden: true,
+        }),
+        ..agent::MacUpdateFacts::default()
+    }
+}
+
+/// [`clean_mac`] when `due` holds `macos`, as a Mac's report carries; none otherwise.
+pub(crate) fn mac_of(due: &[MaintenanceKind]) -> Option<agent::MacUpdateFacts> {
+    due.contains(&MaintenanceKind::Macos).then(clean_mac)
+}
+
 /// A heartbeat of `host` that lists one service and, when its daemon `announces` `maintenance-v1`,
-/// carries a report that lists one due item for each of `due`.
+/// carries a report that lists one due item for each of `due` (with [`mac_of`] `due`).
 pub(crate) fn hear(world: &World, host: &str, announces: bool, due: &[MaintenanceKind]) {
     let mut features: Vec<&str> = NEW_DAEMON.to_vec();
     if announces {
@@ -59,6 +79,7 @@ pub(crate) fn hear(world: &World, host: &str, announces: bool, due: &[Maintenanc
                     ..agent::DueItem::default()
                 })
                 .collect(),
+            mac: mac_of(due),
             ..agent::MaintenanceReport::default()
         };
         beat.maintenance = Some(text_of(&report));

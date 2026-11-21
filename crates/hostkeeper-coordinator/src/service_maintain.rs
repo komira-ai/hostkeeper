@@ -3,11 +3,15 @@
 //! daemon reports it, stored before anything is decided; then the `maintain` the host is sent, or
 //! the package orders it is not given.
 //!
-//! All three are the coordinator's changes of the ops state, made under the fleet's lock and,
-//! over a shared store, in the heartbeat's decision transaction, so a decision that does not land
-//! puts them back with the rest. A step and a start are audited by `coordinator`
+//! The host's `macos` left out by its report ([`decide_maintenance::Verdict::Skip`]) is stored the
+//! same way, in place of an order.
+//!
+//! Each is a coordinator's change of the ops state, made under the fleet's lock and, over a
+//! shared store, in the heartbeat's decision transaction, so a decision that does not land puts
+//! them back with the rest. A step, a start and a skip are audited by `coordinator`
 //! (`maintenance_step`, `maintenance_start`); a bake's count is stored at each heartbeat with no
-//! entry of its own, and the heartbeat that ends it is audited `maintenance_step` (`baked`). A start is stored before the order is answered (storage first): a start that cannot
+//! entry of its own, and the heartbeat that ends it is audited `maintenance_step` (`baked`). A
+//! start is stored before the order is answered (storage first): a start that cannot
 //! be stored sends no order, and the host is asked again at its next heartbeat.
 
 use std::collections::BTreeMap;
@@ -17,13 +21,13 @@ use hostkeeper_wire::HostId;
 
 use super::Coordinator;
 use crate::audit_actions::{MAINTENANCE_START, MAINTENANCE_STEP};
-use crate::decide_maintenance::{self, Ordered, Verdict, View};
+use crate::decide_maintenance::{self, Ordered, Skipping, Verdict, View};
 use crate::fleet::Fleet;
 use crate::holds::marks_of;
 use crate::host_groups::GroupName;
 use crate::host_groups::Policy;
 use crate::maintenance::FEATURE;
-use crate::maintenance_runs::Step;
+use crate::maintenance_runs::{Kind, Step};
 use crate::ops::{AuditEntry, OpsError, Write};
 use crate::orders::Order;
 use crate::reconcile::COORDINATOR;
@@ -203,6 +207,52 @@ impl Coordinator {
             Verdict::InTurn { resend: Some(_) } => Next::Busy,
             Verdict::Start(ordered) if sends => self.start_turn(id, ordered, unix_now),
             Verdict::Start(_) => Next::Free,
+            Verdict::Skip(skipping) => {
+                self.skip_macos(id, &skipping, unix_now);
+                Next::Free
+            }
+        }
+    }
+
+    /// Stores the `macos` of the host `id`'s turn that waits, or deferred and is offered again,
+    /// left out at `unix_now`, with why ([`Verdict::Skip`]), audited `maintenance_step`: the turn
+    /// goes on without `macos` at its step, or, when `macos` was all it held, ends `skipped` with
+    /// its kinds as they were. Nothing is stored when the turn no longer waits, or is deferred,
+    /// with `macos` in a run that is not cancelled (an operator's `Cancel` in between); a change the store refuses is logged, and the host's next heartbeat
+    /// decides it again.
+    pub(crate) fn skip_macos(&self, id: &HostId, skipping: &Skipping, unix_now: u64) {
+        let run_id = skipping.run_id.as_str();
+        let why = skipping.why;
+        let stored = self.ops.decide_change(Write::BeforeMemory, |state| {
+            let held = state
+                .maintenance_runs
+                .iter_mut()
+                .filter(|run| run.id == run_id && run.cancelled_unix.is_none())
+                .flat_map(|run| run.hosts.iter_mut())
+                .find(|host| {
+                    host.host_id == id.as_str()
+                        && host.step.may_start()
+                        && host.kinds.contains(&Kind::Macos)
+                })
+                .ok_or(Unstarted::Gone)?;
+            held.skipped_because = Some(why);
+            if held.kinds == [Kind::Macos] {
+                held.step = Step::Skipped;
+                held.since_unix = unix_now;
+            } else {
+                held.kinds.retain(|kind| *kind != Kind::Macos);
+            }
+            let then = format!(" {} {}", held.step.as_str(), why.as_str());
+            Ok::<_, Unstarted>(entry(
+                MAINTENANCE_STEP,
+                id,
+                &skipping.host_group,
+                run_id,
+                &then,
+            ))
+        });
+        if let Err(Unstarted::Store(why)) = stored {
+            tracing::warn!(%why, node_id = %id, run = %run_id, "a host's macOS skip could not be stored: its next heartbeat decides it again");
         }
     }
 
@@ -248,9 +298,9 @@ impl Coordinator {
     }
 }
 
-/// Why a start was not stored.
+/// Why a start, or a skip of `macos`, was not stored.
 enum Unstarted {
-    /// The turn no longer waits in a run that is not cancelled.
+    /// The turn no longer waits in a run that is not cancelled (with `macos`, for a skip).
     Gone,
     /// The store refused the change.
     Store(OpsError),

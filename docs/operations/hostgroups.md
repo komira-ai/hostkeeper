@@ -489,13 +489,15 @@ A value out of range is refused `invalid_policy`, and the log names the key, `ma
 `Get` and `List` answer the table with every key named, a default included. A `Put` replaces the group
 whole, so a `Put` that leaves `maintenance` out sets every key back to its default. A maintenance run
 reads `batch` (unless the run names its own) and `min_serving` to decide when each host of the group
-starts its turn, and `linux_scope`, `drain_deadline_secs` (unless the run names its own) and
-`return_secs` for the `maintain` order it sends the host
-([maintenance-updates.md](../design/maintenance-updates.md), section 5.1). It also reads two keys of
-the policy itself: a host whose turn is done holds its batch place until it has sent the group's
-`bake_beats` healthy heartbeats in a row (section 5.6), and a host whose turn deferred is offered
-again, after the run's other hosts of the group and while the window is open, once the group's
-`defer_backoff` has passed since it deferred, longer for each deferral of its turn (section 5.3).
+starts its turn, and `linux_scope`, `macos_major`, `drain_deadline_secs` (unless the run names its
+own) and `return_secs` for the `maintain` order it sends the host
+([maintenance-updates.md](../design/maintenance-updates.md), section 5.1). `Schedule` counts a
+major upgrade of macOS that a Mac reports as due only when its group's `macos_major` is true
+([macos.md](../macos.md), Maintenance facts). A run also reads two keys of the policy itself: a
+host whose turn is done holds its batch place until it has sent the group's `bake_beats` healthy
+heartbeats in a row (section 5.6), and a host whose turn deferred is offered again, after the
+run's other hosts of the group and while the window is open, once the group's `defer_backoff` has
+passed since it deferred, longer for each deferral of its turn (section 5.3).
 
 ## Incidents are per host and per group
 
