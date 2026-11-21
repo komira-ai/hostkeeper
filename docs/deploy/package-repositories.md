@@ -465,7 +465,7 @@ the coordinator. A private repository is an entry of the coordinator's registry 
   the suite's `InRelease` from the coordinator, then each index file it lists for the host's
   architecture (`binary-<arch>`, `binary-all`, `i18n`), each checked against the size and SHA-256
   that `InRelease` lists, into a new directory that it renames over the mirror whole (directories
-  0755, files 0644, which apt's fetch user reads). apt then reads the mirror and checks it as it
+  0700, files 0600, root's alone; apt runs as root and reads them). apt then reads the mirror and checks it as it
   checks any repository: `InRelease` signed by the pinned key, the index's digest, the `.deb`'s
   digest, and the order's pin. The daemon fetches the pinned package's pool file into the mirror
   and checks it against the pin before apt copies it. apt is given no client certificate. A fetch
@@ -484,8 +484,9 @@ the coordinator. A private repository is an entry of the coordinator's registry 
   entry, and an entry of a private repository (or of the store `coordinator`) is `no_target` for
   it; it runs every other package as before.
 
-No package carries a secret, private or not: a private repository is a place for configuration
-that is not public, never for credentials (docs/design/hostgroups.md section 6.5).
+A private repository is a place for configuration that is not public. A package of it may carry a
+credential every host of its group may hold: on a host, what hostkeeper keeps of a package is
+root's alone (docs/design/hostgroups.md section 6.5).
 
 ## Packaging a service
 

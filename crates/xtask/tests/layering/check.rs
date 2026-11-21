@@ -203,7 +203,13 @@ type Members = BTreeMap<String, Vec<Dep>>;
 /// Runs `cargo <args> --manifest-path <manifest>` and returns its stdout. A command that fails
 /// panics with its stderr.
 pub fn cargo(args: &[&str], manifest: &Path) -> String {
-    let out = Command::new(env!("CARGO"))
+    // Cargo names itself to every test it builds. buildrules' Buck2 build (docs/farm.md), which
+    // never runs this crate's tests, compiles them with no `CARGO`: `option_env!` lets that build
+    // compile and lint the file, and changes nothing under cargo.
+    let Some(cargo) = option_env!("CARGO") else {
+        panic!("cargo names itself (CARGO) to the tests it builds");
+    };
+    let out = Command::new(cargo)
         .args(args)
         .arg("--manifest-path")
         .arg(manifest)

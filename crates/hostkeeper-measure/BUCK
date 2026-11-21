@@ -1,0 +1,13 @@
+load("//:buildrules.bzl", "cargo_package")
+
+# What this package reads beyond src/, tests/ and build.rs, which a Buck2 action sees only when
+# declared. The fake hk binary lives under tests/bin; the golden tests read the shipped plans/
+# and the results page of docs/report.
+cargo_package(
+    path = ".",
+    extra_srcs = [
+        "plans",
+        "tests/bin",
+        "//:docs/report/results/README.md",
+    ],
+)

@@ -189,7 +189,11 @@ fn the_openrc_job_is_refused_on_any_runner_but_the_listed_one() {
     );
     assert_eq!(
         lint(pr_device::FILE, &conditional),
-        ["job openrc-device: has `if`, and must run and report on every pull request"]
+        [
+            "pr-device.yml: job openrc-device has an if: other than ${{ always() }}, and could be skipped for a merge group, which counts as passed",
+            "pr-device.yml: `${{ github.event.pull_request.draft == false }}` reads the event; only an if: that starts `github.event_name == 'push' &&` may, so a merge group runs what a pull request runs",
+            "job openrc-device: has `if`, and must run and report on every pull request and merge group",
+        ]
     );
     let write = in_job(&device(), "contents: read", "contents: write");
     assert_eq!(

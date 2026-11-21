@@ -146,7 +146,7 @@ Every item is **Built** at the path given.
   `{release_channel}/S/V/index.json` and downloads the archive, checking size and digest; `prove.rs` verifies
   `<archive>.sigstore.json` with the pinned `gh attestation verify` against `[trusted_signers]` in
   `/etc/hostkeeper/hostkeeper.toml`. Only then does `VerifiedArchive` exist, the one way to the bytes.
-- **On the host.** `/var/lib/hostkeeper/packages/<service>/<version>/` (0555), `<version>.seal` (tree digest and package
+- **On the host.** `/var/lib/hostkeeper/packages/<service>/<version>/` (0700, root's alone), `<version>.seal` (tree digest and package
   digest), `current` and `previous` links; `current`, `previous`, the pinned version and the newest `--keep-versions` others kept
   (`crates/hostkeeper-steps/src/prune.rs`, hostkeeper-design.md Q14). `Staged::check`
   re-hashes the tree before every hook step (`crates/hostkeeper-steps/src/artifact.rs`); the tree digest refuses

@@ -14,7 +14,7 @@
 //!   Of the listed files, those under `<component>/binary-<architecture>/`,
 //!   `<component>/binary-all/` and `<component>/i18n/` for the entry's components are read,
 //!   each checked against its listed size and SHA-256, into a new directory beside the mirror
-//!   (`.<name>.next`, directories 0755, files 0644), which then takes the mirror's place whole
+//!   (`.<name>.next`, directories 0700, files 0600), which then takes the mirror's place whole
 //!   ([`swap`]). A file that is not what the list says, or is gone, means the origin published
 //!   between two reads: everything is read again once, and a second time is
 //!   [`MirrorError::Unreachable`]. An `InRelease` the coordinator does not have is
@@ -30,9 +30,9 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::fs::{self, OpenOptions, Permissions};
+use std::fs::{self, DirBuilder, OpenOptions, Permissions};
 use std::io::{self, Write};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -58,10 +58,12 @@ pub const INDEX_SECS: u64 = 1800;
 /// transport to the coordinator.
 pub const POOL_SECS: u64 = 3600;
 
-/// The mode of a mirror directory and of a mirror file: what apt, which runs as another user,
-/// reads them with.
-const DIR_MODE: u32 = 0o755;
-const FILE_MODE: u32 = 0o644;
+/// The mode of a mirror directory and of a mirror file: root's alone, since a private
+/// repository's package may carry a secret. apt reads the mirror as root
+/// (`hostkeeper_install::repository::apt`); the start closes a mirror an earlier release left
+/// open ([`crate::package_dirs`]).
+const DIR_MODE: u32 = 0o700;
+const FILE_MODE: u32 = 0o600;
 
 /// The coordinator, as the mirror reads it: one `GET` of a path, the body given to a sink.
 pub trait Fetch: Send + Sync {
@@ -160,7 +162,7 @@ impl CoordinatorMirror {
         })
     }
 
-    /// Reads `path` from the coordinator into the new file `dest`, mode 0644, counting the size
+    /// Reads `path` from the coordinator into the new file `dest`, mode 0600, counting the size
     /// and the SHA-256 of what arrived.
     fn read(&self, path: &str, dest: &Path, limit: Limit) -> Result<Read, MirrorError> {
         let io_error = |e: io::Error| MirrorError::Io(format!("{}: {e}", dest.display()));
@@ -494,17 +496,17 @@ fn under(path: &str, prefix: &str) -> bool {
         })
 }
 
-/// Makes the directory `path` (its parent is there), mode 0755 whatever the umask; one that is
-/// there is left as it is.
+/// Makes the directory `path` (its parent is there), created mode 0700 and set so whatever the
+/// umask; one that is there is left as it is.
 fn make_dir(path: &Path) -> io::Result<()> {
-    match fs::create_dir(path) {
+    match DirBuilder::new().mode(DIR_MODE).create(path) {
         Ok(()) => fs::set_permissions(path, Permissions::from_mode(DIR_MODE)),
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists && path.is_dir() => Ok(()),
         Err(e) => Err(e),
     }
 }
 
-/// Makes the directories of the relative path `relative` under `base`, each 0755.
+/// Makes the directories of the relative path `relative` under `base`, each 0700.
 fn make_dirs(base: &Path, relative: &str) -> io::Result<()> {
     let mut path = base.to_path_buf();
     for segment in relative.split('/').filter(|segment| !segment.is_empty()) {

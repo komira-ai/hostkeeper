@@ -9,7 +9,9 @@
 //! - a step's (or a job's) `uses:` is not an action pinned to a full 40-character commit SHA
 //!   followed on the same line by a version comment (`# v1.2.3`; the value may be quoted, and
 //!   the spaces before and after `#` are free), or names a local path (a
-//!   local action or reusable workflow is code this lint does not read);
+//!   local action or reusable workflow is code this lint does not read). In [`farm::FILE`]
+//!   alone, [`farm::FARM_CONNECT`] is pinned by commit with no version comment: komira tags no
+//!   release of it;
 //! - a job has no `runs-on` (but a job of [`callers::CALLERS`], or of [`callers::TEMPLATE`], that
 //!   calls the CI client, and the job of [`cp_deploy::calls_updater`] that calls
 //!   docker-swarm-updater's deploy workflow), or a runner that is not one of [`HOSTED_RUNNERS`]: a runner group, a
@@ -20,11 +22,13 @@
 //! - a job's `permissions` is not a mapping, or grants `write` for a scope that is not in
 //!   [`WRITE_ALLOWED`] for that workflow file and job, or grants it under another `if:` than the
 //!   one the table gives; or grants `id-token: write` in a job that is in none of that table,
-//!   [`ID_TOKEN_ALLOWED`], [`callers::CALLERS`] and [`callers::TEMPLATE`];
+//!   [`ID_TOKEN_ALLOWED`], [`callers::CALLERS`] and [`callers::TEMPLATE`], and is not the job
+//!   [`farm::JOB`] of [`farm::FILE`] under its exact `if:` ([`farm::JOB_IF`]);
 //! - any key `secrets` has the value `inherit`;
 //! - the workflow runs for a pull request (`pull_request`, its review events, or
-//!   `merge_group`) and a job of it holds a `write` scope, or is root or macOS, whatever its
-//!   `if:` says, and is not a job of [`pr_device::JOBS`] that may be root; or what
+//!   `merge_group`) and a job of it holds a `write` scope (but `id-token: write` in the job
+//!   [`farm::JOB`] of [`farm::FILE`], for the farm's tailnet join alone), or is root or macOS,
+//!   whatever its `if:` says, and is not a job of [`pr_device::JOBS`] that may be root; or what
 //!   sits beside `jobs` (`env`, `defaults`, ...) is root or macOS, which no job may take from
 //!   there. No job of a pull-request workflow is macOS, with no exception: the Mac's tests are the
 //!   stage of release.yml ([`release_macos`]). Root: a value of the job names `sudo` as a word (so `cargo xtask sudo-test` and a
@@ -43,6 +47,8 @@
 //!   `image`) is not an image pinned by digest, `<name>[:<tag>]@sha256:<64 lowercase hex>`, or
 //!   a service has no image;
 //! - it is [`pr_device::FILE`] and breaks a rule of its own ([`pr_device::problems`]);
+//! - it is [`farm::FILE`] and breaks a rule of its own ([`farm::problems`]: its triggers, its one
+//!   job, its rights, farm-connect's inputs, and the `local: 0` check after the build);
 //! - it is neither [`PRIVILEGED_WORKFLOW`] nor [`net_install::FILE`], it does not run for a pull
 //!   request, and a job of it, or what sits beside `jobs`, names root as above (`sudo` as a word,
 //!   `--privileged`, `--cap-add`), whatever its trigger: root runs in those two workflows, on
@@ -95,6 +101,7 @@ use super::debs;
 use super::desired;
 
 use super::downloads;
+use super::farm;
 use super::net_install;
 use super::one_command;
 use super::packages;
@@ -327,8 +334,9 @@ pub fn version_comment<'a>(text: &'a str, line: usize, value: &str) -> Option<&'
         .map(|c| c.trim_start_matches([' ', '\t']))
 }
 
-/// What is wrong with the `uses:` value `value` on `line` of `text`, if anything.
-fn pin_problem(text: &str, line: usize, value: &str) -> Option<String> {
+/// What is wrong with the `uses:` value `value` on `line` of `text`, the workflow `file`, if
+/// anything.
+fn pin_problem(file: &str, text: &str, line: usize, value: &str) -> Option<String> {
     if value.starts_with('.') {
         return Some(format!("line {line}: `uses: {value}` names a local path"));
     }
@@ -347,7 +355,7 @@ fn pin_problem(text: &str, line: usize, value: &str) -> Option<String> {
         c.strip_prefix('v')
             .is_some_and(|v| v.starts_with(|ch: char| ch.is_ascii_digit()))
     });
-    if versioned {
+    if versioned || farm::unversioned_pin_allowed(file, value) {
         None
     } else {
         Some(format!(
@@ -393,7 +401,7 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
     let mut pinned = Vec::new();
     uses(&doc, &mut pinned);
     for (line, value) in pinned {
-        problems.extend(pin_problem(text, line, value));
+        problems.extend(pin_problem(file, text, line, value));
     }
     let on_pull_request = on.iter().any(|t| runs_on_pull_requests(t));
     // Root anywhere but in the privileged and the network-install workflows; a pull-request
@@ -448,6 +456,9 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
     }
     if file == pr_device::FILE {
         problems.extend(pr_device::problems(&doc));
+    }
+    if file == farm::FILE {
+        problems.extend(farm::problems(&doc));
     }
     if net_install_file {
         problems.extend(net_install::problems(&doc));
@@ -542,6 +553,16 @@ fn permission_problems(file: &str, name: &str, job: &Node) -> Vec<String> {
             && level == Some("write")
             && (ID_TOKEN_ALLOWED.contains(&(file, name)) || callers::caller(file, name).is_some());
         if id_token {
+            continue;
+        }
+        // The farm lane's tailnet join, under the job's exact `if:`.
+        if scope == "id-token" && level == Some("write") && farm::id_token_job(file, name) {
+            if condition != Some(farm::JOB_IF) {
+                problems.push(format!(
+                    "job {name}: `id-token: write` needs the exact `if: {}`",
+                    farm::JOB_IF
+                ));
+            }
             continue;
         }
         // The jobs of the package channels that assume the cloud role, each under its exact `if:`.
@@ -682,7 +703,8 @@ pub fn runs_on_pull_requests(name: &str) -> bool {
 }
 
 /// What the job `name` of `file`, a workflow that runs on pull requests, may not be: holding a
-/// write scope, naming a secret or the token, and, root unless [`pr_device`] lets it, and macOS.
+/// write scope (but the farm lane's `id-token: write`, [`farm::id_token_job`]), naming a secret or
+/// the token, and, root unless [`pr_device`] lets it, and macOS.
 fn pull_request_problems(file: &str, name: &str, job: &Node) -> Vec<String> {
     let mut values = Vec::new();
     for (k, v) in entries(job)
@@ -695,10 +717,13 @@ fn pull_request_problems(file: &str, name: &str, job: &Node) -> Vec<String> {
     let who = format!("job {name}");
     let mut problems = word_problems(&who, &values, pr_device::root_allowed(file, name));
     problems.extend(secret_problems(&who, &values));
+    // The farm lane's `id-token: write` is held to its `if:` by `permission_problems`.
+    let farm_token =
+        |scope: &Node| scope.as_str() == Some("id-token") && farm::id_token_job(file, name);
     let writes = entry(job, "permissions")
         .map_or(&[][..], entries)
         .iter()
-        .find(|(_, level)| level.as_str() == Some("write"));
+        .find(|(scope, level)| level.as_str() == Some("write") && !farm_token(scope));
     if let Some((scope, _)) = writes {
         problems.push(format!(
             "{who}: privileged on pull_request (`{}: write`)",
@@ -828,7 +853,7 @@ fn word_problems(who: &str, values: &[&str], root_ok: bool) -> Vec<String> {
 }
 
 /// The expressions of `text`: what stands between each `${{` and the `}}` after it.
-fn expressions(text: &str) -> Vec<&str> {
+pub fn expressions(text: &str) -> Vec<&str> {
     let mut found = Vec::new();
     let mut rest = text;
     while let Some((_, after)) = rest.split_once("${{") {

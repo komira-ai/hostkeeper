@@ -58,7 +58,7 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <path d="M1030,260 v70 a67.5,9 0 0 0 135,0 v-70 a67.5,9 0 0 0 -135,0 z" class="box-b"/>
 <ellipse cx="1097.5" cy="260" rx="67.5" ry="9" class="box-b"/>
 <text x="1097.5" y="278" class="b" text-anchor="middle">Package versions</text>
-<text x="1097.5" y="295" class="t-m" text-anchor="middle">0555, sealed</text>
+<text x="1097.5" y="295" class="t-m" text-anchor="middle">0700, sealed</text>
 <text x="1097.5" y="309" class="t-m" text-anchor="middle">current, links</text>
 <rect x="775" y="90" width="220" height="360" rx="5" class="box-o"/>
 <rect x="775" y="90" width="220" height="22" rx="5" class="box-b"/>

@@ -8,14 +8,16 @@
 //! [`super::lint`] refuses a job as root in every workflow that runs for a pull request but the
 //! jobs of [`JOBS`] that may (`root` of each entry). [`problems`] holds the file to its shape, so
 //! that what such a job may do is fixed here:
-//! - its `on` is exactly `pull_request` with no filter (no `types`, `branches` or `paths`): the
-//!   workflow starts for every pull request, so a required check never waits for a run that did
-//!   not start;
+//! - the rules of the merge queue ([`super::merge_queue::problems`]): its `on` is exactly
+//!   `pull_request` with no filter (no `types`, `branches` or `paths`), so the workflow starts for
+//!   every pull request and a required check never waits for a run that did not start, and
+//!   `merge_group` of `checks_requested` on `main`, so it starts for every merge group too; its
+//!   `concurrency` lets a pull request's newer push cancel the older run and no merge group
+//!   cancel another; and nothing in it reads the event but the cache saves of a push;
 //! - its top-level keys are among [`TOP_LEVEL`] (no `defaults`, which would change the copies);
-//! - its `concurrency` is exactly the group [`GROUP`], one per pull request, with
-//!   `cancel-in-progress: true`: a newer push cancels the older run;
 //! - its jobs are exactly those of [`JOBS`], each on a runner of its entry, with no `name`,
-//!   `needs` or `if:`: each runs on every pull request, as a check of its own name.
+//!   `needs` or `if:`: each runs on every pull request and every merge group, as a check of its
+//!   own name.
 //!
 //! [`mirror_problems`] holds every job of [`JOBS`] to privileged.yml's job of the same name, key
 //! for key, and the file's top-level `env` to that file's, so a pull request runs exactly what
@@ -25,17 +27,16 @@
 
 use std::collections::BTreeSet;
 
-use super::lint::{OPENRC_DEVICE_JOB, PRIVILEGED_RUNNERS, entries, entry, triggers};
+use super::lint::{OPENRC_DEVICE_JOB, PRIVILEGED_RUNNERS, entries, entry};
+use super::merge_queue;
 use super::yaml;
 use super::yaml::{Node, Value};
 
 /// The workflow.
 pub const FILE: &str = "pr-device.yml";
-/// The concurrency group: one per pull request.
-pub const GROUP: &str = "pr-device-${{ github.event.pull_request.number }}";
 
-/// The checks of [`FILE`] a pull request needs, by name: each is the check of exactly one job,
-/// which runs on every pull request.
+/// The checks of [`FILE`] a pull request and a merge group need, by name: each is the check of
+/// exactly one job, which runs on every pull request and every merge group.
 pub const REQUIRED: [&str; 2] = [PRIVILEGED_JOB, OPENRC_DEVICE_JOB];
 
 /// The job that runs the privileged tests against systemd, privileged.yml's job of that name.
@@ -64,12 +65,6 @@ pub const JOBS: &[Job] = &[
 /// copies of privileged.yml's jobs run, where [`mirror_problems`] does not look.
 pub const TOP_LEVEL: &[&str] = &["name", "on", "permissions", "concurrency", "env", "jobs"];
 
-/// What [`FILE`] is refused with when its `on` is anything else.
-pub const ON_PROBLEM: &str = "pr-device.yml: on must be pull_request alone, with no filter";
-/// What [`FILE`] is refused with when its `concurrency` is anything else.
-pub const CONCURRENCY_PROBLEM: &str =
-    "pr-device.yml: concurrency must be the group of the pull request, cancel-in-progress: true";
-
 /// The entry of [`JOBS`] for the job `job` of `file`, if it is one.
 fn job(file: &str, job: &str) -> Option<&'static Job> {
     JOBS.iter().find(|j| file == FILE && j.name == job)
@@ -80,42 +75,9 @@ pub fn root_allowed(file: &str, name: &str) -> bool {
     job(file, name).is_some()
 }
 
-/// Whether `on` is exactly `pull_request` with no filter: the one name, as a scalar, a list, or
-/// a mapping whose one entry has no value or an empty one.
-fn pull_request_only(on: Option<&Node>) -> bool {
-    let Some(on) = on else { return false };
-    let unfiltered = match &on.value {
-        Value::Map(entries) => entries.iter().all(|(_, v)| {
-            v.is_empty_map() || (matches!(v.value, Value::Scalar { .. }) && v.as_str().is_none())
-        }),
-        Value::Scalar { .. } | Value::Seq(_) => true,
-    };
-    triggers(on) == ["pull_request"] && unfiltered
-}
-
-/// Whether the workflow's `concurrency` is exactly [`GROUP`] with `cancel-in-progress: true`.
-fn one_group_per_pull_request(concurrency: Option<&Node>) -> bool {
-    let Some(concurrency) = concurrency else {
-        return false;
-    };
-    let keys: BTreeSet<&str> = entries(concurrency)
-        .iter()
-        .filter_map(|(k, _)| k.as_str())
-        .collect();
-    keys == BTreeSet::from(["group", "cancel-in-progress"])
-        && entry(concurrency, "group").and_then(Node::as_str) == Some(GROUP)
-        && entry(concurrency, "cancel-in-progress").and_then(Node::as_str) == Some("true")
-}
-
 /// What is wrong with the shape of [`FILE`], the document `doc`.
 pub fn problems(doc: &Node) -> Vec<String> {
-    let mut problems = Vec::new();
-    if !pull_request_only(entry(doc, "on")) {
-        problems.push(ON_PROBLEM.to_owned());
-    }
-    if !one_group_per_pull_request(entry(doc, "concurrency")) {
-        problems.push(CONCURRENCY_PROBLEM.to_owned());
-    }
+    let mut problems = merge_queue::problems(FILE, doc);
     for (key, _) in entries(doc) {
         let key = key.as_str().unwrap_or_default();
         if !TOP_LEVEL.contains(&key) {
@@ -138,7 +100,7 @@ pub fn problems(doc: &Node) -> Vec<String> {
         for key in ["name", "needs", "if"] {
             if entry(node, key).is_some() {
                 problems.push(format!(
-                    "job {name}: has `{key}`, and must run and report on every pull request"
+                    "job {name}: has `{key}`, and must run and report on every pull request and merge group"
                 ));
             }
         }

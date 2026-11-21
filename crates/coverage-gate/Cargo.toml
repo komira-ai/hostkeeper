@@ -14,3 +14,7 @@ thiserror.workspace = true
 
 [lints]
 workspace = true
+
+[package.metadata.buildrules]
+# The Buck2 build's policy for this package (docs/farm.md): none of its own; it takes
+# [workspace.metadata.buildrules] of the root Cargo.toml.

@@ -124,7 +124,7 @@ fn an_entry_written_reads_back_equal_and_the_file_is_read_only() {
     let file = dir.path().join(TARGET_FILE);
     assert_eq!(
         fs::metadata(&file).expect("the file").permissions().mode() & 0o777,
-        0o444
+        0o400
     );
     assert_eq!(
         fs::read(&file).expect("its bytes"),
@@ -133,7 +133,7 @@ fn an_entry_written_reads_back_equal_and_the_file_is_read_only() {
     assert_eq!(read(dir.path()).expect("read"), Some(written));
     let marker = dir.path().join(MANIFEST_HOOK_FILE);
     let meta = fs::metadata(&marker).expect("the marker");
-    assert_eq!((meta.len(), meta.permissions().mode() & 0o777), (0, 0o444));
+    assert_eq!((meta.len(), meta.permissions().mode() & 0o777), (0, 0o400));
 }
 
 /// Proves a second write into the same staging directory fails with an I/O error and leaves the

@@ -3,3 +3,5 @@
 # environment cargo-llvm-cov sets: the fixture programs of tests that start a program with an empty
 # environment.
 *.profraw
+.buckconfig.local
+buck-out/

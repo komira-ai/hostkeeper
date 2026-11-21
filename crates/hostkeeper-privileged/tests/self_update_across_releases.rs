@@ -404,7 +404,9 @@ fn lay_down_other_installer_version(packages: &Path, service: &str, sealed: bool
 /// directory while the daemon is stopped, one sealed and one not, each `current`; the released
 /// binary starts on them, runs, reports itself and hostkeeper at the released version, takes the
 /// update to this build and reports that; every entry of both directories (kind, mode, bytes,
-/// links) is as it was laid down, after the released binary's start and after the update.
+/// links) is as it was laid down after the released binary's start, and after the update but for
+/// the version directories, which this build's start closes (0700) with their service
+/// directories.
 #[test]
 fn the_released_binary_started_on_versions_of_another_installer_runs_on_and_leaves_them_untouched()
 {
@@ -433,10 +435,35 @@ fn the_released_binary_started_on_versions_of_another_installer_runs_on_and_leav
     let next = newer(&released, 1);
     update_to_this_build(&rig, &released, &next);
     rig.wait_host_reports(&next, &next);
+    // This build's start closes each service and version directory to every user but root; what
+    // is in them, the seal and `current` are as they were laid down.
     assert_eq!(
         others.map(|service| snapshot(&packages.join(service))),
-        before,
-        "the versions of the other installer are as they were laid down\n{}",
+        before.map(|entries| closed_versions(&entries)),
+        "the versions of the other installer are as they were laid down, their directories \
+         closed\n{}",
         rig.host.logs()
     );
+    for service in others {
+        let mode = fs::metadata(packages.join(service))
+            .expect("the service directory")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o7777, 0o700, "{service}");
+    }
+}
+
+/// `entries` of a service directory ([`snapshot`]) with each version directory in it mode 0700,
+/// as this build's start leaves it; nothing below a version changes.
+fn closed_versions(entries: &[(String, Vec<u8>)]) -> Vec<(String, Vec<u8>)> {
+    entries
+        .iter()
+        .map(|(name, bytes)| {
+            let top = name.matches('/').count() == 1;
+            match name.strip_suffix(" dir 755").filter(|_| top) {
+                Some(dir) => (format!("{dir} dir 700"), bytes.clone()),
+                None => (name.clone(), bytes.clone()),
+            }
+        })
+        .collect()
 }

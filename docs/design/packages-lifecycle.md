@@ -19,9 +19,9 @@ For every installer but `hostkeeper-archive` (a repository installer adds `apt/`
 packages-repositories.md sections 4.2 and 4.7):
 
 ```
-/var/lib/hostkeeper/packages/<service>/<version>/     0555, sealed
+/var/lib/hostkeeper/packages/<service>/<version>/     0700, sealed
   target.json        the order's entry (installer, digest, manifest...), as canonical JSON
-  artifact           the verified bytes, 0444
+  artifact           the verified bytes, 0400
   tree/              what stage extracted: the hook, and the files the observer hashes
 ```
 

@@ -254,12 +254,16 @@ fn a_gate_with_another_name_needs_or_condition_is_refused() {
     }
     let condition = format!("    if: {GATE_IF}\n");
     let if_problem = format!("{COVERAGE}: if must be {GATE_IF}");
+    assert_problems(&edited(GATE_JOB, &condition, ""), &[&if_problem]);
+    // Another condition could also skip the check for a merge group, as the queue's rules say.
+    let skipped = format!(
+        "ci.yml: job {GATE_JOB} has an if: other than {GATE_IF}, and could be skipped for a merge group, which counts as passed"
+    );
     for bad in [
-        "",
         "    if: ${{ !cancelled() }}\n",
         "    if: ${{ success() }}\n",
     ] {
-        assert_problems(&edited(GATE_JOB, &condition, bad), &[&if_problem]);
+        assert_problems(&edited(GATE_JOB, &condition, bad), &[&skipped, &if_problem]);
     }
     assert_problems(
         &edited(

@@ -3,6 +3,8 @@
 //!
 //! - `install-tool`: check a downloaded tool against its pinned SHA-256 and install it
 //!   (`install`).
+//! - `farm-build`: the farm lane's `buck2 build`, refused unless buck2 has the farm's workers and
+//!   its summary line says `local: 0` (`farm`).
 //! - `release <verb>`: the release steps: the version of a commit, the release plan, the check
 //!   and publication of a release's assets, the native packages of the services and the
 //!   `targets` that deploy them (`release`).
@@ -49,6 +51,7 @@ mod channels;
 mod coordinator_update;
 mod db_backup;
 mod debs;
+mod farm;
 mod install;
 mod mirrored;
 mod netboot_iso;
@@ -92,6 +95,8 @@ enum Error {
     Debs(#[from] debs::Error),
     #[error(transparent)]
     NetbootIso(#[from] netboot_iso::Error),
+    #[error(transparent)]
+    Farm(#[from] farm::Error),
     /// The roots of `--ca-bundle` could not be read.
     #[error(transparent)]
     CaBundle(#[from] release::ports::PortError),
@@ -124,6 +129,16 @@ enum Verb {
         /// The file to take out of a tar (`--extract tar.gz`): its path inside the archive.
         #[arg(long)]
         member: Option<PathBuf>,
+    },
+    /// The farm lane's build: `buck2 build <target>` with the farm's workers configured, its
+    /// summary line saying `local: 0` (docs/farm.md); buck2's daemon is stopped after.
+    FarmBuild {
+        /// The buck2 program (the workflow installed the pinned release there).
+        #[arg(long)]
+        buck2: PathBuf,
+        /// What to build (`//:ci`).
+        #[arg(long)]
+        target: String,
     },
     /// The release steps: version, package, plan, check and publish.
     Release {
@@ -213,6 +228,9 @@ fn run(cli: Cli) -> Result<Vec<String>, Error> {
                 &download, &sha256, &unpack, &out,
             )?])
         }
+        Verb::FarmBuild { buck2, target } => {
+            Ok(vec![farm::build(&buck2, &target, &mut std::io::stderr())?])
+        }
         Verb::Release { verb } => Ok(release::run(verb, release::real::connect)?),
         Verb::Advisories { repo } => {
             let adapters = release::real::connect();
@@ -282,6 +300,7 @@ pub fn main() -> ExitCode {
                 | Error::Channels(_)
                 | Error::Debs(_)
                 | Error::NetbootIso(_)
+                | Error::Farm(_)
                 | Error::CaBundle(_) => ExitCode::FAILURE,
             }
         }
