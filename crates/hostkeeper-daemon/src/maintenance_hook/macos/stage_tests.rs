@@ -7,6 +7,7 @@
 //! proved over a child of this test binary.
 
 use std::collections::BTreeMap;
+use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -777,17 +778,25 @@ fn maintenance_hook_prepare_stages_a_macos_update_or_defers() {
     assert_eq!(Boot.read().expect("a boot id").as_str(), "boot-1");
 }
 
-/// The environment this process has, without what an instrumented build sets by itself in each
-/// process it starts (`__LLVM_PROFILE_RT_*`), which no parent passed.
+/// The environment this process has, without what a process sets in itself and no parent passed:
+/// an instrumented build's `__LLVM_PROFILE_RT_*`, and on macOS CoreFoundation's
+/// `__CF_USER_TEXT_ENCODING`, which it sets as it loads (this binary links it through
+/// `hostkeeper-bootstrap`'s `rustls-native-certs`).
 #[expect(
     clippy::disallowed_methods,
     reason = "the helper child reports the environment its parent gave it"
 )]
 fn own_environment() -> Vec<String> {
     std::env::vars_os()
-        .filter(|(name, _)| !name.to_string_lossy().starts_with("__LLVM_PROFILE_RT_"))
+        .filter(|(name, _)| !set_by_itself(name.as_bytes()))
         .map(|(name, value)| format!("env:{}={}", name.to_string_lossy(), value.to_string_lossy()))
         .collect()
+}
+
+/// Whether the variable `name` is one this process set in itself (see `own_environment`).
+fn set_by_itself(name: &[u8]) -> bool {
+    name.starts_with(b"__LLVM_PROFILE_RT_")
+        || (cfg!(target_os = "macos") && name == b"__CF_USER_TEXT_ENCODING")
 }
 
 /// Catches nothing itself: the child of
