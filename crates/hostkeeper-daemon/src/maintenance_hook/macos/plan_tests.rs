@@ -19,6 +19,18 @@ fn update() -> Plan {
         build: "25H62".to_owned(),
         install: Install::Update {
             label: "macOS Tahoe 26.7-25H62".to_owned(),
+            authrestart: false,
+        },
+    }
+}
+
+/// The minor update of [`update`], followed by an authenticated restart (FileVault on).
+fn update_authenticated() -> Plan {
+    Plan {
+        build: "25H62".to_owned(),
+        install: Install::Update {
+            label: "macOS Tahoe 26.7-25H62".to_owned(),
+            authrestart: true,
         },
     }
 }
@@ -52,6 +64,48 @@ fn a_plan_reads_back_as_it_was_kept() {
     assert_eq!(plans.load("run-1"), Ok(update()));
     plans.save("run-1", &upgrade()).expect("kept");
     assert_eq!(plans.load("run-1"), Ok(upgrade()));
+}
+
+/// Proves: a minor update's plan with an authenticated restart is kept with `"authrestart":true`
+/// and reads back as kept; a plan without the key reads as one whose install restarts the Mac;
+/// an `authrestart` that is not `true` (`false`, text) is refused, and so is one beside an
+/// installer app, each by a text naming the file and never quoting it.
+///
+/// Catches: a FileVault-on Mac's install run with `--restart` after the plan was read back, or a
+/// major upgrade followed by an authenticated restart because a plan said so.
+#[test]
+fn an_authenticated_restart_is_kept_in_the_plan_and_nowhere_else() {
+    let dir = scratch("macos-plan-authrestart");
+    let plans = PlanFile::new(Some(dir.path()));
+    plans.save("run-1", &update_authenticated()).expect("kept");
+    let path = dir.path().join(PLAN_FILE);
+    assert_eq!(
+        fs::read_to_string(&path).expect("the file"),
+        r#"{"authrestart":true,"build":"25H62","label":"macOS Tahoe 26.7-25H62","runId":"run-1"}"#
+    );
+    assert_eq!(plans.load("run-1"), Ok(update_authenticated()));
+    let refused = |why: &str| Err(format!("the install plan {} {why}", path.display()));
+    let cases = [
+        (
+            r#"{"runId":"run-1","build":"1A1","label":"x","authrestart":false}"#,
+            "has an authrestart that is not true",
+        ),
+        (
+            r#"{"runId":"run-1","build":"1A1","label":"x","authrestart":"true"}"#,
+            "has an authrestart that is not true",
+        ),
+        (
+            concat!(
+                r#"{"runId":"run-1","build":"1A1","authrestart":true,"installer":"/Applications/Install macOS 27"#,
+                r#".app"}"#
+            ),
+            "names an installer app and an authrestart",
+        ),
+    ];
+    for (text, why) in cases {
+        fs::write(&path, text).expect("written");
+        assert_eq!(plans.load("run-1"), refused(why), "{text}");
+    }
 }
 
 /// Proves: a plan of another run, one that is not JSON, one larger than the bound, one with no

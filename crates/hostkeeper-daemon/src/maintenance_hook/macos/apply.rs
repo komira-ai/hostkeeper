@@ -9,9 +9,11 @@
 //!
 //! 1. The update account's file ([`UPDATE_ACCOUNT_FILE`], root's, mode 0600), read and checked
 //!    before any Apple program runs: a file that is wrong fails `update_account_refused`.
-//! 2. FileVault (`fdesetup status`) must be off: with it on, the restart of `--restart` stops at the
-//!    pre-boot login, and the authenticated restart of section 5.5 is not built, so anything else
-//!    fails `filevault_not_off`.
+//! 2. FileVault ([`filevault`]): off, the install restarts the Mac itself; on, the update account
+//!    must be a FileVault user (`fdesetup list`) and `fdesetup supportsauthrestart` must say
+//!    `true`, and the install then runs without `--restart` and is followed by `fdesetup
+//!    authrestart`; anything else, or a password a property list cannot carry, fails
+//!    `filevault_not_ready` before anything is listed.
 //! 3. What the Mac runs (`sw_vers`) and what Apple offers it now (`softwareupdate --list`, and
 //!    `--list-full-installers` only when the order's `macos_major` allows it), chosen as the stage
 //!    chose ([`super::stage`]): with an upgrade allowed and offered, the newest full installer of
@@ -19,7 +21,9 @@
 //!    `Install macOS *.app` with its `startosinstall`, or `macos_installer_not_found`), and the
 //!    build its listing gives; otherwise the newest macOS update of the running major, by its
 //!    label, and the build its label ends with (`<title>-<build>`). Nothing offered fails
-//!    `macos_update_not_listed`.
+//!    `macos_update_not_listed`. A major upgrade chosen on a Mac with FileVault on fails
+//!    `filevault_not_ready`: that `startosinstall` restarts it authenticated is not shown (the
+//!    Mac proof, MP-U8), and its restart would stop at the pre-boot login.
 //! 4. The plan written, durably, in the run's directory (`macos_plan_failed` when it cannot be).
 //!
 //! **The restart** ([`Apply::install`], the kind's [`super::super::MaintenanceKind::restart`]),
@@ -29,10 +33,15 @@
 //! program's standard input alone ([`UpdateAccount::run`]): a minor update by `softwareupdate
 //! --install <label> --agree-to-license --restart --user <account> --stdinpass`, a major upgrade by
 //! the installer app's `Contents/Resources/startosinstall --agreetolicense --nointeraction --user
-//! <account> --stdinpass`; each restarts the Mac itself. The program's environment is empty and
-//! nothing else is on its standard input ([`HostInstallers`]). A program that does not run, is
-//! killed at [`INSTALL_DEADLINE`] or exits non-zero fails `macos_install_failed`, whose detail,
-//! like the one log line of the call, names the step and the exit code alone.
+//! <account> --stdinpass`; each restarts the Mac itself. On a plan with FileVault on, the minor
+//! update's arguments are the same without `--restart`, and once it exited 0 `fdesetup authrestart
+//! -inputplist` runs with the account's name and password in a property list on its standard
+//! input alone ([`filevault::authrestart`]); the list is made before the install runs, so a
+//! password it cannot carry fails `filevault_not_ready` with nothing installed. The program's
+//! environment is empty and nothing else is on its standard input ([`HostInstallers`]). A program
+//! that does not run, is killed at [`INSTALL_DEADLINE`] or exits non-zero fails
+//! `macos_install_failed` (`filevault_authrestart_failed` for the authenticated restart), whose
+//! detail, like the one log line of the call, names the step and the exit code alone.
 //!
 //! **`after_reboot`** answers the build `sw_vers` reports. **`verify`** ([`Apply::verify`]) reads
 //! the plan, fails `macos_build_not_target` unless `sw_vers` reports its build, and only then
@@ -41,21 +50,26 @@
 //!
 //! **Failure.** Every failure of these steps is [`KindError::Failed`]: the Mac is drained, and the
 //! run halts there (section 5.4). No detail holds the password: the account's file is named by
-//! its path and its problem alone, a program by its step and exit code, and the plan holds none.
+//! its path and its problem alone, a program by its step and exit code, and neither the plan nor
+//! any error holds it or the property list.
+
+#[path = "filevault.rs"]
+mod filevault;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use hostkeeper_launchd::{StdinProcess, StdinRun};
 use hostkeeper_link::Log;
-use hostkeeper_proto::hostkeeper::agent::v1::{FileVaultState, MacosPath};
+use hostkeeper_proto::hostkeeper::agent::v1::MacosPath;
+
+use filevault::{REASON_FILEVAULT_NOT_READY, Restart, RestartPlist, authrestart, restart_of};
 
 use super::plan::{APP_SUFFIX, Install, Plan, PlanFile, installer_name};
 use super::stage::{Programs, newest_upgrade};
 use crate::maintenance_collect::{APPLICATIONS, HostRoot, compare_versions, listing};
 use crate::maintenance_hook::kind::{Cutover, KindError};
 use crate::maintenance_hook::params::MaintainParams;
-use crate::maintenance_mac::{FDESETUP, parse_fdesetup_status};
 use crate::maintenance_macos::parse_sw_vers;
 use crate::maintenance_softwareupdate::{
     ListedUpdate, MACOS_TITLE, major_of, parse_softwareupdate_list,
@@ -67,8 +81,6 @@ use crate::xcode_clt::{LIST_DEADLINE, LOOK_DEADLINE, SOFTWAREUPDATE, SW_VERS};
 pub const REASON_PATH_NOT_BUILT: &str = "macos_path_not_built";
 /// The reason of an update-account file that is missing or wrong.
 pub const REASON_ACCOUNT_REFUSED: &str = "update_account_refused";
-/// The reason of a Mac whose FileVault is not off.
-pub const REASON_FILEVAULT_NOT_OFF: &str = "filevault_not_off";
 /// The reason of a look (`fdesetup status`, `sw_vers`, a listing) that failed.
 pub const REASON_LOOK_FAILED: &str = "macos_look_failed";
 /// The reason of a Mac offered no macOS update and no upgrade the order allows.
@@ -254,15 +266,15 @@ impl Apply {
     /// The failure of the first check that does not pass.
     pub fn cutover(&self, params: &MaintainParams) -> Result<Cutover, KindError> {
         install_path(params)?;
-        self.account.read()?;
-        self.filevault_off()?;
+        let account = self.account.read()?;
+        let restart = restart_of(&*self.programs, &account)?;
         let (version, _) = self.running()?;
         let running = major_of(&version).ok_or_else(|| {
             look_failed(format!(
                 "sw_vers named the version \"{version}\", which has no major number"
             ))
         })?;
-        let plan = self.choose(running, params.maintain().macos_major)?;
+        let plan = self.choose(running, params.maintain().macos_major, restart)?;
         self.plans
             .save(params.run_id(), &plan)
             .map_err(|why| failed(REASON_PLAN_FAILED, why))?;
@@ -280,20 +292,18 @@ impl Apply {
         let account = self.account.read()?;
         let plan = self.plan(params)?;
         let user = account.name().to_owned();
+        let mut restart_plist = None;
         let (program, step, args) = match &plan.install {
-            Install::Update { label } => (
-                PathBuf::from(SOFTWAREUPDATE),
-                STEP_UPDATE,
-                vec![
-                    "--install",
-                    label.as_str(),
-                    "--agree-to-license",
-                    "--restart",
-                    "--user",
-                    user.as_str(),
-                    "--stdinpass",
-                ],
-            ),
+            Install::Update { label, authrestart } => {
+                let mut args = vec!["--install", label.as_str(), "--agree-to-license"];
+                if *authrestart {
+                    restart_plist = Some(RestartPlist::of(&account)?);
+                } else {
+                    args.push("--restart");
+                }
+                args.extend(["--user", user.as_str(), "--stdinpass"]);
+                (PathBuf::from(SOFTWAREUPDATE), STEP_UPDATE, args)
+            }
             Install::Upgrade { app } => (
                 self.root.path(&format!("{app}/{STARTOSINSTALL}")),
                 STEP_UPGRADE,
@@ -310,8 +320,11 @@ impl Apply {
         let runner = self.installers.runner(&program, INSTALL_DEADLINE);
         account
             .run(&*runner, step, &args, &*self.log)
-            .map(|_| ())
-            .map_err(|error| failed(REASON_INSTALL_FAILED, error.to_string()))
+            .map_err(|error| failed(REASON_INSTALL_FAILED, error.to_string()))?;
+        match restart_plist {
+            Some(plist) => authrestart(&*self.installers, &plist, &*self.log),
+            None => Ok(()),
+        }
     }
 
     /// The build the Mac runs, after the reboot of its install.
@@ -354,27 +367,6 @@ impl Apply {
             .map_err(|why| failed(REASON_PLAN_FAILED, why))
     }
 
-    /// The failure of a Mac whose FileVault is not off.
-    fn filevault_off(&self) -> Result<(), KindError> {
-        let tool = self.programs.tool(Path::new(FDESETUP), LOOK_DEADLINE);
-        let (_, text) =
-            listing(&*tool, "fdesetup status", &["status"], &[0]).map_err(look_failed)?;
-        let state = match parse_fdesetup_status(&text).0 {
-            FileVaultState::Off => return Ok(()),
-            FileVaultState::On => "on",
-            FileVaultState::Encrypting => "encrypting",
-            FileVaultState::Decrypting => "decrypting",
-            FileVaultState::Unspecified => "in no state fdesetup names",
-        };
-        Err(failed(
-            REASON_FILEVAULT_NOT_OFF,
-            format!(
-                "FileVault is {state} (fdesetup status): its authenticated restart is not built, \
-                 so the update is not installed"
-            ),
-        ))
-    }
-
     /// The version and the build `sw_vers` reports.
     fn running(&self) -> Result<(String, String), KindError> {
         let tool = self.programs.tool(Path::new(SW_VERS), LOOK_DEADLINE);
@@ -398,12 +390,28 @@ impl Apply {
     }
 
     /// The plan of a Mac of the major version `running`, a major upgrade only when
-    /// `major_allowed`, as the module says.
-    fn choose(&self, running: u64, major_allowed: bool) -> Result<Plan, KindError> {
+    /// `major_allowed`, restarted after its install by `restart`, as the module says.
+    fn choose(
+        &self,
+        running: u64,
+        major_allowed: bool,
+        restart: Restart,
+    ) -> Result<Plan, KindError> {
         let listed = self.offered(&["--list"])?;
         if major_allowed {
             let full = self.offered(&["--list-full-installers"])?;
             if let Some(installer) = newest_upgrade(running, &full.installers) {
+                if restart == Restart::Authenticated {
+                    return Err(failed(
+                        REASON_FILEVAULT_NOT_READY,
+                        format!(
+                            "FileVault is on and the order allows the major upgrade to macOS {}: \
+                             that startosinstall restarts a Mac with FileVault on authenticated \
+                             is not shown, so the upgrade is not installed",
+                            installer.version
+                        ),
+                    ));
+                }
                 return Ok(Plan {
                     build: installer.build.clone(),
                     install: Install::Upgrade {
@@ -431,6 +439,7 @@ impl Apply {
             build: build.to_owned(),
             install: Install::Update {
                 label: update.label.clone(),
+                authrestart: restart == Restart::Authenticated,
             },
         })
     }
