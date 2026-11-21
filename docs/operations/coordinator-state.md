@@ -170,6 +170,15 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   place without the bake. In the ops file the two counts are the keys `offered_again` and
   `baked_beats` of a host's turn, written only when not 0; a coordinator before them refuses the
   file then, as with the run's other keys.
+  Migration `0031` adds two columns to `maintenance_hosts` for a halted host: `queued`, the act an
+  operator queued for it (`retry` or `put_back`, NULL for none; the check refuses any other name),
+  and `order_try`, the last try of the order of its turn the coordinator made (0 by default, never
+  negative), which each queued act raises so that it reaches the daemon as a new try. `0031` is
+  `may-run`: the release before reads and writes the table by its other columns, leaving these as
+  they are (NULL and 0 in a row it adds), and queues no act. In the ops file they are the keys
+  `queued` and `order_try` of a host's turn, written only when set or not 0; a file written before
+  them reads as none and 0, and a name other than `retry` or `put_back` is refused; a coordinator
+  before them refuses an ops file that holds them, as with the run's other keys.
 - **Generations and write ids.** The database keeps, with each service's desired state, its
   generation (one more for every accepted set, a set identical to the state held included, and a
   force), the write id of the last set (`hk releases set-desired --write-id`, 1 to

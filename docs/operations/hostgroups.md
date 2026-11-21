@@ -503,6 +503,22 @@ heartbeats in a row (section 5.6), and a host whose turn deferred is offered aga
 run's other hosts of the group and while the window is open, once the group's `defer_backoff` has
 passed since it deferred, longer for each deferral of its turn (section 5.3).
 
+Two alerts of `Alerts.List` follow a host's turn of a run, both critical, each one alert per host
+with the host's group in `host_group`. `maintenance_halted` stands while the host's turn is stored
+halted: it names the host, the run and the reason the host's daemon gave (the step and the exit
+code), says that the host stays cordoned and that no further host of its group starts in the run,
+and that the operator acts with `Maintenance.RetryHost` or `Maintenance.PutBack` (`Cancel` ends the
+run but leaves the host halted); once an act is queued it says that the act is sent to the daemon.
+It clears when the daemon reports its turn at another step. `maintenance_not_back` stands while the
+turn is stored not back: a host stored rebooting that stays silent for its group's `return_secs`
+(1200 for a Linux host, 3600 for a Mac, or the group's own; a host the coordinator has not heard
+since it started is judged from the coordinator's start, by the larger of the two defaults) is
+stored not back by the coordinator at its next observation of the alerts (every 15 seconds; an
+`Alerts.List` alone stores nothing), audited `maintenance_step`. It clears when the host reports
+again, which stores the step its daemon reports. A host stored rebooting, or not back, raises no
+`silent_host` for its silence; it does again if its turn moves on, such as to done, and the host is
+still silent.
+
 ## Incidents are per host and per group
 
 Hold, exclude and abort stay per host. A hold of a role names a group (a role that is no group is

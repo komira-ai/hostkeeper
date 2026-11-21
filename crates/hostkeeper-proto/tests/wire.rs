@@ -781,6 +781,8 @@ fn wire_names_are_pinned() {
                 "updates_due",
                 "failed_update",
                 "host_halt",
+                "maintenance_halted",
+                "maintenance_not_back",
             ],
         ),
         (

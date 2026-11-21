@@ -57,7 +57,10 @@
 //!   another outcome or another version is wanted;
 //! - `host_halt`: a host that holds a halt of a service of its own (its beat's `local_halt`), with
 //!   its reason and when the host wrote it, stale or not ([`failures`]), until it no longer reports
-//!   it.
+//!   it;
+//! - `maintenance_halted` and `maintenance_not_back`: a host whose maintenance turn is stored
+//!   halted or not back ([`maintenance_alerts`]); a host rebooting in its turn raises no
+//!   `silent_host`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
@@ -142,6 +145,11 @@ pub enum Kind {
     FailedUpdate,
     /// A host holds a halt of a service of its own.
     HostHalt,
+    /// A host's turn of a maintenance run halted.
+    MaintenanceHalted,
+    /// A host rebooting in its turn of a maintenance run is silent past its group's
+    /// `return_secs`.
+    MaintenanceNotBack,
 }
 
 impl Kind {
@@ -168,6 +176,8 @@ impl Kind {
             Self::UpdatesDue => "updates_due",
             Self::FailedUpdate => "failed_update",
             Self::HostHalt => "host_halt",
+            Self::MaintenanceHalted => "maintenance_halted",
+            Self::MaintenanceNotBack => "maintenance_not_back",
         }
     }
 
@@ -180,7 +190,9 @@ impl Kind {
             | Self::FailedCanary
             | Self::StoreUnreachable
             | Self::FailedUpdate
-            | Self::HostHalt => proto::AlertSeverity::Critical,
+            | Self::HostHalt
+            | Self::MaintenanceHalted
+            | Self::MaintenanceNotBack => proto::AlertSeverity::Critical,
             Self::WaitingForOperator
             | Self::DuplicateClaimPending
             | Self::HeldOnBadVersion
@@ -216,6 +228,8 @@ impl Kind {
             Self::UpdatesDue => proto::AlertKind::UpdatesDue,
             Self::FailedUpdate => proto::AlertKind::FailedUpdate,
             Self::HostHalt => proto::AlertKind::HostHalt,
+            Self::MaintenanceHalted => proto::AlertKind::MaintenanceHalted,
+            Self::MaintenanceNotBack => proto::AlertKind::MaintenanceNotBack,
         }
     }
 }
@@ -236,7 +250,8 @@ pub struct Subject {
     pub request: String,
     /// The enrolled host a duplicate claim collides with.
     pub other_host: String,
-    /// The host group, for the alerts that count its hosts.
+    /// The host group: for the alerts that count its hosts, and for a maintenance alert the group
+    /// the run took its host in.
     pub group: String,
 }
 
@@ -378,7 +393,12 @@ pub(crate) fn derive_in(
     alerts.extend(failed_canaries(fleet, ops, &packages));
     alerts.extend(held_on_bad_versions(fleet, ops, &packages));
     alerts.extend(abandoned(ops, &packages));
-    alerts.extend(silent_hosts(fleet, at.now, thresholds.silent_after));
+    alerts.extend(maintenance_alerts::silent_hosts(
+        fleet,
+        ops,
+        at.now,
+        thresholds.silent_after,
+    ));
     alerts.extend(cert_near_expiry(
         enrollment,
         at.unix,
@@ -400,6 +420,8 @@ pub(crate) fn derive_in(
         &enrollment.wanted,
     ));
     alerts.extend(failures::host_halts(fleet, ops, services, groups, at));
+    alerts.extend(maintenance_alerts::halted(ops));
+    alerts.extend(maintenance_alerts::not_back(ops));
     alerts.sort_by(|a, b| a.subject.cmp(&b.subject));
     alerts.dedup_by(|a, b| a.subject == b.subject);
     alerts
@@ -637,29 +659,6 @@ fn abandoned(ops: &OpsState, packages: &BTreeSet<String>) -> Vec<Alert> {
         .collect()
 }
 
-/// `silent_host`: each host heard since the start whose last heartbeat is `silent_after` old
-/// or older at `now`.
-fn silent_hosts(fleet: &Fleet, now: Duration, silent_after: Duration) -> Vec<Alert> {
-    fleet
-        .nodes()
-        .filter_map(|(id, node)| {
-            let silent = now.saturating_sub(node.seen);
-            (silent >= silent_after).then(|| Alert {
-                subject: Subject {
-                    host: id.to_string(),
-                    ..Subject::of(Kind::SilentHost)
-                },
-                message: format!(
-                    "{id} has not heartbeated for {} s (the threshold is {} s)",
-                    silent.as_secs(),
-                    silent_after.as_secs()
-                ),
-                said: Said::default(),
-            })
-        })
-        .collect()
-}
-
 /// `store_unreachable`: the store's link to its database, while it is lost.
 fn store_unreachable(fleet: &Fleet) -> Option<Alert> {
     fleet.store_lost.then(|| Alert {
@@ -813,12 +812,14 @@ impl Coordinator {
         self
     }
 
-    /// Observes the alerts now: reads the enrollment store, derives every alert ([`derive`])
+    /// Observes the alerts now: notes the rebooting hosts that did not come back
+    /// ([`Self::note_not_back`]), reads the enrollment store, derives every alert ([`derive`])
     /// and logs each the last observation did not find ([`Book`]).
     ///
     /// # Errors
     /// [`StoreError`]: the enrollment store could not be read; nothing is noted or logged.
     pub fn observe_alerts(&self) -> Result<Vec<Observed>, StoreError> {
+        self.note_not_back();
         self.alerts.observe_with(|| self.find_alerts())
     }
 
@@ -969,6 +970,9 @@ mod xcode_tests;
 
 #[path = "group_alerts.rs"]
 mod group_alerts;
+
+#[path = "alerts_maintenance.rs"]
+mod maintenance_alerts;
 
 #[path = "alerts_prerequisites.rs"]
 mod prerequisite_alerts;

@@ -40,6 +40,8 @@ pub(crate) fn sample() -> Vec<Run> {
         reason: String::new(),
         offered_again: 0,
         baked_beats: 0,
+        queued: None,
+        order_try: 0,
     };
     let skipped = |id: &str, group: &str, why: Skip, kinds: &[Kind]| RunHost {
         skipped_because: Some(why),
@@ -168,6 +170,8 @@ fn host(id: &str, group: &str, step: Step, since: u64) -> RunHost {
         reason: String::new(),
         offered_again: 0,
         baked_beats: 0,
+        queued: None,
+        order_try: 0,
     }
 }
 
