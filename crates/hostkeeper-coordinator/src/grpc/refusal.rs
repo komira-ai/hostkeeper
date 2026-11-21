@@ -216,7 +216,8 @@ pub(crate) fn host_groups(refusal: HostGroupsRefusal) -> Status {
         | HostGroupsRefusal::GenerationMismatch
         | HostGroupsRefusal::NotEmpty
         | HostGroupsRefusal::SameHostGroup
-        | HostGroupsRefusal::ReservedHostGroup => Code::FailedPrecondition,
+        | HostGroupsRefusal::ReservedHostGroup
+        | HostGroupsRefusal::HostInMaintenance => Code::FailedPrecondition,
     };
     refused(code, refusal.as_str_name(), "HOST_GROUPS_REFUSAL_")
 }

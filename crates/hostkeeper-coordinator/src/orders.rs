@@ -191,7 +191,8 @@ pub enum Order {
     Maintain {
         /// What the turn applies, and how.
         maintain: Maintain,
-        /// The order's id: `maintain-<run id>` ([`crate::decide_maintenance::order_id`]).
+        /// The order's id: `maintain-<run id>`, then `-<n>` for a turn offered again
+        /// ([`crate::maintenance_runs::RunHost::order_id`]).
         order_id: String,
         /// The try: 1, which a resend of the order keeps.
         order_try: u64,

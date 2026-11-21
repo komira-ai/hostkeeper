@@ -160,6 +160,16 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   no restore for it; it serves no maintenance run while it runs, and the rows wait for this release
   to come back. A shipped migration is never edited: its SHA-256 is pinned. `export` counts both
   tables, and the file store keeps the runs under the key `maintenance_runs` of the ops file.
+  Migration `0030` adds two counts to `maintenance_hosts`, each 0 by default: `offered_again`, how
+  many times a host whose turn deferred was offered it again (its order id is the run's, then
+  `-2`, `-3` and on), and `baked_beats`, the healthy heartbeats in a row a host whose turn is done
+  has sent toward its group's `bake_beats`, until which it holds its batch place. The count is
+  written at each such heartbeat with no audit entry; the heartbeat that ends the bake is audited
+  `maintenance_step` (`run <id> baked`). `0030` is `may-run`: the release before reads and writes
+  the table by its other columns, so it never offers a deferred host again and frees a done host's
+  place without the bake. In the ops file the two counts are the keys `offered_again` and
+  `baked_beats` of a host's turn, written only when not 0; a coordinator before them refuses the
+  file then, as with the run's other keys.
 - **Generations and write ids.** The database keeps, with each service's desired state, its
   generation (one more for every accepted set, a set identical to the state held included, and a
   force), the write id of the last set (`hk releases set-desired --write-id`, 1 to

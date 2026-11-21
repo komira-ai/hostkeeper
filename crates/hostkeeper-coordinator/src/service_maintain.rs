@@ -1,14 +1,17 @@
-//! A heartbeat's maintenance ([`crate::decide_maintenance`]): the host's turn of a run as its
-//! daemon reports it, stored before anything is decided, then the `maintain` the host is sent, or
+//! A heartbeat's maintenance ([`crate::decide_maintenance`]): the bake of a host whose turn is
+//! done, counted from the heartbeat before its report is read; the host's turn of a run as its
+//! daemon reports it, stored before anything is decided; then the `maintain` the host is sent, or
 //! the package orders it is not given.
 //!
 //! The host's `macos` left out by its report ([`decide_maintenance::Verdict::Skip`]) is stored the
 //! same way, in place of an order.
 //!
-//! Each is a coordinator's change of the ops state, audited by `coordinator`
-//! (`maintenance_step`, `maintenance_start`), made under the fleet's lock and, over a shared store,
-//! in the heartbeat's decision transaction, so a decision that does not land puts them back with
-//! the rest. A start is stored before the order is answered (storage first): a start that cannot
+//! Each is a coordinator's change of the ops state, made under the fleet's lock and, over a
+//! shared store, in the heartbeat's decision transaction, so a decision that does not land puts
+//! them back with the rest. A step, a start and a skip are audited by `coordinator`
+//! (`maintenance_step`, `maintenance_start`); a bake's count is stored at each heartbeat with no
+//! entry of its own, and the heartbeat that ends it is audited `maintenance_step` (`baked`). A
+//! start is stored before the order is answered (storage first): a start that cannot
 //! be stored sends no order, and the host is asked again at its next heartbeat.
 
 use std::collections::BTreeMap;
@@ -22,8 +25,8 @@ use crate::decide_maintenance::{self, Ordered, Skipping, Verdict, View};
 use crate::fleet::Fleet;
 use crate::holds::marks_of;
 use crate::host_groups::GroupName;
+use crate::host_groups::Policy;
 use crate::maintenance::FEATURE;
-use crate::maintenance_policy::Maintenance as Policy;
 use crate::maintenance_runs::{Kind, Step};
 use crate::ops::{AuditEntry, OpsError, Write};
 use crate::orders::Order;
@@ -85,6 +88,66 @@ impl Coordinator {
         }
     }
 
+    /// The group policy of the group named `group` (empty: none), or every default.
+    fn group_policy(&self, group: &str) -> Policy {
+        group
+            .parse::<GroupName>()
+            .ok()
+            .and_then(|name| self.desired.host_group(&name))
+            .map_or_else(Policy::default, |held| held.policy)
+    }
+
+    /// Counts the host `id`'s heartbeat toward the bake of a done turn of it
+    /// ([`decide_maintenance::baked`]): the count is stored with no audit entry of its own, and
+    /// the heartbeat that completes the bake, which frees the host's batch place, is audited
+    /// `maintenance_step` with `baked` after the run. A count that cannot be stored is logged; the
+    /// next healthy heartbeat counts again from what is held.
+    pub(super) fn bake_maintenance(&self, fleet: &Fleet, id: &HostId) {
+        let need = |group: &str| self.group_policy(group).bake_beats;
+        let counts: Vec<(usize, usize, u32, String, String, bool)> = self.ops.read(|state| {
+            let runs = &state.maintenance_runs;
+            decide_maintenance::baked(runs, fleet.node(id), id, need)
+                .into_iter()
+                .map(|(r, h, beats)| {
+                    let host = &runs[r].hosts[h];
+                    let done = beats >= need(&host.host_group);
+                    (
+                        r,
+                        h,
+                        beats,
+                        runs[r].id.clone(),
+                        host.host_group.clone(),
+                        done,
+                    )
+                })
+                .collect()
+        });
+        if counts.is_empty() {
+            return;
+        }
+        let stored = self.ops.decide_changes(Write::BeforeMemory, |state| {
+            let mut audit = Vec::new();
+            for (r, h, beats, run_id, group, done) in &counts {
+                if let Some(held) = state
+                    .maintenance_runs
+                    .get_mut(*r)
+                    .filter(|run| run.id == *run_id)
+                    .and_then(|run| run.hosts.get_mut(*h))
+                    .filter(|host| host.step == Step::Done)
+                {
+                    held.baked_beats = *beats;
+                    if *done {
+                        audit.push(entry(MAINTENANCE_STEP, id, group, run_id, " baked"));
+                    }
+                }
+            }
+            Ok::<_, crate::ops::OpsError>(audit)
+        });
+        if let Err(why) = stored {
+            tracing::warn!(%why, node_id = %id, "a host's maintenance bake could not be stored: its next healthy heartbeat counts again");
+        }
+    }
+
     /// The maintenance of the heartbeat of the host `id` at `now`, decided over `fleet`: a
     /// `maintain` only over a transport that carries typed orders (`orders`) to a daemon that
     /// announced `maintenance-v1` (a lost store is a quiet start, which starts no turn).
@@ -102,11 +165,7 @@ impl Coordinator {
         else {
             return Next::Free;
         };
-        let policy = group
-            .parse::<GroupName>()
-            .ok()
-            .and_then(|name| self.desired.host_group(&name))
-            .map_or_else(Policy::default, |held| held.policy.maintenance);
+        let policy = self.group_policy(&group);
         let groups: BTreeMap<String, String> = if waits {
             match self.memberships() {
                 Ok(all) => all
@@ -126,7 +185,9 @@ impl Coordinator {
                 state,
                 fleet,
                 groups: &groups,
-                policy: &policy,
+                policy: &policy.maintenance,
+                bake_beats: policy.bake_beats,
+                defer_backoff: policy.defer_backoff,
                 unix_now,
                 now,
             };
@@ -153,11 +214,11 @@ impl Coordinator {
         }
     }
 
-    /// Stores the `macos` of the host `id`'s waiting turn left out at `unix_now`, with why
-    /// ([`Verdict::Skip`]), audited `maintenance_step`: the turn waits without `macos`, or, when
-    /// `macos` was all it held, ends `skipped` with its kinds as they were. Nothing is stored when
-    /// the turn no longer waits with `macos` in a run that is not cancelled (an operator's
-    /// `Cancel` in between); a change the store refuses is logged, and the host's next heartbeat
+    /// Stores the `macos` of the host `id`'s turn that waits, or deferred and is offered again,
+    /// left out at `unix_now`, with why ([`Verdict::Skip`]), audited `maintenance_step`: the turn
+    /// goes on without `macos` at its step, or, when `macos` was all it held, ends `skipped` with
+    /// its kinds as they were. Nothing is stored when the turn no longer waits, or is deferred,
+    /// with `macos` in a run that is not cancelled (an operator's `Cancel` in between); a change the store refuses is logged, and the host's next heartbeat
     /// decides it again.
     pub(crate) fn skip_macos(&self, id: &HostId, skipping: &Skipping, unix_now: u64) {
         let run_id = skipping.run_id.as_str();
@@ -170,7 +231,7 @@ impl Coordinator {
                 .flat_map(|run| run.hosts.iter_mut())
                 .find(|host| {
                     host.host_id == id.as_str()
-                        && host.step == Step::Waiting
+                        && host.step.may_start()
                         && host.kinds.contains(&Kind::Macos)
                 })
                 .ok_or(Unstarted::Gone)?;
@@ -196,9 +257,11 @@ impl Coordinator {
     }
 
     /// Stores the start of the host `id`'s turn decided as `ordered` at `unix_now` (its step
-    /// staging, audited `maintenance_start`) and answers its order. Nothing is stored or sent when
-    /// the store refuses the change, or when the turn no longer waits in a run that is not
-    /// cancelled by the time it is stored (an operator's `Cancel` in between).
+    /// staging, audited `maintenance_start`; a deferred host's offer counted, its reason and the
+    /// kinds it applied cleared) and answers its order. Nothing is stored or sent when the store
+    /// refuses the change, or when the turn no longer waits, or is deferred, under the order id
+    /// decided, in a run that is not cancelled by the time it is stored (an operator's `Cancel`, or
+    /// another coordinator's start, in between).
     pub(super) fn start_turn(&self, id: &HostId, ordered: Ordered, unix_now: u64) -> Next {
         let run_id = ordered.run_id.clone();
         let audit = entry(MAINTENANCE_START, id, &ordered.host_group, &run_id, "");
@@ -208,10 +271,20 @@ impl Coordinator {
                 .iter_mut()
                 .filter(|run| run.id == run_id && run.cancelled_unix.is_none())
                 .flat_map(|run| run.hosts.iter_mut())
-                .find(|host| host.host_id == id.as_str() && host.step == Step::Waiting)
+                .find(|host| {
+                    host.host_id == id.as_str()
+                        && host.step.may_start()
+                        && host.next_order_id(&run_id) == ordered.order_id
+                })
                 .ok_or(Unstarted::Gone)?;
+            if held.step == Step::Deferred {
+                held.offered_again = held.offered_again.saturating_add(1);
+                held.reason.clear();
+                held.applied.clear();
+            }
             held.step = Step::Staging;
             held.since_unix = unix_now;
+            held.baked_beats = 0;
             Ok(())
         });
         match stored {
@@ -251,6 +324,10 @@ fn order_of(ordered: Ordered) -> Order {
 #[cfg(test)]
 #[path = "service_maintain_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "maintenance_turns_tests.rs"]
+mod turns_tests;
 
 #[cfg(test)]
 #[path = "maintenance_packages_tests.rs"]
