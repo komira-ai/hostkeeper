@@ -89,7 +89,7 @@ impl Coordinator {
     }
 
     /// The group policy of the group named `group` (empty: none), or every default.
-    fn group_policy(&self, group: &str) -> Policy {
+    pub(crate) fn group_policy(&self, group: &str) -> Policy {
         group
             .parse::<GroupName>()
             .ok()

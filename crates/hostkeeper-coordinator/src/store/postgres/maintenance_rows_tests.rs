@@ -47,6 +47,8 @@ fn full(id: &str) -> Run {
                 reason: String::new(),
                 offered_again: 0,
                 baked_beats: 3,
+                queued: None,
+                order_try: 0,
             },
             RunHost {
                 host_id: "h1".to_owned(),
@@ -59,6 +61,8 @@ fn full(id: &str) -> Run {
                 reason: "why".to_owned(),
                 offered_again: 4,
                 baked_beats: 0,
+                queued: None,
+                order_try: 0,
             },
         ],
     }
@@ -91,6 +95,8 @@ fn bare(id: &str) -> Run {
             reason: String::new(),
             offered_again: 0,
             baked_beats: 0,
+            queued: None,
+            order_try: 0,
         }],
     }
 }

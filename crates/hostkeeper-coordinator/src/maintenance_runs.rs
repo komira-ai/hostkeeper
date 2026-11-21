@@ -15,7 +15,7 @@
 //! no write. A host's turn is started, and its step then follows what its daemon reports, by
 //! [`crate::decide_maintenance`].
 
-use hostkeeper_proto::hostkeeper::agent::v1::MaintenanceKind;
+use hostkeeper_proto::hostkeeper::agent::v1::{MaintainAction, MaintenanceKind};
 use hostkeeper_proto::hostkeeper::operator::v1::{
     MaintenanceHostStep, MaintenanceSkip, MaintenanceState,
 };
@@ -149,6 +149,17 @@ named! {
     }
 }
 
+named! {
+    /// What an operator asked of a halted turn (`Maintenance.RetryHost`, `Maintenance.PutBack`),
+    /// queued for the host's daemon as the action of a new try of the order that took the turn.
+    Act: MaintainAction {
+        /// Run the step that failed again, and go on from there.
+        Retry = "retry" => Retry,
+        /// Run the drained services' `resume`, and leave the update as far as it got.
+        PutBack = "put_back" => PutBack,
+    }
+}
+
 impl Step {
     /// Whether a host at this step is in its turn: started and not ended. Such a host finishes
     /// its turn whatever becomes of its run, and a halted or silent host stays so until an
@@ -208,6 +219,17 @@ pub(crate) struct RunHost {
     /// 0 otherwise.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub(crate) baked_beats: u32,
+    /// Halted: the operator's act queued for its daemon, sent at each of its heartbeats under the
+    /// try [`RunHost::order_try`] until its daemon reports the turn at another step; none
+    /// otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) queued: Option<Act>,
+    /// The last try of the order of its turn ([`RunHost::order_id`]) the coordinator made: 1 (or
+    /// 0, in a turn stored before) for the `RUN` that started it, one more for each operator's act
+    /// queued since, so that each act reaches the daemon as a new try. 0 again for a turn offered
+    /// again under a new order id.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(crate) order_try: u64,
 }
 
 impl RunHost {
@@ -229,6 +251,16 @@ impl RunHost {
             _ => self.offered_again,
         };
         order_id_of(run_id, again)
+    }
+
+    /// Queues the operator's `act` for its daemon under the order's next try: one more than the
+    /// last try made, 2 for the first act after the `RUN` (try 1). An act queued again, the same or
+    /// the other one, replaces the one queued under a newer try, so the daemon takes at most one
+    /// of them: it refuses an older try (`stale_try`) and a turn that is no longer halted
+    /// (`not_halted`).
+    pub(crate) fn queue(&mut self, act: Act) {
+        self.order_try = self.order_try.max(1).saturating_add(1);
+        self.queued = Some(act);
     }
 
     /// Whether, done in a group that bakes for `bake_beats` healthy heartbeats, it still bakes:

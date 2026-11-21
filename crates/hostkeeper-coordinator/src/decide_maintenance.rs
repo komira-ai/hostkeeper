@@ -501,6 +501,7 @@ fn ordered(view: &View<'_>, run: &Run, host: &RunHost, order_id: String) -> Orde
         order_id,
         maintain: Maintain {
             run_id: run.id.clone(),
+            action: agent::MaintainAction::Run,
             kinds,
             linux_scope: match effective.linux_scope {
                 LinuxScope::Security => agent::LinuxScope::Security,

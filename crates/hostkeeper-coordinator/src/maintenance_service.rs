@@ -291,6 +291,8 @@ fn turn_of(seen: &Seen, kinds: &[Kind], state: &OpsState) -> Option<RunHost> {
         reason: String::new(),
         offered_again: 0,
         baked_beats: 0,
+        queued: None,
+        order_try: 0,
     })
 }
 

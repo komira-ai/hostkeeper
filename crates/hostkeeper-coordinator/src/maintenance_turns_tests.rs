@@ -493,6 +493,7 @@ fn a_start_under_a_stale_order_id_stores_and_sends_nothing() {
         order_id: order_id.to_owned(),
         maintain: crate::orders::Maintain {
             run_id: RUN.to_owned(),
+            action: agent::MaintainAction::Run,
             kinds: vec![agent::MaintenanceKind::Linux],
             linux_scope: agent::LinuxScope::Security,
             drain_deadline_secs: None,

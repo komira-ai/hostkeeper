@@ -216,6 +216,8 @@ pub(crate) fn runs_of(tables: &Tables) -> Result<Vec<Run>, OpsError> {
             reason: at.text(6)?.unwrap_or_default(),
             offered_again: small(&at, 8)?,
             baked_beats: small(&at, 9)?,
+            queued: None,
+            order_try: 0,
         };
         let position = at.position(7)?;
         let (_, _, hosts) = runs

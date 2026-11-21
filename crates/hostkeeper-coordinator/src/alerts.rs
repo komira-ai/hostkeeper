@@ -51,7 +51,15 @@
 //! - `xcode_version_taken`: an upload of a second build under a version the Xcode store holds was
 //!   refused ([`crate::xcode_store`]); one alert per version, until the held archive of that version
 //!   is removed (the coordinator's memory, like a failed canary's);
-//! - `updates_due`: one alert per host group with hosts whose kept report has updates due.
+//! - `updates_due`: one alert per host group with hosts whose kept report has updates due;
+//! - `maintenance_halted`: a host whose turn of a maintenance run is stored halted (the ops
+//!   state), one alert per host naming the run and the reason its daemon gave; it stands until the
+//!   host's daemon reports its turn at another step, after an operator's `RetryHost` or `PutBack`
+//!   ([`maintenance_alerts`]);
+//! - `maintenance_not_back`: a host whose turn is stored not back: it was rebooting and stayed
+//!   silent for its group's `return_secs`, which each observation checks first
+//!   ([`Coordinator::note_not_back`]); it clears when the host reports again. A host rebooting in
+//!   its turn, or not back, raises no `silent_host`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
@@ -132,6 +140,11 @@ pub enum Kind {
     XcodeVersionTaken,
     /// Hosts of a host group have updates due.
     UpdatesDue,
+    /// A host's turn of a maintenance run halted.
+    MaintenanceHalted,
+    /// A host rebooting in its turn of a maintenance run is silent past its group's
+    /// `return_secs`.
+    MaintenanceNotBack,
 }
 
 impl Kind {
@@ -156,6 +169,8 @@ impl Kind {
             Self::XcodeReleaseWaiting => "xcode_release_waiting",
             Self::XcodeVersionTaken => "xcode_version_taken",
             Self::UpdatesDue => "updates_due",
+            Self::MaintenanceHalted => "maintenance_halted",
+            Self::MaintenanceNotBack => "maintenance_not_back",
         }
     }
 
@@ -163,9 +178,12 @@ impl Kind {
     #[must_use]
     pub const fn severity(self) -> proto::AlertSeverity {
         match self {
-            Self::Halt | Self::Duplicate | Self::FailedCanary | Self::StoreUnreachable => {
-                proto::AlertSeverity::Critical
-            }
+            Self::Halt
+            | Self::Duplicate
+            | Self::FailedCanary
+            | Self::StoreUnreachable
+            | Self::MaintenanceHalted
+            | Self::MaintenanceNotBack => proto::AlertSeverity::Critical,
             Self::WaitingForOperator
             | Self::DuplicateClaimPending
             | Self::HeldOnBadVersion
@@ -199,6 +217,8 @@ impl Kind {
             Self::XcodeReleaseWaiting => proto::AlertKind::XcodeReleaseWaiting,
             Self::XcodeVersionTaken => proto::AlertKind::XcodeVersionTaken,
             Self::UpdatesDue => proto::AlertKind::UpdatesDue,
+            Self::MaintenanceHalted => proto::AlertKind::MaintenanceHalted,
+            Self::MaintenanceNotBack => proto::AlertKind::MaintenanceNotBack,
         }
     }
 }
@@ -219,7 +239,8 @@ pub struct Subject {
     pub request: String,
     /// The enrolled host a duplicate claim collides with.
     pub other_host: String,
-    /// The host group, for the alerts that count its hosts.
+    /// The host group: for the alerts that count its hosts, and for a maintenance alert the group
+    /// the run took its host in.
     pub group: String,
 }
 

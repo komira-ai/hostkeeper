@@ -92,6 +92,7 @@ fn the_maintain_order_carries_the_run_and_the_groups_settings() {
     let expected = |drain_deadline_secs| Order::Maintain {
         maintain: Maintain {
             run_id: RUN.to_owned(),
+            action: agent::MaintainAction::Run,
             kinds: vec![MaintenanceKind::Linux, MaintenanceKind::Reboot],
             linux_scope: agent::LinuxScope::All,
             drain_deadline_secs,
@@ -550,6 +551,7 @@ fn a_start_after_the_run_was_cancelled_stores_and_sends_nothing() {
         order_id: ORDER.to_owned(),
         maintain: Maintain {
             run_id: RUN.to_owned(),
+            action: agent::MaintainAction::Run,
             kinds: vec![MaintenanceKind::Linux],
             linux_scope: agent::LinuxScope::Security,
             drain_deadline_secs: None,

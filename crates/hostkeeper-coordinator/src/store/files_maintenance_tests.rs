@@ -77,6 +77,8 @@ fn hand_run() -> Run {
         reason: String::new(),
         offered_again: 0,
         baked_beats: 0,
+        queued: None,
+        order_try: 0,
     };
     Run {
         id: "run-1900000000-1".to_owned(),
