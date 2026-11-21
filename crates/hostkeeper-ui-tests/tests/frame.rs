@@ -368,6 +368,8 @@ fn a_window_is_converted_in_the_zone_the_frame_was_given_and_in_utc_when_it_was_
     ] {
         let mut ui = Ui::start();
         ui.session("tok_a");
+        // Home, where the app starts, reads the hosts first; the Maintenance page reads them next.
+        ui.reply(&m("Hosts/List"), json!({}));
         ui.reply(
             &m("Hosts/List"),
             json!({"hosts": [{"nodeId": "h-1", "hostGroup": "g", "maintenanceLookAgeSecs": "600",

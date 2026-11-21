@@ -142,7 +142,7 @@ function scheduled(answer) {
   const hosts = list(answer, "hosts");
   const skipped = hosts.filter((host) => host.step === `${STEP}SKIPPED`);
   const waiting = hosts.length - skipped.length;
-  const id = answer && answer.run ? answer.run.id : "";
+  const id = answer && answer["run"] ? answer["run"]["id"] : "";
   const said = `Scheduled run ${id}: ${waiting} host${waiting === 1 ? "" : "s"} waiting`;
   if (skipped.length === 0) {
     return said;
@@ -201,7 +201,7 @@ export function newScheduleState(scope) {
   }
   return {
     kinds,
-    where: scope.hostId ? "host" : scope.group ? "group" : "hosts",
+    where: scope.hostId ? "host" : scope["group"] ? "group" : "hosts",
     picks,
     when: "now",
     windowStart: "",
@@ -231,8 +231,8 @@ function whereOptions(scope) {
   if (scope.hostId) {
     options.push(["host", `this host: ${scope.hostId}`]);
   }
-  if (scope.group) {
-    options.push(["group", `every host of ${scope.group}`]);
+  if (scope["group"]) {
+    options.push(["group", `every host of ${scope["group"]}`]);
   }
   options.push(["hosts", "the hosts ticked"]);
   return options;
@@ -264,7 +264,7 @@ export function scheduleRequest(form, scope, offsetAt, checking) {
   if (where === "host") {
     request.hostIds = [scope.hostId];
   } else if (where === "group") {
-    request.hostGroup = scope.group;
+    request.hostGroup = scope["group"];
   } else {
     const left = checking === true ? new Map() : skippedByCheck(form);
     const ids = scope.hosts.map((host) => host.nodeId).filter((id) => form.picks[id] === true && !left.has(id));
@@ -366,7 +366,7 @@ function selectedXcode(host) {
 
 // The lines for the hosts of the check whose turn moves the default Xcode off the one selected now.
 function movesDefault(form, scope) {
-  if (!scope.policy || !scope.group) {
+  if (!scope.policy || !scope["group"]) {
     return [];
   }
   const want = typeof scope.policy.xcodeDefault === "string" && scope.policy.xcodeDefault !== ""
@@ -374,7 +374,7 @@ function movesDefault(form, scope) {
   const out = [];
   for (const turn of form.preview || []) {
     const host = scope.hosts.find((candidate) => candidate.nodeId === turn.hostId);
-    if (turn.hostGroup !== scope.group || !list(turn, "kinds").includes(`${KIND}XCODE`)) {
+    if (turn.hostGroup !== scope["group"] || !list(turn, "kinds").includes(`${KIND}XCODE`)) {
       continue;
     }
     const selected = selectedXcode(host);
@@ -395,7 +395,7 @@ function previewView(form, scope) {
     h("td", {}, list(turn, "kinds").map(kindWords).join(", ") || "-"),
     h("td", {}, skipWords(turn.skippedBecause) || "-")));
   const shown = table(["Host", "Group", "Kinds", "Left out"], rows);
-  shown.attrs.name = "schedule-preview";
+  shown.attrs["name"] = "schedule-preview";
   return h("div", {}, shown, movesDefault(form, scope));
 }
 

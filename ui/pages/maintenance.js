@@ -156,7 +156,7 @@ async function readRuns(ctx) {
       continue;
     }
     try {
-      const got = await ctx.api.maintenance.get({ runId: run.id });
+      const got = await ctx.api.maintenance.get({ runId: run["id"] });
       runs.push({ run, hosts: list(got, "hosts") });
     } catch (error) {
       runs.push({ run, hosts: null, failure: error });

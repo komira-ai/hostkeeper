@@ -74,8 +74,8 @@ export function stepCell(host) {
 // Whether the turn is of a Mac: its report says macOS; with no report, its kinds do.
 export function isMac(turn, host) {
   const report = host && host.maintenance;
-  if (report && report.host && typeof report.host.osName === "string") {
-    return report.host.osName === "macOS";
+  if (report && report["host"] && typeof report["host"].osName === "string") {
+    return report["host"].osName === "macOS";
   }
   return list(turn, "kinds").some((kind) => kind === `${KIND}MACOS` || kind === `${KIND}XCODE`);
 }
@@ -100,7 +100,7 @@ function windowWords(run) {
 function headline(run) {
   const batch = run.batch === undefined ? "the group's" : String(run.batch);
   const parts = [
-    `Run ${run.id}`,
+    `Run ${run["id"]}`,
     stateWords(run.state),
     whereWords(run),
     `window ${windowWords(run)}`,
@@ -128,7 +128,7 @@ function restartLink(env, turn) {
 
 // The typed reason of a run, or why it cannot be used: `{ reason }` or `{ problem }`.
 function reasonOf(env, run) {
-  const reason = trimmed(env.state[run.id]);
+  const reason = trimmed(env.state[run["id"]]);
   if (reason === "") {
     return { problem: "Give a reason first." };
   }
@@ -148,9 +148,9 @@ function hostButtons(env, run, turn) {
     if (!ctx.confirm(`Put ${host} back? Its drained services' resume runs, the update stays as far as it got, and the run goes on.`)) {
       return "Not put back.";
     }
-    await env.putBack({ runId: run.id, hostId: host, reason: given.reason });
+    await env.putBack({ runId: run["id"], hostId: host, reason: given.reason });
     await env.after();
-    return `Put ${host} back in run ${run.id}.`;
+    return `Put ${host} back in run ${run["id"]}.`;
   })];
   if (!isEnded(run)) {
     buttons.unshift(action(ctx, "Retry", "retry-host", async () => {
@@ -161,9 +161,9 @@ function hostButtons(env, run, turn) {
       if (!ctx.confirm(`Retry ${host} from the step that failed? It is drained again if needed and the update goes on.`)) {
         return "Not retried.";
       }
-      await env.retryHost({ runId: run.id, hostId: host, reason: given.reason });
+      await env.retryHost({ runId: run["id"], hostId: host, reason: given.reason });
       await env.after();
-      return `Retried ${host} in run ${run.id}.`;
+      return `Retried ${host} in run ${run["id"]}.`;
     }));
   }
   return buttons;
@@ -199,19 +199,19 @@ function controls(env, run, turns) {
   if (isEnded(run) && !halted) {
     return [];
   }
-  const out = [field("Reason", "run-reason", env.state, run.id, { maxlength: 256 })];
+  const out = [field("Reason", "run-reason", env.state, run["id"], { maxlength: 256 })];
   if (!isEnded(run)) {
     out.push(action(ctx, "Cancel", "cancel-run", async () => {
       const given = reasonOf(env, run);
       if (given.problem !== undefined) {
         return given.problem;
       }
-      if (!ctx.confirm(`Cancel run ${run.id}? No new host starts; a host in its turn finishes.`)) {
+      if (!ctx.confirm(`Cancel run ${run["id"]}? No new host starts; a host in its turn finishes.`)) {
         return "Not cancelled.";
       }
-      await env.cancel({ runId: run.id, reason: given.reason });
+      await env.cancel({ runId: run["id"], reason: given.reason });
       await env.after();
-      return `Cancelled run ${run.id}.`;
+      return `Cancelled run ${run["id"]}.`;
     }));
   }
   return out;

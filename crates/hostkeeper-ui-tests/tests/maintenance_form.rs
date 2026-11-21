@@ -261,7 +261,7 @@ fn a_host_with_no_report_has_no_update_controls_on_its_updates_tab() {
         r#"{ nodeId: "h-1" }"#,
         "[]",
         r#"
-return ["update", "update-reason", "schedule-form"].map((name) => named(tree, name).length);"#,
+return ["update", "update-reason", "schedule-form"].map((name) => nodes(tree).filter((n) => n.attrs["name"] === name).length);"#,
     ));
     assert_eq!(out["out"], json!([0, 0, 0]));
 }
@@ -284,8 +284,8 @@ await click(tree, "open-schedule", 0);
 await click(cur(), "schedule-check");
 return {
   note: named(cur(), "schedule-nothing-due").map(text),
-  kinds: named(cur(), "kind").length,
-  clash: named(cur(), "nothing-due").length,
+  kinds: nodes(cur()).filter((n) => n.attrs["name"] === "kind").length,
+  clash: nodes(cur()).filter((n) => n.attrs["name"] === "nothing-due").length,
 };"#,
     ));
     assert_eq!(
@@ -311,7 +311,7 @@ const cur = () => seen.shown[seen.shown.length - 1];
 const buttons = (t) => nodes(t).filter((n) => n.tag === "button").map(text);
 const before = buttons(tree);
 await click(tree, "open-schedule", 0);
-const labels = nodes(cur()).filter((n) => n.tag === "label").map(text);
+const labels = nodes(cur()).filter((n) => n.tag === "label").map((n) => text(n).trim());
 return {
   groupButton: before.filter((words) => words === "Update the group").length,
   rowButtons: named(tree, "update").length,
@@ -351,10 +351,10 @@ fn a_group_whose_policy_cannot_be_read_still_opens_its_form_and_the_form_closes_
         "[]",
         r#"
 const cur = () => seen.shown[seen.shown.length - 1];
-const state = (t) => ({ form: named(t, "schedule-form").length, button: text(named(t, "open-schedule")[0]) });
+const state = (t) => ({ form: nodes(t).filter((n) => n.attrs["name"] === "schedule-form").length, button: text(named(t, "open-schedule")[0]) });
 const closed = state(tree);
 await click(tree, "open-schedule", 0);
-const labels = nodes(cur()).filter((n) => n.tag === "label").map(text);
+const labels = nodes(cur()).filter((n) => n.tag === "label").map((n) => text(n).trim());
 const opened = {
   ...state(cur()),
   where: chosen(cur(), "where", 0),
