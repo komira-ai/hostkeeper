@@ -12,10 +12,11 @@
 //! `cutover` and the `after_reboot` of `linux` and `reboot` are written
 //! ([`crate::maintenance_linux`]), and so is their `verify` ([`LinuxCheck`], the module
 //! [`linux`]), and the `prepare` of `linux`, its stage (the module `linux::stage`: the free space
-//! checked, then a download alone); on a Mac the `prepare` of `macos` ([`MacosKind`]), which
-//! stages a macOS update or defers, and the `prepare` of `xcode`, the stage of the Xcodes of the
-//! order ([`XcodeKind`]); every other step of every kind is `unsupported_kind` until its own
-//! change. The steps run each kind of the run in [`Kind::ALL`]'s order, macOS before Xcode,
+//! checked, then a download alone); on a Mac every step of `macos` ([`MacosKind`]): its
+//! `prepare` stages a macOS update or defers, its `cutover` and restart install it with the update
+//! account, its `verify` checks the target build, and the `prepare` of `xcode`, the stage of the
+//! Xcodes of the order ([`XcodeKind`]); every other step of every kind is `unsupported_kind` until
+//! its own change. The steps run each kind of the run in [`Kind::ALL`]'s order, macOS before Xcode,
 //! whatever order the parameters give:
 //!
 //! - `prepare` runs each kind's `prepare`, and ends at the first that does not succeed. It writes
@@ -23,12 +24,14 @@
 //! - `cutover` runs each kind's `cutover` once per run, by the run record ([`RunRecord`]): a kind
 //!   recorded applied is passed over. A kind whose cutover says it needs a reboot
 //!   ([`Cutover::NeedsReboot`]) is recorded with its reboot under way and the boot id it was asked
-//!   in, and only then is the reboot asked for ([`Rebooter`]); the step ends there, exit 0, reason
-//!   `reboot_under_way`. The `cutover` run after the reboot finds the boot id changed, asks the
+//!   in, and only then is the reboot asked for: by the kind's own restart when it has one
+//!   ([`MaintenanceKind::restart`]: a Mac's update, whose install restarts the Mac, so that the
+//!   record is durable before the install starts), else by the host's [`Rebooter`]; the step ends
+//!   there, exit 0, reason `reboot_under_way`. The `cutover` run after the reboot finds the boot id changed, asks the
 //!   kind for the version the host now runs ([`MaintenanceKind::after_reboot`]), records the kind
 //!   applied and goes on with the next kind, never installing the first again. Under the same
 //!   boot id, the reboot was asked for and has not happened: it is asked for again, and nothing is
-//!   installed again. A `reboot` kind after a kind whose reboot the same `cutover` saw finished is
+//!   installed again but by a kind's own restart, which is its install. A `reboot` kind after a kind whose reboot the same `cutover` saw finished is
 //!   recorded applied without a second reboot.
 //! - `verify` checks each kind of the run in turn and ends at the first wrong fact: it fails
 //!   `not_applied` for a kind the run record does not hold applied, `not_rebooted` for a kind
@@ -234,9 +237,16 @@ fn bounded(detail: &str) -> String {
 /// packages recorded in the daemon's `placed.json`, and checked by the host's [`LinuxCheck`]
 /// ([`linux::kinds`]). When `own` is not a version (which the daemon itself refuses to start
 /// with), or the build has no adapters for the platform, their `verify` stays `unsupported_kind`.
-/// On a Mac, `macos` ([`MacosKind`]), whose `prepare` stages a macOS update, and `xcode`
+/// On a Mac, `macos` ([`MacosKind`]), whose `prepare` stages a macOS update and whose other steps
+/// install and check it, keeping the install's plan in `run_dir` (the directory of the run's
+/// parameters; `None` for parameters on standard input, where no `cutover` runs), and `xcode`
 /// ([`XcodeKind`]), whose `prepare` stages the order's Xcodes; `reboot` keeps its stub.
-pub fn registry_for(platform: &Platform, lock_wait_secs: u64, own: &str) -> Registry {
+pub fn registry_for(
+    platform: &Platform,
+    lock_wait_secs: u64,
+    own: &str,
+    run_dir: Option<&Path>,
+) -> Registry {
     let registry = Registry::for_platform(platform.kind);
     match platform.kind {
         PlatformKind::Linux | PlatformKind::Openrc => {
@@ -264,7 +274,7 @@ pub fn registry_for(platform: &Platform, lock_wait_secs: u64, own: &str) -> Regi
             }
         }
         PlatformKind::Macos => registry
-            .with(Kind::Macos, Box::new(MacosKind::at_host()))
+            .with(Kind::Macos, Box::new(MacosKind::at_host(run_dir)))
             .with(Kind::Xcode, Box::new(XcodeKind::at_host())),
     }
 }
@@ -289,10 +299,15 @@ pub fn host_main(args: &HookArgs) -> Outcome {
         return ending.outcome;
     }
     let platform = Platform::host();
+    let run_dir = match args.params == Path::new(STDIN_PARAMS) {
+        true => None,
+        false => args.params.parent(),
+    };
     let kinds = registry_for(
         &platform,
         args.package_lock_wait_secs,
         env!("CARGO_PKG_VERSION"),
+        run_dir,
     );
     let boot_id = crate::adapters::host_boot_id();
     let host_rebooter = HostRebooter::for_platform(platform.kind);
@@ -376,7 +391,7 @@ fn cutover(params: &MaintainParams, ports: &HookPorts<'_>) -> Result<Ending, End
             KindState::RebootUnderWay { boot } => {
                 let now = boot_id(ports.boot_id)?;
                 if now == boot {
-                    return Err(reboot(kind, ports.rebooter));
+                    return Err(reboot(kind, params, ports));
                 }
                 let version = ports.kinds.get(kind)?.after_reboot(params)?;
                 record
@@ -397,7 +412,7 @@ fn cutover(params: &MaintainParams, ports: &HookPorts<'_>) -> Result<Ending, End
                         record
                             .reboot_under_way(run_id, kind, &boot)
                             .map_err(record_failed)?;
-                        return Err(reboot(kind, ports.rebooter));
+                        return Err(reboot(kind, params, ports));
                     }
                 },
             },
@@ -440,16 +455,31 @@ fn verify(params: &MaintainParams, ports: &HookPorts<'_>) -> Result<Ending, Endi
     Ok(Ending::done())
 }
 
-/// Asks for the reboot `kind` needs: the step ends done, `reboot_under_way`, or failed when the
-/// reboot could not be asked for.
-fn reboot(kind: Kind, rebooter: &dyn Rebooter) -> Ending {
-    match rebooter.reboot() {
+/// Asks for the reboot `kind` needs, by the kind's own restart when it has one
+/// ([`MaintenanceKind::restart`]), else (and for a kind this host holds no work for) by the
+/// host's [`Rebooter`]: the step ends done,
+/// `reboot_under_way`, or failed when the reboot could not be asked for (the kind's own failure,
+/// or `reboot_failed`).
+fn reboot(kind: Kind, params: &MaintainParams, ports: &HookPorts<'_>) -> Ending {
+    let own = ports
+        .kinds
+        .get(kind)
+        .ok()
+        .and_then(|work| work.restart(params));
+    let asked = match own {
+        Some(restarted) => restarted.map_err(Ending::from),
+        None => ports
+            .rebooter
+            .reboot()
+            .map_err(|error| Ending::failed(REASON_REBOOT_FAILED, error.to_string())),
+    };
+    match asked {
         Ok(()) => Ending {
             outcome: Outcome::Success,
             reason: Some(REASON_REBOOT_UNDER_WAY),
             detail: Some(format!("{kind} needs a reboot: rebooting")),
         },
-        Err(error) => Ending::failed(REASON_REBOOT_FAILED, error.to_string()),
+        Err(ending) => ending,
     }
 }
 

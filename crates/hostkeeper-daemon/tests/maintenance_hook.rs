@@ -109,6 +109,78 @@ fn after_the_reboot_the_same_cutover_goes_on_with_the_next_kind_and_installs_not
     assert_eq!(host.effects(), Vec::<String>::new());
 }
 
+/// Proves: a kind whose install restarts the host itself is recorded with its reboot under way
+/// before its own restart runs, and the host's rebooter is never asked; in the same boot the
+/// cutover runs that restart again, and on the new boot the kind is applied by its version.
+///
+/// Catches: a Mac's install started before the record of its reboot is durable, so the Mac comes
+/// back and installs it a second time; or a second, plain reboot asked of a Mac whose install
+/// restarts it.
+#[test]
+fn a_kind_that_restarts_itself_is_recorded_before_its_own_restart_runs() {
+    let effects = Effects::default();
+    let host = Host::new(
+        &effects,
+        vec![
+            FakeKind::restarting(Kind::Macos, "25H62", &effects),
+            FakeKind::applying(Kind::Xcode, "27.2", &effects),
+        ],
+    );
+    let kinds = [WireKind::Macos, WireKind::Xcode];
+    assert_eq!(host.run(HookStep::Cutover, &kinds), rebooting("macos"));
+    assert_eq!(
+        host.effects(),
+        [
+            "macos cutover".to_owned(),
+            format!("record run-7 macos reboot_under_way {BOOT_A}"),
+            "macos restart".to_owned(),
+        ]
+    );
+    assert_eq!(host.run(HookStep::Cutover, &kinds), rebooting("macos"));
+    assert_eq!(host.effects(), ["macos restart"]);
+    host.boot.set(BOOT_B);
+    assert_eq!(host.run(HookStep::Cutover, &kinds), done());
+    assert_eq!(
+        host.effects(),
+        [
+            "macos after_reboot",
+            "record run-7 macos applied 25H62",
+            "xcode cutover",
+            "record run-7 xcode applied 27.2",
+        ]
+    );
+}
+
+/// Proves: a kind's own restart that fails ends the step with the kind's reason and detail, after
+/// the record of its reboot, and the host's rebooter is not asked in its place.
+///
+/// Catches: a failed install reported as a restart under way, or hidden behind a plain reboot.
+#[test]
+fn a_kinds_own_restart_that_fails_is_the_steps_failure() {
+    let effects = Effects::default();
+    let mut macos = FakeKind::restarting(Kind::Macos, "25H62", &effects);
+    macos.restart = Some(Err(KindError::Failed {
+        reason: "macos_install_failed",
+        detail: "softwareupdate --install: the program exited with code 1".to_owned(),
+    }));
+    let host = Host::new(&effects, vec![macos]);
+    assert_eq!(
+        host.run(HookStep::Cutover, &[WireKind::Macos]),
+        failed(
+            "macos_install_failed",
+            "softwareupdate --install: the program exited with code 1"
+        )
+    );
+    assert_eq!(
+        host.effects(),
+        [
+            "macos cutover".to_owned(),
+            format!("record run-7 macos reboot_under_way {BOOT_A}"),
+            "macos restart".to_owned(),
+        ]
+    );
+}
+
 /// Proves: a cutover run again in the boot its reboot was asked in (the reboot has not happened)
 /// asks for the reboot again and installs nothing, records nothing.
 ///
