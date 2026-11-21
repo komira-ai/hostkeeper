@@ -739,7 +739,8 @@ async fn a_reply_with_the_largest_entry_fits_in_32_kib() {
         .collect();
     let answer = grpc_beat(&rig, &daemon).await;
     assert_eq!(said(&answer).and_then(|o| o.5), Some(largest));
-    assert_eq!(answer.features.len(), 8, "{:?}", answer.features);
+    // The 8 it echoes, and `maintenance-v1`, which it offers to every agent.
+    assert_eq!(answer.features.len(), 9, "{:?}", answer.features);
     assert!(
         answer.encoded_len() <= 32 * 1024,
         "{}",

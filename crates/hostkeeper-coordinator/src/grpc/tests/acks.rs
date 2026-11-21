@@ -74,7 +74,8 @@ async fn a_stored_verdict_is_acknowledged_alike_on_grpc_and_json() {
         })
         .collect();
     assert_eq!(Value::Array(grpc_acks), json_acks);
-    assert_eq!(response.features, vec![VERDICT_ACKS_FEATURE.to_owned()]);
+    // With the feature the coordinator offers to every agent that announces features.
+    assert_eq!(response.features, [VERDICT_ACKS_FEATURE, "maintenance-v1"]);
 }
 
 /// Proves that an agent that did not announce `verdict-acks-v1` is acknowledged nothing over

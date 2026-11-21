@@ -310,7 +310,9 @@ and `hkctl` edit it):
 ### 4.1 The report (New)
 
 `HeartbeatRequest` gains `maintenance` (the next free field, optional), announced by the feature `maintenance-v1` and sent only to a
-coordinator that advertises it, like `prerequisites` (Built). It carries the host's facts (OS name, version and build, on a Mac its hardware serial, running and newest
+coordinator that advertises it, like `prerequisites` (Built). The daemon names `maintenance-v1` only once a reply advertised it, so the
+coordinator offers it in its answer to every gRPC heartbeat that announces features, named or not (Built:
+`crates/hostkeeper-coordinator/src/features.rs`, `OFFERED`); the report is kept only from a heartbeat that names it. It carries the host's facts (OS name, version and build, on a Mac its hardware serial, running and newest
 installed kernel, the boot id the daemon already reads for its step record, Built: `hostkeeper_steps::ProcBootId` and
 `hostkeeper_launchd::SysctlBootId`, and the boot time), the installed Xcodes (version, build, path, `xcode-select`'s, and `foreign` when its directory is not `Xcode-<version>.app`), on a Mac the update facts of section 1 (FileVault, free space, the update
 account, the Command Line Tools, device-management conflicts), the due items of
@@ -694,6 +696,16 @@ certificate, with no token, and for a version and build the feed does not list; 
 and a body whose SHA-256 differs from its path is refused and nothing kept; `hk xcode-push` puts the token only in the request's header, in no
 argument and no environment variable, and uploads nothing when the signature check fails (Built: `crates/hostkeeper-hk/src/xcode_push/tests.rs`); with no fetcher,
 `xcode_release_waiting` stands from the feed's new release until the store holds it.
+
+The Linux path is proven end to end in process (Built: `crates/hostkeeper-daemon/tests/maintenance_linux_e2e.rs`, over
+`tests/support_linux`): the real coordinator schedules and orders each turn from the hosts' heartbeats, and on each host the real
+daemon runs it from its run record through the real maintenance hook's `cutover` and `verify` over fake `apt-get`, `systemctl`, a
+fake service that declares `drain` and `resume`, and a fake boot id. It shows the Update button's turn (stage, drain, install,
+reboot, check in the new boot, resume, done, nothing due after, `updates_due` cleared), a batch of one over a group of three inside
+a window, a failed apply that halts the host cordoned with no resume and no rollback until Put back, a coordinator and a daemon that
+restart mid-run without starting the order twice, a `reboot`-only run that installs nothing, and a drain deadline that puts the host
+back unchanged and defers it. The stage (`prepare`) is answered by the test's launcher there; its programs are tested in the hook's
+own crate.
 
 ## 9. Questions for the owner
 

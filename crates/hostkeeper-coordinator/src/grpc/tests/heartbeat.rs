@@ -48,6 +48,16 @@ const ANNOUNCED: [&str; 4] = ["order-v1", "halt-v1", "deferred-v1", "target-v1"]
 /// What the coordinator answers an agent that announced [`ANNOUNCED`].
 const AGREED: [&str; 4] = ["deferred-v1", "halt-v1", "order-v1", "target-v1"];
 
+/// The features of a gRPC reply to the heartbeats of this file: [`AGREED`], and `maintenance-v1`,
+/// which the coordinator offers to every agent that announces features.
+const ANSWERED: [&str; 5] = [
+    "deferred-v1",
+    "halt-v1",
+    "order-v1",
+    "target-v1",
+    "maintenance-v1",
+];
+
 /// The agent of the heartbeats of this file.
 const AGENT_NAME: &str = "hostkeeper-daemon";
 const AGENT_VERSION: &str = "1.0";
@@ -564,14 +574,19 @@ enum Expect {
 }
 
 impl Heard {
-    /// The same decision with no update: what the JSON route, which carries no order, says of it.
+    /// The same decision with no update and without `maintenance-v1`: what the JSON route, which
+    /// carries no order and offers no feature a heartbeat did not name, says of it.
     pub(super) fn without_update(&self) -> Heard {
         match self {
             Heard::Told {
                 features, halts, ..
             } => Heard::Told {
                 update: None,
-                features: features.clone(),
+                features: features
+                    .iter()
+                    .filter(|name| name.as_str() != crate::maintenance::FEATURE)
+                    .cloned()
+                    .collect(),
                 halts: halts.clone(),
             },
             Heard::Refused => Heard::Refused,
@@ -626,7 +641,16 @@ impl Expect {
                     .map(|(name, generation)| ((*name).to_owned(), *generation))
                     .collect();
                 assert_eq!(*got_halts, want, "{label}: the clear generations");
-                assert_eq!(*features, AGREED, "{label}: the features");
+                assert_eq!(*features, ANSWERED, "{label}: the features");
+                assert_eq!(
+                    heard.without_update(),
+                    Heard::Told {
+                        update: None,
+                        features: AGREED.iter().map(|name| (*name).to_owned()).collect(),
+                        halts: got_halts.clone(),
+                    },
+                    "{label}: the features agreed, as the JSON route answers them"
+                );
             }
             _ => panic!("{label}: expected {self:?}, heard {heard:?}"),
         }

@@ -174,33 +174,51 @@ async fn hosts_answer_the_report_a_grpc_heartbeat_carried_byte_for_byte() {
     assert_eq!(dropped(&world), None);
 }
 
-/// Proves: a daemon that announces `maintenance-v1` is answered it in `features`, and a daemon
-/// that does not announce it, even when its heartbeat carries a report, is answered without it and
-/// has no `Host.maintenance`.
+/// Proves: `maintenance-v1` is offered in `features` to every daemon that announces
+/// features, whether or not it named it, so a daemon that names it only once advertised learns it
+/// from its first answer; a daemon that does not announce it, even when its heartbeat carries a
+/// report, has no `Host.maintenance`; a daemon that announces it is shown its report; an agent
+/// that announces no feature is answered none.
 ///
-/// Catches: the feature not advertised, and a report kept for a daemon that did not announce it.
+/// Catches: the feature echoed only when named, which no daemon names before a reply advertised
+/// it, so no report is ever sent and no `maintain` order ever given; a report kept for a daemon
+/// that did not announce it.
 #[tokio::test]
-async fn only_a_daemon_that_announces_the_feature_is_agreed_it_and_shown() {
+async fn maintenance_v1_is_offered_to_every_announcing_daemon_and_kept_only_from_one_naming_it() {
     let enrollment = EnrollmentRig::new("grpc-maintenance-feature-enrollment");
     let certificate = enrolled(&enrollment.enrollment, &HostKey::new(), "machine-1", "s1");
     let world = world_over("grpc-maintenance-feature", &enrollment);
     let peer = peer_of(&certificate);
+    let offered = |answer: &agent::HeartbeatResponse| -> Vec<String> {
+        answer
+            .features
+            .iter()
+            .filter(|name| *name == FEATURE)
+            .cloned()
+            .collect()
+    };
+    let both = vec![FEATURE.to_owned()];
 
     let mut plain = heartbeat(Some(full(1, AUDIT_UNIX - 60)));
     plain.features.retain(|name| name != FEATURE);
     let answer: agent::HeartbeatResponse = beat(&world.coordinator, &peer, &plain).await.decode();
-    assert!(!answer.features.iter().any(|name| name == FEATURE));
+    assert_eq!(offered(&answer), both);
     assert_eq!(shown(&world, "s1").await, (None, None, false));
 
     let announcing = heartbeat(Some(full(1, AUDIT_UNIX - 60)));
     let answer: agent::HeartbeatResponse =
         beat(&world.coordinator, &peer, &announcing).await.decode();
-    assert!(answer.features.iter().any(|name| name == FEATURE));
+    assert_eq!(offered(&answer), both);
     assert_eq!(shown(&world, "s1").await.0, Some(full(1, AUDIT_UNIX - 60)));
 
     let answer: agent::HeartbeatResponse = beat(&world.coordinator, &peer, &plain).await.decode();
-    assert!(!answer.features.iter().any(|name| name == FEATURE));
+    assert_eq!(offered(&answer), both);
     assert_eq!(shown(&world, "s1").await, (None, None, false));
+
+    let mut silent = plain;
+    silent.features.clear();
+    let answer: agent::HeartbeatResponse = beat(&world.coordinator, &peer, &silent).await.decode();
+    assert_eq!(answer.features, Vec::<String>::new());
 }
 
 /// Proves: a report that breaks a bound (13 due items) is answered like any heartbeat, counted as

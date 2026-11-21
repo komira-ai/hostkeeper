@@ -48,6 +48,14 @@ pub const FEATURES: &[&str] = &[
     crate::maintenance::FEATURE,
 ];
 
+/// The features of [`FEATURES`] advertised in the answer to a gRPC heartbeat of every agent that
+/// announces features, whether or not it named them: `maintenance-v1`. A daemon names it only once
+/// a reply has advertised it, so that the names it sends a coordinator older than `ssh-v1` stay
+/// within the 16 that coordinator reads; echoed back only when named, it would never be agreed.
+/// What it gates on the coordinator's side (the `maintenance` report kept, the `maintain` order)
+/// still waits for a heartbeat that announces it. An older agent drops a name it does not know.
+pub(crate) const OFFERED: &[&str] = &[crate::maintenance::FEATURE];
+
 /// The fields of the answer to a heartbeat that go only to an agent that announced a feature,
 /// each with the feature: the one place that says which. An older agent reads the answer
 /// strictly and refuses a field it does not know, so a field listed here is left out of the
