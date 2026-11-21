@@ -226,6 +226,21 @@ fn every_key_of_the_policy_is_held_to_its_range() {
             |p| p.rollback = proto::RollbackMode::Automatic.into(),
             true,
         ),
+        (
+            "a failed-hosts mode the proto lacks",
+            |p| p.failed_hosts = 9,
+            false,
+        ),
+        (
+            "failed hosts stop",
+            |p| p.failed_hosts = proto::FailedHosts::Stop.into(),
+            true,
+        ),
+        (
+            "failed hosts continue",
+            |p| p.failed_hosts = proto::FailedHosts::Continue.into(),
+            true,
+        ),
     ];
     let world = World::new("hg-put-policy-bounds");
     let before = world.state();
@@ -271,6 +286,7 @@ fn a_policy_is_read_back_as_it_was_put() {
             percent: Some(30),
             min_hosts: Some(3),
         }),
+        failed_hosts: proto::FailedHosts::Stop.into(),
         defer_backoff: Some(proto::DeferBackoff {
             initial_secs: Some(10),
             factor: Some(5),

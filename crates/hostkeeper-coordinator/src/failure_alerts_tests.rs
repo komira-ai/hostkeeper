@@ -238,8 +238,9 @@ fn of(verb: &'static str, service: &str) -> Option<(&'static str, String)> {
     Some((verb, service.to_owned()))
 }
 
-/// Proves the example of `docs/operations/rollout-plans.md` ("Example: one host fails"), step by
-/// step: a group of six build nodes and a group of four Macs, `tierstore-config`, then
+/// Proves the example of `docs/operations/rollout-plans.md` ("Example: one host fails, under
+/// `stop`"), step by step: a group of six build nodes and a group of four Macs whose failed hosts
+/// hold their stage, `tierstore-config`, then
 /// `tierstore`, then `hostkeeper` set. The first Mac's install of `tierstore-config` fails
 /// (`manifest_invalid`): the other Macs wait `stage_failed`, `tierstore` waits `install_order` on
 /// every Mac and its plan says `nothing_to_order`, one `failed_update` alert names the Mac, and
@@ -260,7 +261,10 @@ async fn the_example_of_one_failed_host_rolls_as_the_operations_page_says() {
     farm.group(
         "mac",
         &["tierstore-config", "tierstore"],
-        Some(policy(|p| p.stages = stages(&[25, 100]))),
+        Some(policy(|p| {
+            p.stages = stages(&[25, 100]);
+            p.failed_hosts = proto::FailedHosts::Stop.into();
+        })),
     );
     let builds = ["b1", "b2", "b3", "b4", "b5", "b6"];
     let macs = ["m1", "m2", "m3", "m4"];

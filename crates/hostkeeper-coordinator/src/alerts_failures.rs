@@ -1,17 +1,22 @@
 //! The alerts of one host that cannot reach a service's desired version: its update or install of
-//! the version failed (`failed_update`), or it holds a halt of the service of its own
-//! (`host_halt`). Each is one alert per host and service, with the reason and what the host said
-//! ([`Said`]), and each clears by itself: a failed update when the host reports another outcome
-//! (it reached the version, or a new try is under way) or the desired version changes, a host's
-//! halt when the host no longer reports it.
+//! the version failed (`failed_update`), it holds a halt of the service of its own (`host_halt`),
+//! or it declined the version several times in a row for one reason (`repeated_deferral`). Each is
+//! one alert per host and service, with the reason and what the host said ([`Said`]), and each
+//! clears by itself: a failed update when the host reports another outcome (it reached the
+//! version, or a new try an operator asked for is under way; a failure the coordinator retries by
+//! itself stays through its tries) or the desired version changes, a host's halt when the host no
+//! longer reports it, a repeated deferral when the host updates, gives another reason, or the
+//! desired version changes.
 
 use std::collections::BTreeMap;
 
 use hostkeeper_wire::HostId;
 use hostkeeper_wire::version::Version;
-use hostkeeper_wire::wire::Outcome;
+use hostkeeper_wire::wire::{Health, Outcome};
 
 use super::{Alert, At, Kind, Said, Subject};
+use crate::defer::REPEATED_DEFERRALS;
+use crate::failed_hosts::clears_by_itself;
 use crate::fleet::{Fleet, Host};
 use crate::host_groups::{GroupName, HostGroups};
 use crate::ops::OpsState;
@@ -74,9 +79,28 @@ fn in_group(group: Option<&GroupName>) -> String {
     group.map_or_else(String::new, |group| format!(" in host group {group}"))
 }
 
+/// The alerts of the hosts of every service of `services`, or package of every group of `groups`:
+/// [`failed_updates`], [`host_halts`] and [`repeated_deferrals`], `desired` the coordinator's
+/// desired versions of the rollout file's services.
+pub(super) fn of_hosts(
+    fleet: &Fleet,
+    ops: &OpsState,
+    services: &Services,
+    groups: &HostGroups,
+    desired: &BTreeMap<String, Version>,
+    at: At,
+) -> Vec<Alert> {
+    let mut alerts = failed_updates(fleet, services, groups, desired);
+    alerts.extend(host_halts(fleet, ops, services, groups, at));
+    alerts.extend(repeated_deferrals(fleet, services, groups, desired));
+    alerts
+}
+
 /// `failed_update`: each host whose last report of a service is a failure of the version its
-/// group wants of it. A `halted` refusal is the host's own halt, which `host_halt` says.
-pub(super) fn failed_updates(
+/// group wants of it, or, for a failure the coordinator retries by itself (a package of a group),
+/// whose last such failure is set aside while the host has reported nothing else
+/// ([`Fleet::failing`]). A `halted` refusal is the host's own halt, which `host_halt` says.
+fn failed_updates(
     fleet: &Fleet,
     services: &Services,
     groups: &HostGroups,
@@ -88,11 +112,18 @@ pub(super) fn failed_updates(
             continue;
         };
         for (id, host) in hosts(fleet, &want) {
-            let Some(report) = host.beat.last_update.as_ref().filter(|report| {
+            let standing = host.beat.last_update.as_ref().filter(|report| {
                 report.outcome == Outcome::Failed
                     && report.target == *version
                     && !report.is_halted_refusal()
-            }) else {
+            });
+            let retried = || {
+                fleet
+                    .failing(want.service, id)
+                    .map(|run| run.report)
+                    .filter(|report| report.target == *version)
+            };
+            let Some(report) = standing.cloned().or_else(retried) else {
                 continue;
             };
             let reason = report.reason.as_ref().map_or_else(
@@ -105,6 +136,18 @@ pub(super) fn failed_updates(
             } else {
                 format!(" ({detail:?})")
             };
+            let next = if want.group.is_some() && clears_by_itself(&report) {
+                let failures = fleet.failures_in_a_row(want.service, id).unwrap_or(1);
+                format!(
+                    "; the host can clear it by itself ({failures} in a row): it is ordered \
+                     {version} again after the group's defer_backoff, longer after each failure"
+                )
+            } else {
+                format!(
+                    "; it is not ordered {version} again until an operator retries it \
+                     (Hosts.Retry), holds or excludes it, or another version is set"
+                )
+            };
             alerts.push(Alert {
                 subject: Subject {
                     service: want.service.to_owned(),
@@ -113,9 +156,7 @@ pub(super) fn failed_updates(
                     ..Subject::of(Kind::FailedUpdate)
                 },
                 message: format!(
-                    "{id} failed {} {version}{}: {reason}{said}; it is not ordered {version} \
-                     again until an operator retries it (Hosts.Retry), holds or excludes it, or \
-                     another version is set",
+                    "{id} failed {} {version}{}: {reason}{said}{next}",
                     want.service,
                     in_group(want.group),
                 ),
@@ -131,11 +172,62 @@ pub(super) fn failed_updates(
     alerts
 }
 
+/// `repeated_deferral`: each host that declined the version its group wants of a service
+/// [`REPEATED_DEFERRALS`] times or more in a row for the same reason ([`crate::defer`]), and does
+/// not run it.
+fn repeated_deferrals(
+    fleet: &Fleet,
+    services: &Services,
+    groups: &HostGroups,
+    desired: &BTreeMap<String, Version>,
+) -> Vec<Alert> {
+    let mut alerts = Vec::new();
+    for want in wanted(services, groups, desired) {
+        let Some(version) = want.version else {
+            continue;
+        };
+        // A host that runs the version declines it no longer, though no beat said it updated.
+        let runs =
+            |host: &Host| host.beat.health != Health::Absent && host.beat.version == *version;
+        for (id, _) in hosts(fleet, &want).filter(|(_, host)| !runs(host)) {
+            let Some((reason, times)) = fleet
+                .declined_in_a_row(want.service, id, version)
+                .filter(|(_, times)| *times >= REPEATED_DEFERRALS)
+            else {
+                continue;
+            };
+            alerts.push(Alert {
+                subject: Subject {
+                    service: want.service.to_owned(),
+                    host: id.to_string(),
+                    version: version.as_str().to_owned(),
+                    ..Subject::of(Kind::RepeatedDeferral)
+                },
+                message: format!(
+                    "{id} declined {} {version}{} {times} times in a row: {}; it is offered \
+                     the version again after each wait, longer each time, and holds no other \
+                     host or service, but its reason may not clear by itself",
+                    want.service,
+                    in_group(want.group),
+                    reason.as_str(),
+                ),
+                said: Said {
+                    reason: reason.as_str().to_owned(),
+                    detail: String::new(),
+                    tries: u64::from(times),
+                    since_unix: 0,
+                },
+            });
+        }
+    }
+    alerts
+}
+
 /// `host_halt`: each host that holds a halt of a service of its own (its beat's `local_halt`),
 /// stale or not: stale when the generation it holds is above any the coordinator issued for the
 /// service in its group, so that no generation the coordinator sends lifts it but the one a
 /// `Releases.ClearHalt` issues past it.
-pub(super) fn host_halts(
+fn host_halts(
     fleet: &Fleet,
     ops: &OpsState,
     services: &Services,

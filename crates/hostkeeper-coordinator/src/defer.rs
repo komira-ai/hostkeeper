@@ -14,6 +14,10 @@
 //! was ordered reports the deferral, or the first time a report is seen; the same report
 //! repeated in later heartbeats is the same episode and moves nothing.
 //!
+//! A host that declines [`REPEATED_DEFERRALS`] episodes in a row for the same reason is an alert
+//! (`repeated_deferral`, [`crate::alerts`]): its reason may be one that does not clear by itself.
+//! It still waits out its backoff and holds no other host or service.
+//!
 //! The episodes are kept in memory only: after a restart the first report starts the count
 //! again. A deferral of reason [`INSTALLER_NOT_LISTED`] opens no wait: the host is picked an
 //! entry again at its next heartbeat ([`crate::picks`]).
@@ -23,12 +27,16 @@ use std::time::Duration;
 
 use hostkeeper_wire::HostId;
 use hostkeeper_wire::version::Version;
-use hostkeeper_wire::wire::{DeferredReport, Heartbeat};
+use hostkeeper_wire::wire::{DeferredReport, Heartbeat, Token};
 use serde::{Deserialize, Serialize};
 
 /// The reason of a deferral of an order whose entry is of an installer the daemon does not list
 /// (docs/design/packages.md, section 3.3): it opens no wait.
 pub const INSTALLER_NOT_LISTED: &str = "installer_not_listed";
+
+/// How many episodes in a row of one version, each for the same reason, make a host's deferral an
+/// alert: with the default backoff, the third comes about 15 minutes after the first.
+pub const REPEATED_DEFERRALS: u32 = 3;
 
 /// The longest cap a definition may set: a week.
 pub const MAX_BACKOFF_SECS: u64 = 7 * 24 * 3600;
@@ -101,6 +109,10 @@ struct Defer {
     episodes: u32,
     /// What the host asked for in the report that opened the episode.
     retry_after_secs: u64,
+    /// The reason of the last episode.
+    reason: Token,
+    /// How many episodes in a row gave that reason.
+    streak: u32,
 }
 
 /// The open deferrals, by host and service.
@@ -138,16 +150,34 @@ impl Defers {
         }
         match self.open.get_mut(key) {
             Some(open) if open.target == report.target => {
+                let same = open.reason == report.reason;
                 if ordered {
                     open.episodes = open.episodes.saturating_add(1);
                     open.opened = now;
                     open.retry_after_secs = report.retry_after_secs;
+                    open.streak = if same {
+                        open.streak.saturating_add(1)
+                    } else {
+                        1
+                    };
+                } else if !same {
+                    open.streak = 1;
                 }
+                open.reason.clone_from(&report.reason);
             }
             _ => {
                 self.open.insert(key.clone(), Defer::first(report, now));
             }
         }
+    }
+
+    /// The reason the host and service `key` declined `target` for, and how many episodes in a row
+    /// gave it, if it declined `target`.
+    pub(crate) fn streak(&self, key: &(HostId, String), target: &Version) -> Option<(&Token, u32)> {
+        self.open
+            .get(key)
+            .filter(|d| d.target == *target)
+            .map(|d| (&d.reason, d.streak))
     }
 
     /// When the wait of the host and service `key` ends, if it declined `target`.
@@ -172,6 +202,8 @@ impl Defer {
             opened: now,
             episodes: 1,
             retry_after_secs: report.retry_after_secs,
+            reason: report.reason.clone(),
+            streak: 1,
         }
     }
 }

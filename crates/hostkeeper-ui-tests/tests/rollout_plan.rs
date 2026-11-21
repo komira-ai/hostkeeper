@@ -237,6 +237,61 @@ return sections.map((s) => [cell(s, "Plan"), cell(s, "Stage"), cell(s, "Waiting"
     );
 }
 
+/// Proves: a plan that goes on past a failed host (a host group's `failed_hosts` is `continue`)
+/// shows the failed host's row as `failed` in the stage it took, the next stage's hosts as they
+/// stand, and the wait of the plan as it is (`updating, stage 2`), not `failed_host`.
+#[test]
+fn a_failed_host_of_a_rollout_that_goes_on_is_shown_failed() {
+    // Catches: a failed host dropped from the stage table, shown as waiting or done, or a page
+    // that says a plan is held by a failed host when the coordinator says it goes on.
+    let mut ui = Ui::start();
+    let mut going_on = plan(
+        2,
+        4,
+        "PLAN_WAIT_UPDATING",
+        &[(Some(50), 2, false), (Some(100), 4, false)],
+    );
+    going_on["stages"][0]["members"] = json!([
+        {"nodeId": "mac-1", "role": "mac", "state": "PLAN_HOST_STATE_DONE"},
+        {"nodeId": "mac-2", "role": "mac", "state": "PLAN_HOST_STATE_FAILED"},
+    ]);
+    going_on["stages"][1]["members"] = json!([
+        {"nodeId": "mac-3", "role": "mac", "state": "PLAN_HOST_STATE_UPDATING"},
+        {"nodeId": "mac-4", "role": "mac", "state": "PLAN_HOST_STATE_WAITING"},
+    ]);
+    ui.reply(&m("Releases/Status"), status_of(&[going_on]));
+    let out = run(
+        &mut ui,
+        r#"
+const sections = nodes(tree).filter((n) => n.attrs["class"] === "service");
+return [cell(sections[0], "Waiting"), rows(tree).filter((r) => r.length === 7)];"#,
+        "[]",
+    );
+    assert_eq!(
+        out["out"],
+        json!([
+            "updating, stage 2",
+            [
+                [
+                    "Stage", "Percent", "Hosts", "Enters", "Host", "Role", "State"
+                ],
+                ["1", "50%", "2", "auto", "mac-1", "mac", "done"],
+                ["", "", "", "", "mac-2", "mac", "failed"],
+                [
+                    "2 (current)",
+                    "100%",
+                    "4",
+                    "auto",
+                    "mac-3",
+                    "mac",
+                    "updating"
+                ],
+                ["", "", "", "", "mac-4", "mac", "waiting"],
+            ]
+        ])
+    );
+}
+
 #[test]
 fn a_service_with_no_plan_has_no_stage_table() {
     // Catches: a page that fails, or draws an empty stage table, for a service whose Status has
