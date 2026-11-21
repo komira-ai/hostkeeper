@@ -24,6 +24,9 @@ testing = ["hostkeeper-link/testing"]
 
 [dependencies]
 clap.workspace = true
+# The bootstrap's settings (`Sources::load`), whose administrator gives the update account its
+# Secure Token at a Mac's start (`update_account_make`, docs/design/mac-bootstrap.md, section 4).
+hostkeeper-bootstrap = { path = "../hostkeeper-bootstrap" }
 hostkeeper-config = { path = "../hostkeeper-config" }
 # The enrollment loop, over gRPC with TLS to the coordinator, the pki directory and the host's
 # claims.

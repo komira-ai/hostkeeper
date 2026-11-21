@@ -480,12 +480,15 @@ drain was never asked for is never held.
   Setup Assistant, once per Mac. The bootstrap's settings (New keys beside the farm values, `docs/design/mac-bootstrap.md`) carry the
   update account's name and password and that administrator's name and password; the bootstrap writes the update-account file (Built:
   `crates/hostkeeper-bootstrap/src/update_account.rs`, the keys `update_account_name`, `update_account_password`, `admin_name` and
-  `admin_password`, all four or none), and writes no copy of the administrator's password: the daemon is to read the two `admin_` keys from
+  `admin_password`, all four or none), and writes no copy of the administrator's password: the daemon reads the two `admin_` keys from
   the bootstrap's settings source at the start that makes the account (mac-bootstrap.md section 4). The
   daemon, at its next start, makes the account if it is missing: `sysadminctl -addUser hkupdate -password - -admin`, then
   `sysadminctl -secureTokenOn hkupdate -password - -adminUser <admin> -adminPassword -`, the passwords on standard input **[V]** (if
   `sysadminctl` reads `-` only from a terminal, the daemon gives it a pseudo-terminal it owns, never an argument), then hides it. The
-  administrator's password is used for that call and not kept. The report of section 1 says whether the account exists, is an
+  administrator's password is used for that call and not kept. (Built: `crates/hostkeeper-daemon/src/update_account_make.rs`, at every
+  start of a Mac's daemon: the passwords on a pipe, since MP-A2 has not run; the hide, `UserShell /usr/bin/false` and the removal from
+  `com.apple.access_ssh` right after `-addUser` and before the token call, each only when not so already; the account's password, then
+  the administrator's, in the order of the arguments; each `sysadminctl` call followed by a read that must show it took.) The report of section 1 says whether the account exists, is an
   administrator, holds a token and is hidden (Built: `maintenance_account.rs`, the name read from the update-account file); a Mac whose account lacks one is never ordered a macOS update (`no_update_account`, shown in the
   Schedule form).
 

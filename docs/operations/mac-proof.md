@@ -127,7 +127,7 @@ Decides:
 - if `sudo -n` exits 0 -> report to the owner; the update path does not rely on it.
 
 ### MP-E5 Read the Mac as root and compare
-Settles: none; checks that the collectors read the Mac as it is (design 5.8). Runs: a root shell on the proof Mac. Needs: MP-E4. Read-only. The listing argvs are the daemon's: `maintenance_macos.rs:31,34` (`softwareupdate --list`, `--list-full-installers`), `maintenance_mac.rs:41,44` (`fdesetup status`, `supportsauthrestart`), `maintenance_account.rs:128` (`sysadminctl -secureTokenStatus <name>`), all in `crates/hostkeeper-daemon/src/`.
+Settles: none; checks that the collectors read the Mac as it is (design 5.8). Runs: a root shell on the proof Mac. Needs: MP-E4. Read-only. The listing argvs are the daemon's: `maintenance_macos.rs:31,34` (`softwareupdate --list`, `--list-full-installers`), `maintenance_mac.rs:41,44` (`fdesetup status`, `supportsauthrestart`), `maintenance_account.rs` `secure_token` (`sysadminctl -secureTokenStatus <name>`), all in `crates/hostkeeper-daemon/src/`.
 ```sh
 cd /var/root/hk-proof
 { date -u; sw_vers; /usr/sbin/sysctl -n hw.model kern.bootsessionuuid; /usr/bin/xcode-select -p; } > base-1.txt 2>&1
@@ -226,7 +226,7 @@ Settles: none; the order of the account steps in design 5.5. Runs: a root shell 
 ```
 Record: the time from creation to hiding; operatorKeys and ssh at each heartbeat across the window; whether `IsHidden 1` alone satisfies the daemon's next report.
 Decides:
-- if "n local administrator accounts" is reported in the window -> the account step of the hook writes `IsHidden 1` in the same step as `-addUser`, or creates without `-admin`, hides, then grants admin (design 5.5; not built).
+- if "n local administrator accounts" is reported in the window -> the account-making start writes `IsHidden 1` right after `-addUser` and before any other call (built: `update_account_make.rs`); if that window is still seen, it creates without `-admin`, hides, then grants admin (design 5.5).
 - if `ssh.state` becomes `no_login_user` and the session drops -> real lockout risk; run the proof only with the owner at the Mac (MP-E9).
 
 
@@ -637,16 +637,16 @@ done
 /usr/bin/dscl . -read /Groups/admin GroupMembership; /usr/bin/fdesetup status
 ```
 
-Argv as merged: `maintenance_account.rs:127-128`, `:174-190`, `:41` (56), `:44`, `:47`; `maintenance_mac.rs:35,41`. Record: exit, stdout and stderr of each call apart; which stream carries the Secure Token line and its exact text; `fdesetup status`; the admin's name is not a secret.
+Argv as merged: `maintenance_account.rs` `secure_token`, `collect()`, `RECORD_NOT_FOUND` (56), `TOKEN_ENABLED`, `TOKEN_DISABLED`; `maintenance_mac.rs:35,41`. Record: exit, stdout and stderr of each call apart; which stream carries the Secure Token line and its exact text; `fdesetup status`; the admin's name is not a secret.
 Decides:
-- dscl exits 56 for the missing user -> keep `RECORD_NOT_FOUND` (`maintenance_account.rs:40`), drop the [V] in its module doc; other code -> change the `Some(RECORD_NOT_FOUND)` arm in `collect()` and its fixtures.
-- Token line text differs from `Secure token is ENABLED/DISABLED for user` -> change `TOKEN_ENABLED`/`TOKEN_DISABLED` (`:44`, `:47`) and `tests/fixtures/maintenance/account/token-*.txt`.
-- Only one stream carries the line -> no code change (both are joined at `:131-135`); say which in the doc comment; add the real text as a fixture.
+- dscl exits 56 for the missing user -> keep `RECORD_NOT_FOUND` (`maintenance_account.rs`), drop the [V] in its module doc; other code -> change the `Some(RECORD_NOT_FOUND)` arm in `collect()` and its fixtures.
+- Token line text differs from `Secure token is ENABLED/DISABLED for user` -> change `TOKEN_ENABLED`/`TOKEN_DISABLED` in `maintenance_account.rs` and `tests/fixtures/maintenance/account/token-*.txt`.
+- Only one stream carries the line -> no code change (both are joined in `secure_token`); say which in the doc comment; add the real text as a fixture.
 - The admin reads DISABLED -> stop; the grant in A3 cannot work; use another Mac.
 
 ### MP-A2 Create the account, hidden, in one job
 
-Settles section 5.5 line 468-470 ([V]: `-password -` read from standard input without a terminal; else the daemon needs a pty it owns). Root shell on the proof Mac. Needs A1. The hide is in the creating job, so the Mac never holds two visible administrators (the daemon's one-administrator rule would fail). Design argv, not built (`SYSADMINCTL` path const, `maintenance_account.rs:35`).
+Settles section 5.5 line 468-470 ([V]: `-password -` read from standard input without a terminal; else the daemon needs a pty it owns). Root shell on the proof Mac. Needs A1. The hide is in the creating job, so the Mac holds two visible administrators only between the two calls (the daemon's one-administrator rule would fail); the daemon hides right after `-addUser`, before any other change. Built as the daemon's account-making start (`crates/hostkeeper-daemon/src/update_account_make.rs`: `-addUser <name> -password - -admin`, the password and a newline on a pipe, no terminal, an empty environment; then `IsHidden 1` and `UserShell /usr/bin/false`); this step shows whether that pipe is enough.
 
 ```sh
 # variant A, harness of MP-E8, stdin /var/root/hk-proof/pw-proof
@@ -671,7 +671,7 @@ Decides:
 
 ### MP-A3 Grant the Secure Token with two passwords on standard input
 
-Settles section 5.5 line 469 ([V]: `-secureTokenOn ... -password - -adminUser <admin> -adminPassword -`, both passwords on stdin, which order). Root shell. Needs A2 (account has no token; `-secureTokenStatus hkproof` says DISABLED). Design argv, not built. Use the variant that worked in A2.
+Settles section 5.5 line 469 ([V]: `-secureTokenOn ... -password - -adminUser <admin> -adminPassword -`, both passwords on stdin, which order). Root shell. Needs A2 (account has no token; `-secureTokenStatus hkproof` says DISABLED). Built as order 1 on a pipe (`update_account_make.rs`: `<account pw>\n<admin pw>\n`, the order of the arguments, then `-secureTokenStatus` read again). Use the variant that worked in A2.
 
 ```sh
 # order 1 (hkproof, then admin): harness of MP-E8, stdin /var/root/hk-proof/in-proof-admin
@@ -693,7 +693,7 @@ Decides:
 
 ### MP-A4 Three views of the token
 
-Settles section 5.5 ([V]: the token also shows in `diskutil apfs listCryptoUsers /` and `fdesetup list`, only when FileVault is on). Root shell. Needs A3. Run once with FileVault off and again after A7. Only `sysadminctl -secureTokenStatus` is built (`maintenance_account.rs:127-146`); the other reads are design argv, not built.
+Settles section 5.5 ([V]: the token also shows in `diskutil apfs listCryptoUsers /` and `fdesetup list`, only when FileVault is on). Root shell. Needs A3. Run once with FileVault off and again after A7. Only `sysadminctl -secureTokenStatus` is built (`maintenance_account.rs` `secure_token`, which the account-making start also uses); the other reads are design argv, not built.
 
 ```sh
 A=$(cat /var/root/hk-proof/admin-name)
@@ -712,7 +712,7 @@ Decides:
 
 ### MP-A5 Hidden, no shell, not in ssh
 
-Settles section 5.5 line 470-471 (hidden, no login shell, not in `com.apple.access_ssh`). Root shell. Needs A2 (the hide was done there). Built reads: `login_account.rs:210-213` (`is_hidden`), `maintenance_account.rs:174-182`; nothing built writes `IsHidden`.
+Settles section 5.5 line 470-471 (hidden, no login shell, not in `com.apple.access_ssh`). Root shell. Needs A2 (the hide was done there). Built reads: `login_account.rs:210-213` (`is_hidden`), `maintenance_account.rs` `collect()`; the account-making start (`update_account_make.rs`) writes `IsHidden 1` and `UserShell /usr/bin/false` with `dscl . -create` and takes the account out of `com.apple.access_ssh` with `dseditgroup -o edit -d`, each only when it is not so already.
 
 ```sh
 /usr/bin/dscl . -read "$U/hkproof" RecordName IsHidden; echo "exit=$?"

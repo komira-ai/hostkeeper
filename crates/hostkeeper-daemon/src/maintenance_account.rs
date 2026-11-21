@@ -38,7 +38,7 @@ pub const SYSADMINCTL: &str = "/usr/sbin/sysadminctl";
 pub const DEADLINE: Duration = Duration::from_secs(60);
 
 /// What `dscl` exits with for a record that is not there (`eDSRecordNotFound`).
-const RECORD_NOT_FOUND: i32 = 56;
+pub(crate) const RECORD_NOT_FOUND: i32 = 56;
 
 /// What `sysadminctl -secureTokenStatus` writes for an account that holds a token.
 const TOKEN_ENABLED: &str = "Secure token is ENABLED for user";
@@ -120,34 +120,37 @@ impl UpdateAccountFacts {
             tool(SYSADMINCTL),
         )
     }
+}
 
-    /// Whether `name` holds a Secure Token, and how many lines of the answer were none that is
-    /// known.
-    fn secure_token(&self, name: &str) -> Result<(bool, u32), String> {
-        let what = "sysadminctl -secureTokenStatus";
-        let output = run(&*self.sysadminctl, what, &["-secureTokenStatus", name])?;
-        if output.code != Some(0) {
-            return Err(exit_failure(what, &output, false));
-        }
-        let text = format!(
-            "{}\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            output.stderr_text()
-        );
-        let token = text.lines().find_map(|line| {
-            if line.contains(TOKEN_ENABLED) {
-                Some(true)
-            } else if line.contains(TOKEN_DISABLED) {
-                Some(false)
-            } else {
-                None
-            }
-        });
-        Ok(match token {
-            Some(token) => (token, 0),
-            None => (false, 1),
-        })
+/// Whether `name` holds a Secure Token, read with `sysadminctl -secureTokenStatus` through
+/// `sysadminctl`, and how many lines of the answer were none that is known: an answer with neither
+/// the enabled nor the disabled line, on either stream, reads as no token and one unparsed line.
+/// The reason of a run that fails is the step and the exit code alone (the arguments name the
+/// account).
+pub(crate) fn secure_token(sysadminctl: &dyn Launchctl, name: &str) -> Result<(bool, u32), String> {
+    let what = "sysadminctl -secureTokenStatus";
+    let output = run(sysadminctl, what, &["-secureTokenStatus", name])?;
+    if output.code != Some(0) {
+        return Err(exit_failure(what, &output, false));
     }
+    let text = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        output.stderr_text()
+    );
+    let token = text.lines().find_map(|line| {
+        if line.contains(TOKEN_ENABLED) {
+            Some(true)
+        } else if line.contains(TOKEN_DISABLED) {
+            Some(false)
+        } else {
+            None
+        }
+    });
+    Ok(match token {
+        Some(token) => (token, 0),
+        None => (false, 1),
+    })
 }
 
 /// The section that carries `state` and `unparsed`.
@@ -189,7 +192,7 @@ impl Collector for UpdateAccountFacts {
             &[".", "-read", "/Groups/admin", "GroupMembership"],
         )?;
         let admin = group_members(&admins).contains(&name);
-        let (secure_token, unparsed) = self.secure_token(&name)?;
+        let (secure_token, unparsed) = secure_token(&*self.sysadminctl, &name)?;
         let state = pb::UpdateAccountState {
             present: true,
             admin,

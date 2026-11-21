@@ -144,8 +144,8 @@ daemon's reader takes (`crates/hostkeeper-daemon/src/update_account.rs`): the li
 
 **The administrator's password is used for the account-creation call only and not kept: the bootstrap writes no copy of it.** The daemon reads the
 two `admin_` keys from the same settings source (the managed preferences, else `bootstrap.toml`), under the same trust rule, at the start that makes
-the account, and uses them for that call alone (**Designed**: the daemon's account-making start is later work; until it lands the two keys are checked
-by the bootstrap and read by nothing). A one-shot file handed from the bootstrap to the daemon's first start was the other way, and is not
+the account, and uses them for that call alone (Built: `crates/hostkeeper-daemon/src/update_account_make.rs`, through the
+bootstrap's own `Sources::load`, and only when the token call is to run). A one-shot file handed from the bootstrap to the daemon's first start was the other way, and is not
 chosen: the source holds the password anyway, so a second copy adds a file to remove and a window in which it is there, and a daemon that never ran
 the call (a release before it, or a start that failed first) would leave it behind. The settings that hold the passwords are never committed to a
 repository and never printed. The operator sets a `bootstrap.toml` that holds them to mode 0600; the bootstrap checks only that no account but

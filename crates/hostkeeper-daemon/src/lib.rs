@@ -102,6 +102,10 @@
 //!   property lists through [`maintenance_plist`].
 //! - [`update_account`]: a Mac's update account, read from its root-only file, and the update
 //!   call, which gives its password to the program on its standard input alone.
+//! - `update_account_make`: the update account made at a Mac's start when it is missing (`sysadminctl
+//!   -addUser`), hidden, with no login shell and out of `com.apple.access_ssh`, and given a Secure
+//!   Token by the bootstrap's administrator (`sysadminctl -secureTokenOn`), the passwords on the
+//!   program's standard input alone.
 //! - [`observer`]: what [`Daemon::status`] reports of a running service.
 //! - [`node`]: the host's enrollment and the heartbeat loop's link, as the loops last wrote them,
 //!   which [`Daemon::status`] reports besides the services.
@@ -230,6 +234,7 @@ pub mod uninstall;
 pub mod unit_links;
 pub mod unix_clock;
 pub mod update_account;
+mod update_account_make;
 pub mod verb;
 pub mod verbs;
 pub mod watchers;
