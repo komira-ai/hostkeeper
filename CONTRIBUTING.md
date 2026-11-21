@@ -97,8 +97,7 @@ run the hostkeeper program. Besides `artifacts.yml`'s `attest`, which signs, and
 
 `.github/workflows/farm.yml` is the farm lane: `buck2 build //:ci` of the workspace on the build
 farm, with `local: 0` asserted, on every push to `main` and every pull request from a branch of
-this repository. It is advisory, never required: `ci.yml` stays the gate. Until buildrules can analyse this
-workspace at a released commit (komira-ai/buildrules#160), the check is red at its build step. Its job holds
+this repository. It is advisory, never required: `ci.yml` stays the gate. Its job holds
 `id-token: write` so that komira's farm-connect action can join the farm's private network with
 the job's OIDC token, under the exact `if:` the workflow lint gives it (a fork's pull request and
 Dependabot's are skipped; a fork's gets no OIDC token), and the lint holds that action's inputs to the organisation's variables

@@ -9,13 +9,13 @@ request from a branch of this repository, and no check of it is required.
 
 ## Status
 
-`.buckconfig` pins buildrules at its main (7dfc5c2), which has the rustfmt check, the Postgres
-fixture for tests and the build-commit stamp this lane uses. It cannot yet analyse this workspace:
-two gaps of its Rust rules, komira-ai/buildrules#160 items 1 and 2, fail every target at load.
-Until a buildrules commit has them, `farm.yml` is red at that step. That changes nothing for a pull
-request, which ci.yml gates. The numbers below were measured with those two changes applied. Each
-other item of that issue is met here by declaring the file in `extra_srcs`, or, for `CARGO`, by
-reading it with `option_env!` in the two tests that run cargo.
+`.buckconfig` pins buildrules at a693e5c (its main at the merge of komira-ai/buildrules#167). That
+commit has the rustfmt check, the Postgres fixture for tests and the build-commit stamp this lane
+uses, and the fix for the two gaps of its Rust rules that failed this workspace's analysis
+(komira-ai/buildrules#160 items 1 and 2: a member's self dev-dependency, and a member build
+script's `links` dependencies). The numbers below were measured with those two fixes applied to an
+earlier commit. Each other item of that issue is met here by declaring the file in `extra_srcs`,
+or, for `CARGO`, by reading it with `option_env!` in the two tests that run cargo.
 
 ## What it builds
 
@@ -128,7 +128,8 @@ keyed by the action's digest, so a result is reused only for byte-identical inpu
 ## Measured
 
 The first measurements of the lane, of `//:ci` as it is here, with buildrules plus the two fixes
-its `cargo.bzl` needs for this workspace (komira-ai/buildrules#160, items 1 and 2). Wall times are buck2's, on a machine that ran no action itself.
+its `cargo.bzl` needed for this workspace (komira-ai/buildrules#160 items 1 and 2, since merged as
+komira-ai/buildrules#167). Wall times are buck2's, on a machine that ran no action itself.
 
 | build | `Commands:` line | wall |
 |---|---|---|
@@ -139,7 +140,7 @@ its `cargo.bzl` needs for this workspace (komira-ai/buildrules#160, items 1 and 
 | the change reverted | `2 (cached: 2, remote: 0, local: 0)` | 0.2 s |
 | the same one-line change, `buck2 build //:ci` (every dependant rebuilt and retested) | `574 (cached: 0, remote: 574, local: 0)` | 318 s |
 
-At the current pin (buildrules main, with `:fmt` in `//:ci` and those two changes applied), after
+At buildrules main before #167 (with `:fmt` in `//:ci` and those two changes applied), after
 the daemon's two stage tests were changed (`--test-threads=2`):
 
 | build | `Commands:` line | wall |
