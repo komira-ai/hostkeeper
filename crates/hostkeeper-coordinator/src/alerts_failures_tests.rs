@@ -410,3 +410,24 @@ fn a_hosts_own_halt_with_no_reason_says_unspecified() {
         )]
     );
 }
+
+/// Proves: a host whose last heartbeat no longer lists the service raises neither kind for it,
+/// whatever the fleet kept of the service from an earlier beat.
+///
+/// Catches: an alert of a service the host dropped, which nobody can clear.
+#[test]
+fn a_service_the_host_no_longer_lists_raises_no_alert() {
+    let mut heartbeat = failed("1.0", "2.0", "busy", None);
+    heartbeat.local_halt = halted(0, Some(5)).local_halt;
+    let mut fleet = fleet_of(vec![("d1", heartbeat)]);
+    let mut gone = node();
+    gone.announced.clear();
+    fleet.note_node(id("d1"), gone, UNIX);
+    let ops = OpsState::default();
+
+    assert_eq!(
+        of_kind(&fleet, &ops, Some("2.0"), Kind::FailedUpdate),
+        vec![]
+    );
+    assert_eq!(of_kind(&fleet, &ops, Some("2.0"), Kind::HostHalt), vec![]);
+}

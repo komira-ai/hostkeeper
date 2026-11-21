@@ -416,8 +416,12 @@ fn a_host_that_is_moving_into_its_group_holds_no_other_service() {
 /// admission, takes no place: `db` in another group, set after it, is ordered, and its plan says
 /// `nothing_to_order`.
 ///
+/// Once an operator holds both packages the host is to lose, the move goes on around them: the
+/// host is ordered the install of `svc`.
+///
 /// Catches: a plan counted as orderable for a host the decision holds `moving` while its
-/// uninstalls wait, which kept every later service queued behind it.
+/// uninstalls wait, which kept every later service queued behind it; or one that stays held after
+/// the uninstalls it waited for are left aside.
 #[tokio::test]
 async fn an_admitted_host_whose_uninstall_waits_holds_no_other_service() {
     use crate::moving_tests::{OLD, say, told, told_beats, wide};
@@ -461,4 +465,17 @@ async fn an_admitted_host_whose_uninstall_waits_holds_no_other_service() {
         (svc.waiting, svc.waiting_on),
         (i32::from(proto::PlanWait::NothingToOrder), vec![])
     );
+
+    assert_eq!(farm.tell("t1", &[("db", "2.0")]), NOTHING);
+    for package in ["oldsvc", "oldcfg"] {
+        crate::marks_support::hold(
+            &farm.world.rig,
+            package,
+            crate::marks_support::scope_host("m1"),
+        )
+        .expect("held");
+    }
+    let svc = plan_of(&farm, "m1", "svc");
+    assert_eq!(svc.waiting, i32::from(proto::PlanWait::None));
+    assert_eq!(told_beats(&farm, "m1", listed()), say("install svc"));
 }
