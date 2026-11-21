@@ -888,3 +888,67 @@ async fn a_service_of_the_rollout_file_is_not_retried_by_itself() {
         assert_eq!(ask(&rig, "d1", "daemon", failed()), NOTHING, "{secs}");
     }
 }
+
+/// Proves: under `continue`, with `max_updating = 1`, a host whose update runs, or that waits for
+/// its promotion, still holds the one slot (the next host waits `no_slot`); once it is up at the
+/// version, the next host is ordered. Only a failure alone holds no slot.
+///
+/// Catches: a plan that goes on past its failed hosts and, with them, stops counting the hosts that
+/// are updating, ordering more at once than `max_updating`.
+#[test]
+fn under_continue_a_host_that_updates_or_waits_for_its_promotion_holds_its_slot() {
+    let farm = two_groups("fh-slot-running", &SIX, slot_continue);
+    assert_eq!(farm.tell("b1", &[("web", "1.0")]), update("web", "2.0"));
+    let mut running = runs("web", "1.0");
+    running.updating = Some(version("2.0"));
+    assert_eq!(
+        farm.tell_with("b1", vec![runs("hostkeeper", "1.0"), running]),
+        NOTHING
+    );
+    assert_eq!(farm.tell("b2", &[("web", "1.0")]), NOTHING);
+    assert_eq!(farm.why("b2", "web"), Some(Why::Gate(Gate::NoSlot)));
+    let mut promoting = runs("web", "2.0");
+    promoting.promotion_pending = true;
+    assert_eq!(
+        farm.tell_with("b1", vec![runs("hostkeeper", "1.0"), promoting]),
+        NOTHING
+    );
+    assert_eq!(farm.tell("b2", &[("web", "1.0")]), NOTHING);
+    assert_eq!(farm.why("b2", "web"), Some(Why::Gate(Gate::NoSlot)));
+    assert_eq!(farm.tell("b1", &[("web", "2.0")]), NOTHING);
+    assert_eq!(farm.tell("b2", &[("web", "1.0")]), update("web", "2.0"));
+}
+
+/// Proves: a plan whose first stage waits for an operator's Advance has entered no stage, so no
+/// stage of it is done, though one of its hosts failed and the group goes on past failed hosts:
+/// the failure counts towards a stage only once the plan is in one.
+///
+/// Catches: a failed host that counts as a done stage before any stage was entered, which would
+/// let the plan enter its second stage without the operator's Advance of the first.
+#[test]
+fn a_plan_that_entered_no_stage_has_no_stage_done() {
+    let farm = two_groups("fh-manual-first", &SIX, |p| {
+        p.stages = vec![
+            proto::PolicyStage {
+                percent: 50,
+                advance: proto::StageAdvance::Manual.into(),
+            },
+            proto::PolicyStage {
+                percent: 100,
+                advance: proto::StageAdvance::Auto.into(),
+            },
+        ];
+    });
+    assert_eq!(farm.tell_with("b1", web_failed(invalid())), NOTHING);
+    let coordinator = farm.world.coordinator();
+    let basis = coordinator.basis_of(&crate::testutil::id("b1"));
+    let all = coordinator.desired_for(&basis.services);
+    let fleet = coordinator.lock_fleet();
+    let now = (coordinator.clock)();
+    let def = basis.services.get("web").expect("a def");
+    let view = crate::stages::current(def, &all["web"], &fleet, now);
+    assert_eq!(
+        (view.current, view.failed(), view.stage_done()),
+        (0, 1, false)
+    );
+}
