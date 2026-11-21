@@ -172,8 +172,12 @@ fn the_release_before_runs_on_a_database_with_0028_and_this_one_on_its() {
     store.stop();
     assert_eq!(
         old.rows("SELECT version FROM schema_version WHERE version > 27 ORDER BY version"),
-        [vec![Some("28".to_owned())], vec![Some("29".to_owned())]],
-        "0028 and 0029 ran"
+        [
+            vec![Some("28".to_owned())],
+            vec![Some("29".to_owned())],
+            vec![Some("30".to_owned())]
+        ],
+        "0028 to 0030 ran"
     );
     assert_eq!(
         old.rows("SELECT count(*) FROM xcode_releases"),

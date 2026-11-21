@@ -596,3 +596,50 @@ fn a_skip_changes_only_the_macs_waiting_turn_of_macos_in_its_run() {
         vec![format!("run {RUN} waiting no_update_account")]
     );
 }
+
+/// Proves: a Mac whose turn deferred and is offered again, but whose next heartbeat reports no
+/// update account, has `macos` left out with `no_update_account` (its step stays deferred,
+/// audited), and is then sent its other kinds under the order of its second offer.
+///
+/// Catches: a deferred Mac that is decided `macos`-skipped at every heartbeat without the skip
+/// ever being stored, so its other kinds are never offered again.
+#[test]
+fn a_deferred_mac_offered_again_without_its_account_is_sent_its_other_kinds() {
+    let world = world_of(
+        "mac-deferred-again",
+        false,
+        &[minor(), xcode()],
+        Some(clean_mac()),
+    );
+    schedule_both(&world, &[]).expect("scheduled");
+    edit_runs(&world, |runs| {
+        for host in runs[0].hosts.iter_mut().filter(|host| host.host_id == MAC) {
+            host.step = Step::Deferred;
+            host.since_unix = UNIX - 10_000;
+        }
+    });
+    let no_account = || mac_beat(&[minor(), xcode()], account(None));
+    assert_eq!(maintain_id(tell(&world, MAC, no_account()).as_ref()), None);
+    let turn = mac_turn(&world);
+    assert_eq!(
+        (turn.step, turn.kinds, turn.skipped_because),
+        (
+            Step::Deferred,
+            vec![Kind::Xcode],
+            Some(Skip::NoUpdateAccount)
+        )
+    );
+    assert_eq!(
+        mac_steps_audited(&world),
+        vec![format!("run {RUN} deferred no_update_account")]
+    );
+    match tell(&world, MAC, no_account()) {
+        Some(Order::Maintain {
+            maintain, order_id, ..
+        }) => {
+            assert_eq!(order_id, format!("{ORDER}-2"));
+            assert_eq!(maintain.kinds, vec![agent::MaintenanceKind::Xcode]);
+        }
+        other => panic!("not the second offer: {other:?}"),
+    }
+}

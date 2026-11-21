@@ -16,6 +16,12 @@
 //! begins afresh: a move under way is replaced, and the admission it had is dropped
 //! ([`crate::moving`]).
 //!
+//! A host in its turn of a maintenance run ([`crate::maintenance_runs`]: it has been ordered the
+//! first step and its turn has not ended, halted and not back included) is refused as
+//! `host_in_maintenance`, before anything is written and again on the state the change is applied
+//! to, since heartbeats start turns under the same lock: a host that only waits for its turn, or
+//! whose turn is done, deferred, skipped or not reached, is moved.
+//!
 //! The audit entry raises the host's facts generation ([`crate::facts`]), once it is committed:
 //! the facts the host is sent carry the new group, and the host is ordered nothing after its
 //! admission until it reports that generation. A commit that fails raises nothing, and the
@@ -45,7 +51,7 @@ use crate::holds::marks_of;
 use crate::host_groups::GroupName;
 use crate::inventory::unreadable;
 use crate::operator::{Caller, entry_proto, valid_reason};
-use crate::ops::{AuditEntry, OpsError, Write};
+use crate::ops::{AuditEntry, OpsState, Write};
 use crate::service::Coordinator;
 
 /// The audit action of a move; it raises the facts generation of the host it names
@@ -58,6 +64,16 @@ fn unwritten(why: StoreError) -> Refusal {
     Refusal::StoreFailed
 }
 
+/// Whether `host` is in its turn of a maintenance run: a row of a run holds it at a step that has
+/// started and not ended.
+fn in_turn(state: &OpsState, host: &str) -> bool {
+    state
+        .maintenance_runs
+        .iter()
+        .flat_map(|run| &run.hosts)
+        .any(|row| row.host_id == host && row.step.in_turn())
+}
+
 impl Coordinator {
     /// `HostGroups.Move`: puts the enrolled host in the group, or in none when the group is empty, as the module says. Audited as
     /// `host_move`.
@@ -65,7 +81,7 @@ impl Coordinator {
     /// # Errors
     /// `unauthorized`, `forbidden`, `invalid_request` (the node id, the group's name or the
     /// reason), `unknown_host` (not enrolled, or denied), `unknown_host_group`,
-    /// `same_host_group`, `store_failed`, `audit_unavailable`.
+    /// `same_host_group`, `host_in_maintenance`, `store_failed`, `audit_unavailable`.
     pub fn host_groups_move(
         &self,
         caller: &Caller,
@@ -102,6 +118,9 @@ impl Coordinator {
         let target = to.as_ref().map_or("", GroupName::as_str);
         if before.host_group == target {
             return Err(Refusal::SameHostGroup);
+        }
+        if self.ops.read(|state| in_turn(state, host.as_str())) {
+            return Err(Refusal::HostInMaintenance);
         }
         let from = before
             .host_group
@@ -141,7 +160,11 @@ impl Coordinator {
             .map_err(unwritten)?;
         let done = self
             .ops
-            .decide_changes(Write::BeforeMemory, |state| -> Result<_, OpsError> {
+            .decide_changes(Write::BeforeMemory, |state| -> Result<_, Refusal> {
+                // Another coordinator may have started the host's turn since the read above.
+                if in_turn(state, host.as_str()) {
+                    return Err(Refusal::HostInMaintenance);
+                }
                 let mut entries = vec![audit];
                 match (&to, &into) {
                     (Some(to), Some(into)) => {
@@ -153,11 +176,10 @@ impl Coordinator {
                 order_uninstalls(state, &wanted);
                 Ok(entries)
             })
-            .map_err(|refused| {
+            .inspect_err(|_: &Refusal| {
                 if let Err(why) = store.set_membership(&enrolled, previous) {
                     tracing::error!(%why, node_id = %host, "a host's group could not be written back: it stays in the group it was moved to");
                 }
-                Refusal::from(refused)
             })?;
         fleet.set_marks(self.ops.read(marks_of));
         fleet.regroup(&host, target);

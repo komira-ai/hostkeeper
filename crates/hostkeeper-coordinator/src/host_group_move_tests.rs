@@ -10,6 +10,8 @@ use hostkeeper_proto::hostkeeper::operator::v1::HostGroupsRefusal as Refusal;
 use crate::host_groups_support::{
     REASON, SELF, World, body, cancelled, coordinator_on, move_of, operator_entry, put_of,
 };
+use crate::maintenance_calls_tests::{edit_runs, host_at, kept, run_of};
+use crate::maintenance_runs::Step;
 use crate::marks_support::operator;
 use crate::operator::{Caller, entry_proto};
 use crate::ops::AuditEntry;
@@ -470,4 +472,89 @@ fn a_host_in_no_group_is_refused_a_move_to_none_and_moves_in_without_uninstalls(
     world.beat("d1", &[SELF, "svc", "extra"]);
     world.move_to("d1", "alpha").expect("moved");
     assert_eq!(world.intents(), []);
+}
+
+/// Proves: a host whose row in a maintenance run stands at a step of its turn (staging, draining,
+/// applying, rebooting, checking, putting back, halted, not back) is refused a move as
+/// `host_in_maintenance`, with its record, the operations state and the audit as they were; a host
+/// whose row waits, is done, deferred, not reached or skipped is moved.
+///
+/// Catches: a host's group changed under the update it is being given (its drained services put
+/// back by the wrong group's rules), or a host refused a move while it only waits for its turn.
+#[test]
+fn a_host_in_its_turn_is_refused_host_in_maintenance() {
+    let world = World::new("hg-move-in-turn");
+    world.enroll("d1");
+    world.put("alpha", &[SELF], None).expect("put");
+    world.put("beta", &[SELF], None).expect("put");
+    world.move_to("d1", "alpha").expect("moved");
+    for step in [
+        Step::Staging,
+        Step::Draining,
+        Step::Applying,
+        Step::Rebooting,
+        Step::Checking,
+        Step::PuttingBack,
+        Step::Halted,
+        Step::NotBack,
+    ] {
+        edit_runs(&world, |runs| {
+            *runs = vec![run_of("r1", vec![host_at("d1", "alpha", step, 0, &[])])];
+        });
+        let before = kept(&world);
+
+        assert_eq!(
+            world.move_to("d1", "beta").expect_err("in its turn"),
+            Refusal::HostInMaintenance,
+            "{step:?}"
+        );
+
+        assert_eq!(kept(&world), before, "{step:?}");
+    }
+    for step in [
+        Step::Waiting,
+        Step::Done,
+        Step::Deferred,
+        Step::NotReached,
+        Step::Skipped,
+    ] {
+        edit_runs(&world, |runs| {
+            *runs = vec![run_of("r1", vec![host_at("d1", "alpha", step, 0, &[])])];
+        });
+
+        world.move_to("d1", "beta").expect("moved");
+        assert_eq!(world.membership("d1").host_group, "beta", "{step:?}");
+        world.move_to("d1", "alpha").expect("moved back");
+    }
+}
+
+/// Proves: a turn that starts after the call read the operations state, before its change is
+/// applied, still refuses the move as `host_in_maintenance`: the host's record is written back as
+/// it was and no `host_move` entry is audited.
+///
+/// Catches: a move checked only on an early read, which a heartbeat of another coordinator
+/// starting the host's turn in between would pass.
+#[test]
+fn a_turn_started_before_the_change_is_applied_refuses_the_move() {
+    let world = World::new("hg-move-turn-race");
+    world.enroll("d1");
+    world.put("alpha", &[SELF], None).expect("put");
+    world.put("beta", &[SELF], None).expect("put");
+    world.move_to("d1", "alpha").expect("moved");
+    let group = world.membership("d1");
+    let audited = world.audit().len();
+    world.coordinator().ops().interleave(|state| {
+        state.maintenance_runs.push(run_of(
+            "r1",
+            vec![host_at("d1", "alpha", Step::Staging, 0, &[])],
+        ));
+    });
+
+    assert_eq!(
+        world.move_to("d1", "beta").expect_err("in its turn"),
+        Refusal::HostInMaintenance
+    );
+
+    assert_eq!(world.membership("d1"), group);
+    assert_eq!(world.audit().len(), audited);
 }
