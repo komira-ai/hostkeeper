@@ -13,7 +13,8 @@
 //! 3. `fdesetup list` must hold a line `<name>,<uuid>` whose name is the update account's,
 //!    exactly, else `filevault_not_ready`: only a FileVault user can authorise the restart.
 //! 4. The account's password must go in a property list as it is: UTF-8, with no control
-//!    character but a tab (XML would refuse one, or read a carriage return as a line feed), else
+//!    character but a tab and neither U+FFFE nor U+FFFF (XML would refuse one, or read a carriage
+//!    return as a line feed), else
 //!    `filevault_not_ready`. Then [`Restart::Authenticated`].
 //!
 //! **The property list** ([`RestartPlist`]) is Apple's XML layout, one tab per level, a
@@ -137,7 +138,8 @@ impl fmt::Debug for RestartPlist {
     }
 }
 
-/// `text` escaped for an XML string, or `None` when it holds a control character but a tab.
+/// `text` escaped for an XML string, or `None` when it holds a control character but a tab, or
+/// U+FFFE or U+FFFF, which XML 1.0 refuses too.
 fn escaped(text: &str) -> Option<String> {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
@@ -148,6 +150,7 @@ fn escaped(text: &str) -> Option<String> {
             '"' => out.push_str("&quot;"),
             '\'' => out.push_str("&apos;"),
             '\t' => out.push(c),
+            '\u{FFFE}' | '\u{FFFF}' => return None,
             c if c.is_control() => return None,
             c => out.push(c),
         }

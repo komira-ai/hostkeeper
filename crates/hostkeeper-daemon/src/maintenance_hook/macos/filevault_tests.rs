@@ -213,8 +213,9 @@ fn an_account_that_is_not_a_filevault_user_is_refused_before_any_install_program
 
 /// Proves: with FileVault on, `fdesetup supportsauthrestart` saying `false`, or anything but
 /// `true`, fails `filevault_not_ready` before `fdesetup list` is asked; FileVault in no state
-/// `fdesetup status` names fails it before `supportsauthrestart` is; a FileVault look that fails
-/// fails `macos_look_failed`, naming it; none lists, keeps or installs anything.
+/// `fdesetup status` names fails it before `supportsauthrestart` is; each of the three FileVault
+/// looks that fails (`status`, `supportsauthrestart`, `list`) fails `macos_look_failed`, naming
+/// it, and asks nothing after it; none lists, keeps or installs anything.
 ///
 /// Catches: an authenticated restart asked of a Mac that cannot make one, a Mac in an unknown
 /// state read as on or off, or a failed look read as a FileVault user.
@@ -245,7 +246,35 @@ fn a_mac_that_cannot_restart_authenticated_is_refused_before_anything_is_listed(
     );
     assert_eq!(mac.effects(), ["run /usr/bin/fdesetup status"]);
 
+    mac.look(FDESETUP, &["status"], Ok(LaunchctlOutput::exit(1, "busy")));
+    assert_eq!(
+        apply.cutover(&params(false)).map(|_| ()),
+        failure(
+            REASON_LOOK_FAILED,
+            "fdesetup status failed with exit code 1: busy"
+        )
+    );
+    assert_eq!(mac.effects(), ["run /usr/bin/fdesetup status"]);
     mac.look(FDESETUP, &["status"], ok(FILEVAULT_ON));
+    mac.look(
+        FDESETUP,
+        &["supportsauthrestart"],
+        Ok(LaunchctlOutput::exit(1, "busy")),
+    );
+    assert_eq!(
+        apply.cutover(&params(false)).map(|_| ()),
+        failure(
+            REASON_LOOK_FAILED,
+            "fdesetup supportsauthrestart failed with exit code 1: busy"
+        )
+    );
+    assert_eq!(
+        mac.effects(),
+        [
+            "run /usr/bin/fdesetup status",
+            "run /usr/bin/fdesetup supportsauthrestart",
+        ]
+    );
     mac.look(FDESETUP, &["supportsauthrestart"], ok("true\n"));
     mac.look(
         FDESETUP,
@@ -342,7 +371,8 @@ fn a_failing_authrestart_or_install_fails_naming_the_step_and_exit_code_alone() 
 }
 
 /// Proves: with FileVault on, a password a property list cannot carry (a carriage return, which
-/// XML reads as a line feed; a byte that is not UTF-8) fails `filevault_not_ready` at the
+/// XML reads as a line feed; a byte that is not UTF-8; U+FFFE or U+FFFF, which XML refuses)
+/// fails `filevault_not_ready` at the
 /// `cutover` after the FileVault looks, before `sw_vers`; and a password changed to one after
 /// the plan was kept fails the restart the same way before `softwareupdate` runs. No detail holds
 /// a byte of it.
@@ -357,6 +387,14 @@ fn a_password_the_plist_cannot_carry_is_refused_before_anything_is_installed() {
     for (name, bad) in [
         ("macos-filevault-password-cr", &b"pass\rword"[..]),
         ("macos-filevault-password-utf8", &b"pass\xffword"[..]),
+        (
+            "macos-filevault-password-fffe",
+            "pass\u{FFFE}word".as_bytes(),
+        ),
+        (
+            "macos-filevault-password-ffff",
+            "pass\u{FFFF}word".as_bytes(),
+        ),
     ] {
         let files = Files::new(name);
         password(&files, bad);

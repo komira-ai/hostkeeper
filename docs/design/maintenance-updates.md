@@ -505,7 +505,7 @@ drain was never asked for is never held.
   supportsauthrestart` says yes. The macOS installer app of a major upgrade is removed by `verify` once it passes.
   (Built in the daemon: `crates/hostkeeper-daemon/src/maintenance_hook/macos/filevault.rs`. The `cutover` asks `fdesetup status`;
   off, nothing more. On, `fdesetup supportsauthrestart` must say `true` and `fdesetup list` must name the update account, and its
-  password must go in a plist (UTF-8, no control character but a tab), else `filevault_not_ready` before anything is listed; as it is
+  password must go in a plist (UTF-8, no control character but a tab, neither U+FFFE nor U+FFFF), else `filevault_not_ready` before anything is listed; as it is
   for FileVault being turned on or off. The plan keeps `"authrestart": true`; the restart runs `softwareupdate --install <label>
   --agree-to-license --user <account> --stdinpass` and, once it exits 0, `fdesetup authrestart -inputplist`, the plist of `Username`
   and `Password` on its standard input alone, failing `filevault_authrestart_failed` by the step and exit code alone. A major upgrade
