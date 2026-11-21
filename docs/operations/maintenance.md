@@ -460,6 +460,12 @@ with `build.json` the group as `get` answered it, its `maintenance` changed:
   "restart" in the form) on a host that also has a `linux` item: its apply restarts the host when
   `/run/reboot-required` or a newer kernel says so, and its check fails unless the host came back
   on the newest kernel. A host whose only due item is a restart cannot be restarted by a run yet.
+- **A new package due under the `security` scope halts the check.** The look reports a package the
+  upgrade would newly install (an item with no `from`: a new `linux-image-<version>`, a new
+  library) as due. Under `security` the apply installs only packages already installed, so such a
+  package arrives only when a meta-package the apply names depends on it. When none does, the check
+  finds it still due and the host halts `update_due`; put it back. The farm's Ubuntu 24.04 nodes
+  report two such packages ([maintenance-first-linux-run.md](maintenance-first-linux-run.md)).
 - **The Console link of the runs view.** The **Console** button on a rebooting or not-back host's
   row does not open the Console page in this release; open it from the server's row in Home's List
   view.
