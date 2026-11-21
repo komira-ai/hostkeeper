@@ -171,9 +171,9 @@ hostkeeper-package = { path = "../hostkeeper-package" }
 workspace = true
 
 [package.metadata.buildrules]
-# The farm lane's `//:ci` (docs/farm.md) builds and lints this package but does not run its tests.
+# The farm lane's `//:ci` (docs/farm.md) checks the format of, builds and lints this package but does not run its tests.
 # Its tests read the git checkout (the workflows, AGENTS.md, every Cargo.toml) and run git, cargo, bash and jq,
 # none of which a farm action has: they run in ci.yml alone (docs/farm.md).
 
 [package.metadata.buildrules.actions]
-ci = ["lint"]
+ci = ["fmt", "lint"]

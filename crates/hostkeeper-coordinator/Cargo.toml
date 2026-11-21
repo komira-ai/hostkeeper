@@ -116,9 +116,9 @@ tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-th
 workspace = true
 
 [package.metadata.buildrules]
-# The farm lane's `//:ci` (docs/farm.md) builds and lints this package but does not run its tests.
-# Its store tests need a Postgres server (HOSTKEEPER_TEST_POSTGRES_URL), which a farm action does not have
-# until buildrules gives a test one: its tests run in ci.yml alone until then (docs/farm.md).
+# The Buck2 build's policy for this package (docs/farm.md): the workspace's, and a private Postgres
+# for every test, its URL in the variable the store tests read (hostkeeper-testkit's
+# POSTGRES_URL_VAR), as ci.yml's service container gives them one.
 
-[package.metadata.buildrules.actions]
-ci = ["lint"]
+[package.metadata.buildrules.postgres]
+url-env = "HOSTKEEPER_TEST_POSTGRES_URL"

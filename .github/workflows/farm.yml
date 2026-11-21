@@ -5,8 +5,8 @@
 # tests in ci.yml (docs/farm.md says which and why).
 #
 # It is additive and advisory. ci.yml stays the pull-request gate: its tests run under coverage, the
-# 99% gate is there, and so are the tests the farm cannot run (the coordinator's Postgres tests, the
-# tests that read the git checkout or run cargo, git or a shell). A farm outage turns this check
+# 99% gate is there, and so are the tests the farm cannot run (the tests that read the git checkout,
+# run as root, or run cargo, git, ssh or a shell). A farm outage turns this check
 # red and blocks nothing; a fix to the farm itself is built and tested by ci.yml alone.
 #
 # The farm is reached through komira's farm-connect action, pinned by commit (komira tags no

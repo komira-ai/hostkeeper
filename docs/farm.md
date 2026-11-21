@@ -9,16 +9,18 @@ request from a branch of this repository, and no check of it is required.
 
 ## Status
 
-The buildrules commit `.buckconfig` pins (2391d31, release v0.0.76) cannot yet analyse this workspace: two gaps of
-its Rust rules, komira-ai/buildrules#160 items 1 and 2, fail every target at load. Until a
-buildrules release has them, `farm.yml` is red at that step. That changes nothing for a pull
+`.buckconfig` pins buildrules at its main (7dfc5c2), which has the rustfmt check, the Postgres
+fixture for tests and the build-commit stamp this lane uses. It cannot yet analyse this workspace:
+two gaps of its Rust rules, komira-ai/buildrules#160 items 1 and 2, fail every target at load.
+Until a buildrules commit has them, `farm.yml` is red at that step. That changes nothing for a pull
 request, which ci.yml gates. The numbers below were measured with those two changes applied. Each
 other item of that issue is met here by declaring the file in `extra_srcs`, or, for `CARGO`, by
 reading it with `option_env!` in the two tests that run cargo.
 
 ## What it builds
 
-`buck2 build //:ci`: for every member of the workspace, its `:lint` (clippy over the library, the
+`buck2 build //:ci`: for every member of the workspace, its `:fmt` (the pinned `rustfmt --check`
+over the files `cargo fmt` reads, with `rustfmt.toml`), its `:lint` (clippy over the library, the
 binaries and every test target, with `[workspace.lints]` and `clippy.toml`, warnings as errors)
 and, for the members listed below as farm-tested, its `:test`. A test target runs as a build
 action: its `.passed` marker exists only if every test of the target passed, and a cached marker
@@ -43,18 +45,20 @@ After a change to a manifest or the lock, run `buildrules sync` and commit what 
 
 ## What stays in ci.yml, and why
 
-`//:ci` runs the tests of 28 of the 33 members: `coverage-gate`, `hostkeeper`,
-`hostkeeper-bootstrap`, `-config`, `-console`, `-daemon`, `-enroll`, `-enrollment`, `-install`,
+`//:ci` runs the tests of 29 of the 33 members: `coverage-gate`, `hostkeeper`,
+`hostkeeper-bootstrap`, `-config`, `-console`, `-coordinator`, `-daemon`, `-enroll`, `-enrollment`, `-install`,
 `-launchd`, `-link`, `-measure`, `-observe`, `-oidc`, `-openrc`, `-package`, `-placed`, `-proto`,
 `-pxe`, `-pxe-packets`, `-pxe-seed`, `-release`, `-steps`, `-testkit`, `-tls`, `-ui-tests`,
 `-wire` and `examples/hello`. A farm action has its declared inputs and nothing else: no network,
-no `PATH` but buildrules' busybox, no git checkout, not root. The other five members are built
-and linted there, and their tests run in ci.yml (or as root in privileged.yml and pr-device.yml)
-alone; each says so in its `[package.metadata.buildrules.actions]` (`ci = ["lint"]`):
+no `PATH` but buildrules' busybox, no git checkout, not root. The coordinator's tests get a
+private Postgres for each test target from buildrules (`[package.metadata.buildrules.postgres]`,
+its URL in `HOSTKEEPER_TEST_POSTGRES_URL`, as ci.yml's service container gives it), on a Unix socket
+in the action's own directory. The other four members are format-checked, built and linted there,
+and their tests run in ci.yml (or as root in privileged.yml and pr-device.yml) alone; each says so
+in its `[package.metadata.buildrules.actions]` (`ci = ["fmt", "lint"]`):
 
 | member | why its tests stay hosted |
 |---|---|
-| `hostkeeper-coordinator` | its store tests need a Postgres server (`HOSTKEEPER_TEST_POSTGRES_URL`) and never skip; they join `//:ci` once buildrules gives a test one |
 | `hostkeeper-hk` | its ssh tests run `ssh`, `ssh-agent`, `ssh-add` and `ssh-keygen` |
 | `hostkeeper-hook` | its outside-consumer test builds a crate with cargo against crates.io |
 | `hostkeeper-privileged` | its tests run as root against systemd, OpenRC, Docker and apt |
@@ -76,6 +80,13 @@ library that includes a test fixture, a test that includes a library file, a bui
 compiles `proto/`, a `[[bin]]` under `tests/bin`, and a test that reads `docs/`, `packaging/` or
 another member's fixtures each name the file or directory. A file read by another member is
 exported by reference in its owner's BUCK file (or the root `BUCK`), so it stays at its path.
+
+The coordinator's `build.rs` stamps the commit it reads with `git` (`HOSTKEEPER_BUILD_COMMIT`),
+and a farm action has no `git`. Its BUCK file gives that value as an input instead, the file
+`crates/hostkeeper-coordinator/build_commit.txt` (buildrules' `stamp_rustc_env`). The committed
+text is `unknown`, what `build.rs` says for a source archive, so the coordinator's units keep one
+cache key from commit to commit. A build that wants the commit in `--version` writes its 12 hex
+digits there first. Releases are cargo's and stamp `RELEASE_COMMIT` as before.
 
 ## Running it yourself
 

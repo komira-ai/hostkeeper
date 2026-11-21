@@ -46,9 +46,9 @@ hostkeeper-testkit = { path = "../hostkeeper-testkit" }
 workspace = true
 
 [package.metadata.buildrules]
-# The farm lane's `//:ci` (docs/farm.md) builds and lints this package but does not run its tests.
+# The farm lane's `//:ci` (docs/farm.md) checks the format of, builds and lints this package but does not run its tests.
 # Its outside-consumer test builds a crate with cargo against crates.io, which a farm action cannot:
 # its tests run in ci.yml alone (docs/farm.md).
 
 [package.metadata.buildrules.actions]
-ci = ["lint"]
+ci = ["fmt", "lint"]
