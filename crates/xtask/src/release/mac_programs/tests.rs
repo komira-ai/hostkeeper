@@ -22,7 +22,10 @@ fn the_requirement_names_the_identifier_and_the_team_and_no_hash() {
     for program in MAC_PROGRAMS {
         let requirement = program.requirement();
         assert!(!requirement.contains("cdhash"), "{requirement}");
-        assert!(requirement.ends_with(&format!("= {TEAM_ID}")), "{requirement}");
+        assert!(
+            requirement.ends_with(&format!("= {TEAM_ID}")),
+            "{requirement}"
+        );
     }
 }
 

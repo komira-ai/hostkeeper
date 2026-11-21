@@ -365,6 +365,41 @@ What it proves: the binary was built from the pinned commit and reports the vers
 
 Refuse when: the output differs in any character.
 
+### 7. A macOS program's signature (macOS only)
+
+The Mach-O programs of the macos-arm64 release (`hostkeeper`, `hk`, `hello` and the bootstrap
+program) are signed with the Developer ID Application identity `Developer ID Application: Komira AI,
+Inc. (U7RTX4XD3X)`, under a stable identifier, with the hardened runtime and a trusted timestamp
+(docs/macos.md, "The programs' signature"); `gh` inside the installer pkg is GitHub's, signed as
+GitHub shipped it. On a Mac, after unpacking `hostkeeper` from its tarball (or from the pkg's
+payload, `pkgutil --expand-full <pkg> <dir>`):
+
+```sh
+codesign --verify --strict --verbose=2 ./hostkeeper
+codesign --display --verbose=2 ./hostkeeper
+codesign --display --requirements - ./hostkeeper
+```
+
+Expected: the first exits 0; the second shows `Identifier=dev.hostkeeper.hostkeeper`,
+`TeamIdentifier=U7RTX4XD3X`, the `Authority=` lines `Developer ID Application: Komira AI, Inc.
+(U7RTX4XD3X)`, `Developer ID Certification Authority` and `Apple Root CA` in that order, a
+`Timestamp=` line, and `flags=0x10000(runtime)` on the `CodeDirectory` line; the third prints,
+exactly, the line
+
+```
+designated => identifier "dev.hostkeeper.hostkeeper" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = U7RTX4XD3X
+```
+
+The identifiers of the other programs are `dev.hostkeeper.hk`, `dev.hostkeeper.hello` and
+`dev.hostkeeper.bootstrap`; each requirement is the same text with its identifier. The release runs
+the same reading, `cargo xtask release check-code-signature <binary> --program <name>`, on the
+programs of its tarballs and pkgs before it publishes them. The programs are not notarized.
+
+What it proves: the program was signed by the release's Team ID under the identifier a privacy
+profile names it by, and the requirement pins no hash of one build.
+
+Refuse when: a command exits other than 0, the signature is ad hoc, or any line differs.
+
 ## What the release workflow runs
 
 Before anything is published, the `verify` job of `release.yml`, on the files of the commit's

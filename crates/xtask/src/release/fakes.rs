@@ -706,6 +706,45 @@ impl Exec for FakeExec {
     }
 }
 
+/// A `codesign` that answers every program the same: what `--verify`, `--display` and
+/// `--display --requirements -` printed. Each call is recorded as `<verb> <binary>`.
+#[derive(Default)]
+pub(crate) struct FakeCodeSign {
+    pub(crate) verify: Option<Result<super::ports::Codesigned, PortError>>,
+    pub(crate) display: Option<Result<super::ports::Codesigned, PortError>>,
+    pub(crate) requirements: Option<Result<super::ports::Codesigned, PortError>>,
+    pub(crate) calls: RefCell<Vec<String>>,
+}
+
+impl FakeCodeSign {
+    fn answer(
+        &self,
+        verb: &str,
+        binary: &Path,
+        said: &Option<Result<super::ports::Codesigned, PortError>>,
+    ) -> Result<super::ports::Codesigned, PortError> {
+        self.calls
+            .borrow_mut()
+            .push(format!("{verb} {}", binary.display()));
+        said.clone()
+            .unwrap_or_else(|| Err(PortError::new("codesign", "not scripted")))
+    }
+}
+
+impl super::ports::CodeSign for FakeCodeSign {
+    fn verify(&self, binary: &Path) -> Result<super::ports::Codesigned, PortError> {
+        self.answer("verify", binary, &self.verify)
+    }
+
+    fn display(&self, binary: &Path) -> Result<super::ports::Codesigned, PortError> {
+        self.answer("display", binary, &self.display)
+    }
+
+    fn requirements(&self, binary: &Path) -> Result<super::ports::Codesigned, PortError> {
+        self.answer("requirements", binary, &self.requirements)
+    }
+}
+
 /// A registry whose answers are scripted, one per call in order: each `copy` takes the next of
 /// `copies` and each `served` the next of `served` (none left: the call fails). Each call is
 /// recorded as `copy <layout> <tag> <repository>` or `served <repository>@<digest>`.
@@ -762,6 +801,7 @@ pub(crate) struct Fakes {
     pub(crate) verifier: FakeVerifier,
     pub(crate) run_version: FakeRunVersion,
     pub(crate) pkgbuild: FakePkgbuild,
+    pub(crate) codesign: FakeCodeSign,
     pub(crate) advisories: FakeAdvisories,
     pub(crate) registry: FakeRegistry,
     pub(crate) wait: FakeWait,
@@ -786,6 +826,7 @@ impl Fakes {
                 },
             },
             pkgbuild: FakePkgbuild::default(),
+            codesign: FakeCodeSign::default(),
             advisories: FakeAdvisories {
                 said: Said {
                     success: true,
@@ -808,6 +849,7 @@ impl Adapters for Fakes {
             verifier: &self.verifier,
             run_version: &self.run_version,
             pkgbuild: &self.pkgbuild,
+            codesign: &self.codesign,
             advisories: &self.advisories,
             registry: &self.registry,
             wait: &self.wait,

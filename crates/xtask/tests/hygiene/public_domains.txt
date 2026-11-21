@@ -237,3 +237,7 @@ span.mini
 # (crates/hostkeeper-daemon/src/maintenance_hook/xcode/stage.rs and its tests).
 =xcode.app
 =xcode-beta.app
+
+# The code-signing identifier of the `hk` program (xtask's mac_programs.rs): a reverse-DNS name
+# that ends in the top-level domain `.hk`, not a site.
+=dev.hostkeeper.hk

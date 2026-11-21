@@ -32,6 +32,10 @@
 //!   that Apple Business installs on a new Mac (docs/design/mac-bootstrap.md): the bootstrap
 //!   program, its launchd plist and a postinstall that loads the job, and the check of the pkg
 //!   read back.
+//! - `check-code-signature` ([`code_signature`]): a built Mach-O program is signed by the Developer
+//!   ID Application identity under its stable identifier, with the hardened runtime and a trusted
+//!   timestamp, and has the designated requirement of [`mac_programs`]'s table, read back from
+//!   `codesign`.
 //! - `compare-images` ([`compare_images`]): two OCI image tarballs are byte for byte equal.
 //! - `image-index`, `image-layout` ([`image_index`]): the coordinator's multi-platform image
 //!   index, made of the two image tarballs, and the OCI layout a registry push copies from.
@@ -66,6 +70,7 @@
 pub(crate) mod check;
 mod check_binary;
 mod check_image_ui;
+mod code_signature;
 pub(crate) mod compare_images;
 pub(crate) mod contract;
 #[cfg(test)]
@@ -396,6 +401,17 @@ pub(crate) enum Verb {
         #[arg(long)]
         identity: String,
     },
+    /// Refuse a Mach-O program unless `codesign` says it is signed by the Developer ID Application
+    /// identity under the stable identifier of `--program` (a binary name of the release's table),
+    /// with the hardened runtime and a secure timestamp, verifies strictly, and has the program's
+    /// designated requirement exactly. Every problem is named.
+    CheckCodeSignature {
+        /// The program to read.
+        binary: PathBuf,
+        /// The program's name in the table: hostkeeper, hk, hello or hostkeeper-bootstrap.
+        #[arg(long)]
+        program: String,
+    },
     /// Refuse two OCI image tarballs unless they are byte for byte equal.
     CompareImages { a: PathBuf, b: PathBuf },
     /// Write hostkeeper-coordinator-<version>.image.json into `dir`: the OCI image index
@@ -678,6 +694,9 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
         } => check_binary::check_binary(ports.run_version, &binary, &version, &commit),
         Verb::CheckPkgSignature { pkg, identity } => {
             pkg_signature::check(ports.pkgbuild, &pkg, &identity)
+        }
+        Verb::CheckCodeSignature { binary, program } => {
+            code_signature::check(ports.codesign, &binary, &program)
         }
         Verb::MacosPkg {
             service,
