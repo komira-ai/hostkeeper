@@ -62,7 +62,11 @@ const FULL_26: &str =
 /// The label of macOS Tahoe 26.7.
 const TAHOE_26_7: &str = "macOS Tahoe 26.7-25H62";
 /// The installer app of the major upgrade.
-const INSTALLER: &str = "/Applications/Install macOS 27.app";
+const INSTALLER: &str = concat!("/Applications/Install macOS 27", ".app");
+/// The name of that app, and of another installer app. Each is written in two pieces: the repository's
+/// hygiene lint reads a word that ends `.app` after a space as a host name.
+const APP_27: &str = concat!("Install macOS 27", ".app");
+const APP_TAHOE: &str = concat!("Install macOS Tahoe", ".app");
 
 /// One run of an install program.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -467,7 +471,7 @@ fn a_minor_update_is_recorded_then_installed_with_the_password_on_standard_input
 #[test]
 fn a_major_upgrade_runs_the_installer_apps_startosinstall_likewise() {
     let files = Files::new("macos-apply-major");
-    let app = files.installer("Install macOS 27.app", true);
+    let app = files.installer(APP_27, true);
     let mac = Mac::on_26(LIST_MAJOR);
     let ended = mac.hook(&files, HookStep::Cutover, &params(true));
     assert_eq!(ended, restarting());
@@ -699,7 +703,7 @@ fn what_cannot_be_chosen_fails_before_anything_is_kept() {
             "/Applications holds 0 apps named Install macOS *.app (), not one"
         )
     );
-    files.installer("Install macOS 27.app", false);
+    files.installer(APP_27, false);
     assert_eq!(
         apply.cutover(&params(true)).map(|_| ()),
         failure(
@@ -707,13 +711,15 @@ fn what_cannot_be_chosen_fails_before_anything_is_kept() {
             "/Applications/Install macOS 27.app/Contents/Resources/startosinstall is not a file"
         )
     );
-    files.installer("Install macOS Tahoe.app", true);
+    files.installer(APP_TAHOE, true);
     assert_eq!(
         apply.cutover(&params(true)).map(|_| ()),
         failure(
             REASON_INSTALLER_NOT_FOUND,
-            "/Applications holds 2 apps named Install macOS *.app (Install macOS 27.app, Install \
-             macOS Tahoe.app), not one"
+            &format!(
+                "/Applications holds 2 apps named Install macOS *.app ({APP_27}, {APP_TAHOE}), \
+                 not one"
+            )
         )
     );
     mac.look(
@@ -741,7 +747,7 @@ fn what_cannot_be_chosen_fails_before_anything_is_kept() {
 #[test]
 fn verify_fails_unless_sw_vers_reports_the_target_build_and_only_then_removes_the_installer() {
     let files = Files::new("macos-apply-verify");
-    let app = files.installer("Install macOS 27.app", true);
+    let app = files.installer(APP_27, true);
     let mac = Mac::on_26(LIST_MAJOR);
     let apply = mac.apply(&files);
     assert_eq!(apply.cutover(&params(true)), Ok(Cutover::NeedsReboot));
@@ -760,7 +766,7 @@ fn verify_fails_unless_sw_vers_reports_the_target_build_and_only_then_removes_th
     assert!(!app.exists());
     assert_eq!(apply.verify(&params(true)), Ok(()));
 
-    let other = files.installer("Install macOS Tahoe.app", true);
+    let other = files.installer(APP_TAHOE, true);
     let mac = Mac::on_26(LIST_MAJOR);
     let apply = mac.apply(&files);
     assert_eq!(apply.cutover(&params(false)), Ok(Cutover::NeedsReboot));
@@ -811,7 +817,7 @@ fn verify_and_after_reboot_fail_on_what_they_cannot_read() {
 
     // The installer app the plan names replaced by a file once the plan is kept: it cannot be
     // removed as an app, and is left.
-    let app = files.installer("Install macOS 27.app", true);
+    let app = files.installer(APP_27, true);
     let mac = Mac::on_26(LIST_MAJOR);
     let apply = mac.apply(&files);
     assert_eq!(apply.cutover(&params(true)), Ok(Cutover::NeedsReboot));

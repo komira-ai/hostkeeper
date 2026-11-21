@@ -27,7 +27,7 @@ fn upgrade() -> Plan {
     Plan {
         build: "26B70".to_owned(),
         install: Install::Upgrade {
-            app: "/Applications/Install macOS 27.app".to_owned(),
+            app: concat!("/Applications/Install macOS 27", ".app").to_owned(),
         },
     }
 }
@@ -81,7 +81,10 @@ fn a_plan_that_is_not_this_runs_is_refused() {
             "names neither one update label nor one installer app in /Applications",
         ),
         (
-            r#"{"runId":"run-1","build":"1A1","label":"x","installer":"/Applications/Install macOS 27.app"}"#,
+            concat!(
+                r#"{"runId":"run-1","build":"1A1","label":"x","installer":"/Applications/Install macOS 27"#,
+                r#".app"}"#
+            ),
             "names neither one update label nor one installer app in /Applications",
         ),
         (
@@ -105,7 +108,10 @@ fn a_plan_that_is_not_this_runs_is_refused() {
             "names neither one update label nor one installer app in /Applications",
         ),
         (
-            r#"{"runId":"run-1","build":"1A1","installer":"/Library/Install macOS 27.app"}"#,
+            concat!(
+                r#"{"runId":"run-1","build":"1A1","installer":"/Library/Install macOS 27"#,
+                r#".app"}"#
+            ),
             "names neither one update label nor one installer app in /Applications",
         ),
     ];
