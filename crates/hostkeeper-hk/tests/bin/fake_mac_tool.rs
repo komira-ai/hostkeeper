@@ -1,8 +1,11 @@
-//! A stand-in for `xcodes`, `pkgutil`, `xip` and `plutil` in the tests of `hk xcode-push`, by the
-//! name of the file it is run as, `<dir>/<name>`. Every run appends its arguments, joined by tabs,
-//! as one line to `<dir>/<name>.args` and its environment, `NAME=value` a line, to
-//! `<dir>/<name>.env`; prints `<dir>/<name>.out` when there is one; and exits with the number in
-//! `<dir>/<name>.exit` (0 without it). Besides:
+//! A stand-in for `xcodes`, `pkgutil`, `xip` and `plutil` in the tests of `hk xcode-push`, and for
+//! `tailscale` in those of `hk tailnet-wait`, by the name of the file it is run as,
+//! `<dir>/<name>`. Every run appends its arguments, joined by tabs, as one line to
+//! `<dir>/<name>.args` and its environment, `NAME=value` a line, to `<dir>/<name>.env`; prints
+//! `<dir>/<name>.out` when there is one, and `<dir>/<name>.<first argument>.err` to stderr when
+//! there is one; never ends when `<dir>/<name>.<first argument>.hang` exists; and exits with the
+//! number in `<dir>/<name>.<first argument>.exit`, else in `<dir>/<name>.exit` (0 without
+//! either). Besides:
 //!
 //! - `xcodes download <version> --directory <into>` copies `<dir>/xcodes.xip`, when there is one,
 //!   to `<into>/Xcode-<version>.xip`;
@@ -53,6 +56,17 @@ fn run() -> std::io::Result<u8> {
     if let Ok(out) = std::fs::read(at("out")) {
         std::io::stdout().write_all(&out)?;
     }
+    let first = args.first().map(String::as_str).unwrap_or_default();
+    let of_verb = |suffix: &str| dir.join(format!("{name}.{first}.{suffix}"));
+    if let Ok(err) = std::fs::read(of_verb("err")) {
+        std::io::stderr().write_all(&err)?;
+    }
+    if of_verb("hang").exists() {
+        // Until it is killed.
+        loop {
+            std::thread::park();
+        }
+    }
     let words: Vec<&str> = args.iter().map(String::as_str).collect();
     match (name.as_str(), words.as_slice()) {
         ("xcodes", ["download", version, "--directory", into]) => {
@@ -97,7 +111,8 @@ fn run() -> std::io::Result<u8> {
         }
         _ => {}
     }
-    let code = std::fs::read_to_string(at("exit"))
+    let code = std::fs::read_to_string(of_verb("exit"))
+        .or_else(|_| std::fs::read_to_string(at("exit")))
         .ok()
         .and_then(|text| text.trim().parse().ok())
         .unwrap_or(0);

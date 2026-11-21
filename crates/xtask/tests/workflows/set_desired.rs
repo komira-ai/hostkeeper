@@ -41,9 +41,16 @@
 //!   `continue-on-error`, it comes before a check of [`VERIFY_STEPS`] or after [`CLIENT_STEP`],
 //!   its `uses:` is not [`JOIN_ACTION`] at a 40-digit lowercase commit SHA, it names `secrets.`
 //!   anywhere or passes a stored credential ([`STORED_CREDENTIALS`]), its `with:` does not give
-//!   each of [`JOIN_WITH`] exactly, or it does not pin the Tailscale tarball by an `X.Y.Z`
-//!   `version` and a 64-digit lowercase `sha256sum`; or a step after the last provenance check
-//!   and before the join uses an action: the join is the first action of the job;
+//!   each of [`JOIN_WITH`] exactly, passes `ping` in any case (the action's ping fails the job on one missed
+//!   answer), or it does not pin the Tailscale tarball by an `X.Y.Z` `version` and a 64-digit
+//!   lowercase `sha256sum`; or a step after the last provenance check and before the join uses an
+//!   action: the join is the first action of the job;
+//! - the wait for the coordinator after the join, [`REACH_STEP`], is missing or there twice, its
+//!   `if:` is not [`JOIN_IF`] (it runs exactly when the join does), it comes before the join or
+//!   the `ca` step whose file it reads, or after [`CLIENT_STEP`], its `env` is not exactly
+//!   [`REACH_ENV`], or its `run:` is not the one command [`REACH_RUN`]: hk's `tailnet-wait`,
+//!   which asks the coordinator in bounded attempts and rejoins the tailnet once
+//!   (crates/hostkeeper-hk/src/tailnet_wait);
 //! - the tailnet tag the join passes breaks a rule of [`set_desired_tag`](super::set_desired_tag):
 //!   it is the input `tailnet_tag`, `tag:hk-ci` by default, checked by the step [`TAG_STEP`] (one
 //!   of [`CHECKED`] and [`ORDERED`]) before the join.
@@ -146,14 +153,36 @@ pub const JOIN_IF: &str = "${{ inputs.join_tailnet }}";
 pub const JOIN_ACTION: &str = "tailscale/github-action";
 /// What the join step's `with:` must give, exactly: the federated identity (from the caller's
 /// inputs; neither is a secret), the tag its credential issues (the caller's input, which the
-/// step [`TAG_STEP`] checked), and the coordinator the join pings before it ends (from the
-/// caller's input), so the first call does not race the tailnet's spread of the new node.
+/// step [`TAG_STEP`] checked), and [`JOIN_ARGS`].
 pub const JOIN_WITH: [(&str, &str); 4] = [
     ("oauth-client-id", "${{ inputs.tailnet_client_id }}"),
     ("audience", "${{ inputs.tailnet_audience }}"),
     ("tags", TAG_VALUE),
-    ("ping", "${{ inputs.tailnet_coordinator }}"),
+    ("args", JOIN_ARGS),
 ];
+/// The join's one argument of its own to `tailscale up`: the runner's user (`runner` on a
+/// GitHub-hosted Ubuntu runner) is the node's operator, so that [`REACH_STEP`] can run
+/// `tailscale down` and `tailscale up` without root.
+pub const JOIN_ARGS: &str = "--operator=runner";
+/// The input of the action that pings hosts after the join and fails the job when one does not
+/// answer; the join passes none ([`REACH_STEP`] waits instead).
+pub const JOIN_PING: &str = "ping";
+/// The step that waits, after the join, until the coordinator answers where the calls talk to,
+/// and rejoins the tailnet once when it does not.
+pub const REACH_STEP: &str = "reach";
+/// The words of the one command of [`REACH_STEP`]'s `run:`, quotes removed: the verified hk's
+/// `tailnet-wait` against the coordinator's URL and the CA the `ca` step wrote, with the
+/// command's own number of attempts and wait between them.
+pub const REACH_RUN: [&str; 6] = [
+    PROGRAM,
+    "--endpoint",
+    "$COORDINATOR_URL",
+    "--ca-file",
+    "$RUNNER_TEMP/hk-coordinator-ca.pem",
+    "tailnet-wait",
+];
+/// The `env` of [`REACH_STEP`], exactly: the coordinator the calls talk to.
+pub const REACH_ENV: [(&str, &str); 1] = [("COORDINATOR_URL", "${{ inputs.coordinator_url }}")];
 /// The job's `outputs`, exactly: each from the outputs step, `converged` `false` when that step
 /// wrote nothing.
 pub const JOB_OUTPUTS: [(&str, &str); 3] = [
@@ -425,6 +454,13 @@ fn step_problems(steps: &[Node]) -> Vec<String> {
         Ok(join) => problems.extend(join_problems(steps, join, proven, &index)),
         Err(e) => problems.push(e),
     }
+    match position(steps, REACH_STEP) {
+        Ok(reach) => {
+            let join = position(steps, JOIN_STEP).ok();
+            problems.extend(reach_problems(steps, reach, join, &index));
+        }
+        Err(e) => problems.push(e),
+    }
     for (i, step) in steps.iter().enumerate() {
         let lines = logical_lines(text(step, "run").unwrap_or_default());
         for word in ["while", "until", "for"] {
@@ -643,6 +679,18 @@ fn join_problems(
             problems.push(format!("{who} does not pass `{key}: {want}`"));
         }
     }
+    // In any case: the runner hands the action its inputs case-insensitively.
+    let pings = with.is_some_and(|w| {
+        entries(w).iter().any(|(k, _)| {
+            k.as_str()
+                .is_some_and(|k| k.eq_ignore_ascii_case(JOIN_PING))
+        })
+    });
+    if pings {
+        problems.push(format!(
+            "{who} passes `{JOIN_PING}`, which fails the job when one ping is not answered; the step `{REACH_STEP}` waits for the coordinator"
+        ));
+    }
     let version = given("version").is_some_and(|v| {
         let parts: Vec<&str> = v.split('.').collect();
         parts.len() == 3
@@ -654,6 +702,70 @@ fn join_problems(
     if !(version && sha256) {
         problems.push(format!(
             "{who} does not pin the Tailscale tarball by an `X.Y.Z` `version` and a 64-digit lowercase `sha256sum`"
+        ));
+    }
+    problems
+}
+
+/// What is wrong with the wait for the coordinator, step `reach` of `steps`: its condition, its
+/// place after the join (at `join`, when there is one) and the CA and before the set, its
+/// environment and its one command.
+fn reach_problems(
+    steps: &[Node],
+    reach: usize,
+    join: Option<usize>,
+    index: &dyn Fn(&str) -> Option<usize>,
+) -> Vec<String> {
+    let mut problems = Vec::new();
+    let step = &steps[reach];
+    let who = format!("the wait step `{REACH_STEP}` (step {})", reach + 1);
+    if text(step, "if") != Some(JOIN_IF) {
+        problems.push(format!("{who} does not have `if: {JOIN_IF}`"));
+    }
+    for (id, at) in [(JOIN_STEP, join), ("ca", index("ca"))] {
+        if let Some(at) = at.filter(|&at| at > reach) {
+            problems.push(format!(
+                "{who} comes before the step `{id}` (step {})",
+                at + 1
+            ));
+        }
+    }
+    if let Some(c) = index(CLIENT_STEP).filter(|&c| c < reach) {
+        problems.push(format!(
+            "{who} comes after the OIDC token step `{CLIENT_STEP}` (step {})",
+            c + 1
+        ));
+    }
+    let env: Vec<(&str, &str)> = entry(step, "env")
+        .map(|e| {
+            entries(e)
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        k.as_str().unwrap_or_default(),
+                        v.as_str().unwrap_or_default(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if env != REACH_ENV {
+        problems.push(format!(
+            "{who} does not have exactly the `env` {REACH_ENV:?}"
+        ));
+    }
+    let lines: Vec<String> = logical_lines(text(step, "run").unwrap_or_default())
+        .into_iter()
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+    let one = match lines.as_slice() {
+        [line] => words(line) == REACH_RUN && !line.contains(['&', ';', '|', '>', '<', '`']),
+        _ => false,
+    };
+    if !one {
+        problems.push(format!(
+            "{who} is not the one command `{}`",
+            REACH_RUN.join(" ")
         ));
     }
     problems

@@ -15,7 +15,9 @@
 //!   join, and no repository right, since no step reads the repository;
 //! - a step has a key outside [`STEP_KEYS`], or its steps are not exactly [`STEPS`], in that
 //!   order, each as [`super::desired::step_shape`] writes it: so the tailnet tag is checked
-//!   first, the one action is the pinned tailscale join with the same `with` as the CI client's,
+//!   first, the one action is the pinned tailscale join with the CI client's Tailscale version,
+//!   digest, cache and tag, and no `ping` (an unanswered ping fails the job; curl's wait is the
+//!   one that counts) and no `args` (no step of this job rejoins),
 //!   the CA is written from the repository variable, and the one request is the exact command
 //!   line of [`STEPS`] (a pinned CA, TLS 1.2 or later, HTTPS only, no header, hence no token;
 //!   `--fail`, which writes no body on an HTTP error, so curl can retry a 409 into /dev/null),
@@ -77,7 +79,7 @@ pub const NO_ANSWER_IF: &str = "${{ failure() && steps.wait.outcome == 'failure'
 /// The steps, in order, as [`super::desired::step_shape`] writes them.
 pub const STEPS: [&str; 6] = [
     r#"run jq --null-input --arg tag "$TAILNET_TAG" 'if $tag | test("^tag:[a-z][a-z0-9-]*\\z") then empty else error("tailnet_tag is not tag: followed by a Tailscale tag name (a lower-case letter, then lower-case letters, digits and -)") end' env TAILNET_TAG=${{ vars.HOSTKEEPER_TAILNET_TAG }}"#,
-    "if ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID != '' }} uses tailscale/github-action with audience=${{ vars.HOSTKEEPER_TAILNET_AUDIENCE }} with oauth-client-id=${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID }} with ping=${{ vars.HOSTKEEPER_TAILNET_COORDINATOR }} with sha256sum=c6f99a5d774c7783b56902188d69e9756fc3dddfb08ac6be4cb2585f3fecdc32 with tags=${{ vars.HOSTKEEPER_TAILNET_TAG }} with use-cache=false with version=1.94.2",
+    "if ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID != '' }} uses tailscale/github-action with audience=${{ vars.HOSTKEEPER_TAILNET_AUDIENCE }} with oauth-client-id=${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID }} with sha256sum=c6f99a5d774c7783b56902188d69e9756fc3dddfb08ac6be4cb2585f3fecdc32 with tags=${{ vars.HOSTKEEPER_TAILNET_TAG }} with use-cache=false with version=1.94.2",
     r#"run printf '%s\n' "$COORDINATOR_CA" > "$RUNNER_TEMP/coordinator-ca.pem" env COORDINATOR_CA=${{ vars.HOSTKEEPER_COORDINATOR_CA }}"#,
     r#"run curl --proto =https --tlsv1.2 --cacert "$RUNNER_TEMP/coordinator-ca.pem" --fail --silent --show-error --max-time 20 --retry 180 --retry-delay 10 --retry-max-time 1800 --retry-all-errors --output /dev/null --write-out 'status=%{http_code}\n' --url "$COORDINATOR_URL/v1/version?at_least=$VERSION" >> "$GITHUB_OUTPUT" env COORDINATOR_URL=${{ vars.HOSTKEEPER_COORDINATOR_URL }} env VERSION=${{ needs.targets.outputs.version }}"#,
     r#"if ${{ failure() && steps.wait.outcome == 'failure' && (steps.wait.outputs.status == '409' || steps.wait.outputs.status == '404') }} run echo "::error::No coordinator updater reported this release ($VERSION) (is the timer installed?). For 30 minutes the coordinator answered that it runs an older release (its last answer was HTTP $STATUS; 404 is a coordinator from before the version route). Install the timer of hostkeeper-coordinator-update on the coordinator's machine, or read its journal there, as docs/deploy/coordinator-update.md says. With the control-plane deploy on (CP_DEPLOY_ENDPOINT and CP_DEPLOY_TAILSCALE_TAGS both set), the job cp-deploy reported this release deployed, so check that HOSTKEEPER_COORDINATOR_URL names the coordinator it deploys. The hosts' desired version is not set." env STATUS=${{ steps.wait.outputs.status }} env VERSION=${{ needs.targets.outputs.version }}"#,

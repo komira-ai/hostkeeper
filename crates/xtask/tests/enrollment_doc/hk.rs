@@ -380,7 +380,13 @@ fn encode(field: &Field, value: &str) -> Result<(), String> {
 }
 
 /// The verbs hk has by hand, besides `ssh` with a host id: not in the command table.
-pub(crate) const HAND_VERBS: &[&str] = &["ssh-proxy", "ssh-revoke", "ssh-status", "xcode-push"];
+pub(crate) const HAND_VERBS: &[&str] = &[
+    "ssh-proxy",
+    "ssh-revoke",
+    "ssh-status",
+    "xcode-push",
+    "tailnet-wait",
+];
 
 /// What `hk xcode-push` says when it is not given exactly one version or archive.
 const XCODE_PUSH_ONE: &str = "hk xcode-push takes one Xcode version (27.2) or the path of an \
@@ -390,12 +396,17 @@ const XCODE_PUSH_ONE: &str = "hk xcode-push takes one Xcode version (27.2) or th
 /// those of `ssh` and `ssh-proxy`, and those of `ssh-revoke`.
 const HAND_IDENTITY_FLAGS: &[&str] = &["--identity", "--reason"];
 const HAND_REVOKE_FLAGS: &[&str] = &["--operator", "--serial", "--host"];
+/// The flags of `hk tailnet-wait`, each with the whole numbers it takes.
+const TAILNET_WAIT_FLAGS: &[(&str, u32, u32)] =
+    &[("--attempts", 1, 100), ("--interval-secs", 0, 600)];
+const HAND_TAILNET_WAIT_FLAGS: &[&str] = &["--attempts", "--interval-secs"];
 
 /// The flags of the hand verb `verb` (`ssh` for `ssh <host-id>`) of its own, not the global ones.
 pub(crate) fn hand_flags(verb: &str) -> &'static [&'static str] {
     match verb {
         "ssh" | "ssh-proxy" => HAND_IDENTITY_FLAGS,
         "ssh-revoke" => HAND_REVOKE_FLAGS,
+        "tailnet-wait" => HAND_TAILNET_WAIT_FLAGS,
         _ => &[],
     }
 }
@@ -406,6 +417,9 @@ pub(crate) fn hand_flags(verb: &str) -> &'static [&'static str] {
 /// or archive path. They take `--token-file` alone of the credentials and no `--response-file`,
 /// and need the endpoint and the CA file.
 fn hand(line: &mut Line<'_>, verb: &str, words: &[String]) -> Result<Parsed, String> {
+    if verb == "tailnet-wait" {
+        return tailnet_wait(line, words);
+    }
     let own = hand_flags(verb);
     let mut host: Option<&str> = None;
     let mut selectors: Vec<&str> = Vec::new();
@@ -480,6 +494,67 @@ fn hand(line: &mut Line<'_>, verb: &str, words: &[String]) -> Result<Parsed, Str
     }
     line.call_needs()?;
     Ok(Parsed::Call(verb.to_owned()))
+}
+
+/// What `words` (the words after `tailnet-wait`) ask for: `--attempts` and `--interval-secs`,
+/// each once with a whole number in its range, no argument, no credential and no
+/// `--response-file`, and the endpoint and the CA file; in hk's words.
+fn tailnet_wait(line: &mut Line<'_>, words: &[String]) -> Result<Parsed, String> {
+    let mut seen: Vec<&str> = Vec::new();
+    let mut at = 0;
+    while let Some(word) = words.get(at) {
+        let flag = flag_of(word);
+        if matches!(flag, "--help" | "-h") {
+            return Ok(Parsed::Help);
+        }
+        if let Some((own, min, max)) = TAILNET_WAIT_FLAGS.iter().find(|(f, ..)| *f == flag) {
+            let (value, took) = arg(flag, &words[at..])?;
+            if seen.contains(own) {
+                return Err(format!("{flag} is given twice"));
+            }
+            seen.push(own);
+            let in_range = !value.is_empty()
+                && value.len() <= 6
+                && value.bytes().all(|b| b.is_ascii_digit())
+                && value
+                    .parse::<u32>()
+                    .is_ok_and(|n| (*min..=*max).contains(&n));
+            if !in_range {
+                return Err(format!("{flag} takes a whole number from {min} to {max}"));
+            }
+            at += took;
+        } else if word.starts_with('-') {
+            match line.global(&words[at..])? {
+                Some(took) => at += took,
+                None => return Err(format!("hk tailnet-wait has no flag {flag}")),
+            }
+        } else {
+            return Err(format!("hk tailnet-wait takes no argument: {word}"));
+        }
+    }
+    let has = |name: &str| line.given.iter().any(|g| g == name);
+    if [
+        "token-file",
+        "token-stdin",
+        "github-oidc-audience",
+        "response-file",
+    ]
+    .iter()
+    .any(|c| has(c))
+    {
+        return Err(
+            "hk tailnet-wait takes no token and writes no answer: --token-file, \
+                    --token-stdin, --github-oidc-audience and --response-file are not for it"
+                .to_owned(),
+        );
+    }
+    if !(has("endpoint") && has("ca-file")) {
+        return Err("hk tailnet-wait needs --endpoint and --ca-file".to_owned());
+    }
+    if !is_endpoint(&line.endpoint) {
+        return Err("--endpoint takes https://<host>[:<port>]".to_owned());
+    }
+    Ok(Parsed::Call("tailnet-wait".to_owned()))
 }
 
 /// What `words` (the line's words after `hk`) ask for, or the usage error hk exits 2

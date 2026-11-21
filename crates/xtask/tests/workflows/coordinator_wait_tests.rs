@@ -502,8 +502,10 @@ fn a_coordinator_job_that_runs_another_action_or_our_code_is_refused() {
 
 #[test]
 fn a_tailnet_join_that_differs_from_the_ci_clients_is_refused() {
-    // Catches: another Tailscale version or digest, the cache turned on, no ping of the
-    // coordinator, another tag, or a join that does not wait for the client ID variable.
+    // Catches: another Tailscale version or digest, the cache turned on, the action's ping of the
+    // coordinator back (one unanswered ping fails the job; curl's wait is the one that counts), an
+    // operator no step of the job needs, another tag, or a join that does not wait for the client
+    // ID variable.
     let join_line = "          version: 1.94.2\n";
     assert_eq!(
         about_the_job(found(join_line, "          version: 1.94.3\n")),
@@ -519,14 +521,31 @@ fn a_tailnet_join_that_differs_from_the_ci_clients_is_refused() {
             &STEPS[1].replace("use-cache=false", "use-cache=true")
         )]
     );
+    let cache = "          use-cache: false\n";
     assert_eq!(
         about_the_job(found(
-            "          ping: ${{ vars.HOSTKEEPER_TAILNET_COORDINATOR }}\n",
-            ""
+            cache,
+            &format!("{cache}          ping: ${{{{ vars.HOSTKEEPER_TAILNET_COORDINATOR }}}}\n")
         )),
         [step_problem(
             2,
-            &STEPS[1].replace(" with ping=${{ vars.HOSTKEEPER_TAILNET_COORDINATOR }}", "")
+            &STEPS[1].replace(
+                " with sha256sum",
+                " with ping=${{ vars.HOSTKEEPER_TAILNET_COORDINATOR }} with sha256sum"
+            )
+        )]
+    );
+    assert_eq!(
+        about_the_job(found(
+            cache,
+            &format!("{cache}          args: --operator=runner\n")
+        )),
+        [step_problem(
+            2,
+            &STEPS[1].replace(
+                "tailscale/github-action with audience",
+                "tailscale/github-action with args=--operator=runner with audience"
+            )
         )]
     );
     assert_eq!(
