@@ -18,9 +18,11 @@
 # macOS job in any workflow that runs for a pull request.
 #
 # A pull request's newer run cancels its older one; a merge group's run is never cancelled by
-# another. No job of it holds a write scope or names a secret or the token, and no cache is saved
-# from a pull request or a merge group (each copied job's save step runs only on a push, which
-# never starts this workflow): the jobs restore the caches privileged.yml's runs on main saved.
+# another. No job of it holds a write scope or names a secret or the token. No Cargo cache is
+# saved from a pull request or a merge group (each copied job's Cargo save runs only on a push,
+# which never starts this workflow): the jobs restore the Cargo caches privileged.yml's runs on
+# main saved. The pinned tool archives (gh, the previous release, nfpm) are saved by any run whose
+# checksum check passed and whose restore missed, under the run's own ref.
 # The workflow lint (crates/xtask/tests/workflows, pr_device.rs and merge_queue.rs) holds this
 # file to its triggers, its concurrency, its top-level keys, its jobs, their runners, the copied
 # jobs to privileged.yml's, to no read of the event but the cache saves of a push, and to no

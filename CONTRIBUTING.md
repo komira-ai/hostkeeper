@@ -255,7 +255,7 @@ required of every pull request, and of every merge group ([The merge queue](#the
 
 Both are copies of `privileged.yml`'s jobs of those names, key for key (the workflow lint compares
 them), so a pull request runs what will run after its merge. These jobs hold no write scope and
-name no secret or token, and save no cache. A newer push to the same pull request cancels the older
+name no secret or token, and save no Cargo cache (only a checked pinned tool archive, on a miss). A newer push to the same pull request cancels the older
 run.
 
 ### The Mac's beta stage
