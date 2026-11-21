@@ -139,6 +139,17 @@ its `cargo.bzl` needs for this workspace (komira-ai/buildrules#160, items 1 and 
 | the change reverted | `2 (cached: 2, remote: 0, local: 0)` | 0.2 s |
 | the same one-line change, `buck2 build //:ci` (every dependant rebuilt and retested) | `574 (cached: 0, remote: 574, local: 0)` | 318 s |
 
+At the current pin (buildrules main, with `:fmt` in `//:ci` and those two changes applied), after
+the daemon's two stage tests were changed (`--test-threads=2`):
+
+| build | `Commands:` line | wall |
+|---|---|---|
+| `//:ci`, the daemon's test units changed | `132 (cached: 0, remote: 132, local: 0)`, BUILD SUCCEEDED | 2,227 s |
+| the same, again, buck2's daemon restarted | `3448 (cached: 3448, remote: 0, local: 0)` | 1.9 s |
+
+Its critical path is the daemon's test target `boot_sweep` (its two tests kill the daemon at every
+write of an update and start it again): 2,200 s in one action, on one CPU.
+
 The critical path (`buck2 log critical-path`) is a chain of whole-crate compiles followed by one
 test run, because a test target is one action:
 
