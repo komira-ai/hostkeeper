@@ -49,6 +49,7 @@ mod one_command_tests;
 mod openrc;
 mod openrc_tests;
 mod packages;
+mod packages_stable_tests;
 mod packages_tests;
 mod pinned_cache;
 mod pinned_cache_tests;

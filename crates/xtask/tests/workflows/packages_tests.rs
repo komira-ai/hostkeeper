@@ -12,7 +12,7 @@ use super::workflows;
 use super::xtask_calls::{call_problem, commands, xtask_args};
 
 /// The repository's release.yml.
-fn release_yml() -> String {
+pub(super) fn release_yml() -> String {
     workflows()
         .into_iter()
         .find(|(file, _)| file == "release.yml")
@@ -21,14 +21,14 @@ fn release_yml() -> String {
 }
 
 /// Every problem the lint and the publish rule find in `text` as release.yml.
-fn problems(text: &str) -> Vec<String> {
+pub(super) fn problems(text: &str) -> Vec<String> {
     let mut found = lint("release.yml", text);
     found.extend(publish_problems("release.yml", text));
     found
 }
 
 /// The byte range of the job `name` in `text`: from its header to the next job's header.
-fn job_range(text: &str, name: &str) -> (usize, usize) {
+pub(super) fn job_range(text: &str, name: &str) -> (usize, usize) {
     let start = text
         .find(&format!("\n  {name}:\n"))
         .unwrap_or_else(|| panic!("release.yml has no job {name}"))
@@ -50,7 +50,7 @@ fn job_range(text: &str, name: &str) -> (usize, usize) {
 }
 
 /// `text` with the first `from` inside the job `name` replaced by `to`.
-fn in_job(text: &str, name: &str, from: &str, to: &str) -> String {
+pub(super) fn in_job(text: &str, name: &str, from: &str, to: &str) -> String {
     let (start, end) = job_range(text, name);
     let job = &text[start..end];
     assert!(
@@ -66,7 +66,7 @@ fn in_job(text: &str, name: &str, from: &str, to: &str) -> String {
 }
 
 #[track_caller]
-fn assert_refused(text: &str, want: &str) {
+pub(super) fn assert_refused(text: &str, want: &str) {
     let found = problems(text);
     assert!(
         found.iter().any(|p| p.contains(want)),
@@ -86,7 +86,7 @@ fn the_rows_hold_the_key_and_the_role_in_no_job_and_the_role_in_exactly_the_writ
     // Catches: a table that lets one job hold the signing key and assume the cloud role, or a
     // job that assumes the role without an exact `if:` for its `id-token: write`.
     let all = rows();
-    assert_eq!(all.len(), 47);
+    assert_eq!(all.len(), 53);
     let mut names = job_names();
     names.dedup();
     assert_eq!(names.len(), all.len(), "a job has two rows");
@@ -689,9 +689,8 @@ fn the_release_files_are_checked_in_every_job_that_signs_or_publishes_them() {
     ] {
         want.extend(["", "-2", "-3"].map(|n| format!("{job}{n}")));
     }
-    for job in ["stable-apt-index", "stable-rpm-index"] {
-        want.extend(["", "-2", "-3"].map(|n| format!("{job}{n}")));
-    }
+    want.extend(["", "-2", "-3", "-4", "-5"].map(|n| format!("stable-apt-index{n}")));
+    want.extend(["", "-2", "-3"].map(|n| format!("stable-rpm-index{n}")));
     // Hello's failing build is signed and written by one attempt, from the same checked files.
     want.extend(["testing-fail-apt-index", "testing-fail-apt-write"].map(str::to_owned));
     want.extend(["testing-pkg-upload".to_owned(), "promote-pkg".to_owned()]);
