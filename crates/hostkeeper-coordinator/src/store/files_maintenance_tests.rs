@@ -9,7 +9,7 @@ use super::conformance_tests::rich_ops;
 use super::{Backend, BackendError, Commit, Files};
 use crate::audit_file::DEFAULT_ROTATION;
 use crate::maintenance_runs::tests::sample;
-use crate::maintenance_runs::{Kind, Run, RunHost, Skip, Step};
+use crate::maintenance_runs::{Act, Kind, Run, RunHost, Skip, Step};
 use crate::ops::OpsState;
 use crate::testutil::{LEGACY, scratch};
 
@@ -186,4 +186,71 @@ fn runs_committed_are_loaded_equal_after_a_restart() {
     let last = files_over(dir.path()).load_ops().expect("loads");
     assert_eq!(last.maintenance_runs, second.maintenance_runs);
     assert_eq!(last.maintenance_runs[0].cancelled_unix, Some(1_900_000_500));
+}
+
+/// Proves: a halted host's queued act and its last order try are the keys `queued` and `order_try`
+/// of its turn in the ops file, written only when set (a turn with neither writes neither, as a
+/// file written before them has none), read back equal after a restart; a file without the keys
+/// reads as no act and try 0; and a file naming an act other than `retry` or `put_back` is
+/// refused at load naming it.
+///
+/// Catches: an act or a try lost at a restart (a queued retry never sent, or sent again under an
+/// older try), a key written for a turn that has none, and an unknown act read as one.
+#[test]
+fn a_halted_hosts_queued_act_and_order_try_are_kept_in_the_ops_file() {
+    let dir = scratch("files-maintenance-queued");
+    let mut run = hand_run();
+    run.hosts[0].step = Step::Halted;
+    run.hosts[0].queued = Some(Act::Retry);
+    run.hosts[0].order_try = 2;
+    run.hosts[1].step = Step::Halted;
+    run.hosts[1].queued = Some(Act::PutBack);
+    run.hosts[1].order_try = 3;
+    let mut after = rich_ops();
+    after.maintenance_runs = vec![run.clone()];
+    commit_ops(&files_over(dir.path()), &after).expect("committed");
+    let text = ops_text(dir.path());
+    let value: serde_json::Value = serde_json::from_slice(&text).expect("JSON");
+    let hosts = &value["maintenance_runs"][0]["hosts"];
+    assert_eq!(hosts[0]["queued"], "retry");
+    assert_eq!(hosts[0]["order_try"], 2);
+    assert_eq!(hosts[1]["queued"], "put_back");
+    assert_eq!(hosts[1]["order_try"], 3);
+    let back = files_over(dir.path()).load_ops().expect("loads");
+    assert_eq!(back.maintenance_runs, vec![run]);
+
+    let plain = scratch("files-maintenance-unqueued");
+    let mut before = rich_ops();
+    before.maintenance_runs = vec![hand_run()];
+    commit_ops(&files_over(plain.path()), &before).expect("committed");
+    let text = ops_text(plain.path());
+    let value: serde_json::Value = serde_json::from_slice(&text).expect("JSON");
+    for host in value["maintenance_runs"][0]["hosts"]
+        .as_array()
+        .expect("the hosts")
+    {
+        assert!(host.get("queued").is_none(), "{host}");
+        assert!(host.get("order_try").is_none(), "{host}");
+    }
+    let loaded = files_over(plain.path()).load_ops().expect("loads");
+    assert_eq!(
+        loaded.maintenance_runs[0]
+            .hosts
+            .iter()
+            .map(|host| (host.queued, host.order_try))
+            .collect::<Vec<_>>(),
+        vec![(None, 0), (None, 0)]
+    );
+
+    let mut odd = value;
+    odd["maintenance_runs"][0]["hosts"][0]["queued"] = serde_json::json!("nap");
+    fs::write(
+        plain.path().join("desired.json.ops"),
+        serde_json::to_vec(&odd).expect("JSON"),
+    )
+    .expect("the file is written");
+    let refused = files_over(plain.path())
+        .load_ops()
+        .expect_err("an unknown act is refused");
+    assert!(refused.to_string().contains("\"nap\" is not a Act"), "{refused}");
 }

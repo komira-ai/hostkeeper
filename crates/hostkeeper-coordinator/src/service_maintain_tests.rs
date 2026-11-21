@@ -549,6 +549,7 @@ fn a_start_after_the_run_was_cancelled_stores_and_sends_nothing() {
         run_id: RUN.to_owned(),
         host_group: GROUP.to_owned(),
         order_id: ORDER.to_owned(),
+        order_try: 1,
         maintain: Maintain {
             run_id: RUN.to_owned(),
             action: agent::MaintainAction::Run,

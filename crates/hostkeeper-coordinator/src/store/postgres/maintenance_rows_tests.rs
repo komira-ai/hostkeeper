@@ -61,8 +61,8 @@ fn full(id: &str) -> Run {
                 reason: "why".to_owned(),
                 offered_again: 4,
                 baked_beats: 0,
-                queued: None,
-                order_try: 0,
+                queued: Some(Act::PutBack),
+                order_try: 3,
             },
         ],
     }
@@ -122,7 +122,8 @@ fn the_sample_runs_round_trip_through_their_rows() {
 /// Proves: a run with every value set is one row of `maintenance_runs` (kinds and hosts by name,
 /// the window, batch, drain deadline, cancel and position as numbers) and each of its hosts one
 /// row of `maintenance_hosts` (step and skip by name, an empty group `NULL`, its offers after a
-/// deferral and its bake as numbers), and a run with
+/// deferral and its bake as numbers, a queued act by its name and `NULL` for none, and the last
+/// order try as a number), and a run with
 /// nothing set has `NULL` for its group, batch, drain deadline and cancel, and an empty list for
 /// its kinds and hosts.
 ///
@@ -180,6 +181,8 @@ fn the_rows_of_a_run_and_of_a_host_hold_the_values_by_name_and_null_for_none() {
             Val::Int(0),
             Val::Int(0),
             Val::Int(3),
+            Val::Null,
+            Val::Int(0),
         ]
     );
     assert_eq!(
@@ -195,11 +198,17 @@ fn the_rows_of_a_run_and_of_a_host_hold_the_values_by_name_and_null_for_none() {
             Val::Int(1),
             Val::Int(4),
             Val::Int(0),
+            s("put_back"),
+            Val::Int(3),
         ]
     );
     assert_eq!(
         tables["maintenance_hosts"][&key(&["run-b", "h3"])][5],
         Val::Null
+    );
+    assert_eq!(
+        tables["maintenance_hosts"][&key(&["run-b", "h3"])][10..],
+        [Val::Null, Val::Int(0)]
     );
     assert_eq!(tables["maintenance_hosts"].len(), 3);
 }
@@ -239,6 +248,9 @@ fn a_time_above_the_largest_the_database_keeps_is_refused_when_written() {
     let mut host_run = bare("run-a");
     host_run.hosts[0].since_unix = u64::MAX;
     assert!(insert_runs(&[host_run], &mut Tables::new()).is_err());
+    let mut tried = bare("run-a");
+    tried.hosts[0].order_try = u64::MAX;
+    assert!(insert_runs(&[tried], &mut Tables::new()).is_err());
 }
 
 fn refused(tables: &Tables) -> String {
@@ -330,7 +342,30 @@ fn a_run_row_this_build_cannot_read_is_refused_naming_the_run_and_the_reason() {
         edited(|t| set_run(t, 12, s("first"))),
         at("a position is not a number")
     );
+    assert_eq!(
+        edited(|t| set_host(t, 10, s("nap"))),
+        at("\"nap\" is not an act queued for a host")
+    );
+    assert_eq!(
+        edited(|t| set_host(t, 10, Val::Int(1))),
+        at("a column is not text")
+    );
+    assert_eq!(
+        edited(|t| set_host(t, 11, Val::Int(-1))),
+        at("a counter is negative")
+    );
+    assert_eq!(
+        edited(|t| set_host(t, 11, Val::Null)),
+        at("a counter is not a number")
+    );
     let mut ok = rows_of(&[full("run-a")]);
+    set_host(&mut ok, 10, s("retry"));
+    set_host(&mut ok, 11, Val::Int(i64::MAX));
+    let queued = &runs_of(&ok).expect("a queued act and the largest try")[0].hosts[0];
+    assert_eq!(
+        (queued.queued, queued.order_try),
+        (Some(Act::Retry), i64::MAX.unsigned_abs())
+    );
     set_run(&mut ok, 5, Val::Int(i64::from(u32::MAX)));
     assert_eq!(
         runs_of(&ok).expect("the largest batch")[0].batch,

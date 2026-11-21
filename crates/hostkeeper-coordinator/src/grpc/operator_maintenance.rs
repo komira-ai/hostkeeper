@@ -1,12 +1,11 @@
-//! `Maintenance` of `hostkeeper.operator.v1` over [`Coordinator`]: `Schedule`, `List`, `Get` and
-//! `Cancel`.
+//! `Maintenance` of `hostkeeper.operator.v1` over [`Coordinator`]: `Schedule`, `List`, `Get`,
+//! `Cancel`, `RetryHost` and `PutBack`.
 //!
 //! The adapter has no rule of its own: each of those methods calls its handler in
-//! `crate::maintenance_service` with the caller the router admitted, and a refusal is the status
-//! [`refusal::maintenance`] makes of it. A call reads or writes the store, so it runs off the
-//! runtime's threads; a handler that did not finish is `store_failed`. `RetryHost` and `PutBack`
-//! have no handler yet: the router answers them `UNIMPLEMENTED` before any credential is read
-//! ([`super::PENDING`]), and so does this adapter.
+//! `crate::maintenance_service` (`crate::maintenance_operator` for `RetryHost` and `PutBack`) with
+//! the caller the router admitted, and a refusal is the status [`refusal::maintenance`] makes of
+//! it. A call reads or writes the store, so it runs off the runtime's threads; a handler that did
+//! not finish is `store_failed`.
 
 use std::sync::Arc;
 
@@ -102,15 +101,15 @@ impl Api for MaintenanceService {
 
     async fn retry_host(
         &self,
-        _request: Request<proto::RetryMaintenanceHostRequest>,
+        request: Request<proto::RetryMaintenanceHostRequest>,
     ) -> Result<Response<proto::RetryMaintenanceHostResponse>, Status> {
-        Err(Status::unimplemented(""))
+        self.run(request, Coordinator::maintenance_retry_host).await
     }
 
     async fn put_back(
         &self,
-        _request: Request<proto::PutBackMaintenanceHostRequest>,
+        request: Request<proto::PutBackMaintenanceHostRequest>,
     ) -> Result<Response<proto::PutBackMaintenanceHostResponse>, Status> {
-        Err(Status::unimplemented(""))
+        self.run(request, Coordinator::maintenance_put_back).await
     }
 }

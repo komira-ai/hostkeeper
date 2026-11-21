@@ -362,7 +362,12 @@ pub(crate) fn derive_in(
     alerts.extend(failed_canaries(fleet, ops, &packages));
     alerts.extend(held_on_bad_versions(fleet, ops, &packages));
     alerts.extend(abandoned(ops, &packages));
-    alerts.extend(silent_hosts(fleet, at.now, thresholds.silent_after));
+    alerts.extend(maintenance_alerts::silent_hosts(
+        fleet,
+        ops,
+        at.now,
+        thresholds.silent_after,
+    ));
     alerts.extend(cert_near_expiry(
         enrollment,
         at.unix,
@@ -377,6 +382,8 @@ pub(crate) fn derive_in(
     alerts.extend(xcode_release_waiting(enrollment));
     alerts.extend(crate::xcode_service::version_taken(&enrollment.xcode_taken));
     alerts.extend(updates::updates_due(fleet, enrollment.groups.as_ref()));
+    alerts.extend(maintenance_alerts::halted(ops));
+    alerts.extend(maintenance_alerts::not_back(ops));
     alerts.sort_by(|a, b| a.subject.cmp(&b.subject));
     alerts.dedup_by(|a, b| a.subject == b.subject);
     alerts
@@ -607,28 +614,6 @@ fn abandoned(ops: &OpsState, packages: &BTreeSet<String>) -> Vec<Alert> {
         .collect()
 }
 
-/// `silent_host`: each host heard since the start whose last heartbeat is `silent_after` old
-/// or older at `now`.
-fn silent_hosts(fleet: &Fleet, now: Duration, silent_after: Duration) -> Vec<Alert> {
-    fleet
-        .nodes()
-        .filter_map(|(id, node)| {
-            let silent = now.saturating_sub(node.seen);
-            (silent >= silent_after).then(|| Alert {
-                subject: Subject {
-                    host: id.to_string(),
-                    ..Subject::of(Kind::SilentHost)
-                },
-                message: format!(
-                    "{id} has not heartbeated for {} s (the threshold is {} s)",
-                    silent.as_secs(),
-                    silent_after.as_secs()
-                ),
-            })
-        })
-        .collect()
-}
-
 /// `store_unreachable`: the store's link to its database, while it is lost.
 fn store_unreachable(fleet: &Fleet) -> Option<Alert> {
     fleet.store_lost.then(|| Alert {
@@ -839,12 +824,14 @@ impl Coordinator {
         self
     }
 
-    /// Observes the alerts now: reads the enrollment store, derives every alert ([`derive`])
+    /// Observes the alerts now: notes the rebooting hosts that did not come back
+    /// ([`Self::note_not_back`]), reads the enrollment store, derives every alert ([`derive`])
     /// and logs each the last observation did not find ([`Book`]).
     ///
     /// # Errors
     /// [`StoreError`]: the enrollment store could not be read; nothing is noted or logged.
     pub fn observe_alerts(&self) -> Result<Vec<Observed>, StoreError> {
+        self.note_not_back();
         self.alerts.observe_with(|| self.find_alerts())
     }
 
@@ -989,6 +976,9 @@ mod xcode_tests;
 
 #[path = "group_alerts.rs"]
 mod group_alerts;
+
+#[path = "alerts_maintenance.rs"]
+mod maintenance_alerts;
 
 #[path = "alerts_prerequisites.rs"]
 mod prerequisite_alerts;
