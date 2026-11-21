@@ -78,6 +78,7 @@ pub(crate) mod github;
 pub(crate) mod image_index;
 mod image_push;
 mod locate;
+mod mac_programs;
 mod macos_bootstrap;
 mod macos_pkg;
 pub(crate) mod native;
