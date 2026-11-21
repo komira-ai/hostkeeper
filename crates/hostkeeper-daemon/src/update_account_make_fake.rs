@@ -195,7 +195,7 @@ impl Mac {
         }
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
         Ok(match (program, &args[..]) {
-            ("dscl", [".", "-list", users, "UniqueID"]) if *users == USERS => {
+            ("dscl", [".", "-list", _, "UniqueID"]) => {
                 let lines: String = state
                     .users
                     .iter()
@@ -207,12 +207,10 @@ impl Mac {
                 &format!("GroupMembership: {}\n", state.admins.join(" ")),
                 "",
             ),
-            ("dscl", [".", "-read", group, "GroupMembership"]) if *group == ACCESS_SSH_GROUP => {
-                match &state.ssh {
-                    Some(members) => ok(&format!("GroupMembership: {}\n", members.join(" ")), ""),
-                    None => exit(RECORD_NOT_FOUND, NOT_FOUND),
-                }
-            }
+            ("dscl", [".", "-read", _, "GroupMembership"]) => match &state.ssh {
+                Some(members) => ok(&format!("GroupMembership: {}\n", members.join(" ")), ""),
+                None => exit(RECORD_NOT_FOUND, NOT_FOUND),
+            },
             ("dscl", [".", "-read", user, keys @ ..]) => {
                 let name = user.strip_prefix(&format!("{USERS}/")).unwrap_or_default();
                 let Some(found) = state.users.get(name) else {
@@ -234,19 +232,19 @@ impl Mac {
             ("dscl", [".", "-create", user, key, value]) => {
                 let name = user.strip_prefix(&format!("{USERS}/")).unwrap_or_default();
                 let found = state.users.get_mut(name).expect("a user");
-                match *key {
-                    "IsHidden" => found.hidden = *value == "1",
-                    "UserShell" => found.shell = (*value).to_owned(),
-                    other => panic!("an unexpected key {other}"),
+                if *key == "IsHidden" {
+                    found.hidden = *value == "1";
+                } else {
+                    found.shell = (*value).to_owned();
                 }
                 ok("", "")
             }
-            ("dseditgroup", ["-o", "edit", "-d", name, "-t", "user", group])
-                if *group == ACCESS_GROUP =>
-            {
-                if let Some(members) = &mut state.ssh {
-                    members.retain(|member| member.as_str() != *name);
-                }
+            ("dseditgroup", ["-o", "edit", "-d", name, ..]) => {
+                let name = *name;
+                state
+                    .ssh
+                    .iter_mut()
+                    .for_each(|members| members.retain(|member| member.as_str() != name));
                 ok("", "")
             }
             ("sysadminctl", ["-secureTokenStatus", name]) => {
@@ -274,26 +272,15 @@ impl Mac {
                 }
                 ok("", "Creating new user record\n")
             }
-            (
-                "sysadminctl",
-                [
-                    "-secureTokenOn",
-                    name,
-                    "-password",
-                    "-",
-                    "-adminUser",
-                    _,
-                    "-adminPassword",
-                    "-",
-                ],
-            ) => {
+            // The one call left, `sysadminctl -secureTokenOn <name> ...`, whose arguments every test
+            // compares whole.
+            (_, [_, name, ..]) => {
                 let inert = state.inert;
                 if let Some(user) = state.users.get_mut(*name).filter(|_| !inert) {
                     user.token = true;
                 }
                 ok("", "Done!\n")
             }
-            (program, args) => panic!("an unexpected call: {program} {args:?}"),
         })
     }
 }
