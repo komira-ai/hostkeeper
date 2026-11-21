@@ -1461,8 +1461,9 @@ message Alert {
   // For `ALERT_KIND_DUPLICATE_CLAIM_PENDING`: the enrolled host whose identity the request also
   // claims; empty when that is another pending request, or not known.
   string other_host_id = 9;
-  // For `ALERT_KIND_UPDATES_DUE`: the host group it concerns; empty for every other kind and for
-  // hosts in no host group.
+  // For `ALERT_KIND_UPDATES_DUE`, `ALERT_KIND_MAINTENANCE_HALTED` and
+  // `ALERT_KIND_MAINTENANCE_NOT_BACK`: the host group it concerns; empty for every other kind and
+  // for hosts in no host group.
   string host_group = 10;
   // For `ALERT_KIND_FAILED_UPDATE`: the reason of the host's failed report (`unspecified` when it
   // names none); for `ALERT_KIND_HOST_HALT`: the reason of the halt the host holds. Empty for
@@ -1508,8 +1509,9 @@ enum AlertKind {
   // may hold mid-update. Listed while the host stays excluded and the change is among the last 64
   // the coordinator keeps. Log token `exclude_abandon`.
   ALERT_KIND_ABANDONED_WHILE_UPDATING = 7;
-  // The host has not heartbeated for the coordinator's silent-host threshold or longer. Log token
-  // `silent_host`.
+  // The host has not heartbeated for the coordinator's silent-host threshold or longer; not while
+  // it reboots in its turn of a maintenance run, or is not back from it
+  // (`ALERT_KIND_MAINTENANCE_NOT_BACK`). Log token `silent_host`.
   ALERT_KIND_SILENT_HOST = 8;
   // The certificate the coordinator serves its hosts expires within the coordinator's window, or
   // has expired: its renewal is failing. Log token `cert_near_expiry`.
@@ -1595,13 +1597,27 @@ enum AlertKind {
   // coordinator, whose cause may be gone. One alert for each host and service, listed while the
   // host reports the halt. Log token `host_halt`.
   ALERT_KIND_HOST_HALT = 21;
+  // A host's turn of a maintenance run halted (`MAINTENANCE_HOST_STEP_HALTED`): a step from drain
+  // on failed, the host stays cordoned, and no further host of its group starts in the run. The
+  // message names the host, the run and the reason its daemon gave (the step and the exit code).
+  // One alert for each halted host, with its group in `host_group`; it stands until the host's
+  // daemon reports its turn at another step, after a `Maintenance.RetryHost` or
+  // `Maintenance.PutBack`. Critical. Log token `maintenance_halted`.
+  ALERT_KIND_MAINTENANCE_HALTED = 22;
+  // A host rebooting in its turn of a maintenance run has been silent for its group's
+  // `return_secs` (`MAINTENANCE_HOST_STEP_NOT_BACK`): it stays cordoned, and no further host of its
+  // group starts in the run. The message names the host, the run and since when it is not back.
+  // One alert for each such host, with its group in `host_group`; it clears when the host reports
+  // again. While a host reboots in its turn, and while it is not back, it raises no
+  // `ALERT_KIND_SILENT_HOST`. Critical. Log token `maintenance_not_back`.
+  ALERT_KIND_MAINTENANCE_NOT_BACK = 23;
   // The host declined the version its host group wants of the service, offered again after each
   // wait, three times in a row for the same reason: a reason that may not clear by itself. It
   // waits longer each time (the group's `defer_backoff`) and holds no other host or service.
   // `version` is the version it declines, `reason` the deferral's, and `tries` how many times in a
   // row it declined it for that reason. It clears when the host updates, gives another reason,
   // or another version is wanted. Log token `repeated_deferral`.
-  ALERT_KIND_REPEATED_DEFERRAL = 22;
+  ALERT_KIND_REPEATED_DEFERRAL = 24;
 }
 
 // How soon an `Alert` needs a person.

@@ -66,6 +66,8 @@ export namespace hostkeeper_operator_v1 {
     | "ALERT_KIND_UPDATES_DUE"
     | "ALERT_KIND_FAILED_UPDATE"
     | "ALERT_KIND_HOST_HALT"
+    | "ALERT_KIND_MAINTENANCE_HALTED"
+    | "ALERT_KIND_MAINTENANCE_NOT_BACK"
     | "ALERT_KIND_REPEATED_DEFERRAL";
   export type AlertSeverity = "ALERT_SEVERITY_UNSPECIFIED" | "ALERT_SEVERITY_CRITICAL" | "ALERT_SEVERITY_WARNING";
   export interface ApiTokenInfo { name?: string; source?: hostkeeper_operator_v1.ApiTokenSource; createdBy?: string; createdUnix?: string; owner?: string; }

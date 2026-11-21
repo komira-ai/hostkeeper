@@ -192,6 +192,7 @@ pub mod maintenance;
 )]
 pub(crate) mod maintenance_effective;
 pub(crate) mod maintenance_mac;
+pub(crate) mod maintenance_operator;
 pub(crate) mod maintenance_policy;
 pub(crate) mod maintenance_runs;
 pub(crate) mod maintenance_service;

@@ -10,6 +10,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -29,7 +30,7 @@ use crate::maintenance_hook::{
     Ending, HookPorts, HookStep, Kind, KindState, REASON_REBOOT_UNDER_WAY, RebootError, Rebooter,
     RecordError, Registry, RunRecord, run_step,
 };
-use crate::maintenance_mac::FreeSpace;
+use crate::maintenance_mac::{FDESETUP, FreeSpace};
 
 /// The update account's password: bytes an argument list, a shell, JSON or a log line would treat
 /// specially, and an `=`.
@@ -82,6 +83,7 @@ struct Installed {
 struct Script {
     looks: BTreeMap<(PathBuf, Vec<String>), Result<LaunchctlOutput, LaunchctlError>>,
     install: Result<LaunchctlOutput, StdinError>,
+    installed_by: BTreeMap<PathBuf, Result<LaunchctlOutput, StdinError>>,
     effects: Vec<String>,
     installs: Vec<Installed>,
     lines: Vec<String>,
@@ -155,6 +157,7 @@ impl Mac {
         let mac = Mac(Arc::new(Mutex::new(Script {
             looks: BTreeMap::new(),
             install: Ok(LaunchctlOutput::success("")),
+            installed_by: BTreeMap::new(),
             effects: Vec::new(),
             installs: Vec::new(),
             lines: Vec::new(),
@@ -267,7 +270,7 @@ impl Installers for Mac {
 }
 
 /// One install program of the fake Mac: recorded whole, and as `install <program>` among the
-/// effects; answered as scripted.
+/// effects; answered as scripted for its program, else as every install is.
 struct Runner {
     mac: Mac,
     program: PathBuf,
@@ -292,7 +295,8 @@ impl StdinRun for Runner {
             args: args.to_vec(),
             input: input.to_vec(),
         });
-        script.install.clone()
+        let answer = script.installed_by.get(&self.program);
+        answer.cloned().unwrap_or_else(|| script.install.clone())
     }
 }
 
@@ -614,38 +618,6 @@ fn a_restart_in_the_same_boot_installs_the_kept_plan_again() {
     assert_eq!(mac.installs(), [first.clone(), first].concat());
 }
 
-/// Proves: FileVault on, or anything but off, fails `filevault_not_off` after `fdesetup status`
-/// alone: nothing listed, kept or installed.
-///
-/// Catches: `--restart` on a Mac whose restart stops at the pre-boot login, so the host never
-/// comes back.
-#[test]
-fn filevault_not_off_is_refused_before_anything_is_listed_or_installed() {
-    let files = Files::new("macos-apply-filevault");
-    let mac = Mac::on_26(LIST_MAJOR);
-    mac.look(FDESETUP, &["status"], ok(FILEVAULT_ON));
-    assert_eq!(
-        mac.apply(&files).cutover(&params(false)).map(|_| ()),
-        failure(
-            REASON_FILEVAULT_NOT_OFF,
-            "FileVault is on (fdesetup status): its authenticated restart is not built, so the \
-             update is not installed"
-        )
-    );
-    assert_eq!(mac.effects(), ["run /usr/bin/fdesetup status"]);
-    mac.look(FDESETUP, &["status"], ok("something else\n"));
-    assert_eq!(
-        mac.apply(&files).cutover(&params(false)).map(|_| ()),
-        failure(
-            REASON_FILEVAULT_NOT_OFF,
-            "FileVault is in no state fdesetup names (fdesetup status): its authenticated \
-             restart is not built, so the update is not installed"
-        )
-    );
-    assert_eq!(mac.installs(), Vec::new());
-    assert!(!files.run_dir.join(PLAN_FILE).exists());
-}
-
 /// Proves: on the path `wait`, and on an order that names no path, `cutover`, the restart and
 /// `verify` each fail `macos_path_not_built` and read or run nothing.
 ///
@@ -894,17 +866,25 @@ fn the_host_account_is_roots_update_account_file() {
     StderrLog.line("the hook's log line of a test");
 }
 
-/// The environment this process has, without what an instrumented build sets by itself in each
-/// process it starts (`__LLVM_PROFILE_RT_*`), which no parent passed.
+/// The environment this process has, without what a process sets in itself and no parent passed:
+/// an instrumented build's `__LLVM_PROFILE_RT_*`, and on macOS CoreFoundation's
+/// `__CF_USER_TEXT_ENCODING`, which it sets as it loads (this binary links it through
+/// `hostkeeper-bootstrap`'s `rustls-native-certs`).
 #[expect(
     clippy::disallowed_methods,
     reason = "the helper child reports the environment its parent gave it"
 )]
 fn own_environment() -> Vec<String> {
     std::env::vars_os()
-        .filter(|(name, _)| !name.to_string_lossy().starts_with("__LLVM_PROFILE_RT_"))
+        .filter(|(name, _)| !set_by_itself(name.as_bytes()))
         .map(|(name, value)| format!("env:{}={}", name.to_string_lossy(), value.to_string_lossy()))
         .collect()
+}
+
+/// Whether the variable `name` is one this process set in itself (see `own_environment`).
+fn set_by_itself(name: &[u8]) -> bool {
+    name.starts_with(b"__LLVM_PROFILE_RT_")
+        || (cfg!(target_os = "macos") && name == b"__CF_USER_TEXT_ENCODING")
 }
 
 /// Catches nothing itself: the child of
@@ -962,3 +942,5 @@ fn the_host_installers_run_with_exactly_their_arguments_input_and_an_empty_envir
 mod choose;
 #[path = "entry_tests.rs"]
 mod entry;
+#[path = "filevault_tests.rs"]
+mod filevault;

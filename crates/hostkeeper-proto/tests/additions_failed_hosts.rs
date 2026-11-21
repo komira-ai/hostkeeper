@@ -1,10 +1,10 @@
 //! What a host group's `failed_hosts` and the alert of a repeated deferral add to the operator API
 //! (`docs/operations/rollout-plans.md`, A failed host): `RolloutPolicy.failed_hosts` (11), the new
-//! `FailedHosts` enum, and the kind `ALERT_KIND_REPEATED_DEFERRAL` (22).
+//! `FailedHosts` enum, and the kind `ALERT_KIND_REPEATED_DEFERRAL` (24).
 //!
 //! The committed baseline (`proto/compat/baseline.binpb`) predates `hostgroups.proto` and `Alert`,
 //! so the release before's reader is this build's descriptor set with field 11 of `RolloutPolicy`,
-//! the enum `FailedHosts` and the value 22 of `AlertKind` taken out. Rule B8 in both directions:
+//! the enum `FailedHosts` and the value 24 of `AlertKind` taken out. Rule B8 in both directions:
 //!
 //! - that reader reads a policy, a group and an answer naming `failed_hosts`, and an alert of the
 //!   new kind, keeps what it does not know (the field as an unknown field, the value as a number)
@@ -27,7 +27,7 @@ fn current_pool() -> DescriptorPool {
 }
 
 /// The descriptor set of the release before: this build's, with field 11 of `RolloutPolicy`, the
-/// enum `FailedHosts` and the value 22 of `AlertKind` taken out, every other message and value as
+/// enum `FailedHosts` and the value 24 of `AlertKind` taken out, every other message and value as
 /// it is.
 fn before_pool() -> DescriptorPool {
     let mut set =
@@ -50,7 +50,7 @@ fn before_pool() -> DescriptorPool {
         for kind in &mut file.enum_type {
             if kind.name() == "AlertKind" {
                 let before = kind.value.len();
-                kind.value.retain(|v| v.number() != 22);
+                kind.value.retain(|v| v.number() != 24);
                 values += before - kind.value.len();
             }
         }
@@ -166,7 +166,7 @@ fn the_reader_of_the_release_before_keeps_failed_hosts_and_writes_it_back() {
     );
 }
 
-/// Proves: a reader of the release before reads an alert of kind 22 as the number it does not
+/// Proves: a reader of the release before reads an alert of kind 24 as the number it does not
 /// name, its other fields as written, and writes back the bytes it read.
 /// Catches: an alert of a repeated deferral that a client of the release before refuses, reads
 /// as another kind, or writes back changed.
@@ -192,7 +192,7 @@ fn an_older_reader_keeps_a_repeated_deferral_alert_and_writes_it_back() {
     .expect("the release before reads it");
     assert_eq!(
         read.get_field_by_name("kind").as_deref(),
-        Some(&Value::EnumNumber(22))
+        Some(&Value::EnumNumber(24))
     );
     assert_eq!(
         read.get_field_by_name("reason").as_deref(),
@@ -224,7 +224,7 @@ fn this_build_reads_a_policy_of_the_release_before_with_failed_hosts_unspecified
 
 /// Proves: `RolloutPolicy.failed_hosts` is field 11, a plain (not `optional`, not repeated) field
 /// of the enum `hostkeeper.operator.v1.FailedHosts`, named `failedHosts` in JSON; the enum has
-/// exactly UNSPECIFIED 0, STOP 1 and CONTINUE 2; `ALERT_KIND_REPEATED_DEFERRAL` is 22.
+/// exactly UNSPECIFIED 0, STOP 1 and CONTINUE 2; `ALERT_KIND_REPEATED_DEFERRAL` is 24.
 /// Catches: a field or value given another number, label or type than the schema says, which a
 /// peer built apart would read as something else.
 #[test]
@@ -284,9 +284,9 @@ fn the_new_field_and_values_have_their_numbers_and_types() {
             .get_value_by_name("ALERT_KIND_REPEATED_DEFERRAL")
             .expect("value")
             .number(),
-        22
+        24
     );
-    assert_eq!(op::AlertKind::RepeatedDeferral as i32, 22);
+    assert_eq!(op::AlertKind::RepeatedDeferral as i32, 24);
 }
 
 /// Proves: this build's JSON names the key `failedHosts` with the mode by its enum name, reads it

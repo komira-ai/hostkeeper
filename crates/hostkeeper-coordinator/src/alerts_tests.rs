@@ -654,6 +654,10 @@ fn alerts_come_by_kind_then_service_and_host() {
         Kind::XcodeReleaseWaiting,
         Kind::XcodeVersionTaken,
         Kind::UpdatesDue,
+        Kind::FailedUpdate,
+        Kind::HostHalt,
+        Kind::MaintenanceHalted,
+        Kind::MaintenanceNotBack,
     ];
     assert_eq!(
         all.map(Kind::log_token),
@@ -673,11 +677,17 @@ fn alerts_come_by_kind_then_service_and_host() {
             "xcode_release_waiting",
             "xcode_version_taken",
             "updates_due",
+            "failed_update",
+            "host_halt",
+            "maintenance_halted",
+            "maintenance_not_back",
         ]
     );
     assert_eq!(
         all.map(|kind| kind.proto() as i32),
-        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 16, 17, 18, 19]
+        [
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 16, 17, 18, 19, 20, 21, 22, 23
+        ]
     );
     let critical: Vec<Kind> = all
         .into_iter()
@@ -689,7 +699,11 @@ fn alerts_come_by_kind_then_service_and_host() {
             Kind::Halt,
             Kind::Duplicate,
             Kind::FailedCanary,
-            Kind::StoreUnreachable
+            Kind::StoreUnreachable,
+            Kind::FailedUpdate,
+            Kind::HostHalt,
+            Kind::MaintenanceHalted,
+            Kind::MaintenanceNotBack
         ]
     );
 }

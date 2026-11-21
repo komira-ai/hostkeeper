@@ -209,6 +209,8 @@ pub(crate) fn host_at(id: &str, group: &str, step: Step, since: u64, kinds: &[Ki
         reason: String::new(),
         offered_again: 0,
         baked_beats: 0,
+        queued: None,
+        order_try: 0,
     }
 }
 

@@ -7,8 +7,8 @@
 // a host's step is what its daemon's run record says. The rest of the package, `Enrollment` and
 // `EnrollmentRefusal` (enrollment.proto) and `Audit` and `AuditRefusal` among it, is
 // operator.proto, which imports this file publicly; this file is the same package and API, kept
-// apart so that each file stays short. A coordinator of this release serves `Schedule`, `List`,
-// `Get` and `Cancel`; `RetryHost` and `PutBack` answer `UNIMPLEMENTED` until their handlers land.
+// apart so that each file stays short. A coordinator of this release serves every method of
+// `Maintenance`.
 //
 // Served by: the coordinator, on its control listener, as operator.proto says.
 //
@@ -40,10 +40,8 @@ import "hostkeeper/agent/v1/maintenance.proto";
 // `AuditEntry`, which each call that changes something answers.
 import "hostkeeper/operator/v1/entry.proto";
 
-// The maintenance runs. `Schedule`, `List`, `Get` and `Cancel` are served; `RetryHost` and
-// `PutBack` answer `UNIMPLEMENTED` until their handlers land. Each call that changes something
-// takes a reason and answers the audit entry it wrote, under the caller's name, with the
-// caller's reason followed by `run <id>`:
+// The maintenance runs. Each call that changes something takes a reason and answers the audit
+// entry it wrote, under the caller's name, with the caller's reason followed by `run <id>`:
 // `maintenance_schedule` (with the host group as the entry's `host_group` when the run names
 // one), `maintenance_cancel`, `maintenance_retry_host` and `maintenance_put_back` (each with the
 // host as the entry's `node_id`). `List`, `Get` and a `Schedule` without `confirm` change nothing
@@ -67,12 +65,16 @@ service Maintenance {
   // until it is put back: `PutBack` is still taken. Audited `maintenance_cancel`.
   rpc Cancel(CancelMaintenanceRunRequest) returns (CancelMaintenanceRunResponse);
   // Retry a halted host's turn from the step that failed: its daemon is ordered the run again
-  // (`MAINTAIN_ACTION_RETRY`) with a new try. Audited `maintenance_retry_host`.
+  // (`MAINTAIN_ACTION_RETRY`) with a new try. The order is queued, and sent at each heartbeat of
+  // the host until its daemon reports the turn at another step; the answer is the turn as stored,
+  // still halted. Audited `maintenance_retry_host`.
   rpc RetryHost(RetryMaintenanceHostRequest) returns (RetryMaintenanceHostResponse);
   // Put a halted host back: its daemon runs the drained services' `resume`
   // (`MAINTAIN_ACTION_PUT_BACK`) and leaves the update as far as it got; the host's turn ends, and
   // the run goes on in its group. Taken in a run that has ended too (cancelled, or past its
-  // window), for a host still halted there. Audited `maintenance_put_back`.
+  // window), for a host still halted there. The order is queued, and sent at each heartbeat of
+  // the host until its daemon reports the turn at another step; the answer is the turn as stored,
+  // still halted. Audited `maintenance_put_back`.
   rpc PutBack(PutBackMaintenanceHostRequest) returns (PutBackMaintenanceHostResponse);
 }
 

@@ -773,7 +773,7 @@ Decides:
 
 ### MP-A8 Authenticated restart
 
-Settles section 5.5 line 477-478 ([V]: `fdesetup authrestart -inputplist` with the plist on stdin restarts with no pre-boot login). Root shell, the owner watching the console or KVM. Needs A7 (FileVault on, `hkproof` listed) and A6 true. The Mac must be reachable over the network after boot with nobody typing. **Irreversible**: the real run and the control run reboot the Mac. Design argv, not built (`fdesetup authrestart -inputplist`). Each launchd plist stays in `/var/root/hk-proof`, never `/Library/LaunchDaemons`, so the job does not run again after the reboot.
+Settles section 5.5 line 477-478 ([V]: `fdesetup authrestart -inputplist` with the plist on stdin restarts with no pre-boot login). Root shell, the owner watching the console or KVM. Needs A7 (FileVault on, `hkproof` listed) and A6 true. The Mac must be reachable over the network after boot with nobody typing. **Irreversible**: the real run and the control run reboot the Mac. The daemon's argv (`fdesetup authrestart -inputplist`, `crates/hostkeeper-daemon/src/maintenance_hook/macos/filevault.rs`, the plist of `Username` and `Password` on standard input). Each launchd plist stays in `/var/root/hk-proof`, never `/Library/LaunchDaemons`, so the job does not run again after the reboot.
 
 ```sh
 cd /var/root/hk-proof; umask 077; PU=$(cat pw-proof)

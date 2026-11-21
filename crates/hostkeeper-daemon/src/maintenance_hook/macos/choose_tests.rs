@@ -138,12 +138,12 @@ fn a_version_with_no_major_number_fails_the_look() {
     );
 }
 
-/// Proves: FileVault being turned on or off is not off: each fails `filevault_not_off`, naming
-/// the state.
+/// Proves: FileVault being turned on or off is neither on nor off: each fails
+/// `filevault_not_ready`, naming the state, after `fdesetup status` alone.
 ///
 /// Catches: a Mac mid-conversion restarted into a pre-boot login.
 #[test]
-fn filevault_encrypting_or_decrypting_is_not_off() {
+fn filevault_encrypting_or_decrypting_is_not_ready() {
     let files = Files::new("macos-choose-filevault");
     for (text, state) in [
         (FILEVAULT_ENCRYPTING, "encrypting"),
@@ -154,13 +154,14 @@ fn filevault_encrypting_or_decrypting_is_not_off() {
         assert_eq!(
             mac.apply(&files).cutover(&params(false)).map(|_| ()),
             failure(
-                REASON_FILEVAULT_NOT_OFF,
+                REASON_FILEVAULT_NOT_READY,
                 &format!(
-                    "FileVault is {state} (fdesetup status): its authenticated restart is not \
-                     built, so the update is not installed"
+                    "FileVault is {state} (fdesetup status), neither on nor off, so the update \
+                     is not installed"
                 )
             )
         );
+        assert_eq!(mac.effects(), ["run /usr/bin/fdesetup status"]);
     }
 }
 
