@@ -312,9 +312,15 @@ fn the_grpc_link_returns_the_same_reply_as_the_json_link_for_the_same_coordinato
     assert_eq!(from_json, Ok(expected_reply()));
     let from_grpc = from_grpc.expect("a reply over gRPC");
     assert_eq!(from_grpc.order, Some(apt_order()));
+    // And for `maintenance-v1`, which the coordinator offers in every gRPC reply to an agent
+    // that announces features, last in its order.
+    assert_eq!(from_grpc.features.last(), Some(&Feature::MaintenanceV1));
+    let mut features = from_grpc.features.clone();
+    features.retain(|feature| *feature != Feature::MaintenanceV1);
     assert_eq!(
         Reply {
             order: None,
+            features,
             ..from_grpc
         },
         expected_reply()
