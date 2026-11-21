@@ -516,9 +516,10 @@ fn a_cutover_is_refused_while_the_host_keeps_no_run_record() {
 
 /// Proves: a Linux host's registry holds the `linux` and `reboot` kinds and a Mac's its three,
 /// `macos` and `xcode` with their stages: a Linux `prepare` is the stage, which defers a run with
-/// no `linux_scope` before it runs any program; `reboot`'s `prepare` answers `unsupported_kind`,
-/// as does a Mac's `macos` `cutover` (the Mac's `macos` `prepare` would run the host's own
-/// `softwareupdate`; it is tested over a fake Mac in the daemon's unit tests); a build whose
+/// no `linux_scope` before it runs any program; `reboot`'s `prepare` answers `unsupported_kind`;
+/// a Mac's `macos` `cutover` refuses an order that names no macOS path before it reads or runs
+/// anything (its other steps would run the host's own `softwareupdate`; they are tested over a
+/// fake Mac in the daemon's unit tests); a build whose
 /// version is not `major.minor.patch` cannot check its host, so the `verify` of its `linux` and
 /// `reboot` answers `unsupported_kind` (the check itself is `maintenance_hook_linux.rs`'s, over
 /// fakes: a host's reads the host); a Mac's `xcode` stages (an order with no Xcode stages nothing
@@ -529,7 +530,7 @@ fn a_cutover_is_refused_while_the_host_keeps_no_run_record() {
 #[test]
 fn the_registry_of_a_platform_holds_its_kinds() {
     let kinds =
-        |platform: &Platform| registry_for(platform, DEFAULT_PACKAGE_LOCK_WAIT_SECS, "0.1.0");
+        |platform: &Platform| registry_for(platform, DEFAULT_PACKAGE_LOCK_WAIT_SECS, "0.1.0", None);
     let linux = kinds(&Platform::linux());
     assert_eq!(
         linux.kinds().collect::<Vec<_>>(),
@@ -559,7 +560,12 @@ fn the_registry_of_a_platform_holds_its_kinds() {
         reboot.prepare(&params),
         Err(KindError::unsupported(Kind::Reboot))
     );
-    let unchecked = registry_for(&Platform::linux(), DEFAULT_PACKAGE_LOCK_WAIT_SECS, "0.1");
+    let unchecked = registry_for(
+        &Platform::linux(),
+        DEFAULT_PACKAGE_LOCK_WAIT_SECS,
+        "0.1",
+        None,
+    );
     assert_eq!(
         unchecked.kinds().collect::<Vec<_>>(),
         [Kind::Linux, Kind::Reboot]
@@ -574,7 +580,15 @@ fn the_registry_of_a_platform_holds_its_kinds() {
         [Kind::Macos, Kind::Xcode, Kind::Reboot]
     );
     let refused = mac.get(Kind::Macos).expect("held").cutover(&params);
-    assert_eq!(refused, Err(KindError::unsupported(Kind::Macos)));
+    assert_eq!(
+        refused,
+        Err(KindError::Failed {
+            reason: "macos_path_not_built",
+            detail: "the order's macOS path is unspecified, and this hostkeeper installs a macOS \
+                     update only on the path install"
+                .to_owned(),
+        })
+    );
     let xcode = mac.get(Kind::Xcode).expect("held");
     assert_eq!(xcode.prepare(&params), Ok(()));
     let unsupported = KindError::unsupported(Kind::Xcode);
