@@ -69,3 +69,6 @@ impl MacProgram {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod profile_tests;
