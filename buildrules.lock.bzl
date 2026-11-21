@@ -11,7 +11,7 @@ MANIFEST_SHA256 = {
     "crates/hostkeeper-bootstrap/Cargo.toml": "b168fa0b2b13e33156ac5c7f5185a99c96a7f7b600e782f50b043ee6a4702923",
     "crates/hostkeeper-config/Cargo.toml": "a8fc5a024f9a3141e1d2de6adecfc1f22ce9af13d63ff802e9cdbe31ff4306f4",
     "crates/hostkeeper-console/Cargo.toml": "31866f423d79bdb3759006b9cf73b497f120cbddd07adbd20fc0c28e952c5ef5",
-    "crates/hostkeeper-coordinator/Cargo.toml": "ff9db8d3ef79afb0e0d2d66ebd21b6913f87a133d66c8a4a9141517454413a40",
+    "crates/hostkeeper-coordinator/Cargo.toml": "fdd3b8099c5aff54867968251068398c2eea2bc2b9acdbee1f6042b255b1df5f",
     "crates/hostkeeper-daemon/Cargo.toml": "b5d550719f66f8ed1512af915542ec68d3f164470e4da74d137c6f90f278446b",
     "crates/hostkeeper-enroll/Cargo.toml": "53cfa405f4bd2d9119805a0b50ba9d73649185195f189b10f3de51b4a8bcc753",
     "crates/hostkeeper-enrollment/Cargo.toml": "805240e1aaae2ec39e129dea41f50d4b165444619b37013b03788a44d9f4adc2",
@@ -161,7 +161,7 @@ PACKAGES = {
             "clippy": ["-D", "clippy::disallowed_types", "-D", "clippy::disallowed_methods"],
         },
         "actions": {
-            "ci": ["fmt", "lint", "test"],
+            "ci": ["fmt", "lint"],
         },
         "deny_warnings": True,
         "default_action": "ci",

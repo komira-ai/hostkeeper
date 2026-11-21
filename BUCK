@@ -14,6 +14,7 @@ _READ_BY_CRATES = [
     "README.md",
     "docs/cli.md",
     "docs/conformance.md",
+    "docs/deploy/coordinator",
     "docs/deploy/verify-a-release.md",
     "docs/design/models/coordinator-multi-instance.md",
     "docs/gateway.md",

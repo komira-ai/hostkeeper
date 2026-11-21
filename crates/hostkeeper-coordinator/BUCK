@@ -18,6 +18,7 @@ cargo_package(
         "tests/fixtures/xcode",
         "tests/support/readers.rs",
         "//:README.md",
+        "//:docs/deploy/coordinator",
         "//:docs/design/models/coordinator-multi-instance.md",
         "//:docs/gateway.md",
         "//:packaging/container/Dockerfile",

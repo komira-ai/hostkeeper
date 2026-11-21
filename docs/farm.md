@@ -45,20 +45,19 @@ After a change to a manifest or the lock, run `buildrules sync` and commit what 
 
 ## What stays in ci.yml, and why
 
-`//:ci` runs the tests of 29 of the 33 members: `coverage-gate`, `hostkeeper`,
-`hostkeeper-bootstrap`, `-config`, `-console`, `-coordinator`, `-daemon`, `-enroll`, `-enrollment`, `-install`,
+`//:ci` runs the tests of 28 of the 33 members: `coverage-gate`, `hostkeeper`,
+`hostkeeper-bootstrap`, `-config`, `-console`, `-daemon`, `-enroll`, `-enrollment`, `-install`,
 `-launchd`, `-link`, `-measure`, `-observe`, `-oidc`, `-openrc`, `-package`, `-placed`, `-proto`,
 `-pxe`, `-pxe-packets`, `-pxe-seed`, `-release`, `-steps`, `-testkit`, `-tls`, `-ui-tests`,
 `-wire` and `examples/hello`. A farm action has its declared inputs and nothing else: no network,
-no `PATH` but buildrules' busybox, no git checkout, not root. The coordinator's tests get a
-private Postgres for each test target from buildrules (`[package.metadata.buildrules.postgres]`,
-its URL in `HOSTKEEPER_TEST_POSTGRES_URL`, as ci.yml's service container gives it), on a Unix socket
-in the action's own directory. The other four members are format-checked, built and linted there,
-and their tests run in ci.yml (or as root in privileged.yml and pr-device.yml) alone; each says so
-in its `[package.metadata.buildrules.actions]` (`ci = ["fmt", "lint"]`):
+no `PATH` but buildrules' busybox, no git checkout, not root. The other five members are
+format-checked, built and linted there, and their tests run in ci.yml (or as root in
+privileged.yml and pr-device.yml) alone; each says so in its
+`[package.metadata.buildrules.actions]` (`ci = ["fmt", "lint"]`):
 
 | member | why its tests stay hosted |
 |---|---|
+| `hostkeeper-coordinator` | buildrules gives each of its test targets a private Postgres (`[package.metadata.buildrules.postgres]`, the URL in `HOSTKEEPER_TEST_POSTGRES_URL`), but that server runs with `fsync` off, which the coordinator's start refuses by design: every test that starts it fails on the farm (komira-ai/buildrules#166) |
 | `hostkeeper-hk` | its ssh tests run `ssh`, `ssh-agent`, `ssh-add` and `ssh-keygen` |
 | `hostkeeper-hook` | its outside-consumer test builds a crate with cargo against crates.io |
 | `hostkeeper-privileged` | its tests run as root against systemd, OpenRC, Docker and apt |
