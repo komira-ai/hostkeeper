@@ -254,7 +254,7 @@ fn the_updates_tab_shows_the_facts_each_due_item_the_xcodes_and_the_last_look() 
         r#"{ nodeId: "h-1" }"#,
         "[]",
         &format!(
-            "{}\nconst more = nodes(panel).filter((n) => n.attrs[\"class\"] === \"note\").map(text);\nreturn {{ rows: rows(panel), more }};",
+            "{}\nconst controls = new Set(nodes(panel).filter((n) => [\"update-controls\", \"schedule-form\"].includes(n.attrs[\"name\"])).flatMap((n) => nodes(n)));\nconst more = nodes(panel).filter((n) => !controls.has(n) && n.attrs[\"class\"] === \"note\").map(text);\nreturn {{ rows: rows(panel), more }};",
             PANEL
                 .split("return {")
                 .next()
@@ -398,7 +398,8 @@ const view = (t) => ({
 
 #[test]
 fn the_maintenance_page_groups_hosts_and_lists_the_due_ones() {
-    // Asserts: the page reads every page of Hosts.List and nothing else; it counts the hosts with
+    // Asserts: the page reads every page of Hosts.List, then the last 10 runs (none here), and
+    // nothing else; a due host's row ends with its Update button and another host's with nothing; it counts the hosts with
     // something due and their groups; it shows the groups in name order with the hosts in no group
     // last, each group's due hosts first, each host with what is due and its last look (stale ones
     // marked), a host with no report saying so; a host's name opens its page.
@@ -406,6 +407,7 @@ fn the_maintenance_page_groups_hosts_and_lists_the_due_ones() {
     let mut ui = Ui::start();
     ui.reply(&m("Hosts/List"), first);
     ui.reply(&m("Hosts/List"), second);
+    ui.reply(&m("Maintenance/List"), json!({}));
     let out = ui.run(&page_driver(
         "maintenance",
         "{}",
@@ -417,6 +419,7 @@ fn the_maintenance_page_groups_hosts_and_lists_the_due_ones() {
         [
             (m("Hosts/List"), json!({})),
             (m("Hosts/List"), json!({"pageToken": "p2"})),
+            (m("Maintenance/List"), json!({"limit": 10})),
         ]
     );
     assert_eq!(
@@ -425,16 +428,16 @@ fn the_maintenance_page_groups_hosts_and_lists_the_due_ones() {
             "fleet": "Updates due on 3 hosts in 2 groups",
             "groups": [
                 {"title": "linux-build", "note": "2 of 3 hosts with updates due", "rows": [
-                    ["k-1", "kernel update, restart needed", "10 min ago"],
-                    ["s-1", "12 security updates", "1 h ago"],
-                    ["a-1", "nothing due", "59 s ago"],
+                    ["k-1", "kernel update, restart needed", "10 min ago", "Update"],
+                    ["s-1", "12 security updates", "1 h ago", "Update"],
+                    ["a-1", "nothing due", "59 s ago", ""],
                 ]},
                 {"title": "mac-build", "note": "1 of 2 hosts with updates due", "rows": [
-                    ["m-1", "macOS 26.1 to 26.2, restart", "1 day ago"],
-                    ["m-2", "nothing listed (stale)", "2 h ago, stale"],
+                    ["m-1", "macOS 26.1 to 26.2, restart", "1 day ago", "Update"],
+                    ["m-2", "nothing listed (stale)", "2 h ago, stale", ""],
                 ]},
                 {"title": "Unassigned", "note": "0 of 1 host with updates due", "rows": [
-                    ["u-1", "no report", "not reported"],
+                    ["u-1", "no report", "not reported", ""],
                 ]},
             ],
             "warnings": [],
@@ -448,7 +451,8 @@ fn the_maintenance_page_groups_hosts_and_lists_the_due_ones() {
 
 #[test]
 fn the_maintenance_page_reads_again_every_minute_and_keeps_the_last_answer_on_a_failure() {
-    // Asserts: the page asks the frame to repeat its read every 60 seconds; a repeat shows the new
+    // Asserts: the page asks the frame to repeat its hosts read every 60 seconds (and its runs
+    // read every 10, after it); a repeat shows the new
     // answer (a host whose update was applied has nothing due, and the fleet count says so); a
     // repeat that fails keeps the last answer and says the read failed; and a page whose first
     // read fails shows the refusal and repeats nothing.
@@ -461,6 +465,7 @@ fn the_maintenance_page_reads_again_every_minute_and_keeps_the_last_answer_on_a_
         &m("Hosts/List"),
         json!({"hosts": [host("k-1", "linux-build", linux_report(vec![]), "30", false)]}),
     );
+    ui.reply(&m("Maintenance/List"), json!({}));
     let out = ui.run(&page_driver(
         "maintenance",
         "{}",
@@ -475,12 +480,12 @@ const failed = view(seen.shown[seen.shown.length - 1]);
 return {{ seconds, before: view(tree).fleet, after, failed }};"#
         ),
     ));
-    assert_eq!(out["out"]["seconds"], json!([60]));
+    assert_eq!(out["out"]["seconds"], json!([60, 10]));
     assert_eq!(out["out"]["before"], "Updates due on 1 host in 1 group");
     let applied = json!({
         "fleet": "No host reports anything due.",
         "groups": [{"title": "linux-build", "note": "0 of 1 host with updates due",
-                    "rows": [["k-1", "nothing due", "30 s ago"]]}],
+                    "rows": [["k-1", "nothing due", "30 s ago", ""]]}],
         "warnings": [],
     });
     assert_eq!(out["out"]["after"], applied);
@@ -517,17 +522,19 @@ fn home_ui(alerts: Value) -> Ui {
 const HOME: &str = r#"
 const notices = nodes(tree).filter((n) => n.attrs["name"] === "updates-due");
 const strip = nodes(tree).find((n) => String(n.attrs["class"]).startsWith("alert-strip") && n.attrs["name"] === undefined);
-const groups = notices.length === 0 ? [] : named(tree, "updates-due-group").map((li) => text(li).trim());
+const groups = notices.length === 0 ? [] : named(tree, "updates-due-group").map((li) => text(nodes(li).find((n) => n.attrs["class"] === "said")).trim());
+const buttons = notices.length === 0 ? [] : nodes(notices[0]).filter((n) => n.attrs["name"] === "update").map(text);
 if (notices.length > 0) {
   await click(tree, "open-maintenance");
 }
-return { notices: notices.length, groups, alerts: text(strip).replace(/\s+/g, " ").trim(), navigations: seen.navigations };"#;
+return { notices: notices.length, groups, buttons, alerts: text(strip).replace(/\s+/g, " ").trim(), navigations: seen.navigations };"#;
 
 #[test]
 fn home_shows_updates_due_as_a_notice_that_links_the_maintenance_page() {
     // Asserts: each `updates_due` alert is a line of the updates notice, in the coordinator's
     // words, and not an alert of the alerts strip, whose count leaves it out; the notice's button
-    // opens the Maintenance page; with no such alert there is no notice.
+    // opens the Maintenance page; each line has an Update button after its words; with no such alert
+    // there is no notice.
     let due = |group: &str, message: &str| {
         json!({"kind": "ALERT_KIND_UPDATES_DUE", "severity": "ALERT_SEVERITY_WARNING", "hostGroup": group,
                "message": message, "firstObservedUnix": "1800000000"})
@@ -545,6 +552,7 @@ fn home_shows_updates_due_as_a_notice_that_links_the_maintenance_page() {
         json!({
             "notices": 1,
             "groups": ["Updates due on 2 hosts of linux-build", "Updates due on 1 host of mac-build"],
+            "buttons": ["Update", "Update"],
             "alerts": "Alerts (1) halt critical api is halted since 2027-01-15 08:00:00 UTC",
             "navigations": [{"name": "maintenance", "params": {}}],
         })
@@ -558,9 +566,10 @@ fn home_shows_updates_due_as_a_notice_that_links_the_maintenance_page() {
 
 #[test]
 fn every_call_of_the_new_modules_is_a_descriptor_method() {
-    // Asserts: the Maintenance page calls Hosts.List and nothing else, through the generated
-    // client, and that method is one of the protobuf descriptors; the module of the due words
-    // calls nothing.
+    // Asserts: the Maintenance page calls HostGroups.Get, Maintenance.List, Get, Schedule, Cancel,
+    // RetryHost and PutBack and Hosts.List, through the generated client, and each is a method of
+    // the protobuf descriptors; the modules of the due words, the Schedule form and the runs
+    // section call nothing.
     let page = UiFile::named("pages/maintenance.js").expect("the Maintenance page is held");
     let sites = call_sites(page.path, page.text).unwrap_or_else(|e| panic!("{e}"));
     let methods: Vec<String> = sites
@@ -573,10 +582,26 @@ fn every_call_of_the_new_modules_is_a_descriptor_method() {
                 .method
         })
         .collect();
-    assert_eq!(methods, ["hostkeeper.operator.v1.Hosts/List"]);
+    assert_eq!(
+        methods,
+        [
+            "hostkeeper.operator.v1.HostGroups/Get",
+            "hostkeeper.operator.v1.Maintenance/List",
+            "hostkeeper.operator.v1.Maintenance/Get",
+            "hostkeeper.operator.v1.Hosts/List",
+            "hostkeeper.operator.v1.Maintenance/Schedule",
+            "hostkeeper.operator.v1.Maintenance/Cancel",
+            "hostkeeper.operator.v1.Maintenance/RetryHost",
+            "hostkeeper.operator.v1.Maintenance/PutBack",
+        ]
+    );
     let descriptors = FileDescriptorSet::decode(hostkeeper_proto::FILE_DESCRIPTOR_SET)
         .expect("hostkeeper-proto's descriptors decode");
     assert_eq!(check_calls(&methods, &descriptors), Ok(()));
     let words = UiFile::named("updates.js").expect("the due words are held");
     assert_eq!(call_sites(words.path, words.text), Ok(vec![]));
+    for module in ["schedule.js", "runs.js"] {
+        let file = UiFile::named(module).expect("the module is held");
+        assert_eq!(call_sites(file.path, file.text), Ok(vec![]), "{module}");
+    }
 }

@@ -175,6 +175,30 @@ pub const REQUESTS: &[(&str, &str)] = &[
             "reason": "retired"}"#,
     ),
     (
+        "hostkeeper.operator.v1.Maintenance/Cancel",
+        r#"{"runId": "no-such-run", "reason": "not needed"}"#,
+    ),
+    (
+        "hostkeeper.operator.v1.Maintenance/Get",
+        r#"{"runId": "no-such-run"}"#,
+    ),
+    (
+        "hostkeeper.operator.v1.Maintenance/List",
+        r#"{"limit": 10}"#,
+    ),
+    (
+        "hostkeeper.operator.v1.Maintenance/PutBack",
+        r#"{"runId": "no-such-run", "hostId": "storage-1", "reason": "put back"}"#,
+    ),
+    (
+        "hostkeeper.operator.v1.Maintenance/RetryHost",
+        r#"{"runId": "no-such-run", "hostId": "storage-1", "reason": "retry"}"#,
+    ),
+    (
+        "hostkeeper.operator.v1.Maintenance/Schedule",
+        r#"{"hostGroup": "storage", "reason": "monthly update", "confirm": true}"#,
+    ),
+    (
         "hostkeeper.operator.v1.Releases/ClearHalt",
         r#"{"service": "kbf", "reason": "fixed"}"#,
     ),
