@@ -17,7 +17,9 @@
 //! stage; its free places go to the eligible hosts that have not started as they ask, the first
 //! to ask first (a host that declined the update and waits does not ask: it is passed over).
 //! A stage is done when as many hosts are up at the desired version and have baked (or were
-//! recorded done) as it holds. A host in its turn of a maintenance run is no member until its
+//! recorded done) as it holds, and no failed host holds it; in a host group whose `failed_hosts`
+//! is `continue` a failed host counts as done, failed, unless it holds the plan
+//! ([`crate::failed_hosts`]: the canary, or the ceiling). A host in its turn of a maintenance run is no member until its
 //! turn ends, unless it took its place already: one at the desired version counts as done, so a
 //! long drain holds no stage open, and a failed one stays failed.
 //!
@@ -40,9 +42,7 @@
 //! the other services whose rollouts count are the group's other packages, up to the group's
 //! `live_rollouts` or the coordinator's.
 
-use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
-use std::rc::Rc;
 use std::time::Duration;
 
 use hostkeeper_wire::HostId;
@@ -55,9 +55,9 @@ use crate::decide::Gate;
 use crate::desired::Desired;
 use crate::fleet::{Fleet, Host};
 pub use crate::live::is_live;
-use crate::live::live_elsewhere;
 use crate::membership::HEARTBEAT_V2;
 use crate::orders::INSTALL_FEATURE;
+pub(crate) use crate::plan_memo::{Memo, current, elsewhere};
 use crate::rollouts::{Pause, Rollout};
 use crate::services::{ServiceDef, Services};
 
@@ -309,7 +309,9 @@ pub enum Wait {
     RolloutElsewhere,
     /// The stage is done, or none is entered yet, and the next waits for an operator's Advance.
     ManualAdvance,
-    /// A host of the stage failed the desired version and is still eligible.
+    /// A host of the stage failed the desired version and is still eligible, and holds the plan:
+    /// any failed host does under `failed_hosts = stop`, and under `continue` one of the canary,
+    /// or as many as the ceiling ([`crate::failed_hosts`]).
     FailedHost,
     /// The next host of the stage would leave fewer hosts of its role up than `min_up`.
     BelowMinUp,
@@ -342,6 +344,12 @@ pub struct View {
     pub paused: Option<Pause>,
     /// The hosts recorded done for the desired version.
     pub done: BTreeSet<String>,
+    /// How many failed hosts stop the plan when it goes on past them; none when one holds its
+    /// stage ([`crate::failed_hosts::ceiling`]).
+    pub(crate) ceiling: Option<usize>,
+    /// How many of the failed hosts failed for a reason they can clear by itself, which the
+    /// coordinator retries: they count for no ceiling ([`crate::failed_hosts::retrying`]).
+    pub(crate) retrying: usize,
 }
 
 impl View {
@@ -446,6 +454,8 @@ impl View {
             member.stage = stage + 1;
         }
         let current = stages.iter().filter(|s| s.first < entered).count();
+        let ceiling = crate::failed_hosts::ceiling(def, members.len());
+        let retrying = crate::failed_hosts::retrying(def, fleet, &members);
         Self {
             version: want.version.clone(),
             stages,
@@ -454,6 +464,8 @@ impl View {
             members,
             paused: None,
             done,
+            ceiling,
+            retrying,
         }
     }
 
@@ -479,17 +491,18 @@ impl View {
         self.size().saturating_sub(self.started().count())
     }
 
-    /// Whether the current stage is done: it is entered, and as many hosts are done as it holds.
-    /// The hosts are in the order the stages take them, the done ones first, so these are the
-    /// stage's own: a host the next stage already ordered does not undo it.
+    /// Whether the current stage is done: it is entered, no failed host holds it
+    /// ([`Self::failed_holds`]), and as many hosts are done, or failed, as it holds. The hosts are
+    /// in the order the stages take them, the done ones first, so these are the stage's own: a
+    /// host the next stage already ordered does not undo it.
     #[must_use]
     pub fn stage_done(&self) -> bool {
         self.current > 0
-            && !self.started().any(|m| m.state == HostState::Failed)
+            && !self.failed_holds()
             && self
                 .members
                 .iter()
-                .filter(|m| m.state == HostState::Done)
+                .filter(|m| matches!(m.state, HostState::Done | HostState::Failed))
                 .count()
                 >= self.size()
     }
@@ -544,7 +557,7 @@ impl View {
         if self.stage_done() {
             return self.next().map(|_| Wait::ManualAdvance);
         }
-        if self.started().any(|m| m.state == HostState::Failed) {
+        if self.failed_holds() {
             return Some(Wait::FailedHost);
         }
         let next = self
@@ -746,9 +759,12 @@ fn no_slot(def: &ServiceDef, want: &Desired, fleet: &Fleet, id: &HostId, now: Du
     slots_full(def, cap, fleet, id, now)
 }
 
-/// Whether `cap` hosts of the role of `id` hold a slot of `def`, the host `id` not counted.
+/// Whether `cap` hosts of the role of `id` hold a slot of `def`, the host `id` not counted. A plan
+/// that goes on past its failed hosts counts no host for its failure alone, only one that runs
+/// something or is ordered ([`crate::failed_hosts::continues`]).
 fn slots_full(def: &ServiceDef, cap: u32, fleet: &Fleet, id: &HostId, now: Duration) -> bool {
     let service = def.name.as_str();
+    let continues = crate::failed_hosts::continues(def);
     let role = fleet.role_in(service, id);
     let others =
         |o: &HostId| o != id && !fleet.is_forced_in(def, o) && fleet.role_in(service, o) == role;
@@ -758,6 +774,10 @@ fn slots_full(def: &ServiceDef, cap: u32, fleet: &Fleet, id: &HostId, now: Durat
         .filter(|(o, h)| {
             if fleet.is_held(service, o) {
                 h.beat.updating.is_some() || fleet.is_ordered(service, o, now)
+            } else if continues {
+                h.beat.updating.is_some()
+                    || h.beat.promotion_pending
+                    || fleet.is_ordered(service, o, now)
             } else {
                 fleet.holds_slot(service, o, h, now)
             }
@@ -770,118 +790,12 @@ fn slots_full(def: &ServiceDef, cap: u32, fleet: &Fleet, id: &HostId, now: Durat
     occupying + unseen >= cap as usize
 }
 
-/// Whether `service` may not start a rollout now: its own is not live and as many other
-/// services' are as `--live-rollouts` lets be.
-pub(crate) fn elsewhere(
-    services: &Services,
-    all: &BTreeMap<String, Desired>,
-    service: &str,
-    fleet: &Fleet,
-    now: Duration,
-) -> bool {
-    let name = memo_name(services.get(service).and_then(ServiceDef::group), service);
-    let kept = MEMO.with(|memo| {
-        memo.borrow()
-            .as_ref()
-            .map(|plans| plans.elsewhere.get(&name).copied())
-    });
-    match kept {
-        Some(Some(held)) => held,
-        Some(None) => {
-            let held = live_elsewhere(services, all, service, fleet, now).is_some();
-            MEMO.with(|memo| {
-                memo.borrow_mut()
-                    .as_mut()
-                    .map(|plans| plans.elsewhere.insert(name, held))
-            });
-            held
-        }
-        None => live_elsewhere(services, all, service, fleet, now).is_some(),
-    }
-}
-
-/// The name a [`Memo`] keeps a service's plan under: the service's own, or, for one made for a host
-/// group, the group's name before it, so that two groups' plans of one package are two.
-fn memo_name(group: Option<&crate::host_groups::GroupName>, service: &str) -> String {
-    group.map_or_else(|| service.to_owned(), |group| format!("{group}/{service}"))
-}
-
-thread_local! {
-    /// The plans [`current`] built while a [`Memo`] stands, by service and desired version.
-    static MEMO: RefCell<Option<Plans>> = const { RefCell::new(None) };
-}
-
-/// What a [`Memo`] keeps: each service's plan by service and desired version (the service's name
-/// is its group's before it, for a service made for a group), and whether another service's
-/// rollout holds it ([`elsewhere`]).
-#[derive(Default)]
-struct Plans {
-    views: BTreeMap<(String, String), Rc<View>>,
-    elsewhere: BTreeMap<String, bool>,
-}
-
-/// While it stands, each service's plan is built once at its desired version and read again from
-/// memory ([`current`]): for a pass over a fleet that does not change under it, such as the
-/// decisions of one heartbeat until it is ordered something, or a status. The pass begins one
-/// and drops it before it changes the fleet. A memo begun while another stands leaves that one.
-pub(crate) struct Memo {
-    began: bool,
-}
-
-impl Memo {
-    /// A memo for this thread, unless one stands already.
-    #[must_use]
-    pub(crate) fn begin() -> Self {
-        let began = MEMO.with(|memo| {
-            let mut memo = memo.borrow_mut();
-            let began = memo.is_none();
-            if began {
-                *memo = Some(Plans::default());
-            }
-            began
-        });
-        Self { began }
-    }
-}
-
-impl Drop for Memo {
-    fn drop(&mut self) {
-        if self.began {
-            MEMO.with(|memo| *memo.borrow_mut() = None);
-        }
-    }
-}
-
-/// The plan of `def` at its desired version `want` as the decision reads it
-/// ([`View::effective`]), from the memo while one stands.
-pub(crate) fn current(def: &ServiceDef, want: &Desired, fleet: &Fleet, now: Duration) -> Rc<View> {
-    let build = || {
-        Rc::new(View::effective(
-            def,
-            want,
-            fleet.rollout_in(def),
-            fleet,
-            now,
-        ))
-    };
-    MEMO.with(|memo| {
-        let mut memo = memo.borrow_mut();
-        let Some(plans) = memo.as_mut() else {
-            return build();
-        };
-        let key = (
-            memo_name(def.group(), &def.name),
-            want.version.as_str().to_owned(),
-        );
-        Rc::clone(plans.views.entry(key).or_insert_with(build))
-    })
-}
-
 /// The gate the plan of `def` puts on ordering the host `id` the desired version `want` at
 /// `now`, after every rule of the decision before it held nothing; none when it may be ordered.
 ///
 /// A host under its own order is never held: it is told the same again. Then, in order: a paused
-/// plan holds every host (`paused`); a service whose rollout is not live waits for the others
+/// plan holds every host (`paused`), and so does a plan that goes on past its failed hosts once
+/// they reach its ceiling (`stage_failed`); a service whose rollout is not live waits for the others
 /// (`rollout_elsewhere`); while the current stage has a free place, a host is held only by its
 /// role's `max_updating` (`no_slot`) and `min_up` (`below_min_up`); once it has none, a host
 /// waits for its stage:
@@ -909,6 +823,9 @@ pub fn gate(
     }
     if view.paused.is_some() {
         return Some(Gate::Paused);
+    }
+    if view.at_ceiling() {
+        return Some(Gate::StageFailed);
     }
     if view.free() > 0 {
         // A plan with a free place whose rollout is not live has started no host, or has none

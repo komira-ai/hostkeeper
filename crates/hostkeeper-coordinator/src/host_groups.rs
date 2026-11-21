@@ -34,6 +34,7 @@ use crate::bake::MAX_BAKE_BEATS;
 use crate::canary::Canary;
 use crate::defer::DeferBackoff;
 use crate::desired::MAX_COUNT;
+use crate::failed_hosts::FailedHosts;
 use crate::force::{ForceRecord, SELF_SERVICE};
 use crate::maintenance_policy::Maintenance;
 use crate::ops::{Halt, HaltAck, OpsState, ServiceOps};
@@ -159,7 +160,11 @@ pub(crate) struct Policy {
     /// How many failed hosts make an automatic rollback.
     #[serde(skip_serializing_if = "is_default_threshold")]
     pub(crate) rollback_after_failed: FailThreshold,
-    /// How long a deferred host is left alone.
+    /// What a host that failed does to the rest of its stage ([`crate::failed_hosts`]).
+    #[serde(skip_serializing_if = "is_continue")]
+    pub(crate) failed_hosts: FailedHosts,
+    /// How long a deferred host is left alone, and a host whose failure it can clear by itself
+    /// before it is ordered again.
     #[serde(skip_serializing_if = "is_default_backoff")]
     pub(crate) defer_backoff: DeferBackoff,
     /// The most hosts of the group updating one package at once, 0 to [`MAX_COUNT`]; 0 holds
@@ -187,6 +192,7 @@ impl Default for Policy {
             bake_beats: 0,
             rollback: Rollback::Manual,
             rollback_after_failed: FailThreshold::default(),
+            failed_hosts: FailedHosts::Continue,
             defer_backoff: DeferBackoff::default(),
             max_updating: DEFAULT_MAX_UPDATING,
             min_up: 0,
@@ -206,6 +212,10 @@ fn is_zero(n: &u32) -> bool {
 
 fn is_manual(rollback: &Rollback) -> bool {
     *rollback == Rollback::Manual
+}
+
+fn is_continue(failed_hosts: &FailedHosts) -> bool {
+    *failed_hosts == FailedHosts::Continue
 }
 
 fn is_default_threshold(threshold: &FailThreshold) -> bool {
@@ -271,6 +281,7 @@ impl Policy {
                 "rollback_after_failed",
                 self.rollback_after_failed != other.rollback_after_failed,
             ),
+            ("failed_hosts", self.failed_hosts != other.failed_hosts),
             ("defer_backoff", self.defer_backoff != other.defer_backoff),
             ("max_updating", self.max_updating != other.max_updating),
             ("min_up", self.min_up != other.min_up),

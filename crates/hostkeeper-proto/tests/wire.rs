@@ -783,6 +783,7 @@ fn wire_names_are_pinned() {
                 "host_halt",
                 "maintenance_halted",
                 "maintenance_not_back",
+                "repeated_deferral",
             ],
         ),
         (

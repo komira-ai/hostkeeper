@@ -1,4 +1,5 @@
-//! The failed reports an operator set aside with `Hosts.Retry` ([`crate::retry`]), and the order
+//! The failed reports set aside, by an operator with `Hosts.Retry` ([`crate::retry`]) or by the
+//! coordinator itself for a failure the host can clear by itself ([`auto`]), and the order
 //! a host was given and has not answered, which `Releases.Status` and `Hosts.Get` show
 //! ([`Outstanding`]).
 //!
@@ -26,6 +27,9 @@ use hostkeeper_wire::wire::{Health, Heartbeat, Outcome, UpdateResult};
 
 use super::{Fleet, ORDER_AGE};
 
+#[path = "fleet_autoretry.rs"]
+pub(crate) mod auto;
+
 /// A failed report set aside.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Aside {
@@ -48,6 +52,9 @@ pub(crate) struct Retries {
     /// Per host and service, the target and the id of the update or install the coordinator
     /// ordered last.
     named: BTreeMap<(HostId, String), (Version, String)>,
+    /// Per host and service, the run of failures the host can clear by itself that the
+    /// coordinator retries ([`auto`]).
+    failing: BTreeMap<(HostId, String), auto::Failing>,
 }
 
 impl Retries {
@@ -122,6 +129,13 @@ impl Fleet {
                 .last_update
                 .take_if(|r| r.outcome == Outcome::Failed)
         }) {
+            if let Some(run) = self
+                .retries
+                .failing
+                .get_mut(&(id.clone(), service.to_owned()))
+            {
+                run.set_aside();
+            }
             self.retries.set_aside.insert(
                 (id.clone(), service.to_owned()),
                 Aside {
@@ -190,5 +204,6 @@ impl Fleet {
     pub(super) fn forget_retries(&mut self, id: &HostId) {
         self.retries.set_aside.retain(|(host, _), _| host != id);
         self.retries.named.retain(|(host, _), _| host != id);
+        self.retries.failing.retain(|(host, _), _| host != id);
     }
 }

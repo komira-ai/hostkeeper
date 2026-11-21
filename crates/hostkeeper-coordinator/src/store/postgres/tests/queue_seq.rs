@@ -103,6 +103,7 @@ fn entries(on: &Instance) -> Vec<Entry> {
                 group: group.clone(),
                 live_rollouts: None,
                 max_updating: 1,
+                failed_hosts: crate::failed_hosts::FailedHosts::Stop,
             });
             out.push(Entry {
                 def,

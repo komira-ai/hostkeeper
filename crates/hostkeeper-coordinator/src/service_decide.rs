@@ -109,7 +109,9 @@ impl Coordinator {
     /// Notes `hearing`, a beat of a host decided over `basis` with the operations state `ops`, in
     /// `fleet` at `now`: each service that counts the host records its word, a service that no
     /// longer counts it forgets it (or keeps what an update it still runs occupies), as a
-    /// heartbeat has always been noted.
+    /// heartbeat has always been noted. A package of a host group whose word is a failure the host
+    /// can clear by itself is retried once its backoff has passed
+    /// ([`Fleet::retry_by_itself`]).
     pub(super) fn fold(
         fleet: &mut Fleet,
         basis: &Basis<'_>,
@@ -155,13 +157,20 @@ impl Coordinator {
         }
         for one in announced.iter().chain(own) {
             match basis.services.get(&one.name) {
-                Some(def) if counted(def) => fleet.record_named_in(
-                    &one.name,
-                    host.clone(),
-                    role,
-                    one.as_heartbeat(platform),
-                    now,
-                ),
+                Some(def) if counted(def) => {
+                    fleet.record_named_in(
+                        &one.name,
+                        host.clone(),
+                        role,
+                        one.as_heartbeat(platform),
+                        now,
+                    );
+                    // A package of a host group: a failure the host can clear by itself is
+                    // ordered again once the group's `defer_backoff` has passed.
+                    if def.scope.is_some() {
+                        fleet.retry_by_itself(&def.name, host, &def.defer_backoff, now);
+                    }
+                }
                 // A host taken off the service while it ran an update of it says when that ends.
                 Some(def)
                     if dropped(def)

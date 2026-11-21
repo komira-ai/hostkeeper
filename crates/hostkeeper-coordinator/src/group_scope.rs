@@ -56,6 +56,9 @@ pub(crate) struct GroupScope {
     /// How many hosts of the group may hold a slot of one package at once: the policy's
     /// `max_updating`, which an uninstall of a package the group no longer lists takes a slot of.
     pub(crate) max_updating: u32,
+    /// What a host that failed the desired version does to the rest of its stage: the policy's
+    /// `failed_hosts` ([`crate::failed_hosts`]).
+    pub(crate) failed_hosts: crate::failed_hosts::FailedHosts,
 }
 
 impl ServiceDef {
@@ -109,6 +112,7 @@ fn def_of(
             group: group.clone(),
             live_rollouts: policy.live_rollouts.map(|n| n as usize),
             max_updating: policy.max_updating,
+            failed_hosts: policy.failed_hosts,
         }),
     }
 }
@@ -159,6 +163,7 @@ fn leaving_def(
             group: group.clone(),
             live_rollouts: listed.policy.live_rollouts.map(|n| n as usize),
             max_updating: listed.policy.max_updating,
+            failed_hosts: listed.policy.failed_hosts,
         }),
     }
 }
