@@ -274,9 +274,10 @@ impl Mac {
             }
             // The one call left, `sysadminctl -secureTokenOn <name> ...`, whose arguments every test
             // compares whole.
-            (_, [_, name, ..]) => {
+            _ => {
+                let name = args.get(1).copied().unwrap_or_default();
                 let inert = state.inert;
-                if let Some(user) = state.users.get_mut(*name).filter(|_| !inert) {
+                if let Some(user) = state.users.get_mut(name).filter(|_| !inert) {
                     user.token = true;
                 }
                 ok("", "Done!\n")
