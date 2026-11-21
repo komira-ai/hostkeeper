@@ -488,9 +488,11 @@ A value out of range is refused `invalid_policy`, and the log names the key, `ma
 `Get` and `List` answer the table with every key named, a default included. A `Put` replaces the group
 whole, so a `Put` that leaves `maintenance` out sets every key back to its default. A maintenance run
 reads `batch` (unless the run names its own) and `min_serving` to decide when each host of the group
-starts its turn, and `linux_scope`, `drain_deadline_secs` (unless the run names its own) and
-`return_secs` for the `maintain` order it sends the host
-([maintenance-updates.md](../design/maintenance-updates.md), section 5.1).
+starts its turn, and `linux_scope`, `macos_major`, `drain_deadline_secs` (unless the run names its
+own) and `return_secs` for the `maintain` order it sends the host
+([maintenance-updates.md](../design/maintenance-updates.md), section 5.1). `Schedule` counts a
+major upgrade of macOS that a Mac reports as due only when its group's `macos_major` is true
+([macos.md](../macos.md), Maintenance facts).
 
 ## Incidents are per host and per group
 

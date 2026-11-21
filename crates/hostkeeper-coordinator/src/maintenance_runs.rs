@@ -9,8 +9,8 @@
 //! What a run holds is what `Maintenance.Schedule` decided: its kinds, where (hosts, or a host
 //! group), its window, its batch and drain deadline (absent: each group's), whether it may take a
 //! group's last host, its reason, who scheduled it and when, and its hosts, each with its group,
-//! its step and since when, the kinds its turn applies and, for a host left out, why. The one
-//! ending it stores is a cancel ([`Run::cancelled_unix`]); where it stands otherwise
+//! its step and since when, the kinds its turn applies and, for a host or a kind left out, why.
+//! The one ending it stores is a cancel ([`Run::cancelled_unix`]); where it stands otherwise
 //! ([`Run::state_at`]) is read from its hosts' steps and the clock, so a window that ends needs
 //! no write. A host's turn is started, and its step then follows what its daemon reports, by
 //! [`crate::decide_maintenance`].
@@ -138,6 +138,14 @@ named! {
         Held = "held" => Held,
         /// It is excluded from a package.
         Excluded = "excluded" => Excluded,
+        /// For `macos`: the Mac reports a device-management setting that must not be set on it.
+        MdmConflict = "mdm_conflict" => MdmConflict,
+        /// For `macos`: the Mac's update account is missing, is not an administrator or holds no
+        /// Secure Token, or the Mac reports no facts of it.
+        NoUpdateAccount = "no_update_account" => NoUpdateAccount,
+        /// For `macos`: FileVault is not reported off, and the report does not show the update
+        /// account a FileVault user.
+        FilevaultNotReady = "filevault_not_ready" => FilevaultNotReady,
     }
 }
 
@@ -185,7 +193,8 @@ pub(crate) struct RunHost {
     /// The kinds applied so far, in the order applied, as its daemon reports them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) applied: Vec<Kind>,
-    /// Why it is left out, with [`Step::Skipped`].
+    /// Why it is left out: with [`Step::Skipped`] the whole host, with another step the kind
+    /// `macos`, which is then not in `kinds` ([`crate::maintenance_mac`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) skipped_because: Option<Skip>,
     /// Why it halted or deferred, as its daemon words it; empty otherwise.
