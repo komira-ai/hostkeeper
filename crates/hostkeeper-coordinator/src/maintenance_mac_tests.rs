@@ -13,7 +13,9 @@ use crate::decide_maintenance::Skipping;
 use crate::decide_maintenance::tests::{ORDER, RUN, beat, group_with, maintain_id, table, tell};
 use crate::host_groups_support::{UNIX, World};
 use crate::maintenance::text_of;
-use crate::maintenance_calls_tests::{GROUP, clean_mac, edit_runs, get, hosts_request, schedule};
+use crate::maintenance_calls_tests::{
+    GROUP, clean_mac, edit_runs, get, host_at, hosts_request, run_of, schedule, seed_runs, waiting,
+};
 use crate::maintenance_runs::{Kind, RunHost, Skip, Step};
 use crate::orders::Order;
 
@@ -531,4 +533,66 @@ fn a_skip_that_cannot_be_stored_or_comes_after_a_cancel_changes_nothing() {
         .skip_macos(&crate::testutil::id(MAC), &skipping, UNIX);
     assert_eq!(world.ops().maintenance_runs, before);
     assert!(mac_steps_audited(&world).is_empty());
+}
+
+/// Proves: a skip of `macos` stored for a Mac changes only the Mac's own turn of the run it
+/// names, and only while that turn waits with `macos`: another run that holds the Mac waiting,
+/// another host of the run, the Mac's turn once it is staging, and its waiting turn without
+/// `macos` are each left as they were, with no audit entry; its waiting turn of `macos` and
+/// `xcode` is stored waiting with `xcode` alone and why.
+///
+/// Catches: a skip stored on the wrong run or host, or on a turn that has started or no longer
+/// holds `macos`.
+#[test]
+fn a_skip_changes_only_the_macs_waiting_turn_of_macos_in_its_run() {
+    let world = world_of("mac-skip-which", false, &[minor()], Some(clean_mac()));
+    seed_runs(
+        &world,
+        vec![
+            run_of("run-1-1", vec![waiting(MAC, GROUP, &[Kind::Macos])]),
+            run_of(
+                RUN,
+                vec![
+                    waiting("a0", GROUP, &[Kind::Macos]),
+                    host_at(MAC, GROUP, Step::Staging, UNIX, &[Kind::Macos]),
+                ],
+            ),
+        ],
+    );
+    let skipping = Skipping {
+        run_id: RUN.to_owned(),
+        host_group: GROUP.to_owned(),
+        why: Skip::NoUpdateAccount,
+    };
+    let skip = |world: &World| {
+        world
+            .coordinator()
+            .skip_macos(&crate::testutil::id(MAC), &skipping, UNIX);
+    };
+    let held = world.ops().maintenance_runs;
+    skip(&world);
+    assert_eq!(world.ops().maintenance_runs, held, "the Mac is staging");
+
+    edit_runs(&world, |runs| {
+        runs[1].hosts[1] = waiting(MAC, GROUP, &[Kind::Xcode])
+    });
+    let held = world.ops().maintenance_runs;
+    skip(&world);
+    assert_eq!(world.ops().maintenance_runs, held, "no macos in the turn");
+    assert!(mac_steps_audited(&world).is_empty());
+
+    edit_runs(&world, |runs| {
+        runs[1].hosts[1] = waiting(MAC, GROUP, &[Kind::Macos, Kind::Xcode]);
+    });
+    let mut expected = world.ops().maintenance_runs;
+    expected[1].hosts[1] = RunHost {
+        skipped_because: Some(Skip::NoUpdateAccount),
+        ..waiting(MAC, GROUP, &[Kind::Xcode])
+    };
+    skip(&world);
+    assert_eq!(world.ops().maintenance_runs, expected);
+    assert_eq!(
+        mac_steps_audited(&world),
+        vec![format!("run {RUN} waiting no_update_account")]
+    );
 }
