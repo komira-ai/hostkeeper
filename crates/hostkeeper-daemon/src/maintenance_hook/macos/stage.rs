@@ -197,7 +197,7 @@ fn plan(
 
 /// The newest of `installers` of macOS of a major version higher than `running`; of equal
 /// versions, the first.
-fn newest_upgrade(running: u64, installers: &[FullInstaller]) -> Option<&FullInstaller> {
+pub(super) fn newest_upgrade(running: u64, installers: &[FullInstaller]) -> Option<&FullInstaller> {
     installers
         .iter()
         .filter(|installer| {
