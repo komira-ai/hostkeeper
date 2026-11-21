@@ -957,6 +957,8 @@ fn the_join_action_is_pinned_federated_and_names_no_secret() {
         "          ping: ${{ inputs.tailnet_coordinator }}\n",
         "          ping: hk-coordinator\n",
         "          ping: ''\n",
+        "          Ping: hk-coordinator\n",
+        "          PING: hk-coordinator\n",
     ] {
         assert_client(&with_in(CLIENT, args, &format!("{args}{ping}")), &[pings]);
     }

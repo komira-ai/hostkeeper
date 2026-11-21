@@ -41,7 +41,7 @@
 //!   `continue-on-error`, it comes before a check of [`VERIFY_STEPS`] or after [`CLIENT_STEP`],
 //!   its `uses:` is not [`JOIN_ACTION`] at a 40-digit lowercase commit SHA, it names `secrets.`
 //!   anywhere or passes a stored credential ([`STORED_CREDENTIALS`]), its `with:` does not give
-//!   each of [`JOIN_WITH`] exactly, passes `ping` (the action's ping fails the job on one missed
+//!   each of [`JOIN_WITH`] exactly, passes `ping` in any case (the action's ping fails the job on one missed
 //!   answer), or it does not pin the Tailscale tarball by an `X.Y.Z` `version` and a 64-digit
 //!   lowercase `sha256sum`; or a step after the last provenance check and before the join uses an
 //!   action: the join is the first action of the job;
@@ -679,7 +679,14 @@ fn join_problems(
             problems.push(format!("{who} does not pass `{key}: {want}`"));
         }
     }
-    if with.and_then(|w| entry(w, JOIN_PING)).is_some() {
+    // In any case: the runner hands the action its inputs case-insensitively.
+    let pings = with.is_some_and(|w| {
+        entries(w).iter().any(|(k, _)| {
+            k.as_str()
+                .is_some_and(|k| k.eq_ignore_ascii_case(JOIN_PING))
+        })
+    });
+    if pings {
         problems.push(format!(
             "{who} passes `{JOIN_PING}`, which fails the job when one ping is not answered; the step `{REACH_STEP}` waits for the coordinator"
         ));
