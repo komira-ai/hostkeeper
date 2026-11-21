@@ -165,3 +165,65 @@ fn the_doc_check_reads_xcode_push() {
         ["docs/x.md: `hk xcode-push --force`: xcode-push has no flag --force"]
     );
 }
+
+/// Catches the doc check refusing `hk tailnet-wait` as hk takes it (in a fenced line or a span,
+/// `--help` too), and passing it with an argument, a flag or a number it has not, a token, or
+/// without the CA file, each in hk's own words.
+#[test]
+fn the_doc_check_reads_tailnet_wait() {
+    let call = "hk --endpoint https://coordinator.example:8443 --ca-file ca.pem";
+    let good = format!(
+        "```sh\n{call} tailnet-wait\n{call} tailnet-wait --attempts 3 --interval-secs=0\n```\n"
+    ) + "`hk tailnet-wait`, `hk tailnet-wait --help` and `hk tailnet-wait --attempts 3`.\n";
+    assert_eq!(doc_problems("docs/x.md", &good), Vec::<String>::new());
+    assert_eq!(
+        command_of(&format!("{call} tailnet-wait")),
+        Ok(Some("tailnet-wait".to_owned()))
+    );
+    let token = "hk tailnet-wait takes no token and writes no answer: --token-file, \
+                 --token-stdin, --github-oidc-audience and --response-file are not for it";
+    let cases = [
+        (
+            format!("{call} tailnet-wait coordinator"),
+            "hk tailnet-wait takes no argument: coordinator",
+        ),
+        (
+            format!("{call} tailnet-wait --ping"),
+            "hk tailnet-wait has no flag --ping",
+        ),
+        (
+            format!("{call} tailnet-wait --attempts 0"),
+            "--attempts takes a whole number from 1 to 100",
+        ),
+        (
+            format!("{call} tailnet-wait --attempts=101"),
+            "--attempts takes a whole number from 1 to 100",
+        ),
+        (
+            format!("{call} tailnet-wait --interval-secs 601"),
+            "--interval-secs takes a whole number from 0 to 600",
+        ),
+        (
+            format!("{call} tailnet-wait --attempts 2 --attempts 2"),
+            "--attempts is given twice",
+        ),
+        (format!("{call} --token-file t tailnet-wait"), token),
+        (format!("{call} tailnet-wait --response-file r"), token),
+        (
+            "hk --endpoint https://coordinator.example:8443 tailnet-wait".to_owned(),
+            "hk tailnet-wait needs --endpoint and --ca-file",
+        ),
+        (
+            "hk --endpoint http://coordinator.example --ca-file ca.pem tailnet-wait".to_owned(),
+            "--endpoint takes https://<host>[:<port>]",
+        ),
+    ];
+    for (line, problem) in cases {
+        let error = command_of(&line).expect_err(&line);
+        assert_eq!(error, format!("{line}\n{problem}"));
+    }
+    assert_eq!(
+        doc_problems("docs/x.md", "`hk tailnet-wait --ping`"),
+        ["docs/x.md: `hk tailnet-wait --ping`: tailnet-wait has no flag --ping"]
+    );
+}

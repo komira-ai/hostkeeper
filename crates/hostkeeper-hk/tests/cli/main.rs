@@ -20,7 +20,9 @@
 //! - `maintenance`: the `Maintenance` calls' requests, their enum flags' usage errors, and the
 //!   answer of every one through the real gateway of an empty coordinator;
 //! - `xcode`: the commands of the service `xcode`: their paths, bodies, answers and a refusal;
-//! - `xcode_push`: `hk xcode-push`, on stand-ins for the Mac's programs and a fake Xcode store.
+//! - `xcode_push`: `hk xcode-push`, on stand-ins for the Mac's programs and a fake Xcode store;
+//! - `tailnet_wait`: `hk tailnet-wait`, its probe of a loopback server, its recorded waits and its
+//!   rejoin through a stand-in `tailscale`.
 
 mod answers;
 mod flags;
@@ -35,6 +37,7 @@ mod rig;
 mod secrets;
 mod ssh;
 mod surface;
+mod tailnet_wait;
 mod transport;
 mod xcode;
 mod xcode_push;

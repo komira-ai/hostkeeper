@@ -20,6 +20,8 @@ Four commands are not gateway calls: the SSH tunnel is built into hk. `hk ssh <h
 
 `hk xcode-push <version> | <archive.xip>` is not a gateway call either: on macOS only, it brings an Xcode release into the coordinator's Xcode store. Given a version, it downloads the archive with `xcodes download <version>` in the operator's own session (a two-factor prompt is answered at the terminal); given a file, it takes the file. Apple's signature must be on it (`pkgutil --check-signature`: exit 0, `signed Apple Software`, a chain ending at Apple Root CA), its version and build are read from the app `xip --expand` makes, and it is uploaded unmodified and streamed, `PUT /v1/xcode/<sha256>?version=<version>&build=<build>`; a step that fails uploads nothing. It needs --endpoint, --ca-file and --token-file, and takes no other credential; `hk xcode-push --help` says each step.
 
+`hk tailnet-wait [--attempts N] [--interval-secs S]` is not a gateway call either: run by a CI job right after it joined the tailnet, it asks the coordinator's `GET /v1/version`, with no token, up to N times (6 by default) with S seconds between two tries (10 by default), until any HTTP answer comes; when none does, it runs `tailscale down`, then `tailscale up`, and asks as many times again. It ends 0 at the first answer, with one line saying which try it was, and 1 when neither round had one, saying how each ended. It needs --endpoint and --ca-file, takes --timeout-secs for each try, and takes no token; `hk tailnet-wait --help` says each step.
+
 ## Global flags
 
 | flag | value | default | meaning |
