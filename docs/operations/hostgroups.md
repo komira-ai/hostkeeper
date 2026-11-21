@@ -480,6 +480,8 @@ rules and `--live-rollouts` are otherwise as [rollout-plans.md](rollout-plans.md
 ### Maintenance
 
 `maintenance` holds the keys a group keeps for its hosts' maintenance. A key left out takes its default.
+How an operator runs a Linux host's maintenance with them, and recovers a host that halted, is
+[maintenance.md](maintenance.md).
 
 | Key | Default | Range |
 |---|---|---|
