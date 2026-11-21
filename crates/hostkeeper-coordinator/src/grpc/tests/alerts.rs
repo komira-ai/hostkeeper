@@ -96,6 +96,10 @@ async fn a_failed_canary_is_the_same_alert_over_grpc_and_the_gateway() {
         request_id: String::new(),
         other_host_id: String::new(),
         host_group: String::new(),
+        reason: String::new(),
+        detail: String::new(),
+        tries: 0,
+        since_unix: 0,
     };
     assert_eq!(listed.alerts, vec![want]);
 

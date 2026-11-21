@@ -7,9 +7,11 @@
 //! Only a service that is moving takes a place: one of its hosts runs an update (updating, or its
 //! promotion pending), an order the coordinator sent it is outstanding, one of its plan's hosts
 //! bakes the desired version after an update the coordinator saw, or its plan is under way and
-//! nothing stops it. A failed host is the operator's to resolve: it keeps holding a slot of its
-//! own service, against its role's `max_updating`, so the service piles no more failures on, but
-//! it does not make the service live. A halted service, a service at a version marked bad, and a
+//! nothing stops it, and it has a host left that the decision can order now ([`crate::orderable`]:
+//! not one held by its own halt, by the order of installs, or by a move). A failed host is the
+//! operator's to resolve: it keeps holding a slot of its own service, against its role's
+//! `max_updating`, so the service piles no more failures on, but it does not make the service
+//! live. A halted service, a service at a version marked bad, and a
 //! plan held by a failed host order nothing until an operator acts, so they never hold another
 //! service's rollout.
 //!
@@ -89,8 +91,9 @@ pub fn is_live(def: &ServiceDef, want: Option<&Desired>, fleet: &Fleet, now: Dur
 /// it has; an order ages out after [`crate::fleet::ORDER_AGE`]), a host of the plan that bakes
 /// `want`'s version after an update the coordinator saw ([`is_baking`]), and a plan under way
 /// ([`crate::stages::View::under_way`]) that is neither halted nor at a version marked bad, nor
-/// held by a failed host. The pairs a standing force orders are left out; a held host's promotion
-/// counts only while it is not held.
+/// held by a failed host, and has a host left that a rule before the plan's gate does not hold
+/// ([`crate::orderable::can_order`]). The pairs a standing force orders are left out; a held
+/// host's promotion counts only while it is not held.
 pub(crate) fn why_live(
     def: &ServiceDef,
     want: Option<&Desired>,
@@ -128,8 +131,11 @@ pub(crate) fn why_live(
     if let Some(id) = baking {
         return Some(Live::of(Why::Baking, id));
     }
+    // A plan under way whose every host left to order is held by a rule before the plan's gate
+    // (a host's own halt, the order of installs, a move) orders nobody: it is not live.
     let failed = view.members.iter().any(|m| m.state == HostState::Failed);
-    (view.under_way() && !failed).then_some(Live {
+    let under_way = view.under_way() && crate::orderable::can_order(def, want, &view, fleet, now);
+    (under_way && !failed).then_some(Live {
         why: Why::PlanUnderWay,
         host: None,
     })

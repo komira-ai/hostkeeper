@@ -1,6 +1,6 @@
 //! Every RPC of the command table is served but those [`PENDING`] lists, which answer
-//! `UNIMPLEMENTED`; those are `RetryHost` and `PutBack` of `Maintenance`. A method added to a
-//! proto without a handler cannot pass unnoticed.
+//! `UNIMPLEMENTED`; none is listed now. A method added to a proto without a handler cannot pass
+//! unnoticed.
 
 use hostkeeper_proto::ctl::{COMMANDS, Command};
 use tonic::Code;
@@ -53,27 +53,23 @@ const HOST_GROUPS: [&str; 5] = [
     "/hostkeeper.operator.v1.HostGroups/Move",
 ];
 
-/// The gRPC path of each method of `Maintenance` whose handler has not landed.
-const MAINTENANCE: [&str; 2] = [
-    "/hostkeeper.operator.v1.Maintenance/RetryHost",
-    "/hostkeeper.operator.v1.Maintenance/PutBack",
-];
-
-/// The gRPC path of each method of `Maintenance` that is served.
-const MAINTENANCE_SERVED: [&str; 4] = [
+/// The gRPC path of each method of `Maintenance`, all served.
+const MAINTENANCE_SERVED: [&str; 6] = [
     "/hostkeeper.operator.v1.Maintenance/Schedule",
     "/hostkeeper.operator.v1.Maintenance/List",
     "/hostkeeper.operator.v1.Maintenance/Get",
     "/hostkeeper.operator.v1.Maintenance/Cancel",
+    "/hostkeeper.operator.v1.Maintenance/RetryHost",
+    "/hostkeeper.operator.v1.Maintenance/PutBack",
 ];
 
-/// Proves: [`PENDING`] is exactly `RetryHost` and `PutBack` of `Maintenance`, each a method of the
-/// compiled descriptor set (the command table lists it), the four served methods of `Maintenance`
-/// are in the set and not pending, and each of the five methods of `HostGroups` is in the set
-/// too, so a path misspelt here or a method the proto drops cannot hide behind the excuse.
+/// Proves: no method is pending, the six methods of `Maintenance` (`RetryHost` and `PutBack`
+/// among them) are in the compiled descriptor set (the command table lists them) and not pending,
+/// and each of the five methods of `HostGroups` is in the set too, so a path misspelt here or a
+/// method the proto drops cannot hide behind the excuse.
 #[test]
-fn only_retry_host_and_put_back_are_pending_and_the_other_methods_are_in_the_descriptor_set() {
-    assert_eq!(PENDING, &MAINTENANCE[..]);
+fn no_method_is_pending_and_the_served_methods_are_in_the_descriptor_set() {
+    assert_eq!(PENDING, Vec::<&str>::new());
     for path in PENDING {
         assert!(
             COMMANDS.iter().any(|command| command.path == *path),
@@ -91,7 +87,7 @@ fn only_retry_host_and_put_back_are_pending_and_the_other_methods_are_in_the_des
 
 /// Proves: no RPC of the command table (the agent's service and the operator API) answers
 /// `UNIMPLEMENTED` to an empty request, each called with the credentials it takes on the
-/// listener that serves it, but those [`PENDING`] lists; and the table is not empty, so the
+/// listener that serves it, but those [`PENDING`] lists (none); and the table is not empty, so the
 /// check called something.
 #[tokio::test]
 async fn every_rpc_answers_something_other_than_unimplemented() {
@@ -138,7 +134,6 @@ async fn every_method_of_the_retired_mdm_service_answers_unimplemented() {
 #[tokio::test]
 async fn every_pending_method_answers_unimplemented() {
     let served = served("grpc-pending-methods");
-    assert!(!PENDING.is_empty(), "the check called something");
     for path in PENDING {
         for bearer in [Some(OPERATOR), None] {
             let request = grpc_request(path, (), bearer);

@@ -3,13 +3,14 @@
 //! are held, and one row of `maintenance_hosts` for each host's turn of one, in the run's order.
 //! A kind, a step and a reason a host is left out are written by their names; a value a run
 //! leaves out (no group, no batch, no drain deadline, no cancel) is `NULL`. A host's offers after
-//! a deferral and its bake are the columns `0030` adds.
+//! a deferral and its bake are the columns `0030` adds, and the act an operator queued for a halted
+//! host with the last try of its order, those `0031` adds.
 
 use super::at::At;
 use super::rows::{KeyTy, KeyVal, Rows, Table, Tables, Ty, Val};
 use super::state::int;
 use crate::desired::StoreError;
-use crate::maintenance_runs::{Kind, Run, RunHost, Skip, Step};
+use crate::maintenance_runs::{Act, Kind, Run, RunHost, Skip, Step};
 use crate::ops::OpsError;
 
 /// The table of the runs.
@@ -48,6 +49,8 @@ pub(crate) const HOSTS: Table = Table {
         ("position", Ty::Int),
         ("offered_again", Ty::Int),
         ("baked_beats", Ty::Int),
+        ("queued", Ty::Text),
+        ("order_try", Ty::Int),
     ],
 };
 
@@ -104,6 +107,8 @@ pub(crate) fn insert_runs(runs: &[Run], tables: &mut Tables) -> Result<(), Store
                     Val::Int(int(position as u64)?),
                     Val::Int(i64::from(host.offered_again)),
                     Val::Int(i64::from(host.baked_beats)),
+                    Val::text_or_null(host.queued.map(Act::as_str)),
+                    Val::Int(int(host.order_try)?),
                 ],
             );
         }
@@ -204,6 +209,13 @@ pub(crate) fn runs_of(tables: &Tables) -> Result<Vec<Run>, OpsError> {
                     .ok_or_else(|| at.no(format!("{name:?} is not why a host is left out")))
             })
             .transpose()?;
+        let queued = at
+            .text(10)?
+            .map(|name| {
+                Act::parse(&name)
+                    .ok_or_else(|| at.no(format!("{name:?} is not an act queued for a host")))
+            })
+            .transpose()?;
         let host = RunHost {
             host_id: at.key(1)?,
             host_group: at.text(0)?.unwrap_or_default(),
@@ -216,6 +228,8 @@ pub(crate) fn runs_of(tables: &Tables) -> Result<Vec<Run>, OpsError> {
             reason: at.text(6)?.unwrap_or_default(),
             offered_again: small(&at, 8)?,
             baked_beats: small(&at, 9)?,
+            queued,
+            order_try: at.count(11)?,
         };
         let position = at.position(7)?;
         let (_, _, hosts) = runs

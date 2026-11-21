@@ -1,30 +1,41 @@
 //! The `macos` kind of the maintenance hook on a Mac (docs/design/maintenance-updates.md, sections
-//! 5.2 and 5.5). Its `prepare` is the stage ([`Stage`]): the free space of the data volume checked,
-//! then `softwareupdate --download` of each update, or `--fetch-full-installer` of a major upgrade
-//! the order allows, nothing installed. Its `cutover`, `after_reboot` and `verify` are not written
-//! yet: each fails `unsupported_kind`, as the stub ([`Unsupported`]) does.
+//! 5.2, 5.5 and 5.6). Its `prepare` is the stage ([`Stage`]): the free space of the data volume
+//! checked, then `softwareupdate --download` of each update, or `--fetch-full-installer` of a major
+//! upgrade the order allows, nothing installed. Its other steps are the apply ([`Apply`]), on the
+//! order's path `install` alone: `cutover` checks the update account's file and FileVault, chooses
+//! the install from the Mac's own listings and keeps it; the kind's own restart, which the hook
+//! runs once it recorded the reboot under way, installs it with the update account's password on
+//! the program's standard input (`softwareupdate --install ... --restart`, or the installer app's
+//! `startosinstall`), which restarts the Mac; `after_reboot` reads the build; `verify` checks the
+//! target build and then removes a major upgrade's installer app.
 
+mod apply;
+mod plan;
 mod stage;
 
+pub use apply::Apply;
 pub use stage::Stage;
 
-use super::kind::{Cutover, KindError, MaintenanceKind, Unsupported};
-use super::params::{Kind, MaintainParams};
+use std::path::Path;
 
-/// The `macos` kind: its stage, and the steps not written yet.
+use super::kind::{Cutover, KindError, MaintenanceKind};
+use super::params::MaintainParams;
+
+/// The `macos` kind: its stage and its apply.
 pub struct MacosKind {
     stage: Stage,
+    apply: Apply,
 }
 
 impl MacosKind {
-    /// The kind staging with `stage`.
-    pub fn new(stage: Stage) -> MacosKind {
-        MacosKind { stage }
+    /// The kind staging with `stage` and applying with `apply`.
+    pub fn new(stage: Stage, apply: Apply) -> MacosKind {
+        MacosKind { stage, apply }
     }
 
-    /// The kind of this Mac.
-    pub fn at_host() -> MacosKind {
-        MacosKind::new(Stage::at_host())
+    /// The kind of this Mac, keeping its install's plan in `run_dir`.
+    pub fn at_host(run_dir: Option<&Path>) -> MacosKind {
+        MacosKind::new(Stage::at_host(), Apply::at_host(run_dir))
     }
 }
 
@@ -34,14 +45,18 @@ impl MaintenanceKind for MacosKind {
     }
 
     fn cutover(&self, params: &MaintainParams) -> Result<Cutover, KindError> {
-        Unsupported(Kind::Macos).cutover(params)
+        self.apply.cutover(params)
+    }
+
+    fn restart(&self, params: &MaintainParams) -> Option<Result<(), KindError>> {
+        Some(self.apply.install(params))
     }
 
     fn after_reboot(&self, params: &MaintainParams) -> Result<String, KindError> {
-        Unsupported(Kind::Macos).after_reboot(params)
+        self.apply.after_reboot(params)
     }
 
     fn verify(&self, params: &MaintainParams) -> Result<(), KindError> {
-        Unsupported(Kind::Macos).verify(params)
+        self.apply.verify(params)
     }
 }

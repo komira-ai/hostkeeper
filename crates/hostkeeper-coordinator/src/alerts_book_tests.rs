@@ -1,7 +1,7 @@
 //! The book of the alerts: an alert is logged once, when it first appears, and keeps the time it
 //! was first observed until it ends.
 
-use super::{Alert, Book, Kind, Observed, Subject};
+use super::{Alert, Book, Kind, Observed, Said, Subject};
 use crate::testutil::Log;
 
 /// The unix time of the coordinator's clock at 0.
@@ -23,6 +23,7 @@ fn halt_alert(host: &str) -> Alert {
     Alert {
         subject: subject(Kind::Halt, "kbf", host, "2.0"),
         message: format!("kbf is halted by {host}"),
+        said: Said::default(),
     }
 }
 

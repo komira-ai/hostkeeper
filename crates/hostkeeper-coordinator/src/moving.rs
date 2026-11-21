@@ -156,6 +156,19 @@ impl Fleet {
             .and_modify(|move_| move_.admitted = Some(packages));
     }
 
+    /// [`Self::uninstalls_pending`] for a reader that holds no services ([`crate::orderable`]):
+    /// over the services the host's last heartbeat lists, since an intent stands only for a
+    /// package its group does not list.
+    pub(crate) fn uninstalls_listed(&self, id: &HostId) -> bool {
+        self.node(id).is_some_and(|node| {
+            node.announced.keys().any(|name| {
+                self.uninstall_order(name, id).is_some()
+                    && !self.is_held(name, id)
+                    && !self.is_excluded(name, id)
+            })
+        })
+    }
+
     /// Whether the host `id` has a package to uninstall in its move: an intent of the host for a
     /// package that the group does not list, that it lists, and that no hold or exclusion leaves
     /// alone.

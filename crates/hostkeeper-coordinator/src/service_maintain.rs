@@ -13,6 +13,12 @@
 //! entry of its own, and the heartbeat that ends it is audited `maintenance_step` (`baked`). A
 //! start is stored before the order is answered (storage first): a start that cannot
 //! be stored sends no order, and the host is asked again at its next heartbeat.
+//!
+//! A start, fresh or after a deferral, resets the turn's try and queued act of an operator (the
+//! order is `RUN`, try 1); a halted host with an operator's act queued
+//! ([`crate::maintenance_runs::RunHost::queued`]) is sent it at each heartbeat as a resend, under
+//! the try it was queued with, and its report that moves the turn from halted clears it
+//! ([`decide_maintenance::folded`]).
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -89,7 +95,7 @@ impl Coordinator {
     }
 
     /// The group policy of the group named `group` (empty: none), or every default.
-    fn group_policy(&self, group: &str) -> Policy {
+    pub(crate) fn group_policy(&self, group: &str) -> Policy {
         group
             .parse::<GroupName>()
             .ok()
@@ -285,6 +291,8 @@ impl Coordinator {
             held.step = Step::Staging;
             held.since_unix = unix_now;
             held.baked_beats = 0;
+            held.order_try = 0;
+            held.queued = None;
             Ok(())
         });
         match stored {
@@ -312,12 +320,13 @@ impl From<OpsError> for Unstarted {
     }
 }
 
-/// The typed order of `ordered`: its first try, which a resend keeps.
+/// The typed order of `ordered`, under the try it was decided with: 1 for a `RUN`, which a resend
+/// keeps, a newer one for an operator's act queued on a halted turn.
 fn order_of(ordered: Ordered) -> Order {
     Order::Maintain {
         maintain: ordered.maintain,
         order_id: ordered.order_id,
-        order_try: 1,
+        order_try: ordered.order_try,
     }
 }
 

@@ -1,8 +1,8 @@
 //! The coordinator's gRPC: `hostkeeper.agent.v1.Coordinator` on the heartbeat listener,
 //! `hostkeeper.operator.v1.{Hosts, Releases, Services, Enrollment, Audit, Alerts, Rollouts,
 //! Repositories, HostGroups, Users, ApiTokens, Maintenance}` on the private one (the `Mdm` service
-//! is no longer served: a call of it is `UNIMPLEMENTED`; of `Maintenance`, `RetryHost` and
-//! `PutBack` answer `UNIMPLEMENTED` until their handlers land, [`PENDING`]),
+//! is no longer served: a call of it is `UNIMPLEMENTED`; a method of an operator service with no
+//! handler yet is listed in [`PENDING`], which is empty now),
 //! and the JSON gateway of the operator API ([`gateway`]), all beside the frozen JSON routes of
 //! [`crate::http`].
 //!
@@ -116,12 +116,9 @@ pub const GRPC_FEATURE: &str = "grpc-v1";
 
 /// The gRPC path of every method of the operator API that no handler serves yet: each is
 /// answered `UNIMPLEMENTED`, with no message, until the coordinator has the handler. A method
-/// added to a proto is listed here until its handler lands. `RetryHost` and `PutBack` of
-/// `Maintenance` are: the router answers them before it reads any credential ([`admit_via`]).
-pub const PENDING: &[&str] = &[
-    "/hostkeeper.operator.v1.Maintenance/RetryHost",
-    "/hostkeeper.operator.v1.Maintenance/PutBack",
-];
+/// added to a proto is listed here until its handler lands, and the router answers it before it
+/// reads any credential ([`admit_via`]). Every method has its handler now: the list is empty.
+pub const PENDING: &[&str] = &[];
 
 /// The body of an answer: the bytes of a JSON route or the gateway, or a gRPC response or the
 /// streamed bytes of a private repository's file.

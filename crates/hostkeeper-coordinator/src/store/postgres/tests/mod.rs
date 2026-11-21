@@ -341,6 +341,7 @@ mod jobs_rows;
 mod layout;
 mod login_rows;
 mod lost;
+mod maintenance_operator;
 mod maintenance_rows;
 mod maintenance_turns;
 mod migrate_ddl;

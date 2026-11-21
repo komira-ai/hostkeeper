@@ -187,24 +187,29 @@ pub enum Order {
         /// The try ([`Fleet::next_try`]).
         order_try: u64,
     },
-    /// Start the host's turn of a maintenance run ([`crate::decide_maintenance`]).
+    /// Start, retry or put back the host's turn of a maintenance run
+    /// ([`crate::decide_maintenance`]).
     Maintain {
         /// What the turn applies, and how.
         maintain: Maintain,
         /// The order's id: `maintain-<run id>`, then `-<n>` for a turn offered again
         /// ([`crate::maintenance_runs::RunHost::order_id`]).
         order_id: String,
-        /// The try: 1, which a resend of the order keeps.
+        /// The try: 1 for the `RUN` that starts the turn, which a resend of the order keeps; a
+        /// new try for each operator's `RETRY` or `PUT_BACK` of the halted turn
+        /// ([`crate::maintenance_runs::RunHost::order_try`]).
         order_try: u64,
     },
 }
 
-/// The arguments of a `maintain` that starts a host's turn (`MAINTAIN_ACTION_RUN`), as
-/// [`crate::decide_maintenance`] made them.
+/// The arguments of a `maintain` of a host's turn, as [`crate::decide_maintenance`] made them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Maintain {
     /// The run's id.
     pub run_id: String,
+    /// What to do with the turn: `RUN` starts it; `RETRY` and `PUT_BACK` act on it once it
+    /// halted, as an operator asked.
+    pub action: agent::MaintainAction,
     /// The kinds the turn applies, as the run holds them for the host.
     pub kinds: Vec<agent::MaintenanceKind>,
     /// Which Linux updates a `linux` kind applies: the group's `linux_scope`.
@@ -222,11 +227,11 @@ pub struct Maintain {
 }
 
 impl Maintain {
-    /// The arguments as `hostkeeper.agent.v1` says them, with the action `RUN` and no Xcode.
+    /// The arguments as `hostkeeper.agent.v1` says them, with no Xcode.
     fn to_proto(&self) -> agent::Maintain {
         agent::Maintain {
             run_id: self.run_id.clone(),
-            action: agent::MaintainAction::Run.into(),
+            action: self.action.into(),
             kinds: self.kinds.iter().map(|kind| i32::from(*kind)).collect(),
             linux_scope: self.linux_scope.into(),
             drain_deadline_secs: self.drain_deadline_secs,

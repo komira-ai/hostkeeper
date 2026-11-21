@@ -64,6 +64,7 @@ const WAITS = {
   MANUAL_ADVANCE: "Waiting for Advance", FAILED_HOST: "A host failed",
   BELOW_MIN_UP: "Below the minimum up", UPDATING: "Updates under way", DEFERRING: "A host deferred",
   BAKING: "Baking", HALTED: "Halted", QUIET: "Quiet start", ROLLOUT_ELSEWHERE: "Another rollout is live",
+  NOTHING_TO_ORDER: "No host it can order",
 };
 
 // Why the plan orders no new host, in words: `Baking, stage 1`, `Paused by ops: freeze`; "-" when

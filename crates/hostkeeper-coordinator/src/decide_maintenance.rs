@@ -64,6 +64,15 @@
 //! recognises it and does not start it twice; once it reports the id, nothing more is sent, also
 //! after a coordinator restart, since the step is stored with the run.
 //!
+//! A halted host whose turn holds an operator's act queued by `RetryHost` or `PutBack`
+//! ([`RunHost::queued`]) is sent a `maintain` too: the same order id, the action `RETRY` or
+//! `PUT_BACK`, and the try the act was queued under ([`RunHost::order_try`]: 2 for the first act,
+//! one more for each later one), with the run's kinds, scope and `return_secs`, at each heartbeat
+//! until the host's daemon reports its turn at another step ([`folded`] then clears the act, and
+//! keeps the try). The daemon acts on it at most once: it refuses an older try and a turn that is
+//! not halted. The run's group stays halted until it does ([`Hold::Halted`]). A turn offered again
+//! after a deferral starts at try 1 and no act (the caller of [`Verdict::Start`]).
+//!
 //! A run whose window ended, or that was cancelled, starts no host: its hosts that had not started
 //! (waiting, or deferred) are not reached ([`Run::shown`], [`Run::cancel`]).
 
@@ -156,6 +165,10 @@ pub(crate) struct Ordered {
     pub(crate) host_group: String,
     /// The order's id ([`order_id`]).
     pub(crate) order_id: String,
+    /// The try: 1 for the `RUN` that starts a turn, and for the `RUN` sent again; the try an
+    /// operator's act was queued under ([`RunHost::order_try`]) for a halted turn's `RETRY` or
+    /// `PUT_BACK`.
+    pub(crate) order_try: u64,
     /// The arguments.
     pub(crate) maintain: Maintain,
 }
@@ -201,8 +214,11 @@ fn turn(state: &OpsState, fleet: &Fleet, id: &HostId, unix_now: u64) -> Turn {
             .position(|host| host.host_id == id.as_str())
             && run.hosts[h].step.in_turn()
         {
-            let unreported =
-                run.hosts[h].step == Step::Staging && !reported(fleet, id, run, &run.hosts[h]);
+            let unreported = match run.hosts[h].step {
+                Step::Staging => !reported(fleet, id, run, &run.hosts[h]),
+                Step::Halted => run.hosts[h].queued.is_some(),
+                _ => false,
+            };
             return Turn::In {
                 run: r,
                 host: h,
@@ -237,7 +253,9 @@ fn offered(host: &RunHost) -> bool {
 enum Turn {
     /// In no open turn.
     None,
-    /// In its turn; `unreported` while its order was sent and its daemon has not named it.
+    /// In its turn; `unreported` while its order was sent and its daemon has not named it, or
+    /// while the turn is halted with an operator's act queued, which is sent at each heartbeat
+    /// until the daemon reports the turn at another step.
     In {
         run: usize,
         host: usize,
@@ -480,7 +498,9 @@ fn serving(view: &View<'_>, group: &str) -> usize {
 
 /// The `maintain` of `host`'s turn in `run` under the order id `order_id`: its kinds, the Linux
 /// scope, `macos_major` and `return_secs` of its group's table ([`View::policy`]) for the host's
-/// platform, and the run's drain deadline, else the group's.
+/// platform, and the run's drain deadline, else the group's. Its action is `RUN` under try 1,
+/// except for a halted turn with an operator's act queued: that act under the try it was queued
+/// under ([`RunHost::order_try`]).
 fn ordered(view: &View<'_>, run: &Run, host: &RunHost, order_id: String) -> Ordered {
     let platform = host
         .host_id
@@ -495,12 +515,18 @@ fn ordered(view: &View<'_>, run: &Run, host: &RunHost, order_id: String) -> Orde
         None => effective.drain_deadline_secs,
     };
     let kinds = host.kinds.iter().map(|kind| kind.proto()).collect();
+    let (action, order_try) = match (host.step, host.queued) {
+        (Step::Halted, Some(act)) => (act.proto(), host.order_try),
+        _ => (agent::MaintainAction::Run, 1),
+    };
     Ordered {
         run_id: run.id.clone(),
         host_group: host.host_group.clone(),
         order_id,
+        order_try,
         maintain: Maintain {
             run_id: run.id.clone(),
+            action,
             kinds,
             linux_scope: match effective.linux_scope {
                 LinuxScope::Security => agent::LinuxScope::Security,
@@ -546,7 +572,9 @@ fn kind_of(kind: i32) -> Option<Kind> {
 /// host reports no run, a run of none of `runs`, a run taken by another order than the one of the
 /// host's turn ([`RunHost::order_id`]: a deferred host offered again is not read back to deferred
 /// by the record of its earlier offer), a step it does not name, or what is held already; and none
-/// for a turn that ended without the host (skipped, not reached) or is done.
+/// for a turn that ended without the host (skipped, not reached) or is done. A turn folded to any
+/// step but halted has its queued act of an operator cleared (the daemon took it; its try is kept,
+/// so that the next act is a newer one).
 pub(crate) fn folded(
     runs: &[Run],
     node: Option<&Node>,
@@ -574,6 +602,9 @@ pub(crate) fn folded(
     }
     turn.applied = applied;
     turn.reason.clone_from(&said.halted_reason);
+    if turn.step != Step::Halted {
+        turn.queued = None;
+    }
     (turn != *held).then_some((r, h, turn))
 }
 
