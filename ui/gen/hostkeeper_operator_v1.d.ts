@@ -38,6 +38,10 @@ export namespace hostkeeper_operator_v1 {
     requestId?: string;
     otherHostId?: string;
     hostGroup?: string;
+    reason?: string;
+    detail?: string;
+    tries?: string;
+    sinceUnix?: string;
   }
   export type AlertKind =
     | "ALERT_KIND_UNSPECIFIED"
@@ -59,7 +63,9 @@ export namespace hostkeeper_operator_v1 {
     | "ALERT_KIND_PREREQUISITE_FAILED"
     | "ALERT_KIND_XCODE_RELEASE_WAITING"
     | "ALERT_KIND_XCODE_VERSION_TAKEN"
-    | "ALERT_KIND_UPDATES_DUE";
+    | "ALERT_KIND_UPDATES_DUE"
+    | "ALERT_KIND_FAILED_UPDATE"
+    | "ALERT_KIND_HOST_HALT";
   export type AlertSeverity = "ALERT_SEVERITY_UNSPECIFIED" | "ALERT_SEVERITY_CRITICAL" | "ALERT_SEVERITY_WARNING";
   export interface ApiTokenInfo { name?: string; source?: hostkeeper_operator_v1.ApiTokenSource; createdBy?: string; createdUnix?: string; owner?: string; }
   export type ApiTokenSource = "API_TOKEN_SOURCE_UNSPECIFIED" | "API_TOKEN_SOURCE_STORE" | "API_TOKEN_SOURCE_TOKENS_FILE";
@@ -591,7 +597,8 @@ export namespace hostkeeper_operator_v1 {
     | "PLAN_WAIT_BELOW_MIN_UP"
     | "PLAN_WAIT_UPDATING"
     | "PLAN_WAIT_DEFERRING"
-    | "PLAN_WAIT_BAKING";
+    | "PLAN_WAIT_BAKING"
+    | "PLAN_WAIT_NOTHING_TO_ORDER";
   export interface PolicyStage { percent?: number; advance?: hostkeeper_operator_v1.StageAdvance; }
   export type PowerAction = "POWER_ACTION_UNSPECIFIED" | "POWER_ACTION_STATUS" | "POWER_ACTION_ON" | "POWER_ACTION_OFF" | "POWER_ACTION_SOFT" | "POWER_ACTION_CYCLE" | "POWER_ACTION_RESET";
   export type PowerState = "POWER_STATE_UNSPECIFIED" | "POWER_STATE_ON" | "POWER_STATE_OFF";

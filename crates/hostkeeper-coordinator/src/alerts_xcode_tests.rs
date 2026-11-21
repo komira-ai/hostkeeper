@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use super::{Alert, At, EnrollmentFacts, Kind, Subject, Thresholds, derive};
+use super::{Alert, At, EnrollmentFacts, Kind, Said, Subject, Thresholds, derive};
 use crate::fleet::{Fleet, QUIET_START};
 use crate::ops::OpsState;
 use crate::testutil::kbf_services;
@@ -93,6 +93,7 @@ fn xcode_version_taken_is_one_warning_per_refused_version() {
                       remove the held archive with `hk xcode remove` before pushing the other \
                       build"
                 .to_owned(),
+            said: Said::default(),
         }]
     );
     assert_eq!(
@@ -133,6 +134,7 @@ fn xcode_release_waiting_is_one_warning_naming_the_release() {
                       the coordinator's Xcode store holds no release as new: push it from a Mac \
                       signed in to the Apple developer account with `hk xcode-push 27.2`"
                 .to_owned(),
+            said: Said::default(),
         }]
     );
     assert_eq!(

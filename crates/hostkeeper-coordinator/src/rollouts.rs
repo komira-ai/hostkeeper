@@ -435,10 +435,12 @@ impl Coordinator {
 }
 
 /// The plan of `def` for its desired state `want` at `now` as `hostkeeper.operator.v1` says it,
-/// with why it waits: a halt or a bad version (`halted`), the pause, the quiet start and the other
-/// services' rollouts first (naming the services whose live rollouts hold it, `waiting_on`, and
-/// why each is live, `waiting_on_why`), then
-/// what the plan holds ([`View::wait`]).
+/// with why it waits: a halt or a bad version (`halted`), the pause, the quiet start, then, for a
+/// plan that takes no place of `--live-rollouts` (not live, nothing it can order now,
+/// [`crate::queue::orderable`]), what the plan holds ([`View::wait`]), or `nothing_to_order` when
+/// only rules of its hosts hold it ([`crate::orderable`]); else the other services' rollouts
+/// (naming the services whose live rollouts hold it, `waiting_on`, and why each is live,
+/// `waiting_on_why`), then what the plan holds.
 pub(crate) fn plan_proto(
     services: &crate::services::Services,
     all: &BTreeMap<String, Desired>,
@@ -450,6 +452,11 @@ pub(crate) fn plan_proto(
 ) -> proto::RolloutPlan {
     let view = crate::stages::current(def, want, fleet, now);
     let mut live_on = Vec::new();
+    // A plan that is not live and has nothing it can order now takes no place of
+    // `--live-rollouts`: it says its own reason, not the services that hold the places.
+    let yields = !view.members.is_empty()
+        && !crate::live::is_live(def, Some(want), fleet, now)
+        && !crate::queue::orderable(def, Some(want), fleet, now);
     let waiting = if view.finished() {
         None
     } else if halted {
@@ -458,12 +465,17 @@ pub(crate) fn plan_proto(
         Some(Wait::Paused)
     } else if fleet.is_quiet(now) {
         Some(Wait::Quiet)
+    } else if yields {
+        view.wait(def, want, fleet, now)
     } else if let Some(live) = live_elsewhere(services, all, &def.name, fleet, now) {
         live_on = live;
         Some(Wait::RolloutElsewhere)
     } else {
         view.wait(def, want, fleet, now)
     };
+    // Nothing of the plan's own holds it, and yet it orders nobody: each host left is held by a
+    // rule of its own host ([`crate::orderable`]).
+    let nothing_to_order = yields && waiting.is_none() && !view.finished();
     let stages = view
         .stages
         .iter()
@@ -475,7 +487,12 @@ pub(crate) fn plan_proto(
         stages,
         current: u32::try_from(view.current).unwrap_or(u32::MAX),
         eligible: u32::try_from(view.members.len()).unwrap_or(u32::MAX),
-        waiting: wait_proto(waiting).into(),
+        waiting: if nothing_to_order {
+            proto::PlanWait::NothingToOrder
+        } else {
+            wait_proto(waiting)
+        }
+        .into(),
         paused: view.paused.is_some(),
         paused_by: view.paused.as_ref().map(|p| p.by.clone()),
         pause_reason: view.paused.as_ref().map(|p| p.reason.clone()),

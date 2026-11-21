@@ -1464,6 +1464,21 @@ message Alert {
   // For `ALERT_KIND_UPDATES_DUE`: the host group it concerns; empty for every other kind and for
   // hosts in no host group.
   string host_group = 10;
+  // For `ALERT_KIND_FAILED_UPDATE`: the reason of the host's failed report (`unspecified` when it
+  // names none); for `ALERT_KIND_HOST_HALT`: the reason of the halt the host holds. Empty for
+  // every other kind.
+  string reason = 11;
+  // For `ALERT_KIND_FAILED_UPDATE`: what the host said of the failure (its report's `detail`);
+  // empty when it said nothing, and for every other kind.
+  string detail = 12;
+  // For `ALERT_KIND_FAILED_UPDATE`: how often the host was ordered the version, the failed try
+  // included (the try of its report: 1 for the first); 0 when its agent names no try, and for
+  // every other kind.
+  uint64 tries = 13;
+  // For `ALERT_KIND_HOST_HALT`: when the host wrote the halt it holds, unix seconds, by the age it
+  // reports; 0 when it reports none, and for every other kind. `first_observed_unix` is when this
+  // coordinator first saw the alert.
+  uint64 since_unix = 14;
 }
 
 // What an `Alert` is about. These spellings are public; the `alert=` field of the coordinator's
@@ -1559,6 +1574,24 @@ enum AlertKind {
   // group in `host_group`; it stands while a host of the group is due and clears when the last
   // beats of its hosts report nothing due. Log token `updates_due`.
   ALERT_KIND_UPDATES_DUE = 19;
+  // The host's last report of the service is a failure of the version its host group wants of it
+  // (an update or a first install): it stays where it is and is not ordered that version again
+  // until an operator retries it (`Hosts.Retry`), or another version is set. `version` is the
+  // version it failed, `reason` and `detail` are those of its report, and `tries` the try of the
+  // order that failed. One alert for each host and service; it clears when the host reports
+  // another outcome (it reaches the version, or a new try is under way), when another version is
+  // wanted, or when the host is excluded from the service or leaves its group. A `halted` refusal
+  // is no failed update: the host holds a halt of its own, `ALERT_KIND_HOST_HALT`. Log token
+  // `failed_update`.
+  ALERT_KIND_FAILED_UPDATE = 20;
+  // The host holds a halt of the service of its own (its heartbeat's `local_halt`): it refuses
+  // every order of the service until an operator clears the halt (`Releases.ClearHalt`), whether
+  // or not the coordinator holds a halt of it. `version` is the version it runs, `reason` the
+  // halt's, and `since_unix` when the host wrote it, by the age it reports. The message says when
+  // the generation it holds is above any this coordinator issued: a halt left by an earlier
+  // coordinator, whose cause may be gone. One alert for each host and service, listed while the
+  // host reports the halt. Log token `host_halt`.
+  ALERT_KIND_HOST_HALT = 21;
 }
 
 // How soon an `Alert` needs a person.

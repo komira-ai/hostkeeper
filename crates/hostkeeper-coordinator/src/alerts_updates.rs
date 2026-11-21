@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 
 use hostkeeper_wire::HostId;
 
-use super::{Alert, Kind, Subject};
+use super::{Alert, Kind, Said, Subject};
 use crate::fleet::{Fleet, Node};
 use crate::maintenance::Kept;
 use crate::service::Coordinator;
@@ -57,6 +57,7 @@ pub(super) fn updates_due(fleet: &Fleet, groups: Option<&BTreeMap<HostId, String
                     ..Subject::of(Kind::UpdatesDue)
                 },
                 message: format!("Updates due on {count} {hosts} {place}"),
+                said: Said::default(),
             }
         })
         .collect()
