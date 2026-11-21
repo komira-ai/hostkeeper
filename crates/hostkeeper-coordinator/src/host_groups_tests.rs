@@ -109,10 +109,11 @@ fn a_package_name_is_one_to_255_bytes_of_its_alphabet() {
 }
 
 /// Proves: the default policy is the default of every key of section 3 (no stage, which is 50 and
-/// 100 percent; no canary; 0 bake beats; manual rollback; 25 percent and 2 hosts; 300, 2 and 3600
-/// seconds; `max_updating` the whole stage; `min_up` 0; the coordinator's `live_rollouts`), it is
-/// written `{}`, and `{}` reads as it; an explicit `max_updating` of 1 is written, and the default
-/// is not.
+/// 100 percent; no canary; 0 bake beats; manual rollback; 25 percent and 2 hosts; failed hosts
+/// continue; 300, 2 and 3600 seconds; `max_updating` the whole stage; `min_up` 0; the
+/// coordinator's `live_rollouts`), it is written `{}`, and `{}` reads as it; an explicit
+/// `max_updating` of 1 is written, and the default is not; `failed_hosts` is written only when it
+/// is `stop`, and a group written before the key (`{}`) reads as `continue`.
 ///
 /// Catches: a default written into every group's file, or a key read with another default than
 /// the one the rollout file had.
@@ -126,6 +127,7 @@ fn the_default_policy_is_written_as_nothing_and_read_back_from_nothing() {
             policy.bake_beats,
             policy.rollback,
             policy.rollback_after_failed,
+            policy.failed_hosts,
             policy.defer_backoff,
             policy.max_updating,
             policy.min_up,
@@ -140,6 +142,7 @@ fn the_default_policy_is_written_as_nothing_and_read_back_from_nothing() {
                 percent: 25,
                 min_hosts: 2
             },
+            FailedHosts::Continue,
             DeferBackoff {
                 initial_secs: 300,
                 factor: 2,
@@ -165,6 +168,22 @@ fn the_default_policy_is_written_as_nothing_and_read_back_from_nothing() {
     assert_eq!(
         serde_json::from_value::<Policy>(json!({"max_updating": 1})).expect("reads"),
         capped
+    );
+    let stops = Policy {
+        failed_hosts: FailedHosts::Stop,
+        ..Policy::default()
+    };
+    assert_eq!(
+        serde_json::to_value(&stops).expect("serialises"),
+        json!({"failed_hosts": "stop"})
+    );
+    assert_eq!(
+        serde_json::from_value::<Policy>(json!({"failed_hosts": "stop"})).expect("reads"),
+        stops
+    );
+    assert_eq!(
+        serde_json::from_value::<Policy>(json!({"failed_hosts": "continue"})).expect("reads"),
+        policy
     );
     assert_eq!(
         serde_json::from_value::<Policy>(json!({})).expect("reads"),
@@ -216,6 +235,7 @@ fn every_key() -> Policy {
             percent: 10,
             min_hosts: 3,
         },
+        failed_hosts: FailedHosts::Stop,
         defer_backoff: DeferBackoff {
             initial_secs: 60,
             factor: 3,
@@ -255,6 +275,7 @@ fn a_policy_with_every_key_is_written_by_name_and_read_back() {
             "bake_beats": 4,
             "rollback": "automatic",
             "rollback_after_failed": {"percent": 10, "min_hosts": 3},
+            "failed_hosts": "stop",
             "defer_backoff": {"initial_secs": 60, "factor": 3, "max_secs": 7200},
             "max_updating": 0,
             "min_up": 5,

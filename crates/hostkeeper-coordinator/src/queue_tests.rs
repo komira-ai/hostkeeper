@@ -350,6 +350,7 @@ fn queued(group: &str, package: &str, at_unix: u64, set_seq: Option<i64>) -> Ent
         group: group.parse().expect("a group name"),
         live_rollouts: None,
         max_updating: 1,
+        failed_hosts: crate::failed_hosts::FailedHosts::Stop,
     });
     Entry {
         def,

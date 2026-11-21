@@ -149,6 +149,7 @@ pub mod defer;
 pub mod desired;
 pub mod enrollment;
 pub(crate) mod facts;
+pub(crate) mod failed_hosts;
 mod features;
 pub mod fleet;
 pub mod force;
@@ -212,6 +213,7 @@ pub mod orders;
 pub mod origin_https;
 pub mod password;
 pub(crate) mod picks;
+mod plan_memo;
 pub mod prerequisites;
 mod queue;
 pub mod reconcile;
@@ -341,6 +343,8 @@ mod desired_tests;
 mod extras_dropped_tests;
 #[cfg(test)]
 mod facts_tests;
+#[cfg(test)]
+mod failed_hosts_tests;
 #[cfg(test)]
 mod failure_alerts_tests;
 #[cfg(test)]

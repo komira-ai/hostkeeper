@@ -1575,14 +1575,17 @@ enum AlertKind {
   // beats of its hosts report nothing due. Log token `updates_due`.
   ALERT_KIND_UPDATES_DUE = 19;
   // The host's last report of the service is a failure of the version its host group wants of it
-  // (an update or a first install): it stays where it is and is not ordered that version again
-  // until an operator retries it (`Hosts.Retry`), or another version is set. `version` is the
-  // version it failed, `reason` and `detail` are those of its report, and `tries` the try of the
-  // order that failed. One alert for each host and service; it clears when the host reports
-  // another outcome (it reaches the version, or a new try is under way), when another version is
-  // wanted, or when the host is excluded from the service or leaves its group. A `halted` refusal
-  // is no failed update: the host holds a halt of its own, `ALERT_KIND_HOST_HALT`. Log token
-  // `failed_update`.
+  // (an update or a first install): it stays where it is. A failure whose reason the host can
+  // clear by itself (`busy`, `verify_unavailable`, `fetch_failed`, `package_manager_busy`,
+  // `no_space`) is ordered again by the coordinator after the group's `defer_backoff`, longer
+  // after each failure, and stays listed through those tries; any other is not ordered that
+  // version again until an operator retries it (`Hosts.Retry`), or another version is set.
+  // `version` is the version it failed, `reason` and `detail` are those of its report, and
+  // `tries` the try of the order that failed. One alert for each host and service; it clears
+  // when the host reports another outcome (it reaches the version, or, for a failure an operator
+  // retried, a new try is under way), when another version is wanted, or when the host is
+  // excluded from the service or leaves its group. A `halted` refusal is no failed update: the
+  // host holds a halt of its own, `ALERT_KIND_HOST_HALT`. Log token `failed_update`.
   ALERT_KIND_FAILED_UPDATE = 20;
   // The host holds a halt of the service of its own (its heartbeat's `local_halt`): it refuses
   // every order of the service until an operator clears the halt (`Releases.ClearHalt`), whether
@@ -1592,6 +1595,13 @@ enum AlertKind {
   // coordinator, whose cause may be gone. One alert for each host and service, listed while the
   // host reports the halt. Log token `host_halt`.
   ALERT_KIND_HOST_HALT = 21;
+  // The host declined the version its host group wants of the service, offered again after each
+  // wait, three times in a row for the same reason: a reason that may not clear by itself. It
+  // waits longer each time (the group's `defer_backoff`) and holds no other host or service.
+  // `version` is the version it declines, `reason` the deferral's, and `tries` how many times in a
+  // row it declined it for that reason. It clears when the host updates, gives another reason,
+  // or another version is wanted. Log token `repeated_deferral`.
+  ALERT_KIND_REPEATED_DEFERRAL = 22;
 }
 
 // How soon an `Alert` needs a person.

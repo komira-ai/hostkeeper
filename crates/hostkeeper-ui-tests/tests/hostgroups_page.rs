@@ -32,6 +32,7 @@ fn storage_list() -> Value {
                               "canary": {"count": 1}, "bakeBeats": 2,
                               "rollback": "ROLLBACK_MODE_AUTOMATIC",
                               "rollbackAfterFailed": {"percent": 20, "minHosts": 2},
+                              "failedHosts": "FAILED_HOSTS_STOP",
                               "deferBackoff": {"initialSecs": "30", "factor": 2, "maxSecs": "600"},
                               "maxUpdating": 2, "minUp": 1, "liveRollouts": 3}},
          "generation": "4", "hosts": 7,
@@ -43,14 +44,16 @@ fn storage_list() -> Value {
 #[test]
 fn the_page_lists_every_page_of_host_groups_with_their_summary() {
     // Proves: the list follows nextPageToken, and a row shows the name, packages, the policy keys
-    // that are set, generation, host count and desired versions.
+    // that are set (`failed_hosts` by its mode, stop or continue), generation, host count and
+    // desired versions.
     // Catches: a list that stops at the first page, or a row that shows a default as a value.
     let mut ui = Ui::start();
     hosts_replies(&mut ui);
     ui.reply(&m("HostGroups/List"), storage_list());
     ui.reply(
         &m("HostGroups/List"),
-        json!({"hostGroups": [{"group": {"name": "zeta", "packages": ["hostkeeper"]},
+        json!({"hostGroups": [{"group": {"name": "zeta", "packages": ["hostkeeper"],
+                                         "policy": {"failedHosts": "FAILED_HOSTS_CONTINUE"}},
                                "generation": "2", "hosts": 1,
                                "packages": [{"package": "hostkeeper", "desiredVersion": "1.0.0"}]}]}),
     );
@@ -73,7 +76,7 @@ fn the_page_lists_every_page_of_host_groups_with_their_summary() {
         &json!([
             "storage",
             "hostkeeper, kbf",
-            "stages 10%/100% manual, canary 1, bake 2 beats, rollback automatic, rollback after 20% failed, at least 2 hosts, defer backoff 30s x2 to 600s, max updating 2, min up 1, live rollouts 3",
+            "stages 10%/100% manual, canary 1, bake 2 beats, rollback automatic, rollback after 20% failed, at least 2 hosts, failed hosts stop, defer backoff 30s x2 to 600s, max updating 2, min up 1, live rollouts 3",
             "4",
             "7",
             "hostkeeper 0.9.0, kbf none set",
@@ -92,7 +95,7 @@ fn the_page_lists_every_page_of_host_groups_with_their_summary() {
     assert!(rows.contains(&json!([
         "zeta",
         "hostkeeper",
-        "default",
+        "failed hosts continue",
         "2",
         "1",
         "hostkeeper 1.0.0",
