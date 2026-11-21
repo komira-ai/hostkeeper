@@ -165,8 +165,9 @@ hkctl xcode-push 27.2            # downloads with xcodes in the operator's own s
 hkctl xcode-push ~/Downloads/Xcode_27.2.xip
 ```
 
-`xcode-push` is, like `hkctl ssh`, not a gateway call, but it does not run `hkssh`: it is a hand-written verb of the generated script
-that calls `xcodes`, `pkgutil`, `shasum` and curl on the operator's Mac (macOS only **[V]**), and `docs/cli.md`'s list of commands that
+`xcode-push` is, like `hk ssh`, not a gateway call: it is a verb of the `hk` program (Rust)
+that calls `xcodes`, `pkgutil`, `xip` and `plutil` on the operator's Mac, hashes the archive itself and uploads it over its own HTTPS client
+(Built: `crates/hostkeeper-hk/src/xcode_push/`; macOS only **[V]**, section 10), and `docs/cli.md`'s list of commands that
 are not gateway calls gains it. In order:
 
 1. **Download**, when given a version: `xcodes download <version>` in the operator's own session (their Keychain, so a two-factor prompt
@@ -176,7 +177,7 @@ are not gateway calls gains it. In order:
    signed by Apple itself **[V]**; anything else stops the push and uploads nothing.
 3. **Read** the archive's version and build **[V]**, as 2.2 does, and compute its SHA-256 and size.
 4. **Upload** it unmodified, streamed, to the coordinator's store: `PUT /v1/xcode/<sha256>?version=27.2&build=27B52` on the operator
-   listener, with the operator's token given to curl as hkctl gives every token (`--config` on a pipe: never an argument, an environment
+   listener, with the operator's token as the bearer in the request's header and nowhere else (never an argument, an environment
    variable or an output line). The coordinator refuses a version and build the feed does not list or the store already holds, refuses a
    body whose SHA-256 is not its path's, and audits the upload.
 
@@ -351,7 +352,7 @@ and decided where packages are: in `decide()`, per heartbeat, in one transaction
 `crates/hostkeeper-coordinator/src/decide.rs`, `store/decision.rs`). One rule is shared with packages, as it stands: **one thing at a
 time on a host** (Built: `busy_elsewhere`). A host with a package order outstanding is not given maintenance, and a host in a run is
 given no package order until its run ends there. The other rules are maintenance's own (New), because the package rules (halt,
-exclusion, `min_up`) are kept per package and count a cordoned host as up:
+exclusion, `min_up`) are kept per package and, before the last rule below, counted a cordoned host as up:
 
 - **Serving count:** a host is not taken while fewer than `min_serving + 1` hosts of its group are serving. A host counts as serving when
   it is live and healthy and not between drain and done in a run, so a draining, rebooting or halted host never counts.
@@ -364,9 +365,14 @@ exclusion, `min_up`) are kept per package and count a cordoned host as up:
   Schedule form, never ordered), a host whose group changes while it waits, and,
   for `macos`, a Mac that reports an `mdm_conflict` (5.8), or, while the path is `daemon`, a Mac with `no_update_account` (5.5); the
   `apple-business` path needs no update account.
-- **Packages wait, not the reverse:** a host between drain and done is left out of the hosts a package plan counts for its stage, so a long
-  drain does not hold a stage open; it gets its package updates after its turn. A maintenance run does not count against
-  `--live-rollouts`. `HostGroups.Move` of a host in its turn is refused `host_in_maintenance`.
+- **Packages wait, not the reverse** (Built: `crates/hostkeeper-coordinator/src/stages.rs`, `live.rs`, `decide.rs`, `moving.rs`, the
+  hosts in their turn kept in the fleet's marks by `holds.rs`): a host in its turn (from the order that starts it until it is done,
+  deferred or put back) is told `busy_elsewhere` for every package. One that has not taken its place in a package's plan is left out of
+  the hosts the plan counts for its stage, neither failed nor left to order, so a long drain does not hold a stage open; it gets its
+  package updates after its turn. One already at the desired version keeps its place and counts as done, and one that failed the
+  version stays failed. `min_up` counts it down. A maintenance run does not count against `--live-rollouts`, and a host in its turn
+  bakes nothing that makes a rollout live. A host moving into a group is not admitted to a plan while in its turn. `HostGroups.Move` of
+  a host in its turn is refused `host_in_maintenance` (New: not built).
 
 The coordinator sends one order, `maintain` (New, a case of `Order.verb`, with an `order_id` and `try` like the others): the run, the
 kinds, for `xcode` the store entries (version, build, size, SHA-256) and the versions to remove and the default, the Linux scope, the
@@ -672,8 +678,8 @@ release; the store keeps the largest `xcode_keep` newest releases plus the insta
 refused from any host but the fetcher and for any release it was not told to fetch; the operator `PUT` is refused with a host
 certificate, with no token, and for a version and build the feed does not list; a failed read of the feed is a log line and no alert;
 `fetch_xcode` stops once the fetcher reports the release held; `xcode-push` uploads only a release the feed lists and the store lacks,
-and a body whose SHA-256 differs from its path is refused and nothing kept; the generated script's `xcode-push` puts the token in no
-argument and no environment variable, and uploads nothing when the signature check fails (Rust tests over the generated script, as the other hkctl tests are); with no fetcher,
+and a body whose SHA-256 differs from its path is refused and nothing kept; `hk xcode-push` puts the token only in the request's header, in no
+argument and no environment variable, and uploads nothing when the signature check fails (Built: `crates/hostkeeper-hk/src/xcode_push/tests.rs`); with no fetcher,
 `xcode_release_waiting` stands from the feed's new release until the store holds it.
 
 ## 9. Questions for the owner
@@ -688,3 +694,77 @@ argument and no environment variable, and uploads nothing when the signature che
 3. **`linux_scope` default.** Kept: `security` (security updates and the kernel); `all` is one setting away.
 4. **FileVault on the build Macs.** Recommended: off (section 5.5, FileVault): with it on, every restart hostkeeper does not make stops
    at the pre-boot login until a person types a password. The report shows each Mac's state before any run.
+
+## 10. Proof results
+
+This section records the Mac proof (MP of section 8): for each **[V]** of sections 2.0, 2.4, 5.5 and 5.8, the command that settles it,
+the macOS version it ran on, what it showed and the decision that forces. The commands, in the order they are run, with what to record
+and how to undo each, are in `docs/operations/mac-proof.md` (its step ids are cited below). A result is written here only when it was
+seen on a Mac; what Apple documents, or what a reading of the code shows, is said as such.
+
+### 10.1 What could be shown on 2026-11-20
+
+Read from the coordinator's operator API (`Hosts.List` and `Hosts.Get`, as an operator, read only):
+
+- **No farm Mac can be given a shell yet.** All four Macs run hostkeeper 0.1.398, announce `operator-keys-v1`, and report an empty
+  operator keys block (`heartbeat.operatorKeys` is `{}`), so `hk ssh` has no key to log in with on any of them. Every step of the proof
+  needs a root shell on the Mac, from the owner at the Mac or after the proof group is named in the coordinator's operator-keys files
+  (`mac-proof.md` MP-E2 to MP-E4).
+- **No Mac is drained or in a group of its own.** All four are in `mac-build`. js-agent is not a hostkeeper package on the Macs
+  (`services[js-agent].membership` is `MEMBERSHIP_MISSING`: `kbf-mac-provision` installs it), so moving a Mac to a new group does not take
+  it out of builds; only a js-agent cordon does (MP-E6).
+- **No Mac reports the maintenance facts yet.** No host of the fleet sends `heartbeat.maintenance`, so the reads already built for 5.5 and
+  5.8 (FileVault, `supportsauthrestart`, the update account, the device-management keys) have no answer from a Mac yet. They will come
+  without a shell once the Macs and the coordinator run a release with `maintenance-v1`: that answer is the 5.8 read as the daemon makes it
+  (root, launchd), which MP-M also needs.
+- **The daemon, root under launchd, cannot open `TCC.db`**: its Remote Login probe reports `Operation not permitted`, which looks like
+  missing Full Disk Access. Whether `/var/db/softwareupdate/SoftwareUpdateDDMStatePersistence.plist` (5.8) is behind the same protection is not shown;
+  if it is, the built read reports `look_failed` on every Mac and never a clean one (MP-M6 decides).
+- **The Macs' Command Line Tools differ**: `27.2.0.0.1792721180` on two Macs, `26.6.0.0.1781586589` on the other two (the `prerequisites`
+  report). Their macOS versions are not reported yet, so which Mac has a minor update or an older major waiting is not known.
+
+From this repository's release pipeline (the job `macos-device` of `release.yml`, on a GitHub-hosted macOS 15.8.2 VM, build 24H232):
+a step run as a launchd job and the daemon under launchd work as root; who was logged in is not recorded there. That VM is not a farm Mac and has
+no Secure Token holder, FileVault or update to install, so it settles none of the **[V]** below.
+
+### 10.2 Each [V]
+
+Status `not run` means: not yet run on a Mac. The common reasons: no root shell on any farm Mac (10.1); no Mac drained in a group
+of its own; a step that needs the owner's own hands (an Xcode archive downloaded with the Apple Account, FileVault's password, a setting in
+Apple Business); a major upgrade, which cannot be undone, needs the owner's choice of Mac.
+
+| [V] | Section | Settled by | Status | What each result decides |
+|---|---|---|---|---|
+| `xcode-push` runs only on macOS, with `pkgutil`, `xip` and `plutil` at their paths | 2.0 | MP-X1 | not run: needs the operator's own Mac | paths present: as built (`xcode_push/mod.rs` `Mac::system`); elsewhere: change those paths |
+| `pkgutil --check-signature` on a real `.xip` exits 0, `Status: signed Apple Software`, chain ending at `Apple Root CA` with the fingerprint the code holds | 2.0, 2.4 | MP-X2, MP-X3 | not run: needs a real archive (the Apple Account, owner's Mac) | as expected: `signature.rs` stands; other status text or root: change `SIGNED_BY_APPLE` / `APPLE_ROOT_CA*`, never widening to a developer-ID status; no signature (an encrypted archive): step 2 needs another check (MP-X6) |
+| The archive's version and build are readable | 2.0, 2.2 | MP-X4, MP-X5 | not run | the built read expands the archive and reads `Contents/Info.plist` and `Contents/version.plist`; the copy of `xip`'s manual page read (an older macOS's) documents only `--expand`, not checked against macOS 26, so 2.2's "`xip` lists it before it expands" is unproven and is changed to the expand-then-read if MP-X4 finds none |
+| `xip --expand` checks Apple's signature | 2.4 | MP-I1 | not run | refuses a damaged or re-signed archive: the stage step relies on it; expands it anyway: stage runs `pkgutil --check-signature` first, as `xcode-push` does |
+| An encrypted archive is expanded with `archiveutil` as `xcodes` does | 2.4 | MP-I2, MP-X6 | not run: needs an encrypted release | other tools run `archiveutil extractXcodeAEA <archive>` in the destination directory (read in their sources, not run); the store names every archive `<sha256>.xip` (`xcode_store.rs`), so an encrypted one needs its kind recorded beside it, or the stage step choosing by the file's first bytes |
+| `xcodebuild -runFirstLaunch` installs packages every Xcode shares | 2.4 | MP-I3 | not run | the receipts it adds (`pkgutil --pkgs` before and after) say whether the drain is needed for it |
+| Simulator platforms by `xcodebuild -exportPlatform` and `-importPlatform`; `xcode-push` uploads them | 2.4 | MP-I4 | not run | a copy of `xcodebuild`'s manual page read (not checked on a Mac) lists neither `-exportPlatform` nor `-importPlatform`; the route other tools use is, as recalled and not checked, `-downloadPlatform <platform> -exportPath <dir>`, then `-importPlatform <file>`. If MP-I4 shows that, 2.4 names it, and the export needs one download from Apple on the pushing Mac |
+| An Xcode install, a swap and a removal, js-agent probing before and after | 2.4, MP | MP-I5 | not run: needs the drained Mac and its js-agent | js-agent's probe reads `/Applications/Xcode*.app/Contents/version.plist` and runs nothing (komira-ai/jobscheduler); what it reports after each step decides whether J2's re-read in `resume` is enough |
+| `sysadminctl -addUser` and `-secureTokenOn` take both passwords on standard input (`-`), or need a pseudo-terminal | 5.5 | MP-A2, MP-A3 | not run | on a pipe: the Built stdin runner is enough; only from a terminal: the daemon gives it a pseudo-terminal it owns; a password reaches no argument in either case |
+| The Secure Token grant, and the account hidden | 5.5 | MP-A4, MP-A5 | not run | read three ways (`sysadminctl -secureTokenStatus`, `diskutil apfs listCryptoUsers /`, `fdesetup list`); the built read uses the first (`maintenance_account.rs`) |
+| The update account is a FileVault user; `fdesetup authrestart -inputplist` with the plist on standard input | 5.5 | MP-A6 to MP-A8 | not run: needs FileVault turned on by the owner | if the account cannot authorise it, Macs with FileVault on are never ordered `macos` (question 4) |
+| A minor update as root from launchd, nobody logged in, FileVault off and on | 5.5 | MP-U1 to MP-U5 | not run: needs a pending minor update | stops, asks, or does not restart: the apply step changes (MU8); `--restart` with FileVault on stops at the pre-boot login: the install runs without it and `authrestart` follows, as 5.5 says |
+| A major upgrade by `startosinstall --nointeraction --user --stdinpass`, FileVault off and on | 5.5 | MP-U6 to MP-U8 | not run: cannot be undone; needs a Mac on an older major and the owner's choice | as for the minor; one Mac can show only one of the two FileVault cases |
+| `startosinstall` restarts authenticated with FileVault on | 5.5 | MP-U8 | not run (as above) | if it stops at the pre-boot login, major upgrades are ordered only on Macs with FileVault off |
+| An install on macOS 26 or later stops on a step that needs the screen | 5.5 | MP-U9 | not run | a pane after the restart that waits for a person: the host does not come back by itself, and `verify` must name it |
+| How each setting of 5.8 shows: `/Library/Managed Preferences`, the declarations the Mac reports, the undocumented DDM state file | 5.8 | MP-M1 to MP-M6 | not run: each setting is made in Apple Business by the owner, one at a time | each key seen corrects `maintenance_mdm.rs`'s keys; a nested `Deferrals` or `AutomaticActions` dictionary with nothing on in it is reported as on by `is_on`, which MP-M4 checks |
+| Apple Business's `SOFTWARE_UPDATE` Configuration is the enforcement declaration | 5.5.1 | MP-M7 | not run (owner's console) | 5.5.1 stays "not chosen" either way; the answer only says whether the Blueprint route would work |
+
+### 10.3 What the proof must allow for
+
+Found while writing the steps, from the code and the jobscheduler repository, not from a Mac:
+
+- **A farm Mac normally has someone logged in.** js-agent's session helper logs in a standing VM user or a lease's user automatically
+  (komira-ai/jobscheduler `crates/js-mac-session/src/autologin.rs`), so "nobody logged in" is made and checked for the proof (MP-E7),
+  and the apply path is also shown with that user logged in, as a real run would find the Mac.
+- **A second visible administrator breaks the operator-keys account rule.** The daemon gives operator keys to the one visible local
+  administrator (`login_account.rs`); with two, the host has none. The proof account (`hkproof`, never the production `hkupdate`) is
+  hidden in the same step that makes it, and the update account of MU8 must be too (5.5 already hides it; it must not be visible between
+  the two calls).
+- **A cordon must outlive the shell.** The cordon a shell starts ends with the shell's session, so it runs as a launchd job (MP-E6). Until
+  js-agent's hold file (J1) is deployed, a Mac that restarts during the proof may take a lease before its cordon is placed again.
+- **A new group is named in the coordinator's operator files first** (operator keys, SSH operators, host prerequisites), or moving the Mac
+  into it removes its operator keys and `hk ssh` is refused (MP-E2).

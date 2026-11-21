@@ -19,6 +19,7 @@ use super::Coordinator;
 use crate::audit_actions::{MAINTENANCE_START, MAINTENANCE_STEP};
 use crate::decide_maintenance::{self, Ordered, Verdict, View};
 use crate::fleet::Fleet;
+use crate::holds::marks_of;
 use crate::host_groups::GroupName;
 use crate::host_groups::Policy;
 use crate::maintenance::FEATURE;
@@ -49,9 +50,12 @@ fn entry(action: &str, id: &HostId, group: &str, run_id: &str, then: &str) -> Au
 
 impl Coordinator {
     /// Stores the host `id`'s turn as its daemon's last kept report says it, when that differs
-    /// from what the run holds ([`decide_maintenance::folded`]), audited `maintenance_step`. A
-    /// change that cannot be stored is logged, and the next heartbeat's report folds it again.
-    pub(super) fn fold_maintenance(&self, fleet: &Fleet, id: &HostId) {
+    /// from what the run holds ([`decide_maintenance::folded`]), audited `maintenance_step`, and
+    /// refreshes the marks of `fleet` from it, so the packages of this heartbeat are decided over
+    /// the turn as stored ([`crate::fleet::Marks::in_maintenance`]): a host whose turn ended here
+    /// takes its place in its plans again at once. A change that cannot be stored is logged, and
+    /// the next heartbeat's report folds it again.
+    pub(super) fn fold_maintenance(&self, fleet: &mut Fleet, id: &HostId) {
         let unix_now = self.ops.unix_now();
         let Some((r, h, turn, run_id)) = self.ops.read(|state| {
             let runs = &state.maintenance_runs;
@@ -72,8 +76,11 @@ impl Coordinator {
                 *held = turn;
             }
         });
-        if let Err(why) = stored {
-            tracing::warn!(%why, node_id = %id, run = %run_id, "a host's maintenance step could not be stored: its next heartbeat reports it again");
+        match stored {
+            Ok(_) => fleet.set_marks(self.ops.read(marks_of)),
+            Err(why) => {
+                tracing::warn!(%why, node_id = %id, run = %run_id, "a host's maintenance step could not be stored: its next heartbeat reports it again");
+            }
         }
     }
 
@@ -271,3 +278,7 @@ mod tests;
 #[cfg(test)]
 #[path = "maintenance_turns_tests.rs"]
 mod turns_tests;
+
+#[cfg(test)]
+#[path = "maintenance_packages_tests.rs"]
+mod packages_tests;

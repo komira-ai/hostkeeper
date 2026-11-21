@@ -20,8 +20,9 @@
 //!
 //! 1. the coordinator has been up for its quiet start (`--quiet-secs`, by default
 //!    [`crate::fleet::QUIET_START`]);
-//! 2. the host is not already updating, and no other service updates on it or has an order
-//!    outstanding for it (a host does one update at a time);
+//! 2. the host is not already updating, no other service updates on it or has an order
+//!    outstanding for it, and it is not in its turn of a maintenance run (a host does one thing at
+//!    a time; [`crate::decide_maintenance`]);
 //! 3. the host is behind: it does not run the desired version (a rollback is a desired
 //!    version older than the one the hosts run, under the same rules), or does not run the
 //!    service at all;
@@ -164,7 +165,8 @@ pub enum Gate {
     BelowMinVersion,
     /// The host is updating this service.
     Updating,
-    /// The host is updating another service or has an order outstanding for one.
+    /// The host is updating another service or has an order outstanding for one, or is in its turn
+    /// of a maintenance run.
     BusyElsewhere,
     /// As many hosts of the host's role hold an update slot of the service as the desired
     /// state's `max_updating` of the role lets ([`crate::stages`]).
@@ -495,7 +497,7 @@ pub(crate) fn consider(
             Decision::Gate(Gate::Updating),
         ),
         (
-            fleet.is_busy_besides(service, id, now),
+            fleet.is_busy_besides(service, id, now) || fleet.in_maintenance(id),
             Decision::Gate(Gate::BusyElsewhere),
         ),
         (
@@ -534,10 +536,10 @@ pub(crate) fn consider(
 }
 
 /// The uninstall of `def` the host `id` is ordered by `order_id`, or the first rule that holds
-/// it back: the host must still list the service, and the hold, the quiet start, the one update
-/// at a time on the host, its failure or deferral of this uninstall, an uninstall of a package of
-/// its group that goes before it (`uninstall_order`) and the other services' live rollouts hold
-/// it.
+/// it back: the host must still list the service, and the hold, the quiet start, the one thing
+/// at a time on the host (an update, an order or a maintenance turn), its failure or deferral of
+/// this uninstall, an uninstall of a package of its group that goes before it (`uninstall_order`)
+/// and the other services' live rollouts hold it.
 fn uninstall(
     services: &Services,
     def: &ServiceDef,
@@ -565,7 +567,7 @@ fn uninstall(
         (fleet.is_quiet(now), Decision::Gate(Gate::Quiet)),
         (host.beat.updating.is_some(), Decision::Gate(Gate::Updating)),
         (
-            fleet.is_busy_besides(service, id, now),
+            fleet.is_busy_besides(service, id, now) || fleet.in_maintenance(id),
             Decision::Gate(Gate::BusyElsewhere),
         ),
         (
