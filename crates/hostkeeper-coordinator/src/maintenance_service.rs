@@ -1,6 +1,6 @@
 //! The handlers of `Maintenance` of `hostkeeper.operator.v1` (docs/design/maintenance-updates.md,
 //! sections 4.2 and 5.1): `Schedule`, `List`, `Get` and `Cancel`, each with the operator's
-//! credential only. `RetryHost` and `PutBack` have no handler yet (`crate::grpc::PENDING`).
+//! credential only. `RetryHost` and `PutBack` are in [`crate::maintenance_operator`].
 //!
 //! `Schedule` resolves where the run goes (the hosts named, each of which must be enrolled, or
 //! every enrolled host of a host group, those moving into it among them) to the hosts with
@@ -173,7 +173,7 @@ fn asked(request: &proto::ScheduleMaintenanceRequest) -> Result<Asked, Refusal> 
 }
 
 /// The run id `text`, if it is one: 1 to 64 bytes of an order id's characters.
-fn run_id(text: &str) -> Result<&str, Refusal> {
+pub(crate) fn run_id(text: &str) -> Result<&str, Refusal> {
     OrderId::parse(text)
         .map(|_| text)
         .ok_or(Refusal::InvalidRequest)
@@ -291,6 +291,8 @@ fn turn_of(seen: &Seen, kinds: &[Kind], state: &OpsState) -> Option<RunHost> {
         reason: String::new(),
         offered_again: 0,
         baked_beats: 0,
+        queued: None,
+        order_try: 0,
     })
 }
 

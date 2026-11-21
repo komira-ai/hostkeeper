@@ -361,6 +361,10 @@ and takes no place in its plan, whichever stage each plan is in. So a config pac
 its service is never ordered to a host that does not run the service. A package that is not
 installed because a halt, a hold, an exclusion, a version marked bad, the quiet start or a gate of
 its plan holds it also holds the later ones back. Updates are not ordered by the list.
+A later package whose every host left to order waits `install_order` (behind an earlier package
+that failed its install on one host, say, and waits `stage_failed` on the others) has nothing to
+order: it takes no place of `--live-rollouts` and holds no other service of any group, and its plan
+says `nothing_to_order` ([rollout-plans.md](rollout-plans.md#across-services---live-rollouts)).
 
 The uninstall of a package waits, told `uninstall_order`, while a package whose intent was
 written before it (which the group listed after it) is still on the host, whatever holds that
@@ -499,6 +503,22 @@ heartbeats in a row (section 5.6), and a host whose turn deferred is offered aga
 run's other hosts of the group and while the window is open, once the group's `defer_backoff` has
 passed since it deferred, longer for each deferral of its turn (section 5.3).
 
+Two alerts of `Alerts.List` follow a host's turn of a run, both critical, each one alert per host
+with the host's group in `host_group`. `maintenance_halted` stands while the host's turn is stored
+halted: it names the host, the run and the reason the host's daemon gave (the step and the exit
+code), says that the host stays cordoned and that no further host of its group starts in the run,
+and that the operator acts with `Maintenance.RetryHost` or `Maintenance.PutBack` (`Cancel` ends the
+run but leaves the host halted); once an act is queued it says that the act is sent to the daemon.
+It clears when the daemon reports its turn at another step. `maintenance_not_back` stands while the
+turn is stored not back: a host stored rebooting that stays silent for its group's `return_secs`
+(1200 for a Linux host, 3600 for a Mac, or the group's own; a host the coordinator has not heard
+since it started is judged from the coordinator's start, by the larger of the two defaults) is
+stored not back by the coordinator at its next observation of the alerts (every 15 seconds; an
+`Alerts.List` alone stores nothing), audited `maintenance_step`. It clears when the host reports
+again, which stores the step its daemon reports. A host stored rebooting, or not back, raises no
+`silent_host` for its silence; it does again if its turn moves on, such as to done, and the host is
+still silent.
+
 ## Incidents are per host and per group
 
 Hold, exclude and abort stay per host. A hold of a role names a group (a role that is no group is
@@ -509,7 +529,10 @@ shows, per package, the groups that list it (`host_groups`), their hosts and min
 leaves `roles` and `assignments` empty. `Alerts.List` derives a `halt` alert from each group's
 halt (groups with the same halt of a package, host and version are one alert that names them
 all), and the failed-canary, held-on-bad-version and abandoned-host alerts cover the packages
-that only a group lists.
+that only a group lists. A host of a group whose last report of a package is a failure of the
+group's desired version is a `failed_update` alert, and a host that holds a halt of a package of
+its own is a `host_halt` alert, each naming the group in its message
+([rollout-plans.md](rollout-plans.md#a-failed-host)).
 
 ## The audit log
 

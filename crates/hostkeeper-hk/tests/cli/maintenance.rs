@@ -1,9 +1,8 @@
 //! The `Maintenance` calls, as `hk` sends them: the path each posts to and the body its flags
 //! make, a kind or a state the proto does not name refused before anything is sent, and every
-//! call through the real gateway of a coordinator that holds no run and no enrolled host: the four
-//! served calls answer what an empty state answers (`schedule` and `get`/`cancel` a refusal
-//! `NOT_FOUND`, exit 1; `list` no runs), `retry-host` and `put-back`, which have no handler yet,
-//! `UNIMPLEMENTED`.
+//! call through the real gateway of a coordinator that holds no run and no enrolled host: each
+//! answers what an empty state answers (`schedule`, `get`, `cancel`, `retry-host` and `put-back` a
+//! refusal `NOT_FOUND`, exit 1; `list` no runs).
 
 use crate::gateway;
 use crate::rig::{Rig, Server, call};
@@ -201,17 +200,14 @@ fn a_kind_or_state_the_proto_does_not_name_is_refused_before_anything_is_sent() 
 /// maintenance command reaches its method with its body and gets what an empty state answers.
 /// `schedule` of host ids that are not enrolled is `NOT_FOUND` (HTTP 404) `unknown_host`, of a host
 /// group the coordinator does not hold `NOT_FOUND` `unknown_group`; `get` and `cancel` of a run id
-/// no run has are `NOT_FOUND` `unknown_run`; each of those exits 1 with the code and the
-/// `refused:` reason on stderr and nothing on stdout. `list` is 200 with no run, printed as the
-/// gateway sent it, exit 0. `retry-host` and `put-back`, which have no handler yet, are
-/// `UNIMPLEMENTED` (501): exit 1 with exactly the code on stderr, no `refused:` line.
+/// no run has, and `retry-host` and `put-back` of a host in such a run, are `NOT_FOUND`
+/// `unknown_run`; each of those exits 1 with the code and the `refused:` reason on stderr and
+/// nothing on stdout. `list` is 200 with no run, printed as the gateway sent it, exit 0.
 ///
 /// Catches: a served method answered `UNIMPLEMENTED`, a missing run or host answered as a
-/// refusal of the caller (exit 3) or of the request (exit 2), a refusal that loses its reason,
-/// and a method that is answered before its handler lands.
+/// refusal of the caller (exit 3) or of the request (exit 2), and a refusal that loses its reason.
 #[test]
-fn maintenance_commands_through_the_real_gateway_answer_an_empty_state_and_two_stay_unimplemented()
-{
+fn maintenance_commands_through_the_real_gateway_answer_what_an_empty_state_answers() {
     let rig = Rig::new("maintenance-gateway");
     let gateway = gateway::start(&rig.pki, &rig.path(""));
     let not_found = |reason: &str| {
@@ -228,16 +224,8 @@ fn maintenance_commands_through_the_real_gateway_answer_an_empty_state_and_two_s
         (200, 0, String::new()),
         not_found("unknown_run"),
         not_found("unknown_run"),
-        (
-            501,
-            1,
-            "hk: the coordinator answered UNIMPLEMENTED\n".to_owned(),
-        ),
-        (
-            501,
-            1,
-            "hk: the coordinator answered UNIMPLEMENTED\n".to_owned(),
-        ),
+        not_found("unknown_run"),
+        not_found("unknown_run"),
     ];
     for (i, ((words, method, body), (status, code, stderr))) in
         commands().into_iter().zip(wants).enumerate()

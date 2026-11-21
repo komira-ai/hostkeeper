@@ -20,7 +20,7 @@ use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::XcodeRefusal as Refusal;
 use hostkeeper_wire::HostId;
 
-use crate::alerts::{Alert, Kind, Subject};
+use crate::alerts::{Alert, Kind, Said, Subject};
 use crate::audit_actions::{XCODE_REMOVE, about};
 use crate::operator::{Caller, entry_proto, valid_reason};
 use crate::ops::Write;
@@ -65,6 +65,7 @@ pub(crate) fn version_taken(taken: &[Taken]) -> Vec<Alert> {
                  archive with `hk xcode remove` before pushing the other build",
                 taken.version, taken.refused_build, taken.held_build
             ),
+            said: Said::default(),
         })
         .collect()
 }
