@@ -25,18 +25,25 @@
 # crates/hostkeeper-privileged are behind its feature `privileged`, which this workflow never
 # turns on: they are neither built nor run here, and count toward no gate.
 #
-# The pull request and the push to main run the same jobs. A push to main also saves the Cargo
-# cache; a pull request only restores it.
+# The pull request, the merge group of main's merge queue and the push to main run the same jobs:
+# `lint` and `test` are checks main requires, and a merge group must run them as a pull request
+# does (the workflow lint, merge_queue.rs, holds the triggers, the job conditions and the
+# concurrency to that). A push to main also saves the Cargo cache; a pull request and a merge
+# group only restore it.
 name: ci
 
 on:
   pull_request:
+  merge_group:
+    types: [checks_requested]
+    branches: [main]
   push:
     branches: [main]
 
 permissions: {}
 
-# A pull request's newer run replaces its older one; a push to main always runs to its end.
+# A pull request's newer run replaces its older one; a merge group's run and a push to main always
+# run to their end (each has a group of its own, its run id).
 concurrency:
   group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
