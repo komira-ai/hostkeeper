@@ -21,7 +21,7 @@
 //!
 //! 1. `<version>/` is opened to its owner (0700) and renamed to `.stage-prune-<16 hex>` beside
 //!    it, so the version is gone in one step: no reader ever sees a half-deleted `<version>/`.
-//!    The version is read-only (0555) as an unpack leaves it, and macOS refuses to rename a
+//!    A version an earlier release published is read-only (0555), and macOS refuses to rename a
 //!    directory its caller cannot write, even to a new name in the same parent (it rewrites the
 //!    directory's `..` entry); Linux makes that check only when the parent changes. The mode of
 //!    the top directory is not part of the tree digest;

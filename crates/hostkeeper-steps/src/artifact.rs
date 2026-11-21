@@ -26,8 +26,8 @@
 //! header  = kind NUL name NUL mode NUL size NUL
 //! kind    = "f" (a regular file), "d" (a directory) or "l" (a symbolic link)
 //! name    = the full relative name, as bytes
-//! mode    = the permission bits (mode & 0o7777), four octal digits ("0555", "0444"); "0000"
-//!           for a link, whose own bits mean nothing and differ between systems
+//! mode    = the permission bits (mode & 0o7777), four octal digits (such as "0400");
+//!           "0000" for a link, whose own bits mean nothing and differ between systems
 //! size    = the file's size in bytes, in decimal; "0" for a directory; the length of the
 //!           target text for a link
 //! bytes   = the file's contents (files only); the link's target text, as `readlink` gives it,

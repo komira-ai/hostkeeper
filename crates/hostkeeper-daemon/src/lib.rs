@@ -204,6 +204,7 @@ pub mod notify;
 pub mod observer;
 pub mod operator_keys;
 pub mod own_package;
+pub mod package_dirs;
 pub mod packaged;
 pub mod packages;
 pub mod pin;

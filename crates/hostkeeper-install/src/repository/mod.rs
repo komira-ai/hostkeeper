@@ -292,13 +292,25 @@ fn record_failure(error: RecordError) -> Failure {
 }
 
 impl RepositoryInstaller<'_> {
-    /// The work directory of `service`, emptied and made again.
+    /// The work directory of `service`, emptied and made again, mode 0700 like the work
+    /// directories' parent, which is made 0700 when it is missing and set so when it is not (an
+    /// earlier release left both 0755): a download is a package's bytes, root's alone.
     fn fresh_work(&self, service: &ServiceName) -> Result<PathBuf, Failure> {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
         let work = self.dirs.work.join(service.as_str());
         remove_tree(&work).map_err(|e| io_failure("the work directory", e))?;
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .create(&work)
+        let closed = std::fs::Permissions::from_mode(0o700);
+        let parent = &self.dirs.work;
+        std::fs::create_dir_all(parent.parent().unwrap_or(parent))
+            .and_then(
+                |()| match std::fs::DirBuilder::new().mode(0o700).create(parent) {
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+                    made => made,
+                },
+            )
+            .and_then(|()| std::fs::set_permissions(parent, closed.clone()))
+            .and_then(|()| std::fs::DirBuilder::new().mode(0o700).create(&work))
+            .and_then(|()| std::fs::set_permissions(&work, closed))
             .map_err(|e| io_failure("the work directory", e))?;
         Ok(work)
     }

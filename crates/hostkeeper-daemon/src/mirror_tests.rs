@@ -209,7 +209,7 @@ fn mode(path: &Path) -> u32 {
 /// listed files under `<component>/binary-<architecture>/`, `binary-all/` and `i18n/` of the
 /// entry's component and no others (not another architecture or component, not contents or
 /// sources); each is requested with its listed size as the bound and arrives byte for byte in
-/// chunks; directories are 0755 and files 0644; and no staging directory is left.
+/// chunks; directories are 0700 and files 0600 (root's alone); and no staging directory is left.
 #[test]
 fn the_index_files_of_the_hosts_architecture_are_mirrored_byte_for_byte() {
     let bench = bench("mirror-index");
@@ -234,14 +234,14 @@ fn the_index_files_of_the_hosts_architecture_are_mirrored_byte_for_byte() {
     let dists = bench.mirrored().join("dists/web");
     for (path, bytes) in [PACKAGES, ALL, TRANSLATION] {
         assert_eq!(fs::read(dists.join(path)).expect("a file"), bytes, "{path}");
-        assert_eq!(mode(&dists.join(path)), 0o644, "{path}");
+        assert_eq!(mode(&dists.join(path)), 0o600, "{path}");
     }
     assert_eq!(
         fs::read(dists.join("InRelease")).expect("the release"),
         release(&listed())
     );
     for dir in ["", "dists", "dists/web", "dists/web/main/i18n"] {
-        assert_eq!(mode(&bench.mirrored().join(dir)), 0o755, "{dir:?}");
+        assert_eq!(mode(&bench.mirrored().join(dir)), 0o700, "{dir:?}");
     }
     let requests = bench.origin.requests();
     assert_eq!(
@@ -488,8 +488,8 @@ fn a_mirror_root_under_a_file_is_io() {
 const POOL: &str = "/repositories/acme/pool/web/a/hello_1_amd64.deb";
 const FILENAME: &str = "pool/web/a/hello_1_amd64.deb";
 
-/// Proves a package file is read into the mirror at the index's `Filename` (directories 0755,
-/// the file 0644), requested with the order's size as the bound, with no temporary file left;
+/// Proves a package file is read into the mirror at the index's `Filename` (directories 0700,
+/// the file 0600), requested with the order's size as the bound, with no temporary file left;
 /// and a later read of the same file replaces it.
 #[test]
 fn the_pool_file_is_mirrored_at_its_filename() {
@@ -507,9 +507,9 @@ fn the_pool_file_is_mirrored_at_its_filename() {
         .expect("mirrored");
     let dest = bench.mirrored().join(FILENAME);
     assert_eq!(fs::read(&dest).expect("the file"), deb);
-    assert_eq!(mode(&dest), 0o644);
+    assert_eq!(mode(&dest), 0o600);
     for dir in ["", "pool", "pool/web", "pool/web/a"] {
-        assert_eq!(mode(&bench.mirrored().join(dir)), 0o755, "{dir:?}");
+        assert_eq!(mode(&bench.mirrored().join(dir)), 0o700, "{dir:?}");
     }
     assert_eq!(
         bench.tree(),

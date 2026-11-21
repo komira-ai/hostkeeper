@@ -408,7 +408,7 @@ host without a repository never announces `apt` and keeps taking tarballs.
 ### 4.2 The version directory
 
 ```
-/var/lib/hostkeeper/packages/<service>/<version>/    0555, sealed
+/var/lib/hostkeeper/packages/<service>/<version>/    0700, sealed
   target.json            the order's entry, as canonical JSON
   apt/<repository>.sources   the host's entry as it was at stage
   apt/lists/             the suite's InRelease and Packages index, as apt fetched and verified them
@@ -432,7 +432,11 @@ on its command line, which wins over `/etc/apt/apt.conf.d/`:
 - `APT::Get::AllowUnauthenticated=false`, `Acquire::AllowInsecureRepositories=false`,
   `Acquire::AllowDowngradeToInsecureRepositories=false`, `APT::Install-Recommends=false`,
   `APT::Install-Suggests=false`, and `DPkg::Lock::Timeout` within the step's bound; for the install of `activate`, the
-  daemon's `--package-lock-wait-secs` (default 300), the run bounded by `activate_secs` and that wait together.
+  daemon's `--package-lock-wait-secs` (default 300), the run bounded by `activate_secs` and that wait together;
+- `APT::Sandbox::User=root`, so that apt never hands a download to its sandbox user (`_apt`): the work directory, the
+  version directory and the private repository's mirror are root's alone (directories 0700, files 0600 or 0400),
+  since a package may carry a secret, and `_apt` could neither write nor read them. The transient unit of section 4.6
+  is the confinement of each run.
 
 The system's dpkg database (`/var/lib/dpkg`) is the one apt installs into, as it must be. The host's proxy settings in
 `apt.conf.d` still apply.
@@ -677,7 +681,7 @@ the directories above them (`Library`, `Library/Application Support`, `Library/L
 only. Its data lives in a directory of the same tree that the payload does not list, so neither an update nor `remove`
 touches it.
 
-**The version directory** is packages-lifecycle.md section 6.1's: `target.json`, `artifact` (the signed `.pkg`, 0444,
+**The version directory** is packages-lifecycle.md section 6.1's: `target.json`, `artifact` (the signed `.pkg`, 0400,
 kept for rollback), and `tree/`, the component's payload as `installer` places it, so `tree/Library/…` is `/Library/…`.
 Beside them, `macos-pkg/PackageInfo` and `macos-pkg/Bom`, the component's two files as the expansion gave them, and
 `macos-pkg/artifact.pkg`, a hard link of `artifact` under the name `installer -pkg` takes (it refuses a path that does

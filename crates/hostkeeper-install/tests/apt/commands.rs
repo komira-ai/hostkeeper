@@ -60,8 +60,9 @@ fn every_apt_run_carries_every_option_of_the_work_directory() {
 
 /// Proves the options are the ones section 4.2 lists: the work directory's copy of the one entry
 /// as the only source, no trusted key, no preference, lists and archives in the work directory,
-/// no package cache, no unauthenticated or insecure repository, no recommends or suggests, and
-/// the lock timeout of the bound.
+/// no package cache, no unauthenticated or insecure repository, no recommends or suggests, the
+/// lock timeout of the bound, and apt kept as root (no sandbox user, who could not read a closed
+/// mirror or work directory).
 #[test]
 fn the_options_are_those_of_section_4_2() {
     let work = std::path::Path::new("/w/mdm");
@@ -83,6 +84,7 @@ fn the_options_are_those_of_section_4_2() {
         "APT::Install-Recommends=false".to_owned(),
         "APT::Install-Suggests=false".to_owned(),
         "DPkg::Lock::Timeout=77".to_owned(),
+        "APT::Sandbox::User=root".to_owned(),
     ]
     .into_iter()
     .flat_map(|o| ["-o".to_owned(), o])
@@ -170,28 +172,91 @@ fn only_the_install_and_the_purge_suspend_needrestart() {
     assert_eq!(seen, ["apt-get install", "dpkg --purge"]);
 }
 
-/// Proves the download runs in an archives directory that has the mode apt gave the lists'
-/// `partial/` (0700 in the fake, as apt run as root makes it) and the same owner and group, so
-/// that apt's sandbox user, which owns `partial/`, can write the package file there. Run by one
-/// user, the owner is that user's either way; the device test `install_apt` runs real apt as
-/// root and proves the owner (`_apt`) is copied.
-/// Catches: a download into a root-owned archives directory, where apt downloads as root and
-/// warns "Download is performed unsandboxed as root".
+/// The permission bits of `path`, not followed.
+fn mode_of(path: &std::path::Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::symlink_metadata(path)
+        .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+        .permissions()
+        .mode()
+        & 0o7777
+}
+
+/// The regular files directly in `dir`, by path.
+fn files_in(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut files: Vec<_> = std::fs::read_dir(dir)
+        .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
+        .map(|e| e.expect("an entry").path())
+        .filter(|p| std::fs::symlink_metadata(p).is_ok_and(|m| m.is_file()))
+        .collect();
+    files.sort();
+    files
+}
+
+/// Proves what a stage and an activate keep of an apt package is closed to every user but its
+/// owner, from its creation: the version's copy (`apt/`, its `lists/` and `archives/`) is 0700
+/// and every file in it (the entry, the indexes, the kept package) 0600; and the work
+/// directories' parent, the work directory and each directory the backend makes in it are 0700,
+/// with the entry and the package the activate copied back 0600.
+/// Catches: a staged or restored `.deb`, which holds a secret file of the package as it is,
+/// readable by another user.
 #[test]
-fn the_archives_directory_takes_the_owner_and_mode_of_the_lists_partial() {
-    use std::os::unix::fs::MetadataExt;
-    let env = Env::new("apt-archives-owner");
-    env.staged(&deb(V1), &["mdm.service"]);
-    let work = env.work();
-    let partial = std::fs::metadata(work.join("lists/partial")).expect("lists/partial");
-    let archives = std::fs::metadata(work.join("archives")).expect("archives");
-    assert_eq!(partial.mode() & 0o7777, 0o700);
-    assert_eq!(archives.mode() & 0o7777, 0o700);
+fn a_staged_and_activated_apt_package_is_closed_to_other_users() {
+    let env = Env::new("apt-closed");
+    let (_, dir) = env.installed(&deb(V1), &["mdm.service"]);
+    let meta = dir.join("apt");
+    for kept in [meta.clone(), meta.join("lists"), meta.join("archives")] {
+        assert_eq!(mode_of(&kept), 0o700, "{}", kept.display());
+    }
+    let kept: Vec<_> = [
+        files_in(&meta),
+        files_in(&meta.join("lists")),
+        files_in(&meta.join("archives")),
+    ]
+    .concat();
     assert_eq!(
-        (archives.uid(), archives.gid()),
-        (partial.uid(), partial.gid())
+        kept.len(),
+        4,
+        "the entry, two indexes, the package: {kept:?}"
     );
-    assert_eq!(env.host.calls_of("apt-get download").len(), 1);
+    for file in &kept {
+        assert_eq!(mode_of(file), 0o600, "{}", file.display());
+    }
+    let work = env.work();
+    for made in [
+        env.dirs.work.clone(),
+        work.clone(),
+        work.join("sources"),
+        work.join("empty"),
+        work.join("lists"),
+        work.join("lists/partial"),
+        work.join("archives"),
+        work.join("archives/partial"),
+    ] {
+        assert_eq!(mode_of(&made), 0o700, "{}", made.display());
+    }
+    let restored = [
+        files_in(&work.join("sources")),
+        files_in(&work.join("archives")),
+    ]
+    .concat();
+    assert_eq!(restored.len(), 2, "the entry and the package: {restored:?}");
+    for file in &restored {
+        assert_eq!(mode_of(file), 0o600, "{}", file.display());
+    }
+}
+
+/// Proves a work directories' parent an earlier release left open (0755) is closed (0700) by the
+/// next stage, and the stage goes on.
+#[test]
+fn a_work_directories_parent_left_open_is_closed_by_the_next_stage() {
+    use std::os::unix::fs::PermissionsExt;
+    let env = Env::new("apt-closed-parent");
+    std::fs::create_dir_all(&env.dirs.work).expect("the parent");
+    std::fs::set_permissions(&env.dirs.work, std::fs::Permissions::from_mode(0o755)).expect("open");
+    env.staged(&deb(V1), &["mdm.service"]);
+    assert_eq!(mode_of(&env.dirs.work), 0o700);
+    assert_eq!(mode_of(&env.work()), 0o700);
 }
 
 /// Proves the dpkg-deb runs are confined: reading the fields writes nothing and the extraction
