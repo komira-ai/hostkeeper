@@ -69,6 +69,8 @@ ui_files![
     "terminal_keys.js",
     "terminal_port.js",
     "updates.js",
+    "schedule.js",
+    "runs.js",
     "styles/terminal.css",
     "styles/serialconsole.css",
     "vendor/xterm/xterm.js",

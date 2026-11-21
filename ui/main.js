@@ -1,5 +1,5 @@
 // The browser's entry: starts the app with the page's document, fetch, confirm and clock, its one
-// socket opener and its terminal.
+// socket opener, its terminal and the operator's time zone.
 import { startApp } from "./app.js";
 import { socketAddress } from "./socket_address.js";
 import { openTerminal } from "./terminal_port.js";
@@ -53,6 +53,8 @@ startApp({
   openTerminal,
   viewScreen: screenViewer(RFB),
   now: () => Math.floor(Date.now() / 1000),
+  // The operator's offset from UTC at an instant, in seconds east of UTC (UTC+01:00 is 3600).
+  localOffset: (unix) => -new Date(unix * 1000).getTimezoneOffset() * 60,
   prefs,
   every: (run, milliseconds) => {
     const timer = window.setInterval(run, milliseconds);
