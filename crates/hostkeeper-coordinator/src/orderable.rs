@@ -6,11 +6,12 @@
 //! ([`crate::decide`]), and one of them can hold such a host for as long as its cause stands: the
 //! host holds a halt of the service of its own (`halted_here`, `stale_halt_here`), its install
 //! waits for a package listed before it that is not installed (`install_order`), it was moved into
-//! its group and is not admitted yet (`moving`), another service updates on it (`busy_elsewhere`),
-//! or its agent cannot take the order (`unsupported`, `no_digest` and the picks' skips). A plan
-//! whose every host left to order is held so has nothing to order: it takes no place, so it holds
-//! no other service of any group, and its plan says so (`nothing_to_order`). It takes its place
-//! again, by when its version was set, as soon as one of those hosts can be ordered.
+//! its group and is not admitted yet or its uninstalls are not done (`moving`), another service
+//! updates on it (`busy_elsewhere`), or its agent cannot take the order (`unsupported`,
+//! `no_digest` and the picks' skips). A plan whose every host left to order is held so has nothing
+//! to order: it takes no place, so it holds no other service of any group, and its plan says so
+//! (`nothing_to_order`). It takes its place again, by when its version was set, as soon as one of
+//! those hosts can be ordered.
 //!
 //! A host that deferred the update is not one left to order: it waits out its backoff by itself
 //! ([`crate::defer`]). The quiet start holds every host alike and is no reason of one host, so it
@@ -43,7 +44,10 @@ fn held(
     let halted_here = fleet
         .occupant(service, id)
         .is_some_and(|host| host.beat.local_halt.is_some());
-    if halted_here || (def.scope.is_some() && fleet.holds_moving(id)) {
+    // A host moving into its group is held until it is admitted and, once it is, while its
+    // uninstalls are not done, as the decision holds it (`moving`).
+    let moving = fleet.holds_moving(id) || (fleet.is_moving(id) && fleet.uninstalls_listed(id));
+    if halted_here || (def.scope.is_some() && moving) {
         return true;
     }
     let considered = consider(def, want, fleet.bad_versions(service), fleet, id, now);

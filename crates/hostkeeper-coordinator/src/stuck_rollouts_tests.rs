@@ -410,3 +410,55 @@ fn a_host_that_is_moving_into_its_group_holds_no_other_service() {
         (i32::from(proto::PlanWait::NothingToOrder), vec![])
     );
 }
+
+/// Proves: a host admitted to its move whose uninstall is not done (it deferred it) is held
+/// `moving`, and a service whose only host left is that host, at a version set after the host's
+/// admission, takes no place: `db` in another group, set after it, is ordered, and its plan says
+/// `nothing_to_order`.
+///
+/// Catches: a plan counted as orderable for a host the decision holds `moving` while its
+/// uninstalls wait, which kept every later service queued behind it.
+#[tokio::test]
+async fn an_admitted_host_whose_uninstall_waits_holds_no_other_service() {
+    use crate::moving_tests::{OLD, say, told, told_beats, wide};
+    let farm = Farm::new("stuck-uninstall-waits");
+    farm.flag(1);
+    farm.group("old", &["oldsvc", "oldcfg"], Some(wide()));
+    farm.group("new", &["svc", "cfg"], Some(wide()));
+    farm.group("two", &["db"], None);
+    farm.host("m1", "old");
+    farm.host("t1", "two");
+    assert_eq!(farm.tell("t1", &[("db", "1.0")]), NOTHING);
+    farm.deploy("new", "svc", "2.0", 1).await;
+    farm.deploy("new", "cfg", "2.0", 2).await;
+    assert_eq!(told(&farm, "m1", &OLD), None);
+    farm.world.move_to("m1", "new").expect("moved");
+    assert_eq!(told(&farm, "m1", &OLD), say("uninstall oldcfg"));
+    let mut declined = runs("oldcfg", "1.0");
+    declined.deferred = Some(hostkeeper_wire::wire::DeferredReport {
+        target: version("1.0"),
+        reason: Token::parse("busy_host").expect("a token"),
+        retry_after_secs: 3_600,
+    });
+    let listed = || {
+        vec![
+            runs("hostkeeper", "1.0"),
+            runs("oldsvc", "1.0"),
+            declined.clone(),
+        ]
+    };
+    assert_eq!(told_beats(&farm, "m1", listed()), None);
+    at(&farm, 2_005);
+    farm.deploy("new", "svc", "3.0", 3).await;
+    stamp(&farm);
+    db_set_last(&farm, 2_010);
+    assert_eq!(told_beats(&farm, "m1", listed()), None);
+    assert_eq!(farm.why("m1", "svc"), Some(Why::Gate(Gate::Moving)));
+
+    assert_eq!(farm.tell("t1", &[("db", "1.0")]), update("db", "2.0"));
+    let svc = plan_of(&farm, "m1", "svc");
+    assert_eq!(
+        (svc.waiting, svc.waiting_on),
+        (i32::from(proto::PlanWait::NothingToOrder), vec![])
+    );
+}
