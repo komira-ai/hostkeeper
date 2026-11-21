@@ -9,7 +9,11 @@
 //! not heard since it started, is not in the run. A host is in the run and left out of it
 //! (`skipped`, with why) when its daemon does not announce `maintenance-v1` (whether anything is
 //! due there is not known), when a hold stands on it for any package, or when it is excluded from
-//! any package; every other host in the run waits for its turn. The run is refused, in this
+//! any package; every other host in the run waits for its turn. A host that may not be ordered
+//! `macos` by its report ([`crate::maintenance_mac`]: `mdm_conflict`, `no_update_account`,
+//! `filevault_not_ready`) waits without `macos`, with why in `skipped_because`, and is left out
+//! with that reason when `macos` is all it has due of the run's kinds; a major upgrade of macOS
+//! counts as due only in a group whose `macos_major` allows one. The run is refused, in this
 //! order, `nothing_due` when no host waits, `last_host` when the hosts that wait are every host of
 //! one of their groups and the request does not say `take_last_host`, and `host_in_maintenance`
 //! when a host that would wait has a turn of another run that has not ended, which a `Schedule`
@@ -32,7 +36,8 @@ use hostkeeper_wire::wire::OrderId;
 
 use crate::audit_actions::{MAINTENANCE_CANCEL, MAINTENANCE_SCHEDULE};
 use crate::host_groups::GroupName;
-use crate::maintenance::FEATURE;
+use crate::maintenance::{FEATURE, Kept};
+use crate::maintenance_mac;
 use crate::maintenance_runs::{self, Kind, Run, RunHost, Skip, Step};
 use crate::operator::{Caller, entry_proto, optional_reason, valid_reason};
 use crate::ops::{AuditBy, AuditEntry, OpsState, Write};
@@ -83,8 +88,13 @@ struct Seen {
     /// The host's role, as its last heartbeat said it: what a hold of a role covers when the
     /// host is in no group.
     role: String,
-    /// The kinds the kept report lists as due, each once.
+    /// The kinds the kept report lists as due, each once, a major upgrade of macOS only when
+    /// the host's group allows one ([`maintenance_mac::counts_as_due`]).
     due: Vec<Kind>,
+    /// Why the kept report keeps the host from being ordered `macos`
+    /// ([`maintenance_mac::macos_skip`]): read only when `macos` is due, so a Linux host's
+    /// `no_update_account` (it reports no Mac facts) is never used.
+    macos_skip: Option<Skip>,
 }
 
 /// The kind `value` names in a request, if it is one other than `UNSPECIFIED`.
@@ -232,12 +242,14 @@ fn skip_of(seen: &Seen, state: &OpsState) -> Option<Skip> {
 
 /// The turn of `seen` in a run of `kinds` (every kind due, when empty), by the holds and
 /// exclusions of `state`: waiting with the kinds due, or left out with why; none when it is not
-/// in the run (not heard since the coordinator started, or nothing due of the kinds).
+/// in the run (not heard since the coordinator started, or nothing due of the kinds). A host
+/// that may not be ordered `macos` waits without it, with why; it is left out when `macos` is all
+/// that is due of the kinds.
 fn turn_of(seen: &Seen, kinds: &[Kind], state: &OpsState) -> Option<RunHost> {
     if !seen.heard {
         return None;
     }
-    let due: Vec<Kind> = if seen.announced {
+    let mut due: Vec<Kind> = if seen.announced {
         let due: Vec<Kind> = seen
             .due
             .iter()
@@ -251,20 +263,34 @@ fn turn_of(seen: &Seen, kinds: &[Kind], state: &OpsState) -> Option<RunHost> {
     } else {
         kinds.to_vec()
     };
-    let skipped_because = skip_of(seen, state);
+    let mut skipped_because = skip_of(seen, state);
+    let mut step = if skipped_because.is_some() {
+        Step::Skipped
+    } else {
+        Step::Waiting
+    };
+    if step == Step::Waiting
+        && due.contains(&Kind::Macos)
+        && let Some(why) = seen.macos_skip
+    {
+        skipped_because = Some(why);
+        if due == [Kind::Macos] {
+            step = Step::Skipped;
+        } else {
+            due.retain(|kind| *kind != Kind::Macos);
+        }
+    }
     Some(RunHost {
         host_id: seen.id.as_str().to_owned(),
         host_group: seen.group.clone(),
-        step: if skipped_because.is_some() {
-            Step::Skipped
-        } else {
-            Step::Waiting
-        },
+        step,
         since_unix: 0,
         kinds: due,
         applied: Vec::new(),
         skipped_because,
         reason: String::new(),
+        offered_again: 0,
+        baked_beats: 0,
     })
 }
 
@@ -401,12 +427,16 @@ impl Coordinator {
             .into_iter()
             .map(|(id, group)| {
                 let node = fleet.node(&id);
-                let mut due: Vec<Kind> = node
+                let report = node
                     .and_then(|node| node.maintenance.as_ref())
-                    .map(|kept| {
-                        kept.report()
+                    .map(Kept::report);
+                let macos_major = self.macos_major_of(&group);
+                let mut due: Vec<Kind> = report
+                    .map(|report| {
+                        report
                             .due
                             .iter()
+                            .filter(|item| maintenance_mac::counts_as_due(item, macos_major))
                             .filter_map(|item| kind_of(item.kind))
                             .collect()
                     })
@@ -418,11 +448,22 @@ impl Coordinator {
                     announced: fleet.announced(&id, FEATURE),
                     role: node.map(|node| node.role.clone()).unwrap_or_default(),
                     due,
+                    macos_skip: maintenance_mac::macos_skip(report),
                     id,
                     group,
                 }
             })
             .collect())
+    }
+
+    /// The `macos_major` of the maintenance table of the group `group` (empty: none): false for
+    /// a host in no group, or in a group the coordinator does not hold.
+    fn macos_major_of(&self, group: &str) -> bool {
+        group
+            .parse::<GroupName>()
+            .ok()
+            .and_then(|name| self.desired.host_group(&name))
+            .is_some_and(|held| held.policy.maintenance.macos_major)
     }
 
     /// Whether the hosts of `hosts` that wait are every enrolled host of one of their groups.
@@ -505,7 +546,11 @@ impl Coordinator {
                     .find(|run| run.id == id)
                     .map(|run| proto::GetMaintenanceRunResponse {
                         run: Some(run_proto(run, now)),
-                        hosts: run.hosts.iter().map(host_proto).collect(),
+                        hosts: run
+                            .hosts
+                            .iter()
+                            .map(|host| host_proto(&run.shown(host, now)))
+                            .collect(),
                     })
             })
             .ok_or(Refusal::UnknownRun)

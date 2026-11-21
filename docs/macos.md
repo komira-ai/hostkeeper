@@ -442,6 +442,51 @@ Nothing is installed or downloaded. A program that does not run, exits non-zero 
 its deadline (15 minutes for `softwareupdate`), or a property list that cannot be read, fails the look: the report keeps what the last look
 that succeeded found and names the collector and the step in `look_failed`.
 
+The coordinator orders a Mac a `macos` update only while its last report allows it
+(`crates/hostkeeper-coordinator/src/maintenance_mac.rs`), read when `Maintenance.Schedule` takes the
+Mac in a run and again at the heartbeat that would start its turn. The first that applies is the
+reason, shown as the host's `skipped_because` by `Schedule` and `Get`:
+
+| Reason | When |
+|---|---|
+| `mdm_conflict` | `mdm_conflicts` names anything |
+| `no_update_account` | the update account is absent, not an administrator or without a Secure Token, or the report carries no Mac facts |
+| `filevault_not_ready` | FileVault is not reported off: the report does not yet say whether the update account is a FileVault user, so a Mac with FileVault on is not ordered `macos` even when it can restart authenticated |
+
+Only `macos` is left out: the Mac's other kinds of the same run, an `xcode` install, still go, and
+the Mac is shown `skipped` only when `macos` was all its turn held. A major upgrade the Mac reports
+counts as due only when its group's `macos_major` is true, and the `maintain` order carries that
+setting, so the daemon stages a major upgrade only for such a group.
+
+### The update account
+
+At every start, once its config is loaded, a Mac's daemon makes the update account of its
+root-only update-account file (`/Library/Application Support/hostkeeper/update-account`, written by
+the bootstrap) when it is missing, and leaves it a hidden administrator holding a Secure Token
+(`crates/hostkeeper-daemon/src/update_account_make.rs`, design
+[maintenance-updates.md](design/maintenance-updates.md) section 5.5). A Mac without the file runs
+nothing. Each step looks first and changes only what is not so:
+
+1. `dscl` reads the account's user record; when it is not there, `sysadminctl -addUser <name>
+   -password - -admin` makes it, the account's password on its standard input, and the record must
+   then be there.
+2. Before anything else, the account is hidden (`dscl . -create` of `IsHidden 1`), so it is never
+   the login account that takes the operator keys, and its login shell is set to `/usr/bin/false`.
+3. When `com.apple.access_ssh` exists and holds the account, `dseditgroup -o edit -d` takes it out.
+4. When `sysadminctl -secureTokenStatus` says DISABLED, the administrator made at Setup Assistant
+   gives it a token: its name and password are read then from the bootstrap's settings (the managed
+   preferences of `dev.hostkeeper.config`, else `bootstrap.toml`, under the bootstrap's trust rule)
+   and `sysadminctl -secureTokenOn <name> -password - -adminUser <admin> -adminPassword -` runs, the
+   account's password then the administrator's on its standard input. The status must then say
+   ENABLED. An answer that says neither makes no call.
+
+The passwords go to `sysadminctl`'s standard input alone, a pipe, with an empty environment; none
+is in an argument, a log line or an error, and the administrator's password is dropped once its
+call returns. Each change is written to the daemon's standard error as it is made; a step that fails
+is written once, naming the step and the exit code, and the start goes on: the next start tries
+again. Whether `sysadminctl` reads `-` from a pipe is for the Mac proof to show
+([operations/mac-proof.md](operations/mac-proof.md) MP-A2 and MP-A3).
+
 ### Release and installer pkg
 
 Every release ships macos-arm64 beside the two Linux platforms: the binary tarball
