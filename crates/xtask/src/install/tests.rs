@@ -211,6 +211,44 @@ fn an_archive_that_does_not_decode_is_an_unpack_error_and_the_old_tool_stays() {
     }
 }
 
+fn zst(bytes: &[u8]) -> Vec<u8> {
+    ruzstd::encoding::compress_to_vec(bytes, ruzstd::encoding::CompressionLevel::Fastest)
+}
+
+#[test]
+fn a_zstd_stream_yields_the_file_it_holds() {
+    // Catches: a zstd download installed as its compressed bytes, or decoded with the tar.gz
+    // codec (buck2's releases are one zstd-compressed binary each).
+    let dir = scratch("zst");
+    let out = dir.join("bin").join("buck2");
+    let archive = zst(TOOL);
+    install(&archive, &Sha256::of(&archive), &Unpack::Zst, &out).expect("install");
+    assert_eq!(std::fs::read(&out).expect("read"), TOOL);
+    let mode = std::fs::metadata(&out).expect("stat").permissions().mode();
+    assert_eq!(mode & 0o777, 0o755);
+}
+
+#[test]
+fn a_zstd_stream_that_does_not_decode_is_an_unpack_error_and_the_old_tool_stays() {
+    // Catches: bytes that are not zstd, or a stream cut short inside its frame, installed as
+    // they are or as the part that decoded.
+    let whole = zst(&TOOL.repeat(64));
+    let cases: [(&str, Vec<u8>); 3] = [
+        ("not zstd", b"not zstd at all".to_vec()),
+        ("empty", Vec::new()),
+        ("zstd cut short", whole[..whole.len() / 2].to_vec()),
+    ];
+    for (name, bytes) in cases {
+        let (dir, out) = with_old_tool(name);
+        let result = install(&bytes, &Sha256::of(&bytes), &Unpack::Zst, &out);
+        assert!(
+            matches!(result, Err(Error::Unpack(_))),
+            "{name}: {result:?}"
+        );
+        assert_old_tool_alone(&dir, &out);
+    }
+}
+
 #[test]
 fn a_missing_member_or_one_that_is_not_a_regular_file_is_refused() {
     // Catches: an installer that writes an empty file for a member the archive lacks (a renamed
@@ -341,6 +379,15 @@ fn extract_and_member_must_agree() {
     assert_eq!(
         Unpack::new(None, m()),
         Err(UnpackFlags::MemberWithoutExtract)
+    );
+    assert_eq!(Unpack::new(Some(Format::Zst), None), Ok(Unpack::Zst));
+    assert_eq!(
+        Unpack::new(Some(Format::Zst), m()),
+        Err(UnpackFlags::MemberOfZst)
+    );
+    assert_eq!(
+        UnpackFlags::MemberOfZst.to_string(),
+        "--extract zst is one compressed file: it takes no --member"
     );
     assert_eq!(
         UnpackFlags::ExtractWithoutMember.to_string(),

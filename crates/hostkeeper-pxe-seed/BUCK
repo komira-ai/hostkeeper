@@ -1,0 +1,10 @@
+load("//:buildrules.bzl", "cargo_package")
+
+# What this package reads beyond src/, tests/ and build.rs, which a Buck2 action sees only when
+# declared. The runbook test reads the console runbook.
+cargo_package(
+    path = ".",
+    extra_srcs = [
+        "//:docs/operations/console.md",
+    ],
+)
