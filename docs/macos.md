@@ -492,10 +492,13 @@ again. Whether `sysadminctl` reads `-` from a pipe is for the Mac proof to show
 Every release ships macos-arm64 beside the two Linux platforms: the binary tarball
 `hostkeeper-<v>-macos-arm64.tar.gz` with its SBOM, and the installer pkg
 `hostkeeper-<v>-macos-arm64.pkg`. It also ships hello's `.pkg`, `hello-<v>-macos-arm64.pkg`, for
-the example service of `examples/hello`: `hello` carries the same ad-hoc code signature as the
-hostkeeper binary, and the plists of its two slots are rendered by
-`hostkeeper_launchd::service_plist`. The artifacts workflow builds them on a GitHub-hosted Apple
-silicon runner, on each push to `main` and by hand, never on a pull request.
+the example service of `examples/hello`: `hello` is signed like the other programs
+([The programs' signature](#the-programs-signature)), and the plists of its two slots are
+rendered by `hostkeeper_launchd::service_plist`. The artifacts workflow builds them on a
+GitHub-hosted Apple silicon runner, on each push to `main` and by hand, never on a pull request.
+The four Mach-O programs (`hostkeeper`, `hk`, `hello` and `hostkeeper-bootstrap`) are compiled by
+`compile-macos` and, on a push to `main`, signed by `sign-code` before `build-macos` packages them;
+a run by hand packages the linker's ad hoc signatures.
 
 The release also ships the bootstrap pkg, `hostkeeper-bootstrap-<v>-macos-arm64.pkg`, which Apple
 Business installs on a new Mac: the program `hostkeeper-bootstrap` at
@@ -624,8 +627,9 @@ install the pkg. The daemon's start keeps that file, and the postinstall loads t
 `cargo xtask release macos-pkg` builds the component with `pkgbuild` from the binary, `gh` and the
 trusted root (`--binary`, `--gh`, `--trusted-root`), then runs `productbuild --package` over it
 with the pkg identifier and the version and no signature; only the product goes to `--out`, and
-the digest line is its digest. The binary in it keeps the ad-hoc code signature the linker gives
-it, which the package verification above accepts.
+the digest line is its digest. The binary in it is the one given as `--binary`: on a push to
+`main` the one `sign-code` signed ([The programs' signature](#the-programs-signature)), otherwise
+the linker's ad-hoc signature, which the package verification above accepts.
 `cargo xtask release check-macos-pkg` reads back the product
 archive that `pkgutil --expand` expanded, layer by layer.
 
@@ -667,7 +671,8 @@ states asks a pkg that device management installs for notarization, and the rele
 only if a Mac refuses the signed pkg without it. The signing is in `.github/workflows/artifacts.yml`,
 on a push to `main` only, in three jobs:
 
-1. `build-macos` builds the unsigned pkgs into `pkg/` and checks them (above); they are never
+1. `build-macos` builds the unsigned pkgs into `pkg/` from the programs `sign-code` signed
+   ([The programs' signature](#the-programs-signature)) and checks them (above); they are never
    release files, only the artifact `pkg-unsigned-macos-arm64`.
 2. `sign-pkg`, in the environment `pkg-signing`, runs no repository code (no checkout, no cargo),
    so no build script or dependency runs where the key is. It decodes the PKCS#12 of the secret
@@ -682,7 +687,8 @@ on a push to `main` only, in three jobs:
    trusted status, a trusted timestamp and the chain of exactly the identity, `Developer ID
    Certification Authority` and `Apple Root CA`, naming every difference; it then expands the
    signed and the unsigned pkg and refuses any file that differs, so the signing changed nothing
-   `check-macos-pkg` checked. Only then is each signed pkg the release file
+   `check-macos-pkg` checked, and expands each signed pkg with its payload (`pkgutil
+   --expand-full`) to run `release check-code-signature` on the program inside it. Only then is each signed pkg the release file
    `hostkeeper-<version>-macos-arm64.pkg`, `hostkeeper-bootstrap-<version>-macos-arm64.pkg` or
    `hello-<version>-macos-arm64.pkg`: `SHA256SUMS`,
    the attestation and the release are of its bytes.
@@ -697,6 +703,87 @@ secrets named in that job alone; the checks of both pkgs before the one upload o
 On a Mac, `pkgutil --check-signature hostkeeper-<version>-macos-arm64.pkg` (or
 `hello-<version>-macos-arm64.pkg`) shows the signature.
 The digest of the release's pkg is the line of `SHA256SUMS`, the signed file's.
+
+### The programs' signature
+
+Each Mach-O program the release ships for macOS is signed with the Developer ID Application
+identity `Developer ID Application: Komira AI, Inc. (U7RTX4XD3X)` (the Team ID is
+`U7RTX4XD3X`, the installer's), under a stable identifier, with the hardened runtime and a trusted
+timestamp. The identifiers are in one table, `crates/xtask/src/release/mac_programs.rs`:
+
+| Program | Identifier |
+| --- | --- |
+| `hostkeeper` | `dev.hostkeeper.hostkeeper` |
+| `hk` | `dev.hostkeeper.hk` |
+| `hello` | `dev.hostkeeper.hello` |
+| `hostkeeper-bootstrap` | `dev.hostkeeper.bootstrap` |
+
+The `gh` the installer pkg also carries is not in the table: it is GitHub's program, shipped with
+GitHub's own signature, byte for byte as its pinned SHA-256 says.
+
+The designated requirement of such a signature names the identifier and the team and no hash of
+the program, so it is the same for every release; the privacy profile that grants hostkeeper Full
+Disk Access ([operations/mac-full-disk-access.md](operations/mac-full-disk-access.md)) names the
+program by it. For `hostkeeper` it is, as `codesign --display --requirements - <program>` prints
+it after `designated => `:
+
+```
+identifier "dev.hostkeeper.hostkeeper" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = U7RTX4XD3X
+```
+
+The `hostkeeper` binary embeds `crates/hostkeeper/macos/Info.plist` on macOS (its build script
+passes `-sectcreate __TEXT __info_plist` to the linker), so the program has the bundle identifier
+`dev.hostkeeper.hostkeeper`, equal to its signing identifier; the privacy profile grants by bundle
+identifier. A unit test of xtask holds the plist's identifier to the table's.
+
+The signing is in `.github/workflows/artifacts.yml`, on a push to `main` only, in three jobs
+before the pkgs are built:
+
+1. `compile-macos`, with no secret, compiles the four programs (`cargo build --locked --release`,
+   with the release's version and commit) and uploads them as the artifact
+   `macho-unsigned-macos-arm64`.
+2. `sign-code`, in the environment `pkg-signing`, runs no repository code (no checkout, no cargo),
+   so no build script or dependency runs where the key is. A secret that is not set stops it by
+   its name (`MACOS_APPLICATION_P12`, the PKCS#12 of the identity's key and certificate and Apple's
+   intermediate, and `MACOS_APPLICATION_P12_PASSWORD`; how the owner makes them is in
+   [operations/mac-full-disk-access.md](operations/mac-full-disk-access.md)). It imports the
+   identity into a keychain of the job (`code-signing.keychain-db` in `$RUNNER_TEMP`, never the
+   login keychain), then runs `codesign --force --sign <identity> --keychain <it> --identifier
+   <identifier> --options runtime --timestamp` on a copy of each program, deletes the keychain and
+   the PKCS#12 file whether the signing worked or not, and uploads the copies as
+   `macho-signed-macos-arm64`.
+3. `build-macos` downloads the unsigned programs, then (on a push to `main`) the signed ones over
+   them, and sets their modes (an artifact does not keep them); the tarballs and the pkgs are made
+   from them. On a push to `main` it also runs `cargo xtask release check-code-signature` on
+   `hostkeeper` and `hk` as unpacked from their tarballs, and `check-pkg` does so on the program
+   at its payload path in each signed pkg.
+
+`cargo xtask release check-code-signature <binary> --program <name>` (`name` is a binary name of
+the table; any other is refused before a tool runs) refuses a program, naming every problem with
+one line prefixed by the binary's path, unless:
+
+- `codesign --verify --strict --verbose=2` exits 0;
+- `codesign --display --verbose=2` shows `Identifier=` the program's identifier,
+  `TeamIdentifier=U7RTX4XD3X`, the `Authority=` chain exactly the identity, `Developer ID
+  Certification Authority` and `Apple Root CA`, a `Timestamp=` line (a trusted timestamp) and
+  the `runtime` flag in the `CodeDirectory` flags (`flags=0x10000(runtime)`); so an ad hoc
+  signature, another identifier, another team, no hardened runtime and no timestamp each fail by
+  name;
+- `codesign --display --requirements -` has the line `designated => <the requirement above>`
+  exactly, so a requirement that pins a `cdhash` fails.
+
+The workflow lint (`crates/xtask/tests/workflows/code_signing.rs`) holds the three jobs: the
+compile job's needs, runner and upload, the signing job's exact steps (each program signed under
+its identifier with `--options runtime --timestamp`, each secret checked by name, the cleanup under
+`always()`), the secrets named in the signing jobs alone, and `build-macos`'s needs, condition and
+downloads. A unit test of xtask reads the workflow and holds each identifier of the table to the
+signing step of its program.
+
+The programs are not notarized: no notarization step is in the release. A Mac does not assess with
+Gatekeeper a daemon that an installer installs when the file has no quarantine attribute, which a
+pkg's payload does not get from the installer; that is an expectation, not a measurement
+([operations/mac-full-disk-access.md](operations/mac-full-disk-access.md) lists the measurement
+that settles it).
 
 ### Remote Login for ssh through the coordinator
 

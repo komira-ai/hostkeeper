@@ -68,6 +68,8 @@ impl MacProgram {
 }
 
 #[cfg(test)]
+mod drift_tests;
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]

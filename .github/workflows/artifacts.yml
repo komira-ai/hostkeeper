@@ -11,7 +11,9 @@
 # static build;
 # for macos-arm64 the installer pkg of a Mac's first install, the bootstrap pkg that Apple Business
 # installs on a new Mac, and hello's .pkg, each signed on a
-# push to main with the Developer ID Installer identity (sign-pkg, then check-pkg); the
+# push to main with the Developer ID Installer identity (sign-pkg, then check-pkg), their programs
+# signed first with the Developer ID Application identity (compile-macos, sign-code, then
+# build-macos); the
 # coordinator's image index over its two images
 # (`cargo xtask release image-index`), whose SHA-256 is the digest release.yml pushes the
 # multi-platform image under;
@@ -487,9 +489,137 @@ jobs:
   # they go to their own artifact, `pkg-unsigned-macos-arm64`, which sign-pkg signs and check-pkg
   # checks and publishes, so each pkg SHA256SUMS lists and attest attests is the signed one. The runner's `gtar` is GNU tar, so
   # the tarball is made as on Linux.
+  # The four Mach-O programs of macos-arm64, compiled and nothing else: no secret reaches this job,
+  # which runs repository code (build scripts and dependencies). They are signed by sign-code, a
+  # job that runs none, and packaged by build-macos.
+  compile-macos:
+    name: compile macos-arm64
+    needs: [version]
+    runs-on: macos-15
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      RELEASE_VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: rustup toolchain install
+      - name: The workspace takes the version of the release
+        run: cargo xtask release set-version --version "$RELEASE_VERSION"
+      - name: Build hostkeeper
+        env:
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: cargo build --locked --release -p hostkeeper --bin hostkeeper
+      - name: Build hk
+        env:
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: cargo build --locked --release -p hostkeeper-hk --bin hk
+      # hello takes its version from the workspace, so it needs no RELEASE_COMMIT.
+      - name: Build hello
+        run: cargo build --locked --release -p hello --bin hello
+      # The bootstrap pkg's program (docs/design/mac-bootstrap.md): built on the macOS runner only,
+      # in the release pipeline, never in a pull request.
+      - name: Build the bootstrap
+        run: cargo build --locked --release -p hostkeeper-bootstrap --bin hostkeeper-bootstrap
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macho-unsigned-macos-arm64
+          path: |
+            target/release/hostkeeper
+            target/release/hk
+            target/release/hello
+            target/release/hostkeeper-bootstrap
+          retention-days: 90
+          if-no-files-found: error
+
+  # Push to main only: each Mach-O program signed with the Developer ID Application identity under
+  # its stable identifier (xtask's mac_programs.rs), with the hardened runtime and a trusted
+  # timestamp, BEFORE build-macos packages it, so the pkgs and the tarballs hold signed programs.
+  # The designated requirement of such a signature names the identifier and the team, never a
+  # hash, so the privacy profile that grants hostkeeper Full Disk Access
+  # (docs/operations/mac-full-disk-access.md) matches every release. Like sign-pkg this job runs
+  # no repository code (no checkout, no cargo), so no build script or dependency runs on the
+  # machine that holds the key; the workflow lint holds it to the exact steps of
+  # SIGN_CODE_STEPS (crates/xtask/tests/workflows). The key is in a keychain of this job, never the
+  # login keychain; the keychain and the PKCS#12 file are deleted whether or not the signing
+  # worked. A secret that is not set stops the job by its name. Not notarized (docs/macos.md).
+  # The signed programs go to `macho-signed-macos-arm64`.
+  sign-code:
+    needs: [compile-macos]
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: macos-15
+    timeout-minutes: 15
+    environment: pkg-signing
+    permissions:
+      contents: read
+    env:
+      IDENTITY: "Developer ID Application: Komira AI, Inc. (U7RTX4XD3X)"
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: macho-unsigned-macos-arm64
+          path: unsigned
+      - name: The secret of the identity is set
+        env:
+          P12: ${{ secrets.MACOS_APPLICATION_P12 }}
+        run: 'test -n "$P12" || { echo "::error::the secret MACOS_APPLICATION_P12 of the environment pkg-signing is not set (docs/operations/mac-full-disk-access.md says how the owner makes it)"; exit 1; }'
+      - name: The secret of the identity's password is set
+        env:
+          PASSWORD: ${{ secrets.MACOS_APPLICATION_P12_PASSWORD }}
+        run: 'test -n "$PASSWORD" || { echo "::error::the secret MACOS_APPLICATION_P12_PASSWORD of the environment pkg-signing is not set (docs/operations/mac-full-disk-access.md says how the owner makes it)"; exit 1; }'
+      - name: The identity, from its secret into a file of the job
+        env:
+          P12: ${{ secrets.MACOS_APPLICATION_P12 }}
+        run: base64 --decode -o "$RUNNER_TEMP/application.p12" <<< "$P12"
+      - name: A keychain of the job
+        env:
+          PASSWORD: ${{ secrets.MACOS_APPLICATION_P12_PASSWORD }}
+        run: security create-keychain -p "$PASSWORD" "$RUNNER_TEMP/code-signing.keychain-db"
+      - name: The keychain stays unlocked for the job
+        run: security set-keychain-settings -lut 21600 "$RUNNER_TEMP/code-signing.keychain-db"
+      - name: Unlock the keychain
+        env:
+          PASSWORD: ${{ secrets.MACOS_APPLICATION_P12_PASSWORD }}
+        run: security unlock-keychain -p "$PASSWORD" "$RUNNER_TEMP/code-signing.keychain-db"
+      - name: Import the identity, its key usable by codesign only
+        env:
+          PASSWORD: ${{ secrets.MACOS_APPLICATION_P12_PASSWORD }}
+        run: security import "$RUNNER_TEMP/application.p12" -k "$RUNNER_TEMP/code-signing.keychain-db" -f pkcs12 -P "$PASSWORD" -T /usr/bin/codesign
+      - name: Let Apple's tools use the key without a prompt
+        env:
+          PASSWORD: ${{ secrets.MACOS_APPLICATION_P12_PASSWORD }}
+        run: security set-key-partition-list -S "apple-tool:,apple:" -s -k "$PASSWORD" "$RUNNER_TEMP/code-signing.keychain-db"
+      - name: The job's keychain is the user's only keychain
+        run: security list-keychains -d user -s "$RUNNER_TEMP/code-signing.keychain-db"
+      - run: mkdir signed
+      - name: Sign hostkeeper as dev.hostkeeper.hostkeeper, with the hardened runtime and a trusted timestamp
+        run: cp unsigned/hostkeeper signed/hostkeeper && codesign --force --sign "$IDENTITY" --keychain "$RUNNER_TEMP/code-signing.keychain-db" --identifier dev.hostkeeper.hostkeeper --options runtime --timestamp signed/hostkeeper
+      - name: Sign hk as dev.hostkeeper.hk, with the hardened runtime and a trusted timestamp
+        run: cp unsigned/hk signed/hk && codesign --force --sign "$IDENTITY" --keychain "$RUNNER_TEMP/code-signing.keychain-db" --identifier dev.hostkeeper.hk --options runtime --timestamp signed/hk
+      - name: Sign hello as dev.hostkeeper.hello, with the hardened runtime and a trusted timestamp
+        run: cp unsigned/hello signed/hello && codesign --force --sign "$IDENTITY" --keychain "$RUNNER_TEMP/code-signing.keychain-db" --identifier dev.hostkeeper.hello --options runtime --timestamp signed/hello
+      - name: Sign the bootstrap as dev.hostkeeper.bootstrap, with the hardened runtime and a trusted timestamp
+        run: cp unsigned/hostkeeper-bootstrap signed/hostkeeper-bootstrap && codesign --force --sign "$IDENTITY" --keychain "$RUNNER_TEMP/code-signing.keychain-db" --identifier dev.hostkeeper.bootstrap --options runtime --timestamp signed/hostkeeper-bootstrap
+      - name: Delete the keychain, whether the signing worked or not
+        if: ${{ always() }}
+        run: security delete-keychain "$RUNNER_TEMP/code-signing.keychain-db"
+      - name: Delete the identity's file, whether the signing worked or not
+        if: ${{ always() }}
+        run: rm -f "$RUNNER_TEMP/application.p12"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macho-signed-macos-arm64
+          path: signed/
+          retention-days: 90
+          if-no-files-found: error
+
   build-macos:
     name: macos-arm64
-    needs: [version]
+    needs: [version, compile-macos, sign-code]
+    if: ${{ !cancelled() && !failure() }}
     runs-on: macos-15
     timeout-minutes: 45
     permissions:
@@ -549,27 +679,30 @@ jobs:
         run: cargo xtask release set-version --version "$RELEASE_VERSION"
       - name: Keep the lock file as written
         run: cp Cargo.lock "$RUNNER_TEMP/Cargo.lock.release"
-      - name: Build hostkeeper
-        env:
-          RELEASE_COMMIT: ${{ github.sha }}
-        run: cargo build --locked --release -p hostkeeper --bin hostkeeper
-      - name: Build hk
-        env:
-          RELEASE_COMMIT: ${{ github.sha }}
-        run: cargo build --locked --release -p hostkeeper-hk --bin hk
-      # hello takes its version from the workspace, so it needs no RELEASE_COMMIT.
-      - name: Build hello
-        run: cargo build --locked --release -p hello --bin hello
-      # The bootstrap pkg's program (docs/design/mac-bootstrap.md): built on the macOS runner only,
-      # in the release pipeline, never in a pull request.
-      - name: Build the bootstrap
-        run: cargo build --locked --release -p hostkeeper-bootstrap --bin hostkeeper-bootstrap
+      # The programs were compiled by compile-macos and, on a push to main, signed by sign-code
+      # with the Developer ID Application identity before anything below packages them; the
+      # signed ones replace the unsigned ones. A run by hand off main signs nothing and builds
+      # from the linker's ad hoc signatures. An artifact does not keep a file's mode.
+      - name: The compiled programs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: macho-unsigned-macos-arm64
+          path: target/release
+      - name: The signed programs, over the compiled ones (push to main)
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: macho-signed-macos-arm64
+          path: target/release
+      - name: The programs are executable
+        run: chmod 0755 target/release/hostkeeper target/release/hk target/release/hello target/release/hostkeeper-bootstrap
       - name: hostkeeper says the version and the commit
         run: cargo xtask release check-binary target/release/hostkeeper "$RELEASE_VERSION" "$GITHUB_SHA"
       - name: hk says the version and the commit
         run: cargo xtask release check-binary target/release/hk "$RELEASE_VERSION" "$GITHUB_SHA"
       # The macOS unpack refuses a Mach-O without a valid code signature of its own bytes; the
-      # linker signs the binary ad hoc, and this checks it as the unpack does.
+      # program is signed (by sign-code, or ad hoc by the linker in a run by hand), and this checks
+      # it as the unpack does.
       - name: hostkeeper has a valid code signature
         run: codesign --verify --strict --verbose=2 target/release/hostkeeper
       # hello is a Mach-O in a macOS package too, so it is held to the same signature.
@@ -646,6 +779,12 @@ jobs:
       - run: tar -xzf "dist/hk-$RELEASE_VERSION-$PLATFORM.tar.gz" -C "$RUNNER_TEMP/unpacked" hk
       - name: The packaged hk says the version and the commit
         run: cargo xtask release check-binary "$RUNNER_TEMP/unpacked/hk" "$RELEASE_VERSION" "$GITHUB_SHA"
+      - name: The packaged hostkeeper has the signature of the release (push to main)
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        run: cargo xtask release check-code-signature "$RUNNER_TEMP/unpacked/hostkeeper" --program hostkeeper
+      - name: The packaged hk has the signature of the release (push to main)
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        run: cargo xtask release check-code-signature "$RUNNER_TEMP/unpacked/hk" --program hk
       # hello's .pkg and its failing build's (docs/design/packages-native.md, items A20 and A21):
       # one component with no script, the program under /Library/Application Support/hello/ and
       # the two slots' plists, Disabled, in /Library/LaunchDaemons/, read back from the expanded
@@ -803,6 +942,10 @@ jobs:
         run: pkgutil --expand "dist/hostkeeper-$RELEASE_VERSION-macos-arm64.pkg" "$RUNNER_TEMP/signed-expanded"
       - name: Signing changed no file of the pkg
         run: diff -r "$RUNNER_TEMP/unsigned-expanded" "$RUNNER_TEMP/signed-expanded"
+      - name: Expand the signed pkg with its payload
+        run: pkgutil --expand-full "dist/hostkeeper-$RELEASE_VERSION-macos-arm64.pkg" "$RUNNER_TEMP/signed-full"
+      - name: hostkeeper in the pkg has the signature of the release
+        run: cargo xtask release check-code-signature "$RUNNER_TEMP/signed-full/hostkeeper.pkg/Payload/usr/local/bin/hostkeeper" --program hostkeeper
       - name: hello's signature is the identity's, under Apple's chain, with a trusted timestamp
         run: cargo xtask release check-pkg-signature "dist/hello-$RELEASE_VERSION-macos-arm64.pkg" --identity "$IDENTITY"
       - name: Expand hello's unsigned pkg
@@ -811,6 +954,10 @@ jobs:
         run: pkgutil --expand "dist/hello-$RELEASE_VERSION-macos-arm64.pkg" "$RUNNER_TEMP/hello-signed-expanded"
       - name: Signing changed no file of hello's pkg
         run: diff -r "$RUNNER_TEMP/hello-unsigned-expanded" "$RUNNER_TEMP/hello-signed-expanded"
+      - name: Expand hello's signed pkg with its payload
+        run: pkgutil --expand-full "dist/hello-$RELEASE_VERSION-macos-arm64.pkg" "$RUNNER_TEMP/hello-signed-full"
+      - name: hello in the pkg has the signature of the release
+        run: cargo xtask release check-code-signature "$RUNNER_TEMP/hello-signed-full/hello.pkg/Payload/Library/Application Support/hello/bin/hello" --program hello
       - name: The bootstrap pkg's signature is the identity's, under Apple's chain, with a trusted timestamp
         run: cargo xtask release check-pkg-signature "dist/hostkeeper-bootstrap-$RELEASE_VERSION-macos-arm64.pkg" --identity "$IDENTITY"
       - name: Expand the bootstrap pkg, unsigned
@@ -819,6 +966,10 @@ jobs:
         run: pkgutil --expand "dist/hostkeeper-bootstrap-$RELEASE_VERSION-macos-arm64.pkg" "$RUNNER_TEMP/bootstrap-signed-expanded"
       - name: Signing changed no file of the bootstrap pkg
         run: diff -r "$RUNNER_TEMP/bootstrap-unsigned-expanded" "$RUNNER_TEMP/bootstrap-signed-expanded"
+      - name: Expand the signed bootstrap pkg with its payload
+        run: pkgutil --expand-full "dist/hostkeeper-bootstrap-$RELEASE_VERSION-macos-arm64.pkg" "$RUNNER_TEMP/bootstrap-signed-full"
+      - name: The bootstrap in the pkg has the signature of the release
+        run: cargo xtask release check-code-signature "$RUNNER_TEMP/bootstrap-signed-full/hostkeeper-bootstrap.pkg/Payload/usr/local/lib/hostkeeper-bootstrap/hostkeeper-bootstrap" --program hostkeeper-bootstrap
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: assets-pkg-macos-arm64
