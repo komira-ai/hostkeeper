@@ -22,12 +22,17 @@
 //!   a step of theirs `shell` or `working-directory` ([`STEP_KEYS_REFUSED`]), which would change
 //!   what a pinned `run` does (`shell: echo {0}` makes `exit 1` pass).
 //!
+//! - The rules of the merge queue ([`super::merge_queue::problems`]): its triggers (a pull
+//!   request, a merge group of `main` and a push to `main`), its concurrency, no job `if:` but
+//!   [`GATE_IF`], and no read of the event but the cache saves of a push.
+//!
 //! A profile or a binary that does not reach the gate can only lower what it measures, so the
 //! hand-over is pinned to fail early, in this lint, and not to keep a pass. `ci_tests.rs` shows each
 //! rule refusing its defect, and evaluates the gate's conditions against every result of the
 //! shards.
 
 use super::lint::{entries, entry};
+use super::merge_queue;
 use super::yaml::{self, Node, Value};
 
 /// The workflow.
@@ -104,7 +109,7 @@ pub fn problems(text: &str) -> Vec<String> {
     };
     let jobs = entry(&doc, "jobs").map_or(&[][..], entries);
     let names: Vec<&str> = jobs.iter().filter_map(|(name, _)| name.as_str()).collect();
-    let mut problems = Vec::new();
+    let mut problems = merge_queue::problems(FILE, &doc);
     if entry(&doc, "defaults").is_some() {
         problems.push(
             "defaults is set on the workflow, which changes how every step's run runs".to_owned(),

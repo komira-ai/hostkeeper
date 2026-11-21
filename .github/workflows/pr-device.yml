@@ -7,7 +7,9 @@
 # - privileged: the privileged tests against systemd as root.
 # - openrc-device: the daemon under OpenRC in an Alpine Linux container, as root.
 #
-# Both run on every pull request. No macOS job runs for a pull request, here or in any other
+# Both run on every pull request, and on every merge group of main's merge queue (the pull
+# request's change on top of main and of the pull requests ahead of it), where both are checks main
+# requires. No macOS job runs for a pull request, here or in any other
 # workflow (AGENTS.md B9): the hosted macOS runners are few, and a burst of pushes to pull requests
 # once held them for a day and starved a release's macos-arm64 build. The Mac's tests (the tests
 # of the crates the `hostkeeper` and `hello` binaries are built from, and the device tests under
@@ -15,12 +17,14 @@
 # the build and before the macOS installer is promoted to stable; the workflow lint refuses a
 # macOS job in any workflow that runs for a pull request.
 #
-# A pull request's newer run cancels its older one. No job of it holds a write scope or names a
-# secret or the token, and no cache is saved from a pull request (each copied job's save step
-# runs only on a push, which never starts this workflow): the jobs restore the caches
-# privileged.yml's runs on main saved. The workflow lint (crates/xtask/tests/workflows,
-# pr_device.rs) holds this file to its trigger, its concurrency, its top-level keys, its jobs,
-# their runners, the copied jobs to privileged.yml's, and to no secret.
+# A pull request's newer run cancels its older one; a merge group's run is never cancelled by
+# another. No job of it holds a write scope or names a secret or the token, and no cache is saved
+# from a pull request or a merge group (each copied job's save step runs only on a push, which
+# never starts this workflow): the jobs restore the caches privileged.yml's runs on main saved.
+# The workflow lint (crates/xtask/tests/workflows, pr_device.rs and merge_queue.rs) holds this
+# file to its triggers, its concurrency, its top-level keys, its jobs, their runners, the copied
+# jobs to privileged.yml's, to no read of the event but the cache saves of a push, and to no
+# secret.
 #
 # privileged.yml still runs every job after every merge to main; no release waits for that run (a
 # red one opens a RELEASE-RED issue, release-red.yml), and this workflow is no part of a release.
@@ -28,14 +32,19 @@ name: pr-device
 
 on:
   pull_request:
+  merge_group:
+    types: [checks_requested]
+    branches: [main]
 
 permissions: {}
 
-# A pull request's newer run cancels its older one, so a burst of pushes holds at most one run of each
-# job.
+# A pull request's newer run cancels its older one (the group is the pull request's ref), so a
+# burst of pushes holds at most one run of each job. Any other run, a merge group's, has a group
+# of its own (its run id): a merge group has no pull request number, and a group keyed on it would
+# let each merge group cancel the one before.
 concurrency:
-  group: pr-device-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  group: pr-device-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always

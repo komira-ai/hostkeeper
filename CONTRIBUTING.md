@@ -90,6 +90,129 @@ to the order of its steps: the release is verified before any step can request a
 run the hostkeeper program. Besides `artifacts.yml`'s `attest`, which signs, that job is the only
 one that may hold `id-token: write`.
 
+## The merge queue
+
+`main` takes pull requests through GitHub's merge queue. A pull request whose checks passed is
+added to the queue. The queue makes a branch `gh-readonly-queue/main/pr-<n>-<sha>` holding `main`,
+the pull requests ahead of it in the queue and this pull request's squash commit, runs the checks
+`main` requires on it (the event `merge_group`), and moves `main` to that commit when they pass.
+So a pull request is checked once more, on top of exactly what will be ahead of it, and is not
+brought up to date and checked again every time `main` moves.
+
+`main` requires four checks: `lint` and `test` from `ci.yml`, and `privileged` and `openrc-device`
+from `pr-device.yml`. Both workflows run for a merge group (`merge_group` of `checks_requested` on
+`main`) and report each check under the same name as for a pull request. The workflow lint
+(`crates/xtask/tests/workflows/merge_queue.rs`) holds them to that:
+
+- the triggers: every pull request, every merge group of `main`, and (`ci.yml`) a push to `main`;
+- no job `if:` but `always()`: GitHub counts a skipped job as a passed check, so the queue would
+  merge what nothing tested;
+- nothing reads which event started the run (`github.event*`, `github.ref*`, `github.head_ref`,
+  `github.base_ref`, or their `GITHUB_*` variables) but the `if:` of the cache saves, which starts
+  `github.event_name == 'push' &&`: a pull request and a merge group both skip those steps, so a
+  merge group runs every step a pull request runs;
+- the concurrency: a pull request's newer run cancels its older one (the group is the pull
+  request's ref), and any other run, a merge group's included, has a group of its own (its run id),
+  so no merge group cancels another (a merge group has no pull request number to key on);
+- each required check is the check of exactly one job, and no other workflow runs for a merge
+  group.
+
+The pull-request rules of the lint hold for a merge group too: no write scope, no secret or token,
+nothing as root but `pr-device.yml`'s two jobs, and no runner that is not Linux x86_64. A merge
+group's run of `ci` starts no release: `release.yml` runs after a `ci` run of a push to `main`.
+
+The queue is a rule of the ruleset of `main`. The workflow lint holds the checks this ruleset
+requires to the workflows' and its queue parameters to these:
+
+```json
+{
+  "name": "main",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": { "ref_name": { "include": ["refs/heads/main"], "exclude": [] } },
+  "rules": [
+    { "type": "deletion" },
+    { "type": "non_fast_forward" },
+    {
+      "type": "pull_request",
+      "parameters": {
+        "allowed_merge_methods": ["squash"],
+        "dismiss_stale_reviews_on_push": false,
+        "require_code_owner_review": false,
+        "require_last_push_approval": false,
+        "required_approving_review_count": 0,
+        "required_review_thread_resolution": false
+      }
+    },
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "do_not_enforce_on_create": false,
+        "strict_required_status_checks_policy": false,
+        "required_status_checks": [
+          { "context": "lint", "integration_id": 15368 },
+          { "context": "test", "integration_id": 15368 },
+          { "context": "privileged", "integration_id": 15368 },
+          { "context": "openrc-device", "integration_id": 15368 }
+        ]
+      }
+    },
+    {
+      "type": "merge_queue",
+      "parameters": {
+        "merge_method": "SQUASH",
+        "grouping_strategy": "ALLGREEN",
+        "max_entries_to_build": 5,
+        "min_entries_to_merge": 1,
+        "max_entries_to_merge": 5,
+        "min_entries_to_merge_wait_minutes": 5,
+        "check_response_timeout_minutes": 360
+      }
+    }
+  ]
+}
+```
+
+and the repository's squash-message settings are:
+
+```json
+{ "squash_merge_commit_title": "PR_TITLE", "squash_merge_commit_message": "BLANK" }
+```
+
+Why each:
+
+- **Squash.** `main` gets one commit per pull request, as before. A stack of pull requests lands
+  as one squash commit per pull request, in the order of the queue.
+- **The commit message is the pull request's title alone.** The queue writes its commits with the
+  repository's default squash message; nobody passes one when queueing. The title gives
+  `<title> (#<n>)`. The body is left blank: the repository is public, and the default
+  (`COMMIT_MESSAGES`) would copy every branch commit's message into `main`'s history, where none
+  of them was written to be.
+- **Each pull request is checked on its own (`ALLGREEN`).** Every queued pull request's own commit
+  must pass the checks before it merges, so a red commit never reaches `main`, not even inside a
+  group whose last commit is green.
+- **Up to five build at once, one to five merge together, after at most five minutes.** A run of
+  the checks takes about half an hour. Five queued pull requests building at once give up to five
+  merges per run instead of one. `min_entries_to_merge: 1` means a pull request never waits for
+  others to make a group, so the five minutes of `min_entries_to_merge_wait_minutes` never apply.
+  When the first ones of the queue pass together they reach `main` in one push, and `release.yml`
+  runs once for them.
+- **The branch need not be up to date (`strict_required_status_checks_policy: false`).** The
+  queue checks each pull request on top of what is ahead of it; requiring the branch up to date
+  would bring back the check after every move of `main` that the queue replaces.
+- **A check that has not reported in 360 minutes fails** (`check_response_timeout_minutes`, the
+  most GitHub allows). The jobs end before that: `privileged` and `openrc-device` at their
+  `timeout-minutes` (60 and 45), and the jobs of `ci.yml` at GitHub's own bound of 360 minutes per
+  job.
+
+**A pull request whose group fails leaves the queue.** GitHub removes it, and rebuilds the groups
+behind it without it; those are checked again and are not counted against. The pull request stays
+open with its failed check, and comes back only when it is added to the queue again, after a fix.
+
+**The Mac's checks keep their place.** No merge group runs a macOS job, as no pull request does:
+the Mac's tests stay in `release.yml`'s beta stage after the merge
+([The Mac's beta stage](#the-macs-beta-stage)), and hold only the macOS installer's promotion.
+
 ## The privileged workflow: real systemd, after a merge
 
 Everything a pull request runs proves hostkeeper against fakes of the host.
@@ -122,7 +245,7 @@ pull-request workflow with a job on a macOS runner, on `ubuntu-*-arm` or on any 
 is not Linux x86_64.
 
 `.github/workflows/pr-device.yml` runs on every pull request, beside `ci.yml`. Its two checks are
-required of every pull request:
+required of every pull request, and of every merge group ([The merge queue](#the-merge-queue)):
 
 - `privileged`: the privileged tests as root against systemd.
 - `openrc-device`: the daemon under OpenRC in an Alpine Linux container, as root. The job builds

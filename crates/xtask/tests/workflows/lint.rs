@@ -828,7 +828,7 @@ fn word_problems(who: &str, values: &[&str], root_ok: bool) -> Vec<String> {
 }
 
 /// The expressions of `text`: what stands between each `${{` and the `}}` after it.
-fn expressions(text: &str) -> Vec<&str> {
+pub fn expressions(text: &str) -> Vec<&str> {
     let mut found = Vec::new();
     let mut rest = text;
     while let Some((_, after)) = rest.split_once("${{") {
