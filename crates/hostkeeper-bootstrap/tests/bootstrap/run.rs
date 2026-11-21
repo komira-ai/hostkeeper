@@ -468,8 +468,18 @@ fn staging_problems_are_errors_of_the_attempt() {
     assert!(world.repo.asked.borrow().is_empty());
     paths.staging_dir = dir.path().join(OsStr::from_bytes(b"caf\xe9"));
     let gave_up = world.run(&paths).expect_err("not UTF-8");
-    assert!(matches!(gave_up.last, Error::NotUtf8(_)), "{gave_up}");
-    assert!(gave_up.last.to_string().ends_with("is not UTF-8"));
+    // A name that is not UTF-8 cannot exist on macOS: APFS refuses to create it (EILSEQ), so there
+    // the staging directory itself cannot be made, and nothing more is fetched.
+    #[cfg(target_os = "macos")]
+    {
+        assert!(matches!(gave_up.last, Error::Staging { .. }), "{gave_up}");
+        assert!(world.repo.asked.borrow().is_empty());
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        assert!(matches!(gave_up.last, Error::NotUtf8(_)), "{gave_up}");
+        assert!(gave_up.last.to_string().ends_with("is not UTF-8"));
+    }
 }
 
 /// A config that cannot be written (a directory where the file goes) stops the attempt before
