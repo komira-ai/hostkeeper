@@ -70,6 +70,8 @@ async fn retry_host_and_put_back_queue_an_order_for_a_halted_host_over_both_wire
     for (n, wire) in WIRES.into_iter().enumerate() {
         let world = Wired::new(&format!("grpc-maintenance-runs-acts-{n}"));
         world.beat("a1", &[agent::MaintenanceKind::Linux]).await;
+        // A second host of `alpha` that serves, so `a1` may be taken (`min_serving` 1).
+        world.beat("a2", &[]).await;
         let _: proto::ScheduleMaintenanceResponse = world
             .ask(wire, SCHEDULE, &hosts_run(&["a1"]))
             .await

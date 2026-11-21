@@ -294,6 +294,7 @@ fn set_host(tables: &mut Tables, column: usize, value: Val) {
 #[test]
 fn a_run_row_this_build_cannot_read_is_refused_naming_the_run_and_the_reason() {
     let at = |why: &str| format!("database:maintenance_runs: the row run-a: {why}");
+    let at_host = |why: &str| format!("database:maintenance_hosts: the row run-a/h2: {why}");
     assert_eq!(
         edited(|t| set_run(t, 0, names_of(&["macos", "weekly"]))),
         at("\"weekly\" is not a maintenance kind")
@@ -344,19 +345,19 @@ fn a_run_row_this_build_cannot_read_is_refused_naming_the_run_and_the_reason() {
     );
     assert_eq!(
         edited(|t| set_host(t, 10, s("nap"))),
-        at("\"nap\" is not an act queued for a host")
+        at_host("\"nap\" is not an act queued for a host")
     );
     assert_eq!(
         edited(|t| set_host(t, 10, Val::Int(1))),
-        at("a column is not text")
+        at_host("a column is not text")
     );
     assert_eq!(
         edited(|t| set_host(t, 11, Val::Int(-1))),
-        at("a counter is negative")
+        at_host("a counter is negative")
     );
     assert_eq!(
         edited(|t| set_host(t, 11, Val::Null)),
-        at("a counter is not a number")
+        at_host("a counter is not a number")
     );
     let mut ok = rows_of(&[full("run-a")]);
     set_host(&mut ok, 10, s("retry"));
