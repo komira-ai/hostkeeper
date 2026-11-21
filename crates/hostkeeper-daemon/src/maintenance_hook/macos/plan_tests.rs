@@ -104,6 +104,10 @@ fn a_plan_that_is_not_this_runs_is_refused() {
             "names neither one update label nor one installer app in /Applications",
         ),
         (
+            r#"{"runId":"run-1","build":"1A1","installer":"/Applications/Install macOS a/b.app"}"#,
+            "names neither one update label nor one installer app in /Applications",
+        ),
+        (
             r#"{"runId":"run-1","build":"1A1","installer":"/Applications/Install macOS .app"}"#,
             "names neither one update label nor one installer app in /Applications",
         ),

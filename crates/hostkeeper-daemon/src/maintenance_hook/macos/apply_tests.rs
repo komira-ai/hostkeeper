@@ -328,9 +328,17 @@ impl RunRecord for Mac {
     }
 
     fn applied(&self, run_id: &str, kind: Kind, version: &str) -> Result<(), RecordError> {
-        self.script()
+        let mut script = self.script();
+        script
             .effects
             .push(format!("record {run_id} {kind} applied {version}"));
+        let state = match script.states.get(&kind) {
+            Some(KindState::RebootUnderWay { boot }) => KindState::AppliedAfterReboot {
+                asked_in: boot.clone(),
+            },
+            _ => KindState::Applied,
+        };
+        script.states.insert(kind, state);
         Ok(())
     }
 }
@@ -949,3 +957,8 @@ fn the_host_installers_run_with_exactly_their_arguments_input_and_an_empty_envir
     expected.push(format!("stdin:{PASSWORD}"));
     assert_eq!(reported, expected);
 }
+
+#[path = "choose_tests.rs"]
+mod choose;
+#[path = "entry_tests.rs"]
+mod entry;
