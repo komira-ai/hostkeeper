@@ -435,6 +435,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 40] = [
             ("prerequisites", 16),
             ("bmc", 17),
             ("maintenance", 18),
+            ("full_disk_access", 19),
         ],
     ),
     ("hostkeeper.agent.v1.BmcReport", &[("ip", 1), ("mac", 2)]),
@@ -629,6 +630,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 40] = [
             ("maintenance", 26),
             ("maintenance_look_age_secs", 27),
             ("maintenance_stale", 28),
+            ("full_disk_access", 29),
         ],
     ),
     (

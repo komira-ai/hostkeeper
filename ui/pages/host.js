@@ -41,6 +41,7 @@ import {
   h, action, allPages, checkbox, describeError, enumLabel, errorView, field, fmtUnix, list, pill, reasonProblem,
   scopeLabel, select, table, trimmed,
 } from "../view.js";
+import { accessRows, accessWarning } from "../fulldisk.js";
 import { isDegraded, reasonsOf } from "../health.js";
 import { crumbs, hostState, layoutOf, layoutProblem, rackName, slotOf, slotOptions, subjectOf } from "../lab.js";
 import { loadSsh, sshPanel } from "../sshpanel.js";
@@ -755,7 +756,9 @@ export async function render(ctx) {
         ["Labels", labelsForm.labels || "-"],
         ["Excluded from", (host.exclusions || []).map((x) => `${x.service} (${x.reason || "-"})`).join(", ") || "-"],
         ...inventoryFacts(ctx, host),
+        ...accessRows(host),
       ], "cols card"),
+      accessWarning(host),
       assignedSection(listing, nodeId, ends),
     ],
     services: services.length === 0

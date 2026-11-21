@@ -39,6 +39,8 @@
 //! - [`remote_login_probe`]: a Mac's report of what its daemon can do of Remote Login without
 //!   Full Disk Access, and of why the Mac may sleep, run once at its start and sent in every
 //!   heartbeat after ([`line_process`] reads `pmset -g log` for it).
+//! - [`full_disk_access`]: whether a Mac's Full Disk Access grant is in force for its daemon,
+//!   found by listing a directory only the grant allows and sent in every heartbeat.
 //! - [`adapters`]: the step launcher, service manager, unit directory, observer ports and package
 //!   check of the host's platform ([`adapters::Adapters::for_platform`]: systemd on Linux,
 //!   launchd on macOS), and the claims of its enrollment.
@@ -154,6 +156,7 @@ pub mod entry;
 pub mod executor;
 pub mod facts_file;
 mod files;
+pub mod full_disk_access;
 pub mod halt;
 pub mod handover;
 pub mod hook_log;

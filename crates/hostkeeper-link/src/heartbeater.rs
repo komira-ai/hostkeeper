@@ -189,6 +189,8 @@ pub struct Ports {
     /// The Remote Login probe of a Mac's daemon; none on a host that runs none, which then sends
     /// none.
     pub remote_login_probe: Option<Arc<dyn RemoteLoginProbeSource>>,
+    /// The Full Disk Access state; none on a host that reports none.
+    pub full_disk_access: Option<Arc<dyn crate::full_disk_access::FullDiskAccessSource>>,
     /// The managed block of the login account's `authorized_keys`; none on a host that keeps
     /// none, which then announces no `operator-keys-v1`, sends no report and writes no keys.
     pub operator_keys: Option<Arc<dyn OperatorKeysSink>>,
@@ -584,6 +586,7 @@ impl Heartbeater {
                 .remote_login_probe
                 .as_ref()
                 .and_then(|source| source.remote_login_probe()),
+            full_disk_access: crate::full_disk_access::read(self.ports.full_disk_access.as_ref()),
             operator_keys: self.ports.operator_keys.as_ref().map(|sink| sink.report()),
             ssh: self.ports.ssh.as_ref().and_then(|sink| sink.report()),
             prerequisites: self.ports.prerequisites.as_ref().map(|sink| sink.report()),

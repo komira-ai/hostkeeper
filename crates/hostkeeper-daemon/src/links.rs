@@ -57,10 +57,11 @@ use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_config::names::Version;
 use hostkeeper_enroll::{Enroller, RETRY_SECS};
 use hostkeeper_link::{
-    BmcSource, CertSource, ClientIdentity, CoordinatorLink, Dispatch, GrpcLinkError, GrpcMtlsLink,
-    Heartbeat, Heartbeater, JsonMtlsLink, LinkError, LoopConfig, MaintainSink, MaintenanceSource,
-    NegotiatedLink, OperatorKeysSink, Platform, Ports, PrerequisitesSink, RemoteLoginProbeSource,
-    Reply, RepositorySink, Sleeper, SshSink, StopFlag, TcpDial, TcpTransport, Tick, UnixClock,
+    BmcSource, CertSource, ClientIdentity, CoordinatorLink, Dispatch, FullDiskAccessSource,
+    GrpcLinkError, GrpcMtlsLink, Heartbeat, Heartbeater, JsonMtlsLink, LinkError, LoopConfig,
+    MaintainSink, MaintenanceSource, NegotiatedLink, OperatorKeysSink, Platform, Ports,
+    PrerequisitesSink, RemoteLoginProbeSource, Reply, RepositorySink, Sleeper, SshSink, StopFlag,
+    TcpDial, TcpTransport, Tick, UnixClock,
 };
 use hostkeeper_observe::ProcessRunner;
 use hostkeeper_observe::command::MAX_STDOUT;
@@ -144,6 +145,9 @@ pub struct Links {
     /// The Remote Login probe the daemon started ([`crate::remote_login_probe`]), which every
     /// heartbeat reports once it is done; none on any host but a Mac.
     pub remote_login_probe: Option<Arc<dyn RemoteLoginProbeSource>>,
+    /// The state of the Full Disk Access grant ([`crate::full_disk_access`]), which every
+    /// heartbeat reports; none where a host reports none.
+    pub full_disk_access: Option<Arc<dyn FullDiskAccessSource>>,
     /// The host's operator keys ([`crate::operator_keys`]): the managed block of its login
     /// account's `authorized_keys`, which every heartbeat reports and a set the coordinator sends
     /// replaces. A daemon that has one announces `operator-keys-v1`.
@@ -243,6 +247,7 @@ impl Links {
                     Arc::clone(&self.log),
                 ))),
                 remote_login_probe: self.remote_login_probe.clone(),
+                full_disk_access: self.full_disk_access.clone(),
                 operator_keys: self.operator_keys.clone(),
                 ssh: ssh_setup(PLATFORM, rustix::process::geteuid().as_raw(), &self.log),
                 prerequisites: self.prerequisites.clone(),

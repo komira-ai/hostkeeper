@@ -56,6 +56,7 @@ pub mod bmc;
 pub mod deferral;
 pub mod dial;
 pub mod fetch;
+pub mod full_disk_access;
 pub mod grpc;
 pub mod heartbeater;
 pub mod host_facts;
@@ -85,6 +86,7 @@ pub use bmc::BmcReport;
 pub use deferral::{Deferral, DeferralError, Deferrals};
 pub use dial::{CALL_SECS, TcpDial, TcpTransport};
 pub use fetch::{CoordinatorGet, GetError, Got, Limit};
+pub use full_disk_access::{FullDiskAccess, FullDiskAccessSource};
 pub use grpc::GRPC_REPLY_MAX;
 pub use grpc::{AsyncConn, GrpcDial, GrpcLinkError, GrpcMtlsLink};
 pub use heartbeater::{

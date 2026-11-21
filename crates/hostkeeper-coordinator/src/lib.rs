@@ -13,7 +13,8 @@
 //!   with the [`registry`] of every version CI has set and its release (the digest of its
 //!   package, or the record of its release index; neither orders a host anything);
 //! - [`fleet`]: the last heartbeat of every host, the live and down rule, the quiet start, and
-//!   what each host's last gRPC heartbeat said of its Sigstore trusted root ([`trusted_root`]);
+//!   what each host's last gRPC heartbeat said of its Sigstore trusted root ([`trusted_root`])
+//!   and of its Mac's Full Disk Access grant (`full_disk_access`);
 //! - [`acks`]: the failure reports an override of a bad version acknowledged;
 //! - [`verdicts`]: the release failures heard, each counted once per host, order id and try,
 //!   and the [`verdict_file`] that stores them with the verdict each host was last acknowledged,
@@ -153,6 +154,7 @@ pub(crate) mod failed_hosts;
 mod features;
 pub mod fleet;
 pub mod force;
+pub(crate) mod full_disk_access;
 pub(crate) mod graceful;
 pub(crate) mod group_converge;
 mod group_halt;

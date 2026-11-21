@@ -228,6 +228,8 @@ pub struct Fleet {
     pub(crate) facts: crate::facts::Reported,
     /// The Remote Login probes daemons reported over gRPC ([`crate::remote_login_probe`]).
     pub(crate) remote_login_probes: crate::remote_login_probe::Probes,
+    /// The Full Disk Access states daemons reported ([`crate::full_disk_access`]).
+    pub(crate) full_disk_access: crate::full_disk_access::Reported,
     /// Every package of every group and its desired state, as of the last take of the lock: the
     /// rollouts one service waits for, across groups ([`crate::queue`]).
     cluster: crate::queue::Cluster,
@@ -265,6 +267,7 @@ impl Fleet {
             moves: crate::moving::Moves::default(),
             facts: crate::facts::Reported::default(),
             remote_login_probes: crate::remote_login_probe::Probes::default(),
+            full_disk_access: crate::full_disk_access::Reported::default(),
             cluster: crate::queue::Cluster::default(),
             shared: shared::Shared::default(),
         }
@@ -502,6 +505,7 @@ impl Fleet {
         self.nodes.remove(id);
         self.picks.forget(id);
         self.remote_login_probes.forget(id);
+        self.full_disk_access.forget(id);
         true
     }
 
@@ -976,9 +980,7 @@ impl Fleet {
     /// order id. Taken, it is not sent again.
     pub fn take_abort(&mut self, id: &HostId) -> Option<(String, String)> {
         let key = self.aborts.keys().find(|(host, _)| host == id).cloned()?;
-        self.aborts
-            .remove_entry(&key)
-            .map(|((_, service), order_id)| (service, order_id))
+        self.aborts.remove(&key).map(|order_id| (key.1, order_id))
     }
 
     /// Forgets the host `id` for `service` altogether, its order with it, so the slot it held is
@@ -988,11 +990,9 @@ impl Fleet {
         let held = self
             .occupant(service, id)
             .is_some_and(|host| self.holds_slot(service, id, host, now));
-        self.hosts.entry(service.to_owned()).or_default().remove(id);
-        self.outside
-            .entry(service.to_owned())
-            .or_default()
-            .remove(id);
+        for hosts in [&mut self.hosts, &mut self.outside] {
+            hosts.entry(service.to_owned()).or_default().remove(id);
+        }
         self.orders.remove(&(id.clone(), service.to_owned()));
         held
     }
