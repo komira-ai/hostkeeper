@@ -54,6 +54,11 @@ pub struct Marks {
     /// Whether the coordinator holds a host group: the roles and hosts of an operator's
     /// assignments, and the minimum versions of a role, then place and bound nothing.
     pub(crate) group_mode: bool,
+    /// The hosts in their turn of a maintenance run (`docs/design/maintenance-updates.md`, section
+    /// 5.1; [`crate::maintenance_runs::Step::in_turn`]): from the order that starts the turn until
+    /// it is done, deferred or put back. A package plan leaves them out and `min_up` counts them
+    /// down ([`crate::stages`]), and no package order goes to them ([`crate::decide`]).
+    pub(crate) in_maintenance: BTreeSet<HostId>,
 }
 
 impl Marks {
@@ -83,6 +88,13 @@ impl Fleet {
     /// `on` ([`Marks`]), from the next [`Self::set_marks`] on, and as it always has otherwise.
     pub(crate) fn set_group_mode(&mut self, on: bool) {
         self.marks.group_mode = on;
+    }
+
+    /// Whether the host `id` is in its turn of a maintenance run, as of the last refresh of the
+    /// marks ([`Marks::in_maintenance`]).
+    #[must_use]
+    pub(crate) fn in_maintenance(&self, id: &HostId) -> bool {
+        self.marks.in_maintenance.contains(id)
     }
 
     /// Whether the coordinator is in group mode (it holds a host group, or places by groups only),

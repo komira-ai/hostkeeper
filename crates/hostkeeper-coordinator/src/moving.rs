@@ -209,10 +209,11 @@ fn needed<'a>(
 }
 
 /// Whether the plan of `def` at `want` admits the host `id`: it is neither halted, at a version
-/// marked bad nor paused, and the host is no member of it, already holds a place of it, or the
-/// plan has a free place in its current stage or has rolled every other host.
+/// marked bad nor paused, the host is not in its turn of a maintenance run (a plan does not count
+/// it then, so no place of it is checked), and the host is no member of it, already holds a place
+/// of it, or the plan has a free place in its current stage or has rolled every other host.
 fn admits(def: &ServiceDef, want: &Desired, fleet: &Fleet, id: &HostId, now: Duration) -> bool {
-    if fleet.is_stopped_in(def, &want.version) {
+    if fleet.is_stopped_in(def, &want.version) || fleet.in_maintenance(id) {
         return false;
     }
     let view = stages::current(def, want, fleet, now);
