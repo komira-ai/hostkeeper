@@ -8,7 +8,8 @@
 //!   [`SIGN_IF`] in the environment [`SIGN_ENV`] on `macos-15`, needs exactly [`COMPILE_JOB`],
 //!   holds `contents: read` alone, has the `env:` [`CODE_IDENTITY`] alone, and its steps are
 //!   exactly [`SIGN_CODE_STEPS`], in order: no checkout, no cargo. A secret that is not set stops
-//!   it by its name. It signs each of [`PROGRAMS`] under its identifier with `--options runtime
+//!   it by its name. Apple's intermediate joins the keychain only as the file of
+//!   [`INTERMEDIATE_SHA256`], and an identity that expires within 30 days stops it by name. It signs each of [`PROGRAMS`] under its identifier with `--options runtime
 //!   --timestamp`, and uploads the signed programs as [`SIGNED_MACHO`] after the cleanup that
 //!   runs under [`ALWAYS`].
 //! - **The secrets are named there alone** ([`CODE_SECRETS`]; `super::pkg_signing` holds the
@@ -92,10 +93,31 @@ pub const EXPAND_BOOTSTRAP_FULL: &str = "pkgutil --expand-full \"dist/hostkeeper
 pub const CHECK_BOOTSTRAP_CODE: &str = "cargo xtask release check-code-signature \"$RUNNER_TEMP/bootstrap-signed-full/hostkeeper-bootstrap.pkg/Payload/usr/local/lib/hostkeeper-bootstrap/hostkeeper-bootstrap\" --program hostkeeper-bootstrap";
 
 /// The message of a step that stops the job by the name of a secret that is not set.
-pub const NOT_SET_P12: &str = "test -n \"$P12\" || { echo \"::error::the secret MACOS_APPLICATION_P12 of the environment pkg-signing is not set (docs/operations/mac-full-disk-access.md says how the owner makes it)\"; exit 1; }";
+pub const NOT_SET_P12: &str = "test -n \"$P12\" || { echo \"::error::the organisation secret MACOS_APPLICATION_P12 is not set or not given to this repository (docs/operations/mac-full-disk-access.md)\"; exit 1; }";
 
 /// As [`NOT_SET_P12`], for the password.
-pub const NOT_SET_PASSWORD: &str = "test -n \"$PASSWORD\" || { echo \"::error::the secret MACOS_APPLICATION_P12_PASSWORD of the environment pkg-signing is not set (docs/operations/mac-full-disk-access.md says how the owner makes it)\"; exit 1; }";
+pub const NOT_SET_PASSWORD: &str = "test -n \"$PASSWORD\" || { echo \"::error::the organisation secret MACOS_APPLICATION_P12_PASSWORD is not set or not given to this repository (docs/operations/mac-full-disk-access.md)\"; exit 1; }";
+
+/// The SHA-256 of Apple's Developer ID intermediate (G2), `DeveloperIDG2CA.cer` of Apple's
+/// certificate authority page: the identity's file holds no intermediate, and codesign needs it.
+pub const INTERMEDIATE_SHA256: &str =
+    "f16cd3c54c7f83cea4bf1a3e6a0819c8aaa8e4a1528fd144715f350643d2df3a";
+
+/// The download of the intermediate, HTTPS only.
+pub const FETCH_INTERMEDIATE: &str = "curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output \"$RUNNER_TEMP/DeveloperIDG2CA.cer\" https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer";
+
+/// The intermediate held to [`INTERMEDIATE_SHA256`] before it is used.
+pub const CHECK_INTERMEDIATE: &str = concat!(
+    "echo \"",
+    "f16cd3c54c7f83cea4bf1a3e6a0819c8aaa8e4a1528fd144715f350643d2df3a",
+    "  $RUNNER_TEMP/DeveloperIDG2CA.cer\" | shasum -a 256 --check --strict"
+);
+
+/// The intermediate imported into the job's keychain.
+pub const IMPORT_INTERMEDIATE: &str = "security import \"$RUNNER_TEMP/DeveloperIDG2CA.cer\" -k \"$RUNNER_TEMP/code-signing.keychain-db\"";
+
+/// The identity must stay valid 30 days more (2592000 seconds), or the release stops by name.
+pub const VALID_30_DAYS: &str = "security find-certificate -c \"$IDENTITY\" -p \"$RUNNER_TEMP/code-signing.keychain-db\" | openssl x509 -noout -checkend 2592000 || { echo \"::error::the identity $IDENTITY expires within 30 days or has expired: renew it and replace the secret MACOS_APPLICATION_P12 (docs/operations/mac-full-disk-access.md)\"; exit 1; }";
 
 /// The signing of hostkeeper, from `unsigned/` into `signed/`.
 pub const SIGN_HOSTKEEPER: &str = "cp unsigned/hostkeeper signed/hostkeeper && codesign --force --sign \"$IDENTITY\" --keychain \"$RUNNER_TEMP/code-signing.keychain-db\" --identifier dev.hostkeeper.hostkeeper --options runtime --timestamp signed/hostkeeper";
@@ -149,7 +171,7 @@ const fn always(run: &'static str) -> Step {
 }
 
 /// The steps of [`SIGN_CODE_JOB`], exactly and in this order.
-pub const SIGN_CODE_STEPS: [Step; 18] = [
+pub const SIGN_CODE_STEPS: [Step; 22] = [
     Step::Download(UNSIGNED_MACHO, "unsigned"),
     with_p12(NOT_SET_P12),
     with_password(NOT_SET_PASSWORD),
@@ -168,6 +190,10 @@ pub const SIGN_CODE_STEPS: [Step; 18] = [
         "security set-key-partition-list -S \"apple-tool:,apple:\" -s -k \"$PASSWORD\" \"$RUNNER_TEMP/code-signing.keychain-db\"",
     ),
     run("security list-keychains -d user -s \"$RUNNER_TEMP/code-signing.keychain-db\""),
+    run(FETCH_INTERMEDIATE),
+    run(CHECK_INTERMEDIATE),
+    run(IMPORT_INTERMEDIATE),
+    run(VALID_30_DAYS),
     run("mkdir signed"),
     run(SIGN_HOSTKEEPER),
     run(SIGN_HK),

@@ -34,45 +34,41 @@ Three pieces make the grant durable:
    `host.fullDiskAccess`, and the host page says when it is missing ([docs/macos.md](../macos.md),
    "Full Disk Access").
 
-The owner's steps, in order, follow. Step 1 comes **before** the change that adds `sign-code` is
-merged: from that merge on, a push to `main` signs the programs, and while the identity's secrets
-are missing the job `sign-code` fails and names the missing secret, so no release is made.
+What remains for the owner is the profile (step 2). The signing identity is in place (step 1).
 
-## 1. The Developer ID Application certificate (owner, once)
+## 1. The Developer ID Application identity
 
-Only the account holder of the Apple Developer account can create a Developer ID certificate. The
-Developer ID **Installer** identity the release already uses stays as it is; this is a second
-certificate of the same team.
+The identity is `Developer ID Application: Komira AI, Inc. (U7RTX4XD3X)`, issued by Apple's
+`Developer ID Certification Authority` (G2) for code signing, a second certificate of the team beside
+the Developer ID **Installer** identity the pkgs are signed with. It is valid until **2027-12-21**.
 
-1. On a Mac, open Keychain Access, choose Keychain Access > Certificate Assistant > Request a
-   Certificate From a Certificate Authority, enter the account's email address and a common name
-   (for example "hostkeeper Developer ID Application"), choose "Saved to disk", and save the
-   certificate signing request.
-2. In the Apple Developer account, open Certificates, Identifiers & Profiles > Certificates, choose
-   the add button, choose **Developer ID Application**, choose the **G2 Sub-CA** profile type,
-   upload the signing request, and download the certificate.
-3. Open the downloaded certificate so it joins the login keychain beside the request's private
-   key. In Keychain Access, under My Certificates, the identity reads
-   `Developer ID Application: Komira AI, Inc. (U7RTX4XD3X)`. Any other name or team is refused by the
-   release: the workflow signs with exactly that name, and its check compares the team.
-4. Select that identity (the certificate with its key), choose File > Export Items, save it as a
-   `.p12` file, and give it a new strong password.
-5. Store it in the repository's environment `pkg-signing` as two secrets, from the Mac, without the
-   file or the password ever being pasted into a message, an issue or a chat:
+The release reads it from two organisation secrets given to this repository, named beside the
+installer's:
 
-   ```sh
-   base64 -i application.p12 | gh secret set MACOS_APPLICATION_P12 --env pkg-signing --repo komira-ai/hostkeeper
-   gh secret set MACOS_APPLICATION_P12_PASSWORD --env pkg-signing --repo komira-ai/hostkeeper
-   ```
+| Secret | Holds |
+|---|---|
+| `MACOS_APPLICATION_P12` | the PKCS#12 file of the identity's certificate and key, base64, one line |
+| `MACOS_APPLICATION_P12_PASSWORD` | its password |
 
-   The second command reads the password from its prompt. Then delete the `.p12` file. The
-   environment `pkg-signing` already holds the installer's two secrets and is limited to `main`.
-6. After the next push to `main`, the run of `artifacts.yml` shows `sign-code` green, and
-   `check-pkg` has checked the designated requirement of each program in the signed pkgs
-   (`cargo xtask release check-code-signature`).
+The file holds the leaf and its key only. Apple's intermediate, which `codesign` needs to build the
+chain, is fetched by the job `sign-code` from Apple's certificate authority page
+(`DeveloperIDG2CA.cer`) and imported only if its SHA-256 is the one the workflow pins.
 
-The certificate is valid for five years. When it is renewed, the identity's name and team do not
-change, so the requirement and the profile stay the same; only the two secrets are replaced.
+`sign-code` stops, naming what is wrong:
+- when a secret is absent or not given to this repository;
+- when the intermediate is not the pinned one;
+- **30 days before the identity expires** (`openssl x509 -checkend 2592000` of the certificate in
+  the job's keychain), so it is renewed while releases still go out.
+
+**Renewal.** Before 2027-11-21, the account holder creates a new Developer ID Application
+certificate (G2 Sub-CA) of the same team in the Apple Developer account, exports it with its key as
+a PKCS#12 file, and replaces the two secrets. The identity's name and team do not change, so the
+designated requirement, the profile and the Macs' grant stay as they are. The file and its password
+never go into a message, an issue or a chat.
+
+After a push to `main`, the run of `artifacts.yml` shows `sign-code` green, and `check-pkg` has
+checked the designated requirement of each program in the signed pkgs
+(`cargo xtask release check-code-signature`).
 
 ## 2. The profile in Apple Business (owner, once)
 

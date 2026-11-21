@@ -555,11 +555,11 @@ jobs:
       - name: The secret of the identity is set
         env:
           P12: ${{ secrets.MACOS_APPLICATION_P12 }}
-        run: 'test -n "$P12" || { echo "::error::the secret MACOS_APPLICATION_P12 of the environment pkg-signing is not set (docs/operations/mac-full-disk-access.md says how the owner makes it)"; exit 1; }'
+        run: 'test -n "$P12" || { echo "::error::the organisation secret MACOS_APPLICATION_P12 is not set or not given to this repository (docs/operations/mac-full-disk-access.md)"; exit 1; }'
       - name: The secret of the identity's password is set
         env:
           PASSWORD: ${{ secrets.MACOS_APPLICATION_P12_PASSWORD }}
-        run: 'test -n "$PASSWORD" || { echo "::error::the secret MACOS_APPLICATION_P12_PASSWORD of the environment pkg-signing is not set (docs/operations/mac-full-disk-access.md says how the owner makes it)"; exit 1; }'
+        run: 'test -n "$PASSWORD" || { echo "::error::the organisation secret MACOS_APPLICATION_P12_PASSWORD is not set or not given to this repository (docs/operations/mac-full-disk-access.md)"; exit 1; }'
       - name: The identity, from its secret into a file of the job
         env:
           P12: ${{ secrets.MACOS_APPLICATION_P12 }}
@@ -584,6 +584,18 @@ jobs:
         run: security set-key-partition-list -S "apple-tool:,apple:" -s -k "$PASSWORD" "$RUNNER_TEMP/code-signing.keychain-db"
       - name: The job's keychain is the user's only keychain
         run: security list-keychains -d user -s "$RUNNER_TEMP/code-signing.keychain-db"
+      # The identity's file holds the leaf and its key only; codesign needs Apple's intermediate in
+      # the keychain to build the chain, so it is fetched from Apple and held to its pinned SHA-256.
+      - name: Apple's Developer ID intermediate (G2)
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/DeveloperIDG2CA.cer" https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+      - name: The intermediate is the pinned one
+        run: echo "f16cd3c54c7f83cea4bf1a3e6a0819c8aaa8e4a1528fd144715f350643d2df3a  $RUNNER_TEMP/DeveloperIDG2CA.cer" | shasum -a 256 --check --strict
+      - name: The intermediate joins the job's keychain
+        run: security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$RUNNER_TEMP/code-signing.keychain-db"
+      # The identity is valid for thirteen months: the release stops 30 days before it ends, so it is
+      # renewed while releases still go out (docs/operations/mac-full-disk-access.md).
+      - name: The identity is valid for 30 days more
+        run: 'security find-certificate -c "$IDENTITY" -p "$RUNNER_TEMP/code-signing.keychain-db" | openssl x509 -noout -checkend 2592000 || { echo "::error::the identity $IDENTITY expires within 30 days or has expired: renew it and replace the secret MACOS_APPLICATION_P12 (docs/operations/mac-full-disk-access.md)"; exit 1; }'
       - run: mkdir signed
       - name: Sign hostkeeper as dev.hostkeeper.hostkeeper, with the hardened runtime and a trusted timestamp
         run: cp unsigned/hostkeeper signed/hostkeeper && codesign --force --sign "$IDENTITY" --keychain "$RUNNER_TEMP/code-signing.keychain-db" --identifier dev.hostkeeper.hostkeeper --options runtime --timestamp signed/hostkeeper

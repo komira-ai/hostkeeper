@@ -3,11 +3,12 @@
 //! line.
 
 use super::code_signing::{
-    BUILD_JOB, CHECK_BOOTSTRAP_CODE, CHECK_HELLO_CODE, CHECK_HOSTKEEPER_CODE, CHECK_PACKAGED_HK,
-    CHECK_PACKAGED_HOSTKEEPER, CHMOD, CODE_IDENTITY, COMPILE_JOB, DELETE_CODE_KEYCHAIN,
-    DELETE_CODE_P12, EXPAND_BOOTSTRAP_FULL, EXPAND_FULL, EXPAND_HELLO_FULL, NOT_SET_P12,
-    NOT_SET_PASSWORD, PROGRAMS, SIGN_BOOTSTRAP_CODE, SIGN_CODE_JOB, SIGN_CODE_STEPS,
-    SIGN_HELLO_CODE, SIGN_HK, SIGN_HOSTKEEPER, SIGNED_MACHO, UNSIGNED_MACHO,
+    BUILD_JOB, CHECK_BOOTSTRAP_CODE, CHECK_HELLO_CODE, CHECK_HOSTKEEPER_CODE, CHECK_INTERMEDIATE,
+    CHECK_PACKAGED_HK, CHECK_PACKAGED_HOSTKEEPER, CHMOD, CODE_IDENTITY, COMPILE_JOB,
+    DELETE_CODE_KEYCHAIN, DELETE_CODE_P12, EXPAND_BOOTSTRAP_FULL, EXPAND_FULL, EXPAND_HELLO_FULL,
+    IMPORT_INTERMEDIATE, INTERMEDIATE_SHA256, NOT_SET_P12, NOT_SET_PASSWORD, PROGRAMS,
+    SIGN_BOOTSTRAP_CODE, SIGN_CODE_JOB, SIGN_CODE_STEPS, SIGN_HELLO_CODE, SIGN_HK, SIGN_HOSTKEEPER,
+    SIGNED_MACHO, UNSIGNED_MACHO, VALID_30_DAYS,
 };
 use super::lint::lint;
 use super::pkg_signing::{CHECK_JOB, CHECK_STEPS, SIGN_ENV, SIGN_JOB, SUMS_IF, Step};
@@ -317,7 +318,7 @@ fn a_checkout_or_cargo_step_in_the_signing_job_or_a_step_moved_or_changed_is_ref
         &run_line(SIGN_HK),
         &format!("        continue-on-error: true\n{}", run_line(SIGN_HK)),
     );
-    assert_refused(&lenient, &code_step(13));
+    assert_refused(&lenient, &code_step(17));
 }
 
 #[test]
@@ -336,11 +337,61 @@ fn a_secret_that_is_not_set_must_stop_the_job_by_its_name() {
         &text,
         &password,
         &password.replace(
-            "the secret MACOS_APPLICATION_P12_PASSWORD",
-            "the secret MACOS_APPLICATION_P12",
+            "secret MACOS_APPLICATION_P12_PASSWORD is",
+            "secret MACOS_APPLICATION_P12 is",
         ),
     );
     assert_refused(&other, &code_step(3));
+}
+
+#[test]
+fn an_intermediate_not_held_to_its_pin_or_not_in_the_keychain_is_refused() {
+    // Catches: Apple's intermediate taken from the network unchecked (another file would sign
+    // nothing but could stand in the chain), checked against another digest, or never imported,
+    // so codesign cannot build the chain of an identity whose file holds the leaf alone.
+    let text = artifacts_yml();
+    let unchecked = with_in(
+        &text,
+        &run_line(CHECK_INTERMEDIATE),
+        "        run: echo fine\n",
+    );
+    assert_refused(&unchecked, &code_step(12));
+    let other = with_in(
+        &text,
+        INTERMEDIATE_SHA256,
+        "0000000000000000000000000000000000000000000000000000000000000000",
+    );
+    assert_refused(&other, &code_step(12));
+    let plain = with_in(
+        &text,
+        "--proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output \"$RUNNER_TEMP/DeveloperIDG2CA.cer\" https://",
+        "--proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --insecure --output \"$RUNNER_TEMP/DeveloperIDG2CA.cer\" https://",
+    );
+    assert_refused(&plain, &code_step(11));
+    let absent = with_in(
+        &text,
+        &run_line(IMPORT_INTERMEDIATE),
+        "        run: echo fine\n",
+    );
+    assert_refused(&absent, &code_step(13));
+}
+
+#[test]
+fn an_identity_near_its_end_must_stop_the_job_by_name() {
+    // Catches: a release that signs with an identity about to expire (or expired) without saying
+    // so, a check with a shorter warning than 30 days, or one that does not stop the job.
+    let text = artifacts_yml();
+    let step = quoted_run_line(VALID_30_DAYS);
+    let absent = with_in(&text, &step, "        run: echo fine\n");
+    assert_refused(&absent, &code_step(14));
+    let shorter = with_in(
+        &text,
+        &step,
+        &step.replace("-checkend 2592000", "-checkend 86400"),
+    );
+    assert_refused(&shorter, &code_step(14));
+    let go_on = with_in(&text, &step, &step.replace("exit 1", "exit 0"));
+    assert_refused(&go_on, &code_step(14));
 }
 
 #[test]
@@ -352,22 +403,22 @@ fn a_program_not_signed_under_its_identifier_with_the_runtime_and_a_timestamp_is
         (
             SIGN_HOSTKEEPER,
             "--identifier dev.hostkeeper.hostkeeper",
-            12,
+            16,
             "hostkeeper",
             "dev.hostkeeper.hostkeeper",
         ),
-        (SIGN_HK, "--options runtime ", 13, "hk", "dev.hostkeeper.hk"),
+        (SIGN_HK, "--options runtime ", 17, "hk", "dev.hostkeeper.hk"),
         (
             SIGN_HELLO_CODE,
             "--identifier dev.hostkeeper.hello",
-            14,
+            18,
             "hello",
             "dev.hostkeeper.hello",
         ),
         (
             SIGN_BOOTSTRAP_CODE,
             "--timestamp signed",
-            15,
+            19,
             "hostkeeper-bootstrap",
             "dev.hostkeeper.bootstrap",
         ),
@@ -404,7 +455,7 @@ fn the_keychain_and_the_p12_left_after_a_failed_signing_or_the_upload_before_the
         &keychain,
         &keychain.replace("${{ always() }}", "${{ success() }}"),
     );
-    assert_refused(&not_always, &code_step(16));
+    assert_refused(&not_always, &code_step(20));
     let p12 = format!(
         "      - name: Delete the identity's file, whether the signing worked or not\n        if: ${{{{ always() }}}}\n{}",
         run_line(DELETE_CODE_P12)
@@ -413,8 +464,8 @@ fn the_keychain_and_the_p12_left_after_a_failed_signing_or_the_upload_before_the
         "      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1\n        with:\n          name: {SIGNED_MACHO}\n          path: signed/\n          retention-days: 90\n          if-no-files-found: error\n"
     );
     let late = with_in(&text, &format!("{p12}{upload}"), &format!("{upload}{p12}"));
-    assert_refused(&late, &code_step(17));
-    assert_refused(&late, &code_step(18));
+    assert_refused(&late, &code_step(21));
+    assert_refused(&late, &code_step(22));
 }
 
 #[test]

@@ -782,11 +782,13 @@ before the pkgs are built:
    `macho-unsigned-macos-arm64`.
 2. `sign-code`, in the environment `pkg-signing`, runs no repository code (no checkout, no cargo),
    so no build script or dependency runs where the key is. A secret that is not set stops it by
-   its name (`MACOS_APPLICATION_P12`, the PKCS#12 of the identity's key and certificate and Apple's
-   intermediate, and `MACOS_APPLICATION_P12_PASSWORD`; how the owner makes them is in
+   its name (the organisation secrets `MACOS_APPLICATION_P12`, the PKCS#12 of the identity's key
+   and certificate, and `MACOS_APPLICATION_P12_PASSWORD`; see
    [operations/mac-full-disk-access.md](operations/mac-full-disk-access.md)). It imports the
    identity into a keychain of the job (`code-signing.keychain-db` in `$RUNNER_TEMP`, never the
-   login keychain), then runs `codesign --force --sign <identity> --keychain <it> --identifier
+   login keychain), adds Apple's Developer ID intermediate (G2), downloaded from Apple and held to
+   its pinned SHA-256, stops by name when the identity expires within 30 days (it is valid until
+   2027-12-21), then runs `codesign --force --sign <identity> --keychain <it> --identifier
    <identifier> --options runtime --timestamp` on a copy of each program, deletes the keychain and
    the PKCS#12 file whether the signing worked or not, and uploads the copies as
    `macho-signed-macos-arm64`.
