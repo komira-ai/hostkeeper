@@ -839,17 +839,25 @@ fn record(args: &[Vec<u8>], env: &[(Vec<u8>, Vec<u8>)], stdin: &[u8]) -> Vec<u8>
     text
 }
 
-/// The environment this process has, without what an instrumented build sets by itself in each
-/// process it starts (`__LLVM_PROFILE_RT_*`), which no parent passed.
+/// The environment this process has, without what a process sets in itself and no parent passed:
+/// an instrumented build's `__LLVM_PROFILE_RT_*`, and on macOS CoreFoundation's
+/// `__CF_USER_TEXT_ENCODING`, which it sets as it loads (this binary links it through
+/// `hostkeeper-bootstrap`'s `rustls-native-certs`).
 #[expect(
     clippy::disallowed_methods,
     reason = "the helper child reports the environment its parent gave it"
 )]
 fn own_environment() -> Vec<(Vec<u8>, Vec<u8>)> {
     std::env::vars_os()
-        .filter(|(name, _)| !name.as_bytes().starts_with(b"__LLVM_PROFILE_RT_"))
+        .filter(|(name, _)| !set_by_itself(name.as_bytes()))
         .map(|(name, value)| (name.as_bytes().to_vec(), value.as_bytes().to_vec()))
         .collect()
+}
+
+/// Whether the variable `name` is one this process set in itself (see `own_environment`).
+fn set_by_itself(name: &[u8]) -> bool {
+    name.starts_with(b"__LLVM_PROFILE_RT_")
+        || (cfg!(target_os = "macos") && name == b"__CF_USER_TEXT_ENCODING")
 }
 
 /// Catches nothing itself: the child of `the_two_calls_get_their_passwords_on_standard_input_and_an_empty_environment`.
