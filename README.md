@@ -111,7 +111,11 @@ are parsed with that program's own parser. Setting up the console (the network p
 how the coordinator finds each BMC's address, the console files, `ipmitool` beside the coordinator, the BMC and
 BIOS settings) and moving an installed server to the serial console baseline is
 [docs/operations/console.md](docs/operations/console.md); its file examples are read by the
-console's parsers and its hand step is held to the seed's own files and commands. A test (`crates/xtask/tests/enrollment_doc.rs`)
+console's parsers and its hand step is held to the seed's own files and commands. Updating a
+Linux host's security packages and kernel through a maintenance run (the notice of what is due, the
+one **Update** button, **Schedule**, and a host that halted in its turn) is
+[docs/operations/maintenance.md](docs/operations/maintenance.md); its `hk maintenance` verbs and
+the names of its tables are held to the command table and the protos. A test (`crates/xtask/tests/enrollment_doc.rs`)
 reads every fenced `hk` line of every Markdown file but the design documents as hk reads
 it, against its command table and global flags, so a runbook's command cannot name a method, a
 flag or a value hk does not take.
