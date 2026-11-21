@@ -568,7 +568,11 @@ failure of a check, `promote-check` or a stable job opens the release's `RELEASE
    and every check succeeded or had nothing to check.
 4. **Stable.** `stable-apt-*` and `stable-rpm-*` list the entries of the release that `testing` holds
    in the index of `stable` (held to the digests of the release's `SHA256SUMS`; nothing is uploaded, the
-   packages are in the pool already). `promote-pkg` reads the directory of the installers back
+   packages are in the pool already), with the same read, index and write jobs and the same lost-race
+   rule as testing. The apt promotion has up to five attempts (`stable-apt-write` to `stable-apt-write-5`;
+   the fifth fails instead of asking for a sixth), the rpm one up to three: every product of the
+   repository promotes into the one apt index of `stable`, and one attempt of ours holds it for several
+   minutes, so another product's promotion often lands in between. No job waits for these writes. `promote-pkg` reads the directory of the installers back
    against `SHA256SUMS` and moves `stable.json` to the release, with `If-Match` on the ETag it read and
    only to a higher version, then invalidates the path in the CDN. **Promotion copies no bytes:** the
    same pool files and the same installer files that were installed and checked are the ones the
