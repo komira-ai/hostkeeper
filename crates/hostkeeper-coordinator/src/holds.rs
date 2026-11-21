@@ -97,8 +97,9 @@ pub fn holding<'a>(
 
 /// What the fleet keeps of the ops state for its decisions: the holds, the hosts each standing
 /// force orders ([`crate::force`]), the assignments ([`crate::assignment`]), the labels, the
-/// exclusions, where each update plan stands ([`crate::rollouts`]), and the services halted or
-/// with versions marked bad, which a plan reads of the other services.
+/// exclusions, where each update plan stands ([`crate::rollouts`]), the services halted or
+/// with versions marked bad, which a plan reads of the other services, and the hosts in their turn
+/// of a maintenance run, over every run.
 #[must_use]
 pub fn marks_of(state: &OpsState) -> Marks {
     let forced = state
@@ -146,6 +147,13 @@ pub fn marks_of(state: &OpsState) -> Marks {
         group_halted,
         group_forced,
         group_mode: false,
+        in_maintenance: state
+            .maintenance_runs
+            .iter()
+            .flat_map(|run| &run.hosts)
+            .filter(|host| host.step.in_turn())
+            .filter_map(|host| host.host_id.parse().ok())
+            .collect(),
         holds: state.holds.clone(),
         forced,
         assignments: state.assignments.clone(),
