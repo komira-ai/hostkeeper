@@ -21,6 +21,8 @@
 // Alerts.List is called last when the page is read, for the alerts that name the host; when it
 // fails, the page says so and shows the reasons the host's own report gives. On a button of a
 // reason, after a confirm, Releases.ClearHalt (with the reason typed) or Hosts.Retry.
+// On the Updates tab, for a host with a maintenance report, Maintenance.Schedule on the Update, Check and Schedule
+// buttons (the Check sends no confirm; the other two ask first).
 //
 // The page is a status header (name, status LED and word, role, group, what it runs, the last
 // heartbeat, what its maintenance report lists as due, and a small elevation of the rack it stands
@@ -28,7 +30,8 @@
 // why: every reason (`health.js`) in plain words, with when it began and the one action that fixes
 // it (Clear halt, Retry update), and for a js-agent taint what hostkeeper holds of it; then tabs (Overview, Services,
 // Updates (`updates.js`: the facts of the maintenance report Hosts.Get answers, each due item, the Xcodes, the last
-// look and how old it is; read only, no call of its own), Certificate, Labels, Placement, Host group, Remote SSH, Power and boot; every panel is in the page, the stylesheet shows the
+// look and how old it is; for a host with a report, an Update button and the Schedule form of `schedule.js`,
+// which call Maintenance.Schedule), Certificate, Labels, Placement, Host group, Remote SSH, Power and boot; every panel is in the page, the stylesheet shows the
 // chosen one, and the choice is kept across a refresh of the same host), then the danger zone,
 // which holds Retire. The status says "degraded" for a live host with any reason: a service of it
 // unhealthy, halted or whose last update failed, or an alert that names it; the lab's state alone
@@ -42,6 +45,7 @@ import { isDegraded, reasonsOf } from "../health.js";
 import { crumbs, hostState, layoutOf, layoutProblem, rackName, slotOf, slotOptions, subjectOf } from "../lab.js";
 import { loadSsh, sshPanel } from "../sshpanel.js";
 import { dueNotice, isDue, isStale, updatesPanel } from "../updates.js";
+import { newScheduleState, scheduleForm, updateControls } from "../schedule.js";
 
 // Rows of a facts table: a name and its value, no heading strip.
 function kv(rows, extra) {
@@ -99,6 +103,20 @@ export function parseLabels(text) {
 
 // The reason sent with every move: the form asks for none.
 const DEFAULT_MOVE_REASON = "moved in the console";
+
+// The Updates tab's controls, for a host with a maintenance report: the Update button with its reason
+// and the Schedule form. `scheduling` holds the typed reason and the form's state across repaints.
+function maintenanceActions(ctx, host, scope, scheduling, repaint) {
+  if (host.maintenance === undefined) {
+    return [];
+  }
+  const env = {
+    ctx, state: scheduling, form: scheduling.form, repaint,
+    schedule: (request) => ctx.api.maintenance.schedule(request),
+    after: () => ctx.refresh(),
+  };
+  return [updateControls(env, { hostIds: [scope.hostId] }), scheduleForm(env, scope)];
+}
 
 // The Host group form: a dropdown of the groups held, the host's own selected (the
 // blank, "Unassigned", for a host in no group), and Move. `groups` is the
@@ -687,10 +705,11 @@ export async function render(ctx) {
       retireSection(ctx, nodeId));
   }
   let groups = null;
+  let groupStates = [];
   let groupsFailure = null;
   try {
-    groups = (await allPages((token) => ctx.api.hostGroups.list(token === "" ? {} : { pageToken: token }), "hostGroups"))
-      .map((one) => ((one || {}).group || {}).name);
+    groupStates = await allPages((token) => ctx.api.hostGroups.list(token === "" ? {} : { pageToken: token }), "hostGroups");
+    groups = groupStates.map((one) => ((one || {}).group || {}).name);
   } catch (error) {
     groupsFailure = error;
   }
@@ -720,6 +739,9 @@ export async function render(ctx) {
     || (typeof host.lastRenewError === "string" && host.lastRenewError !== "")
     || ["stale", "missing", "unparseable"].includes(rootWord);
   const group = typeof host.hostGroup === "string" && host.hostGroup !== "" ? host.hostGroup : "";
+  const policy = ((groupStates.find((one) => ((one || {}).group || {}).name === group) || {}).group || {}).policy || {};
+  const scope = { hosts: [host], group, policy: policy.maintenance || null, hostId: nodeId };
+  const scheduling = { reason: "", form: newScheduleState(scope) };
   const version = services.length > 0 && typeof services[0].installedVersion === "string"
     ? `${services[0].service} ${services[0].installedVersion}` : "";
   const labelCount = Object.keys(host.labels || {}).length;
@@ -807,7 +829,8 @@ export async function render(ctx) {
           "aria-pressed": String(chosen.tab === id),
           on: { click: () => { chosen.tab = id; repaint(); } },
         }, label, tone === "" ? null : h("span", { class: `dot ${tone}`, "aria-hidden": "true" })))),
-      tabs.map(([id]) => h("div", { class: `panel${chosen.tab === id ? "" : " off"}` }, panels[id])),
+      tabs.map(([id]) => h("div", { class: `panel${chosen.tab === id ? "" : " off"}` },
+        id === "updates" ? [...panels[id], ...maintenanceActions(ctx, host, scope, scheduling, repaint)] : panels[id])),
       retireSection(ctx, nodeId));
     return root;
   };
