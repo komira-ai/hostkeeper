@@ -24,7 +24,7 @@ use crate::desired::Desired;
 use crate::fleet::Fleet;
 use crate::live::why_live;
 use crate::services::ServiceDef;
-use crate::stages::{HostState, Wait, current};
+use crate::stages::{Wait, current};
 
 /// One package of one group with its desired state.
 #[derive(Clone, Debug)]
@@ -161,7 +161,7 @@ impl Cluster {
 
     /// The services queued ahead of `name`, first in line first, each once: those with work left
     /// whose rollout is not live and that something can still order (a service that is halted, at
-    /// a version marked bad, paused, held by a failed host, waiting for an Advance or for `min_up`,
+    /// a version marked bad, paused, held by its failed hosts ([`crate::failed_hosts`]), waiting for an Advance or for `min_up`,
     /// or whose every host that has not started defers or is held by a rule before the plan's gate,
     /// [`crate::orderable`], takes no place), that were set before `name`. Empty when `name` has no
     /// entry.
@@ -222,6 +222,6 @@ pub(crate) fn orderable(
     !blocked
         && !view.finished()
         && view.paused.is_none()
-        && !view.members.iter().any(|m| m.state == HostState::Failed)
+        && !view.failed_holds()
         && crate::orderable::can_order(def, want, &view, fleet, now)
 }

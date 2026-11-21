@@ -120,9 +120,11 @@ one credential is the OIDC token GitHub issues to the job.
    The hosts of a stage update in parallel, up to the policy's `max_updating` (by default the whole stage).
    Only one service rolls in the cluster at a time, so a release of another service waits for it
    (`rollout_elsewhere`) and the services queue in the order their versions were set; the caller chaining the groups one after the other (a canary group first) is a
-   later change, with the CI client's `host_group` input. A host whose update fails keeps its
-   update slot until it is healthy, and its stage is not done until an operator resolves it, so
-   the next stage is not ordered the version meanwhile
+   later change, with the CI client's `host_group` input. A host whose update fails stays at its
+   version and is an alert; under the group's default `failed_hosts` (continue) its stage counts
+   it as done, failed, and the other hosts are still ordered, unless it failed as a canary or as
+   many hosts failed as `rollback_after_failed`; under `failed_hosts = FAILED_HOSTS_STOP` its
+   stage is not done until an operator resolves it
    ([rollout-plans.md](../operations/rollout-plans.md); design, section 5.4).
 10. **Each host updates itself.** At its next heartbeat an ordered host stages the `.deb` from its
    repository entry, checks it against the pinned SHA-256, and updates hostkeeper by the

@@ -178,10 +178,16 @@ the JSON heartbeat route; any other waits for the next heartbeat over gRPC.
   version it failed. A host whose last report of a service is a failure of the desired version is
   not ordered that version again (gate reason `failed_here`), and neither clearing the halt the
   failure raised nor excluding and including the host changes that: the report stands until the
-  host reports another. Each such host is an alert (`failed_update`, critical: `Alerts.List`
+  host reports another. One exception: in a host group, a failure whose reason the host can clear
+  by itself (`busy`, `verify_unavailable`, `fetch_failed`, `package_manager_busy`, `no_space`, with
+  no phase or before the commit) is set aside by the coordinator itself once the group's
+  `defer_backoff` has passed since it was reported, longer after each failure in a row, and the
+  host is ordered again ([rollout-plans.md](rollout-plans.md#a-failed-host)); `Hosts.Retry` does
+  the same at once. Each such host is an alert (`failed_update`, critical: `Alerts.List`
   gives the version, the report's `reason` and `detail` and its try in `tries`, and an error line
   with `alert=failed_update` is logged once when it appears), until the host reports another
-  outcome, another version is set, or the host is excluded or leaves its group; a `halted`
+  outcome, another version is set, or the host is excluded or leaves its group (a failure the
+  coordinator retries by itself stays listed through its tries); a `halted`
   refusal is the host's own halt (`host_halt`) and no failed update. The call sets the report
   aside, so the host is ordered the desired version at its next heartbeat, as the plan and the
   other rules let it, at the try after the failed one; the report's try still counts, so the daemon
@@ -196,7 +202,8 @@ the JSON heartbeat route; any other waits for the next heartbeat over gRPC.
   and when it failed the version it runs (a halt after its switch, which a force repairs), and
   `store_failed` or `audit_unavailable`, with nothing set aside, when its audit line cannot be
   written. What is set aside is kept in memory only: after a restart of the coordinator, the
-  operator asks again.
+  operator asks again. So is the count of the failures the coordinator retries by itself: after a
+  restart the first report heard starts it again.
 - `Hosts.Exclude` takes a host out of a service. Its update slot stays held while the host runs
   an update (it reports one `updating` or its promotion pending) or has an order outstanding,
   until the host's own heartbeats or its order's age free it; an excluded host whose last update
@@ -290,7 +297,8 @@ row and each heartbeat is decided over the rows
 - A force's desired version is set under a new `set_seq`, so it takes its place in the queue of
   `--live-rollouts` by when it was set, on every coordinator.
 - What `Hosts.Retry` sets aside and the order of `Hosts.ClearRecord` are kept in the memory of the
-  coordinator that took the call, as before.
+  coordinator that took the call, as before; the failures retried by themselves, in the memory of
+  each coordinator that heard them.
 
 Over the files one process decides over its own memory; none of this applies.
 

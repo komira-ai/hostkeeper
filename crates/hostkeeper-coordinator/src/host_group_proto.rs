@@ -6,6 +6,7 @@
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 
 use crate::defer::DeferBackoff;
+use crate::failed_hosts::FailedHosts;
 use crate::host_groups::{
     DEFAULT_MAX_UPDATING, GroupName, HostGroup, Policy, PolicyCanary, PolicyError, PolicyStage,
 };
@@ -17,8 +18,8 @@ use crate::stages::Advance;
 /// ([`Policy::check`] checks them).
 ///
 /// # Errors
-/// [`PolicyError`] for a stage's `advance` or the `rollback` mode that is a number the proto does
-/// not define, and of `maintenance` for its `linux_scope` that is one, or an `xcode_default` that
+/// [`PolicyError`] for a stage's `advance`, the `rollback` mode or the `failed_hosts` mode that is
+/// a number the proto does not define, and of `maintenance` for its `linux_scope` that is one, or an `xcode_default` that
 /// is neither `latest` nor a version.
 pub(crate) fn policy_of(policy: Option<&proto::RolloutPolicy>) -> Result<Policy, PolicyError> {
     let Some(policy) = policy else {
@@ -49,6 +50,7 @@ pub(crate) fn policy_of(policy: Option<&proto::RolloutPolicy>) -> Result<Policy,
             percent: given.percent.unwrap_or(threshold.percent),
             min_hosts: given.min_hosts.unwrap_or(threshold.min_hosts),
         },
+        failed_hosts: failed_hosts_of(policy.failed_hosts)?,
         defer_backoff: DeferBackoff {
             initial_secs: spaced.initial_secs.unwrap_or(backoff.initial_secs),
             factor: spaced.factor.unwrap_or(backoff.factor),
@@ -140,6 +142,19 @@ fn rollback_of(number: i32) -> Result<Rollback, PolicyError> {
     }
 }
 
+fn failed_hosts_of(number: i32) -> Result<FailedHosts, PolicyError> {
+    match proto::FailedHosts::try_from(number) {
+        Ok(proto::FailedHosts::Unspecified | proto::FailedHosts::Continue) => {
+            Ok(FailedHosts::Continue)
+        }
+        Ok(proto::FailedHosts::Stop) => Ok(FailedHosts::Stop),
+        Err(_) => Err(PolicyError {
+            key: "failed_hosts",
+            why: format!("{number} is not a failed-hosts mode"),
+        }),
+    }
+}
+
 /// `policy` as the proto says it, every key named.
 pub(crate) fn policy_proto(policy: &Policy) -> proto::RolloutPolicy {
     proto::RolloutPolicy {
@@ -168,6 +183,11 @@ pub(crate) fn policy_proto(policy: &Policy) -> proto::RolloutPolicy {
             percent: Some(policy.rollback_after_failed.percent),
             min_hosts: Some(policy.rollback_after_failed.min_hosts),
         }),
+        failed_hosts: match policy.failed_hosts {
+            FailedHosts::Stop => proto::FailedHosts::Stop,
+            FailedHosts::Continue => proto::FailedHosts::Continue,
+        }
+        .into(),
         defer_backoff: Some(proto::DeferBackoff {
             initial_secs: Some(policy.defer_backoff.initial_secs),
             factor: Some(policy.defer_backoff.factor),
