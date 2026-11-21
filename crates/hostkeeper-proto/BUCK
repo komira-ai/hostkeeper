@@ -20,6 +20,7 @@ cargo_package(
     )
     for path in [
         "proto",
+        "src/ctl_gen",
         "src/ctl_gen.rs",
     ]
 ]

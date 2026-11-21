@@ -1,13 +1,15 @@
 load("//:buildrules.bzl", "cargo_package")
 
 # What this package reads beyond src/, tests/ and build.rs, which a Buck2 action sees only when
-# declared. The build script compiles the fixture protos with hostkeeper-proto's generator and protos; the docs test reads docs/cli.md.
+# declared. The build script compiles the fixture protos with hostkeeper-proto's generator and protos (and
+# rustfmt, which `:fmt` runs, follows the generator's `mod tests;` into src/ctl_gen/); the docs test reads docs/cli.md.
 cargo_package(
     path = ".",
     extra_srcs = [
         "tests/bin",
         "tests/fixtures",
         "//crates/hostkeeper-proto:proto",
+        "//crates/hostkeeper-proto:src/ctl_gen",
         "//crates/hostkeeper-proto:src/ctl_gen.rs",
         "//:docs/cli.md",
     ],
