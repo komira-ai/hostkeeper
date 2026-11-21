@@ -28,9 +28,9 @@
 //! ```
 //!
 //! **The administrator's password is not written.** The bootstrap keeps no copy of it: the daemon
-//! is to read the two `admin_` keys from the same settings source, under the same trust rule, at
-//! the start that makes the account, and use them for that call alone (docs/design/mac-bootstrap.md,
-//! section 4).
+//! reads the two `admin_` keys from the same settings source, under the same trust rule
+//! ([`crate::settings::Sources::load`]), at the start that makes the account, and uses them for
+//! that call alone (docs/design/mac-bootstrap.md, section 4; the daemon's `update_account_make`).
 //!
 //! **Nothing prints a password.** [`Password`] has no `Display` and its `Debug` prints
 //! `Password(withheld)`; no error of the settings holds a value of these keys, only its name.
