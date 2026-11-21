@@ -335,8 +335,8 @@ fn the_age_of_a_halt_is_said_in_its_largest_units() {
     }
 }
 
-/// Proves: both kinds are critical, go out with their log tokens, and `Alerts.List` answers what
-/// the host said in the alert's own fields.
+/// Proves: the three kinds of a host off its desired version are critical and go out with their
+/// log tokens, and `Alerts.List` answers what the host said in the alert's own fields.
 ///
 /// Catches: a failed update listed as a warning that a pager filters out, or its reason only in
 /// the message's text.
@@ -385,6 +385,18 @@ fn both_kinds_go_out_critical_with_what_the_host_said() {
     );
     assert_eq!(Kind::HostHalt.proto(), proto::AlertKind::HostHalt);
     assert_eq!(Kind::HostHalt.severity(), proto::AlertSeverity::Critical);
+    assert_eq!(
+        (
+            Kind::RepeatedDeferral.log_token(),
+            Kind::RepeatedDeferral.proto(),
+            Kind::RepeatedDeferral.severity(),
+        ),
+        (
+            "repeated_deferral",
+            proto::AlertKind::RepeatedDeferral,
+            proto::AlertSeverity::Critical,
+        )
+    );
 }
 
 /// Proves: a host's own halt that names no reason is listed with the reason `unspecified`.
