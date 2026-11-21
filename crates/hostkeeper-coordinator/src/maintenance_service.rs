@@ -289,6 +289,8 @@ fn turn_of(seen: &Seen, kinds: &[Kind], state: &OpsState) -> Option<RunHost> {
         applied: Vec::new(),
         skipped_because,
         reason: String::new(),
+        offered_again: 0,
+        baked_beats: 0,
     })
 }
 
@@ -544,7 +546,11 @@ impl Coordinator {
                     .find(|run| run.id == id)
                     .map(|run| proto::GetMaintenanceRunResponse {
                         run: Some(run_proto(run, now)),
-                        hosts: run.hosts.iter().map(host_proto).collect(),
+                        hosts: run
+                            .hosts
+                            .iter()
+                            .map(|host| host_proto(&run.shown(host, now)))
+                            .collect(),
                     })
             })
             .ok_or(Refusal::UnknownRun)

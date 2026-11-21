@@ -670,6 +670,8 @@ impl Coordinator {
             return (ServiceReply::Nothing, None, None, Vec::new());
         }
         crate::intents::settle(&self.ops, &basis.services, fleet, &who.host_id);
+        // The bake counts the heartbeats after the one that reports a turn done.
+        self.bake_maintenance(fleet, &who.host_id);
         self.fold_maintenance(fleet, &who.host_id);
         let mut names: Vec<&str> = legacy
             .into_iter()

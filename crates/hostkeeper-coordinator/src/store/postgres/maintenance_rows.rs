@@ -2,7 +2,8 @@
 //! (`crate::maintenance_runs`): one row of `maintenance_runs` for each run, in the order the runs
 //! are held, and one row of `maintenance_hosts` for each host's turn of one, in the run's order.
 //! A kind, a step and a reason a host is left out are written by their names; a value a run
-//! leaves out (no group, no batch, no drain deadline, no cancel) is `NULL`.
+//! leaves out (no group, no batch, no drain deadline, no cancel) is `NULL`. A host's offers after
+//! a deferral and its bake are the columns `0030` adds.
 
 use super::at::At;
 use super::rows::{KeyTy, KeyVal, Rows, Table, Tables, Ty, Val};
@@ -45,6 +46,8 @@ pub(crate) const HOSTS: Table = Table {
         ("skipped_because", Ty::Text),
         ("reason", Ty::Text),
         ("position", Ty::Int),
+        ("offered_again", Ty::Int),
+        ("baked_beats", Ty::Int),
     ],
 };
 
@@ -99,6 +102,8 @@ pub(crate) fn insert_runs(runs: &[Run], tables: &mut Tables) -> Result<(), Store
                     Val::text_or_null(host.skipped_because.map(Skip::as_str)),
                     Val::Text(host.reason.clone()),
                     Val::Int(int(position as u64)?),
+                    Val::Int(i64::from(host.offered_again)),
+                    Val::Int(i64::from(host.baked_beats)),
                 ],
             );
         }
@@ -106,6 +111,11 @@ pub(crate) fn insert_runs(runs: &[Run], tables: &mut Tables) -> Result<(), Store
     tables.insert(RUNS.name, run_rows);
     tables.insert(HOSTS.name, host_rows);
     Ok(())
+}
+
+/// The count of column `i` of `at`, which a run host keeps as a `u32`.
+fn small(at: &At<'_>, i: usize) -> Result<u32, OpsError> {
+    u32::try_from(at.count(i)?).map_err(|_| at.no("a count is above what a host's turn keeps"))
 }
 
 /// The list of texts of column `i` of `at`.
@@ -204,6 +214,8 @@ pub(crate) fn runs_of(tables: &Tables) -> Result<Vec<Run>, OpsError> {
             applied: kinds(&at, 4)?,
             skipped_because,
             reason: at.text(6)?.unwrap_or_default(),
+            offered_again: small(&at, 8)?,
+            baked_beats: small(&at, 9)?,
         };
         let position = at.position(7)?;
         let (_, _, hosts) = runs

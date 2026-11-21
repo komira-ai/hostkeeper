@@ -172,9 +172,9 @@ fn the_release_before_runs_on_a_database_with_0029_and_this_one_on_its() {
     let (store, _) = old.open("this release").expect("this release starts on it");
     store.stop();
     assert_eq!(
-        old.rows("SELECT version FROM schema_version WHERE version > 28"),
-        [vec![Some("29".to_owned())]],
-        "0029 alone ran"
+        old.rows("SELECT version FROM schema_version WHERE version > 28 ORDER BY version"),
+        [vec![Some("29".to_owned())], vec![Some("30".to_owned())]],
+        "0029 ran, and 0030 after it"
     );
     assert_eq!(count(&old, "maintenance_runs"), "0");
     assert_eq!(count(&old, "maintenance_hosts"), "0");

@@ -103,6 +103,9 @@ enum HostGroupsRefusal {
   // FAILED_PRECONDITION: retired. No call answers it, since there is no built-in group; the number
   // is kept so that it is never given another meaning.
   HOST_GROUPS_REFUSAL_RESERVED_HOST_GROUP = 16;
+  // FAILED_PRECONDITION: `Move` of a host in its turn of a maintenance run: from the order that
+  // starts it (staging) until it is done or deferred, halted and not back included.
+  HOST_GROUPS_REFUSAL_HOST_IN_MAINTENANCE = 17;
 }
 
 // A group's body, as `Put` takes it and the answers carry it.
