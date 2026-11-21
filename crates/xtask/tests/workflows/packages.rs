@@ -17,8 +17,10 @@
 //!   repository without the settings gets a green job that did nothing;
 //! - every job runs the xtask of the newest release's commit, the files of that release's own
 //!   artifact, and a `--session-name` that starts with the product's prefix;
-//! - the last attempt of a write passes `--last` (the third of `testing` and `stable`; the only one
-//!   of `testing-fail`, hello's failing build, which no stage of `promote-check` waits for), the
+//! - the last attempt of a write passes `--last` ([`last_attempt`]: the third of `testing` and of
+//!   the rpm tree of `stable`, the fifth of the apt index of `stable`, which every product of the
+//!   repository promotes into; the only one of `testing-fail`, hello's failing build, which no
+//!   stage of `promote-check` waits for), the
 //!   writes of `stable` pass `--no-pool`, and a job names only the suite its row says;
 //! - `docker` is run only by the two install checks, with an image pinned by digest, in the
 //!   one command each is allowed ([`docker_line_ok`]);
@@ -138,8 +140,8 @@ pub struct Row {
     pub verbs: Vec<String>,
     /// Whether it starts with its gate.
     pub gated: bool,
-    /// For a write: its attempt, the last attempt of its family (3, or 1 for `testing-fail`),
-    /// and whether it writes the pool.
+    /// For a write: its attempt, the last attempt of its family ([`last_attempt`]), and whether
+    /// it writes the pool.
     pub write: Option<(usize, usize, bool)>,
     /// The `--suite` values it passes, sorted and without duplicates.
     pub suites: Vec<&'static str>,
@@ -156,6 +158,28 @@ fn suffix(attempt: usize) -> String {
         String::new()
     } else {
         format!("-{attempt}")
+    }
+}
+
+/// The number of attempts of the jobs of `kind` (`apt`, `rpm`) for `suite`: one for
+/// `testing-fail`, whose build is never promoted; five for the apt index of `stable`, the one
+/// index every product of the repository promotes into, which another product's promotion often
+/// writes between an attempt's read and its write (no job waits for the promotion, so the extra
+/// attempts hold nothing back); three for the others.
+pub fn last_attempt(suite: &str, kind: &str) -> usize {
+    match (suite, kind) {
+        ("testing-fail", _) => 1,
+        ("stable", "apt") => 5,
+        _ => 3,
+    }
+}
+
+/// The ordinal of `n` in words, for the attempt counts of [`last_attempt`].
+fn ordinal(n: usize) -> &'static str {
+    match n {
+        1 => "only",
+        3 => "third",
+        _ => "fifth",
     }
 }
 
@@ -287,11 +311,7 @@ fn attempt_row(suite: &'static str, kind: &str, step: &str, attempt: usize) -> R
         permissions,
         verbs,
         gated: true,
-        write: (step == "write").then_some((
-            attempt,
-            if suite == "testing-fail" { 1 } else { 3 },
-            !stable,
-        )),
+        write: (step == "write").then_some((attempt, last_attempt(suite, kind), !stable)),
         suites,
     }
 }
@@ -323,7 +343,7 @@ pub fn rows() -> Vec<Row> {
     )];
     for kind in ["apt", "rpm"] {
         for step in ["read", "index", "write"] {
-            for attempt in 1..=3 {
+            for attempt in 1..=last_attempt("testing", kind) {
                 rows.push(attempt_row("testing", kind, step, attempt));
             }
         }
@@ -413,7 +433,7 @@ pub fn rows() -> Vec<Row> {
     ));
     for kind in ["apt", "rpm"] {
         for step in ["read", "index", "write"] {
-            for attempt in 1..=3 {
+            for attempt in 1..=last_attempt("stable", kind) {
                 rows.push(attempt_row("stable", kind, step, attempt));
             }
         }
@@ -635,7 +655,7 @@ fn row_problems(row: &Row, job: &Node) -> Vec<String> {
         if has_flag(&calls, verb, "--last") != (attempt == last) {
             say(format!(
                 "passes --last exactly in the {} attempt, which fails on a lost race instead of asking for another",
-                if last == 1 { "only" } else { "third" }
+                ordinal(last)
             ));
         }
         if has_flag(&calls, verb, "--no-pool") == pool {
