@@ -349,7 +349,7 @@ The states, as the daemon reports them in `HeartbeatRequest.full_disk_access`:
 
 When: once at the start of the daemon, and again when a heartbeat reads the state and the last
 check is 60 seconds old or more (`RECHECK_SECS`, on the daemon's unix clock), so a profile
-installed or removed shows within about a minute with no restart. The daemon logs one line at the
+installed or removed shows at the first heartbeat 60 seconds or more after the last check, with no restart. The daemon logs one line at the
 start (`full disk access: granted`) and one line whenever the state changes
 (`full disk access: not_granted -> granted`); a check that finds the same state logs nothing.
 
@@ -358,8 +358,8 @@ until the host's next heartbeat; a number it does not know reads as `UNSPECIFIED
 `hk hosts get --node-id <host>` answers it as `host.fullDiskAccess` (`hosts list` too). A host
 reporting `NOT_GRANTED` or `UNDETERMINED` is shown as that. The Host page's Overview has a
 "Full Disk Access" row for a Mac (`granted`, `not granted`, `not determined`, or `not reported`
-for a Mac whose daemon says nothing), and a warning line naming the profile's document while the
-grant is not granted; a host that is not a Mac shows no row.
+for a Mac whose last heartbeat the coordinator holds but which carries no state), and a warning line naming the profile's document while the
+grant is not granted; a host that is not a Mac, or whose heartbeat the coordinator does not hold (since its start), shows no row.
 
 ### The Remote Login probe
 

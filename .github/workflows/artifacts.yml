@@ -479,16 +479,6 @@ jobs:
           retention-days: 90
           if-no-files-found: error
 
-  # macos-arm64 on a GitHub-hosted Apple silicon runner, so the binary runs where it is built: the
-  # binary tarball, its SBOM and hostkeeper's own package as for Linux (the package has no unit:
-  # the daemon's launchd job is the plist of the installer), hello's two packages (their units
-  # are the plists of its two slots), and the installer pkg of a Mac's first
-  # install (a distribution pkg: productbuild around the component pkgbuild makes), read back from
-  # the built pkg and checked here. No deb, rpm or coordinator on macOS.
-  # The pkgs built here, the installer and hello's .pkg, are unsigned and are not release files:
-  # they go to their own artifact, `pkg-unsigned-macos-arm64`, which sign-pkg signs and check-pkg
-  # checks and publishes, so each pkg SHA256SUMS lists and attest attests is the signed one. The runner's `gtar` is GNU tar, so
-  # the tarball is made as on Linux.
   # The four Mach-O programs of macos-arm64, compiled and nothing else: no secret reaches this job,
   # which runs repository code (build scripts and dependencies). They are signed by sign-code, a
   # job that runs none, and packaged by build-macos.
@@ -616,6 +606,17 @@ jobs:
           retention-days: 90
           if-no-files-found: error
 
+  # macos-arm64 on a GitHub-hosted Apple silicon runner, so the binary runs where it is built: the
+  # binary tarball, its SBOM and hostkeeper's own package as for Linux (the package has no unit:
+  # the daemon's launchd job is the plist of the installer), hello's two packages (their units
+  # are the plists of its two slots), and the installer pkg of a Mac's first
+  # install (a distribution pkg: productbuild around the component pkgbuild makes), read back from
+  # the built pkg and checked here. No deb, rpm or coordinator on macOS.
+  # The pkgs built here, the installer and hello's .pkg, are unsigned and are not release files:
+  # they go to their own artifact, `pkg-unsigned-macos-arm64`, which sign-pkg signs and check-pkg
+  # checks and publishes, so each pkg SHA256SUMS lists and attest attests is the signed one. The runner's `gtar` is GNU tar, so
+  # the tarball is made as on Linux. Its four programs are compile-macos's, signed by sign-code on a
+  # push to main and as the linker signed them (ad hoc) on a run by hand.
   build-macos:
     name: macos-arm64
     needs: [version, compile-macos, sign-code]

@@ -232,18 +232,19 @@ fn the_real_listing_reads_a_directory_and_fails_for_anything_else() {
     assert!(HostTccDirectory::at(inside).list().is_err());
 }
 
-/// Proves: over a real directory the source reads what the system says: a directory with no
-/// permission is not granted to a user who is refused it, and listed by root, who is not; a
-/// directory that is not there is undetermined.
+/// Proves: over real directories the source reads what the system says: a directory it may list
+/// is granted, and a directory that is not there is undetermined. The refusal of the system (the
+/// kind `PermissionDenied`) is mapped by the fake's tests above: a real refusal would depend on the
+/// test's user, since root lists a directory of mode 0, so no test here relies on one.
 ///
-/// Catches: the kind of the system's refusal not mapped to not granted, and a missing directory
-/// mapped to it.
+/// Catches: a listing that succeeds read as anything but granted, and a missing directory read
+/// as not granted.
 #[test]
 fn over_real_directories_the_source_maps_the_systems_answer() {
     let scratch = scratch("fda-real");
-    let closed = scratch.path().join("closed");
-    fs::create_dir(&closed).expect("make the directory");
-    fs::set_permissions(&closed, fs::Permissions::from_mode(0o000)).expect("close it");
+    let open = scratch.path().join("open");
+    fs::create_dir(&open).expect("make the directory");
+    fs::write(open.join("entry"), b"").expect("one entry");
     let rig = Rig::new();
     let source = |path| {
         HostFullDiskAccess::new(
@@ -253,18 +254,11 @@ fn over_real_directories_the_source_maps_the_systems_answer() {
             rig.log.clone(),
         )
     };
-    let root = rustix::process::geteuid().is_root();
-    let want = if root {
-        FullDiskAccess::Granted
-    } else {
-        FullDiskAccess::NotGranted
-    };
-    assert_eq!(source(closed.clone()).full_disk_access(), want);
+    assert_eq!(source(open).full_disk_access(), FullDiskAccess::Granted);
     assert_eq!(
         source(scratch.path().join("absent")).full_disk_access(),
         FullDiskAccess::Undetermined
     );
-    fs::set_permissions(&closed, fs::Permissions::from_mode(0o700)).expect("open it again");
 }
 
 /// Proves: the host's source on a Linux host answers not applicable.
@@ -274,10 +268,7 @@ fn over_real_directories_the_source_maps_the_systems_answer() {
 fn the_hosts_source_on_linux_is_not_applicable() {
     let rig = Rig::new();
     let source = at_host(PlatformKind::Linux, rig.clock.clone(), rig.log.clone());
-    assert_eq!(
-        source.expect("a source").full_disk_access(),
-        FullDiskAccess::NotApplicable
-    );
+    assert_eq!(source.full_disk_access(), FullDiskAccess::NotApplicable);
     assert!(rig.log.lines().is_empty());
 }
 

@@ -530,7 +530,11 @@ pub fn host_links(
         link: Arc::new(link),
         certs,
         bmc: crate::bmc::at_host(kind, Arc::clone(&clock)),
-        full_disk_access: crate::full_disk_access::at_host(kind, Arc::clone(&clock), log.clone()),
+        full_disk_access: Some(crate::full_disk_access::at_host(
+            kind,
+            Arc::clone(&clock),
+            log.clone(),
+        )),
         clock,
         log,
         sleeper: Box::new(ClockSleeper::new(Arc::clone(&ctx.clock), stop.clone())),

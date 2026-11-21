@@ -29,7 +29,7 @@ Three pieces make the grant durable:
    `SystemPolicyAllFiles` to `dev.hostkeeper.hostkeeper` by that requirement
    ([its README](../../packaging/macos-mdm/README.md)). Only hostkeeper is named: the other programs
    need no grant.
-3. **Knowing.** hostkeeper checks at start, and again within a minute of any change, whether the
+3. **Knowing.** hostkeeper checks at start, and again at the first heartbeat 60 seconds or more after its last check, whether the
    grant is in force, and reports it in every heartbeat; `hk hosts get --node-id <host>` shows it as
    `host.fullDiskAccess`, and the host page says when it is missing ([docs/macos.md](../macos.md),
    "Full Disk Access").
@@ -112,8 +112,10 @@ On a Mac, as an administrator, with the release signed by step 1 installed:
    The first shows `Identifier=dev.hostkeeper.hostkeeper`, `TeamIdentifier=U7RTX4XD3X`, the runtime
    flag and a timestamp; the second prints `designated =>` followed by exactly the profile's
    `CodeRequirement`.
-3. hostkeeper's own check: the daemon's log (`/var/log/hostkeeper/`) has the line of the check at
-   start; `hk hosts get --node-id <host>` answers `"fullDiskAccess": "FULL_DISK_ACCESS_GRANTED"`.
+3. hostkeeper's own check: the daemon's log `/var/log/hostkeeper/daemon.err.log` has a line
+   ending `full disk access: granted` from the check at start (or a line
+   `full disk access: not_granted -> granted` when the grant arrived while it ran);
+   `hk hosts get --node-id <host>` answers `"fullDiskAccess": "FULL_DISK_ACCESS_GRANTED"`.
 4. The grant does what it is for: `sudo log show --last 10m --predicate 'subsystem == "com.apple.TCC"'`
    shows the check of `dev.hostkeeper.hostkeeper` for `kTCCServiceSystemPolicyAllFiles` allowed.
 

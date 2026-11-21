@@ -13,7 +13,7 @@ const BINARY: &str = "unpacked/hostkeeper";
 
 /// What `codesign --display --verbose=2` prints (to stderr) of hostkeeper signed by the release.
 const DISPLAY: &str = "\
-Executable=/Users/runner/unpacked/hostkeeper
+Executable=/scratch/unpacked/hostkeeper
 Identifier=dev.hostkeeper.hostkeeper
 Format=Mach-O thin (arm64)
 CodeDirectory v=20500 size=1234 flags=0x10000(runtime) hashes=30+2 location=embedded
@@ -30,7 +30,7 @@ Internal requirements count=1 size=200
 
 /// What `codesign --display --verbose=2` prints of a program the linker signed ad hoc.
 const ADHOC: &str = "\
-Executable=/Users/runner/unpacked/hostkeeper
+Executable=/scratch/unpacked/hostkeeper
 Identifier=hostkeeper-5555555555555555
 Format=Mach-O thin (arm64)
 CodeDirectory v=20400 size=800 flags=0x20002(adhoc,linker-signed) hashes=20+0 location=embedded
@@ -43,7 +43,7 @@ Internal requirements=none
 
 fn requirements(program: &str) -> String {
     let want = MacProgram::named(program).expect("a program").requirement();
-    format!("Executable=/Users/runner/unpacked/{program}\ndesignated => {want}\n")
+    format!("Executable=/scratch/unpacked/{program}\ndesignated => {want}\n")
 }
 
 fn ran(success: bool, text: &str) -> Result<Codesigned, PortError> {

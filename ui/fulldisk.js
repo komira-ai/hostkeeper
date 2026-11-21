@@ -2,8 +2,9 @@
 // said (`fullDiskAccess` of Hosts.Get, the enum's name; absent when unspecified). The Host page's
 // Overview shows it as one row, "Full Disk Access", for a host that reports a state, and a warning
 // under the row while the grant is not in force. A host that is not a Mac has no such grant, so it
-// shows no row; a Mac whose daemon predates the field (or that the coordinator has not heard since
-// it started) shows "not reported". The functions here are pure: no call is made.
+// shows no row, and so does a host whose heartbeat the coordinator does not hold (the platform is
+// read from it); a Mac whose last heartbeat carries no state (a daemon that predates the field)
+// shows "not reported". The functions here are pure: no call is made.
 
 import { h } from "./view.js";
 

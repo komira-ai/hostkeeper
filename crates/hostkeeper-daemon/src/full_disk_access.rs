@@ -151,9 +151,9 @@ pub fn at_host(
     kind: PlatformKind,
     clock: Arc<dyn UnixClock>,
     log: Arc<dyn Log>,
-) -> Option<Arc<dyn FullDiskAccessSource>> {
+) -> Arc<dyn FullDiskAccessSource> {
     let tcc = Arc::new(HostTccDirectory::host());
-    Some(Arc::new(HostFullDiskAccess::new(kind, tcc, clock, log)))
+    Arc::new(HostFullDiskAccess::new(kind, tcc, clock, log))
 }
 
 #[cfg(test)]
