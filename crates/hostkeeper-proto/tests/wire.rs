@@ -779,6 +779,10 @@ fn wire_names_are_pinned() {
                 "xcode_release_waiting",
                 "xcode_version_taken",
                 "updates_due",
+                "failed_update",
+                "host_halt",
+                "maintenance_halted",
+                "maintenance_not_back",
             ],
         ),
         (

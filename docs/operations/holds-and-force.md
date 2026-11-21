@@ -126,17 +126,25 @@ the JSON heartbeat route; any other waits for the next heartbeat over gRPC.
   and it refuses every order of the service (`halted`) until it is told a halt generation above the
   one in its `held-halt` file. Its heartbeat reports that halt (`ServiceBeat.local_halt`: the
   reason, the generation it holds and how long ago that generation was written), and `Hosts.Get`
-  and `Releases.Status` show it in the host's beat. With no halt of the coordinator standing, the
-  host's gate reason is `halted_here`, or `stale_halt_here` when the generation it holds is above
-  any this coordinator has issued (a generation of the coordinator it heard before, which no
-  generation this one counts up to will reach); never `failed_here`. `Releases.ClearHalt` of the
-  service lifts it: it is accepted while any host reports such a halt, even with no halt standing
-  (the `clear_halt` entry then names no host), and the generation it issues is one past both the
-  service's last one and the highest a host reports holding, so every such host lifts its halt at
-  its next heartbeat. The clear also sets aside each such host's `halted` refusal, as
-  `Hosts.Retry` does, so the host is ordered the desired version once it reports the halt lifted;
-  a report of the hook's own halt (phase `halt`) is not set aside and stands until `Hosts.Retry`.
-  What is set aside is kept in memory only: after a coordinator restart, `Hosts.Retry` does it.
+  and `Releases.Status` show it in the host's beat. It is an alert while the host reports it
+  (`host_halt`, critical: `Alerts.List` gives its reason and, in `since_unix`, when the host
+  wrote it, by the age it reports, and an error line with `alert=host_halt` is logged once when
+  it appears), so a halt a host keeps after its cause is gone is seen, with its age; the message
+  says when the generation the host holds is above any this coordinator issued (a halt of an
+  earlier coordinator). The host takes no place in its plan's count of hosts to order: a plan
+  whose every host left to order holds such a halt holds no other service
+  ([rollout-plans.md](rollout-plans.md#across-services---live-rollouts)). With no halt of the
+  coordinator standing, the host's gate reason is `halted_here`, or `stale_halt_here` when the
+  generation it holds is above any this coordinator has issued (a generation of the coordinator it
+  heard before, which no generation this one counts up to will reach); never `failed_here`.
+  `Releases.ClearHalt` of the service lifts it: it is accepted while any host reports such a halt,
+  even with no halt standing (the `clear_halt` entry then names no host), and the generation it
+  issues is one past both the service's last one and the highest a host reports holding, so every
+  such host lifts its halt at its next heartbeat. The clear also sets aside each such host's
+  `halted` refusal, as `Hosts.Retry` does, so the host is ordered the desired version once it
+  reports the halt lifted; a report of the hook's own halt (phase `halt`) is not set aside and
+  stands until `Hosts.Retry`. What is set aside is kept in memory only: after a coordinator restart,
+  `Hosts.Retry` does it.
 - A host keeps a `held-halt` file of a service (`<state-dir>/<service>/held-halt`) only while it
   holds a halt of that service. Every heartbeat reply names the generation of each service that
   has one, to every host, after a clear of any host's halt; a host that holds no halt of the
@@ -170,19 +178,23 @@ the JSON heartbeat route; any other waits for the next heartbeat over gRPC.
   version it failed. A host whose last report of a service is a failure of the desired version is
   not ordered that version again (gate reason `failed_here`), and neither clearing the halt the
   failure raised nor excluding and including the host changes that: the report stands until the
-  host reports another. The call sets the report aside, so the host is ordered the desired
-  version at its next heartbeat, as the plan and the other rules let it, at the try after the
-  failed one; the report's try still counts, so the daemon never sees the failed try again. A
-  halt the failure raised is not lifted by it: clear the halt first (`Releases.ClearHalt`).
-  Until the host answers, `Releases.Status` and `Hosts.Get` show the new order as the host's
-  `order` (its id, try and version) and no last update; the report set aside is shown by no
-  call but the answer. It is set aside until the host reports another, or the same one again
-  after it was seen updating, so a failure of the new try is read, raises a halt and holds the
-  host back as any failure does. It answers the report, with the `retry` audit entry; asked
+  host reports another. Each such host is an alert (`failed_update`, critical: `Alerts.List`
+  gives the version, the report's `reason` and `detail` and its try in `tries`, and an error line
+  with `alert=failed_update` is logged once when it appears), until the host reports another
+  outcome, another version is set, or the host is excluded or leaves its group; a `halted`
+  refusal is the host's own halt (`host_halt`) and no failed update. The call sets the report
+  aside, so the host is ordered the desired version at its next heartbeat, as the plan and the
+  other rules let it, at the try after the failed one; the report's try still counts, so the daemon
+  never sees the failed try again. A halt the failure raised is not lifted by it: clear the halt
+  first (`Releases.ClearHalt`). Until the host answers, `Releases.Status` and `Hosts.Get` show the
+  new order as the host's `order` (its id, try and version) and no last update; the report set aside
+  is shown by no call but the answer. It is set aside until the host reports another, or the same
+  one again after it was seen updating, so a failure of the new try is read, raises a halt and holds
+  the host back as any failure does. It answers the report, with the `retry` audit entry; asked
   again while the report is set aside, it answers the report and audits nothing. It is refused
-  `nothing_to_retry` when the host's last report of the service is not a failure, when it has
-  none, and when it failed the version it runs (a halt after its switch, which a force repairs),
-  and `store_failed` or `audit_unavailable`, with nothing set aside, when its audit line cannot be
+  `nothing_to_retry` when the host's last report of the service is not a failure, when it has none,
+  and when it failed the version it runs (a halt after its switch, which a force repairs), and
+  `store_failed` or `audit_unavailable`, with nothing set aside, when its audit line cannot be
   written. What is set aside is kept in memory only: after a restart of the coordinator, the
   operator asks again.
 - `Hosts.Exclude` takes a host out of a service. Its update slot stays held while the host runs

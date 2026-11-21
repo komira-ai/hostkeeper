@@ -1171,3 +1171,29 @@ fn the_remove_button_of_a_trusted_publisher_is_the_danger_button() {
     );
     assert_eq!(out["out"], json!(["danger", "danger"]));
 }
+
+#[test]
+fn a_plan_with_nothing_to_order_says_so_in_its_group_row() {
+    // Catches: a plan whose every host left to order is held by a rule of its own host
+    // (`PLAN_WAIT_NOTHING_TO_ORDER`) shown as the bare enum name, as no wait, or as another
+    // service's live rollout.
+    let mut ui = Ui::start();
+    let mut stuck = running_plan();
+    stuck["waiting"] = json!("PLAN_WAIT_NOTHING_TO_ORDER");
+    script(&ui, vec![web_status(web_hosts(), stuck), db_status()]);
+    let out = package(
+        &mut ui,
+        r#"{ package: "api" }"#,
+        "[]",
+        r#"return { web: text(named(tree, "group-web")[0]) };"#,
+    );
+    let web = out["out"]["web"]
+        .as_str()
+        .expect("text")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(web.contains("No host it can order"), "{web}");
+    assert!(!web.contains("NOTHING_TO_ORDER"), "{web}");
+    assert!(!web.contains("Another rollout is live"), "{web}");
+}

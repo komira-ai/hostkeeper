@@ -30,8 +30,8 @@ It is made of two programs:
   puts the daemon and its config on them ([macOS](docs/macos.md)); the coordinator no longer runs an
   MDM of its own ([coordinator-mdm.md](docs/design/coordinator-mdm.md), superseded). The operator
   API serves a `Maintenance` service whose runs the coordinator stores: `Maintenance.Schedule`,
-  `Maintenance.List`, `Maintenance.Get` and `Maintenance.Cancel`. Only `Maintenance.RetryHost` and
-  `Maintenance.PutBack` answer `UNIMPLEMENTED` until their handlers land.
+  `Maintenance.List`, `Maintenance.Get` and `Maintenance.Cancel`; `Maintenance.RetryHost` and
+  `Maintenance.PutBack` queue an operator's act for the daemon of a host whose turn halted.
 
 Every API is a protobuf service, and the command line is generated from those definitions.
 

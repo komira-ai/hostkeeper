@@ -99,6 +99,12 @@ plan: its stages with their sizes and hosts, each host `waiting`, `updating`, `b
 | `updating` | the stage's hosts are updating |
 | `deferring` | the hosts left to order declined the update and wait out their backoff |
 | `baking` | the stage's hosts are updated and baking |
+| `nothing_to_order` | every host the plan has left to order is held by a rule of its own host (it holds a halt of its own, its install waits `install_order`, it is `moving`, another update runs on it): the plan takes no place of `--live-rollouts` (below), and each host's gate reason says which rule holds it |
+
+A plan that takes no place of `--live-rollouts` (it is not live and nothing of it can be ordered
+now: `failed_host`, `manual_advance`, `below_min_up`, `deferring`, `nothing_to_order`, a pause or a
+halt) says its own reason, never `rollout_elsewhere`: what holds it is its own, not the services
+that roll meanwhile.
 
 Each host's gate reason names its stage. `paused`, `advance_wait`, `stage_failed`, `stage_wait`,
 `below_min_up` and `rollout_elsewhere` are the reasons the plan adds; `no_slot` means the
@@ -199,10 +205,50 @@ host, by one of:
 - setting another desired version, by hand or by CI, which starts the plan over (a version set by an
   operator over a failure acknowledges the failures standing).
 
+Every failed host is an alert of `Alerts.List` (`hk alerts list`), so the operator's tooling that
+polls it tells a person at once: `failed_update`, critical, one for each host and service whose
+last report is a failure of the group's desired version, with the version, the report's `reason`
+and `detail` and its try (`tries`), first observed when this coordinator first saw it. It clears
+when the host reports another outcome (it reaches the version, or a new try is under way: a report
+`Hosts.Retry` set aside is none), when another version is set, or when the host is excluded or
+leaves its group. A host that holds a halt of its own is `host_halt` instead
+([holds-and-force.md](holds-and-force.md#marks)). A plan held by its failed host holds no other
+service: it says `failed_host`, and the other services of every group roll meanwhile.
+
 Failures that reach the rollback threshold (the larger of `rollback_after_failed.percent` of the
 service's live hosts and its `min_hosts`) mark the version bad, which halts the plan, and with
 `rollback = "automatic"` set the desired version back to the last good one; that is checked at
 every heartbeat that brings a verdict, so it can be reached in the middle of a stage.
+
+## Example: one host fails
+
+A fleet of two groups, the coordinator at the default `--live-rollouts 1`: `build` of six Linux
+build nodes listing `hostkeeper` and `tierstore`, with `stages = [50, 100]`, and `mac` of four
+Macs listing `hostkeeper`, `tierstore-config` and `tierstore`, with `stages = [25, 100]`. CI
+sets `tierstore-config` 2.0 in `mac`, then `tierstore` 2.0 in `mac`, then `hostkeeper` 2.0 in both
+groups.
+
+1. The first Mac is ordered the install of `tierstore-config` (stage 1 of 2: one host). Its
+   install fails before commit (`manifest_invalid`): the Mac is `failed_here`, the other three
+   wait `stage_failed`, and the plan waits `failed_host`. `hk alerts list` answers one
+   `failed_update` alert: that Mac, `tierstore-config`, 2.0, reason `manifest_invalid`, its
+   `detail`, try 1.
+2. `tierstore` is listed after `tierstore-config`: every Mac waits `install_order`, so its plan
+   says `nothing_to_order` and takes no place in the queue, though its version was set before
+   `hostkeeper`'s.
+3. So `hostkeeper` is the one live rollout, in both groups at once, as each group's stages and
+   `max_updating` let it: three build nodes and one Mac, then the rest. Nothing waits on
+   `tierstore-config` or `tierstore`.
+4. An operator reads the alert, fixes the package and sets `tierstore-config` 2.1. The failed
+   report is not of the desired version any more, so the alert clears; the plan starts over,
+   and its first install takes the next place once `hostkeeper` is no longer live. When the
+   config is on a Mac, `tierstore` has a host it can order there and takes its place in the queue
+   again.
+
+Had a build node kept a halt of `hostkeeper` of its own instead (`halted_here`), with the five
+others done, the plan would say `nothing_to_order` and hold no other service, and
+`host_halt` would list the node with the halt's reason and when it wrote it, until an operator
+clears it (`Releases.ClearHalt`).
 
 ## Across services: `--live-rollouts`
 
@@ -214,28 +260,38 @@ their desired versions were set, and the coordinator orders them in that order: 
 is held (`rollout_elsewhere`, the status names the services ahead as `QUEUED` and gives the
 plan's `queue_position`) even when the earlier one has no host updating at the moment. A service
 that nothing can order (halted, at a version marked bad, paused, held by a failed host, waiting for an Advance or for `min_up`, or whose
-hosts that have not started all defer) takes no place in the queue. On the database store the order is the number each desired version was set under
-(`desired.set_seq` and `group_desired.set_seq`, taken from the sequence `desired_seq` in the
-transaction that sets it, `store/postgres/queue_seq.rs`), so every coordinator on the database
-queues the services alike and a restart changes nothing. Over the files the order is kept in
-memory; after a coordinator restart the services that were waiting queue by their group's last
-change, then by group and package name. A rollout that is live is never held by the others. A rollout is live when one of its hosts runs an update (updating,
-its promotion pending, or under an order) or bakes the desired version, or when its plan has
-started a host and still has one to order (a paused plan and one waiting for an Advance are live).
-A failed host does not make its service live: it still counts against its own group's
-`max_updating`, but a halted service, a version marked bad, a plan held by a failed host and a
-service whose only occupants are failed hosts order nothing until an operator acts, so they hold
-no other service. A bake counts only for a host of the plan (live, in the group, neither excluded nor
-held, picked a package of the version) that the coordinator saw update: a host the release picks
-no package for (`no_build_for_host`), an excluded or held host, a host that stopped heartbeating,
-and a host the coordinator first heard after it started already at the version (after a restart,
-it cannot tell whether the host updated) bake nothing that holds another service. So a service
-whose every host runs its desired version, with nothing updating or ordered, holds no other. A
-service whose rollout is not live is told `rollout_elsewhere` while N others are, and its plan in
-`Releases.Status` names them (`waiting_on`) and, for each, why it is live and on which host
-(`waiting_on_why`: `updating`, `promotion_pending`, `ordered`, `baking` with the host, or
-`plan_under_way`); the web UI shows it as `rollout_elsewhere on hello (baking on db-5)`. A
-service that is live is never held by the others. The default keeps one service's rollout at a time in each group.
+hosts that have not started all defer or are held by a rule of their own host) takes no place in
+the queue. A host left to order is held by a rule of its own host when the decision would hold it
+before the plan's gate however the plan stood: it holds a halt of the service of its own
+(`halted_here`, `stale_halt_here`), its install waits for a package listed before it
+(`install_order`), it was moved into its group and is not admitted (`moving`), another service
+updates on it (`busy_elsewhere`), or its agent cannot take the order. Such a service gets its
+place back, by when its version was set, at the first decision that finds one of its hosts
+orderable again; a service that is live meanwhile is never held by it. On the database store the
+order is the number each desired version was set under (`desired.set_seq` and
+`group_desired.set_seq`, taken from the sequence `desired_seq` in the transaction that sets it,
+`store/postgres/queue_seq.rs`), so every coordinator on the database queues the services alike and a
+restart changes nothing. Over the files the order is kept in memory; after a coordinator restart the
+services that were waiting queue by their group's last change, then by group and package name. A
+rollout that is live is never held by the others. A rollout is live when one of its hosts runs an
+update (updating, its promotion pending, or under an order) or bakes the desired version, or when
+its plan has started a host and still has one it can order now (a paused plan and one waiting for an
+Advance are live). A plan under way whose every host left is held by a rule of its own host is not
+live: one host that keeps a halt of its own for hours holds no other service meanwhile. A failed
+host does not make its service live: it still counts against its own group's `max_updating`, but a
+halted service, a version marked bad, a plan held by a failed host and a service whose only
+occupants are failed hosts order nothing until an operator acts, so they hold no other service. A
+bake counts only for a host of the plan (live, in the group, neither excluded nor held, picked a
+package of the version) that the coordinator saw update: a host the release picks no package for
+(`no_build_for_host`), an excluded or held host, a host that stopped heartbeating, and a host the
+coordinator first heard after it started already at the version (after a restart, it cannot tell
+whether the host updated) bake nothing that holds another service. So a service whose every host
+runs its desired version, with nothing updating or ordered, holds no other. A service whose rollout
+is not live is told `rollout_elsewhere` while N others are, and its plan in `Releases.Status` names
+them (`waiting_on`) and, for each, why it is live and on which host (`waiting_on_why`: `updating`,
+`promotion_pending`, `ordered`, `baking` with the host, or `plan_under_way`); the web UI shows it as
+`rollout_elsewhere on hello (baking on db-5)`. A service that is live is never held by the others.
+The default keeps one service's rollout at a time in each group.
 
 ## What a restart keeps
 

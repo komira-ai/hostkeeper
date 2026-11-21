@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use hostkeeper_proto::hostkeeper::agent::v1::{PrerequisiteStatus, PrerequisitesReport};
 use hostkeeper_wire::HostId;
 
-use super::{Alert, Kind, Subject};
+use super::{Alert, Kind, Said, Subject};
 use crate::fleet::Fleet;
 
 /// `prerequisite_failed`: each host of the fleet whose last heartbeat announced
@@ -44,6 +44,7 @@ pub(super) fn prerequisite_failures(
                      needs",
                     failed.join("; ")
                 ),
+                said: Said::default(),
             })
         })
         .collect()

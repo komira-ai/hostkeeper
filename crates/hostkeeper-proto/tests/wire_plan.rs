@@ -195,6 +195,7 @@ fn wire_names_of_the_update_plan_are_pinned() {
                 "updating",
                 "deferring",
                 "baking",
+                "nothing_to_order",
             ],
         ),
         (

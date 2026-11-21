@@ -1,15 +1,13 @@
 //! `Maintenance` on the operator API end to end, through `crate::grpc::route` as the private
 //! listener serves it, once over gRPC and once over the JSON gateway: `Schedule`, `List`, `Get`
 //! and `Cancel` over hosts that heartbeat a maintenance report, the status of each refusal, the
-//! operator's credential alone, and `RetryHost` and `PutBack`, which answer `UNIMPLEMENTED`. No
-//! socket.
+//! operator's credential alone, and `RetryHost` and `PutBack` of a halted host. No socket.
 
 use std::sync::Arc;
 
 use hostkeeper_enrollment::enroll::records::MemoryRecords;
 use hostkeeper_proto::hostkeeper::agent::v1 as agent;
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
-use hostkeeper_proto::hostkeeper::operator::v1::maintenance_server::Maintenance as Api;
 use hostkeeper_proto::hostkeeper::operator::v1::{
     MaintenanceHostStep as HostStep, MaintenanceSkip, MaintenanceState,
 };
@@ -18,16 +16,15 @@ use tonic::Code;
 
 use super::heartbeat::{beat, proto_message, svc, updater};
 use super::rollouts::{Refused, WIRES, Wire, rpc};
-use super::support::{call, grpc_request};
 use crate::enrollment::tests::support::Rig as EnrollmentRig;
-use crate::grpc::operator_maintenance::MaintenanceService;
 use crate::host_groups_support::{SELF, UNIX, body, coordinator_on, enroll_host, move_of, put_of};
-use crate::http::Surface;
 use crate::maintenance::FEATURE;
 use crate::marks_support::operator;
 use crate::service::Coordinator;
 use crate::store::Fake;
 use crate::testutil::{OPERATOR, Rig, ci_token};
+
+mod acts;
 
 const SCHEDULE: &str = "/hostkeeper.operator.v1.Maintenance/Schedule";
 const LIST: &str = "/hostkeeper.operator.v1.Maintenance/List";
@@ -721,50 +718,38 @@ async fn only_the_operator_reaches_the_maintenance_calls() {
     }
 }
 
-/// Proves: `RetryHost` and `PutBack` answer `UNIMPLEMENTED` with an empty message and no response
-/// message on the private listener, with the operator's token, with CI's and with none (the
-/// router refuses before it reads a credential); and the service itself, called directly,
-/// answers `UNIMPLEMENTED` with an empty message to each.
-///
-/// Catches: a method served before its handler lands, and an adapter that answers a call of
-/// either with a message or a token.
-#[tokio::test]
-async fn retry_host_and_put_back_answer_unimplemented() {
-    let world = Wired::new("grpc-maintenance-runs-unimplemented");
-    let ci = ci_token();
-    for path in [RETRY_HOST, PUT_BACK] {
-        for bearer in [Some(OPERATOR), Some(ci.as_str()), None] {
-            let request = grpc_request(path, (), bearer);
-            let answer = call(&world.coordinator, Surface::Control, &None, request).await;
-            assert_eq!(
-                answer,
-                (Code::Unimplemented, String::new(), None),
-                "{path} {bearer:?}"
-            );
-        }
+/// The `maintain` order of the run [`FIRST`]'s Linux host `a1` as the heartbeat handler answers it,
+/// with `action` under `order_try`.
+fn maintain_order(action: agent::MaintainAction, order_try: u64) -> agent::Order {
+    agent::Order {
+        order_id: format!("maintain-{FIRST}"),
+        r#try: order_try,
+        verb: Some(agent::order::Verb::Maintain(agent::Maintain {
+            run_id: FIRST.to_owned(),
+            action: action as i32,
+            kinds: vec![agent::MaintenanceKind::Linux as i32],
+            linux_scope: agent::LinuxScope::Security as i32,
+            drain_deadline_secs: None,
+            macos_path: agent::MacosPath::Install as i32,
+            xcodes: Vec::new(),
+            xcode_remove: Vec::new(),
+            xcode_default: String::new(),
+            return_secs: 1200,
+            macos_major: false,
+        })),
     }
+}
 
-    let service = MaintenanceService::new(Arc::clone(&world.coordinator));
-    let retried = service
-        .retry_host(tonic::Request::new(
-            proto::RetryMaintenanceHostRequest::default(),
-        ))
-        .await
-        .expect_err("not served");
-    assert_eq!(
-        (retried.code(), retried.message()),
-        (Code::Unimplemented, "")
-    );
-    let put_back = service
-        .put_back(tonic::Request::new(
-            proto::PutBackMaintenanceHostRequest::default(),
-        ))
-        .await
-        .expect_err("not served");
-    assert_eq!(
-        (put_back.code(), put_back.message()),
-        (Code::Unimplemented, "")
-    );
+/// The run record of [`FIRST`] a daemon reports for its turn at `step`, under the order of the
+/// first offer.
+fn run_state(step: agent::MaintenanceStep, reason: &str) -> Option<agent::MaintenanceRunState> {
+    Some(agent::MaintenanceRunState {
+        run_id: FIRST.to_owned(),
+        order_id: format!("maintain-{FIRST}"),
+        step: step as i32,
+        applied: Vec::new(),
+        halted_reason: reason.to_owned(),
+    })
 }
 
 /// Proves, through the heartbeat handler as the heartbeat listener mounts it: after a `Schedule`

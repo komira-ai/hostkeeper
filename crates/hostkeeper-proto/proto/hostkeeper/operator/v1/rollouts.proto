@@ -265,4 +265,9 @@ enum PlanWait {
   PLAN_WAIT_DEFERRING = 10;
   // The hosts of the current stage run the version, and some are still baking.
   PLAN_WAIT_BAKING = 11;
+  // Every host the plan has left to order is held by a rule of its own host, before the plan
+  // (the host holds a halt of its own, its install waits for a package listed before it, it is
+  // moving into its group, or another update runs on it): each host's gate reason says which. The
+  // plan takes no place of `--live-rollouts` and holds no other service until one can be ordered.
+  PLAN_WAIT_NOTHING_TO_ORDER = 12;
 }

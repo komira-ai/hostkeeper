@@ -89,6 +89,10 @@ fn alert() -> op::Alert {
         request_id: "ab".repeat(32),
         other_host_id: "db-1".to_owned(),
         host_group: "db-hosts".to_owned(),
+        reason: "config_missing".to_owned(),
+        detail: "there is no configuration file".to_owned(),
+        tries: 2,
+        since_unix: 1_799_999_000,
     }
 }
 

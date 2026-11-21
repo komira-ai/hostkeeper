@@ -682,7 +682,7 @@ Removes a sled that holds nothing: refused `in_use`, naming what stands on it, o
 
 ### `maintenance`
 
-The service `Maintenance` of the package `hostkeeper.operator.v1`. The maintenance runs. `Schedule`, `List`, `Get` and `Cancel` are served; `RetryHost` and `PutBack` answer `UNIMPLEMENTED` until their handlers land. Each call that changes something takes a reason and answers the audit entry it wrote, under the caller's name, with the caller's reason followed by `run <id>`: `maintenance_schedule` (with the host group as the entry's `host_group` when the run names one), `maintenance_cancel`, `maintenance_retry_host` and `maintenance_put_back` (each with the host as the entry's `node_id`). `List`, `Get` and a `Schedule` without `confirm` change nothing and write no audit entry.
+The service `Maintenance` of the package `hostkeeper.operator.v1`. The maintenance runs. Each call that changes something takes a reason and answers the audit entry it wrote, under the caller's name, with the caller's reason followed by `run <id>`: `maintenance_schedule` (with the host group as the entry's `host_group` when the run names one), `maintenance_cancel`, `maintenance_retry_host` and `maintenance_put_back` (each with the host as the entry's `node_id`). `List`, `Get` and a `Schedule` without `confirm` change nothing and write no audit entry.
 
 #### `hk maintenance schedule`
 
@@ -749,7 +749,9 @@ until it is put back: `PutBack` is still taken. Audited `maintenance_cancel`.
 `/hostkeeper.operator.v1.Maintenance/RetryHost`
 
 Retry a halted host's turn from the step that failed: its daemon is ordered the run again
-(`MAINTAIN_ACTION_RETRY`) with a new try. Audited `maintenance_retry_host`.
+(`MAINTAIN_ACTION_RETRY`) with a new try. The order is queued, and sent at each heartbeat of
+the host until its daemon reports the turn at another step; the answer is the turn as stored,
+still halted. Audited `maintenance_retry_host`.
 
 | flag | value | meaning |
 |---|---|---|
@@ -764,7 +766,9 @@ Retry a halted host's turn from the step that failed: its daemon is ordered the 
 Put a halted host back: its daemon runs the drained services' `resume`
 (`MAINTAIN_ACTION_PUT_BACK`) and leaves the update as far as it got; the host's turn ends, and
 the run goes on in its group. Taken in a run that has ended too (cancelled, or past its
-window), for a host still halted there. Audited `maintenance_put_back`.
+window), for a host still halted there. The order is queued, and sent at each heartbeat of
+the host until its daemon reports the turn at another step; the answer is the turn as stored,
+still halted. Audited `maintenance_put_back`.
 
 | flag | value | meaning |
 |---|---|---|
