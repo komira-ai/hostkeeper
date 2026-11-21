@@ -137,6 +137,7 @@ fn the_loop_dials_only_the_coordinator_link_port() {
         "deferral.rs",
         "dial.rs",
         "fetch.rs",
+        "full_disk_access.rs",
         "grpc.rs",
         "heartbeater.rs",
         "host_facts.rs",

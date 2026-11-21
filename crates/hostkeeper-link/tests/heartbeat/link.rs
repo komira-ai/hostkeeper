@@ -31,6 +31,7 @@ fn beat() -> Heartbeat {
         repositories: None,
         facts_generation: None,
         remote_login_probe: None,
+        full_disk_access: None,
         operator_keys: None,
         ssh: None,
         prerequisites: None,

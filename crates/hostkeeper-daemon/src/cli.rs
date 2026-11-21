@@ -453,6 +453,7 @@ async fn start_and_serve(
 /// - the heartbeat loop tells `watchdog` after each heartbeat that it is alive;
 /// - on a Mac (`kind`), the Remote Login probe starts on a thread of its own, and every heartbeat
 ///   after it is done reports it ([`crate::remote_login_probe::at_host_start`]);
+/// - every heartbeat reports the Full Disk Access grant ([`crate::full_disk_access`]);
 /// - every host keeps the certificate and key of the pki directory's `current` generation at
 ///   [`IDENTITY_DIR`], after each step of the enrollment loop, for the group `hostkeeper-identity`
 ///   ([`HostIdentity`], [`IdentityGroup::for_host`]);
@@ -529,6 +530,7 @@ pub fn host_links(
         link: Arc::new(link),
         certs,
         bmc: crate::bmc::at_host(kind, Arc::clone(&clock)),
+        full_disk_access: crate::full_disk_access::at_host(kind, Arc::clone(&clock), log.clone()),
         clock,
         log,
         sleeper: Box::new(ClockSleeper::new(Arc::clone(&ctx.clock), stop.clone())),

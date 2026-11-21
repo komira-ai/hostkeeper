@@ -475,6 +475,7 @@ pub(super) fn proto_message(services: &[Svc]) -> proto::HeartbeatRequest {
         trusted_root_reason: 0,
         facts_generation: None,
         remote_login_probe: None,
+        full_disk_access: 0,
         operator_keys: None,
         prerequisites: None,
         bmc: None,

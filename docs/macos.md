@@ -324,14 +324,52 @@ made at each start of the daemon, not watched in between; the heartbeat does not
 A configuration profile is the other way to hold power settings on a managed Mac; the daemon is
 what ships, so a Mac needs nothing but hostkeeper.
 
+### Full Disk Access
+
+Full Disk Access is a privacy grant that an administrator gives the daemon with a configuration
+profile (docs/operations/mac-full-disk-access.md). The daemon
+(`crates/hostkeeper-daemon/src/full_disk_access.rs`) tells whether the grant is in force, and the
+coordinator shows it; nothing decides on it yet, and the daemon does not read the profile store,
+which is itself guarded.
+
+What is checked: the daemon lists one directory only the grant allows,
+`/Library/Application Support/com.apple.TCC`. It opens the directory and reads one entry; it opens
+no file inside it, so the privacy database is never read. The listing is behind a port, so the
+logic is tested on Linux against fakes and scratch directories.
+
+The states, as the daemon reports them in `HeartbeatRequest.full_disk_access`:
+
+| State | When |
+|---|---|
+| `GRANTED` | the directory could be listed |
+| `NOT_GRANTED` | the system refused the listing for want of permission (`EPERM` or `EACCES`) |
+| `UNDETERMINED` | the listing failed in any other way; the error is logged |
+| `NOT_APPLICABLE` | the host is not a Mac (a Linux daemon runs no check) |
+| `UNSPECIFIED` | not reported: a daemon that predates the field, or a heartbeat by the JSON route, which carries none |
+
+When: once at the start of the daemon, and again when a heartbeat reads the state and the last
+check is 60 seconds old or more (`RECHECK_SECS`, on the daemon's unix clock), so a profile
+installed or removed shows within about a minute with no restart. The daemon logs one line at the
+start (`full disk access: granted`) and one line whenever the state changes
+(`full disk access: not_granted -> granted`); a check that finds the same state logs nothing.
+
+Where it shows: the coordinator keeps the last state of each host in memory (a restart forgets it
+until the host's next heartbeat; a number it does not know reads as `UNSPECIFIED`), and
+`hk hosts get --node-id <host>` answers it as `host.fullDiskAccess` (`hosts list` too). A host
+reporting `NOT_GRANTED` or `UNDETERMINED` is shown as that. The Host page's Overview has a
+"Full Disk Access" row for a Mac (`granted`, `not granted`, `not determined`, or `not reported`
+for a Mac whose daemon says nothing), and a warning line naming the profile's document while the
+grant is not granted; a host that is not a Mac shows no row.
+
 ### The Remote Login probe
 
 Whether the daemon needs Full Disk Access to turn on Remote Login (sshd) is not stated by Apple
 (docs/design/ssh-through-coordinator.md, section 3). The daemon answered it itself, on the three
 build Macs on 0.1.337: `systemsetup -setremotelogin on` is refused without Full Disk Access, and
 `launchctl enable` and `bootstrap` of sshd's job turn Remote Login on without it, so the SSH design
-uses `launchctl` and the daemon needs no Full Disk Access and no Developer ID Application
-signature (the design's section 3 has the table of results).
+uses `launchctl` and the daemon needs no Full Disk Access for Remote Login and no Developer ID
+Application signature for it (the design's section 3 has the table of results). The daemon now
+checks whether it holds the grant for other operations ([Full Disk Access](#full-disk-access)).
 
 At each start of a Mac's daemon, a thread of its own (`crates/hostkeeper-daemon/src/remote_login_probe.rs`) runs,
 as the daemon (root under launchd, with whatever privacy grants the daemon has), these steps in
@@ -386,7 +424,7 @@ it loaded (never `systemsetup`, which needs Full Disk Access, and never a step t
 then `dseditgroup -o edit -a <account> -t user com.apple.access_ssh` when that group exists and the
 account is not in it. A Mac with no administrator account, or with several, is refused and left as
 it is; the report in the heartbeat says so. Nothing here needs Full Disk Access, a privacy profile
-or a password.
+or a password, whether or not the Mac holds the grant ([Full Disk Access](#full-disk-access)).
 
 ### Command Line Tools
 

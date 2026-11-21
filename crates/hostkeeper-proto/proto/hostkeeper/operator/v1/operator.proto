@@ -564,6 +564,11 @@ message Host {
   // seconds, or more than 300 seconds ahead of the coordinator's clock: an empty `due` in it then
   // does not mean nothing is due. False without a report.
   bool maintenance_stale = 28;
+  // Whether the host's Full Disk Access grant was in force, as its last gRPC heartbeat said
+  // (`HeartbeatRequest.full_disk_access`). UNSPECIFIED: unknown, the host's agent predates the
+  // field, it beats only by the JSON route, which carries none, or the coordinator has not heard
+  // it over gRPC since it started.
+  hostkeeper.agent.v1.FullDiskAccess full_disk_access = 29;
 }
 
 // One service a host runs, as its daemon said in a heartbeat (packages-native.md section 10.6).

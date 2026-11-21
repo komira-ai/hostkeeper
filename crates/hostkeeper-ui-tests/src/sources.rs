@@ -54,6 +54,7 @@ ui_files![
     "bytes.js",
     "lab.js",
     "health.js",
+    "fulldisk.js",
     "sleds.js",
     "sledpanels.js",
     "rackforms.js",
