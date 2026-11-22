@@ -7,7 +7,9 @@ use hostkeeper_launchd::{FakeLaunchctl, LaunchctlError, LaunchctlOutput};
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 
 use super::*;
+use crate::cli::DEFAULT_PACKAGE_LOCK_WAIT_SECS;
 use crate::maintenance_collect::LinuxScope;
+use crate::testing::RecordedWaits;
 
 const SECURITY_FIXTURE: &str = include_str!("../tests/fixtures/maintenance/dnf/security.txt");
 const CHECK_FIXTURE: &str = include_str!("../tests/fixtures/maintenance/dnf/check_update.txt");
@@ -17,11 +19,17 @@ fn args(args: &[&str]) -> Vec<String> {
 }
 
 fn security_args() -> Vec<String> {
-    args(&["updateinfo", "list", "--security", "-q"])
+    args(&[
+        "--setopt=exit_on_lock=True",
+        "updateinfo",
+        "list",
+        "--security",
+        "-q",
+    ])
 }
 
 fn check_args() -> Vec<String> {
-    args(&["check-update", "-q"])
+    args(&["--setopt=exit_on_lock=True", "check-update", "-q"])
 }
 
 fn names(names: &[&str]) -> BTreeSet<String> {
@@ -47,7 +55,8 @@ fn dnf(advisories: &str, code: i32, updates: &str) -> (Dnf, FakeLaunchctl) {
             stderr: Vec::new(),
         }),
     );
-    (Dnf::new(Box::new(fake.clone())), fake)
+    let lock = RecordedWaits::bounded(DEFAULT_PACKAGE_LOCK_WAIT_SECS).0;
+    (Dnf::new(Box::new(fake.clone()), lock), fake)
 }
 
 fn collect(dnf: &Dnf, scope: LinuxScope, own: &[&str]) -> Result<Section, String> {
@@ -373,7 +382,87 @@ fn a_listing_that_times_out_fails() {
 /// collector of the host is built over the program and deadline the design names.
 #[test]
 fn the_collector_is_named_dnf_and_runs_the_hosts_program() {
-    assert_eq!(Dnf::at_host().name(), "dnf");
+    assert_eq!(Dnf::at_host(DEFAULT_PACKAGE_LOCK_WAIT_SECS).name(), "dnf");
     assert_eq!(DNF, "/usr/bin/dnf");
     assert_eq!(DNF_DEADLINE, Duration::from_secs(300));
+}
+
+/// What dnf 4 writes to its standard error when another holds its lock and `exit_on_lock` is
+/// set, as it exits 200.
+const METADATA_LOCKED: &str =
+    "metadata already locked by 2413341\n  The application with PID 2413341 is: dnf\n";
+
+/// Proves each listing that finds dnf's lock held (exit 200) is run again every 2 seconds until
+/// the lock is free, and the look then reports what it would have without the lock: one wait for
+/// the advisories and one for the updates, and nothing else run.
+#[test]
+fn a_held_lock_is_waited_for_by_each_listing() {
+    let (collector, fake) = dnf(SECURITY_FIXTURE, 100, CHECK_FIXTURE);
+    let unlocked = collect(&collector, LinuxScope::Security, &[]).expect("collects");
+    let (lock, waits) = RecordedWaits::bounded(DEFAULT_PACKAGE_LOCK_WAIT_SECS);
+    let collector = Dnf::new(Box::new(fake.clone()), lock);
+    let locked = || Ok(LaunchctlOutput::exit(LOCK_HELD, METADATA_LOCKED));
+    fake.then(&security_args(), locked());
+    fake.then(&check_args(), locked());
+    let before = fake.calls().len();
+    assert_eq!(
+        collect(&collector, LinuxScope::Security, &[]).expect("collects once the lock is free"),
+        unlocked
+    );
+    assert_eq!(waits.waits(), [2, 2]);
+    assert_eq!(
+        fake.calls()[before..],
+        [security_args(), security_args(), check_args(), check_args()]
+    );
+}
+
+/// Proves a lock still held once the bound is waited fails the look with a reason that names
+/// the wait and dnf's own line about the lock, by exact equality, for each listing; the waits add
+/// up to the bound (2 and 1 of 3 seconds), and `check-update` is not run after the advisories
+/// failed.
+#[test]
+fn a_lock_held_past_the_bound_fails_the_look_naming_the_lock() {
+    let (_, fake) = dnf(SECURITY_FIXTURE, 100, CHECK_FIXTURE);
+    fake.always(
+        &security_args(),
+        Ok(LaunchctlOutput::exit(LOCK_HELD, METADATA_LOCKED)),
+    );
+    let (lock, waits) = RecordedWaits::bounded(3);
+    let collector = Dnf::new(Box::new(fake.clone()), lock);
+    assert_eq!(
+        collect(&collector, LinuxScope::All, &[]).err(),
+        Some(
+            "the package manager's lock was held for 3s of 3s: dnf updateinfo list failed with \
+             exit code 200: metadata already locked by 2413341"
+                .to_owned()
+        )
+    );
+    assert_eq!(waits.waits(), [2, 1]);
+    assert_eq!(fake.calls(), vec![security_args(); 3]);
+
+    let (_, fake) = dnf(SECURITY_FIXTURE, 100, CHECK_FIXTURE);
+    fake.always(
+        &check_args(),
+        Ok(LaunchctlOutput::exit(LOCK_HELD, METADATA_LOCKED)),
+    );
+    let (lock, waits) = RecordedWaits::bounded(1);
+    let collector = Dnf::new(Box::new(fake.clone()), lock);
+    assert_eq!(
+        collect(&collector, LinuxScope::All, &[]).err(),
+        Some(
+            "the package manager's lock was held for 1s of 1s: dnf check-update failed with exit \
+             code 200: metadata already locked by 2413341"
+                .to_owned()
+        )
+    );
+    assert_eq!(waits.waits(), [1]);
+}
+
+/// Proves only exit 200 is a held lock: 0, 1, 100 (updates listed) and a signal are not.
+#[test]
+fn only_exit_200_is_a_held_lock() {
+    assert!(lock_held(Some(200), ""));
+    for code in [Some(0), Some(1), Some(100), None] {
+        assert!(!lock_held(code, METADATA_LOCKED), "{code:?}");
+    }
 }

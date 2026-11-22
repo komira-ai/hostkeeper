@@ -6,7 +6,9 @@ use std::collections::BTreeSet;
 use hostkeeper_launchd::{FakeLaunchctl, LaunchctlError, LaunchctlOutput};
 
 use super::*;
+use crate::cli::DEFAULT_PACKAGE_LOCK_WAIT_SECS;
 use crate::maintenance_collect::LinuxScope;
+use crate::testing::RecordedWaits;
 
 const UBUNTU: &str = include_str!("../tests/fixtures/maintenance/apt/ubuntu_2404.txt");
 const DEBIAN: &str = include_str!("../tests/fixtures/maintenance/apt/debian12_security.txt");
@@ -26,7 +28,11 @@ fn host(simulation: &str) -> (FakeLaunchctl, Apt) {
         &args(&SIMULATE_ARGS),
         Ok(LaunchctlOutput::success(simulation)),
     );
-    let apt = Apt::new(Box::new(fake.clone()), Box::new(fake.clone()));
+    let apt = Apt::new(
+        Box::new(fake.clone()),
+        Box::new(fake.clone()),
+        RecordedWaits::bounded(DEFAULT_PACKAGE_LOCK_WAIT_SECS).0,
+    );
     (fake, apt)
 }
 
@@ -57,7 +63,7 @@ fn it_is_named_apt() {
 #[test]
 fn the_host_collector_is_apt() {
     assert_eq!(APT_GET, "/usr/bin/apt-get");
-    assert_eq!(Apt::at_host().name(), "apt");
+    assert_eq!(Apt::at_host(DEFAULT_PACKAGE_LOCK_WAIT_SECS).name(), "apt");
 }
 
 /// Proves a security-only look of an Ubuntu 24.04 listing reports the security updates and the new
@@ -336,7 +342,8 @@ fn a_failing_update_fails_and_the_simulation_is_not_run() {
             "E: Failed to fetch http://deb.example/dists/stable/InRelease\nE: more\n",
         )),
     );
-    let apt = Apt::new(Box::new(fake.clone()), Box::new(fake.clone()));
+    let (lock, waits) = RecordedWaits::bounded(DEFAULT_PACKAGE_LOCK_WAIT_SECS);
+    let apt = Apt::new(Box::new(fake.clone()), Box::new(fake.clone()), lock);
     assert_eq!(
         collect(&apt, LinuxScope::All).err(),
         Some(
@@ -345,6 +352,7 @@ fn a_failing_update_fails_and_the_simulation_is_not_run() {
         )
     );
     assert_eq!(fake.calls(), vec![args(&["update", "-qq"])]);
+    assert_eq!(waits.waits(), Vec::<u64>::new());
 }
 
 /// Proves an `apt-get update` that does not finish by its deadline fails the collector with the
@@ -358,7 +366,11 @@ fn an_update_that_times_out_fails_and_the_simulation_is_not_run() {
             args: "update -qq".to_owned(),
         }),
     );
-    let apt = Apt::new(Box::new(fake.clone()), Box::new(fake.clone()));
+    let apt = Apt::new(
+        Box::new(fake.clone()),
+        Box::new(fake.clone()),
+        RecordedWaits::bounded(DEFAULT_PACKAGE_LOCK_WAIT_SECS).0,
+    );
     assert_eq!(
         collect(&apt, LinuxScope::All).err(),
         Some("apt-get update did not finish within its deadline".to_owned())
@@ -378,9 +390,99 @@ fn a_failing_simulation_fails() {
             "E: Unable to correct problems\n",
         )),
     );
-    let apt = Apt::new(Box::new(fake.clone()), Box::new(fake.clone()));
+    let apt = Apt::new(
+        Box::new(fake.clone()),
+        Box::new(fake.clone()),
+        RecordedWaits::bounded(DEFAULT_PACKAGE_LOCK_WAIT_SECS).0,
+    );
     assert_eq!(
         collect(&apt, LinuxScope::All).err(),
         Some("apt-get dist-upgrade simulation failed with exit code 100: E: Unable to correct problems".to_owned())
     );
+}
+
+/// What `apt-get update` (apt 2.8) writes when another `apt-get` holds the lists' lock.
+const LISTS_LOCKED: &str = "E: Could not get lock /var/lib/apt/lists/lock. It is held by process 2413341 (apt-get)\nE: Unable to lock directory /var/lib/apt/lists/\n";
+
+/// Proves an `apt-get update` that finds the lists' lock held is run again every 2 seconds until
+/// the lock is free, and the look then goes on to the simulation and reports what is due: the
+/// waits asked for are exactly two of 2 seconds, and nothing else was run.
+#[test]
+fn a_held_lists_lock_is_waited_for_and_the_look_goes_on() {
+    let fake = FakeLaunchctl::new();
+    fake.then(
+        &args(&UPDATE_ARGS),
+        Ok(LaunchctlOutput::exit(100, LISTS_LOCKED)),
+    );
+    fake.then(
+        &args(&UPDATE_ARGS),
+        Ok(LaunchctlOutput::exit(100, LISTS_LOCKED)),
+    );
+    fake.always(&args(&UPDATE_ARGS), Ok(LaunchctlOutput::success("")));
+    fake.always(&args(&SIMULATE_ARGS), Ok(LaunchctlOutput::success(UBUNTU)));
+    let (lock, waits) = RecordedWaits::bounded(DEFAULT_PACKAGE_LOCK_WAIT_SECS);
+    let apt = Apt::new(Box::new(fake.clone()), Box::new(fake.clone()), lock);
+    let waited = collect(&apt, LinuxScope::Security).expect("collects once the lock is free");
+    let (_, unlocked) = host(UBUNTU);
+    assert_eq!(
+        waited,
+        collect(&unlocked, LinuxScope::Security).expect("collects")
+    );
+    assert_eq!(waits.waits(), [2, 2]);
+    assert_eq!(
+        fake.calls(),
+        [
+            args(&UPDATE_ARGS),
+            args(&UPDATE_ARGS),
+            args(&UPDATE_ARGS),
+            args(&SIMULATE_ARGS)
+        ]
+    );
+}
+
+/// Proves a lists' lock still held once the bound is waited fails the look with a reason that
+/// names the wait and the lock, by exact equality; the last pause is cut so that the waits add up
+/// to the bound (2, 2 and 1 of 5 seconds), and the simulation is not run.
+#[test]
+fn a_lists_lock_held_past_the_bound_fails_the_look_naming_the_lock() {
+    let fake = FakeLaunchctl::new();
+    fake.always(
+        &args(&UPDATE_ARGS),
+        Ok(LaunchctlOutput::exit(100, LISTS_LOCKED)),
+    );
+    let (lock, waits) = RecordedWaits::bounded(5);
+    let apt = Apt::new(Box::new(fake.clone()), Box::new(fake.clone()), lock);
+    assert_eq!(
+        collect(&apt, LinuxScope::All).err(),
+        Some(
+            "the package manager's lock was held for 5s of 5s: apt-get update failed with exit \
+             code 100: E: Could not get lock /var/lib/apt/lists/lock. It is held by process \
+             2413341 (apt-get)"
+                .to_owned()
+        )
+    );
+    assert_eq!(waits.waits(), [2, 2, 1]);
+    assert_eq!(fake.calls(), vec![args(&UPDATE_ARGS); 4]);
+}
+
+/// Proves a lock is held only by a run that did not exit 0 and says so in one of apt's forms
+/// (a lock it could not get, the dpkg frontend lock, a lock another process holds); another
+/// failure, or those words in a run that exited 0, is not a held lock.
+#[test]
+fn a_lock_is_held_only_by_a_failed_run_that_says_so() {
+    assert!(lock_held(Some(100), LISTS_LOCKED));
+    assert!(lock_held(
+        Some(100),
+        "E: Unable to acquire the dpkg frontend lock (/var/lib/dpkg/lock-frontend)"
+    ));
+    assert!(lock_held(
+        Some(100),
+        "E: dpkg status database is locked by another process"
+    ));
+    assert!(lock_held(None, LISTS_LOCKED));
+    assert!(!lock_held(Some(0), LISTS_LOCKED));
+    assert!(!lock_held(
+        Some(100),
+        "E: Failed to fetch http://deb.example/"
+    ));
 }

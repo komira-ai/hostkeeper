@@ -5,6 +5,11 @@
 //! [`parse_dnf_check_update`]), pinned by fixtures; a line that function does not know is counted
 //! and never guessed at. `check-update` does not give the installed version, so a due item has no
 //! `from`.
+//!
+//! **The lock.** Both listings take dnf's metadata lock, for which dnf itself waits with no bound.
+//! Each is run with `--setopt=exit_on_lock=True` ([`EXIT_ON_LOCK`]), so that a held lock ends it
+//! at once with exit [`LOCK_HELD`] (`metadata already locked by <pid>`), and is run again until
+//! the lock is free, for at most the look's bound ([`LockWait`]).
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -12,7 +17,7 @@ use std::time::Duration;
 
 use hostkeeper_launchd::{Launchctl, LaunchctlProcess};
 
-use crate::maintenance_collect::{Collector, Look, Section, linux_item, listing};
+use crate::maintenance_collect::{Collector, LockWait, Look, Section, linux_item};
 
 /// The program that is run.
 pub const DNF: &str = "/usr/bin/dnf";
@@ -23,8 +28,15 @@ pub const DNF_DEADLINE: Duration = Duration::from_secs(300);
 /// The packages that are a kernel: a newer one needs a reboot.
 pub const DNF_KERNELS: [&str; 4] = ["kernel", "kernel-core", "kernel-uek", "kernel-uek-core"];
 
-const SECURITY_ARGS: [&str; 4] = ["updateinfo", "list", "--security", "-q"];
-const CHECK_ARGS: [&str; 2] = ["check-update", "-q"];
+/// The option that has `dnf` exit [`LOCK_HELD`] at once when another holds its lock, instead of
+/// waiting for it with no bound.
+pub const EXIT_ON_LOCK: &str = "--setopt=exit_on_lock=True";
+
+/// What dnf exits with when another holds its lock and [`EXIT_ON_LOCK`] is set.
+pub const LOCK_HELD: i32 = 200;
+
+const SECURITY_ARGS: [&str; 5] = [EXIT_ON_LOCK, "updateinfo", "list", "--security", "-q"];
+const CHECK_ARGS: [&str; 3] = [EXIT_ON_LOCK, "check-update", "-q"];
 /// What `dnf check-update` exits with when it lists updates.
 const UPDATES_AVAILABLE: i32 = 100;
 const METADATA_CHECK: &str = "Last metadata expiration check:";
@@ -153,25 +165,33 @@ pub fn parse_dnf_check_update(text: &str) -> UpdateListing {
     listing
 }
 
+/// Whether a `dnf` run found its lock held: exit [`LOCK_HELD`].
+#[must_use]
+pub fn lock_held(code: Option<i32>, _text: &str) -> bool {
+    code == Some(LOCK_HELD)
+}
+
 /// The collector of the updates `dnf` offers.
 pub struct Dnf {
     dnf: Box<dyn Launchctl>,
+    lock: LockWait,
 }
 
 impl Dnf {
-    /// A collector that runs `dnf` through `dnf`.
+    /// A collector that runs `dnf` through `dnf`, waiting for a held lock as `lock` says.
     #[must_use]
-    pub fn new(dnf: Box<dyn Launchctl>) -> Dnf {
-        Dnf { dnf }
+    pub fn new(dnf: Box<dyn Launchctl>, lock: LockWait) -> Dnf {
+        Dnf { dnf, lock }
     }
 
-    /// The collector of this host: [`DNF`], each listing waited for [`DNF_DEADLINE`].
+    /// The collector of this host: [`DNF`], each listing waited for [`DNF_DEADLINE`] and a held
+    /// lock for at most `lock_wait_secs`.
     #[must_use]
-    pub fn at_host() -> Dnf {
-        Dnf::new(Box::new(LaunchctlProcess::new(
-            Path::new(DNF),
-            DNF_DEADLINE,
-        )))
+    pub fn at_host(lock_wait_secs: u64) -> Dnf {
+        Dnf::new(
+            Box::new(LaunchctlProcess::new(Path::new(DNF), DNF_DEADLINE)),
+            LockWait::host(lock_wait_secs),
+        )
     }
 }
 
@@ -181,13 +201,20 @@ impl Collector for Dnf {
     }
 
     fn collect(&self, look: &Look<'_>) -> Result<Section, String> {
-        let (_, advisories) = listing(&*self.dnf, "dnf updateinfo list", &SECURITY_ARGS, &[0])?;
+        let (_, advisories) = self.lock.listing(
+            &*self.dnf,
+            "dnf updateinfo list",
+            &SECURITY_ARGS,
+            &[0],
+            lock_held,
+        )?;
         let security = parse_dnf_security(&advisories);
-        let (_, updates) = listing(
+        let (_, updates) = self.lock.listing(
             &*self.dnf,
             "dnf check-update",
             &CHECK_ARGS,
             &[0, UPDATES_AVAILABLE],
+            lock_held,
         )?;
         let updates = parse_dnf_check_update(&updates);
         let mut section = Section {

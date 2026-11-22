@@ -25,7 +25,9 @@ gateway serves each call at `POST /hostkeeper.operator.v1.Maintenance/<Method>`
 
 **Where it comes from.** The coordinator discovers no update itself. Each host's daemon looks at
 its own host after it starts, then every hour, and again as soon as a maintenance turn of it ends,
-and sends what it found in each heartbeat (the feature `maintenance-v1`). It reads
+and sends what it found in each heartbeat (the feature `maintenance-v1`). A look that failed is
+tried again sooner: 5 minutes after it ended, then 10, 20 and 40 minutes after each further failure
+in a row, then every hour again; a look that succeeds starts that count again. It reads
 `/etc/os-release`, `uname -r`, the kernels under `/lib/modules`, and asks the package manager it
 finds (`apt-get`, else `dnf`, else `apk`) what it would upgrade. Two kinds can be due on Linux:
 
@@ -68,7 +70,12 @@ the default shows only security updates and kernels as due, and a run then insta
 **When to distrust it.** A look older than two hours, or one more than five minutes ahead of the
 coordinator's clock, is stale: the host page says "stale look" with its age, and an empty list then
 does not mean nothing is due. A failed look keeps the last good report and names why
-(`look_failed` in the report). A host that shows "no report" runs a daemon without
+(`look_failed` in the report). A look that finds the package manager's lock held (another
+`apt-get`, unattended-upgrades, an operator's `dnf`) tries the run again every 2 seconds for the daemon's
+`--package-lock-wait-secs` (300 by default; per run, so dnf's two listings may each wait that
+long) and fails only when the lock is still held then, with
+`look_failed` starting `apt: the package manager's lock was held for 300s of 300s:` and the
+package manager's own line, which names the lock and its holder. A host that shows "no report" runs a daemon without
 `maintenance-v1`, or has not sent a heartbeat since the coordinator started; it is never ordered.
 The same report, read with `hk`:
 
@@ -463,9 +470,9 @@ with `build.json` the group as `get` answered it, its `maintenance` changed:
 - **The Console link of the runs view.** The **Console** button on a rebooting or not-back host's
   row does not open the Console page in this release; open it from the server's row in Home's List
   view.
-- **The package manager's lock.** The daemon's `--package-lock-wait-secs` reaches only the
-  repository installer; the maintenance hook waits its own default, 300 seconds, for a held apt,
-  dnf or apk lock. At the stage a lock still held defers (`package_manager_busy`); at the apply the
+- **The package manager's lock.** The daemon's `--package-lock-wait-secs` reaches the repository
+  installer and the maintenance look; the maintenance hook waits its own default, 300 seconds, for
+  a held apt, dnf or apk lock. At the stage a lock still held defers (`package_manager_busy`); at the apply the
   install fails and halts.
 - **The group's package order for drains.** Services drain in the order of their names, and resume
   in the reverse.

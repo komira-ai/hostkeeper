@@ -10,10 +10,12 @@ mod support;
 use std::sync::Arc;
 
 use clap::Parser as _;
+use hostkeeper_daemon::cli::DEFAULT_PACKAGE_LOCK_WAIT_SECS;
 use hostkeeper_daemon::cli::{Cli, Command, maintenance_source};
 use hostkeeper_daemon::executor::Daemon;
 use hostkeeper_daemon::maintenance_apt::Apt;
 use hostkeeper_daemon::maintenance_collect::Collector;
+use hostkeeper_daemon::testing::RecordedWaits;
 use hostkeeper_launchd::{FakeLaunchctl, LaunchctlOutput};
 use hostkeeper_link::testing::{FakeClock, RecordingLog};
 use hostkeeper_link::{Dispatch, Job};
@@ -69,6 +71,7 @@ fn reported(name: &str, argv: &[&str]) -> Vec<String> {
     let collectors: Vec<Box<dyn Collector>> = vec![Box::new(Apt::new(
         Box::new(apt_get.clone()),
         Box::new(apt_get),
+        RecordedWaits::bounded(DEFAULT_PACKAGE_LOCK_WAIT_SECS).0,
     ))];
     let source = maintenance_source(
         &daemon,
