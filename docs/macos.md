@@ -448,7 +448,9 @@ report is `host.heartbeat.prerequisites` in `hk hosts get`
 
 ### Maintenance facts
 
-A Mac's daemon looks at its Mac for maintenance after every start and every hour, on a worker that
+A Mac's daemon looks at its Mac for maintenance after every start and every hour (sooner after a
+look that failed: 5 minutes after it, doubled for each further failure in a row, at most the
+hour), on a worker that
 never holds up a heartbeat, and reports what it found to a coordinator that advertises
 `maintenance-v1` ([design/maintenance-updates.md](design/maintenance-updates.md) sections 1 and
 4.1), as a Linux host does. Five collectors read it, in this order, each program as root with an

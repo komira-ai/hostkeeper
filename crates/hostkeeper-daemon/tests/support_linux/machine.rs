@@ -205,7 +205,11 @@ impl Machine {
                 self.program("needs-restarting"),
                 self.root(),
             )),
-            Box::new(Apt::new(self.program("apt-get"), self.program("apt-get"))),
+            Box::new(Apt::new(
+                self.program("apt-get"),
+                self.program("apt-get"),
+                RecordedWaits::bounded(LOCK_WAIT).0,
+            )),
         ]
     }
 
@@ -231,6 +235,7 @@ impl Machine {
             Some(Box::new(Apt::new(
                 self.program("apt-get"),
                 self.program("apt-get"),
+                RecordedWaits::bounded(LOCK_WAIT).0,
             ))),
             Box::new(Own),
             Box::new(Healthy),

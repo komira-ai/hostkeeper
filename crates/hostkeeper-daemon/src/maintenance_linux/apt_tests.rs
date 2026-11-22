@@ -226,7 +226,8 @@ fn the_security_install_names_what_the_security_look_reports() {
             &args(&["--simulate", "-qq", "dist-upgrade"]),
             Ok(LaunchctlOutput::success(simulation)),
         );
-        let look = Apt::new(Box::new(fake.clone()), Box::new(fake))
+        let lock = crate::testing::RecordedWaits::bounded(300).0;
+        let look = Apt::new(Box::new(fake.clone()), Box::new(fake), lock)
             .collect(&Look {
                 scope: LinuxScope::Security,
                 own_packages: &own,

@@ -175,9 +175,10 @@ impl LinuxCheck {
     /// The check of this host over the platform's `adapters`, for a daemon of version `own`: the
     /// host's own collectors and files, the packages the `placed.json` of the default state
     /// directory records, and the services of the default package directory, observed as the
-    /// daemon observes them.
+    /// daemon observes them; the package manager waits for a held lock for at most
+    /// `lock_wait_secs`, as the maintenance look does.
     #[must_use]
-    pub fn at_host(adapters: Adapters, own: HostkeeperVersion) -> LinuxCheck {
+    pub fn at_host(adapters: Adapters, own: HostkeeperVersion, lock_wait_secs: u64) -> LinuxCheck {
         let packages = PathBuf::from(DEFAULT_PACKAGES_DIR);
         let binaries = binary_dir(Path::new(DEFAULT_STATE_DIR));
         let placement = Placement {
@@ -197,7 +198,7 @@ impl LinuxCheck {
         LinuxCheck::new(
             Box::new(HostFacts::at_host()),
             Box::new(RebootNeed::at_host()),
-            package_manager(&HostRoot::host()),
+            package_manager(&HostRoot::host(), lock_wait_secs),
             Box::new(PlacedPackages::new(&placement)),
             Box::new(HostServices::new(
                 packages,
