@@ -103,8 +103,24 @@ jobs:
           farm-properties: ${{ vars.FARM_LINUX_X86_64_PROPERTIES }}
           tls: ${{ vars.FARM_TLS || 'false' }}
       # One command (crates/xtask/src/farm.rs): it refuses to build unless .buckconfig handed
-      # farm-connect's worker property set to buildrules, builds //:ci, fails unless the summary
-      # line says `local: 0` (every action ran on the farm or came from its cache), and stops
-      # buck2's daemon however the build ended.
+      # farm-connect's worker property set to buildrules; builds the pinned `buildrules` command
+      # line on the farm and runs `buildrules check`, and when the generated build table is stale
+      # runs `buildrules sync`, writes what it changed as a patch, puts the stale inputs, the
+      # changed files and the command that applies the patch in this job's summary, and fails
+      # without building (crates/xtask/src/farm/table.rs); builds //:ci with buck2's progress in
+      # this log, and when every failure of that build is a cut connection to the farm
+      # (crates/xtask/src/farm/cuts.rs) runs it once more and says so here and in the job summary
+      # (a second cut fails the job); fails unless the summary line says `local: 0` (every action
+      # ran on the farm or came from its cache); and stops buck2's daemon however the build ended.
       - name: buck2 build //:ci on the farm, local 0
-        run: cargo xtask farm-build --buck2 "$RUNNER_TEMP/bin/buck2" --target //:ci
+        run: cargo xtask farm-build --buck2 "$RUNNER_TEMP/bin/buck2" --target //:ci --patch "$RUNNER_TEMP/buildrules-sync/buildrules-sync.patch" --summary "$GITHUB_STEP_SUMMARY" --repo "$GITHUB_REPOSITORY" --run-id "$GITHUB_RUN_ID"
+      # A stale table's fix, for the contributor to read and `git apply` (docs/farm.md). The file
+      # exists only when the build step wrote it; any other failure uploads nothing.
+      - name: Upload the regenerated build table as a patch
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: buildrules-sync
+          path: ${{ runner.temp }}/buildrules-sync/buildrules-sync.patch
+          if-no-files-found: ignore
+          retention-days: 30
