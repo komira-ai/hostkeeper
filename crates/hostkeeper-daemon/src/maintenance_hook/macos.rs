@@ -17,6 +17,7 @@ mod stage;
 
 pub use apply::Apply;
 pub use stage::Stage;
+pub(crate) use stage::{HostPrograms, Programs};
 
 use std::path::Path;
 
