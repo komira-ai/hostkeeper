@@ -516,7 +516,7 @@ fn a_cutover_is_refused_while_the_host_keeps_no_run_record() {
 
 /// Proves: a Linux host's registry holds the `linux` and `reboot` kinds and a Mac's its three,
 /// `macos` and `xcode` with their stages: a Linux `prepare` is the stage, which defers a run with
-/// no `linux_scope` before it runs any program; `reboot`'s `prepare` answers `unsupported_kind`;
+/// no `linux_scope` before it runs any program; `reboot`'s `prepare` succeeds and runs nothing;
 /// a Mac's `macos` `cutover` refuses an order that names no macOS path before it reads or runs
 /// anything (its other steps would run the host's own `softwareupdate`; they are tested over a
 /// fake Mac in the daemon's unit tests); a build whose
@@ -525,8 +525,9 @@ fn a_cutover_is_refused_while_the_host_keeps_no_run_record() {
 /// fakes: a host's reads the host); a Mac's `xcode` stages (an order with no Xcode stages nothing
 /// and succeeds) and its `cutover`, `after_reboot` and `verify` answer `unsupported_kind`.
 ///
-/// Catches: a platform's kinds put in the wrong platform's registry, or a host that cannot be
-/// checked made to look checked.
+/// Catches: a platform's kinds put in the wrong platform's registry, a host that cannot be checked
+/// made to look checked, or a Linux `reboot` whose stage answers `unsupported_kind` and so defers
+/// every run that includes a restart.
 #[test]
 fn the_registry_of_a_platform_holds_its_kinds() {
     let kinds =
@@ -556,10 +557,7 @@ fn the_registry_of_a_platform_holds_its_kinds() {
         })
     );
     let reboot = linux.get(Kind::Reboot).expect("held");
-    assert_eq!(
-        reboot.prepare(&params),
-        Err(KindError::unsupported(Kind::Reboot))
-    );
+    assert_eq!(reboot.prepare(&params), Ok(()));
     let unchecked = registry_for(
         &Platform::linux(),
         DEFAULT_PACKAGE_LOCK_WAIT_SECS,

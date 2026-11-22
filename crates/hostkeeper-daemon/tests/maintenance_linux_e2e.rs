@@ -3,8 +3,9 @@
 //! orders each host's turn from its heartbeats, and on each host the real daemon runs the turn
 //! from its run record (stage, drain, apply with its reboot, check, put back) through the real
 //! maintenance hook over a fake Linux host, across the host's reboot, a daemon that stops in the
-//! middle of a turn and a coordinator that restarts (`support_linux`). Each test ends with exact
-//! equality on what the fake host went through.
+//! middle of a turn and a coordinator that restarts (`support_linux`). The hook's `prepare` is the
+//! real hook's too, over the real `reboot` kind; the `linux` kind's stage is answered there. Each
+//! test ends with exact equality on what the fake host went through.
 
 mod support;
 mod support_linux;
@@ -338,12 +339,13 @@ fn restarts_of_the_coordinator_and_the_daemon_mid_run_resume_the_turn_once() {
     assert_eq!(h1.due(), Vec::<pb::MaintenanceKind>::new());
 }
 
-/// Proves: a host whose only due item is a restart (`run/reboot-required`, no package due) is
-/// ordered `reboot` alone, and its turn installs nothing: stage, drain, reboot, check in the new
-/// boot, resume, done, the same kernel running and nothing due after.
+/// Proves: a host whose only due item is a restart (`run/reboot-required`, no package due, the
+/// newest kernel already running) is ordered `reboot` alone; the real hook's `prepare` of it is
+/// done, and its turn installs nothing: stage, drain, reboot, check in the new boot, resume, done,
+/// the same kernel running and nothing due after.
 ///
-/// Catches: a reboot-only run that runs the package manager's install, or that ends without
-/// rebooting.
+/// Catches: a reboot-only run that runs the package manager's install, that ends without
+/// rebooting, or whose stage fails `unsupported_kind` and defers the turn.
 #[test]
 fn a_reboot_only_run_installs_nothing_and_reboots() {
     let (world, mut h1, _h2) = pair("linux-e2e-reboot", Due::Reboot);
@@ -368,6 +370,41 @@ fn a_reboot_only_run_installs_nothing_and_reboots() {
     assert_eq!(h1.machine.running(), OLD_KERNEL);
     assert_eq!(world.steps(&run), [at("h1", Step::Done)]);
     assert_eq!(h1.due(), Vec::<pb::MaintenanceKind>::new());
+    assert_eq!(h1.orders(), [order]);
+}
+
+/// Proves: the Update button on a host that reports both a `linux` item (a kernel update) and a
+/// `reboot` item (`run/reboot-required`) orders `linux` and `reboot` together, and the real
+/// hook's `prepare` of both is done, so the turn runs to done: stage, drain, install of the
+/// kernel update, one reboot, the check in the new boot, resume. The host runs the new kernel,
+/// its next report shows nothing due and the group's `updates_due` notice clears.
+///
+/// Catches: a `reboot` kind whose stage answers `unsupported_kind`, which defers the turn after
+/// `stage` and leaves a host with a pending restart never updated by the Update button; or a run
+/// of both kinds that reboots twice.
+#[test]
+fn the_update_button_runs_a_host_with_a_kernel_update_and_a_restart_due_to_done() {
+    let (world, mut h1, _h2) = pair("linux-e2e-both", Due::KernelAndReboot);
+    assert_eq!(
+        h1.due(),
+        [pb::MaintenanceKind::Reboot, pb::MaintenanceKind::Linux]
+    );
+    assert_eq!(world.alerts(), updates_due());
+
+    let run = world.update(&["h1"]);
+    let order = first_offer(
+        &run,
+        &[pb::MaintenanceKind::Linux, pb::MaintenanceKind::Reboot],
+    );
+    assert_eq!(h1.beat(), Some(order.clone()));
+    reboot_to_done(&mut h1);
+
+    assert_eq!(h1.machine.effects(), kernel_turn());
+    assert_eq!(h1.machine.running(), NEW_KERNEL);
+    assert!(!h1.machine.cordoned(), "the service is back in service");
+    assert_eq!(world.steps(&run), [at("h1", Step::Done)]);
+    assert_eq!(h1.due(), Vec::<pb::MaintenanceKind>::new());
+    assert_eq!(world.alerts(), no_alerts());
     assert_eq!(h1.orders(), [order]);
 }
 

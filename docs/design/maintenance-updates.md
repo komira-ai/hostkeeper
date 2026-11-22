@@ -699,13 +699,15 @@ argument and no environment variable, and uploads nothing when the signature che
 
 The Linux path is proven end to end in process (Built: `crates/hostkeeper-daemon/tests/maintenance_linux_e2e.rs`, over
 `tests/support_linux`): the real coordinator schedules and orders each turn from the hosts' heartbeats, and on each host the real
-daemon runs it from its run record through the real maintenance hook's `cutover` and `verify` over fake `apt-get`, `systemctl`, a
-fake service that declares `drain` and `resume`, and a fake boot id. It shows the Update button's turn (stage, drain, install,
-reboot, check in the new boot, resume, done, nothing due after, `updates_due` cleared), a batch of one over a group of three inside
-a window, a failed apply that halts the host cordoned with no resume and no rollback until Put back, a coordinator and a daemon that
-restart mid-run without starting the order twice, a `reboot`-only run that installs nothing, and a drain deadline that puts the host
-back unchanged and defers it. The stage (`prepare`) is answered by the test's launcher there; its programs are tested in the hook's
-own crate.
+daemon runs it from its run record through the real maintenance hook's `prepare`, `cutover` and `verify` over fake `apt-get`,
+`systemctl`, a fake service that declares `drain` and `resume`, and a fake boot id. It shows the Update button's turn (stage, drain,
+install, reboot, check in the new boot, resume, done, nothing due after, `updates_due` cleared), the same turn for a host that has a
+`linux` and a `reboot` item due (one reboot), a batch of one over a group of three inside a window, a failed apply that halts the
+host cordoned with no resume and no rollback until Put back, a coordinator and a daemon that restart mid-run without starting the
+order twice, a `reboot`-only run that installs nothing, and a drain deadline that puts the host back unchanged and defers it. The
+`prepare` of `reboot` is the real kind's there (it succeeds and runs nothing: a restart has nothing to download); the `linux`
+kind's stage is answered by the test, and its programs are tested in the hook's own crate (`maintenance_hook/linux/tests.rs`,
+`stage_tests.rs`), where the hook's `prepare` of `reboot` alone and of `linux` with `reboot` is run too.
 
 ## 9. Questions for the owner
 

@@ -4,8 +4,9 @@
 //!
 //! `cutover` and `after_reboot` are written here. The `prepare` of `linux` is its stage
 //! ([`Stage`], `crate::maintenance_hook::linux::stage`) when the kind is given one; the `prepare`
-//! of `reboot` and the `verify` of both answer [`Unsupported`]: on a host the hook checks both
-//! kinds with [`crate::maintenance_hook::LinuxCheck`] in place of their `verify`
+//! of `reboot` succeeds and runs nothing, since a restart has nothing to download. The `verify`
+//! of both answers [`Unsupported`]: on a host the hook checks both kinds with
+//! [`crate::maintenance_hook::LinuxCheck`] in place of their `verify`
 //! ([`crate::maintenance_hook::registry_for`]).
 
 use std::collections::BTreeSet;
@@ -278,9 +279,9 @@ impl RebootKind {
 }
 
 impl MaintenanceKind for RebootKind {
-    /// Not written yet: [`Unsupported`].
-    fn prepare(&self, params: &MaintainParams) -> Result<(), KindError> {
-        Unsupported(Kind::Reboot).prepare(params)
+    /// Succeeds; no program is run and nothing is read: a restart has nothing to stage.
+    fn prepare(&self, _params: &MaintainParams) -> Result<(), KindError> {
+        Ok(())
     }
 
     /// Always [`Cutover::NeedsReboot`]; no program is run.
