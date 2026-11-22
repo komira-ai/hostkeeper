@@ -25,11 +25,18 @@ use crate::maintenance_softwareupdate::MacosMajor;
 use crate::maintenance_xcode::Xcodes;
 
 /// The collectors of a host of `kind`, over the host's own programs and files, in the order its
-/// look reads them; a Mac's under `major`.
+/// look reads them; a Linux host's package manager waiting for a held lock for at most
+/// `lock_wait_secs`, a Mac's under `major`.
 #[must_use]
-pub fn at_host(kind: PlatformKind, major: MacosMajor) -> Vec<Box<dyn Collector>> {
+pub fn at_host(
+    kind: PlatformKind,
+    major: MacosMajor,
+    lock_wait_secs: u64,
+) -> Vec<Box<dyn Collector>> {
     match kind {
-        PlatformKind::Linux | PlatformKind::Openrc => linux_under(&HostRoot::host()),
+        PlatformKind::Linux | PlatformKind::Openrc => {
+            linux_under(&HostRoot::host(), lock_wait_secs)
+        }
         PlatformKind::Macos => mac(major),
     }
 }
@@ -48,27 +55,28 @@ pub fn mac(major: MacosMajor) -> Vec<Box<dyn Collector>> {
 }
 
 /// The collectors of a Linux host: the host's facts, the reboot need, and the package manager
-/// that is under `root` ([`package_manager`]).
+/// that is under `root` ([`package_manager`]), waiting for its lock for at most `lock_wait_secs`.
 #[must_use]
-pub fn linux_under(root: &HostRoot) -> Vec<Box<dyn Collector>> {
+pub fn linux_under(root: &HostRoot, lock_wait_secs: u64) -> Vec<Box<dyn Collector>> {
     let mut collectors: Vec<Box<dyn Collector>> = vec![
         Box::new(HostFacts::at_host()),
         Box::new(RebootNeed::at_host()),
     ];
-    collectors.extend(package_manager(root));
+    collectors.extend(package_manager(root, lock_wait_secs));
     collectors
 }
 
 /// The collector of the package manager whose program is a file under `root`: `apt-get`, else
-/// `dnf`, else `apk`; none when there is none of them.
+/// `dnf`, else `apk`; none when there is none of them. It waits for a held lock for at most
+/// `lock_wait_secs` ([`crate::maintenance_collect::LockWait`]).
 #[must_use]
-pub fn package_manager(root: &HostRoot) -> Option<Box<dyn Collector>> {
+pub fn package_manager(root: &HostRoot, lock_wait_secs: u64) -> Option<Box<dyn Collector>> {
     if root.is_file(maintenance_apt::APT_GET) {
-        Some(Box::new(Apt::at_host()))
+        Some(Box::new(Apt::at_host(lock_wait_secs)))
     } else if root.is_file(maintenance_dnf::DNF) {
-        Some(Box::new(Dnf::at_host()))
+        Some(Box::new(Dnf::at_host(lock_wait_secs)))
     } else if root.is_file(maintenance_apk::APK) {
-        Some(Box::new(Apk::at_host()))
+        Some(Box::new(Apk::at_host(lock_wait_secs)))
     } else {
         None
     }

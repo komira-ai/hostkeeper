@@ -5,13 +5,22 @@
 //! the simulation's `Inst` lines, so it is never due. Under the scope `security` a package not yet
 //! installed is never due either (`AptUpdate::is_due`): that scope's install upgrades installed
 //! packages only, so the look reports what the install does.
+//!
+//! **The lock.** `apt-get update` takes the lock of `/var/lib/apt/lists`; when another `apt-get`
+//! holds it, the update is run again until it is free, for at most the look's bound
+//! ([`LockWait`]). `DPkg::Lock::Timeout` is not passed: apt 2.4, 2.6 and 2.8 wait with it for
+//! the dpkg lock alone, and fail at once (exit 100, `Could not get lock /var/lib/apt/lists/lock`)
+//! on the lists' lock. The simulation takes no lock.
 
 use std::path::Path;
 use std::time::Duration;
 
+use hostkeeper_install::repository::apt::parse::BUSY;
 use hostkeeper_launchd::{Launchctl, LaunchctlProcess};
 
-use crate::maintenance_collect::{Collector, LinuxScope, Look, Section, linux_item, listing};
+use crate::maintenance_collect::{
+    Collector, LinuxScope, LockWait, Look, Section, linux_item, listing,
+};
 
 /// The program that refreshes the index and simulates the upgrade.
 pub const APT_GET: &str = "/usr/bin/apt-get";
@@ -39,28 +48,44 @@ const PROGRESS: [&str; 4] = [
 /// The line `apt-get` ends its simulation with, its counts replaced by nothing.
 const SUMMARY_SHAPE: &str = " upgraded,  newly installed,  to remove and  not upgraded.";
 
+/// Whether an `apt-get` run that did not exit 0 found a lock held: it says so in one of the forms
+/// the repository installer reads ([`BUSY`]: `Could not get lock`, `Unable to acquire the dpkg
+/// frontend lock`, a lock that `is` or `was locked by another process`).
+#[must_use]
+pub fn lock_held(code: Option<i32>, text: &str) -> bool {
+    code != Some(0) && BUSY.iter().any(|needle| text.contains(needle))
+}
+
 /// The collector `apt`.
 pub struct Apt {
     update: Box<dyn Launchctl>,
     simulate: Box<dyn Launchctl>,
+    lock: LockWait,
 }
 
 impl Apt {
-    /// A collector refreshing the index with `update` and simulating the upgrade with `simulate`
-    /// (each runs `apt-get` with the arguments it is given).
+    /// A collector refreshing the index with `update`, waiting for a held lock as `lock` says,
+    /// and simulating the upgrade with `simulate` (each runs `apt-get` with the arguments it is
+    /// given).
     #[must_use]
-    pub fn new(update: Box<dyn Launchctl>, simulate: Box<dyn Launchctl>) -> Apt {
-        Apt { update, simulate }
+    pub fn new(update: Box<dyn Launchctl>, simulate: Box<dyn Launchctl>, lock: LockWait) -> Apt {
+        Apt {
+            update,
+            simulate,
+            lock,
+        }
     }
 
-    /// The collector of this host: [`APT_GET`] as root, the index refresh bounded at 600 seconds
-    /// and the simulation at 300.
+    /// The collector of this host: [`APT_GET`] as root, each index refresh bounded at 600
+    /// seconds, a held lock waited for at most `lock_wait_secs`, and the simulation bounded at
+    /// 300 seconds.
     #[must_use]
-    pub fn at_host() -> Apt {
+    pub fn at_host(lock_wait_secs: u64) -> Apt {
         let program = Path::new(APT_GET);
         Apt::new(
             Box::new(LaunchctlProcess::new(program, UPDATE_DEADLINE)),
             Box::new(LaunchctlProcess::new(program, SIMULATE_DEADLINE)),
+            LockWait::host(lock_wait_secs),
         )
     }
 }
@@ -71,7 +96,13 @@ impl Collector for Apt {
     }
 
     fn collect(&self, look: &Look<'_>) -> Result<Section, String> {
-        listing(&*self.update, "apt-get update", &UPDATE_ARGS, &[0])?;
+        self.lock.listing(
+            &*self.update,
+            "apt-get update",
+            &UPDATE_ARGS,
+            &[0],
+            lock_held,
+        )?;
         let (_, text) = listing(
             &*self.simulate,
             "apt-get dist-upgrade simulation",

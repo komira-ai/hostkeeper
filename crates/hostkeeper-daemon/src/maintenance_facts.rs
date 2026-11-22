@@ -15,11 +15,16 @@
 //! report as the last look that succeeded left it, with the reason in `look_failed`. The next
 //! look clears it.
 //!
-//! **When.** A report ([`MaintenanceSource::report`]) starts a look when none is running and one is due:
-//! before the first, [`LOOK_SECS`] after the last one started (however it ended), and at once
-//! after [`MaintenanceFacts::look_again`]. It never waits for the look: a report made while it
-//! runs is the report as it stands, which before the first look ends is the default one
-//! (`looked_unix` 0). Nothing is locked while a collector runs. A look whose worker never ran, or
+//! **When.** A report ([`MaintenanceSource::report`]) starts a look when none is running and one
+//! is due: before the first, [`LOOK_SECS`] after the last one started, and at once after
+//! [`MaintenanceFacts::look_again`]. After a look that failed (a package manager's lock still
+//! held at its bound, a mirror that did not answer), the next is due sooner, so that a passing
+//! cause does not hide what is due for an hour: [`RETRY_SECS`] after the failed look ended, twice
+//! that after a second failure in a row, and so on, never later than [`LOOK_SECS`] after the
+//! failed look started ([`retry_secs`]); a look that succeeds starts the count again.
+//!
+//! A report never waits for the look: a report made while it runs is the report as it stands,
+//! which before the first look ends is the default one (`looked_unix` 0). Nothing is locked while a collector runs. A look whose worker never ran, or
 //! died, ends as well and is tried again by the next report. Every look is a line of the daemon's
 //! log.
 
@@ -40,6 +45,17 @@ use crate::maintenance_own::{OwnPackages, PlacedPackages};
 /// How long after a look started the next one is due, in seconds.
 pub const LOOK_SECS: u64 = 60 * 60;
 
+/// How long after a look that failed, the first in a row, the next one is due, in seconds.
+pub const RETRY_SECS: u64 = 5 * 60;
+
+/// How long after the `failed`th look in a row that failed (from 1) ended the next one is due:
+/// [`RETRY_SECS`], doubled for each failure before it, at most [`LOOK_SECS`].
+#[must_use]
+pub fn retry_secs(failed: u32) -> u64 {
+    let doublings = failed.saturating_sub(1).min(u64::BITS - 1);
+    RETRY_SECS.saturating_mul(1 << doublings).min(LOOK_SECS)
+}
+
 /// What the sink keeps between two calls.
 #[derive(Default)]
 struct State {
@@ -48,9 +64,12 @@ struct State {
     report: pb::MaintenanceReport,
     /// Whether a look was started and has not ended.
     running: bool,
-    /// The second from which the next look is due: [`LOOK_SECS`] after the last one started, and
-    /// 0 (due at once) before the first and after [`MaintenanceFacts::look_again`].
+    /// The second from which the next look is due: [`LOOK_SECS`] after the last one started,
+    /// sooner after one that failed ([`retry_secs`]), and 0 (due at once) before the first and
+    /// after [`MaintenanceFacts::look_again`].
     next_look_unix: u64,
+    /// How many looks in a row failed, up to the last one that ended.
+    failed_in_a_row: u32,
 }
 
 struct Inner {
@@ -191,12 +210,21 @@ impl Inner {
                     report.due.len() + report.due_left_out as usize,
                     report.unparsed_lines
                 );
-                self.state().report = report;
+                let mut state = self.state();
+                state.report = report;
+                state.failed_in_a_row = 0;
+                drop(state);
                 self.log.line(&line);
             }
             Err(reason) => {
                 let reason = clip(&reason, MAX_LOOK_FAILED);
-                self.state().report.look_failed.clone_from(&reason);
+                let ended_unix = self.clock.unix_secs();
+                let mut state = self.state();
+                state.report.look_failed.clone_from(&reason);
+                state.failed_in_a_row = state.failed_in_a_row.saturating_add(1);
+                let retry = ended_unix.saturating_add(retry_secs(state.failed_in_a_row));
+                state.next_look_unix = state.next_look_unix.min(retry);
+                drop(state);
                 self.log
                     .line(&format!("error: maintenance: the look failed: {reason}"));
             }

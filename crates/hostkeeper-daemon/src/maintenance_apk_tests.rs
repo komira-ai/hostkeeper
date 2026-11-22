@@ -6,7 +6,9 @@ use std::collections::BTreeSet;
 use hostkeeper_launchd::{FakeLaunchctl, LaunchctlError, LaunchctlOutput};
 
 use super::*;
+use crate::cli::DEFAULT_PACKAGE_LOCK_WAIT_SECS;
 use crate::maintenance_collect::LinuxScope;
+use crate::testing::RecordedWaits;
 
 const FIXTURE: &str = include_str!("../tests/fixtures/maintenance/apk/version.txt");
 const EMPTY_FIXTURE: &str = include_str!("../tests/fixtures/maintenance/apk/version_none.txt");
@@ -37,7 +39,11 @@ fn apk(text: &str) -> (Apk, FakeLaunchctl) {
     fake.always(&refresh_args(), Ok(LaunchctlOutput::success("")));
     fake.always(&version_args(), Ok(LaunchctlOutput::success(text)));
     (
-        Apk::new(Box::new(fake.clone()), Box::new(fake.clone())),
+        Apk::new(
+            Box::new(fake.clone()),
+            Box::new(fake.clone()),
+            RecordedWaits::bounded(DEFAULT_PACKAGE_LOCK_WAIT_SECS).0,
+        ),
         fake,
     )
 }
@@ -233,8 +239,69 @@ fn a_failed_or_timed_out_step_fails() {
 /// collector of the host is built over the program and the deadlines the design names.
 #[test]
 fn the_collector_is_named_apk_and_runs_the_hosts_program() {
-    assert_eq!(Apk::at_host().name(), "apk");
+    assert_eq!(Apk::at_host(DEFAULT_PACKAGE_LOCK_WAIT_SECS).name(), "apk");
     assert_eq!(APK, "/sbin/apk");
     assert_eq!(APK_REFRESH_DEADLINE, Duration::from_secs(600));
     assert_eq!(APK_LIST_DEADLINE, Duration::from_secs(300));
+}
+
+/// What `apk update` (apk-tools 2.14) writes when another `apk` holds its database lock, as it
+/// exits 99.
+const DATABASE_LOCKED: &str = "ERROR: Unable to lock database: temporary error (try again later)\nERROR: Failed to open apk database: temporary error (try again later)\n";
+
+/// Proves an `apk update` that finds the database lock held is run again every 2 seconds until
+/// the lock is free, and the look then lists the updates as it would have without the lock.
+#[test]
+fn a_held_database_lock_is_waited_for_and_the_look_goes_on() {
+    let (unlocked, _) = apk(FIXTURE);
+    let unlocked = collect(&unlocked, LinuxScope::All).expect("collects");
+    let (_, fake) = apk(FIXTURE);
+    fake.then(
+        &refresh_args(),
+        Ok(LaunchctlOutput::exit(99, DATABASE_LOCKED)),
+    );
+    let (lock, waits) = RecordedWaits::bounded(DEFAULT_PACKAGE_LOCK_WAIT_SECS);
+    let collector = Apk::new(Box::new(fake.clone()), Box::new(fake.clone()), lock);
+    assert_eq!(
+        collect(&collector, LinuxScope::All).expect("collects once the lock is free"),
+        unlocked
+    );
+    assert_eq!(waits.waits(), [2]);
+    assert_eq!(
+        fake.calls(),
+        [refresh_args(), refresh_args(), version_args()]
+    );
+}
+
+/// Proves a database lock still held once the bound is waited fails the look with a reason that
+/// names the wait and apk's line about the lock, by exact equality, and nothing is listed.
+#[test]
+fn a_database_lock_held_past_the_bound_fails_the_look_naming_the_lock() {
+    let (_, fake) = apk(FIXTURE);
+    fake.always(
+        &refresh_args(),
+        Ok(LaunchctlOutput::exit(99, DATABASE_LOCKED)),
+    );
+    let (lock, waits) = RecordedWaits::bounded(4);
+    let collector = Apk::new(Box::new(fake.clone()), Box::new(fake.clone()), lock);
+    assert_eq!(
+        collect(&collector, LinuxScope::All).err(),
+        Some(
+            "the package manager's lock was held for 4s of 4s: apk update failed with exit code \
+             99: ERROR: Unable to lock database: temporary error (try again later)"
+                .to_owned()
+        )
+    );
+    assert_eq!(waits.waits(), [2, 2]);
+    assert_eq!(fake.calls(), vec![refresh_args(); 3]);
+}
+
+/// Proves a held lock is a run that did not exit 0 and says `Unable to lock database`; another
+/// failure, or those words in a run that exited 0, is not.
+#[test]
+fn a_lock_is_held_only_by_a_failed_run_that_says_so() {
+    assert!(lock_held(Some(99), DATABASE_LOCKED));
+    assert!(lock_held(None, DATABASE_LOCKED));
+    assert!(!lock_held(Some(0), DATABASE_LOCKED));
+    assert!(!lock_held(Some(1), "ERROR: unable to select packages"));
 }
