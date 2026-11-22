@@ -6,10 +6,11 @@ use super::code_signing::{
     ALREADY_EXISTS, BUILD_JOB, CHECK_BOOTSTRAP_CODE, CHECK_HELLO_CODE, CHECK_HOSTKEEPER_CODE,
     CHECK_INTERMEDIATE, CHECK_PACKAGED_HK, CHECK_PACKAGED_HOSTKEEPER, CHMOD, CODE_IDENTITY,
     COMPILE_JOB, DELETE_CODE_KEYCHAIN, DELETE_CODE_P12, EXPAND_BOOTSTRAP_FULL, EXPAND_FULL,
-    EXPAND_HELLO_FULL, FIND_VALID_IDENTITIES, IDENTITY_IS_VALID, IMPORT_INTERMEDIATE,
-    INTERMEDIATE_SHA256, NOT_SET_P12, NOT_SET_PASSWORD, PROGRAMS, SIGN_BOOTSTRAP_CODE,
-    SIGN_CODE_JOB, SIGN_CODE_STEPS, SIGN_HELLO_CODE, SIGN_HK, SIGN_HOSTKEEPER, SIGNED_MACHO,
-    UNSIGNED_MACHO, VALID_30_DAYS,
+    EXPAND_HELLO_FULL, FIND_VALID_IDENTITIES, IDENTITY_IS_VALID, IMPORT_FAILED_IF, IMPORT_ID,
+    IMPORT_INTERMEDIATE, INTERMEDIATE_SHA256, NOT_SET_P12, NOT_SET_PASSWORD, PROGRAMS,
+    SAME_AS_ALREADY_EXISTS, SHOW_IMPORT, SIGN_BOOTSTRAP_CODE, SIGN_CODE_JOB, SIGN_CODE_STEPS,
+    SIGN_HELLO_CODE, SIGN_HK, SIGN_HOSTKEEPER, SIGNED_MACHO, UNSIGNED_MACHO, VALID_30_DAYS,
+    WRITE_ALREADY_EXISTS,
 };
 use super::lint::lint;
 use super::pkg_signing::{CHECK_JOB, CHECK_STEPS, SIGN_ENV, SIGN_JOB, SUMS_IF, Step};
@@ -319,7 +320,7 @@ fn a_checkout_or_cargo_step_in_the_signing_job_or_a_step_moved_or_changed_is_ref
         &run_line(SIGN_HK),
         &format!("        continue-on-error: true\n{}", run_line(SIGN_HK)),
     );
-    assert_refused(&lenient, &code_step(19));
+    assert_refused(&lenient, &code_step(22));
 }
 
 #[test]
@@ -371,7 +372,7 @@ fn an_intermediate_not_held_to_its_pin_or_not_in_the_keychain_is_refused() {
     assert_refused(&plain, &code_step(11));
     let absent = with_in(
         &text,
-        &quoted_run_line(IMPORT_INTERMEDIATE),
+        &run_line(IMPORT_INTERMEDIATE),
         "        run: echo fine\n",
     );
     assert_refused(&absent, &code_step(13));
@@ -379,22 +380,58 @@ fn an_intermediate_not_held_to_its_pin_or_not_in_the_keychain_is_refused() {
 
 #[test]
 fn an_import_that_fails_on_the_duplicate_or_passes_every_failure_is_refused() {
-    // Catches: the import of the first signing run on main back (it failed on a runner that
-    // holds the intermediate already), an import that passes any failure, or one that takes
-    // another answer for the duplicate.
+    // Catches: the import of the first signing run on main back (it stopped the job on a runner
+    // that holds the intermediate already), an import whose failure is never judged, a judge
+    // that takes another answer for the duplicate or passes any answer, or one that runs
+    // whatever the import's outcome.
     let text = artifacts_yml();
-    let step = quoted_run_line(IMPORT_INTERMEDIATE);
-    let plain = "        run: security import \"$RUNNER_TEMP/DeveloperIDG2CA.cer\" -k \"$RUNNER_TEMP/code-signing.keychain-db\"\n";
-    assert_refused(&with_in(&text, &step, plain), &code_step(13));
-    let any = with_in(&text, &step, &step.replace("exit 1; fi", "exit 0; fi"));
-    assert_refused(&any, &code_step(13));
+    let import = format!(
+        "        id: {IMPORT_ID}\n        continue-on-error: true\n{}",
+        run_line(IMPORT_INTERMEDIATE)
+    );
+    let stops = with_in(
+        &text,
+        &import,
+        &format!("        id: {IMPORT_ID}\n{}", run_line(IMPORT_INTERMEDIATE)),
+    );
+    assert_refused(&stops, &code_step(13));
+    let renamed = with_in(&text, &import, &import.replace(IMPORT_ID, "import"));
+    assert_refused(&renamed, &code_step(13));
+    let unkept = with_in(
+        &text,
+        &import,
+        &import.replace(" > \"$RUNNER_TEMP/import-intermediate.txt\" 2>&1", ""),
+    );
+    assert_refused(&unkept, &code_step(13));
+    let unshown = with_in(&text, &run_line(SHOW_IMPORT), "        run: echo fine\n");
+    assert_refused(&unshown, &code_step(14));
+    let write = quoted_run_line(WRITE_ALREADY_EXISTS);
     let other = with_in(
         &text,
-        &step,
-        &step.replace("already exists in the keychain.", "already exists"),
+        &write,
+        &write.replace("already exists in the keychain.", "already exists"),
     );
-    assert_refused(&other, &code_step(13));
-    assert_eq!(IMPORT_INTERMEDIATE.matches(ALREADY_EXISTS).count(), 1);
+    assert_refused(&other, &code_step(15));
+    let judge = run_line(SAME_AS_ALREADY_EXISTS);
+    for changed in [
+        judge
+            .replace("cmp ", "cmp -s ")
+            .replace("cmp -s ", "true || cmp "),
+        "        run: echo fine\n".to_owned(),
+    ] {
+        assert_refused(&with_in(&text, &judge, &changed), &code_step(16));
+    }
+    let condition = format!("        if: {IMPORT_FAILED_IF}\n{judge}");
+    let always = with_in(&text, &condition, &judge);
+    assert_refused(&always, &code_step(16));
+    let on_success = with_in(
+        &text,
+        &condition,
+        &condition.replace("'failure'", "'success'"),
+    );
+    assert_refused(&on_success, &code_step(16));
+    assert_eq!(WRITE_ALREADY_EXISTS.matches(ALREADY_EXISTS).count(), 1);
+    assert!(IMPORT_FAILED_IF.contains(&format!("steps.{IMPORT_ID}.outcome")));
 }
 
 #[test]
@@ -405,26 +442,26 @@ fn an_identity_not_proved_valid_before_the_signing_is_refused() {
     let text = artifacts_yml();
     let find = run_line(FIND_VALID_IDENTITIES);
     let absent = with_in(&text, &find, "        run: echo fine\n");
-    assert_refused(&absent, &code_step(14));
+    assert_refused(&absent, &code_step(17));
     for (from, to) in [
         ("find-identity -v -p", "find-identity -p"),
         ("-p codesigning", "-p basic"),
     ] {
         let changed = with_in(&text, &find, &find.replace(from, to));
-        assert_refused(&changed, &code_step(14));
+        assert_refused(&changed, &code_step(17));
     }
     let check = run_line(IDENTITY_IS_VALID);
     let absent = with_in(&text, &check, "        run: echo fine\n");
-    assert_refused(&absent, &code_step(15));
+    assert_refused(&absent, &code_step(18));
     for (from, to) in [
         ("\"\\\"$IDENTITY\\\"\"", "\"$IDENTITY\""),
         ("grep -F -q", "grep -F -q -v"),
     ] {
         let changed = with_in(&text, &check, &check.replace(from, to));
-        assert_refused(&changed, &code_step(15));
+        assert_refused(&changed, &code_step(18));
     }
     let tolerated = with_in(&text, &check, &check.replace("\n", " || true\n"));
-    assert_refused(&tolerated, &code_step(15));
+    assert_refused(&tolerated, &code_step(18));
 }
 
 #[test]
@@ -434,15 +471,15 @@ fn an_identity_near_its_end_must_stop_the_job_by_name() {
     let text = artifacts_yml();
     let step = quoted_run_line(VALID_30_DAYS);
     let absent = with_in(&text, &step, "        run: echo fine\n");
-    assert_refused(&absent, &code_step(16));
+    assert_refused(&absent, &code_step(19));
     let shorter = with_in(
         &text,
         &step,
         &step.replace("-checkend 2592000", "-checkend 86400"),
     );
-    assert_refused(&shorter, &code_step(16));
+    assert_refused(&shorter, &code_step(19));
     let go_on = with_in(&text, &step, &step.replace("exit 1", "exit 0"));
-    assert_refused(&go_on, &code_step(16));
+    assert_refused(&go_on, &code_step(19));
 }
 
 #[test]
@@ -454,22 +491,22 @@ fn a_program_not_signed_under_its_identifier_with_the_runtime_and_a_timestamp_is
         (
             SIGN_HOSTKEEPER,
             "--identifier dev.hostkeeper.hostkeeper",
-            18,
+            21,
             "hostkeeper",
             "dev.hostkeeper.hostkeeper",
         ),
-        (SIGN_HK, "--options runtime ", 19, "hk", "dev.hostkeeper.hk"),
+        (SIGN_HK, "--options runtime ", 22, "hk", "dev.hostkeeper.hk"),
         (
             SIGN_HELLO_CODE,
             "--identifier dev.hostkeeper.hello",
-            20,
+            23,
             "hello",
             "dev.hostkeeper.hello",
         ),
         (
             SIGN_BOOTSTRAP_CODE,
             "--timestamp signed",
-            21,
+            24,
             "hostkeeper-bootstrap",
             "dev.hostkeeper.bootstrap",
         ),
@@ -506,7 +543,7 @@ fn the_keychain_and_the_p12_left_after_a_failed_signing_or_the_upload_before_the
         &keychain,
         &keychain.replace("${{ always() }}", "${{ success() }}"),
     );
-    assert_refused(&not_always, &code_step(22));
+    assert_refused(&not_always, &code_step(25));
     let p12 = format!(
         "      - name: Delete the identity's file, whether the signing worked or not\n        if: ${{{{ always() }}}}\n{}",
         run_line(DELETE_CODE_P12)
@@ -515,8 +552,8 @@ fn the_keychain_and_the_p12_left_after_a_failed_signing_or_the_upload_before_the
         "      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1\n        with:\n          name: {SIGNED_MACHO}\n          path: signed/\n          retention-days: 90\n          if-no-files-found: error\n"
     );
     let late = with_in(&text, &format!("{p12}{upload}"), &format!("{upload}{p12}"));
-    assert_refused(&late, &code_step(23));
-    assert_refused(&late, &code_step(24));
+    assert_refused(&late, &code_step(26));
+    assert_refused(&late, &code_step(27));
 }
 
 #[test]

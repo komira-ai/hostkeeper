@@ -9,8 +9,8 @@
 //!   holds `contents: read` alone, has the `env:` [`CODE_IDENTITY`] alone, and its steps are
 //!   exactly [`SIGN_CODE_STEPS`], in order: no checkout, no cargo. A secret that is not set stops
 //!   it by its name. Apple's intermediate joins the keychain only as the file of
-//!   [`INTERMEDIATE_SHA256`] ([`IMPORT_INTERMEDIATE`]: a runner that holds it already answers
-//!   [`ALREADY_EXISTS`], which alone passes), the identity must then be a valid code-signing
+//!   [`INTERMEDIATE_SHA256`] ([`IMPORT_INTERMEDIATE`], kept going on failure: a runner that holds
+//!   it already answers [`ALREADY_EXISTS`], which alone passes [`SAME_AS_ALREADY_EXISTS`]), the identity must then be a valid code-signing
 //!   identity ([`FIND_VALID_IDENTITIES`], [`IDENTITY_IS_VALID`]), and an identity that expires within 30 days stops it by name. It signs each of [`PROGRAMS`] under its identifier with `--options runtime
 //!   --timestamp`, and uploads the signed programs as [`SIGNED_MACHO`] after the cleanup that
 //!   runs under [`ALWAYS`].
@@ -121,13 +121,31 @@ pub const CHECK_INTERMEDIATE: &str = concat!(
 pub const ALREADY_EXISTS: &str =
     "security: SecKeychainItemImport: The specified item already exists in the keychain.";
 
-/// The intermediate imported into the job's keychain: a success, or [`ALREADY_EXISTS`] exactly,
-/// passes; any other answer stops the job with what `security` said.
-pub const IMPORT_INTERMEDIATE: &str = concat!(
-    "if out=\"$(security import \"$RUNNER_TEMP/DeveloperIDG2CA.cer\" -k \"$RUNNER_TEMP/code-signing.keychain-db\" 2>&1)\"; then echo \"$out\"; elif test \"$out\" = \"",
+/// The `id` of the import of the intermediate, whose outcome the steps after it read.
+pub const IMPORT_ID: &str = "import-intermediate";
+
+/// The intermediate imported into the job's keychain, its answer kept in a file. The step is
+/// [`Step::Kept`]: a failure goes on to [`SAME_AS_ALREADY_EXISTS`], which passes it only as
+/// [`ALREADY_EXISTS`], exactly.
+pub const IMPORT_INTERMEDIATE: &str = "security import \"$RUNNER_TEMP/DeveloperIDG2CA.cer\" -k \"$RUNNER_TEMP/code-signing.keychain-db\" > \"$RUNNER_TEMP/import-intermediate.txt\" 2>&1";
+
+/// What the import answered, into the log.
+pub const SHOW_IMPORT: &str = "cat \"$RUNNER_TEMP/import-intermediate.txt\"";
+
+/// The `if:` of the two steps that judge a failed import.
+pub const IMPORT_FAILED_IF: &str = "${{ steps.import-intermediate.outcome == 'failure' }}";
+
+/// [`ALREADY_EXISTS`] as `security` writes it, into a file, after a failed import.
+pub const WRITE_ALREADY_EXISTS: &str = concat!(
+    "echo \"",
     "security: SecKeychainItemImport: The specified item already exists in the keychain.",
-    "\"; then echo \"the runner holds the intermediate already: $out\"; else echo \"::error::the import of the intermediate failed: $out\"; exit 1; fi"
+    "\" > \"$RUNNER_TEMP/already-exists.txt\""
 );
+
+/// A failed import passes only when its whole answer is [`ALREADY_EXISTS`], byte for byte; any
+/// other answer fails the step, and so the job.
+pub const SAME_AS_ALREADY_EXISTS: &str =
+    "cmp \"$RUNNER_TEMP/already-exists.txt\" \"$RUNNER_TEMP/import-intermediate.txt\"";
 
 /// The valid code-signing identities of the job's keychain, into a file: `security
 /// find-identity -v -p codesigning` lists only an identity whose chain builds to a trusted Apple
@@ -184,6 +202,14 @@ const fn with_password(run: &'static str) -> Step {
     }
 }
 
+const fn if_import_failed(run: &'static str) -> Step {
+    Step::Run {
+        run,
+        secret: None,
+        condition: Some(IMPORT_FAILED_IF),
+    }
+}
+
 const fn always(run: &'static str) -> Step {
     Step::Run {
         run,
@@ -193,7 +219,7 @@ const fn always(run: &'static str) -> Step {
 }
 
 /// The steps of [`SIGN_CODE_JOB`], exactly and in this order.
-pub const SIGN_CODE_STEPS: [Step; 24] = [
+pub const SIGN_CODE_STEPS: [Step; 27] = [
     Step::Download(UNSIGNED_MACHO, "unsigned"),
     with_p12(NOT_SET_P12),
     with_password(NOT_SET_PASSWORD),
@@ -214,7 +240,13 @@ pub const SIGN_CODE_STEPS: [Step; 24] = [
     run("security list-keychains -d user -s \"$RUNNER_TEMP/code-signing.keychain-db\""),
     run(FETCH_INTERMEDIATE),
     run(CHECK_INTERMEDIATE),
-    run(IMPORT_INTERMEDIATE),
+    Step::Kept {
+        id: IMPORT_ID,
+        run: IMPORT_INTERMEDIATE,
+    },
+    run(SHOW_IMPORT),
+    if_import_failed(WRITE_ALREADY_EXISTS),
+    if_import_failed(SAME_AS_ALREADY_EXISTS),
     run(FIND_VALID_IDENTITIES),
     run(IDENTITY_IS_VALID),
     run(VALID_30_DAYS),

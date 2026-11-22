@@ -611,11 +611,22 @@ jobs:
       - name: The intermediate is the pinned one
         run: echo "f16cd3c54c7f83cea4bf1a3e6a0819c8aaa8e4a1528fd144715f350643d2df3a  $RUNNER_TEMP/DeveloperIDG2CA.cer" | shasum -a 256 --check --strict
       # A hosted runner may hold the intermediate already (outside the job's keychain), and then
-      # `security import` answers that the item already exists. That one answer, exactly, is taken
-      # as success; any other failure stops the job with what security said. Whether the chain
-      # really builds is the next step's question, not this one's.
-      - name: The intermediate joins the job's keychain, unless the runner holds it already
-        run: 'if out="$(security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$RUNNER_TEMP/code-signing.keychain-db" 2>&1)"; then echo "$out"; elif test "$out" = "security: SecKeychainItemImport: The specified item already exists in the keychain."; then echo "the runner holds the intermediate already: $out"; else echo "::error::the import of the intermediate failed: $out"; exit 1; fi'
+      # `security import` answers that the item already exists. The import's failure does not stop
+      # the job by itself: its answer is kept, printed, and, when the import failed, passes only
+      # when it is that one answer, byte for byte; any other answer stops the job. Whether the
+      # chain really builds is the identity steps' question, not these.
+      - name: The intermediate joins the job's keychain (its answer kept)
+        id: import-intermediate
+        continue-on-error: true
+        run: security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$RUNNER_TEMP/code-signing.keychain-db" > "$RUNNER_TEMP/import-intermediate.txt" 2>&1
+      - name: What the import answered
+        run: cat "$RUNNER_TEMP/import-intermediate.txt"
+      - name: The answer of a runner that holds the intermediate already
+        if: ${{ steps.import-intermediate.outcome == 'failure' }}
+        run: 'echo "security: SecKeychainItemImport: The specified item already exists in the keychain." > "$RUNNER_TEMP/already-exists.txt"'
+      - name: A failed import passes only as that answer, exactly
+        if: ${{ steps.import-intermediate.outcome == 'failure' }}
+        run: cmp "$RUNNER_TEMP/already-exists.txt" "$RUNNER_TEMP/import-intermediate.txt"
       # `find-identity -v` lists only an identity whose chain builds to a trusted Apple root under
       # the code-signing policy: the identity is usable for codesign, whichever keychain holds the
       # intermediate. The list goes to a file (not the log, so no certificate hash is printed).

@@ -98,6 +98,9 @@ pub enum Step {
     /// `actions/upload-artifact` of the directory (`path`) as the artifact (`name`), with
     /// `retention-days: 90` and `if-no-files-found: error`, and no other input.
     Upload(&'static str, &'static str),
+    /// A `run:`, exactly, with the `id` and `continue-on-error: true` and no other key: its
+    /// failure does not stop the job, and a later step judges it by `steps.<id>.outcome`.
+    Kept { id: &'static str, run: &'static str },
 }
 
 const fn run(run: &'static str) -> Step {
@@ -452,6 +455,12 @@ pub fn step_is(step: &Node, want: &Step) -> bool {
                 ("if-no-files-found", "error"),
             ],
         ),
+        Step::Kept { id, run } => {
+            keys == ["continue-on-error", "id", "run"]
+                && text_of(Some(step), "id") == Some(id)
+                && text_of(Some(step), "run") == Some(run)
+                && text_of(Some(step), "continue-on-error") == Some("true")
+        }
         Step::Run {
             run,
             secret,

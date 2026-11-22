@@ -1,7 +1,8 @@
-//! The two steps of `sign-code` that decide whether the job's keychain can sign
-//! ([`IMPORT_INTERMEDIATE`], then [`FIND_VALID_IDENTITIES`] and [`IDENTITY_IS_VALID`], which the
-//! lint holds the committed file to),
-//! run with bash as a runner runs a step (`bash --noprofile --norc -eo pipefail`) against a fake
+//! The steps of `sign-code` that decide whether the job's keychain can sign (the import of the
+//! intermediate, [`IMPORT_INTERMEDIATE`] to [`SAME_AS_ALREADY_EXISTS`], then
+//! [`FIND_VALID_IDENTITIES`] and [`IDENTITY_IS_VALID`], which the lint holds the committed file
+//! to), run with bash as a runner runs a step (`bash --noprofile --norc -eo pipefail`) against a
+//! fake
 //! `security` (tests/bin/gh_fixture.rs) that gives each answer the real one can: the import
 //! passes on a runner without the intermediate and on one that holds it, and on nothing else;
 //! the identity passes only when `find-identity -v` lists it, by its exact name, as valid.
@@ -10,7 +11,8 @@ use std::path::Path;
 use std::process::Command;
 
 use super::code_signing::{
-    ALREADY_EXISTS, CODE_IDENTITY, FIND_VALID_IDENTITIES, IDENTITY_IS_VALID, IMPORT_INTERMEDIATE,
+    ALREADY_EXISTS, CODE_IDENTITY, FIND_VALID_IDENTITIES, IDENTITY_IS_VALID, IMPORT_FAILED_IF,
+    IMPORT_ID, IMPORT_INTERMEDIATE, SAME_AS_ALREADY_EXISTS, SHOW_IMPORT, WRITE_ALREADY_EXISTS,
 };
 use super::testdir::TestDir;
 
@@ -71,8 +73,19 @@ fn run(name: &str, script: &str, verb: &str, answer: &Answer) -> Ran {
 /// The command line the import step gives `security`.
 const IMPORT_CALL: &str = "import temp/DeveloperIDG2CA.cer -k temp/code-signing.keychain-db\n";
 
+/// The four import steps as a runner runs them: the import with `continue-on-error` (its
+/// failure only sets its outcome), the print of its answer, then, only when the import failed
+/// ([`IMPORT_FAILED_IF`]), the duplicate answer written and compared with the import's. A step
+/// that fails stops the job.
 fn import(name: &str, answer: &Answer) -> Ran {
-    run(name, IMPORT_INTERMEDIATE, "import", answer)
+    assert_eq!(
+        IMPORT_FAILED_IF,
+        format!("${{{{ steps.{IMPORT_ID}.outcome == 'failure' }}}}")
+    );
+    let script = format!(
+        "if {IMPORT_INTERMEDIATE}; then outcome=success; else outcome=failure; fi\n{SHOW_IMPORT}\nif test \"$outcome\" = failure; then\n{WRITE_ALREADY_EXISTS}\n{SAME_AS_ALREADY_EXISTS}\nfi"
+    );
+    run(name, &script, "import", answer)
 }
 
 #[test]
@@ -113,27 +126,29 @@ fn a_runner_that_holds_the_intermediate_already_passes() {
         ran,
         Ran {
             status: Some(0),
-            stdout: format!("the runner holds the intermediate already: {ALREADY_EXISTS}\n"),
+            stdout: format!("{ALREADY_EXISTS}\n"),
             calls: IMPORT_CALL.to_owned(),
         }
     );
 }
 
 #[test]
-fn any_other_failure_of_the_import_stops_the_job_with_what_security_said() {
-    // Catches: a step that passes every failure (`|| true`), or one that takes any answer
-    // naming the duplicate, with more said beside it, for the duplicate alone.
+fn any_other_failure_of_the_import_stops_the_job_after_printing_what_security_said() {
+    // Catches: a judge that passes every failure, or one that takes any answer naming the
+    // duplicate, with more said beside it, or without its line break, for the duplicate alone.
+    // The answer is printed before the job stops.
     let other = "security: SecKeychainItemImport: One or more parameters passed to a function were not valid.";
     let more = format!(
         "{ALREADY_EXISTS}\nsecurity: SecKeychainItemImport: Unable to decode the provided data."
     );
-    let suffixed = format!("{ALREADY_EXISTS} (-25299)");
-    for (name, said) in [
-        ("other", other.to_owned()),
-        ("more", more),
+    let suffixed = format!("{ALREADY_EXISTS} (-25299)\n");
+    for (name, stderr) in [
+        ("other", format!("{other}\n")),
+        ("more", format!("{more}\n")),
         ("suffixed", suffixed),
+        ("unterminated", ALREADY_EXISTS.to_owned()),
+        ("empty", String::new()),
     ] {
-        let stderr = format!("{said}\n");
         let ran = import(
             name,
             &Answer {
@@ -142,15 +157,9 @@ fn any_other_failure_of_the_import_stops_the_job_with_what_security_said() {
                 status: 1,
             },
         );
-        assert_eq!(
-            ran,
-            Ran {
-                status: Some(1),
-                stdout: format!("::error::the import of the intermediate failed: {said}\n"),
-                calls: IMPORT_CALL.to_owned(),
-            },
-            "{name}"
-        );
+        assert_eq!(ran.status, Some(1), "{name}");
+        assert_eq!(ran.calls, IMPORT_CALL, "{name}");
+        assert!(ran.stdout.starts_with(&stderr), "{name}: {:?}", ran.stdout);
     }
 }
 
