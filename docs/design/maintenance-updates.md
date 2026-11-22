@@ -59,10 +59,14 @@ heartbeat, the due items included; the coordinator only shows the reports. The o
 (section 1.1), because no host can see it: for the `xcode` row below the daemon reports only what is installed, and the coordinator
 decides what is due.
 
-The daemon looks at its host every hour, after every start, and after a maintenance step ends, as the prerequisites pass does today (Built:
+The daemon looks at its host every hour, after every start, and after a maintenance step ends, and sooner after a look that failed (Built:
+5 minutes after it ended, doubled for each further failure in a row, at most the hour; `maintenance_facts.rs`), as the prerequisites pass does today (Built:
 `crates/hostkeeper-daemon/src/prerequisites.rs`, a worker thread that never holds up a heartbeat; `xcode_clt.rs`, which already runs
 `softwareupdate`; the bounded program runner `run`/`run_ok` of `login_account.rs`). Each program runs as root with an empty environment, a deadline and capped output, through the same ports. **New:** the
-checks below and the report of section 4.1.
+checks below and the report of section 4.1. A package manager's run that finds its lock held is tried again every 2 seconds for at
+most the daemon's `--package-lock-wait-secs`, as the hook's stage waits, and fails the look only when the lock is still held then (Built:
+`LockWait` in `maintenance_collect.rs`; apt's `DPkg::Lock::Timeout` is not used, since apt 2.4 to 2.8 do not apply it to the lock of
+`/var/lib/apt/lists` that `apt-get update` takes; dnf runs with `exit_on_lock`).
 
 | Kind | Platform | What the daemon reads | Due when |
 |---|---|---|---|

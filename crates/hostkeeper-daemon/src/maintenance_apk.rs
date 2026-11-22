@@ -4,13 +4,18 @@
 //! fixture; a line the parser does not know is counted and never guessed at. `apk` has no
 //! security origin: no update is a security update, so under the security scope only a kernel is
 //! due.
+//!
+//! **The lock.** The refresh takes apk's database lock; when another `apk` holds it, the refresh
+//! fails at once (`Unable to lock database`, [`LOCKED`]) and is run again until the lock is free,
+//! for at most the look's bound ([`LockWait`]), as the dnf and apt collectors wait. The listing
+//! takes no lock.
 
 use std::path::Path;
 use std::time::Duration;
 
 use hostkeeper_launchd::{Launchctl, LaunchctlProcess};
 
-use crate::maintenance_collect::{Collector, Look, Section, linux_item, listing};
+use crate::maintenance_collect::{Collector, LockWait, Look, Section, linux_item, listing};
 
 /// The program that is run.
 pub const APK: &str = "/sbin/apk";
@@ -29,6 +34,9 @@ pub const APK_KERNELS: [&str; 5] = [
     "linux-stable",
     "linux-rpi",
 ];
+
+/// What apk says when another holds its database lock.
+pub const LOCKED: &str = "Unable to lock database";
 
 const REFRESH_ARGS: [&str; 2] = ["update", "-q"];
 const VERSION_ARGS: [&str; 3] = ["version", "-l", "<"];
@@ -83,27 +91,39 @@ fn split_package(package: &str) -> Option<(&str, String)> {
     Some((name, format!("{version}-{release}"))).filter(|(name, _)| !name.is_empty())
 }
 
+/// Whether an `apk` run that did not exit 0 found the lock held: it says [`LOCKED`].
+#[must_use]
+pub fn lock_held(code: Option<i32>, text: &str) -> bool {
+    code != Some(0) && text.contains(LOCKED)
+}
+
 /// The collector of the updates `apk` offers.
 pub struct Apk {
     refresh: Box<dyn Launchctl>,
     list: Box<dyn Launchctl>,
+    lock: LockWait,
 }
 
 impl Apk {
-    /// A collector that refreshes the index through `refresh` and lists through `list`: the same
-    /// program, each with the deadline of its step.
+    /// A collector that refreshes the index through `refresh`, waiting for a held lock as `lock`
+    /// says, and lists through `list`: the same program, each with the deadline of its step.
     #[must_use]
-    pub fn new(refresh: Box<dyn Launchctl>, list: Box<dyn Launchctl>) -> Apk {
-        Apk { refresh, list }
+    pub fn new(refresh: Box<dyn Launchctl>, list: Box<dyn Launchctl>, lock: LockWait) -> Apk {
+        Apk {
+            refresh,
+            list,
+            lock,
+        }
     }
 
-    /// The collector of this host: [`APK`], the refresh waited for [`APK_REFRESH_DEADLINE`] and
-    /// the listing for [`APK_LIST_DEADLINE`].
+    /// The collector of this host: [`APK`], each refresh waited for [`APK_REFRESH_DEADLINE`], a
+    /// held lock for at most `lock_wait_secs`, and the listing for [`APK_LIST_DEADLINE`].
     #[must_use]
-    pub fn at_host() -> Apk {
+    pub fn at_host(lock_wait_secs: u64) -> Apk {
         Apk::new(
             Box::new(LaunchctlProcess::new(Path::new(APK), APK_REFRESH_DEADLINE)),
             Box::new(LaunchctlProcess::new(Path::new(APK), APK_LIST_DEADLINE)),
+            LockWait::host(lock_wait_secs),
         )
     }
 }
@@ -114,7 +134,8 @@ impl Collector for Apk {
     }
 
     fn collect(&self, look: &Look<'_>) -> Result<Section, String> {
-        listing(&*self.refresh, "apk update", &REFRESH_ARGS, &[0])?;
+        self.lock
+            .listing(&*self.refresh, "apk update", &REFRESH_ARGS, &[0], lock_held)?;
         let (_, text) = listing(&*self.list, "apk version", &VERSION_ARGS, &[0])?;
         let versions = parse_apk_version(&text);
         let mut section = Section {

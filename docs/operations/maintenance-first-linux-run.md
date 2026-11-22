@@ -54,7 +54,7 @@ Read from the code against the lists above, as built:
 - **B**: the same, except that the apply has nothing to install.
 - **C** and **E**: deferred at the stage with `unsupported_kind`, because their lists hold `reboot`
   items (gap 2).
-- **F**: nothing, until its next look (gap 3).
+- **F**: nothing, until its next look (gap 3, now fixed: the look waits for the lock).
 
 So no first run should be made on a serving host until gaps 1 and 2 are fixed. A test host may be
 used to see the halt and Put back on hardware.
@@ -77,11 +77,12 @@ used to see the halt and Put back on hardware.
    The in-process e2e (`crates/hostkeeper-daemon/tests/maintenance_linux_e2e.rs`) does not show
    this, because its launcher answers the stage itself. A `reboot`-only run cannot be made until it
    is fixed.
-3. **A look fails on a held apt lock.** The look's `apt-get update` waits for no lock, unlike the
-   hook's stage and apply, which wait up to the daemon's `--package-lock-wait-secs` (300 by
-   default) for each program they run. A look that collides with another `apt-get` (the
-   repository installer's, or unattended-upgrades') fails, and the host shows no due list until its
-   next look, an hour later.
+3. **A look fails on a held apt lock.** Fixed: the look's `apt-get update` (and dnf's listings and
+   `apk update`) is now tried again every 2 seconds while the lock is held, for up to the daemon's
+   `--package-lock-wait-secs` (300 by default), and a look that fails is tried again 5 minutes
+   later rather than an hour ([maintenance.md](maintenance.md)). The apply's `apt-get update`
+   passes `DPkg::Lock::Timeout`, which apt 2.4 to 2.8 do not apply to the lock of
+   `/var/lib/apt/lists`, so the apply can still fail on that lock.
 
 Each is to be fixed in its own pull request, with a test that fails before the fix. Once gaps 1 and
 2 are released, the first run is the command above on one host whose drain moves its work elsewhere.

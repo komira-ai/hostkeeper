@@ -14,26 +14,23 @@
 
 use super::stage::{Calls, Download, arguments, listing_failed, scaled};
 use crate::maintenance_collect::{LinuxScope, Look};
+use crate::maintenance_dnf::{EXIT_ON_LOCK, lock_held};
 use crate::maintenance_hook::kind::KindError;
 
 /// Where dnf keeps what it downloads.
 pub const CACHE: &str = "/var/cache/dnf";
 
-/// What dnf exits with when another holds its lock and `exit_on_lock` is set.
-pub const LOCK_HELD: i32 = 200;
-
 /// What `--assumeno` exits with once it has printed the transaction.
 const ABORTED: i32 = 1;
 
-const EXIT_ON_LOCK: &str = "--setopt=exit_on_lock=True";
 const SECURITY: &str = "--security";
 const ESTIMATE: [&str; 2] = ["upgrade", "--assumeno"];
 const DOWNLOAD: [&str; 4] = ["upgrade", "--downloadonly", "-y", "-q"];
 const TOTAL: &str = "Total download size:";
 
-/// Whether a `dnf` run found the lock held: exit [`LOCK_HELD`].
-pub(super) fn busy(code: Option<i32>, _text: &str) -> bool {
-    code == Some(LOCK_HELD)
+/// Whether a `dnf` run found the lock held, as the maintenance look reads it ([`lock_held`]).
+pub(super) fn busy(code: Option<i32>, text: &str) -> bool {
+    lock_held(code, text)
 }
 
 /// The options of both runs under `look`.

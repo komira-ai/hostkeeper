@@ -22,15 +22,12 @@ use super::stage::{
     Calls, Download, LISTING_DEADLINE, REASON_LISTING_FAILED, arguments, listing_failed,
     never_busy, scaled,
 };
-use crate::maintenance_apk::{APK_KERNELS, ApkUpdate, parse_apk_version};
+use crate::maintenance_apk::{APK_KERNELS, ApkUpdate, lock_held, parse_apk_version};
 use crate::maintenance_collect::Look;
 use crate::maintenance_hook::kind::KindError;
 
 /// Where the stage puts the packages `apk fetch` downloads.
 pub const STAGE_DIR: &str = "/var/cache/hostkeeper/maintenance/apk";
-
-/// What apk says when another holds its database lock.
-pub const LOCKED: &str = "Unable to lock database";
 
 const UPDATE: [&str; 2] = ["update", "-q"];
 const VERSION: [&str; 3] = ["version", "-l", "<"];
@@ -38,9 +35,9 @@ const INFO: [&str; 2] = ["info", "--size"];
 const FETCH: [&str; 4] = ["fetch", "--quiet", "--output", STAGE_DIR];
 const SIZE_HEADER: &str = " installed size:";
 
-/// Whether an `apk` run that did not exit 0 found the lock held: it says [`LOCKED`].
+/// Whether an `apk` run found the lock held, as the maintenance look reads it ([`lock_held`]).
 pub(super) fn busy(code: Option<i32>, text: &str) -> bool {
-    code != Some(0) && text.contains(LOCKED)
+    lock_held(code, text)
 }
 
 /// What apk will download for `look`, or `None` when nothing is due.
