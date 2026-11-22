@@ -11,7 +11,7 @@
 # static build;
 # for macos-arm64 the installer pkg of a Mac's first install, the bootstrap pkg that Apple Business
 # installs on a new Mac, and hello's .pkg, each signed on a
-# push to main with the Developer ID Installer identity (sign-pkg, then check-pkg), their programs
+# push to main (and in a signing run by hand) with the Developer ID Installer identity (sign-pkg, then check-pkg), their programs
 # signed first with the Developer ID Application identity (compile-macos, sign-code, then
 # build-macos); the
 # coordinator's image index over its two images
@@ -76,7 +76,13 @@
 #
 # No pull request runs this workflow (AGENTS.md B9: a pull request runs only build and unit tests
 # with coverage, and never a macOS job). A push to main builds, sums, signs and checks what it signed (`verify`); a run
-# by hand on a branch builds and sums and signs nothing. release.yml starts when a push run of
+# by hand on a branch builds and sums and signs nothing, unless it is started with `sign: true`
+# (`gh workflow run artifacts.yml --ref <branch> -f sign=true`): a signing run. A signing run, on a
+# branch of this repository only (the job `version` refuses it by name for a tag or a fork),
+# also runs sign-code, sign-pkg and check-pkg and the signature checks of build-macos, exactly as
+# a push to main does, so the signing is proved before a merge; it attests nothing (attest and
+# verify stay a push to main's) and releases nothing (release.yml plans only the completion of a
+# push run on main). release.yml starts when a push run of
 # this workflow on main completes, and publishes these files once `ci` and `privileged` have
 # passed on the same commit.
 name: artifacts
@@ -85,15 +91,23 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      sign:
+        description: Sign the macOS programs and pkgs and check them (a branch of this repository only; nothing is attested or released)
+        type: boolean
+        default: false
 
 permissions: {}
 
-# A run per commit: two runs for one commit (a re-run) queue behind each other, and different
-# commits do not wait for each other; a signing run is never cancelled. This workflow builds and
+# A run per commit and event: two runs for one commit and event (a re-run) queue behind each
+# other, and different commits do not wait for each other; a signing run is never cancelled. The
+# event is in the group so a run by hand on a branch at main's commit never shares main's push
+# group, where GitHub's one pending run per group would let it replace that push run while it
+# waits (release.yml needs the push run of each commit). This workflow builds and
 # attests and never tags or publishes, so it is outside the release group of release.yml (the
 # workflow lint lists it as exempt and holds it to this group).
 concurrency:
-  group: artifacts-${{ github.sha }}
+  group: artifacts-${{ github.sha }}-${{ github.event_name }}
   cancel-in-progress: false
 
 env:
@@ -129,6 +143,12 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
+      # A signing run started anywhere but a branch of this repository (a tag, or a fork's copy of
+      # this file) stops here, before any job runs, rather than going green unsigned; the step's
+      # name says why (the log shows the run's ref and repository above it).
+      - name: 'Refused: a signing run (sign: true) runs only on a branch of komira-ai/hostkeeper'
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.sign && !(github.repository == 'komira-ai/hostkeeper' && startsWith(github.ref, 'refs/heads/')) }}
+        run: exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -525,7 +545,7 @@ jobs:
           retention-days: 90
           if-no-files-found: error
 
-  # Push to main only: each Mach-O program signed with the Developer ID Application identity under
+  # A push to main or a signing run: each Mach-O program signed with the Developer ID Application identity under
   # its stable identifier (xtask's mac_programs.rs), with the hardened runtime and a trusted
   # timestamp, BEFORE build-macos packages it, so the pkgs and the tarballs hold signed programs.
   # The designated requirement of such a signature names the identifier and the team, never a
@@ -539,7 +559,7 @@ jobs:
   # The signed programs go to `macho-signed-macos-arm64`.
   sign-code:
     needs: [compile-macos]
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.sign && github.repository == 'komira-ai/hostkeeper' && startsWith(github.ref, 'refs/heads/')) }}
     runs-on: macos-15
     timeout-minutes: 15
     environment: pkg-signing
@@ -584,14 +604,36 @@ jobs:
         run: security set-key-partition-list -S "apple-tool:,apple:" -s -k "$PASSWORD" "$RUNNER_TEMP/code-signing.keychain-db"
       - name: The job's keychain is the user's only keychain
         run: security list-keychains -d user -s "$RUNNER_TEMP/code-signing.keychain-db"
-      # The identity's file holds the leaf and its key only; codesign needs Apple's intermediate in
-      # the keychain to build the chain, so it is fetched from Apple and held to its pinned SHA-256.
+      # The identity's file holds the leaf and its key only; codesign needs Apple's intermediate to
+      # build the chain, so it is fetched from Apple and held to its pinned SHA-256.
       - name: Apple's Developer ID intermediate (G2)
         run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/DeveloperIDG2CA.cer" https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
       - name: The intermediate is the pinned one
         run: echo "f16cd3c54c7f83cea4bf1a3e6a0819c8aaa8e4a1528fd144715f350643d2df3a  $RUNNER_TEMP/DeveloperIDG2CA.cer" | shasum -a 256 --check --strict
-      - name: The intermediate joins the job's keychain
-        run: security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$RUNNER_TEMP/code-signing.keychain-db"
+      # A hosted runner may hold the intermediate already (outside the job's keychain), and then
+      # `security import` answers that the item already exists. The import's failure does not stop
+      # the job by itself: its answer is kept, printed, and, when the import failed, passes only
+      # when it is that one answer, byte for byte; any other answer stops the job. Whether the
+      # chain really builds is the identity steps' question, not these.
+      - name: The intermediate joins the job's keychain (its answer kept)
+        id: import-intermediate
+        continue-on-error: true
+        run: security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$RUNNER_TEMP/code-signing.keychain-db" > "$RUNNER_TEMP/import-intermediate.txt" 2>&1
+      - name: What the import answered
+        run: cat "$RUNNER_TEMP/import-intermediate.txt"
+      - name: The answer of a runner that holds the intermediate already
+        if: ${{ steps.import-intermediate.outcome == 'failure' }}
+        run: 'echo "security: SecKeychainItemImport: The specified item already exists in the keychain." > "$RUNNER_TEMP/already-exists.txt"'
+      - name: A failed import passes only as that answer, exactly
+        if: ${{ steps.import-intermediate.outcome == 'failure' }}
+        run: cmp "$RUNNER_TEMP/already-exists.txt" "$RUNNER_TEMP/import-intermediate.txt"
+      # `find-identity -v` lists only an identity whose chain builds to a trusted Apple root under
+      # the code-signing policy: the identity is usable for codesign, whichever keychain holds the
+      # intermediate. The list goes to a file (not the log, so no certificate hash is printed).
+      - name: The valid code-signing identities of the job's keychain
+        run: security find-identity -v -p codesigning "$RUNNER_TEMP/code-signing.keychain-db" > "$RUNNER_TEMP/valid-identities"
+      - name: The identity is among them, so its chain builds to Apple's root
+        run: grep -F -q "\"$IDENTITY\"" "$RUNNER_TEMP/valid-identities"
       # The identity is valid for thirteen months: the release stops 30 days before it ends, so it is
       # renewed while releases still go out (docs/operations/mac-full-disk-access.md).
       - name: The identity is valid for 30 days more
@@ -628,7 +670,7 @@ jobs:
   # they go to their own artifact, `pkg-unsigned-macos-arm64`, which sign-pkg signs and check-pkg
   # checks and publishes, so each pkg SHA256SUMS lists and attest attests is the signed one. The runner's `gtar` is GNU tar, so
   # the tarball is made as on Linux. Its four programs are compile-macos's, signed by sign-code on a
-  # push to main and as the linker signed them (ad hoc) on a run by hand.
+  # push to main or in a signing run, and as the linker signed them (ad hoc) in another run by hand.
   build-macos:
     name: macos-arm64
     needs: [version, compile-macos, sign-code]
@@ -692,17 +734,17 @@ jobs:
         run: cargo xtask release set-version --version "$RELEASE_VERSION"
       - name: Keep the lock file as written
         run: cp Cargo.lock "$RUNNER_TEMP/Cargo.lock.release"
-      # The programs were compiled by compile-macos and, on a push to main, signed by sign-code
+      # The programs were compiled by compile-macos and, on a push to main or in a signing run, signed by sign-code
       # with the Developer ID Application identity before anything below packages them; the
-      # signed ones replace the unsigned ones. A run by hand off main signs nothing and builds
+      # signed ones replace the unsigned ones. Another run by hand signs nothing and builds
       # from the linker's ad hoc signatures. An artifact does not keep a file's mode.
       - name: The compiled programs
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: macho-unsigned-macos-arm64
           path: target/release
-      - name: The signed programs, over the compiled ones (push to main)
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      - name: The signed programs, over the compiled ones (a signing run)
+        if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.sign && github.repository == 'komira-ai/hostkeeper' && startsWith(github.ref, 'refs/heads/')) }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: macho-signed-macos-arm64
@@ -714,7 +756,7 @@ jobs:
       - name: hk says the version and the commit
         run: cargo xtask release check-binary target/release/hk "$RELEASE_VERSION" "$GITHUB_SHA"
       # The macOS unpack refuses a Mach-O without a valid code signature of its own bytes; the
-      # program is signed (by sign-code, or ad hoc by the linker in a run by hand), and this checks
+      # program is signed (by sign-code, or ad hoc by the linker in a run by hand that does not sign), and this checks
       # it as the unpack does.
       - name: hostkeeper has a valid code signature
         run: codesign --verify --strict --verbose=2 target/release/hostkeeper
@@ -792,11 +834,19 @@ jobs:
       - run: tar -xzf "dist/hk-$RELEASE_VERSION-$PLATFORM.tar.gz" -C "$RUNNER_TEMP/unpacked" hk
       - name: The packaged hk says the version and the commit
         run: cargo xtask release check-binary "$RUNNER_TEMP/unpacked/hk" "$RELEASE_VERSION" "$GITHUB_SHA"
-      - name: The packaged hostkeeper has the signature of the release (push to main)
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      # What check-code-signature reads, printed for the record: the run's log then holds the real
+      # codesign output of every signed release, which the check's unit tests are held to.
+      - name: What codesign shows of the packaged hostkeeper (a signing run)
+        if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.sign && github.repository == 'komira-ai/hostkeeper' && startsWith(github.ref, 'refs/heads/')) }}
+        run: codesign --display --verbose=2 "$RUNNER_TEMP/unpacked/hostkeeper"
+      - name: The designated requirement codesign shows of the packaged hostkeeper (a signing run)
+        if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.sign && github.repository == 'komira-ai/hostkeeper' && startsWith(github.ref, 'refs/heads/')) }}
+        run: codesign --display --requirements - "$RUNNER_TEMP/unpacked/hostkeeper"
+      - name: The packaged hostkeeper has the signature of the release (a signing run)
+        if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.sign && github.repository == 'komira-ai/hostkeeper' && startsWith(github.ref, 'refs/heads/')) }}
         run: cargo xtask release check-code-signature "$RUNNER_TEMP/unpacked/hostkeeper" --program hostkeeper
-      - name: The packaged hk has the signature of the release (push to main)
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      - name: The packaged hk has the signature of the release (a signing run)
+        if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.sign && github.repository == 'komira-ai/hostkeeper' && startsWith(github.ref, 'refs/heads/')) }}
         run: cargo xtask release check-code-signature "$RUNNER_TEMP/unpacked/hk" --program hk
       # hello's .pkg and its failing build's (docs/design/packages-native.md, items A20 and A21):
       # one component with no script, the program under /Library/Application Support/hello/ and
@@ -846,7 +896,7 @@ jobs:
           retention-days: 90
           if-no-files-found: error
 
-  # Push to main only: the installer pkg and the bootstrap pkg signed with the Developer ID
+  # A push to main or a signing run: the installer pkg and the bootstrap pkg signed with the Developer ID
   # Installer identity, for Apple Business's device management, which installs only a signed pkg,
   # and hello's .pkg with the same identity, for a host's macos-pkg installer, which stages only a
   # signed pkg. Not notarized: a pkg device management or a host's installer installs needs no notarization. This job runs no repository code (no checkout, no
@@ -859,7 +909,7 @@ jobs:
   # The signed pkgs go to `pkg-signed-macos-arm64`, which check-pkg checks.
   sign-pkg:
     needs: [version, build-macos]
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.sign && github.repository == 'komira-ai/hostkeeper' && startsWith(github.ref, 'refs/heads/')) }}
     runs-on: macos-15
     timeout-minutes: 15
     environment: pkg-signing
@@ -917,7 +967,7 @@ jobs:
           retention-days: 90
           if-no-files-found: error
 
-  # Push to main only, with no secret: each signed pkg, the installer and hello's, is checked and
+  # A push to main or a signing run, with no secret: each signed pkg, the installer and hello's, is checked and
   # only then becomes a release file. `release check-pkg-signature` refuses it unless pkgutil
   # says the Mac trusts its signature, signed with a trusted timestamp by exactly the identity
   # under Apple's Developer ID intermediate and root; each signed and unsigned pkg must expand to
@@ -926,7 +976,7 @@ jobs:
   # so SHA256SUMS, the attestation and the release name the signed bytes.
   check-pkg:
     needs: [version, sign-pkg]
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.sign && github.repository == 'komira-ai/hostkeeper' && startsWith(github.ref, 'refs/heads/')) }}
     runs-on: macos-15
     timeout-minutes: 30
     permissions:
@@ -1081,8 +1131,8 @@ jobs:
   # boot sets of network install (it reads no network), then SHA256SUMS over every file but itself
   # (the bundles come later, from attest). The attest job signs these sums, so they are the one
   # list of what a release holds.
-  # On a push to main it waits for check-pkg, which publishes the signed pkgs (the installer and
-  # hello's); on a run by hand, which signs nothing, check-pkg is skipped and the sums are made
+  # On a push to main or in a signing run it waits for check-pkg, which publishes the signed pkgs (the installer and
+  # hello's); on another run by hand, which signs nothing, check-pkg is skipped and the sums are made
   # without them.
   sums:
     needs: [version, build, build-macos, image, check-pkg]

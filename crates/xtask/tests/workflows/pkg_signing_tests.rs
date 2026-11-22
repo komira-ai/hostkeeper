@@ -10,7 +10,7 @@ use super::pkg_signing::{
     SIGN_BOOTSTRAP, SIGN_ENV, SIGN_HELLO, SIGN_JOB, SIGN_STEPS, SIGNED_ARTIFACT, SUMS_IF, Step,
     UNSIGNED_ARTIFACT,
 };
-use super::release::SIGN_IF;
+use super::signing_run::MACOS_SIGN_IF;
 use super::{with_in, workflows};
 
 /// The repository's artifacts.yml.
@@ -159,7 +159,8 @@ fn the_signing_job_running_repository_code_or_holding_more_is_refused() {
     // dependency would run beside it), the job on another trigger, runner or environment, a
     // write scope, or other needs.
     let text = artifacts_yml();
-    let header = format!("  {SIGN_JOB}:\n    needs: [version, build-macos]\n    if: {SIGN_IF}\n");
+    let header =
+        format!("  {SIGN_JOB}:\n    needs: [version, build-macos]\n    if: {MACOS_SIGN_IF}\n");
     let checkout = with_in(
         &text,
         "          name: pkg-unsigned-macos-arm64\n          path: unsigned\n      - name: The identity",
@@ -180,12 +181,14 @@ fn the_signing_job_running_repository_code_or_holding_more_is_refused() {
     );
     assert_refused(
         &dispatch,
-        &format!("artifacts.yml: job {SIGN_JOB} needs the exact `if: {SIGN_IF}`"),
+        &format!("artifacts.yml: job {SIGN_JOB} needs the exact `if: {MACOS_SIGN_IF}`"),
     );
     let needs = with_in(
         &text,
         &header,
-        &format!("  {SIGN_JOB}:\n    needs: [version, build-macos, build]\n    if: {SIGN_IF}\n"),
+        &format!(
+            "  {SIGN_JOB}:\n    needs: [version, build-macos, build]\n    if: {MACOS_SIGN_IF}\n"
+        ),
     );
     assert_refused(
         &needs,
@@ -526,7 +529,7 @@ fn a_signing_step_or_job_with_a_key_of_its_own_is_refused() {
     );
     assert_refused(&timed, &step_problem(13));
     let header = format!(
-        "  {SIGN_JOB}:\n    needs: [version, build-macos]\n    if: {SIGN_IF}\n    runs-on: macos-15\n    timeout-minutes: 15\n    environment: {SIGN_ENV}\n"
+        "  {SIGN_JOB}:\n    needs: [version, build-macos]\n    if: {MACOS_SIGN_IF}\n    runs-on: macos-15\n    timeout-minutes: 15\n    environment: {SIGN_ENV}\n"
     );
     let job_key = with_in(
         &text,
