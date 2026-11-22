@@ -27,8 +27,8 @@ Three pieces make the grant durable:
    `gh`, which the installer pkg carries, keeps GitHub's own signature.
 2. **The profile.** `packaging/macos-mdm/hostkeeper-full-disk-access.mobileconfig` grants
    `SystemPolicyAllFiles` to `dev.hostkeeper.hostkeeper` by that requirement
-   ([its README](../../packaging/macos-mdm/README.md)). Only hostkeeper is named: the other programs
-   need no grant.
+   ([its README](../../packaging/macos-mdm/README.md)). Of this repository's programs only hostkeeper is
+   named: the others need no grant. The job agent's grant joins the same profile (section 5).
 3. **Knowing.** hostkeeper checks at start, and again at the first heartbeat 60 seconds or more after its last check, whether the
    grant is in force, and reports it in every heartbeat; `hk hosts get --node-id <host>` shows it as
    `host.fullDiskAccess`, and the host page says when it is missing ([docs/macos.md](../macos.md),
@@ -139,13 +139,21 @@ programs is the next step (`docs/design/mac-bootstrap.md`, MB4).
 
 ## 5. Who else needs the grant
 
-The job agent of the build farm cleans pool users' homes on the same Macs and meets the same wall.
-It gets no grant of its own: only hostkeeper holds Full Disk Access, and the host operations others
-need (remove an account, empty a guarded folder) become compiled-in operations of hostkeeper, done
-by the daemon itself. This keeps the rule of one root process with compiled-in verbs, and the
-profile and its requirement name one program. The operations must run inside the daemon: macOS
-charges a process that another program starts to that program, so a `hostkeeper` command run by the
-job agent would carry the agent's rights, not hostkeeper's.
+The job agent of the build farm (komira-ai/jobscheduler) makes an account for each job and deletes it
+afterwards, on the same Macs, and meets the same wall. It holds a Full Disk Access grant of its own:
+deleting an account is on the path of every job and must not wait for a round trip to the
+coordinator. It cannot borrow hostkeeper's grant either way: macOS charges a process that another
+program starts to that program, so a `hostkeeper` command run by the agent would carry the agent's
+rights. hostkeeper keeps its grant for its own host operations.
+
+**One profile carries both grants.** `SystemPolicyAllFiles` is a list: the agent's program is a second
+entry beside hostkeeper's, by its own identifier and designated requirement (a Developer ID
+Application signature of the same team, never a hash). The entry is added to this profile once the
+agent's identifier is fixed, and the profile's test then pins both entries. The owner uploads that
+one file to Apple Business. A profile that keeps its `PayloadIdentifier`
+(`dev.hostkeeper.full-disk-access`) replaces the one installed before, so a Mac never holds two.
+Until the agent's entry is in, uploading hostkeeper's profile alone works, and a later upload with
+both entries replaces it.
 
 ## 6. A Mac already running hostkeeper
 
