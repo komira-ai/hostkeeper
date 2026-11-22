@@ -79,13 +79,17 @@ fn all_due(count: usize, due: &agent::MaintenanceReport) -> Fleet {
 /// The `updates_due` alerts of `fleet` when the enrollment store puts each host of `groups` in
 /// its group (the empty name: in none); without `groups`, of a coordinator that holds no group.
 fn updates(fleet: &Fleet, groups: Option<&[(&str, &str)]>) -> Vec<Alert> {
-    let facts = EnrollmentFacts {
+    let due = super::Due {
         groups: groups.map(|groups| {
             groups
                 .iter()
                 .map(|(host, group)| (id(host), (*group).to_owned()))
                 .collect()
         }),
+        ..super::Due::default()
+    };
+    let facts = EnrollmentFacts {
+        due,
         ..EnrollmentFacts::default()
     };
     derive(

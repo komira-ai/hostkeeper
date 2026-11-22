@@ -501,6 +501,7 @@ fn a_start_under_a_stale_order_id_stores_and_sends_nothing() {
             macos_path: agent::MacosPath::Install,
             macos_major: false,
             return_secs: 1200,
+            xcode: None,
         },
     };
     let id = crate::testutil::id("h1");

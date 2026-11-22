@@ -558,7 +558,12 @@ message Host {
   // Absent while the coordinator keeps none: the host's daemon has not announced `maintenance-v1`,
   // or has sent no report the coordinator read. The coordinator keeps the last report that kept
   // every bound of `MaintenanceReport`; a report that breaks one is dropped and the last one read
-  // stays.
+  // stays. On a Mac of a group that keeps Xcode (`xcode_keep` above 0), `due` also holds the
+  // `MAINTENANCE_KIND_XCODE` item the coordinator decides, which no daemon lists: the newest
+  // `xcode_keep` releases its Xcode store holds include one the Mac lacks in its own
+  // `Xcode-<version>.app`, or `xcode-select` does not name the group's `xcode_default`. Its `from`
+  // is the version `xcode-select` names, its `to` the release missing (else the default) and its
+  // `label` that release's build; it is counted in `due_left_out` when `due` already lists 12.
   optional hostkeeper.agent.v1.MaintenanceReport maintenance = 26;
   // For a host with a kept `maintenance` report whose `looked_unix` is not 0: the seconds between
   // that last look and the coordinator's clock when it answered; 0 when the look is ahead of the
@@ -1579,7 +1584,8 @@ enum AlertKind {
   // `xcode_version_taken`.
   ALERT_KIND_XCODE_VERSION_TAKEN = 18;
   // The last maintenance report of one or more hosts of a host group (or of no host group) holds
-  // an item that is due (`MaintenanceReport.due` is not empty, or `due_left_out` is not 0). The
+  // an item that is due (`MaintenanceReport.due` is not empty, or `due_left_out` is not 0), or the
+  // coordinator finds `xcode` due on a Mac of the group (`Host.maintenance`). The
   // message counts the hosts: `Updates due on 2 hosts of web`, or `Updates due on 1 host in no host
   // group`; a stale report that holds due items still counts. One alert for each group, with the
   // group in `host_group`; it stands while a host of the group is due and clears when the last
