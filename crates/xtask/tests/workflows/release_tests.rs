@@ -394,16 +394,22 @@ fn a_workflow_that_publishes_outside_the_release_group_is_refused() {
     );
     assert_eq!(publish_problems("ci.yml", &commented), Vec::<String>::new());
     assert_eq!(publish_problems("ci.yml", CLEAN), Vec::<String>::new());
+    let want = "artifacts.yml: concurrency must be group artifacts-${{ github.sha }}-${{ github.event_name }}, cancel-in-progress false";
+    let committed = "  group: artifacts-${{ github.sha }}-${{ github.event_name }}\n";
     let shared = with_in(
         &workflow("artifacts.yml"),
-        "  group: artifacts-${{ github.sha }}\n",
+        committed,
         "  group: artifacts\n",
     );
-    assert_refused(
-        "artifacts.yml",
-        &shared,
-        "artifacts.yml: concurrency must be group artifacts-${{ github.sha }}, cancel-in-progress false",
+    assert_refused("artifacts.yml", &shared, want);
+    // Catches: a run by hand at main's commit in the push run's group, where, pending, it
+    // would replace that push run.
+    let per_commit = with_in(
+        &workflow("artifacts.yml"),
+        committed,
+        "  group: artifacts-${{ github.sha }}\n",
     );
+    assert_refused("artifacts.yml", &per_commit, want);
     for (file, reason) in RELEASE_EXEMPT {
         assert!(
             !reason.trim().is_empty(),

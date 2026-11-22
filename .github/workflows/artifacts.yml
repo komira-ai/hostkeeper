@@ -99,12 +99,15 @@ on:
 
 permissions: {}
 
-# A run per commit: two runs for one commit (a re-run) queue behind each other, and different
-# commits do not wait for each other; a signing run is never cancelled. This workflow builds and
+# A run per commit and event: two runs for one commit and event (a re-run) queue behind each
+# other, and different commits do not wait for each other; a signing run is never cancelled. The
+# event is in the group so a run by hand on a branch at main's commit never shares main's push
+# group, where GitHub's one pending run per group would let it replace that push run while it
+# waits (release.yml needs the push run of each commit). This workflow builds and
 # attests and never tags or publishes, so it is outside the release group of release.yml (the
 # workflow lint lists it as exempt and holds it to this group).
 concurrency:
-  group: artifacts-${{ github.sha }}
+  group: artifacts-${{ github.sha }}-${{ github.event_name }}
   cancel-in-progress: false
 
 env:
