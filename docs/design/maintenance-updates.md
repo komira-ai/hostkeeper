@@ -68,7 +68,7 @@ checks below and the report of section 4.1.
 |---|---|---|---|
 | `macos` | Mac | `sw_vers` (version, build); `softwareupdate --list` (each label, its version, whether it says `Action: restart`); `--list-full-installers` for a major upgrade | `softwareupdate` lists a macOS update. A major upgrade is listed but never due by default (group setting `macos_major`, section 3) |
 | `xcode` | Mac | each `/Applications/Xcode*.app/Contents/version.plist` (`CFBundleShortVersionString`, `ProductBuildVersion`); `xcode-select -p` | decided by the coordinator: the newest `xcode_keep` releases its store holds (section 2) include one the host lacks or `xcode-select` is not the group's default |
-| `linux` | Linux | apt: `apt-get update`, then a simulated upgrade, split by origin into security and other; dnf: `dnf updateinfo list --security` and `dnf check-update`; apk: `apk version -l '<'`. The kernel: `uname -r` against the newest installed kernel | a security update or a newer kernel package is available (group setting `linux_scope`: `security` by default, or `all`) |
+| `linux` | Linux | apt: `apt-get update`, then a simulated upgrade, split by origin into security and other; dnf: `dnf updateinfo list --security` and `dnf check-update`; apk: `apk version -l '<'`. The kernel: `uname -r` against the newest installed kernel | a security update or a newer kernel package is available (group setting `linux_scope`: `security` by default, or `all`); under `security`, apt counts only packages already installed (section 5.5) |
 | `reboot` | Linux | `/run/reboot-required` (apt); `needrestart -b` where installed (its kernel status, and the services running old libraries); `needs-restarting -r` (dnf); the newest kernel under `/lib/modules` against `uname -r` | the host needs a reboot it has not had: a newer kernel installed but not running, or the distribution says so. A run of `reboot` alone has nothing to install: it drains, reboots, checks and puts back |
 
 Packages hostkeeper itself installs must not move in an OS upgrade. apt holds them (`apt-mark hold`, Built:
@@ -453,9 +453,9 @@ drain was never asked for is never held.
 
 ### 5.5 Apply
 
-- **Linux.** apt: `apt-get install --only-upgrade` of the security packages and the kernel (`linux_scope = security`) or `apt-get
-  dist-upgrade` (`all`), non-interactive, keeping existing configuration files; dnf: `dnf upgrade --security`, then a newer kernel
-  by name, or `dnf upgrade`; apk: `apk upgrade`, under `security` the kernel alone (apk names no security origin). The package lock is
+- **Linux.** apt: `apt-get install --only-upgrade` of the installed security packages and kernels (`linux_scope = security`; a
+  package not yet installed is not due under it and comes in only as a dependency of one of them) or `apt-get dist-upgrade` (`all`),
+  non-interactive, keeping existing configuration files; dnf: `dnf upgrade --security`, then a newer kernel by name, or `dnf upgrade`; apk: `apk upgrade`, under `security` the kernel alone (apk names no security origin). The package lock is
   waited for as the installers wait today (Built: `--package-lock-wait-secs`, also a flag of `maintenance-hook`).
 - **macOS.** Apple silicon installs a macOS update or upgrade only with a *volume owner's* authorisation: an administrator holding a
   Secure Token. Root alone is not one, and the bootstrap token, which is one, can be redeemed only by a device-management service, not by

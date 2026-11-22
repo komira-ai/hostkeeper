@@ -32,7 +32,14 @@ finds (`apt-get`, else `dnf`, else `apk`) what it would upgrade. Two kinds can b
 - `linux`: a package update. With the daemon's `--maintenance-linux-scope security` (its default),
   only security updates (apt: an origin ending `-security`; dnf: listed by `dnf updateinfo list
   --security`) and new kernels (apk names no security origin, so there only kernels); with `all`,
-  every update. A new kernel package also needs a restart.
+  every update. A new kernel package also needs a restart. Under `security`, apt reports only
+  packages the host already has: a package the upgrade would install new (a `linux-image-<version>`,
+  a library a newer version of another package needs) is not due, because that scope's apply
+  installs nothing new by name. It arrives as a dependency of an installed package the apply
+  upgrades (a new kernel image with the upgraded kernel meta-package, `linux-image-generic` on
+  Ubuntu, `linux-image-<flavour>` on Debian), and with `all` it is due and installed. So a host
+  whose upgrade would only bring new packages, such as an older kernel series' image on a host
+  booted from a newer one, has nothing due under `security`.
 - `reboot`: a restart the host needs and has not had, with nothing to install: a newer kernel
   installed than the one running (`kernel`), `/run/reboot-required` (`reboot-required`),
   `needrestart -b` saying the kernel is stale (`needrestart`), or `needs-restarting -r`
@@ -93,7 +100,7 @@ step, so a crash, a reboot or a newer daemon picks it up where it stopped:
 |---|---|---|---|
 | 1 | stage | `hostkeeper maintenance-hook prepare`: refreshes the package lists, takes the package manager's own estimate of the download, checks there are at least twice as many bytes free where it downloads, and downloads only (`apt-get --download-only`, `dnf upgrade --downloadonly`, `apk fetch`). Nothing is installed; the host still serves. The kind `reboot` stages nothing (a restart has nothing to download), so a run of `reboot` alone passes this step without running a program. | deferred: nothing was touched |
 | 2 | drain | each installed service whose package names `[hook] drain` and `[hook] resume`, in the order of their names: its `drain` takes it out of service and returns when it has no work (js-agent's cordons the host in the lease server and waits for its leases to end) | exit 75, or the run's drain deadline passing: deferred, each drained service resumed. Anything else: halted |
-| 3 | apply | `maintenance-hook cutover`: the upgrade of the order's scope (apt `install --only-upgrade` of the security packages and kernels, or `dist-upgrade` under `all`, keeping existing configuration files; dnf `upgrade --security` then the kernel by name, or `upgrade`; apk the kernel alone, or `upgrade`), then, when the host needs a restart (a newer kernel, `/run/reboot-required`, `needrestart`, `needs-restarting`), `systemctl reboot` (OpenRC's `reboot`). After the restart the daemon sees the new boot id and goes on | halted |
+| 3 | apply | `maintenance-hook cutover`: the upgrade of the order's scope (apt `install --only-upgrade` of the installed security packages and kernels, exactly the apt items reported due, a package not yet installed coming in only as a dependency of one of them; or `dist-upgrade` under `all`, new packages included; keeping existing configuration files; dnf `upgrade --security` then the kernel by name, or `upgrade`; apk the kernel alone, or `upgrade`), then, when the host needs a restart (a newer kernel, `/run/reboot-required`, `needrestart`, `needs-restarting`), `systemctl reboot` (OpenRC's `reboot`). After the restart the daemon sees the new boot id and goes on | halted |
 | 4 | check | `maintenance-hook verify`: the host booted again if it had to, runs the newest installed kernel and needs no restart, has nothing of the order's scope still due, and every installed service reports itself healthy | halted |
 | 5 | put back | each drained service's `resume`, in the reverse order (js-agent's uncordons) | halted |
 | 6 | done | the record is closed; the daemon looks again at once, so the notice clears | |

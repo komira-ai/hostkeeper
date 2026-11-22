@@ -17,8 +17,8 @@ use hostkeeper_proto::hostkeeper::operator::v1 as op;
 use hostkeeper_steps::maintenance::{Ending, Kind};
 use op::MaintenanceHostStep as Step;
 use support_linux::{
-    Due, KERNEL_PACKAGE, NEW_KERNEL, Node, OLD_KERNEL, Ordered, SERVICE, World, after_drained,
-    first_offer, kernel_turn, one_at_a_time,
+    Due, KERNEL_PACKAGE, NEW_KERNEL, Node, OLD_KERNEL, Ordered, SECURITY_PACKAGE, SERVICE, World,
+    after_drained, first_offer, kernel_turn, one_at_a_time,
 };
 
 /// The group of every test.
@@ -456,4 +456,68 @@ fn a_drain_deadline_puts_the_host_back_unchanged_and_defers_it() {
     assert_eq!(h1.due(), [pb::MaintenanceKind::Linux]);
     assert_eq!(world.alerts(), updates_due());
     assert_eq!(h1.orders(), [order]);
+}
+
+/// Proves: Update on a host whose upgrade would install, beside one installed security update,
+/// two packages the host does not have yet (a library that is a security update, and an older
+/// kernel series' image) runs the turn to done under the default scope `security`: the look
+/// reports the installed security update alone, the apply installs it alone and asks for no
+/// reboot, and the check after it, which reads the same look of a simulation still listing the
+/// two new packages, passes; the service is resumed, nothing is due after and no notice stands.
+///
+/// Catches: a look that reports a new package the security install never installs, so that the
+/// check fails `update_due` on it and the host halts cordoned until Put back.
+#[test]
+fn new_packages_beside_a_security_update_end_the_turn_done() {
+    let (world, mut h1, _h2) = pair("linux-e2e-new-packages", Due::NewPackages);
+    let labels: Vec<String> = h1
+        .last_report()
+        .due
+        .into_iter()
+        .map(|item| item.label)
+        .collect();
+    assert_eq!(labels, [SECURITY_PACKAGE]);
+    assert_eq!(world.alerts(), updates_due());
+
+    let run = world.update(&["h1"]);
+    let order = first_offer(&run, &[pb::MaintenanceKind::Linux]);
+    assert_eq!(h1.beat(), Some(order.clone()));
+    for _ in 0..3 {
+        assert_eq!(h1.beat(), None);
+    }
+
+    assert_eq!(
+        h1.machine.effects(),
+        [
+            "stage".to_owned(),
+            format!("drain {SERVICE}"),
+            format!("install {SECURITY_PACKAGE}"),
+            "check".to_owned(),
+            format!("resume {SERVICE}"),
+        ]
+    );
+    assert_eq!(h1.record().and_then(|record| record.halted), None);
+    assert!(!h1.machine.cordoned(), "the service is back in service");
+    assert!(!h1.machine.reboot_asked());
+    assert_eq!(h1.machine.running(), OLD_KERNEL);
+    assert_eq!(world.steps(&run), [at("h1", Step::Done)]);
+    assert_eq!(h1.due(), Vec::<pb::MaintenanceKind>::new());
+    assert_eq!(world.alerts(), no_alerts());
+    assert_eq!(h1.orders(), [order]);
+}
+
+/// Proves: a host whose upgrade would install only packages it does not have yet (a library that
+/// is a security update, and an older kernel series' image) has nothing due under the default
+/// scope `security`, so its group raises no `updates_due` notice and no run is offered it.
+///
+/// Catches: a host reported due with updates the security install would never install, whose
+/// Update installs nothing and then halts on `update_due`.
+#[test]
+fn only_new_packages_are_nothing_due() {
+    let (world, mut h1, h2) = pair("linux-e2e-only-new", Due::OnlyNew);
+    assert_eq!(h1.due(), Vec::<pb::MaintenanceKind>::new());
+    assert_eq!(world.alerts(), no_alerts());
+    assert_eq!(h1.beat(), None);
+    assert_eq!(h1.machine.effects(), Vec::<String>::new());
+    assert_eq!(h2.machine.effects(), Vec::<String>::new());
 }
