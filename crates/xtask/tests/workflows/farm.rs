@@ -22,8 +22,14 @@
 //!   property set and TLS switch, each from the organisation's variable of its name, and nothing
 //!   else (no secret, no token, no input a pull request could set);
 //! - a step after farm-connect's runs exactly [`BUILD_RUN`]: `cargo xtask farm-build` of `//:ci`,
-//!   which refuses a build with no farm workers or whose summary line does not say `local: 0`
-//!   (crates/xtask/src/farm.rs).
+//!   which refuses a build with no farm workers, a stale generated build table (whose fix it
+//!   writes as a patch to the file [`patch_file`] names) or a build whose summary line does not say
+//!   `local: 0`, and runs a build whose only failures are cut connections once more
+//!   (crates/xtask/src/farm.rs);
+//! - exactly one step after the build uploads the artifact [`PATCH_ARTIFACT`], under exactly
+//!   [`UPLOAD_IF`] (the build failed: the patch exists only then), with `actions/upload-artifact`
+//!   and a `with:` of exactly [`upload_inputs`]: that artifact name and the build's patch file, so
+//!   the command the job summary prints downloads what was uploaded.
 
 use std::collections::BTreeMap;
 
@@ -53,8 +59,37 @@ pub const CONNECT_INPUTS: [(&str, &str); 6] = [
     ("tls", "${{ vars.FARM_TLS || 'false' }}"),
 ];
 /// The build step's `run:`.
-pub const BUILD_RUN: &str =
-    "cargo xtask farm-build --buck2 \"$RUNNER_TEMP/bin/buck2\" --target //:ci";
+pub const BUILD_RUN: &str = "cargo xtask farm-build --buck2 \"$RUNNER_TEMP/bin/buck2\" --target //:ci --patch \"$RUNNER_TEMP/buildrules-sync/buildrules-sync.patch\" --summary \"$GITHUB_STEP_SUMMARY\" --repo \"$GITHUB_REPOSITORY\" --run-id \"$GITHUB_RUN_ID\"";
+/// The artifact a stale table's patch is uploaded as, and the patch's file name: the names the
+/// command in the job summary downloads (`PATCH_ARTIFACT` and `PATCH_FILE` of
+/// crates/xtask/src/farm/table.rs, whose test holds that command to them).
+pub const PATCH_ARTIFACT: &str = "buildrules-sync";
+pub const PATCH_FILE: &str = "buildrules-sync.patch";
+/// The action that uploads the patch, at any commit.
+pub const UPLOAD: &str = "actions/upload-artifact@";
+/// The exact `if:` of the upload of the patch.
+pub const UPLOAD_IF: &str = "${{ failure() }}";
+
+/// The patch file the build writes, below the runner's temporary directory, as the build step's
+/// shell names it (`shell`) and as the upload's `with:` does.
+pub fn patch_file(shell: bool) -> String {
+    let temp = if shell {
+        "$RUNNER_TEMP"
+    } else {
+        "${{ runner.temp }}"
+    };
+    format!("{temp}/{PATCH_ARTIFACT}/{PATCH_FILE}")
+}
+
+/// The `with:` of the upload of the patch, exactly.
+pub fn upload_inputs() -> BTreeMap<&'static str, String> {
+    BTreeMap::from([
+        ("name", PATCH_ARTIFACT.to_owned()),
+        ("path", patch_file(false)),
+        ("if-no-files-found", "ignore".to_owned()),
+        ("retention-days", "30".to_owned()),
+    ])
+}
 
 /// What a [`FILE`] whose `on` is anything else is refused with.
 pub const ON_PROBLEM: &str =
@@ -184,6 +219,49 @@ fn job_problems(job: &Node) -> Vec<String> {
         _ => problems.push(format!(
             "job {JOB}: the build does not come after the farm-connect step"
         )),
+    }
+    problems.extend(upload_problems(steps, build));
+    problems
+}
+
+/// Whether `step` uploads the artifact [`PATCH_ARTIFACT`].
+fn uploads_patch(step: &Node) -> bool {
+    entry(step, "uses")
+        .and_then(Node::as_str)
+        .is_some_and(|u| u.starts_with(UPLOAD))
+        && entry(step, "with")
+            .and_then(|with| entry(with, "name"))
+            .and_then(Node::as_str)
+            == Some(PATCH_ARTIFACT)
+}
+
+/// What is wrong with the upload of the patch among the steps `all`, the build at `build`.
+fn upload_problems(all: &[Node], build: Option<usize>) -> Vec<String> {
+    let uploads: Vec<usize> = (0..all.len()).filter(|&i| uploads_patch(&all[i])).collect();
+    let [at] = uploads[..] else {
+        return vec![format!(
+            "job {JOB}: exactly one step must upload the artifact {PATCH_ARTIFACT} with \
+             {UPLOAD}<commit>"
+        )];
+    };
+    let step = &all[at];
+    let mut problems = Vec::new();
+    if build.is_some_and(|b| b > at) {
+        problems.push(format!(
+            "job {JOB}: the upload of {PATCH_ARTIFACT} does not come after the build"
+        ));
+    }
+    if entry(step, "if").and_then(Node::as_str) != Some(UPLOAD_IF) {
+        problems.push(format!(
+            "job {JOB}: the upload of {PATCH_ARTIFACT} must run under exactly `if: {UPLOAD_IF}`"
+        ));
+    }
+    let wanted = upload_inputs();
+    let wanted: BTreeMap<&str, &str> = wanted.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    if entry(step, "with").and_then(scalar_map).as_ref() != Some(&wanted) {
+        problems.push(format!(
+            "job {JOB}: the upload of {PATCH_ARTIFACT}'s `with:` must be exactly {wanted:?}"
+        ));
     }
     problems
 }

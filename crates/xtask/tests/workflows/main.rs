@@ -8,7 +8,9 @@
 //! no secret and no macOS job on a pull request, in `pr_device_tests.rs`; those of the Mac's
 //! tests, the macOS stage of `release.yml` (no macOS job runs for a pull request), in
 //! `release_macos_tests.rs`; those of `farm.yml`, the farm lane and the one pull-request workflow
-//! whose job holds `id-token: write`, in `farm_tests.rs`; those of the merge queue (`ci.yml` and
+//! whose job holds `id-token: write`, in `farm_tests.rs`, and of the tests that lane leaves to the
+//! Mac (the build files of the members with macOS-only code say so), in `farm_macos_tests.rs`;
+//! those of the merge queue (`ci.yml` and
 //! `pr-device.yml` run and report every check `main` requires for a merge group as for a pull
 //! request, and CONTRIBUTING.md's ruleset requires exactly those checks), in
 //! `merge_queue_tests.rs`; those of `advisories.yml`, the advisory
@@ -38,6 +40,8 @@ mod downloads;
 mod downloads_tests;
 mod expr;
 mod farm;
+mod farm_macos;
+mod farm_macos_tests;
 mod farm_tests;
 mod hello_run_tests;
 mod hk_release_tests;

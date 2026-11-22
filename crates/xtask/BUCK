@@ -1,11 +1,12 @@
 load("//:buildrules.bzl", "cargo_package")
 
 # What this package reads beyond src/, tests/ and build.rs, which a Buck2 action sees only when
-# declared (a unit sees its own src/, tests/ or build.rs alone). The fixture binaries live under tests/bin; the release code and its tests include the workflow, docs and packaging they are held to.
+# declared (a unit sees its own src/, tests/ or build.rs alone). The fixture binaries live under tests/bin; the release code and its tests include the workflow, docs and packaging they are held to; the farm-build tests include the recorded farm logs of src/farm/cuts.
 cargo_package(
     path = ".",
     extra_srcs = [
         "src/coordinator_update/https_tests.rs",
+        "src/farm/cuts",
         "src/testdir.rs",
         "tests/bin",
         "tests/release",
