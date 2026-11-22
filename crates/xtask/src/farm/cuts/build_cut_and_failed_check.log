@@ -1,0 +1,59 @@
+[2026-11-21T15:36:22.174+00:00] Build ID: 00000000-0000-0000-0000-000000000000
+[2026-11-21T15:36:25.232+00:00] RE Session: GRPC-SESSION-ID
+[2026-11-21T15:42:21.574+00:00] [2m2026-11-21T15:42:21.516637Z[0m [33m WARN[0m [2mremote_execution::client[0m[2m:[0m Transient error (attempt 1/5), retrying in 103ms: Failed to make BatchReadBlobs request: code: 'The operation was cancelled', message: "operation was canceled", source: tonic::transport::Error(Transport, hyper::Error(Canceled, "connection closed")): transport error: operation was canceled: connection closed
+[2026-11-21T15:42:21.774+00:00] [2m2026-11-21T15:42:21.621006Z[0m [33m WARN[0m [2mremote_execution::client[0m[2m:[0m Transient error (attempt 2/5), retrying in 202ms: Failed to make BatchReadBlobs request: code: 'The operation was cancelled', message: "operation was canceled", source: tonic::transport::Error(Transport, hyper::Error(Canceled, "connection closed")): transport error: operation was canceled: connection closed
+[2026-11-21T15:42:21.975+00:00] [2m2026-11-21T15:42:21.824449Z[0m [33m WARN[0m [2mremote_execution::client[0m[2m:[0m Transient error (attempt 3/5), retrying in 446ms: Failed to make BatchReadBlobs request: code: 'The operation was cancelled', message: "operation was canceled", source: tonic::transport::Error(Transport, hyper::Error(Canceled, "connection closed")): transport error: operation was canceled: connection closed
+[2026-11-21T15:42:22.374+00:00] [2m2026-11-21T15:42:22.272636Z[0m [33m WARN[0m [2mremote_execution::client[0m[2m:[0m Transient error (attempt 4/5), retrying in 824ms: Failed to make BatchReadBlobs request: code: 'The operation was cancelled', message: "operation was canceled", source: tonic::transport::Error(Transport, hyper::Error(Canceled, "connection closed")): transport error: operation was canceled: connection closed
+[2026-11-21T15:42:23.098+00:00] Action failed: hostkeeper//:check (buildrules//platforms:linux_x86_64#27db57317ae2fec7) (cargo_table_check check)
+[2026-11-21T15:42:23.098+00:00] Remote command returned non-zero exit code 1
+[2026-11-21T15:42:23.098+00:00] Remote action digest: '0000000000000000000000000000000000000000000000000000000000000000:141'
+[2026-11-21T15:42:23.098+00:00] Stdout: <empty>
+[2026-11-21T15:42:23.098+00:00] Stderr:
+Result could not be downloaded
+
+[2026-11-21T15:42:23.174+00:00] [2m2026-11-21T15:42:23.097720Z[0m [33m WARN[0m [2mbuck2_execute::execute::output[0m[2m:[0m Failed to download action stderr: Remote Execution Error on download_blob for digest 0000000000000000000000000000000000000000000000000000000000000000:682 for ReSession GRPC-SESSION-ID
+[2026-11-21T15:42:23.174+00:00] Error: (Failed to make BatchReadBlobs request: code: 'The operation was cancelled', message: "operation was canceled", source: tonic::transport::Error(Transport, hyper::Error(Canceled, "connection closed")): transport error: operation was canceled: connection closed)
+[2026-11-21T16:00:58.333+00:00] Action failed: hostkeeper//crates/hostkeeper-ui-tests:hostkeeper-ui-tests-0.1.0_57559aed2a_lint (buildrules//platforms:linux_x86_64#27db57317ae2fec7) (rustc hostkeeper-ui-tests-0.1.0_57559aed2a_lint)
+[2026-11-21T16:00:58.333+00:00] Internal error (stage: remote_call_error): Remote Execution Error on Execute with digest 0000000000000000000000000000000000000000000000000000000000000000:143 for ReSession GRPC-SESSION-ID
+[2026-11-21T16:00:58.333+00:00] Error: (Error was returned on the stream by RE: RE channel error: code: 'Unknown error', message: "h2 protocol error: error reading a body from connection", source: hyper::Error(Body, Error { kind: Io(Custom { kind: BrokenPipe, error: "stream closed because of a broken pipe" }) }): error reading a body from connection: stream closed because of a broken pipe)
+[2026-11-21T16:00:58.333+00:00] Remote action digest: '0000000000000000000000000000000000000000000000000000000000000000:143'
+[2026-11-21T16:00:58.333+00:00] Stdout: <empty>
+[2026-11-21T16:00:58.333+00:00] Stderr: <empty>
+
+[2026-11-21T16:00:58.333+00:00] Action failed: hostkeeper//crates/hostkeeper-ui-tests:hostkeeper-ui-tests-0.1.0_638f6d0865_lint (buildrules//platforms:linux_x86_64#27db57317ae2fec7) (rustc hostkeeper-ui-tests-0.1.0_638f6d0865_lint)
+[2026-11-21T16:00:58.333+00:00] Internal error (stage: remote_call_error): Remote Execution Error on Execute with digest 0000000000000000000000000000000000000000000000000000000000000000:143 for ReSession GRPC-SESSION-ID
+[2026-11-21T16:00:58.333+00:00] Error: (Error was returned on the stream by RE: RE channel error: code: 'Unknown error', message: "h2 protocol error: error reading a body from connection", source: hyper::Error(Body, Error { kind: Io(Custom { kind: BrokenPipe, error: "stream closed because of a broken pipe" }) }): error reading a body from connection: stream closed because of a broken pipe)
+[2026-11-21T16:00:58.333+00:00] Remote action digest: '0000000000000000000000000000000000000000000000000000000000000000:143'
+[2026-11-21T16:00:58.333+00:00] Stdout: <empty>
+[2026-11-21T16:00:58.333+00:00] Stderr: <empty>
+
+[2026-11-21T16:05:51.481+00:00] Action failed: hostkeeper//crates/hostkeeper-ui-tests:hostkeeper-ui-tests-0.1.0_4cd1a96474__bin (buildrules//platforms:linux_x86_64#27db57317ae2fec7) (rustc hostkeeper-ui-tests-0.1.0_4cd1a96474__bin)
+[2026-11-21T16:05:51.481+00:00] Internal error (stage: remote_call_error): Remote Execution Error on Execute with digest 0000000000000000000000000000000000000000000000000000000000000000:143 for ReSession GRPC-SESSION-ID
+[2026-11-21T16:05:51.481+00:00] Error: (Error was returned on the stream by RE: RE channel error: code: 'Unknown error', message: "h2 protocol error: error reading a body from connection", source: hyper::Error(Body, Error { kind: Io(Custom { kind: BrokenPipe, error: "stream closed because of a broken pipe" }) }): error reading a body from connection: stream closed because of a broken pipe)
+[2026-11-21T16:05:51.481+00:00] Remote action digest: '0000000000000000000000000000000000000000000000000000000000000000:143'
+[2026-11-21T16:05:51.481+00:00] Stdout: <empty>
+[2026-11-21T16:05:51.481+00:00] Stderr: <empty>
+
+[2026-11-21T16:05:51.481+00:00] Action failed: hostkeeper//crates/hostkeeper-ui-tests:hostkeeper-ui-tests-0.1.0_1c1d24d01f__bin (buildrules//platforms:linux_x86_64#27db57317ae2fec7) (rustc hostkeeper-ui-tests-0.1.0_1c1d24d01f__bin)
+[2026-11-21T16:05:51.481+00:00] Internal error (stage: remote_call_error): Remote Execution Error on Execute with digest 0000000000000000000000000000000000000000000000000000000000000000:143 for ReSession GRPC-SESSION-ID
+[2026-11-21T16:05:51.481+00:00] Error: (Error was returned on the stream by RE: RE channel error: code: 'Unknown error', message: "h2 protocol error: error reading a body from connection", source: hyper::Error(Body, Error { kind: Io(Custom { kind: BrokenPipe, error: "stream closed because of a broken pipe" }) }): error reading a body from connection: stream closed because of a broken pipe)
+[2026-11-21T16:05:51.481+00:00] Remote action digest: '0000000000000000000000000000000000000000000000000000000000000000:143'
+[2026-11-21T16:05:51.481+00:00] Stdout: <empty>
+[2026-11-21T16:05:51.481+00:00] Stderr: <empty>
+
+[2026-11-21T16:05:51.481+00:00] Action failed: hostkeeper//crates/hostkeeper-ui-tests:hostkeeper-ui-tests-0.1.0_6e8b31c01f__bin (buildrules//platforms:linux_x86_64#27db57317ae2fec7) (rustc hostkeeper-ui-tests-0.1.0_6e8b31c01f__bin)
+[2026-11-21T16:05:51.481+00:00] Internal error (stage: remote_call_error): Remote Execution Error on Execute with digest 0000000000000000000000000000000000000000000000000000000000000000:143 for ReSession GRPC-SESSION-ID
+[2026-11-21T16:05:51.481+00:00] Error: (Error was returned on the stream by RE: RE channel error: code: 'Unknown error', message: "h2 protocol error: error reading a body from connection", source: hyper::Error(Body, Error { kind: Io(Custom { kind: BrokenPipe, error: "stream closed because of a broken pipe" }) }): error reading a body from connection: stream closed because of a broken pipe)
+[2026-11-21T16:05:51.481+00:00] Remote action digest: '0000000000000000000000000000000000000000000000000000000000000000:143'
+[2026-11-21T16:05:51.481+00:00] Stdout: <empty>
+[2026-11-21T16:05:51.481+00:00] Stderr: <empty>
+
+[2026-11-21T16:05:51.481+00:00] Action failed: hostkeeper//crates/hostkeeper-ui-tests:hostkeeper-ui-tests-0.1.0_7cce2d9186_lint (buildrules//platforms:linux_x86_64#27db57317ae2fec7) (rustc hostkeeper-ui-tests-0.1.0_7cce2d9186_lint)
+[2026-11-21T16:05:51.481+00:00] Internal error (stage: remote_call_error): Remote Execution Error on Execute with digest 0000000000000000000000000000000000000000000000000000000000000000:143 for ReSession GRPC-SESSION-ID
+[2026-11-21T16:05:51.481+00:00] Error: (Error was returned on the stream by RE: RE channel error: code: 'Unknown error', message: "h2 protocol error: error reading a body from connection", source: hyper::Error(Body, Error { kind: Io(Custom { kind: BrokenPipe, error: "stream closed because of a broken pipe" }) }): error reading a body from connection: stream closed because of a broken pipe)
+[2026-11-21T16:05:51.481+00:00] Remote action digest: '0000000000000000000000000000000000000000000000000000000000000000:143'
+[2026-11-21T16:05:51.481+00:00] Stdout: <empty>
+[2026-11-21T16:05:51.481+00:00] Stderr: <empty>
+
+[2026-11-21T16:05:51.481+00:00]
+BUILD FAILED

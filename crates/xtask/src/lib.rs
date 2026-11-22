@@ -3,8 +3,10 @@
 //!
 //! - `install-tool`: check a downloaded tool against its pinned SHA-256 and install it
 //!   (`install`).
-//! - `farm-build`: the farm lane's `buck2 build`, refused unless buck2 has the farm's workers and
-//!   its summary line says `local: 0` (`farm`).
+//! - `farm-build`: the farm lane's `buck2 build`, refused unless buck2 has the farm's workers, the
+//!   generated build table is fresh (a stale one is handed over as a patch) and its summary line
+//!   says `local: 0`; a build whose only failures are cut connections to the farm runs once more
+//!   (`farm`).
 //! - `release <verb>`: the release steps: the version of a commit, the release plan, the check
 //!   and publication of a release's assets, the native packages of the services and the
 //!   `targets` that deploy them (`release`).
@@ -130,8 +132,10 @@ enum Verb {
         #[arg(long)]
         member: Option<PathBuf>,
     },
-    /// The farm lane's build: `buck2 build <target>` with the farm's workers configured, its
-    /// summary line saying `local: 0` (docs/farm.md); buck2's daemon is stopped after.
+    /// The farm lane's build: `buck2 build <target>` with the farm's workers configured and the
+    /// generated build table fresh, run once more when its only failures are cut connections to
+    /// the farm, its summary line saying `local: 0` (docs/farm.md); buck2's daemon is stopped
+    /// after.
     FarmBuild {
         /// The buck2 program (the workflow installed the pinned release there).
         #[arg(long)]
@@ -139,6 +143,18 @@ enum Verb {
         /// What to build (`//:ci`).
         #[arg(long)]
         target: String,
+        /// Where a stale table's fix, the patch of `buildrules sync`, is written.
+        #[arg(long)]
+        patch: PathBuf,
+        /// The job summary: a stale table's fix and a build run again after a cut are told there.
+        #[arg(long)]
+        summary: PathBuf,
+        /// The repository of the run (`owner/name`), for the command that applies the patch.
+        #[arg(long)]
+        repo: String,
+        /// The run's id, for the same command.
+        #[arg(long)]
+        run_id: u64,
     },
     /// The release steps: version, package, plan, check and publish.
     Release {
@@ -228,8 +244,26 @@ fn run(cli: Cli) -> Result<Vec<String>, Error> {
                 &download, &sha256, &unpack, &out,
             )?])
         }
-        Verb::FarmBuild { buck2, target } => {
-            Ok(vec![farm::build(&buck2, &target, &mut std::io::stderr())?])
+        Verb::FarmBuild {
+            buck2,
+            target,
+            patch,
+            summary,
+            repo,
+            run_id,
+        } => {
+            let handoff = farm::Handoff {
+                patch,
+                summary,
+                repo,
+                run_id,
+            };
+            Ok(vec![farm::build(
+                &buck2,
+                &target,
+                &handoff,
+                &mut std::io::stderr(),
+            )?])
         }
         Verb::Release { verb } => Ok(release::run(verb, release::real::connect)?),
         Verb::Advisories { repo } => {
