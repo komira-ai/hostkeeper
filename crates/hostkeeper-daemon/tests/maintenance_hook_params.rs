@@ -522,8 +522,10 @@ fn a_cutover_is_refused_while_the_host_keeps_no_run_record() {
 /// fake Mac in the daemon's unit tests); a build whose
 /// version is not `major.minor.patch` cannot check its host, so the `verify` of its `linux` and
 /// `reboot` answers `unsupported_kind` (the check itself is `maintenance_hook_linux.rs`'s, over
-/// fakes: a host's reads the host); a Mac's `xcode` stages (an order with no Xcode stages nothing
-/// and succeeds) and its `cutover`, `after_reboot` and `verify` answer `unsupported_kind`.
+/// fakes: a host's reads the host); a Mac's `xcode` stages, applies and checks (an order with no
+/// Xcode, no removal and no default stages, applies and checks nothing and succeeds; its own
+/// tests run it over a fake Mac), and its `after_reboot`, which Xcode never asks for, answers
+/// `unsupported_kind`.
 ///
 /// Catches: a platform's kinds put in the wrong platform's registry, or a host that cannot be
 /// checked made to look checked.
@@ -591,8 +593,15 @@ fn the_registry_of_a_platform_holds_its_kinds() {
     );
     let xcode = mac.get(Kind::Xcode).expect("held");
     assert_eq!(xcode.prepare(&params), Ok(()));
-    let unsupported = KindError::unsupported(Kind::Xcode);
-    assert_eq!(xcode.cutover(&params), Err(unsupported.clone()));
-    assert_eq!(xcode.after_reboot(&params), Err(unsupported.clone()));
-    assert_eq!(xcode.verify(&params), Err(unsupported));
+    assert_eq!(
+        xcode.cutover(&params),
+        Ok(Cutover::Applied {
+            version: String::new()
+        })
+    );
+    assert_eq!(
+        xcode.after_reboot(&params),
+        Err(KindError::unsupported(Kind::Xcode))
+    );
+    assert_eq!(xcode.verify(&params), Ok(()));
 }
