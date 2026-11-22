@@ -99,6 +99,7 @@ fn the_maintain_order_carries_the_run_and_the_groups_settings() {
             macos_path: agent::MacosPath::Install,
             macos_major: true,
             return_secs: 1200,
+            xcode: None,
         },
         order_id: ORDER.to_owned(),
         order_try: 1,
@@ -559,6 +560,7 @@ fn a_start_after_the_run_was_cancelled_stores_and_sends_nothing() {
             macos_path: agent::MacosPath::Install,
             macos_major: false,
             return_secs: 1200,
+            xcode: None,
         },
     };
     edit_runs(&world, |runs| {

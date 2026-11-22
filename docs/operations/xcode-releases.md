@@ -138,10 +138,31 @@ The store keeps the newest releases, as many as the largest `xcode_keep` of any 
 policy (and at least one), and removes the rest, newest first, each removal audited before it is made. A release older than those the store keeps
 is refused `not_kept` when it is pushed, before its body is read and again under the store's lock
 before it is stored, so the release just pushed always stays. A
-release a host reports installed is never removed; no host reports its installed Xcodes yet, so today
-none is held back by that rule. The prune runs after each stored upload and in the daily read of the list.
+release a host reports installed is never removed; the prune does not read the Xcodes the Macs report
+yet (they decide only what is due on a Mac and what its run removes, below), so today none is held
+back by that rule. The prune runs after each stored upload and in the daily read of the list.
 Each archive it removes is audited first, as `xcode_remove` by `coordinator`, with the reason `pruned:
 Xcode <version> (<build>), sha256 <sha256>`.
+
+## When a Mac is due an Xcode
+
+A Mac's daemon reports the Xcodes installed in `/Applications` and the one `xcode-select` names, and
+lists no Xcode due: the coordinator decides it, from the Mac's group and the store. In a group whose
+`xcode_keep` is 0, nothing of Xcode is ever due and no run changes an Xcode. Otherwise the group keeps
+the newest `xcode_keep` releases the store holds, and `xcode` is due on its Mac when one of them is not
+installed in its own directory (`Xcode-<version>.app` with that build: a copy elsewhere, such as an
+App Store `Xcode.app`, does not count), or when `xcode-select` does not name the group's
+`xcode_default` (`latest`, the newest kept release, or a kept version; a version the store keeps no
+release of leaves `xcode-select` as it is). So a newer Xcode becomes due only once it is pushed to
+the store.
+
+The host page shows it among the due items, from the version `xcode-select` names to the release
+missing (or the default), with that release's build; the Mac counts toward the alert `updates_due` of
+its group, and a Schedule or Update with `xcode` takes it. The `maintain` order of its turn carries
+the kept releases (version, build, size and SHA-256, newest first), the versions to remove (each
+installed in its own directory and older than every kept release; never one in another directory)
+and the default; a turn with both macOS and Xcode is ordered macOS first. While the store's directory
+cannot be read, no Mac is shown due an Xcode and a turn with `xcode` waits.
 
 ## The audit entries
 

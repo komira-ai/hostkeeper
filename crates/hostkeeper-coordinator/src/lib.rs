@@ -198,6 +198,7 @@ pub(crate) mod maintenance_operator;
 pub(crate) mod maintenance_policy;
 pub(crate) mod maintenance_runs;
 pub(crate) mod maintenance_service;
+pub(crate) mod maintenance_xcode;
 pub mod membership;
 pub(crate) mod moving;
 pub mod operate;

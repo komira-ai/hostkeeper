@@ -145,6 +145,7 @@ impl Coordinator {
         let (mut hosts, shown) = self.page_hosts(page, enrolled);
         self.show_inventory_with(&mut hosts, &shown);
         self.show_groups(&mut hosts);
+        self.show_xcode_due(&mut hosts);
         Ok(proto::ListHostsResponse {
             hosts,
             next_page_token,
@@ -197,6 +198,7 @@ impl Coordinator {
         self.show_running(&mut hosts[0], &id, enrolled.as_ref());
         self.show_inventory_with(&mut hosts, &[enrolled]);
         self.show_groups(&mut hosts);
+        self.show_xcode_due(&mut hosts);
         let [host] = hosts;
         Ok(proto::GetHostResponse { host: Some(host) })
     }
