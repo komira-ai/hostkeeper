@@ -1,0 +1,33 @@
+[2026-11-22T00:16:34.856+00:00] Build ID: 00000000-0000-0000-0000-000000000000
+[2026-11-22T00:16:36.897+00:00] RE Session: GRPC-SESSION-ID
+[2026-11-22T00:18:21.394+00:00] Action failed: hostkeeper//crates/hostkeeper-privileged:hostkeeper-privileged-0.1.0_fa8b7729ee_lint (buildrules//platforms:linux_x86_64#27db57317ae2fec7) (rustc hostkeeper-privileged-0.1.0_fa8b7729ee_lint)
+[2026-11-22T00:18:21.394+00:00] Internal error (stage: remote_call_error): Remote Execution Error on Execute with digest 0000000000000000000000000000000000000000000000000000000000000000:143 for ReSession GRPC-SESSION-ID
+[2026-11-22T00:18:21.394+00:00] Error: (Error was returned on the stream by RE: RE channel error: code: 'Unknown error', message: "h2 protocol error: error reading a body from connection", source: hyper::Error(Body, Error { kind: Io(Custom { kind: BrokenPipe, error: "stream closed because of a broken pipe" }) }): error reading a body from connection: stream closed because of a broken pipe)
+[2026-11-22T00:18:21.394+00:00] Remote action digest: '0000000000000000000000000000000000000000000000000000000000000000:143'
+[2026-11-22T00:18:21.394+00:00] Stdout: <empty>
+[2026-11-22T00:18:21.394+00:00] Stderr: <empty>
+
+[2026-11-22T00:18:21.394+00:00] Action failed: hostkeeper//crates/hostkeeper-privileged:hostkeeper-privileged-0.1.0_7ec335970d_lint (buildrules//platforms:linux_x86_64#27db57317ae2fec7) (rustc hostkeeper-privileged-0.1.0_7ec335970d_lint)
+[2026-11-22T00:18:21.394+00:00] Internal error (stage: remote_call_error): Remote Execution Error on Execute with digest 0000000000000000000000000000000000000000000000000000000000000000:143 for ReSession GRPC-SESSION-ID
+[2026-11-22T00:18:21.394+00:00] Error: (Error was returned on the stream by RE: RE channel error: code: 'Unknown error', message: "h2 protocol error: error reading a body from connection", source: hyper::Error(Body, Error { kind: Io(Custom { kind: BrokenPipe, error: "stream closed because of a broken pipe" }) }): error reading a body from connection: stream closed because of a broken pipe)
+[2026-11-22T00:18:21.394+00:00] Remote action digest: '0000000000000000000000000000000000000000000000000000000000000000:143'
+[2026-11-22T00:18:21.394+00:00] Stdout: <empty>
+[2026-11-22T00:18:21.394+00:00] Stderr: <empty>
+
+[2026-11-22T00:18:21.397+00:00] Action failed: hostkeeper//crates/hostkeeper-ui-tests:hostkeeper-ui-tests-0.1.0_5ce83311df__bin (buildrules//platforms:linux_x86_64#27db57317ae2fec7) (rustc hostkeeper-ui-tests-0.1.0_5ce83311df__bin)
+[2026-11-22T00:18:21.397+00:00] Internal error (stage: remote_call_error): Remote Execution Error on Execute with digest 0000000000000000000000000000000000000000000000000000000000000000:143 for ReSession GRPC-SESSION-ID
+[2026-11-22T00:18:21.397+00:00] Error: (Error was returned on the stream by RE: RE channel error: code: 'Unknown error', message: "h2 protocol error: error reading a body from connection", source: hyper::Error(Body, Error { kind: Io(Custom { kind: BrokenPipe, error: "stream closed because of a broken pipe" }) }): error reading a body from connection: stream closed because of a broken pipe)
+[2026-11-22T00:18:21.397+00:00] Remote action digest: '0000000000000000000000000000000000000000000000000000000000000000:143'
+[2026-11-22T00:18:21.397+00:00] Stdout: <empty>
+[2026-11-22T00:18:21.397+00:00] Stderr: <empty>
+
+[2026-11-22T00:18:21.457+00:00] [2m2026-11-22T00:18:21.391037Z[0m [33m WARN[0m [2mremote_execution::client[0m[2m:[0m Transient error (attempt 1/5), retrying in 114ms: code: 'The service is currently unavailable', message: "http2 error", source: tonic::transport::Error(Transport, hyper::Error(Http2, KeepAliveTimedOut)): transport error: http2 error: keep-alive timed out: operation timed out
+[2026-11-22T00:18:21.457+00:00] [2m2026-11-22T00:18:21.391106Z[0m [33m WARN[0m [2mremote_execution::client[0m[2m:[0m Transient error (attempt 1/5), retrying in 105ms: code: 'The service is currently unavailable', message: "http2 error", source: tonic::transport::Error(Transport, hyper::Error(Http2, KeepAliveTimedOut)): transport error: http2 error: keep-alive timed out: operation timed out
+[2026-11-22T00:18:21.457+00:00] [2m2026-11-22T00:18:21.391532Z[0m [33m WARN[0m [2mremote_execution::client[0m[2m:[0m Transient error (attempt 1/5), retrying in 133ms: code: 'The service is currently unavailable', message: "http2 error", source: tonic::transport::Error(Transport, hyper::Error(Http2, KeepAliveTimedOut)): transport error: http2 error: keep-alive timed out: operation timed out
+[2026-11-22T00:18:21.457+00:00] [2m2026-11-22T00:18:21.391577Z[0m [33m WARN[0m [2mremote_execution::client[0m[2m:[0m Transient error (attempt 1/5), retrying in 145ms: code: 'The service is currently unavailable', message: "http2 error", source: tonic::transport::Error(Transport, hyper::Error(Http2, KeepAliveTimedOut)): transport error: http2 error: keep-alive timed out: operation timed out
+[2026-11-22T00:18:21.457+00:00] [2m2026-11-22T00:18:21.391567Z[0m [33m WARN[0m [2mremote_execution::client[0m[2m:[0m Transient error (attempt 1/5), retrying in 131ms: code: 'The service is currently unavailable', message: "http2 error", source: tonic::transport::Error(Transport, hyper::Error(Http2, KeepAliveTimedOut)): transport error: http2 error: keep-alive timed out: operation timed out
+[2026-11-22T00:18:21.457+00:00] [2m2026-11-22T00:18:21.392882Z[0m [33m WARN[0m [2mremote_execution::client[0m[2m:[0m Transient error (attempt 1/5), retrying in 123ms: code: 'The service is currently unavailable', message: "http2 error", source: tonic::transport::Error(Transport, hyper::Error(Http2, KeepAliveTimedOut)): transport error: http2 error: keep-alive timed out: operation timed out
+[2026-11-22T00:18:21.457+00:00] [2m2026-11-22T00:18:21.393084Z[0m [33m WARN[0m [2mremote_execution::client[0m[2m:[0m Transient error (attempt 1/5), retrying in 121ms: code: 'The service is currently unavailable', message: "http2 error", source: tonic::transport::Error(Transport, hyper::Error(Http2, KeepAliveTimedOut)): transport error: http2 error: keep-alive timed out: operation timed out
+
+[2026-11-22T00:25:29.654+00:00]
+BUILD FAILED

@@ -1,6 +1,6 @@
 # Scheduled maintenance updates
 
-Status: design; the Linux report of sections 1 and 4.1 is built (`crates/hostkeeper-daemon/src/maintenance_facts.rs`), and on a Mac its macOS facts and due macOS updates, FileVault, the data volume's free space, the Command Line Tools, its Xcodes, its update account and the settings of section 5.8 (`maintenance_macos.rs`, `maintenance_mac.rs`, `maintenance_xcode.rs`, `maintenance_account.rs`, `maintenance_mdm.rs`), as are the maintenance hook's steps, the Linux kinds' `cutover` (`maintenance_linux.rs`) and their `verify` of section 5.6 (`crates/hostkeeper-daemon/src/maintenance_hook/linux.rs`), and the `macos` kind's `cutover`, install and `verify` on the daemon path of section 5.5 (`crates/hostkeeper-daemon/src/maintenance_hook/macos/apply.rs`; with FileVault on, a minor update's install without `--restart` and its authenticated restart, `maintenance_hook/macos/filevault.rs`); nothing else. The owner's answers of 2026-11-19 are in: the Mac's update account (section 5.5) and the first-class Linux path
+Status: design; the Linux report of sections 1 and 4.1 is built (`crates/hostkeeper-daemon/src/maintenance_facts.rs`), and on a Mac its macOS facts and due macOS updates, FileVault, the data volume's free space, the Command Line Tools, its Xcodes, its update account and the settings of section 5.8 (`maintenance_macos.rs`, `maintenance_mac.rs`, `maintenance_xcode.rs`, `maintenance_account.rs`, `maintenance_mdm.rs`), as are the maintenance hook's steps, the Linux kinds' `cutover` (`maintenance_linux.rs`) and their `verify` of section 5.6 (`crates/hostkeeper-daemon/src/maintenance_hook/linux.rs`), and the `macos` kind's `cutover`, install and `verify` on the daemon path of section 5.5 (`crates/hostkeeper-daemon/src/maintenance_hook/macos/apply.rs`; with FileVault on, a minor update's install without `--restart` and its authenticated restart, `maintenance_hook/macos/filevault.rs`), and the `xcode` kind's stage, `cutover` and `verify` of sections 2.4 and 5.6 (`crates/hostkeeper-daemon/src/maintenance_hook/xcode/`; no simulator platform is imported), the coordinator's `xcode` due of section 1.1 and the Xcode entries of the `maintain` order (`crates/hostkeeper-coordinator/src/maintenance_xcode.rs`), and the operator runbook of section 8's MU9 for Linux and the Mac (`docs/operations/maintenance.md`, whose list "Not built yet" says what of the Mac path an operator cannot use yet); nothing else. The owner's answers of 2026-11-19 are in: the Mac's update account (section 5.5) and the first-class Linux path
 (the one-button update of section 4.2) are decided; for Xcode, section 2.0 makes a push from the operator's own Mac the source (owner's direction, 2026-11-20), with a fetcher Mac as the alternative. Facts about this repository were read on `main` at the commit this document lands on top
 of; facts about komira-ai/jobscheduler and komira-ai/kbf were read on their `main` and are marked as theirs. **Built** marks what exists
 (with its path), **New** what this design adds, **[V]** a claim to verify before building on it.
@@ -59,10 +59,14 @@ heartbeat, the due items included; the coordinator only shows the reports. The o
 (section 1.1), because no host can see it: for the `xcode` row below the daemon reports only what is installed, and the coordinator
 decides what is due.
 
-The daemon looks at its host every hour, after every start, and after a maintenance step ends, as the prerequisites pass does today (Built:
+The daemon looks at its host every hour, after every start, and after a maintenance step ends, and sooner after a look that failed (Built:
+5 minutes after it ended, doubled for each further failure in a row, at most the hour; `maintenance_facts.rs`), as the prerequisites pass does today (Built:
 `crates/hostkeeper-daemon/src/prerequisites.rs`, a worker thread that never holds up a heartbeat; `xcode_clt.rs`, which already runs
 `softwareupdate`; the bounded program runner `run`/`run_ok` of `login_account.rs`). Each program runs as root with an empty environment, a deadline and capped output, through the same ports. **New:** the
-checks below and the report of section 4.1.
+checks below and the report of section 4.1. A package manager's run that finds its lock held is tried again every 2 seconds for at
+most the daemon's `--package-lock-wait-secs`, as the hook's stage waits, and fails the look only when the lock is still held then (Built:
+`LockWait` in `maintenance_collect.rs`; apt's `DPkg::Lock::Timeout` is not used, since apt 2.4 to 2.8 do not apply it to the lock of
+`/var/lib/apt/lists` that `apt-get update` takes; dnf runs with `exit_on_lock`).
 
 | Kind | Platform | What the daemon reads | Due when |
 |---|---|---|---|
@@ -108,7 +112,7 @@ what the store holds (section 2) and what each Mac reports installed (section 1)
   only version, build, release type and required macOS from it, never a file. Apple's own developer releases RSS feed names the same
   version and build in each item's title; it is the fallback if the community list goes away (a second parser, written only then). The
   list's address is a flag (`--xcode-feed-url`; empty turns the job off).
-- **What it decides:** a release (not a beta or a release candidate) newer than any the store holds is brought in by the source of section 2.0. When no fetcher is configured (`--xcode-fetcher` empty), it raises the warning alert `xcode_release_waiting`, which clears when the store holds the release (`hkctl xcode-push`); with a fetcher, the fetcher fetches it and `xcode_signin_needed` is the alert when it cannot. Once the
+- **What it decides:** a release (not a beta or a release candidate) newer than any the store holds is brought in by the source of section 2.0. When no fetcher is configured (`--xcode-fetcher` empty), it raises the warning alert `xcode_release_waiting`, which clears when the store holds the release (`hk xcode-push`); with a fetcher, the fetcher fetches it and `xcode_signin_needed` is the alert when it cannot. Once the
   coordinator holds it, a Mac of a group that keeps the newest Xcodes (`xcode_keep`, section 3) and lacks it has `xcode` due, like any
   other due item.
 - **Failure:** a fetch of the list that fails is a log line, retried the next day, never an alert.
@@ -161,8 +165,8 @@ do with the archive (2.4: expand it, check Apple's signature, move it into place
 runs as root with no sign-in.
 
 ```
-hkctl xcode-push 27.2            # downloads with xcodes in the operator's own session, then uploads
-hkctl xcode-push ~/Downloads/Xcode_27.2.xip
+hk xcode-push 27.2            # downloads with xcodes in the operator's own session, then uploads
+hk xcode-push ~/Downloads/Xcode_27.2.xip
 ```
 
 `xcode-push` is, like `hk ssh`, not a gateway call: it is a verb of the `hk` program (Rust)
@@ -286,13 +290,13 @@ No step below needs an Apple Account: the daemon runs each as root.
 |---|---|
 | The coordinator downloads | section 2.1 |
 | Every Mac signs in and downloads its own | a sign-in with a code on every Mac, every time a session ends |
-| A person downloads the `.xip` and uploads it to the store | chosen: section 2.0, `hkctl xcode-push` |
+| A person downloads the `.xip` and uploads it to the store | chosen: section 2.0, `hk xcode-push` |
 | Apple Business assigns the App Store's Xcode | not offered in our Apple Business's Apps and Books (section 2.0); it would also update one Xcode in place under running builds |
 
 ## 3. The group's settings
 
 A host group's policy (Built: `hostgroups.proto` `RolloutPolicy`) gains an optional `maintenance` table (New, additive; `HostGroups.Put`
-and `hkctl` edit it):
+and `hk` edit it):
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -331,7 +335,7 @@ heartbeat's 16 KiB and stored for free in the host's last beat (Built: `fleet_ho
 - **Update** (one button, on the host page, on a host's row of the Maintenance page and on a group's notice): a run of everything due, on
   that host or every due host of the group, now, with the group's batch and drain settings. It asks once to confirm ("drains, updates,
   restarts if needed, puts back"), takes a reason, and calls `Maintenance.Schedule` like the form.
-- **Maintenance page** (New, `ui/pages/maintenance.js`, in the Manage menu): per group, the hosts and what is due; the Xcode store, the release waiting for a push (with the `hkctl xcode-push <version>` line to copy) and, if a fetcher is configured, its state (with "sign in on the fetcher" and a link to its Desktop
+- **Maintenance page** (New, `ui/pages/maintenance.js`, in the Manage menu): per group, the hosts and what is due; the Xcode store, the release waiting for a push (with the `hk xcode-push <version>` line to copy) and, if a fetcher is configured, its state (with "sign in on the fetcher" and a link to its Desktop
 page when it needs one); the
   runs, each with its hosts and their step (waiting, staging, draining since, applying, rebooting, checking, putting back, done, deferred,
   halted), refreshed by `ctx.every`. A rebooting host links its **Console** (Linux, Serial over LAN, Built: `ui/pages/serialconsole.js`)
@@ -343,7 +347,7 @@ page when it needs one); the
   and **Put back** (run the drained services' `resume`, leave the update as far as it got, and let the run go on). Nothing else: a pause is
   a Cancel and a new Schedule.
 
-The operator API is a new service `hostkeeper.operator.v1.Maintenance` (`Schedule`, `List`, `Get`, `Cancel`, `RetryHost`, `PutBack`) and `Xcode` (`List`: the store, the release waiting, and with a fetcher its last attempt and whether it needs a sign-in; `Remove`), each audited, each in `ui/calls.json` and `hkctl`. The store's upload, `PUT /v1/xcode/<sha256>`, is a route of its own, not a method of these services; each upload is audited.
+The operator API is a new service `hostkeeper.operator.v1.Maintenance` (`Schedule`, `List`, `Get`, `Cancel`, `RetryHost`, `PutBack`) and `Xcode` (`List`: the store, the release waiting, and with a fetcher its last attempt and whether it needs a sign-in; `Remove`), each audited, each in `ui/calls.json` and `hk`. The store's upload, `PUT /v1/xcode/<sha256>`, is a route of its own, not a method of these services; each upload is audited.
 
 ## 5. The run
 
@@ -655,7 +659,7 @@ Each is one pull request in this repository unless the table says otherwise, wit
 | MU4 | Hook contract: `[hook] drain` and `resume` in the manifest and the release manifest, the step runner running them, the conformance checks | MU1 |
 | MU5 | Daemon: the `maintain` order, the run record, the maintenance hook for Linux (apt, dnf, apk, reboot), stage-drain-apply-reboot-check-put back across a reboot | MU2, MU4 |
 | MU6 | Coordinator: runs, the migration, `Schedule`, `Cancel`, `RetryHost`, `PutBack`, the rules of 5.1 in `decide()` (serving count, window, batch, packages leaving a host in its turn out of a stage), `maintenance_halted`, `maintenance_not_back` and silence while rebooting, `--macos-update-via` accepting only `daemon` and the order's path field (no `silent_host` before `return_secs`); the Update button, the Schedule form and the run view | MU3, MU5 |
-| MU7 | Xcode: the `xcode-feed` job and `xcode_release_waiting`, the store (`--xcode-dir`) and its route for enrolled Macs, `hkctl xcode-push` and the operator `PUT` route (2.0), the hook's install and removal (2.4); the fetcher (`--xcode-fetcher`, `fetch_xcode`, `xcode_signin_needed`) only if question 2 chooses it | MU6, MU8 (a run with both orders macOS first), MP, J2 and K1 deployed |
+| MU7 | Xcode: the `xcode-feed` job and `xcode_release_waiting`, the store (`--xcode-dir`) and its route for enrolled Macs, `hk xcode-push` and the operator `PUT` route (2.0), the hook's install and removal (2.4); the fetcher (`--xcode-fetcher`, `fetch_xcode`, `xcode_signin_needed`) only if question 2 chooses it | MU6, MU8 (a run with both orders macOS first), MP, J2 and K1 deployed |
 | MU8 | macOS: `softwareupdate` and `startosinstall` in the maintenance hook with the update account file and the standard-input runner (5.5), the account and its Secure Token made at start, FileVault's authenticated restart, the bootstrap's keys | MU6, MP |
 | MP | The Mac proof, on one drained Mac in a group of its own, each a **[V]** of 5.5, 2.0, 2.4 and 5.8: `xcode-push`'s signature check and version read on a real archive; a minor update and a major upgrade as root from launchd with nobody logged in, each with FileVault off and on; whether an install on macOS 26 or later stops on a step that needs the screen; `sysadminctl` with passwords on a pipe and the Secure Token grant; an Xcode install, a swap and a removal with js-agent probing before and after; how each setting of 5.8 shows on the Mac. Results go into this document | MU5 |
 | MU9 | `docs/operations/maintenance.md`: the runbook (the Xcode download, scheduling, a halted host) | MU7, MU8 |
@@ -714,7 +718,7 @@ kind's stage is answered by the test, and its programs are tested in the hook's 
 1. **How a Mac authorises a macOS update. Decided (2026-11-19):** device management after the drain is the ideal, but Apple Business's
    API cannot send the update to one device (5.5.1); until it can, the daemon installs with the dedicated update account's password on
    standard input (5.5), and `--macos-update-via` switches (5.5.2). Open: nothing.
-2. **Xcode: where it comes from. Decided (2026-11-20):** `hkctl xcode-push` from the operator's own Mac, prompted by
+2. **Xcode: where it comes from. Decided (2026-11-20):** `hk xcode-push` from the operator's own Mac, prompted by
    `xcode_release_waiting` (section 2.0); Apple Business's Apps and Books does not offer Xcode, and the two-factor step cannot be
    automated. The store is decided (2026-11-19): the archive unmodified, private, installed only on our Macs (section 2.2). Open: whether
    the fetcher Mac is wanted as well (it is not built unless asked for).
@@ -726,7 +730,9 @@ kind's stage is answered by the test, and its programs are tested in the hook's 
 
 This section records the Mac proof (MP of section 8): for each **[V]** of sections 2.0, 2.4, 5.5 and 5.8, the command that settles it,
 the macOS version it ran on, what it showed and the decision that forces. The commands, in the order they are run, with what to record
-and how to undo each, are in `docs/operations/mac-proof.md` (its step ids are cited below). A result is written here only when it was
+and how to undo each, are in `docs/operations/mac-proof.md` (its step ids are cited below). What an operator does with what is built (the Xcode push, the update account, FileVault, the
+settings of 5.8, a Mac that halts) is in `docs/operations/maintenance.md`, "The Mac: macOS and Xcode"; a result here that changes
+an operator's step changes that page too. A result is written here only when it was
 seen on a Mac; what Apple documents, or what a reading of the code shows, is said as such.
 
 ### 10.1 What could be shown on 2026-11-20

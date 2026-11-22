@@ -12,15 +12,20 @@
 //!
 //! A collector that cannot read what it reads fails with a reason ([`Collector::collect`]): the
 //! program's step and exit code and the first line of its standard error, a deadline, or a file
-//! that cannot be read. The look then fails as a whole (`MaintenanceReport.look_failed`).
+//! that cannot be read. The look then fails as a whole (`MaintenanceReport.look_failed`). A
+//! package manager's program that takes its lock is waited for while another process holds it
+//! ([`LockWait`]), and fails the look only when the lock is still held at the bound.
 
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
 
-use hostkeeper_launchd::Launchctl;
+use hostkeeper_install::repository::wait::LOCK_POLL_SECS;
 use hostkeeper_launchd::launchctl::OUTPUT_MAX;
+use hostkeeper_launchd::{Launchctl, LaunchctlOutput};
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use hostkeeper_proto::maintenance::{MAX_DUE_LABEL, MAX_DUE_VERSION};
 
@@ -205,7 +210,12 @@ pub fn listing(
     args: &[&str],
     codes: &[i32],
 ) -> Result<(i32, String), String> {
-    let output = run(tool, what, args)?;
+    checked(run(tool, what, args)?, what, codes)
+}
+
+/// The exit code and standard output of `output` when it exited with one of `codes`, as
+/// [`listing`] says.
+fn checked(output: LaunchctlOutput, what: &str, codes: &[i32]) -> Result<(i32, String), String> {
     match output.code {
         Some(code) if codes.contains(&code) => {
             if output.stdout.len() >= OUTPUT_MAX {
@@ -216,6 +226,108 @@ pub fn listing(
             Ok((code, String::from_utf8_lossy(&output.stdout).into_owned()))
         }
         _ => Err(exit_failure(what, &output, true)),
+    }
+}
+
+/// Whether a run of a package manager's program found its lock held, from its exit code and its
+/// standard output and standard error joined: each package manager's own
+/// ([`crate::maintenance_apt::lock_held`], [`crate::maintenance_dnf::lock_held`],
+/// [`crate::maintenance_apk::lock_held`]).
+pub type LockHeld = fn(Option<i32>, &str) -> bool;
+
+/// The wait between two tries of a program whose lock is held.
+pub trait LockWaiter: Send + Sync {
+    /// Waits `secs` seconds.
+    fn wait(&self, secs: u64);
+}
+
+/// A wait made by a sleep: the host's is the thread's ([`SleepWaiter::host`]).
+pub struct SleepWaiter {
+    sleep: Box<dyn Fn(Duration) + Send + Sync>,
+}
+
+impl SleepWaiter {
+    /// The wait that asks `sleep` for each wait's duration.
+    pub fn new(sleep: Box<dyn Fn(Duration) + Send + Sync>) -> SleepWaiter {
+        SleepWaiter { sleep }
+    }
+
+    /// The host's wait: the thread sleeps ([`std::thread::sleep`]).
+    pub fn host() -> SleepWaiter {
+        SleepWaiter::new(Box::new(std::thread::sleep))
+    }
+}
+
+impl LockWaiter for SleepWaiter {
+    /// Sleeps `secs` seconds.
+    fn wait(&self, secs: u64) {
+        (self.sleep)(Duration::from_secs(secs));
+    }
+}
+
+/// How a look waits for a package manager's lock that another process holds (an `apt-get` of the
+/// repository installer, unattended-upgrades, an operator's `dnf`): a program that finds it held
+/// is run again every [`LOCK_POLL_SECS`] seconds, the wait made by its [`LockWaiter`], for at most
+/// `bound_secs` per run of a program (the daemon's `--package-lock-wait-secs`, which is the
+/// maintenance hook's bound too), as the hook's stage waits: dnf's two listings may each wait
+/// that long. The package managers' own timeouts are not used: apt's
+/// `DPkg::Lock::Timeout` does not reach the lock of `/var/lib/apt/lists`, which `apt-get update`
+/// takes, and dnf waits with no bound of its own.
+#[derive(Clone)]
+pub struct LockWait {
+    waiter: Arc<dyn LockWaiter>,
+    bound_secs: u64,
+}
+
+impl LockWait {
+    /// The wait of at most `bound_secs`, made by `waiter`.
+    #[must_use]
+    pub fn new(waiter: Arc<dyn LockWaiter>, bound_secs: u64) -> LockWait {
+        LockWait { waiter, bound_secs }
+    }
+
+    /// The host's wait of at most `bound_secs`: the thread sleeps ([`SleepWaiter::host`]).
+    #[must_use]
+    pub fn host(bound_secs: u64) -> LockWait {
+        LockWait::new(Arc::new(SleepWaiter::host()), bound_secs)
+    }
+
+    /// [`listing`], run again while `held` says the lock is held, waiting [`LOCK_POLL_SECS`]
+    /// between two tries (less before the last, so the wait is the bound and never more).
+    ///
+    /// # Errors
+    /// As [`listing`]; a lock still held once the bound is waited is `the package manager's lock
+    /// was held for <waited>s of <bound>s: ` and then the run's failure ([`exit_failure`]: the
+    /// step, the exit code and the first line of its standard error, which names the lock).
+    pub fn listing(
+        &self,
+        tool: &dyn Launchctl,
+        what: &str,
+        args: &[&str],
+        codes: &[i32],
+        held: LockHeld,
+    ) -> Result<(i32, String), String> {
+        let mut waited: u64 = 0;
+        loop {
+            let output = run(tool, what, args)?;
+            let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+            text.push('\n');
+            text.push_str(&output.stderr_text());
+            if !held(output.code, &text) {
+                return checked(output, what, codes);
+            }
+            let left = self.bound_secs.saturating_sub(waited);
+            if left == 0 {
+                return Err(format!(
+                    "the package manager's lock was held for {waited}s of {}s: {}",
+                    self.bound_secs,
+                    exit_failure(what, &output, true)
+                ));
+            }
+            let pause = left.min(LOCK_POLL_SECS);
+            self.waiter.wait(pause);
+            waited += pause;
+        }
     }
 }
 

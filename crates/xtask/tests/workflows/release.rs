@@ -17,7 +17,7 @@
 //!   rpm repositories, never a release file) and, in the two install checks, one `docker` command
 //!   each.
 //! - `artifacts.yml` ([`artifacts_problems`]) starts only by a push to main or by hand, has its
-//!   own group per commit ([`ARTIFACTS_GROUP`]), computes the version on a whole history, builds
+//!   own group per commit and event ([`ARTIFACTS_GROUP`]), computes the version on a whole history, builds
 //!   the coordinator's image twice, compares the two, checks that the image holds the operator
 //!   web app and runs the image's entrypoint ([`IMAGE_BUILD`], [`IMAGE_COMPARE`],
 //!   [`IMAGE_UI_CHECK`], [`IMAGE_RUN`]), and its `attest` job, under its exact
@@ -66,8 +66,10 @@ pub const PUBLISH_GROUP: &str = "release-publish-${{ matrix.tag }}";
 /// behind.
 pub const PLAN_RUN: &str = "cargo xtask release plan --repo \"$GITHUB_REPOSITORY\" --commit \"$GITHUB_SHA\" --version-file VERSION --freeze \"$FREEZE\" --output \"$GITHUB_OUTPUT\"";
 
-/// The group of artifacts.yml: one per commit.
-pub const ARTIFACTS_GROUP: &str = "artifacts-${{ github.sha }}";
+/// The group of artifacts.yml: one per commit and event.
+/// The event is in it so a run by hand at main's commit never shares (and, pending, never
+/// replaces) the push run of that commit.
+pub const ARTIFACTS_GROUP: &str = "artifacts-${{ github.sha }}-${{ github.event_name }}";
 
 /// Workflows outside the release group on purpose, each with its reason.
 pub const RELEASE_EXEMPT: &[(&str, &str)] = &[(

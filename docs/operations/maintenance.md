@@ -1,14 +1,16 @@
-# Maintenance updates on Linux: the notice, Update, Schedule and a halted host
+# Maintenance updates: the notice, Update, Schedule, a halted host, the Mac and Xcode
 
 Every Linux host's daemon reports, in its heartbeat, the security and kernel updates its host has
-not taken and whether it needs a restart. The web UI shows that as a notice; one **Update** button,
+not taken and whether it needs a restart; a Mac's, its macOS updates and Xcodes. The web UI shows that as a notice; one **Update** button,
 or a **Schedule** with choices, then takes each host out of service, updates it, restarts it if it
 needs to, checks it and puts it back, one batch of each host group at a time. A failure stops the
 run in that group and leaves the failed host out of service until an operator acts. This page is
 how to do each of those things, and what to do when one goes wrong. The design is
 [maintenance-updates.md](../design/maintenance-updates.md) (sections 3, 4.2 and 5); the group's
-settings are also in [hostgroups.md](hostgroups.md#maintenance); `hk` is [cli.md](../cli.md). A Mac's
-macOS and Xcode updates are not on this page.
+settings are also in [hostgroups.md](hostgroups.md#maintenance); `hk` is [cli.md](../cli.md). What
+differs on a Mac (a new Xcode pushed from an operator's Mac, the update account, FileVault, what
+device management must not set, major upgrades, a Mac that halts) is in
+[The Mac: macOS and Xcode](#the-mac-macos-and-xcode).
 
 Every `Maintenance` call takes the operator's credential only (a token of the tokens file, a stored
 API token, or a signed-in session in the UI): a CI token is refused with `forbidden`, no token with
@@ -25,7 +27,9 @@ gateway serves each call at `POST /hostkeeper.operator.v1.Maintenance/<Method>`
 
 **Where it comes from.** The coordinator discovers no update itself. Each host's daemon looks at
 its own host after it starts, then every hour, and again as soon as a maintenance turn of it ends,
-and sends what it found in each heartbeat (the feature `maintenance-v1`). It reads
+and sends what it found in each heartbeat (the feature `maintenance-v1`). A look that failed is
+tried again sooner: 5 minutes after it ended, then 10, 20 and 40 minutes after each further failure
+in a row, then every hour again; a look that succeeds starts that count again. It reads
 `/etc/os-release`, `uname -r`, the kernels under `/lib/modules`, and asks the package manager it
 finds (`apt-get`, else `dnf`, else `apk`) what it would upgrade. Two kinds can be due on Linux:
 
@@ -75,7 +79,12 @@ the default shows only security updates and kernels as due, and a run then insta
 **When to distrust it.** A look older than two hours, or one more than five minutes ahead of the
 coordinator's clock, is stale: the host page says "stale look" with its age, and an empty list then
 does not mean nothing is due. A failed look keeps the last good report and names why
-(`look_failed` in the report). A host that shows "no report" runs a daemon without
+(`look_failed` in the report). A look that finds the package manager's lock held (another
+`apt-get`, unattended-upgrades, an operator's `dnf`) tries the run again every 2 seconds for the daemon's
+`--package-lock-wait-secs` (300 by default; per run, so dnf's two listings may each wait that
+long) and fails only when the lock is still held then, with
+`look_failed` starting `apt: the package manager's lock was held for 300s of 300s:` and the
+package manager's own line, which names the lock and its holder. A host that shows "no report" runs a daemon without
 `maintenance-v1`, or has not sent a heartbeat since the coordinator started; it is never ordered.
 The same report, read with `hk`:
 
@@ -212,6 +221,27 @@ waiting host only when all of these hold:
   group the coordinator has heard.
 
 Groups go on in parallel: a run over three groups with batch 2 has up to six hosts in their turn.
+
+### Why a host is left out
+
+A host left out is listed `skipped` with its `skippedBecause`, by the Check, the stored run and
+`Get`, and is never ordered. A Mac's three reasons leave out its `macos` alone: its other kinds of
+the run (an `xcode` install) still go, and it is listed `skipped` only when `macos` was all its turn
+held. `no_maintenance_v1`, `held` and `excluded` are read when the run is stored: a host held or
+excluded after that waits instead (the list above). The three Mac reasons are read then and again
+at the heartbeat that would start the host, so a Mac whose report changed while it waited is left
+out then.
+
+| Reason | When |
+|---|---|
+| `no_maintenance_v1` | its daemon does not announce `maintenance-v1` ("older daemon") |
+| `held` | a hold stands on it for a package (`Services.Hold`) |
+| `excluded` | it is excluded from a package (`Hosts.Exclude`) |
+| `in_package_update` | never stored by this coordinator: a host with a package update under way waits instead (the list above) |
+| `group_changed` | never stored by this coordinator: a host moved to another group while it waited waits instead, and is not started |
+| `mdm_conflict` | a Mac reports a device-management setting a run must not run under ([What device management must not set](#what-device-management-must-not-set)) |
+| `no_update_account` | a Mac's update account is missing, not an administrator or holds no Secure Token, or its report carries no Mac facts ([The update account](#the-update-account)) |
+| `filevault_not_ready` | a Mac does not report FileVault off ([FileVault](#filevault)) |
 
 ## How a drain waits
 
@@ -372,7 +402,7 @@ There is no pause: a pause is a Cancel and, later, a new Schedule. A run that ha
 ### A host that is not back
 
 A host the coordinator stores `rebooting` and that stays silent for its group's `return_secs` (1200
-seconds for a Linux host by default) is stored `not_back`, and the critical alert
+seconds for a Linux host by default, 3600 for a Mac: [A Mac that halts](#a-mac-that-halts)) is stored `not_back`, and the critical alert
 `maintenance_not_back` stands. It is still out of service (no `resume` has run), and no further host
 of its group starts. There is no Retry or Put back for it: its turn goes on by itself when its
 daemon reports again. Look at the machine: open its Console (Serial over LAN) with the **Console**
@@ -381,9 +411,388 @@ does not boot. Once it reports, the turn goes on (to the check), and a failure t
 above. While a host is stored rebooting or not back, the coordinator raises no `silent_host` for
 it.
 
+## The Mac: macOS and Xcode
+
+A Mac takes the same run as a Linux host: the same Update and Schedule, batch, `min_serving`,
+window, drain, halt, Retry, Put back and Cancel. What differs is what is due, who authorises the
+install, and what an operator does by hand: push each new Xcode from their own Mac, give each Mac
+an update account, keep FileVault off, and keep device management away from software updates.
+The design is [maintenance-updates.md](../design/maintenance-updates.md), sections 2, 5.5 and 5.8;
+the daemon's side is in [macos.md](../macos.md) (Maintenance facts). None of the Mac path has run on
+a farm Mac yet: its proof is [mac-proof.md](mac-proof.md), and its results go into the design's
+section 10. Read [Not built yet](#not-built-yet) before the first Mac run.
+
+### What is due on a Mac
+
+A Mac's daemon looks as a Linux host's does (after a start, hourly, and sooner after a failed look)
+and reports, besides what is due, the facts a run needs: FileVault's state and whether it can
+restart authenticated, the free bytes of the data volume, the Command Line Tools, each Xcode in
+`/Applications` (version, build, path, whether `xcode-select` names it), its update account, and
+the device-management settings it found. The host's Updates tab shows them ("FileVault", "Restart
+without unlock (authrestart)", "Free on the data volume", "Update account", "Device-management
+conflicts" and the Xcode table); `hk hosts get` holds them under `maintenance.mac`
+(`filevault`, `authrestartSupported`, `dataFreeBytes`, `commandLineTools`, `updateAccount`,
+`mdmConflicts`) and the Xcodes in `maintenance.xcodes`.
+
+- `macos`: an update `softwareupdate --list` offers whose title starts `macOS` and whose major
+  version is the one running ("macOS 26.1 to 26.2, restart"). A newer major is due only under
+  [Major macOS upgrades](#major-macos-upgrades-macos_major).
+- `xcode`: decided by the coordinator, never by the Mac, from the Mac's group and the store: one of
+  the newest `xcode_keep` releases the store holds is not installed as `Xcode-<version>.app` with
+  its build, or `xcode-select` does not name the group's default
+  ([The private store](#the-private-store-xcode_keep-and-xcode_default)). A newer Xcode becomes
+  due only once it is pushed to the store.
+
+### A Mac's turn
+
+The steps of [What one host's turn does](#what-one-hosts-turn-does), for `macos`:
+
+| # | Step | What runs on the Mac | If it fails |
+|---|---|---|---|
+| 1 | stage | `softwareupdate --list`, at least twice the download's bytes free on `/System/Volumes/Data`, then `softwareupdate --download <label>` (a major upgrade: `softwareupdate --fetch-full-installer --full-installer-version <version>`) | deferred |
+| 2 | drain | as on Linux: js-agent cordons the Mac and waits for its leases to end | as on Linux |
+| 3 | apply | `cutover` reads the update account's file and FileVault's state, picks the newest update of the running major (or the installer of a major upgrade), and writes that choice to `macos-install.json` beside the run record (`/var/lib/updater/maintenance/`); the daemon records the restart under way, then runs `softwareupdate --install <label> --agree-to-license --restart --user <account> --stdinpass` (a major upgrade: the installer's `startosinstall --agreetolicense --nointeraction --user <account> --stdinpass`), the password on the program's standard input alone. The Mac restarts itself | halted |
+| 4 | check | `verify`: `sw_vers` reports the build chosen, and, for a major upgrade, the installer app is removed | halted |
+| 5 | put back | as on Linux | halted |
+
+A run with both `macos` and `xcode` installs macOS first, restarts, then installs Xcode in the same
+turn. Xcode alone needs no restart. A Mac's `return_secs` defaults to 3600 seconds: an install can
+take most of an hour after the restart starts.
+
+### Bringing in a new Xcode
+
+The coordinator reads the list of Xcode releases once a day (`--xcode-feed-url`). When the list holds
+a release, not a beta and not a release candidate, newer than any its store holds, it raises the
+warning alert `xcode_release_waiting`. Its message names the version, the build, the macOS it
+requires and the command to run. That is the prompt; nothing downloads Xcode by itself.
+
+An operator brings it in from **their own Mac**, the one signed in to the organisation's Apple
+developer account (the shared engineering account; its address is in the private operator runbook,
+not here). On that Mac, with `xcodes` installed and an operator token in a private file:
+
+```
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> xcode-push 27.2
+```
+
+or, with an archive downloaded in a browser from Apple's developer site:
+
+```
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> xcode-push ~/Downloads/Xcode_27.2.xip
+```
+
+- **The two-factor code goes to a person.** `xcodes` signs in with the session it keeps in that
+  Mac's Keychain, and asks for a code at the terminal only when Apple has ended the session. The
+  code arrives on the account's trusted device; whoever holds it types it at the prompt. hostkeeper
+  never holds the Apple Account, its password or its session, and no farm Mac signs in to Apple:
+  everything a farm Mac does with the archive runs as root with no Apple sign-in. This is why
+  `xcode-push` takes `--token-file` only: standard input is the terminal `xcodes` prompts on.
+- **What it checks before it uploads**: Apple's own signature on the archive (`pkgutil
+  --check-signature`, status `signed Apple Software`, a chain ending at Apple Root CA), then the
+  version and build inside it (for a version given, they must be it). A failed check uploads
+  nothing. The expansion that reads them needs about an installed Xcode's free space beside the
+  archive.
+- **The upload** is the archive unmodified, with the operator token as the bearer and nowhere
+  else. The coordinator answers before the body is sent when it would refuse it (`not_listed`: the
+  list has no such release; `already_held`; `not_kept`: older than the releases the store keeps, so
+it would be removed at once),
+  and stores it only when its SHA-256 matches. A second build of a version the store holds is
+  answered `xcode_version_taken` and raises the alert of that name; remove the held archive first
+  to switch builds. Each code, its status and the exit codes are in
+  [xcode-releases.md](xcode-releases.md#pushing-a-release-from-your-mac-hk-xcode-push).
+
+The alert clears when the store holds the release. Check with:
+
+```
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> xcode list
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> alerts list
+```
+
+`xcode list` names the archives held, newest first, how many releases the store keeps, and the
+release still waiting, if any.
+
+**Then install it.** Once the store holds it, `xcode` is due on each Mac of a group whose
+`xcode_keep` is at least 1 and that lacks it: the Mac counts toward its group's `updates_due`, and
+its host page lists it. **Update** the group, or **Schedule** it in a window with only "Xcode"
+ticked (`--kinds xcode`); a Mac that is also due macOS installs that first. While the store's
+directory cannot be read, no Mac is shown due an Xcode and a turn with `xcode` waits.
+
+### The private store, `xcode_keep` and `xcode_default`
+
+The store is the coordinator's `--xcode-dir`: each archive kept exactly as Apple ships it, never
+public, read only by a Mac of a group whose `xcode_keep` is at least 1, over its host certificate
+([xcode-releases.md](xcode-releases.md)). It keeps as many of the newest releases as the largest
+`xcode_keep` of any group (at least one) and removes older ones once a day and after each upload,
+each removal audited `xcode_remove`. To remove one by hand (a wrong build, or to switch builds):
+
+```
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    xcode remove --sha256 <sha256> --reason "switch Xcode 27.2 to the other build"
+```
+
+Refused `no_store` without `--xcode-dir`, `unknown_archive` for a SHA-256 it does not hold.
+
+A group's two Xcode keys ([The group's settings](#the-groups-settings)):
+
+- `xcode_keep` (0 to 4): how many of the newest releases each of its Macs keeps side by side, as
+  `/Applications/Xcode-<version>.app`. 0, the default, leaves Xcode alone and lets no Mac of the
+  group read the store. 2 is the latest and the one before.
+- `xcode_default`: the Xcode `xcode-select` points at, `latest` (the default, the newest kept
+  release) or a version (`27.1`), which needs an `xcode_keep` of at least 1; a version the store
+  keeps no release of leaves `xcode-select` as it is. Builds are not to lean on it: the design has
+  each action name its Xcode by build, which js-agent and kbf do not do yet ([Not built
+  yet](#not-built-yet)).
+
+The `maintain` order of a Mac's turn with `xcode` carries the kept releases (version, build, size
+and SHA-256), the versions to remove (each installed as `Xcode-<version>.app` and older than every
+kept release) and the default. The turn stages each release it lacks while the Mac still
+serves (fetched from the store, its size and SHA-256 checked, expanded with `xip --expand` in
+`/Applications/.hostkeeper-staging/`, its build and code signature checked); then, drained, moves
+it to `/Applications/Xcode-<version>.app`, accepts the licence, runs the first launch, points
+`xcode-select` at the default, and removes the releases older than the group keeps. An Xcode whose
+directory is not `Xcode-<version>.app` (one a person or the App Store put there) is never removed.
+A stage that fails defers (`xcode_order_invalid`, `xcode_installed_unreadable`,
+`free_space_unreadable`, `free_space_short`, `xcode_not_in_store`, `xcode_fetch_failed`,
+`xcode_archive_mismatch`, `xcode_archive_encrypted`, `xcode_expand_failed`, `xcode_build_mismatch`,
+`xcode_signature_invalid`, `xcode_staging_failed`); an apply or a check that fails halts
+(`xcode_order_invalid`, `xcode_installed_unreadable`, `xcode_build_mismatch`, `xcode_not_staged`,
+`xcode_install_taken`, `xcode_move_failed`, `xcode_license_failed`,
+`xcode_first_launch_failed`, `xcode_select_failed`, `xcode_remove_failed`, `xcode_missing`,
+`xcode_version_failed`, `xcode_license_not_accepted`, `xcode_default_wrong`).
+
+### The update account
+
+Apple silicon installs a macOS update only with a volume owner's authorisation: an administrator
+holding a Secure Token. Root is not one. So each Mac has a dedicated local account, `hkupdate`,
+whose name and password the daemon passes to `softwareupdate` or `startosinstall`, the password on
+the program's standard input only.
+
+- **Made by the bootstrap and the daemon.** The bootstrap writes the account's name and password to
+  `/Library/Application Support/hostkeeper/update-account` (root's, mode 0600; two lines,
+  `name=<name>` and `password=<password>`), before hostkeeper is installed. At every start, a Mac's
+  daemon reads that file and, only for what is not so already: makes the account an administrator
+  (`sysadminctl -addUser <name> -password - -admin`), hides it (`IsHidden 1`), sets its shell to
+  `/usr/bin/false`, takes it out of `com.apple.access_ssh`, and gives it a Secure Token
+  (`sysadminctl -secureTokenOn`) with the administrator made at Setup Assistant, whose name and
+  password it reads from the bootstrap's settings for that call alone and keeps nowhere. Each
+  password goes on standard input, never in an argument. A start whose making fails logs one line,
+  `update_account: <why>; the start goes on, and the next start tries again`.
+- **Hidden, no shell, no SSH**, so it is not the account operator keys go to and nobody logs in
+  with it.
+- **Root-only file.** The daemon refuses a file that is a link, not root's, or not mode 0600: the
+  look then fails naming it (`look_failed`), and a `macos` turn halts `update_account_refused`.
+- **The threat model, plainly.** The account is a local administrator: its password is root on that
+  Mac for anyone who learns it, and on every Mac if they share it. That is accepted: the password is
+  not treated as a secret (no vault, no escrow), and may be the same on every Mac. The file's mode,
+  the hidden account and its lack of a shell and of SSH limit who can use it, and nothing more.
+  What guards the install is hostkeeper's own authorisation: the daemon runs it only for a
+  `maintain` order, which the coordinator sends to an enrolled host over mutual TLS, for a run an
+  operator scheduled and the audit log names. Never commit the settings that hold these passwords.
+  It is not shown yet what mode macOS gives the managed-preferences file that carries them.
+
+### The update account's keys
+
+The bootstrap's settings carry four keys beside the farm values, all four or none
+([mac-bootstrap.md](mac-bootstrap.md)):
+
+| Key | What |
+|---|---|
+| `update_account_name` | the update account's name, `hkupdate` |
+| `update_account_password` | its password: not empty, no line break |
+| `admin_name` | the administrator made at Setup Assistant, which holds a Secure Token; not the update account |
+| `admin_password` | that administrator's password, used for the Secure Token grant and never written |
+
+A name is ASCII letters, digits, `_`, `.` and `-`, not starting with `-`. A source that holds some
+but not all four is refused, naming the first missing, and nothing is installed.
+
+### Setting up the update account on a new Mac
+
+1. Put the four keys in the Blueprint's managed preferences `dev.hostkeeper.config`, beside
+   `coordinator` and `ca_sha256` (or, where Apple Business cannot carry them, in
+   `/Library/Application Support/hostkeeper/bootstrap.toml` on the Mac, root's, mode 0600, beside
+   the farm values).
+2. Enroll the Mac as [mac-bootstrap.md](mac-bootstrap.md) says. The bootstrap's last line names
+   the file: `installed hostkeeper <version> (..., update-account Made)` (`Kept` when a valid file
+   was already there, which it never replaces).
+3. After the daemon's first start, read the Mac's report:
+
+   ```
+   hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+       hosts get --node-id mac-03
+   ```
+
+   `maintenance.mac.updateAccount` must be `present`, `admin` and `secureToken`, each true; the
+   Updates tab says "present, administrator: yes, Secure Token: yes". Until then the Mac is left
+   out of `macos` with `no_update_account`. `hidden` (in `hk hosts get` alone) is not a condition
+   of a run, but false means the daemon could not hide it: read its log.
+
+**A Mac enrolled before the keys.** The bootstrap does nothing on a Mac it already set up, so the
+file is written by hand, as the Mac's administrator with `sudo` (log in with `hk ssh`, or at the
+Mac), and the four keys still go in the Mac's settings, for the administrator's part:
+
+```
+sudo sh -c 'umask 077; stty -echo; printf "password: "; read -r pw; stty echo; echo; printf "name=hkupdate\npassword=%s\n" "$pw" > "/Library/Application Support/hostkeeper/update-account"'
+```
+
+The password is typed without echo and goes in no command line or shell history. Restart the daemon
+(`sudo launchctl kickstart -k system/dev.hostkeeper.hostkeeper`), and read the report as in step 3.
+
+**A Mac whose account holds no Secure Token** (`secureToken` false): the daemon grants one at each
+start once the settings name the administrator, and logs `the update account holds no Secure
+Token, and the bootstrap's settings name no administrator to give it one` until they do. Add the
+keys and restart the daemon. The administrator must itself hold a Secure Token, and the file's
+password must be the account's own.
+
+**Changing the password** is not built: the daemon never changes the password of an account that
+exists, and the bootstrap never replaces a file that is there. Change the account's password and
+the file together, by hand, as root.
+
+### FileVault
+
+**Keep FileVault off on the build Macs.** With it on, every restart stops at the pre-boot login
+until a person types a FileVault user's password at the Mac. hostkeeper can avoid that for its own
+restarts (an authenticated restart), but not for one it does not make: a power cut or a panic. A build Mac stopped at that screen is out of the fleet until someone
+is at the Mac.
+
+What the coordinator does with it: a Mac not reported FileVault off (on, encrypting, decrypting, or
+not read) is left out of `macos` with `filevault_not_ready`. Its other kinds still go. To turn
+FileVault off, as the Mac's administrator at the Mac or in a shell, `sudo fdesetup disable` (it asks
+for a FileVault user's password); the Mac is ordered `macos` again once its report says off, after
+decryption ends.
+
+**What an authenticated restart needs**, built in the daemon for when the coordinator orders such a
+Mac: `fdesetup supportsauthrestart` says `true` (`authrestartSupported`), the update account is a
+FileVault user (named by `fdesetup list`), and its password can go in a property list (UTF-8, no
+control character but a tab). The install then runs without `--restart`, and once it ends the
+daemon runs `fdesetup authrestart -inputplist` with the account and password on its standard input;
+a failure halts `filevault_authrestart_failed`. Any of the three missing halts the apply
+`filevault_not_ready` before anything is installed. A major upgrade is never installed on a Mac
+with FileVault on (`filevault_not_ready`): that `startosinstall` restarts such a Mac authenticated
+is not shown.
+
+### What device management must not set
+
+Apple Business, or any device management, must leave a Mac's software updates to the run: a
+setting below forces an install and a restart in the middle of a job, hides updates from
+`softwareupdate --list` (the Command Line Tools too), or lets the App Store change an Xcode under a
+build. Each is fixed in Apple Business, at its source, not on the Mac. A Mac's daemon reports each
+it finds by the name in the first column (`maintenance.mac.mdmConflicts`; the Updates tab's
+"Device-management conflicts"), and while one stands the Mac is left out of `macos` with
+`mdm_conflict` ("mdm_conflict: a device-management setting hostkeeper must not update under" in the
+Schedule form). Its other kinds still go.
+
+| Name | Where the Mac shows it | Set in Apple Business as |
+|---|---|---|
+| `com.apple.configuration.softwareupdate.enforcement.specific` | a `TargetOSVersion` or `TargetBuildVersion` in the software-update declarations' state | a software-update enforcement: a target version and deadline |
+| `Deferrals` | an on key naming a deferral in the declarations' settings | `softwareupdate.settings` deferrals, of any period |
+| `AutomaticActions` | `automaticallyInstallOSUpdates` or `automaticallyInstallSystemAndSecurityUpdates` on | `softwareupdate.settings` automatic actions that install |
+| `Beta` | an on key naming a beta in the declarations' settings | `softwareupdate.settings` beta enrollment |
+| `forceDelayedSoftwareUpdates` | the restrictions, `com.apple.applicationaccess` | a restriction that delays updates |
+| `forceDelayedMajorSoftwareUpdates` | the restrictions | a restriction that delays major upgrades |
+| `forceDelayedAppSoftwareUpdates` | the restrictions | a restriction that delays app updates |
+| `enforcedSoftwareUpdateDelay` | the restrictions | the delay of those restrictions |
+| `enforcedSoftwareUpdateMajorOSDeferredInstallDelay` | the restrictions | a deferred install of major upgrades |
+| `enforcedSoftwareUpdateMinorOSDeferredInstallDelay` | the restrictions | a deferred install of minor updates |
+| `enforcedSoftwareUpdateNonOSDeferredInstallDelay` | the restrictions | a deferred install of other updates |
+| `CatalogURL` | `com.apple.SoftwareUpdate` | another software-update catalog |
+| `AllowPreReleaseInstallation` | `com.apple.SoftwareUpdate` | pre-release installs |
+| `AutomaticallyInstallMacOSUpdates` | `com.apple.SoftwareUpdate` | automatic macOS installs |
+| `restrict-software-update-require-admin-to-install` | `com.apple.SoftwareUpdate` | updates that need an administrator to install |
+| `xcode-app-store` | an `/Applications/Xcode*.app` holding `Contents/_MASReceipt/receipt` | an App Store assignment of Xcode |
+
+The restrictions and `com.apple.SoftwareUpdate` are read from the device's own files in
+`/Library/Managed Preferences`, and the declarations from
+`/var/db/softwareupdate/SoftwareUpdateDDMStatePersistence.plist`, a file Apple does not document; a
+key counts as on when it is a true boolean, a non-zero number, or any other value. How each setting
+shows on a Mac is still to be checked (the proof's MP-M steps). A file there that cannot be read
+fails the look (`look_failed` starting `mdm: `), and the Mac keeps its last report: it never reads
+as a clean Mac. An `xcode-app-store` Xcode is removed by hand once its assignment is gone; a run
+never removes it.
+
+### Major macOS upgrades: `macos_major`
+
+A new major macOS (26 to 27) is not due by default. The group's `macos_major` true makes the
+coordinator count one the Mac reports, and its `maintain` order lets the daemon stage and install
+it: `softwareupdate --fetch-full-installer` at the stage (twice its size free on the data volume), then
+the installer's `startosinstall` at the apply, which restarts the Mac itself, and the installer
+removed once the check passes. The Mac reports a major upgrade only when its daemon runs with
+`--maintenance-macos-major`, which the Mac's launchd job does not pass ([Not built
+yet](#not-built-yet)).
+
+A major upgrade cannot be undone. Turn `macos_major` on in a group of its own first, for one Mac,
+and back off once the group is upgraded. It is never installed with FileVault on.
+
+```
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    host-groups get --host-group mac-canary
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    host-groups put --if-generation 3 --request mac-canary.json \
+    --reason "macOS 27 on one Mac first"
+```
+
+with `mac-canary.json` the group as `get` answered it and `"macosMajor": true` added to its
+`maintenance` table, every other key kept (a `Put` replaces the table whole). Then schedule the Mac's
+`macos` alone, with "Take the group's last host" for a group of one:
+
+```
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    maintenance schedule --host-group mac-canary --kinds macos --take-last-host true \
+    --confirm true --reason "macOS 27 on one Mac first"
+```
+
+### A Mac that halts
+
+A Mac halts as a Linux host does ([A halted host](#a-halted-host)): it stays drained and cordoned,
+`maintenance_halted` stands, the run stops in its group, and Retry or Put back is the operator's.
+Its reason names the step and the hook's reason, never a password:
+
+- stage (deferred, not a halt): `stage_listing_failed`, `macos_update_not_listed` (Apple no longer
+  offers it), `free_space_unreadable`, `free_space_short`, `stage_download_failed`;
+- apply: `update_account_refused` (the file is missing, a link, not root's or not 0600),
+  `filevault_not_ready` (as in [FileVault](#filevault)), `macos_look_failed`,
+  `macos_update_not_listed`, `macos_target_unknown`, `macos_installer_not_found` (not exactly one
+  `Install macOS *.app` in `/Applications`), `macos_plan_failed`, `macos_install_failed` (names the
+  program, `softwareupdate --install` or `startosinstall`, and its exit), `macos_path_not_built`,
+  `filevault_authrestart_failed`;
+- check: `macos_build_not_target` (`sw_vers reports the build <b>, not the target build <t>`),
+  `macos_installer_not_removed`, `macos_look_failed`, `macos_plan_failed`.
+
+**Reach the Mac.** A Mac has no serial console. Open a shell with `hk ssh` (its group must be in
+the coordinator's operator-keys files, [operator-keys.md](operator-keys.md)):
+
+```
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    ssh mac-03 --reason "maintenance halted: macos_install_failed"
+```
+
+or its screen with the **Desktop** button of its row in Home's List view (the run's row has one
+too while the Mac restarts). The daemon's log is in `/var/log/hostkeeper`, and the run record and
+`macos-install.json` in `/var/lib/updater/maintenance/`.
+
+**Then choose.**
+
+- **Retry** after an apply that failed while it chose (`update_account_refused`,
+  `filevault_not_ready`, `macos_update_not_listed`, `macos_installer_not_found`,
+  `macos_plan_failed`): the apply looks and chooses again. Once the choice is in
+  `macos-install.json` the restart is recorded under way, and a failure from there
+  (`macos_install_failed`, `filevault_authrestart_failed`, or `update_account_refused` when the
+  file changed in between) is retried by running the same install again, from that file, without
+  choosing again. After a check that failed, only the check runs again: use it when the Mac came
+  back on the right build late, or after removing the installer app by hand.
+- **Put back** when the Mac should build again first: its drained services resume and the update
+  stays as far as it got (an update downloaded or installed and not restarted into stays so). Its
+  due items stay due for a later run.
+
+**A Mac that is not back.** A Mac restarting in its turn and silent past its group's `return_secs`
+(3600 seconds by default) raises `maintenance_not_back`, as on Linux. Its turn goes on when it
+reports; nothing remote can reach a Mac that does not boot to macOS. Look at the Mac: the Desktop
+reaches only a running macOS, so a Mac at the FileVault pre-boot login, in recovery, or on a pane
+of the installer that waits for a person (to be checked on macOS 26 and later) needs a person at the
+Mac. A Mac stopped at the FileVault login needs a FileVault user's password typed there; then turn
+FileVault off.
+
 ## Alerts
 
-All three are in `Alerts.List` (`hk alerts list`), logged once (`alert=<kind>`) when they first
+All five are in `Alerts.List` (`hk alerts list`), logged once (`alert=<kind>`) when they first
 appear, and clear by themselves when their cause does.
 
 | Alert | Level | Stands while | What to do |
@@ -391,12 +800,15 @@ appear, and clear by themselves when their cause does.
 | `updates_due` | warning | a host of the group (one alert per group, `host_group` set, and one for the hosts in no group) reports something due, stale reports included | Update the group or its hosts, or Schedule them in a window; or leave it: it never pages |
 | `maintenance_halted` | critical | a host's turn is stored halted (one per host); it names the host, the run, its group and its daemon's reason, and adds that a retry or a put back is sent once one is queued | [A halted host](#a-halted-host): read the reason, then Retry or Put back |
 | `maintenance_not_back` | critical | a host stored rebooting stayed silent past its group's `return_secs` (one per host) | [A host that is not back](#a-host-that-is-not-back): look at its console; it goes on when it reports |
+| `xcode_release_waiting` | warning | the list of Xcode releases holds a release newer than any the store holds (one alert, the newest; it names the version, the build and the macOS it requires) | [Bringing in a new Xcode](#bringing-in-a-new-xcode): `hk xcode-push <version>` from your Mac |
+| `xcode_version_taken` | warning | a push of a second build of a version the store holds was refused (one per version; a coordinator restart forgets it) | remove the held archive with `hk xcode remove`, then push the other build |
 
 ## The group's settings
 
 A host group's policy holds a `maintenance` table. A key left out takes its default; `Get` and
 `List` answer every key, defaults included (`returnSecs` shows 0 for the platform default). The
-three Mac keys do nothing on a Linux host.
+three Mac keys do nothing on a Linux host; they are in [The private store](#the-private-store-xcode_keep-and-xcode_default)
+and [Major macOS upgrades](#major-macos-upgrades-macos_major).
 
 | Key | Default | Range, and what it does |
 |---|---|---|
@@ -407,7 +819,7 @@ three Mac keys do nothing on a Linux host.
 | `batch` | 1 | 1 to 10000: hosts of the group in their turn at once, unless a run names its own |
 | `min_serving` | 1 | 0 to 10000: hosts of the group that must stay serving while one is taken; no run overrides it |
 | `drain_deadline_secs` | 0 (none) | seconds a drain may wait before the host is put back as it was and deferred, unless a run names its own |
-| `return_secs` | 0 (1200 for a Linux host) | 0, or 60 to 86400: seconds a restarting host may be silent before `maintenance_not_back` |
+| `return_secs` | 0 (1200 for a Linux host, 3600 for a Mac) | 0, or 60 to 86400: seconds a restarting host may be silent before `maintenance_not_back` |
 
 A run also reads two keys of the group's policy itself: `bake_beats` (a host whose turn is done
 holds its batch place until it has sent that many healthy heartbeats in a row; default 0) and
@@ -468,12 +880,38 @@ with `build.json` the group as `get` answered it, its `maintenance` changed:
 - **The Console link of the runs view.** The **Console** button on a rebooting or not-back host's
   row does not open the Console page in this release; open it from the server's row in Home's List
   view.
-- **The package manager's lock.** The daemon's `--package-lock-wait-secs` reaches only the
-  repository installer; the maintenance hook waits its own default, 300 seconds, for a held apt,
-  dnf or apk lock. At the stage a lock still held defers (`package_manager_busy`); at the apply the
+- **The package manager's lock.** The daemon's `--package-lock-wait-secs` reaches the repository
+  installer and the maintenance look; the maintenance hook waits its own default, 300 seconds, for
+  a held apt, dnf or apk lock. At the stage a lock still held defers (`package_manager_busy`); at the apply the
   install fails and halts.
 - **The group's package order for drains.** Services drain in the order of their names, and resume
   in the reverse.
+
+On a Mac:
+
+- **Builds do not name their Xcode yet.** js-agent and kbf are to place each Mac action by the
+  Xcode build it names (design section 6), so that a cached result is never served across Xcodes.
+  Until they do, a build that does not set `DEVELOPER_DIR` uses `xcode-select`'s default, which a
+  run with `xcode` can move: change a group's `xcode_default`, or install a new `latest`, while
+  its builds can be re-run.
+- **The store's prune does not read the Xcodes the Macs report**, so it never keeps an older
+  release because a Mac has it.
+- **A Mac with FileVault on is never ordered `macos`.** The report does not yet say whether the
+  update account is a FileVault user, so every Mac not reported off is left out
+  (`filevault_not_ready`). The authenticated restart is built in the daemon for when it does.
+- **No Mac reports a major upgrade due.** The daemon reports one only with
+  `--maintenance-macos-major`, and the Mac's launchd job runs `hostkeeper daemon` with no flag, so a
+  group's `macos_major` has nothing to count yet.
+- **The update account's making is not proven on a Mac.** That `sysadminctl` takes both passwords
+  on a pipe, and the Secure Token grant, are still to be shown (the proof's MP-A2 to MP-A5). Its
+  password is changed by hand only.
+- **An encrypted Xcode archive defers** (`xcode_archive_encrypted`), and no simulator platform is
+  imported, until the proof shows `archiveutil` and `xcodebuild -importPlatform` on a Mac.
+- **Installs by device management.** The coordinator's `--macos-update-via` takes only `daemon`:
+  `apple-business` is refused at its start, since Apple Business offers no call that installs an
+  update on one Mac.
+- **The Maintenance page shows no Xcode store.** The waiting release is the alert, and `hk xcode
+  list`.
 
 ## Example: a kernel update on a group of three
 

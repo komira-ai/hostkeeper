@@ -813,7 +813,7 @@ fn a_store_that_gives_no_archive_defers() {
 
 /// Proves: an Xcode installed as `/Applications/Xcode-<version>.app` with the order's build is
 /// passed over (no read of the store, the space or a program), and one under that name with
-/// another build is staged.
+/// another build, or with the order's build under another version, is staged.
 #[test]
 fn an_installed_xcode_is_passed_over_and_another_build_is_staged() {
     let entry = entry_of(ARCHIVE_BYTES);
@@ -826,10 +826,13 @@ fn an_installed_xcode_is_passed_over_and_another_build_is_staged() {
     assert!(mac.runner.ran().is_empty());
     assert!(!mac.path(STAGING).exists());
 
-    let mac = Mac::new("xcs-installed-other");
-    mac.file(installed, V26);
-    assert_eq!(mac.run(std::slice::from_ref(&entry)), Ok(()));
-    assert_eq!(mac.store.asked().len(), 1);
+    let other_version = String::from_utf8_lossy(V27).replace(">27.2<", ">27.2.1<");
+    for (name, plist) in [("other", V26), ("other-version", other_version.as_bytes())] {
+        let mac = Mac::new(&format!("xcs-installed-{name}"));
+        mac.file(installed, plist);
+        assert_eq!(mac.run(std::slice::from_ref(&entry)), Ok(()), "{name}");
+        assert_eq!(mac.store.asked().len(), 1, "{name}");
+    }
 
     let mac = Mac::new("xcs-installed-garbage");
     mac.file(installed, b"not a property list");

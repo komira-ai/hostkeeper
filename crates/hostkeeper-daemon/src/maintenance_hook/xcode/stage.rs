@@ -9,7 +9,8 @@
 //! 1. **Checked.** The SHA-256 must be 64 lower-case hex characters (it names the one path the
 //!    store is read by, `/v1/xcode/<sha256>`, and the entry's staging directory), the version
 //!    digits and dots and the build letters and digits, each 1 to 16 bytes, the size above 0.
-//! 2. **Passed over** when `/Applications/Xcode-<version>.app` is installed with that build.
+//! 2. **Passed over** when `/Applications/Xcode-<version>.app` is installed with that version and
+//!    build.
 //! 3. **Re-verified** when it is staged already, `<staging>/<sha256>/Xcode.app` (only a verified
 //!    app is put there): its build and its code signature are checked again (steps 9 and 10).
 //! 4. **Space.** Before anything is fetched, the volume must have free, for each entry to fetch,
@@ -232,7 +233,11 @@ impl Stage {
             .plists
             .dictionary(&installed)
             .map_err(|detail| deferred(REASON_INSTALLED_UNREADABLE, detail))?;
-        if found.is_some_and(|plist| text(&plist, "ProductBuildVersion") == Some(&entry.build)) {
+        let installed = |plist: &plist::Dictionary| {
+            text(plist, "CFBundleShortVersionString") == Some(&entry.version)
+                && text(plist, "ProductBuildVersion") == Some(&entry.build)
+        };
+        if found.as_ref().is_some_and(installed) {
             return Ok(Plan::Installed);
         }
         let dir = self.entry_dir(entry);
@@ -435,28 +440,39 @@ impl Stage {
 }
 
 /// The staging directory of `entry`, as the host names it.
-fn entry_host_dir(entry: &XcodeEntry) -> String {
+pub(super) fn entry_host_dir(entry: &XcodeEntry) -> String {
     format!("{STAGING}/{}", entry.sha256)
 }
 
 /// The text of `key` in `plist`.
-fn text<'a>(plist: &'a plist::Dictionary, key: &str) -> Option<&'a String> {
+pub(super) fn text<'a>(plist: &'a plist::Dictionary, key: &str) -> Option<&'a String> {
     match plist.get(key)? {
         plist::Value::String(text) => Some(text),
         _ => None,
     }
 }
 
+/// Whether `text` is 1 to 16 bytes, each one `allowed` takes.
+fn is_name(text: &str, allowed: fn(u8) -> bool) -> bool {
+    (1..=MAX_NAME).contains(&text.len()) && text.bytes().all(allowed)
+}
+
+/// Whether `text` is a version the stage and the apply take: 1 to 16 digits and dots.
+pub(super) fn is_version(text: &str) -> bool {
+    is_name(text, |b| b.is_ascii_digit() || b == b'.')
+}
+
+/// Whether `entry` is one step 1 of the module's header takes.
+pub(super) fn is_valid_entry(entry: &XcodeEntry) -> bool {
+    is_sha256(&entry.sha256)
+        && is_version(&entry.version)
+        && is_name(&entry.build, |b| b.is_ascii_alphanumeric())
+        && entry.size > 0
+}
+
 /// Step 1 of the module's header.
 fn check_entry(entry: &XcodeEntry) -> Result<(), KindError> {
-    let name = |text: &str, allowed: fn(u8) -> bool| {
-        (1..=MAX_NAME).contains(&text.len()) && text.bytes().all(allowed)
-    };
-    let valid = is_sha256(&entry.sha256)
-        && name(&entry.version, |b| b.is_ascii_digit() || b == b'.')
-        && name(&entry.build, |b| b.is_ascii_alphanumeric())
-        && entry.size > 0;
-    if valid {
+    if is_valid_entry(entry) {
         return Ok(());
     }
     Err(deferred(
@@ -559,7 +575,7 @@ fn program_ok(ran: &io::Result<Ran>, what: &str, reason: &'static str) -> Result
 /// Whether `path` is a directory (not a link to one) that this process's user owns and nobody
 /// else can read or write: what an admin of the Mac (`/Applications` is theirs to write) cannot
 /// have put in its place. A path that is not there is not trusted.
-fn trusted(path: &Path) -> bool {
+pub(super) fn trusted(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|meta| {
         meta.is_dir()
             && meta.uid() == rustix::process::geteuid().as_raw()
@@ -568,7 +584,7 @@ fn trusted(path: &Path) -> bool {
 }
 
 /// Removes the file or the directory `path`, when it is there.
-fn remove(path: &Path) -> Result<(), KindError> {
+pub(super) fn remove(path: &Path) -> Result<(), KindError> {
     let removed = match fs::symlink_metadata(path) {
         Ok(meta) if meta.is_dir() => fs::remove_dir_all(path),
         Ok(_) => fs::remove_file(path),
@@ -578,7 +594,7 @@ fn remove(path: &Path) -> Result<(), KindError> {
 }
 
 /// Makes the directory `path`, mode 0700, when it is not there.
-fn make_dir(path: &Path) -> Result<(), KindError> {
+pub(super) fn make_dir(path: &Path) -> Result<(), KindError> {
     match DirBuilder::new().mode(0o700).create(path) {
         Err(error) if error.kind() != io::ErrorKind::AlreadyExists => {
             Err(staging_failed(path, "make", &error))

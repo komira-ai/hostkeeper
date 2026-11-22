@@ -56,7 +56,7 @@ pub(crate) fn releases(refusal: ReleasesRefusal) -> Status {
         | ReleasesRefusal::TargetInvalid
         | ReleasesRefusal::LimitsInHostGroup => Code::InvalidArgument,
         ReleasesRefusal::UnknownService | ReleasesRefusal::ReleaseUnknown => Code::NotFound,
-        ReleasesRefusal::GenerationConflict => Code::Aborted,
+        ReleasesRefusal::GenerationConflict | ReleasesRefusal::StateChanged => Code::Aborted,
         ReleasesRefusal::HeldBad
         | ReleasesRefusal::BelowMinVersion
         | ReleasesRefusal::NotHalted

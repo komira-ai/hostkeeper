@@ -831,3 +831,28 @@ pub fn repository_ports(
         owner,
     ))
 }
+
+/// A package manager's lock wait that waits for nothing and records each wait it was asked for,
+/// in seconds: clones share one record.
+#[derive(Clone, Debug, Default)]
+pub struct RecordedWaits(Arc<Mutex<Vec<u64>>>);
+
+impl RecordedWaits {
+    /// A wait of at most `bound_secs` made by a new record, and the record.
+    pub fn bounded(bound_secs: u64) -> (crate::maintenance_collect::LockWait, RecordedWaits) {
+        let waits = RecordedWaits::default();
+        let wait = crate::maintenance_collect::LockWait::new(Arc::new(waits.clone()), bound_secs);
+        (wait, waits)
+    }
+
+    /// The seconds of every wait asked for, in order.
+    pub fn waits(&self) -> Vec<u64> {
+        lock(&self.0).clone()
+    }
+}
+
+impl crate::maintenance_collect::LockWaiter for RecordedWaits {
+    fn wait(&self, secs: u64) {
+        lock(&self.0).push(secs);
+    }
+}

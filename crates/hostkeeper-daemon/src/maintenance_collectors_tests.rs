@@ -4,6 +4,7 @@
 use hostkeeper_testkit::Scratch;
 
 use super::*;
+use crate::cli::DEFAULT_PACKAGE_LOCK_WAIT_SECS;
 
 fn scratch(name: &str) -> Scratch {
     let exe = std::env::current_exe().expect("the test binary");
@@ -54,7 +55,8 @@ fn the_package_manager_is_the_first_program_the_host_has() {
         let scratch = scratch(name);
         let root = root_with(&scratch, &programs);
         assert_eq!(
-            package_manager(&root).map(|collector| collector.name()),
+            package_manager(&root, DEFAULT_PACKAGE_LOCK_WAIT_SECS)
+                .map(|collector| collector.name()),
             expected,
             "{name}"
         );
@@ -67,9 +69,15 @@ fn the_package_manager_is_the_first_program_the_host_has() {
 fn a_linux_host_lists_the_host_the_reboot_and_the_package_manager() {
     let scratch = scratch("collectors-linux");
     let root = root_with(&scratch, &[maintenance_apt::APT_GET]);
-    assert_eq!(names(&linux_under(&root)), ["host", "reboot", "apt"]);
+    assert_eq!(
+        names(&linux_under(&root, DEFAULT_PACKAGE_LOCK_WAIT_SECS)),
+        ["host", "reboot", "apt"]
+    );
     let bare = HostRoot::at(&scratch.path().join("bare"));
-    assert_eq!(names(&linux_under(&bare)), ["host", "reboot"]);
+    assert_eq!(
+        names(&linux_under(&bare, DEFAULT_PACKAGE_LOCK_WAIT_SECS)),
+        ["host", "reboot"]
+    );
 }
 
 /// Proves the host's own collectors start with the host's facts and the reboot need on Linux,
@@ -79,11 +87,15 @@ fn a_linux_host_lists_the_host_the_reboot_and_the_package_manager() {
 fn the_platforms_list_their_collectors() {
     for major in [MacosMajor::NotDue, MacosMajor::Due] {
         for kind in [PlatformKind::Linux, PlatformKind::Openrc] {
-            let collectors = at_host(kind, major);
+            let collectors = at_host(kind, major, DEFAULT_PACKAGE_LOCK_WAIT_SECS);
             assert_eq!(names(&collectors)[..2], ["host", "reboot"]);
         }
         assert_eq!(
-            names(&at_host(PlatformKind::Macos, major)),
+            names(&at_host(
+                PlatformKind::Macos,
+                major,
+                DEFAULT_PACKAGE_LOCK_WAIT_SECS
+            )),
             ["macos", "mac", "xcode", "update-account", "mdm"]
         );
         assert_eq!(

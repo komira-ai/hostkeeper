@@ -186,6 +186,13 @@ impl Coordinator {
         } else {
             BTreeMap::new()
         };
+        // The store is read only for a group that keeps Xcode: with an `xcode_keep` of 0 no order
+        // carries any.
+        let archives = if policy.maintenance.xcode_keep == 0 {
+            Some(Vec::new())
+        } else {
+            self.xcode_archives()
+        };
         let verdict = self.ops.read(|state| {
             let view = View {
                 state,
@@ -196,6 +203,7 @@ impl Coordinator {
                 defer_backoff: policy.defer_backoff,
                 unix_now,
                 now,
+                xcode_store: archives.as_deref(),
             };
             decide_maintenance::decide(&view, id)
         });

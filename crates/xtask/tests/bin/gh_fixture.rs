@@ -58,6 +58,13 @@
 //! its own file (the test links this crate's real binary there) with `<args>`, and exits as it
 //! exits; anything else exits 2. Started as `rustup`: `rustup toolchain install` does nothing and
 //! succeeds (the toolchain is the one running the test); anything else exits 2.
+//!
+//! Started as `security` (macOS's keychain tool, for the steps of `artifacts.yml`'s `sign-code`
+//! that tests/workflows/sign_code_run_tests.rs runs), it answers each verb from
+//! `security-answers/<verb>.stdout`, `<verb>.stderr` and `<verb>.status` beside its own file: it
+//! writes the first two to its stdout and stderr and exits with the third, a number; a file that
+//! is missing is empty, and a status that is missing or not a number is 2. It appends each
+//! command line to `security-answers/calls`.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -353,6 +360,29 @@ fn cargo(dir: &Path, args: &[String]) -> ExitCode {
     }
 }
 
+/// The fake `security` (see the module): the answer of `<answers>/<verb>.*` to `args`.
+fn security(answers: &Path, args: &[String]) -> ExitCode {
+    let verb = args.first().map_or("", String::as_str);
+    let read =
+        |part: &str| std::fs::read(answers.join(format!("{verb}.{part}"))).unwrap_or_default();
+    let status = String::from_utf8_lossy(&read("status"))
+        .trim()
+        .parse::<u8>()
+        .unwrap_or(2);
+    let logged = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(answers.join("calls"))
+        .and_then(|mut log| writeln!(log, "{}", args.join(" ")));
+    let answered = logged
+        .and_then(|()| std::io::stdout().write_all(&read("stdout")))
+        .and_then(|()| std::io::stderr().write_all(&read("stderr")));
+    match answered {
+        Ok(()) => ExitCode::from(status),
+        Err(_) => fail("cannot answer as security"),
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Ok(exe) = std::env::current_exe() else {
@@ -364,6 +394,7 @@ fn main() -> ExitCode {
     match exe.file_name().and_then(|name| name.to_str()) {
         Some("curl") => return curl(dir, &args),
         Some("cargo") => return cargo(dir, &args),
+        Some("security") => return security(&dir.join("security-answers"), &args),
         Some("rustup") if args == ["toolchain", "install"] => return ExitCode::SUCCESS,
         Some("rustup") => return ExitCode::from(2),
         _ => {}

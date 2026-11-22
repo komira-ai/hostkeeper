@@ -224,11 +224,33 @@ pub struct Maintain {
     /// How long the host may be silent while it reboots: the group's `return_secs` for the
     /// host's platform.
     pub return_secs: u64,
+    /// For `xcode`: the Xcodes of the coordinator's store the host is to have, the versions to
+    /// remove and the default ([`crate::maintenance_xcode`]); none when the host's group keeps no
+    /// Xcode, the store holds none, or the turn holds no `xcode`.
+    pub xcode: Option<XcodeOrder>,
+}
+
+/// What a `maintain` with `xcode` carries (`Maintain.xcodes`, `xcode_remove` and
+/// `xcode_default` of `hostkeeper.agent.v1`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct XcodeOrder {
+    /// The newest releases of the store the host's group keeps (`xcode_keep`), newest first: at
+    /// least one.
+    pub entries: Vec<agent::XcodeEntry>,
+    /// The versions to remove: each installed in its own directory and older than every entry,
+    /// oldest first.
+    pub remove: Vec<String>,
+    /// The version `xcode-select` is to name, one of the entries'; none: leave it.
+    pub default: Option<String>,
 }
 
 impl Maintain {
-    /// The arguments as `hostkeeper.agent.v1` says them, with no Xcode.
+    /// The arguments as `hostkeeper.agent.v1` says them.
     fn to_proto(&self) -> agent::Maintain {
+        let xcode = self.xcode.clone();
+        let (xcodes, xcode_remove, xcode_default) = xcode.map_or_else(Default::default, |x| {
+            (x.entries, x.remove, x.default.unwrap_or_default())
+        });
         agent::Maintain {
             run_id: self.run_id.clone(),
             action: self.action.into(),
@@ -236,9 +258,9 @@ impl Maintain {
             linux_scope: self.linux_scope.into(),
             drain_deadline_secs: self.drain_deadline_secs,
             macos_path: self.macos_path.into(),
-            xcodes: Vec::new(),
-            xcode_remove: Vec::new(),
-            xcode_default: String::new(),
+            xcodes,
+            xcode_remove,
+            xcode_default,
             return_secs: self.return_secs,
             macos_major: self.macos_major,
         }

@@ -154,7 +154,8 @@ message CommandLineToolsState {
 
 // One update due on a host.
 message DueItem {
-  // What kind of update it is; never `MAINTENANCE_KIND_XCODE` from a daemon.
+  // What kind of update it is; never `MAINTENANCE_KIND_XCODE` from a daemon (the coordinator
+  // decides that one, and adds it to the report it shows, `Host.maintenance`).
   MaintenanceKind kind = 1;
   // The version the host has (`26.1`; a package's installed version; the running kernel), at
   // most 32 bytes; empty when there is none (a package not yet installed).

@@ -13,7 +13,8 @@
 //! `macos` by its report ([`crate::maintenance_mac`]: `mdm_conflict`, `no_update_account`,
 //! `filevault_not_ready`) waits without `macos`, with why in `skipped_because`, and is left out
 //! with that reason when `macos` is all it has due of the run's kinds; a major upgrade of macOS
-//! counts as due only in a group whose `macos_major` allows one. The run is refused, in this
+//! counts as due only in a group whose `macos_major` allows one, and `xcode` is due on a Mac as the
+//! coordinator decides it ([`crate::maintenance_xcode`]). The run is refused, in this
 //! order, `nothing_due` when no host waits, `last_host` when the hosts that wait are every host of
 //! one of their groups and the request does not say `take_last_host`, and `host_in_maintenance`
 //! when a host that would wait has a turn of another run that has not ended, which a `Schedule`
@@ -89,7 +90,8 @@ struct Seen {
     /// host is in no group.
     role: String,
     /// The kinds the kept report lists as due, each once, a major upgrade of macOS only when
-    /// the host's group allows one ([`maintenance_mac::counts_as_due`]).
+    /// the host's group allows one ([`maintenance_mac::counts_as_due`]), and `xcode` when the
+    /// coordinator finds it due ([`crate::maintenance_xcode::due_of`]).
     due: Vec<Kind>,
     /// Why the kept report keeps the host from being ordered `macos`
     /// ([`maintenance_mac::macos_skip`]): read only when `macos` is due, so a Linux host's
@@ -424,11 +426,16 @@ impl Coordinator {
                 placed
             }
         };
+        let archives = self.xcode_archives().unwrap_or_default();
         let fleet = self.lock_fleet();
         Ok(placed
             .into_iter()
             .map(|(id, group)| {
                 let node = fleet.node(&id);
+                let table = self.group_policy(&group).maintenance;
+                let xcode_due = node
+                    .and_then(|node| crate::maintenance_xcode::due_of(node, &table, &archives))
+                    .is_some();
                 let report = node
                     .and_then(|node| node.maintenance.as_ref())
                     .map(Kept::report);
@@ -443,6 +450,9 @@ impl Coordinator {
                             .collect()
                     })
                     .unwrap_or_default();
+                if xcode_due {
+                    due.push(Kind::Xcode);
+                }
                 due.sort();
                 due.dedup();
                 Seen {

@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use hostkeeper_daemon::Reply;
+use hostkeeper_daemon::cli::DEFAULT_PACKAGE_LOCK_WAIT_SECS;
 use hostkeeper_daemon::cli::maintenance_source;
 use hostkeeper_daemon::executor::Daemon;
 use hostkeeper_daemon::link_adapters::DaemonMaintain;
@@ -18,6 +19,7 @@ use hostkeeper_daemon::links::Links;
 use hostkeeper_daemon::maintenance_apt::Apt;
 use hostkeeper_daemon::maintenance_collect::{Collector, LinuxScope};
 use hostkeeper_daemon::maintenance_state::{LookAgain, RunReported, run_state};
+use hostkeeper_daemon::testing::RecordedWaits;
 use hostkeeper_hook::Verdict;
 use hostkeeper_launchd::{FakeLaunchctl, LaunchctlOutput};
 use hostkeeper_link::testing::{
@@ -550,6 +552,7 @@ fn the_wired_source_reports_the_run_of_the_record() {
     let collectors: Vec<Box<dyn Collector>> = vec![Box::new(Apt::new(
         Box::new(apt_get.clone()),
         Box::new(apt_get),
+        RecordedWaits::bounded(DEFAULT_PACKAGE_LOCK_WAIT_SECS).0,
     ))];
     let source = maintenance_source(
         &daemon,

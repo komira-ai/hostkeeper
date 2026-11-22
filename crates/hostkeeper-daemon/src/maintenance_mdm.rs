@@ -210,6 +210,19 @@ fn value_holds_target(value: &Value) -> bool {
     }
 }
 
+/// Every name the collector can report, in the order a Mac with all of them set reports them:
+/// the declarations', the restrictions', `com.apple.SoftwareUpdate`'s, then [`APP_STORE_XCODE`].
+/// The runbook's list of what device management must not set is held to it
+/// (`docs/operations/maintenance.md`).
+#[must_use]
+pub fn reported() -> Vec<&'static str> {
+    let mut names = vec![ENFORCED, DEFERRALS, AUTOMATIC_ACTIONS, BETA];
+    names.extend(RESTRICTION_KEYS);
+    names.extend(SOFTWARE_UPDATE_KEYS);
+    names.push(APP_STORE_XCODE);
+    names
+}
+
 #[cfg(test)]
 #[path = "maintenance_mdm_tests.rs"]
 mod tests;

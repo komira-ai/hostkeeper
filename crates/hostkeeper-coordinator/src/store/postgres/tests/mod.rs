@@ -335,6 +335,7 @@ mod enrollment_races;
 mod fleet_rows;
 mod gate;
 mod generations;
+mod group_sets;
 mod host_groups;
 mod instance;
 mod jobs_rows;

@@ -7,6 +7,7 @@ use std::time::Duration;
 use hostkeeper_proto::hostkeeper::agent::v1::LinuxScope as WireScope;
 
 use super::*;
+use crate::maintenance_dnf::LOCK_HELD;
 use crate::maintenance_hook::linux::stage::{
     REASON_BUSY, REASON_DOWNLOAD_FAILED, REASON_LISTING_FAILED, REASON_SPACE_SHORT,
 };
