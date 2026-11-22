@@ -31,10 +31,12 @@
 //!   of its queries whole, each run with jaq on the coordinator's JSON, and a section for each
 //!   stage ([`move_runbook`]).
 //!
-//! - The runbook of the Linux maintenance update, `docs/operations/maintenance.md`, names only
-//!   the `hk maintenance` verbs of the command table and calls each of them, and the names of its
-//!   tables (the group's settings, a run's states, a host's steps, the refusals, the alerts) are
-//!   those the protos define ([`maintenance_runbook`]).
+//! - The runbook of the maintenance update, `docs/operations/maintenance.md`, names only the
+//!   `hk maintenance` verbs of the command table and calls each of them and the Xcode calls, and
+//!   the names of its tables (the group's settings, a run's states, a host's steps, why a host is
+//!   left out, the refusals, the alerts) are those the protos define, its device-management
+//!   settings those the daemon's detector reports and its update-account keys the bootstrap's
+//!   ([`maintenance_runbook`]).
 //!
 //! The checks are pure functions of the text, each tested on edited texts as well as on the real
 //! files. The files are read from the repository; a missing runbook fails.

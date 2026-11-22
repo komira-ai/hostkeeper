@@ -1,15 +1,24 @@
-//! `docs/operations/maintenance.md`, the runbook of the Linux maintenance update, against the
-//! command table `hk` is generated from and the protos' descriptors.
+//! `docs/operations/maintenance.md`, the runbook of the maintenance update of Linux hosts and
+//! Macs, against the command table `hk` is generated from, the protos' descriptors, the daemon's
+//! detector of device-management settings and the bootstrap's keys.
 //!
 //! - Every `hk maintenance <verb>` the runbook names, on a fenced command line or in an inline
 //!   code span, is a method of the command table, and every method of the table's `maintenance`
 //!   service is called by a fenced command line: a renamed, added or misspelled verb fails here.
+//!   So are `hk xcode-push` and every method of the table's `xcode` service (`list`, `remove`).
 //! - The first column of each of its tables is exactly the names the code defines, each once: the
 //!   group's settings (`## The group's settings`) the fields of `MaintenancePolicy`, a run's states
 //!   and a host's steps the values of `MaintenanceState` and `MaintenanceHostStep`, the refusals
-//!   (`## Refusals`) the values of `MaintenanceRefusal`, and the alerts (`## Alerts`) the three
-//!   alert kinds of a maintenance run, each a value of `AlertKind`.
-//! - A token written after "refused" is a refusal of `Maintenance` or of `HostGroups`.
+//!   (`## Refusals`) the values of `MaintenanceRefusal`, the alerts (`## Alerts`) the three
+//!   alert kinds of a maintenance run and the two of the Xcode store, each a value of `AlertKind`,
+//!   and why a host is left out (`### Why a host is left out`) the values of `MaintenanceSkip`.
+//! - The table of what device management must not set (`### What device management must not
+//!   set`) is exactly the names the daemon's detector reports, in its order
+//!   (`hostkeeper_daemon::maintenance_mdm::reported`), and the table of the update account's keys
+//!   (`### The update account's keys`) exactly the bootstrap's keys, in their order
+//!   (`hostkeeper_bootstrap::update_account::KEYS`).
+//! - A token written after "refused" is a refusal of `Maintenance` or of `HostGroups`, and one
+//!   written after "alert" a value of `AlertKind`.
 //!
 //! The checks are pure functions of the text, tested on edits of the real runbook.
 
@@ -38,8 +47,27 @@ const REFUSALS: &str = "## Refusals";
 /// The table of the alerts a run raises.
 const ALERTS: &str = "## Alerts";
 
-/// The alert kinds a maintenance run raises, which the alerts table holds.
-const RUN_ALERTS: [&str; 3] = ["updates_due", "maintenance_halted", "maintenance_not_back"];
+/// The table of why a host is left out of a run.
+const SKIPS: &str = "### Why a host is left out";
+
+/// The table of what device management must not set on a Mac.
+const MDM: &str = "### What device management must not set";
+
+/// The table of the update account's keys.
+const ACCOUNT_KEYS: &str = "### The update account's keys";
+
+/// The alert kinds the alerts table holds: the three a maintenance run raises and the two of the
+/// Xcode store.
+const RUNBOOK_ALERTS: [&str; 5] = [
+    "updates_due",
+    "maintenance_halted",
+    "maintenance_not_back",
+    "xcode_release_waiting",
+    "xcode_version_taken",
+];
+
+/// The calls the runbook must make that are not `hk maintenance`: the push and the store's.
+const XCODE_CALLS: [&str; 3] = ["xcode-push", "xcode list", "xcode remove"];
 
 /// The verbs of the command table's `maintenance` service, as `maintenance <verb>`.
 fn verbs() -> Vec<String> {
@@ -47,6 +75,15 @@ fn verbs() -> Vec<String> {
         .iter()
         .filter(|c| c.service_command == "maintenance")
         .map(|c| format!("maintenance {}", c.method_command))
+        .collect()
+}
+
+/// The methods of the command table's `xcode` service, as `xcode <method>`.
+fn xcode_methods() -> Vec<String> {
+    COMMANDS
+        .iter()
+        .filter(|c| c.service_command == "xcode")
+        .map(|c| format!("xcode {}", c.method_command))
         .collect()
 }
 
@@ -100,6 +137,54 @@ fn names_problems(doc: &str, heading: &str, what: &str, code: &BTreeSet<String>)
     problems
 }
 
+/// What is wrong with the order of the table under `heading` whose tokens are the names `code`
+/// lists, each once: nothing when the table holds other names (which [`names_problems`] says),
+/// else the first row out of `code`'s order.
+fn order_problems(doc: &str, heading: &str, code: &[&str]) -> Vec<String> {
+    let Ok(tokens) = tokens_under(doc, heading) else {
+        return Vec::new();
+    };
+    if tokens.len() != code.len() {
+        return Vec::new();
+    }
+    tokens
+        .iter()
+        .zip(code)
+        .find(|(token, name)| token.as_str() != **name)
+        .map(|(token, name)| {
+            vec![format!(
+                "`{token}` under `{heading}` stands where the code lists `{name}`: keep the code's order"
+            )]
+        })
+        .unwrap_or_default()
+}
+
+/// The table under `heading` against `code`, the names in the order the code lists them: each
+/// name once, none missing, none extra, in that order.
+fn listed_problems(doc: &str, heading: &str, what: &str, code: &[&str]) -> Vec<String> {
+    let names: BTreeSet<String> = code.iter().map(|name| (*name).to_owned()).collect();
+    let mut problems = names_problems(doc, heading, what, &names);
+    if problems.is_empty() {
+        problems.extend(order_problems(doc, heading, code));
+    }
+    problems
+}
+
+/// Every token written after "alert" in `doc` that is no alert kind of `kinds`.
+fn alert_mention_problems(doc: &str, kinds: &BTreeSet<String>) -> Vec<String> {
+    let marker = "alert `";
+    doc.match_indices(marker)
+        .filter_map(|(at, _)| {
+            let token = doc[at + marker.len()..]
+                .split('`')
+                .next()
+                .unwrap_or_default();
+            (!kinds.contains(token))
+                .then(|| format!("`{token}` is written as an alert and is none"))
+        })
+        .collect()
+}
+
 /// Every inline `hk maintenance <verb>` span whose verb the command table does not have.
 fn span_verb_problems(doc: &str) -> Vec<String> {
     let verbs = verbs();
@@ -121,8 +206,9 @@ fn span_verb_problems(doc: &str) -> Vec<String> {
 
 /// Every problem of the runbook.
 fn problems(doc: &str) -> Vec<String> {
-    let verbs = verbs();
-    let required: Vec<&str> = verbs.iter().map(String::as_str).collect();
+    let mut calls = verbs();
+    calls.extend(XCODE_CALLS.iter().map(|call| (*call).to_owned()));
+    let required: Vec<&str> = calls.iter().map(String::as_str).collect();
     let mut problems = command_problems_for(doc, &required);
     problems.extend(span_verb_problems(doc));
     problems.extend(names_problems(
@@ -155,12 +241,34 @@ fn problems(doc: &str) -> Vec<String> {
     );
     problems.extend(names_problems(doc, REFUSALS, "refusal", &refusals));
     let kinds = tokens_of("hostkeeper.operator.v1.AlertKind", "ALERT_KIND_");
-    let alerts: BTreeSet<String> = RUN_ALERTS
+    let alerts: BTreeSet<String> = RUNBOOK_ALERTS
         .iter()
         .filter(|k| kinds.contains(**k))
         .map(|k| (*k).to_owned())
         .collect();
     problems.extend(names_problems(doc, ALERTS, "alert of a run", &alerts));
+    problems.extend(alert_mention_problems(doc, &kinds));
+    problems.extend(names_problems(
+        doc,
+        SKIPS,
+        "reason a host is left out",
+        &tokens_of(
+            "hostkeeper.operator.v1.MaintenanceSkip",
+            "MAINTENANCE_SKIP_",
+        ),
+    ));
+    problems.extend(listed_problems(
+        doc,
+        MDM,
+        "setting the detector reports",
+        &hostkeeper_daemon::maintenance_mdm::reported(),
+    ));
+    problems.extend(listed_problems(
+        doc,
+        ACCOUNT_KEYS,
+        "key of the bootstrap",
+        &hostkeeper_bootstrap::update_account::KEYS,
+    ));
     let groups = tokens_of(
         "hostkeeper.operator.v1.HostGroupsRefusal",
         "HOST_GROUPS_REFUSAL_",
@@ -178,13 +286,21 @@ fn real() -> String {
 }
 
 /// Catches a runbook that names an `hk maintenance` verb the command table lacks, leaves a verb
-/// of the table uncalled, or lists a setting `MaintenancePolicy` does not have (or leaves one of
-/// its fields out); and a run state, host step, refusal or alert it lists that the protos do not
-/// define, or one they define that it leaves out.
+/// of the table or an Xcode call uncalled, or lists a setting `MaintenancePolicy` does not have
+/// (or leaves one of its fields out); a run state, host step, refusal, alert or reason a host is
+/// left out that it lists and the protos do not define, or one they define that it leaves out;
+/// and a device-management setting or an update-account key it lists that the daemon's detector
+/// or the bootstrap does not have, leaves out, or lists out of their order.
 #[test]
 fn the_maintenance_runbook_matches_the_code() {
     assert_eq!(problems(&real()), Vec::<String>::new());
     assert_eq!(verbs().len(), 6, "{:?}", verbs());
+    assert_eq!(
+        xcode_methods(),
+        ["xcode list", "xcode remove"],
+        "the xcode service's methods, all of which XCODE_CALLS names"
+    );
+    assert_eq!(hostkeeper_daemon::maintenance_mdm::reported().len(), 16);
 }
 
 /// The check of [`the_maintenance_runbook_matches_the_code`] refuses each defect, with its
@@ -268,5 +384,117 @@ fn the_maintenance_runbook_check_refuses_each_defect() {
     assert_eq!(
         edit("## Refusals\n", "## Refused\n"),
         ["no section `## Refusals`"]
+    );
+    // An Xcode call no line makes: both pushes named by a verb hk does not have.
+    let push = "<token-file> xcode-push ";
+    assert_eq!(doc.matches(push).count(), 2);
+    let found = problems(&doc.replace(push, "<token-file> xcode-upload "));
+    assert_eq!(found.len(), 3, "{found:?}");
+    for parse in &found[..2] {
+        assert!(
+            parse.ends_with("no service xcode-upload; 'hk --help' lists them"),
+            "{found:?}"
+        );
+    }
+    assert_eq!(found[2], "no command line calls `hk xcode-push`");
+    // The store's removal left uncalled.
+    let remove = "    xcode remove --sha256 <sha256>";
+    let found = edit(remove, "    xcode list --sha256 <sha256>");
+    assert_eq!(found.len(), 2, "{found:?}");
+    assert!(
+        found[0].ends_with("xcode list has no flag --sha256"),
+        "{found:?}"
+    );
+    assert_eq!(found[1], "no command line calls `hk xcode remove`");
+    // An alert of the store dropped from the alerts table.
+    assert_eq!(
+        edit("| `xcode_version_taken` | warning |", "| warning |"),
+        ["the code's `xcode_version_taken` is missing under `## Alerts`"]
+    );
+    // A token written as an alert that is none.
+    assert_eq!(
+        edit(
+            "warning alert `xcode_release_waiting`",
+            "warning alert `xcode_waiting`"
+        ),
+        ["`xcode_waiting` is written as an alert and is none"]
+    );
+    // A reason a host is left out that the protos do not define, and the one it replaced.
+    assert_eq!(
+        edit("| `group_changed` |", "| `moved` |"),
+        [
+            "`moved` under `### Why a host is left out` is no reason a host is left out of the code",
+            "the code's `group_changed` is missing under `### Why a host is left out`",
+        ]
+    );
+    // A device-management setting the detector does not report, one it reports left out, one
+    // listed twice, and two listed out of the detector's order.
+    assert_eq!(
+        edit("| `Beta` |", "| `BetaEnrollment` |"),
+        [
+            "`BetaEnrollment` under `### What device management must not set` is no setting the detector reports of the code",
+            "the code's `Beta` is missing under `### What device management must not set`",
+        ]
+    );
+    let catalog =
+        "| `CatalogURL` | `com.apple.SoftwareUpdate` | another software-update catalog |\n";
+    assert_eq!(
+        edit(catalog, ""),
+        ["the code's `CatalogURL` is missing under `### What device management must not set`"]
+    );
+    assert_eq!(
+        edit(catalog, &format!("{catalog}{catalog}")),
+        ["`CatalogURL` is listed twice under `### What device management must not set`"]
+    );
+    let pre =
+        "| `AllowPreReleaseInstallation` | `com.apple.SoftwareUpdate` | pre-release installs |\n";
+    assert_eq!(
+        edit(&format!("{catalog}{pre}"), &format!("{pre}{catalog}")),
+        [
+            "`AllowPreReleaseInstallation` under `### What device management must not set` stands where the code lists `CatalogURL`: keep the code's order"
+        ]
+    );
+    // An update-account key the bootstrap does not take, and two keys out of its order.
+    assert_eq!(
+        edit("| `admin_name` |", "| `admin_user` |"),
+        [
+            "`admin_user` under `### The update account's keys` is no key of the bootstrap of the code",
+            "the code's `admin_name` is missing under `### The update account's keys`",
+        ]
+    );
+    let name = "| `update_account_name` | the update account's name, `hkupdate` |\n";
+    let password = "| `update_account_password` | its password: not empty, no line break |\n";
+    assert_eq!(
+        edit(&format!("{name}{password}"), &format!("{password}{name}")),
+        [
+            "`update_account_password` under `### The update account's keys` stands where the code lists `update_account_name`: keep the code's order"
+        ]
+    );
+}
+
+/// The order check of [`listed_problems`] says nothing of a table [`names_problems`] already
+/// refuses: one that is gone, or one of another length.
+#[test]
+fn the_order_check_leaves_other_defects_to_the_names_check() {
+    let code = ["a", "b"];
+    assert_eq!(
+        order_problems("# Other\n", "### T", &code),
+        Vec::<String>::new()
+    );
+    let short = "### T\n\n| `b` |\n";
+    assert_eq!(order_problems(short, "### T", &code), Vec::<String>::new());
+    assert_eq!(
+        listed_problems(short, "### T", "name", &code),
+        ["the code's `a` is missing under `### T`"]
+    );
+    let swapped = "### T\n\n| `b` |\n| `a` |\n";
+    assert_eq!(
+        listed_problems(swapped, "### T", "name", &code),
+        ["`b` under `### T` stands where the code lists `a`: keep the code's order"]
+    );
+    let kept = "### T\n\n| `a` |\n| `b` |\n";
+    assert_eq!(
+        listed_problems(kept, "### T", "name", &code),
+        Vec::<String>::new()
     );
 }

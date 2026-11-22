@@ -225,6 +225,31 @@ fn a_mac_with_every_key_set_reports_all_sixteen_in_order() {
     assert_eq!(mac.collect(), Ok(section(&expected)));
 }
 
+/// Proves [`reported`] is every name the collector reports, in its order, each once: a Mac with
+/// every key set reports exactly that list, and each key set alone reports one name of it.
+#[test]
+fn reported_is_what_a_mac_with_every_key_set_reports() {
+    let mac = Mac::new(
+        "mdm-reported",
+        &[
+            (DDM_STATE, fixture!("ddm/all.plist")),
+            (RESTRICTIONS_PATH, fixture!("restrictions/all.plist")),
+            (SOFTWARE_UPDATE_PATH, fixture!("softwareupdate/all.plist")),
+            (RECEIPT, EMPTY),
+        ],
+    );
+    let reported = reported();
+    assert_eq!(mac.collect(), Ok(section(&reported)));
+    assert_eq!(reported.len(), MAX_MDM_CONFLICTS);
+    assert_eq!(
+        reported.iter().collect::<BTreeSet<_>>().len(),
+        reported.len()
+    );
+    let alone: Vec<&str> = cases().iter().map(|(name, _, _)| *name).collect();
+    assert_eq!(alone[..], reported[..reported.len() - 1]);
+    assert_eq!(reported.last(), Some(&APP_STORE_XCODE));
+}
+
 /// Proves keys set off (false, 0) and keys that name nothing of software updates report none.
 #[test]
 fn keys_set_off_and_unrelated_keys_report_none() {
