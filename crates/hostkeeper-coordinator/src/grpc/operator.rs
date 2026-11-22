@@ -35,7 +35,7 @@ use tonic::{Request, Response, Status};
 use super::{Admitted, refusal, report};
 use crate::desired::{Desired, DesiredError};
 use crate::operator::{Caller, entry_proto};
-use crate::ops::OperateError;
+use crate::ops::{OperateError, OpsError};
 use crate::service::ci_calls::{ReleaseError, Setter};
 use crate::service::{CiRefused, ConvergenceError, Coordinator, SetError, Unauthorized};
 use crate::wait::{CallLimit, ConnectionWaits, MAX_WAIT_SECS, WaitRefused};
@@ -119,6 +119,7 @@ pub(crate) fn set_refusal(why: SetError) -> proto::ReleasesRefusal {
         SetError::NotInHostGroup => proto::ReleasesRefusal::NotInHostGroup,
         SetError::AmbiguousHostGroup => proto::ReleasesRefusal::AmbiguousHostGroup,
         SetError::LimitsInHostGroup => proto::ReleasesRefusal::LimitsInHostGroup,
+        SetError::Ops(OpsError::DesiredChanged) => proto::ReleasesRefusal::StateChanged,
         SetError::Ops(why) => why.into(),
         SetError::Store(_) => {
             tracing::error!(%why, "the desired state could not be stored");

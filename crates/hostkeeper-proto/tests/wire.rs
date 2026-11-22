@@ -854,6 +854,7 @@ fn wire_names_are_pinned() {
                 "not_in_host_group",
                 "ambiguous_host_group",
                 "limits_in_host_group",
+                "state_changed",
             ],
         ),
         (

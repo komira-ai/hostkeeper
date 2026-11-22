@@ -22,9 +22,11 @@ pub enum SetError {
     /// The state file could not be written.
     #[error(transparent)]
     Store(#[from] StoreError),
-    /// The ops file could not be written: the desired state is set, and the halt the updater
-    /// raised, which the set lifts, stands. Setting the same state again is safe and tries the
-    /// lift again.
+    /// The ops file could not be written: for a set of a service, the desired state is set, and
+    /// the halt the updater raised, which the set lifts, stands. Setting the same state again is
+    /// safe and tries the lift again. For a set in host groups, whose desired state and audit
+    /// entries are one commit, nothing is set; [`crate::ops::OpsError::DesiredChanged`] there
+    /// means the desired state changed in the store each time the set was decided.
     #[error(transparent)]
     Ops(#[from] OpsError),
     /// The allow-list entry that admitted the token does not name this service, or names
