@@ -268,9 +268,11 @@ pub fn registry_for(
                 HostkeeperVersion::parse(own),
                 Adapters::for_platform(platform),
             ) {
-                (Ok(own), Ok(adapters)) => {
-                    linux::kinds(LinuxCheck::at_host(adapters, own), linux_work, reboot_work)
-                }
+                (Ok(own), Ok(adapters)) => linux::kinds(
+                    LinuxCheck::at_host(adapters, own, lock_wait_secs),
+                    linux_work,
+                    reboot_work,
+                ),
                 _ => registry
                     .with(Kind::Linux, linux_work)
                     .with(Kind::Reboot, reboot_work),

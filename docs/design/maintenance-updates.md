@@ -59,16 +59,20 @@ heartbeat, the due items included; the coordinator only shows the reports. The o
 (section 1.1), because no host can see it: for the `xcode` row below the daemon reports only what is installed, and the coordinator
 decides what is due.
 
-The daemon looks at its host every hour, after every start, and after a maintenance step ends, as the prerequisites pass does today (Built:
+The daemon looks at its host every hour, after every start, and after a maintenance step ends, and sooner after a look that failed (Built:
+5 minutes after it ended, doubled for each further failure in a row, at most the hour; `maintenance_facts.rs`), as the prerequisites pass does today (Built:
 `crates/hostkeeper-daemon/src/prerequisites.rs`, a worker thread that never holds up a heartbeat; `xcode_clt.rs`, which already runs
 `softwareupdate`; the bounded program runner `run`/`run_ok` of `login_account.rs`). Each program runs as root with an empty environment, a deadline and capped output, through the same ports. **New:** the
-checks below and the report of section 4.1.
+checks below and the report of section 4.1. A package manager's run that finds its lock held is tried again every 2 seconds for at
+most the daemon's `--package-lock-wait-secs`, as the hook's stage waits, and fails the look only when the lock is still held then (Built:
+`LockWait` in `maintenance_collect.rs`; apt's `DPkg::Lock::Timeout` is not used, since apt 2.4 to 2.8 do not apply it to the lock of
+`/var/lib/apt/lists` that `apt-get update` takes; dnf runs with `exit_on_lock`).
 
 | Kind | Platform | What the daemon reads | Due when |
 |---|---|---|---|
 | `macos` | Mac | `sw_vers` (version, build); `softwareupdate --list` (each label, its version, whether it says `Action: restart`); `--list-full-installers` for a major upgrade | `softwareupdate` lists a macOS update. A major upgrade is listed but never due by default (group setting `macos_major`, section 3) |
 | `xcode` | Mac | each `/Applications/Xcode*.app/Contents/version.plist` (`CFBundleShortVersionString`, `ProductBuildVersion`); `xcode-select -p` | decided by the coordinator: the newest `xcode_keep` releases its store holds (section 2) include one the host lacks or `xcode-select` is not the group's default |
-| `linux` | Linux | apt: `apt-get update`, then a simulated upgrade, split by origin into security and other; dnf: `dnf updateinfo list --security` and `dnf check-update`; apk: `apk version -l '<'`. The kernel: `uname -r` against the newest installed kernel | a security update or a newer kernel package is available (group setting `linux_scope`: `security` by default, or `all`) |
+| `linux` | Linux | apt: `apt-get update`, then a simulated upgrade, split by origin into security and other; dnf: `dnf updateinfo list --security` and `dnf check-update`; apk: `apk version -l '<'`. The kernel: `uname -r` against the newest installed kernel | a security update or a newer kernel package is available (group setting `linux_scope`: `security` by default, or `all`); under `security`, apt counts only packages already installed (section 5.5) |
 | `reboot` | Linux | `/run/reboot-required` (apt); `needrestart -b` where installed (its kernel status, and the services running old libraries); `needs-restarting -r` (dnf); the newest kernel under `/lib/modules` against `uname -r` | the host needs a reboot it has not had: a newer kernel installed but not running, or the distribution says so. A run of `reboot` alone has nothing to install: it drains, reboots, checks and puts back |
 
 Packages hostkeeper itself installs must not move in an OS upgrade. apt holds them (`apt-mark hold`, Built:
@@ -453,9 +457,9 @@ drain was never asked for is never held.
 
 ### 5.5 Apply
 
-- **Linux.** apt: `apt-get install --only-upgrade` of the security packages and the kernel (`linux_scope = security`) or `apt-get
-  dist-upgrade` (`all`), non-interactive, keeping existing configuration files; dnf: `dnf upgrade --security`, then a newer kernel
-  by name, or `dnf upgrade`; apk: `apk upgrade`, under `security` the kernel alone (apk names no security origin). The package lock is
+- **Linux.** apt: `apt-get install --only-upgrade` of the installed security packages and kernels (`linux_scope = security`; a
+  package not yet installed is not due under it and comes in only as a dependency of one of them) or `apt-get dist-upgrade` (`all`),
+  non-interactive, keeping existing configuration files; dnf: `dnf upgrade --security`, then a newer kernel by name, or `dnf upgrade`; apk: `apk upgrade`, under `security` the kernel alone (apk names no security origin). The package lock is
   waited for as the installers wait today (Built: `--package-lock-wait-secs`, also a flag of `maintenance-hook`).
 - **macOS.** Apple silicon installs a macOS update or upgrade only with a *volume owner's* authorisation: an administrator holding a
   Secure Token. Root alone is not one, and the bootstrap token, which is one, can be redeemed only by a device-management service, not by

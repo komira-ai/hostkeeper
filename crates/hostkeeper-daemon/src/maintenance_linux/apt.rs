@@ -18,7 +18,7 @@ use std::time::Duration;
 use hostkeeper_launchd::{Launchctl, LaunchctlProcess};
 
 use crate::maintenance_apt::{APT_GET, AptUpdate, parse_apt_simulation};
-use crate::maintenance_collect::{LinuxScope, listing};
+use crate::maintenance_collect::{LinuxScope, Look, listing};
 use crate::maintenance_hook::KindError;
 use crate::maintenance_linux::{
     INSTALL_DEADLINE, LIST_DEADLINE, REFRESH_DEADLINE, Upgrade, Upgrader, install_failed,
@@ -183,19 +183,22 @@ fn moving_own(updates: &[AptUpdate], own: &BTreeSet<String>) -> Vec<String> {
         .collect()
 }
 
-/// The packages `install --only-upgrade` is given for the `security` scope: the installed
-/// packages of the simulation that are security updates or kernels and are not own packages, in
-/// the simulation's order, each once and named as apt printed it. A package not yet installed
-/// (a new `linux-image-<version>`) is not named: apt installs it as a dependency of the kernel
-/// meta-package (`linux-image-<flavour>` on Debian, `linux-generic` on Ubuntu), which is named
-/// when its simulation line is a security update or a `linux-image-` package.
+/// The packages `install --only-upgrade` is given for the `security` scope: the updates of the
+/// simulation the look makes due under that scope ([`AptUpdate::is_due`]: the installed packages
+/// that are security updates or kernels and are not own packages), in the simulation's order,
+/// each once and named as apt printed it. So what the look and the check after the install report
+/// due is what this install names. A package not yet installed (a new `linux-image-<version>`, a
+/// new library) is not named and not due: apt installs it only as a dependency of a named package
+/// whose new version needs it (the kernel meta-package `linux-image-<flavour>` on Debian,
+/// `linux-image-generic` on Ubuntu, which is named when it is upgraded).
 fn security_names(updates: &[AptUpdate], own: &BTreeSet<String>) -> Vec<String> {
+    let look = Look {
+        scope: LinuxScope::Security,
+        own_packages: own,
+    };
     let mut names: Vec<String> = Vec::new();
     for update in updates {
-        let wanted = !update.from.is_empty()
-            && (update.security || update.kernel)
-            && !own.contains(without_arch(&update.package));
-        if wanted && !names.contains(&update.package) {
+        if update.is_due(&look) && !names.contains(&update.package) {
             names.push(update.package.clone());
         }
     }
