@@ -3,9 +3,10 @@
 
 use super::*;
 
-/// The daemon's launcher on a fake host: the maintenance hook's steps run in process over the
-/// host ([`Machine::kinds`]), each service's `drain` and `resume` are the host's service; every
-/// other step goes to the rig's scripted launcher.
+/// The daemon's launcher on a fake host: the maintenance hook's steps (`prepare`, `cutover`,
+/// `verify`) run in process through the real hook over the host ([`Machine::kinds`]), each
+/// service's `drain` and `resume` are the host's service; every other step goes to the rig's
+/// scripted launcher.
 struct HostLauncher {
     machine: Arc<Machine>,
     inner: Arc<hostkeeper_daemon::testing::ScriptedLauncher>,
@@ -13,15 +14,12 @@ struct HostLauncher {
 
 impl HostLauncher {
     /// The maintenance hook's `step` with the params file `params`, as its unit would run it:
-    /// its exit code and its report line.
+    /// its exit code and its report line. A `prepare` is logged `stage` before it runs.
     fn hook(&self, step: &str, params: &Path) -> StepExit {
         let step = match step {
             "prepare" => {
                 self.machine.effect("stage".to_owned());
-                return StepExit {
-                    code: Some(0),
-                    last_line: Some("{}".to_owned()),
-                };
+                HookStep::Prepare
             }
             "cutover" => HookStep::Cutover,
             "verify" => HookStep::Verify,

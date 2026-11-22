@@ -107,7 +107,7 @@ step, so a crash, a reboot or a newer daemon picks it up where it stopped:
 
 | # | Step | What runs | If it fails |
 |---|---|---|---|
-| 1 | stage | `hostkeeper maintenance-hook prepare`: refreshes the package lists, takes the package manager's own estimate of the download, checks there are at least twice as many bytes free where it downloads, and downloads only (`apt-get --download-only`, `dnf upgrade --downloadonly`, `apk fetch`). Nothing is installed; the host still serves. | deferred: nothing was touched |
+| 1 | stage | `hostkeeper maintenance-hook prepare`: refreshes the package lists, takes the package manager's own estimate of the download, checks there are at least twice as many bytes free where it downloads, and downloads only (`apt-get --download-only`, `dnf upgrade --downloadonly`, `apk fetch`). Nothing is installed; the host still serves. The kind `reboot` stages nothing (a restart has nothing to download), so a run of `reboot` alone passes this step without running a program. | deferred: nothing was touched |
 | 2 | drain | each installed service whose package names `[hook] drain` and `[hook] resume`, in the order of their names: its `drain` takes it out of service and returns when it has no work (js-agent's cordons the host in the lease server and waits for its leases to end) | exit 75, or the run's drain deadline passing: deferred, each drained service resumed. Anything else: halted |
 | 3 | apply | `maintenance-hook cutover`: the upgrade of the order's scope (apt `install --only-upgrade` of the installed security packages and kernels, exactly the apt items reported due, a package not yet installed coming in only as a dependency of one of them; or `dist-upgrade` under `all`, new packages included; keeping existing configuration files; dnf `upgrade --security` then the kernel by name, or `upgrade`; apk the kernel alone, or `upgrade`), then, when the host needs a restart (a newer kernel, `/run/reboot-required`, `needrestart`, `needs-restarting`), `systemctl reboot` (OpenRC's `reboot`). After the restart the daemon sees the new boot id and goes on | halted |
 | 4 | check | `maintenance-hook verify`: the host booted again if it had to, runs the newest installed kernel and needs no restart, has nothing of the order's scope still due, and every installed service reports itself healthy | halted |
@@ -871,14 +871,6 @@ with `build.json` the group as `get` answered it, its `maintenance` changed:
 
 ## Not built yet
 
-- **A run with the kind `reboot` defers.** The stage of `reboot` is not written, so every turn whose
-  kinds include it ends `deferred` with `stage: exit 1, unsupported_kind: reboot is not supported on
-  this host`, and is offered again until the run ends. Update and a Schedule with every kind ticked
-  include it whenever a host reports a restart it needs (a `reboot` item: `/run/reboot-required`,
-  or a kernel installed and not running). Until it is, schedule `--kinds linux` alone (untick
-  "restart" in the form) on a host that also has a `linux` item: its apply restarts the host when
-  `/run/reboot-required` or a newer kernel says so, and its check fails unless the host came back
-  on the newest kernel. A host whose only due item is a restart cannot be restarted by a run yet.
 - **A new package due under the `security` scope halts the check.** The look reports a package the
   upgrade would newly install (an item with no `from`: a new `linux-image-<version>`, a new
   library) as due. Under `security` the apply installs only packages already installed, so such a
