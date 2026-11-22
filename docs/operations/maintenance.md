@@ -437,9 +437,11 @@ conflicts" and the Xcode table); `hk hosts get` holds them under `maintenance.ma
 - `macos`: an update `softwareupdate --list` offers whose title starts `macOS` and whose major
   version is the one running ("macOS 26.1 to 26.2, restart"). A newer major is due only under
   [Major macOS upgrades](#major-macos-upgrades-macos_major).
-- `xcode`: decided by the coordinator, never by the Mac: a release its store holds that the Mac's
-  group keeps and the Mac lacks ([The private store](#the-private-store-xcode_keep-and-xcode_default)).
-  It is not built yet: no Mac is reported `xcode` due today.
+- `xcode`: decided by the coordinator, never by the Mac, from the Mac's group and the store: one of
+  the newest `xcode_keep` releases the store holds is not installed as `Xcode-<version>.app` with
+  its build, or `xcode-select` does not name the group's default
+  ([The private store](#the-private-store-xcode_keep-and-xcode_default)). A newer Xcode becomes
+  due only once it is pushed to the store.
 
 ### A Mac's turn
 
@@ -508,6 +510,12 @@ hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-
 `xcode list` names the archives held, newest first, how many releases the store keeps, and the
 release still waiting, if any.
 
+**Then install it.** Once the store holds it, `xcode` is due on each Mac of a group whose
+`xcode_keep` is at least 1 and that lacks it: the Mac counts toward its group's `updates_due`, and
+its host page lists it. **Update** the group, or **Schedule** it in a window with only "Xcode"
+ticked (`--kinds xcode`); a Mac that is also due macOS installs that first. While the store's
+directory cannot be read, no Mac is shown due an Xcode and a turn with `xcode` waits.
+
 ### The private store, `xcode_keep` and `xcode_default`
 
 The store is the coordinator's `--xcode-dir`: each archive kept exactly as Apple ships it, never
@@ -528,12 +536,15 @@ A group's two Xcode keys ([The group's settings](#the-groups-settings)):
 - `xcode_keep` (0 to 4): how many of the newest releases each of its Macs keeps side by side, as
   `/Applications/Xcode-<version>.app`. 0, the default, leaves Xcode alone and lets no Mac of the
   group read the store. 2 is the latest and the one before.
-- `xcode_default`: the Xcode `xcode-select` points at, `latest` (the default) or a version
-  (`27.1`), which needs an `xcode_keep` of at least 1. Builds are not to lean on it: the design has
+- `xcode_default`: the Xcode `xcode-select` points at, `latest` (the default, the newest kept
+  release) or a version (`27.1`), which needs an `xcode_keep` of at least 1; a version the store
+  keeps no release of leaves `xcode-select` as it is. Builds are not to lean on it: the design has
   each action name its Xcode by build, which js-agent and kbf do not do yet ([Not built
   yet](#not-built-yet)).
 
-When the install is built, a Mac's turn for `xcode` stages each release it lacks while it still
+The `maintain` order of a Mac's turn with `xcode` carries the kept releases (version, build, size
+and SHA-256), the versions to remove (each installed as `Xcode-<version>.app` and older than every
+kept release) and the default. The turn stages each release it lacks while the Mac still
 serves (fetched from the store, its size and SHA-256 checked, expanded with `xip --expand` in
 `/Applications/.hostkeeper-staging/`, its build and code signature checked); then, drained, moves
 it to `/Applications/Xcode-<version>.app`, accepts the licence, runs the first launch, points
@@ -886,14 +897,13 @@ with `build.json` the group as `get` answered it, its `maintenance` changed:
 
 On a Mac:
 
-- **No Mac is given an Xcode by a run.** The coordinator decides no Mac's `xcode` due and sends
-  every `maintain` order with no Xcode in it, so a Schedule of `--kinds xcode` takes no Mac and an
-  Update never installs one. The push, the store, `hk xcode list` and `hk xcode remove`, the
-  alerts and the daemon's own stage, apply and check of `xcode` are built; the coordinator's side
-  waits for js-agent and kbf to name the Xcode of each action by build (design section 6), so that a
-  cached result is never served across Xcodes. Until then an Xcode is installed by hand, and
-  `xcode_keep` only sets how many releases the store keeps. The store's prune does not read the
-  Xcodes hosts report, so it never keeps an older release because a Mac has it.
+- **Builds do not name their Xcode yet.** js-agent and kbf are to place each Mac action by the
+  Xcode build it names (design section 6), so that a cached result is never served across Xcodes.
+  Until they do, a build that does not set `DEVELOPER_DIR` uses `xcode-select`'s default, which a
+  run with `xcode` can move: change a group's `xcode_default`, or install a new `latest`, while
+  its builds can be re-run.
+- **The store's prune does not read the Xcodes the Macs report**, so it never keeps an older
+  release because a Mac has it.
 - **A Mac with FileVault on is never ordered `macos`.** The report does not yet say whether the
   update account is a FileVault user, so every Mac not reported off is left out
   (`filevault_not_ready`). The authenticated restart is built in the daemon for when it does.
