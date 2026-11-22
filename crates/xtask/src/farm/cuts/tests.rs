@@ -12,6 +12,9 @@ const BUILD_CUT_AND_FAILED_CHECK: &str = include_str!("build_cut_and_failed_chec
 /// A build whose cuts came with buck2's own warnings that it retries its calls, which say `timed
 /// out` (an excerpt: three reports and the warnings).
 const BUILD_CUT_WITH_WARNINGS: &str = include_str!("build_cut_with_warnings.log");
+/// A build run while the farm could not be reached: buck2's errors that it cannot start its
+/// session (the farm's address replaced by a documentation one), then cut reports (an excerpt).
+const BUILD_UNREACHABLE: &str = include_str!("build_unreachable.log");
 /// A build whose one failure was a test of the daemon.
 const TEST_FAILED: &str = include_str!("test_failed.log");
 
@@ -197,4 +200,17 @@ fn the_stamp_indent_and_line_ends_are_taken_off_before_the_line_is_read() {
     );
     assert_eq!(bare("  Error: x\r"), "Error: x");
     assert_eq!(bare("[no stamp end"), "[no stamp end");
+}
+
+#[test]
+fn a_farm_that_cannot_be_reached_is_cut_and_another_remote_error_is_not() {
+    // Catches: a run made while the farm was down (buck2 cannot even query its capabilities)
+    // read as a real failure, so that a farm down for both runs fails with an ordinary build
+    // error instead of saying so; and another of the remote's errors taken for it.
+    assert_eq!(only_cuts(BUILD_UNREACHABLE), Some(5));
+    let unreachable = "[t] Error: (Failed to query capabilities of remote: code: 'The service is \
+                       currently unavailable', message: \"tcp connect error\")\n";
+    assert_eq!(only_cuts(&format!("{unreachable}BUILD FAILED\n")), Some(1));
+    let other = "[t] Error: (Failed to query something else of remote: code: 'Unavailable')\n";
+    assert_eq!(only_cuts(&format!("{other}{CUT}BUILD FAILED\n")), None);
 }

@@ -5,7 +5,10 @@
 //! - a **cut** is buck2's own `Error:` line (after its `[<time>] ` stamp) that holds
 //!   [`CUT_MARKER`], the error buck2's remote-execution client gives when the stream to the farm
 //!   breaks (`RE channel error: code: 'Unknown error', message: "h2 protocol error: ..."`,
-//!   `BrokenPipe`);
+//!   `BrokenPipe`), or that holds [`UNREACHABLE_MARKER`], the error buck2 gives when it cannot
+//!   reach the farm at all (`Failed to query capabilities of remote: ... tcp connect error`). The
+//!   second is not in buildrules' rule; it names the farm alone, never the change under test, and
+//!   counting it lets a farm that is down for both runs fail the job as a second cut;
 //! - a failed action's report is a cut when its reason, the line after `Action failed:`, is
 //!   `Internal error (stage: ...)` naming a `Remote Execution Error on ...`, and the line after
 //!   that is a cut. Any other reason (a compiler or a test that `returned non-zero exit code`, a
@@ -26,6 +29,8 @@
 
 /// What buck2 writes in the error of a cut stream to the farm.
 pub(crate) const CUT_MARKER: &str = "RE channel error: code:";
+/// What buck2 writes when it cannot reach the farm to start its session.
+pub(crate) const UNREACHABLE_MARKER: &str = "Failed to query capabilities of remote: ";
 
 /// One line of buck2's output with its stamp (`[2026-11-21T07:48:10.059+00:00] `), its indent
 /// and its line end taken off.
@@ -76,7 +81,7 @@ fn log_level(line: &str) -> Option<&'static str> {
 
 /// Whether `line` (bare) is buck2's own error of a cut stream.
 fn is_cut(line: &str) -> bool {
-    line.starts_with("Error:") && line.contains(CUT_MARKER)
+    line.starts_with("Error:") && (line.contains(CUT_MARKER) || line.contains(UNREACHABLE_MARKER))
 }
 
 /// Whether `line` (bare) shows a failure that is not a cut.

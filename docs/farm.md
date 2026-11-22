@@ -94,6 +94,10 @@ Internal error (stage: remote_call_error): Remote Execution Error on Execute wit
 Error: (Error was returned on the stream by RE: RE channel error: code: 'Unknown error', message: "h2 protocol error: error reading a body from connection", ... BrokenPipe ...)
 ```
 
+buck2 writes `Error: (Failed to query capabilities of remote: ... tcp connect error ...)` when it
+cannot reach the farm at all; that counts as a cut too (it names the farm alone, never the change),
+so a farm that is down for both runs fails the job as a second cut, by name.
+
 When the build fails and every failure in what buck2 printed is such a cut
 (`crates/xtask/src/farm/cuts.rs`, the rule of buildrules' stages since komira-ai/buildrules#172 and
 of komira's farm steps since komira-ai/komira#2155), `farm-build` runs the same build once more, at
