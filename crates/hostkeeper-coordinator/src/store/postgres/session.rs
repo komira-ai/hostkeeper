@@ -41,16 +41,23 @@ impl From<postgres::Error> for Fail {
     }
 }
 
-/// The text of a client error: the server's severity, message and SQLSTATE, or the client's own
-/// error and its cause. It never holds the connection string.
+/// The text of a client error: the server's severity, message and SQLSTATE, followed by the table
+/// and the constraint the server names (a statement a constraint refused names both), or the
+/// client's own error and its cause. It never holds the connection string.
 pub(crate) fn describe(e: &postgres::Error) -> String {
     match e.as_db_error() {
-        Some(db) => format!(
-            "{}: {} (SQLSTATE {})",
-            db.severity(),
-            db.message(),
-            db.code().code()
-        ),
+        Some(db) => {
+            let named = [("table", db.table()), ("constraint", db.constraint())]
+                .into_iter()
+                .filter_map(|(what, name)| name.map(|name| format!(", {what} {name}")))
+                .collect::<String>();
+            format!(
+                "{}: {} (SQLSTATE {}{named})",
+                db.severity(),
+                db.message(),
+                db.code().code()
+            )
+        }
         None => match e.source() {
             Some(cause) => format!("{e}: {cause}"),
             None => e.to_string(),

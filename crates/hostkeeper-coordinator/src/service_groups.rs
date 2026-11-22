@@ -20,6 +20,13 @@
 //! updater raised that lifts, both audited by the setter. The answer is the desired state and the
 //! write record of the group, or, when the set made more than one deployment, of the first group by
 //! name, with no record.
+//!
+//! The set is decided on the desired state in memory and committed with the operations state in
+//! one transaction, which refuses it when the desired state it reads under its locks is not the
+//! copy the set was decided on (a commit came between: another coordinator's, or this one's own
+//! set just before it, whose queue number only the rows hold). Memory then holds the rows as read,
+//! and the set is decided again on them, refusals and all: [`SET_ATTEMPTS`] times in all, and then
+//! it is refused `state_changed` with nothing changed.
 
 use std::sync::Arc;
 
@@ -32,7 +39,7 @@ use crate::force;
 use crate::group_scope::higher;
 use crate::halt;
 use crate::host_groups::{GroupName, HostGroup, HostGroups};
-use crate::ops::AuditEntry;
+use crate::ops::{AuditEntry, OpsError};
 use crate::releases::{self, Release, Targets};
 use crate::services::{ServiceDef, Services};
 use crate::write_record::{WriteAsk, WriteRecord};
@@ -124,8 +131,9 @@ impl Coordinator {
     /// [`SetError::AmbiguousHostGroup`] and [`SetError::LimitsInHostGroup`];
     /// [`SetError::Forbidden`] also when the token's entry names `host_groups` that exclude the
     /// group the set names, or, with none named, every group that lists the package. The audit
-    /// entries are written with the desired state: [`SetError::Ops`] of
-    /// [`crate::ops::OpsError::AuditUnavailable`] means nothing is set.
+    /// entries are written with the desired state: every [`SetError::Ops`] means nothing is set;
+    /// [`OpsError::DesiredChanged`] means the desired state changed in the store each of the
+    /// [`SET_ATTEMPTS`] times the set was decided.
     pub(super) async fn set_desired_by_group(
         &self,
         setter: &Setter<'_>,
@@ -168,73 +176,50 @@ impl Coordinator {
             Setter::Operator(operator) => format!("operator token {}", operator.name()),
         };
         let reason = reason_of(setter, &desired, release.as_deref());
-        // The fleet's lock is held to the end of the set, as for a set of a service: the groups
-        // and the marks the refusals are decided on do not change under it.
-        let _fleet = self.lock_fleet_for_set();
-        let groups = deployment_targets(
-            &self.desired.host_groups(),
-            &service,
+        let set = GroupSet {
+            service: &service,
+            base: &base,
+            desired: &desired,
+            release: release.as_ref(),
+            names_release: named.release().is_some(),
             host_group,
             ask,
-            permitted.as_deref(),
-        )?;
-        let state = self.ops.state();
-        for group in &groups {
-            let floor = state.group_marks(group, &service).min_version;
-            let def = ServiceDef {
-                min_version: higher(base.min_version.clone(), floor),
-                ..base.clone()
-            };
-            self.refuse(&def, &desired)?;
-        }
-        self.refuse_release(
-            &service,
-            &desired.version,
-            release.as_deref(),
-            named.release().is_some(),
-        )?;
-        self.refuse_repository(&base, release.as_deref())?;
-        // The versions the registry keeps at its cap whatever their age: those a group recorded
-        // as good, and those marked bad.
-        let kept: Vec<Version> = state
-            .host_groups
-            .0
-            .values()
-            .filter_map(|packages| packages.get(&service)?.last_good.clone())
-            .chain(state.marks_in(None, &service).bad)
-            .collect();
-        let staged = self
-            .desired
-            .stage_group_set(&groups, &service, &desired, release, &kept, ask)?;
-        self.ops.decide_changes_with(staged, |state| {
-            let mut entries = Vec::new();
-            for group in &groups {
-                let mut entry = AuditEntry::new(actor, "set_desired");
-                entry.service = Some(service.clone());
-                entry.host_group = Some(group.to_string());
-                entry.reason = Some(reason.clone());
-                entries.push(entry);
-                let ended = force::end(
-                    state,
-                    Some(group),
-                    &service,
-                    &desired.version,
-                    actor,
-                    &set_by,
-                );
-                entries.extend(ended);
-                let lifted = halt::lift(
-                    state,
-                    Some(group),
-                    &service,
-                    &desired.version,
-                    actor,
-                    &set_by,
-                );
-                entries.extend(lifted);
+            permitted: permitted.as_deref(),
+            actor,
+            set_by: &set_by,
+            reason: &reason,
+        };
+        // The fleet's lock is held to the end of the set, as for a set of a service: the groups
+        // and the marks the refusals are decided on do not change under it. A set staged on a
+        // copy of the desired state older than the rows is decided again on the rows the edit
+        // read, which memory took: what a commit just before it on this coordinator (whose queue
+        // number memory does not hold) or on another one leaves behind.
+        let _fleet = self.lock_fleet_for_set();
+        let mut attempt = 1;
+        let groups = loop {
+            match self.deploy_group_set(&set) {
+                Err(SetError::Ops(OpsError::DesiredChanged)) if attempt < SET_ATTEMPTS => {
+                    tracing::info!(
+                        %service,
+                        attempt,
+                        "a set in host groups was staged on a desired state older than the store's: it is decided again on the state as stored"
+                    );
+                    attempt += 1;
+                }
+                Err(SetError::Ops(why)) => {
+                    tracing::error!(
+                        %service,
+                        %host_group,
+                        attempt,
+                        %why,
+                        "a set in host groups was refused at its commit of the groups' desired versions, the release and the audit entries: nothing changed"
+                    );
+                    return Err(SetError::Ops(why));
+                }
+                Err(why) => return Err(why),
+                Ok(groups) => break groups,
             }
-            entries
-        })?;
+        };
         match setter {
             Setter::Ci(verified) => tracing::info!(
                 workflow = %verified.job_workflow_ref,
@@ -265,6 +250,115 @@ impl Coordinator {
             },
             record,
         ))
+    }
+}
+
+/// How many times a set in host groups is decided and staged before the store's answer that the
+/// desired state changed after it was staged ([`OpsError::DesiredChanged`]) refuses it: once, and
+/// again after each such answer. Every attempt after the first follows a commit that came between
+/// the copy the set was decided on and its edit's locks; only the first can follow this
+/// coordinator's own commit, since memory then holds the rows that edit read.
+const SET_ATTEMPTS: u32 = 3;
+
+/// What a set in host groups is decided from, read from its request before the fleet's lock.
+struct GroupSet<'a> {
+    service: &'a str,
+    /// What the package has alone: the rollout file's definition, else the defaults.
+    base: &'a ServiceDef,
+    desired: &'a Desired,
+    release: Option<&'a Arc<Release>>,
+    /// Whether the body named a package digest or a release index.
+    names_release: bool,
+    host_group: &'a str,
+    ask: &'a WriteAsk,
+    permitted: Option<&'a [String]>,
+    actor: &'a Setter<'a>,
+    set_by: &'a str,
+    reason: &'a str,
+}
+
+impl Coordinator {
+    /// Decides `set` on the state in memory and commits it: the groups it deploys to, the
+    /// refusals of the version in each of them, then the groups' desired versions, the release
+    /// and the audit entries in one commit. Answers the groups, in name order. Called under the
+    /// fleet's lock.
+    ///
+    /// # Errors
+    /// [`SetError`]: a refusal of the set, decided before anything changes, or of its commit
+    /// ([`SetError::Ops`]), nothing changed; [`OpsError::DesiredChanged`] means the set is to be
+    /// decided again, on the desired state memory now holds.
+    fn deploy_group_set(&self, set: &GroupSet<'_>) -> Result<Vec<GroupName>, SetError> {
+        let (service, desired, actor) = (set.service, set.desired, set.actor);
+        let groups = deployment_targets(
+            &self.desired.host_groups(),
+            service,
+            set.host_group,
+            set.ask,
+            set.permitted,
+        )?;
+        let state = self.ops.state();
+        for group in &groups {
+            let floor = state.group_marks(group, service).min_version;
+            let def = ServiceDef {
+                min_version: higher(set.base.min_version.clone(), floor),
+                ..set.base.clone()
+            };
+            self.refuse(&def, desired)?;
+        }
+        self.refuse_release(
+            service,
+            &desired.version,
+            set.release.map(Arc::as_ref),
+            set.names_release,
+        )?;
+        self.refuse_repository(set.base, set.release.map(Arc::as_ref))?;
+        // The versions the registry keeps at its cap whatever their age: those a group recorded
+        // as good, and those marked bad.
+        let kept: Vec<Version> = state
+            .host_groups
+            .0
+            .values()
+            .filter_map(|packages| packages.get(service)?.last_good.clone())
+            .chain(state.marks_in(None, service).bad)
+            .collect();
+        let staged = self.desired.stage_group_set(
+            &groups,
+            service,
+            desired,
+            set.release.cloned(),
+            &kept,
+            set.ask,
+        )?;
+        self.ops.decide_changes_with(staged, |state| {
+            let mut entries = Vec::new();
+            for group in &groups {
+                let mut entry = AuditEntry::new(actor, "set_desired");
+                entry.service = Some(service.to_owned());
+                entry.host_group = Some(group.to_string());
+                entry.reason = Some(set.reason.to_owned());
+                entries.push(entry);
+                let ended = force::end(
+                    state,
+                    Some(group),
+                    service,
+                    &desired.version,
+                    actor,
+                    set.set_by,
+                );
+                entries.extend(ended);
+                let lifted = halt::lift(
+                    state,
+                    Some(group),
+                    service,
+                    &desired.version,
+                    actor,
+                    set.set_by,
+                );
+                entries.extend(lifted);
+            }
+            entries
+        })?;
+        Ok(groups)
     }
 }
 

@@ -211,6 +211,7 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
                 InvalidArgument,
                 "limits_in_host_group",
             ),
+            (ReleasesRefusal::StateChanged, Aborted, "state_changed"),
         ],
         refusal::releases,
     );
