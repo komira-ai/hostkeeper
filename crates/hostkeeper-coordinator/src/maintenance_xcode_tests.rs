@@ -18,6 +18,7 @@ use hostkeeper_wire::wire::Heartbeat;
 
 use super::plan;
 use crate::decide_maintenance::tests::{beat, table, tell};
+use crate::host_groups::GroupName;
 use crate::host_groups_support::{SELF, World};
 use crate::maintenance::text_of;
 use crate::maintenance_calls_tests::{
@@ -148,8 +149,15 @@ impl Farm {
             maintenance: Some(settings),
             ..proto::RolloutPolicy::default()
         };
+        let name = GROUP.parse::<GroupName>().expect("a group name");
+        let generation = self
+            .world
+            .coordinator()
+            .desired
+            .host_group(&name)
+            .map(|group| group.generation);
         self.world
-            .put_with(GROUP, &[SELF], Some(policy), None)
+            .put_with(GROUP, &[SELF], Some(policy), generation)
             .expect("a group put");
     }
 
@@ -379,7 +387,7 @@ fn a_default_xcode_select_does_not_name_is_due() {
 }
 
 /// Proves: with the store holding 26.4, 27.1 and 27.2 and the group keeping two, the `maintain`
-/// of a Mac that has Xcode-26.3.app, Xcode-27.1.app (selected) and a foreign Xcode.app of 26.0
+/// of a Mac that has 26.3 and 27.1 (selected) each in its own directory, and a foreign 26.0
 /// carries exactly the entries of 27.2 and 27.1, newest first, each with the store's version,
 /// build, size and SHA-256; removes 26.3 alone (never the foreign 26.0, nor the kept 27.1); and
 /// names 27.2 the default, on the wire as in the typed order.
