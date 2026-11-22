@@ -453,9 +453,9 @@ drain was never asked for is never held.
 
 ### 5.5 Apply
 
-- **Linux.** apt: `apt-get install --only-upgrade` of the security packages and the kernel (`linux_scope = security`) or `apt-get
-  dist-upgrade` (`all`), non-interactive, keeping existing configuration files; dnf: `dnf upgrade --security`, then a newer kernel
-  by name, or `dnf upgrade`; apk: `apk upgrade`, under `security` the kernel alone (apk names no security origin). The package lock is
+- **Linux.** apt: `apt-get install --only-upgrade` of the installed security packages and kernels (`linux_scope = security`; a
+  package not yet installed is not due under it and comes in only as a dependency of one of them) or `apt-get dist-upgrade` (`all`),
+  non-interactive, keeping existing configuration files; dnf: `dnf upgrade --security`, then a newer kernel by name, or `dnf upgrade`; apk: `apk upgrade`, under `security` the kernel alone (apk names no security origin). The package lock is
   waited for as the installers wait today (Built: `--package-lock-wait-secs`, also a flag of `maintenance-hook`).
 - **macOS.** Apple silicon installs a macOS update or upgrade only with a *volume owner's* authorisation: an administrator holding a
   Secure Token. Root alone is not one, and the bootstrap token, which is one, can be redeemed only by a device-management service, not by
