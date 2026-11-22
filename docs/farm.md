@@ -17,6 +17,13 @@ script's `links` dependencies). The numbers below were measured with those two f
 earlier commit. Each other item of that issue is met here by declaring the file in `extra_srcs`,
 or, for `CARGO`, by reading it with `option_env!` in the two tests that run cargo.
 
+Before that pin, at buildrules 7dfc5c2, the analysis of `//:ci` failed on every tree with
+`xtask: two dependencies named xtask`: xtask's dev-dependency on itself (for its feature
+`test-support`) makes cargo list the same edge to its library twice in each of its test targets,
+and the rules took the repeated edge for two different crates of one name. komira-ai/buildrules#167
+takes a repeated edge once and still refuses two different units under one name; its analysis test
+`edges_take_the_same_edge_listed_twice_once` (rules/rust/tests) fails at 7dfc5c2.
+
 ## What it builds
 
 `buck2 build //:ci`: for every member of the workspace, its `:fmt` (the pinned `rustfmt --check`
@@ -27,8 +34,10 @@ action: its `.passed` marker exists only if every test of the target passed, and
 means the tests passed on byte-identical inputs. The summary line must read
 `Commands: N (cached: N, remote: N, local: 0)`: no action ran on the runner. `farm.yml` runs the build
 as one command, `cargo xtask farm-build` (`crates/xtask/src/farm.rs`): it refuses to start
-without the farm's worker property set, fails a build that does not say `local: 0`, and stops
-buck2's daemon however the build ended.
+without the farm's worker property set, hands over a stale generated table as a patch instead of
+building (below), runs a build whose only failures are cut connections to the farm once more
+(below), fails a build that does not say `local: 0`, and stops buck2's daemon however the build
+ended.
 
 The files of the build, all generated or written once by `buildrules`:
 
@@ -40,8 +49,97 @@ The files of the build, all generated or written once by `buildrules`:
 | `buildrules.lock.bzl`, `buildrules.bzl`, `third_party/buildrules/` | Cargo's unit graph of every member, and every crates.io crate as a unit pinned by SHA-256 and size | `buildrules sync`; never edited by hand |
 
 `Cargo.toml`, `Cargo.lock` and `rust-toolchain.toml` stay the source: `//:check` fails every
-target when the generated table no longer matches them, and prints `buildrules sync` as the fix.
-After a change to a manifest or the lock, run `buildrules sync` and commit what it wrote.
+target when the generated table no longer matches them. You do not need `buildrules` to fix that:
+the job hands you the fix (next section).
+
+## A stale table: the fix is a patch of the run
+
+Before it builds, `cargo xtask farm-build` (`crates/xtask/src/farm/table.rs`) builds the pinned
+`buildrules` command line on the farm and runs `buildrules check`. When the table is stale (a pull
+request changed a `Cargo.toml` or `Cargo.lock` and not the table, or a generated file was edited or
+removed), the job runs `buildrules sync` itself, checks again, and fails before the build with:
+
+- an error and a job-summary section that name the inputs that changed and list the files the
+  patch changes;
+- the patch uploaded as the run's artifact `buildrules-sync` (kept 30 days);
+- the one command that applies it, with the run filled in:
+
+```sh
+gh run download <run> -R komira-ai/hostkeeper -n buildrules-sync -D buck-out/buildrules-sync-<run> && git apply buck-out/buildrules-sync-<run>/buildrules-sync.patch
+```
+
+Read the patch, apply it in your checkout of the branch, commit and push. Nothing runs on your
+machine but `gh` and `git`. The checkout of a pull request's run is its merge into main, so if
+`git apply` refuses the patch, main has changed the table too: merge main and push, and the next
+run carries a new patch.
+
+The job does not push the fix to the branch itself. That would need a token that can write to the
+repository in the one job that already holds an OIDC token and runs the pull request's own code; a
+push with the job's `GITHUB_TOKEN` starts no workflow run, so the branch's new head would have no
+CI; and a generated change of thousands of lines would land unread. A fork's pull request does not
+run this job at all.
+
+A sync that fails (crates.io unreachable from the runner), or one that leaves the table stale (a
+member with no `cargo_package`), fails the job with its words and uploads nothing.
+
+## A cut connection to the farm: the build runs once more
+
+The way from the runner to the farm is a private network over the internet, and a stream of it is
+sometimes cut for a moment. buck2 then fails every action it had in flight, each with its own
+report:
+
+```text
+Action failed: hostkeeper//crates/...
+Internal error (stage: remote_call_error): Remote Execution Error on Execute with digest ... for ReSession ...
+Error: (Error was returned on the stream by RE: RE channel error: code: 'Unknown error', message: "h2 protocol error: error reading a body from connection", ... BrokenPipe ...)
+```
+
+When the build fails and every failure in what buck2 printed is such a cut
+(`crates/xtask/src/farm/cuts.rs`, the rule of buildrules' stages since komira-ai/buildrules#172 and
+of komira's farm steps since komira-ai/komira#2155), `farm-build` runs the same build once more, at
+once. buck2's own log lines at `WARN` (its `Transient error (attempt 1/5), retrying ...: keep-alive
+timed out` comes with every cut) are passed over; one at `ERROR` is a failure. A line in the log
+and in the job summary says so, so a green build that needed a second run
+is not hidden. The farm's cache keeps every action the first run finished, so the second run does
+only what the cut stopped.
+
+A real failure is never run again. The build's failure is final when any report's reason is not a
+remote-execution error with the cut under it (a compiler or test that `returned non-zero exit
+code`, a timeout), when any other error is printed anywhere (an analysis error, a compiler's
+`error:`, a panic, a download that failed, such as a stand-alone `Failed to make BatchReadBlobs
+request ... operation was cancelled`), or when buck2 was ended by a signal. A test that only prints
+the cut's words is not a cut: they must be buck2's own `Error:` line under the action's
+remote-execution error.
+
+Only the build of the target is run again. The short build of the `buildrules` command line before
+it, and the audit of the worker property set, fail the job as before when the farm is cut under
+them.
+
+The second run is final. If it is cut too, the job fails saying the build was cut on its second run
+too. One cut is a moment's break in the way to the farm; a second in a row means the farm or the
+network to it is down, and a third try would only spend the job's two hours and hide an outage
+behind a slow green. Run the job again once the farm answers.
+
+## What the farm leaves to the Mac
+
+The farm builds and tests for Linux x86_64 alone. Code under `cfg(target_os = "macos")`, and every
+test of it or arm of a test behind it, is compiled out there: it is neither run nor failed on the
+farm. A test that only makes sense on macOS (one that needs APFS, launchd or a Mac's own programs)
+is written that way, and runs in release.yml's job `macos-test` on a Mac, which tests exactly the
+crates the `hostkeeper` and `hello` binaries are built from.
+
+The farm-tested members with such code are `hostkeeper-bootstrap`, `-config`, `-daemon`,
+`-install` and `-launchd`, and each one's BUCK file says so in one line. The workflow lint
+(`crates/xtask/tests/workflows/farm_macos.rs`) fails when a farm-tested member has such code and
+its BUCK file does not say so, when `macos-test` does not test such a member (its Mac tests would
+run nowhere), or when a BUCK file says so of a member that has none.
+
+The tests of the Mac's install programs under `maintenance_hook::macos` are not among them: they
+run a fake program (a child of the test binary) in place of `softwareupdate` and `startosinstall`,
+on any Unix, and the farm runs them. One of them,
+`the_host_installers_run_with_exactly_their_arguments_input_and_an_empty_environment`, once failed
+on a farm worker with one CPU, where libtest writes `test <name> ... ` on the child's first line of
+output; it asks the child for `--test-threads=2`, and the farm runs of main pass it.
 
 ## What stays in ci.yml, and why
 
