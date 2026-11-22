@@ -14,6 +14,8 @@ use std::io;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
+use hostkeeper_install::version::PACKAGES_MODE;
+
 use crate::files;
 use crate::start::{Settings, StartError};
 
@@ -24,12 +26,14 @@ pub const HOOKS_DIR: &str = "hooks";
 /// The daemon's directory in the platform's run directory.
 pub const RUN_SUBDIR: &str = "hostkeeper";
 
-/// Makes the packages directory and the hooks directory (both mode 0700: what is kept of a
-/// package is read by root alone) when they are missing, and the parents they need (0755). A
-/// directory that exists is left as it is here, its mode and contents included; the start
-/// closes a packages directory an earlier release left open ([`crate::package_dirs`]). Something at either path that is not a directory, a link
-/// included, stops the start. Then the daemon's run directory ([`RUN_SUBDIR`]) is made, or set,
-/// mode 0700; something there that is not a directory stops the start too.
+/// Makes the packages directory (mode [`PACKAGES_MODE`], 0711: passed through by every user to
+/// the version an earlier release runs a service from, listed by root alone) and the hooks
+/// directory (0700) when they are missing, and the parents they need (0755). A directory that
+/// exists is left as it is here, its mode and contents included; the start sets the packages
+/// directory's mode, and those of the directories in it, right ([`crate::package_dirs`]).
+/// Something at either path that is not a directory, a link included, stops the start. Then the
+/// daemon's run directory ([`RUN_SUBDIR`]) is made, or set, mode 0700; something there that is
+/// not a directory stops the start too.
 pub fn ensure_state_dirs(settings: &Settings) -> Result<(), StartError> {
     for (dir, mode) in dirs(settings) {
         ensure_dir(&dir, mode).map_err(|source| StartError::Io { path: dir, source })?;
@@ -44,7 +48,10 @@ fn dirs(settings: &Settings) -> [(PathBuf, u32); 2] {
         .parent()
         .unwrap_or(&settings.state_dir)
         .join(HOOKS_DIR);
-    [(settings.packages_dir.clone(), 0o700), (hooks, 0o700)]
+    [
+        (settings.packages_dir.clone(), PACKAGES_MODE),
+        (hooks, 0o700),
+    ]
 }
 
 fn ensure_dir(dir: &Path, mode: u32) -> io::Result<()> {

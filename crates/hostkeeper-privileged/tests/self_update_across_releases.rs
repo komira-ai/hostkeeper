@@ -46,7 +46,15 @@
 //! - the released binary started on a host that also holds versions of another installer than
 //!   `hostkeeper-archive` (a `target.json`, an `artifact` and a `tree/`, as a later daemon stages
 //!   them), sealed and not sealed, runs on, reports itself and hostkeeper, updates the host to
-//!   this build, which starts on them too, and leaves those versions byte for byte as they were.
+//!   this build, which starts on them too, and leaves those versions byte for byte as they were;
+//! - a service an earlier release installed from hostkeeper's archive, whose unit runs its program
+//!   from its version in the packages directory as its own user (`DynamicUser=yes`, as
+//!   `hello@.service` did), and which cannot start while a release before this build keeps that
+//!   version closed to root (`status=203/EXEC`), runs again once this build starts: the start
+//!   gives the packages and service directories 0711 and the archive version 0555 and starts the
+//!   unit the archive enabled, which runs as a user that is not root; another user runs the program
+//!   too; and nothing below hostkeeper's own versions, which hold the `.deb` they were installed
+//!   from, can be read by another user.
 //!
 //! The mixed cases of the design stop at hostkeeper's own release: the rig's coordinator manages
 //! one service, so rolling back to and uninstalling a second service's archive version with the
@@ -59,10 +67,14 @@
 
 mod across;
 mod e2e;
+#[path = "shared/other_user.rs"]
+mod other_user;
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use across::{Build, Built, FALLBACK_REASON, HK, NAMED, Rig, newer};
 use hostkeeper_hook::{Class, Phase, Verdict};
@@ -405,8 +417,8 @@ fn lay_down_other_installer_version(packages: &Path, service: &str, sealed: bool
 /// binary starts on them, runs, reports itself and hostkeeper at the released version, takes the
 /// update to this build and reports that; every entry of both directories (kind, mode, bytes,
 /// links) is as it was laid down after the released binary's start, and after the update but for
-/// the version directories, which this build's start closes (0700) with their service
-/// directories.
+/// the version directories and the seal, which this build's start closes (0700, 0600), and their
+/// service directories, which it makes 0711 (passed through by every user, listed by root alone).
 #[test]
 fn the_released_binary_started_on_versions_of_another_installer_runs_on_and_leaves_them_untouched()
 {
@@ -435,8 +447,9 @@ fn the_released_binary_started_on_versions_of_another_installer_runs_on_and_leav
     let next = newer(&released, 1);
     update_to_this_build(&rig, &released, &next);
     rig.wait_host_reports(&next, &next);
-    // This build's start closes each service and version directory to every user but root; what
-    // is in them, the seal and `current` are as they were laid down.
+    // This build's start closes each version directory and the seal to every user but root and
+    // makes each service directory 0711; what is in the versions and `current` are as they were
+    // laid down.
     assert_eq!(
         others.map(|service| snapshot(&packages.join(service))),
         before.map(|entries| closed_versions(&entries)),
@@ -449,21 +462,237 @@ fn the_released_binary_started_on_versions_of_another_installer_runs_on_and_leav
             .expect("the service directory")
             .permissions()
             .mode();
-        assert_eq!(mode & 0o7777, 0o700, "{service}");
+        assert_eq!(mode & 0o7777, 0o711, "{service}");
     }
 }
 
-/// `entries` of a service directory ([`snapshot`]) with each version directory in it mode 0700,
-/// as this build's start leaves it; nothing below a version changes.
+/// `entries` of a service directory ([`snapshot`]) with each version directory in it mode 0700
+/// and each file in it (the seal, laid down 0644) closed to its owner (0600), as this build's
+/// start leaves them; nothing below a version changes.
 fn closed_versions(entries: &[(String, Vec<u8>)]) -> Vec<(String, Vec<u8>)> {
     entries
         .iter()
         .map(|(name, bytes)| {
             let top = name.matches('/').count() == 1;
-            match name.strip_suffix(" dir 755").filter(|_| top) {
-                Some(dir) => (format!("{dir} dir 700"), bytes.clone()),
+            let closed = name
+                .strip_suffix(" dir 755")
+                .map(|dir| format!("{dir} dir 700"))
+                .or_else(|| {
+                    name.strip_suffix(" file 644")
+                        .map(|f| format!("{f} file 600"))
+                });
+            match closed.filter(|_| top) {
+                Some(closed) => (closed, bytes.clone()),
                 None => (name.clone(), bytes.clone()),
             }
         })
         .collect()
+}
+
+/// The service an earlier release installed from hostkeeper's archive, in the test below.
+const ARCHIVE_SERVICE: &str = "hostkeeper-ci-archive";
+/// Its run unit, which the archive's placement linked into the unit directory and enabled.
+const ARCHIVE_UNIT: &str = "hostkeeper-ci-archive.service";
+/// Its version, as the archive unpacked it.
+const ARCHIVE_VERSION: &str = "0.1.92";
+/// Where systemd looks for the units an administrator (and that release) placed.
+const UNIT_DIR: &str = "/etc/systemd/system";
+/// The directory of the unit's `WantedBy=multi-user.target` link.
+const WANTS_DIR: &str = "/etc/systemd/system/multi-user.target.wants";
+/// The daemon's record of what it placed (a fixed path; the rig moves what was there aside).
+const PLACED_FILE: &str = "/var/lib/hostkeeper/placed.json";
+/// The program the archive's version holds: a copy of the host's `sleep`, which the unit runs
+/// with `infinity`, so that it runs until it is stopped.
+const ARCHIVE_PROGRAM_SOURCE: &str = "/usr/bin/sleep";
+
+/// The unit and the `WantedBy=` link that [`lay_down_archive_service`] placed; dropping it stops
+/// the unit and removes them, failed or not.
+struct ArchiveUnit;
+
+impl Drop for ArchiveUnit {
+    fn drop(&mut self) {
+        let _ = e2e::host_root::systemctl(&["stop", ARCHIVE_UNIT]);
+        let _ = e2e::host_root::systemctl(&["reset-failed", ARCHIVE_UNIT]);
+        let _ = fs::remove_file(Path::new(WANTS_DIR).join(ARCHIVE_UNIT));
+        let _ = fs::remove_file(Path::new(UNIT_DIR).join(ARCHIVE_UNIT));
+        let _ = e2e::host_root::systemctl(&["daemon-reload"]);
+    }
+}
+
+/// The path of the archive service's program below `packages`, through `current`.
+fn archive_program(packages: &Path) -> PathBuf {
+    packages
+        .join(ARCHIVE_SERVICE)
+        .join("current/bin")
+        .join(ARCHIVE_SERVICE)
+}
+
+/// Lays down [`ARCHIVE_SERVICE`] under `packages` as hostkeeper's archive release unpacked and
+/// placed it, as the release that closed the store to root then left it: the version holds its
+/// `manifest.toml`, `bin/` with the program and `units/` with its unit (every directory and the
+/// program 0555, every other file 0444), `current` names it; the unit (`DynamicUser=yes`, its
+/// `ExecStart=` the program through `current`) is linked into the unit directory and enabled,
+/// and `placed.json` lists both paths for the service; the packages directory, the service
+/// directory and the version are 0700.
+fn lay_down_archive_service(packages: &Path) -> ArchiveUnit {
+    let dir = packages.join(ARCHIVE_SERVICE);
+    let version = dir.join(ARCHIVE_VERSION);
+    directory(&version.join("bin"), 0o755);
+    directory(&version.join("units"), 0o755);
+    let program = version.join("bin").join(ARCHIVE_SERVICE);
+    fs::copy(ARCHIVE_PROGRAM_SOURCE, &program).expect("the program");
+    fs::set_permissions(&program, fs::Permissions::from_mode(0o555)).expect("its mode");
+    put(&version.join("manifest.toml"), b"schema = 1\n", 0o444);
+    let unit = format!(
+        "[Unit]\nDescription=a service of hostkeeper's archive, run as its own user\n\n\
+         [Service]\nType=exec\nExecStart={} infinity\nDynamicUser=yes\n\n\
+         [Install]\nWantedBy=multi-user.target\n",
+        archive_program(packages).display()
+    );
+    put(
+        &version.join("units").join(ARCHIVE_UNIT),
+        unit.as_bytes(),
+        0o444,
+    );
+    for sub in ["bin", "units"] {
+        directory(&version.join(sub), 0o555);
+    }
+    symlink(ARCHIVE_VERSION, dir.join("current")).expect("link current");
+    for closed in [&version, &dir, packages] {
+        fs::set_permissions(closed, fs::Permissions::from_mode(0o700)).expect("closed");
+    }
+
+    let unit_path = Path::new(UNIT_DIR).join(ARCHIVE_UNIT);
+    let wants = Path::new(WANTS_DIR).join(ARCHIVE_UNIT);
+    // A run killed before its drop left these: the guard takes them away first.
+    drop(ArchiveUnit);
+    let placed = ArchiveUnit;
+    let target = dir.join("current/units").join(ARCHIVE_UNIT);
+    symlink(&target, &unit_path).expect("link the unit");
+    fs::create_dir_all(WANTS_DIR).expect("the wants directory");
+    symlink(&unit_path, &wants).expect("enable the unit");
+    let mut record: serde_json::Value = match fs::read(PLACED_FILE) {
+        Ok(bytes) => serde_json::from_slice(&bytes).expect("placed.json is JSON"),
+        Err(_) => serde_json::json!({"schema": 1}),
+    };
+    let entry = |kind: &str, link_target: &Path| {
+        serde_json::json!({
+            "service": ARCHIVE_SERVICE,
+            "version": ARCHIVE_VERSION,
+            "kind": kind,
+            "state": "placed",
+            "link_target": link_target.display().to_string(),
+        })
+    };
+    record["paths"][unit_path.display().to_string()] = entry("unit", &target);
+    record["paths"][wants.display().to_string()] = entry("wants_link", &unit_path);
+    let bytes = serde_json::to_vec_pretty(&record).expect("json");
+    fs::write(PLACED_FILE, bytes).expect("write placed.json");
+    placed
+}
+
+/// `systemctl show --value -p <property> <unit>`, trimmed.
+fn unit_property(unit: &str, property: &str) -> String {
+    let out = e2e::host_root::systemctl(&["show", "--value", "-p", property, unit]);
+    String::from_utf8_lossy(&out.stdout).trim().to_owned()
+}
+
+/// The real user id of the process `pid` (`Uid:` of `/proc/<pid>/status`).
+fn process_uid(pid: &str) -> u32 {
+    let status = fs::read_to_string(format!("/proc/{pid}/status"))
+        .unwrap_or_else(|e| panic!("the status of process {pid}: {e}"));
+    status
+        .lines()
+        .find_map(|line| line.strip_prefix("Uid:"))
+        .and_then(|ids| ids.split_whitespace().next())
+        .and_then(|uid| uid.parse().ok())
+        .unwrap_or_else(|| panic!("no Uid: line in the status of process {pid}:\n{status}"))
+}
+
+/// The permission bits of `path`, not followed.
+fn mode_of(path: &Path) -> u32 {
+    fs::symlink_metadata(path)
+        .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+        .permissions()
+        .mode()
+        & 0o7777
+}
+
+/// Catches a service that runs as its own user from its archive version in the packages
+/// directory (`DynamicUser=yes`, as `hello@.service` of hostkeeper's archive release does) staying
+/// unable to start once this build runs, as it is while a release keeps the store closed to root
+/// (`Failed to execute ...: Permission denied`, `status=203/EXEC`, and systemd gives up): with the
+/// daemon stopped on this build, the service is laid down as that release left it and its unit
+/// fails to start with status 203; this build's start then gives the packages directory and the
+/// service directory 0711 and the version 0555, and starts the unit the archive enabled, which is
+/// active and runs as a user that is not root; the runner's user runs the program through
+/// `current` too; and the `.deb` hostkeeper's own versions keep, and every other file below them,
+/// cannot be read by that user.
+#[test]
+fn a_service_run_as_its_own_user_from_its_archive_version_runs_again_once_this_build_starts() {
+    let rig = Rig::installed("x1arch");
+    let released = rig.released.clone();
+    rig.wait_running(&released);
+    let next = newer(&released, 1);
+    update_to_this_build(&rig, &released, &next);
+    rig.wait_host_reports(&next, &next);
+    let packages = rig.host.root().packages();
+
+    rig.host.stop();
+    let _placed = lay_down_archive_service(&packages);
+    let reloaded = e2e::host_root::systemctl(&["daemon-reload"]);
+    assert!(reloaded.status.success(), "{reloaded:?}");
+    let refused = e2e::host_root::systemctl(&["start", ARCHIVE_UNIT]);
+    assert!(
+        !refused.status.success(),
+        "the unit started from a version closed to root"
+    );
+    assert_eq!(unit_property(ARCHIVE_UNIT, "ExecMainStatus"), "203");
+
+    rig.host.start_again();
+    rig.wait_running(&next);
+
+    e2e::wait_for(
+        &format!("{ARCHIVE_UNIT} is active"),
+        e2e::scenario::LOCAL,
+        || e2e::host_root::is_active(ARCHIVE_UNIT),
+    );
+    let pid = unit_property(ARCHIVE_UNIT, "MainPID");
+    assert_ne!(process_uid(&pid), 0, "the unit runs as root");
+    let dir = packages.join(ARCHIVE_SERVICE);
+    for (path, want) in [
+        (packages.clone(), 0o711),
+        (dir.clone(), 0o711),
+        (dir.join(ARCHIVE_VERSION), 0o555),
+    ] {
+        assert_eq!(
+            mode_of(&path),
+            want,
+            "{}\n{}",
+            path.display(),
+            rig.host.logs()
+        );
+    }
+
+    let (uid, gid) = other_user::other_user();
+    let ran = Command::new(archive_program(&packages))
+        .arg("--version")
+        .uid(uid)
+        .gid(gid)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap_or_else(|e| panic!("run the archive's program as {uid}: {e}"));
+    assert!(ran.status.success(), "{ran:?}");
+
+    let own = packages.join(HK);
+    let kept: Vec<PathBuf> = other_user::files_below(&own)
+        .into_iter()
+        .filter(|file| file.extension().is_some_and(|ext| ext == "deb"))
+        .collect();
+    assert!(!kept.is_empty(), "hostkeeper's versions keep their .deb");
+    for deb in &kept {
+        assert!(!other_user::other_user_reads(deb), "{}", deb.display());
+    }
+    let tried = other_user::assert_root_only(rig.host.root().base(), &[&own]);
+    assert!(tried > kept.len(), "{tried}");
 }

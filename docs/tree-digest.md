@@ -58,12 +58,18 @@ it with the seal; a version that changed is not run. A reader ignores fields it 
 
 The links' targets are relative (`1.5.0`, not a path). No version starts with `.`, so the names
 of a placement under way cannot be a version, and a version is never `current`, `previous` or a
-name ending in `.seal` or `.tmp` (refused as `reserved_version`). The packages directory, each
-service directory and each version directory are 0700, root's alone: a package may carry a
-secret, and no other user reads what is kept of it. A `.stage-*` directory is made 0700 and stays
-so as the version. An earlier release left these directories open (0755, and 0555 for a version);
-the daemon closes them at its start, and a version found again for its order is closed then too.
-Only the directories are changed: the modes below a version are part of its digest.
+name ending in `.seal` or `.tmp` (refused as `reserved_version`). Each version directory is
+0700, root's alone: a package may carry a secret, and no other user reads what is kept of it. A
+`.stage-*` directory is made 0700 and stays so as the version. The packages directory and each
+service directory are 0711: another user passes through them by a name it knows, and cannot list
+them. A version an earlier release unpacked from hostkeeper's own archive (a `manifest.toml` and no
+`target.json` at its top) is the tree its service runs from, as the service's own user, and is
+0555, as that release made it; the archive gave every file in it 0555 or 0444. Earlier releases
+left these directories otherwise (all open, 0755 and 0555, or all closed, 0700); the daemon gives
+each its mode at its start, and a version found again for its order is made 0700 then too. The
+start also closes to its owner each file in the packages directory or a service directory that
+other users can read (an earlier release wrote seals 0444). Nothing below a version is changed:
+the modes there are part of its digest.
 
 One placement of a service runs at a time: a placement holds an exclusive lock (`flock`) on the
 service directory from before it removes orphans until it has published, and `remove_orphans`

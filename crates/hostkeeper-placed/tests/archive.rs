@@ -737,3 +737,75 @@ fn a_unit_entry_with_no_file_name_names_no_unit() {
     assert_eq!(taken.units, Vec::<String>::new());
     assert_eq!(taken.left_alone, paths(&["/"]));
 }
+
+/// Catches the start starting again a unit an operator disabled, a unit of another service, or
+/// a unit the record lists only as a unit file, and missing one the archive enabled: of the
+/// `WantedBy=` links the record lists for `hello`, the units are those whose path holds the
+/// archive's link (to the recorded unit path, or written relative into the packages directory),
+/// in the record's order; a link that is gone, an operator's link to another unit and a regular
+/// file are not; nothing is written. A `placed.json` that is not JSON, and a path that cannot be
+/// looked at, are errors.
+#[test]
+fn the_archives_enabled_units_are_the_wants_links_the_host_still_holds() {
+    let world = World::new("archive-enabled");
+    let wants = |unit: &str| format!("/etc/systemd/system/multi-user.target.wants/{unit}");
+    let unit = "/etc/systemd/system/hello@.service";
+    let relative = "/etc/systemd/system/timers.target.wants/hello@e.service";
+    let [a, b, c, d] = ["a", "b", "c", "d"].map(|slot| wants(&format!("hello@{slot}.service")));
+    seed(
+        &world,
+        json!({
+            unit: entry("hello", "unit", &unit_target("hello", "hello@.service")),
+            a.as_str(): entry("hello", "wants_link", unit),
+            b.as_str(): entry("hello", "wants_link", unit),
+            c.as_str(): entry("hello", "wants_link", unit),
+            d.as_str(): entry("hello", "wants_link", unit),
+            relative: entry("hello", "wants_link", unit),
+            WANTS: entry("hostkeeper", "wants_link", UNIT),
+        }),
+    );
+    link(&world, &unit_target("hello", "hello@.service"), unit);
+    link(&world, unit, &a);
+    link(&world, DEB_UNIT, &c);
+    file(&world, &d, "[Unit]\n");
+    link(
+        &world,
+        "../../../../var/lib/hostkeeper/packages/hello/current/units/hello@.service",
+        relative,
+    );
+    link(&world, UNIT, WANTS);
+    let before = on_disk(&world);
+
+    let units = world
+        .placer()
+        .archive_enabled_units("hello")
+        .expect("the record reads");
+
+    assert_eq!(units, ["hello@a.service", "hello@e.service"]);
+    assert_eq!(on_disk(&world), before);
+    assert_eq!(
+        world
+            .placer()
+            .archive_enabled_units("other")
+            .expect("reads"),
+        Vec::<String>::new()
+    );
+
+    // The second read is the inspection of the first `WantedBy=` path, after the record's.
+    let reads = FaultFs::new(world.root(), world.log.clone()).failing_read(2, true);
+    let error = world
+        .placer_on(&reads)
+        .archive_enabled_units("hello")
+        .expect_err("a path cannot be looked at");
+    assert!(
+        matches!(&error, PlacedError::Io { op: "inspect", path, .. } if path == &PathBuf::from(&a)),
+        "{error}"
+    );
+
+    fs::write(world.host(PLACED), b"not json").expect("a broken placed.json");
+    let error = world
+        .placer()
+        .archive_enabled_units("hello")
+        .expect_err("placed.json is not JSON");
+    assert!(matches!(error, PlacedError::Corrupt { .. }), "{error}");
+}

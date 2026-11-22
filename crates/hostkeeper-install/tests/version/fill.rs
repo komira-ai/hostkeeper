@@ -96,9 +96,10 @@ fn published(_rig: &Rig) -> [String; 2] {
     [VERSION.to_owned(), format!("{VERSION}.seal")]
 }
 
-/// Catches a fill published without its seal, or open to other users: the version is
-/// `fresh`, its directory is the real path of `packages/<service>/<version>` at mode 0700 in a
-/// service directory at mode 0700, the seal (mode 0400) records the given package digest and the
+/// Catches a fill published without its seal, open to other users, or in a service directory
+/// its service's user cannot pass through: the version is `fresh`, its directory is the real path
+/// of `packages/<service>/<version>` at mode 0700 in a service directory at mode 0711, the seal
+/// (mode 0400) records the given package digest and the
 /// digest of the tree as walked, the step runner's check of the version passes, and the stage is
 /// gone.
 #[test]
@@ -112,7 +113,7 @@ fn a_fill_is_published_sealed_with_the_given_package_digest_and_the_walked_tree_
     let dir = rig.service().join(VERSION);
     assert_eq!(filled.dir, dir);
     assert_eq!(mode(&dir), 0o700);
-    assert_eq!(mode(&rig.service()), 0o700);
+    assert_eq!(mode(&rig.service()), 0o711);
     assert_eq!(rig.listing(), published(&rig));
     let layout = Layout::package(&rig.service());
     let seal = Seal::parse(&read_seal(&layout.seal_path(VERSION)).unwrap()).unwrap();
@@ -408,8 +409,9 @@ fn a_version_whose_last_publish_step_failed_is_kept_closed_and_taken_by_the_next
 
 /// Catches a version an earlier release published open to every user (its directory 0555, the
 /// service directory 0755) staying open when it is reused: the next call of the same order finds
-/// it sealed, closes both to 0700 without filling, and the version's seal still holds (the mode
-/// of the version directory is not part of the tree digest).
+/// it sealed, closes the version to 0700 and gives the service directory 0711 (passed through,
+/// not listed) without filling, and the version's seal still holds (the mode of the version
+/// directory is not part of the tree digest).
 #[test]
 fn a_version_an_earlier_release_left_open_is_closed_by_the_next_call() {
     let rig = Rig::new("fill-close-open");
@@ -423,7 +425,7 @@ fn a_version_an_earlier_release_left_open_is_closed_by_the_next_call() {
     assert_eq!((run.same, run.fill), (1, 0));
     assert!(!run.result.unwrap().fresh);
     assert_eq!(mode(&dir), 0o700);
-    assert_eq!(mode(&rig.service()), 0o700);
+    assert_eq!(mode(&rig.service()), 0o711);
     assert_eq!(tree_digest(&dir).unwrap(), sealed);
     Layout::package(&rig.service()).check_tree(VERSION).unwrap();
 }

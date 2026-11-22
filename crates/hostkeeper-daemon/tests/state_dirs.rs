@@ -28,15 +28,16 @@ fn settings(root: &Path) -> Settings {
     }
 }
 
-/// Catches a daemon that reads `--packages-dir` before making it, or makes it open to other
-/// users: on an empty root, each directory tmpfiles makes is there after the call, with its
-/// mode (the packages directory 0700).
+/// Catches a daemon that reads `--packages-dir` before making it, makes it listable by other
+/// users, or makes it one a service's user cannot pass through: on an empty root, each directory
+/// tmpfiles makes is there after the call, with its mode (the packages directory 0711, as
+/// tmpfiles makes it).
 #[test]
 fn an_empty_root_gets_the_packages_and_hooks_directories_with_their_modes() {
     let scratch = Scratch::new("state-dirs-empty");
     let settings = settings(scratch.path());
     ensure_state_dirs(&settings).expect("make them");
-    assert_eq!(mode(&settings.packages_dir), 0o700);
+    assert_eq!(mode(&settings.packages_dir), 0o711);
     let hooks = scratch.path().join("var/lib/updater/hooks");
     assert_eq!(mode(&hooks), 0o700);
     assert!(hooks.is_dir());
