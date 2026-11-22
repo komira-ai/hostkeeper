@@ -1,5 +1,6 @@
 //! The two steps of `sign-code` that decide whether the job's keychain can sign
-//! ([`IMPORT_INTERMEDIATE`] and [`VALID_IDENTITY`], which the lint holds the committed file to),
+//! ([`IMPORT_INTERMEDIATE`], then [`FIND_VALID_IDENTITIES`] and [`IDENTITY_IS_VALID`], which the
+//! lint holds the committed file to),
 //! run with bash as a runner runs a step (`bash --noprofile --norc -eo pipefail`) against a fake
 //! `security` (tests/bin/gh_fixture.rs) that gives each answer the real one can: the import
 //! passes on a runner without the intermediate and on one that holds it, and on nothing else;
@@ -8,7 +9,9 @@
 use std::path::Path;
 use std::process::Command;
 
-use super::code_signing::{ALREADY_EXISTS, CODE_IDENTITY, IMPORT_INTERMEDIATE, VALID_IDENTITY};
+use super::code_signing::{
+    ALREADY_EXISTS, CODE_IDENTITY, FIND_VALID_IDENTITIES, IDENTITY_IS_VALID, IMPORT_INTERMEDIATE,
+};
 use super::testdir::TestDir;
 
 /// The fixture that answers as `security` when started by that name.
@@ -54,7 +57,7 @@ fn run(name: &str, script: &str, verb: &str, answer: &Answer) -> Ran {
             "PATH",
             format!("{}:/usr/bin:/bin", root.join("bin").display()),
         )
-        .env("RUNNER_TEMP", "/runner/temp")
+        .env("RUNNER_TEMP", "temp")
         .env("IDENTITY", CODE_IDENTITY)
         .output()
         .expect("run bash");
@@ -66,8 +69,7 @@ fn run(name: &str, script: &str, verb: &str, answer: &Answer) -> Ran {
 }
 
 /// The command line the import step gives `security`.
-const IMPORT_CALL: &str =
-    "import /runner/temp/DeveloperIDG2CA.cer -k /runner/temp/code-signing.keychain-db\n";
+const IMPORT_CALL: &str = "import temp/DeveloperIDG2CA.cer -k temp/code-signing.keychain-db\n";
 
 fn import(name: &str, answer: &Answer) -> Ran {
     run(name, IMPORT_INTERMEDIATE, "import", answer)
@@ -152,13 +154,15 @@ fn any_other_failure_of_the_import_stops_the_job_with_what_security_said() {
     }
 }
 
-/// The command line the identity step gives `security`.
-const FIND_CALL: &str = "find-identity -v -p codesigning /runner/temp/code-signing.keychain-db\n";
+/// The command line the identity steps give `security`.
+const FIND_CALL: &str = "find-identity -v -p codesigning temp/code-signing.keychain-db\n";
 
+/// Runs the two identity steps in order, as a runner does: the second only after the first
+/// passed.
 fn find(name: &str, stdout: &str, status: u8) -> Ran {
     run(
         name,
-        VALID_IDENTITY,
+        &format!("{FIND_VALID_IDENTITIES}\n{IDENTITY_IS_VALID}"),
         "find-identity",
         &Answer {
             stdout,
@@ -168,16 +172,9 @@ fn find(name: &str, stdout: &str, status: u8) -> Ran {
     )
 }
 
-/// The refusal of an identity that `find-identity -v` does not list.
-fn not_valid() -> String {
-    format!(
-        "::error::{CODE_IDENTITY} is not a valid code-signing identity of the job keychain: its chain to the Apple root does not build\n"
-    )
-}
-
 #[test]
 fn the_identity_listed_as_valid_passes_and_prints_nothing() {
-    // Catches: the step refusing the identity security lists as valid, or asking for another
+    // Catches: the steps refusing the identity security lists as valid, or asking for another
     // policy or keychain, or printing the certificate's hash.
     let listed = format!(
         "  1) 0123456789ABCDEF0123456789ABCDEF01234567 \"{CODE_IDENTITY}\"\n     1 valid identities found\n"
@@ -194,10 +191,11 @@ fn the_identity_listed_as_valid_passes_and_prints_nothing() {
 }
 
 #[test]
-fn an_identity_not_listed_as_valid_by_its_exact_name_stops_the_job_by_name() {
+fn an_identity_not_listed_as_valid_by_its_exact_name_stops_the_job() {
     // Catches: a chain that does not build (no valid identity), another team's or the
     // installer's identity, or a longer name that starts with the identity's, passing; and a
-    // `security` that fails although it printed the identity (the pipeline's status).
+    // `security` that fails although it printed the identity. Each fails the job quietly: the
+    // failing step's name says why, and no certificate hash reaches the log.
     let installer = "  1) 0123456789ABCDEF0123456789ABCDEF01234567 \"Developer ID Installer: Komira AI, Inc. (U7RTX4XD3X)\"\n     1 valid identities found\n".to_owned();
     let longer = format!(
         "  1) 0123456789ABCDEF0123456789ABCDEF01234567 \"{CODE_IDENTITY} 2\"\n     1 valid identities found\n"
@@ -216,7 +214,7 @@ fn an_identity_not_listed_as_valid_by_its_exact_name_stops_the_job_by_name() {
             ran,
             Ran {
                 status: Some(1),
-                stdout: not_valid(),
+                stdout: String::new(),
                 calls: FIND_CALL.to_owned(),
             },
             "{name}"

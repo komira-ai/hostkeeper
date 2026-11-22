@@ -11,7 +11,7 @@
 //!   it by its name. Apple's intermediate joins the keychain only as the file of
 //!   [`INTERMEDIATE_SHA256`] ([`IMPORT_INTERMEDIATE`]: a runner that holds it already answers
 //!   [`ALREADY_EXISTS`], which alone passes), the identity must then be a valid code-signing
-//!   identity ([`VALID_IDENTITY`]), and an identity that expires within 30 days stops it by name. It signs each of [`PROGRAMS`] under its identifier with `--options runtime
+//!   identity ([`FIND_VALID_IDENTITIES`], [`IDENTITY_IS_VALID`]), and an identity that expires within 30 days stops it by name. It signs each of [`PROGRAMS`] under its identifier with `--options runtime
 //!   --timestamp`, and uploads the signed programs as [`SIGNED_MACHO`] after the cleanup that
 //!   runs under [`ALWAYS`].
 //! - **The secrets are named there alone** ([`CODE_SECRETS`]; `super::pkg_signing` holds the
@@ -129,10 +129,14 @@ pub const IMPORT_INTERMEDIATE: &str = concat!(
     "\"; then echo \"the runner holds the intermediate already: $out\"; else echo \"::error::the import of the intermediate failed: $out\"; exit 1; fi"
 );
 
-/// The identity is usable by codesign: `security find-identity -v -p codesigning` lists only an
-/// identity whose chain builds to a trusted Apple root under the code-signing policy, wherever
-/// the intermediate is, or the job stops by name.
-pub const VALID_IDENTITY: &str = "security find-identity -v -p codesigning \"$RUNNER_TEMP/code-signing.keychain-db\" | grep -F \"\\\"$IDENTITY\\\"\" > /dev/null || { echo \"::error::$IDENTITY is not a valid code-signing identity of the job keychain: its chain to the Apple root does not build\"; exit 1; }";
+/// The valid code-signing identities of the job's keychain, into a file: `security
+/// find-identity -v -p codesigning` lists only an identity whose chain builds to a trusted Apple
+/// root under the code-signing policy, wherever the intermediate is.
+pub const FIND_VALID_IDENTITIES: &str = "security find-identity -v -p codesigning \"$RUNNER_TEMP/code-signing.keychain-db\" > \"$RUNNER_TEMP/valid-identities\"";
+
+/// The identity, by its exact quoted name, is among them, or the step (named for it) fails.
+pub const IDENTITY_IS_VALID: &str =
+    "grep -F -q \"\\\"$IDENTITY\\\"\" \"$RUNNER_TEMP/valid-identities\"";
 
 /// The identity must stay valid 30 days more (2592000 seconds), or the release stops by name.
 pub const VALID_30_DAYS: &str = "security find-certificate -c \"$IDENTITY\" -p \"$RUNNER_TEMP/code-signing.keychain-db\" | openssl x509 -noout -checkend 2592000 || { echo \"::error::the identity $IDENTITY expires within 30 days or has expired: renew it and replace the secret MACOS_APPLICATION_P12 (docs/operations/mac-full-disk-access.md)\"; exit 1; }";
@@ -189,7 +193,7 @@ const fn always(run: &'static str) -> Step {
 }
 
 /// The steps of [`SIGN_CODE_JOB`], exactly and in this order.
-pub const SIGN_CODE_STEPS: [Step; 23] = [
+pub const SIGN_CODE_STEPS: [Step; 24] = [
     Step::Download(UNSIGNED_MACHO, "unsigned"),
     with_p12(NOT_SET_P12),
     with_password(NOT_SET_PASSWORD),
@@ -211,7 +215,8 @@ pub const SIGN_CODE_STEPS: [Step; 23] = [
     run(FETCH_INTERMEDIATE),
     run(CHECK_INTERMEDIATE),
     run(IMPORT_INTERMEDIATE),
-    run(VALID_IDENTITY),
+    run(FIND_VALID_IDENTITIES),
+    run(IDENTITY_IS_VALID),
     run(VALID_30_DAYS),
     run("mkdir signed"),
     run(SIGN_HOSTKEEPER),

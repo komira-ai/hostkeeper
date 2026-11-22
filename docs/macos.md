@@ -795,9 +795,9 @@ The signing is in `.github/workflows/artifacts.yml`, on a push to `main` and in 
    its pinned SHA-256 (a hosted runner may hold that intermediate already, outside the job's
    keychain, and `security import` then answers `The specified item already exists in the
    keychain.`: that answer exactly passes, any other failure stops the job with what `security`
-   said), stops by name unless `security find-identity -v -p codesigning` lists the identity as a
-   valid code-signing identity of the job's keychain (its chain builds to Apple's root, wherever
-   the intermediate is), stops by name when the identity expires within 30 days (it is valid until
+   said), stops (at the step named for it) unless `security find-identity -v -p codesigning`
+   lists the identity as a valid code-signing identity of the job's keychain (its chain builds to
+   Apple's root, wherever the intermediate is), stops by name when the identity expires within 30 days (it is valid until
    2027-12-21), then runs `codesign --force --sign <identity> --keychain <it> --identifier
    <identifier> --options runtime --timestamp` on a copy of each program, deletes the keychain and
    the PKCS#12 file whether the signing worked or not, and uploads the copies as
@@ -844,8 +844,8 @@ It runs `sign-code`, `sign-pkg`, `check-pkg` and the signature checks of `build-
 same steps, secrets and environment as a push to `main`. It attests nothing (`attest` and
 `verify` run on a push to `main` alone) and releases nothing (`release.yml` plans only the
 completion of a push run on `main`): its signed files stay artifacts of the run. A signing run on a
-tag, or in a fork's copy of the workflow, stops at its first step by name (the job `version`'s
-refusal), instead of going green unsigned; a run by hand without the input signs nothing, as
+tag, or in a fork's copy of the workflow, stops at its first step (the job `version`'s refusal,
+named for why it stops), instead of going green unsigned; a run by hand without the input signs nothing, as
 before. The workflow lint (`crates/xtask/tests/workflows/signing_run.rs`) holds the one boolean
 input, its default `false`, the refusal as the first step of `version`, the condition of every job
 and step that signs or checks the signature, and that nothing else of the file reads the input.

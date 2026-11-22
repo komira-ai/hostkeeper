@@ -9,7 +9,7 @@ use super::lint::lint;
 use super::pkg_signing::{CHECK_JOB, SIGN_JOB};
 use super::release::SIGN_IF;
 use super::signing_run::{
-    ALLOWED, INPUT_PROBLEM, MACOS_SIGN_IF, REFUSE_IF, REFUSE_PROBLEM, REFUSE_RUN,
+    ALLOWED, INPUT_PROBLEM, MACOS_SIGN_IF, REFUSE_IF, REFUSE_NAME, REFUSE_PROBLEM, REFUSE_RUN,
 };
 use super::{with_in, workflows};
 
@@ -289,8 +289,8 @@ fn the_evaluator_reads_a_boolean_input_as_a_boolean_and_starts_with_ignoring_cas
 fn the_committed_artifacts_yml_has_the_one_input_the_refusal_first_and_signs_under_the_condition() {
     // Catches: the rules refusing the committed file, or the signing condition missing from a
     // signing job or a step of build-macos that takes or checks the signed programs (three jobs,
-    // the download of the signed programs, the record of the packaged hostkeeper's signature and
-    // the two checks of the packaged programs).
+    // the download of the signed programs, the two records of the packaged hostkeeper's
+    // signature and the two checks of the packaged programs).
     let text = artifacts_yml();
     assert_eq!(lint("artifacts.yml", &text), Vec::<String>::new());
     assert_eq!(
@@ -301,14 +301,14 @@ fn the_committed_artifacts_yml_has_the_one_input_the_refusal_first_and_signs_und
     assert_eq!(
         text.matches(&format!("        if: {MACOS_SIGN_IF}\n"))
             .count(),
-        4
+        5
     );
     assert_eq!(
         text.matches(&format!("        if: {REFUSE_IF}\n")).count(),
         1
     );
     assert_eq!(
-        text.matches(&format!("        run: '{REFUSE_RUN}'\n"))
+        text.matches(&format!("        run: {REFUSE_RUN}\n"))
             .count(),
         1
     );
@@ -348,9 +348,7 @@ fn a_dispatch_with_another_input_shape_is_refused() {
 
 /// The refusal step as the file writes it, with its comment.
 fn refusal() -> String {
-    format!(
-        "      - name: A signing run is refused outside a branch of this repository\n        if: {REFUSE_IF}\n        run: '{REFUSE_RUN}'\n"
-    )
+    format!("      - name: '{REFUSE_NAME}'\n        if: {REFUSE_IF}\n        run: {REFUSE_RUN}\n")
 }
 
 #[test]
@@ -371,8 +369,15 @@ fn a_version_job_without_the_refusal_first_is_refused() {
         ),
     );
     assert_refused(&other_if, REFUSE_PROBLEM);
-    let no_exit = with_in(&text, &step, &step.replace("; exit 1", ""));
+    let no_exit = with_in(&text, &step, &step.replace("run: exit 1", "run: exit 0"));
     assert_refused(&no_exit, REFUSE_PROBLEM);
+    // A refusal whose name no longer says why the run stops.
+    let unnamed = with_in(
+        &text,
+        &step,
+        &step.replace(&format!("'{REFUSE_NAME}'"), "Stop"),
+    );
+    assert_refused(&unnamed, REFUSE_PROBLEM);
     let tolerated = with_in(
         &text,
         &step,

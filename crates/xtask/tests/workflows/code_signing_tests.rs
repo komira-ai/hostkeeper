@@ -6,9 +6,10 @@ use super::code_signing::{
     ALREADY_EXISTS, BUILD_JOB, CHECK_BOOTSTRAP_CODE, CHECK_HELLO_CODE, CHECK_HOSTKEEPER_CODE,
     CHECK_INTERMEDIATE, CHECK_PACKAGED_HK, CHECK_PACKAGED_HOSTKEEPER, CHMOD, CODE_IDENTITY,
     COMPILE_JOB, DELETE_CODE_KEYCHAIN, DELETE_CODE_P12, EXPAND_BOOTSTRAP_FULL, EXPAND_FULL,
-    EXPAND_HELLO_FULL, IMPORT_INTERMEDIATE, INTERMEDIATE_SHA256, NOT_SET_P12, NOT_SET_PASSWORD,
-    PROGRAMS, SIGN_BOOTSTRAP_CODE, SIGN_CODE_JOB, SIGN_CODE_STEPS, SIGN_HELLO_CODE, SIGN_HK,
-    SIGN_HOSTKEEPER, SIGNED_MACHO, UNSIGNED_MACHO, VALID_30_DAYS, VALID_IDENTITY,
+    EXPAND_HELLO_FULL, FIND_VALID_IDENTITIES, IDENTITY_IS_VALID, IMPORT_INTERMEDIATE,
+    INTERMEDIATE_SHA256, NOT_SET_P12, NOT_SET_PASSWORD, PROGRAMS, SIGN_BOOTSTRAP_CODE,
+    SIGN_CODE_JOB, SIGN_CODE_STEPS, SIGN_HELLO_CODE, SIGN_HK, SIGN_HOSTKEEPER, SIGNED_MACHO,
+    UNSIGNED_MACHO, VALID_30_DAYS,
 };
 use super::lint::lint;
 use super::pkg_signing::{CHECK_JOB, CHECK_STEPS, SIGN_ENV, SIGN_JOB, SUMS_IF, Step};
@@ -318,7 +319,7 @@ fn a_checkout_or_cargo_step_in_the_signing_job_or_a_step_moved_or_changed_is_ref
         &run_line(SIGN_HK),
         &format!("        continue-on-error: true\n{}", run_line(SIGN_HK)),
     );
-    assert_refused(&lenient, &code_step(18));
+    assert_refused(&lenient, &code_step(19));
 }
 
 #[test]
@@ -398,20 +399,32 @@ fn an_import_that_fails_on_the_duplicate_or_passes_every_failure_is_refused() {
 
 #[test]
 fn an_identity_not_proved_valid_before_the_signing_is_refused() {
-    // Catches: the signing reached with no check that the identity's chain builds, a check that
-    // lists every identity (no `-v`), another policy, or one that does not stop the job.
+    // Catches: the signing reached with no check that the identity's chain builds, a list of
+    // every identity (no `-v`), another policy, a check of another name or of a part of it, or
+    // a check that cannot fail.
     let text = artifacts_yml();
-    let step = quoted_run_line(VALID_IDENTITY);
-    let absent = with_in(&text, &step, "        run: echo fine\n");
+    let find = run_line(FIND_VALID_IDENTITIES);
+    let absent = with_in(&text, &find, "        run: echo fine\n");
     assert_refused(&absent, &code_step(14));
     for (from, to) in [
         ("find-identity -v -p", "find-identity -p"),
         ("-p codesigning", "-p basic"),
-        ("exit 1; }", "exit 0; }"),
     ] {
-        let changed = with_in(&text, &step, &step.replace(from, to));
+        let changed = with_in(&text, &find, &find.replace(from, to));
         assert_refused(&changed, &code_step(14));
     }
+    let check = run_line(IDENTITY_IS_VALID);
+    let absent = with_in(&text, &check, "        run: echo fine\n");
+    assert_refused(&absent, &code_step(15));
+    for (from, to) in [
+        ("\"\\\"$IDENTITY\\\"\"", "\"$IDENTITY\""),
+        ("grep -F -q", "grep -F -q -v"),
+    ] {
+        let changed = with_in(&text, &check, &check.replace(from, to));
+        assert_refused(&changed, &code_step(15));
+    }
+    let tolerated = with_in(&text, &check, &check.replace("\n", " || true\n"));
+    assert_refused(&tolerated, &code_step(15));
 }
 
 #[test]
@@ -421,15 +434,15 @@ fn an_identity_near_its_end_must_stop_the_job_by_name() {
     let text = artifacts_yml();
     let step = quoted_run_line(VALID_30_DAYS);
     let absent = with_in(&text, &step, "        run: echo fine\n");
-    assert_refused(&absent, &code_step(15));
+    assert_refused(&absent, &code_step(16));
     let shorter = with_in(
         &text,
         &step,
         &step.replace("-checkend 2592000", "-checkend 86400"),
     );
-    assert_refused(&shorter, &code_step(15));
+    assert_refused(&shorter, &code_step(16));
     let go_on = with_in(&text, &step, &step.replace("exit 1", "exit 0"));
-    assert_refused(&go_on, &code_step(15));
+    assert_refused(&go_on, &code_step(16));
 }
 
 #[test]
@@ -441,22 +454,22 @@ fn a_program_not_signed_under_its_identifier_with_the_runtime_and_a_timestamp_is
         (
             SIGN_HOSTKEEPER,
             "--identifier dev.hostkeeper.hostkeeper",
-            17,
+            18,
             "hostkeeper",
             "dev.hostkeeper.hostkeeper",
         ),
-        (SIGN_HK, "--options runtime ", 18, "hk", "dev.hostkeeper.hk"),
+        (SIGN_HK, "--options runtime ", 19, "hk", "dev.hostkeeper.hk"),
         (
             SIGN_HELLO_CODE,
             "--identifier dev.hostkeeper.hello",
-            19,
+            20,
             "hello",
             "dev.hostkeeper.hello",
         ),
         (
             SIGN_BOOTSTRAP_CODE,
             "--timestamp signed",
-            20,
+            21,
             "hostkeeper-bootstrap",
             "dev.hostkeeper.bootstrap",
         ),
@@ -493,7 +506,7 @@ fn the_keychain_and_the_p12_left_after_a_failed_signing_or_the_upload_before_the
         &keychain,
         &keychain.replace("${{ always() }}", "${{ success() }}"),
     );
-    assert_refused(&not_always, &code_step(21));
+    assert_refused(&not_always, &code_step(22));
     let p12 = format!(
         "      - name: Delete the identity's file, whether the signing worked or not\n        if: ${{{{ always() }}}}\n{}",
         run_line(DELETE_CODE_P12)
@@ -502,8 +515,8 @@ fn the_keychain_and_the_p12_left_after_a_failed_signing_or_the_upload_before_the
         "      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1\n        with:\n          name: {SIGNED_MACHO}\n          path: signed/\n          retention-days: 90\n          if-no-files-found: error\n"
     );
     let late = with_in(&text, &format!("{p12}{upload}"), &format!("{upload}{p12}"));
-    assert_refused(&late, &code_step(22));
     assert_refused(&late, &code_step(23));
+    assert_refused(&late, &code_step(24));
 }
 
 #[test]

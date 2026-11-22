@@ -144,10 +144,11 @@ jobs:
       version: ${{ steps.version.outputs.version }}
     steps:
       # A signing run started anywhere but a branch of this repository (a tag, or a fork's copy of
-      # this file) stops here by name, before any job runs, rather than going green unsigned.
-      - name: A signing run is refused outside a branch of this repository
+      # this file) stops here, before any job runs, rather than going green unsigned; the step's
+      # name says why (the log shows the run's ref and repository above it).
+      - name: 'Refused: a signing run (sign: true) runs only on a branch of komira-ai/hostkeeper'
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.sign && !(github.repository == 'komira-ai/hostkeeper' && startsWith(github.ref, 'refs/heads/')) }}
-        run: 'echo "::error::a signing run (sign: true) runs only on a branch of komira-ai/hostkeeper, not on $GITHUB_REF of $GITHUB_REPOSITORY"; exit 1'
+        run: exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -617,9 +618,11 @@ jobs:
         run: 'if out="$(security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$RUNNER_TEMP/code-signing.keychain-db" 2>&1)"; then echo "$out"; elif test "$out" = "security: SecKeychainItemImport: The specified item already exists in the keychain."; then echo "the runner holds the intermediate already: $out"; else echo "::error::the import of the intermediate failed: $out"; exit 1; fi'
       # `find-identity -v` lists only an identity whose chain builds to a trusted Apple root under
       # the code-signing policy: the identity is usable for codesign, whichever keychain holds the
-      # intermediate.
-      - name: The identity is a valid code-signing identity of the job's keychain
-        run: 'security find-identity -v -p codesigning "$RUNNER_TEMP/code-signing.keychain-db" | grep -F "\"$IDENTITY\"" > /dev/null || { echo "::error::$IDENTITY is not a valid code-signing identity of the job keychain: its chain to the Apple root does not build"; exit 1; }'
+      # intermediate. The list goes to a file (not the log, so no certificate hash is printed).
+      - name: The valid code-signing identities of the job's keychain
+        run: security find-identity -v -p codesigning "$RUNNER_TEMP/code-signing.keychain-db" > "$RUNNER_TEMP/valid-identities"
+      - name: The identity is among them, so its chain builds to Apple's root
+        run: grep -F -q "\"$IDENTITY\"" "$RUNNER_TEMP/valid-identities"
       # The identity is valid for thirteen months: the release stops 30 days before it ends, so it is
       # renewed while releases still go out (docs/operations/mac-full-disk-access.md).
       - name: The identity is valid for 30 days more
@@ -824,7 +827,10 @@ jobs:
       # codesign output of every signed release, which the check's unit tests are held to.
       - name: What codesign shows of the packaged hostkeeper (a signing run)
         if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.sign && github.repository == 'komira-ai/hostkeeper' && startsWith(github.ref, 'refs/heads/')) }}
-        run: codesign --display --verbose=2 "$RUNNER_TEMP/unpacked/hostkeeper" && codesign --display --requirements - "$RUNNER_TEMP/unpacked/hostkeeper"
+        run: codesign --display --verbose=2 "$RUNNER_TEMP/unpacked/hostkeeper"
+      - name: The designated requirement codesign shows of the packaged hostkeeper (a signing run)
+        if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.sign && github.repository == 'komira-ai/hostkeeper' && startsWith(github.ref, 'refs/heads/')) }}
+        run: codesign --display --requirements - "$RUNNER_TEMP/unpacked/hostkeeper"
       - name: The packaged hostkeeper has the signature of the release (a signing run)
         if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.sign && github.repository == 'komira-ai/hostkeeper' && startsWith(github.ref, 'refs/heads/')) }}
         run: cargo xtask release check-code-signature "$RUNNER_TEMP/unpacked/hostkeeper" --program hostkeeper

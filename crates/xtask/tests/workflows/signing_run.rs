@@ -12,7 +12,7 @@
 //!   [`super::release::SIGN_IF`], a push to main alone, so a signing run attests nothing, and
 //!   release.yml plans only the completion of a push run on main, so it releases nothing.
 //! - **Refused by name elsewhere.** The first step of the job `version`, which every job needs,
-//!   is [`REFUSE_RUN`] under [`REFUSE_IF`], the negation of [`ALLOWED`]: a signing run on a tag or
+//!   is [`REFUSE_RUN`], named [`REFUSE_NAME`], under [`REFUSE_IF`], the negation of [`ALLOWED`]: a signing run on a tag or
 //!   in a fork's copy of the file fails by name instead of going green unsigned.
 //! - **Nothing else reads the input.** Every scalar of the file that names `inputs.` is one of
 //!   those two conditions, so no other job, step, `env:` or `with:` takes it.
@@ -50,14 +50,18 @@ pub const REFUSE_IF: &str = concat!(
     ") }}"
 );
 
-/// The refusal, by name, as the first step of the job `version`.
-pub const REFUSE_RUN: &str = "echo \"::error::a signing run (sign: true) runs only on a branch of komira-ai/hostkeeper, not on $GITHUB_REF of $GITHUB_REPOSITORY\"; exit 1";
+/// The name of the refusal, the first step of the job `version`: why the run stops.
+pub const REFUSE_NAME: &str =
+    "Refused: a signing run (sign: true) runs only on a branch of komira-ai/hostkeeper";
+
+/// The command of the refusal: the step fails, and its name says why.
+pub const REFUSE_RUN: &str = "exit 1";
 
 /// The problem of a dispatch trigger that is not the one input.
 pub const INPUT_PROBLEM: &str = "artifacts.yml: workflow_dispatch must have exactly the input `sign`: `type: boolean`, `default: false` and a description";
 
 /// The problem of a job `version` whose first step is not the refusal.
-pub const REFUSE_PROBLEM: &str = "artifacts.yml: the first step of job version must be the refusal of a signing run outside a branch of this repository (REFUSE_RUN under REFUSE_IF)";
+pub const REFUSE_PROBLEM: &str = "artifacts.yml: the first step of job version must be the refusal of a signing run outside a branch of this repository (REFUSE_RUN named REFUSE_NAME under REFUSE_IF)";
 
 /// One line per rule of this module that `doc`, artifacts.yml, breaks.
 pub fn problems(doc: &Node) -> Vec<String> {
@@ -114,8 +118,8 @@ fn one_input(doc: &Node) -> bool {
         && text_of(Some(sign), "description").is_some_and(|d| !d.trim().is_empty())
 }
 
-/// Whether the first step of the job `version` is [`REFUSE_RUN`] under [`REFUSE_IF`], with a
-/// name and no other key.
+/// Whether the first step of the job `version` is [`REFUSE_RUN`] named [`REFUSE_NAME`] under
+/// [`REFUSE_IF`], with no other key.
 fn refuses_first(doc: &Node) -> bool {
     let Some(first) = steps(job(doc, "version")).first() else {
         return false;
@@ -128,4 +132,5 @@ fn refuses_first(doc: &Node) -> bool {
     keys == ["if", "name", "run"]
         && text_of(Some(first), "if") == Some(REFUSE_IF)
         && text_of(Some(first), "run") == Some(REFUSE_RUN)
+        && text_of(Some(first), "name") == Some(REFUSE_NAME)
 }
