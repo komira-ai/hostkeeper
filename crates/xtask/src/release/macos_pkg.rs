@@ -55,7 +55,8 @@
 //! The pkg is not signed here: the release signs it with the Developer ID Installer identity
 //! (`sign-pkg`, then `check-pkg`, in artifacts.yml). It is attested like every other asset (build
 //! provenance by the artifacts workflow), and an install names it by its digest. The binary in it is
-//! `--binary`, signed by `sign-code` on a push to main, else ad hoc by the linker (the unpack check accepts both).
+//! `--binary`, signed by `sign-code` on a push to main or in a signing run (a run by hand with
+//! `sign: true`), else ad hoc by the linker (the unpack check accepts both).
 //!
 //! [`build`] lays the payload's tree and the scripts directory out in a new directory, runs
 //! `pkgbuild` over them into the component pkg in that directory, and runs `productbuild` over

@@ -5,19 +5,21 @@
 //!   `version`, runs on `macos-15` with `contents: read` alone, and uploads the four programs
 //!   of [`PROGRAMS`] as [`UNSIGNED_MACHO`].
 //! - **The key is held by one job that runs no repository code.** [`SIGN_CODE_JOB`] runs under
-//!   [`SIGN_IF`] in the environment [`SIGN_ENV`] on `macos-15`, needs exactly [`COMPILE_JOB`],
+//!   [`MACOS_SIGN_IF`] in the environment [`SIGN_ENV`] on `macos-15`, needs exactly [`COMPILE_JOB`],
 //!   holds `contents: read` alone, has the `env:` [`CODE_IDENTITY`] alone, and its steps are
 //!   exactly [`SIGN_CODE_STEPS`], in order: no checkout, no cargo. A secret that is not set stops
 //!   it by its name. Apple's intermediate joins the keychain only as the file of
-//!   [`INTERMEDIATE_SHA256`], and an identity that expires within 30 days stops it by name. It signs each of [`PROGRAMS`] under its identifier with `--options runtime
+//!   [`INTERMEDIATE_SHA256`] ([`IMPORT_INTERMEDIATE`], kept going on failure: a runner that holds
+//!   it already answers [`ALREADY_EXISTS`], which alone passes [`SAME_AS_ALREADY_EXISTS`]), the identity must then be a valid code-signing
+//!   identity ([`FIND_VALID_IDENTITIES`], [`IDENTITY_IS_VALID`]), and an identity that expires within 30 days stops it by name. It signs each of [`PROGRAMS`] under its identifier with `--options runtime
 //!   --timestamp`, and uploads the signed programs as [`SIGNED_MACHO`] after the cleanup that
 //!   runs under [`ALWAYS`].
 //! - **The secrets are named there alone** ([`CODE_SECRETS`]; `super::pkg_signing` holds the
 //!   installer's two to its own job).
 //! - **The pkgs and the tarballs hold the signed programs.** `build-macos` needs [`COMPILE_JOB`]
-//!   and [`SIGN_CODE_JOB`] and runs under [`SUMS_IF`] (a run by hand skips the signing); it
-//!   builds nothing, downloads [`UNSIGNED_MACHO`] into `target/release`, then, under [`SIGN_IF`],
-//!   [`SIGNED_MACHO`] over it, then sets the modes; under [`SIGN_IF`] it checks the signature of
+//!   and [`SIGN_CODE_JOB`] and runs under [`SUMS_IF`] (a run by hand that is not a signing run skips the signing); it
+//!   builds nothing, downloads [`UNSIGNED_MACHO`] into `target/release`, then, under [`MACOS_SIGN_IF`],
+//!   [`SIGNED_MACHO`] over it, then sets the modes; under [`MACOS_SIGN_IF`] it checks the signature of
 //!   the packaged `hostkeeper` and `hk`.
 //! - **Each signed pkg's program is checked.** `check-pkg` expands each signed pkg with its payload
 //!   and runs `check-code-signature` on the program at its payload path ([`CHECK_HOSTKEEPER_CODE`],
@@ -28,7 +30,8 @@ use super::lint::entry;
 use super::pkg_signing::{
     ALWAYS, SIGN_ENV, SUMS_IF, Step, artifact, job_problems, pairs, steps_problems, uses_of,
 };
-use super::release::{SIGN_IF, job, names, steps, text_of};
+use super::release::{job, names, steps, text_of};
+use super::signing_run::{self, MACOS_SIGN_IF};
 use super::yaml::Node;
 
 /// The job that compiles the programs.
@@ -113,8 +116,45 @@ pub const CHECK_INTERMEDIATE: &str = concat!(
     "  $RUNNER_TEMP/DeveloperIDG2CA.cer\" | shasum -a 256 --check --strict"
 );
 
-/// The intermediate imported into the job's keychain.
-pub const IMPORT_INTERMEDIATE: &str = "security import \"$RUNNER_TEMP/DeveloperIDG2CA.cer\" -k \"$RUNNER_TEMP/code-signing.keychain-db\"";
+/// What `security import` answers, exactly, when a keychain it consults holds the certificate
+/// already (a hosted runner may hold Apple's intermediate outside the job's keychain).
+pub const ALREADY_EXISTS: &str =
+    "security: SecKeychainItemImport: The specified item already exists in the keychain.";
+
+/// The `id` of the import of the intermediate, whose outcome the steps after it read.
+pub const IMPORT_ID: &str = "import-intermediate";
+
+/// The intermediate imported into the job's keychain, its answer kept in a file. The step is
+/// [`Step::Kept`]: a failure goes on to [`SAME_AS_ALREADY_EXISTS`], which passes it only as
+/// [`ALREADY_EXISTS`], exactly.
+pub const IMPORT_INTERMEDIATE: &str = "security import \"$RUNNER_TEMP/DeveloperIDG2CA.cer\" -k \"$RUNNER_TEMP/code-signing.keychain-db\" > \"$RUNNER_TEMP/import-intermediate.txt\" 2>&1";
+
+/// What the import answered, into the log.
+pub const SHOW_IMPORT: &str = "cat \"$RUNNER_TEMP/import-intermediate.txt\"";
+
+/// The `if:` of the two steps that judge a failed import.
+pub const IMPORT_FAILED_IF: &str = "${{ steps.import-intermediate.outcome == 'failure' }}";
+
+/// [`ALREADY_EXISTS`] as `security` writes it, into a file, after a failed import.
+pub const WRITE_ALREADY_EXISTS: &str = concat!(
+    "echo \"",
+    "security: SecKeychainItemImport: The specified item already exists in the keychain.",
+    "\" > \"$RUNNER_TEMP/already-exists.txt\""
+);
+
+/// A failed import passes only when its whole answer is [`ALREADY_EXISTS`], byte for byte; any
+/// other answer fails the step, and so the job.
+pub const SAME_AS_ALREADY_EXISTS: &str =
+    "cmp \"$RUNNER_TEMP/already-exists.txt\" \"$RUNNER_TEMP/import-intermediate.txt\"";
+
+/// The valid code-signing identities of the job's keychain, into a file: `security
+/// find-identity -v -p codesigning` lists only an identity whose chain builds to a trusted Apple
+/// root under the code-signing policy, wherever the intermediate is.
+pub const FIND_VALID_IDENTITIES: &str = "security find-identity -v -p codesigning \"$RUNNER_TEMP/code-signing.keychain-db\" > \"$RUNNER_TEMP/valid-identities\"";
+
+/// The identity, by its exact quoted name, is among them, or the step (named for it) fails.
+pub const IDENTITY_IS_VALID: &str =
+    "grep -F -q \"\\\"$IDENTITY\\\"\" \"$RUNNER_TEMP/valid-identities\"";
 
 /// The identity must stay valid 30 days more (2592000 seconds), or the release stops by name.
 pub const VALID_30_DAYS: &str = "security find-certificate -c \"$IDENTITY\" -p \"$RUNNER_TEMP/code-signing.keychain-db\" | openssl x509 -noout -checkend 2592000 || { echo \"::error::the identity $IDENTITY expires within 30 days or has expired: renew it and replace the secret MACOS_APPLICATION_P12 (docs/operations/mac-full-disk-access.md)\"; exit 1; }";
@@ -162,6 +202,14 @@ const fn with_password(run: &'static str) -> Step {
     }
 }
 
+const fn if_import_failed(run: &'static str) -> Step {
+    Step::Run {
+        run,
+        secret: None,
+        condition: Some(IMPORT_FAILED_IF),
+    }
+}
+
 const fn always(run: &'static str) -> Step {
     Step::Run {
         run,
@@ -171,7 +219,7 @@ const fn always(run: &'static str) -> Step {
 }
 
 /// The steps of [`SIGN_CODE_JOB`], exactly and in this order.
-pub const SIGN_CODE_STEPS: [Step; 22] = [
+pub const SIGN_CODE_STEPS: [Step; 27] = [
     Step::Download(UNSIGNED_MACHO, "unsigned"),
     with_p12(NOT_SET_P12),
     with_password(NOT_SET_PASSWORD),
@@ -192,7 +240,15 @@ pub const SIGN_CODE_STEPS: [Step; 22] = [
     run("security list-keychains -d user -s \"$RUNNER_TEMP/code-signing.keychain-db\""),
     run(FETCH_INTERMEDIATE),
     run(CHECK_INTERMEDIATE),
-    run(IMPORT_INTERMEDIATE),
+    Step::Kept {
+        id: IMPORT_ID,
+        run: IMPORT_INTERMEDIATE,
+    },
+    run(SHOW_IMPORT),
+    if_import_failed(WRITE_ALREADY_EXISTS),
+    if_import_failed(SAME_AS_ALREADY_EXISTS),
+    run(FIND_VALID_IDENTITIES),
+    run(IDENTITY_IS_VALID),
     run(VALID_30_DAYS),
     run("mkdir signed"),
     run(SIGN_HOSTKEEPER),
@@ -209,6 +265,7 @@ pub fn problems(doc: &Node) -> Vec<String> {
     let mut problems = compile_problems(doc);
     problems.extend(sign_code_problems(doc));
     problems.extend(build_problems(doc));
+    problems.extend(signing_run::problems(doc));
     problems
 }
 
@@ -329,7 +386,7 @@ fn build_problems(doc: &Node) -> Vec<String> {
     }
     let at = |f: &dyn Fn(&Node) -> bool| all.iter().position(f);
     let unsigned = at(&|s| downloads(s, UNSIGNED_MACHO, None));
-    let signed = at(&|s| downloads(s, SIGNED_MACHO, Some(SIGN_IF)));
+    let signed = at(&|s| downloads(s, SIGNED_MACHO, Some(MACOS_SIGN_IF)));
     let modes = at(&|s| text_of(Some(s), "run") == Some(CHMOD) && entry(s, "if").is_none());
     if unsigned.is_none() {
         problems.push(format!(
@@ -338,7 +395,7 @@ fn build_problems(doc: &Node) -> Vec<String> {
     }
     if signed.is_none() {
         problems.push(format!(
-            "artifacts.yml: job {BUILD_JOB} does not download {SIGNED_MACHO} into target/release under the exact `if: {SIGN_IF}`"
+            "artifacts.yml: job {BUILD_JOB} does not download {SIGNED_MACHO} into target/release under the exact `if: {MACOS_SIGN_IF}`"
         ));
     }
     if modes.is_none() {
@@ -355,11 +412,12 @@ fn build_problems(doc: &Node) -> Vec<String> {
     }
     for command in [CHECK_PACKAGED_HOSTKEEPER, CHECK_PACKAGED_HK] {
         let checked = all.iter().any(|s| {
-            text_of(Some(s), "run") == Some(command) && text_of(Some(s), "if") == Some(SIGN_IF)
+            text_of(Some(s), "run") == Some(command)
+                && text_of(Some(s), "if") == Some(MACOS_SIGN_IF)
         });
         if !checked {
             problems.push(format!(
-                "artifacts.yml: job {BUILD_JOB} does not run `{command}` under the exact `if: {SIGN_IF}`"
+                "artifacts.yml: job {BUILD_JOB} does not run `{command}` under the exact `if: {MACOS_SIGN_IF}`"
             ));
         }
     }

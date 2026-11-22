@@ -442,3 +442,63 @@ fn check_code_signature_reads_the_binary_and_the_program_from_its_command_line()
     ));
     assert_eq!(fakes.codesign.calls.borrow().len(), 1);
 }
+
+/// What `codesign --display --verbose=2` printed of the packaged hostkeeper in the first
+/// signing run of the release's identity, as the adapter reads it: stdout (empty), then
+/// stderr. Only the runner's path is replaced.
+const REAL_DISPLAY: &str = "
+Executable=/scratch/unpacked/hostkeeper
+Identifier=dev.hostkeeper.hostkeeper
+Format=Mach-O thin (arm64)
+CodeDirectory v=20500 size=125637 flags=0x10000(runtime) hashes=3920+2 location=embedded
+Signature size=9050
+Authority=Developer ID Application: Komira AI, Inc. (U7RTX4XD3X)
+Authority=Developer ID Certification Authority
+Authority=Apple Root CA
+Timestamp=Nov 22, 2026 at 3:08:45 AM
+Info.plist entries=3
+TeamIdentifier=U7RTX4XD3X
+Runtime Version=15.5.0
+Sealed Resources=none
+Internal requirements count=1 size=188
+";
+
+/// What `codesign --display --requirements -` printed of it in that run: the requirement on
+/// stdout, then `Executable=` on stderr, as the adapter joins them.
+const REAL_REQUIREMENTS: &str = "designated => identifier \"dev.hostkeeper.hostkeeper\" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = U7RTX4XD3X
+\nExecutable=/scratch/unpacked/hostkeeper
+";
+
+#[test]
+fn the_real_codesign_output_of_a_signing_run_passes() {
+    // Catches: the parser refusing what codesign really prints of the release's signature (its
+    // `Runtime Version=` line, its timestamp format, the requirement on stdout before the
+    // `Executable=` line of stderr), which the fixtures above only approximate.
+    let t = tools(REAL_DISPLAY, REAL_REQUIREMENTS);
+    assert_eq!(
+        check(&t, Path::new(BINARY), "hostkeeper"),
+        Ok(vec![format!(
+            "{BINARY}: dev.hostkeeper.hostkeeper signed by Developer ID Application: Komira AI, Inc. (U7RTX4XD3X) under Developer ID Certification Authority and Apple Root CA, with the hardened runtime and a trusted timestamp"
+        )])
+    );
+}
+
+#[test]
+fn the_real_output_of_another_program_is_refused_by_its_identifier_and_requirement() {
+    // Catches: a check that passes the real output of hostkeeper's signature for another program
+    // of the table.
+    let t = tools(REAL_DISPLAY, REAL_REQUIREMENTS);
+    let want = MacProgram::named("hk").expect("hk").requirement();
+    assert_eq!(
+        check(&t, Path::new(BINARY), "hk"),
+        Err(Error::Refused(vec![
+            line("the identifier is [\"dev.hostkeeper.hostkeeper\"], not \"dev.hostkeeper.hk\""),
+            line(&format!(
+                "the designated requirement is [{:?}], not {want:?}",
+                MacProgram::named("hostkeeper")
+                    .expect("hostkeeper")
+                    .requirement()
+            )),
+        ]))
+    );
+}

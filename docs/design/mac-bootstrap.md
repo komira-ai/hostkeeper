@@ -228,7 +228,7 @@ Mac (a host group's configuration pkg, [hostgroups.md](hostgroups.md) section 6.
 ## 7. Signing and notarization
 
 **What the release produces.** The hostkeeper pkg, hello's pkg and the bootstrap pkg are signed by `Developer ID Installer: Komira AI, Inc. (U7RTX4XD3X)`
-with a trusted timestamp (`artifacts.yml` `sign-pkg`, then `check-pkg`, on a push to `main` only), attested, and **not notarized**
+with a trusted timestamp (`artifacts.yml` `sign-pkg`, then `check-pkg`, on a push to `main` and in a signing run; attested on a push to `main` only), and **not notarized**
 (`docs/macos.md` "The installer's signature", `docs/deploy/verify-a-release.md`). A Developer ID **Application** identity is now in the workflow:
 `artifacts.yml` `sign-code` signs each Mach-O program (hostkeeper, hk, hello and the bootstrap, as `dev.hostkeeper.bootstrap`) under a stable identifier with the hardened
 runtime and a trusted timestamp, before the pkgs are built, so the programs inside every pkg carry that signature and not the linker's ad-hoc one (`docs/macos.md`
