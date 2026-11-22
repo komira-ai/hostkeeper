@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::fs::{self, DirBuilder};
-use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt, symlink};
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -17,6 +17,8 @@ use hostkeeper_testkit::Scratch;
 
 use super::*;
 
+#[path = "removal_tests.rs"]
+mod removal;
 #[path = "verify_tests.rs"]
 mod verify;
 
@@ -229,6 +231,14 @@ impl Mac {
         names
     }
 
+    /// The host's paths of what `/Applications` holds, sorted.
+    fn apps(&self) -> Vec<String> {
+        self.names("/Applications")
+            .into_iter()
+            .map(|name| format!("/Applications/{name}"))
+            .collect()
+    }
+
     /// The version list of the app at the host's path `app`, as text.
     fn version_list(&self, app: &str) -> String {
         fs::read_to_string(self.path(&format!("{app}/Contents/version.plist")))
@@ -314,8 +324,12 @@ fn a_staged_xcode_is_moved_then_licensed_launched_selected_and_the_old_one_remov
     let ended = mac.apply().cutover(&params(&xcodes, &["25.4"], "27.2"));
     assert_eq!(ended, applied("27.2"));
     assert_eq!(
-        mac.names("/Applications"),
-        [".hostkeeper-staging", "Xcode-26.3.app", "Xcode-27.2.app"]
+        mac.apps(),
+        [
+            "/Applications/.hostkeeper-staging",
+            "/Applications/Xcode-26.3.app",
+            "/Applications/Xcode-27.2.app"
+        ]
     );
     assert_eq!(
         mac.version_list("/Applications/Xcode-27.2.app"),
@@ -355,11 +369,10 @@ fn every_xcode_is_in_place_before_the_first_program_and_the_removal_follows_the_
     let noted = |what: &'static str, seen: &Arc<Mutex<Vec<String>>>| -> Answer {
         let seen = Arc::clone(seen);
         Arc::new(move |root: &Path| {
-            let apps = root.join("Applications");
             lock(&seen).push(format!(
                 "{what}: 27.2 {}, 25.4 {}",
-                apps.join("Xcode-27.2.app").exists(),
-                apps.join("Xcode-25.4.app").exists()
+                root.join("Applications/Xcode-27.2.app").exists(),
+                root.join("Applications/Xcode-25.4.app").exists()
             ));
             Ok(LaunchctlOutput::success(""))
         })
@@ -399,8 +412,11 @@ fn an_installed_xcode_is_not_moved_and_an_order_with_no_default_selects_nothing(
     let ended = mac.apply().cutover(&params(&xcodes, &[], ""));
     assert_eq!(ended, applied("27.2"));
     assert_eq!(
-        mac.names("/Applications"),
-        ["Xcode-26.3.app", "Xcode-27.2.app"]
+        mac.apps(),
+        [
+            "/Applications/Xcode-26.3.app",
+            "/Applications/Xcode-27.2.app"
+        ]
     );
     let mut expected = Vec::new();
     expected.extend(licence_and_first_launch("27.2"));
@@ -499,13 +515,13 @@ fn only_a_verified_app_in_a_trusted_staging_directory_is_moved() {
         let mac = Mac::new(&format!("xcode-apply-unstaged-{name}"));
         mac.installed("25.4", "25E5");
         setup(&mac);
-        let before = mac.names("/Applications");
+        let before = mac.apps();
         let ended = mac
             .apply()
             .cutover(&params(std::slice::from_ref(&new), &["25.4"], "27.2"));
         assert_eq!(ended, failure(REASON_NOT_STAGED, &detail), "{name}");
         assert_eq!(mac.ran(), Vec::<String>::new(), "{name}");
-        assert_eq!(mac.names("/Applications"), before, "{name}");
+        assert_eq!(mac.apps(), before, "{name}");
         assert!(!mac.path("/Applications/Xcode-27.2.app").exists(), "{name}");
     }
 }
@@ -534,7 +550,7 @@ fn no_xcode_is_moved_until_every_one_is_found() {
             )
         )
     );
-    assert_eq!(mac.names("/Applications"), [".hostkeeper-staging"]);
+    assert_eq!(mac.apps(), ["/Applications/.hostkeeper-staging"]);
     assert_eq!(mac.names(&entry_host_dir(&kept)), [STAGED_APP]);
     assert_eq!(mac.ran(), Vec::<String>::new());
 }
@@ -628,13 +644,13 @@ fn a_path_holding_anything_else_is_left_alone() {
         let mac = Mac::new(&format!("xcode-apply-taken-{name}"));
         mac.staged(&new);
         setup(&mac);
-        let before = mac.names("/Applications");
+        let before = mac.apps();
         let ended = mac
             .apply()
             .cutover(&params(std::slice::from_ref(&new), &[], "27.2"));
         assert_eq!(ended, failure(reason, &detail), "{name}");
         assert_eq!(mac.ran(), Vec::<String>::new(), "{name}");
-        assert_eq!(mac.names("/Applications"), before, "{name}");
+        assert_eq!(mac.apps(), before, "{name}");
         assert_eq!(mac.names(&entry_host_dir(&new)), [STAGED_APP], "{name}");
     }
 }
@@ -726,162 +742,16 @@ fn a_failing_program_fails_the_cutover_and_removes_nothing() {
         assert_eq!(ended, failure(reason, &detail), "{line}");
         assert_eq!(mac.ran(), ran, "{line}");
         assert_eq!(
-            mac.names("/Applications"),
+            mac.apps(),
             [
-                ".hostkeeper-staging",
-                "Xcode-25.4.app",
-                "Xcode-26.3.app",
-                "Xcode-27.2.app"
+                "/Applications/.hostkeeper-staging",
+                "/Applications/Xcode-25.4.app",
+                "/Applications/Xcode-26.3.app",
+                "/Applications/Xcode-27.2.app"
             ],
             "{line}"
         );
     }
-}
-
-/// Proves: the removal takes exactly the `Xcode-<version>.app` directories of the versions the
-/// order names whose own version list names that version; a directory named for a version it
-/// does not hold, one with no or an unreadable version list, a link, a file, an Xcode the order
-/// does not name (older or not), a foreign `Xcode.app` and a version not installed are all left.
-///
-/// Catches: a removal by a glob over `/Applications`, an Xcode a person put there under another
-/// name removed, a link followed into what it names, a version not installed failing the run.
-#[test]
-fn the_removal_takes_only_the_named_xcodes_of_their_own_version() {
-    let mac = Mac::new("xcode-apply-removal");
-    let new = entry("27.2", "27B52");
-    mac.staged(&new);
-    mac.installed("25.4", "25E5");
-    mac.installed("25.1", "25A1");
-    mac.app("/Applications/Xcode-25.3.app", "25.3.1", "25C9");
-    mac.app("/Applications/Xcode.app", "24.1", "24B2");
-    fs::create_dir_all(mac.path("/Applications/Xcode-22.app/Contents")).expect("no version list");
-    mac.file("/Applications/Xcode-21.app/Contents/version.plist", GARBAGE);
-    mac.installed("20.1", "20A1");
-    symlink(
-        mac.path("/Applications/Xcode-20.1.app"),
-        mac.path("/Applications/Xcode-20.app"),
-    )
-    .expect("a link");
-    mac.file("/Applications/Xcode-19.app", b"a file");
-    let remove = ["25.4", "25.3", "24.1", "22", "21", "20", "19", "18"];
-    let ended = mac
-        .apply()
-        .cutover(&params(std::slice::from_ref(&new), &remove, "27.2"));
-    assert_eq!(ended, applied("27.2"));
-    assert_eq!(
-        mac.names("/Applications"),
-        [
-            ".hostkeeper-staging",
-            "Xcode-19.app",
-            "Xcode-20.1.app",
-            "Xcode-20.app",
-            "Xcode-21.app",
-            "Xcode-22.app",
-            "Xcode-25.1.app",
-            "Xcode-25.3.app",
-            "Xcode-27.2.app",
-            "Xcode.app",
-        ]
-    );
-    assert_eq!(
-        mac.version_list("/Applications/Xcode-20.1.app"),
-        plist("20.1", "20A1")
-    );
-}
-
-/// Proves: an Xcode to remove leaves its path whole, renamed into the staging directory, before
-/// it is deleted there: a deletion the volume refuses fails `xcode_remove_failed` naming what is
-/// left in staging, with `/Applications/Xcode-<version>.app` already gone; a path that cannot be
-/// looked at, or a staging directory others can write, fails it before anything is moved. Each
-/// comes after the select.
-///
-/// Catches: a removal cut off part way that leaves a half-deleted Xcode at its path, which no
-/// later run can tell is ours; an Xcode moved into a directory an admin of the Mac controls.
-#[test]
-fn a_removal_that_fails_names_what_it_left() {
-    let removing = format!("{STAGING}/removing-25.4");
-    let cases = [
-        (
-            "contents",
-            "/Applications/Xcode-25.4.app/Contents".to_owned(),
-            0o500,
-            format!("{removing}/Contents"),
-            format!("cannot remove {removing}: Permission denied (os error 13)"),
-            vec!["Xcode-26.3.app", "Xcode-27.2.app"],
-        ),
-        (
-            "applications",
-            "/Applications".to_owned(),
-            0o000,
-            "/Applications".to_owned(),
-            "cannot read /Applications/Xcode-25.4.app: Permission denied (os error 13)".to_owned(),
-            vec!["Xcode-25.4.app", "Xcode-26.3.app", "Xcode-27.2.app"],
-        ),
-        (
-            "staging",
-            STAGING.to_owned(),
-            0o755,
-            STAGING.to_owned(),
-            format!(
-                "cannot remove /Applications/Xcode-25.4.app: {STAGING} is not a directory only \
-                 this process's user can write"
-            ),
-            vec!["Xcode-25.4.app", "Xcode-26.3.app", "Xcode-27.2.app"],
-        ),
-    ];
-    for (name, closed, mode, reopen, detail, left) in cases {
-        let (mac, xcodes) = usual_mac(&format!("xcode-apply-remove-{name}"));
-        let shut = closed.clone();
-        mac.answers(
-            "/usr/bin/xcode-select -s /Applications/Xcode-27.2.app",
-            Arc::new(move |root: &Path| {
-                let path = root.join(shut.trim_start_matches('/'));
-                fs::set_permissions(path, fs::Permissions::from_mode(mode))
-                    .expect("the mode the test sets");
-                Ok(LaunchctlOutput::success(""))
-            }),
-        );
-        let ended = mac.apply().cutover(&params(&xcodes, &["25.4"], "27.2"));
-        mac.mode(&reopen, 0o755);
-        assert_eq!(ended, failure(REASON_REMOVE_FAILED, &detail), "{name}");
-        let mut names = vec![".hostkeeper-staging"];
-        names.extend(left);
-        assert_eq!(mac.names("/Applications"), names, "{name}");
-    }
-}
-
-/// Proves: what an earlier removal cut off left in the staging directory is removed before the
-/// next removal of that version, and a staging directory that is not there is made, mode 0700,
-/// for the removal: the Mac ends with no `Xcode-25.4.app` and an empty staging directory.
-///
-/// Catches: a leftover of a cut-off removal that blocks the next removal for ever; a removal
-/// that fails on a Mac whose stage left no staging directory.
-#[test]
-fn a_removal_finishes_what_an_earlier_one_left() {
-    let mac = Mac::new("xcode-apply-remove-again");
-    mac.installed("27.2", "27B52");
-    mac.installed("25.4", "25E5");
-    let order = params(&[entry("27.2", "27B52")], &["25.4"], "27.2");
-    assert_eq!(mac.apply().cutover(&order), applied("27.2"));
-    assert_eq!(
-        mac.names("/Applications"),
-        [".hostkeeper-staging", "Xcode-27.2.app"]
-    );
-    let mode = fs::metadata(mac.path(STAGING))
-        .expect("the staging directory")
-        .mode();
-    assert_eq!(mode & 0o777, 0o700);
-    mac.installed("25.4", "25E5");
-    mac.file(
-        &format!("{STAGING}/removing-25.4/Contents/left"),
-        b"cut off",
-    );
-    assert_eq!(mac.apply().cutover(&order), applied("27.2"));
-    assert_eq!(
-        mac.names("/Applications"),
-        [".hostkeeper-staging", "Xcode-27.2.app"]
-    );
-    assert_eq!(mac.names(STAGING), Vec::<String>::new());
 }
 
 /// Proves: an order the apply does not take fails `xcode_order_invalid` with its reason before
@@ -969,7 +839,7 @@ fn an_order_the_apply_does_not_take_fails_before_anything_is_touched() {
     ];
     for (at, (xcodes, remove, default, detail)) in cases.into_iter().enumerate() {
         let (mac, _) = usual_mac(&format!("xcode-apply-order-{at}"));
-        let before = mac.names("/Applications");
+        let before = mac.apps();
         let order = params(&xcodes, &remove, default);
         assert_eq!(
             mac.apply().cutover(&order),
@@ -985,7 +855,7 @@ fn an_order_the_apply_does_not_take_fails_before_anything_is_touched() {
             "{detail}"
         );
         assert_eq!(mac.ran(), Vec::<String>::new(), "{detail}");
-        assert_eq!(mac.names("/Applications"), before, "{detail}");
+        assert_eq!(mac.apps(), before, "{detail}");
         assert_eq!(mac.names(&entry_host_dir(&new)), [STAGED_APP], "{detail}");
     }
 }

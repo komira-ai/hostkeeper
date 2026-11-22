@@ -109,7 +109,8 @@ fn a_mac_with_every_fact_right_passes_the_check() {
 /// default's, or nothing.
 ///
 /// Catches: a check that passes a Mac whose new Xcode is missing, of the wrong build, unusable,
-/// unlicensed, or not the default; a prefix match taking `Xcode-27.2.app.old` for `Xcode-27.2.app`.
+/// unlicensed, or not the default; a prefix match taking `/Applications/Xcode-27.2.app.old` for
+/// `/Applications/Xcode-27.2.app`.
 #[test]
 fn each_wrong_fact_fails_the_check_with_its_reason() {
     let app = "/Applications/Xcode-27.2.app";
@@ -377,8 +378,12 @@ fn with_macos_the_xcode_cutover_runs_after_the_reboot() {
     );
     assert_eq!(mac.ran(), ["macos cutover", "reboot"]);
     assert_eq!(
-        mac.names("/Applications"),
-        [".hostkeeper-staging", "Xcode-25.4.app", "Xcode-26.3.app"]
+        mac.apps(),
+        [
+            "/Applications/.hostkeeper-staging",
+            "/Applications/Xcode-25.4.app",
+            "/Applications/Xcode-26.3.app"
+        ]
     );
     assert_eq!(mac.names(&entry_host_dir(&xcodes[1])), [STAGED_APP]);
     lock(&log).clear();
@@ -390,8 +395,12 @@ fn with_macos_the_xcode_cutover_runs_after_the_reboot() {
     expected.push("/usr/bin/xcode-select -s /Applications/Xcode-27.2.app".to_owned());
     assert_eq!(mac.ran(), expected);
     assert_eq!(
-        mac.names("/Applications"),
-        [".hostkeeper-staging", "Xcode-26.3.app", "Xcode-27.2.app"]
+        mac.apps(),
+        [
+            "/Applications/.hostkeeper-staging",
+            "/Applications/Xcode-26.3.app",
+            "/Applications/Xcode-27.2.app"
+        ]
     );
     lock(&log).clear();
     mac.answers(
@@ -442,12 +451,12 @@ fn a_failing_first_launch_fails_the_hook_step_and_removes_nothing() {
     assert_eq!(ended.outcome.code(), 1);
     assert_eq!(record.state("run-7", Kind::Xcode), Ok(KindState::Pending));
     assert_eq!(
-        mac.names("/Applications"),
+        mac.apps(),
         [
-            ".hostkeeper-staging",
-            "Xcode-25.4.app",
-            "Xcode-26.3.app",
-            "Xcode-27.2.app"
+            "/Applications/.hostkeeper-staging",
+            "/Applications/Xcode-25.4.app",
+            "/Applications/Xcode-26.3.app",
+            "/Applications/Xcode-27.2.app"
         ]
     );
 }
