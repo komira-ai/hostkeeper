@@ -65,8 +65,8 @@ fn the_removal_takes_only_the_named_xcodes_of_their_own_version() {
 /// Proves: an Xcode to remove leaves its path whole, renamed into the staging directory, before
 /// it is deleted there: a deletion the volume refuses fails `xcode_remove_failed` naming what is
 /// left in staging, with `/Applications/Xcode-<version>.app` already gone; a path that cannot be
-/// looked at, or a staging directory others can write, fails it before anything is moved. Each
-/// comes after the select.
+/// looked at, a staging directory others can write, or a rename out of `/Applications` the
+/// volume refuses fails it with the Xcode still at its path. Each comes after the select.
 ///
 /// Catches: a removal cut off part way that leaves a half-deleted Xcode at its path, which no
 /// later run can tell is ours; an Xcode moved into a directory an admin of the Mac controls.
@@ -81,6 +81,21 @@ fn a_removal_that_fails_names_what_it_left() {
             format!("{removing}/Contents"),
             format!("cannot remove {removing}: Permission denied (os error 13)"),
             vec![
+                "/Applications/Xcode-26.3.app",
+                "/Applications/Xcode-27.2.app",
+            ],
+        ),
+        (
+            "rename",
+            "/Applications".to_owned(),
+            0o555,
+            "/Applications".to_owned(),
+            format!(
+                "cannot move /Applications/Xcode-25.4.app to {removing}: Permission denied (os \
+                 error 13)"
+            ),
+            vec![
+                "/Applications/Xcode-25.4.app",
                 "/Applications/Xcode-26.3.app",
                 "/Applications/Xcode-27.2.app",
             ],

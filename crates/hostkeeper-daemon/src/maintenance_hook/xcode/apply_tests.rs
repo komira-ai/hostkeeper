@@ -452,7 +452,7 @@ fn only_a_verified_app_in_a_trusted_staging_directory_is_moved() {
                      user can write";
     let staged = staged_app(&new);
     let missing = not_staged(&format!("{staged} is not a directory"));
-    let cases: [(&str, Setup<'_>, String); 8] = [
+    let cases: [(&str, Setup<'_>, String); 9] = [
         ("none", Box::new(|_| {}), not_staged(untrusted)),
         (
             "open",
@@ -493,6 +493,11 @@ fn only_a_verified_app_in_a_trusted_staging_directory_is_moved() {
             "build",
             Box::new(|mac| mac.staged_as(&new, "27.2", "27B51")),
             not_staged(&format!("{staged} is Xcode 27.2 (27B51)")),
+        ),
+        (
+            "version",
+            Box::new(|mac| mac.staged_as(&new, "27.2.1", "27B52")),
+            not_staged(&format!("{staged} is Xcode 27.2.1 (27B52)")),
         ),
         (
             "list",
@@ -574,7 +579,7 @@ fn a_path_holding_anything_else_is_left_alone() {
              as it is"
         )
     };
-    let cases: [(&str, Setup<'_>, &'static str, String); 8] = [
+    let cases: [(&str, Setup<'_>, &'static str, String); 9] = [
         (
             "open",
             Box::new(|mac| {
@@ -611,6 +616,12 @@ fn a_path_holding_anything_else_is_left_alone() {
             Box::new(|mac| mac.installed("27.2", "27B51")),
             REASON_INSTALL_TAKEN,
             taken("is Xcode 27.2 (27B51), not Xcode 27.2 (27B52)"),
+        ),
+        (
+            "version",
+            Box::new(|mac| mac.app(app, "27.2.1", "27B52")),
+            REASON_INSTALL_TAKEN,
+            taken("is Xcode 27.2.1 (27B52), not Xcode 27.2 (27B52)"),
         ),
         (
             "list",
