@@ -934,6 +934,7 @@ impl World {
             facts: self
                 .keeping_facts
                 .then(|| Arc::clone(&self.facts) as Arc<dyn FactsSink>),
+            full_disk_access: None,
             remote_login_probe: self
                 .probing
                 .then(|| Arc::clone(&self.probe) as Arc<dyn RemoteLoginProbeSource>),

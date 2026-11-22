@@ -97,6 +97,7 @@ fn a_retry_time_far_ahead_is_capped_at_an_hour_from_now() {
         console: None,
         identity: None,
         remote_login_probe: None,
+        full_disk_access: None,
         operator_keys: None,
         prerequisites: None,
         maintenance: None,

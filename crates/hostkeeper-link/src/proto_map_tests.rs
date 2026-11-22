@@ -55,6 +55,7 @@ fn beat(platform: Platform, services: Vec<ServiceFacts>) -> Heartbeat {
         repositories: None,
         facts_generation: None,
         remote_login_probe: None,
+        full_disk_access: None,
         operator_keys: None,
         ssh: None,
         prerequisites: None,
@@ -279,12 +280,7 @@ fn a_heartbeat_with_every_fact_maps_to_the_request_field_for_field() {
             last_renew_error: None,
             trusted_root_age_secs: None,
             trusted_root_reason: pb::TrustedRootReason::Unspecified as i32,
-            facts_generation: None,
-            remote_login_probe: None,
-            operator_keys: None,
-            prerequisites: None,
-            bmc: None,
-            maintenance: None,
+            ..pb::HeartbeatRequest::default()
         }
     );
 }

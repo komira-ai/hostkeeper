@@ -625,6 +625,7 @@ fn a_plan_from_a_tip_whose_ci_is_pending_publishes_the_done_commits_oldest_first
             verifier: &verifier,
             run_version: &fakes.run_version,
             pkgbuild: &fakes.pkgbuild,
+            codesign: &fakes.codesign,
             advisories: &fakes.advisories,
             registry: &fakes.registry,
             wait: &fakes.wait,

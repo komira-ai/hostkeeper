@@ -93,6 +93,7 @@ fn heartbeat_lists_installed_services_from_records_and_observer() {
         repositories: None,
         facts_generation: None,
         remote_login_probe: None,
+        full_disk_access: None,
         operator_keys: None,
         ssh: None,
         prerequisites: None,

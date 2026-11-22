@@ -324,14 +324,52 @@ made at each start of the daemon, not watched in between; the heartbeat does not
 A configuration profile is the other way to hold power settings on a managed Mac; the daemon is
 what ships, so a Mac needs nothing but hostkeeper.
 
+### Full Disk Access
+
+Full Disk Access is a privacy grant that an administrator gives the daemon with a configuration
+profile (docs/operations/mac-full-disk-access.md). The daemon
+(`crates/hostkeeper-daemon/src/full_disk_access.rs`) tells whether the grant is in force, and the
+coordinator shows it; nothing decides on it yet, and the daemon does not read the profile store,
+which is itself guarded.
+
+What is checked: the daemon lists one directory only the grant allows,
+`/Library/Application Support/com.apple.TCC`. It opens the directory and reads one entry; it opens
+no file inside it, so the privacy database is never read. The listing is behind a port, so the
+logic is tested on Linux against fakes and scratch directories.
+
+The states, as the daemon reports them in `HeartbeatRequest.full_disk_access`:
+
+| State | When |
+|---|---|
+| `GRANTED` | the directory could be listed |
+| `NOT_GRANTED` | the system refused the listing for want of permission (`EPERM` or `EACCES`) |
+| `UNDETERMINED` | the listing failed in any other way; the error is logged |
+| `NOT_APPLICABLE` | the host is not a Mac (a Linux daemon runs no check) |
+| `UNSPECIFIED` | not reported: a daemon that predates the field, or a heartbeat by the JSON route, which carries none |
+
+When: once at the start of the daemon, and again when a heartbeat reads the state and the last
+check is 60 seconds old or more (`RECHECK_SECS`, on the daemon's unix clock), so a profile
+installed or removed shows at the first heartbeat 60 seconds or more after the last check, with no restart. The daemon logs one line at the
+start (`full disk access: granted`) and one line whenever the state changes
+(`full disk access: not_granted -> granted`); a check that finds the same state logs nothing.
+
+Where it shows: the coordinator keeps the last state of each host in memory (a restart forgets it
+until the host's next heartbeat; a number it does not know reads as `UNSPECIFIED`), and
+`hk hosts get --node-id <host>` answers it as `host.fullDiskAccess` (`hosts list` too). A host
+reporting `NOT_GRANTED` or `UNDETERMINED` is shown as that. The Host page's Overview has a
+"Full Disk Access" row for a Mac (`granted`, `not granted`, `not determined`, or `not reported`
+for a Mac whose last heartbeat the coordinator holds but which carries no state), and a warning line naming the profile's document while the
+grant is not granted; a host that is not a Mac, or whose heartbeat the coordinator does not hold (since its start), shows no row.
+
 ### The Remote Login probe
 
 Whether the daemon needs Full Disk Access to turn on Remote Login (sshd) is not stated by Apple
 (docs/design/ssh-through-coordinator.md, section 3). The daemon answered it itself, on the three
 build Macs on 0.1.337: `systemsetup -setremotelogin on` is refused without Full Disk Access, and
 `launchctl enable` and `bootstrap` of sshd's job turn Remote Login on without it, so the SSH design
-uses `launchctl` and the daemon needs no Full Disk Access and no Developer ID Application
-signature (the design's section 3 has the table of results).
+uses `launchctl` and the daemon needs no Full Disk Access for Remote Login and no Developer ID
+Application signature for it (the design's section 3 has the table of results). The daemon now
+checks whether it holds the grant for other operations ([Full Disk Access](#full-disk-access)).
 
 At each start of a Mac's daemon, a thread of its own (`crates/hostkeeper-daemon/src/remote_login_probe.rs`) runs,
 as the daemon (root under launchd, with whatever privacy grants the daemon has), these steps in
@@ -386,7 +424,7 @@ it loaded (never `systemsetup`, which needs Full Disk Access, and never a step t
 then `dseditgroup -o edit -a <account> -t user com.apple.access_ssh` when that group exists and the
 account is not in it. A Mac with no administrator account, or with several, is refused and left as
 it is; the report in the heartbeat says so. Nothing here needs Full Disk Access, a privacy profile
-or a password.
+or a password, whether or not the Mac holds the grant ([Full Disk Access](#full-disk-access)).
 
 ### Command Line Tools
 
@@ -492,10 +530,13 @@ again. Whether `sysadminctl` reads `-` from a pipe is for the Mac proof to show
 Every release ships macos-arm64 beside the two Linux platforms: the binary tarball
 `hostkeeper-<v>-macos-arm64.tar.gz` with its SBOM, and the installer pkg
 `hostkeeper-<v>-macos-arm64.pkg`. It also ships hello's `.pkg`, `hello-<v>-macos-arm64.pkg`, for
-the example service of `examples/hello`: `hello` carries the same ad-hoc code signature as the
-hostkeeper binary, and the plists of its two slots are rendered by
-`hostkeeper_launchd::service_plist`. The artifacts workflow builds them on a GitHub-hosted Apple
-silicon runner, on each push to `main` and by hand, never on a pull request.
+the example service of `examples/hello`: `hello` is signed like the other programs
+([The programs' signature](#the-programs-signature)), and the plists of its two slots are
+rendered by `hostkeeper_launchd::service_plist`. The artifacts workflow builds them on a
+GitHub-hosted Apple silicon runner, on each push to `main` and by hand, never on a pull request.
+The four Mach-O programs (`hostkeeper`, `hk`, `hello` and `hostkeeper-bootstrap`) are compiled by
+`compile-macos` and, on a push to `main`, signed by `sign-code` before `build-macos` packages them;
+a run by hand packages the linker's ad hoc signatures.
 
 The release also ships the bootstrap pkg, `hostkeeper-bootstrap-<v>-macos-arm64.pkg`, which Apple
 Business installs on a new Mac: the program `hostkeeper-bootstrap` at
@@ -624,8 +665,9 @@ install the pkg. The daemon's start keeps that file, and the postinstall loads t
 `cargo xtask release macos-pkg` builds the component with `pkgbuild` from the binary, `gh` and the
 trusted root (`--binary`, `--gh`, `--trusted-root`), then runs `productbuild --package` over it
 with the pkg identifier and the version and no signature; only the product goes to `--out`, and
-the digest line is its digest. The binary in it keeps the ad-hoc code signature the linker gives
-it, which the package verification above accepts.
+the digest line is its digest. The binary in it is the one given as `--binary`: on a push to
+`main` the one `sign-code` signed ([The programs' signature](#the-programs-signature)), otherwise
+the linker's ad-hoc signature, which the package verification above accepts.
 `cargo xtask release check-macos-pkg` reads back the product
 archive that `pkgutil --expand` expanded, layer by layer.
 
@@ -667,7 +709,8 @@ states asks a pkg that device management installs for notarization, and the rele
 only if a Mac refuses the signed pkg without it. The signing is in `.github/workflows/artifacts.yml`,
 on a push to `main` only, in three jobs:
 
-1. `build-macos` builds the unsigned pkgs into `pkg/` and checks them (above); they are never
+1. `build-macos` builds the unsigned pkgs into `pkg/` from the programs `sign-code` signed
+   ([The programs' signature](#the-programs-signature)) and checks them (above); they are never
    release files, only the artifact `pkg-unsigned-macos-arm64`.
 2. `sign-pkg`, in the environment `pkg-signing`, runs no repository code (no checkout, no cargo),
    so no build script or dependency runs where the key is. It decodes the PKCS#12 of the secret
@@ -682,7 +725,8 @@ on a push to `main` only, in three jobs:
    trusted status, a trusted timestamp and the chain of exactly the identity, `Developer ID
    Certification Authority` and `Apple Root CA`, naming every difference; it then expands the
    signed and the unsigned pkg and refuses any file that differs, so the signing changed nothing
-   `check-macos-pkg` checked. Only then is each signed pkg the release file
+   `check-macos-pkg` checked, and expands each signed pkg with its payload (`pkgutil
+   --expand-full`) to run `release check-code-signature` on the program inside it. Only then is each signed pkg the release file
    `hostkeeper-<version>-macos-arm64.pkg`, `hostkeeper-bootstrap-<version>-macos-arm64.pkg` or
    `hello-<version>-macos-arm64.pkg`: `SHA256SUMS`,
    the attestation and the release are of its bytes.
@@ -697,6 +741,89 @@ secrets named in that job alone; the checks of both pkgs before the one upload o
 On a Mac, `pkgutil --check-signature hostkeeper-<version>-macos-arm64.pkg` (or
 `hello-<version>-macos-arm64.pkg`) shows the signature.
 The digest of the release's pkg is the line of `SHA256SUMS`, the signed file's.
+
+### The programs' signature
+
+Each Mach-O program the release ships for macOS is signed with the Developer ID Application
+identity `Developer ID Application: Komira AI, Inc. (U7RTX4XD3X)` (the Team ID is
+`U7RTX4XD3X`, the installer's), under a stable identifier, with the hardened runtime and a trusted
+timestamp. The identifiers are in one table, `crates/xtask/src/release/mac_programs.rs`:
+
+| Program | Identifier |
+| --- | --- |
+| `hostkeeper` | `dev.hostkeeper.hostkeeper` |
+| `hk` | `dev.hostkeeper.hk` |
+| `hello` | `dev.hostkeeper.hello` |
+| `hostkeeper-bootstrap` | `dev.hostkeeper.bootstrap` |
+
+The `gh` the installer pkg also carries is not in the table: it is GitHub's program, shipped with
+GitHub's own signature, byte for byte as its pinned SHA-256 says.
+
+The designated requirement of such a signature names the identifier and the team and no hash of
+the program, so it is the same for every release; the privacy profile that grants hostkeeper Full
+Disk Access ([operations/mac-full-disk-access.md](operations/mac-full-disk-access.md)) names the
+program by it. For `hostkeeper` it is, as `codesign --display --requirements - <program>` prints
+it after `designated => `:
+
+```
+identifier "dev.hostkeeper.hostkeeper" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = U7RTX4XD3X
+```
+
+The `hostkeeper` binary embeds `crates/hostkeeper/macos/Info.plist` on macOS (its build script
+passes `-sectcreate __TEXT __info_plist` to the linker), so the program has the bundle identifier
+`dev.hostkeeper.hostkeeper`, equal to its signing identifier; the privacy profile grants by bundle
+identifier. A unit test of xtask holds the plist's identifier to the table's.
+
+The signing is in `.github/workflows/artifacts.yml`, on a push to `main` only, in three jobs
+before the pkgs are built:
+
+1. `compile-macos`, with no secret, compiles the four programs (`cargo build --locked --release`,
+   with the release's version and commit) and uploads them as the artifact
+   `macho-unsigned-macos-arm64`.
+2. `sign-code`, in the environment `pkg-signing`, runs no repository code (no checkout, no cargo),
+   so no build script or dependency runs where the key is. A secret that is not set stops it by
+   its name (the organisation secrets `MACOS_APPLICATION_P12`, the PKCS#12 of the identity's key
+   and certificate, and `MACOS_APPLICATION_P12_PASSWORD`; see
+   [operations/mac-full-disk-access.md](operations/mac-full-disk-access.md)). It imports the
+   identity into a keychain of the job (`code-signing.keychain-db` in `$RUNNER_TEMP`, never the
+   login keychain), adds Apple's Developer ID intermediate (G2), downloaded from Apple and held to
+   its pinned SHA-256, stops by name when the identity expires within 30 days (it is valid until
+   2027-12-21), then runs `codesign --force --sign <identity> --keychain <it> --identifier
+   <identifier> --options runtime --timestamp` on a copy of each program, deletes the keychain and
+   the PKCS#12 file whether the signing worked or not, and uploads the copies as
+   `macho-signed-macos-arm64`.
+3. `build-macos` downloads the unsigned programs, then (on a push to `main`) the signed ones over
+   them, and sets their modes (an artifact does not keep them); the tarballs and the pkgs are made
+   from them. On a push to `main` it also runs `cargo xtask release check-code-signature` on
+   `hostkeeper` and `hk` as unpacked from their tarballs, and `check-pkg` does so on the program
+   at its payload path in each signed pkg.
+
+`cargo xtask release check-code-signature <binary> --program <name>` (`name` is a binary name of
+the table; any other is refused before a tool runs) refuses a program, naming every problem with
+one line prefixed by the binary's path, unless:
+
+- `codesign --verify --strict --verbose=2` exits 0;
+- `codesign --display --verbose=2` shows `Identifier=` the program's identifier,
+  `TeamIdentifier=U7RTX4XD3X`, the `Authority=` chain exactly the identity, `Developer ID
+  Certification Authority` and `Apple Root CA`, a `Timestamp=` line (a trusted timestamp) and
+  the `runtime` flag in the `CodeDirectory` flags (`flags=0x10000(runtime)`); so an ad hoc
+  signature, another identifier, another team, no hardened runtime and no timestamp each fail by
+  name;
+- `codesign --display --requirements -` has the line `designated => <the requirement above>`
+  exactly, so a requirement that pins a `cdhash` fails.
+
+The workflow lint (`crates/xtask/tests/workflows/code_signing.rs`) holds the three jobs: the
+compile job's needs, runner and upload, the signing job's exact steps (each program signed under
+its identifier with `--options runtime --timestamp`, each secret checked by name, the cleanup under
+`always()`), the secrets named in the signing jobs alone, and `build-macos`'s needs, condition and
+downloads. A unit test of xtask reads the workflow and holds each identifier of the table to the
+signing step of its program.
+
+The programs are not notarized: no notarization step is in the release. A Mac does not assess with
+Gatekeeper a daemon that an installer installs when the file has no quarantine attribute, which a
+pkg's payload does not get from the installer; that is an expectation, not a measurement
+([operations/mac-full-disk-access.md](operations/mac-full-disk-access.md) lists the measurement
+that settles it).
 
 ### Remote Login for ssh through the coordinator
 

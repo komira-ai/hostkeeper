@@ -20,6 +20,7 @@ fn beat(platform: Platform) -> Heartbeat {
         repositories: None,
         facts_generation: None,
         remote_login_probe: None,
+        full_disk_access: None,
         operator_keys: None,
         ssh: None,
         prerequisites: None,
@@ -202,4 +203,35 @@ fn a_response_keeps_its_ssh_access_as_decoded() {
         })
     );
     assert_eq!(reply(pb::HeartbeatResponse::default()).reply.ssh, None);
+}
+
+/// Proves: each Full Disk Access state a heartbeat holds goes out as its enum value, and a
+/// heartbeat with none sends UNSPECIFIED.
+///
+/// Catches: a state mapped to another value, and a host that reports none read by the coordinator
+/// as granted.
+#[test]
+fn the_full_disk_access_state_goes_out_as_its_enum_value() {
+    use crate::full_disk_access::FullDiskAccess;
+    let mut with = beat(Platform::DarwinArm64);
+    for (state, want) in [
+        (FullDiskAccess::Granted, pb::FullDiskAccess::Granted),
+        (FullDiskAccess::NotGranted, pb::FullDiskAccess::NotGranted),
+        (
+            FullDiskAccess::NotApplicable,
+            pb::FullDiskAccess::NotApplicable,
+        ),
+        (
+            FullDiskAccess::Undetermined,
+            pb::FullDiskAccess::Undetermined,
+        ),
+    ] {
+        with.full_disk_access = Some(state);
+        assert_eq!(sent(&with).full_disk_access(), want);
+    }
+    with.full_disk_access = None;
+    assert_eq!(
+        sent(&with).full_disk_access(),
+        pb::FullDiskAccess::Unspecified
+    );
 }

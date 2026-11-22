@@ -33,6 +33,7 @@ use hostkeeper_proto::hostkeeper::agent::v1::MaintenanceReport;
 use serde_json::{Map, Value, json};
 
 use crate::bmc::BmcReport;
+use crate::full_disk_access::FullDiskAccess;
 use crate::host_ssh::SshReport;
 use crate::maintenance::maintenance_json;
 use crate::names::Reason;
@@ -478,6 +479,9 @@ pub struct Heartbeat {
     /// but a Mac's) or has not finished it. Sent over gRPC only, counted toward the bound on both,
     /// and the first optional fact [`fit`] drops.
     pub remote_login_probe: Option<RemoteLoginProbe>,
+    /// Whether the Mac's Full Disk Access grant is in force; none from a daemon that reports no
+    /// state. Sent over gRPC only, counted toward the bound on both, and never dropped.
+    pub full_disk_access: Option<FullDiskAccess>,
     /// What the managed block of the login account's `authorized_keys` holds; none from a daemon
     /// that keeps no operator keys. Sent over gRPC only, and counted toward the bound on both.
     pub operator_keys: Option<KeysReport>,
@@ -550,6 +554,9 @@ impl Heartbeat {
         }
         if let Some(probe) = &self.remote_login_probe {
             beat.insert("remote_login_probe".to_owned(), probe.to_json());
+        }
+        if let Some(state) = self.full_disk_access {
+            beat.insert("full_disk_access".to_owned(), state.as_str().into());
         }
         if let Some(report) = &self.operator_keys {
             let refused = report

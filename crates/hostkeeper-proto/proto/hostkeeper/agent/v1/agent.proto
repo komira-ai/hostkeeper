@@ -252,6 +252,10 @@ message HeartbeatRequest {
   // report that breaks a bound of `MaintenanceReport` is dropped and the one kept stays, and a
   // heartbeat without one leaves the one kept as it is.
   optional MaintenanceReport maintenance = 18;
+  // Whether the Mac's Full Disk Access grant is in force for the daemon, as it found by listing a
+  // directory only the grant allows. UNSPECIFIED: not reported, by an agent that predates the
+  // field; the coordinator reads that as unknown, never as granted. Read only over gRPC.
+  FullDiskAccess full_disk_access = 19;
 }
 
 // The LAN settings of a host's BMC, as the daemon read them from the BMC (Get LAN Configuration
@@ -458,6 +462,23 @@ enum TrustedRootReason {
   // The file of the root cannot be read, or is not one or more JSON trusted roots; this wins over
   // `TRUSTED_ROOT_REASON_STALE`.
   TRUSTED_ROOT_REASON_UNPARSEABLE = 4;
+}
+
+// Whether a host's daemon holds Full Disk Access, as it found by listing a directory only the
+// grant allows (never by reading the privacy database). The grant is a profile an administrator
+// installs, so the state can change while the daemon runs: the daemon looks again from time to
+// time.
+enum FullDiskAccess {
+  // Not reported: an agent that predates the field, or a heartbeat by the JSON route.
+  FULL_DISK_ACCESS_UNSPECIFIED = 0;
+  // The directory could be listed: the grant is in force.
+  FULL_DISK_ACCESS_GRANTED = 1;
+  // The system refused the listing for want of permission: the grant is not in force.
+  FULL_DISK_ACCESS_NOT_GRANTED = 2;
+  // The host is not a Mac: there is no such grant.
+  FULL_DISK_ACCESS_NOT_APPLICABLE = 3;
+  // The listing failed in some other way, so the grant is neither confirmed nor refused.
+  FULL_DISK_ACCESS_UNDETERMINED = 4;
 }
 
 // The platforms releases are built for.

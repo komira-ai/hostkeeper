@@ -16,6 +16,7 @@ mod dial;
 mod facts;
 mod features;
 mod fetch;
+mod full_disk_access;
 mod grpc;
 mod grpc_reply;
 mod halts;

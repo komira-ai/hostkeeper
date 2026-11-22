@@ -337,6 +337,7 @@ fn misread(tamper: fn(&mut Release), detail: &str) {
         verifier: &fakes.verifier,
         run_version: &fakes.run_version,
         pkgbuild: &fakes.pkgbuild,
+        codesign: &fakes.codesign,
         advisories: &fakes.advisories,
         registry: &fakes.registry,
         wait: &fakes.wait,

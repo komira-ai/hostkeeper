@@ -3,7 +3,7 @@
 //!
 //! The adapters that answer them for real are `git::GitCli` ([`GitHistory`]), `github::Gh`
 //! ([`GitHubRuns`], [`ReleaseStore`], [`Verifier`]), `check_binary::VersionOf`
-//! ([`RunVersion`]), `macos_pkg::PkgbuildCli` ([`BuildPkg`], `pkgutil` too) and `advisories::DenyCli` ([`AdvisoryCheck`]). Each runs its program through an [`Exec`], and the
+//! ([`RunVersion`]), `macos_pkg::PkgbuildCli` ([`BuildPkg`], `pkgutil` too), `code_signature::CodesignCli` ([`CodeSign`]) and `advisories::DenyCli` ([`AdvisoryCheck`]). Each runs its program through an [`Exec`], and the
 //! one [`Exec`] that starts a process, `real::SystemExec`, is built in `real` only and named by
 //! no test.
 
@@ -236,6 +236,24 @@ pub(crate) trait BuildPkg {
     fn check_signature(&self, pkg: &Path) -> Result<String, PortError>;
 }
 
+/// What one `codesign` run ended with: whether it exited 0, and everything it printed (it writes
+/// `--display` text to stderr and requirements to stdout, so both streams, stdout first).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Codesigned {
+    pub(crate) success: bool,
+    pub(crate) text: String,
+}
+
+/// What `codesign` says of a built Mach-O program (`code_signature::CodesignCli` is the adapter).
+pub(crate) trait CodeSign {
+    /// `codesign --verify --strict --verbose=2 <binary>`.
+    fn verify(&self, binary: &Path) -> Result<Codesigned, PortError>;
+    /// `codesign --display --verbose=2 <binary>`.
+    fn display(&self, binary: &Path) -> Result<Codesigned, PortError>;
+    /// `codesign --display --requirements - <binary>`.
+    fn requirements(&self, binary: &Path) -> Result<Codesigned, PortError>;
+}
+
 /// The registry the coordinator's image is pushed to (`skopeo`, read by `image_push`).
 pub(crate) trait Registry {
     /// Copies every image of the OCI layout `layout`, the one its `index.json` names `tag`, to
@@ -403,6 +421,7 @@ pub(crate) struct Ports<'a> {
     pub(crate) verifier: &'a dyn Verifier,
     pub(crate) run_version: &'a dyn RunVersion,
     pub(crate) pkgbuild: &'a dyn BuildPkg,
+    pub(crate) codesign: &'a dyn CodeSign,
     pub(crate) advisories: &'a dyn AdvisoryCheck,
     pub(crate) registry: &'a dyn Registry,
     pub(crate) wait: &'a dyn Wait,

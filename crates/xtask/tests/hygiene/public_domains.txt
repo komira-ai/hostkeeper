@@ -237,3 +237,7 @@ span.mini
 # (crates/hostkeeper-daemon/src/maintenance_hook/xcode/stage.rs and its tests).
 =xcode.app
 =xcode-beta.app
+
+# Not a host: the code-signing identifier of `hk` on macOS (crates/xtask/src/release/mac_programs.rs),
+# a reverse-DNS name whose last label is the program's name, which happens to be a country domain.
+=dev.hostkeeper.hk
