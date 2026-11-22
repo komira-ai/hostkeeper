@@ -15,12 +15,10 @@
 //! runs no package script, so no `DEBIAN_FRONTEND` is needed. apt-get's own lock timeout is not
 //! used: a held lock (`Could not get lock`) is waited for by the stage ([`super::stage::Calls`]).
 
-use hostkeeper_install::repository::apt::parse::BUSY;
-
 use super::stage::{
     Calls, Download, LISTING_DEADLINE, REASON_LISTING_FAILED, arguments, listing_failed, never_busy,
 };
-use crate::maintenance_apt::parse_apt_simulation;
+use crate::maintenance_apt::{lock_held, parse_apt_simulation};
 use crate::maintenance_collect::Look;
 use crate::maintenance_hook::kind::KindError;
 
@@ -40,10 +38,10 @@ const DOWNLOAD: [&str; 7] = [
     "--only-upgrade",
 ];
 
-/// Whether an `apt-get` run that did not exit 0 found the lock held: it says so in one of the
-/// forms the repository installer reads ([`BUSY`]).
+/// Whether an `apt-get` run found the lock held, as the maintenance look reads it
+/// ([`lock_held`]).
 pub(super) fn busy(code: Option<i32>, text: &str) -> bool {
-    code != Some(0) && BUSY.iter().any(|needle| text.contains(needle))
+    lock_held(code, text)
 }
 
 /// What apt will download for `look`, or `None` when nothing is due or every archive is already

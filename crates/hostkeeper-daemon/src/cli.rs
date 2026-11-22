@@ -191,7 +191,9 @@ pub struct DaemonFlags {
     /// The seconds a step of the repository installer waits at most for the host's package
     /// manager's lock, from 1 to 3600: apt's own wait (`DPkg::Lock::Timeout`) for an install,
     /// and a try every 2 seconds for `dpkg --purge` and `apt-mark`. A lock still held then defers
-    /// the order (`package_manager_busy`), which halts nothing.
+    /// the order (`package_manager_busy`), which halts nothing. It is also the maintenance look's
+    /// bound: each run of the look's package manager that finds the lock held is tried again
+    /// every 2 seconds for at most this long, and a lock still held then fails the look.
     #[arg(
         long,
         default_value_t = DEFAULT_PACKAGE_LOCK_WAIT_SECS,
@@ -463,7 +465,8 @@ async fn start_and_serve(
 ///   Linux host only reports ([`Prerequisites::at_host`]);
 /// - every host reports what it last found of its maintenance ([`maintenance_source`] over
 ///   [`crate::maintenance_collectors::at_host`]): a Linux host under `scope`, from the packages
-///   `placed.json` records and its package manager; a Mac from `sw_vers`, `softwareupdate`,
+///   `placed.json` records and its package manager, which waits for a held lock for the daemon's
+///   `--package-lock-wait-secs`; a Mac from `sw_vers`, `softwareupdate`,
 ///   `fdesetup`, its data volume and its Command Line Tools, a major upgrade due under `major`,
 ///   and its Xcodes, its update account and its device-management conflicts;
 /// - every heartbeat of a Linux host reports its BMC's address and MAC, read through
@@ -519,7 +522,7 @@ pub fn host_links(
     let maintenance = maintenance_source(
         daemon,
         scope,
-        crate::maintenance_collectors::at_host(kind, major),
+        crate::maintenance_collectors::at_host(kind, major, ctx.repository_ports.lock_wait_secs),
         Arc::new(SystemUnixClock),
         Arc::new(ThreadDispatch),
         log.clone(),

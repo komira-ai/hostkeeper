@@ -689,3 +689,114 @@ fn sections_without_mac_facts_give_a_report_without_them() {
     rig.run_look();
     assert_eq!(rig.sink.report().mac, None);
 }
+
+/// Proves a look that fails is tried again sooner than the hour: 5 minutes after it ended, then
+/// twice that after each further failure in a row (10, 20, 40 minutes), then the hour, never a
+/// second before; and that a look that succeeds puts the next one an hour after it and starts the
+/// count again, so the failure after it is tried again 5 minutes later.
+#[test]
+fn a_failed_look_is_tried_again_sooner_doubling_up_to_the_hour() {
+    let calls = Calls::default();
+    let (collector, answer) = scripted("apt", Err("the lock was held".to_owned()), &calls);
+    let rig = simple(vec![Box::new(collector)]);
+    rig.sink.report();
+    rig.run_look();
+    for after in [300, 600, 1200, 2400, 3600, 3600] {
+        rig.clock.advance(after - 1);
+        rig.sink.report();
+        assert_eq!(rig.dispatch.pending(), 0, "not before {after}s");
+        rig.clock.advance(1);
+        rig.sink.report();
+        assert_eq!(rig.dispatch.pending(), 1, "at {after}s");
+        rig.run_look();
+    }
+    assert_eq!(lock(&calls).len(), 7);
+    *lock(&answer) = Ok(Section::default());
+    rig.clock.advance(LOOK_SECS);
+    rig.sink.report();
+    rig.run_look();
+    assert_eq!(rig.sink.report().look_failed, "");
+    *lock(&answer) = Err("the lock was held".to_owned());
+    rig.clock.advance(LOOK_SECS - 1);
+    rig.sink.report();
+    assert_eq!(rig.dispatch.pending(), 0);
+    rig.clock.advance(1);
+    rig.sink.report();
+    rig.run_look();
+    rig.clock.advance(RETRY_SECS);
+    rig.sink.report();
+    assert_eq!(rig.dispatch.pending(), 1);
+}
+
+/// A collector that takes `secs` of the clock and then fails.
+struct Slow {
+    clock: Arc<FakeClock>,
+    secs: u64,
+}
+
+impl Collector for Slow {
+    fn name(&self) -> &'static str {
+        "slow"
+    }
+
+    fn collect(&self, _look: &Look<'_>) -> Result<Section, String> {
+        self.clock.advance(self.secs);
+        Err("the lock was held".to_owned())
+    }
+}
+
+/// Proves the retry of a failed look is counted from the second it ended (a look that waited 200
+/// seconds for a lock is tried again 300 seconds after that), and is never later than the hour
+/// after it started (a look that failed after 3500 seconds is tried again at the hour).
+#[test]
+fn the_retry_counts_from_the_end_of_the_failed_look_and_never_passes_the_hour() {
+    for (secs, due_after_start) in [(200, 500), (3500, LOOK_SECS)] {
+        let clock = Arc::new(FakeClock::new(START, 7));
+        let dispatch = Arc::new(ManualDispatch::default());
+        let sink = MaintenanceFacts::new(
+            vec![Box::new(Slow {
+                clock: clock.clone(),
+                secs,
+            })],
+            Box::new(Own(Ok(BTreeSet::new()))),
+            LinuxScope::default(),
+            clock.clone(),
+            dispatch.clone(),
+            Arc::new(RecordingLog::default()),
+        );
+        sink.report();
+        assert!(dispatch.run_next());
+        clock.set_unix(START + due_after_start - 1);
+        sink.report();
+        assert_eq!(dispatch.pending(), 0, "a look of {secs}s");
+        clock.set_unix(START + due_after_start);
+        sink.report();
+        assert_eq!(dispatch.pending(), 1, "a look of {secs}s");
+    }
+}
+
+/// Proves `look_again` while a look runs that then fails still starts the next look at once: the
+/// retry never puts off a look that was asked for.
+#[test]
+fn look_again_during_a_failed_look_is_not_put_off_by_the_retry() {
+    let calls = Calls::default();
+    let (collector, _) = scripted("apt", Err("the lock was held".to_owned()), &calls);
+    let rig = simple(vec![Box::new(collector)]);
+    rig.sink.report();
+    rig.sink.look_again();
+    rig.run_look();
+    rig.sink.report();
+    assert_eq!(rig.dispatch.pending(), 1);
+}
+
+/// Proves the retry's arithmetic at its ends: the first failure waits [`RETRY_SECS`], and a count
+/// past what a `u64` of seconds can double stays at the hour.
+#[test]
+fn the_retry_doubles_from_five_minutes_and_stays_at_the_hour() {
+    assert_eq!(RETRY_SECS, 300);
+    assert_eq!(retry_secs(0), 300);
+    assert_eq!(retry_secs(1), 300);
+    assert_eq!(retry_secs(4), 2400);
+    assert_eq!(retry_secs(5), LOOK_SECS);
+    assert_eq!(retry_secs(u32::MAX), LOOK_SECS);
+}
