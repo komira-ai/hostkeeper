@@ -13,12 +13,10 @@ use std::path::Path;
 
 use hostkeeper_steps::Seal;
 
+use super::VERSION_MODE;
 use super::error::UnpackError;
 use super::fs::PackageFs;
 use super::seal;
-
-/// The mode of a published version directory: open to root alone.
-pub(crate) const VERSION_MODE: u32 = 0o700;
 
 /// Publishes the staging directory `stage` of `service` as `version`, sealed with `seal`:
 ///

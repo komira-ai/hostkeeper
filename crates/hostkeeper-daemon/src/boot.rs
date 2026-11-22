@@ -286,9 +286,13 @@ pub struct BootReport {
     /// The dangling unit links an earlier move left that the start removed, before the boot
     /// pass ([`crate::unit_links`]).
     pub unit_links: Vec<std::path::PathBuf>,
-    /// The package directories an earlier release left open that the start closed, before
-    /// anything else it does ([`crate::package_dirs`]).
-    pub closed_package_dirs: Vec<std::path::PathBuf>,
+    /// The package directories an earlier release left otherwise that the start gave the modes
+    /// of the store's layout, before anything else it does, and the services whose archive
+    /// version it opened to their users ([`crate::package_dirs`]).
+    pub package_dirs: crate::package_dirs::PackageDirs,
+    /// The run units of an archive version the start opened that it started again
+    /// ([`crate::run_units`]).
+    pub archive_units_started: Vec<String>,
     /// How the readiness notice went: `None` before it was sent.
     pub ready: Option<Result<(), String>>,
     /// What the start settled of the update of hostkeeper itself that waited for the restart

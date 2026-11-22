@@ -37,6 +37,9 @@
 //! ([`Placer::restore_archive_links`]): until a native version is installed, the archive's unit
 //! is the one systemd starts the running service by.
 //!
+//! [`Placer::archive_enabled_units`] reads which of the archive's run units are enabled still:
+//! those whose `WantedBy=` link the record lists and the host still holds.
+//!
 //! [`Placer::remove_dangling_unit_links`] is the repair of a host a release moved without that
 //! removal: a link directly in the unit directory that points into the package directory of a
 //! service the daemon runs natively, and whose target is gone, is removed, then `daemon-reload`.
@@ -252,6 +255,29 @@ impl Placer<'_> {
         record.drop_archive_paths(&listed);
         store.save(&record, &lock)?;
         Ok(true)
+    }
+
+    /// The run units of `service` an archive version enabled that are enabled still: for each
+    /// `WantedBy=` link the record lists for it ([`ArchiveKind::WantsLink`]) whose path holds the
+    /// archive's link ([the module](self)'s table), the link's file name, the unit's, in the
+    /// record's order. A link that is gone or that is not the archive's (an operator's
+    /// `systemctl disable`, then `enable` of another unit) is not one. The record is read, not
+    /// written.
+    pub fn archive_enabled_units(&self, service: &str) -> Result<Vec<String>, PlacedError> {
+        let listed = self.store().load()?.archive_paths(service);
+        let mut units = Vec::new();
+        for one in listed
+            .iter()
+            .filter(|one| one.kind == ArchiveKind::WantsLink)
+        {
+            let found = occupant(self.fs, &one.path)?;
+            let enabled = found.is_some_and(|found| self.is_archives(one, &found));
+            let name = one.path.file_name().map(|n| n.to_string_lossy());
+            if let Some(name) = name.filter(|_| enabled) {
+                units.push(name.into_owned());
+            }
+        }
+        Ok(units)
     }
 
     /// Whether nothing is at `path`: no file there, or a component above it that is not a

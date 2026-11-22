@@ -12,7 +12,7 @@
 //! - [`store`]: `placed.json` ([`PlacedRecord`], [`Store`]);
 //! - [`archive`]: the paths an archive version of an earlier release placed, and their removal
 //!   ([`Placer::take_away_archive_paths`], [`Placer::restore_archive_links`],
-//!   [`Placer::forget_archive_paths`],
+//!   [`Placer::forget_archive_paths`], [`Placer::archive_enabled_units`],
 //!   [`Placer::remove_dangling_unit_links`]);
 //! - [`placer`]: the switch of `current` and `previous`, the lock of `placed.json` and the
 //!   service manager's reload ([`Placer`]);

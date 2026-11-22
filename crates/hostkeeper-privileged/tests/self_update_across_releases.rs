@@ -417,8 +417,8 @@ fn lay_down_other_installer_version(packages: &Path, service: &str, sealed: bool
 /// binary starts on them, runs, reports itself and hostkeeper at the released version, takes the
 /// update to this build and reports that; every entry of both directories (kind, mode, bytes,
 /// links) is as it was laid down after the released binary's start, and after the update but for
-/// the version directories, which this build's start closes (0700) with their service
-/// directories.
+/// the version directories, which this build's start closes (0700), and their service
+/// directories, which it makes 0711 (passed through by every user, listed by root alone).
 #[test]
 fn the_released_binary_started_on_versions_of_another_installer_runs_on_and_leaves_them_untouched()
 {
@@ -447,8 +447,8 @@ fn the_released_binary_started_on_versions_of_another_installer_runs_on_and_leav
     let next = newer(&released, 1);
     update_to_this_build(&rig, &released, &next);
     rig.wait_host_reports(&next, &next);
-    // This build's start closes each service and version directory to every user but root; what
-    // is in them, the seal and `current` are as they were laid down.
+    // This build's start closes each version directory to every user but root and makes each
+    // service directory 0711; what is in them, the seal and `current` are as they were laid down.
     assert_eq!(
         others.map(|service| snapshot(&packages.join(service))),
         before.map(|entries| closed_versions(&entries)),
@@ -461,7 +461,7 @@ fn the_released_binary_started_on_versions_of_another_installer_runs_on_and_leav
             .expect("the service directory")
             .permissions()
             .mode();
-        assert_eq!(mode & 0o7777, 0o700, "{service}");
+        assert_eq!(mode & 0o7777, 0o711, "{service}");
     }
 }
 

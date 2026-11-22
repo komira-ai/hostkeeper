@@ -506,20 +506,23 @@ fn a_service_directory_that_cannot_be_made_or_looked_at_stops_the_work() {
     assert!(!rig.host().exists(Path::new("absent/x")).unwrap());
 }
 
-/// Catches a service directory left open to other users staying so: a directory an earlier
-/// release left 0755 (or a crash left half-made) is closed to 0700 by the next publish, which
-/// publishes into it; a call on a closed directory changes nothing; and a link in the place of
-/// the service directory is refused, not followed, and its target (0755) is left as it was.
+/// Catches a service directory an earlier release left otherwise staying so: a directory left
+/// 0755 (listed by every user), or 0700 (passed through by no service user), or half-made by a
+/// crash, is given 0711 by the next publish, which publishes into it; a call on a directory
+/// already 0711 changes nothing; and a link in the place of the service directory is refused, not
+/// followed, and its target (0755) is left as it was.
 #[test]
-fn a_service_directory_left_open_is_closed_by_the_next_publish() {
-    let rig = Rig::new("f-half-made");
-    fs::create_dir(rig.service()).unwrap();
-    fs::set_permissions(rig.service(), fs::Permissions::from_mode(0o755)).unwrap();
-    publish(&rig.host(), VERSION).unwrap();
-    assert_eq!(mode(&rig.service()), 0o700);
-    rig.host().create_service(Path::new(SERVICE)).unwrap();
-    assert_eq!(mode(&rig.service()), 0o700);
-    assert_eq!(rig.listing(), published());
+fn a_service_directory_left_open_or_closed_is_given_its_mode_by_the_next_publish() {
+    for (name, left) in [("f-half-made", 0o755), ("f-left-closed", 0o700)] {
+        let rig = Rig::new(name);
+        fs::create_dir(rig.service()).unwrap();
+        fs::set_permissions(rig.service(), fs::Permissions::from_mode(left)).unwrap();
+        publish(&rig.host(), VERSION).unwrap();
+        assert_eq!(mode(&rig.service()), 0o711, "{left:o}");
+        rig.host().create_service(Path::new(SERVICE)).unwrap();
+        assert_eq!(mode(&rig.service()), 0o711, "{left:o}");
+        assert_eq!(rig.listing(), published(), "{left:o}");
+    }
 
     let rig = Rig::new("f-service-link");
     let elsewhere = rig.scratch.path().join("elsewhere");

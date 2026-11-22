@@ -8,6 +8,11 @@ use crate::testing::{
     Failing, FakeClock, FakeFetcher, deliver, listing, scratch, serve, service_dir, sha256_hex,
 };
 
+/// The permission bits of `path`.
+fn fs_mode(path: &Path) -> u32 {
+    std::fs::metadata(path).expect("the path").mode() & 0o7777
+}
+
 fn service(name: &str) -> ServiceName {
     ServiceName::new(name).expect("a service name")
 }
@@ -96,9 +101,10 @@ fn staging_names_have_the_prefix_and_never_repeat() {
     assert_eq!(all.len(), 32);
 }
 
-/// Catches a service directory that is a link (or not a directory) being written through, and
-/// a missing one not being made: `make_dir` makes a missing directory, accepts an existing one,
-/// and refuses a link to a directory, a file, and a path under a file.
+/// Catches a service directory that is a link (or not a directory) being written through, a
+/// missing one not being made, or one made that a service's user cannot pass through: `make_dir`
+/// makes a missing directory mode 0711, accepts an existing one as it is, and refuses a link to a
+/// directory, a file, and a path under a file.
 #[test]
 fn the_service_directory_is_made_or_must_be_a_real_directory() {
     let scratch = scratch("stage-dir");
@@ -106,7 +112,14 @@ fn the_service_directory_is_made_or_must_be_a_real_directory() {
     assert!(!is_dir(&dir).expect("missing"));
     make_dir(&dir).expect("made");
     assert!(is_dir(&dir).expect("a directory"));
+    assert_eq!(fs_mode(&dir), 0o711);
+    std::fs::set_permissions(&dir, Permissions::from_mode(0o700)).expect("closed");
     make_dir(&dir).expect("already there");
+    assert_eq!(
+        fs_mode(&dir),
+        0o700,
+        "an existing directory is left as it is"
+    );
 
     let link = scratch.path().join("link");
     symlink(&dir, &link).expect("a link to the directory");

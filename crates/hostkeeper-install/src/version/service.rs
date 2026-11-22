@@ -12,9 +12,10 @@ use hostkeeper_config::daemon::Sha256Hex;
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_steps::{Layout, Seal, SealError, read_seal};
 
+use super::VERSION_MODE;
 use super::error::UnpackError;
 use super::fs::{PackageFs, ServiceLock};
-use super::publish::{VERSION_MODE, settle};
+use super::publish::settle;
 use super::seal;
 
 /// Refuses a version name that is one of the package directory's own names, or too long.
