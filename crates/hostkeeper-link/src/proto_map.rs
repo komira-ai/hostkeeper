@@ -20,7 +20,9 @@
 //! JSON route has no field for them either, nor for a service's installer. The generation of the
 //! facts the daemon's facts file holds goes out as `facts_generation` when there is one; the
 //! JSON route has no field for it. The report of the daemon's sshd setup goes out as `ssh` when
-//! there is one; the JSON route has no field for it either.
+//! there is one; the JSON route has no field for it either. The state of the Mac's Full Disk
+//! Access grant goes out as `full_disk_access`, unspecified when the daemon reports none; the JSON
+//! route has no field for it.
 //!
 //! **In.** The advertised features the daemon knows, and the halt clear generations of the
 //! services the daemon could run (a name outside its grammar names none), in the order of the
@@ -42,6 +44,7 @@ use hostkeeper_wire::wire::{is_drift_version, is_service_name};
 use crate::beat::{
     AGENT_NAME, Feature, Health, Heartbeat, LocalHalt, Platform, RootReason, ServiceFacts,
 };
+use crate::full_disk_access::FullDiskAccess;
 use crate::host_facts::PushedFacts;
 use crate::host_ssh::{PushedSsh, SshReport};
 use crate::names::{OrderId, PackageDigest};
@@ -98,6 +101,10 @@ pub(crate) fn heartbeat(beat: &Heartbeat) -> Result<pb::HeartbeatRequest, Unsend
             .into(),
         facts_generation: beat.facts_generation,
         remote_login_probe: beat.remote_login_probe.as_ref().map(remote_login_probe),
+        full_disk_access: beat
+            .full_disk_access
+            .map_or(pb::FullDiskAccess::Unspecified, access)
+            .into(),
         operator_keys: beat.operator_keys.as_ref().map(keys_report),
         prerequisites: beat.prerequisites.as_ref().map(prerequisites_report),
         bmc: beat.bmc.as_ref().map(|report| pb::BmcReport {
@@ -224,6 +231,16 @@ fn prerequisite_state(state: &PrerequisiteState) -> pb::PrerequisiteState {
         failures: state.failures,
         next_try_unix: state.next_try_unix,
         seen_unix: state.seen_unix,
+    }
+}
+
+/// A Full Disk Access state.
+fn access(state: FullDiskAccess) -> pb::FullDiskAccess {
+    match state {
+        FullDiskAccess::Granted => pb::FullDiskAccess::Granted,
+        FullDiskAccess::NotGranted => pb::FullDiskAccess::NotGranted,
+        FullDiskAccess::NotApplicable => pb::FullDiskAccess::NotApplicable,
+        FullDiskAccess::Undetermined => pb::FullDiskAccess::Undetermined,
     }
 }
 

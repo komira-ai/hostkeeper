@@ -44,6 +44,7 @@ fn host(rig: &Rig) -> (Heartbeater, Arc<FakeLink>, Arc<RecordingLog>) {
         console: None,
         identity: None,
         remote_login_probe: None,
+        full_disk_access: None,
         operator_keys: None,
         prerequisites: None,
         maintenance: None,

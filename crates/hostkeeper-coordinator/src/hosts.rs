@@ -121,6 +121,7 @@ impl Coordinator {
                         crate::picks::show(&fleet, &id, &mut host, &self.services, &desired);
                         self.show_repositories(&fleet, &id, &mut host);
                         crate::remote_login_probe::show(&fleet, &id, &mut host);
+                        crate::full_disk_access::show(&fleet, &id, &mut host);
                         self.show_operator_keys(&fleet, &id, &mut host);
                         self.show_ssh_report(&fleet, &id, &mut host);
                         self.show_prerequisites(&fleet, &id, &mut host);
@@ -176,6 +177,7 @@ impl Coordinator {
             crate::picks::show(&fleet, &id, &mut host, &self.services, &self.desired.all());
             self.show_repositories(&fleet, &id, &mut host);
             crate::remote_login_probe::show(&fleet, &id, &mut host);
+            crate::full_disk_access::show(&fleet, &id, &mut host);
             self.show_operator_keys(&fleet, &id, &mut host);
             self.show_ssh_report(&fleet, &id, &mut host);
             self.show_prerequisites(&fleet, &id, &mut host);

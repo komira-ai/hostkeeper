@@ -250,6 +250,7 @@ fn a_host_is_what_the_status_holds_of_it() {
             trusted_root_reason: 0,
             facts_generation: None,
             remote_login_probe: None,
+            full_disk_access: 0,
             operator_keys: None,
             prerequisites: None,
             bmc: None,
@@ -283,6 +284,7 @@ fn a_host_is_what_the_status_holds_of_it() {
         // A heartbeat answered as the JSON route answers it says nothing of the trusted root: unknown.
         trusted_root_age_secs: None,
         trusted_root_reason: agent::TrustedRootReason::Unspecified.into(),
+        full_disk_access: agent::FullDiskAccess::Unspecified.into(),
         // A daemon that does not announce `target-v1` runs every service from archives.
         running: [DB, WEB]
             .into_iter()

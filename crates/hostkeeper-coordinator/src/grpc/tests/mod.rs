@@ -14,6 +14,7 @@ mod enrollment;
 mod enrollment_groups;
 mod facts;
 mod force;
+mod full_disk_access;
 mod gateway;
 mod group_calls;
 mod group_releases;

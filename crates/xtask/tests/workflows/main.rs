@@ -21,6 +21,8 @@ mod callers_tests;
 
 mod ci;
 mod ci_tests;
+mod code_signing;
+mod code_signing_tests;
 mod coordinator_update_release_tests;
 mod coordinator_wait;
 mod coordinator_wait_run_tests;

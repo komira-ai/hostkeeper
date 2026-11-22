@@ -29,7 +29,9 @@ The answer is the coordinator's view of the host: whether it is live, when its l
 arrived, that heartbeat as the host sent it (its agent version, the trusted root's age and reason in
 `trusted_root_age_secs` and `trusted_root_reason`, see
 [The trusted root on a host](deploy/verify-a-release.md#the-trusted-root-on-a-host), and each
-service's lifecycle, health and step records), and how each service the coordinator manages sees it,
+service's lifecycle, health and step records), the host's Full Disk Access state in
+`full_disk_access` (a Mac's grant: `GRANTED`, `NOT_GRANTED`, `UNDETERMINED`; `NOT_APPLICABLE` for a
+Linux host, `UNSPECIFIED` when the host has not said, see [Full Disk Access](macos.md#full-disk-access)), and how each service the coordinator manages sees it,
 and `running`: each service the host's daemon said it runs (not one it reported absent) with its
 version and the installer it runs it with (`hostkeeper-archive` for a daemon that announces none),
 and `running_unix`, when the coordinator took it from a heartbeat. A host the coordinator has not

@@ -229,8 +229,12 @@ Mac (a host group's configuration pkg, [hostgroups.md](hostgroups.md) section 6.
 
 **What the release produces.** The hostkeeper pkg, hello's pkg and the bootstrap pkg are signed by `Developer ID Installer: Komira AI, Inc. (U7RTX4XD3X)`
 with a trusted timestamp (`artifacts.yml` `sign-pkg`, then `check-pkg`, on a push to `main` only), attested, and **not notarized**
-(`docs/macos.md` "The installer's signature", `docs/deploy/verify-a-release.md`). There is no Developer ID **Application** identity in the workflow:
-the binaries inside carry the linker's ad-hoc signature (the deleted `hostkeeper-mdm.md` section 2).
+(`docs/macos.md` "The installer's signature", `docs/deploy/verify-a-release.md`). A Developer ID **Application** identity is now in the workflow:
+`artifacts.yml` `sign-code` signs each Mach-O program (hostkeeper, hk, hello and the bootstrap, as `dev.hostkeeper.bootstrap`) under a stable identifier with the hardened
+runtime and a trusted timestamp, before the pkgs are built, so the programs inside every pkg carry that signature and not the linker's ad-hoc one (`docs/macos.md`
+"The programs' signature"; a run by hand off `main` still packages the ad-hoc ones). The programs are **not notarized**: no step of the release notarizes them. A Gatekeeper
+assessment is not expected of a daemon that an installer installs, since the files carry no quarantine attribute; that is an expectation, not a measurement
+(`docs/operations/mac-full-disk-access.md` lists the measurement).
 
 **Q2 (default, owner may change): no notarization work now; MB4 is deferred.** The bootstrap pkg is signed with the existing identity, built and uploaded
 beside the hostkeeper pkg with a versioned URL, and its SHA-256 is in the release's `SHA256SUMS` and in the `SHA256SUMS` of its version directory (section 8).
@@ -241,7 +245,7 @@ nothing Apple states asked that install for notarization, "added only if a Mac r
 path asks more is unverified. If it does, notarizing a pkg is more than adding a step:
 
 - `notarytool` accepts a pkg only if the Mach-O files in it carry a Developer ID **Application** signature with the hardened runtime and a secure
-  timestamp. The bootstrap binary would need that identity, which the org may not have. (Only for the bootstrap: hostkeeper's pkg is fetched and run through
+  timestamp. The bootstrap binary now has that signature (`sign-code`), so this condition is met; the notary submission itself is not built. (Only for the bootstrap: hostkeeper's pkg is fetched and run through
   `installer` by the bootstrap, not opened by a user, so I expect no Gatekeeper check on it; not tested here.)
 - The notarization ticket is stapled, which changes the pkg's bytes, so the digest, the attestation and `SHA256SUMS` must be of the stapled file,
   after `sign-pkg` and before `check-pkg`.
@@ -366,7 +370,7 @@ Size: S under a day, M a few days. All of them land in the pull request that car
 | MB1 | Crate `hostkeeper-bootstrap`: the loop of section 9 over its ports (the network, `pkgutil` and `installer`, the pause), the settings, the fetch, the check and the install; `main.rs` only forwards to the library (T4). The farm Mac measures the terms of section 9 | M | **Built**: `crates/hostkeeper-bootstrap`. The measurement on the farm Mac is not done |
 | MB2 | `cargo xtask release macos-bootstrap-pkg` and its `check`: one component, the binary, the plist, a postinstall that loads the job, identifier `dev.hostkeeper.bootstrap` | S | **Built**: `crates/xtask/src/release/macos_bootstrap.rs`, `packaging/macos-bootstrap/` |
 | MB3 | `artifacts.yml`: the pkg joins `build-macos`, `sign-pkg` and `check-pkg`, is attested, and the release publishes it beside the hostkeeper pkg; the workflow lint gains the job lines with a negative case (T15) | S | **Built**: `.github/workflows/artifacts.yml`, `crates/xtask/tests/workflows/pkg_signing.rs`, `crates/xtask/src/release/contract.rs`, `crates/xtask/src/channels/spec.rs` |
-| MB4 | Notarization of the bootstrap alone, only if question 2 says so | M | **Deferred** (Q2 default: no notarization work now) |
+| MB4 | Notarization of the bootstrap alone, only if question 2 says so | M | **Deferred** (Q2 default: no notarization work now). The Application identity exists in the workflow (`sign-code`) and the programs are not notarized |
 | MB5 | `docs/operations/mac-bootstrap.md`: the owner's Blueprint steps, the record, the approval, the logs; `docs/macos.md` updated | S | **Built**: `docs/operations/mac-bootstrap.md` |
 | MB6 | Coordinator: approve a re-imaged Mac's request by the serial of an inventory record, additive | S | **Not planned** (Q6 default: an operator's click with `--replace true`) |
 

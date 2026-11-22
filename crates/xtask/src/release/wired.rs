@@ -2,6 +2,7 @@
 //! over the process-starting one and a test over a fake.
 
 use super::check_binary::VersionOf;
+use super::code_signature::CodesignCli;
 use super::git::GitCli;
 use super::github::Gh;
 use super::image_push;
@@ -10,7 +11,7 @@ use super::ports::{Adapters, Exec, Ports};
 use crate::advisories::DenyCli;
 
 /// The adapters wired over one [`Exec`]: git, gh (runs, issues, releases and attestations),
-/// the `--version` of a binary, `pkgbuild`, `cargo deny` and `skopeo`, each running its
+/// the `--version` of a binary, `pkgbuild`, `codesign`, `cargo deny` and `skopeo`, each running its
 /// program through a copy of `exec`. The real ones (`real::connect`) are these over the
 /// process-starting `Exec`; a test wires them over a fake one.
 pub(crate) struct Wired<E> {
@@ -18,6 +19,7 @@ pub(crate) struct Wired<E> {
     gh: Gh<E>,
     version_of: VersionOf<E>,
     pkgbuild: PkgbuildCli<E>,
+    codesign: CodesignCli<E>,
     deny: DenyCli<E>,
     skopeo: image_push::SkopeoCli<E>,
     sleep: image_push::Sleep,
@@ -30,6 +32,7 @@ impl<E: Exec + Clone> Wired<E> {
             gh: Gh::new(exec.clone()),
             version_of: VersionOf::new(exec.clone()),
             pkgbuild: PkgbuildCli::new(exec.clone()),
+            codesign: CodesignCli::new(exec.clone()),
             deny: DenyCli::new(exec.clone()),
             skopeo: image_push::SkopeoCli::new(exec),
             sleep: image_push::Sleep(std::thread::sleep),
@@ -46,6 +49,7 @@ impl<E: Exec> Adapters for Wired<E> {
             verifier: &self.gh,
             run_version: &self.version_of,
             pkgbuild: &self.pkgbuild,
+            codesign: &self.codesign,
             advisories: &self.deny,
             registry: &self.skopeo,
             wait: &self.sleep,

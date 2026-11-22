@@ -285,6 +285,7 @@ export namespace hostkeeper_operator_v1 {
     maintenance?: hostkeeper_agent_v1.MaintenanceReport;
     maintenanceLookAgeSecs?: string;
     maintenanceStale?: boolean;
+    fullDiskAccess?: hostkeeper_agent_v1.FullDiskAccess;
   }
   export interface HostCounts { missing?: number; absent?: number; excluded?: number; unmanaged?: number; deferred?: number; picked?: number; noTarget?: number; noBuildForHost?: number; installerDropped?: number; }
   export interface HostGroup { name?: string; packages?: string[]; policy?: hostkeeper_operator_v1.RolloutPolicy; }

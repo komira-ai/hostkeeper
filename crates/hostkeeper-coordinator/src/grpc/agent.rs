@@ -93,6 +93,8 @@ impl Api for AgentService {
             self.coordinator
                 .hear_remote_login_probe(&identity, request.get_ref());
             self.coordinator
+                .hear_full_disk_access(&identity, request.get_ref());
+            self.coordinator
                 .hear_operator_keys(&identity, request.get_ref());
             self.coordinator
                 .hear_ssh_report(&identity, request.get_ref());
