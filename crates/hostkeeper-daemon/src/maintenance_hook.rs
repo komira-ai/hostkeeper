@@ -14,9 +14,11 @@
 //! [`linux`]), and the `prepare` of `linux`, its stage (the module `linux::stage`: the free space
 //! checked, then a download alone); on a Mac every step of `macos` ([`MacosKind`]): its
 //! `prepare` stages a macOS update or defers, its `cutover` and restart install it with the update
-//! account, its `verify` checks the target build, and the `prepare` of `xcode`, the stage of the
-//! Xcodes of the order ([`XcodeKind`]); every other step of every kind is `unsupported_kind` until
-//! its own change. The steps run each kind of the run in [`Kind::ALL`]'s order, macOS before Xcode,
+//! account, its `verify` checks the target build, and every step of `xcode` ([`XcodeKind`]) but the
+//! `after_reboot` it never asks for: its `prepare` stages the Xcodes of the order, its `cutover`
+//! moves them into place, accepts their licences, runs their first launch, selects the default
+//! and removes the old Xcodes the order names, and its `verify` checks each; every other step of
+//! every kind is `unsupported_kind` until its own change. The steps run each kind of the run in [`Kind::ALL`]'s order, macOS before Xcode,
 //! whatever order the parameters give:
 //!
 //! - `prepare` runs each kind's `prepare`, and ends at the first that does not succeed. It writes
@@ -240,7 +242,8 @@ fn bounded(detail: &str) -> String {
 /// On a Mac, `macos` ([`MacosKind`]), whose `prepare` stages a macOS update and whose other steps
 /// install and check it, keeping the install's plan in `run_dir` (the directory of the run's
 /// parameters; `None` for parameters on standard input, where no `cutover` runs), and `xcode`
-/// ([`XcodeKind`]), whose `prepare` stages the order's Xcodes; `reboot` keeps its stub.
+/// ([`XcodeKind`]), whose `prepare` stages the order's Xcodes and whose `cutover` and `verify`
+/// install and check them; `reboot` keeps its stub.
 pub fn registry_for(
     platform: &Platform,
     lock_wait_secs: u64,

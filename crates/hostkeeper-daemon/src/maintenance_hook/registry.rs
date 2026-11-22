@@ -1,7 +1,7 @@
 //! The kinds of maintenance a platform has work for ([`Registry::for_platform`]). Each is a stub
 //! ([`Unsupported`]) until its platform's work is written; `super::registry_for` puts the work
-//! that is written (a Linux host's `linux` and `reboot`, a Mac's `macos`) in place of the stub on a
-//! host.
+//! that is written (a Linux host's `linux` and `reboot`, a Mac's `macos` and `xcode`) in place of the stub on
+//! a host.
 
 use std::collections::BTreeMap;
 

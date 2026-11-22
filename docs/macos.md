@@ -496,6 +496,21 @@ the Mac is shown `skipped` only when `macos` was all its turn held. A major upgr
 counts as due only when its group's `macos_major` is true, and the `maintain` order carries that
 setting, so the daemon stages a major upgrade only for such a group.
 
+### The Xcode install
+
+A run's `xcode` kind (`crates/hostkeeper-daemon/src/maintenance_hook/xcode/`, design
+[maintenance-updates.md](design/maintenance-updates.md) sections 2.4 and 5.6) stages each Xcode of
+the order in `/Applications/.hostkeeper-staging/` while the Mac serves, and, on the drained Mac,
+moves each staged one to `/Applications/Xcode-<version>.app` beside the others, runs its own
+`xcodebuild -license accept` and then `xcodebuild -runFirstLaunch`, points `xcode-select -s` at the
+order's default, and only then removes each `Xcode-<version>.app` the order names to remove that is
+older than every Xcode it keeps. An Xcode whose directory is not `Xcode-<version>.app` of its own
+version is never removed (the look reports it `foreign`), and an installed Xcode whose `xcodebuild`
+or any directory down to it is not root's alone is refused, never run. The check before the Mac is put back
+fails unless each Xcode of the order is at its path with its build, its `xcodebuild -version` runs
+and names that build, its licence is accepted (`xcodebuild -license check`) and `xcode-select -p`
+names the default. Xcode needs no reboot. Simulator platforms are not imported yet.
+
 ### The update account
 
 At every start, once its config is loaded, a Mac's daemon makes the update account of its
