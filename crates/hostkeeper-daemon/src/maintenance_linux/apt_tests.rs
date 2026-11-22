@@ -9,6 +9,16 @@ use crate::maintenance_linux::REASON_INSTALL_FAILED;
 const UBUNTU: &str = include_str!("../../tests/fixtures/maintenance/apt/ubuntu_2404.txt");
 const HELD: &str = include_str!("../../tests/fixtures/maintenance/apt/debian12_held.txt");
 const NOTHING: &str = include_str!("../../tests/fixtures/maintenance/apt/nothing_to_do.txt");
+const DEBIAN: &str = include_str!("../../tests/fixtures/maintenance/apt/debian12_security.txt");
+/// A simulation that installs a new library (a security update) and a new kernel image beside one
+/// installed security update.
+const NEW_PACKAGES: &str =
+    include_str!("../../tests/fixtures/maintenance/apt/ubuntu_2404_new_packages.txt");
+/// A simulation that installs only packages not installed yet.
+const ONLY_NEW: &str = "\
+Inst libdrm-amdgpu1 (2.4.125-1ubuntu0.1~24.04.2 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64])
+Inst linux-image-6.8.0-151-generic (6.8.0-151.151 Ubuntu:24.04/noble-updates [amd64])
+";
 
 fn args(list: &[&str]) -> Vec<String> {
     list.iter().map(|arg| (*arg).to_owned()).collect()
@@ -171,6 +181,62 @@ fn security_scope_with_nothing_due_installs_nothing() {
     assert_eq!(run(&host, LinuxScope::Security), Ok(()));
     assert!(host.mark.calls().is_empty());
     assert!(host.install.calls().is_empty());
+}
+
+/// Proves the security scope on a host whose simulation installs a new library and a new kernel
+/// image beside an installed security update installs that update alone, with exactly these
+/// arguments, and holds nothing (no own package moves).
+#[test]
+fn security_scope_names_no_package_that_is_not_installed() {
+    let host = host(NEW_PACKAGES, 300);
+    ok_install(&host, &["install", "--only-upgrade", "python3-jwt"], 300);
+    assert_eq!(run(&host, LinuxScope::Security), Ok(()));
+    assert!(host.mark.calls().is_empty());
+    let mut expected = install_prefix(300);
+    expected.extend(args(&["install", "--only-upgrade", "python3-jwt"]));
+    assert_eq!(host.install.calls(), vec![expected]);
+}
+
+/// Proves the security scope on a host whose simulation installs only packages not installed yet
+/// runs no install and succeeds.
+#[test]
+fn security_scope_with_only_new_packages_installs_nothing() {
+    let host = host(ONLY_NEW, 300);
+    assert_eq!(run(&host, LinuxScope::Security), Ok(()));
+    assert!(host.mark.calls().is_empty());
+    assert!(host.install.calls().is_empty());
+}
+
+/// Proves the security scope's install names exactly the packages the maintenance look reports
+/// due under that scope, in the same order, for every listing of the look's fixtures: what the
+/// look (and the check after the install, which is the look again) reports due is what the
+/// install is given.
+///
+/// Catches: a look that reports a package the install leaves out, so that the check after the
+/// install halts the host on `update_due`; or an install of a package the look never reported.
+#[test]
+fn the_security_install_names_what_the_security_look_reports() {
+    use crate::maintenance_apt::Apt;
+    use crate::maintenance_collect::{Collector, Look};
+    let own = own();
+    for simulation in [UBUNTU, DEBIAN, HELD, NOTHING, NEW_PACKAGES, ONLY_NEW] {
+        let fake = FakeLaunchctl::new();
+        fake.always(&args(&["update", "-qq"]), Ok(LaunchctlOutput::success("")));
+        fake.always(
+            &args(&["--simulate", "-qq", "dist-upgrade"]),
+            Ok(LaunchctlOutput::success(simulation)),
+        );
+        let lock = crate::testing::RecordedWaits::bounded(300).0;
+        let look = Apt::new(Box::new(fake.clone()), Box::new(fake), lock)
+            .collect(&Look {
+                scope: LinuxScope::Security,
+                own_packages: &own,
+            })
+            .expect("collects");
+        let reported: Vec<String> = look.due.into_iter().map(|item| item.label).collect();
+        let installed = security_names(&parse_apt_simulation(simulation).updates, &own);
+        assert_eq!(installed, reported, "{simulation}");
+    }
 }
 
 /// Proves a package of a foreign architecture is named as apt printed it, an own package is

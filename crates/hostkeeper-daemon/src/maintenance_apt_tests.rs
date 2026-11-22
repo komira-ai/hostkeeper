@@ -15,6 +15,16 @@ const DEBIAN: &str = include_str!("../tests/fixtures/maintenance/apt/debian12_se
 const NOTHING: &str = include_str!("../tests/fixtures/maintenance/apt/nothing_to_do.txt");
 const HELD: &str = include_str!("../tests/fixtures/maintenance/apt/debian12_held.txt");
 const UNKNOWN: &str = include_str!("../tests/fixtures/maintenance/apt/unknown_line.txt");
+/// An Ubuntu 24.04 host booted from a newer kernel series whose simulation installs two packages it
+/// does not have yet, a library (a security update) and an older series' kernel image (not one),
+/// beside one installed security update.
+const NEW_PACKAGES: &str =
+    include_str!("../tests/fixtures/maintenance/apt/ubuntu_2404_new_packages.txt");
+/// The same host once the installed security update is installed: the two new packages alone.
+const ONLY_NEW: &str = "\
+Inst libdrm-amdgpu1 (2.4.125-1ubuntu0.1~24.04.2 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64])
+Inst linux-image-6.8.0-151-generic (6.8.0-151.151 Ubuntu:24.04/noble-updates [amd64])
+";
 
 fn args(list: &[&str]) -> Vec<String> {
     list.iter().map(|arg| (*arg).to_owned()).collect()
@@ -66,8 +76,9 @@ fn the_host_collector_is_apt() {
     assert_eq!(Apt::at_host(DEFAULT_PACKAGE_LOCK_WAIT_SECS).name(), "apt");
 }
 
-/// Proves a security-only look of an Ubuntu 24.04 listing reports the security updates and the new
-/// kernel, each with `security` true, the kernel needing a reboot, in the order found.
+/// Proves a security-only look of an Ubuntu 24.04 listing reports the installed security updates
+/// and the upgraded kernel meta-package, each with `security` true, in the order found; the new
+/// kernel image and modules it pulls in (not installed yet) are not due under that scope.
 #[test]
 fn security_scope_reports_the_security_updates_and_the_kernel() {
     let (fake, apt) = host(UBUNTU);
@@ -87,20 +98,6 @@ fn security_scope_reports_the_security_updates_and_the_kernel() {
                 "openssl",
                 "3.0.13-0ubuntu3.2",
                 "3.0.13-0ubuntu3.4",
-                true,
-                false
-            ),
-            linux_item(
-                "linux-image-6.8.0-45-generic",
-                "",
-                "6.8.0-45.45",
-                true,
-                true
-            ),
-            linux_item(
-                "linux-modules-6.8.0-45-generic",
-                "",
-                "6.8.0-45.45",
                 true,
                 false
             ),
@@ -150,18 +147,18 @@ fn other_updates_are_due_only_under_scope_all() {
     );
 }
 
-/// Proves a new kernel package is due under the security scope even when it is not a security
-/// update, with `needs_reboot` and no `security`.
+/// Proves an installed kernel image with a newer version is due under the security scope even
+/// when it is not a security update, with `needs_reboot` and no `security`.
 #[test]
-fn a_new_kernel_is_due_and_needs_a_reboot() {
+fn an_installed_kernel_upgrade_is_due_and_needs_a_reboot() {
     let (_, apt) =
-        host("Inst linux-image-6.1.0-25-amd64 (6.1.106-3 Debian:12.7/stable-updates [amd64])\n");
+        host("Inst linux-image-amd64 [6.1.99-1] (6.1.106-3 Debian:12.7/stable-updates [amd64])\n");
     let section = collect(&apt, LinuxScope::Security).expect("collects");
     assert_eq!(
         section.due,
         vec![linux_item(
-            "linux-image-6.1.0-25-amd64",
-            "",
+            "linux-image-amd64",
+            "6.1.99-1",
             "6.1.106-3",
             false,
             true
@@ -171,19 +168,155 @@ fn a_new_kernel_is_due_and_needs_a_reboot() {
     assert!(!section.due[0].security);
 }
 
-/// Proves a Debian 12 listing reports the `Debian-Security` updates as security, and a plain
-/// `stable-updates` update only under scope `all`.
+/// Proves a kernel image not installed yet is due under the scope `all`, which installs it
+/// (`dist-upgrade`), needing a reboot, and not under the scope `security`, whose install upgrades
+/// installed packages only.
+#[test]
+fn a_new_kernel_image_is_due_only_under_scope_all() {
+    let (_, apt) =
+        host("Inst linux-image-6.1.0-25-amd64 (6.1.106-3 Debian:12.7/stable-updates [amd64])\n");
+    let security = collect(&apt, LinuxScope::Security).expect("collects");
+    assert_eq!(security, Section::default());
+    let all = collect(&apt, LinuxScope::All).expect("collects");
+    assert_eq!(
+        all.due,
+        vec![linux_item(
+            "linux-image-6.1.0-25-amd64",
+            "",
+            "6.1.106-3",
+            false,
+            true
+        )]
+    );
+}
+
+/// Proves the look of a host whose simulation installs a new library (a security update) and a
+/// new kernel image beside an installed security update reports, under the scope `security`,
+/// the installed security update alone, which is what that scope's install names; under `all`
+/// it reports all three, new ones with no `from`.
+///
+/// Catches: a security look that reports a package the install never installs, so that the check
+/// after the install fails `update_due` on it and the host halts.
+#[test]
+fn new_packages_are_not_due_under_scope_security() {
+    let (_, apt) = host(NEW_PACKAGES);
+    let security = collect(&apt, LinuxScope::Security).expect("collects");
+    assert_eq!(
+        security.due,
+        vec![linux_item(
+            "python3-jwt",
+            "2.7.0-1ubuntu0.4",
+            "2.7.0-1ubuntu0.5",
+            true,
+            false
+        )]
+    );
+    assert_eq!(security.unparsed, 0);
+    let all = collect(&apt, LinuxScope::All).expect("collects");
+    assert_eq!(
+        all.due,
+        vec![
+            linux_item(
+                "libdrm-amdgpu1",
+                "",
+                "2.4.125-1ubuntu0.1~24.04.2",
+                true,
+                false
+            ),
+            linux_item(
+                "python3-jwt",
+                "2.7.0-1ubuntu0.4",
+                "2.7.0-1ubuntu0.5",
+                true,
+                false
+            ),
+            linux_item(
+                "linux-image-6.8.0-151-generic",
+                "",
+                "6.8.0-151.151",
+                false,
+                true
+            ),
+        ]
+    );
+}
+
+/// Proves a simulation that installs only packages not installed yet, a security update and a
+/// kernel image, has nothing due under the scope `security`, and both under `all`.
+///
+/// Catches: a host with nothing the security install would install reported as having updates
+/// due, so that an update of it halts on `update_due`.
+#[test]
+fn only_new_packages_are_nothing_due_under_scope_security() {
+    let (_, apt) = host(ONLY_NEW);
+    assert_eq!(
+        collect(&apt, LinuxScope::Security).expect("collects"),
+        Section::default()
+    );
+    let all = collect(&apt, LinuxScope::All).expect("collects");
+    assert_eq!(
+        labels(&all),
+        ["libdrm-amdgpu1", "linux-image-6.8.0-151-generic"]
+    );
+}
+
+/// Proves the rule is one for the look and the install: for each update of each listing,
+/// [`AptUpdate::is_due`] is true exactly when the package is not hostkeeper's own and, under
+/// `security`, is installed and a security update or a kernel image; under `all` whatever it is.
+#[test]
+fn is_due_follows_the_scope_the_installed_state_and_the_own_packages() {
+    let own = own();
+    let security = Look {
+        scope: LinuxScope::Security,
+        own_packages: &own,
+    };
+    let all = Look {
+        scope: LinuxScope::All,
+        own_packages: &own,
+    };
+    let update = |package: &str, from: &str, security: bool, kernel: bool| AptUpdate {
+        package: package.to_owned(),
+        from: from.to_owned(),
+        to: "2".to_owned(),
+        security,
+        kernel,
+    };
+    let cases = [
+        // (update, due under security, due under all)
+        (update("a", "1", true, false), true, true),
+        (update("a", "1", false, true), true, true),
+        (update("a", "1", false, false), false, true),
+        (update("a", "", true, false), false, true),
+        (update("a", "", false, true), false, true),
+        (update("a", "", false, false), false, true),
+        (update("hostkeeper", "1", true, true), false, false),
+        (update("hostkeeper:amd64", "", true, true), false, false),
+    ];
+    for (update, under_security, under_all) in cases {
+        assert_eq!(update.is_due(&security), under_security, "{update:?}");
+        assert_eq!(update.is_due(&all), under_all, "{update:?}");
+    }
+}
+
+/// Proves a Debian 12 listing reports the installed `Debian-Security` updates as security, and a
+/// plain `stable-updates` update and a kernel image not installed yet only under scope `all`.
 #[test]
 fn debian_security_origins_are_security() {
     let (_, apt) = host(DEBIAN);
     let section = collect(&apt, LinuxScope::Security).expect("collects");
-    assert_eq!(
-        labels(&section),
-        ["libssl3", "openssl", "curl", "linux-image-6.1.0-26-amd64"]
-    );
+    assert_eq!(labels(&section), ["libssl3", "openssl", "curl"]);
     assert!(section.due.iter().all(|item| item.security));
     let all = collect(&apt, LinuxScope::All).expect("collects");
-    assert_eq!(all.due.len(), 5);
+    assert_eq!(
+        labels(&all),
+        [
+            "libssl3",
+            "openssl",
+            "curl",
+            "linux-image-6.1.0-26-amd64",
+            "tzdata"
+        ]
+    );
     assert_eq!(
         all.due[4],
         linux_item("tzdata", "2024a-0+deb12u1", "2024b-0+deb12u1", false, false)

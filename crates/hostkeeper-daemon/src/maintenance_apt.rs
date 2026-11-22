@@ -2,7 +2,9 @@
 //! Debian or Ubuntu host, which package updates are due, from a refreshed index and a simulated
 //! `dist-upgrade`. Nothing is installed: the simulation prints what the upgrade would do and
 //! changes nothing. A package held back (`apt-mark hold`, or kept back by the resolver) is not in
-//! the simulation's `Inst` lines, so it is never due.
+//! the simulation's `Inst` lines, so it is never due. Under the scope `security` a package not yet
+//! installed is never due either (`AptUpdate::is_due`): that scope's install upgrades installed
+//! packages only, so the look reports what the install does.
 //!
 //! **The lock.** `apt-get update` takes the lock of `/var/lib/apt/lists`; when another `apt-get`
 //! holds it, the update is run again until it is free, for at most the look's bound
@@ -16,7 +18,9 @@ use std::time::Duration;
 use hostkeeper_install::repository::apt::parse::BUSY;
 use hostkeeper_launchd::{Launchctl, LaunchctlProcess};
 
-use crate::maintenance_collect::{Collector, LockWait, Look, Section, linux_item, listing};
+use crate::maintenance_collect::{
+    Collector, LinuxScope, LockWait, Look, Section, linux_item, listing,
+};
 
 /// The program that refreshes the index and simulates the upgrade.
 pub const APT_GET: &str = "/usr/bin/apt-get";
@@ -109,7 +113,7 @@ impl Collector for Apt {
         let due = parsed
             .updates
             .iter()
-            .filter(|update| look.due(&update.package, update.security, update.kernel))
+            .filter(|update| update.is_due(look))
             .map(|update| {
                 linux_item(
                     &update.package,
@@ -141,6 +145,22 @@ pub struct AptUpdate {
     pub security: bool,
     /// Whether it is a kernel image (`linux-image-`), which needs a reboot.
     pub kernel: bool,
+}
+
+impl AptUpdate {
+    /// Whether this update is due under `look`, the one rule of the look, the stage, the install
+    /// and the check after it: never for a package of hostkeeper's own; under
+    /// [`LinuxScope::All`] (`dist-upgrade`) always; under [`LinuxScope::Security`] when it is a
+    /// security update or a kernel image and the package is installed (`from` is not empty). That
+    /// scope's install is `apt-get install --only-upgrade`, which installs no package by its own
+    /// name that is not installed yet, so a new package (a `linux-image-<version>`, a library a
+    /// newer version of another package needs) is not due under it: it comes in only as a
+    /// dependency of an installed package the install upgrades, and is installed by then.
+    #[must_use]
+    pub(crate) fn is_due(&self, look: &Look<'_>) -> bool {
+        let installed_or_all = !self.from.is_empty() || look.scope == LinuxScope::All;
+        installed_or_all && look.due(&self.package, self.security, self.kernel)
+    }
 }
 
 /// What [`parse_apt_simulation`] read.
