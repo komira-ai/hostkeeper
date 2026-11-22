@@ -524,6 +524,16 @@ pub enum OpsError {
     /// `audit_unavailable`.
     #[error("the audit file could not be appended to, so the change is not made: {0}")]
     AuditUnavailable(#[source] io::Error),
+    /// A change staged with the desired state ([`OpsStore::decide_changes_with`]) was staged on a
+    /// copy older than the rows its edit read under their locks: a commit came between. It is
+    /// another coordinator's, or this one's own commit that took a number that only the rows
+    /// hold (the number a desired version is set under). Nothing changed. Memory now holds the
+    /// rows as read, so a change decided and staged again on them is made on the state as stored.
+    #[error(
+        "the desired state changed in the store after this change was staged on it: nothing \
+         changed, and the change is to be decided again on the state as stored"
+    )]
+    DesiredChanged,
     /// The file was written by a newer build.
     #[error(
         "{path}: schema {found} is newer than the {SCHEMA} this build reads; starting would \
@@ -834,6 +844,8 @@ impl OpsStore {
     ///
     /// # Errors
     /// The edit's own error, or [`OpsError`] as for [`Self::change`]: nothing changed.
+    /// [`OpsError::DesiredChanged`]: `staged` was staged on a desired state older than the rows
+    /// the edit read; memory now holds them, and the caller may decide and stage it again.
     pub(crate) fn decide_changes_with(
         &self,
         staged: Staged<'_>,

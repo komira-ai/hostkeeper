@@ -316,9 +316,9 @@ fn a_change_staged_with_the_ops_state_holds_no_database_lock_until_the_ops_store
 }
 
 /// Proves: a change staged to commit with the operations state on a copy of the desired state
-/// older than the rows (another coordinator set a desired version since) is refused when the ops
-/// store's edit finds the rows newer, nothing written, and memory takes the rows: the same change
-/// made again is staged on them and committed.
+/// older than the rows (another coordinator set a desired version since) is refused
+/// `DesiredChanged` when the ops store's edit finds the rows newer, nothing written, and memory
+/// takes the rows: the same change made again is staged on them and committed.
 ///
 /// Catches: a staged change committed over a desired state it was not made on, whose diff would
 /// write the copy's rows back over the other coordinator's change.
@@ -340,7 +340,10 @@ fn a_change_staged_on_a_stale_desired_copy_is_refused_and_memory_takes_the_rows(
             .decide_changes_with(staged, |_| vec![AuditEntry::new("alice", "repository_put")])
     };
     let refused = put(&a).expect_err("a's copy is older than the rows");
-    assert!(refused.to_string().contains("make it again"), "{refused}");
+    assert!(
+        matches!(refused, crate::ops::OpsError::DesiredChanged),
+        "{refused}"
+    );
     assert!(audit_numbers(&db).is_empty());
     assert_eq!(
         a.desired.get("web").map(|d| d.version.as_str().to_owned()),

@@ -19,12 +19,9 @@
 //! with it, [`Staged`]) before that: a store's lock is never waited for by a thread that holds a
 //! lock of the database.
 
-use std::io;
-use std::path::PathBuf;
-
 use super::{AUDIT_RING, AuditEntry, OpsError, OpsState, OpsStore, Order, announce};
 use crate::audit_file::AuditLine;
-use crate::desired::{Staged, StoreError};
+use crate::desired::Staged;
 use crate::store::{Commit, Edit, Facts, Part, Scope, commit_across};
 
 impl OpsStore {
@@ -113,10 +110,13 @@ impl OpsStore {
         self.interleaved();
         let mut tx = self.opened(staged.is_some())?;
         if let (Some(fresh), Some(staged)) = (tx.take_desired(), &staged) {
-            // Staged on a desired state older than the rows: memory takes them, and the change
-            // is made again on them.
+            // Staged on a desired state older than the rows: memory takes them, and the
+            // operations state the edit read afresh too, so that the caller decides the change
+            // again on the state as stored ([`OpsError::DesiredChanged`]). The edit is rolled
+            // back: nothing changed.
             staged.stale(fresh);
-            return Err(OpsError::from(changed_meanwhile()).into());
+            self.install(&mut tx);
+            return Err(OpsError::DesiredChanged.into());
         }
         self.install(&mut tx);
         let before = self.state();
@@ -212,15 +212,5 @@ impl OpsStore {
         next.audit.drain(..surplus);
         let at = (self.unix)();
         entries.iter().map(|e| AuditLine::of(e, at)).collect()
-    }
-}
-
-/// What a change staged on a desired state older than the rows is refused with.
-fn changed_meanwhile() -> StoreError {
-    StoreError::Io {
-        path: PathBuf::from("store"),
-        source: io::Error::other(
-            "the desired state changed on another coordinator since this change was staged: make it again",
-        ),
     }
 }
