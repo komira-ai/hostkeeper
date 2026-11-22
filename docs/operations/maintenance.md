@@ -452,6 +452,12 @@ with `build.json` the group as `get` answered it, its `maintenance` changed:
 
 ## Not built yet
 
+- **A new package due under the `security` scope halts the check.** The look reports a package the
+  upgrade would newly install (an item with no `from`: a new `linux-image-<version>`, a new
+  library) as due. Under `security` the apply installs only packages already installed, so such a
+  package arrives only when a meta-package the apply names depends on it. When none does, the check
+  finds it still due and the host halts `update_due`; put it back. The Ubuntu 24.04 hosts of
+  [maintenance-first-linux-run.md](maintenance-first-linux-run.md) each report two such packages.
 - **The Console link of the runs view.** The **Console** button on a rebooting or not-back host's
   row does not open the Console page in this release; open it from the server's row in Home's List
   view.
