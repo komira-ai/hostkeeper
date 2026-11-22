@@ -66,8 +66,10 @@ them. A version an earlier release unpacked from hostkeeper's own archive (a `ma
 `target.json` at its top) is the tree its service runs from, as the service's own user, and is
 0555, as that release made it; the archive gave every file in it 0555 or 0444. Earlier releases
 left these directories otherwise (all open, 0755 and 0555, or all closed, 0700); the daemon gives
-each its mode at its start, and a version found again for its order is made 0700 then too. Only
-the directories are changed: the modes below a version are part of its digest.
+each its mode at its start, and a version found again for its order is made 0700 then too. The
+start also closes to its owner each file in the packages directory or a service directory that
+other users can read (an earlier release wrote seals 0444). Nothing below a version is changed:
+the modes there are part of its digest.
 
 One placement of a service runs at a time: a placement holds an exclusive lock (`flock`) on the
 service directory from before it removes orphans until it has published, and `remove_orphans`

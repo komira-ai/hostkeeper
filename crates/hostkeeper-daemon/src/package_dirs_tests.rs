@@ -41,11 +41,12 @@ fn a_directory_that_cannot_be_listed_is_a_failure_with_no_entries() {
     assert!(done.failed.is_empty());
 }
 
-/// Catches an entry that changed between the listing and its look passing as a failure, or one
-/// that cannot be looked at passing unsaid: an entry gone since its service was listed is left as
-/// it is with nothing said, a version path below a file is a failure with why, and a file or a
-/// link in its place is left as it is; a directory that is not there is not given a mode and is
-/// no failure.
+/// Catches an entry that changed between the listing and its look passing as a failure, one that
+/// cannot be looked at passing unsaid, or a file in a service directory left readable by other
+/// users: an entry gone since its service was listed and a link are left as they are with nothing
+/// said, a file its group or others can read (a seal, 0644) is closed to its owner (0600) and one
+/// already closed is left, and a version path below a file is a failure with why; a directory
+/// that is not there is not given a mode and is no failure.
 #[test]
 fn an_entry_gone_or_below_a_file_is_left_alone_or_a_failure() {
     let scratch = scratch("package-dirs-entries");
@@ -53,13 +54,25 @@ fn an_entry_gone_or_below_a_file_is_left_alone_or_a_failure() {
     fs::create_dir(&service).expect("a service");
     let file = service.join("1.0.0.seal");
     fs::write(&file, b"{}").expect("a seal");
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).expect("its mode");
     std::os::unix::fs::symlink("1.0.0", service.join("current")).expect("current");
 
     let mut done = Set::default();
     for entry in ["gone", "current", "1.0.0.seal"] {
         set_version(&service, &service.join(entry), &mut done);
     }
-    assert!(done.set.is_empty() && done.failed.is_empty(), "{done:?}");
+    assert_eq!(
+        done.set,
+        [(file.clone(), 0o600)],
+        "the seal written 0644 is closed"
+    );
+    assert!(done.failed.is_empty(), "{done:?}");
+    let mut done = Set::default();
+    set_version(&service, &file, &mut done);
+    assert!(
+        done.set.is_empty(),
+        "a closed file is left as it is: {done:?}"
+    );
 
     set_version(&service, &file.join("below"), &mut done);
     let failed: Vec<(&Path, io::ErrorKind)> = done

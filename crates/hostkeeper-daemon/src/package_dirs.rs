@@ -18,13 +18,17 @@
 //!   archive's unpack made, and what no installer makes), otherwise a published version;
 //! - a directory named with a leading `.` (a publish or a prune under way) is closed (0700) when
 //!   its group or others can reach it, and otherwise left as it is;
+//! - a regular file in the packages directory or in a service directory (a seal, a seal being
+//!   written, a download) is closed to its owner, its group's and others' bits cleared, when
+//!   they have any: an earlier release wrote each seal 0444, and a service directory every user
+//!   passes through must hold nothing another user can read;
 //! - then the apt work directories' parent and the mirrors' parent beside the packages directory
 //!   are closed (0700) the same way.
 //!
 //! Nothing below a version directory is changed: the modes there are part of the tree digest its
 //! seal holds. The mode of a version directory itself is not part of the digest, so every seal
-//! still holds. A link (`current`, `previous`), anything that is not a directory, and a directory
-//! that is not there are left as they are; a version whose top cannot be looked at is left as it
+//! still holds. A link (`current`, `previous`), anything that is neither a directory nor a regular
+//! file, and an entry that is not there are left as they are; a version whose top cannot be looked at is left as it
 //! is and is a failure.
 //!
 //! What it set is said in one log line, and what it could not set is the alert [`ALERT_START`];
@@ -61,7 +65,8 @@ const TARGET_FILE: &str = "target.json";
 /// What [`set_dirs`] did.
 #[derive(Debug, Default)]
 pub struct Set {
-    /// The directories whose mode was set, outermost first, each with the mode it was given.
+    /// The directories and files whose mode was set, outermost first, each with the mode it was
+    /// given.
     pub set: Vec<(PathBuf, u32)>,
     /// The services, by the name of their directory, whose archive version `current` names was
     /// given [`ARCHIVE_VERSION_MODE`], in name order, each once.
@@ -74,7 +79,8 @@ pub struct Set {
 /// [`set_dirs`].
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PackageDirs {
-    /// The directories whose mode was set, outermost first, each with the mode it was given.
+    /// The directories and files whose mode was set, outermost first, each with the mode it was
+    /// given.
     pub set: Vec<(PathBuf, u32)>,
     /// The services whose archive version `current` names was opened to their users.
     pub opened: Vec<String>,
@@ -137,11 +143,15 @@ pub fn set_dirs(packages: &Path, beside: &[&Path]) -> Set {
 }
 
 /// Gives the entry `version` of `service`, when it is a directory, the mode of its kind, or
-/// closes it when it is under way (a leading `.`). A link (`current`, `previous`), a file (a
-/// seal, a download) and an entry gone since the listing are left as they are.
+/// closes it when it is under way (a leading `.`) or a regular file (a seal, a download). A link
+/// (`current`, `previous`) and an entry gone since the listing are left as they are.
 fn set_version(service: &Path, version: &Path, done: &mut Set) {
     match fs::symlink_metadata(version) {
         Ok(meta) if meta.is_dir() => {}
+        Ok(meta) if meta.is_file() => {
+            close(version, done);
+            return;
+        }
         Ok(_) => return,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return,
         Err(e) => return done.failed.push((version.to_path_buf(), e)),
@@ -204,15 +214,22 @@ fn close(dir: &Path, done: &mut Set) -> bool {
 }
 
 /// Sets `dir` to the mode `wanted` answers for its present mode, if any, when it is a directory,
-/// and answers whether it is one. A directory that is not there is not one; a failure to look
-/// or to set is kept in `done`, and is not one.
+/// and answers whether it is one. A regular file at `dir` is closed to its owner instead (its
+/// group's and others' bits cleared, and any set-id or sticky bit with them, when it has any of
+/// the first two), and is not a directory; anything else is left as it is. A directory that is
+/// not there is not one; a failure to look or to set is kept in `done`, and is not one.
 fn set_when(dir: &Path, done: &mut Set, wanted: impl Fn(u32) -> Option<u32>) -> bool {
     let looked = match fs::symlink_metadata(dir) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => return false,
         looked => looked,
     };
     let set = looked.and_then(|meta| {
-        let mode = wanted(meta.permissions().mode() & 0o7777).filter(|_| meta.is_dir());
+        let found = meta.permissions().mode() & 0o7777;
+        let mode = match (meta.is_dir(), meta.is_file()) {
+            (true, _) => wanted(found),
+            (false, true) => (found & 0o077 != 0).then_some(found & 0o700),
+            (false, false) => None,
+        };
         if let Some(mode) = mode {
             fs::set_permissions(dir, fs::Permissions::from_mode(mode))?;
             done.set.push((dir.to_path_buf(), mode));

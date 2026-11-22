@@ -39,7 +39,8 @@
 //!   secret, and see that a name it guesses is there). So a version
 //!   that a service of an earlier release runs from is reachable by the service's user, and
 //!   nothing this crate publishes is: each version, `.stage-` directory and seal in a service
-//!   directory is closed by its own mode (0700, 0700, 0400).
+//!   directory is closed by its own mode (0700, 0700, 0400). An earlier release wrote seals
+//!   0444; the daemon's start closes every file in a service directory to its owner.
 //! - A version an earlier release unpacked from hostkeeper's own archive (`hostkeeper-archive`:
 //!   a `manifest.toml` and no `target.json` at its top) is the tree its service runs from, as
 //!   the service's own user (its unit's `ExecStart=` names `current/bin/...`), and is

@@ -110,7 +110,7 @@ fn left(rig: &Rig, dirs: u32, version: u32, archived: u32) -> [PathBuf; 2] {
     fs::create_dir_all(&stage).expect("a stage");
     set_mode(&stage, version);
     let hello = archive(&rig.packages, "hello", "0.1.92", archived);
-    fs::write(rig.packages.join("not-a-service"), b"x").expect("a file");
+    put(&rig.packages.join("not-a-service"), b"x", 0o644);
     for dir in beside(rig) {
         fs::create_dir_all(dir.join("web")).expect("a directory beside");
         set_mode(&dir.join("web"), 0o755);
@@ -163,11 +163,12 @@ fn rig(name: &str) -> (Rig, Removable) {
 /// Catches a start that leaves an earlier release's open package directories readable or
 /// listable by other users, closes an archive version its service runs from, or changes what a
 /// seal holds: after the start, the packages and service directories are 0711, the published
-/// version and the publish under way 0700, the archive version is left 0555, and the apt work
-/// and mirror parents are 0700, each listed in the report with its mode, outermost first; no
-/// archive version is said opened; what is below each version keeps its modes, so the tree
-/// digests are the same; `current`, the seals, a file beside the services and a directory below
-/// a closed parent are left as they are; and a second start sets nothing.
+/// version and the publish under way 0700, the archive version is left 0555, each seal (0444)
+/// 0400 and a file beside the services (0644) 0600, and the apt work and mirror parents are
+/// 0700, each listed in the report with its mode, outermost first; no archive version is said
+/// opened; what is below each version keeps its modes, so the tree digests are the same;
+/// `current` and a directory below a closed parent are left as they are; and a second start
+/// sets nothing.
 #[test]
 fn the_start_gives_the_directories_an_earlier_release_left_open_the_layouts_modes() {
     let (rig, _removable) = rig("modes-open");
@@ -182,9 +183,12 @@ fn the_start_gives_the_directories_an_earlier_release_left_open_the_layouts_mode
         set: vec![
             (p.clone(), 0o711),
             (p.join("hello"), 0o711),
+            (p.join("hello/0.1.92.seal"), 0o400),
+            (p.join("not-a-service"), 0o600),
             (p.join("web"), 0o711),
             (p.join("web/.stage-left"), 0o700),
             (web.clone(), 0o700),
+            (p.join("web/1.0.0.seal"), 0o400),
             (work.clone(), 0o700),
             (mirror.clone(), 0o700),
         ],
@@ -201,7 +205,7 @@ fn the_start_gives_the_directories_an_earlier_release_left_open_the_layouts_mode
     }
     assert_eq!(mode(&web.join("artifact")), 0o400);
     assert_eq!(mode(&hello.join("bin/hello")), 0o555);
-    assert_eq!(mode(&p.join("web/1.0.0.seal")), 0o444);
+    assert_eq!(mode(&p.join("web/1.0.0.seal")), 0o400);
     assert_eq!(
         fs::read_link(p.join("web/current")).expect("current"),
         Path::new("1.0.0")
@@ -215,8 +219,9 @@ fn the_start_gives_the_directories_an_earlier_release_left_open_the_layouts_mode
 
 /// Catches a start that keeps an archive version closed to root, as a release before it left it,
 /// so that the service run from it as its own user cannot start (`status=203/EXEC`): after the
-/// start, the packages and service directories are 0711 and the archive version 0555, the
-/// report says so and names its service opened; the published version, the publish under way and
+/// start, the packages and service directories are 0711 and the archive version 0555, the seals
+/// and the file beside the services are closed to their owner, the report says so and names its
+/// service opened; the published version, the publish under way and
 /// the apt work and mirror parents stay 0700 (none is listed); the digests are the same;
 /// and a second start sets nothing and opens nothing.
 #[test]
@@ -233,7 +238,10 @@ fn the_start_opens_again_an_archive_version_a_release_closed_to_root() {
             (p.clone(), 0o711),
             (p.join("hello"), 0o711),
             (hello.clone(), 0o555),
+            (p.join("hello/0.1.92.seal"), 0o400),
+            (p.join("not-a-service"), 0o600),
             (p.join("web"), 0o711),
+            (p.join("web/1.0.0.seal"), 0o400),
         ],
         opened: vec!["hello".to_owned()],
     };
@@ -251,8 +259,8 @@ fn the_start_opens_again_an_archive_version_a_release_closed_to_root() {
 /// Catches a version taken for an archive version, and opened, on anything but the archive's
 /// own shape (a regular `manifest.toml` and no `target.json`): a version with both, one whose
 /// `manifest.toml` is a directory, one whose `manifest.toml` is a link to a file, and an empty
-/// one are each made 0700 from 0555; a link and a file in the service directory are left as
-/// they are; and nothing is said opened.
+/// one are each made 0700 from 0555; a link in the service directory is left as it is, its seal
+/// (0444) is closed to 0400; and nothing is said opened.
 #[test]
 fn only_the_archives_own_shape_is_an_archive_version() {
     let (rig, _removable) = rig("modes-kinds");
@@ -271,9 +279,15 @@ fn only_the_archives_own_shape_is_an_archive_version() {
 
     let done = set_dirs(&rig.packages, &[]);
 
-    let set: Vec<(PathBuf, u32)> = ["1.0.0", "2.0.0", "3.0.0", "4.0.0"]
-        .map(|v| (odd.join(v), 0o700))
-        .to_vec();
+    let set: Vec<(PathBuf, u32)> = [
+        ("1.0.0", 0o700),
+        ("1.0.0.seal", 0o400),
+        ("2.0.0", 0o700),
+        ("3.0.0", 0o700),
+        ("4.0.0", 0o700),
+    ]
+    .map(|(name, mode)| (odd.join(name), mode))
+    .to_vec();
     assert_eq!(done.set, set);
     assert_eq!(done.opened, Vec::<String>::new());
     assert!(done.failed.is_empty(), "{:?}", done.failed);
@@ -281,7 +295,7 @@ fn only_the_archives_own_shape_is_an_archive_version() {
         fs::read_link(odd.join("current")).expect("current"),
         Path::new("1.0.0")
     );
-    assert_eq!(mode(&odd.join("1.0.0.seal")), 0o444);
+    assert_eq!(mode(&odd.join("1.0.0.seal")), 0o400);
 }
 
 /// Catches the setting passing unsaid, saying something else, or saying it twice: the log line
@@ -299,7 +313,10 @@ fn the_start_says_what_it_set_in_one_line_and_a_repeat_says_nothing() {
         (p.clone(), "0711"),
         (p.join("hello"), "0711"),
         (hello.clone(), "0555"),
+        (p.join("hello/0.1.92.seal"), "0400"),
+        (p.join("not-a-service"), "0600"),
         (p.join("web"), "0711"),
+        (p.join("web/1.0.0.seal"), "0400"),
     ];
     assert_eq!(done.opened, ["hello"]);
     let paths: Vec<String> = named
