@@ -90,7 +90,7 @@ fn entry(installer: &str, c: char) -> Target {
 }
 
 /// Targets of two platforms, the first with three entries in an order that is not alphabetical.
-fn targets() -> Targets {
+pub(super) fn targets() -> Targets {
     BTreeMap::from([
         (
             "linux-x86_64".to_owned(),

@@ -117,7 +117,15 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   rows that differ, and moves each part's version on. An edit waits for the gate at most
   `--operator-gate-wait-ms` (default 30000), and is refused `store_failed` with nothing changed
   when the wait runs out; a heartbeat's own write (its verdicts) never waits, and is made at a
-  later heartbeat when the gate is held. Audit lines are numbered by `audit_counter` in the order
+  later heartbeat when the gate is held. A change decided on the desired state in memory and
+  committed with the operations state (a set in host groups, a force, a host group's or a
+  repository's change) is not made when its transaction finds the desired state read afresh: a
+  commit came between, another coordinator's, or this one's own set just before it, whose
+  `set_seq` memory does not hold. A set in host groups is then decided again on the state as read,
+  up to three times in all, and is refused `state_changed` (nothing changed; asking again is safe)
+  when the state changed each time; the other changes are refused `store_failed`, and the log
+  line of the refusal says why. A refusal by the database names its SQLSTATE, and the table and
+  constraint the database names. Audit lines are numbered by `audit_counter` in the order
   their transactions commit, with no gap; each start sets it past the newest line, which a release
   before this one numbered without it. Every request, a heartbeat among them, first reads the
   parts' versions (one query on the read-only session) and reads again, in one snapshot, each part

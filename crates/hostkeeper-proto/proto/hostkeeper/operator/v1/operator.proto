@@ -366,6 +366,10 @@ enum ReleasesRefusal {
   // INVALID_ARGUMENT: `SetDesired` whose `desired` sets `max_updating` or `min_up`, which a
   // group's rollout policy holds.
   RELEASES_REFUSAL_LIMITS_IN_HOST_GROUP = 31;
+  // ABORTED: `SetDesired` in host groups was decided three times, and each time the desired state
+  // had changed in the store before the set's commit could lock it: a commit came between, after
+  // the first time always another coordinator's. Nothing changed, and asking again is safe.
+  RELEASES_REFUSAL_STATE_CHANGED = 32;
 }
 
 // Why `Services` refused a request. The token is the value's name without the prefix, in lower

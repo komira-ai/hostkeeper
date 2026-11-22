@@ -191,6 +191,54 @@ fn a_session_ends_when_the_server_ends_it_or_a_wait_runs_out_and_not_for_a_refus
     assert_eq!(describe(&ended.1), "connection closed");
 }
 
+/// Proves: the text of a statement a constraint of the coordinator's tables refuses names the
+/// table and the constraint after the SQLSTATE: a second row of one release (`releases`, its
+/// primary key) and a release index digest that is not one (`releases_index_digest`, a check).
+/// Such a refusal keeps the session.
+///
+/// Catches: a refused write logged as `store_failed` with nothing to say which table and which
+/// constraint refused it.
+#[test]
+fn a_write_a_constraint_refuses_names_the_table_and_the_constraint() {
+    let db = TestDatabase::new();
+    let (migrated, _) = db.open("migrated").expect("the store opens");
+    migrated.stop();
+    let config = db.dsn().config(TIMEOUTS);
+    let (twice, not_a_digest) = off_runtime(move || {
+        let mut session =
+            Session::connect(&config, Arc::new(AtomicU64::new(0)), false).expect("a session");
+        let insert = "INSERT INTO releases (service, version, targets, release_index_digest) \
+                      VALUES ('web', '1.0', '{}', $1)";
+        session
+            .execute(insert, &[&None::<String>])
+            .expect("the first row");
+        let twice = session
+            .execute(insert, &[&None::<String>])
+            .expect_err("the same release twice");
+        let not_a_digest = session
+            .execute(
+                "INSERT INTO releases (service, version, targets, release_index_digest) \
+                 VALUES ('web', '2.0', '{}', 'abc')",
+                &[],
+            )
+            .expect_err("no digest");
+        (twice, not_a_digest)
+    });
+    assert!(!ends_session(&twice));
+    assert_eq!(
+        describe(&twice),
+        "ERROR: duplicate key value violates unique constraint \"releases_pkey\" \
+         (SQLSTATE 23505, table releases, constraint releases_pkey)"
+    );
+    assert!(!ends_session(&not_a_digest));
+    assert_eq!(
+        describe(&not_a_digest),
+        "ERROR: new row for relation \"releases\" violates check constraint \
+         \"releases_index_digest\" (SQLSTATE 23514, table releases, constraint \
+         releases_index_digest)"
+    );
+}
+
 /// Proves: a worker runs the jobs handed to it one at a time in the order they came, answers a
 /// call with its job's answer, stops once the jobs before it ran, and answers nothing after it is
 /// stopped, dropped or its thread's job panicked.
