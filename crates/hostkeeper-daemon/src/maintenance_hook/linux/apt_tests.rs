@@ -20,16 +20,11 @@ const APT: &str = "/usr/bin/apt-get";
 const LOCKED: &str =
     "E: Could not get lock /var/lib/apt/lists/lock. It is held by process 4242 (apt-get)";
 
-/// The packages of the Ubuntu simulation the scope `security` makes due: its security updates
-/// and its kernel image, not `vim-tiny` (updates only) or `hostkeeper` (hostkeeper's own).
-const SECURITY: [&str; 6] = [
-    "libc6",
-    "libc-bin",
-    "openssl",
-    "linux-image-6.8.0-45-generic",
-    "linux-modules-6.8.0-45-generic",
-    "linux-generic",
-];
+/// The packages of the Ubuntu simulation the scope `security` makes due: its installed security
+/// updates and its kernel meta-package, not the new kernel image and modules (not installed yet:
+/// they come as the meta-package's dependencies), `vim-tiny` (updates only) or `hostkeeper`
+/// (hostkeeper's own).
+const SECURITY: [&str; 4] = ["libc6", "libc-bin", "openssl", "linux-generic"];
 
 /// The packages the scope `all` makes due: every one but `hostkeeper`.
 const ALL: [&str; 7] = [
