@@ -11,12 +11,14 @@
 //! stage, each drain and resume, each install, the reboot asked for, each boot into a new boot id
 //! and each check.
 //!
-//! The maintenance hook's `cutover` and `verify` are the real hook's ([`run_step`]) over the
-//! real `linux` and `reboot` kinds, the real apt upgrader, the real reboot check and the real
-//! check of the Linux kinds, each over the fake host's programs and files: the launcher of the
-//! daemon ([`HostLauncher`]) runs them in process where a host runs `hostkeeper maintenance-hook`
-//! in a unit. The hook's `prepare` (the stage, whose programs this crate's tests cannot reach) is
-//! answered by the launcher: it logs `stage` and succeeds.
+//! The maintenance hook's `prepare`, `cutover` and `verify` are the real hook's ([`run_step`])
+//! over the real `linux` and `reboot` kinds, the real apt upgrader, the real reboot check and the
+//! real check of the Linux kinds, each over the fake host's programs and files: the launcher of
+//! the daemon ([`HostLauncher`]) runs them in process where a host runs `hostkeeper
+//! maintenance-hook` in a unit, and logs `stage` for each `prepare`. The `prepare` of `reboot` is
+//! the real kind's; the `prepare` of `linux` (its stage, whose programs this crate's tests cannot
+//! reach; they are tested in the hook's own module) is [`machine::StageAnswered`]'s: it succeeds
+//! and runs nothing.
 //!
 //! A reboot is the test's: once the hook asked for one, [`Node::reboot`] boots the fake host into
 //! a new boot id (the daemon's clock and the hook's boot id together, the newest kernel running,
@@ -44,7 +46,8 @@ use hostkeeper_daemon::maintenance_apt::Apt;
 use hostkeeper_daemon::maintenance_collect::{Collector, HostRoot, LinuxScope};
 use hostkeeper_daemon::maintenance_hook::linux::{self as hook_linux, LinuxCheck, ServiceHealth};
 use hostkeeper_daemon::maintenance_hook::{
-    HookPorts, HookStep, MaintainParams, Registry, StoreRecord, run_step,
+    Cutover, HookPorts, HookStep, KindError, MaintainParams, MaintenanceKind, Registry,
+    StoreRecord, run_step,
 };
 use hostkeeper_daemon::maintenance_host::HostFacts;
 use hostkeeper_daemon::maintenance_linux::apt::AptUpgrade;

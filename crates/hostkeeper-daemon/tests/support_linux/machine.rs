@@ -11,6 +11,9 @@ pub enum Due {
     Kernel,
     /// A restart alone: `run/reboot-required` is there, and no package is due.
     Reboot,
+    /// Both: the security update of its kernel image ([`KERNEL_UPDATE`]) and a restart
+    /// (`run/reboot-required` is there), so it reports a `linux` and a `reboot` item.
+    KernelAndReboot,
     /// The upgrade of [`NEW_PACKAGES`]: one installed security update and two packages not
     /// installed yet.
     NewPackages,
@@ -75,7 +78,7 @@ impl Machine {
                 running: OLD_KERNEL.to_owned(),
                 installed: OLD_KERNEL.to_owned(),
                 simulation: match due {
-                    Due::Kernel => KERNEL_UPDATE.to_owned(),
+                    Due::Kernel | Due::KernelAndReboot => KERNEL_UPDATE.to_owned(),
                     Due::NewPackages => NEW_PACKAGES.to_owned(),
                     Due::OnlyNew => only_new(),
                     Due::Nothing | Due::Reboot => String::new(),
@@ -90,7 +93,7 @@ impl Machine {
         machine.put("etc/os-release", "ID=ubuntu\nVERSION_ID=\"24.04\"\n");
         machine.put("proc/sys/kernel/random/boot_id", "boot-1\n");
         machine.kernel(OLD_KERNEL);
-        if due == Due::Reboot {
+        if matches!(due, Due::Reboot | Due::KernelAndReboot) {
             machine.put("run/reboot-required", "*** System restart required ***\n");
         }
         Arc::new(machine)
@@ -214,7 +217,8 @@ impl Machine {
     }
 
     /// The maintenance hook's kinds on this host: the real `linux` and `reboot`, checked by the
-    /// real check of the Linux kinds, every program and file the host's.
+    /// real check of the Linux kinds, every program and file the host's; the `prepare` of `linux`
+    /// is [`StageAnswered`]'s.
     pub(super) fn kinds(self: &Arc<Self>) -> Registry {
         let apt = AptUpgrade::new(
             self.program("apt-get"),
@@ -240,7 +244,7 @@ impl Machine {
             Box::new(Own),
             Box::new(Healthy),
         );
-        hook_linux::kinds(check, Box::new(linux), Box::new(reboot))
+        hook_linux::kinds(check, Box::new(StageAnswered(linux)), Box::new(reboot))
     }
 
     /// The program `name` run with `args`.
@@ -361,5 +365,28 @@ struct Healthy;
 impl ServiceHealth for Healthy {
     fn services(&self) -> Result<Vec<(String, pb::Health)>, String> {
         Ok(vec![(SERVICE.to_owned(), pb::Health::Healthy)])
+    }
+}
+
+/// The `linux` kind of a fake host with its stage answered: its `prepare` succeeds and runs
+/// nothing (the stage's programs are tested in the hook's own module), every other step is the
+/// real kind's.
+pub(super) struct StageAnswered(LinuxKind);
+
+impl MaintenanceKind for StageAnswered {
+    fn prepare(&self, _params: &MaintainParams) -> Result<(), KindError> {
+        Ok(())
+    }
+
+    fn cutover(&self, params: &MaintainParams) -> Result<Cutover, KindError> {
+        self.0.cutover(params)
+    }
+
+    fn after_reboot(&self, params: &MaintainParams) -> Result<String, KindError> {
+        self.0.after_reboot(params)
+    }
+
+    fn verify(&self, params: &MaintainParams) -> Result<(), KindError> {
+        self.0.verify(params)
     }
 }

@@ -53,7 +53,7 @@ Read from the code against the lists above, as built:
   halts cordoned until **Put back** (gap 1).
 - **B**: the same, except that the apply has nothing to install.
 - **C** and **E**: deferred at the stage with `unsupported_kind`, because their lists hold `reboot`
-  items (gap 2).
+  items (gap 2, fixed since: their stage now passes, and the turn goes on as D's, with one reboot).
 - **F**: nothing, until its next look (gap 3, now fixed: the look waits for the lock).
 
 So no first run should be made on a serving host until gaps 1 and 2 are fixed. A test host may be
@@ -76,7 +76,9 @@ used to see the halt and Put back on hardware.
    host reports a restart it needs, so every host with a kernel installed and not running defers.
    The in-process e2e (`crates/hostkeeper-daemon/tests/maintenance_linux_e2e.rs`) does not show
    this, because its launcher answers the stage itself. A `reboot`-only run cannot be made until it
-   is fixed.
+   is fixed. **Fixed** (komira-ai/hostkeeper#524): the `reboot` kind's stage succeeds and runs no
+   program, and the e2e runs the real hook's stage, with a host that has both a `linux` and a
+   `reboot` item due going through Update to done.
 3. **A look fails on a held apt lock.** Fixed: the look's `apt-get update` (and dnf's listings and
    `apk update`) is now tried again every 2 seconds while the lock is held, for up to the daemon's
    `--package-lock-wait-secs` (300 by default), and a look that fails is tried again 5 minutes
