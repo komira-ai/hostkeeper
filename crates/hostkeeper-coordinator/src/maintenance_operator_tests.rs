@@ -104,6 +104,7 @@ fn expected_under(order_id: &str, action: agent::MaintainAction, order_try: u64)
             macos_path: agent::MacosPath::Install,
             macos_major: false,
             return_secs: 1200,
+            xcode: None,
         },
         order_id: order_id.to_owned(),
         order_try,

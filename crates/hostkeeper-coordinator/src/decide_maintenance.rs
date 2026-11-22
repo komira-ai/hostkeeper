@@ -64,6 +64,14 @@
 //! recognises it and does not start it twice; once it reports the id, nothing more is sent, also
 //! after a coordinator restart, since the step is stored with the run.
 //!
+//! The order's kinds go in the order they are applied, `macos` before `xcode` ([`Kind`]'s order).
+//! An order with `xcode` carries what the Xcode store and the group's table make of the host's last
+//! kept report ([`crate::maintenance_xcode::Plan::order`]): the newest `xcode_keep` releases the
+//! store holds, the versions to remove and the default, read at each heartbeat the order is sent;
+//! none in a group that keeps no Xcode. While the store cannot be read, a turn that holds `xcode`
+//! is neither started ([`Hold::XcodeStore`]) nor sent its `RUN` again; an operator's `RETRY` or
+//! `PUT_BACK` of it is still sent, with no Xcode.
+//!
 //! A halted host whose turn holds an operator's act queued by `RetryHost` or `PutBack`
 //! ([`RunHost::queued`]) is sent a `maintain` too: the same order id, the action `RETRY` or
 //! `PUT_BACK`, and the try the act was queued under ([`RunHost::order_try`]: 2 for the first act,
@@ -91,6 +99,7 @@ use crate::maintenance_policy::{LinuxScope, Maintenance as Policy};
 use crate::maintenance_runs::{Kind, MAX_OFFERED_AGAIN, Run, RunHost, Skip, Step};
 use crate::ops::OpsState;
 use crate::orders::Maintain;
+use crate::xcode_store::Archive;
 
 /// Why a host whose turn waits is not started at this heartbeat. Nothing of it is stored: the host
 /// is asked again at its next heartbeat.
@@ -122,6 +131,8 @@ pub(crate) enum Hold {
     NotNext,
     /// Fewer than `min_serving + 1` hosts of its group are serving.
     Serving,
+    /// The host's turn holds `xcode` and the Xcode store cannot be read.
+    XcodeStore,
 }
 
 /// What the rules make of one host at one heartbeat.
@@ -193,6 +204,9 @@ pub(crate) struct View<'a> {
     pub(crate) unix_now: u64,
     /// The coordinator's clock: what the fleet's liveness and orders are read against.
     pub(crate) now: Duration,
+    /// What the Xcode store holds, in any order (empty without a store); none when it cannot be
+    /// read.
+    pub(crate) xcode_store: Option<&'a [Archive]>,
 }
 
 impl View<'_> {
@@ -305,7 +319,9 @@ pub(crate) fn decide(view: &View<'_>, id: &HostId) -> Verdict {
         } => {
             let (run, host) = (&runs[run], &runs[run].hosts[host]);
             Verdict::InTurn {
-                resend: unreported.then(|| ordered(view, run, host, host.order_id(&run.id))),
+                resend: unreported
+                    .then(|| ordered(view, run, host, host.order_id(&run.id)))
+                    .flatten(),
             }
         }
         Turn::Waiting { run, host } => {
@@ -317,7 +333,10 @@ pub(crate) fn decide(view: &View<'_>, id: &HostId) -> Verdict {
                         host_group: host.host_group.clone(),
                         why,
                     }),
-                    None => Verdict::Start(ordered(view, run, host, host.next_order_id(&run.id))),
+                    None => match ordered(view, run, host, host.next_order_id(&run.id)) {
+                        Some(ordered) => Verdict::Start(ordered),
+                        None => Verdict::Waits(Hold::XcodeStore),
+                    },
                 },
                 Err(hold) => Verdict::Waits(hold),
             }
@@ -496,30 +515,50 @@ fn serving(view: &View<'_>, group: &str) -> usize {
         .count()
 }
 
-/// The `maintain` of `host`'s turn in `run` under the order id `order_id`: its kinds, the Linux
-/// scope, `macos_major` and `return_secs` of its group's table ([`View::policy`]) for the host's
-/// platform, and the run's drain deadline, else the group's. Its action is `RUN` under try 1,
-/// except for a halted turn with an operator's act queued: that act under the try it was queued
-/// under ([`RunHost::order_try`]).
-fn ordered(view: &View<'_>, run: &Run, host: &RunHost, order_id: String) -> Ordered {
-    let platform = host
+/// The `maintain` of `host`'s turn in `run` under the order id `order_id`: its kinds in the order
+/// they are applied, the Linux scope, `macos_major` and `return_secs` of its group's table
+/// ([`View::policy`]) for the host's platform, the run's drain deadline, else the group's, and,
+/// for `xcode` on a Mac, what the Xcode store and the table make of its last kept report. Its
+/// action is `RUN` under try 1, except for a halted turn with an operator's act queued: that act
+/// under the try it was queued under ([`RunHost::order_try`]). None for a `RUN` of a turn that
+/// holds `xcode` while the store cannot be read; an operator's act is sent then with no Xcode, so
+/// that a store fault never keeps a halted Mac from being put back.
+fn ordered(view: &View<'_>, run: &Run, host: &RunHost, order_id: String) -> Option<Ordered> {
+    let node = host
         .host_id
         .parse::<HostId>()
         .ok()
-        .and_then(|id| view.fleet.node(&id).map(|node| node.platform))
-        .unwrap_or(hostkeeper_wire::Platform::LinuxX86_64);
+        .and_then(|id| view.fleet.node(&id));
+    let platform = node.map_or(hostkeeper_wire::Platform::LinuxX86_64, |node| node.platform);
+    let (action, order_try) = match (host.step, host.queued) {
+        (Step::Halted, Some(act)) => (act.proto(), host.order_try),
+        _ => (agent::MaintainAction::Run, 1),
+    };
+    let xcode = if host.kinds.contains(&Kind::Xcode) {
+        let archives = match view.xcode_store {
+            Some(archives) => archives,
+            None if action == agent::MaintainAction::Run => return None,
+            None => &[],
+        };
+        let installed = node
+            .and_then(|node| node.maintenance.as_ref())
+            .map_or(&[][..], |kept| kept.report().xcodes.as_slice());
+        (platform == hostkeeper_wire::Platform::DarwinArm64)
+            .then(|| crate::maintenance_xcode::plan(view.policy, archives, installed).order())
+            .flatten()
+    } else {
+        None
+    };
     let effective = effective_of(view.policy, platform);
     let drain_deadline_secs = match run.drain_deadline_secs {
         Some(0) => None,
         Some(secs) => Some(secs),
         None => effective.drain_deadline_secs,
     };
-    let kinds = host.kinds.iter().map(|kind| kind.proto()).collect();
-    let (action, order_try) = match (host.step, host.queued) {
-        (Step::Halted, Some(act)) => (act.proto(), host.order_try),
-        _ => (agent::MaintainAction::Run, 1),
-    };
-    Ordered {
+    let mut applied_in_order = host.kinds.clone();
+    applied_in_order.sort();
+    let kinds = applied_in_order.iter().map(|kind| kind.proto()).collect();
+    Some(Ordered {
         run_id: run.id.clone(),
         host_group: host.host_group.clone(),
         order_id,
@@ -536,8 +575,9 @@ fn ordered(view: &View<'_>, run: &Run, host: &RunHost, order_id: String) -> Orde
             macos_path: agent::MacosPath::Install,
             macos_major: effective.macos_major,
             return_secs: effective.return_secs,
+            xcode,
         },
-    }
+    })
 }
 
 /// The step a daemon's `step` stands for in a host's turn: its waiting (ordered, not started) is

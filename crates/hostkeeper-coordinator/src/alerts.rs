@@ -339,8 +339,8 @@ pub struct EnrollmentFacts {
     /// The refusals of a second build under a held version that stand
     /// ([`crate::xcode_store::XcodeStore::taken`]); empty without a store.
     pub(crate) xcode_taken: Vec<crate::xcode_store::Taken>,
-    /// The host group of each heard host with a kept maintenance report ([`updates`]).
-    pub(crate) groups: Option<BTreeMap<HostId, String>>,
+    /// The hosts' groups and the Macs `xcode` is due on, for `updates_due` ([`updates`]).
+    pub(crate) due: updates::Due,
     /// For a coordinator with no host group, the desired version of each service that has one
     /// ([`failures`]); a group's are its own.
     pub(crate) wanted: BTreeMap<String, hostkeeper_wire::version::Version>,
@@ -421,7 +421,7 @@ pub(crate) fn derive_in(
     ));
     alerts.extend(xcode_release_waiting(enrollment));
     alerts.extend(crate::xcode_service::version_taken(&enrollment.xcode_taken));
-    alerts.extend(updates::updates_due(fleet, enrollment.groups.as_ref()));
+    alerts.extend(updates::updates_due(fleet, &enrollment.due));
     let wanted = &enrollment.wanted;
     alerts.extend(failures::of_hosts(fleet, ops, services, groups, wanted, at));
     alerts.extend(maintenance_alerts::halted(ops));
@@ -847,7 +847,7 @@ impl Coordinator {
             prerequisites: self.prerequisites.reports(),
             xcode_waiting: self.xcode.release_waiting(),
             xcode_taken: self.xcode_taken(),
-            groups: self.groups_of_reports(),
+            due: self.due_facts(),
             wanted: self
                 .desired
                 .all()
@@ -995,4 +995,4 @@ pub use book::{Book, Observed};
 #[path = "alerts_rows.rs"]
 mod rows;
 #[path = "alerts_updates.rs"]
-mod updates;
+pub(crate) mod updates;
