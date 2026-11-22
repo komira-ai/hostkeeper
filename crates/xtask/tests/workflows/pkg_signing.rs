@@ -7,7 +7,7 @@
 //!   with [`BUILD_HELLO_PKG`] into `pkg/` (not `dist/`,
 //!   which its `assets-*` artifact uploads) and uploads them as [`UNSIGNED_ARTIFACT`].
 //! - **The key is held by one job that runs no repository code.** [`SIGN_JOB`] runs under
-//!   [`SIGN_IF`] (a push to main) in the environment [`SIGN_ENV`], on `macos-15`, needs exactly
+//!   [`MACOS_SIGN_IF`] (a push to main, or a signing run: [`super::signing_run`]) in the environment [`SIGN_ENV`], on `macos-15`, needs exactly
 //!   `version` and `build-macos`, holds `contents: read` alone, and its steps are exactly
 //!   [`SIGN_STEPS`], in order: no checkout, no cargo. It imports the identity into a keychain of
 //!   the job (never the login keychain), signs each pkg with a trusted timestamp ([`SIGN`],
@@ -15,15 +15,15 @@
 //!   before it uploads the signed pkgs as [`SIGNED_ARTIFACT`].
 //! - **The secrets are named there alone.** No other job of the file, and nothing beside the
 //!   jobs, names a secret; that job names exactly [`SECRETS`], each only in the `env:` of a step.
-//! - **Each signed pkg is checked before it is published.** [`CHECK_JOB`] runs under [`SIGN_IF`]
+//! - **Each signed pkg is checked before it is published.** [`CHECK_JOB`] runs under [`MACOS_SIGN_IF`]
 //!   after [`SIGN_JOB`], with `contents: read` alone, and runs [`CHECK_SIGNATURE`] and the
 //!   comparison [`SAME_FILES`] of the expanded signed and unsigned installer, then
 //!   [`CHECK_HELLO_SIGNATURE`] and [`SAME_HELLO_FILES`] for hello's, and
 //!   [`CHECK_BOOTSTRAP_SIGNATURE`] and [`SAME_BOOTSTRAP_FILES`] for the bootstrap pkg's, before the one upload of the
 //!   files as [`PUBLISHED_ARTIFACT`], which no other job uploads.
 //! - **The sums wait for it.** `sums` needs [`CHECK_JOB`] under [`SUMS_IF`], so on a push to main
-//!   SHA256SUMS, the attestation and the release take the signed pkgs, and a run by hand, which
-//!   signs nothing, still makes the sums.
+//!   SHA256SUMS, the attestation and the release take the signed pkgs (a signing run sums them
+//!   too and attests nothing), and a run by hand that signs nothing still makes the sums.
 //!
 //! Both jobs name the identity [`IDENTITY`] in their `env:`. The signing of the programs inside
 //! the pkgs, by [`SIGN_CODE_JOB`], is held by [`super::code_signing`]; [`CHECK_STEPS`] also reads
@@ -34,7 +34,8 @@ use super::code_signing::{
     EXPAND_BOOTSTRAP_FULL, EXPAND_FULL, EXPAND_HELLO_FULL, SIGN_CODE_JOB, SIGN_CODE_STEPS,
 };
 use super::lint::{entries, entry, scalars};
-use super::release::{SIGN_IF, job, names, steps, text_of};
+use super::release::{job, names, steps, text_of};
+use super::signing_run::MACOS_SIGN_IF;
 use super::yaml::Node;
 
 /// The job that signs.
@@ -337,9 +338,9 @@ pub fn job_problems(doc: &Node, name: &str, needs: &[&str], env: &[(&str, &str)]
             problems.push(format!("artifacts.yml: job {name} has the key {key}"));
         }
     }
-    if text_of(j, "if") != Some(SIGN_IF) {
+    if text_of(j, "if") != Some(MACOS_SIGN_IF) {
         problems.push(format!(
-            "artifacts.yml: job {name} needs the exact `if: {SIGN_IF}`"
+            "artifacts.yml: job {name} needs the exact `if: {MACOS_SIGN_IF}`"
         ));
     }
     if text_of(j, "runs-on") != Some("macos-15") {
