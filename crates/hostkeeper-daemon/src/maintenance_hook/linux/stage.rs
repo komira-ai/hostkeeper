@@ -43,6 +43,7 @@ use crate::login_account::exit_failure;
 use crate::maintenance_apk::APK;
 use crate::maintenance_apt::APT_GET;
 use crate::maintenance_collect::{HostRoot, LinuxScope, Look};
+pub use crate::maintenance_collect::{LockWaiter, SleepWaiter};
 use crate::maintenance_dnf::DNF;
 use crate::maintenance_hook::kind::KindError;
 use crate::maintenance_hook::params::MaintainParams;
@@ -179,36 +180,6 @@ impl Disk for HostDisk {
         let stat = rustix::fs::statvfs(self.0.path(dir))
             .map_err(|error| format!("the free space of {dir} could not be read: {error}"))?;
         Ok(stat.f_bavail.saturating_mul(stat.f_frsize))
-    }
-}
-
-/// The wait between two tries of a program whose lock is held.
-pub trait LockWaiter: Send + Sync {
-    /// Waits `secs` seconds.
-    fn wait(&self, secs: u64);
-}
-
-/// A wait made by a sleep: the host's is the thread's ([`SleepWaiter::host`]).
-pub struct SleepWaiter {
-    sleep: Box<dyn Fn(Duration) + Send + Sync>,
-}
-
-impl SleepWaiter {
-    /// The wait that asks `sleep` for each wait's duration.
-    pub fn new(sleep: Box<dyn Fn(Duration) + Send + Sync>) -> SleepWaiter {
-        SleepWaiter { sleep }
-    }
-
-    /// The host's wait: the thread sleeps ([`std::thread::sleep`]).
-    pub fn host() -> SleepWaiter {
-        SleepWaiter::new(Box::new(std::thread::sleep))
-    }
-}
-
-impl LockWaiter for SleepWaiter {
-    /// Sleeps `secs` seconds.
-    fn wait(&self, secs: u64) {
-        (self.sleep)(Duration::from_secs(secs));
     }
 }
 

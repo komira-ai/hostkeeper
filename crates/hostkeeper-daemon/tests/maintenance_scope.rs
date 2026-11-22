@@ -10,10 +10,12 @@ mod support;
 use std::sync::Arc;
 
 use clap::Parser as _;
+use hostkeeper_daemon::cli::DEFAULT_PACKAGE_LOCK_WAIT_SECS;
 use hostkeeper_daemon::cli::{Cli, Command, maintenance_source};
 use hostkeeper_daemon::executor::Daemon;
 use hostkeeper_daemon::maintenance_apt::Apt;
 use hostkeeper_daemon::maintenance_collect::Collector;
+use hostkeeper_daemon::testing::RecordedWaits;
 use hostkeeper_launchd::{FakeLaunchctl, LaunchctlOutput};
 use hostkeeper_link::testing::{FakeClock, RecordingLog};
 use hostkeeper_link::{Dispatch, Job};
@@ -69,6 +71,7 @@ fn reported(name: &str, argv: &[&str]) -> Vec<String> {
     let collectors: Vec<Box<dyn Collector>> = vec![Box::new(Apt::new(
         Box::new(apt_get.clone()),
         Box::new(apt_get),
+        RecordedWaits::bounded(DEFAULT_PACKAGE_LOCK_WAIT_SECS).0,
     ))];
     let source = maintenance_source(
         &daemon,
@@ -86,30 +89,30 @@ fn reported(name: &str, argv: &[&str]) -> Vec<String> {
 }
 
 /// Proves the parsed flag decides what the heartbeat reports: with no flag (scope `security`, the
-/// default) and with `--maintenance-linux-scope security`, the security updates and the new kernel
-/// are due and `vim-tiny`, an update of no security origin, is not; with
-/// `--maintenance-linux-scope all` it is due as well. In each, `openssl`, the package
-/// `placed.json` records for a service, and `hostkeeper`, the daemon's own, are never due.
+/// default) and with `--maintenance-linux-scope security`, the installed security updates and the
+/// kernel meta-package are due, and neither `vim-tiny`, an update of no security origin, nor the
+/// new kernel image and modules, not installed yet, are; with `--maintenance-linux-scope all` they
+/// are due as well. In each, `openssl`, the package `placed.json` records for a service, and
+/// `hostkeeper`, the daemon's own, are never due.
 /// Catches: the flag parsed and not passed on to the source, or the source reading another
 /// `placed.json` than the daemon's.
 #[test]
 fn the_scope_flag_decides_which_updates_the_heartbeat_reports() {
-    let security = [
-        "libc6",
-        "libc-bin",
-        "linux-image-6.8.0-45-generic",
-        "linux-modules-6.8.0-45-generic",
-        "linux-generic",
-    ];
+    let security = ["libc6", "libc-bin", "linux-generic"];
     assert_eq!(reported("scope-default", &[]), security);
     assert_eq!(
         reported("scope-security", &["--maintenance-linux-scope", "security"]),
         security
     );
-    let mut all = security.to_vec();
-    all.push("vim-tiny");
     assert_eq!(
         reported("scope-all", &["--maintenance-linux-scope", "all"]),
-        all
+        [
+            "libc6",
+            "libc-bin",
+            "linux-image-6.8.0-45-generic",
+            "linux-modules-6.8.0-45-generic",
+            "linux-generic",
+            "vim-tiny",
+        ]
     );
 }

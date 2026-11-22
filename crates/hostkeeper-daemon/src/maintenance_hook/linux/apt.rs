@@ -3,7 +3,8 @@
 //! 1. `apt-get update -qq` refreshes the index (it takes the lists' lock);
 //! 2. `apt-get --simulate -qq dist-upgrade` names what an upgrade would install, read by the
 //!    maintenance look's parser ([`parse_apt_simulation`]), and the packages the scope makes due
-//!    are kept ([`Look::due`]: security updates and kernels, or all), hostkeeper's own never;
+//!    are kept ([`crate::maintenance_apt::AptUpdate::is_due`]: the installed security updates and
+//!    kernels, or all), hostkeeper's own never;
 //! 3. `apt-get --print-uris -qq install --only-upgrade <packages>` lists each archive still to
 //!    download with its size, apt's own estimate (it takes no lock);
 //! 4. `apt-get --download-only -y -qq -o Dpkg::Options::=--force-confold install --only-upgrade
@@ -14,12 +15,10 @@
 //! runs no package script, so no `DEBIAN_FRONTEND` is needed. apt-get's own lock timeout is not
 //! used: a held lock (`Could not get lock`) is waited for by the stage ([`super::stage::Calls`]).
 
-use hostkeeper_install::repository::apt::parse::BUSY;
-
 use super::stage::{
     Calls, Download, LISTING_DEADLINE, REASON_LISTING_FAILED, arguments, listing_failed, never_busy,
 };
-use crate::maintenance_apt::parse_apt_simulation;
+use crate::maintenance_apt::{lock_held, parse_apt_simulation};
 use crate::maintenance_collect::Look;
 use crate::maintenance_hook::kind::KindError;
 
@@ -39,10 +38,10 @@ const DOWNLOAD: [&str; 7] = [
     "--only-upgrade",
 ];
 
-/// Whether an `apt-get` run that did not exit 0 found the lock held: it says so in one of the
-/// forms the repository installer reads ([`BUSY`]).
+/// Whether an `apt-get` run found the lock held, as the maintenance look reads it
+/// ([`lock_held`]).
 pub(super) fn busy(code: Option<i32>, text: &str) -> bool {
-    code != Some(0) && BUSY.iter().any(|needle| text.contains(needle))
+    lock_held(code, text)
 }
 
 /// What apt will download for `look`, or `None` when nothing is due or every archive is already
@@ -89,9 +88,7 @@ pub(super) fn plan(calls: &Calls<'_>, look: &Look<'_>) -> Result<Option<Download
 fn due_packages(text: &str, look: &Look<'_>) -> Vec<String> {
     let mut packages: Vec<String> = Vec::new();
     for update in parse_apt_simulation(text).updates {
-        if look.due(&update.package, update.security, update.kernel)
-            && !packages.contains(&update.package)
-        {
+        if update.is_due(look) && !packages.contains(&update.package) {
             packages.push(update.package);
         }
     }

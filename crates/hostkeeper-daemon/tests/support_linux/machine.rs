@@ -11,6 +11,29 @@ pub enum Due {
     Kernel,
     /// A restart alone: `run/reboot-required` is there, and no package is due.
     Reboot,
+    /// The upgrade of [`NEW_PACKAGES`]: one installed security update and two packages not
+    /// installed yet.
+    NewPackages,
+    /// The upgrade of [`only_new`]: two packages not installed yet, nothing else.
+    OnlyNew,
+}
+
+/// [`NEW_PACKAGES`] without [`SECURITY_PACKAGE`]: what the simulation prints once the security
+/// update is installed.
+fn only_new() -> String {
+    without(NEW_PACKAGES, &[SECURITY_PACKAGE])
+}
+
+/// The lines of the simulation `text` that install none of `packages`.
+fn without(text: &str, packages: &[&str]) -> String {
+    text.lines()
+        .filter(|line| {
+            !packages
+                .iter()
+                .any(|package| line.starts_with(&format!("Inst {package} ")))
+        })
+        .map(|line| format!("{line}\n"))
+        .collect()
 }
 
 /// What a fake host is and does.
@@ -53,6 +76,8 @@ impl Machine {
                 installed: OLD_KERNEL.to_owned(),
                 simulation: match due {
                     Due::Kernel => KERNEL_UPDATE.to_owned(),
+                    Due::NewPackages => NEW_PACKAGES.to_owned(),
+                    Due::OnlyNew => only_new(),
                     Due::Nothing | Due::Reboot => String::new(),
                 },
                 install_fails: false,
@@ -180,7 +205,11 @@ impl Machine {
                 self.program("needs-restarting"),
                 self.root(),
             )),
-            Box::new(Apt::new(self.program("apt-get"), self.program("apt-get"))),
+            Box::new(Apt::new(
+                self.program("apt-get"),
+                self.program("apt-get"),
+                RecordedWaits::bounded(LOCK_WAIT).0,
+            )),
         ]
     }
 
@@ -206,6 +235,7 @@ impl Machine {
             Some(Box::new(Apt::new(
                 self.program("apt-get"),
                 self.program("apt-get"),
+                RecordedWaits::bounded(LOCK_WAIT).0,
             ))),
             Box::new(Own),
             Box::new(Healthy),
@@ -239,8 +269,9 @@ impl Machine {
         }
     }
 
-    /// The install `words` asks for: the packages named after `--only-upgrade`, logged; a kernel
-    /// image among them leaves the new kernel installed and a restart asked for.
+    /// The install `words` asks for: the packages named after `--only-upgrade`, logged, and
+    /// installed: the simulation no longer lists them; a kernel image among them leaves the new
+    /// kernel installed and a restart asked for.
     fn install(&self, words: &[&str]) -> LaunchctlOutput {
         let packages: Vec<&str> = words
             .iter()
@@ -265,10 +296,10 @@ impl Machine {
         if packages.contains(&KERNEL_PACKAGE) {
             self.kernel(NEW_KERNEL);
             self.put("run/reboot-required", "*** System restart required ***\n");
-            let mut state = self.state();
-            state.installed = NEW_KERNEL.to_owned();
-            state.simulation.clear();
+            self.state().installed = NEW_KERNEL.to_owned();
         }
+        let mut state = self.state();
+        state.simulation = without(&state.simulation, &packages);
         LaunchctlOutput::success("")
     }
 

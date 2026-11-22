@@ -25,14 +25,23 @@ gateway serves each call at `POST /hostkeeper.operator.v1.Maintenance/<Method>`
 
 **Where it comes from.** The coordinator discovers no update itself. Each host's daemon looks at
 its own host after it starts, then every hour, and again as soon as a maintenance turn of it ends,
-and sends what it found in each heartbeat (the feature `maintenance-v1`). It reads
+and sends what it found in each heartbeat (the feature `maintenance-v1`). A look that failed is
+tried again sooner: 5 minutes after it ended, then 10, 20 and 40 minutes after each further failure
+in a row, then every hour again; a look that succeeds starts that count again. It reads
 `/etc/os-release`, `uname -r`, the kernels under `/lib/modules`, and asks the package manager it
 finds (`apt-get`, else `dnf`, else `apk`) what it would upgrade. Two kinds can be due on Linux:
 
 - `linux`: a package update. With the daemon's `--maintenance-linux-scope security` (its default),
   only security updates (apt: an origin ending `-security`; dnf: listed by `dnf updateinfo list
   --security`) and new kernels (apk names no security origin, so there only kernels); with `all`,
-  every update. A new kernel package also needs a restart.
+  every update. A new kernel package also needs a restart. Under `security`, apt reports only
+  packages the host already has: a package the upgrade would install new (a `linux-image-<version>`,
+  a library a newer version of another package needs) is not due, because that scope's apply
+  installs nothing new by name. It arrives as a dependency of an installed package the apply
+  upgrades (a new kernel image with the upgraded kernel meta-package, `linux-image-generic` on
+  Ubuntu, `linux-image-<flavour>` on Debian), and with `all` it is due and installed. So a host
+  whose upgrade would only bring new packages, such as an older kernel series' image on a host
+  booted from a newer one, has nothing due under `security`.
 - `reboot`: a restart the host needs and has not had, with nothing to install: a newer kernel
   installed than the one running (`kernel`), `/run/reboot-required` (`reboot-required`),
   `needrestart -b` saying the kernel is stale (`needrestart`), or `needs-restarting -r`
@@ -68,7 +77,12 @@ the default shows only security updates and kernels as due, and a run then insta
 **When to distrust it.** A look older than two hours, or one more than five minutes ahead of the
 coordinator's clock, is stale: the host page says "stale look" with its age, and an empty list then
 does not mean nothing is due. A failed look keeps the last good report and names why
-(`look_failed` in the report). A host that shows "no report" runs a daemon without
+(`look_failed` in the report). A look that finds the package manager's lock held (another
+`apt-get`, unattended-upgrades, an operator's `dnf`) tries the run again every 2 seconds for the daemon's
+`--package-lock-wait-secs` (300 by default; per run, so dnf's two listings may each wait that
+long) and fails only when the lock is still held then, with
+`look_failed` starting `apt: the package manager's lock was held for 300s of 300s:` and the
+package manager's own line, which names the lock and its holder. A host that shows "no report" runs a daemon without
 `maintenance-v1`, or has not sent a heartbeat since the coordinator started; it is never ordered.
 The same report, read with `hk`:
 
@@ -93,7 +107,7 @@ step, so a crash, a reboot or a newer daemon picks it up where it stopped:
 |---|---|---|---|
 | 1 | stage | `hostkeeper maintenance-hook prepare`: refreshes the package lists, takes the package manager's own estimate of the download, checks there are at least twice as many bytes free where it downloads, and downloads only (`apt-get --download-only`, `dnf upgrade --downloadonly`, `apk fetch`). Nothing is installed; the host still serves. | deferred: nothing was touched |
 | 2 | drain | each installed service whose package names `[hook] drain` and `[hook] resume`, in the order of their names: its `drain` takes it out of service and returns when it has no work (js-agent's cordons the host in the lease server and waits for its leases to end) | exit 75, or the run's drain deadline passing: deferred, each drained service resumed. Anything else: halted |
-| 3 | apply | `maintenance-hook cutover`: the upgrade of the order's scope (apt `install --only-upgrade` of the security packages and kernels, or `dist-upgrade` under `all`, keeping existing configuration files; dnf `upgrade --security` then the kernel by name, or `upgrade`; apk the kernel alone, or `upgrade`), then, when the host needs a restart (a newer kernel, `/run/reboot-required`, `needrestart`, `needs-restarting`), `systemctl reboot` (OpenRC's `reboot`). After the restart the daemon sees the new boot id and goes on | halted |
+| 3 | apply | `maintenance-hook cutover`: the upgrade of the order's scope (apt `install --only-upgrade` of the installed security packages and kernels, exactly the apt items reported due, a package not yet installed coming in only as a dependency of one of them; or `dist-upgrade` under `all`, new packages included; keeping existing configuration files; dnf `upgrade --security` then the kernel by name, or `upgrade`; apk the kernel alone, or `upgrade`), then, when the host needs a restart (a newer kernel, `/run/reboot-required`, `needrestart`, `needs-restarting`), `systemctl reboot` (OpenRC's `reboot`). After the restart the daemon sees the new boot id and goes on | halted |
 | 4 | check | `maintenance-hook verify`: the host booted again if it had to, runs the newest installed kernel and needs no restart, has nothing of the order's scope still due, and every installed service reports itself healthy | halted |
 | 5 | put back | each drained service's `resume`, in the reverse order (js-agent's uncordons) | halted |
 | 6 | done | the record is closed; the daemon looks again at once, so the notice clears | |
@@ -469,9 +483,9 @@ with `build.json` the group as `get` answered it, its `maintenance` changed:
 - **The Console link of the runs view.** The **Console** button on a rebooting or not-back host's
   row does not open the Console page in this release; open it from the server's row in Home's List
   view.
-- **The package manager's lock.** The daemon's `--package-lock-wait-secs` reaches only the
-  repository installer; the maintenance hook waits its own default, 300 seconds, for a held apt,
-  dnf or apk lock. At the stage a lock still held defers (`package_manager_busy`); at the apply the
+- **The package manager's lock.** The daemon's `--package-lock-wait-secs` reaches the repository
+  installer and the maintenance look; the maintenance hook waits its own default, 300 seconds, for
+  a held apt, dnf or apk lock. At the stage a lock still held defers (`package_manager_busy`); at the apply the
   install fails and halts.
 - **The group's package order for drains.** Services drain in the order of their names, and resume
   in the reverse.

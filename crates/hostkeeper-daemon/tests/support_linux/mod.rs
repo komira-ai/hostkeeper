@@ -54,6 +54,7 @@ use hostkeeper_daemon::maintenance_own::OwnPackages;
 use hostkeeper_daemon::maintenance_reboot::RebootNeed;
 use hostkeeper_daemon::maintenance_run::Driven;
 use hostkeeper_daemon::start::{self, Started};
+use hostkeeper_daemon::testing::RecordedWaits;
 use hostkeeper_daemon::{Daemon, Ports};
 use hostkeeper_hook::Outcome;
 use hostkeeper_launchd::{Launchctl, LaunchctlError, LaunchctlOutput};
@@ -113,6 +114,17 @@ pub const KERNEL_PACKAGE: &str = "linux-image-generic";
 /// security update of a kernel image.
 pub const KERNEL_UPDATE: &str =
     "Inst linux-image-generic [6.8.0.40.40] (6.8.0.45.45 Ubuntu:24.04/noble-security [amd64])\n";
+/// The installed security update of [`NEW_PACKAGES`].
+pub const SECURITY_PACKAGE: &str = "python3-jwt";
+/// What `apt-get --simulate dist-upgrade` prints on an Ubuntu host booted from a newer kernel
+/// series than 6.8 whose upgrade would install two packages it does not have yet, a library (a
+/// security update) and a 6.8 kernel image (not one), beside one installed security update,
+/// [`SECURITY_PACKAGE`].
+pub const NEW_PACKAGES: &str = "\
+Inst libdrm-amdgpu1 (2.4.125-1ubuntu0.1~24.04.2 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64])
+Inst python3-jwt [2.7.0-1ubuntu0.4] (2.7.0-1ubuntu0.5 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [all])
+Inst linux-image-6.8.0-151-generic (6.8.0-151.151 Ubuntu:24.04/noble-updates [amd64])
+";
 /// The seconds the install waits for the package manager's lock.
 const LOCK_WAIT: u64 = 300;
 /// The exit of a hook step that ended deferred.
