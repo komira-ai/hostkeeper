@@ -1,4 +1,4 @@
-# What Update finds on a fleet of Ubuntu build hosts, before its first run
+# What Update finds on Ubuntu build hosts, before its first run
 
 The first thing maintenance delivers is the one-button Linux update. Before that button was pressed
 on real hardware, the due lists of six Linux build hosts were read and compared with the code that
@@ -12,9 +12,9 @@ procedure is [maintenance.md](maintenance.md); the design is
 
 A daemon announces `maintenance-v1`, and sends its report, only after the coordinator advertises the
 feature in a heartbeat answer. A coordinator from 0.1.431 on (komira-ai/hostkeeper#513) advertises
-it to every gRPC heartbeat. Once the coordinator ran that release, every host of this fleet announced
-the feature and sent its first look within a minute, still on the earlier daemon release: the
-daemons needed no update for it. The look runs when the report is first asked for, so the first
+it to every gRPC heartbeat. Once the coordinator runs that release, each host announces the feature and
+sends its first look at its next heartbeats, on the daemon release it already runs: the daemons
+need no update for it. The look runs when the report is first asked for, so the first
 heartbeat after the advertisement carries no due list yet, and the next one does.
 
 ## The due lists
@@ -71,13 +71,15 @@ used to see the halt and Put back on hardware.
    hosts booted from 7.0. Installing it changes neither the running kernel nor the newest one.
 2. **A pending kernel makes Update defer.** The `reboot` kind's stage still answers
    `unsupported_kind` (`RebootKind::prepare` in
-   `crates/hostkeeper-daemon/src/maintenance_linux/kinds.rs`). Update includes `reboot` whenever a
+   `crates/hostkeeper-daemon/src/maintenance_linux/kinds.rs` returns the `Unsupported` stub of
+   `maintenance_hook/kind.rs`). Update includes `reboot` whenever a
    host reports a restart it needs, so every host with a kernel installed and not running defers.
    The in-process e2e (`crates/hostkeeper-daemon/tests/maintenance_linux_e2e.rs`) does not show
    this, because its launcher answers the stage itself. A `reboot`-only run cannot be made until it
    is fixed.
 3. **A look fails on a held apt lock.** The look's `apt-get update` waits for no lock, unlike the
-   hook's stage and apply, which wait 300 seconds. A look that collides with another `apt-get` (the
+   hook's stage and apply, which wait up to the daemon's `--package-lock-wait-secs` (300 by
+   default) for each program they run. A look that collides with another `apt-get` (the
    repository installer's, or unattended-upgrades') fails, and the host shows no due list until its
    next look, an hour later.
 
