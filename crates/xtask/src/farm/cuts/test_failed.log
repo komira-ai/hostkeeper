@@ -1,0 +1,43 @@
+[2026-11-21T12:27:11.009+00:00] Build ID: 00000000-0000-0000-0000-000000000000
+[2026-11-21T12:27:13.294+00:00] RE Session: GRPC-SESSION-ID
+[2026-11-21T12:34:18.891+00:00] Action failed: hostkeeper//crates/hostkeeper-daemon:hostkeeper-daemon-0.1.0_267b8e926e (buildrules//platforms:linux_x86_64#27db57317ae2fec7) (rust_test hostkeeper-daemon-0.1.0_267b8e926e)
+[2026-11-21T12:34:18.891+00:00] Remote command returned non-zero exit code 101
+[2026-11-21T12:34:18.891+00:00] Remote action digest: '0000000000000000000000000000000000000000000000000000000000000000:142'
+[2026-11-21T12:34:18.891+00:00] Stdout:
+
+running 791 tests
+test authorized_keys::tests::a_block_key_line_that_is_not_utf8_is_not_held_and_is_replaced ... ok
+test authorized_keys::tests::a_dangling_link_is_refused_and_a_linked_home_is_followed ... ok
+test authorized_keys::tests::a_file_that_is_a_link_or_a_directory_is_refused ... ok
+test authorized_keys::tests::a_file_with_a_loose_mode_is_rewritten_with_mode_0600 ... ok
+test authorized_keys::tests::a_file_with_no_block_gets_the_block_at_its_end ... ok
+test authorized_keys::tests::a_home_that_is_not_a_directory_is_refused ... ok
+failures:
+
+---- maintenance_hook::macos::apply::tests::the_host_installers_run_with_exactly_their_arguments_input_and_an_empty_environment stdout ----
+
+thread 'maintenance_hook::macos::apply::tests::the_host_installers_run_with_exactly_their_arguments_input_and_an_empty_environment' (321) panicked at crates/hostkeeper-daemon/src/maintenance_hook/macos/apply_tests.rs:938:5:
+assertion `left == right` failed
+  left: ["arg:--exact", "arg:--ignored", "arg:--nocapture", "stdin:Up date=pa\"ss$HOME\\1"]
+ right: ["arg:maintenance_hook::macos::apply::tests::child_prints_its_arguments_environment_and_input", "arg:--exact", "arg:--ignored", "arg:--nocapture", "stdin:Up date=pa\"ss$HOME\\1"]
+
+
+failures:
+    maintenance_hook::macos::apply::tests::the_host_installers_run_with_exactly_their_arguments_input_and_an_empty_environment
+
+test result: FAILED. 784 passed; 1 failed; 6 ignored; 0 measured; 0 filtered out; finished in 12.15s
+
+the hook's log line of a test
+[2026-11-21T12:34:18.891+00:00] Stderr:
+check marker: TEST FAILED: /build/buck-out/v2/art/hostkeeper/crates/hostkeeper-daemon/__hostkeeper-daemon-0.1.0_267b8e926e__bin__/b5e8522b2a6bcc69/hostkeeper-daemon-0.1.0_267b8e926e__bin_bin/hostkeeper_daemon
+
+[2026-11-21T13:08:19.004+00:00] Cache hits: 84%
+[2026-11-21T13:08:19.004+00:00] Commands: 3463 (cached: 2896, remote: 567, local: 0)
+[2026-11-21T13:08:19.004+00:00] Network: up 42MiB  down 83MiB  session GRPC-SESSION-ID
+[2026-11-21T13:08:19.005+00:00]
+the hook's log line of a test
+[2026-11-21T13:08:19.005+00:00] Stderr:
+check marker: TEST FAILED: /build/buck-out/v2/art/hostkeeper/crates/hostkeeper-daemon/__hostkeeper-daemon-0.1.0_267b8e926e__bin__/b5e8522b2a6bcc69/hostkeeper-daemon-0.1.0_267b8e926e__bin_bin/hostkeeper_daemon
+
+[2026-11-21T13:08:19.005+00:00]
+BUILD FAILED
