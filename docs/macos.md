@@ -537,8 +537,9 @@ the example service of `examples/hello`: `hello` is signed like the other progra
 rendered by `hostkeeper_launchd::service_plist`. The artifacts workflow builds them on a
 GitHub-hosted Apple silicon runner, on each push to `main` and by hand, never on a pull request.
 The four Mach-O programs (`hostkeeper`, `hk`, `hello` and `hostkeeper-bootstrap`) are compiled by
-`compile-macos` and, on a push to `main`, signed by `sign-code` before `build-macos` packages them;
-a run by hand packages the linker's ad hoc signatures.
+`compile-macos` and, on a push to `main` or in a signing run
+([The signing run](#the-signing-run)), signed by `sign-code` before `build-macos` packages them;
+any other run by hand packages the linker's ad hoc signatures.
 
 The release also ships the bootstrap pkg, `hostkeeper-bootstrap-<v>-macos-arm64.pkg`, which Apple
 Business installs on a new Mac: the program `hostkeeper-bootstrap` at
@@ -668,7 +669,7 @@ install the pkg. The daemon's start keeps that file, and the postinstall loads t
 trusted root (`--binary`, `--gh`, `--trusted-root`), then runs `productbuild --package` over it
 with the pkg identifier and the version and no signature; only the product goes to `--out`, and
 the digest line is its digest. The binary in it is the one given as `--binary`: on a push to
-`main` the one `sign-code` signed ([The programs' signature](#the-programs-signature)), otherwise
+`main` or in a signing run the one `sign-code` signed ([The programs' signature](#the-programs-signature)), otherwise
 the linker's ad-hoc signature, which the package verification above accepts.
 `cargo xtask release check-macos-pkg` reads back the product
 archive that `pkgutil --expand` expanded, layer by layer.
@@ -693,7 +694,11 @@ Since no pull request runs the macOS build, the unit tests of the check read fix
 `crates/hostkeeper-launchd/` or `.github/workflows/artifacts.yml` therefore links, before it
 merges, a green run of the artifacts workflow started by hand on its branch (`gh workflow run
 artifacts.yml --ref <branch>`), which builds, expands and checks the pkg on the macOS runner and
-signs and publishes nothing.
+signs and publishes nothing. A pull request that changes the signing (the jobs `sign-code`,
+`sign-pkg` or `check-pkg`, the signature checks of `build-macos`, or
+`crates/xtask/src/release/code_signature*`, `pkg_signature*` or `mac_programs*`) links a green
+signing run on its branch instead ([The signing run](#the-signing-run)), which does all of that
+and signs and checks too.
 
 hostkeeper's own package has no unit on a Mac: the manifest's launchd labels are the service name
 or the service name, `.` and more, and the daemon's label is not, so the daemon's job is the
@@ -709,7 +714,7 @@ must be signed. hello's `.pkg`
 (`hostkeeper-bootstrap-<version>-macos-arm64.pkg`); each step below is done for all three. It is not notarized: nothing Apple
 states asks a pkg that device management installs for notarization, and the release adds it
 only if a Mac refuses the signed pkg without it. The signing is in `.github/workflows/artifacts.yml`,
-on a push to `main` only, in three jobs:
+on a push to `main` and in a signing run ([The signing run](#the-signing-run)), in three jobs:
 
 1. `build-macos` builds the unsigned pkgs into `pkg/` from the programs `sign-code` signed
    ([The programs' signature](#the-programs-signature)) and checks them (above); they are never
@@ -733,8 +738,8 @@ on a push to `main` only, in three jobs:
    `hello-<version>-macos-arm64.pkg`: `SHA256SUMS`,
    the attestation and the release are of its bytes.
 
-A run by hand signs nothing: it builds and checks the unsigned pkgs and makes the sums without
-them.
+A run by hand that is not a signing run signs nothing: it builds and checks the unsigned pkgs and
+makes the sums without them.
 The workflow lint (`crates/xtask/tests/workflows/pkg_signing.rs`) holds these jobs to their
 steps: the signing job's exact steps, with the cleanup under `always()` after the signing; the
 secrets named in that job alone; the checks of both pkgs before the one upload of them; and
@@ -776,8 +781,8 @@ passes `-sectcreate __TEXT __info_plist` to the linker), so the program has the 
 `dev.hostkeeper.hostkeeper`, equal to its signing identifier; the privacy profile grants by bundle
 identifier. A unit test of xtask holds the plist's identifier to the table's.
 
-The signing is in `.github/workflows/artifacts.yml`, on a push to `main` only, in three jobs
-before the pkgs are built:
+The signing is in `.github/workflows/artifacts.yml`, on a push to `main` and in a signing run
+([The signing run](#the-signing-run)), in three jobs before the pkgs are built:
 
 1. `compile-macos`, with no secret, compiles the four programs (`cargo build --locked --release`,
    with the release's version and commit) and uploads them as the artifact
@@ -789,16 +794,23 @@ before the pkgs are built:
    [operations/mac-full-disk-access.md](operations/mac-full-disk-access.md)). It imports the
    identity into a keychain of the job (`code-signing.keychain-db` in `$RUNNER_TEMP`, never the
    login keychain), adds Apple's Developer ID intermediate (G2), downloaded from Apple and held to
-   its pinned SHA-256, stops by name when the identity expires within 30 days (it is valid until
+   its pinned SHA-256 (a hosted runner may hold that intermediate already, outside the job's
+   keychain, and `security import` then answers `The specified item already exists in the
+   keychain.`: that answer exactly passes, any other failure stops the job with what `security`
+   said), stops (at the step named for it) unless `security find-identity -v -p codesigning`
+   lists the identity as a valid code-signing identity of the job's keychain (its chain builds to
+   Apple's root, wherever the intermediate is), stops by name when the identity expires within 30 days (it is valid until
    2027-12-21), then runs `codesign --force --sign <identity> --keychain <it> --identifier
    <identifier> --options runtime --timestamp` on a copy of each program, deletes the keychain and
    the PKCS#12 file whether the signing worked or not, and uploads the copies as
    `macho-signed-macos-arm64`.
-3. `build-macos` downloads the unsigned programs, then (on a push to `main`) the signed ones over
-   them, and sets their modes (an artifact does not keep them); the tarballs and the pkgs are made
-   from them. On a push to `main` it also runs `cargo xtask release check-code-signature` on
-   `hostkeeper` and `hk` as unpacked from their tarballs, and `check-pkg` does so on the program
-   at its payload path in each signed pkg.
+3. `build-macos` downloads the unsigned programs, then (on a push to `main` or in a signing run)
+   the signed ones over them, and sets their modes (an artifact does not keep them); the tarballs
+   and the pkgs are made from them. Then it prints what `codesign --display --verbose=2` and
+   `codesign --display --requirements -` show of the packaged `hostkeeper`, for the record (the
+   real output the check's unit tests are held to), and runs `cargo xtask release
+   check-code-signature` on `hostkeeper` and `hk` as unpacked from their tarballs; `check-pkg`
+   does so on the program at its payload path in each signed pkg.
 
 `cargo xtask release check-code-signature <binary> --program <name>` (`name` is a binary name of
 the table; any other is refused before a tool runs) refuses a program, naming every problem with
@@ -820,6 +832,30 @@ its identifier with `--options runtime --timestamp`, each secret checked by name
 `always()`), the secrets named in the signing jobs alone, and `build-macos`'s needs, condition and
 downloads. A unit test of xtask reads the workflow and holds each identifier of the table to the
 signing step of its program.
+
+### The signing run
+
+A run of the artifacts workflow started by hand with the input `sign` signs and checks exactly as
+a push to `main` does, so a change to the signing is proved on its branch before it merges:
+
+```
+gh workflow run artifacts.yml --ref <branch> -f sign=true
+```
+
+It runs `sign-code`, `sign-pkg`, `check-pkg` and the signature checks of `build-macos` with the
+same steps, secrets and environment as a push to `main`. It attests nothing (`attest` and
+`verify` run on a push to `main` alone) and releases nothing (`release.yml` plans only the
+completion of a push run on `main`): its signed files stay artifacts of the run. A signing run on a
+tag, or in a fork's copy of the workflow, stops at its first step (the job `version`'s refusal,
+named for why it stops), instead of going green unsigned; a run by hand without the input signs nothing, as
+before. The workflow lint (`crates/xtask/tests/workflows/signing_run.rs`) holds the one boolean
+input, its default `false`, the refusal as the first step of `version`, the condition of every job
+and step that signs or checks the signature, and that nothing else of the file reads the input.
+
+Who can start one: whoever can push a branch of this repository, who can already start a run by
+hand of any workflow file of that branch, which may name the same environment and secrets. The
+input gives them no reach they do not have; what it adds is that the run that proves the signing
+is the one the lint holds to the release's steps.
 
 The programs are not notarized: no notarization step is in the release. A Mac does not assess with
 Gatekeeper a daemon that an installer installs when the file has no quarantine attribute, which a

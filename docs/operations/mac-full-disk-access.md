@@ -52,11 +52,14 @@ installer's:
 
 The file holds the leaf and its key only. Apple's intermediate, which `codesign` needs to build the
 chain, is fetched by the job `sign-code` from Apple's certificate authority page
-(`DeveloperIDG2CA.cer`) and imported only if its SHA-256 is the one the workflow pins.
+(`DeveloperIDG2CA.cer`) and imported only if its SHA-256 is the one the workflow pins; a runner
+that holds the intermediate already answers that it exists, which passes.
 
 `sign-code` stops, naming what is wrong:
 - when a secret is absent or not given to this repository;
-- when the intermediate is not the pinned one;
+- when the intermediate is not the pinned one, or its import fails otherwise than as a duplicate;
+- when the identity is not a valid code-signing identity of the job's keychain
+  (`security find-identity -v -p codesigning`: its chain does not build to Apple's root);
 - **30 days before the identity expires** (`openssl x509 -checkend 2592000` of the certificate in
   the job's keychain), so it is renewed while releases still go out.
 
@@ -68,7 +71,10 @@ never go into a message, an issue or a chat.
 
 After a push to `main`, the run of `artifacts.yml` shows `sign-code` green, and `check-pkg` has
 checked the designated requirement of each program in the signed pkgs
-(`cargo xtask release check-code-signature`).
+(`cargo xtask release check-code-signature`). After replacing the secrets, a signing run on a
+branch (`gh workflow run artifacts.yml --ref <branch> -f sign=true`,
+[docs/macos.md](../macos.md#the-signing-run)) shows the same before the next push to `main`
+depends on them.
 
 ## 2. The profile in Apple Business (owner, once)
 

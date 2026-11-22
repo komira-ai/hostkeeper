@@ -1,12 +1,15 @@
 //! The GitHub Actions expressions the conditions and outputs of `pr-device.yml` (and the `if:` of
-//! `release.yml`'s `set-desired`) are written in, evaluated, so a test can run a condition of the
-//! file against each outcome of the jobs it names.
+//! `release.yml`'s `set-desired`, and the signing conditions of `artifacts.yml`) are written in,
+//! evaluated, so a test can run a condition of the file against each outcome of the jobs it names.
 //!
 //! The subset: `${{ … }}` around the expression; `||`, `&&`, `!`, `==` and `!=` with GitHub's
 //! precedence (`!` binds tightest, then the comparisons, then `&&`, then `||`); parentheses;
-//! string literals in single quotes; the functions `always()`, `cancelled()` and `failure()`; and dotted
+//! string literals in single quotes; the functions `always()`, `cancelled()` and `failure()`, and
+//! `startsWith(a, b)`, which ignores case as GitHub's does; and dotted
 //! names (`needs.changes.result`) looked up in a table, a name not in it being empty, as an unset
-//! output is. Strings compare as GitHub compares them, without regard to case. Anything else is
+//! output is. A name under `inputs.` whose value is `true` or `false` is that boolean, as GitHub
+//! gives a `type: boolean` input of `workflow_dispatch` (so `false` is falsy, unlike the string).
+//! Strings compare as GitHub compares them, without regard to case. Anything else is
 //! an error naming what was not understood.
 
 use std::collections::BTreeMap;
@@ -31,6 +34,7 @@ enum Token {
     Ne,
     Open,
     Close,
+    Comma,
     Text(String),
     Name(String),
 }
@@ -51,7 +55,7 @@ impl Value {
 }
 
 /// The operators, longest first.
-const OPERATORS: [(&str, Token); 7] = [
+const OPERATORS: [(&str, Token); 8] = [
     ("||", Token::Or),
     ("&&", Token::And),
     ("==", Token::Eq),
@@ -59,6 +63,7 @@ const OPERATORS: [(&str, Token); 7] = [
     ("!", Token::Not),
     ("(", Token::Open),
     (")", Token::Close),
+    (",", Token::Comma),
 ];
 
 fn is_name(c: char) -> bool {
@@ -165,6 +170,9 @@ impl Parser<'_> {
             Some(Token::Name(name)) => {
                 self.at += 1;
                 if self.take(&Token::Open) {
+                    if name == "startsWith" {
+                        return self.starts_with();
+                    }
                     if !self.take(&Token::Close) {
                         return Err(format!("{name}( takes no arguments here"));
                     }
@@ -175,11 +183,35 @@ impl Parser<'_> {
                         _ => Err(format!("the function {name} is not understood")),
                     };
                 }
-                Ok(Value::Text(
-                    self.context.names.get(&name).cloned().unwrap_or_default(),
-                ))
+                let value = self.context.names.get(&name).cloned().unwrap_or_default();
+                Ok(match value.as_str() {
+                    "true" if name.starts_with("inputs.") => Value::Bool(true),
+                    "false" if name.starts_with("inputs.") => Value::Bool(false),
+                    _ => Value::Text(value),
+                })
             }
             other => Err(format!("{other:?} where a value was expected")),
+        }
+    }
+
+    /// The rest of `startsWith(` after its name and `(`: two strings, a `,` between them and
+    /// a `)`; whether the first starts with the second, without regard to case.
+    fn starts_with(&mut self) -> Result<Value, String> {
+        let text = self.or()?;
+        if !self.take(&Token::Comma) {
+            return Err("startsWith( takes two arguments".to_owned());
+        }
+        let prefix = self.or()?;
+        if !self.take(&Token::Close) {
+            return Err("a `startsWith(` that is not closed".to_owned());
+        }
+        match (text, prefix) {
+            (Value::Text(t), Value::Text(p)) => Ok(Value::Bool(
+                t.to_ascii_lowercase().starts_with(&p.to_ascii_lowercase()),
+            )),
+            (t, p) => Err(format!(
+                "startsWith({t:?}, {p:?}): only strings are compared here"
+            )),
         }
     }
 }
