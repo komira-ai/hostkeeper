@@ -305,6 +305,9 @@ pub struct BootReport {
     /// ([`crate::own_package`], "The adoption"), `None` when it adopted none, or why it could
     /// not: `None` before the start looked.
     pub adopted: Option<Result<Option<String>, String>>,
+    /// What the start's check of the daemon's own launchd job found ([`crate::own_job`]): `None`
+    /// on a host with no such check (Linux).
+    pub own_job: Option<crate::own_job::OwnJobCheck>,
 }
 
 /// Why the start pass could not run: the state directory cannot be listed.

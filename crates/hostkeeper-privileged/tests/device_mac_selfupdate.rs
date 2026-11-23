@@ -39,6 +39,16 @@
 //!   reports the update's success and its own job live, healthy and at the new version, and the
 //!   coordinator reads the host baked and hostkeeper converged.
 //!
+//! Each test that finds the package installed also reads launchd's override database, as a
+//! release check that a self-update does not leave the daemon's job marked disabled (which a
+//! reboot, not possible on a hosted runner, would show as a daemon that does not come back): the
+//! package ships the plist of the test's job and names no `run`, as hostkeeper's own package
+//! does, so the update over the kept [`N`] is the `activate` that once disabled the job; after
+//! it `launchctl print-disabled system` does not list the job disabled and `launchctl print
+//! system/<label>` finds it loaded, and the label of the daemon's own job, which the daemon's
+//! `activate` of its package enables, is listed enabled
+//! ([`MacSelfHost::assert_installed`]).
+//!
 //! Every wait polls a state a bounded number of times and fails at once when the state can no
 //! longer come; no test asserts how long anything took.
 
@@ -117,7 +127,12 @@ fn assert_restarted_into_next(host: &MacSelfHost, old_pid: u32) {
 /// installed once it ran: the daemon of [`N`], its package installed, is ordered the update to
 /// [`NEXT`] by the entry of its `.pkg`; the record settles `Succeeded`, the job runs [`NEXT`]'s
 /// file, the new daemon reports it, and the package is installed at [`NEXT`] (`previous` of the
-/// packages directory [`N`]).
+/// packages directory [`N`]). That update is an `activate` of [`NEXT`] over the kept [`N`] of a
+/// package that ships a job's plist and names no `run`: afterwards launchd does not list the
+/// job disabled and still holds it, and lists the daemon's own job enabled.
+///
+/// Catches also: an `activate` over a kept version that marks the package's job disabled, which
+/// is the daemon that does not come back after a reboot.
 #[test]
 fn an_installed_daemon_updated_to_the_next_version_restarts_into_it_under_launchd() {
     let host = MacSelfHost::new("update", Plan::Installed);

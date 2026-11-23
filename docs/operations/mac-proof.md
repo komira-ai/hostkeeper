@@ -24,6 +24,7 @@ Mac that takes builds.
 | 8 | MP-U4, MP-U5 (FileVault on) | the proof Mac | root shell and the owner; each needs a fresh minor update |
 | 9 | MP-M2 to MP-M7, one setting at a time | Apple Business, then the proof Mac | the owner sets; root shell reads |
 | 10 | MP-U6, then MP-U7 or MP-U8 | the proof Mac | **Irreversible**: a major upgrade; the owner chooses the Mac |
+| 10a | MP-J1 to MP-J6 (section 6a), before section 7 | the proof Mac, or another farm Mac out of builds | root shell and an operator with `hk`; MP-J3 and MP-J5 reboot the Mac |
 | 11 | MP-U9 after each install; MP-A9; section 7 | the proof Mac, then the coordinator side | root shell, then the operator |
 
 ## Where the files go
@@ -1257,6 +1258,195 @@ defaults read /Library/Preferences/com.apple.SoftwareUpdate 2>&1 | head -40
   - if the Configuration installs at its deadline regardless of drain -> confirms the reason for 5.8; no code change.
 - Expected (recalled, not checked): the declaration is for macOS 14 and later, supervised; whether Apple Business's Configuration maps one to one onto it is not published, and the design's reading of the API reference says it cannot be created by the API.
 - Reversible: the owner removes the Configuration and confirms with `snap` that the declaration is gone. A deadline in the past or near would force an install and restart, so keep it far out and record the time of removal.
+
+## 6a. The daemon's launchd job across self-updates and a reboot
+
+The daemon of a Mac is the launchd job `dev.hostkeeper.hostkeeper`, loaded from `/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist`. launchd keeps a mark per job in its override database (`launchctl print-disabled system` lists it; `launchctl disable` and `launchctl enable` write it), and a job marked disabled is not loaded at boot, though the process that runs now keeps running. An earlier release's installer marked the daemon's job disabled at each self-update over a kept version and at each rollback, so a farm Mac came back from a reboot without its daemon. The current installer disables only a job the replaced version's manifest ran, and the daemon enables its own job after it activates its own package.
+
+The release check for this is in `release.yml`'s job `macos-device`: the tests of `install_macos_pkg/own_shape.rs` and the job checks of `device_mac_selfupdate.rs` read `launchctl print-disabled system` and `launchctl print system/<label>` after each install, update and rollback of a package of the daemon's shape, with a job of a label of their own. A hosted runner cannot be rebooted, and its job is not the daemon's label. This section is the proof on a real Mac, with the reboot: MP-J1 to MP-J3 show that two self-updates leave the job enabled and loaded and that the Mac comes back; MP-J4 to MP-J6 show what happens when something else marks the job disabled or stops the daemon.
+
+Run it on the proof Mac of section 1 (drained, in a group of its own), or on another farm Mac the owner has taken out of builds: MP-J3 and MP-J5 reboot the Mac and MP-J6 stops its daemon. Run it before section 7. "A farm Mac" is `<node-id>` below; the commands on the operator's side use the preamble that follows, the commands on the Mac a root shell (MP-E4).
+
+```sh
+# the preamble of every operator-side shell of this section (paste it; it writes no file):
+P=<the proof's scratch directory>; umask 077; mkdir -p "$P"
+hkc() { hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> "$@"; }
+# the heartbeat the coordinator last took from the Mac, as a number:
+beat() { hkc hosts get --node-id <node-id> | jq -r '(.host // .).lastHeartbeatUnix'; }
+# on the Mac, in every new root shell: the job's label and plist
+L=dev.hostkeeper.hostkeeper; PL=/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist
+```
+
+### MP-J1 Before: the job is enabled or has no mark, and is loaded
+Settles: none; the baseline MP-J2 and MP-J3 compare with. Runs: a root shell on the Mac, then an operator on the coordinator side with hk. Needs: the Mac enrolled, live and running a release of hostkeeper that carries this fix (an older release marks the job disabled at the update of MP-J2, which is the defect, not a result of this proof).
+```sh
+# on the Mac, as root:
+sw_vers; sysctl -n kern.boottime
+launchctl print-disabled system | grep "$L" || echo "no mark: $L is not listed"
+launchctl print system/$L | grep -E '^\s*(state|pid|program) ='
+ls -l "$PL"
+```
+```sh
+# on the operator's side (P, hkc and beat set as in the preamble):
+hkc --response-file $P/get-j1.json hosts get --node-id <node-id>
+jq '(.host // .) | {live, lastHeartbeatUnix, agent: .heartbeat.agent, services: [.services[] | {service, health, installedVersion, up}]}' $P/get-j1.json
+```
+Record: the boot time, the `print-disabled` line (the label listed `=> enabled`, or not listed, or `=> disabled`), the job's state and pid, the plist's owner and mode, `live`, the agent version, hostkeeper's installed version and health.
+Decides:
+- if `print-disabled` lists the label `=> disabled` -> the Mac still carries the old defect: record that the Mac was found so (a result of the release it ran, not of this proof), run `launchctl enable system/$L` as root, and go on.
+- if `launchctl print system/$L` says the service could not be found -> the daemon is not running under its job; stop and read `/var/log/hostkeeper-bootstrap.log` (`docs/operations/mac-bootstrap.md`) before going on.
+- if `live` is false or hostkeeper is not `HEALTH_HEALTHY` -> stop; the Mac is not a fit baseline.
+
+### MP-J2 Two self-updates through the coordinator, with the override read after each
+Settles: that a self-update over a kept `macos-pkg` version leaves the job enabled (or unmarked) and loaded. Runs: an operator on the coordinator side with hk, and a root shell on the Mac. Needs: MP-J1; two releases of hostkeeper that the operator may set for the Mac's group: `<v1>`, then `<v2>`. The first update has no kept version before it; the second is the update over the kept `<v1>`, the activate that once disabled the job. When only one newer release exists, take `<v1>` as that release and `<v2>` as the version the Mac ran at MP-J1: it is an update over a kept version all the same. The group is `<group>` (`mac-proof` after MP-E3).
+```sh
+# on the operator's side: the request of each version, from the targets it was released with
+for V in <v1> <v2>; do
+  hkc --response-file "$P/release-$V.json" releases get-release --service hostkeeper --version "$V"
+  jq --arg v "$V" '{desired: ({version: $v} + (if .releaseIndexDigest then {releaseIndexDigest: .releaseIndexDigest} else {} end)), targets: .targets}' "$P/release-$V.json" > "$P/desired-hostkeeper-$V.json"
+done
+# the first update
+hkc releases set-desired --service hostkeeper --host-group <group> --request "$P/desired-hostkeeper-<v1>.json"
+hkc releases wait-converged --service hostkeeper --version <v1> --wait-secs 900 --host-group <group>
+```
+```sh
+# on the Mac, as root, after the first update converged:
+launchctl print-disabled system | grep "$L" || echo "no mark: $L is not listed"
+launchctl print system/$L | grep -E '^\s*(state|pid|program) ='
+```
+```sh
+# on the operator's side: the second update, over the kept <v1>
+hkc releases set-desired --service hostkeeper --host-group <group> --request "$P/desired-hostkeeper-<v2>.json"
+hkc releases wait-converged --service hostkeeper --version <v2> --wait-secs 900 --host-group <group>
+```
+```sh
+# on the Mac, as root, after the second update converged:
+launchctl print-disabled system | grep "$L" || echo "no mark: $L is not listed"
+launchctl print system/$L | grep -E '^\s*(state|pid|program) ='
+```
+Record: for each update the `wait-converged` outcome, the `print-disabled` line and the job's state and pid after it (the pid differs from before: the daemon restarted into the new version).
+Decides:
+- if `print-disabled` lists the label `=> disabled` after either update -> the defect is not fixed on this release: keep the output, the version pair and the daemon's log, and stop before MP-J3 (a reboot would not bring the daemon back).
+- if the label is `=> enabled` or not listed after both -> go on. The daemon's activate of its own package runs `launchctl enable system/dev.hostkeeper.hostkeeper`, so `enabled` is the line expected.
+- if `wait-converged` ends `halted` or `not_converged` -> read `hkc releases status --service hostkeeper`; the update did not finish, and this is not a result of this step.
+
+### MP-J3 Reboot: the daemon comes back and heartbeats
+Settles: that the updated Mac loads its daemon at boot. Runs: a root shell on the Mac, then an operator on the coordinator side. Needs: MP-J2 with the label enabled or unmarked. With FileVault on, the restart stops at the pre-boot screen unless authenticated restart (MP-A8) was shown to work on this Mac; otherwise the owner types the volume password and the times are noted (MP-E9).
+```sh
+# on the Mac, as root:
+sysctl -n kern.boottime
+shutdown -r now
+```
+```sh
+# after the Mac is back, in a new root shell on it (L set as in the preamble):
+sysctl -n kern.boottime
+launchctl print-disabled system | grep "$L" || echo "no mark: $L is not listed"
+launchctl print system/$L | grep -E '^\s*(state|pid|program) ='
+```
+```sh
+# on the operator's side, once the Mac has heartbeated again:
+until [ "$(hkc hosts get --node-id <node-id> | jq -r '(.host // .).live')" = true ]; do sleep 10; done
+hkc --response-file $P/get-j3.json hosts get --node-id <node-id>
+jq '(.host // .) | {live, lastHeartbeatUnix, services: [.services[] | {service, health, installedVersion, up}]}' $P/get-j3.json
+hkc --response-file $P/status-j3.json releases status --service hostkeeper
+jq --arg n <node-id> '.services[] | .hosts[]? | select(.nodeId == $n) | {nodeId, live, health: .view.health, installed: .view.installedVersion}' $P/status-j3.json
+date +%s
+```
+Record: both boot times (they differ), the job's state and pid after the boot, `live`, `lastHeartbeatUnix` against `date +%s` (a heartbeat within the last 45 seconds), hostkeeper's installed version (`<v2>`) and `HEALTH_HEALTHY` in both answers.
+Decides:
+- if the job is not loaded after the boot, or `live` never becomes true -> the defect is not fixed, or the Mac failed for another reason: read `print-disabled` (a `=> disabled` line is the old defect), `/var/log/hostkeeper-bootstrap.log` and the daemon's log, and record each.
+- if the daemon is loaded and heartbeating and health is `HEALTH_HEALTHY` -> the fix holds across two self-updates and a reboot.
+
+### MP-J4 The daemon's own check: a disabled job is enabled again, and says so
+Settles: that the daemon finds its own job marked disabled, enables it, and reports the alert `own_job_disabled`. Runs: a root shell on the Mac, and an operator on the coordinator side. Needs: MP-J3, and a release that carries the daemon's own check of its job and its alert `own_job_disabled` (added beside the fix this section proves; on an older release this step cannot be shown, and the record says so). Where the alert shows in the host's answer is as that check documents; the commands below search the whole answer for the name.
+```sh
+# on the Mac, as root:
+launchctl disable system/$L
+launchctl print-disabled system | grep "$L"      # the label is listed => disabled
+launchctl print system/$L | grep -E '^\s*(state|pid) ='      # still loaded: disable does not unload
+```
+```sh
+# on the operator's side: two heartbeats after the disable, each answer kept
+B=$(beat)
+for i in 1 2; do
+  until [ "$(beat)" != "$B" ]; do sleep 5; done
+  B=$(beat)
+  hkc --response-file "$P/get-j4-$i.json" hosts get --node-id <node-id>
+  echo "heartbeat $i: own_job_disabled appears $(grep -c own_job_disabled "$P/get-j4-$i.json") time(s)"
+done
+```
+```sh
+# on the Mac, as root:
+launchctl print-disabled system | grep "$L" || echo "no mark: $L is not listed"
+```
+Record: the line after `disable`, the count at each of the two heartbeats, the line after them, and whether the alert is gone once the job is enabled.
+Decides:
+- if the label is still `=> disabled` after two heartbeats -> the daemon did not enable its job; keep the daemon's log, and enable it by hand: `launchctl enable system/$L`.
+- if the label is `=> enabled` and the alert `own_job_disabled` appeared at either heartbeat -> the check works as built.
+- if the label is `=> enabled` and the alert never appeared -> the job was repaired without the report; record it as a gap in the check.
+
+### MP-J5 A job disabled and booted out: the bootstrap loads it at boot
+Settles: that a Mac whose daemon job is marked disabled and not loaded is repaired at boot by `hostkeeper-bootstrap`, which enables and loads it. Runs: a root shell on the Mac, then an operator on the coordinator side. Needs: MP-J3. The disable and the bootout are one command, so that the daemon does not enable its job between them.
+```sh
+# on the Mac, as root:
+sh -c "launchctl disable system/$L && launchctl bootout system/$L"
+launchctl print-disabled system | grep "$L"      # => disabled
+launchctl print system/$L 2>&1 | head -3          # the service could not be found
+sysctl -n kern.boottime
+shutdown -r now
+```
+```sh
+# after the Mac is back, in a new root shell on it (L set as in the preamble):
+sysctl -n kern.boottime
+grep -n 'job was not loaded\|is not loaded' /var/log/hostkeeper-bootstrap.log | tail -5
+launchctl print-disabled system | grep "$L" || echo "no mark: $L is not listed"
+launchctl print system/$L | grep -E '^\s*(state|pid|program) ='
+```
+```sh
+# on the operator's side, once the Mac has heartbeated again:
+until [ "$(hkc hosts get --node-id <node-id> | jq -r '(.host // .).live')" = true ]; do sleep 10; done
+hkc --response-file $P/get-j5.json hosts get --node-id <node-id>
+jq '(.host // .) | {live, lastHeartbeatUnix, services: [.services[] | {service, health, up}]}' $P/get-j5.json
+```
+Record: the lines before the reboot, the lines of the log, the `print-disabled` line and the job's state after, `live`, and hostkeeper's health.
+Decides:
+- if `/var/log/hostkeeper-bootstrap.log` holds `hostkeeper is installed and its job was not loaded: enabled and loaded it`, the daemon is loaded and the Mac is live -> the repair works; `docs/operations/mac-bootstrap.md` says what each other line means.
+- if the log holds `hostkeeper is installed; nothing to do` and the job is not loaded -> the bootstrap asked launchd and was told it is loaded; keep the output of `launchctl print system/$L` and the log.
+- if the log holds a `launchctl <verb> exited ...` line -> the repair failed at that verb; record it, and load the job by hand: `launchctl enable system/$L; launchctl bootstrap system "$PL"`.
+- if the log holds neither line and the daemon is not running -> the bootstrap did not run at boot; read `docs/operations/mac-bootstrap.md` for its job and its log.
+
+### MP-J6 A silent daemon: the Mac's services are HEALTH_SILENT, then healthy again
+Settles: that the coordinator answers `HEALTH_SILENT` for each service of a Mac that is not live, in place of the health it last reported, and the services' own health again once the daemon heartbeats. Runs: a root shell on the Mac, and an operator on the coordinator side. Needs: MP-J3 and a coordinator that carries `HEALTH_SILENT` (`docs/service-observation.md`). The Mac counts as not live after 45 seconds without a heartbeat; the wait below is longer.
+```sh
+# on the Mac, as root: stop the daemon (the job is not marked; bootstrap loads it again)
+launchctl bootout system/$L
+sleep 60
+```
+```sh
+# on the operator's side, now:
+hkc --response-file $P/get-j6-silent.json hosts get --node-id <node-id>
+jq '(.host // .) | {live, services: [.services[] | {service, health, up}]}' $P/get-j6-silent.json
+hkc --response-file $P/status-j6-silent.json releases status --service hostkeeper
+jq --arg n <node-id> '.services[] | .hosts[]? | select(.nodeId == $n) | {nodeId, live, health: .view.health}' $P/status-j6-silent.json
+```
+```sh
+# on the Mac, as root: start the daemon again
+launchctl bootstrap system "$PL"
+launchctl print system/$L | grep -E '^\s*(state|pid) ='
+```
+```sh
+# on the operator's side, once the Mac has heartbeated again:
+until [ "$(hkc hosts get --node-id <node-id> | jq -r '(.host // .).live')" = true ]; do sleep 5; done
+hkc --response-file $P/get-j6-back.json hosts get --node-id <node-id>
+jq '(.host // .) | {live, services: [.services[] | {service, health, up}]}' $P/get-j6-back.json
+```
+Record: `live` and each service's `health` while the daemon is stopped (`false` and `HEALTH_SILENT` for every service of the Mac) and after it started (`true` and the health each reports).
+Decides:
+- if a service shows its last reported health while the Mac is not live -> the coordinator in use predates `HEALTH_SILENT`; record its version.
+- if a service stays `HEALTH_SILENT` after the Mac is live again -> record the answers and read `docs/service-observation.md`.
+- if every service is `HEALTH_SILENT` while the daemon is stopped and has its own health again after it starts -> as built.
+- if `launchctl bootstrap` fails -> the job is marked disabled: `launchctl enable system/$L`, then bootstrap again, and record it as a finding against MP-J4.
+**Reversible**: the daemon is started again in this step; the Mac is as MP-J3 left it.
 
 ## 7. Put the Mac back
 

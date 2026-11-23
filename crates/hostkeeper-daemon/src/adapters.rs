@@ -16,7 +16,8 @@
 //!
 //! Each set also names the unit the daemon itself runs as (`hostkeeper.service`, the OpenRC
 //! service `hostkeeper`, or the launchd job `dev.hostkeeper.hostkeeper`), which the observer
-//! watches as the service `hostkeeper`.
+//! watches as the service `hostkeeper`. The macOS set alone also gives the check that the
+//! daemon's own launchd job is not marked disabled ([`OwnJob`]); the other two give none.
 //!
 //! The host's clock is chosen here too ([`host_clock`]): the kernel's monotonic clock under the
 //! boot id of the system the daemon was built for.
@@ -47,6 +48,7 @@ use hostkeeper_steps::{BootIdSource, StepLauncher, SystemClock, SystemdLauncher}
 
 use crate::hook_log::log_hook_output;
 use crate::observer::{SHOW_DEADLINE, SHOW_OUTPUT_CAP, proc_probe, systemd_manager};
+use crate::own_job::OwnJob;
 use crate::start::StartError;
 
 /// The daemon's own unit on Linux.
@@ -95,6 +97,9 @@ pub struct Adapters {
     /// `hostkeeper` ([`crate::observer::OwnService`]): [`MAIN_UNIT`] on Linux, the launchd job
     /// [`Label::daemon`] on macOS.
     pub own_unit: String,
+    /// The check that the daemon's own launchd job is enabled ([`crate::own_job`]): the Mac's
+    /// alone, none on Linux or under OpenRC.
+    pub own_job: Option<OwnJob>,
 }
 
 impl Adapters {
@@ -128,6 +133,7 @@ impl Adapters {
             manager: Box::new(systemd_manager()),
             process: Box::new(proc_probe()),
             own_unit: MAIN_UNIT.to_owned(),
+            own_job: None,
         }
     }
 
@@ -160,18 +166,21 @@ impl Adapters {
             )),
             process: Box::new(proc_probe()),
             own_unit: OPENRC_SERVICE.to_owned(),
+            own_job: None,
         }
     }
 
     /// The macOS set over the ports given: `launcher` runs the steps, `launchctl` is what the
-    /// unit control (with [`LAUNCHCTL_DEADLINE`]) and the service manager ask, `print` what the
-    /// observer's service manager asks, and `pids` what the process probe asks. `Err` when the
-    /// unit directory of `platform` cannot be read.
+    /// unit control (with [`LAUNCHCTL_DEADLINE`]) asks, `print` what the observer's service
+    /// manager asks, `own_job` what the check of the daemon's own job asks (`print-disabled` and
+    /// `enable`, with [`PRINT_DEADLINE`] on a host), and `pids` what the process probe asks.
+    /// `Err` when the unit directory of `platform` cannot be read.
     pub fn macos<L, P>(
         platform: &Platform,
         launcher: Arc<dyn StepLauncher>,
         launchctl: L,
         print: L,
+        own_job: L,
         pids: P,
     ) -> Result<Adapters, StartError>
     where
@@ -192,6 +201,7 @@ impl Adapters {
             manager: Box::new(LaunchdServiceManager::new(print)),
             process: Box::new(LaunchdProcessProbe::new(pids, StdFileIdentity)),
             own_unit: Label::daemon().to_string(),
+            own_job: Some(OwnJob::new(Arc::new(own_job))),
         })
     }
 }
@@ -260,6 +270,7 @@ fn host_macos(platform: &Platform) -> Result<Adapters, StartError> {
         platform,
         Arc::new(LaunchdLauncher::system().with_log(Arc::new(log_hook_output))),
         LaunchctlProcess::system(LAUNCHCTL_DEADLINE),
+        LaunchctlProcess::system(PRINT_DEADLINE),
         LaunchctlProcess::system(PRINT_DEADLINE),
         DarwinPidInfo,
     )

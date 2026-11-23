@@ -40,6 +40,14 @@
 //!   `macos-pkg`, refuses the unsigned `.pkg` at `stage` (`signature`, real `pkgutil`, nothing
 //!   staged or installed), installs the answered one, updates it, and uninstalls it.
 //!
+//! - `install_macos_pkg/own_shape.rs`: a package shaped like hostkeeper's own (the plist of a job
+//!   in the payload, a manifest that names no `run`) installed, updated twice over the kept
+//!   previous version and rolled back twice, with launchd's override database
+//!   (`launchctl print-disabled system`) and `launchctl print system/<label>` read after each
+//!   step: the job is never disabled and stays loaded; a disable an earlier release left stays
+//!   until `MacosPkg::enable` clears it; a label the kept version's `run` named and the new
+//!   one's does not is disabled.
+//!
 //! The tests run one after the other (`--test-threads=1`, which the workflow lint holds). It
 //! runs as root and says so when it does not: it never skips. Like the other device tests it is
 //! not counted by the coverage gate.
@@ -61,13 +69,18 @@ use hostkeeper_install::macos_pkg::{
 };
 use hostkeeper_install::tools::{ToolError, ToolOutput};
 use hostkeeper_install::{Failure, HostTools, Reason, Tool, Tools};
+use hostkeeper_launchd::launchctl::{parse_disabled, print_disabled_args};
 use hostkeeper_launchd::{Label, Launchctl, LaunchctlProcess};
 use hostkeeper_testkit::Scratch;
 
 #[path = "install_macos_pkg/daemon.rs"]
 mod daemon;
+#[path = "shared/launchd_override.rs"]
+mod launchd_override;
 #[path = "shared/other_user.rs"]
 mod other_user;
+#[path = "install_macos_pkg/own_shape.rs"]
+mod own_shape;
 
 const SERVICE: &str = "hk-a9-fixture";
 const IDENTIFIER: &str = "dev.hostkeeper.a9-fixture";
@@ -469,18 +482,24 @@ impl Rig {
 /// Whether launchd's override enables `label`: `launchctl print-disabled system` prints
 /// `"<label>" => enabled` (or `=> false` on older releases) once `launchctl enable` ran.
 fn enabled_by_launchd(label: &str) -> bool {
-    let printed = run("/bin/launchctl", &["print-disabled", "system"]);
-    let key = format!("\"{label}\" =>");
-    printed.lines().any(|line| {
-        line.trim()
-            .strip_prefix(&key)
-            .is_some_and(|rest| matches!(rest.trim(), "enabled" | "false"))
-    })
+    let printed = run(
+        "/bin/launchctl",
+        &print_disabled_args()
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+    );
+    parse_disabled(&printed).get(label) == Some(&false)
 }
 
 /// The version of the receipt of the fixture's identifier; `None` when there is none.
 fn receipt_version() -> Option<String> {
-    let out = run_any("/usr/sbin/pkgutil", &["--pkg-info-plist", IDENTIFIER]);
+    receipt_version_of(IDENTIFIER)
+}
+
+/// The version of the receipt of `identifier`; `None` when there is none.
+fn receipt_version_of(identifier: &str) -> Option<String> {
+    let out = run_any("/usr/sbin/pkgutil", &["--pkg-info-plist", identifier]);
     if out.code != Some(0) {
         let said = said(&out);
         assert!(

@@ -37,6 +37,7 @@ use crate::locks::{Held, Package, ServiceGuard, ServiceLocks, StepLock};
 use crate::maintenance_run::MaintenanceRuns;
 use crate::node::NodeState;
 use crate::observer;
+use crate::own_job::OwnJob;
 use crate::packages::Packages;
 use crate::prune::{ForceLockPoint, Prune};
 use crate::refusal::Refusal;
@@ -91,6 +92,9 @@ pub struct Ports {
     /// directory a repository version is staged in, the work directories and the installer
     /// lock ([`crate::repository`]).
     pub repository: Arc<RepositoryPorts>,
+    /// The check that the daemon's own launchd job is enabled ([`crate::own_job`]); `Some` on a
+    /// Mac only.
+    pub own_job: Option<Arc<OwnJob>>,
 }
 
 /// Where the daemon's links and `placed.json` are (design section 4.7): the directories as the
@@ -137,6 +141,8 @@ pub struct Ctx {
     pub announcement: Announcement,
     /// What the repository installer works with ([`Ports::repository`]).
     pub repository_ports: Arc<RepositoryPorts>,
+    /// The check of the daemon's own launchd job ([`Ports::own_job`], [`Ctx::check_own_job`]).
+    pub(crate) own_job: Option<Arc<OwnJob>>,
     /// The drift each service's last repository `activate` repaired, until its verdict takes it.
     repaired: Arc<Mutex<BTreeMap<String, Drift>>>,
     /// The counter of the repository installer's tool units ([`Repository::tool_runs`]).
@@ -653,6 +659,7 @@ impl Daemon {
                 observer: ports.observer,
                 announcement: ports.announcement,
                 repository_ports: ports.repository,
+                own_job: ports.own_job,
                 repaired: Arc::default(),
                 tool_runs: Arc::new(std::sync::atomic::AtomicU64::new(
                     crate::repository::first_tool_run(),

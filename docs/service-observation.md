@@ -98,6 +98,12 @@ The daemon's own service is the one exception to the first row: observed `absent
 daemon reports it `HEALTH_UNHEALTHY`, reason `own_unit_not_loaded`, running, since it is that process
 (`crates/hostkeeper-daemon/src/link_adapters.rs`); `HEALTH_ABSENT` would read as not installed to the coordinator.
 
+A Mac's daemon also keeps its own launchd job from being marked disabled in launchd's override
+database, which would stop it from coming back after a reboot: at its start and after each
+heartbeat it enables the job again and logs `alert=own_job_disabled` (docs/macos.md, "The daemon
+keeps its own job enabled"). That alert is a line of the daemon's log; the heartbeat's health of
+the service `hostkeeper` is unchanged by it.
+
 ## The thin modules
 
 Everything above is pure logic over four ports (`ServiceManager`, `ProcessProbe`, `HealthClient`,

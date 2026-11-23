@@ -301,6 +301,7 @@ pub fn startup_notifying(
     let daemon = Arc::new(
         Daemon::new(config, dirs, ports, own_version).keeping_versions(settings.keep_versions),
     );
+    report.own_job = daemon.ctx().check_own_job();
     report.package_dirs = crate::package_dirs::set(daemon.ctx());
     daemon.clear_policy_rc_d(&mut report);
     settle_self_update(&daemon, &mut report);
