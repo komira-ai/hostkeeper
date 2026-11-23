@@ -576,6 +576,11 @@ enum Health {
   HEALTH_UNHEALTHY = 2;
   // It is installed on the host and has never run.
   HEALTH_ABSENT = 3;
+  // The coordinator's word only, never sent by a daemon: the host has sent no heartbeat for 45
+  // seconds or more (it is not live), so its last report is not current. A coordinator answers
+  // it in place of the health the host last reported; a heartbeat that carries it is read as
+  // HEALTH_UNSPECIFIED.
+  HEALTH_SILENT = 4;
 }
 
 // How an update ended.

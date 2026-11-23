@@ -75,6 +75,10 @@ fn the_openrc_unit_control_runs_rc_service_for_each_call() {
     assert_eq!(adapters.kind, PlatformKind::Openrc);
     assert_eq!(adapters.unit_dir, Path::new("/etc/init.d"));
     assert_eq!(adapters.own_unit, "hostkeeper");
+    assert!(
+        adapters.own_job.is_none(),
+        "an OpenRC host has no launchd job to check"
+    );
     assert_eq!(OPENRC_SERVICE, "hostkeeper");
     let units = &adapters.units;
 

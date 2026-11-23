@@ -114,6 +114,7 @@ fn mac_observer(rig: &Rig, print: LaunchctlOutput, exe: &Path) -> hostkeeper_obs
         Arc::new(Unwired),
         launchctl,
         asked,
+        FakeLaunchctl::new(),
         RunsFile(exe.to_path_buf()),
     )
     .expect("the macOS set");
@@ -288,6 +289,7 @@ fn only_hostkeeper_with_no_unit_of_its_own_is_observed_through_the_daemons_job()
         Arc::new(Unwired),
         FakeLaunchctl::new(),
         asked.clone(),
+        FakeLaunchctl::new(),
         RunsFile(version_file(&rig, RUNS)),
     )
     .expect("the macOS set");

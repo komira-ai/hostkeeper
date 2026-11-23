@@ -9,7 +9,9 @@
 //! It plays launchd's memory of the job too. The file `launchctl.loaded` is there while the job is
 //! loaded: `print` then writes a description of the job on standard output and standard error and
 //! exits 0, and without the file it says the job is not found and exits 113, as `launchctl print`
-//! does; a `bootstrap` that succeeds creates the file.
+//! does; a `bootstrap` that succeeds creates the file. The file `launchctl.disabled` plays the
+//! mark launchd keeps for a job that is disabled: while it is there `bootstrap` fails with exit
+//! code 5 and does not load the job, and an `enable` removes it.
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -36,12 +38,22 @@ fn main() -> ExitCode {
     }
     let first = args.first().cloned().unwrap_or_default();
     let loaded = dir.join("launchctl.loaded");
+    let disabled = dir.join("launchctl.disabled");
     match std::fs::read_to_string(dir.join(format!("launchctl.{first}.exit"))) {
         Ok(code) => {
             eprintln!("launchctl fixture: {first} failed");
             ExitCode::from(code.trim().parse().unwrap_or(1))
         }
         Err(_) if first == "print" => print(&loaded),
+        Err(_) if first == "enable" => {
+            // Nothing to clear is not an error, as for the real `launchctl enable`.
+            let _ = std::fs::remove_file(&disabled);
+            ExitCode::SUCCESS
+        }
+        Err(_) if first == "bootstrap" && disabled.exists() => {
+            eprintln!("Bootstrap failed: 5: Input/output error");
+            ExitCode::from(5)
+        }
         Err(_) if first == "bootstrap" && std::fs::write(&loaded, "").is_err() => {
             ExitCode::from(70)
         }

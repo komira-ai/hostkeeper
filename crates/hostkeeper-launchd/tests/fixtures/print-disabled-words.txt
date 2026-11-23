@@ -1,0 +1,8 @@
+# A hand-written sample of the `launchctl print-disabled system` format of macOS 13 and later,
+# to be replaced by output captured on a device.
+disabled services = {
+	"com.example.disabled-one" => disabled
+	"dev.hostkeeper.hostkeeper" => disabled
+	"dev.hostkeeper.hostkeeper-helper" => enabled
+	"com.example.enabled-one" => enabled
+}

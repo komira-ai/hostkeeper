@@ -15,20 +15,24 @@ const COMMENT: &str = "#!/bin/sh
 \
 # never booted out here; its new plist takes effect at the next boot. A first
 \
-# install, or a host where the job is not loaded, gets it loaded.
+# install, or a host where the job is not loaded, gets it enabled (a job marked
+\
+# disabled is not loaded by bootstrap) and then loaded.
 ";
 
 /// Catches a script for the pkg's paths that is not exactly the shebang, its comment, a quiet
-/// `print` of the daemon's job that ends the script with 0 when it is loaded, and an `exec` of
-/// the bootstrap of the installed plist (no boot-out, no seed and no `mac-config`, which the
-/// daemon's start does).
+/// `print` of the daemon's job that ends the script with 0 when it is loaded, an `enable` of the
+/// job (a job marked disabled is not loaded by `bootstrap`), and an `exec` of the bootstrap of
+/// the installed plist (no boot-out, no seed and no `mac-config`, which the daemon's start
+/// does). The `enable` comes after the loaded-job exit, so a loaded job is never touched.
 #[test]
-fn the_pkgs_postinstall_loads_the_daemons_job_only_when_it_is_not_loaded() {
+fn the_pkgs_postinstall_enables_and_loads_the_daemons_job_only_when_it_is_not_loaded() {
     assert_eq!(
         Postinstall::pkg().script(),
         format!(
             "{COMMENT}'/bin/launchctl' print 'system/dev.hostkeeper.hostkeeper' >/dev/null 2>&1 \
              && exit 0\n\
+             '/bin/launchctl' enable 'system/dev.hostkeeper.hostkeeper'\n\
              exec '/bin/launchctl' bootstrap system \
              '/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist'\n"
         )
@@ -70,6 +74,7 @@ fn a_path_with_a_space_or_a_quote_is_one_shell_word() {
         format!(
             "{COMMENT}'/l c' print 'system/dev.hostkeeper.hostkeeper' >/dev/null 2>&1 \
              && exit 0\n\
+             '/l c' enable 'system/dev.hostkeeper.hostkeeper'\n\
              exec '/l c' bootstrap system '/p'\\''l'\n"
         )
     );

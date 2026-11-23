@@ -579,6 +579,8 @@ mod services_tests;
 #[cfg(test)]
 mod session_tests;
 #[cfg(test)]
+mod silent_health_tests;
+#[cfg(test)]
 mod stages_edge_tests;
 #[cfg(test)]
 mod stages_tests;

@@ -5,8 +5,10 @@
 //! (`stdin_process`) is the only code of the crate that starts a process; the two collect a
 //! child's output the same way (`collect`).
 //! The text `launchctl print` writes is Apple's, not a stable interface; [`parse_print`] reads the
-//! few lines of it this daemon needs and ignores the rest.
+//! few lines of it this daemon needs and ignores the rest; [`parse_disabled`] reads the override
+//! database that `launchctl print-disabled system` prints the same way.
 
+use std::collections::BTreeMap;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -387,6 +389,42 @@ pub enum PrintError {
 /// The arguments of `launchctl print system/<label>`.
 pub fn print_args(label: &Label) -> Vec<String> {
     vec!["print".to_owned(), format!("system/{label}")]
+}
+
+/// The arguments of `launchctl enable system/<label>`, which clears the mark that keeps a job
+/// disabled in launchd's override database; a disabled job is not loaded by `bootstrap`.
+pub fn enable_args(label: &Label) -> Vec<String> {
+    vec!["enable".to_owned(), format!("system/{label}")]
+}
+
+/// The arguments of `launchctl print-disabled system`, which prints launchd's override database
+/// of the system domain: each label marked disabled or enabled by `launchctl disable` or
+/// `launchctl enable`, and by an installer that ran them.
+pub fn print_disabled_args() -> Vec<String> {
+    vec!["print-disabled".to_owned(), "system".to_owned()]
+}
+
+/// Reads the output of `launchctl print-disabled system`: one entry per line of the form
+/// `"<label>" => <state>`, `true` for a label marked disabled and `false` for one marked
+/// enabled. The state is `disabled` or `enabled` (macOS 13 and later) or `true` or `false`
+/// (earlier releases, which print no word). A line of any other shape (the `disabled services = {`
+/// header, the closing brace, a blank line, a line whose state is a word this function does not
+/// know) is ignored, so a label such a line names is read as absent, which launchd treats as not
+/// disabled. A label printed twice keeps the state of its last line. Labels are matched whole: an
+/// entry for `dev.hostkeeper.hostkeeper-x` is none for `dev.hostkeeper.hostkeeper`.
+pub fn parse_disabled(stdout: &str) -> BTreeMap<String, bool> {
+    stdout
+        .lines()
+        .filter_map(|line| {
+            let (label, rest) = line.trim().strip_prefix('"')?.split_once('"')?;
+            let state = match rest.trim().strip_prefix("=>")?.trim() {
+                "disabled" | "true" => true,
+                "enabled" | "false" => false,
+                _ => return None,
+            };
+            Some((label.to_owned(), state))
+        })
+        .collect()
 }
 
 /// The arguments of `launchctl bootstrap system <plist>`.

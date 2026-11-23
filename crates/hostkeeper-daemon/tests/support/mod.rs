@@ -336,6 +336,7 @@ impl Rig {
 
     pub fn ports(&self) -> Ports {
         Ports {
+            own_job: None,
             announcement: Default::default(),
             launcher: self.launcher.clone(),
             packages: self.pins.clone(),

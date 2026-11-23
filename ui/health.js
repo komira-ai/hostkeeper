@@ -193,6 +193,8 @@ export function reasonsOf(host, alerts) {
     } else if (failed(last)) {
       out.push(failedReason(view));
     }
+    // A host that is not live has `HEALTH_SILENT` in every view, never its last report: its
+    // reason is the silent-host alert, not a service it last said was unhealthy.
     if (view.health === "HEALTH_UNHEALTHY") {
       out.push(unhealthyReason(view));
     }
@@ -201,7 +203,8 @@ export function reasonsOf(host, alerts) {
 }
 
 // Whether a host is degraded: live (heard from, and within the last 45 seconds) and with a reason.
-// A host that is not live is `offline` or `pending` whatever its reasons; its page still shows them.
+// A host that is not live is `offline` or `pending` whatever its reasons; its page still shows them
+// (its alerts, a halt or a failed update; its services say `HEALTH_SILENT`, which is no reason).
 export function isDegraded(host, reasons) {
   const heard = host.lastHeartbeatUnix !== undefined && Number(host.lastHeartbeatUnix) !== 0;
   return heard && host.live === true && reasons.length > 0;

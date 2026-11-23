@@ -25,7 +25,7 @@ use hostkeeper_install::host::{Host, Ids};
 use hostkeeper_install::lock::InstallerLock;
 use hostkeeper_install::macos_pkg::record::{PkgRecord, RecordError, Records};
 use hostkeeper_install::macos_pkg::signers::{Fingerprint, Signers};
-use hostkeeper_install::macos_pkg::{Activated, Bounds, MacosPkg, Order};
+use hostkeeper_install::macos_pkg::{Activated, Bounds, MacosPkg, Order, Replaced};
 use hostkeeper_launchd::Label;
 use hostkeeper_testkit::Scratch;
 
@@ -329,7 +329,7 @@ impl Rig {
         &self,
         order: &Order,
         dir: &Path,
-        from: Option<&Path>,
+        from: Option<Replaced<'_>>,
     ) -> Result<Activated, Failure> {
         self.pkg().activate(order, dir, from)
     }
@@ -407,6 +407,15 @@ impl Rig {
     pub fn paths(&self) -> Vec<String> {
         self.snapshot().into_keys().collect()
     }
+}
+
+/// The version an `activate` replaces: the version directory `dir`, activated for `order`, whose
+/// `run` is what the version ran.
+pub fn replaces<'a>(dir: &'a Path, order: &'a Order) -> Option<Replaced<'a>> {
+    Some(Replaced {
+        dir,
+        run: &order.run,
+    })
 }
 
 /// The entries of `dir` by name.

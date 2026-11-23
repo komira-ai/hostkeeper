@@ -177,10 +177,12 @@ fn platform(platform: proto::Platform) -> Option<&'static str> {
     }
 }
 
-/// The health's name on the JSON route.
+/// The health's name on the JSON route. `Silent` is the coordinator's word for a host it has not
+/// heard from, never one a daemon reports, so a heartbeat that carries it names no health, as
+/// `Unspecified` does.
 fn health(health: proto::Health) -> Option<&'static str> {
     match health {
-        proto::Health::Unspecified => None,
+        proto::Health::Unspecified | proto::Health::Silent => None,
         proto::Health::Healthy => Some("healthy"),
         proto::Health::Unhealthy => Some("unhealthy"),
         proto::Health::Absent => Some("absent"),

@@ -22,6 +22,10 @@
 //! notices, and systemd, past the unit's `WatchdogSec=`, restarts the daemon. A notice that
 //! cannot be sent is logged, and the loop goes on.
 //!
+//! On a Mac the heartbeat loop also checks, after each heartbeat and its notice, that the daemon's
+//! own launchd job is not marked disabled ([`crate::own_job`]): a job that is gets enabled again
+//! and is alerted, and a check that fails is alerted, the loop going on either way.
+//!
 //! The loops stop when [`Links::stop`] is set: the enrollment loop before its next step, the
 //! heartbeat loop at the end of its wait (`hostkeeper_link::ClockSleeper`). An order running on
 //! a worker goes on; its verdict is in its step record.
@@ -204,6 +208,9 @@ impl Links {
             heartbeater.run(&*sleeper, &mut |outcome| {
                 node.beat(outcome, clock.unix_secs());
                 alive(&*watchdog, beat_log.as_ref());
+                // After the beat and the notice, so a check never holds either back; it alerts
+                // what it finds and never fails.
+                beating.ctx().check_own_job();
             });
         }));
     }

@@ -9,7 +9,8 @@
 //! - [`plist`]: the XML property lists of the daemon, of a step job and of a service package's
 //!   job.
 //! - [`launchctl`]: the [`Launchctl`] port (one `launchctl` command), its real adapter
-//!   [`LaunchctlProcess`], and the reading of `launchctl print system/<label>`.
+//!   [`LaunchctlProcess`], the reading of `launchctl print system/<label>`, and the reading of
+//!   the override database `launchctl print-disabled system` ([`parse_disabled`]).
 //! - [`stdin_process`]: the [`StdinRun`] port (one run of a program with bytes on its standard
 //!   input, which is a pipe), its real adapter [`StdinProcess`], and [`stdin_process::run_ok`]:
 //!   the runner of a program that reads a password on its standard input, whose errors name the
@@ -56,7 +57,7 @@ pub use fake::{FakeLaunchctl, FakeStdinRun, StdinCall};
 pub use label::{Label, LabelError, REVERSE_DNS_PREFIX};
 pub use launchctl::{
     JobInfo, JobState, JobStatus, LAUNCHCTL, Launchctl, LaunchctlError, LaunchctlOutput,
-    LaunchctlProcess, ParseError, PrintError, parse_print,
+    LaunchctlProcess, ParseError, PrintError, parse_disabled, parse_print, print_disabled_args,
 };
 pub use launcher::{LaunchdLauncher, Pace};
 pub use manager::LaunchdServiceManager;

@@ -6,21 +6,24 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "The hostkeeper bootstrap of a Mac: reads the farm's two values, fetches and checks hostkeeper's signed macOS pkg, writes the daemon config when it is absent and the update-account file when the settings name the update account, runs the installer and exits."
+description = "The hostkeeper bootstrap of a Mac: reads the farm's two values, fetches and checks hostkeeper's signed macOS pkg, writes the daemon config when it is absent and the update-account file when the settings name the update account, runs the installer and exits; on a Mac that has hostkeeper it loads the daemon's launchd job when launchd does not have it loaded."
 
 # docs/design/mac-bootstrap.md. A small program that a one-time pkg installs and a launchd job runs:
 # it holds no secret and enrolls nothing (the daemon it installs enrolls through the normal
-# approval flow). The network, the Mac's tools (`pkgutil`, `installer`) and the pause between
+# approval flow). The network, the Mac's tools (`pkgutil`, `installer`, `launchctl`) and the pause between
 # attempts are ports, so every step is measured on Linux against fakes.
 [dependencies]
 clap.workspace = true
 # `read_trusted` for the farm values, and `DaemonConfig::parse`, which judges the config the
 # bootstrap writes before anything is fetched.
 hostkeeper-config = { path = "../hostkeeper-config" }
-# The tool port (`Tools`, `Tool::Pkgutil`, `Tool::Installer`) and the `pkgutil --check-signature`
+# The tool port (`Tools`, `Tool::Pkgutil`, `Tool::Installer`, `Tool::Launchctl`) and the `pkgutil --check-signature`
 # reading of the macos-pkg installer, and its signers file's text check.
 hostkeeper-install = { path = "../hostkeeper-install" }
-# The path of the binary the hostkeeper pkg installs, which tells the bootstrap hostkeeper is installed.
+# The path of the binary the hostkeeper pkg installs, which tells the bootstrap hostkeeper is
+# installed, and what it asks launchd about the daemon's job: the label, the arguments of
+# `launchctl print`, `enable` and `bootstrap`, the reading of a job that is not loaded, and the
+# daemon's plist path.
 hostkeeper-launchd = { path = "../hostkeeper-launchd" }
 # The HTTPS transport port (`Transport`, `UreqTransport`) of the downloads.
 hostkeeper-package = { path = "../hostkeeper-package" }

@@ -359,6 +359,8 @@ fn run_daemon(
             files.pki = dir.join("pki");
         }
         let mut ports: Ports = cli::host_ports(&config, &settings, &files, own, adapters)?;
+        // The fixture's daemon is not the host's own job: it never enables `dev.hostkeeper.hostkeeper`.
+        ports.own_job = None;
         let mut repository = (*ports.repository).clone();
         repository.dirs.root = dir.join("root");
         #[cfg(target_os = "macos")]

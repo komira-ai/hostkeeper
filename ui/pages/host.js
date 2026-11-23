@@ -296,7 +296,9 @@ function serviceSection(ctx, nodeId, view) {
   };
   const reason = () => trimmed(form.reason);
   const healthWord = enumLabel(view["health"], "HEALTH_");
-  const tone = view.health === "HEALTH_UNHEALTHY" ? "bad" : view.health === "HEALTH_HEALTHY" ? "ok" : "muted";
+  // A silent host's service (the coordinator's word, not the host's) is as bad as an unhealthy one.
+  const bad = view.health === "HEALTH_UNHEALTHY" || view.health === "HEALTH_SILENT";
+  const tone = bad ? "bad" : view.health === "HEALTH_HEALTHY" ? "ok" : "muted";
   return h("section", { class: "service card" },
     h("div", { class: "card-head" },
       h("h3", {}, service),
@@ -734,7 +736,7 @@ export async function render(ctx) {
   const services = list(host, "services");
   const certWord = certState(host.certNotAfterUnix, now);
   const rootWord = rootState(host.trustedRootReason);
-  const servicesAttention = services.some((s) => s.health === "HEALTH_UNHEALTHY"
+  const servicesAttention = services.some((s) => s.health === "HEALTH_UNHEALTHY" || s.health === "HEALTH_SILENT"
     || (s.lastUpdate && /FAIL/.test(String(s.lastUpdate.outcome))));
   const trustAttention = certWord === "expired" || certWord === "soon"
     || (typeof host.lastRenewError === "string" && host.lastRenewError !== "")

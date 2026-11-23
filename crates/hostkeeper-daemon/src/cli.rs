@@ -882,6 +882,7 @@ pub fn host_ports(
         )),
         announcement,
         repository: Arc::new(repository),
+        own_job: adapters.own_job.map(Arc::new),
     })
 }
 

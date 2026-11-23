@@ -44,6 +44,9 @@
 //! - [`adapters`]: the step launcher, service manager, unit directory, observer ports and package
 //!   check of the host's platform ([`adapters::Adapters::for_platform`]: systemd on Linux,
 //!   launchd on macOS), and the claims of its enrollment.
+//! - [`own_job`]: a Mac's check that the daemon's own launchd job is not marked disabled in
+//!   launchd's override database, run at the start and after each heartbeat; a job that is gets
+//!   enabled again and alerted.
 //! - [`ipmi`]: the BMC a Linux host's enrollment claims ask for its MAC, over `/dev/ipmi0`.
 //! - [`bmc`]: the BMC's address and MAC a Linux host's heartbeats report, read over the same
 //!   device every ten minutes.
@@ -206,6 +209,7 @@ pub mod node;
 pub mod notify;
 pub mod observer;
 pub mod operator_keys;
+pub mod own_job;
 pub mod own_package;
 pub mod package_dirs;
 pub mod packaged;

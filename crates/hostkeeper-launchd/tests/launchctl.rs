@@ -6,7 +6,7 @@ use std::path::Path;
 use hostkeeper_launchd::launchctl::{
     EXIT_NOT_LOADED, JobInfo, JobState, JobStatus, Launchctl, LaunchctlError, LaunchctlOutput,
     NOT_LOADED_TEXT, ParseError, PrintError, StopError, bootout, bootout_args, bootstrap_args,
-    kickstart_args, parse_print, print, print_args,
+    enable_args, kickstart_args, parse_print, print, print_args,
 };
 use hostkeeper_launchd::{FakeLaunchctl, Label};
 
@@ -306,13 +306,17 @@ fn state_words_round_trip() {
     }
 }
 
-/// Catches the argument lists of the four commands drifting from what callers and tests expect.
+/// Catches the argument lists of the five commands drifting from what callers and tests expect.
 #[test]
 fn the_argument_lists() {
     let label = label();
     assert_eq!(
         print_args(&label),
         strings(&["print", "system/dev.hostkeeper.web-main"])
+    );
+    assert_eq!(
+        enable_args(&label),
+        strings(&["enable", "system/dev.hostkeeper.web-main"])
     );
     assert_eq!(
         bootout_args(&label),

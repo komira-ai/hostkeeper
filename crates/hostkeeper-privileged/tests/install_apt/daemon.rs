@@ -184,6 +184,7 @@ pub fn daemon(rig: &Rig) -> (Daemon, Vec<String>, Scratch) {
         ObserveOptions::default(),
     );
     let ports = Ports {
+        own_job: None,
         launcher: Arc::new(SystemdLauncher::system().with_log(Arc::new(note_step))),
         packages: Arc::new(NoStore),
         clock: Arc::new(SystemClock::new(Box::new(ProcBootId::host()))),

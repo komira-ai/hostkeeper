@@ -3,9 +3,11 @@
 //! the messages of `Releases.Status` and `Releases.Converge`, and one host of the status as
 //! `Hosts.List` and `Hosts.Get` answer it ([`host`]).
 //!
-//! The mapping decides nothing. A fact with no field in the proto is left out (the `hold` of a
-//! host that the rollout gate has no spelling for, the legacy service's top-level status, the
-//! flattened heartbeat's platform in `Releases.Status`); a proto field with no source here stays at its default (the
+//! The mapping decides almost nothing. One word is the report's own: a service's health in the
+//! view of a host that is not live is `HEALTH_SILENT`, since the host's last heartbeat is too old
+//! to say how the service is now (the raw copy of that heartbeat is left as the host sent it). A
+//! fact with no field in the proto is left out (the `hold` of a host that the rollout gate has no
+//! spelling for, the legacy service's top-level status, the flattened heartbeat's platform in `Releases.Status`); a proto field with no source here stays at its default (the
 //! write record of a service, the pinned count of a role). A standing force is in the marks of
 //! the ops state, so [`status`] puts it into the convergence of its service; [`convergence`]
 //! alone has no force to name.
@@ -335,7 +337,9 @@ fn service_host(
 
 /// How `service`, whose status is `one`, sees a host it heard: the members of `one` are the nodes
 /// the service does not count, and a host not among them is present; the stage is the one of
-/// the service's plan that takes the host.
+/// the service's plan that takes the host. The health is the host's last report while it is live
+/// and `Silent` once it is not (see [`service_health`]); the installed version stays as last
+/// reported.
 fn host_service(
     service: &str,
     host: &ServiceHostStatus,
@@ -356,7 +360,7 @@ fn host_service(
             .map(hold_proto)
             .collect(),
         installed_version: installed_version(beat),
-        health: health(beat.health).into(),
+        health: service_health(host.host.live, beat.health).into(),
         last_update: beat.last_update.as_ref().map(update_result),
         excluded_reason: member.and_then(|m| m.reason.clone()),
         stage: one.plan.as_ref().and_then(|plan| stage_of(plan, node_id)),
@@ -568,6 +572,17 @@ pub(crate) fn update_result(result: &wire::UpdateResult) -> agent::UpdateResult 
         forced: false,
         detail: result.detail.clone(),
         log_tail: Vec::new(),
+    }
+}
+
+/// The health a service's view says: what the host last reported while the host is live, and
+/// `Silent` once it is not, whatever it last reported, since a report that old says nothing of
+/// the service now. The raw report stays in the service's `beat` copy as the host sent it.
+fn service_health(live: bool, reported: wire::Health) -> agent::Health {
+    if live {
+        health(reported)
+    } else {
+        agent::Health::Silent
     }
 }
 

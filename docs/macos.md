@@ -111,7 +111,10 @@ observer's service manager and process probe, and the unit control over `launchc
 step launcher, observer and unit control (`systemctl`), and no package check. Each set names the
 unit the daemon runs as, which the observer watches as the service `hostkeeper`: on a Mac the
 daemon's job `dev.hostkeeper.hostkeeper`, since the macOS package of hostkeeper names no unit
-(docs/service-observation.md, "The daemon's own service"). The daemon binds no socket; the platform's run directory (`/var/run` on a Mac) holds the `updater` directory of the registration-socket cleanup.
+(docs/service-observation.md, "The daemon's own service"). For the same reason an `activate` of
+that package disables no job (a job is disabled only when the previous version's `run` named it and its plist is gone)
+and enables the daemon's job itself, so a self-update leaves the job loadable after a reboot; the daemon also checks at each start and heartbeat that its job is not marked disabled
+and enables it again when it is ("The daemon keeps its own job enabled"). The daemon binds no socket; the platform's run directory (`/var/run` on a Mac) holds the `updater` directory of the registration-socket cleanup.
 
 #### One daemon, run by launchd
 
@@ -134,6 +137,39 @@ maintainers must confirm the prefix before any Mac enrolls, since a label is the
 
 The daemon's plist runs `hostkeeper daemon` at load and keeps it alive. It names no user, no
 sandbox profile and no environment.
+
+#### The daemon keeps its own job enabled
+
+launchd keeps an override database for the system domain, and a job marked disabled there is not
+loaded at boot: a Mac whose daemon's job is marked disabled comes back from a reboot with no
+daemon, and nothing on the host says why. The mark is not in the job's plist and a restart does not
+clear it. An installer, an operator's `launchctl disable` or an earlier release's self-update can
+leave it.
+
+The Mac's daemon (`hostkeeper_daemon::own_job`) therefore checks its own job,
+`dev.hostkeeper.hostkeeper`, once at its start and after every heartbeat:
+
+1. It runs `launchctl print-disabled system` and reads the line of its label
+   (`"dev.hostkeeper.hostkeeper" => disabled`, or `=> true` before macOS 13;
+   `hostkeeper_launchd::launchctl::parse_disabled`). A label the output does not list, one it
+   lists as enabled, and a line that is not of that shape count as not disabled, and nothing else
+   is run.
+2. A job marked disabled gets `launchctl enable system/dev.hostkeeper.hostkeeper`, and the daemon
+   writes one line to `daemon.err.log`:
+   `hostkeeper daemon: level=error alert=own_job_disabled the launchd job ... was marked disabled, so it would not have started after a reboot; it was enabled again`.
+   The job stays enabled, so the line is written once per mark and the next check says nothing. An
+   `enable` that fails writes the same alert with the failure (`... is marked disabled, ... and it
+   could not be enabled: <why>`), and the next check tries again.
+3. A `print-disabled` that fails (it did not start, did not end within its deadline, exited
+   non-zero, or wrote text that is not UTF-8) writes
+   `level=error alert=own_job_check ...` with the failure, at every check that fails.
+
+A check never stops the daemon or its heartbeat: the heartbeat and the watchdog notice are sent
+first, each `launchctl` command has its own deadline (5 seconds), and every failure is a line and
+a return. The alerts are lines of the daemon's log, as every alert the daemon raises
+(`own_package`, `start_incomplete`, ...): the coordinator is not told and shows no alert row for
+them, so a fleet watches `alert=own_job_disabled` in `daemon.err.log`. Linux (systemd and OpenRC)
+has no such check and runs no `launchctl`.
 
 #### The daemon's logs
 
@@ -560,7 +596,8 @@ The release also ships the bootstrap pkg, `hostkeeper-bootstrap-<v>-macos-arm64.
 Business installs on a new Mac: the program `hostkeeper-bootstrap` at
 `/usr/local/lib/hostkeeper-bootstrap/`, its launchd plist and a postinstall that loads the job. It
 fetches hostkeeper's own pkg, checks it against its Team ID and installs it, and the daemon then
-enrolls ([design/mac-bootstrap.md](design/mac-bootstrap.md),
+enrolls; on a Mac that already has hostkeeper it installs nothing and only enables and loads the
+daemon's job when launchd does not have it loaded ([design/mac-bootstrap.md](design/mac-bootstrap.md),
 [operations/mac-bootstrap.md](operations/mac-bootstrap.md)). It is built, signed and checked in the
 same jobs as the other pkgs.
 
@@ -600,7 +637,7 @@ exists.)
 The file `hostkeeper-<v>-macos-arm64.pkg` is a distribution pkg: `productbuild` wraps the component
 pkg that `pkgbuild` makes from the payload and the script, and the wrapper holds the one
 component and nothing else (no installer script, no installation check, no volume check). The
-installer runs the component's one script, a `postinstall` of two lines, as root once the
+installer runs the component's one script, a `postinstall` of three command lines, as root once the
 files are in place. The bootstrap's status is the script's own, which fails the install when the
 job is not loaded and cannot be:
 
@@ -610,8 +647,10 @@ job is not loaded and cannot be:
 # not have it loaded, and leave it alone when it does. An installer the daemon
 # itself runs (its self-update) must not boot the running daemon out, so the job is
 # never booted out here; its new plist takes effect at the next boot. A first
-# install, or a host where the job is not loaded, gets it loaded.
+# install, or a host where the job is not loaded, gets it enabled (a job marked
+# disabled is not loaded by bootstrap) and then loaded.
 '/bin/launchctl' print 'system/dev.hostkeeper.hostkeeper' >/dev/null 2>&1 && exit 0
+'/bin/launchctl' enable 'system/dev.hostkeeper.hostkeeper'
 exec '/bin/launchctl' bootstrap system '/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist'
 ```
 
@@ -620,8 +659,12 @@ output is discarded. A loaded job is left alone: the script exits 0 and never ru
 `launchctl bootout`, because an `installer -pkg` that the daemon itself runs (its self-update
 through the `macos-pkg` installer) must not boot the running daemon out in the middle of its
 update. The plist's new text then takes effect at the next boot. When the job is not loaded (a
-first install, or a host that booted it out) `launchctl bootstrap` loads it, and `RunAtLoad`
-starts it. The script runs the bootstrap with `exec`, so its status is the install's.
+first install, or a host that booted it out) the script runs `launchctl enable` of the job and
+then `launchctl bootstrap`, which loads it, and `RunAtLoad` starts it. The `enable` is there
+because launchd keeps a mark for a job that is disabled in its override database, and
+`launchctl bootstrap` fails for a job that carries it; `enable` clears the mark and changes
+nothing for a job that has none. Its status is not the script's. The script runs the bootstrap
+with `exec`, so its status is the install's.
 
 The script no longer seeds the binary directory or writes the config; the daemon's start does
 both, each time it starts.
@@ -993,7 +1036,22 @@ counted by the coverage gate; what they drive is measured against fakes on Linux
     rollout asks two healthy heartbeats of a host at its version), orders the update: the daemon
     restarts into the next version, the new binary reports the update's `Succeeded` under the
     coordinator's order id and its own job running, healthy and at the new version, and the
-    coordinator reads the host baked and hostkeeper converged.
+    coordinator reads the host baked and hostkeeper converged;
+  - each of these tests that finds the package installed also reads launchd's override database:
+    the package ships the plist of the test's job in `/Library/LaunchDaemons` and names no `run`
+    (as hostkeeper's own package ships the daemon's plist), and after each install and update,
+    the update over the kept first version included, `launchctl print-disabled system` does not
+    list the job disabled and `launchctl print system/<label>` finds it loaded, and lists the
+    daemon's own job, `dev.hostkeeper.hostkeeper`, enabled (the daemon's `activate` of its own
+    package enables it). A reboot cannot be done on the runner; the proof with one on a farm
+    Mac is section 6a of [operations/mac-proof.md](operations/mac-proof.md).
+- install and update a package of hostkeeper's own shape with the `macos-pkg` installer's real
+  tools (`install_macos_pkg.rs`, `install_macos_pkg/own_shape.rs`): a package whose payload ships
+  a job's plist and whose manifest names no `run` is installed, updated twice over the kept
+  previous version and rolled back twice, and after each step the job (of a label of the test's
+  own) is not disabled and is loaded; a job an earlier release left disabled stays so across the
+  `activate` until `MacosPkg::enable` makes it enabled; and a job the kept version's `run` named
+  and the new one's does not is disabled.
 - update hostkeeper itself from the published release `previous-release.toml` pins to this build
   (`self_update_across_releases.rs`, the cross-release rig, which runs on Linux too; CONTRIBUTING.md
   says how the pin moves): the released daemon is the job `dev.hostkeeper.hostkeeper` of the

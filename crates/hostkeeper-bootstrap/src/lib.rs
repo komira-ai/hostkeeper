@@ -2,7 +2,9 @@
 //! one-time, signed pkg installs and a launchd job runs. It reads the farm's two values, fetches
 //! hostkeeper's signed macOS pkg from the public repository, checks it, writes the daemon's
 //! config when there is none, runs `installer` and exits. The daemon it installed enrolls through
-//! the normal approval flow, and the coordinator installs everything else.
+//! the normal approval flow, and the coordinator installs everything else. On a Mac that has
+//! hostkeeper it installs nothing, but asks launchd whether the daemon's job is loaded and, when
+//! it is not (a job left marked disabled is not loaded at boot), enables and loads it.
 //!
 //! - [`settings`]: the farm values (coordinator, CA hash) from the managed preferences of
 //!   `dev.hostkeeper.config`, else a fallback file, and every tunable with its default.

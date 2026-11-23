@@ -49,6 +49,10 @@ fn the_linux_unit_control_runs_systemctl_for_each_call() {
     assert_eq!(adapters.kind, PlatformKind::Linux);
     assert_eq!(adapters.unit_dir, Path::new("/etc/systemd/system"));
     assert_eq!(adapters.own_unit, "hostkeeper.service");
+    assert!(
+        adapters.own_job.is_none(),
+        "a Linux host has no launchd job to check"
+    );
     let units = &adapters.units;
 
     assert_eq!(units.daemon_reload(), Ok(()));

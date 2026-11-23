@@ -11,7 +11,7 @@
 //! | Step | Here |
 //! |---|---|
 //! | [`MacosPkg::stage`] | The identifier no other service records; `pkgutil --check-signature` against the host's [`signers`]; `pkgutil --expand-full`; the [`shape`] of the expansion (its `Distribution` rules and its `PackageInfo`'s identifier, version, location and bundles; a `Scripts` directory and the `PackageInfo`'s script elements are accepted); the `Bom` against the payload, and the jobs ([`payload`]); the manifest's hook program, an executable regular file of the payload ([`crate::program`]); `artifact`, `tree/` and `macos-pkg/{PackageInfo,Bom,artifact.pkg}` in the staging directory |
-//! | [`MacosPkg::activate`] | Under the [`InstallerLock`]: the parents of the payload paths safe, no payload file another receipt lists, the record pending, `installer -allowUntrusted -pkg <dir>/macos-pkg/artifact.pkg -target /` (which runs the package's scripts), the receipt's version and every installed file proved against `tree/`, the files of the version it replaces that this one does not list deleted, then the created directories left empty, the `run` labels enabled and a dropped one disabled, the record done. A rollback is the `activate` of the kept previous version. Drift found on the way is reported, and repaired by the install |
+//! | [`MacosPkg::activate`] | Under the [`InstallerLock`]: the parents of the payload paths safe, no payload file another receipt lists, the record pending, `installer -allowUntrusted -pkg <dir>/macos-pkg/artifact.pkg -target /` (which runs the package's scripts), the receipt's version and every installed file proved against `tree/`, the files of the version it replaces that this one does not list deleted, then the created directories left empty, the `run` labels enabled and each label the replaced version's `run` named that this one's does not, and whose plist this one does not ship, disabled (a job a payload ships but no `run` names is never touched), the record done. A rollback is the `activate` of the kept previous version. Drift found on the way is reported, and repaired by the install |
 //! | [`MacosPkg::retire`] | The version directory and its seal deleted; no tool runs |
 //! | [`MacosPkg::remove`] | Under the lock: every file and link the receipt or a kept version's `Bom` lists, changed or not, but one another receipt lists or one under a linked parent; the created directories left empty, deepest first; `pkgutil --forget` |
 //!
@@ -35,6 +35,7 @@ use std::time::Duration;
 
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_launchd::Label;
+use hostkeeper_proto::hostkeeper::release::v1::Manifest;
 
 use crate::host::Host;
 use crate::installer::StageOrder;
@@ -44,7 +45,7 @@ use crate::tools::{Tool, ToolOutput, Tools};
 use record::Records;
 use signers::Signers;
 
-pub use activate::Activated;
+pub use activate::{Activated, Replaced};
 pub use drift::{Drift, Seen};
 
 /// The kept, verified `.pkg` in a version directory.
@@ -115,14 +116,7 @@ impl Order {
             .clone()
             .filter(|package| !package.is_empty())
             .ok_or_else(|| manifest_invalid("the manifest names no package".into()))?;
-        let run = manifest
-            .run
-            .iter()
-            .map(|label| {
-                Label::parse(label)
-                    .map_err(|e| manifest_invalid(format!("the run label {label:?}: {e}")))
-            })
-            .collect::<Result<Vec<Label>, Failure>>()?;
+        let run = run_of(manifest)?;
         let bounds = manifest
             .installer_bounds
             .as_ref()
@@ -149,6 +143,22 @@ impl Order {
             hook,
         })
     }
+}
+
+/// The launchd labels of a manifest's `run`; a label that does not parse is `manifest_invalid`.
+pub fn run_of(manifest: &Manifest) -> Result<Vec<Label>, Failure> {
+    manifest
+        .run
+        .iter()
+        .map(|label| {
+            Label::parse(label).map_err(|e| {
+                Failure::new(
+                    Reason::ManifestInvalid,
+                    format!("the run label {label:?}: {e}"),
+                )
+            })
+        })
+        .collect()
 }
 
 /// Whether a Mac announces `macos-pkg`: `installer` and `pkgutil` are present under `host`, and

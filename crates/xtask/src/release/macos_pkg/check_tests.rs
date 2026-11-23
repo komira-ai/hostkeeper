@@ -236,9 +236,9 @@ fn a_scripts_directory_that_is_not_the_one_postinstall_is_refused() {
 }
 
 #[test]
-fn the_postinstall_loads_the_job_only_when_it_is_not_loaded_and_runs_nothing_else() {
-    // Catches: a postinstall that is not the two lines in order (the quiet print that ends the
-    // script with 0 for a loaded job, the load), that boots the job out, that runs the installed
+fn the_postinstall_enables_and_loads_the_job_only_when_it_is_not_loaded_and_runs_nothing_else() {
+    // Catches: a postinstall that is not the three lines in order (the quiet print that ends the
+    // script with 0 for a loaded job, the enable of the job, the load), that boots the job out, that runs the installed
     // binary (the old seed and mac-config, which the daemon's start does now), that names other
     // paths than launchctl's and the installed plist's, or that goes on after the load.
     let text = postinstall_text();
@@ -256,6 +256,7 @@ fn the_postinstall_loads_the_job_only_when_it_is_not_loaded_and_runs_nothing_els
         code,
         [
             "'/bin/launchctl' print 'system/dev.hostkeeper.hostkeeper' >/dev/null 2>&1 && exit 0",
+            "'/bin/launchctl' enable 'system/dev.hostkeeper.hostkeeper'",
             "exec '/bin/launchctl' bootstrap system \
              '/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist'",
         ]

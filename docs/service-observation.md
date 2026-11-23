@@ -87,10 +87,22 @@ service, in this order, `version_mismatch`, the health reason, `version_unknown`
 `HEALTH_UNHEALTHY` means "does not, or the daemon cannot tell"; the reason token tells the cases
 apart.
 
+`HEALTH_SILENT` is not in the table: no daemon sends it. The coordinator answers it in place of the
+health a host last reported, in a service's view of a host that is not live (the `health` of a
+`HostService` in `Releases.Status`, `Hosts.List` and `Hosts.Get`), since that report is 45 seconds old or more. The
+heartbeat the coordinator keeps for the host, and shows as `heartbeat`, stays as the host sent it. A
+heartbeat that carries `HEALTH_SILENT` is read as one that names no health.
+
 The daemon's own service is the one exception to the first row: observed `absent` while its package is installed
 (the service manager finds no unit, as a unit left in `/etc/systemd/system/` that hides the package's leaves it), the
 daemon reports it `HEALTH_UNHEALTHY`, reason `own_unit_not_loaded`, running, since it is that process
 (`crates/hostkeeper-daemon/src/link_adapters.rs`); `HEALTH_ABSENT` would read as not installed to the coordinator.
+
+A Mac's daemon also keeps its own launchd job from being marked disabled in launchd's override
+database, which would stop it from coming back after a reboot: at its start and after each
+heartbeat it enables the job again and logs `alert=own_job_disabled` (docs/macos.md, "The daemon
+keeps its own job enabled"). That alert is a line of the daemon's log; the heartbeat's health of
+the service `hostkeeper` is unchanged by it.
 
 ## The thin modules
 
