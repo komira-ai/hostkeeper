@@ -372,6 +372,7 @@ mod ssh_book;
 mod start;
 pub(crate) mod store;
 mod unused_mdm_tables;
+mod waits;
 mod xcode_jobs;
 mod xcode_rows;
 

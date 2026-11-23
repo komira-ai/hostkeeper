@@ -7,7 +7,9 @@ use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 
 use super::{TestDatabase, admin, off_runtime};
-use crate::store::postgres::session::{Fail, Session, Worker, describe, ends_session, not_up};
+use crate::store::postgres::session::{
+    Fail, Session, Worker, describe, ends_session, not_up, waited_out,
+};
 use crate::store::postgres::{DatabaseError, Dsn, TIMEOUTS};
 
 fn config_of(text: &str) -> postgres::Config {
@@ -127,20 +129,23 @@ fn a_connect_is_not_up_by_the_clients_typed_errors_only() {
     );
 }
 
-/// Proves: a session that was ended by the server (its connection closed, or told `FATAL`) and one
-/// whose statement was cancelled or could not get a lock end the session, while a statement the
-/// server refuses with a plain error (a constraint, a division by zero) keeps it; the text of each
-/// is the server's severity, message and SQLSTATE.
+/// Proves: a session that was ended by the server (its connection closed, or told `FATAL`) ends
+/// the session, while a statement the server refuses keeps it: a plain error (a constraint, a
+/// division by zero), and a wait that ran out (a cancel, a lock taken `NOWAIT`, a lock not had
+/// within `lock_timeout`), which alone is [`waited_out`]. The text of each is the server's
+/// severity, message and SQLSTATE, and for a lock wait that ran out, the row and table it waited
+/// for, as the server names them; after each refusal the same session answers the next statement.
 ///
-/// Catches: a store that keeps writing on a dead session, and one that drops a good session for a
-/// refused statement.
+/// Catches: a store that keeps writing on a dead session, one that drops a good session for a
+/// refused statement or a wait that ran out (so every write is refused until a revival), and a
+/// lock timeout whose text does not say what it waited for.
 #[test]
-fn a_session_ends_when_the_server_ends_it_or_a_wait_runs_out_and_not_for_a_refusal() {
+fn a_session_ends_when_the_server_ends_it_and_not_for_a_refusal_or_a_wait_that_ran_out() {
     let db = TestDatabase::new();
     let (migrated, _) = db.open("migrated").expect("the store opens");
     migrated.stop();
     let config = db.dsn().config(TIMEOUTS);
-    let (refused, cancelled, locked, ended) = off_runtime(move || {
+    let (refused, cancelled, locked, timed_out, ended) = off_runtime(move || {
         let connect =
             || Session::connect(&config, Arc::new(AtomicU64::new(0)), false).expect("a session");
         let mut session = connect();
@@ -157,6 +162,15 @@ fn a_session_ends_when_the_server_ends_it_or_a_wait_runs_out_and_not_for_a_refus
         let locked = session
             .query("SELECT * FROM lease FOR UPDATE NOWAIT", &[])
             .expect_err("no lock");
+        session
+            .batch("SET lock_timeout = '50ms'")
+            .expect("the session answers after the refusal");
+        let timed_out = session
+            .query("SELECT * FROM lease FOR UPDATE", &[])
+            .expect_err("no lock within the timeout");
+        session
+            .batch("SELECT 1")
+            .expect("the session answers after the wait ran out");
 
         let pid = session.backend_pid().expect("a pid");
         admin(None)
@@ -168,25 +182,36 @@ fn a_session_ends_when_the_server_ends_it_or_a_wait_runs_out_and_not_for_a_refus
         let again = session
             .query_one("SELECT 1", &[])
             .expect_err("still closed");
-        (refused, cancelled, locked, (ended, again))
+        (refused, cancelled, locked, timed_out, (ended, again))
     });
     assert!(!ends_session(&refused));
+    assert!(!waited_out(&refused));
     assert_eq!(
         describe(&refused),
         "ERROR: division by zero (SQLSTATE 22012)"
     );
-    assert!(ends_session(&cancelled));
+    assert!(!ends_session(&cancelled));
+    assert!(waited_out(&cancelled));
     assert_eq!(
         describe(&cancelled),
         "ERROR: canceling statement due to user request (SQLSTATE 57014)"
     );
-    assert!(ends_session(&locked));
+    assert!(!ends_session(&locked));
+    assert!(waited_out(&locked));
     assert_eq!(
         describe(&locked),
         "ERROR: could not obtain lock on row in relation \"lease\" (SQLSTATE 55P03)"
     );
+    assert!(!ends_session(&timed_out));
+    assert!(waited_out(&timed_out));
+    assert_eq!(
+        describe(&timed_out),
+        "ERROR: canceling statement due to lock timeout (SQLSTATE 55P03, while locking tuple \
+         (0,2) in relation \"lease\")"
+    );
     assert!(ends_session(&ended.0), "{}", describe(&ended.0));
     assert!(ends_session(&ended.1), "{}", describe(&ended.1));
+    assert!(!waited_out(&ended.0) && !waited_out(&ended.1));
     assert!(ended.1.is_closed());
     assert_eq!(describe(&ended.1), "connection closed");
 }

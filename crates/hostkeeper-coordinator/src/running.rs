@@ -188,10 +188,11 @@ fn agent_of(running: &HostRunning) -> Option<agent::AgentInfo> {
 impl Coordinator {
     /// Notes what the heartbeat `beat` of `who` (`announced` its services, `legacy` the legacy
     /// service its top level is) says the host runs: it replaces the record kept for the host,
-    /// and with enrollment, when `keep` is set (the host is ordered), it is kept with the host's
-    /// enrollment: a duplicate host's heartbeats come from two daemons, and a retiring host's
-    /// enrollment is not written for. `fleet` is the lock the caller holds, for the installers
-    /// the host's daemon said over gRPC.
+    /// and with enrollment, when `keep` is set (the host is ordered), it is the record to keep
+    /// with the host's enrollment, which the caller writes once the heartbeat's decision is over
+    /// ([`crate::service::Coordinator::keep_noted`]): a duplicate host's heartbeats come from two
+    /// daemons, and a retiring host's enrollment is not written for. `fleet` is the lock the
+    /// caller holds, for the installers the host's daemon said over gRPC.
     pub(crate) fn note_running(
         &self,
         fleet: &Fleet,
@@ -200,7 +201,7 @@ impl Coordinator {
         announced: &[ServiceBeat],
         legacy: Option<&str>,
         keep: bool,
-    ) {
+    ) -> Option<HostRunning> {
         let before = self.running.of(&who.host_id).map(|(before, _)| before);
         let running = said(
             fleet,
@@ -210,11 +211,10 @@ impl Coordinator {
             legacy,
             before.as_ref(),
         );
-        if let Some(enrollment) = self.enrollment().filter(|_| keep) {
-            enrollment.note_running(&who.host_id, &running);
-        }
+        let kept = (keep && self.enrollment().is_some()).then(|| running.clone());
         self.running
             .note(&who.host_id, running, self.ops.unix_now());
+        kept
     }
 
     /// Fills in `host`, a host heard since the coordinator started, with what it runs: the record

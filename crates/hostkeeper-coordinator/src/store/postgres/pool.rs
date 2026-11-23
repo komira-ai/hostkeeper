@@ -12,9 +12,12 @@ use super::session::Worker;
 use super::writer::Writer;
 
 /// The writers and which of them are free. The last writer is kept for heartbeats' decisions
-/// ([`super::decide`]): a decision holds it to its end, and a write the deciding thread makes
-/// meanwhile (a record of the enrollment, what a host runs) takes one of the others, so it never
-/// waits for the writer its own decision holds. A coordinator decides one heartbeat at a time.
+/// ([`super::decide`]): a decision holds it to its end, and a write that is not the decision's
+/// takes one of the others, so it never waits for the writer a decision holds. The deciding
+/// thread makes no such write while its decision is open: its heartbeat's records of the
+/// enrollment (what a host runs, its first serving) are written once the decision is over, since
+/// such a write could wait for a lock the decision holds while the decision waits for the thread.
+/// A coordinator decides one heartbeat at a time.
 pub(crate) struct Pool {
     writers: Vec<Worker<Writer>>,
     free: Mutex<VecDeque<usize>>,

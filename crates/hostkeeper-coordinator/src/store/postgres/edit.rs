@@ -27,13 +27,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use postgres::error::SqlState;
-
 use super::parts::{self, Known};
 use super::pool::{Lease, Pool};
 use super::queue_seq;
 use super::rows::{Stmt, Val, changes};
-use super::session::describe;
+use super::session::{describe, waited_out};
 use super::writer::{Halt, State, Tx, WriteFail, Writer};
 use super::{
     LOST, Owned, Postgres, STOPPED, accounts, audit_insert, layout, run_all, state, unwritten,
@@ -168,12 +166,6 @@ fn serve(
         (false, Err(fail)) => Answer::Opened(Err(fail)),
         (_, done) => Answer::Done(done),
     });
-}
-
-/// Whether `e` is a wait for a lock that ran out: the lock's timeout or the statement's.
-fn waited_out(e: &postgres::Error) -> bool {
-    e.code()
-        .is_some_and(|code| [SqlState::LOCK_NOT_AVAILABLE, SqlState::QUERY_CANCELED].contains(code))
 }
 
 /// Takes the locks of `scope` in their order, each waiting at most `wait`, and reads afresh each

@@ -11,7 +11,17 @@
 //! transaction while it is in progress, so the database says whether it landed (no row inserted:
 //! it did; one inserted: it did not, and now never will).
 //!
-//! A session that a write finds gone, or whose bounded wait ran out, is **lost**: its writer drops
+//! Every transaction also deletes a batch of the ledger's rows older than [`LEDGER_KEEP_SECS`],
+//! skipping each row another transaction holds (`FOR UPDATE SKIP LOCKED`): every transaction
+//! purges the same oldest rows, and a purge that waited for another transaction's purge to
+//! commit would wait for whatever that transaction waits for (a heartbeat's decision holds its
+//! transaction open while it decides). A row skipped is deleted by a later transaction.
+//!
+//! A statement whose bounded wait ran out (a lock another transaction held past `lock_timeout`,
+//! or a run past `statement_timeout`) is refused: its transaction is rolled back, the refusal says
+//! what it waited for, and the session stays, so the caller's next write runs on it again.
+//!
+//! A session that a write finds gone is **lost**: its writer drops
 //! it, and from then on every call is answered at once that the store is lost ([`Link`]), whichever
 //! session it would have taken, until a revival ([`Writer::revive`], asked for at each heartbeat
 //! and run on every writer's thread, never under the caller's locks) opens each session that is
@@ -26,15 +36,24 @@ use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use super::Owned;
-use super::session::{Fail, Params, Session, describe, ends_session};
+use super::session::{Fail, Params, Session, describe, ends_session, waited_out};
 
 /// The key of the coordinator's advisory lock: a constant that never changes, which the trigger
 /// `lease_fenced` of `0001` names by its two halves.
 pub(crate) const LOCK_KEY: i64 = 0x686b_6370_6731;
 
-/// How long a row of `tx_ledger` is kept. A revival that finds a commit older than this, and its
-/// row gone, refuses to answer that it did not land.
+/// How long a row of `tx_ledger` is kept at least. A revival that finds a commit older than this,
+/// and its row gone, refuses to answer that it did not land.
 const LEDGER_KEEP_SECS: i64 = 3600;
+
+/// The most rows of `tx_ledger` one transaction deletes: more than one transaction inserts, so
+/// the purge keeps up, and few, so no transaction is made long by a backlog.
+const LEDGER_PURGE_BATCH: i64 = 100;
+
+/// What a statement whose bounded wait ran out ([`waited_out`]) is refused with, before the
+/// server's text, which names the lock or the statement.
+pub(crate) const WAITED: &str = "a statement of this write ran out its bounded wait (for a lock \
+     another transaction held, or for its own run): nothing of it is written, and the session stays";
 
 /// The state of the writing sessions, as every caller sees it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -206,6 +225,9 @@ pub(crate) enum Fault {
     /// The `COMMIT` lands, and the session ends before its answer is read: a commit of unknown
     /// outcome that landed.
     LoseAfterCommit,
+    /// In place of the `COMMIT`, a statement the server cancels: the answer a `COMMIT` cancelled
+    /// or out of time is, whose outcome is not known; here the transaction did not land.
+    CancelAtCommit,
 }
 
 /// The fault the next commit of any writer of one pool meets, which a test sets.
@@ -398,14 +420,14 @@ impl Writer {
     }
 
     /// The failure of a statement of a transaction: the session stays for a refusal (after a
-    /// `ROLLBACK`), and is lost otherwise.
+    /// `ROLLBACK`), a wait that ran out among them ([`WAITED`]), and is lost otherwise.
     fn failed(&mut self, e: &postgres::Error) -> WriteFail {
         let why = describe(e);
         if ends_session(e) {
             self.lose(&why, None);
             return WriteFail::Lost(why);
         }
-        self.refused(why)
+        self.refused(refusal(e, why))
     }
 
     /// A transaction refused for `why`, its session still there: rolled back, and the session
@@ -430,7 +452,7 @@ impl Writer {
     ///
     /// # Errors
     /// [`WriteFail::Lost`]: the session is lost, or was lost by it; [`WriteFail::Refused`]: the
-    /// server refused it, and the session stays.
+    /// server refused it, or its bounded wait ran out ([`WAITED`]), and the session stays.
     pub(crate) fn once<R>(
         &mut self,
         statement: impl FnOnce(&mut Session) -> Result<R, postgres::Error>,
@@ -444,13 +466,14 @@ impl Writer {
                 self.lose(&why, None);
                 WriteFail::Lost(why)
             } else {
-                WriteFail::Refused(why)
+                WriteFail::Refused(refusal(&e, why))
             }
         })
     }
 
     /// Runs `body` in one transaction, after inserting the transaction's row of `tx_ledger` (and
-    /// deleting the rows older than [`LEDGER_KEEP_SECS`]), and commits it.
+    /// deleting at most [`LEDGER_PURGE_BATCH`] rows older than [`LEDGER_KEEP_SECS`] that no other
+    /// transaction holds), and commits it.
     ///
     /// # Errors
     /// [`WriteFail`]: nothing of it is written, or ([`WriteFail::Unknown`]) its outcome is
@@ -485,8 +508,10 @@ impl Writer {
             let id: String = row.get(0);
             let begun: i64 = row.get(1);
             session.execute(
-                "DELETE FROM tx_ledger WHERE at_unix < extract(epoch FROM now())::bigint - $1",
-                &[&LEDGER_KEEP_SECS],
+                "DELETE FROM tx_ledger WHERE id IN (SELECT id FROM tx_ledger \
+                 WHERE at_unix < extract(epoch FROM now())::bigint - $1 \
+                 ORDER BY at_unix LIMIT $2 FOR UPDATE SKIP LOCKED)",
+                &[&LEDGER_KEEP_SECS, &LEDGER_PURGE_BATCH],
             )?;
             Ok((id, begun))
         });
@@ -508,7 +533,16 @@ impl Writer {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .take();
-        let committed = session.batch("COMMIT");
+        let commit = "COMMIT";
+        #[cfg(test)]
+        let commit = match fault {
+            Some(Fault::CancelAtCommit) => {
+                "SELECT pg_cancel_backend(pg_backend_pid()), count(*) \
+                 FROM generate_series(1, 1000000)"
+            }
+            _ => commit,
+        };
+        let committed = session.batch(commit);
         #[cfg(test)]
         let committed = match (committed, fault) {
             (Ok(()), Some(Fault::LoseAfterCommit)) => {
@@ -519,7 +553,9 @@ impl Writer {
         };
         match committed {
             Ok(()) => Ok(answer),
-            Err(e) if ends_session(&e) => {
+            // A `COMMIT` cancelled or out of time may have landed all the same: its outcome is
+            // not known, and the session is dropped for the revival to settle it.
+            Err(e) if ends_session(&e) || waited_out(&e) => {
                 let why = describe(&e);
                 let unknown = Unknown {
                     id: id.clone(),
@@ -629,6 +665,16 @@ impl Writer {
             }
         };
         Ok(Revived::Up(Box::new(session), landed))
+    }
+}
+
+/// The text of a statement the server refused for `why`: led by [`WAITED`] when its bounded wait
+/// ran out.
+fn refusal(e: &postgres::Error, why: String) -> String {
+    if waited_out(e) {
+        format!("{WAITED}: {why}")
+    } else {
+        why
     }
 }
 
