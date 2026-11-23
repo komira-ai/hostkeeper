@@ -90,7 +90,8 @@ pub struct Order {
     pub repository: String,
     /// The SHA-256 of the package file, the entry's required `digest`.
     pub pin: String,
-    /// The units hostkeeper starts, stops, enables and observes.
+    /// The units hostkeeper starts, stops, enables and observes; none for a package with a hook
+    /// command, whose service is then unmonitored.
     pub run: Vec<String>,
     /// The manifest's hook program, `hook.command[0]`: the absolute path the package installs
     /// it at; `None` for the built-in steps.
@@ -129,8 +130,9 @@ impl Order {
     /// The order of `entry` for `service` at `version`, checked against `backend`'s rules:
     /// the entry's kind ([`judge_kind`]), the pin, the backend's grammars, and the manifest rules
     /// of a repository entry (packages-repositories.md section 3.4, packages-native.md section
-    /// 10.2: `hook.command` empty or led by an absolute path, no `place`, no `containers`, 1 to 64 `run` units, the
-    /// installer's bounds).
+    /// 10.2: `hook.command` empty or led by an absolute path, no `place`, no `containers`, 1 to
+    /// 64 `run` units (0 to 64 with a hook command: a config package, hostgroups.md section 6.1,
+    /// runs none), the installer's bounds).
     pub fn from_entry(
         backend: &dyn Backend,
         service: &ServiceName,
@@ -188,9 +190,18 @@ impl Order {
                 "the manifest has containers; a package runs no image".to_owned(),
             ));
         }
-        if !(1..=64).contains(&manifest.run.len()) {
+        // A config package (hostgroups.md section 6.1) runs no unit of its own: its hook
+        // reloads or restarts the service. Without a hook it would change files and restart
+        // nothing, so it needs a unit.
+        let least = usize::from(program.is_none());
+        if !(least..=64).contains(&manifest.run.len()) {
+            let note = if manifest.run.is_empty() {
+                " and no hook command"
+            } else {
+                ""
+            };
             return Err(invalid(format!(
-                "the manifest has {} run units, not 1 to 64",
+                "the manifest has {} run units{note}, not {least} to 64",
                 manifest.run.len()
             )));
         }

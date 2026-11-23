@@ -395,3 +395,44 @@ fn an_index_apt_left_as_a_link_is_kept_as_its_bytes() {
         .expect("activates from the kept copy");
     assert_eq!(env.host.installed(PACKAGE).expect("installed").version, V1);
 }
+
+/// Where the config package of [`config_deb`] installs its hook program.
+const CONFIG_HOOK: &str = "/usr/lib/mdm/config-hook";
+
+/// A config package of the service (hostgroups.md section 6.1): files under `/etc/mdm/` and a
+/// hook program, and no unit file.
+fn config_deb(version: &str) -> crate::apt_fake::Deb {
+    crate::apt_fake::Deb::new(PACKAGE, version, "amd64")
+        .file("etc/mdm/mdm.toml", 0o644, "level = 1\n")
+        .file(
+            CONFIG_HOOK.trim_start_matches('/'),
+            0o755,
+            "#!/bin/sh\nexit 0\n",
+        )
+        .member("md5sums")
+}
+
+/// Proves a config package, a hook command and no `run` unit, stages with its hook program found
+/// in the tree, and its activate installs, holds and records it done with no link: nothing is
+/// written under the service manager's directory and the record names no link.
+///
+/// Catches: an activate that needs a run unit to finish, or writes a link for none.
+#[test]
+fn a_hook_only_package_activates_with_no_link() {
+    let env = Env::new("apt-activate-hook-only");
+    let deb = config_deb(V1);
+    let mut order = env.publish(&deb);
+    order.run = Vec::new();
+    order.hook = Some(CONFIG_HOOK.to_owned());
+    let (staged, dir) = env.stage(&order);
+    assert!(staged.expect("the version stages").hook);
+    let activated = env.installer().activate(&order, &dir).expect("activates");
+    assert_eq!(activated.drift, None);
+    let held = env.host.installed(PACKAGE).expect("installed");
+    assert_eq!((held.version.as_str(), held.held), (V1, true));
+    let record = env.records.get(SERVICE).expect("a record");
+    assert_eq!(record.links, std::collections::BTreeSet::new());
+    assert!(!record.pending);
+    assert!(!at_root(&env, "/etc/systemd/system").exists());
+    assert!(env.has_run("systemctl daemon-reload"));
+}
