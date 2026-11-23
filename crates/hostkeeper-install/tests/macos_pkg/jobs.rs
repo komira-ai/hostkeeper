@@ -64,10 +64,14 @@ fn a_rollback_disables_no_job_the_rolled_back_from_version_did_not_run() {
     assert_eq!(rig.read_text(&home("VERSION")), "1.0");
 }
 
-/// Proves that a label the previous version ran is disabled when the new version still ships
-/// its plist but no longer runs it (packages-repositories.md section 4.7).
+/// Proves that a label the previous version ran and the new one does not is never disabled while
+/// the new version still ships its plist: only `svc` is enabled, `svc.worker` keeps the override
+/// the previous activate gave it (packages-repositories.md section 4.7).
+///
+/// Catches: a job disabled because a `run` list left it out although its plist is still
+/// installed, the shape of the daemon's own job, which its manifest never runs.
 #[test]
-fn a_label_the_previous_version_ran_is_disabled_though_the_new_version_still_ships_it() {
+fn a_label_whose_plist_the_new_version_still_ships_is_never_disabled() {
     let rig = Rig::new("jobs-still-shipped");
     rig.mac.add(v1());
     let order1 = rig.order_run("1.0", &BOTH);
@@ -82,8 +86,9 @@ fn a_label_the_previous_version_ran_is_disabled_though_the_new_version_still_shi
     assert!(rig.exists("/Library/LaunchDaemons/svc.worker.plist"));
     assert_eq!(
         rig.mac.calls_of(Tool::Launchctl),
-        [["enable", "system/svc"], ["disable", "system/svc.worker"]]
+        [["enable", "system/svc"]]
     );
+    assert_eq!(rig.mac.enabled("svc.worker"), Some(true));
 }
 
 /// Proves that a rollback disables the labels the version rolled back from ran and the previous

@@ -5,8 +5,9 @@
 //! bytes again, and the deletions and the enablement find nothing left to do.
 //!
 //! The jobs: each label the order's `run` names is enabled, and each label the replaced
-//! version's `run` named that this one's does not is disabled. A job the replaced version's
-//! payload shipped but its `run` never named (hostkeeper's own package, whose manifest names no
+//! version's `run` named that this one's does not, and whose plist this version no longer ships,
+//! is disabled: a job whose plist is still in the new tree is never disabled, whatever the two
+//! `run` lists say. A job the replaced version's payload shipped but its `run` never named (hostkeeper's own package, whose manifest names no
 //! `run`) is left as it was, enabled or disabled; [`MacosPkg::enable`] is how a caller clears an
 //! override on such a job.
 
@@ -16,6 +17,7 @@ use std::time::Duration;
 
 use hostkeeper_launchd::Label;
 
+use super::payload::plist_path;
 use super::record::PkgRecord;
 use super::{INSTALLER_PKG, META, MacosPkg, Order, TREE, arg, io, receipt};
 use crate::host::{self, GID_ADMIN, Kind, Meta, file_digest, link_target, parents};
@@ -129,7 +131,8 @@ impl MacosPkg<'_> {
         }
         let mut dropped: Vec<&Label> = Vec::new();
         for label in from.map_or(&[][..], |old| old.run) {
-            if !order.run.contains(label) && !dropped.contains(&label) {
+            let shipped = tree.contains_key(&plist_path(label));
+            if !order.run.contains(label) && !shipped && !dropped.contains(&label) {
                 dropped.push(label);
             }
         }

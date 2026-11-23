@@ -112,7 +112,7 @@ step launcher, observer and unit control (`systemctl`), and no package check. Ea
 unit the daemon runs as, which the observer watches as the service `hostkeeper`: on a Mac the
 daemon's job `dev.hostkeeper.hostkeeper`, since the macOS package of hostkeeper names no unit
 (docs/service-observation.md, "The daemon's own service"). For the same reason an `activate` of
-that package disables no job (a job is disabled only when the previous version's `run` named it)
+that package disables no job (a job is disabled only when the previous version's `run` named it and its plist is gone)
 and enables the daemon's job itself, so a self-update leaves the job loadable after a reboot. The daemon binds no socket; the platform's run directory (`/var/run` on a Mac) holds the `updater` directory of the registration-socket cleanup.
 
 #### One daemon, run by launchd
