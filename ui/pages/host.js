@@ -736,7 +736,7 @@ export async function render(ctx) {
   const services = list(host, "services");
   const certWord = certState(host.certNotAfterUnix, now);
   const rootWord = rootState(host.trustedRootReason);
-  const servicesAttention = services.some((s) => s.health === "HEALTH_UNHEALTHY"
+  const servicesAttention = services.some((s) => s.health === "HEALTH_UNHEALTHY" || s.health === "HEALTH_SILENT"
     || (s.lastUpdate && /FAIL/.test(String(s.lastUpdate.outcome))));
   const trustAttention = certWord === "expired" || certWord === "soon"
     || (typeof host.lastRenewError === "string" && host.lastRenewError !== "")

@@ -6,8 +6,8 @@
 //! The mapping decides almost nothing. One word is the report's own: a service's health in the
 //! view of a host that is not live is `HEALTH_SILENT`, since the host's last heartbeat is too old
 //! to say how the service is now (the raw copy of that heartbeat is left as the host sent it). A
-//! fact with no field in the proto is left out (the `hold` of a host that the rollout gate has no spelling for, the legacy service's top-level status, the
-//! flattened heartbeat's platform in `Releases.Status`); a proto field with no source here stays at its default (the
+//! fact with no field in the proto is left out (the `hold` of a host that the rollout gate has no
+//! spelling for, the legacy service's top-level status, the flattened heartbeat's platform in `Releases.Status`); a proto field with no source here stays at its default (the
 //! write record of a service, the pinned count of a role). A standing force is in the marks of
 //! the ops state, so [`status`] puts it into the convergence of its service; [`convergence`]
 //! alone has no force to name.

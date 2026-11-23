@@ -26,9 +26,9 @@
 //!    daemon's job; the daemon finds its config and enrolls through the normal approval flow. When
 //!    a write or `installer` fails, the files this attempt made are removed.
 //!
-//! A failed attempt, of the check of the job as of the install, is retried after a pause until the sum of the pauses reaches `wait_secs`;
-//! then [`run`] gives up with the last error, the program exits non-zero and launchd starts it
-//! again. A step changes nothing it has not finished, so each attempt is safe to repeat.
+//! A failed attempt, whether it checked the job or installed, is retried after a pause until the
+//! sum of the pauses reaches `wait_secs`; then [`run`] gives up with the last error, the program
+//! exits non-zero and launchd starts it again. A step changes nothing it has not finished, so each attempt is safe to repeat.
 
 use std::fmt;
 use std::fs;

@@ -187,6 +187,31 @@ return nodes(tree).filter((n) => n.attrs["class"] && String(n.attrs["class"]).st
     assert_eq!(out["out"], json!(["dot bad", "dot warn", "dot muted"]));
 }
 
+/// Proves: the Services tab carries the bad dot for a service whose view says `HEALTH_SILENT`
+/// (a host that is not live), as for an unhealthy one, and none for a healthy service alone.
+/// Catches: a silent host whose Services tab looks as if nothing needed a look.
+#[test]
+fn the_services_tab_shows_a_dot_for_a_silent_service() {
+    for (health, dots) in [
+        ("HEALTH_SILENT", json!(["dot bad", "dot muted"])),
+        ("HEALTH_HEALTHY", json!(["dot muted"])),
+    ] {
+        let mut ui = ui_with(json!({
+            "nodeId": "web-9", "live": false, "lastHeartbeatUnix": "1799999000",
+            "services": [{"service": "api", "health": health}],
+        }));
+        let out = ui.run(&page_driver(
+            "host",
+            r#"{ nodeId: "web-9" }"#,
+            "[]",
+            r#"
+return nodes(tree).filter((n) => n.attrs["class"] && String(n.attrs["class"]).startsWith("dot"))
+  .map((n) => n.attrs["class"]);"#,
+        ));
+        assert_eq!(out["out"], dots, "{health}");
+    }
+}
+
 #[test]
 fn retire_is_the_last_thing_on_the_page_in_a_danger_zone_with_a_danger_button() {
     // Asserts: the Retire fieldset is the danger zone, after every tab panel, and its button is

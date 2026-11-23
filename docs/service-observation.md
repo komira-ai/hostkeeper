@@ -88,8 +88,8 @@ service, in this order, `version_mismatch`, the health reason, `version_unknown`
 apart.
 
 `HEALTH_SILENT` is not in the table: no daemon sends it. The coordinator answers it in place of the
-health a host last reported, in a service's view of a host that is not live (`HostService.health` of
-`Releases.Status`, `Hosts.List` and `Hosts.Get`), since that report is 45 seconds old or more. The
+health a host last reported, in a service's view of a host that is not live (the `health` of a
+`HostService` in `Releases.Status`, `Hosts.List` and `Hosts.Get`), since that report is 45 seconds old or more. The
 heartbeat the coordinator keeps for the host, and shows as `heartbeat`, stays as the host sent it. A
 heartbeat that carries `HEALTH_SILENT` is read as one that names no health.
 

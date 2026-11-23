@@ -1,8 +1,8 @@
 //! The health value `HEALTH_SILENT` (4) of `Health`, which a coordinator answers in the view of a
-//! host it has not heard from for 45 seconds or more (`HostService.health`). A reader of the
-//! release before (the baseline, `proto/compat/baseline.binpb`) does not know the value, reads
-//! every field it knows from an answer that carries it, and writes the unknown enum number back
-//! unchanged; this build reads what that release wrote as it was.
+//! host it has not heard from for 45 seconds or more (the `health` of a `HostService`). A reader
+//! of the release before (the baseline, `proto/compat/baseline.binpb`) does not know the value,
+//! reads every field it knows from an answer that carries it, and writes the unknown enum number
+//! back unchanged; this build reads what that release wrote as it was.
 
 use prost::Message as _;
 use prost_reflect::{DescriptorPool, DynamicMessage, Value};
