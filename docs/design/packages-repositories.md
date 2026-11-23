@@ -375,7 +375,7 @@ payload (section 4.7):
 |---|---|
 | `package` | Required: the package's name, checked by the daemon against the package manager's grammar and against the package's own control field |
 | `hook` | Required. `command` empty: built-in steps. Otherwise `command[0]` is the absolute path of a file the package installs (an executable regular file of the extracted tree, links followed inside the tree), and `command[1..]` are leading arguments. The daemon runs the sealed copy `tree/<path>`. `boot` needs a command. The bounds as today |
-| `run` | Required, 1 to 64: the units that hostkeeper starts, stops and observes. No rule on a unit's name or place: a unit whose file is in the tree and has `[Install]` targets gets those links, and any other is started by hostkeeper at `cutover` and at every daemon start |
+| `run` | Required, 1 to 64; 0 to 64 when the hook has a command: the units that hostkeeper starts, stops and observes. A config package (hostgroups.md section 6.1) names a hook and no unit, and its service is observed `unmonitored`; with no hook and no unit an `apt` entry would change files and restart nothing, and is refused (`manifest_invalid`). No rule on a unit's name or place: a unit whose file is in the tree and has `[Install]` targets gets those links, and any other is started by hostkeeper at `cutover` and at every daemon start |
 | `health_url` | Optional, as today |
 | `installer_bounds` | Required: `stage_secs` bounds the index fetch, the download and the checks; `activate_secs` each tool run of the install; `remove_secs` each tool run of the removal. A wait for the dpkg lock (the daemon's `--package-lock-wait-secs`, section 4.5) comes on top of them |
 | `place` | Refused for `apt`, whose package places its own files |
