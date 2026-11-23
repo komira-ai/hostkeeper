@@ -36,7 +36,7 @@ use crate::tokens::OperatorTokens;
 use crate::ui::UiDir;
 use crate::verdict_file::{self, VerdictFile};
 use decide::{Hearing, Mode};
-use enrollment_calls::Turn;
+use enrollment_calls::{Noted, Turn};
 use gate_orders::Asked;
 
 pub use crate::status::{AgentStatus, HostStatus, ServiceHostStatus, ServiceStatus, Status};
@@ -541,20 +541,27 @@ impl Coordinator {
         // Over a shared store, the decision's transaction holds the gate from here, and the
         // group is read from the state it read afresh under it.
         let mode = self.open_decision(&mut fleet, now);
-        let basis = self.basis_of(&who.host_id);
+        let (basis, host) = (self.basis_of(&who.host_id), who.host_id.clone());
         let nothing = (ServiceReply::Nothing, None, None, Vec::new());
+        let mut noted = Noted::default();
+        let heard = (turn, root);
         let (reply, order, terms, acks) = match mode {
             Mode::Skip => nothing,
-            Mode::Alone => self.reply_to(&mut fleet, who, beat, orders, (turn, root), &basis, now),
+            Mode::Alone => self.reply_to(
+                &mut fleet, who, beat, orders, heard, &basis, now, &mut noted,
+            ),
             Mode::Deciding(deciding) => {
-                let decided =
-                    self.reply_to(&mut fleet, who, beat, orders, (turn, root), &basis, now);
+                let decided = self.reply_to(
+                    &mut fleet, who, beat, orders, heard, &basis, now, &mut noted,
+                );
                 match self.end_decision(&fleet, deciding, now) {
                     true => decided,
                     false => nothing,
                 }
             }
         };
+        // Only now, its decision over ([`Noted`]).
+        self.keep_noted(&host, noted);
         // Only an agent that announced features gets `features`: an older agent reads the
         // reply strictly and refuses a field it does not know.
         let features: Option<Vec<String>> = (!asked.is_empty()).then(|| {
@@ -604,6 +611,7 @@ impl Coordinator {
         (turn, trusted_root): (Turn, crate::trusted_root::TrustedRootSaid),
         basis: &Basis<'_>,
         now: Duration,
+        kept: &mut Noted,
     ) -> (ServiceReply, Option<Order>, Option<Terms>, Vec<VerdictAck>) {
         let own = crate::agent_service::own_beat(&basis.services, &mut beat);
         let role = basis.role_of(&who);
@@ -660,8 +668,9 @@ impl Coordinator {
         let announced = beat.services.clone().unwrap_or_default();
         let noted = halt::note(&self.ops, &basis.services, legacy, &who, &beat, &node, now);
         let ops = self.ops.state();
-        self.note_serving(&basis.services, &who.host_id, &node, &beat, &ops, now);
-        self.note_running(fleet, &who, &beat, &announced, legacy, turn == Turn::Order);
+        kept.serving = self.serves(&basis.services, &who.host_id, &node, &beat, &ops, now);
+        kept.running =
+            self.note_running(fleet, &who, &beat, &announced, legacy, turn == Turn::Order);
         let counted =
             |def: &ServiceDef| standing(def, &who.host_id, &node, &ops, now) == Standing::Counted;
         let dropped =

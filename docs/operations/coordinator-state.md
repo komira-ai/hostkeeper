@@ -76,7 +76,8 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   (`--database-pool`, default 4, at least 1), each holding the lock: a write takes a free session,
   and waits only while every one is busy. A Postgres that serves N coordinators needs N x
   (`--database-pool` + 1) connections. Each transaction first inserts its row of the `tx_ledger`
-  table, which names it if its commit is lost. A coordinator that lost any of its sessions commits
+  table, which names it if its commit is lost, and deletes up to 100 rows older than an hour that
+  no other transaction holds, so it never waits for another transaction's purge. A coordinator that lost any of its sessions commits
   nothing, on any of them, until the next heartbeat's revival has opened every lost one again with
   the lock. Reads that are not decisions
   (`Audit.List`, the enrollment lists, the alerts' scans) run on a second, read-only session.
@@ -278,11 +279,16 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   SHA-256 stays pinned. The file store drops the group `all` and what is keyed by it from the
   state file and the ops file when it reads them, and writes the `host_groups` key without it.
 - **Bounded waits.** Each session connects within 5 seconds, a statement runs at most 5 seconds and
-  waits for a lock at most 3, and the connection's keepalives drop a peer that is gone. A wait
-  that runs out loses the session. The same bounds hold at start, for each statement of a
-  migration and of the load.
+  waits for a lock at most 3, and the connection's keepalives drop a peer that is gone. A
+  connect or a connection that runs out loses the session. A statement whose wait for a lock, or
+  whose run, runs out is refused: its write is rolled back, the log names what it waited for
+  (`a statement of this write ran out its bounded wait (for a lock another transaction held, or
+  for its own run): ...`, then the server's text naming the lock), and the
+  session stays, so the next write is made without waiting for a revival (and waits as long
+  again while what it waits for is held). The same bounds hold at start, for each
+  statement of a migration and of the load.
 - **A lost session.** When a write finds the session gone (the server restarted, the network
-  dropped, a wait ran out), the coordinator orders nothing (its status says it is quiet, and an
+  dropped, a connect ran out), the coordinator orders nothing (its status says it is quiet, and an
   operator's force or abort waits too), refuses every change that lowers protection
   `store_failed`, keeps a change that raises protection (a halt, a bad mark, a pause, an abort) in
   memory, still answers heartbeats, and raises the critical alert `store_unreachable`

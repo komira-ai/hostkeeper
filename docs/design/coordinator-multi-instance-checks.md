@@ -129,7 +129,9 @@ The edits, versions, gate and counter of the design's section 6 as the code make
   line that is not audit-only), so the ring, and the hosts' facts generations, are read in the ops part's snapshot.
 - `--operator-gate-wait-ms` bounds every lock wait of an edit (the gate, the parts' rows, the counter): `lock_timeout` is set
   to it, and `statement_timeout` to it plus a second, for those statements only. A wait that runs out refuses the edit
-  `store_failed` and keeps the session; a statement's own bounded wait still loses it.
+  `store_failed` and keeps the session; a statement's own bounded wait (`lock_timeout`, `statement_timeout`) is refused
+  the same way and keeps the session too. Only a connect or connection that runs out, a `FATAL` or `PANIC`, or a
+  transaction left idle past its timeout loses it.
 - A heartbeat's own write is the verdicts' (`Scope::VERDICTS`, `SKIP LOCKED`): refused at once while the gate is held or asked
   for, and made again at the host's next beat. What else a heartbeat writes through the ops store (a halt on a threshold, a
   stage entered, the last good version) waited for the gate as an operator's edit does; M7 makes it in the deciding

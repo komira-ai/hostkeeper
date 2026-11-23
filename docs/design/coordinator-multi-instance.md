@@ -115,7 +115,8 @@ update `lease` only if `pg_locks` shows it holds that key; it does not look at t
 shared lock; `tx_ledger`, inserted as each transaction's first statement (the id is the row's `gen_random_uuid()` default,
 read back); no `lease.commits` write; no deposed exit; the session's `statement_timeout`, `lock_timeout` and
 `idle_in_transaction_session_timeout`; the runner's mutex. Where the text below differs, the code is the record: the purge of
-ledger rows older than an hour runs in every transaction, not a reload tick; a lost commit is settled at the session's revival
+ledger rows older than an hour runs in every transaction, not a reload tick, a batch of at most 100 rows that skips
+rows another transaction holds (`FOR UPDATE SKIP LOCKED`), so no transaction waits for another's purge; a lost commit is settled at the session's revival
 by inserting its id again with `ON CONFLICT DO NOTHING`, and the outcome goes to the caller (no retry of the closure by that
 id), with a commit older than the ledger's hour and its row gone left unsettled, not called "did not land"; the mutex is a
 session advisory lock on `MIGRATE_KEY` around the runner, each migration its own transaction, the wait bounded by the

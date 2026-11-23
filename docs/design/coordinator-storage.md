@@ -519,9 +519,12 @@ that lowers it needs storage first. They are kept, with storage now the database
   cost.
 - **Bounded waits.** A stalled database must not freeze every heartbeat under the fleet lock. The session is opened with
   `connect_timeout`, `statement_timeout`, `lock_timeout`, client TCP keepalives and `tcp_user_timeout` (values set by
-  C3, each a few seconds), and a timeout is a lost session. While the session is lost the store thread answers every
+  C3, each a few seconds). A connect or connection timeout is a lost session; a statement whose lock or statement
+  timeout runs out is refused, rolled back, and keeps its session. While the session is lost the store thread answers every
   call at once with "lost" and reconnects on its own, never under the fleet lock. So a heartbeat waits at most one
-  statement timeout, once, and then not at all until the session is back.
+  bounded wait for each statement it makes: after a lost connection, once, and then not at all until the session is
+  back; after a refused statement the session stays up, and the next heartbeat's statement waits afresh, as long as
+  the same bound, while what it waits for is held.
 - **Reads.** `Audit.List`, `Enrollment.List`, the inventory's enrolled-host reads and the alerts' scans of requests run
   on a second, read-only connection, so a long list never holds a commit. They see committed rows only, which is
   stricter than a scan of files that may change underneath it, and they show a commit once it has returned. The
@@ -934,7 +937,7 @@ on the database and the back-out window has closed.
 | `a_commit_on_a_session_without_the_lock_fails` | the fence holds at the database | C3 |
 | `a_commit_that_landed_before_its_session_was_lost_is_taken_into_memory` | a commit of unknown outcome, settled by its `tx_ledger` row | C3 |
 | `a_commit_that_did_not_land_before_its_session_was_lost_is_not_taken` | the other outcome | C3 |
-| `a_stalled_statement_is_a_lost_session` | the bounded wait | C3 |
+| `a_statement_whose_lock_wait_runs_out_is_refused_and_keeps_the_session` | the bounded wait | C3 |
 | `store_unreachable_stands_while_the_session_is_lost` | the alert | C3 |
 | `the_enrollment_copy_is_reloaded_after_a_commit_of_unknown_outcome` | the copy never disagrees with the tables | C3 |
 | `the_first_heartbeat_and_the_duplicate_mark_are_written_once` | the heartbeat's enrollment writes, the first serving heartbeat among them | C3 |

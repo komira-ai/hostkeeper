@@ -89,12 +89,12 @@ impl Holding {
 pub(super) struct Farm {
     pub(super) rig: Rig,
     pub(super) store: Postgres,
-    enrollment: Option<Arc<Enrollment>>,
+    pub(super) enrollment: Option<Arc<Enrollment>>,
     pub(super) database: TestDatabase,
 }
 
 /// The waits of the store's sessions that a test that does not tune them opens it with.
-fn waits() -> Timeouts {
+pub(super) fn waits() -> Timeouts {
     crate::store::postgres::TIMEOUTS
 }
 
@@ -156,6 +156,20 @@ impl Farm {
     /// heartbeats' decisions; the pool has tests of its own); with `enrolled`, the enrollment
     /// store's records on the same store.
     fn start(test: &str, timeouts: Timeouts, enrolled: bool) -> Farm {
+        Farm::start_over(test, timeouts, |store| {
+            enrolled.then(|| {
+                Arc::new(crate::store::postgres::PgRecords::over(store)) as Arc<dyn Records>
+            })
+        })
+    }
+
+    /// [`Farm::start`] with the enrollment store's records `records` makes over the store, when
+    /// it makes any.
+    pub(super) fn start_over(
+        test: &str,
+        timeouts: Timeouts,
+        records: impl FnOnce(&Postgres) -> Option<Arc<dyn Records>>,
+    ) -> Farm {
         let database = TestDatabase::new();
         let (store, loaded) = database
             .open_tuned(timeouts, &super::pooled(1), "coordinator")
@@ -164,8 +178,7 @@ impl Farm {
         let marker = rig.dir.path().join("halt.marker");
         let mut coordinator = start_on_postgres(&rig, &store, loaded, &marker);
         let mut enrollment = None;
-        if enrolled {
-            let records = Arc::new(crate::store::postgres::PgRecords::over(&store));
+        if let Some(records) = records(&store) {
             let files = Files::in_dir(&rig.dir);
             let started = setup(
                 Arc::new(RealFs),
@@ -495,14 +508,17 @@ async fn a_commit_that_did_not_land_before_its_session_was_lost_is_not_taken() {
     assert_eq!(held.last().cloned(), Some(done.seq.to_string()));
 }
 
-/// Proves: a statement that stalls is a lost session: with the table of the exclusions locked by
-/// another session, a commit that writes it is ended by the store's own bounded wait, the store
-/// is lost and the change refused; once the lock is released a revival makes the store `Up`.
+/// Proves: a statement whose wait for a lock runs out is refused and keeps the session: with the
+/// table of the exclusions locked by another session, an operator's exclusion that writes it is
+/// ended by the store's own bounded wait and refused `store_failed`, writing nothing, and the
+/// store stays `Up`; once the lock is released the same exclusion is written at once, on the
+/// same sessions, with no revival. (The reason the refusal is logged with is in
+/// `waits::a_write_whose_lock_wait_runs_out_is_refused_with_what_it_waited_for`.)
 ///
-/// Catches: a stalled database that freezes the coordinator behind a write that never returns, or
-/// one whose timeout leaves the session believed up.
+/// Catches: a stalled database that freezes the coordinator behind a write that never returns, and
+/// a lock timeout that drops the session, so every write and heartbeat is refused until a revival.
 #[tokio::test]
-async fn a_stalled_statement_is_a_lost_session() {
+async fn a_statement_whose_lock_wait_runs_out_is_refused_and_keeps_the_session() {
     let short = Timeouts {
         statement: Duration::from_secs(2),
         lock: Duration::from_secs(1),
@@ -519,10 +535,19 @@ async fn a_stalled_statement_is_a_lost_session() {
         farm.rig.coordinator.exclude(&operator(), exclude("d1")),
         Err(proto::HostsRefusal::StoreFailed)
     );
-    assert_eq!(farm.store.health(), Health::Lost);
+    assert_eq!(farm.store.health(), Health::Up);
 
     locked.release();
-    farm.revive();
+    assert_eq!(
+        farm.count("exclusions"),
+        0,
+        "the refused exclusion wrote nothing"
+    );
+    farm.rig
+        .coordinator
+        .exclude(&operator(), exclude("d1"))
+        .expect("written once the lock is free");
+    assert_eq!(farm.count("exclusions"), 1);
     assert_eq!(farm.store.health(), Health::Up);
 }
 
