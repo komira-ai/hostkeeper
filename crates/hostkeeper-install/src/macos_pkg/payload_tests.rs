@@ -410,21 +410,3 @@ fn a_program_that_is_no_file_of_the_payload_is_refused() {
         );
     }
 }
-
-#[test]
-fn labels_of_lists_the_launch_daemon_plists_with_valid_labels() {
-    let mut tree = valid();
-    tree.insert(
-        "/Library/LaunchDaemons/second.job.plist".into(),
-        file(0o644),
-    );
-    tree.insert("/Library/LaunchDaemons/notes.txt".into(), file(0o644));
-    tree.insert("/Library/LaunchDaemons/bad label.plist".into(), file(0o644));
-    tree.insert("/Library/LaunchDaemons/.plist".into(), file(0o644));
-    tree.insert("/Library/Other/third.plist".into(), file(0o644));
-    let got: Vec<String> = labels_of(&tree)
-        .iter()
-        .map(|l| l.as_str().to_owned())
-        .collect();
-    assert_eq!(got, [LABEL, "second.job"]);
-}

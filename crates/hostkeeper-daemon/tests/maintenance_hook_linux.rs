@@ -422,8 +422,9 @@ fn a_security_update_still_due_fails_update_due() {
 }
 
 /// Proves: one installed service unhealthy by its own health check fails `service_unhealthy`,
-/// naming it (the first such in name order), and so does one installed and absent; a service
-/// with no health check passes.
+/// naming it (the first such in name order), and so does one installed and absent, and one whose
+/// health is the coordinator's word `Silent` (a local read never gives it, and a health nobody
+/// checked is not well); a service with no health check passes.
 ///
 /// Catches: a host put back while a service it runs is down after the reboot.
 #[test]
@@ -431,6 +432,7 @@ fn one_service_unhealthy_fails_service_unhealthy_naming_it() {
     let cases = [
         (Health::Unhealthy, "the service tierstore is unhealthy"),
         (Health::Absent, "the service tierstore is absent"),
+        (Health::Silent, "the service tierstore is silent"),
     ];
     for (health, detail) in cases {
         let effects = Effects::default();

@@ -51,7 +51,7 @@ What does not change: the daemon, the enrollment protocol, the host certificate,
 | Enroller: key made first, CA checked against `ca_sha256` before anything is sent, request posted once per key, signed poll, certificate checked and stored | `crates/hostkeeper-enroll` | the **daemon's** enrollment, unchanged; the bootstrap does not link it |
 | Mac claims: serial and platform UUID from `ioreg` | `crates/hostkeeper-enroll/src/claims.rs` (`MacClaims`) | the request's claims; a record matches a Mac by serial |
 | CA, request store, approval by operator or by inventory record, host groups | `crates/hostkeeper-enrollment`, [enrollment-coordinator.md](../enrollment-coordinator.md), [operations/enrollment.md](../operations/enrollment.md) | the approval flow, unchanged |
-| The Mac pkg: binary, launchd job, pinned `gh`, trusted root; a postinstall that loads the job; the start keeps an existing `/etc/hostkeeper/hostkeeper.toml` | `crates/xtask/src/release/macos_pkg.rs`, `crates/hostkeeper-launchd/src/postinstall.rs`, `crates/hostkeeper-daemon/src/mac_config.rs` | what the bootstrap installs; "the manual path" of hostkeeper-mdm.md section 4 (deleted; its text is in git history) |
+| The Mac pkg: binary, launchd job, pinned `gh`, trusted root; a postinstall that enables and loads the job; the start keeps an existing `/etc/hostkeeper/hostkeeper.toml` | `crates/xtask/src/release/macos_pkg.rs`, `crates/hostkeeper-launchd/src/postinstall.rs`, `crates/hostkeeper-daemon/src/mac_config.rs` | what the bootstrap installs; "the manual path" of hostkeeper-mdm.md section 4 (deleted; its text is in git history) |
 | The daemon config loader and its trust rule (`DaemonConfig::parse`, `read_trusted`) | `crates/hostkeeper-config` | the bootstrap reads its settings files as the daemon reads its config, and parses the config it writes with the daemon's own loader |
 | The tool port for `pkgutil` and `installer`, and the `pkgutil --check-signature` reader | `crates/hostkeeper-install` (`tools`, `macos_pkg/signature.rs`) | the bootstrap's tools behind a port with fakes, and its reading of the status and the leaf's fingerprint |
 | The HTTPS transport port (`Transport`, `UreqTransport`) | `crates/hostkeeper-package/src/net.rs` | the bootstrap's downloads |
@@ -80,7 +80,7 @@ sequenceDiagram
     Mac->>Repo: GET hostkeeper-<v>-macos-arm64.pkg (streamed, hashed as written)
     Mac->>Mac: size and SHA-256 equal the pointer's; pkgutil --check-signature; Team ID pinned
     Mac->>Mac: write hostkeeper.toml and macos-pkg.toml when absent
-    Mac->>Mac: installer -pkg (postinstall loads dev.hostkeeper.hostkeeper); the bootstrap exits 0
+    Mac->>Mac: installer -pkg (postinstall enables and loads dev.hostkeeper.hostkeeper); the bootstrap exits 0
     D->>Co: TLS probe, SHA-256 of the CA vs ca_sha256 (nothing sent on mismatch)
     D->>Co: Enroll {csr, claims: serial + platform UUID}
     alt a record matches the serial, window open, unused
@@ -285,7 +285,7 @@ The Blueprint takes that versioned URL and the file's SHA-256 from the `files` o
 never takes `stable.json`: a pointer moves, a Blueprint pin must not. (The pointer lists the bootstrap pkg among the `files` of the version; the bootstrap reads only the entry of hostkeeper's own pkg.)
 
 **Rollout of a new bootstrap is editing the Blueprint**: a new URL and hash, by the owner, in Apple Business. No fleet rollout exists or is needed.
-An enrolled Mac's bootstrap is a no-op (section 9), and only a Mac not yet set up needs the newest one. A bootstrap changes only for: a changed
+An enrolled Mac's bootstrap only checks that the daemon's job is loaded (section 9), and only a Mac not yet set up needs the newest one. A bootstrap changes only for: a changed
 farm value, a new settings key, a wire change the old bootstrap cannot speak (B8 makes the repository formats additive, so the old one keeps working), or a Mac OS
 change. Whether Apple reinstalls a pkg when the Blueprint's pin changes, and whether it reinstalls a removed one, is unverified (question 2); the
 bootstrap stays installed, idle, rather than deleting itself, so a declarative "reinstall if missing" has nothing to reinstall.
@@ -294,8 +294,12 @@ bootstrap stays installed, idle, rather than deleting itself, so a declarative "
 
 The bootstrap is a root launchd job (`dev.hostkeeper.bootstrap`, `RunAtLoad`, restarted by launchd only after a failure). On each start (`crates/hostkeeper-bootstrap/src/run.rs`):
 
-1. If `/etc/updater/pki/current` is there, or `/usr/local/bin/hostkeeper` is there **and** the marker `/var/lib/hostkeeper-bootstrap/installed` is (made after `installer` exited 0), exit 0 and do nothing. This makes it idempotent and a no-op on every enrolled Mac
-   and on one the bootstrap installed. The binary alone is not enough: the pkg lays its payload down before its postinstall, so a failed postinstall leaves a binary and no loaded job, and that Mac is installed again. A Mac with a hand-installed binary and no marker is installed again too, which is harmless: existing configs are kept.
+1. If `/etc/updater/pki/current` is there, or `/usr/local/bin/hostkeeper` is there **and** the marker `/var/lib/hostkeeper-bootstrap/installed` is (made after `installer` exited 0), the Mac is not installed again;
+   the bootstrap asks launchd whether the daemon's job is loaded (`launchctl print system/dev.hostkeeper.hostkeeper`, tool timeout from the settings when they can be read, else the default). A loaded job: exit 0 and do nothing more. A job that
+   is not loaded (exit 113 or `Could not find service`): launchd does not load a job that is marked disabled in its override database, so a Mac whose job was left disabled has no daemon after a restart; the bootstrap runs
+   `launchctl enable system/dev.hostkeeper.hostkeeper` and then `launchctl bootstrap system /Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist`, and exits 0 (`hostkeeper is installed and its job was not loaded: enabled and loaded it`).
+   A bootstrap that fails is followed by one more `print`: a job loaded by then (launchd loads the jobs of a booting Mac while this one starts) is success, and one still not loaded is an error of the attempt. Every `launchctl` failure (it cannot be started, passes its
+   deadline, a `print` that exits with another code, an `enable` that exits non-zero) is an error of the attempt, retried as step 4's are. No file is written and nothing is fetched. This keeps it idempotent and, on a Mac whose job is loaded, a no-op. The binary alone is not enough: the pkg lays its payload down before its postinstall, so a failed postinstall leaves a binary and no loaded job, and that Mac is installed again. A Mac with a hand-installed binary and no marker is installed again too, which is harmless: existing configs are kept.
 2. Read the settings (section 4), then the repository's descriptor and pointer (`hostkeeper_release::descriptor`), and download the pkg into a new root-only file in
    `/var/lib/hostkeeper-bootstrap` (mode 0600, never replacing a file), hashed in the same pass, held to the pointer's size and SHA-256 and to `max_package_bytes`.
 3. `pkgutil --check-signature` and the Team ID pin (section 7). A pkg that fails any check is deleted, and nothing else is written or run.
@@ -359,7 +363,8 @@ the migrations and their tables (unused), `mdm.proto` (every call answers `UNIMP
 | **Coordinator unreachable at first boot** (down, wrong LAN, CA hash mismatch) | Not the bootstrap's: the daemon's CA check fails first, so nothing is sent and no key is made on a hash mismatch (`UntrustedCoordinator`); a connection failure is a failed step, retried every poll period | the daemon's log; no request in the queue |
 | **Approval never given** | The request waits and expires after `--enrollment-request-ttl` (72 h). The daemon posts again with the same key and the request is listed again | the request in the Enrollment page; after the TTL, under `unenrolled` |
 | **The Mac is re-imaged** | The Blueprint installs the bootstrap again; the files of the old install are gone, so it installs hostkeeper again, and the daemon makes a new key and a new request. The host id is held by the old key, so the record does not approve it (the record is used, and "no other key holds the host id" fails): an operator approves with `--replace true` in the same group. A different group is refused `host_group_differs` | one click; the old key's certificate stops being admitted |
-| **The bootstrap runs on a Mac that has hostkeeper** | Step 1 of section 9: it exits 0 | none |
+| **The bootstrap runs on a Mac that has hostkeeper** | Step 1 of section 9: with the daemon's job loaded it exits 0 and does nothing more | none |
+| **A Mac that has hostkeeper whose daemon job is not loaded** (the job was left marked disabled, so launchd did not load it at boot) | Step 1 of section 9: `launchctl enable`, then `launchctl bootstrap` of the daemon's plist; a bootstrap that fails with the job still not loaded, or any other `launchctl` failure, is retried after `retry_secs` until `wait_secs`, then the program exits non-zero and launchd starts it again | the log: `... is not loaded; enabling and loading it`, then `hostkeeper is installed and its job was not loaded: enabled and loaded it`, or the failed attempt with `launchctl <verb> exited ...` |
 
 ## 12. Tasks, one pull request each
 

@@ -389,6 +389,12 @@ pub fn print_args(label: &Label) -> Vec<String> {
     vec!["print".to_owned(), format!("system/{label}")]
 }
 
+/// The arguments of `launchctl enable system/<label>`, which clears the mark that keeps a job
+/// disabled in launchd's override database; a disabled job is not loaded by `bootstrap`.
+pub fn enable_args(label: &Label) -> Vec<String> {
+    vec!["enable".to_owned(), format!("system/{label}")]
+}
+
 /// The arguments of `launchctl bootstrap system <plist>`.
 pub fn bootstrap_args(plist: &Path) -> Vec<String> {
     vec![

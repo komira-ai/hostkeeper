@@ -43,8 +43,8 @@ the click with `--replace true` (the old key holds the host id).
 ## What happens, and where to look
 
 On the Mac, `/var/log/hostkeeper-bootstrap.log` holds the bootstrap's lines: the pkg it fetched, each
-failed attempt with its reason, and `installed hostkeeper <version>` or `hostkeeper is installed;
-nothing to do`.
+failed attempt with its reason, and `installed hostkeeper <version>`, `hostkeeper is installed;
+nothing to do`, or `hostkeeper is installed and its job was not loaded: enabled and loaded it`.
 
 | You see | It means |
 |---|---|
@@ -55,12 +55,15 @@ nothing to do`.
 | `the pkg's SHA-256 is ..., the pointer says ...` | a corrupted or cut download; it is retried |
 | `installer exited ...` | the install failed; the next attempt installs the same bytes again |
 | `installed hostkeeper <version>` | done: the daemon is loaded, finds `/etc/hostkeeper/hostkeeper.toml`, and enrolls |
+| `hostkeeper is installed; nothing to do` | hostkeeper was on the Mac and launchd has the daemon's job loaded; nothing was changed |
+| `hostkeeper is installed and its job was not loaded: enabled and loaded it` | hostkeeper was on the Mac but launchd did not have the daemon's job loaded (a job marked disabled is not loaded at boot); the bootstrap enabled it and loaded it, and the daemon starts |
+| `launchctl <verb> exited ...` or `launchctl could not be run: ...` | on a Mac that has hostkeeper, `launchctl` failed to report, enable or load the daemon's job; the bootstrap retries, then exits and launchd starts it again |
 
 After that the request is in the coordinator's queue (or approved by the record) and the Mac is an
 ordinary host. At its first heartbeat its daemon writes its group's operator SSH keys into the
 administrator account's `authorized_keys` and turns Remote Login on, so the Mac can be reached over
-SSH with no password typed ([operator-keys.md](operator-keys.md)). A Mac that already has a host certificate, or `/usr/local/bin/hostkeeper` with the bootstrap's finished-install marker, is left alone
-by the bootstrap, however many times it runs. The bootstrap does not install Apple's Command Line
+SSH with no password typed ([operator-keys.md](operator-keys.md)). A Mac that already has a host certificate, or `/usr/local/bin/hostkeeper` with the bootstrap's finished-install marker, is not installed
+again by the bootstrap, however many times it runs; it only checks that the daemon's job is loaded, and loads it when it is not. The bootstrap does not install Apple's Command Line
 Tools and nobody types `sudo softwareupdate` on the Mac: when the Mac's host group lists
 `xcode-command-line-tools` in the coordinator's host prerequisites file, its daemon installs them as
 root ([host-prerequisites.md](host-prerequisites.md)).

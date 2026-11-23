@@ -1,13 +1,17 @@
 //! The pkg's one script, `postinstall` ([`postinstall_text`], the text
 //! `hostkeeper_launchd::postinstall::Postinstall::pkg` writes for the pkg's paths). It asks, then
-//! loads:
+//! enables and loads:
 //!
 //! 1. `launchctl print` of the daemon's job, its output discarded: when the job is loaded the
 //!    script exits 0 and touches nothing. An `installer -pkg` the daemon itself runs (its
 //!    self-update through macos-pkg, docs/design/packages-native.md, section 10.4) must not boot
 //!    the running daemon out in the middle of its update; the plist's new text takes effect at
 //!    the next boot. The script never runs `launchctl bootout`.
-//! 2. `launchctl bootstrap` of the daemon's plist, when the job is not loaded (a first install, or
+//! 2. `launchctl enable` of the daemon's job, when the job is not loaded: a job marked disabled in
+//!    launchd's override database is not loaded by `bootstrap`, which fails for it, and `enable`
+//!    clears that mark (it changes nothing for a job that is not marked). Its status is not the
+//!    script's.
+//! 3. `launchctl bootstrap` of the daemon's plist, when the job is not loaded (a first install, or
 //!    a host that booted it out), which loads the job (its `RunAtLoad` starts it); its status is
 //!    the script's, so a failure fails the install with its message.
 //!
@@ -43,8 +47,8 @@ pub(super) const SCRIPT_MODE: u32 = 0o755;
 /// The element `pkgbuild` writes in `PackageInfo` for a `postinstall` in the scripts directory.
 const POSTINSTALL_ELEMENT: &str = "<postinstall file=\"./postinstall\"";
 
-/// The text of `postinstall`: the check that the daemon's job is loaded and the load of it when
-/// it is not, for the pkg's paths.
+/// The text of `postinstall`: the check that the daemon's job is loaded and the enable and load of
+/// it when it is not, for the pkg's paths.
 pub(super) fn postinstall_text() -> String {
     Postinstall::pkg().script()
 }

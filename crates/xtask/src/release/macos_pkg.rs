@@ -41,7 +41,7 @@
 //!
 //! The pkg has one script, `postinstall` ([`scripts`]), which asks launchd at install
 //! whether the daemon's job is loaded (`launchctl print`) and, only when it is not, runs
-//! `launchctl bootstrap`, which loads the job the pkg installed; a loaded job is never booted
+//! `launchctl enable` and `launchctl bootstrap`, which loads the job the pkg installed; a loaded job is never booted
 //! out, so an installer the daemon itself runs does not stop the daemon. It runs the installed binary at no point: the daemon's
 //! start does what the script once did (`hostkeeper_daemon::packaged` seeds the binary directory
 //! of hostkeeper's own update and execs `current`, `hostkeeper_daemon::mac_config::at_start`

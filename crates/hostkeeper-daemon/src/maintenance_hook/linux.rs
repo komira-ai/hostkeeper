@@ -18,7 +18,7 @@
 //! | the running kernel is older than the newest installed | [`REASON_KERNEL_NOT_NEWEST`] |
 //! | the host still says it needs a reboot | [`REASON_REBOOT_NEEDED`] |
 //! | for `linux`: an update of the order's scope is still due | [`REASON_UPDATE_DUE`] |
-//! | an installed service is unhealthy or absent | [`REASON_SERVICE_UNHEALTHY`] |
+//! | an installed service is unhealthy, absent or silent | [`REASON_SERVICE_UNHEALTHY`] |
 //!
 //! A collector that cannot read the host fails [`REASON_FACTS_UNREADABLE`], naming it as a
 //! failed look does; services whose health cannot be listed fail [`REASON_HEALTH_UNREADABLE`].
@@ -78,7 +78,8 @@ pub const REASON_KERNEL_NOT_NEWEST: &str = "kernel_not_newest";
 pub const REASON_REBOOT_NEEDED: &str = "reboot_needed";
 /// The reason of an update of the order's scope that is still due.
 pub const REASON_UPDATE_DUE: &str = "update_due";
-/// The reason of an installed service that is unhealthy or absent.
+/// The reason of an installed service that is unhealthy, absent or silent (a health a local read
+/// never gives, counted as not well).
 pub const REASON_SERVICE_UNHEALTHY: &str = "service_unhealthy";
 /// The reason of services whose health could not be listed.
 pub const REASON_HEALTH_UNREADABLE: &str = "health_unreadable";
@@ -266,6 +267,9 @@ impl LinuxCheck {
                 Health::Healthy | Health::Unspecified => None,
                 Health::Unhealthy => Some((service, "unhealthy")),
                 Health::Absent => Some((service, "absent")),
+                // The coordinator's word for a host it has not heard from; a local read never
+                // returns it, and a health nobody could check does not count as well.
+                Health::Silent => Some((service, "silent")),
             });
         match unwell {
             Some((service, word)) => Err(failed(

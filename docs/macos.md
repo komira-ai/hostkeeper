@@ -111,7 +111,9 @@ observer's service manager and process probe, and the unit control over `launchc
 step launcher, observer and unit control (`systemctl`), and no package check. Each set names the
 unit the daemon runs as, which the observer watches as the service `hostkeeper`: on a Mac the
 daemon's job `dev.hostkeeper.hostkeeper`, since the macOS package of hostkeeper names no unit
-(docs/service-observation.md, "The daemon's own service"). The daemon binds no socket; the platform's run directory (`/var/run` on a Mac) holds the `updater` directory of the registration-socket cleanup.
+(docs/service-observation.md, "The daemon's own service"). For the same reason an `activate` of
+that package disables no job (a job is disabled only when the previous version's `run` named it)
+and enables the daemon's job itself, so a self-update leaves the job loadable after a reboot. The daemon binds no socket; the platform's run directory (`/var/run` on a Mac) holds the `updater` directory of the registration-socket cleanup.
 
 #### One daemon, run by launchd
 
@@ -560,7 +562,8 @@ The release also ships the bootstrap pkg, `hostkeeper-bootstrap-<v>-macos-arm64.
 Business installs on a new Mac: the program `hostkeeper-bootstrap` at
 `/usr/local/lib/hostkeeper-bootstrap/`, its launchd plist and a postinstall that loads the job. It
 fetches hostkeeper's own pkg, checks it against its Team ID and installs it, and the daemon then
-enrolls ([design/mac-bootstrap.md](design/mac-bootstrap.md),
+enrolls; on a Mac that already has hostkeeper it installs nothing and only enables and loads the
+daemon's job when launchd does not have it loaded ([design/mac-bootstrap.md](design/mac-bootstrap.md),
 [operations/mac-bootstrap.md](operations/mac-bootstrap.md)). It is built, signed and checked in the
 same jobs as the other pkgs.
 
@@ -600,7 +603,7 @@ exists.)
 The file `hostkeeper-<v>-macos-arm64.pkg` is a distribution pkg: `productbuild` wraps the component
 pkg that `pkgbuild` makes from the payload and the script, and the wrapper holds the one
 component and nothing else (no installer script, no installation check, no volume check). The
-installer runs the component's one script, a `postinstall` of two lines, as root once the
+installer runs the component's one script, a `postinstall` of three command lines, as root once the
 files are in place. The bootstrap's status is the script's own, which fails the install when the
 job is not loaded and cannot be:
 
@@ -610,8 +613,10 @@ job is not loaded and cannot be:
 # not have it loaded, and leave it alone when it does. An installer the daemon
 # itself runs (its self-update) must not boot the running daemon out, so the job is
 # never booted out here; its new plist takes effect at the next boot. A first
-# install, or a host where the job is not loaded, gets it loaded.
+# install, or a host where the job is not loaded, gets it enabled (a job marked
+# disabled is not loaded by bootstrap) and then loaded.
 '/bin/launchctl' print 'system/dev.hostkeeper.hostkeeper' >/dev/null 2>&1 && exit 0
+'/bin/launchctl' enable 'system/dev.hostkeeper.hostkeeper'
 exec '/bin/launchctl' bootstrap system '/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist'
 ```
 
@@ -620,8 +625,12 @@ output is discarded. A loaded job is left alone: the script exits 0 and never ru
 `launchctl bootout`, because an `installer -pkg` that the daemon itself runs (its self-update
 through the `macos-pkg` installer) must not boot the running daemon out in the middle of its
 update. The plist's new text then takes effect at the next boot. When the job is not loaded (a
-first install, or a host that booted it out) `launchctl bootstrap` loads it, and `RunAtLoad`
-starts it. The script runs the bootstrap with `exec`, so its status is the install's.
+first install, or a host that booted it out) the script runs `launchctl enable` of the job and
+then `launchctl bootstrap`, which loads it, and `RunAtLoad` starts it. The `enable` is there
+because launchd keeps a mark for a job that is disabled in its override database, and
+`launchctl bootstrap` fails for a job that carries it; `enable` clears the mark and changes
+nothing for a job that has none. Its status is not the script's. The script runs the bootstrap
+with `exec`, so its status is the install's.
 
 The script no longer seeds the binary directory or writes the config; the daemon's start does
 both, each time it starts.

@@ -2,7 +2,7 @@
 //! installer runs it: an executable file in its own directory, started with the path of the pkg,
 //! the install location, the target volume and the root of the volume as arguments, and an empty
 //! environment. It runs `launchctl` to ask whether the daemon's job is loaded (`print`) and, only
-//! when it is not, to bootstrap its plist, and nothing else: it never boots the job out, as an
+//! when it is not, to enable the job and bootstrap its plist, and nothing else: it never boots the job out, as an
 //! `installer` the daemon itself runs must not stop the daemon, and the binary the pkg installed seeds the binary directory and writes the
 //! config at each start of the job (docs/design/two-programs.md, section 4.1), not here. Every
 //! path is in a scratch directory and holds a space, so the script's quoting is exercised by the
@@ -88,10 +88,20 @@ impl Mac {
         format!("print {JOB}")
     }
 
-    /// The calls of a load: the question, then the bootstrap.
+    /// Makes launchd hold the job as disabled: a `bootstrap` fails until an `enable`.
+    fn disable_job(&self) {
+        fs::write(
+            self.paths.launchctl.with_file_name("launchctl.disabled"),
+            "",
+        )
+        .expect("the disabled marker");
+    }
+
+    /// The calls of a load: the question, the enable, then the bootstrap.
     fn load_calls(&self) -> Vec<String> {
         vec![
             Self::print_call(),
+            format!("enable {JOB}"),
             format!("bootstrap system {}", self.paths.plist.display()),
         ]
     }
@@ -136,7 +146,7 @@ fn stderr(out: &Output) -> String {
 /// Catches a postinstall that does not run, exits other than 0 on a first install with no
 /// config and no managed preferences (the daemon's start, not the install, refuses that host),
 /// writes anything (a state directory, a config), says anything, or does not ask whether the job
-/// is loaded and then load it; it also holds that the job is loaded afterwards.
+/// is loaded and then enable and load it; it also holds that the job is loaded afterwards.
 #[test]
 fn the_postinstall_loads_a_job_that_is_not_loaded_and_writes_nothing() {
     let mac = Mac::new("postinstall-first");
@@ -152,6 +162,20 @@ fn the_postinstall_loads_a_job_that_is_not_loaded_and_writes_nothing() {
     written.sort();
     assert_eq!(mac.entries(), written);
     assert!(!mac.paths.plist.exists());
+}
+
+/// Catches a postinstall that fails on a job launchd holds as disabled and not loaded (the state a
+/// Mac is left in when another step disabled the job): `bootstrap` alone fails for it, so the
+/// install must run `enable` first. It exits 0, says nothing, and the job is loaded afterwards.
+#[test]
+fn the_postinstall_loads_a_job_that_is_disabled_and_not_loaded() {
+    let mac = Mac::new("postinstall-disabled");
+    mac.disable_job();
+    let out = mac.install();
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(stderr(&out), "");
+    assert_eq!(mac.calls(), mac.load_calls());
+    assert!(mac.is_loaded());
 }
 
 /// Catches a postinstall that touches a job launchd has loaded (a boot-out of the running daemon
@@ -200,7 +224,7 @@ fn a_print_that_fails_for_any_reason_loads_the_job_quietly() {
 }
 
 /// Catches a postinstall that reports success when `launchctl bootstrap` fails: the install fails
-/// with its status and exactly the message it wrote, after the one question and the one try.
+/// with its status and exactly the message it wrote, after the one question, the enable and the one try.
 #[test]
 fn a_failing_bootstrap_fails_the_postinstall_with_its_status_and_message() {
     let mac = Mac::new("postinstall-bootstrap-fails");

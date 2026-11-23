@@ -615,7 +615,9 @@ message HostService {
   // The version of the service installed on the host, as it last reported; absent when it is not
   // installed.
   optional string installed_version = 7;
-  // Its health, as the host last reported it.
+  // Its health, as the host last reported it while the host is live; HEALTH_SILENT once the host
+  // is not live (its last heartbeat is 45 seconds old or more), whatever it last reported. The
+  // raw report stays in `Host.heartbeat` as the host sent it.
   hostkeeper.agent.v1.Health health = 8;
   // The last update of the service on the host, with its verdict, phase, class, reason, detail,
   // try and log lines; absent before the first.

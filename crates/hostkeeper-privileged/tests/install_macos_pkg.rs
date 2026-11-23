@@ -56,7 +56,9 @@ use hostkeeper_install::host::Host;
 use hostkeeper_install::lock::InstallerLock;
 use hostkeeper_install::macos_pkg::record::{PkgRecord, RecordError, Records};
 use hostkeeper_install::macos_pkg::signers::{Fingerprint, Signers};
-use hostkeeper_install::macos_pkg::{Bounds, MacosPkg, Order, Seen, drift, receipt, signature};
+use hostkeeper_install::macos_pkg::{
+    Bounds, MacosPkg, Order, Replaced, Seen, drift, receipt, signature,
+};
 use hostkeeper_install::tools::{ToolError, ToolOutput};
 use hostkeeper_install::{Failure, HostTools, Reason, Tool, Tools};
 use hostkeeper_launchd::{Label, Launchctl, LaunchctlProcess};
@@ -610,9 +612,10 @@ fn a_package_is_refused_unsigned_then_installed_updated_repaired_rolled_back_and
     let dir100 = rig
         .stage(&signers, &rig.order("1.0.0"), &v100.product)
         .unwrap_or_else(|(f, _)| panic!("{f}"));
+    let order100 = rig.order("1.0.0");
     let activated = rig
         .installer(&signers)
-        .activate(&rig.order("1.0.0"), &dir100, None)
+        .activate(&order100, &dir100, None)
         .unwrap_or_else(|f| panic!("{f}"));
     assert_eq!(activated.drift, None, "a first install found no drift");
     assert_eq!(receipt_version().as_deref(), Some("1.0.0"));
@@ -650,7 +653,14 @@ fn a_package_is_refused_unsigned_then_installed_updated_repaired_rolled_back_and
         "stage ran no script of the package"
     );
     rig.installer(&signers)
-        .activate(&order110, &dir110, Some(&dir100))
+        .activate(
+            &order110,
+            &dir110,
+            Some(Replaced {
+                dir: &dir100,
+                run: &order100.run,
+            }),
+        )
         .unwrap_or_else(|f| panic!("{f}"));
     assert_eq!(
         fs::read_to_string(&evidence).expect("the postinstall ran at activate"),
@@ -716,7 +726,14 @@ fn a_package_is_refused_unsigned_then_installed_updated_repaired_rolled_back_and
     // (e) Roll back to 1.0.0: the kept package is installed with `-allowUntrusted`, and no
     // signature is checked (no `--check-signature` is asked by any `activate`).
     rig.installer(&signers)
-        .activate(&rig.order("1.0.0"), &dir100, Some(&dir110))
+        .activate(
+            &order100,
+            &dir100,
+            Some(Replaced {
+                dir: &dir110,
+                run: &order110.run,
+            }),
+        )
         .unwrap_or_else(|f| panic!("{f}"));
     assert_eq!(rig.tools.asked(), asked, "activate checks no signature");
     assert_eq!(receipt_version().as_deref(), Some("1.0.0"));

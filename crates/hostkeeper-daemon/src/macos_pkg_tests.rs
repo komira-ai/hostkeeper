@@ -259,7 +259,8 @@ fn a_removal_takes_its_order_from_the_record() {
 
 /// Catches: an `activate` given as `from` a version `current` names that is not a `.pkg` (an
 /// archive version, the move), or the version itself; or a `remove` that walks a version that
-/// is no `.pkg`. Only a `macos-pkg` version is replaced or kept.
+/// is no `.pkg`. Only a `macos-pkg` version is replaced or kept; the labels it ran are the
+/// `run` of its sealed manifest.
 #[test]
 fn only_a_pkg_version_is_replaced_or_kept() {
     let scratch = scratch("pkg-replaced");
@@ -299,7 +300,8 @@ fn only_a_pkg_version_is_replaced_or_kept() {
     );
     assert_eq!(
         repository.replaced(&hello(), &v("1.2.0")),
-        Ok(Some(packages.join("1.1.0")))
+        Ok(Some((packages.join("1.1.0"), Vec::new()))),
+        "a manifest that names no run"
     );
     link("previous", "1.0.0");
     assert_eq!(repository.kept(&hello()), Ok(vec![packages.join("1.1.0")]));
@@ -312,6 +314,51 @@ fn only_a_pkg_version_is_replaced_or_kept() {
     fs::write(packages.join("1.0.0/target.json"), b"not json").expect("a bad target.json");
     link("current", "1.0.0");
     assert!(repository.replaced(&hello(), &v("1.2.0")).is_err());
+}
+
+/// Catches: the jobs a replaced version ran taken from anything but its sealed manifest's `run`.
+/// The labels come in the manifest's order; a sealed entry with no manifest ran none; a label
+/// that does not parse is `manifest_invalid`; a sealed entry that cannot be read is `io_error`.
+#[test]
+fn the_jobs_a_replaced_version_ran_are_the_run_of_its_sealed_manifest() {
+    let scratch = scratch("pkg-replaced-run");
+    let repository = repository(&scratch, None);
+    let packages = scratch.path().join("packages/hello");
+    let current = packages.join("current");
+    fs::create_dir_all(&packages).expect("the service's directory");
+    std::os::unix::fs::symlink("1.1.0", &current).expect("the link");
+    let dir = packages.join("1.1.0");
+    fs::create_dir_all(&dir).expect("a version");
+    let v = Version::new("1.2.0").expect("a version");
+    let label = |text: &str| Label::parse(text).expect("a label");
+    let reseal = |sealed: &Target| {
+        for file in [target::TARGET_FILE, target::MANIFEST_HOOK_FILE] {
+            let _ = fs::remove_file(dir.join(file));
+        }
+        target::write(&dir, sealed).expect("its target.json");
+    };
+
+    let mut sealed = entry();
+    sealed.manifest.as_mut().expect("a manifest").run =
+        vec!["b.job".to_owned(), "a.job".to_owned()];
+    reseal(&sealed);
+    assert_eq!(
+        repository.replaced(&hello(), &v),
+        Ok(Some((dir.clone(), vec![label("b.job"), label("a.job")])))
+    );
+
+    sealed.manifest = None;
+    reseal(&sealed);
+    assert_eq!(
+        repository.replaced(&hello(), &v),
+        Ok(Some((dir.clone(), Vec::new())))
+    );
+
+    sealed.manifest = entry().manifest;
+    sealed.manifest.as_mut().expect("a manifest").run = vec!["bad label".to_owned()];
+    reseal(&sealed);
+    let refused = repository.replaced(&hello(), &v).expect_err("a bad label");
+    assert_eq!(refused.reason(), Reason::ManifestInvalid);
 }
 
 /// Catches: the ports of a Mac said in a log line with what they hold beyond the host and the

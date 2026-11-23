@@ -146,7 +146,10 @@ fn activate_reports_io_error_at_each_look_at_a_host_it_cannot_read() {
         1,
         swap_root(&i.rig),
     );
-    let err = i.rig.activate(&order2, &dir2, Some(&i.dir1)).unwrap_err();
+    let err = i
+        .rig
+        .activate(&order2, &dir2, replaces(&i.dir1, &i.order1))
+        .unwrap_err();
     assert_eq!(err.reason(), Reason::IoError);
     assert!(err.detail().starts_with(&home("lib/x")), "{}", err.detail());
 
@@ -160,7 +163,10 @@ fn activate_reports_io_error_at_each_look_at_a_host_it_cannot_read() {
         1,
         swap_root(&i.rig),
     );
-    let err = i.rig.activate(&order2, &dir2, Some(&i.dir1)).unwrap_err();
+    let err = i
+        .rig
+        .activate(&order2, &dir2, replaces(&i.dir1, &i.order1))
+        .unwrap_err();
     assert_eq!(err.reason(), Reason::IoError);
     assert!(err.detail().starts_with("/Library: "), "{}", err.detail());
     assert_eq!(
@@ -183,7 +189,10 @@ fn activate_reports_io_error_when_an_installed_file_cannot_be_read() {
         1,
         swap_root(&i.rig),
     );
-    let err = i.rig.activate(&order2, &dir2, Some(&i.dir1)).unwrap_err();
+    let err = i
+        .rig
+        .activate(&order2, &dir2, replaces(&i.dir1, &i.order1))
+        .unwrap_err();
     assert_eq!(err.reason(), Reason::IoError);
     assert!(
         err.detail().starts_with(&home("VERSION")),
@@ -205,7 +214,10 @@ fn activate_reports_io_error_when_an_installed_file_cannot_be_read() {
         1,
         swap_root(&i.rig),
     );
-    let err = i.rig.activate(&order2, &dir2, Some(&i.dir1)).unwrap_err();
+    let err = i
+        .rig
+        .activate(&order2, &dir2, replaces(&i.dir1, &i.order1))
+        .unwrap_err();
     assert_eq!(err.reason(), Reason::IoError);
     assert_eq!(
         i.rig.mac.calls_of(Tool::Installer).len(),
@@ -229,7 +241,10 @@ fn activate_reports_io_error_when_the_files_to_delete_cannot_be_looked_at() {
         1,
         swap_root(&i.rig),
     );
-    let err = i.rig.activate(&order2, &dir2, Some(&i.dir1)).unwrap_err();
+    let err = i
+        .rig
+        .activate(&order2, &dir2, replaces(&i.dir1, &i.order1))
+        .unwrap_err();
     assert_eq!(err.reason(), Reason::IoError);
     assert!(
         err.detail().starts_with(&home("VERSION")),
@@ -249,7 +264,7 @@ fn activate_reports_io_error_when_a_directory_cannot_be_written() {
     let i = installed("act-denied-file");
     lock_dir(&i.rig, &home("old"));
     let (dir2, order2) = i.stage_v2();
-    let result = i.rig.activate(&order2, &dir2, Some(&i.dir1));
+    let result = i.rig.activate(&order2, &dir2, replaces(&i.dir1, &i.order1));
     match permissions_deny(&i.rig) {
         true => assert!(
             result
@@ -270,7 +285,7 @@ fn activate_reports_io_error_when_a_directory_cannot_be_written() {
     let order2 = rig.order("2.0");
     let dir2 = rig.stage(&order2, "svc-2.0");
     lock_dir(&rig, &home("grp"));
-    let result = rig.activate(&order2, &dir2, Some(&dir1));
+    let result = rig.activate(&order2, &dir2, replaces(&dir1, &order1));
     match permissions_deny(&rig) {
         true => assert!(result.unwrap_err().detail().starts_with(&home("grp/inner"))),
         false => assert!(!rig.exists(&home("grp"))),

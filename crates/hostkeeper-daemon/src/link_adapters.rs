@@ -580,7 +580,11 @@ pub fn observation(seen: &hostkeeper_observe::Observation) -> Observation {
     let health = match beat_health(seen).0 {
         wire::Health::Healthy => Health::Healthy,
         wire::Health::Absent => Health::Absent,
-        wire::Health::Unhealthy | wire::Health::Unspecified => Health::Unhealthy,
+        // `Silent` is the coordinator's word, which a local read never yields; like a health the
+        // daemon cannot tell, it counts as unhealthy.
+        wire::Health::Unhealthy | wire::Health::Unspecified | wire::Health::Silent => {
+            Health::Unhealthy
+        }
     };
     Observation {
         liveness,

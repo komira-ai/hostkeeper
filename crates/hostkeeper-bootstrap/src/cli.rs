@@ -1,9 +1,11 @@
 //! The command line of `hostkeeper-bootstrap` and its host: the ports a Mac provides.
 //!
-//! Every path has the Mac's own as its default, and a flag changes it (configuration is passed
-//! as flags, never read from the environment). A run ends with exit status 0 when hostkeeper is
-//! installed or was already there, 1 when it gave up (launchd starts the program again), and 2 for
-//! a command line that is not understood.
+//! Every path has the Mac's own as its default, and a flag changes it, but for the host
+//! certificate's and the daemon's launchd plist, which are fixed (configuration is passed as flags,
+//! never read from the environment). A run ends with exit status 0 when hostkeeper is installed,
+//! was already there with its job loaded, or was already there and had its job enabled and loaded
+//! by this run; 1 when it gave up (launchd starts the program again); and 2 for a command line that
+//! is not understood.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -39,7 +41,7 @@ pub struct Args {
     /// The user id that must own the settings files: root's.
     #[arg(long, default_value_t = 0)]
     pub trusted_uid: u32,
-    /// The binary hostkeeper's pkg installs; the bootstrap does nothing when it is there.
+    /// The binary hostkeeper's pkg installs; the bootstrap does not install again when it is there.
     #[arg(long, default_value = hostkeeper_launchd::plist::INSTALLED_BINARY)]
     pub installed_binary: PathBuf,
     /// The update-account file, written when the settings name the update account.
@@ -57,11 +59,12 @@ impl Args {
         paths.staging_dir = self.staging_dir;
         paths.binary = self.installed_binary;
         paths.update_account = self.update_account_file;
+        // The daemon's plist has no flag: it is the pkg's fixed path, as `pki_current` is.
         paths
     }
 }
 
-/// The Mac's `pkgutil` and `installer`; on any other system, a tool that cannot be run.
+/// The Mac's `pkgutil`, `installer` and `launchctl`; on any other system, a tool that cannot be run.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct HostTools;
 

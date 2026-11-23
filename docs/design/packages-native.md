@@ -236,7 +236,7 @@ old as the host's last `.deb`; from A19 it is the last version that confirmed. O
 
 **hostkeeper's own package has scripts**, like any package (10.2). It is also the bootstrap package,
 installed by dpkg or by MDM before any daemon runs, so it makes its directories and enables its own unit or job. Its
-scripts are the texts the packaging tests hold today, with one change: the `.pkg`'s postinstall bootstraps the
+scripts are the texts the packaging tests hold today, with one change: the `.pkg`'s postinstall enables and bootstraps the
 job only when launchd does not have it loaded, so an `installer` the daemon itself runs never boots the daemon out
 in the middle of its update. That change lands in A19 itself, so that `rollback_below_installer`'s row for A19 also
 keeps a Mac from installing an older `.pkg` whose postinstall boots the job out. The plist's text then takes effect

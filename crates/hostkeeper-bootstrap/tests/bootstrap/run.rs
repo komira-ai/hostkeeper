@@ -124,8 +124,9 @@ fn existing_configs_are_kept_and_the_install_still_runs() {
     assert_eq!(world.tools.ran(), [Tool::Pkgutil, Tool::Installer]);
 }
 
-/// A Mac that has hostkeeper's binary and the marker of a finished install, or a host certificate, is a no-op: no request, no tool, no
-/// file written, not even the staging directory.
+/// A Mac that has hostkeeper's binary and the marker of a finished install, or a host certificate,
+/// whose daemon job launchd has loaded is a no-op: no request, no tool but the one `launchctl
+/// print` of the job, no file written, not even the staging directory.
 #[test]
 fn a_mac_that_has_hostkeeper_is_left_alone() {
     for markers in [
@@ -140,7 +141,12 @@ fn a_mac_that_has_hostkeeper_is_left_alone() {
         let world = World::good();
         assert_eq!(world.run(&paths).expect("a no-op"), Outcome::AlreadySetUp);
         assert!(world.repo.asked.borrow().is_empty(), "nothing is fetched");
-        assert!(world.tools.ran().is_empty(), "no tool runs");
+        assert_eq!(
+            world.tools.launchctl_calls(),
+            [["print", "system/dev.hostkeeper.hostkeeper"].map(String::from)],
+            "the job is asked about and nothing else is run"
+        );
+        assert_eq!(world.tools.ran(), [Tool::Launchctl]);
         assert!(!exists(&paths.config_dir) && !exists(&paths.staging_dir.join("hostkeeper.pkg")));
         assert!(is_set_up(&paths));
         assert_eq!(

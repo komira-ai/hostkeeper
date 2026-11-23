@@ -3,6 +3,12 @@
 //! `.pkg` the core re-hashed before the step; its signature is not checked again). It fetches
 //! nothing, and a crash inside it resumes by running it again: `installer` installs the same
 //! bytes again, and the deletions and the enablement find nothing left to do.
+//!
+//! The jobs: each label the order's `run` names is enabled, and each label the replaced
+//! version's `run` named that this one's does not is disabled. A job the replaced version's
+//! payload shipped but its `run` never named (hostkeeper's own package, whose manifest names no
+//! `run`) is left as it was, enabled or disabled; [`MacosPkg::enable`] is how a caller clears an
+//! override on such a job.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -10,7 +16,6 @@ use std::time::Duration;
 
 use hostkeeper_launchd::Label;
 
-use super::payload::labels_of;
 use super::record::PkgRecord;
 use super::{INSTALLER_PKG, META, MacosPkg, Order, TREE, arg, io, receipt};
 use crate::host::{self, GID_ADMIN, Kind, Meta, file_digest, link_target, parents};
@@ -21,6 +26,15 @@ use crate::tools::{Tool, last_line, may_be_cut};
 /// the order is deferred, `package_manager_busy`.
 pub const BUSY: [&str; 2] = ["already in progress", "installer is busy"];
 
+/// The version an `activate` replaces, or rolls back from.
+#[derive(Clone, Copy, Debug)]
+pub struct Replaced<'a> {
+    /// The version directory `current` names when it is not the one activated.
+    pub dir: &'a Path,
+    /// The `run` labels of that version's sealed manifest: the jobs it ran.
+    pub run: &'a [Label],
+}
+
 /// What an `activate` that succeeded found and corrected.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Activated {
@@ -30,21 +44,23 @@ pub struct Activated {
 }
 
 impl MacosPkg<'_> {
-    /// Activates the version staged at `dir`. `from` is the version directory `current` names
-    /// when it is not `dir`: the version this one replaces, or rolls back from. `current` is
-    /// switched only after `activate` returns, so an `activate` run again after a crash gets the
-    /// same `from`.
+    /// Activates the version staged at `dir`. `from` is the version `current` names when it is
+    /// not `dir`: the version this one replaces, or rolls back from. `current` is switched only
+    /// after `activate` returns, so an `activate` run again after a crash gets the same `from`.
+    /// The jobs the `run` of `from` named and the order's `run` does not are disabled.
     pub fn activate(
         &self,
         order: &Order,
         dir: &Path,
-        from: Option<&Path>,
+        from: Option<Replaced<'_>>,
     ) -> Result<Activated, Failure> {
         let deadline = order.bounds.activate;
         let ids = *self.host.ids();
         let tree = host::walk(&dir.join(TREE), &ids).map_err(|e| io("the staged tree", e))?;
         let old_tree = match from {
-            Some(old) => host::walk(&old.join(TREE), &ids).map_err(|e| io("the kept tree", e))?,
+            Some(old) => {
+                host::walk(&old.dir.join(TREE), &ids).map_err(|e| io("the kept tree", e))?
+            }
             None => BTreeMap::new(),
         };
         let _held = self.lock.hold().map_err(|e| io("the installer lock", e))?;
@@ -55,7 +71,7 @@ impl MacosPkg<'_> {
             .load(&order.service)
             .map_err(|e| Failure::new(Reason::IoError, e.to_string()))?;
         let reference = match from {
-            Some(old) => Some((old, &old_tree)),
+            Some(old) => Some((old.dir, &old_tree)),
             None if record
                 .as_ref()
                 .is_some_and(|r| r.version == order.version.as_str()) =>
@@ -111,15 +127,17 @@ impl MacosPkg<'_> {
                 done.created_dirs.remove(dir);
             }
         }
-        let dropped: Vec<Label> = labels_of(&old_tree)
-            .into_iter()
-            .filter(|label| !order.run.contains(label))
-            .collect();
+        let mut dropped: Vec<&Label> = Vec::new();
+        for label in from.map_or(&[][..], |old| old.run) {
+            if !order.run.contains(label) && !dropped.contains(&label) {
+                dropped.push(label);
+            }
+        }
         for (verb, label) in order
             .run
             .iter()
             .map(|l| ("enable", l))
-            .chain(dropped.iter().map(|l| ("disable", l)))
+            .chain(dropped.into_iter().map(|l| ("disable", l)))
         {
             self.launchctl(verb, label, deadline)?;
         }
@@ -304,6 +322,13 @@ impl MacosPkg<'_> {
             ));
         }
         Ok(())
+    }
+
+    /// `launchctl enable system/<label>`, at most `deadline`: clears a `disable` override on a
+    /// job whose package's manifest does not name it in `run` (hostkeeper's own job), as a
+    /// failing `launchctl` fails an `activate` (`installer_error`).
+    pub fn enable(&self, label: &Label, deadline: Duration) -> Result<(), Failure> {
+        self.launchctl("enable", label, deadline)
     }
 
     fn launchctl(&self, verb: &str, label: &Label, deadline: Duration) -> Result<(), Failure> {

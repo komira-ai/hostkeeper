@@ -180,16 +180,6 @@ pub fn program(job: &plist::Dictionary) -> Option<&str> {
     })
 }
 
-/// The labels of the jobs whose plists a payload tree (standing for `/`) holds in
-/// `/Library/LaunchDaemons`: the `run` labels of the version staged from it.
-pub fn labels_of(tree: &BTreeMap<String, Meta>) -> Vec<Label> {
-    tree.keys()
-        .filter_map(|path| path.strip_prefix("/Library/LaunchDaemons/"))
-        .filter_map(|name| name.strip_suffix(".plist"))
-        .filter_map(|label| Label::parse(label).ok())
-        .collect()
-}
-
 #[cfg(test)]
 #[path = "payload_tests.rs"]
 mod tests;

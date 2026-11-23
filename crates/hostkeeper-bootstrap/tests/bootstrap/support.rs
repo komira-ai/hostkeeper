@@ -1,7 +1,7 @@
 //! The fakes and the fixtures of the tests.
 
 use std::cell::{Cell, RefCell};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::io::Cursor;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -58,6 +58,7 @@ pub fn paths_in(dir: &Path, extra: &str) -> Paths {
         config_dir: dir.join("etc/hostkeeper"),
         staging_dir: dir.join("var/bootstrap"),
         update_account: dir.join("Library/hostkeeper/update-account"),
+        daemon_plist: dir.join("Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist"),
     };
     write_mode(&paths.sources.fallback, &settings_text(extra), 0o600);
     paths
@@ -169,11 +170,21 @@ pub fn good_pkgutil() -> String {
     )
 }
 
-/// `pkgutil` and `installer`, scripted; every call is recorded.
+/// What a scripted tool answers with: an output, or the reason it could not be started.
+pub type Answer = Result<ToolOutput, String>;
+
+/// `pkgutil`, `installer` and `launchctl`, scripted; every call is recorded.
 pub struct Tool_ {
     pub pkgutil: Mutex<Result<ToolOutput, String>>,
     pub installer_code: Mutex<Option<i32>>,
     pub installer_spawn_fails: Mutex<bool>,
+    /// The answers of `launchctl print`, one for each call in order; once they are used up, the
+    /// job is loaded (exit 0).
+    pub launchctl_prints: Mutex<VecDeque<Answer>>,
+    /// The answer of `launchctl enable`.
+    pub launchctl_enable: Mutex<Answer>,
+    /// The answer of `launchctl bootstrap`.
+    pub launchctl_bootstrap: Mutex<Answer>,
     pub calls: Mutex<Vec<(Tool, Vec<String>)>>,
     /// The bytes of the staged pkg when `pkgutil` was run, to prove what it was asked about.
     pub seen_pkg: Mutex<Vec<Vec<u8>>>,
@@ -189,6 +200,9 @@ impl Tool_ {
             pkgutil: Mutex::new(Ok(ToolOutput::success(pkgutil_stdout))),
             installer_code: Mutex::new(Some(0)),
             installer_spawn_fails: Mutex::new(false),
+            launchctl_prints: Mutex::new(VecDeque::new()),
+            launchctl_enable: Mutex::new(Ok(ToolOutput::success(""))),
+            launchctl_bootstrap: Mutex::new(Ok(ToolOutput::success(""))),
             calls: Mutex::new(Vec::new()),
             seen_pkg: Mutex::new(Vec::new()),
             watch: Mutex::new(Vec::new()),
@@ -198,6 +212,22 @@ impl Tool_ {
 
     pub fn good() -> Tool_ {
         Tool_::new(&good_pkgutil())
+    }
+
+    /// Scripts the answers of the `launchctl print` calls, in order.
+    pub fn print_answers(&self, answers: impl IntoIterator<Item = Answer>) {
+        *self.launchctl_prints.lock().expect("prints") = answers.into_iter().collect();
+    }
+
+    /// The arguments of each `launchctl` call, in order.
+    pub fn launchctl_calls(&self) -> Vec<Vec<String>> {
+        self.calls
+            .lock()
+            .expect("calls")
+            .iter()
+            .filter(|call| call.0 == Tool::Launchctl)
+            .map(|call| call.1.clone())
+            .collect()
     }
 
     pub fn ran(&self) -> Vec<Tool> {
@@ -231,7 +261,30 @@ impl Tools for Tool_ {
                 .collect();
             self.at_installer.lock().expect("seen").push(seen);
         }
+        let spawn = |why: &str| ToolError::Spawn {
+            args: args.join(" "),
+            why: why.to_owned(),
+        };
         match tool {
+            Tool::Launchctl => {
+                let answer = match args.first().map(String::as_str) {
+                    Some("print") => self
+                        .launchctl_prints
+                        .lock()
+                        .expect("prints")
+                        .pop_front()
+                        .unwrap_or_else(|| {
+                            Ok(ToolOutput::success("system/x = { state = running }"))
+                        }),
+                    Some("enable") => self.launchctl_enable.lock().expect("enable").clone(),
+                    Some("bootstrap") => {
+                        self.launchctl_bootstrap.lock().expect("bootstrap").clone()
+                    }
+                    other => panic!("a launchctl verb the bootstrap does not run: {other:?}"),
+                };
+                answer.map_err(|why| spawn(&why))
+            }
+            Tool::Lsbom => panic!("the bootstrap does not run lsbom"),
             Tool::Pkgutil => {
                 let pkg = args.last().expect("a path");
                 self.seen_pkg
@@ -242,16 +295,12 @@ impl Tools for Tool_ {
                     .lock()
                     .expect("pkgutil")
                     .clone()
-                    .map_err(|why| ToolError::Spawn {
-                        args: args.join(" "),
-                        why,
-                    })
+                    .map_err(|why| spawn(&why))
             }
-            _ if *self.installer_spawn_fails.lock().expect("flag") => Err(ToolError::Spawn {
-                args: args.join(" "),
-                why: "no such file".into(),
-            }),
-            _ => Ok(ToolOutput {
+            Tool::Installer if *self.installer_spawn_fails.lock().expect("flag") => {
+                Err(spawn("no such file"))
+            }
+            Tool::Installer => Ok(ToolOutput {
                 code: *self.installer_code.lock().expect("code"),
                 stdout: Vec::new(),
                 stderr: b"installer: the install failed\n".to_vec(),

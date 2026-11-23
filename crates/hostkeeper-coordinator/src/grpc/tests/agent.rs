@@ -319,7 +319,8 @@ fn a_verdicts_detail_is_read_cut_to_the_coordinators_bound() {
 
 /// Proves every enum reaches its JSON word, and an unset one or one the proto does not know
 /// leaves the key out: the healths, the outcomes, the failure phases and classes, the commit
-/// states.
+/// states. `HEALTH_SILENT` is the coordinator's word, not a health a daemon reports, so a
+/// heartbeat that carries it names no health, as an unset one does.
 #[test]
 fn each_enum_value_has_its_json_word_and_an_unset_one_has_none() {
     for (health, word) in [
@@ -346,6 +347,9 @@ fn each_enum_value_has_its_json_word_and_an_unset_one_has_none() {
         let sent = service_json(one);
         assert!(sent.get("health").is_none() && sent.get("commit").is_none());
     }
+    let mut silent = entry("svc", "1.0");
+    silent.health = proto::Health::Silent as i32;
+    assert!(service_json(silent).get("health").is_none());
 
     let last = |result: proto::UpdateResult| {
         let mut one = entry("svc", "1.0");
