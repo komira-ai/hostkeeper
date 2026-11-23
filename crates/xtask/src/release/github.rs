@@ -4,6 +4,13 @@
 //!
 //! A command that cannot start or ends unsuccessfully, a reply that is not JSON, and a reply
 //! that lacks a field the port needs are each a [`PortError`] whose `what` is the command line.
+//!
+//! A read (a `GET` of the API: the runs, jobs, issues, comparison and releases) that GitHub
+//! answers with a server error ([`SERVER_ERRORS`]: an answer it could not give in time, or at
+//! all) is asked again after a wait, in up to [`READ_ATTEMPTS`] attempts in all; its last error
+//! is the error. A read changes nothing, so asking again is safe. A write (creating, editing or
+//! closing an issue, creating, uploading to or publishing a release) is asked once: a write that
+//! timed out may have been done, and the verbs that write read the state back before they go on.
 
 use std::path::Path;
 
@@ -11,13 +18,26 @@ use serde_json::Value;
 
 use super::contract::{Commit, MAIN, Repo, Signer};
 use super::git::{stdout_of, stdout_of_ran};
+use super::image_push::Sleep;
 use super::ports::{
     Ask, Attestation, Exec, GitHubRuns, Issue, Job, PortError, Release, ReleaseStore, Run,
-    StoredAsset, Verifier,
+    StoredAsset, Verifier, Wait,
 };
 
 /// What `gh api` prints on stderr for a path GitHub does not have.
 const NOT_FOUND: &str = "(HTTP 404)";
+
+/// What `gh api` prints on stderr, at its end, for a server error of GitHub's that asking again
+/// may not meet: an internal error, a bad gateway, the service unavailable, a gateway timeout.
+pub(crate) const SERVER_ERRORS: [&str; 4] =
+    ["(HTTP 500)", "(HTTP 502)", "(HTTP 503)", "(HTTP 504)"];
+
+/// The waits, in seconds, before the second and each later attempt of a read: under two minutes
+/// in all.
+pub(crate) const READ_WAITS: [u64; 3] = [10, 30, 60];
+
+/// The attempts of a read in all: the first, and one after each of [`READ_WAITS`].
+pub(crate) const READ_ATTEMPTS: usize = READ_WAITS.len() + 1;
 
 /// The start of the URI a signing certificate names the workflow by.
 const SIGNER_URI_START: &str = "https://github.com/";
@@ -141,14 +161,19 @@ fn parse_attestation(r: &Reader<'_>, element: &Value) -> Result<Attestation, Por
     })
 }
 
-/// The GitHub command line tool, run through an [`Exec`].
+/// The GitHub command line tool, run through an [`Exec`], waiting through `wait` between the
+/// attempts of a read.
 pub(crate) struct Gh<E> {
     exec: E,
+    wait: Sleep,
 }
 
 impl<E: Exec> Gh<E> {
     pub(crate) fn new(exec: E) -> Gh<E> {
-        Gh { exec }
+        Gh {
+            exec,
+            wait: Sleep(std::thread::sleep),
+        }
     }
 
     /// What `gh <args>` printed on stdout.
@@ -166,9 +191,29 @@ impl<E: Exec> Gh<E> {
         Ok((value, what))
     }
 
-    /// The JSON of the GitHub API path `path`.
+    /// The JSON a read `gh <args>` printed, asked again while GitHub answers it with a server
+    /// error, as the module says.
+    fn read(&self, args: &[&str]) -> Result<(Value, String), PortError> {
+        let mut waits = READ_WAITS.iter();
+        loop {
+            match self.json(args) {
+                Err(e) if SERVER_ERRORS.iter().any(|end| e.why.ends_with(end)) => {
+                    let Some(secs) = waits.next() else {
+                        return Err(PortError::new(
+                            e.what,
+                            format!("{} (the last of {READ_ATTEMPTS} attempts)", e.why),
+                        ));
+                    };
+                    self.wait.wait(*secs, &e.to_string());
+                }
+                answer => return answer,
+            }
+        }
+    }
+
+    /// The JSON of the GitHub API path `path`, read ([`Gh::read`]).
     fn api(&self, path: &str) -> Result<(Value, String), PortError> {
-        self.json(&["api", path])
+        self.read(&["api", path])
     }
 }
 
@@ -195,7 +240,7 @@ impl<E: Exec> GitHubRuns for Gh<E> {
     /// Every page of the list: a run of many releases has more jobs than one page holds.
     fn jobs(&self, repo: &Repo, run: u64) -> Result<Vec<Job>, PortError> {
         let path = format!("repos/{repo}/actions/runs/{run}/jobs?per_page=100");
-        let (value, what) = self.json(&["api", "--paginate", "--slurp", &path])?;
+        let (value, what) = self.read(&["api", "--paginate", "--slurp", &path])?;
         let r = Reader { what: &what };
         let mut jobs = Vec::new();
         for page in r.list(&value, "the reply")? {
@@ -220,7 +265,7 @@ impl<E: Exec> GitHubRuns for Gh<E> {
     /// as one list of lists.
     fn open_issues(&self, repo: &Repo) -> Result<Vec<Issue>, PortError> {
         let path = format!("repos/{repo}/issues?state=open&per_page=100");
-        let (value, what) = self.json(&["api", "--paginate", "--slurp", &path])?;
+        let (value, what) = self.read(&["api", "--paginate", "--slurp", &path])?;
         let r = Reader { what: &what };
         let mut issues = Vec::new();
         for page in r.list(&value, "the reply")? {
