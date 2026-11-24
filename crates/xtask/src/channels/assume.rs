@@ -7,7 +7,9 @@
 //!    configuration, so the step passes it as `--token-url "$ACTIONS_ID_TOKEN_REQUEST_URL"` and
 //!    it must be an `https` URL. The bearer is secret material set by the platform; it is the only
 //!    environment this verb reads, by name in [`platform_value`].
-//! 2. The token is asked for with the audience `sts.amazonaws.com` over HTTPS.
+//! 2. The token is asked for with the audience `sts.amazonaws.com` over HTTPS. An answer of the
+//!    5xx class or a transport error (the connection, a timeout, an answer cut short) is asked
+//!    again after a pause ([`PAUSES`]); any other failure ends the request at once.
 //! 3. `aws sts assume-role-with-web-identity` exchanges it for the role's credentials.
 //! 4. `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` and the region are
 //!    appended to the env file (`GITHUB_ENV`), so the steps after this one carry them.
@@ -40,6 +42,17 @@ const DURATION_SECONDS: &str = "3600";
 
 /// How long the token request may take.
 const TOKEN_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// The pauses before each repeated token request: GitHub's token service answers 503 or 504 for
+/// a while now and then, and is asked at most `PAUSES.len() + 1` times in about two minutes and
+/// a quarter.
+const PAUSES: [Duration; 5] = [
+    Duration::from_secs(5),
+    Duration::from_secs(10),
+    Duration::from_secs(20),
+    Duration::from_secs(40),
+    Duration::from_secs(60),
+];
 
 /// The most the token answer may be.
 const MAX_TOKEN_ANSWER: u64 = 1024 * 1024;
@@ -102,6 +115,9 @@ pub struct Request<'a> {
     /// Whether the token request must be HTTPS (it always is, bar the tests of the request on the
     /// loopback address).
     pub https_only: bool,
+    /// Waits out one of [`PAUSES`] before a token request is repeated (`std::thread::sleep`, bar
+    /// the tests, which record it).
+    pub pause: &'a dyn Fn(Duration),
 }
 
 /// A value that may be written as one `NAME=value` line of an env file: not empty, one line, no
@@ -143,8 +159,31 @@ fn tls_config(roots: &[ureq::tls::Certificate<'static>]) -> ureq::tls::TlsConfig
         .build()
 }
 
-/// Asks the runner for the token: the JWT.
-fn request_token(oidc: &Oidc, https_only: bool) -> Result<String, Error> {
+/// Whether a failed token request may succeed when asked again: an answer of the 5xx class, or
+/// the connection, a timeout or an answer cut short.
+fn transient(error: &ureq::Error) -> bool {
+    match error {
+        ureq::Error::StatusCode(code) => (500..=599).contains(code),
+        ureq::Error::Io(_) | ureq::Error::Timeout(_) | ureq::Error::ConnectionFailed => true,
+        _ => false,
+    }
+}
+
+/// One token request: the answer's body.
+fn token_answer(agent: &ureq::Agent, url: &str, bearer: &str) -> Result<Vec<u8>, ureq::Error> {
+    agent
+        .get(url)
+        .header("Authorization", format!("Bearer {bearer}"))
+        .call()?
+        .body_mut()
+        .with_config()
+        .limit(MAX_TOKEN_ANSWER)
+        .read_to_vec()
+}
+
+/// Asks the runner for the token, again after each of [`PAUSES`] while the failure is
+/// [`transient`]: the JWT.
+fn request_token(oidc: &Oidc, https_only: bool, pause: &dyn Fn(Duration)) -> Result<String, Error> {
     let url = format!(
         "{}{}audience={AUDIENCE}",
         oidc.url,
@@ -158,17 +197,21 @@ fn request_token(oidc: &Oidc, https_only: bool) -> Result<String, Error> {
         .tls_config(tls_config(&host_roots()))
         .build()
         .into();
-    let mut response = agent
-        .get(&url)
-        .header("Authorization", format!("Bearer {}", oidc.bearer))
-        .call()
-        .map_err(|e| failed(e.to_string()))?;
-    let body = response
-        .body_mut()
-        .with_config()
-        .limit(MAX_TOKEN_ANSWER)
-        .read_to_vec()
-        .map_err(|e| failed(e.to_string()))?;
+    let mut pauses = PAUSES.iter();
+    let mut asked = 1;
+    let body = loop {
+        match token_answer(&agent, &url, &oidc.bearer) {
+            Ok(body) => break body,
+            Err(e) => match pauses.next() {
+                Some(wait) if transient(&e) => {
+                    pause(*wait);
+                    asked += 1;
+                }
+                _ if asked == 1 => return Err(failed(e.to_string())),
+                _ => return Err(failed(format!("{e} (asked {asked} times)"))),
+            },
+        }
+    };
     let answer: Value =
         serde_json::from_slice(&body).map_err(|_| failed("the answer is not JSON".to_owned()))?;
     answer
@@ -208,7 +251,8 @@ fn mask(log: &mut dyn Write, value: &str) -> Result<(), Error> {
 /// The `assume` verb: the lines to print after the masks.
 ///
 /// # Errors
-/// An empty role, a session name or region that is not plain, a token request that fails, a
+/// An empty role, a session name or region that is not plain, a token request that fails (after
+/// the repeats of [`PAUSES`] when its failure is transient), a
 /// refusal by STS, or an env file that cannot be appended to. No credential is in the message.
 pub fn assume(
     aws: &dyn Aws,
@@ -240,7 +284,7 @@ pub fn assume(
     // `mask-aws-account-id` did.
     mask(log, request.role_arn)?;
     mask(log, &oidc.bearer)?;
-    let jwt = request_token(&oidc, request.https_only)?;
+    let jwt = request_token(&oidc, request.https_only, request.pause)?;
     mask(log, &jwt)?;
     let answer = aws.run(
         &[
