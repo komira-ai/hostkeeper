@@ -162,10 +162,53 @@ pub(crate) async fn serve(mut attached: Attached, io: Box<dyn Duplex>) {
     // A client that is gone, or reads nothing, is not waited for.
     let _ = tokio::time::timeout(CLOSE_GRACE, close).await;
     reader.abort();
+    settle(&attached, &closing).await;
+}
+
+/// How a stream whose client is in the coordinator ended: the cause of its close line, and why
+/// its device was not reached, if it was not.
+pub(crate) struct Carried {
+    pub(crate) cause: &'static str,
+    pub(crate) unreached: Option<Close>,
+}
+
+/// The stream of a serial console's `attached` session with a client in the coordinator,
+/// `client`, in place of a WebSocket (a probe): the steps of [`serve`] but its messages and close
+/// frame. `reached` is told once the device is reached, and is dropped untold when it is not. The
+/// client leaves by ending its side, which closes the stream `client_left` by the session's
+/// operator; then the payload is deactivated and the close line written, as for a browser that
+/// left.
+pub(crate) async fn carry_inside(
+    mut attached: Attached,
+    client: Pipe,
+    reached: oneshot::Sender<()>,
+) -> Carried {
+    let (told, verdict) = oneshot::channel();
+    // The client in the coordinator breaks no protocol: its end is always that it left.
+    let _ = told.send(Client::Gone);
+    let (closing, unreached) = match reach(&attached.coordinator, &attached.session).await {
+        Err(close) => (Closing::of(close, By::of(COORDINATOR)), Some(close)),
+        Ok(device) => {
+            // A client that is gone already ends the bridge at once.
+            let _ = reached.send(());
+            let closing = relay(&mut attached, client, device, verdict).await;
+            (closing, None)
+        }
+    };
+    settle(&attached, &closing).await;
+    Carried {
+        cause: closing.cause,
+        unreached,
+    }
+}
+
+/// The last steps of every stream: the payload deactivated when `closing` says so, then the
+/// session out of the table and its close line.
+async fn settle(attached: &Attached, closing: &Closing) {
     if closing.deactivate {
         deactivate(&attached.coordinator, &attached.session).await;
     }
-    finish(&attached, &closing);
+    finish(attached, closing);
 }
 
 /// The device of the stream, reached; or how the stream closes without it. A stop cancels the dial

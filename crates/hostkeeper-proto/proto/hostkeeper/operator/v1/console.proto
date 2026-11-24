@@ -54,6 +54,12 @@ service Console {
   // Ends the console session of a host, whoever holds it. The closer's name is in the audit
   // line.
   rpc Close(CloseConsoleRequest) returns (CloseConsoleResponse);
+  // Reads a Linux server's serial console without typing and says what it saw: opens a session
+  // as `Open` does (the same checks, refusals and `console_open` line), attaches it in the
+  // coordinator, reads until `max_bytes` came, `quiet_secs` passed without a byte or
+  // `wait_secs` passed, then ends it as a stream ends (the payload deactivated, one
+  // `console_close` line). It sends the host no byte, not even a newline. A Mac is `no_bmc_mac`.
+  rpc Probe(ProbeConsoleRequest) returns (ProbeConsoleResponse);
 }
 
 // Why `Console` refused a request. The token is the value's name without the prefix, in lower
@@ -114,6 +120,9 @@ enum ConsoleRefusal {
   // INTERNAL: the coordinator could not read its enrollment store, draw a session's id, or finish
   // the call.
   CONSOLE_REFUSAL_STORE_FAILED = 21;
+  // UNAVAILABLE: `Probe` found the BMC's Serial over LAN payload held by another session, which
+  // is never taken from it.
+  CONSOLE_REFUSAL_BMC_SOL_BUSY = 22;
 }
 
 // What a console session carries.
@@ -281,3 +290,71 @@ message CloseConsoleRequest {
 }
 
 message CloseConsoleResponse {}
+
+message ProbeConsoleRequest {
+  // The host's id.
+  string host_id = 1;
+  // Why the console is probed; the `console_open` line carries it.
+  string reason = 2;
+  // The longest the read lasts, in seconds: 1 to 900. `hk` waits this long beyond its own
+  // timeout.
+  uint32 wait_secs = 3;
+  // The read ends once this many seconds pass with no byte from the host, from its start or from
+  // the last byte; 0 is the coordinator's `--console-quiet-s`.
+  uint32 quiet_secs = 4;
+  // The read ends once this many bytes came: 0 is 65536, and at most 1048576.
+  uint32 max_bytes = 5;
+}
+
+// What a probe recognized in what the host sent.
+enum ConsoleProbeClass {
+  CONSOLE_PROBE_CLASS_UNSPECIFIED = 0;
+  // No byte came. Whether a key would bring a prompt is not known: the probe sends none.
+  CONSOLE_PROBE_CLASS_SILENT = 1;
+  // A line whose text, once trimmed, ends with `login:`.
+  CONSOLE_PROBE_CLASS_LOGIN_PROMPT = 2;
+  // A line of the kernel's log: `[` and its seconds since boot, as `[    1.234567]`.
+  CONSOLE_PROBE_CLASS_KERNEL_OUTPUT = 3;
+  // Text before the kernel's first line (`[    0.000000]`): the firmware's or GRUB's. Claimed
+  // only when that first line was read (`from_boot`); text before a later kernel line, or with
+  // no kernel line at all, is not claimed as the firmware's.
+  CONSOLE_PROBE_CLASS_FIRMWARE_OUTPUT = 4;
+  // Text came, and none of it is a class above.
+  CONSOLE_PROBE_CLASS_OTHER_OUTPUT = 5;
+}
+
+// A class a probe saw, and the line that showed it.
+message ConsoleProbeFinding {
+  ConsoleProbeClass class = 1;
+  // The first line that showed it, its escape sequences and control characters taken out and
+  // cut to 160 bytes; empty for `silent`.
+  string evidence = 2;
+}
+
+// Why a probe's read ended.
+enum ConsoleProbeEnd {
+  CONSOLE_PROBE_END_UNSPECIFIED = 0;
+  // `max_bytes` came.
+  CONSOLE_PROBE_END_MAX_BYTES = 1;
+  // `quiet_secs` passed with no byte.
+  CONSOLE_PROBE_END_QUIET = 2;
+  // `wait_secs` passed.
+  CONSOLE_PROBE_END_WAIT = 3;
+  // The stream ended first: the host's console ended, another session took the payload, an
+  // operator closed the session, or the coordinator is stopping; `cause` says which.
+  CONSOLE_PROBE_END_STREAM_ENDED = 4;
+}
+
+message ProbeConsoleResponse {
+  // Each class seen, in the order its first line came; `silent` alone when no byte came.
+  repeated ConsoleProbeFinding findings = 1;
+  // The kernel's first line (`[    0.000000]`) was read: the read began before the kernel
+  // started, so a `firmware_output` finding, or none, says what the firmware and GRUB sent.
+  bool from_boot = 2;
+  // The bytes read from the host, the BMC tool's banner not counted.
+  uint64 bytes_read = 3;
+  // Why the read ended.
+  ConsoleProbeEnd ended = 4;
+  // The cause of the session's `console_close` line.
+  string cause = 5;
+}

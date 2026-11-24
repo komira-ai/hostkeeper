@@ -27,6 +27,7 @@ export interface Client {
     setBootDevice(request: hostkeeper_operator_v1.SetBootDeviceRequest): Promise<hostkeeper_operator_v1.SetBootDeviceResponse>;
     list(request: hostkeeper_operator_v1.ListConsoleSessionsRequest): Promise<hostkeeper_operator_v1.ListConsoleSessionsResponse>;
     close(request: hostkeeper_operator_v1.CloseConsoleRequest): Promise<hostkeeper_operator_v1.CloseConsoleResponse>;
+    probe(request: hostkeeper_operator_v1.ProbeConsoleRequest): Promise<hostkeeper_operator_v1.ProbeConsoleResponse>;
   };
   readonly enrollment: {
     list(request: hostkeeper_operator_v1.ListPendingRequest): Promise<hostkeeper_operator_v1.ListPendingResponse>;

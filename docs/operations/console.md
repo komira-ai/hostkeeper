@@ -266,7 +266,8 @@ It shows `Enabled : true`, and `Volatile Bit Rate (kbps)` and `Non-Volatile Bit 
 the kernel and the login prompt still reach SOL, but the firmware's own screens (power-on self
 test, the network boot menu, setup) do not. Standard IPMI does not carry BIOS settings, and the
 boards' Redfish has no BIOS resource, so it can be neither set nor read remotely. It is a one-time
-setting per board. **The only check is watching the server boot on the Console:** open the
+setting per board. **The only check is watching the server boot on the Console** (or probing it
+across the reboot, [Probing a console](#probing-a-console)): open the
 Console on the host, reboot it (next section, step 5), and look for the firmware's output before
 GRUB: screen-control sequences, the network card's boot agent banner, "Press `<DEL>` to run
 setup". If nothing comes before the kernel's first line, it is off. To turn it on, open the BIOS
@@ -393,18 +394,55 @@ The first command reads the SOL payload's state: `01 01 00` is a session active,
 With the host down, run `sol deactivate` from the coordinator's host instead, as in
 [The network path](#the-network-path), with `sol deactivate` in place of `chassis power status`.
 
+## Probing a console
+
+`hk console probe` reads a Linux server's serial console for a few seconds without typing and says
+what it saw. It is `Open` and an attach in one call, run by the coordinator: the same operators
+file, refusals and `console_open` line, the payload activated, read, deactivated, and one
+`console_close` line by the operator (cause `client_left`, with the bytes each way). Afterwards `hk
+console list` names no session of the host. It sends the host no byte, not even Enter: Enter at
+the firmware's setup or GRUB's menu selects an entry, at a shell runs what is typed, and at the
+stock getty moves the port to 9600 baud (step 3 of
+[Moving a server to the serial baseline](#moving-a-server-to-the-serial-baseline)). A host whose console is busy is refused
+`console_busy`, and a payload someone else holds `bmc_sol_busy`; the probe never takes either.
+
+```sh
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    console probe --host-id node-02 --reason "check the console" --wait-secs 30
+```
+
+The read ends at the first of `--max-bytes` (64 KiB unless given), `--quiet-secs` with no byte
+(the coordinator's `console-quiet-s` unless given) and `--wait-secs` (required, at most 900);
+`ended` says which, or `CONSOLE_PROBE_END_STREAM_ENDED` with the close line's `cause` when the
+stream ended first. Each class it saw is a finding, with the first line that showed it (the
+answer names each class in full, `CONSOLE_PROBE_CLASS_` and the name below):
+
+| Finding | What it says |
+|---|---|
+| `LOGIN_PROMPT` | A line ending `login:` came: the login prompt is on `ttyS1`. |
+| `KERNEL_OUTPUT` | A kernel log line (`[    1.234567] ...`) came: the kernel's console is on `ttyS1`. |
+| `FIRMWARE_OUTPUT` | Text came before the kernel's first line (`[    0.000000]`): BIOS redirection (or GRUB's serial terminal) is on. Claimed only with `fromBoot` true. |
+| `OTHER_OUTPUT` | Bytes came that are none of these (a shell prompt, NUL bytes of a port at 9600 baud): read the evidence. |
+| `SILENT` | No byte came within the quiet time. A getty prints its prompt once, so an idle host at its prompt is silent too, and so is one whose console is not on `ttyS1`: the probe cannot tell them apart, since it types nothing. |
+
+To check BIOS redirection, start the probe with a long wait and quiet time (`--wait-secs 600
+--quiet-secs 180`, since the firmware can be silent for a minute), then reboot the host from its
+own shell as in step 5. With `fromBoot` true, a `FIRMWARE_OUTPUT` finding says redirection is on,
+and none says it is off. Without `fromBoot` the probe began after the kernel did, and says nothing
+of the firmware.
+
 ## When something does not work
 
 | What you see | Why, and the fix |
 |---|---|
-| A blank terminal, and after `console-quiet-s` "No output yet: the host's serial port must be ttyS1." | The installed system's console or login prompt is not on `ttyS1`. [Moving a server to the serial baseline](#moving-a-server-to-the-serial-baseline). |
-| A prompt at the first Enter, then nothing or NUL bytes | The stock getty moved the port to 9600. The getty's drop-in, step 3. |
-| The kernel and the login, but nothing of the firmware | BIOS console redirection to COM2 is off. [The BMC and the BIOS](#the-bmc-and-the-bios). |
+| A blank terminal, and after `console-quiet-s` "No output yet: the host's serial port must be ttyS1." | The installed system's console or login prompt is not on `ttyS1`. [Moving a server to the serial baseline](#moving-a-server-to-the-serial-baseline). [`hk console probe`](#probing-a-console) says `SILENT`; probed across a reboot, a host with the baseline shows `KERNEL_OUTPUT` and `LOGIN_PROMPT`. |
+| A prompt at the first Enter, then nothing or NUL bytes | The stock getty moved the port to 9600. The getty's drop-in, step 3. A probe that reads the NUL bytes says `OTHER_OUTPUT` with no evidence. |
+| The kernel and the login, but nothing of the firmware | BIOS console redirection to COM2 is off. [The BMC and the BIOS](#the-bmc-and-the-bios). [`hk console probe`](#probing-a-console) across a reboot: `fromBoot` true and no `FIRMWARE_OUTPUT`. |
 | `device_unreachable` (4001) on every BMC | The coordinator's host is off the lab LAN, or the route of the alternative is down. [The network path](#the-network-path). |
 | `address_mismatch` (4009) | The BMC at every address found for the host is another one: a targets file entry that is out of date, or a record whose `bmcMac` is not the BMC's. [Each BMC's address](#each-bmcs-address). |
 | `no_address` | No address is known for the BMC: its host never reported one (its daemon is not running as root, or the host has been down since before it first did) and the neighbour table has none. Power the host from the BMC's own page, or name the BMC in the targets file. [Each BMC's address](#each-bmcs-address). |
 | `bmc_auth_failed` (4004) | The credential file's user or password is not the BMC's. [The three files](#the-three-files). |
-| `bmc_sol_busy` (4002) | Someone holds the BMC's SOL session, or one was left behind. [A Serial over LAN session left behind](#a-serial-over-lan-session-left-behind). |
+| `bmc_sol_busy` (4002, or the refusal of `hk console probe`) | Someone holds the BMC's SOL session, or one was left behind. [A Serial over LAN session left behind](#a-serial-over-lan-session-left-behind). |
 | `bmc_busy` (4003) | The BMC's 16 sessions are taken; one a client left is freed by the BMC within a minute. |
 | `bmc_failed` | `ipmitool` is missing or failed. [`ipmitool` beside the coordinator](#ipmitool-beside-the-coordinator). |
 | `no_console_access`, `power_not_permitted` | The operators file. [The three files](#the-three-files). |

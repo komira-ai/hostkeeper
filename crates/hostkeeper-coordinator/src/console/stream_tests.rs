@@ -14,14 +14,14 @@ use super::support::{MAC, MAC_ADDRESS, NODE, NODE_BMC_ANSWER, caller, session_id
 use crate::websocket::tests::{client_frame, raw_frame};
 
 /// `sol info` with both rates at 115.2.
-const INFO: &str =
+pub(crate) const INFO: &str =
     "Volatile Bit Rate (kbps)        : 115.2\nNon-Volatile Bit Rate (kbps)    : 115.2\n";
 
 /// The tool's banner, as it comes before the host's first bytes.
 const BANNER: &[u8] = b"[SOL Session operational.  Use \xff? for help]\n";
 
 /// Scripts the activating session of `node-02` and the deactivating one after it.
-fn serial(live: &Live) -> SolHost {
+pub(crate) fn serial(live: &Live) -> SolHost {
     let host = live
         .fixture
         .tool
@@ -31,7 +31,7 @@ fn serial(live: &Live) -> SolHost {
 }
 
 /// What the tool was asked, without the arguments of each open.
-fn asked(live: &Live) -> Vec<String> {
+pub(crate) fn asked(live: &Live) -> Vec<String> {
     live.fixture
         .tool
         .seen()
@@ -45,7 +45,7 @@ fn asked(live: &Live) -> Vec<String> {
 }
 
 /// The commands of an activation and of the deactivation after it.
-fn activated_then_deactivated() -> Vec<String> {
+pub(crate) fn activated_then_deactivated() -> Vec<String> {
     [
         "open escape=None",
         MAC_READ,

@@ -25,7 +25,7 @@ fn post(rig: &Rig, words: &[&str], status: u16, body: &str) -> (crate::rig::Ran,
 /// Proves: each of these calls posts to the method of its command exactly the body its flags
 /// make, and prints the coordinator's answer with one newline: the accounts (a name; a list's
 /// empty request; an optional owner that is absent when not given), the console (enum flags as
-/// their full names, bool flags as JSON booleans), the host groups (an empty group name is a
+/// their full names, bool flags as JSON booleans, a probe's window as numbers), the host groups (an empty group name is a
 /// given flag, a 64-bit generation is a string and follows the request file's text), the
 /// repositories of a service (an empty one clears it), `hosts retry`, and the methods of the
 /// service `ssh`.
@@ -125,6 +125,15 @@ fn each_method_posts_the_body_its_flags_make() {
             vec!["console", "close", "--host-id", "node-02"],
             "Console/Close",
             r#"{"hostId":"node-02"}"#.to_owned(),
+        ),
+        (
+            vec![
+                "console", "probe", "--host-id", "node-02", "--reason", "after the BIOS change",
+                "--wait-secs", "120", "--quiet-secs", "30",
+            ],
+            "Console/Probe",
+            r#"{"hostId":"node-02","reason":"after the BIOS change","waitSecs":120,"quietSecs":30}"#
+                .to_owned(),
         ),
         (
             vec![

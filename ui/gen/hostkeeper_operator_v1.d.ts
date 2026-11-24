@@ -121,6 +121,15 @@ export namespace hostkeeper_operator_v1 {
   export type ConsoleKind = "CONSOLE_KIND_UNSPECIFIED" | "CONSOLE_KIND_SERIAL" | "CONSOLE_KIND_SCREEN";
   export interface ConsolePowerRequest { hostId?: string; action?: hostkeeper_operator_v1.PowerAction; reason?: string; }
   export interface ConsolePowerResponse { state?: hostkeeper_operator_v1.PowerState; sent?: hostkeeper_operator_v1.PowerAction; address?: hostkeeper_operator_v1.ConsoleAddress; }
+  export type ConsoleProbeClass =
+    | "CONSOLE_PROBE_CLASS_UNSPECIFIED"
+    | "CONSOLE_PROBE_CLASS_SILENT"
+    | "CONSOLE_PROBE_CLASS_LOGIN_PROMPT"
+    | "CONSOLE_PROBE_CLASS_KERNEL_OUTPUT"
+    | "CONSOLE_PROBE_CLASS_FIRMWARE_OUTPUT"
+    | "CONSOLE_PROBE_CLASS_OTHER_OUTPUT";
+  export type ConsoleProbeEnd = "CONSOLE_PROBE_END_UNSPECIFIED" | "CONSOLE_PROBE_END_MAX_BYTES" | "CONSOLE_PROBE_END_QUIET" | "CONSOLE_PROBE_END_WAIT" | "CONSOLE_PROBE_END_STREAM_ENDED";
+  export interface ConsoleProbeFinding { class?: hostkeeper_operator_v1.ConsoleProbeClass; evidence?: string; }
   export interface ConsoleSession { hostId?: string; kind?: hostkeeper_operator_v1.ConsoleKind; openedBy?: string; openedUnix?: string; attached?: boolean; reason?: string; }
   export interface ConvergeRequest { service?: string; hostGroup?: string; }
   export interface ConvergeResponse { convergence?: hostkeeper_operator_v1.Convergence; }
@@ -607,6 +616,8 @@ export namespace hostkeeper_operator_v1 {
   export interface PolicyStage { percent?: number; advance?: hostkeeper_operator_v1.StageAdvance; }
   export type PowerAction = "POWER_ACTION_UNSPECIFIED" | "POWER_ACTION_STATUS" | "POWER_ACTION_ON" | "POWER_ACTION_OFF" | "POWER_ACTION_SOFT" | "POWER_ACTION_CYCLE" | "POWER_ACTION_RESET";
   export type PowerState = "POWER_STATE_UNSPECIFIED" | "POWER_STATE_ON" | "POWER_STATE_OFF";
+  export interface ProbeConsoleRequest { hostId?: string; reason?: string; waitSecs?: number; quietSecs?: number; maxBytes?: number; }
+  export interface ProbeConsoleResponse { findings?: hostkeeper_operator_v1.ConsoleProbeFinding[]; fromBoot?: boolean; bytesRead?: string; ended?: hostkeeper_operator_v1.ConsoleProbeEnd; cause?: string; }
   export interface PutAbmTokenRequest { tokenJson?: string; tokenP7m?: string; }
   export interface PutAbmTokenResponse { secret?: hostkeeper_operator_v1.SecretInfo; serverName?: string; orgName?: string; }
   export interface PutBackMaintenanceHostRequest { runId?: string; hostId?: string; reason?: string; }
