@@ -97,6 +97,9 @@ x509-parser.workspace = true
 [dev-dependencies]
 # The scripted double of the ipmitool port.
 hostkeeper-console = { path = "../hostkeeper-console", features = ["testing"] }
+# The daemon's heartbeat loop and the fakes of its ports, which a test drives against this
+# coordinator from the daemon's first heartbeat (src/grpc/tests/ssh_offer.rs).
+hostkeeper-link = { path = "../hostkeeper-link", features = ["testing"] }
 hostkeeper-oidc = { path = "../hostkeeper-oidc", features = ["testkit"] }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
 # The HTTP/2 client that calls a listener in the listener's tests.
