@@ -14,7 +14,7 @@ Mac that takes builds.
 
 | Order | Steps | Where | Who |
 |---|---|---|---|
-| 1 | MP-E1 to MP-E8, MP-E10; MP-E9 says what only the owner can do (there is no MP-E11: putting the Mac back is section 7) | the coordinator side, then the proof Mac | an operator with `hk`; then a root shell on the Mac |
+| 1 | MP-E1 to MP-E8 in the order of section 1's "The ready state, in order", MP-E10; MP-E9 says what only the owner can do (there is no MP-E11: putting the Mac back is section 7) | the coordinator side and the job service, then the proof Mac | an operator with `hk` and `js`, and the coordinator's deploy owner; then a root shell on the Mac |
 | 2 | MP-X1 to MP-X6 (any time, independent) | the operator's own Mac, signed in to the developer account | the operator |
 | 3 | MP-M1 (baseline), MP-A1, MP-A6 | the proof Mac | root shell |
 | 4 | MP-I1 to MP-I5 | the proof Mac | root shell; needs the archive of step 2 |
@@ -62,57 +62,110 @@ Copy every output off the Mac before a step that cannot be undone. A step that c
 
 These steps settle no [V] by themselves. They make the Mac the later sections need: moved to its own group (section 8, row MP), idle, with a root shell and a way to run a command from launchd with nobody logged in. In every step the Mac is `<node-id>`. "Expected" lines are not results.
 
+### The ready state, in order
+
+The proof starts when one Mac reports the maintenance facts, takes no build, is in a group of its own and can be given a root shell
+with `hk ssh`. Design section 10.1.1 records which of these the farm's Macs had when this list was written: the first only. The steps
+below are run in this order, not in the order of their ids; each row names the check that must pass before the next row.
+
+| # | What | Who | Step | Check before the next row |
+|---|---|---|---|---|
+| R1 | Read every Mac; choose the proof Mac, the one that takes the fewest builds | an operator with `hk`, and with the job scheduler's `js` (both read only) | MP-E1 | the Mac announces `maintenance-v1`, its `maintenance` is there and `lookFailed` is empty |
+| R2 | Give the coordinator the SSH user CA and the SSH operators file, if `ssh host-keys` answers `not_configured` | the coordinator's deploy owner | MP-E2 (a), (b) | `ssh host-keys` for the Mac answers, `no_pin` or `pinned` |
+| R3 | Name `mac-proof` in the operator-keys and host-prerequisites files | the coordinator's deploy owner | MP-E2 (c), (d) | one `--tls-reload-secs` has passed, or the coordinator restarted |
+| R4 | Cordon the Mac in the job scheduler and wait until it holds no job | an operator with the job service's operator token | MP-E6 | `js host list` shows the Mac's cordon end and no booking |
+| R5 | Make `mac-proof` with the same packages, versions and policy, and move the Mac into it | an operator with `hk` | MP-E3 | `hostGroup` is `mac-proof`, the services are unchanged, `operatorKeys.digest` is set |
+| R6 | Pin the Mac's host keys and open the root shell | an operator with `hk`; the owner types the administrator's password | MP-E4 | `ssh host-keys` says `pinned`; `id` in the shell is the administrator |
+| R7 | Read the Mac as root and compare with R1 | the root shell | MP-E5, MP-E6's process list | each pair agrees |
+| R8 | Log the console user out; the launchd harness | the root shell, with the owner's agreement | MP-E7, MP-E8 | the probe job runs as uid 0 in the System domain |
+
+No row installs, updates or removes a package on any Mac: R5's move does nothing of the kind when the two groups list the same
+packages at the same versions. Three rows change a host's configuration, and are run knowing it. R2 reaches every host, not only the
+proof Mac: once the coordinator holds the CA it advertises `ssh-v1`, and the daemon of every host that announces it sets its sshd up
+to trust the CA, Linux hosts and the other Macs included (`docs/operations/ssh-ca.md`, "What hosts are sent"). R5 has the proof
+Mac's daemon write the operators' public keys into its administrator's `authorized_keys`. R4 changes only where the job scheduler
+places jobs. R1 and R6 read, but R6's pin is a write on the coordinator. R7 reads only. R8 ends a session on the Mac.
+
 ### MP-E1 Read what the coordinator holds for the Macs
 Settles: none; the baseline that MP-E5 and section 7 compare with (design 4.1). Runs: an operator on the coordinator side with hk. Needs: an operator token file (0600), the coordinator's private URL and CA file. Nothing on a Mac changes.
 ```sh
 # the preamble of every operator-side shell (paste it; it writes no file):
 P=<the proof's scratch directory>; umask 077; mkdir -p "$P"
 # every hk call names the coordinator's private listener, its CA file and the operator token file (0600); <node-id> is the Mac
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> --response-file $P/list.json hosts list
 hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> --response-file $P/get-before.json hosts get --node-id <node-id>
-jq '(.host // .) | {hostGroup, live, agent: .heartbeat.agent, m: .heartbeat.maintenance, operatorKeys: .heartbeat.operatorKeys, ssh: .heartbeat.ssh}' $P/get-before.json
+# the maintenance report is a field of the host, beside its heartbeat; ssh is absent until the coordinator holds the SSH CA (MP-E2)
+jq '(.host // .) | {hostGroup, live, fullDiskAccess, features: .heartbeat.features, agent: .heartbeat.agent, m: .maintenance, lookAgeSecs: .maintenanceLookAgeSecs, operatorKeys: .heartbeat.operatorKeys, ssh: .heartbeat.ssh, prerequisites: .heartbeat.prerequisites}' $P/get-before.json
+# which Mac takes the fewest builds: the job scheduler's two reads, with the job service's operator token (both change nothing)
+js --server https://<job-service> --token-file <js-operator-token> --json host list > $P/js-hosts.json
+js --server https://<job-service> --token-file <js-operator-token> --json usage --host-id <js-host-id> --from-ms <now less 7 days, in ms> --page-size 500 > $P/js-usage-<js-host-id>.json
 ```
-Record: node id, group, agent version, host.osVersion/osBuild/bootId, mac.filevault, authrestartSupported, updateAccount, commandLineTools, mdmConflicts, xcodes, due, lookFailed, operatorKeys, ssh.state. Keep `get-before.json`.
+Record: node id, group, agent version and features, host.osVersion/osBuild, mac.filevault, authrestartSupported, dataFreeBytes, updateAccount, commandLineTools, mdmConflicts, xcodes, due, lookFailed, fullDiskAccess, operatorKeys, ssh.state; for each Mac, its jobs in the last 7 days (records of `js usage`, repeated with `--page-token` while `nextPageToken` is set) and their summed `runMs`, and its `booked` now. Keep `get-before.json`. A Mac's report has no `bootId`, `bootUnix` or `runningKernel` (design 10.1.1); record the boot from `sysctl kern.bootsessionuuid` in MP-E5 instead.
 Decides:
+- the proof Mac is the one with the fewest jobs in the 7 days (then the least summed `runMs`), not tainted and not cordoned by someone else; on a tie, the one with the most `dataFreeBytes` (the Xcode steps of section 3 need room).
 - if `maintenance` is absent -> the coordinator or the daemon predates the report (design 4.1); the proof's reads are then made only on the Mac (MP-E5), and the comparison waits for a release with `maintenance-v1`.
 - if `lookFailed` is set or `unparsedLines` > 0 -> fix the collector it names in `crates/hostkeeper-daemon/src/maintenance_*.rs` before any other step.
+- if `operatorKeys` is `{}` on every host, Linux ones too -> the coordinator was given no `--operator-keys-file` (`docs/operations/operator-keys.md`); MP-E2 (c) is its first one.
 
-### MP-E2 Name the new group in the three group-keyed files
-Settles: none; avoids a lockout. Runs: the coordinator's deploy owner, on the coordinator's configuration. Needs: MP-E1. Do this before MP-E3: a Mac in a group the operator-keys file does not list is sent the empty key set (`crates/hostkeeper-coordinator/src/operator_keys.rs`, doc lines 28-40).
+### MP-E2 Give the coordinator the SSH CA, and name the new group in its group-keyed files
+Settles: none; makes `hk ssh` possible and avoids a lockout. Runs: the coordinator's deploy owner, on the coordinator's configuration (each flag's deploy form: `docs/deploy/coordinator/package.md`). Needs: MP-E1. Do this before MP-E3. The files do different things: `hk ssh` needs (a) and (b) only (`docs/operations/ssh-ca.md`); (c) puts the operators' public keys in the Mac administrator's `authorized_keys` for a plain `ssh`, and a Mac in a group that file does not list is sent the empty key set (`crates/hostkeeper-coordinator/src/operator_keys.rs`, doc lines 28-40); (d) keeps the Command Line Tools check (`docs/operations/host-prerequisites.md`).
 ```sh
-# operator-keys.toml: [host-groups."mac-proof"] with the same keys as the Mac's current group
-# ssh operators file: add "mac-proof" to the proof operator's classes
-# host-prerequisites file: copy the Mac's current group table to [host-groups."mac-proof"]
-# P set as in MP-E1, then:
+# P set as in MP-E1; not_configured here means (a) is not in force
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> ssh host-keys --host-id <node-id>
+# (a) only when not_configured: on the owner's machine, hostkeeper-coordinator ssh-ca init --out <ca-dir> (keep the offline copy as ca-backup.md says);
+#     the coordinator's ssh-ca-secret-file names that key as a secret file (its user's, mode 0600 or 0400), with ssh-operators-file and database-dsn-file; restart the coordinator once
+#     this reaches every host: each daemon that announces ssh-v1 then sets its sshd up for the CA (ssh-ca.md, "What hosts are sent"); read every host's ssh.state after it
+#     ssh-login-user-macos empty (the default) has a Mac's daemon log in its one visible administrator (docs/macos.md, the login user)
+# (b) ssh operators file: an [[operator]] entry for the proof operator with hosts = ["<node-id>"], which holds before and after the move; read again at every call
+# (c) operator-keys file: add [host-groups."mac-proof"] with keys = [the proof operator's public key line], keeping every other group's table;
+#     a coordinator given no operator-keys-file before needs it named and one restart, else the change is read within one tls-reload-secs
+# (d) host-prerequisites file: add [host-groups."mac-proof"] with the prerequisites of the Mac's current group
 hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> --response-file $P/group-current.json host-groups get --host-group <current-group>
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> ssh host-keys --host-id <node-id>
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> --response-file $P/get-ssh-ready.json hosts get --node-id <node-id>
+jq '(.host // .) | {ssh_v1: (.heartbeat.features | index("ssh-v1") != null), ssh: .heartbeat.ssh}' $P/get-ssh-ready.json
 ```
-Record: the three diffs (names only, no keys), the time they were in force.
+Record: the answer of `ssh host-keys` before and after; the four diffs (names only, no keys); the time each was in force; the Mac's `ssh` report.
 Decides:
-- if the coordinator has no `--operator-keys-file` or `--ssh-ca-secret-file` -> `hk ssh` answers `not_configured`; the owner provides the root shell (MP-E9); finding against `docs/operations/operator-keys.md`.
+- if `ssh host-keys` still answers `not_configured` -> (a) is not in force; MP-E4 cannot run, and the owner provides the root shell (MP-E9).
+- if it answers `not_permitted` -> (b) does not list the caller for this host.
+- if the Mac announces no `ssh-v1` or has no `ssh` report a few heartbeats after (a) -> the coordinator does not advertise `ssh-v1`; read its start log before going on.
+- if `ssh.state` is other than `applied` -> its value names the fix (`docs/macos.md`, the Mac's ssh checks); `no_login_user` and `blocked_by_access_group` as in MP-E4.
 
 ### MP-E3 Move the Mac into a group of its own
-Settles: none. Runs: an operator on the coordinator side with hk. Needs: MP-E2 in force (wait one `--tls-reload-secs`); the owner agrees the Mac leaves builds. The new group lists the same packages and the same desired versions, so the move is not also an update (`docs/operations/hostgroups.md`: a package the new group omits is uninstalled).
+Settles: none. Runs: an operator on the coordinator side with hk. Needs: MP-E2 in force (wait one `--tls-reload-secs`); MP-E6's cordon placed and the Mac idle; the Mac in no maintenance turn (its `maintenance.run` absent; the move is refused `host_in_maintenance` otherwise). The new group lists the same packages, in the same order, with the same policy (its `maintenance` table included) and the same desired versions, so the move is not also an update (`docs/operations/hostgroups.md`: a package the new group omits is uninstalled). js-agent is one of those packages on the Macs: the move keeps it running and taking jobs, so it does not take the Mac out of builds; MP-E6's cordon does.
 ```sh
-# P set as in MP-E1
-# write $P/group.json from group-current.json: { "hostGroup": { "name": "mac-proof", "packages": [..same..], "policy": {..same..} } }
+# P set as in MP-E1. `host-groups get` answers the group at .hostGroup.group and each package's version at .hostGroup.packages[].desiredVersion
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> --response-file $P/get-premove.json hosts get --node-id <node-id>
+jq '(.host // .) | .maintenance.run' $P/get-premove.json   # must print null: the Mac holds no maintenance run
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> --response-file $P/group-current.json host-groups get --host-group <current-group>
+jq '{hostGroup: (.hostGroup.group | .name = "mac-proof")}' $P/group-current.json > $P/group.json
+jq -r '.hostGroup.packages[] | "\(.package) \(.desiredVersion)"' $P/group-current.json
 hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> host-groups put --request $P/group.json --reason "Mac proof: one Mac in a group of its own"
-# per package: $P/desired-<service>.json = { "desired": <its desired object> }
-hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> releases set-desired --service hostkeeper --host-group mac-proof --request $P/desired-hostkeeper.json
-hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> releases converge --service hostkeeper --host-group mac-proof
+# once for each package the jq line printed, <service> and <version> from its line: $P/desired-<service>.json = { "desired": { "version": "<version>" } }
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> releases set-desired --service <service> --host-group mac-proof --request $P/desired-<service>.json
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> --response-file $P/group-proof.json host-groups get --host-group mac-proof
+jq -r '.hostGroup.packages[] | "\(.package) \(.desiredVersion)"' $P/group-proof.json   # must print the same lines as for the current group
 hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> host-groups move --node-id <node-id> --host-group mac-proof --reason "Mac proof: taken out of its group"
 hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> --response-file $P/get-moved.json hosts get --node-id <node-id>
-jq '(.host // .) | {hostGroup, operatorKeys: .heartbeat.operatorKeys, services}' $P/get-moved.json
+jq '(.host // .) | {hostGroup, operatorKeys: .heartbeat.operatorKeys, services: [.services[] | {service, membership, installedVersion, gateReason}]}' $P/get-moved.json
 ```
-Record: exit codes, the group's generation, operatorKeys digest (equal to MP-E1), services, the audit entry `host_move`.
+Record: exit codes, the group's generation, the operatorKeys digest, services, the audit entry `host_move`.
 Decides:
-- if the digest is empty or refused -> MP-E2 was not in force; stop, fix, wait, check from the owner's console.
-- if a service is leaving the Mac -> the package lists differ; move back (section 7) and fix `group.json`.
+- if a `set-desired` is refused -> its reason names why (`docs/operations/hostgroups.md`); a version is set only with what the current group's was set with (its targets, when the coordinator keeps no release of that version), never a version other than the Mac runs. Nothing is moved until every package of the new group has its version.
+- if `operatorKeys` has no `digest`, or has `refused` or `failed` -> MP-E2 (c) was not in force, or the Mac has not exactly one visible administrator (the reason says which); stop, fix, wait, check from the owner's console. An `{}` before MP-E2 (c) was in force is not a baseline to compare with.
+- if a service is leaving the Mac or is ordered a version -> the package lists or the versions differ; move back (section 7) and fix `group.json` or the desired versions.
 
 ### MP-E4 Get a root shell
-Settles: none. Runs: an operator on the coordinator side with hk, then in a root shell on the proof Mac. Needs: MP-E3; the operator listed for `mac-proof` (MP-E2). The administrator's password is typed at sudo's own prompt by the owner.
+Settles: none. Runs: an operator on the coordinator side with hk, then in a root shell on the proof Mac. Needs: MP-E3; the operator listed for the Mac (MP-E2 (b)); the Mac's `ssh.state` `applied`. The administrator's password is typed at sudo's own prompt by the owner. `hk ssh` refuses a host whose keys no operator has pinned, so the keys the Mac reports are pinned first (`docs/operations/ssh-ca.md`); compare them with what the owner reads at the Mac (`ssh-keygen -l -f` of each `/etc/ssh/ssh_host_*_key.pub`) before pinning.
 ```sh
 # P set as in MP-E1
 hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> --response-file $P/get-ssh.json hosts get --node-id <node-id>
 jq '(.host // .) | {operatorKeys: .heartbeat.operatorKeys, ssh: .heartbeat.ssh}' $P/get-ssh.json
+jq -r '(.host // .).heartbeat.ssh.hostKeyFingerprints[]' $P/get-ssh.json
+# --fingerprints once for each line, exactly the set the last heartbeat reported
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> ssh pin-host-keys --host-id <node-id> --fingerprints <SHA256:first> --fingerprints <SHA256:second>
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> ssh host-keys --host-id <node-id>
 # hk ssh (docs/cli.md):
 hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> ssh <node-id> --reason "Mac proof shell" -- -t
 # on the Mac, as the administrator:
@@ -144,20 +197,21 @@ Decides:
 - if `sysadminctl -secureTokenStatus` prints wording other than the `TOKEN_ENABLED`/`TOKEN_DISABLED` the daemon matches -> change those constants in `maintenance_account.rs`.
 - if FileVault is on -> the "FileVault on" runs need no change; if off, turning it on is the owner's (MP-E9); answers design question 4 with real state.
 
-### MP-E6 Drain the Mac and check it is idle
-Settles: none; prepares every proof (design 5.3). Runs: a root shell on the proof Mac. Needs: MP-E4; the farm owner agrees. Moving the group does not stop builds, because js-agent is not a package here. Only `js-agent cordon` does (design argv for the harness: not built in this repository; the verb is in the job scheduler's repository). Run it from launchd, never from the ssh shell: expected (recalled, not checked): the end of the session sends SIGHUP, which lifts the cordon. Its plist is also in `/var/root/hk-proof` and is loaded by hand; `KeepAlive` on a non-zero exit is deliberate, but a boot does not load it again, so after every reboot the cordon is placed again by hand and the gap is recorded.
+### MP-E6 Take the Mac out of builds and check it is idle
+Settles: none; prepares every proof (design 5.3). Runs: an operator with the job service's operator token, from the operator's side (no shell on the Mac is needed); the process list in a root shell on the proof Mac once MP-E4 has given one. Needs: MP-E1; the farm owner agrees. Moving the group does not stop builds: js-agent is a package of both groups and goes on taking jobs. An operator's cordon in the job scheduler does (komira-ai/jobscheduler `docs/runbooks/cordon-a-node.md`): it holds for the length asked for, at most seven days a call, with nothing on the Mac renewing it, over restarts of the Mac, of its agent and of the lease server; the jobs already on the Mac go on, so the proof waits until none is booked. `<js-host-id>` is the id the Mac's agent registers with, as `js host list` shows it.
 ```sh
-cd /var/root/hk-proof
-ls /Library/LaunchDaemons | grep -i -E 'js|kbf|jobsched'; ls -la /etc/js-agent
-# write cordon.plist (Label hk-proof-cordon; ProgramArguments: /bin/sh -c '/usr/bin/stat -f %Su /dev/console; /usr/bin/sw_vers; exec <js-agent path> cordon --flags-file <F> --state-root <S> --holder mac-proof --for 12h --lease-secs 300', so every start records the console user; RunAtLoad true; KeepAlive {SuccessfulExit false}; the three Standard*Path files here)
-launchctl bootstrap system /var/root/hk-proof/cordon.plist
-sleep 30; tail -n 20 cordon.out; ps -axo pid,user,etime,command | grep -i -E 'js-agent|xcodebuild|xctest|simctl' | grep -v grep
+# P set as in MP-E1
+js --server https://<job-service> --token-file <js-operator-token> host cordon --host-id <js-host-id> --cordon-secs 48h
+js --server https://<job-service> --token-file <js-operator-token> --json host list > $P/js-cordoned.json
+# repeat the list until the Mac's booked is empty; renew the cordon with the same cordon call before its end while the proof runs
+# once MP-E4 has given a root shell on the Mac:
+ps -axo pid,user,etime,command | grep -i -E 'js-agent|xcodebuild|xctest|simctl' | grep -v grep
 ```
-Record: js-agent paths, the console owner and sw_vers at the top of each start in cordon.out, the cordon.out lines with times (`cordoned`, `idle`, any `kept`), the process list. After a reboot: the time from boot to `cordoned`, and whether a lease was taken in between (ask the scheduler's owner).
+Record: the time of the cordon call and its answer; the Mac's `cordonExpiresAtMs`, `booked`, `mark` and `taintReason` from each `host list`, with the time `booked` became empty; the process list; each renewal.
 Decides:
-- if the verb is refused (`invalid-cordon`, 401, 403) -> the lease server is too old; use the job owner's stop (disable, bootout js-agent; reversible) and record which.
-- if a lease is taken after a reboot before the cordon returns -> reboot proofs run under the job owner's stop; the hold file of design 5.3/5.4 is needed.
-- if `lapsed` appears during a proof -> restart the job; design 5.4's case for the hold file.
+- if the call is refused (`operator-only`, 401, 403) -> the token is not an operator's of the job service; get one from the scheduler's owner, never a host's credential.
+- if the Mac takes a job while the cordon is in force -> stop; a lease server older than the operator's cordon places past it (cordon-a-node.md); the scheduler's owner decides.
+- if `booked` stays set -> wait: a cordon cuts no job; do not stop js-agent to hurry it.
 
 ### MP-E7 Log the console user out
 Settles: none; the "nobody logged in" state for design 5.5. Runs: a root shell on the proof Mac. Needs: MP-E6 idle; the owner agrees to end a standing session. Do not touch `/etc/kcpassword` or `autoLoginUser`.
@@ -169,7 +223,7 @@ sleep 5; { /usr/bin/stat -f %Su /dev/console; /usr/bin/who; } | tee session-2.tx
 ```
 Record: console owner before and after; whether the session came back within 5 minutes (stat again); the same lines inside the harness job of MP-E8. Expected (recalled, not checked): `launchctl bootout gui/<uid>` ends that user's launchd domain.
 Decides:
-- if a session returns by itself -> a session helper restarts it; stop that job as in MP-E6 and add a "user logged in" run to MP; design 5.5 must not assume either state.
+- if a session returns by itself -> a session helper restarts it; the scheduler's owner stops that helper (the cordon of MP-E6 does not) and add a "user logged in" run to MP; design 5.5 must not assume either state.
 - if FileVault is on -> the login window is the resting state; a reboot needs the owner (MP-E9).
 - if bootout is refused -> do not force; the owner logs out on the screen.
 
@@ -1219,7 +1273,7 @@ grep -rIl 'TargetOSVersion\|forceDelayedSoftwareUpdates' /var/db/ConfigurationPr
 
 - Settles: 5.8, that the daemon (root under launchd, no login) sees the same files as a root shell (`collect()`, `maintenance_mdm.rs:126-148`; `HostPlists` opens with `std::fs`).
 - Runs: a root shell, over ssh, with the Mac at the login window (note the FileVault state). Precondition: one setting from MP-M4 step E is set again with the owner. No password is used.
-- Needs: the Mac and the coordinator on a release with `maintenance-v1` (design 10.1); until then this step cannot be shown, and the record says so.
+- Needs: the Mac and the coordinator on a release with `maintenance-v1` (design 10.1; every farm Mac has one since design 10.1.1).
 
 The launchd view is the daemon's own: its Rust collector (`maintenance_mdm.rs`, root under launchd) reports what it read in the heartbeat
 once the Mac runs a release with `maintenance-v1`, so no proof job repeats the reads.
@@ -1229,7 +1283,7 @@ once the Mac runs a release with `maintenance-v1`, so no proof job repeats the r
 cd /var/root/hk-proof/mdm && snap 50-root-shell
 # on the operator side (P set as in MP-E1), after the daemon's next hourly look or a restart of the daemon:
 hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> --response-file $P/get-m6.json hosts get --node-id <node-id>
-jq '(.host // .) | .heartbeat.maintenance | {mdmConflicts: .mac.mdmConflicts, lookFailed: .lookFailed}' $P/get-m6.json
+jq '(.host // .) | .maintenance | {mdmConflicts: .mac.mdmConflicts, lookFailed: .lookFailed}' $P/get-m6.json
 ```
 
 - Record: the console owner when the daemon looked (`root` shows nobody is logged in), the daemon's `mdmConflicts` and `lookFailed` against the root shell's `50-root-shell` files.
@@ -1237,6 +1291,7 @@ jq '(.host // .) | .heartbeat.maintenance | {mdmConflicts: .mac.mdmConflicts, lo
   - if they match -> no change.
   - if the daemon reports `look_failed` for a file the root shell reads (for example a privacy block on `/var/db/softwareupdate`) -> the daemon needs another route; add it to 5.8 and change `HostPlists` in `maintenance_plist.rs`.
 - Expected (recalled, not checked): a system job runs as root with the same file view. Read-only.
+- Known before it runs (design 10.1.1): on every farm Mac, with Full Disk Access not granted, the daemon's look succeeds (`lookFailed` empty). `HostPlists` takes only a missing file as absent and fails the look on any other error of the open (`maintenance_plist.rs`), so a privacy block on the DDM state file or the two managed-preference files would have shown as `look_failed`; none did. The heartbeat cannot tell a missing file from a read one with none of the keys, so this step's root-shell `ls -l` of the three paths still answers whether they exist. The Xcode receipt check of the same collector (`HostRoot::exists`, `maintenance_collect.rs`) takes any error as absent, so a privacy block on a receipt would not show; the farm Macs have no Xcode in `/Applications` today.
 
 ### MP-M7. Is the software-update Configuration the enforcement declaration (5.5.1) [V]
 
@@ -1452,7 +1507,7 @@ Decides:
 
 Settles: none. Runs: a root shell on the proof Mac, then an operator on the coordinator side with hk. Needs: every proof step done or abandoned; if one left the Mac mid-update or halted, read its state and decide with the owner first, and do not tear down.
 ```sh
-# on the Mac, as root: lift the cordon and remove every proof job (the counts must be 0)
+# on the Mac, as root: remove every proof job (the count must be 0)
 for l in $(launchctl print system | grep -o 'hk-proof-[A-Za-z0-9-]*' | sort -u); do launchctl bootout "system/$l"; done
 rm -P /var/root/hk-proof/*.plist /var/root/hk-proof/*.in
 launchctl print system | grep -c 'hk-proof'   # must print 0
@@ -1463,8 +1518,11 @@ launchctl print system | grep -c 'hk-proof'   # must print 0
 hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> host-groups move --node-id <node-id> --host-group <original-group> --reason "Mac proof finished: back in its group"
 hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> --response-file $P/get-after.json hosts get --node-id <node-id>
 hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> host-groups remove --host-group mac-proof --reason "Mac proof finished: group not needed"
+# last, once the Mac is back in its group and as it was: lift MP-E6's cordon
+js --server https://<job-service> --token-file <js-operator-token> host uncordon --host-id <js-host-id>
+js --server https://<job-service> --token-file <js-operator-token> --json host list > $P/js-after.json
 ```
-Record: after against `get-before.json` (group, operatorKeys digest, services, macOS version, FileVault, Xcodes, due); no `hk-proof` job; the scheduler's owner confirms leases are taken again and the cordon list is empty; the three coordinator files no longer name `mac-proof` (deploy owner reverses MP-E2).
+Record: after against `get-before.json` (group, operatorKeys digest, services, macOS version, FileVault, Xcodes, due); no `hk-proof` job; the Mac's `cordonExpiresAtMs` gone in `js-after.json` and its first booking after; the coordinator files no longer name `mac-proof` and the operators file no longer lists the Mac for the proof operator (deploy owner reverses MP-E2 (b) to (d); the SSH CA of (a) stays).
 Decides:
 - if the Mac differs from before (an Xcode, FileVault, an account remains) -> list each leftover as a result of the step that made it, and tell the owner before builds resume.
 **Irreversible**: `host-groups remove` is final (a new Put re-creates the group); it is refused `not_empty` while a host is in or moving into the group.

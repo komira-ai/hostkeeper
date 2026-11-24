@@ -737,6 +737,8 @@ seen on a Mac; what Apple documents, or what a reading of the code shows, is sai
 
 ### 10.1 What could be shown on 2026-11-20
 
+Read again on 2026-11-24: section 10.1.1 says what has changed since. This section is kept as it was read.
+
 Read from the coordinator's operator API (`Hosts.List` and `Hosts.Get`, as an operator, read only):
 
 - **No farm Mac can be given a shell yet.** All four Macs run hostkeeper 0.1.398, announce `operator-keys-v1`, and report an empty
@@ -745,7 +747,7 @@ Read from the coordinator's operator API (`Hosts.List` and `Hosts.Get`, as an op
   (`mac-proof.md` MP-E2 to MP-E4).
 - **No Mac is drained or in a group of its own.** All four are in `mac-build`. js-agent is not a hostkeeper package on the Macs
   (`services[js-agent].membership` is `MEMBERSHIP_MISSING`: `kbf-mac-provision` installs it), so moving a Mac to a new group does not take
-  it out of builds; only a js-agent cordon does (MP-E6).
+  it out of builds; only a js-agent cordon does (MP-E6 as it read then; 10.1.1 says what holds now).
 - **No Mac reports the maintenance facts yet.** No host of the fleet sends `heartbeat.maintenance`, so the reads already built for 5.5 and
   5.8 (FileVault, `supportsauthrestart`, the update account, the device-management keys) have no answer from a Mac yet. They will come
   without a shell once the Macs and the coordinator run a release with `maintenance-v1`: that answer is the 5.8 read as the daemon makes it
@@ -759,6 +761,42 @@ Read from the coordinator's operator API (`Hosts.List` and `Hosts.Get`, as an op
 From this repository's release pipeline (the job `macos-device` of `release.yml`, on a GitHub-hosted macOS 15.8.2 VM, build 24H232):
 a step run as a launchd job and the daemon under launchd work as root; who was logged in is not recorded there. That VM is not a farm Mac and has
 no Secure Token holder, FileVault or update to install, so it settles none of the **[V]** below.
+
+### 10.1.1 The ready state, read on 2026-11-24
+
+Read the same way (`Hosts.List`, `Hosts.Get`, `HostGroups.Get`, and `Ssh.HostKeys` for each Mac, as an operator, read only), against
+the ready state of `mac-proof.md` section 1 ("The ready state, in order"):
+
+- **Every Mac reports the maintenance facts.** All four Macs and the coordinator run 0.1.447. Each Mac announces `maintenance-v1` beside
+  `operator-keys-v1` and `prerequisites-v1`, so no release or roll is needed for the report. Each Mac's `maintenance`, a field of the
+  host beside its heartbeat, reads the same on all four: macOS 27.2.1, build 26B131; FileVault off; `authrestartSupported` true; no
+  update account; the Command Line Tools 27.2.0.0.1792721180 with receipt and files (on all four now); nothing `due`; no
+  `mdmConflicts`; no Xcode in `/Applications`; `lookFailed` empty. The data volume has about 3.9 TB free on two Macs and about 0.9 TB on
+  the other two.
+- **The look does not fail for want of Full Disk Access.** `fullDiskAccess` is `FULL_DISK_ACCESS_NOT_GRANTED` on all four, and the Remote
+  Login probe still cannot open `TCC.db`, yet every look succeeds. The built read takes only a missing file as absent and fails the
+  look on any other error of the open (`maintenance_plist.rs`). So the DDM state file of 5.8 and the two managed-preference files are
+  readable to the daemon or absent; which of the two, the heartbeat cannot say, and MP-M6 answers it from a root shell. The Macs run the
+  Developer ID signed build (the probe's `codesign` step); the profile of `docs/operations/mac-full-disk-access.md` (its step 2, the
+  owner's) is not installed. Nothing in the ready state needs the grant.
+- **A Mac's report has no boot id, boot time or running kernel.** Only the Linux collector fills `boot_id`, `boot_unix` and
+  `running_kernel` (`maintenance_host.rs`). The five Mac collectors fill none of them, though section 4.1 says the report carries them
+  and names `SysctlBootId` for the Mac. A maintenance run is not affected: it reads the boot id from the system (`maintenance_run.rs`).
+  An operator reading the report cannot see a Mac's restart in it. To be fixed in the daemon.
+- **No Mac can be given a shell yet, for a reason 10.1 did not name.** The coordinator holds no SSH user CA. `Ssh.HostKeys` for a Mac
+  answers `not_configured`, no host announces `ssh-v1`, and none has an `ssh` report. `hk ssh` needs that CA and the SSH operators file
+  (MP-E2 (a) and (b)), not the operator-keys file. Every host of the fleet, Linux ones too, reports `operatorKeys` as `{}`: the
+  coordinator was given no operator-keys file. The host-prerequisites file is in force (each Mac reports the Command Line Tools present).
+- **js-agent is now a hostkeeper package on the Macs.** The Macs' group lists it with its configuration packages (`MEMBERSHIP_PRESENT`,
+  healthy). A group move still does not take a Mac out of builds, because the new group lists js-agent too. The job scheduler's operator cordon
+  does (MP-E6).
+- **No Mac is drained or in a group of its own**, as on 2026-11-20. Which Mac takes the fewest builds is not in hostkeeper's reports;
+  the job scheduler's `js usage` answers it (MP-E1).
+
+What is left for the ready state is the operator's and the coordinator deploy owner's: the SSH CA and the files, the cordon, the move
+and the pin. None of these installs, updates or removes a package. The SSH CA has the daemon of every host that announces `ssh-v1`
+set its sshd up to trust it, the Linux hosts included, and the move has the proof Mac's daemon write the operators' keys
+(`mac-proof.md`, "The ready state, in order").
 
 ### 10.2 Each [V]
 
@@ -797,7 +835,10 @@ Found while writing the steps, from the code and the jobscheduler repository, no
   administrator (`login_account.rs`); with two, the host has none. The proof account (`hkproof`, never the production `hkupdate`) is
   hidden in the same step that makes it, and the update account of MU8 must be too (5.5 already hides it; it must not be visible between
   the two calls).
-- **A cordon must outlive the shell.** The cordon a shell starts ends with the shell's session, so it runs as a launchd job (MP-E6). Until
-  js-agent's hold file (J1) is deployed, a Mac that restarts during the proof may take a lease before its cordon is placed again.
-- **A new group is named in the coordinator's operator files first** (operator keys, SSH operators, host prerequisites), or moving the Mac
-  into it removes its operator keys and `hk ssh` is refused (MP-E2).
+- **A cordon must outlive the shell and the Mac's restarts.** The cordon a shell starts ends with the shell's session. The proof uses
+  the job scheduler's operator cordon instead (MP-E6): placed from the operator's side, it holds up to seven days a call with nothing on
+  the Mac renewing it, over restarts of the Mac and its agent (komira-ai/jobscheduler `docs/runbooks/cordon-a-node.md`).
+- **`hk ssh` needs the coordinator's SSH user CA, and the new group is named in its files first.** With no CA the `Ssh` service answers
+  `not_configured` and no host announces `ssh-v1`; the SSH operators file must list the proof operator for the Mac. The operator-keys file
+  is a second route (a plain `ssh` to the Mac's administrator), and moving a Mac into a group it does not list takes those keys away;
+  the host-prerequisites file keeps the Command Line Tools check (MP-E2).
