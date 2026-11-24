@@ -279,6 +279,15 @@ itself failed, **Re-run failed jobs** re-runs it alone, and it is skipped: the c
 was made in an earlier attempt. Re-run the job `no-downgrade` instead (**Re-run job** on it),
 which re-runs `set-desired` after it.
 
+The release verbs ask GitHub's API again when it fails to answer a read (the runs, the jobs, the
+issues, the releases) with a server error, `(HTTP 500)`, `(HTTP 502)`, `(HTTP 503)` or
+`(HTTP 504)`: after 10, 30 and 60 seconds, four attempts in all. A write (a draft, an upload, the
+publication, an issue) is asked once, since one that timed out may have been done. When `publish`
+fails all the same, after its draft was created, the release is left a draft with the assets
+uploaded so far. **Re-run failed jobs** completes it: the job uploads only the assets the draft
+lacks, checks the draft, and publishes it. The next release run does the same, since a draft is
+not a release and that run plans its version again.
+
 | job and step | what it means | what to do |
 |---|---|---|
 | `targets`: The targets of the release | A file of the release does not check out: one of hostkeeper's `.deb`s, its bundle or its control file. Its log names every problem. Nothing is set. | Fix the release (a new commit releases again), then the next run sets it. |
