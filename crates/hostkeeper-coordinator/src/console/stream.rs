@@ -15,8 +15,10 @@
 //! console the payload is deactivated in a session of its own, unless another holder took it
 //! (that holder keeps it) or it was never activated; and last the session leaves the table and
 //! one `console_close` line is written, by the operator who closed it (the stream's own operator
-//! when the browser left) or `coordinator`, with the cause, the attaching peer when known, the
-//! seconds attached and the bytes each way.
+//! when the browser left) or `coordinator`, with the API token that operator acted with as its
+//! `api_token` (the closer's for an operator's close, the one the stream attached with when the
+//! client left), the cause, the attaching peer when known, the seconds attached and the bytes
+//! each way.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -33,8 +35,8 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{mpsc, oneshot, watch};
 
 use super::Duplex;
-use super::Stop;
 use super::device::{End, Reached, deactivate, reach, stop_tool};
+use super::{By, Stop};
 use crate::listen::Hold;
 use crate::reconcile::COORDINATOR;
 use crate::service::Coordinator;
@@ -56,6 +58,9 @@ pub(crate) struct Attached {
     pub(crate) peer: Option<SocketAddr>,
     pub(crate) stopped: watch::Receiver<Option<Stop>>,
     pub(crate) moved: Arc<Moved>,
+    /// The API token the client attached with, if any: the close line's `api_token` when the
+    /// client leaves.
+    pub(crate) api_token: Option<String>,
     /// The listener's slot of the upgraded connection, held until the stream ends (none for a
     /// stream no listener served).
     pub(crate) slot: Option<Hold>,
@@ -75,16 +80,16 @@ enum Client {
 struct Closing {
     code: u16,
     cause: &'static str,
-    by: String,
+    by: By,
     deactivate: bool,
 }
 
 impl Closing {
-    fn of(close: Close, by: &str) -> Self {
+    fn of(close: Close, by: By) -> Self {
         Self {
             code: close.code(),
             cause: close.token(),
-            by: by.to_owned(),
+            by,
             deactivate: false,
         }
     }
@@ -99,7 +104,7 @@ pub(crate) async fn run(attached: Attached, upgrade: OnUpgrade) {
             let closing = Closing {
                 code: CLOSE_NORMAL,
                 cause: "not_upgraded",
-                by: COORDINATOR.to_owned(),
+                by: By::of(COORDINATOR),
                 deactivate: false,
             };
             finish(&attached, &closing);
@@ -171,11 +176,11 @@ async fn reached(attached: &mut Attached) -> Result<Reached, Closing> {
     if attached.session.kind == Kind::Serial {
         return reaching
             .await
-            .map_err(|close| Closing::of(close, COORDINATOR));
+            .map_err(|close| Closing::of(close, By::of(COORDINATOR)));
     }
     tokio::select! {
-        reached = reaching => reached.map_err(|close| Closing::of(close, COORDINATOR)),
-        Stop { close, by } = stopped(&mut attached.stopped) => Err(Closing::of(close, &by)),
+        reached = reaching => reached.map_err(|close| Closing::of(close, By::of(COORDINATOR))),
+        Stop { close, by } = stopped(&mut attached.stopped) => Err(Closing::of(close, by)),
     }
 }
 
@@ -206,7 +211,7 @@ async fn relay(
     match ended {
         Err(Stop { close, by }) => Closing {
             deactivate: ours,
-            ..Closing::of(close, &by)
+            ..Closing::of(close, by)
         },
         Ok(Ended::Device) => match text {
             Some(text) => {
@@ -214,13 +219,13 @@ async fn relay(
                 let close = Close::from(sol::ended(&text));
                 Closing {
                     deactivate: close == Close::DeviceUnreachable,
-                    ..Closing::of(close, COORDINATOR)
+                    ..Closing::of(close, By::of(COORDINATOR))
                 }
             }
             None => Closing {
                 code: CLOSE_NORMAL,
                 cause: "device_closed",
-                by: COORDINATOR.to_owned(),
+                by: By::of(COORDINATOR),
                 deactivate: false,
             },
         },
@@ -231,13 +236,13 @@ async fn relay(
                 Client::Gone => Closing {
                     code: CLOSE_NORMAL,
                     cause: "client_left",
-                    by: attached.session.opened_by.clone(),
+                    by: By::named(&attached.session.opened_by, attached.api_token.as_deref()),
                     deactivate: ours,
                 },
                 Client::Bad(code, cause) => Closing {
                     code,
                     cause,
-                    by: COORDINATOR.to_owned(),
+                    by: By::of(COORDINATOR),
                     deactivate: ours,
                 },
             }

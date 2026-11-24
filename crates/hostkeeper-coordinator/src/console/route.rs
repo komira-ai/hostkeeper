@@ -236,6 +236,10 @@ pub(crate) fn attach(
     let now = (coordinator.clock)();
     let mut table = coordinator.console.lock_table();
     let session = table.sessions.attach(id, by, now)?.clone();
+    let api_token = match &credential {
+        Credential::ApiToken(token) => Some(token.as_str().to_owned()),
+        Credential::Token | Credential::Session(_) => None,
+    };
     let (stop, stopped) = tokio::sync::watch::channel(None);
     let moved = Arc::new(Moved::default());
     table.live.insert(
@@ -254,6 +258,7 @@ pub(crate) fn attach(
         peer,
         stopped,
         moved,
+        api_token,
         slot: None,
     })
 }
