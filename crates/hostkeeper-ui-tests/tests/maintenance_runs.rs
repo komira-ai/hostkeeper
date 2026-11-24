@@ -286,7 +286,7 @@ return { links, navigations: seen.navigations };"#,
                 link("d-1", json!([])),
             ],
             "navigations": [
-                {"name": "serialconsole", "params": {"nodeId": "l-1"}},
+                {"name": "console", "params": {"nodeId": "l-1"}},
                 {"name": "desktop", "params": {"nodeId": "m-1"}},
             ],
         })

@@ -398,3 +398,38 @@ return domNamed(doc.root, "window-utc").textContent;"#,
         assert_eq!(out, shown, "{zone}");
     }
 }
+
+#[test]
+fn the_console_link_of_a_restarting_host_in_a_run_opens_its_console_page() {
+    // Asserts: in the whole app, the Maintenance page's run with host `l-1` rebooting has a
+    // Console link, and a click on it opens the Console page of `l-1` ("Console of l-1"), which
+    // the frame registers; the top bar no longer names Maintenance.
+    // Catches: the link naming a page the app does not register, so that a click leaves the
+    // operator on the Maintenance page with nothing opened.
+    let mut ui = Ui::start();
+    ui.session("tok_a");
+    // Home, where the app starts, reads the hosts first; the Maintenance page reads them next.
+    ui.reply(&m("Hosts/List"), json!({}));
+    ui.reply(
+        &m("Hosts/List"),
+        json!({"hosts": [{"nodeId": "l-1", "hostGroup": "g",
+                          "maintenance": {"host": {"osName": "ubuntu"}, "due": [], "lookedUnix": "1799999400"}}]}),
+    );
+    let run = json!({"id": "r-1", "state": "MAINTENANCE_STATE_RUNNING", "hostGroup": "g"});
+    ui.reply(&m("Maintenance/List"), json!({ "runs": [run] }));
+    ui.reply(
+        &m("Maintenance/Get"),
+        json!({"run": run, "hosts": [{"hostId": "l-1", "hostGroup": "g",
+                                      "step": "MAINTENANCE_HOST_STEP_REBOOTING"}]}),
+    );
+    ui.run(&start("maintenance"));
+    let out = ui.run(&steps(
+        r#"
+await settle();
+const before = text().includes("Runs");
+click("open-console");
+await settle();
+return { before, console: text().includes("Console of l-1"), runs: text().includes("Runs") };"#,
+    ));
+    assert_eq!(out, json!({"before": true, "console": true, "runs": false}));
+}

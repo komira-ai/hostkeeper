@@ -302,8 +302,9 @@
 
 /* Facts: a two-column grid of name over value, no empty heading strip. */
 
+/* A table wider than a phone's screen scrolls sideways inside its box, not the page. */
 .hostpage .table-wrap {
-  overflow: visible;
+  overflow-x: auto;
   border: 0;
   background: transparent;
 }

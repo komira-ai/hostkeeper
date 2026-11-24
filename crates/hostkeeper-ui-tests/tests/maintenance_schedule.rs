@@ -364,10 +364,10 @@ fn an_update_without_a_usable_reason_asks_nothing_and_calls_nothing() {
 }
 
 #[test]
-fn a_refused_update_is_reported_with_its_token_and_reads_nothing_again() {
+fn a_refused_update_is_reported_in_words_and_reads_nothing_again() {
     // Asserts: when the coordinator refuses the one request (FAILED_PRECONDITION last_host), the
-    // report is the code and the token as the coordinator said them; exactly one request was
-    // sent; and the page is not told to refresh.
+    // report says in words that no run was stored and how to take the group's last host, on every
+    // surface of the button; exactly one request was sent; and the page is not told to refresh.
     for surface in surfaces() {
         let mut ui = (surface.ui)();
         ui.refuse(
@@ -380,7 +380,10 @@ fn a_refused_update_is_reported_with_its_token_and_reads_nothing_again() {
         assert_eq!(schedules(&ui).len(), 1, "{}", surface.name);
         assert_eq!(
             out["seen"]["reports"],
-            json!(["FAILED_PRECONDITION last_host"]),
+            json!([
+                "That would take every host of the group at once: no run was stored. To take them \
+                 all, use the Schedule form with \"Take the group's last host\" ticked."
+            ]),
             "{}",
             surface.name
         );
@@ -723,8 +726,8 @@ fn the_schedule_button_needs_a_reason_and_one_yes_and_reports_a_refusal() {
     // Asserts: Schedule with no reason says "Give a reason first." with no question; with a
     // reason and an answer of no it asks once ("Schedule maintenance of the host h-1? ...") and
     // says "Not scheduled." with no call; answered yes it sends one body with the reason and
-    // `confirm: true`, and a refusal of it (FAILED_PRECONDITION nothing_due) is reported as the
-    // coordinator said it, with the page not told to refresh.
+    // `confirm: true`, and a refusal of it (FAILED_PRECONDITION nothing_due) is reported in words,
+    // with the page not told to refresh.
     let mut ui = host_ui(None);
     ui.refuse(
         &m("Maintenance/Schedule"),
@@ -749,7 +752,7 @@ return null;"#,
         json!([
             "Give a reason first.",
             "Not scheduled.",
-            "FAILED_PRECONDITION nothing_due"
+            "Nothing of what was asked is due on those hosts: no run was stored."
         ])
     );
     assert_eq!(out["seen"]["questions"], json!([question, question]));

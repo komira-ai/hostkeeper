@@ -7,10 +7,11 @@
 //
 // A host in its restart (`rebooting`, `not back`) has a button to its Console, or to its Desktop
 // when it is a Mac. A halted host has Put back, and Retry while its run is not ended. A run not
-// ended has Cancel. Each of these needs the run's typed reason and asks once. There is no pause.
+// ended has Cancel. Each of these needs the run's typed reason and asks once, and a refusal is said
+// in words (`refusalWords` of `schedule.js`). There is no pause.
 
 import { action, describeError, enumLabel, field, fmtUnix, h, list, reasonProblem, table, trimmed } from "./view.js";
-import { skipWords } from "./schedule.js";
+import { refusalWords, skipWords } from "./schedule.js";
 
 const STEP = "MAINTENANCE_HOST_STEP_";
 const STATE = "MAINTENANCE_STATE_";
@@ -122,7 +123,7 @@ function restartLink(env, turn) {
     type: "button",
     class: "linklike",
     name: mac ? "open-desktop" : "open-console",
-    on: { click: () => env.ctx.navigate(mac ? "desktop" : "serialconsole", { nodeId: turn.hostId }) },
+    on: { click: () => env.ctx.navigate(mac ? "desktop" : "console", { nodeId: turn.hostId }) },
   }, mac ? "Desktop" : "Console");
 }
 
@@ -148,7 +149,11 @@ function hostButtons(env, run, turn) {
     if (!ctx.confirm(`Put ${host} back? Its drained services' resume runs, the update stays as far as it got, and the run goes on.`)) {
       return "Not put back.";
     }
-    await env.putBack({ runId: run["id"], hostId: host, reason: given.reason });
+    try {
+      await env.putBack({ runId: run["id"], hostId: host, reason: given.reason });
+    } catch (error) {
+      return refusalWords(error);
+    }
     await env.after();
     return `Put ${host} back in run ${run["id"]}.`;
   })];
@@ -161,7 +166,11 @@ function hostButtons(env, run, turn) {
       if (!ctx.confirm(`Retry ${host} from the step that failed? It is drained again if needed and the update goes on.`)) {
         return "Not retried.";
       }
-      await env.retryHost({ runId: run["id"], hostId: host, reason: given.reason });
+      try {
+        await env.retryHost({ runId: run["id"], hostId: host, reason: given.reason });
+      } catch (error) {
+        return refusalWords(error);
+      }
       await env.after();
       return `Retried ${host} in run ${run["id"]}.`;
     }));
@@ -209,7 +218,11 @@ function controls(env, run, turns) {
       if (!ctx.confirm(`Cancel run ${run["id"]}? No new host starts; a host in its turn finishes.`)) {
         return "Not cancelled.";
       }
-      await env.cancel({ runId: run["id"], reason: given.reason });
+      try {
+        await env.cancel({ runId: run["id"], reason: given.reason });
+      } catch (error) {
+        return refusalWords(error);
+      }
       await env.after();
       return `Cancelled run ${run["id"]}.`;
     }));

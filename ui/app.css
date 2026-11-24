@@ -500,6 +500,7 @@ label select {
 
 input[type="text"],
 input[type="password"],
+input[type="datetime-local"],
 input:not([type]),
 select,
 textarea {
