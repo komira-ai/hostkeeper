@@ -133,11 +133,11 @@ Decides:
 - if `ssh.state` is other than `applied` -> its value names the fix (`docs/macos.md`, the Mac's ssh checks); `no_login_user` and `blocked_by_access_group` as in MP-E4.
 
 ### MP-E3 Move the Mac into a group of its own
-Settles: none. Runs: an operator on the coordinator side with hk. Needs: MP-E2 in force (wait one `--tls-reload-secs`); MP-E6's cordon placed and the Mac idle; the Mac in no maintenance turn (its `maintenance.run` absent; the move is refused `host_in_maintenance` otherwise). The new group lists the same packages, in the same order, with the same policy (its `maintenance` table included) and the same desired versions, so the move is not also an update (`docs/operations/hostgroups.md`: a package the new group omits is uninstalled). js-agent is one of those packages on the Macs: the move keeps it running and taking jobs, so it does not take the Mac out of builds; MP-E6's cordon does.
+Settles: none. Runs: an operator on the coordinator side with hk. Needs: MP-E2 in force (wait one `--tls-reload-secs`); MP-E6's cordon placed and the Mac idle; the Mac in no maintenance turn (the `run` of its `maintenance` report absent; the move is refused `host_in_maintenance` otherwise). The new group lists the same packages, in the same order, with the same policy (its `maintenance` table included) and the same desired versions, so the move is not also an update (`docs/operations/hostgroups.md`: a package the new group omits is uninstalled). js-agent is one of those packages on the Macs: the move keeps it running and taking jobs, so it does not take the Mac out of builds; MP-E6's cordon does.
 ```sh
 # P set as in MP-E1. `host-groups get` answers the group at .hostGroup.group and each package's version at .hostGroup.packages[].desiredVersion
 hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> --response-file $P/get-premove.json hosts get --node-id <node-id>
-jq '(.host // .) | .maintenance.run' $P/get-premove.json   # must print null: the Mac holds no maintenance run
+jq '(.host // .) | .maintenance | .run' $P/get-premove.json   # must print null: the Mac holds no maintenance run
 hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> --response-file $P/group-current.json host-groups get --host-group <current-group>
 jq '{hostGroup: (.hostGroup.group | .name = "mac-proof")}' $P/group-current.json > $P/group.json
 jq -r '.hostGroup.packages[] | "\(.package) \(.desiredVersion)"' $P/group-current.json
