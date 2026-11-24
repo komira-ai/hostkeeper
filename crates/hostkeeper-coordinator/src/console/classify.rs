@@ -11,12 +11,19 @@
 //! - a kernel line: `[`, spaces, digits, `.`, digits and `]` at its start, the kernel's log with its
 //!   seconds since boot. The first one whose seconds are all zeros is the kernel's first line, and
 //!   the read then began before the kernel started (`from_boot`): the first line of text since
-//!   the kernel line before it (or since the start) is the firmware's or GRUB's;
+//!   the last line of the running system (a kernel line, a login prompt or a line of systemd's
+//!   status, below), or since the start, is the firmware's or GRUB's;
 //! - a login prompt: its text ends with `login:`;
+//! - a line of systemd's status (`[  OK  ]`, `[FAILED]`, `[ INFO ]`, `[DEPEND]`, `[ WARN ]` at its
+//!   start), which a system shutting down for a reboot writes: no firmware's, and none of the
+//!   classes;
 //! - other text: it may become the firmware's, as above.
 //!
-//! Each class is found once, with the first line that showed it, in the order those lines came.
-//! With none found, bytes that came are `other_output` (with the first line of text, or none), and
+//! Each class is found once, with the first line that showed it, in the order found: a firmware
+//! line is found when the kernel's first line confirms it, just before that line's kernel finding.
+//! Text read before the reboot of a running system that wrote none of these lines (a banner,
+//! a shell) would be taken for the firmware's; the system's own shutdown writes kernel and systemd
+//! lines after it. With none found, bytes that came are `other_output` (with the first line of text, or none), and
 //! no byte at all is `silent`.
 
 use hostkeeper_proto::hostkeeper::operator::v1::{ConsoleProbeClass as Class, ConsoleProbeFinding};
@@ -26,6 +33,9 @@ pub(super) const MAX_LINE: usize = 1024;
 
 /// The most bytes of a finding's evidence.
 pub(super) const MAX_EVIDENCE: usize = 160;
+
+/// The starts of systemd's status lines on a console.
+const SYSTEMD_STATUS: [&str; 5] = ["[  OK  ]", "[FAILED]", "[ INFO ]", "[DEPEND]", "[ WARN ]"];
 
 /// The escape byte, which starts a terminal's control sequence.
 const ESC: u8 = 0x1b;
@@ -155,7 +165,11 @@ impl Reading {
             self.since_kernel = None;
             self.find(Class::KernelOutput, text.to_owned());
         } else if text.ends_with("login:") {
+            self.since_kernel = None;
             self.find(Class::LoginPrompt, text.to_owned());
+        } else if SYSTEMD_STATUS.iter().any(|status| text.starts_with(status)) {
+            self.since_kernel = None;
+            self.other.get_or_insert_with(|| text.to_owned());
         } else {
             self.since_kernel.get_or_insert_with(|| text.to_owned());
             self.other.get_or_insert_with(|| text.to_owned());

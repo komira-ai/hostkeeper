@@ -20,8 +20,10 @@
 //! drain at stop). The client then leaves, which ends the stream as a browser that left ends one:
 //! the BMC tool stopped, the payload deactivated (unless another holder took it), the session out
 //! of the table and one `console_close` line by the operator, `client_left`, with the bytes each
-//! way. A device that is not reached ends the session the same way, by `coordinator`, and the
-//! call is refused with the device's refusal. The adapter runs the call in a task of its own, so
+//! way. A device that is not reached, or that fails before the host said a byte (another session
+//! takes the payload, the BMC drops the session), ends the session the same way, by
+//! `coordinator`, and the call is refused with the device's refusal: a host never read is not
+//! `silent`. The adapter runs the call in a task of its own, so
 //! that a caller who leaves does not cut the clean-up short.
 
 use std::sync::Arc;
@@ -117,6 +119,11 @@ impl Coordinator {
         if let Some(close) = carried.unreached {
             return Err(unreached(close));
         }
+        // A device that failed before the host said a byte was never read: it is refused as one
+        // not reached, not answered `silent`.
+        if let Some(close) = device_failure(carried.cause).filter(|_| findings.bytes == 0) {
+            return Err(unreached(close));
+        }
         Ok(proto::ProbeConsoleResponse {
             findings: findings.findings,
             from_boot: findings.from_boot,
@@ -144,6 +151,23 @@ fn attach_opened(
         let mut table = coordinator.console.lock_table();
         coordinator.end_unattached(&mut table.sessions, (coordinator.clock)());
         Refusal::StoreFailed
+    })
+}
+
+/// The device's failure that the close line's `cause` names, if it names one: the BMC's or its
+/// tool's, not an operator's close, a limit or the drain.
+pub(super) fn device_failure(cause: &str) -> Option<Close> {
+    Close::ALL.into_iter().find(|close| {
+        close.token() == cause
+            && matches!(
+                close,
+                Close::DeviceUnreachable
+                    | Close::BmcSolBusy
+                    | Close::BmcBusy
+                    | Close::BmcAuthFailed
+                    | Close::AddressMismatch
+                    | Close::BmcFailed
+            )
     })
 }
 

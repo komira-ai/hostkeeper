@@ -399,8 +399,12 @@ With the host down, run `sol deactivate` from the coordinator's host instead, as
 `hk console probe` reads a Linux server's serial console for a few seconds without typing and says
 what it saw. It is `Open` and an attach in one call, run by the coordinator: the same operators
 file, refusals and `console_open` line, the payload activated, read, deactivated, and one
-`console_close` line by the operator (cause `client_left`, with the bytes each way). Afterwards `hk
-console list` names no session of the host. It sends the host no byte, not even Enter: Enter at
+`console_close` line by the operator (cause `client_left`, with the bytes each way); a stream that
+ends first (an operator's `hk console close`, the coordinator stopping, the BMC dropping the
+session) writes its own cause, as any stream does. A device that is not reached, or that fails
+before the host sent a byte, is refused with its cause (`bmc_sol_busy`, `device_unreachable`, ...)
+rather than answered `SILENT`, and its close line is by `coordinator`. Afterwards `hk console
+list` names no session of the host. It sends the host no byte, not even Enter: Enter at
 the firmware's setup or GRUB's menu selects an entry, at a shell runs what is typed, and at the
 stock getty moves the port to 9600 baud (step 3 of
 [Moving a server to the serial baseline](#moving-a-server-to-the-serial-baseline)). A host whose console is busy is refused
@@ -422,8 +426,8 @@ answer names each class in full, `CONSOLE_PROBE_CLASS_` and the name below):
 | `LOGIN_PROMPT` | A line ending `login:` came: the login prompt is on `ttyS1`. |
 | `KERNEL_OUTPUT` | A kernel log line (`[    1.234567] ...`) came: the kernel's console is on `ttyS1`. |
 | `FIRMWARE_OUTPUT` | Text came before the kernel's first line (`[    0.000000]`): BIOS redirection (or GRUB's serial terminal) is on. Claimed only with `fromBoot` true. |
-| `OTHER_OUTPUT` | Bytes came that are none of these (a shell prompt, NUL bytes of a port at 9600 baud): read the evidence. |
-| `SILENT` | No byte came within the quiet time. A getty prints its prompt once, so an idle host at its prompt is silent too, and so is one whose console is not on `ttyS1`: the probe cannot tell them apart, since it types nothing. |
+| `OTHER_OUTPUT` | Bytes came and none of the classes above was found (a shell prompt, NUL bytes of a port at 9600 baud): read the evidence. |
+| `SILENT` | No byte came before the read ended. A getty prints its prompt once, so an idle host at its prompt is silent too, and so is one whose console is not on `ttyS1`: the probe cannot tell them apart, since it types nothing. |
 
 To check BIOS redirection, start the probe with a long wait and quiet time (`--wait-secs 600
 --quiet-secs 180`, since the firmware can be silent for a minute), then reboot the host from its

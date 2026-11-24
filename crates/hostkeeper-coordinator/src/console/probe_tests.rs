@@ -290,15 +290,86 @@ async fn a_device_not_reached_is_refused_and_its_session_closed() {
     assert!(listed_none(&live));
     assert!(live.last_reason().contains("cause=bmc_sol_busy;"));
 
-    let (live, _timers) = Live::timed("probe-unreachable");
+    let (live, timers) = Live::timed("probe-unreachable");
     let no_session = "Error: Unable to establish IPMI v2 / RMCP+ session\n";
     live.fixture.tool.end_at_start(no_session);
     live.fixture.tool.end_at_start(no_session);
     let refused = start(&live, "alice", request(NODE)).await.expect("ended");
     assert_eq!(refused, Err(Refusal::DeviceUnreachable));
+    assert!(!asked(&live).contains(&SOL_DEACTIVATE.to_owned()));
+    assert!(timers.durations().is_empty());
     assert!(listed_none(&live));
     let (by, ..) = live.lines().pop().expect("a line");
     assert_eq!(by, "coordinator");
+    assert!(live.last_reason().contains("cause=device_unreachable;"));
+}
+
+/// Proves: a device that fails after its payload was activated but before the host said a byte
+/// is refused as a device not reached, not answered `silent`: another session taking the payload
+/// is `bmc_sol_busy` and that payload is not deactivated; a BMC that stops answering is
+/// `device_unreachable` and the payload is deactivated; either way the session is gone and its
+/// close line by `coordinator` names the cause.
+///
+/// Catches: a probe that reports a host it never read as a console that says nothing.
+#[tokio::test]
+async fn a_device_that_fails_before_any_byte_is_refused_not_silent() {
+    let (live, timers) = Live::timed("probe-taken");
+    let host = serial(&live);
+    let probing = start(&live, "alice", request(NODE));
+    timers.armed(2).await;
+    host.exit("Error sending SOL data: FAIL\nSOL session closed by BMC\n");
+    assert_eq!(probing.await.expect("ended"), Err(Refusal::BmcSolBusy));
+    assert!(!asked(&live).contains(&SOL_DEACTIVATE.to_owned()));
+    assert!(listed_none(&live));
+    assert!(live.last_reason().contains("cause=bmc_sol_busy;"));
+
+    let (live, timers) = Live::timed("probe-gone");
+    let host = serial(&live);
+    let probing = start(&live, "alice", request(NODE));
+    timers.armed(2).await;
+    host.exit("Error: no response from BMC\n");
+    assert_eq!(
+        probing.await.expect("ended"),
+        Err(Refusal::DeviceUnreachable)
+    );
+    assert_eq!(asked(&live), activated_then_deactivated());
+    assert!(listed_none(&live));
+    let (by, ..) = live.lines().pop().expect("a line");
+    assert_eq!(by, "coordinator");
+}
+
+/// Proves: the causes that name a device's failure are its six, each read back as its close, and
+/// no other cause is one: a client that left, an operator's close, the limits, the drain, a
+/// revoked token and a Mac's causes.
+///
+/// Catches: a probe that an operator's close turns into a device refusal, or a device failure
+/// answered as a reading.
+#[test]
+fn only_a_devices_own_causes_are_its_failure() {
+    let failures: Vec<_> = Close::ALL
+        .into_iter()
+        .filter(|close| super::probe::device_failure(close.token()) == Some(*close))
+        .collect();
+    assert_eq!(
+        failures,
+        [
+            Close::DeviceUnreachable,
+            Close::BmcSolBusy,
+            Close::BmcBusy,
+            Close::BmcAuthFailed,
+            Close::AddressMismatch,
+            Close::BmcFailed,
+        ]
+    );
+    for other in ["client_left", "device_closed", "protocol_error"] {
+        assert_eq!(super::probe::device_failure(other), None, "{other}");
+    }
+    assert!(
+        Close::ALL
+            .into_iter()
+            .filter(|close| !failures.contains(close))
+            .all(|close| super::probe::device_failure(close.token()).is_none())
+    );
 }
 
 /// Proves: an operator's `Close` of the host while the probe reads ends the read

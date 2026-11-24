@@ -136,6 +136,27 @@ fn the_firmware_is_the_text_before_the_kernels_first_line() {
         )]
     );
 
+    // A running system's last lines before its reboot are never the firmware's: a login prompt
+    // or systemd's status after the last kernel line ends what the firmware may claim.
+    for before in [
+        "Ubuntu 24.04 LTS node-02 ttyS1\r\nnode-02 login: \r\n",
+        "Ubuntu 24.04 LTS node-02 ttyS1\r\n[  OK  ] Reached target System Reboot.\r\n",
+    ] {
+        let read = seen(&[before.as_bytes(), b"[    0.000000] Linux version 6.8.0\r\n"]);
+        assert!(read.from_boot, "{before}");
+        assert!(
+            read.findings
+                .iter()
+                .all(|finding| finding.class() != Class::FirmwareOutput),
+            "{before}"
+        );
+    }
+    // A second first line (another reboot) claims no second firmware.
+    assert_eq!(
+        found(&[b"[    0.000000] one\r\nIntel(R) Boot Agent\r\n[    0.000000] two\r\n"]),
+        [one(Class::KernelOutput, "[    0.000000] one")]
+    );
+
     let reboot: &[&[u8]] = &[
         b"Stopping services\r\n[ 4211.000001] reboot: Restarting system\r\n",
         b"Intel(R) Boot Agent GE v1.5.88\r\n",

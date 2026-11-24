@@ -58,7 +58,8 @@ service Console {
   // as `Open` does (the same checks, refusals and `console_open` line), attaches it in the
   // coordinator, reads until `max_bytes` came, `quiet_secs` passed without a byte or
   // `wait_secs` passed, then ends it as a stream ends (the payload deactivated, one
-  // `console_close` line). It sends the host no byte, not even a newline. A Mac is `no_bmc_mac`.
+  // `console_close` line). It sends the host no byte, not even a newline. A Mac is `no_bmc_mac`; a
+  // device not reached, or that fails before the host sent a byte, is refused with its cause.
   rpc Probe(ProbeConsoleRequest) returns (ProbeConsoleResponse);
 }
 
@@ -296,20 +297,21 @@ message ProbeConsoleRequest {
   string host_id = 1;
   // Why the console is probed; the `console_open` line carries it.
   string reason = 2;
-  // The longest the read lasts, in seconds: 1 to 900. `hk` waits this long beyond its own
-  // timeout.
+  // The longest the read lasts, in seconds: 1 to 900 (`invalid_request` otherwise). `hk` waits
+  // this long beyond its own timeout.
   uint32 wait_secs = 3;
   // The read ends once this many seconds pass with no byte from the host, from its start or from
   // the last byte; 0 is the coordinator's `--console-quiet-s`.
   uint32 quiet_secs = 4;
-  // The read ends once this many bytes came: 0 is 65536, and at most 1048576.
+  // The read ends once this many bytes came: 0 is 65536; above 1048576 is `invalid_request`.
   uint32 max_bytes = 5;
 }
 
 // What a probe recognized in what the host sent.
 enum ConsoleProbeClass {
   CONSOLE_PROBE_CLASS_UNSPECIFIED = 0;
-  // No byte came. Whether a key would bring a prompt is not known: the probe sends none.
+  // No byte came before the read ended. Whether a key would bring a prompt is not known: the
+  // probe sends none.
   CONSOLE_PROBE_CLASS_SILENT = 1;
   // A line whose text, once trimmed, ends with `login:`.
   CONSOLE_PROBE_CLASS_LOGIN_PROMPT = 2;
@@ -319,7 +321,7 @@ enum ConsoleProbeClass {
   // only when that first line was read (`from_boot`); text before a later kernel line, or with
   // no kernel line at all, is not claimed as the firmware's.
   CONSOLE_PROBE_CLASS_FIRMWARE_OUTPUT = 4;
-  // Text came, and none of it is a class above.
+  // Bytes came, and none of them is of another class: found only when no other class is.
   CONSOLE_PROBE_CLASS_OTHER_OUTPUT = 5;
 }
 
@@ -346,7 +348,8 @@ enum ConsoleProbeEnd {
 }
 
 message ProbeConsoleResponse {
-  // Each class seen, in the order its first line came; `silent` alone when no byte came.
+  // Each class seen, in the order found; `silent` alone when no byte came. A `firmware_output` is
+  // found when the kernel's first line confirms it, just before that line's `kernel_output`.
   repeated ConsoleProbeFinding findings = 1;
   // The kernel's first line (`[    0.000000]`) was read: the read began before the kernel
   // started, so a `firmware_output` finding, or none, says what the firmware and GRUB sent.
