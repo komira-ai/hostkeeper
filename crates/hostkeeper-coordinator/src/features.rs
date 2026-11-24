@@ -27,8 +27,9 @@ use crate::{halt, verdict_file};
 /// digest ([`crate::prerequisites`]). `ssh-v1`: the `ssh` report of a gRPC heartbeat is read, and
 /// the host is sent its sshd access (the CA public keys of its class, its principal and login user,
 /// the password policy and its revoked serials) in every answer until it reports its generation
-/// ([`crate::ssh_heartbeat`]); advertised always, and acted on only while the coordinator holds an
-/// SSH user CA. `maintenance-v1`: the `maintenance` report of a heartbeat is read, kept with the host
+/// ([`crate::ssh_heartbeat`]); advertised always to a daemon that names it, offered to one that does
+/// not only while the coordinator holds an SSH user CA ([`offered`]), and acted on only while it
+/// holds one. `maintenance-v1`: the `maintenance` report of a heartbeat is read, kept with the host
 /// and shown in `Hosts.List` and `Hosts.Get` ([`crate::maintenance`]), and the host is sent the
 /// `maintain` that starts its turn of a maintenance run over gRPC ([`crate::decide_maintenance`]).
 pub const FEATURES: &[&str] = &[
@@ -49,12 +50,22 @@ pub const FEATURES: &[&str] = &[
 ];
 
 /// The features of [`FEATURES`] advertised in the answer to a gRPC heartbeat of every agent that
-/// announces features, whether or not it named them: `maintenance-v1`. A daemon names it only once
-/// a reply has advertised it, so that the names it sends a coordinator older than `ssh-v1` stay
-/// within the 16 that coordinator reads; echoed back only when named, it would never be agreed.
-/// What it gates on the coordinator's side (the `maintenance` report kept, the `maintain` order)
-/// still waits for a heartbeat that announces it. An older agent drops a name it does not know.
-pub(crate) const OFFERED: &[&str] = &[crate::maintenance::FEATURE];
+/// announces features, whether or not it named them: `ssh-v1` (only while the coordinator holds an
+/// SSH user CA, [`offered`]) and `maintenance-v1`. A daemon names each only once a reply has
+/// advertised it, so that the names it sends a coordinator older than `ssh-v1` stay within the 16
+/// that coordinator reads; echoed back only when named, it would never be agreed. What each gates
+/// on the coordinator's side (the `ssh` report kept and the access sent, the `maintenance` report
+/// kept and the `maintain` order) still waits for a heartbeat that announces it. An older agent
+/// drops a name it does not know.
+pub(crate) const OFFERED: &[&str] = &[crate::ssh_heartbeat::FEATURE, crate::maintenance::FEATURE];
+
+/// Whether a coordinator that holds an SSH user CA exactly when `holds_ssh_ca` offers the feature
+/// `name` to an agent that announces features without naming it: a name of [`OFFERED`], except
+/// `ssh-v1` without the CA, since a daemon that named it would then be sent no access.
+#[must_use]
+pub(crate) fn offered(name: &str, holds_ssh_ca: bool) -> bool {
+    OFFERED.contains(&name) && (holds_ssh_ca || name != crate::ssh_heartbeat::FEATURE)
+}
 
 /// The fields of the answer to a heartbeat that go only to an agent that announced a feature,
 /// each with the feature: the one place that says which. An older agent reads the answer
