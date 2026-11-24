@@ -682,7 +682,7 @@ fn a_session_name_must_start_with_the_products_prefix() {
 #[test]
 fn a_token_service_that_answers_503_then_504_is_asked_again_and_its_token_exchanged() {
     // Catches: a release job failed by GitHub's token service being unavailable for seconds,
-    // and a repeated request that waits other than the first pauses, in order.
+    // and repeats that do not wait the first two pauses, in that order.
     let (url, asked) = token_endpoints(vec![
         ("503 Service Unavailable", "busy".to_owned()),
         ("504 Gateway Timeout", "busy".to_owned()),
@@ -809,7 +809,44 @@ fn only_a_5xx_answer_or_a_transport_failure_is_transient() {
         ureq::Error::BodyExceedsLimit(MAX_TOKEN_ANSWER),
         ureq::Error::HostNotFound,
         ureq::Error::TooManyRedirects,
+        ureq::Error::BadUri("no uri".to_owned()),
     ] {
         assert!(!transient(&error), "{error}");
     }
+}
+
+#[test]
+fn a_connection_dropped_before_the_answer_is_asked_again_and_its_token_exchanged() {
+    // Catches: a transport failure (the connection closed with no answer) taken as final.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let url = format!("http://{}/token", listener.local_addr().expect("addr"));
+    std::thread::spawn(move || {
+        for answer in [None, Some(format!(r#"{{"value":"{JWT}"}}"#))] {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut line = String::new();
+            while reader.read_line(&mut line).expect("request") > 2 {
+                line.clear();
+            }
+            // The first connection is closed without a word.
+            if let Some(body) = answer {
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                stream.write_all(head.as_bytes()).expect("head");
+                stream.write_all(body.as_bytes()).expect("body");
+            }
+        }
+    });
+    let run = run_with("dropped", &url, false, FakeAws::says(true, STS, ""), |_| {});
+    assert_eq!(
+        run.result,
+        Ok(vec![
+            "assumed the role; its credentials are masked and reach the steps after this one"
+                .to_owned()
+        ])
+    );
+    assert_eq!(run.pauses, [Duration::from_secs(5)]);
+    assert_eq!(run.aws.calls.borrow().len(), 1);
 }

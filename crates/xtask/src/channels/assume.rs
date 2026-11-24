@@ -160,7 +160,8 @@ fn tls_config(roots: &[ureq::tls::Certificate<'static>]) -> ureq::tls::TlsConfig
 }
 
 /// Whether a failed token request may succeed when asked again: an answer of the 5xx class, or
-/// the connection, a timeout or an answer cut short.
+/// the connection, a timeout or an answer cut short. A refusal (4xx), an answer ureq cannot parse
+/// (`Protocol`), an unknown host and every refusal of the client's own settings are final.
 fn transient(error: &ureq::Error) -> bool {
     match error {
         ureq::Error::StatusCode(code) => (500..=599).contains(code),
