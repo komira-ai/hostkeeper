@@ -8,12 +8,13 @@ use hostkeeper_proto::hostkeeper::operator::v1::ConsoleRefusal as Refusal;
 
 use super::attach_support::{CAROL, Live};
 use super::support::NODE_BMC_ANSWER;
-use super::support::{MAC, NODE};
+use super::support::{MAC, NODE, caller};
 use crate::accounts::{ApiToken, User};
 use crate::audit_actions::AuditOnly;
 use crate::operator::Caller;
 use crate::ops_file::digest;
 use crate::service::Unauthorized;
+use crate::websocket::tests::client_frame;
 
 /// `sol info` with both rates at 115.2.
 const INFO: &str =
@@ -172,4 +173,87 @@ async fn a_stream_attached_with_an_api_token_ends_with_the_token_or_its_owner() 
     live.coordinator.console_sweep();
     by_bot.closed(4008, "token_revoked").await;
     live.gone(NODE).await;
+}
+
+/// `Console/Close` of `host`'s session by `closer`.
+fn close(live: &Live, closer: &Caller, host: &str) {
+    live.coordinator
+        .console_close(
+            closer,
+            &proto::CloseConsoleRequest {
+                host_id: host.to_owned(),
+            },
+        )
+        .expect("closed");
+}
+
+/// The last console line as `(by, action, api_token)`.
+fn last(live: &Live) -> (String, String, Option<String>) {
+    said(live).pop().expect("a line")
+}
+
+/// Proves: the `console_close` line of a stream records the API token as `api_token`, as its
+/// `console_open` does: when the client leaves, the token the stream attached with; when an
+/// operator's `Console/Close` ends it, the closer's token (here the owner's other token), and
+/// none for a closer that holds no API token (a token of the tokens file); when the coordinator
+/// ends it (a revoked token), none, by `coordinator`. `Console/Close` of a session nothing
+/// attached records the closer's token too, so both kinds of close agree.
+///
+/// Catches: a stream's close line that keeps the owner's name and drops the token, so the audit
+/// cannot tell which of a person's scripts (or the person's own sign-in) held or ended a console.
+#[tokio::test]
+async fn a_streams_close_line_records_the_api_token_as_its_open_line_does() {
+    let live = live("console-owner-close");
+    let coordinator = &live.coordinator;
+    let opened = |token: &str| {
+        coordinator
+            .console_open(&bearer(&live, token), &open(MAC))
+            .expect("opened")
+            .session
+    };
+    let alice_bot = Some("alice-bot".to_owned());
+    let line = |by: &str, token: Option<String>| (by.to_owned(), "console_close".to_owned(), token);
+
+    let _mac = live.fixture.dials.connect();
+    let mut client = live.attach(&opened(ALICE_BOT), ALICE_BOT).await;
+    client.raw(&client_frame(8, &1000u16.to_be_bytes())).await;
+    client.closed(1000, "client_left").await;
+    live.gone(MAC).await;
+    assert_eq!(last(&live), line("alice", alice_bot.clone()));
+
+    let _mac = live.fixture.dials.connect();
+    let mut client = live.attach(&opened(ALICE_BOT), ALICE_BOT).await;
+    close(&live, &bearer(&live, ALICE_OPS), MAC);
+    client.closed(4007, "closed_by_operator").await;
+    live.gone(MAC).await;
+    assert_eq!(last(&live), line("alice", Some("alice-ops".to_owned())));
+
+    let _mac = live.fixture.dials.connect();
+    let mut client = live.attach(&opened(ALICE_BOT), ALICE_BOT).await;
+    close(&live, &caller("bob"), MAC);
+    client.closed(4007, "closed_by_operator").await;
+    live.gone(MAC).await;
+    assert_eq!(last(&live), line("bob", None));
+
+    opened(ALICE_BOT);
+    close(&live, &bearer(&live, ALICE_OPS), MAC);
+    assert_eq!(last(&live), line("alice", Some("alice-ops".to_owned())));
+
+    let _mac = live.fixture.dials.connect();
+    let mut client = live.attach(&opened(ALICE_BOT), ALICE_BOT).await;
+    coordinator
+        .accounts()
+        .change(|accounts| accounts.without_token("alice-bot"))
+        .expect("the token is revoked");
+    coordinator.console_sweep();
+    client.closed(4008, "token_revoked").await;
+    live.gone(MAC).await;
+    assert_eq!(last(&live), line("coordinator", None));
+    assert_eq!(
+        said(&live)
+            .iter()
+            .filter(|(_, action, _)| action == "console_open")
+            .count(),
+        5
+    );
 }
