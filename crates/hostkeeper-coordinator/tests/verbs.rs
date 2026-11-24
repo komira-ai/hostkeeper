@@ -1,8 +1,9 @@
 //! The verbs of `hostkeeper-coordinator`: `serve`, `backup`, `restore` and `export`, as the binary
-//! parses them and the exit codes of `backup` and `restore`, driven in-process through
-//! `config::main`. What a backup and a restore copy, check and refuse is in the crate's
+//! parses them, and the exit codes of `backup`, `restore` and `check-ca`, driven in-process
+//! through `config::main`. What a backup and a restore copy, check and refuse is in the crate's
 //! `backup_tests` and `backup_refusal_tests`; what an export writes and refuses, in its
-//! `transfer_tests` and the integration test `transfer.rs`.
+//! `transfer_tests` and the integration test `transfer.rs`; what `check-ca` passes and refuses, in
+//! its `ca_check_tests`.
 
 mod support;
 
@@ -202,4 +203,43 @@ fn a_backup_and_a_restore_exit_0_and_a_refused_restore_exit_1() {
         text(&snapshot),
     ]);
     assert_eq!(main(again), ExitCode::from(1), "a backup over a snapshot");
+}
+
+/// Catches: `check-ca` not wired to the binary, or a refused copy that still exits 0: a copy of
+/// the enrollment CA checked against its own SHA-256 exits 0, and against another CA's exits 1.
+#[test]
+fn a_ca_copy_check_exits_0_for_the_pinned_ca_and_1_for_another() {
+    use std::sync::Arc;
+
+    use hostkeeper_enrollment::ca::{Ca, CaFiles, Signer as _};
+    use hostkeeper_enrollment::fs::RealFs;
+    use hostkeeper_enrollment::validity::SystemClock;
+
+    let dir = scratch("verbs-check-ca");
+    let make = |name: &str| {
+        let key = dir.path().join(format!("{name}.key"));
+        let certificate = dir.path().join(format!("{name}.key.cert"));
+        let files = CaFiles {
+            key: &key,
+            certificate: &certificate,
+        };
+        let ca = Ca::init(&RealFs, files, Arc::new(SystemClock)).expect("a CA");
+        (key, certificate, ca.bundle().sha256_hex())
+    };
+    let (key, certificate, pin) = make("ca");
+    let (_, _, other) = make("other");
+    let check = |pin: &str| {
+        main(args(&[
+            "check-ca",
+            "enrollment",
+            "--key-file",
+            text(&key),
+            "--certificate-file",
+            text(&certificate),
+            "--ca-sha256",
+            pin,
+        ]))
+    };
+    assert_eq!(check(&pin), ExitCode::SUCCESS);
+    assert_eq!(check(&other), ExitCode::from(1));
 }

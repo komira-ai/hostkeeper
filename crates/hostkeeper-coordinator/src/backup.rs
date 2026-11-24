@@ -373,6 +373,21 @@ impl Report {
     }
 }
 
+/// The exit of an offline verb (`backup`, `restore`, `export`, `ssh-ca`, `check-ca`): its report
+/// on standard output and exit 0, or why it was refused on standard error and exit 1.
+pub(crate) fn finish(done: Result<Report, impl fmt::Display>) -> std::process::ExitCode {
+    match done {
+        Ok(report) => {
+            print!("{report}");
+            std::process::ExitCode::SUCCESS
+        }
+        Err(why) => {
+            eprintln!("hostkeeper-coordinator: {why}");
+            std::process::ExitCode::from(1)
+        }
+    }
+}
+
 impl fmt::Display for Report {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for line in &self.0 {
