@@ -377,3 +377,21 @@ fn a_farm_step_added_changed_or_moved_is_refused() {
         assert!(found[0].starts_with(&format!("{who} step ")), "{found:?}");
     }
 }
+
+/// Catches what sits beside `jobs` in the farm build changing how its job runs while it holds the
+/// token: a workflow-level `env:` (a `RUSTC_WRAPPER`, a `BASH_ENV`) or `defaults:` (another shell
+/// or working directory).
+#[test]
+fn a_farm_build_with_a_key_beside_its_jobs_is_refused() {
+    for (key, text) in [
+        ("env", "env:\n  RUSTC_WRAPPER: /bin/true\n"),
+        ("defaults", "defaults:\n  run:\n    shell: sh\n"),
+    ] {
+        refused(
+            FILE,
+            "permissions: {}\n",
+            &format!("permissions: {{}}\n{text}"),
+            &[&format!("{FILE}: has the top-level key {key}")],
+        );
+    }
+}

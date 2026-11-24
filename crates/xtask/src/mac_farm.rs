@@ -649,19 +649,26 @@ pub(crate) async fn remote(
 }
 
 /// The Markdown `--summary` appends: the command, what was sent, and the lines of a pass or the
-/// failure.
+/// failure, with the farm's address left out.
 pub(crate) fn summary(
     s: &Settings,
     facts: &[String],
     ended: &Result<Vec<String>, Error>,
 ) -> String {
+    // The summary is a page of its own, outside the log the mask covers: the farm's address, in
+    // any failure that names it, is written as `the farm`.
+    let host = s.endpoint.split_once("://").map_or("", |(_, h)| h);
+    let redact = |line: &str| {
+        line.replace(&s.endpoint, "the farm")
+            .replace(host, "the farm")
+    };
     let mut text = format!("### mac-farm: `cargo {}`\n\n", s.cargo.join(" "));
     let verdict = match ended {
         Ok(lines) => lines.clone(),
         Err(e) => vec![format!("failed: {e}")],
     };
     for line in facts.iter().chain(&verdict) {
-        text.push_str(&format!("- {line}\n"));
+        text.push_str(&format!("- {}\n", redact(line)));
     }
     text.push('\n');
     text

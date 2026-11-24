@@ -22,6 +22,8 @@
 //!   [`super::lint`]'s pin rule, which lets this one through ([`local_call_allowed`]).
 //!
 //! [`file_problems`] refuses [`FILE`] when:
+//! - it has a top-level key outside [`TOP_LEVEL`] (an `env:` or `defaults:` beside `jobs` would
+//!   change how the job that holds the token runs);
 //! - its `on` is not exactly `workflow_call` with the one input [`INPUT`] (a required string
 //!   with a description): no push, dispatch or schedule runs it by itself;
 //! - its jobs are not exactly [`JOB`]; [`JOB`]'s `if:` is not exactly [`FARM_IF`] (which
@@ -119,6 +121,10 @@ pub const STEPS: [&str; 7] = [
     ),
     "uses actions/upload-artifact with if-no-files-found=error with name=macho-unsigned-macos-arm64 with path=target/release/hostkeeper\ntarget/release/hk\ntarget/release/hello\ntarget/release/hostkeeper-bootstrap\n with retention-days=90",
 ];
+
+/// The top-level keys of [`FILE`], exactly: a workflow-level `env:` or `defaults:` would change
+/// how every step of the job that holds the token runs.
+pub const TOP_LEVEL: [&str; 4] = ["jobs", "name", "on", "permissions"];
 
 /// What a [`FILE`] whose `on` is anything else is refused with.
 pub const ON_PROBLEM: &str = "mac-farm.yml: on must be workflow_call with exactly the input `version`: `type: string`, `required: true` and a description";
@@ -257,6 +263,9 @@ pub fn file_problems(doc: &Node) -> Vec<String> {
     let mut problems = Vec::new();
     if !called_only(entry(doc, "on")) {
         problems.push(ON_PROBLEM.to_owned());
+    }
+    for key in other_keys(doc, &TOP_LEVEL) {
+        problems.push(format!("{FILE}: has the top-level key {key}"));
     }
     let jobs = entry(doc, "jobs").map_or(&[][..], entries);
     for (name, _) in jobs {

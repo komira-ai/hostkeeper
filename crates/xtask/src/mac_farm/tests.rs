@@ -618,7 +618,8 @@ fn a_toolchain_tarball_is_an_answer_of_200_under_its_limit() {
 }
 
 /// Catches a summary that leaves out the command, what was sent, a pass's lines or a failure's
-/// reason: it is the job's record of the run.
+/// reason (it is the job's record of the run), and one that shows the farm's address, which the
+/// log's mask does not cover there.
 #[test]
 fn the_summary_says_the_command_what_was_sent_and_how_it_ended() {
     let s = Settings::of(&args()).expect("settings");
@@ -633,6 +634,15 @@ fn the_summary_says_the_command_what_was_sent_and_how_it_ended() {
          - mac-farm: 3 blobs, 1 missing from the farm (9 bytes to upload)\n\
          - ok: passed\n\
          - mac-farm: wrote the output a (1 bytes)\n\n"
+    );
+    let unreached = Err(Error::Farm(client::FarmError::Connect {
+        address: "https://farm.example:8980".to_owned(),
+        why: "refused by farm.example:8980".to_owned(),
+    }));
+    assert_eq!(
+        summary(&s, &[], &unreached),
+        "### mac-farm: `cargo test -p hello`\n\n\
+         - failed: the farm address \"the farm\" does not connect: refused by the farm\n\n"
     );
     let failed = Err(Error::NoResult("test -p hello".to_owned()));
     assert_eq!(
