@@ -559,12 +559,21 @@ fn a_device_not_reached_is_the_refusal_of_its_cause() {
     );
 }
 
-/// Proves: the coordinator's timer passes, for a duration of zero at once.
+/// Proves: on the runtime's clock (paused, so that the test moves it), the coordinator's timer of
+/// 5 seconds is still pending a nanosecond before 5 seconds pass, and has passed once they have.
 ///
-/// Catches: a timer that never passes, which would hold every probe to the end of its wait.
-#[tokio::test]
-async fn the_runtimes_timer_passes() {
-    (super::sleeping())(Duration::ZERO).await;
+/// Catches: a timer that ignores its duration and passes at once, which would end every probe's
+/// read at its start, and one that never passes, which would hold every probe to its wait.
+#[tokio::test(start_paused = true)]
+async fn the_runtimes_timer_passes_at_its_duration_and_not_before() {
+    use futures::FutureExt as _;
+
+    let mut timer = (super::sleeping())(QUIET);
+    assert_eq!((&mut timer).now_or_never(), None, "at once");
+    tokio::time::advance(QUIET - Duration::from_nanos(1)).await;
+    assert_eq!((&mut timer).now_or_never(), None, "just before");
+    tokio::time::advance(Duration::from_nanos(1)).await;
+    assert_eq!(timer.now_or_never(), Some(()), "at its duration");
 }
 
 /// Proves: on a coordinator whose sessions must be attached at once (`--console-attach-s 0`), a
