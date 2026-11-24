@@ -22,15 +22,15 @@ use super::lint::{entries, entry, scalars};
 use super::release::{job, steps, text_of};
 use super::yaml::Node;
 
-/// Where a signing run may sign: a branch of this repository. A macro so that [`MACOS_SIGN_IF`]
-/// and [`REFUSE_IF`] are built from the one text.
+/// Where a signing run may sign: a branch of this repository. A macro so that [`MACOS_SIGN_IF`],
+/// [`SIGN_JOB_IF`] and [`REFUSE_IF`] are built from the one text.
 macro_rules! allowed {
     () => {
         "github.repository == 'komira-ai/hostkeeper' && startsWith(github.ref, 'refs/heads/')"
     };
 }
 
-/// The condition [`MACOS_SIGN_IF`] and [`REFUSE_IF`] hold a signing run to.
+/// The condition [`MACOS_SIGN_IF`], [`SIGN_JOB_IF`] and [`REFUSE_IF`] hold a signing run to.
 pub const ALLOWED: &str = allowed!();
 
 /// The input of `workflow_dispatch` that asks for a signing run.

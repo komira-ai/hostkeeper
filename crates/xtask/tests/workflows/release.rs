@@ -40,7 +40,7 @@ use super::pkg_signing;
 use super::release_macos;
 use super::yaml::{self, Node, Value};
 
-/// The `if:` of artifacts.yml's attest and verify jobs: a push to main, once no job they need
+/// The exact `if:` of artifacts.yml's attest and verify jobs: a push to main, once no job they need
 /// failed or was cancelled (one of the two compile jobs they need, at some depth, is always
 /// skipped: [`super::mac_farm::AFTER_COMPILE`]). The only condition under which a token can sign.
 pub const SIGN_IF: &str = "${{ !cancelled() && !failure() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}";
@@ -621,12 +621,14 @@ fn artifacts_problems(doc: &Node) -> Vec<String> {
              (`{IMAGE_RUN}...`) and compare it with the coordinator's stamp"
         ));
     }
-    let attest = job(doc, "attest");
-    if text_of(attest, "if") != Some(SIGN_IF) {
-        problems.push(format!(
-            "artifacts.yml: job attest needs the exact `if: {SIGN_IF}`"
-        ));
+    for name in ["attest", "verify"] {
+        if text_of(job(doc, name), "if") != Some(SIGN_IF) {
+            problems.push(format!(
+                "artifacts.yml: job {name} needs the exact `if: {SIGN_IF}`"
+            ));
+        }
     }
+    let attest = job(doc, "attest");
     for uses in step_values(attest, "uses") {
         if uses.starts_with("actions/checkout@") {
             problems.push("artifacts.yml: job attest checks out the repository".to_owned());

@@ -273,6 +273,13 @@ fn a_job_after_the_compile_jobs_without_the_status_functions_is_refused() {
             plain_attest,
             "artifacts.yml: job attest needs the exact `if: ",
         ),
+        (
+            "verify",
+            "  verify:\n    needs: [version, attest]\n",
+            SIGN_IF,
+            plain_attest,
+            "artifacts.yml: job verify needs the exact `if: ",
+        ),
     ] {
         let defect = with_in(
             &text,
@@ -289,20 +296,12 @@ fn a_job_after_the_compile_jobs_without_the_status_functions_is_refused() {
         let outcomes = play_owned(&defect, &push_to_main("grpc://farm.example:8980"), &[]);
         assert_eq!(outcomes[name], Outcome::Skipped, "{name}");
     }
-    // verify's `if:` is held by this rule alone: its problem is the whole answer.
-    let head = "  verify:\n    needs: [version, attest]\n";
-    let defect = with_in(
-        &text,
-        &format!("{head}    if: {SIGN_IF}\n"),
-        &format!("{head}    if: {plain_attest}\n"),
-    );
-    assert_eq!(lint("artifacts.yml", &defect), [problem("verify")]);
-    let outcomes = play_owned(&defect, &push_to_main("grpc://farm.example:8980"), &[]);
-    assert_eq!(ended(&outcomes, Outcome::Skipped), [HOSTED_JOB, "verify"]);
 }
 
 /// Catches the rule passing an `if:` that only looks like the status functions: none at all, a
-/// longer function name glued on, or a condition that names them later or in another order.
+/// longer function name glued on, or a condition that names them later or in another order; and
+/// a condition that starts with the term but widens the job with a `||`, which the exact `if:`
+/// of the job refuses.
 #[test]
 fn an_if_that_does_not_start_with_the_whole_status_term_is_refused() {
     let text = artifacts_yml();
@@ -315,18 +314,47 @@ fn an_if_that_does_not_start_with_the_whole_status_term_is_refused() {
         format!("{head}    if: ${{{{ {rest} && !cancelled() && !failure() }}}}\n"),
         format!("{head}    if: ${{{{ !failure() && !cancelled() && {rest} }}}}\n"),
     ] {
-        assert_eq!(
-            lint("artifacts.yml", &with_in(&text, &from, &to)),
-            [problem("verify")],
-            "{to}"
-        );
+        let found = lint("artifacts.yml", &with_in(&text, &from, &to));
+        assert!(found.contains(&problem("verify")), "{to}: {found:#?}");
     }
-    // The bare term, with nothing after it, is the whole condition sums and build-macos take.
+    // The bare term, with nothing after it, is the whole condition sums and build-macos take:
+    // this rule passes it (the exact `if:` of verify alone refuses it).
+    let exact = format!("artifacts.yml: job verify needs the exact `if: {SIGN_IF}`");
     let bare = format!("{head}    if: ${{{{ !cancelled() && !failure() }}}}\n");
     assert_eq!(
         lint("artifacts.yml", &with_in(&text, &from, &bare)),
-        Vec::<String>::new()
+        std::slice::from_ref(&exact)
     );
+    let widened = format!(
+        "{head}    if: ${{{{ !cancelled() && !failure() && {rest} || github.event_name == 'pull_request' }}}}\n"
+    );
+    assert_eq!(
+        lint("artifacts.yml", &with_in(&text, &from, &widened)),
+        [exact]
+    );
+}
+
+/// Catches the status functions widening where a job signs or attests: a push to a branch other
+/// than main signs and attests nothing, and still builds the macOS files and the sums, the farm
+/// configured or not.
+#[test]
+fn a_push_to_another_branch_signs_and_attests_nothing() {
+    let text = artifacts_yml();
+    for (farm, compile) in [("grpc://farm.example:8980", CALLER_JOB), ("", HOSTED_JOB)] {
+        let names = vec![
+            ("github.event_name", "push".to_owned()),
+            ("github.ref", "refs/heads/topic".to_owned()),
+            ("github.repository", "komira-ai/hostkeeper".to_owned()),
+            ("vars.FARM_ADDRESS", farm.to_owned()),
+        ];
+        let outcomes = play_owned(&text, &names, &[]);
+        for name in ["sign-code", "sign-pkg", "check-pkg", "attest", "verify"] {
+            assert_eq!(outcomes[name], Outcome::Skipped, "{name}, farm {farm:?}");
+        }
+        for name in [compile, "build-macos", "sums"] {
+            assert_eq!(outcomes[name], Outcome::Succeeded, "{name}, farm {farm:?}");
+        }
+    }
 }
 
 /// Catches the walk of the needs stopping at the first level, or looping on a cycle: a job that
