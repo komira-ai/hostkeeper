@@ -108,9 +108,9 @@ by their route and are not in the menu.
   and one confirmation, one call per click. Each group's card has an **Update** button on each due host's row, a Reason field,
   **Update the group** (not for Unassigned) and **Schedule...**, which opens the Schedule form for the group's hosts after reading
   the group's maintenance policy with `HostGroups.Get`. A refusal of `Maintenance.Schedule`, `Cancel`, `RetryHost` or `PutBack`
-  that the operator can act on is said in words, wherever its button is (the host page, this page, Home's notice): nothing due
-  (`nothing_due`), the group's last host (`last_host`, with the way to take it: the Schedule form's "Take the group's last
-  host"), a host already in a run, a window that has ended, an unknown host, group or run, a host not in the run, a run that
+  that the operator can act on is said in words (an Update or Schedule on the host page, this page or Home's notice, and
+  Cancel, Retry and Put back here): nothing due (`nothing_due`), the group's last host (`last_host`, with the way to take it:
+  the Schedule form's "Take the group's last host"), a host already in a run, a window that has ended, an unknown host, group or run, a host not in the run, a run that
   has ended, a host no longer halted, and an audit entry that could not be written; any other refusal is shown as its code
   and token. In the Schedule form, a window field left empty is said to be "not set".
 

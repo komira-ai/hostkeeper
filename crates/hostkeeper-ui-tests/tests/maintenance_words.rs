@@ -14,25 +14,27 @@ use support::pages::{bodies, m, page_driver};
 
 /// The words of each refusal of Maintenance.Schedule an operator can act on, with the HTTP status
 /// and code the gateway answers it with.
-const SCHEDULE_REFUSALS: [(u16, &str, &str, &str); 6] = [
+const SCHEDULE_REFUSALS: [(u16, &str, &str, &str); 7] = [
     (
         412,
         "FAILED_PRECONDITION",
         "nothing_due",
-        "Nothing of what was asked is due on those hosts: no run was stored.",
+        "Nothing of what was asked is due on those hosts, or every host with something due would \
+         be skipped: no run was stored.",
     ),
     (
         412,
         "FAILED_PRECONDITION",
         "last_host",
         "That would take every host of the group at once: no run was stored. To take them all, \
-         use the Schedule form with \"Take the group's last host\" ticked.",
+         use the Schedule form of the Maintenance page or the host page with \"Take the group's \
+         last host\" ticked.",
     ),
     (
         412,
         "FAILED_PRECONDITION",
         "host_in_maintenance",
-        "A host it names is already in a run that has not ended: no run was stored.",
+        "A host it would take is already in a run that has not ended: no run was stored.",
     ),
     (
         412,
@@ -45,6 +47,12 @@ const SCHEDULE_REFUSALS: [(u16, &str, &str, &str); 6] = [
         "NOT_FOUND",
         "unknown_host",
         "The coordinator knows no host of this id: no run was stored.",
+    ),
+    (
+        404,
+        "NOT_FOUND",
+        "unknown_group",
+        "The coordinator knows no host group of this name: no run was stored.",
     ),
     (
         503,

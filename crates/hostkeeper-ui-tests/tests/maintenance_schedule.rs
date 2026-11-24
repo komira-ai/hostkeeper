@@ -382,7 +382,8 @@ fn a_refused_update_is_reported_in_words_and_reads_nothing_again() {
             out["seen"]["reports"],
             json!([
                 "That would take every host of the group at once: no run was stored. To take them \
-                 all, use the Schedule form with \"Take the group's last host\" ticked."
+                 all, use the Schedule form of the Maintenance page or the host page with \"Take \
+                 the group's last host\" ticked."
             ]),
             "{}",
             surface.name
@@ -752,7 +753,8 @@ return null;"#,
         json!([
             "Give a reason first.",
             "Not scheduled.",
-            "Nothing of what was asked is due on those hosts: no run was stored."
+            "Nothing of what was asked is due on those hosts, or every host with something due \
+             would be skipped: no run was stored."
         ])
     );
     assert_eq!(out["seen"]["questions"], json!([question, question]));

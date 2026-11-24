@@ -64,9 +64,9 @@ export function skipWords(value) {
 // The words for a refusal of Maintenance.Schedule, Cancel, RetryHost or PutBack that the operator can
 // act on; any other is said as its code and token.
 const REFUSALS = {
-  nothing_due: "Nothing of what was asked is due on those hosts: no run was stored.",
-  last_host: "That would take every host of the group at once: no run was stored. To take them all, use the Schedule form with \"Take the group's last host\" ticked.",
-  host_in_maintenance: "A host it names is already in a run that has not ended: no run was stored.",
+  nothing_due: "Nothing of what was asked is due on those hosts, or every host with something due would be skipped: no run was stored.",
+  last_host: "That would take every host of the group at once: no run was stored. To take them all, use the Schedule form of the Maintenance page or the host page with \"Take the group's last host\" ticked.",
+  host_in_maintenance: "A host it would take is already in a run that has not ended: no run was stored.",
   window_ended: "The window has already ended: no run was stored.",
   unknown_group: "The coordinator knows no host group of this name: no run was stored.",
   unknown_host: "The coordinator knows no host of this id: no run was stored.",
