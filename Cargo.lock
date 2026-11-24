@@ -1815,6 +1815,7 @@ dependencies = [
  "hostkeeper-config",
  "hostkeeper-console",
  "hostkeeper-enrollment",
+ "hostkeeper-link",
  "hostkeeper-oidc",
  "hostkeeper-proto",
  "hostkeeper-release",
