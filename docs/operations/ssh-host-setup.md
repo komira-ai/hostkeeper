@@ -41,8 +41,8 @@ or `AuthenticationMethods`, and never edits `sshd_config` or any other file of s
    user is `root` and `permitrootlogin` is `no` or `forced-commands-only`.
 3. It writes the drop-in to `/etc/ssh/hostkeeper/candidate.conf` (a path no configuration
    includes) and runs `sshd -t -f` on it; a failure is `config_invalid`, and nothing is installed.
-4. It installs the files, reloads sshd (`systemctl reload`) when a file changed and at the first
-   record after the daemon starts, reads the effective configuration again and a banner from
+4. It installs the files, reloads sshd (`systemctl reload`) when a file changed and until a
+   record is applied after the daemon starts, reads the effective configuration again and a banner from
    sshd's first listen address (an all-addresses address is read as the loopback). Under an active
    `ssh.socket` with `Accept=no` (Debian's and Ubuntu's default) the first connection starts the
    service the socket triggers, which serves every later connection with the configuration it

@@ -352,33 +352,6 @@ fn nothing_is_reported_before_a_record() {
     assert_eq!(rig.setup.report(), None);
 }
 
-/// Proves the same generation again does nothing, and a new generation with the same content
-/// checks and reads the banner but writes nothing, reloads nothing and builds no new list.
-#[test]
-fn a_record_again_changes_nothing() {
-    let rig = Rig::new("ssh-again");
-    rig.apply(&access(1));
-    let before = rig.host.calls();
-    let effective_calls = rig.host.lock().effective_calls;
-    assert_eq!(rig.apply(&access(1)).applied_generation, 1);
-    assert_eq!(rig.host.calls(), before);
-    assert_eq!(
-        rig.host.lock().effective_calls,
-        effective_calls,
-        "nothing was asked of sshd"
-    );
-
-    let report = rig.apply(&access(2));
-    assert_eq!(
-        (report.applied_generation, report.state.as_str()),
-        (2, "applied")
-    );
-    assert_eq!(
-        rig.host.calls()[before.len()..],
-        ["start", "check", "banner 127.0.0.1:22"]
-    );
-}
-
 /// Proves a new list of revoked serials is built and written, at its generation, and a reload
 /// follows because a file changed.
 #[test]
@@ -866,70 +839,6 @@ fn an_account_with_keys_that_is_unchanged_is_fine() {
     assert_eq!(rig.apply(&access(1)).state, "applied");
 }
 
-/// Proves under socket activation a change asks the host to reload the socket's sshd before the
-/// banner, as for a service: whether a socket has a listening sshd to reload is the host's to
-/// say (`SystemHost::reload`), and the setup never takes it that one does not.
-/// Catches: a setup that skips the reload for a socket unit, so that a listener the socket
-/// started before the change keeps refusing every certificate.
-#[test]
-fn a_socket_is_reloaded_by_the_host_after_a_change() {
-    let rig = Rig::new("ssh-socket");
-    rig.host.lock().unit = Ok(SshdUnit::Socket);
-    assert_eq!(rig.apply(&access(1)).state, "applied");
-    assert_eq!(
-        rig.host.calls(),
-        [
-            "start",
-            "revocations",
-            "check",
-            "reload Socket",
-            "banner 127.0.0.1:22"
-        ]
-        .map(str::to_owned)
-    );
-}
-
-/// Proves the first record a daemon takes up after it starts reloads sshd even when every file
-/// is already what the record asks for (an earlier start wrote them), and that the same
-/// content at a later generation then reloads nothing.
-/// Catches: a daemon upgraded from one that wrote the files and never had the listening sshd
-/// read them, which would stay `applied` with every certificate refused.
-#[test]
-fn the_first_record_after_a_start_reloads_files_already_in_place() {
-    let rig = Rig::new("ssh-restart");
-    rig.apply(&access(1));
-    let written = rig.files();
-    let restarted = SshSetup::new(
-        Arc::clone(&rig.host) as Arc<dyn SshHost>,
-        rig.paths.clone(),
-        rustix::process::geteuid().as_raw(),
-        rig.log.clone(),
-    );
-    let before = rig.host.calls().len();
-    restarted.apply(&access(1));
-    assert_eq!(
-        restarted.report().map(|report| report.state),
-        Some("applied".to_owned())
-    );
-    assert_eq!(rig.files(), written);
-    assert_eq!(
-        rig.host.calls()[before..],
-        [
-            "start",
-            "revocations",
-            "check",
-            "reload",
-            "banner 127.0.0.1:22"
-        ]
-    );
-    let again = rig.host.calls().len();
-    restarted.apply(&access(2));
-    assert_eq!(
-        rig.host.calls()[again..],
-        ["start", "check", "banner 127.0.0.1:22"]
-    );
-}
-
 /// Proves a record with `enabled = false` removes the files, reloads, reads the banner and
 /// reports `disabled`, then is a no-op, then puts a file that came back away again, and a later
 /// enabling builds the list again.
@@ -1057,3 +966,6 @@ fn the_report_follows_the_last_record() {
         ]
     );
 }
+
+#[path = "ssh_setup_reload_tests.rs"]
+mod reload;

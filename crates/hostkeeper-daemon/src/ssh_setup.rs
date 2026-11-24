@@ -18,8 +18,8 @@
 //!    it: the login user must be able to log in by certificate alone and its trust files must be
 //!    the drop-in's; every other account's settings must be what they were
 //!    ([`crate::ssh_effective`]). A failure puts the files back.
-//! 4. A reload (never a restart) follows a change, and the first record since the daemon
-//!    started, and then a connection reads the banner; without one the files are put back and
+//! 4. A reload (never a restart) follows a change, and the first record applied since the
+//!    daemon started, and then a connection reads the banner; without one the files are put back and
 //!    sshd reloaded again. Under socket activation the reload is the triggered service's, when
 //!    the socket hands its connections to one listener that runs ([`SshHost::reload`]); a Mac's
 //!    sshd, which launchd starts per connection, has no reload, only the check.
@@ -55,6 +55,9 @@ struct Held {
     /// The login user the last enabled record was planned for: the record's own, or the one the
     /// host resolved when the record named none (a Mac's single administrator).
     login_user: Option<String>,
+    /// Whether a record was applied since the daemon started, so the listening sshd has read the
+    /// files: a reload made it, or nothing changed after one that did.
+    listener_read: bool,
 }
 
 /// A record taken up, and what came of it.
@@ -219,15 +222,17 @@ impl SshSetup {
         let files = wanted(&self.paths, &plan, revoked);
         self.check_candidate(&plan)?;
         let snapshot = Snapshot::of(&self.paths);
-        // The first record since the daemon started reloads even when no file changes: the
-        // files may have been written by an earlier start that did not reload (or stopped
-        // before it did), and sshd -T reads the files, not what the listening sshd holds.
-        let first = held.taken.is_none();
+        // Until a record is applied after the daemon starts, a reload follows even when no file
+        // changes: the files may have been written by an earlier start that did not reload (or
+        // stopped before it did), and sshd -T reads the files, not what the listening sshd holds.
+        // A record refused before this point does not count.
+        let first = !held.listener_read;
         let applied = self.put(&files, &unit, &snapshot, first, || {
             self.verify(&plan, &before)
         });
         if applied.is_ok() {
             held.serials = Some(plan.serials);
+            held.listener_read = true;
         }
         applied
     }

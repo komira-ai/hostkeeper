@@ -674,12 +674,12 @@ fn a_mac_with_no_login_user_named_is_refused_before_the_ledger() {
         .expect("a Linux host is signed");
     assert_eq!(linux.login_user, "root");
 
-    let named = unnamed("ssh-sign-mac-named", "adi");
+    let named = unnamed("ssh-sign-mac-named", "builder");
     let answer = named
         .coordinator
         .ssh_sign_user_cert(&operator(), &request("mac-01", ED25519_KEY, ""))
         .expect("signed");
-    assert_eq!(answer.login_user, "adi");
+    assert_eq!(answer.login_user, "builder");
 }
 
 /// Proves: `Revoke` by an operator the file lists revokes by operator name or by serial and says

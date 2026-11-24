@@ -71,7 +71,7 @@ below are run in this order, not in the order of their ids; each row names the c
 | # | What | Who | Step | Check before the next row |
 |---|---|---|---|---|
 | R1 | Read every Mac; choose the proof Mac, the one that takes the fewest builds | an operator with `hk`, and with the job scheduler's `js` (both read only) | MP-E1 | the Mac announces `maintenance-v1`, its `maintenance` is there and `lookFailed` is empty |
-| R2 | Give the coordinator the SSH user CA and the SSH operators file, if `ssh host-keys` answers `not_configured` | the coordinator's deploy owner | MP-E2 (a), (b) | `ssh host-keys` for the Mac answers, `no_pin` or `pinned` |
+| R2 | Give the coordinator the SSH user CA, the SSH operators file and `--ssh-login-user-macos`, if `ssh host-keys` answers `not_configured` or the flag is empty | the coordinator's deploy owner | MP-E2 (a), (b) | `ssh host-keys` for the Mac answers, `no_pin` or `pinned`, and the coordinator's configuration names `ssh-login-user-macos` |
 | R3 | Name `mac-proof` in the operator-keys and host-prerequisites files | the coordinator's deploy owner | MP-E2 (c), (d) | one `--tls-reload-secs` has passed, or the coordinator restarted |
 | R4 | Cordon the Mac in the job scheduler and wait until it holds no job | an operator with the job service's operator token | MP-E6 | `js host list` shows the Mac's cordon end and no booking |
 | R5 | Make `mac-proof` with the same packages, versions and policy, and move the Mac into it | an operator with `hk` | MP-E3 | `hostGroup` is `mac-proof`, the services are unchanged, `operatorKeys.digest` is set |
@@ -108,7 +108,7 @@ Decides:
 - if `operatorKeys` is `{}` on every host, Linux ones too -> the coordinator was given no `--operator-keys-file` (`docs/operations/operator-keys.md`); MP-E2 (c) is its first one.
 
 ### MP-E2 Give the coordinator the SSH CA, and name the new group in its group-keyed files
-Settles: none; makes `hk ssh` possible and avoids a lockout. Runs: the coordinator's deploy owner, on the coordinator's configuration (each flag's deploy form: `docs/deploy/coordinator/package.md`). Needs: MP-E1. Do this before MP-E3. The files do different things: `hk ssh` needs (a) and (b) only (`docs/operations/ssh-ca.md`); (c) puts the operators' public keys in the Mac administrator's `authorized_keys` for a plain `ssh`, and a Mac in a group that file does not list is sent the empty key set (`crates/hostkeeper-coordinator/src/operator_keys.rs`, doc lines 28-40); (d) keeps the Command Line Tools check (`docs/operations/host-prerequisites.md`).
+Settles: none; makes `hk ssh` possible and avoids a lockout. Runs: the coordinator's deploy owner, on the coordinator's configuration (each flag's deploy form: `docs/deploy/coordinator/package.md`). Needs: MP-E1. Do this before MP-E3. The files do different things: `hk ssh` needs (a) and (b) only, with `--ssh-login-user-macos` naming the account it logs in as on a Mac (`docs/operations/ssh-ca.md`); (c) puts the operators' public keys in the Mac administrator's `authorized_keys` for a plain `ssh`, and a Mac in a group that file does not list is sent the empty key set (`crates/hostkeeper-coordinator/src/operator_keys.rs`, doc lines 28-40); (d) keeps the Command Line Tools check (`docs/operations/host-prerequisites.md`).
 ```sh
 # P set as in MP-E1; not_configured here means (a) is not in force
 hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> ssh host-keys --host-id <node-id>

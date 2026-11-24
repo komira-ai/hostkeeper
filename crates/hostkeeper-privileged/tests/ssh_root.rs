@@ -521,10 +521,11 @@ fn a_certificate_for_the_host_logs_the_login_user_in() {
 
 /// The runner's sshd under socket activation for one test, put back when the test ends: the
 /// service stopped, `ssh.socket` started in its place (its stock `Accept=no`, Debian's and
-/// Ubuntu's default, as on the build nodes), and at the end the socket stopped and the service
-/// started again when it ran before. Dropped before the rig, whose guard then puts `/etc/ssh`
-/// back and reloads the service.
+/// Ubuntu's default), and at the end both stopped and each started again that was active before,
+/// the socket first, so the host listens as it did. Dropped before the rig, whose guard then puts
+/// `/etc/ssh` back and reloads the service.
 struct SocketActivation {
+    socket_was_active: bool,
     service_was_active: bool,
 }
 
@@ -536,6 +537,7 @@ impl SocketActivation {
             "this test needs the ssh.socket unit of openssh-server"
         );
         let guard = SocketActivation {
+            socket_was_active: systemctl(&["is-active", "ssh.socket"]) == "active",
             service_was_active: systemctl(&["is-active", "ssh.service"]) == "active",
         };
         must("/usr/bin/systemctl", &["stop", "ssh.service"]);
@@ -554,10 +556,24 @@ impl Drop for SocketActivation {
         ] {
             let _ = Command::new("/usr/bin/systemctl").args(args).output();
         }
-        if self.service_was_active {
-            let _ = Command::new("/usr/bin/systemctl")
-                .args(["start", "ssh.service"])
-                .output();
+        let mut restored = Vec::new();
+        for (was, unit) in [
+            (self.socket_was_active, "ssh.socket"),
+            (self.service_was_active, "ssh.service"),
+        ] {
+            if was {
+                let _ = Command::new("/usr/bin/systemctl")
+                    .args(["start", unit])
+                    .output();
+                restored.push((unit, systemctl(&["is-active", unit])));
+            }
+        }
+        // A test that already failed keeps its own message; else a host left as it was not
+        // found fails the test that changed it.
+        if !std::thread::panicking() {
+            for (unit, state) in restored {
+                assert_eq!(state, "active", "{unit} was not started again");
+            }
         }
     }
 }
