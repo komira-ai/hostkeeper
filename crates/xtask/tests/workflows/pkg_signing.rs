@@ -7,7 +7,7 @@
 //!   with [`BUILD_HELLO_PKG`] into `pkg/` (not `dist/`,
 //!   which its `assets-*` artifact uploads) and uploads them as [`UNSIGNED_ARTIFACT`].
 //! - **The key is held by one job that runs no repository code.** [`SIGN_JOB`] runs under
-//!   [`MACOS_SIGN_IF`] (a push to main, or a signing run: [`super::signing_run`]) in the environment [`SIGN_ENV`], on `macos-15`, needs exactly
+//!   [`SIGN_JOB_IF`] (a push to main, or a signing run: [`super::signing_run`]) in the environment [`SIGN_ENV`], on `macos-15`, needs exactly
 //!   `version` and `build-macos`, holds `contents: read` alone, and its steps are exactly
 //!   [`SIGN_STEPS`], in order: no checkout, no cargo. It imports the identity into a keychain of
 //!   the job (never the login keychain), signs each pkg with a trusted timestamp ([`SIGN`],
@@ -15,7 +15,7 @@
 //!   before it uploads the signed pkgs as [`SIGNED_ARTIFACT`].
 //! - **The secrets are named there alone.** No other job of the file, and nothing beside the
 //!   jobs, names a secret; that job names exactly [`SECRETS`], each only in the `env:` of a step.
-//! - **Each signed pkg is checked before it is published.** [`CHECK_JOB`] runs under [`MACOS_SIGN_IF`]
+//! - **Each signed pkg is checked before it is published.** [`CHECK_JOB`] runs under [`SIGN_JOB_IF`]
 //!   after [`SIGN_JOB`], with `contents: read` alone, and runs [`CHECK_SIGNATURE`] and the
 //!   comparison [`SAME_FILES`] of the expanded signed and unsigned installer, then
 //!   [`CHECK_HELLO_SIGNATURE`] and [`SAME_HELLO_FILES`] for hello's, and
@@ -35,7 +35,7 @@ use super::code_signing::{
 };
 use super::lint::{entries, entry, scalars};
 use super::release::{job, names, steps, text_of};
-use super::signing_run::MACOS_SIGN_IF;
+use super::signing_run::SIGN_JOB_IF;
 use super::yaml::Node;
 
 /// The job that signs.
@@ -414,7 +414,7 @@ fn sign_problems(doc: &Node) -> Vec<String> {
     let mut problems = job_problems(
         doc,
         SIGN_JOB,
-        (&["build-macos", "version"], MACOS_SIGN_IF),
+        (&["build-macos", "version"], SIGN_JOB_IF),
         &JOB_ENV,
     );
     let j = job(doc, SIGN_JOB);
@@ -582,7 +582,7 @@ fn check_problems(doc: &Node) -> Vec<String> {
     let mut problems = job_problems(
         doc,
         CHECK_JOB,
-        (&["sign-pkg", "version"], MACOS_SIGN_IF),
+        (&["sign-pkg", "version"], SIGN_JOB_IF),
         &JOB_ENV,
     );
     if let Some(j) = job(doc, CHECK_JOB) {

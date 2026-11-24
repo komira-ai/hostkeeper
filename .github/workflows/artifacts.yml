@@ -87,6 +87,13 @@
 # push run on main). release.yml starts when a push run of
 # this workflow on main completes, and publishes these files once `ci` and `privileged` have
 # passed on the same commit.
+#
+# Exactly one of compile-macos and compile-macos-farm runs, so every run skips the other. GitHub
+# skips a job whose `if:` names no status function (it reads as `success() && ...`) as soon as a
+# job it needs, at any depth, was skipped. So every job after the two compile jobs (sign-code,
+# build-macos, sign-pkg, check-pkg, sums, attest, verify) starts its `if:` with
+# `!cancelled() && !failure()`: it still never runs after a failure or a cancel, but a skipped
+# job it needs does not stop it. The workflow lint holds that (crates/xtask/tests/workflows/mac_farm.rs).
 name: artifacts
 
 on:
@@ -586,7 +593,7 @@ jobs:
   # worked. A secret that is not set stops the job by its name. Not notarized (docs/macos.md).
   # The signed programs go to `macho-signed-macos-arm64`. It needs both compile jobs, of which
   # one is skipped, so its `if:` asks that none of them failed or was cancelled rather than that
-  # both succeeded.
+  # both succeeded (see the header; sign-pkg and check-pkg take the same `if:`).
   sign-code:
     needs: [compile-macos, compile-macos-farm]
     if: ${{ !cancelled() && !failure() && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.sign && github.repository == 'komira-ai/hostkeeper' && startsWith(github.ref, 'refs/heads/'))) }}
@@ -939,7 +946,7 @@ jobs:
   # The signed pkgs go to `pkg-signed-macos-arm64`, which check-pkg checks.
   sign-pkg:
     needs: [version, build-macos]
-    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.sign && github.repository == 'komira-ai/hostkeeper' && startsWith(github.ref, 'refs/heads/')) }}
+    if: ${{ !cancelled() && !failure() && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.sign && github.repository == 'komira-ai/hostkeeper' && startsWith(github.ref, 'refs/heads/'))) }}
     runs-on: macos-15
     timeout-minutes: 15
     environment: pkg-signing
@@ -1006,7 +1013,7 @@ jobs:
   # so SHA256SUMS, the attestation and the release name the signed bytes.
   check-pkg:
     needs: [version, sign-pkg]
-    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.sign && github.repository == 'komira-ai/hostkeeper' && startsWith(github.ref, 'refs/heads/')) }}
+    if: ${{ !cancelled() && !failure() && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.sign && github.repository == 'komira-ai/hostkeeper' && startsWith(github.ref, 'refs/heads/'))) }}
     runs-on: macos-15
     timeout-minutes: 30
     permissions:
@@ -1221,7 +1228,7 @@ jobs:
   # it as `<file>.sigstore.json` for a host that verifies without GitHub.
   attest:
     needs: [version, sums]
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    if: ${{ !cancelled() && !failure() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -1551,7 +1558,7 @@ jobs:
   # the signer workflow, the ref refs/heads/main and this commit.
   verify:
     needs: [version, attest]
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    if: ${{ !cancelled() && !failure() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:

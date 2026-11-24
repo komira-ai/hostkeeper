@@ -5,11 +5,11 @@
 //! - **One input.** The `workflow_dispatch` trigger has exactly the input [`INPUT`], of
 //!   `type: boolean` and `default: false`, with a description and no other key: a run by hand
 //!   that does not ask signs nothing, as before.
-//! - **Where it signs.** The signing jobs (`sign-pkg`, `check-pkg`) and the steps of
-//!   `build-macos` that take or check the signed programs run under [`MACOS_SIGN_IF`] (held there
-//!   by [`super::pkg_signing`] and [`super::code_signing`]), and `sign-code` under
-//!   [`SIGN_CODE_IF`], the same condition once no compile job failed: a push to main, or a signing
-//!   run on a branch of this repository ([`ALLOWED`]). `attest` and `verify` stay under
+//! - **Where it signs.** The signing jobs (`sign-code`, `sign-pkg`, `check-pkg`) run under
+//!   [`SIGN_JOB_IF`] and the steps of `build-macos` that take or check the signed programs under
+//!   [`MACOS_SIGN_IF`] (held there by [`super::pkg_signing`] and [`super::code_signing`]): a push
+//!   to main, or a signing run on a branch of this repository ([`ALLOWED`]), the jobs' once no job
+//!   they need failed or was cancelled. `attest` and `verify` stay under
 //!   [`super::release::SIGN_IF`], a push to main alone, so a signing run attests nothing, and
 //!   release.yml plans only the completion of a push run on main, so it releases nothing.
 //! - **Refused by name elsewhere.** The first step of the job `version`, which every job needs,
@@ -22,32 +22,33 @@ use super::lint::{entries, entry, scalars};
 use super::release::{job, steps, text_of};
 use super::yaml::Node;
 
-/// Where a signing run may sign: a branch of this repository. A macro so that [`MACOS_SIGN_IF`]
-/// and [`REFUSE_IF`] are built from the one text.
+/// Where a signing run may sign: a branch of this repository. A macro so that [`MACOS_SIGN_IF`],
+/// [`SIGN_JOB_IF`] and [`REFUSE_IF`] are built from the one text.
 macro_rules! allowed {
     () => {
         "github.repository == 'komira-ai/hostkeeper' && startsWith(github.ref, 'refs/heads/')"
     };
 }
 
-/// The condition [`MACOS_SIGN_IF`] and [`REFUSE_IF`] hold a signing run to.
+/// The condition [`MACOS_SIGN_IF`], [`SIGN_JOB_IF`] and [`REFUSE_IF`] hold a signing run to.
 pub const ALLOWED: &str = allowed!();
 
 /// The input of `workflow_dispatch` that asks for a signing run.
 pub const INPUT: &str = "sign";
 
-/// The `if:` of the signing jobs and of the steps of `build-macos` that take or check the signed
-/// programs: a push to main, or a signing run on a branch of this repository.
+/// The `if:` of the steps of `build-macos` that take or check the signed programs: a push to
+/// main, or a signing run on a branch of this repository.
 pub const MACOS_SIGN_IF: &str = concat!(
     "${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.sign && ",
     allowed!(),
     ") }}"
 );
 
-/// The `if:` of `sign-code`: [`MACOS_SIGN_IF`]'s condition, once no job it needs failed or was
-/// cancelled. It needs both compile jobs, of which one is always skipped ([`super::mac_farm`]),
-/// and a job whose needs include a skipped one runs only under a status function.
-pub const SIGN_CODE_IF: &str = concat!(
+/// The `if:` of the signing jobs, `sign-code`, `sign-pkg` and `check-pkg`: [`MACOS_SIGN_IF`]'s
+/// condition, once no job they need failed or was cancelled. Each needs, at some depth, both
+/// compile jobs, of which one is always skipped, and a job whose needs include a skipped one runs
+/// only under a status function ([`super::mac_farm::AFTER_COMPILE`]).
+pub const SIGN_JOB_IF: &str = concat!(
     "${{ !cancelled() && !failure() && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.sign && ",
     allowed!(),
     ")) }}"
@@ -85,7 +86,7 @@ pub fn problems(doc: &Node) -> Vec<String> {
     let mut all = Vec::new();
     scalars(doc, &mut all);
     for text in all {
-        if text.contains("inputs.") && ![MACOS_SIGN_IF, SIGN_CODE_IF, REFUSE_IF].contains(&text) {
+        if text.contains("inputs.") && ![MACOS_SIGN_IF, SIGN_JOB_IF, REFUSE_IF].contains(&text) {
             problems.push(format!(
                 "artifacts.yml: `{text}` reads an input; only the signing conditions may"
             ));
