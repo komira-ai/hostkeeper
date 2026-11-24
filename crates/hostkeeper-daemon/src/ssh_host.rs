@@ -21,6 +21,9 @@ use hostkeeper_observe::CommandRunner;
 use crate::ssh_effective::Effective;
 use crate::ssh_files::Refused;
 
+/// The socket unit [`SshdUnit::Socket`] is.
+const SOCKET: &str = "ssh.socket";
+
 /// The longest a program of the host is given.
 pub const RUN_DEADLINE: Duration = Duration::from_secs(20);
 
@@ -32,8 +35,11 @@ pub const BANNER_WAIT: Duration = Duration::from_secs(5);
 pub enum SshdUnit {
     /// A service unit, by name: reloaded when its configuration changes.
     Service(String),
-    /// The socket unit is the active one: sshd is started per connection and reads its
-    /// configuration then, so there is nothing to reload.
+    /// The socket unit `ssh.socket` is the active one. With `Accept=yes` sshd is started per
+    /// connection and reads its configuration then; with `Accept=no` (Debian's and Ubuntu's
+    /// default) the first connection starts the service the socket triggers, which then listens
+    /// like any service and reads its configuration only at a reload, so a reload reloads that
+    /// service when it runs ([`SshHost::reload`]).
     Socket,
     /// A Mac's Remote Login: launchd starts sshd per connection, so as with a socket there is
     /// nothing to reload, and starting it is the `launchctl` ensure step of the design.
@@ -86,8 +92,9 @@ pub trait SshHost: Send + Sync {
     /// What failed.
     fn start(&self, unit: &SshdUnit) -> Result<(), String>;
 
-    /// Has sshd read its configuration again, keeping established sessions; nothing for a
-    /// socket or for launchd.
+    /// Has sshd read its configuration again, keeping established sessions: a service is
+    /// reloaded; for a socket, the service it triggers when the socket hands every connection to
+    /// one listener (`Accept=no`) and that service runs, else nothing; nothing for launchd.
     ///
     /// # Errors
     /// What failed.
@@ -235,17 +242,27 @@ impl SystemHost {
         }
     }
 
+    /// The services [`SOCKET`] hands its connections to as one listener: what it triggers when
+    /// its `Accept` is `no`, none when it is `yes` (sshd is then started per connection).
+    fn socket_listeners(&self) -> Result<Vec<String>, String> {
+        let args = ["show", "-p", "Accept,Triggers", SOCKET];
+        let text = self.succeed(&self.tools.systemctl, &args)?;
+        let value = |key: &str| property(&text, key);
+        if value("Accept") == "yes" {
+            return Ok(Vec::new());
+        }
+        Ok(value("Triggers")
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect())
+    }
+
     fn show(&self, unit: &str) -> Result<Props, UnitError> {
         let args = ["show", "-p", "LoadState,ActiveState,UnitFileState", unit];
         let Some((Some(0), text)) = self.run(&self.tools.systemctl, &args) else {
             return Err(UnitError::NoManager);
         };
-        let value = |key: &str| {
-            text.lines()
-                .filter_map(|line| line.split_once('='))
-                .find(|(name, _)| *name == key)
-                .map_or("", |(_, value)| value)
-        };
+        let value = |key: &str| property(&text, key);
         Ok(Props {
             loaded: value("LoadState") == "loaded",
             masked: value("LoadState") == "masked",
@@ -261,7 +278,7 @@ impl SshHost for SystemHost {
     }
 
     fn unit(&self) -> Result<SshdUnit, UnitError> {
-        if self.show("ssh.socket")?.active {
+        if self.show(SOCKET)?.active {
             return Ok(SshdUnit::Socket);
         }
         let mut masked = false;
@@ -295,7 +312,18 @@ impl SshHost for SystemHost {
 
     fn reload(&self, unit: &SshdUnit) -> Result<(), String> {
         match unit {
-            SshdUnit::Socket | SshdUnit::Launchd => Ok(()),
+            SshdUnit::Launchd => Ok(()),
+            SshdUnit::Socket => {
+                for name in self.socket_listeners()? {
+                    let props = self
+                        .show(&name)
+                        .map_err(|_| "systemctl failed".to_owned())?;
+                    if props.active {
+                        self.succeed(&self.tools.systemctl, &["reload", name.as_str()])?;
+                    }
+                }
+                Ok(())
+            }
             SshdUnit::Service(name) => self
                 .succeed(&self.tools.systemctl, &["reload", name.as_str()])
                 .map(drop),
@@ -453,6 +481,14 @@ impl SystemHost {
         }
         fs::read(&list).map_err(|e| format!("the revocation list: {e}"))
     }
+}
+
+/// The value of `key` in what `systemctl show` printed; empty when it printed none.
+fn property<'a>(text: &'a str, key: &str) -> &'a str {
+    text.lines()
+        .filter_map(|line| line.split_once('='))
+        .find(|(name, _)| *name == key)
+        .map_or("", |(_, value)| value)
 }
 
 /// Whether `shell` lets an account log in at all.

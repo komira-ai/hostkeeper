@@ -18,9 +18,11 @@
 //!    it: the login user must be able to log in by certificate alone and its trust files must be
 //!    the drop-in's; every other account's settings must be what they were
 //!    ([`crate::ssh_effective`]). A failure puts the files back.
-//! 4. A reload (never a restart) follows a change, and then a connection reads the banner;
-//!    without one the files are put back and sshd reloaded again. A socket-activated sshd, and a
-//!    Mac's, which launchd starts per connection, has no reload, only the check.
+//! 4. A reload (never a restart) follows a change, and the first record since the daemon
+//!    started, and then a connection reads the banner; without one the files are put back and
+//!    sshd reloaded again. Under socket activation the reload is the triggered service's, when
+//!    the socket hands its connections to one listener that runs ([`SshHost::reload`]); a Mac's
+//!    sshd, which launchd starts per connection, has no reload, only the check.
 //! 5. Passwords stay as found, unless the record says `off` and every account with a password
 //!    has a key path too (or is the login user). A Mac has no shadow file to read, so `off` is
 //!    `unsupported` there and nothing is written.
@@ -217,7 +219,13 @@ impl SshSetup {
         let files = wanted(&self.paths, &plan, revoked);
         self.check_candidate(&plan)?;
         let snapshot = Snapshot::of(&self.paths);
-        let applied = self.put(&files, &unit, &snapshot, || self.verify(&plan, &before));
+        // The first record since the daemon started reloads even when no file changes: the
+        // files may have been written by an earlier start that did not reload (or stopped
+        // before it did), and sshd -T reads the files, not what the listening sshd holds.
+        let first = held.taken.is_none();
+        let applied = self.put(&files, &unit, &snapshot, first, || {
+            self.verify(&plan, &before)
+        });
         if applied.is_ok() {
             held.serials = Some(plan.serials);
         }
@@ -236,19 +244,20 @@ impl SshSetup {
         checked.map_err(|()| Refused::new(SshState::ConfigInvalid, "sshd_t"))
     }
 
-    /// Installs `files`, reloads when something changed and runs `verify`; any failure puts
-    /// `snapshot` back and reloads again.
+    /// Installs `files`, reloads when something changed or `always` is set, and runs `verify`;
+    /// any failure puts `snapshot` back and reloads again.
     fn put(
         &self,
         files: &crate::ssh_files::Wanted,
         unit: &SshdUnit,
         snapshot: &Snapshot,
+        always: bool,
         verify: impl Fn() -> Result<(), Refused>,
     ) -> Result<(), Refused> {
         let step = || -> Result<(), Refused> {
             let changed = install(&self.paths, files, self.owner)
                 .map_err(|_| Refused::new(SshState::ConfigInvalid, "write"))?;
-            if changed {
+            if changed || always {
                 self.host
                     .reload(unit)
                     .map_err(|_| Refused::new(SshState::ReloadFailed, "reload"))?;

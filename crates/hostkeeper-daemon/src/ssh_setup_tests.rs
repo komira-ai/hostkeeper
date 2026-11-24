@@ -84,11 +84,11 @@ impl SshHost for FakeHost {
     }
 
     fn reload(&self, unit: &SshdUnit) -> Result<(), String> {
-        if *unit == SshdUnit::Socket {
-            return Ok(());
-        }
         let mut fake = self.lock();
-        fake.calls.push("reload".to_owned());
+        fake.calls.push(match unit {
+            SshdUnit::Service(_) => "reload".to_owned(),
+            other => format!("reload {other:?}"),
+        });
         if let Some(path) = &fake.sabotage {
             let _ = fs::remove_file(path);
             fs::create_dir_all(path).expect("a directory in the way");
@@ -866,15 +866,67 @@ fn an_account_with_keys_that_is_unchanged_is_fine() {
     assert_eq!(rig.apply(&access(1)).state, "applied");
 }
 
-/// Proves under socket activation there is no reload, only the check, the banner and the files.
+/// Proves under socket activation a change asks the host to reload the socket's sshd before the
+/// banner, as for a service: whether a socket has a listening sshd to reload is the host's to
+/// say (`SystemHost::reload`), and the setup never takes it that one does not.
+/// Catches: a setup that skips the reload for a socket unit, so that a listener the socket
+/// started before the change keeps refusing every certificate.
 #[test]
-fn a_socket_has_no_reload() {
+fn a_socket_is_reloaded_by_the_host_after_a_change() {
     let rig = Rig::new("ssh-socket");
     rig.host.lock().unit = Ok(SshdUnit::Socket);
     assert_eq!(rig.apply(&access(1)).state, "applied");
     assert_eq!(
         rig.host.calls(),
-        ["start", "revocations", "check", "banner 127.0.0.1:22"].map(str::to_owned)
+        [
+            "start",
+            "revocations",
+            "check",
+            "reload Socket",
+            "banner 127.0.0.1:22"
+        ]
+        .map(str::to_owned)
+    );
+}
+
+/// Proves the first record a daemon takes up after it starts reloads sshd even when every file
+/// is already what the record asks for (an earlier start wrote them), and that the same
+/// content at a later generation then reloads nothing.
+/// Catches: a daemon upgraded from one that wrote the files and never had the listening sshd
+/// read them, which would stay `applied` with every certificate refused.
+#[test]
+fn the_first_record_after_a_start_reloads_files_already_in_place() {
+    let rig = Rig::new("ssh-restart");
+    rig.apply(&access(1));
+    let written = rig.files();
+    let restarted = SshSetup::new(
+        Arc::clone(&rig.host) as Arc<dyn SshHost>,
+        rig.paths.clone(),
+        rustix::process::geteuid().as_raw(),
+        rig.log.clone(),
+    );
+    let before = rig.host.calls().len();
+    restarted.apply(&access(1));
+    assert_eq!(
+        restarted.report().map(|report| report.state),
+        Some("applied".to_owned())
+    );
+    assert_eq!(rig.files(), written);
+    assert_eq!(
+        rig.host.calls()[before..],
+        [
+            "start",
+            "revocations",
+            "check",
+            "reload",
+            "banner 127.0.0.1:22"
+        ]
+    );
+    let again = rig.host.calls().len();
+    restarted.apply(&access(2));
+    assert_eq!(
+        rig.host.calls()[again..],
+        ["start", "check", "banner 127.0.0.1:22"]
     );
 }
 
