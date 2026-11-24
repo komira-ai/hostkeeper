@@ -243,3 +243,64 @@ fn a_ca_copy_check_exits_0_for_the_pinned_ca_and_1_for_another() {
     assert_eq!(check(&pin), ExitCode::SUCCESS);
     assert_eq!(check(&other), ExitCode::from(1));
 }
+
+/// The `authorized_keys` line of the one key in the OpenSSH private key file at `path`: the
+/// public blob the file carries after its magic, cipher, kdf, kdf options and key count.
+fn public_line_of(path: &Path) -> String {
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD;
+
+    let text = std::fs::read_to_string(path).expect("the key file");
+    let body: String = text
+        .lines()
+        .filter(|line| !line.starts_with("-----"))
+        .collect();
+    let bytes = STANDARD.decode(body).expect("base64");
+    let mut at = b"openssh-key-v1\0".len();
+    for _ in ["cipher", "kdf", "kdf options"] {
+        let _ = take_string(&bytes, &mut at);
+    }
+    at += 4; // the key count
+    let blob = take_string(&bytes, &mut at);
+    format!("ssh-ed25519 {}", STANDARD.encode(blob))
+}
+
+/// The SSH wire string at `*at` in `bytes`, and `*at` moved past it.
+fn take_string<'a>(bytes: &'a [u8], at: &mut usize) -> &'a [u8] {
+    let len = u32::from_be_bytes(bytes[*at..*at + 4].try_into().expect("a length")) as usize;
+    let field = &bytes[*at + 4..*at + 4 + len];
+    *at += 4 + len;
+    field
+}
+
+/// Catches: `check-ca ssh` or its flags not wired to the binary, or an untrusted key that still
+/// exits 0: a key `ssh-ca init` made, checked against a hosts' file holding its line, exits 0,
+/// and against a file holding another CA's line only, exits 1.
+#[test]
+fn an_ssh_ca_copy_check_exits_0_for_a_trusted_key_and_1_for_another() {
+    let dir = scratch("verbs-check-ca-ssh");
+    let init = |name: &str| {
+        let out = dir.path().join(name);
+        assert_eq!(
+            main(args(&["ssh-ca", "init", "--out", text(&out)])),
+            ExitCode::SUCCESS
+        );
+        out.join("ssh_user_ca")
+    };
+    let fleet = init("fleet");
+    let other = init("other");
+    let public = dir.path().join("user_ca.pub");
+    let check = |line: String| {
+        std::fs::write(&public, format!("{line}\n")).expect("a public file");
+        main(args(&[
+            "check-ca",
+            "ssh",
+            "--key-file",
+            text(&fleet),
+            "--public-file",
+            text(&public),
+        ]))
+    };
+    assert_eq!(check(public_line_of(&fleet)), ExitCode::SUCCESS);
+    assert_eq!(check(public_line_of(&other)), ExitCode::from(1));
+}
