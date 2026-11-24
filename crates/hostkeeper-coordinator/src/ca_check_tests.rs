@@ -361,7 +361,7 @@ fn a_truncated_or_unsafe_ssh_key_file_is_refused() {
     assert!(refused.to_string().starts_with("--key-file: "), "{refused}");
 }
 
-/// Proves: a public file that is missing, too large, holds no key, or holds a line that is not
+/// Proves: a public file that is missing, too large, not text, holds no key, or holds a line that is not
 /// a public key is refused, naming the flag (and the line).
 /// Catches: an empty or broken hosts' file read as "no key to compare", and so a pass.
 #[test]
@@ -386,6 +386,15 @@ fn a_public_file_with_no_key_or_a_bad_line_is_refused() {
         refused.to_string(),
         format!(
             "--public-file: {}: too long for a public key file",
+            files.public.display()
+        )
+    );
+    put(&files.public, b"\xff\xfe\n", 0o644);
+    let refused = check_ssh(&files.key, &files.public).expect_err("not text");
+    assert_eq!(
+        refused.to_string(),
+        format!(
+            "--public-file: {}: stream did not contain valid UTF-8",
             files.public.display()
         )
     );

@@ -56,7 +56,7 @@ pub enum CheckCaCommand {
 /// The flags of `check-ca enrollment`.
 #[derive(Clone, Debug, Args)]
 pub struct Enrollment {
-    /// The CA key: PKCS#8 DER, a regular file of this user with mode 0600 or 0400.
+    /// The CA key: PKCS#8 DER, a regular file of this user closed to group and others.
     #[arg(long)]
     pub key_file: PathBuf,
     /// The CA certificate, DER (the coordinator's `<key>.cert`).

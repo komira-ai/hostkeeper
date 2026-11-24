@@ -10,7 +10,7 @@ up and restored as [coordinator-state.md](coordinator-state.md) says.
 | --- | --- | --- | --- |
 | The enrollment CA | `ca.key`, PKCS#8 DER of an ECDSA P-256 key, mode 0600; `ca.key.cert`, its self-signed certificate, DER, mode 0644. The paths are `--ca-key-file` and that path with `.cert` added | every daemon config's `ca_sha256`: the SHA-256 of `ca.key.cert`'s bytes | every daemon enrolled again, with a new `ca_sha256` in its config |
 | The fleet SSH user CA | `ssh_user_ca`, an unencrypted OpenSSH Ed25519 private key, mode 0600 (the file `ssh-ca init` wrote, and the file of `--ssh-ca-secret-file`; during a rotation that secret holds two keys) | every fleet host's `/etc/ssh/hostkeeper/user_ca.pub`, which the coordinator sends it | a new CA, trusted by every host, before anyone can sign in by a certificate |
-| The control-plane SSH user CA | `ssh_user_ca` as above, in a directory of its own (the file of `--ssh-cp-ca-secret-file`, when the coordinator holds it) | each control-plane host's `/etc/ssh/hostkeeper/user_ca.pub`, and the file of `--ssh-cp-ca-public-file` | the same, on the control-plane hosts |
+| The control-plane SSH user CA | `ssh_user_ca` as above, one key, in a directory of its own (the file of `--ssh-cp-ca-secret-file`, when the coordinator holds it) | each control-plane host's `/etc/ssh/hostkeeper/user_ca.pub`, and the file of `--ssh-cp-ca-public-file` | the same, on the control-plane hosts |
 
 What each file is and how it is made: [enrollment-coordinator.md](../enrollment-coordinator.md) and
 the deploy layout in [docs/deploy/coordinator](../deploy/coordinator/README.md) for the enrollment
@@ -127,8 +127,8 @@ Run it on the machine that holds the offline key, after step 4 above, and whenev
 is to be trusted again (before a move, or yearly). It reads the copy, checks it against what the
 fleet pins today, and removes what it decrypted; it changes nothing of the fleet.
 
-1. Check the encrypted file is the one on the label, then decrypt it into an empty directory in
-   memory (`<ca>` is `enrollment`, `fleet` or `control-plane`):
+1. Mount the medium (`<medium>`), check the encrypted file is the one on the label, then decrypt
+   it into an empty directory in memory (`<ca>` is `enrollment`, `fleet` or `control-plane`):
 
    ```sh
    umask 077
