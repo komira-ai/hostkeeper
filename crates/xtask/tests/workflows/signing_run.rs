@@ -5,17 +5,18 @@
 //! - **One input.** The `workflow_dispatch` trigger has exactly the input [`INPUT`], of
 //!   `type: boolean` and `default: false`, with a description and no other key: a run by hand
 //!   that does not ask signs nothing, as before.
-//! - **Where it signs.** The signing jobs (`sign-code`, `sign-pkg`, `check-pkg`) and the steps of
+//! - **Where it signs.** The signing jobs (`sign-pkg`, `check-pkg`) and the steps of
 //!   `build-macos` that take or check the signed programs run under [`MACOS_SIGN_IF`] (held there
-//!   by [`super::pkg_signing`] and [`super::code_signing`]): a push to main, or a signing run on a
-//!   branch of this repository ([`ALLOWED`]). `attest` and `verify` stay under
+//!   by [`super::pkg_signing`] and [`super::code_signing`]), and `sign-code` under
+//!   [`SIGN_CODE_IF`], the same condition once no compile job failed: a push to main, or a signing
+//!   run on a branch of this repository ([`ALLOWED`]). `attest` and `verify` stay under
 //!   [`super::release::SIGN_IF`], a push to main alone, so a signing run attests nothing, and
 //!   release.yml plans only the completion of a push run on main, so it releases nothing.
 //! - **Refused by name elsewhere.** The first step of the job `version`, which every job needs,
 //!   is [`REFUSE_RUN`], named [`REFUSE_NAME`], under [`REFUSE_IF`], the negation of [`ALLOWED`]: a signing run on a tag or
 //!   in a fork's copy of the file fails by name instead of going green unsigned.
 //! - **Nothing else reads the input.** Every scalar of the file that names `inputs.` is one of
-//!   those two conditions, so no other job, step, `env:` or `with:` takes it.
+//!   those three conditions, so no other job, step, `env:` or `with:` takes it.
 
 use super::lint::{entries, entry, scalars};
 use super::release::{job, steps, text_of};
@@ -41,6 +42,15 @@ pub const MACOS_SIGN_IF: &str = concat!(
     "${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.sign && ",
     allowed!(),
     ") }}"
+);
+
+/// The `if:` of `sign-code`: [`MACOS_SIGN_IF`]'s condition, once no job it needs failed or was
+/// cancelled. It needs both compile jobs, of which one is always skipped ([`super::mac_farm`]),
+/// and a job whose needs include a skipped one runs only under a status function.
+pub const SIGN_CODE_IF: &str = concat!(
+    "${{ !cancelled() && !failure() && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.sign && ",
+    allowed!(),
+    ")) }}"
 );
 
 /// The `if:` of the refusal: a signing run anywhere [`ALLOWED`] does not hold.
@@ -75,7 +85,7 @@ pub fn problems(doc: &Node) -> Vec<String> {
     let mut all = Vec::new();
     scalars(doc, &mut all);
     for text in all {
-        if text.contains("inputs.") && text != MACOS_SIGN_IF && text != REFUSE_IF {
+        if text.contains("inputs.") && ![MACOS_SIGN_IF, SIGN_CODE_IF, REFUSE_IF].contains(&text) {
             problems.push(format!(
                 "artifacts.yml: `{text}` reads an input; only the signing conditions may"
             ));

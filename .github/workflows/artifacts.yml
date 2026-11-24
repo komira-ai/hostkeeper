@@ -68,11 +68,13 @@
 # workflow file that ran the signing step, and every consumer verifies exactly
 # `komira-ai/hostkeeper/.github/workflows/artifacts.yml` on `refs/heads/main`. Do not move or
 # rename it. Only `attest` holds `id-token: write` and `attestations: write`, and only under its
-# exact `if:` (the workflow lint, crates/xtask/tests/workflows, holds both). While it holds them
-# no repository code runs and nothing is built: it runs pinned actions, two `sha256sum --check`
-# and a `cp` per bundle. The files reach it through the run's artifact store, where a job that ran
-# repository code could have replaced them, so it first refuses sums other than the ones the sums
-# job published (their digest is a job output) and then files that differ from the sums.
+# exact `if:` (the workflow lint, crates/xtask/tests/workflows, holds both). (compile-macos-farm
+# grants `id-token: write` to mac-farm.yml, which it calls: a token minted there names
+# mac-farm.yml as its signer, never this file.) While attest holds them no repository code runs
+# and nothing is built: it runs pinned actions, two `sha256sum --check` and a `cp` per bundle.
+# The files reach it through the run's artifact store, where a job that ran repository code could
+# have replaced them, so it first refuses sums other than the ones the sums job published (their
+# digest is a job output) and then files that differ from the sums.
 #
 # No pull request runs this workflow (AGENTS.md B9: a pull request runs only build and unit tests
 # with coverage, and never a macOS job). A push to main builds, sums, signs and checks what it signed (`verify`); a run
@@ -501,10 +503,14 @@ jobs:
 
   # The four Mach-O programs of macos-arm64, compiled and nothing else: no secret reaches this job,
   # which runs repository code (build scripts and dependencies). They are signed by sign-code, a
-  # job that runs none, and packaged by build-macos.
+  # job that runs none, and packaged by build-macos. It runs on a GitHub-hosted Mac only where the
+  # build farm is not configured (the organisation's variable FARM_ADDRESS is empty, or the file
+  # runs in a fork); otherwise compile-macos-farm compiles the same programs on a farm Mac and
+  # uploads the same artifact, and this job is skipped. Exactly one of the two runs.
   compile-macos:
     name: compile macos-arm64
     needs: [version]
+    if: ${{ vars.FARM_ADDRESS == '' || github.repository != 'komira-ai/hostkeeper' }}
     runs-on: macos-15
     timeout-minutes: 45
     permissions:
@@ -545,6 +551,28 @@ jobs:
           retention-days: 90
           if-no-files-found: error
 
+  # compile-macos's programs, compiled on a Mac of the build farm instead of a GitHub-hosted one
+  # (docs/design/mac-farm.md), where the farm is configured: this job runs when the organisation's
+  # variable FARM_ADDRESS is set and the file runs in this repository, and compile-macos when not.
+  # It calls mac-farm.yml, whose one job builds the four programs on a farm Mac and uploads them as
+  # the artifact compile-macos uploads, so sign-code signs whichever of the two jobs ran. That job
+  # joins the farm's tailnet with the run's OIDC token, which is why this call grants
+  # `id-token: write`, under its exact `if:` (the workflow lint,
+  # crates/xtask/tests/workflows/mac_farm.rs). The token is minted in mac-farm.yml, not here: a
+  # certificate Sigstore issues for it names mac-farm.yml as its signer, never artifacts.yml, so
+  # the repository code that job runs cannot sign anything a consumer of this file's attestations
+  # accepts (see the header: attest stays the one job of this file whose token can).
+  compile-macos-farm:
+    name: compile macos-arm64 on the farm
+    needs: [version]
+    if: ${{ vars.FARM_ADDRESS != '' && github.repository == 'komira-ai/hostkeeper' }}
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/mac-farm.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+
   # A push to main or a signing run: each Mach-O program signed with the Developer ID Application identity under
   # its stable identifier (xtask's mac_programs.rs), with the hardened runtime and a trusted
   # timestamp, BEFORE build-macos packages it, so the pkgs and the tarballs hold signed programs.
@@ -556,10 +584,12 @@ jobs:
   # SIGN_CODE_STEPS (crates/xtask/tests/workflows). The key is in a keychain of this job, never the
   # login keychain; the keychain and the PKCS#12 file are deleted whether or not the signing
   # worked. A secret that is not set stops the job by its name. Not notarized (docs/macos.md).
-  # The signed programs go to `macho-signed-macos-arm64`.
+  # The signed programs go to `macho-signed-macos-arm64`. It needs both compile jobs, of which
+  # one is skipped, so its `if:` asks that none of them failed or was cancelled rather than that
+  # both succeeded.
   sign-code:
-    needs: [compile-macos]
-    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.sign && github.repository == 'komira-ai/hostkeeper' && startsWith(github.ref, 'refs/heads/')) }}
+    needs: [compile-macos, compile-macos-farm]
+    if: ${{ !cancelled() && !failure() && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.sign && github.repository == 'komira-ai/hostkeeper' && startsWith(github.ref, 'refs/heads/'))) }}
     runs-on: macos-15
     timeout-minutes: 15
     environment: pkg-signing
@@ -673,7 +703,7 @@ jobs:
   # push to main or in a signing run, and as the linker signed them (ad hoc) in another run by hand.
   build-macos:
     name: macos-arm64
-    needs: [version, compile-macos, sign-code]
+    needs: [version, compile-macos, compile-macos-farm, sign-code]
     if: ${{ !cancelled() && !failure() }}
     runs-on: macos-15
     timeout-minutes: 45

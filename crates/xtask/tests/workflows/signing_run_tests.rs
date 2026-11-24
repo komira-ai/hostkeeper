@@ -10,6 +10,7 @@ use super::pkg_signing::{CHECK_JOB, SIGN_JOB};
 use super::release::SIGN_IF;
 use super::signing_run::{
     ALLOWED, INPUT_PROBLEM, MACOS_SIGN_IF, REFUSE_IF, REFUSE_NAME, REFUSE_PROBLEM, REFUSE_RUN,
+    SIGN_CODE_IF,
 };
 use super::{with_in, workflows};
 
@@ -288,7 +289,8 @@ fn the_evaluator_reads_a_boolean_input_as_a_boolean_and_starts_with_ignoring_cas
 #[test]
 fn the_committed_artifacts_yml_has_the_one_input_the_refusal_first_and_signs_under_the_condition() {
     // Catches: the rules refusing the committed file, or the signing condition missing from a
-    // signing job or a step of build-macos that takes or checks the signed programs (three jobs,
+    // signing job or a step of build-macos that takes or checks the signed programs (two jobs
+    // under it and sign-code under its own, once no compile job failed,
     // the download of the signed programs, the two records of the packaged hostkeeper's
     // signature and the two checks of the packaged programs).
     let text = artifacts_yml();
@@ -296,7 +298,11 @@ fn the_committed_artifacts_yml_has_the_one_input_the_refusal_first_and_signs_und
     assert_eq!(
         text.matches(&format!("\n    if: {MACOS_SIGN_IF}\n"))
             .count(),
-        3
+        2
+    );
+    assert_eq!(
+        text.matches(&format!("\n    if: {SIGN_CODE_IF}\n")).count(),
+        1
     );
     assert_eq!(
         text.matches(&format!("        if: {MACOS_SIGN_IF}\n"))

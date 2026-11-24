@@ -24,6 +24,8 @@ async-channel 2.5.0 18624
 async-trait 0.1.92 32039
 atomic-waker 1.1.2 12422
 autocfg 1.5.1 18911
+axum 0.8.9 180525
+axum-core 0.5.6 26769
 base16ct 1.0.0 10594
 base64 0.22.1 81597
 base64 0.23.1 93605
@@ -208,11 +210,13 @@ logos 0.16.1 28172
 logos-codegen 0.16.1 51792
 logos-derive 0.16.1 8193
 lzma-rs 0.3.0 29080
+matchit 0.8.4 33986
 md-5 0.11.0 17404
 md5 0.8.1 7344
 memchr 2.8.3 99165
 miette 7.6.0 114499
 miette-derive 7.6.0 17249
+mime 0.3.18 16648
 minimal-lexical 0.2.1 94841
 miniz_oxide 0.9.1 70519
 mio 1.2.4 110437

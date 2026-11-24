@@ -3,9 +3,12 @@
 //!
 //! - **The programs are compiled by a job that holds no secret.** [`COMPILE_JOB`] needs exactly
 //!   `version`, runs on `macos-15` with `contents: read` alone, and uploads the four programs
-//!   of [`PROGRAMS`] as [`UNSIGNED_MACHO`].
+//!   of [`PROGRAMS`] as [`UNSIGNED_MACHO`]; where the build farm is configured, [`FARM_JOB`]
+//!   calls `mac-farm.yml`, which compiles them on a farm Mac instead and uploads them as the same
+//!   artifact (the rules of both are [`super::mac_farm`]'s).
 //! - **The key is held by one job that runs no repository code.** [`SIGN_CODE_JOB`] runs under
-//!   [`MACOS_SIGN_IF`] in the environment [`SIGN_ENV`] on `macos-15`, needs exactly [`COMPILE_JOB`],
+//!   [`SIGN_CODE_IF`] in the environment [`SIGN_ENV`] on `macos-15`, needs exactly [`COMPILE_JOB`]
+//!   and [`FARM_JOB`] (one of which is skipped),
 //!   holds `contents: read` alone, has the `env:` [`CODE_IDENTITY`] alone, and its steps are
 //!   exactly [`SIGN_CODE_STEPS`], in order: no checkout, no cargo. A secret that is not set stops
 //!   it by its name. Apple's intermediate joins the keychain only as the file of
@@ -16,8 +19,8 @@
 //!   runs under [`ALWAYS`].
 //! - **The secrets are named there alone** ([`CODE_SECRETS`]; `super::pkg_signing` holds the
 //!   installer's two to its own job).
-//! - **The pkgs and the tarballs hold the signed programs.** `build-macos` needs [`COMPILE_JOB`]
-//!   and [`SIGN_CODE_JOB`] and runs under [`SUMS_IF`] (a run by hand that is not a signing run skips the signing); it
+//! - **The pkgs and the tarballs hold the signed programs.** `build-macos` needs [`COMPILE_JOB`],
+//!   [`FARM_JOB`] and [`SIGN_CODE_JOB`] and runs under [`SUMS_IF`] (a run by hand that is not a signing run skips the signing); it
 //!   builds nothing, downloads [`UNSIGNED_MACHO`] into `target/release`, then, under [`MACOS_SIGN_IF`],
 //!   [`SIGNED_MACHO`] over it, then sets the modes; under [`MACOS_SIGN_IF`] it checks the signature of
 //!   the packaged `hostkeeper` and `hk`.
@@ -27,11 +30,12 @@
 //!   [`super::pkg_signing::CHECK_STEPS`].
 
 use super::lint::entry;
+use super::mac_farm::{self, CALLER_JOB as FARM_JOB};
 use super::pkg_signing::{
     ALWAYS, SIGN_ENV, SUMS_IF, Step, artifact, job_problems, pairs, steps_problems, uses_of,
 };
 use super::release::{job, names, steps, text_of};
-use super::signing_run::{self, MACOS_SIGN_IF};
+use super::signing_run::{self, MACOS_SIGN_IF, SIGN_CODE_IF};
 use super::yaml::Node;
 
 /// The job that compiles the programs.
@@ -263,6 +267,7 @@ pub const SIGN_CODE_STEPS: [Step; 27] = [
 /// One line per rule of this module that `doc`, artifacts.yml, breaks.
 pub fn problems(doc: &Node) -> Vec<String> {
     let mut problems = compile_problems(doc);
+    problems.extend(mac_farm::artifacts_problems(doc));
     problems.extend(sign_code_problems(doc));
     problems.extend(build_problems(doc));
     problems.extend(signing_run::problems(doc));
@@ -314,7 +319,7 @@ fn sign_code_problems(doc: &Node) -> Vec<String> {
     let mut problems = job_problems(
         doc,
         SIGN_CODE_JOB,
-        &[COMPILE_JOB],
+        (&[COMPILE_JOB, FARM_JOB], SIGN_CODE_IF),
         &[("IDENTITY", CODE_IDENTITY)],
     );
     let j = job(doc, SIGN_CODE_JOB);
@@ -365,9 +370,9 @@ fn build_problems(doc: &Node) -> Vec<String> {
         return vec![format!("artifacts.yml: has no job {BUILD_JOB}")];
     };
     let mut problems = Vec::new();
-    if names(entry(j, "needs")) != [COMPILE_JOB, SIGN_CODE_JOB, "version"] {
+    if names(entry(j, "needs")) != [COMPILE_JOB, FARM_JOB, SIGN_CODE_JOB, "version"] {
         problems.push(format!(
-            "artifacts.yml: job {BUILD_JOB} must need exactly [\"{COMPILE_JOB}\", \"{SIGN_CODE_JOB}\", \"version\"]"
+            "artifacts.yml: job {BUILD_JOB} must need exactly [\"{COMPILE_JOB}\", \"{FARM_JOB}\", \"{SIGN_CODE_JOB}\", \"version\"]"
         ));
     }
     if text_of(Some(j), "if") != Some(SUMS_IF) {

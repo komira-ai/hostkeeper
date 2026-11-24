@@ -135,23 +135,28 @@ fn only_the_attest_job_holds_id_token_write() {
         .filter(|a| a.scope == "id-token" || a.scope == "attestations")
         .map(|a| (a.file, a.job))
         .collect();
-    // The two other jobs with `id-token: write` sign nothing, and hold no `attestations` scope:
-    // the coordinator wait of release.yml holds it for the tailnet join (coordinator_wait_tests.rs),
-    // and the control-plane deploy for the OIDC tokens of its requests (cp_deploy_tests.rs).
+    // The other jobs with `id-token: write` hold no `attestations` scope: the coordinator wait of
+    // release.yml holds it for the tailnet join (coordinator_wait_tests.rs), the control-plane
+    // deploy for the OIDC tokens of its requests (cp_deploy_tests.rs), and the farm build of the
+    // macOS programs for its tailnet join, in mac-farm.yml, whose token names that file as its
+    // signer, not artifacts.yml (mac_farm_tests.rs); artifacts.yml's job compile-macos-farm only
+    // grants it the scope.
     assert_eq!(
         signers,
         [
             ("artifacts.yml", "attest"),
             ("artifacts.yml", "attest"),
             ("release.yml", "coordinator"),
-            ("release.yml", "cp-deploy")
+            ("release.yml", "cp-deploy"),
+            ("artifacts.yml", "compile-macos-farm"),
+            ("mac-farm.yml", "compile"),
         ]
     );
-    assert!(
-        WRITE_ALLOWED
-            .iter()
-            .all(|a| (a.job != "coordinator" && a.job != "cp-deploy") || a.scope == "id-token")
-    );
+    assert!(WRITE_ALLOWED.iter().all(|a| (a.job != "coordinator"
+        && a.job != "cp-deploy"
+        && a.job != "compile-macos-farm"
+        && a.job != "compile")
+        || a.scope == "id-token"));
     let version_job = "  version:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 15\n    permissions:\n      contents: read\n";
     let text = with_in(
         &workflow("artifacts.yml"),
@@ -233,7 +238,7 @@ fn publish_job_alone_holds_contents_write() {
         &text,
         "job plan: `contents: write` is not allowed in release.yml",
     );
-    let attest = "      id-token: write\n";
+    let attest = "      id-token: write\n      attestations: write\n";
     let text = with_in(
         &workflow("artifacts.yml"),
         attest,

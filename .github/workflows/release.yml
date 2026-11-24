@@ -2300,7 +2300,11 @@ jobs:
   # build and its signing remain the one macOS work of every merge.
 
   # macos-test: the stage above. The build restores the cache macos-device saves, whose
-  # dependencies it shares (this job saves none).
+  # dependencies it shares (this job saves none). It stays on a hosted Mac: on a farm Mac
+  # (docs/design/mac-farm.md) hostkeeper-config, -launchd, -openrc, -placed, -proto, -release and
+  # -wire pass, and hello, hostkeeper, -bootstrap, -daemon, -enroll, -hook, -install, -link,
+  # -observe, -package and -steps fail (sockets, setuid bits the sandbox strips, the farm Mac's own
+  # settings); AGENTS.md B9 names this job as the one that runs all of them.
   macos-test:
     needs: [plan, newest]
     if: ${{ needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' }}

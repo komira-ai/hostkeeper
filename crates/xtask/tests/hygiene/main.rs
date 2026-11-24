@@ -10,7 +10,8 @@
 //! not scanned either: each is a third-party library's file kept byte for byte as its authors
 //! published it (minified code whose property names read as host names), and a change to one is a
 //! change of its SHA-256 pin, which `cargo test -p hostkeeper-ui-tests --test sources` holds; a
-//! file under `ui/vendor/` with no pin is scanned. The licence text ([`LICENCE_FILE`]) and the Sigstore trusted root ([`TRUSTED_ROOT_FILE`])
+//! file under `ui/vendor/` with no pin is scanned. Nor are the vendored protos of `mac-farm`, for the
+//! same reason ([`vendored_protos`]). The licence text ([`LICENCE_FILE`]) and the Sigstore trusted root ([`TRUSTED_ROOT_FILE`])
 //! are scanned by every rule but the date rule, because each is verbatim third-party text with
 //! its authors' dates; so are the pin lines of the pinned Debian packages (`.github/debs/*.toml`),
 //! each a package's version and path as Canonical's signed index spells them. Test sources that need a text a
@@ -23,6 +24,7 @@ mod rust_text;
 #[path = "../../src/testdir.rs"]
 mod testdir;
 mod tlds;
+mod vendored_protos;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -189,6 +191,7 @@ fn hygiene_lint_passes_the_tree() {
     );
     let lists = real_lists();
     let mut found = Vec::new();
+    let paths = vendored_protos::unpinned(paths, vendored_protos::PINS_TEXT);
     for (path, text) in texts(&root, scanned(paths, VENDOR_PINS_TEXT)) {
         found.extend(reasons(lint(&path, &text, &lists)));
     }
