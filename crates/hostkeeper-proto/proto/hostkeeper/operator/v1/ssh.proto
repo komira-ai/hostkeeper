@@ -74,7 +74,8 @@ enum SshRefusal {
   SSH_REFUSAL_BAD_KEY = 6;
   // NOT_FOUND: a host id that is no enrolled, approved host's.
   SSH_REFUSAL_UNKNOWN_HOST = 7;
-  // FAILED_PRECONDITION: the coordinator holds no SSH user CA, so nothing is signed or tunnelled.
+  // FAILED_PRECONDITION: the coordinator holds no SSH user CA, so nothing is signed or tunnelled;
+  // or `SignUserCert` names a Mac while the coordinator names no login user for Macs.
   SSH_REFUSAL_NOT_CONFIGURED = 8;
   // FAILED_PRECONDITION: the host's last heartbeat is older than `--ssh-live-s`.
   SSH_REFUSAL_HOST_NOT_LIVE = 9;

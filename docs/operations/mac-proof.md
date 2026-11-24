@@ -115,7 +115,8 @@ hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-
 # (a) only when not_configured: on the owner's machine, hostkeeper-coordinator ssh-ca init --out <ca-dir> (keep the offline copy as ca-backup.md says);
 #     the coordinator's ssh-ca-secret-file names that key as a secret file (its user's, mode 0600 or 0400), with ssh-operators-file and database-dsn-file; restart the coordinator once
 #     this reaches every host: each daemon that announces ssh-v1 then sets its sshd up for the CA (ssh-ca.md, "What hosts are sent"); read every host's ssh.state after it
-#     ssh-login-user-macos empty (the default) has a Mac's daemon log in its one visible administrator (docs/macos.md, the login user)
+#     ssh-login-user-macos names the account hk ssh logs in as on every Mac (each Mac's one visible administrator); empty (the default), a Mac's daemon still trusts the CA for its
+#     administrator, but the coordinator refuses to sign for a Mac (not_configured), since it does not know that account (docs/operations/ssh-ca.md, the certificate)
 # (b) ssh operators file: an [[operator]] entry for the proof operator with hosts = ["<node-id>"], which holds before and after the move; read again at every call
 # (c) operator-keys file: add [host-groups."mac-proof"] with keys = [the proof operator's public key line], keeping every other group's table;
 #     a coordinator given no operator-keys-file before needs it named and one restart, else the change is read within one tls-reload-secs
