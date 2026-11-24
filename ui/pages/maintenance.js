@@ -7,7 +7,7 @@
 // card per group, in name order and Unassigned (the hosts in no group) last; a card lists the group's
 // hosts that have something due first, then the others, each in name order, each a link to its host
 // page. A due host's row has an Update button; the card has one Reason field for its buttons, an Update
-// button for the group (not on Unassigned) and a Schedule... button that opens the Schedule form
+// button for the group (not on Unassigned) and, beside it, a Schedule... button that opens the Schedule form
 // (`schedule.js`) for the group's hosts, with the group's policy read when it is opened. A host whose
 // daemon sends no report says so; a stale look is said to be stale.
 // Calls: Hosts.List, every page of it, when the page is read and again every REFRESH_SECONDS through
@@ -108,18 +108,19 @@ function groupCard(env, group, members) {
       h("td", {}, dueWords(host)),
       h("td", {}, lookWords(host)),
       h("td", {}, isDue(host) ? updateButton(updating, { hostIds: [nameOf(host)] }) : null)))),
-    h("div", { class: "actions", name: "group-actions" },
+    h("div", { name: "group-actions" },
       field("Reason", "update-reason", state, "reason", { maxlength: 256 }),
-      group === "" ? null : updateButton(updating, { hostGroup: group }, "Update the group"),
-      action(ctx, open === undefined ? "Schedule..." : "Close the form", "open-schedule", async () => {
-        if (open !== undefined) {
-          env.forms.delete(key);
-        } else {
-          const policy = await policyOf(ctx, group);
-          env.forms.set(key, { form: newScheduleState({ hosts: members, group, policy, hostId: "" }), policy });
-        }
-        env.repaint();
-      })),
+      h("div", { class: "buttons" },
+        group === "" ? null : updateButton(updating, { hostGroup: group }, "Update the group"),
+        action(ctx, open === undefined ? "Schedule..." : "Close the form", "open-schedule", async () => {
+          if (open !== undefined) {
+            env.forms.delete(key);
+          } else {
+            const policy = await policyOf(ctx, group);
+            env.forms.set(key, { form: newScheduleState({ hosts: members, group, policy, hostId: "" }), policy });
+          }
+          env.repaint();
+        }))),
     open === undefined ? null : scheduleForm({
       ctx, schedule: env.schedule, after: env.after, repaint: env.repaint, form: open.form,
     }, { hosts: members, group, policy: open.policy, hostId: "" }));

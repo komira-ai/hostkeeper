@@ -13,11 +13,15 @@
 //   would be (a request without `confirm`) and the form shows each host it would take, each it leaves
 //   out and why, and a host whose Xcode default would move; its Schedule button stores the run. The
 //   form's state, from `newScheduleState`, is kept by the page across repaints. A due kind that is new
-//   since the form was opened is ticked, as the others were.
+//   since the form was opened is ticked, as the others were. A window field left empty is said to
+//   be not set.
+// - `refusalWords` says a refusal of the Maintenance calls in words when the operator can act on it
+//   (nothing due, the group's last host, a host already in a run...), and as its code and token
+//   otherwise; the Update button, Check and Schedule here and the runs' buttons (`runs.js`) report it.
 // - `localToUnix` and `unixToLocal` convert a wall-clock time and unix seconds through the zone's
 //   offset at an instant; `skipWords`, `kindWords` and `dueKinds` say the coordinator's enums in words.
 
-import { h, action, checkbox, enumLabel, field, fmtUnix, list, reasonProblem, select, table, trimmed } from "./view.js";
+import { h, action, checkbox, describeError, enumLabel, field, fmtUnix, list, reasonProblem, select, table, trimmed } from "./view.js";
 import { isDue } from "./updates.js";
 
 const KIND = "MAINTENANCE_KIND_";
@@ -55,6 +59,29 @@ export function skipWords(value) {
     return "";
   }
   return SKIP_WORDS[value] || enumLabel(value, SKIP);
+}
+
+// The words for a refusal of Maintenance.Schedule, Cancel, RetryHost or PutBack that the operator can
+// act on; any other is said as its code and token.
+const REFUSALS = {
+  nothing_due: "Nothing of what was asked is due on those hosts, or every host with something due would be skipped: no run was stored.",
+  last_host: "That would take every host of the group at once: no run was stored. To take them all, use the Schedule form of the Maintenance page or the host page with \"Take the group's last host\" ticked.",
+  host_in_maintenance: "A host it would take is already in a run that has not ended: no run was stored.",
+  window_ended: "The window has already ended: no run was stored.",
+  unknown_group: "The coordinator knows no host group of this name: no run was stored.",
+  unknown_host: "The coordinator knows no host of this id: no run was stored.",
+  unknown_run: "The coordinator knows no run of this id.",
+  not_in_run: "This host is not in the run.",
+  run_ended: "The run has already ended.",
+  not_halted: "This host is not halted any more.",
+  audit_unavailable: "The coordinator could not write the audit entry. Nothing was done; try again.",
+};
+
+// A refusal (or any error) of a Maintenance call in words: the sentence of `REFUSALS` for its
+// token, else what `describeError` says of it.
+export function refusalWords(error) {
+  const reason = error && typeof error.reason === "string" ? error.reason : "";
+  return Object.prototype.hasOwnProperty.call(REFUSALS, reason) ? REFUSALS[reason] : describeError(error);
 }
 
 // A kind of maintenance in words.
@@ -173,7 +200,12 @@ export function updateButton(env, target, label) {
     if (!env.ctx.confirm(`Update ${whatOf(request)}? ${UPDATE_QUESTION_TAIL}`)) {
       return "Not updated.";
     }
-    const answer = await env.schedule(request);
+    let answer;
+    try {
+      answer = await env.schedule(request);
+    } catch (error) {
+      return refusalWords(error);
+    }
     if (env.after) {
       await env.after();
     }
@@ -412,9 +444,12 @@ function hostPicks(form, scope) {
   });
 }
 
-// The window's converted times, as UTC, in words.
+// The window's converted times, as UTC, in words; a field left empty is not set.
 function windowWords(form, offsetAt) {
   const said = (text) => {
+    if (trimmed(text) === "") {
+      return "not set";
+    }
     const unix = localToUnix(text, offsetAt);
     return unix === null ? "not a date and time" : fmtUnix(unix);
   };
@@ -459,7 +494,7 @@ export function scheduleForm(env, scope) {
     field(deadlineLabel(scope.policy), "drain-deadline", form, "deadline"),
     checkbox("Take the group's last host", "take-last-host", form, "takeLast"),
     field("Reason", "schedule-reason", form, "reason", { maxlength: 256 }),
-    action(ctx, "Check", "schedule-check", async () => {
+    h("div", { class: "buttons" }, action(ctx, "Check", "schedule-check", async () => {
       const built = scheduleRequest(form, scope, ctx.localOffset, true);
       if (built.problem !== undefined) {
         return built.problem;
@@ -468,7 +503,12 @@ export function scheduleForm(env, scope) {
       if (problem !== null) {
         return problem;
       }
-      const answer = await env.schedule(built.request);
+      let answer;
+      try {
+        answer = await env.schedule(built.request);
+      } catch (error) {
+        return refusalWords(error);
+      }
       form.preview = list(answer, "hosts");
       env.repaint();
       const skipped = form.preview.filter((turn) => turn.step === `${STEP}SKIPPED`).length;
@@ -487,12 +527,17 @@ export function scheduleForm(env, scope) {
       if (!ctx.confirm(`Schedule maintenance of ${whatOf(request)}? ${UPDATE_QUESTION_TAIL}`)) {
         return "Not scheduled.";
       }
-      const answer = await env.schedule(request);
+      let answer;
+      try {
+        answer = await env.schedule(request);
+      } catch (error) {
+        return refusalWords(error);
+      }
       if (env.after) {
         await env.after();
       }
       return scheduled(answer);
-    }, { class: "primary" }),
+    }, { class: "primary" })),
     form.preview === null ? null : previewView(form, scope));
   return h("fieldset", { name: "schedule-form" }, body);
 }

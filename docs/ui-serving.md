@@ -104,11 +104,15 @@ by their route and are not in the menu.
   says so. After the fleet's count comes the runs (`ui/runs.js`): `Maintenance.List` (the last 10) and `Maintenance.Get` of each
   run that is not done, read when opened, every 10 seconds (the page is drawn again only when the runs changed) and after a stored run; a list that fails is said there and the rest of
   the page stays. Each run shows its state, scope, window, batch, reason and its hosts with each one's step, with a Console or
-  Desktop link while it restarts (the Console link names the page `serialconsole`, which the app does not
-  register, so it does not open the Console page; the Console button of the server's row in Home's List view does), and **Cancel** (a run not ended), **Retry** and **Put back** (a halted host), each with a reason
+  Desktop link while it restarts (the Console link opens the host's Console page), and **Cancel** (a run not ended), **Retry** and **Put back** (a halted host), each with a reason
   and one confirmation, one call per click. Each group's card has an **Update** button on each due host's row, a Reason field,
   **Update the group** (not for Unassigned) and **Schedule...**, which opens the Schedule form for the group's hosts after reading
-  the group's maintenance policy with `HostGroups.Get`.
+  the group's maintenance policy with `HostGroups.Get`. A refusal of `Maintenance.Schedule`, `Cancel`, `RetryHost` or `PutBack`
+  that the operator can act on is said in words (an Update or Schedule on the host page, this page or Home's notice, and
+  Cancel, Retry and Put back here): nothing due (`nothing_due`), the group's last host (`last_host`, with the way to take it:
+  the Schedule form's "Take the group's last host"), a host already in a run, a window that has ended, an unknown host, group or run, a host not in the run, a run that
+  has ended, a host no longer halted, and an audit entry that could not be written; any other refusal is shown as its code
+  and token. In the Schedule form, a window field left empty is said to be "not set".
 
 ## What the pages do for services
 
