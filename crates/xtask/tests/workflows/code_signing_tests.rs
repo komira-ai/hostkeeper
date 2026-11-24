@@ -15,7 +15,7 @@ use super::code_signing::{
 use super::lint::lint;
 use super::mac_farm::{CALLER_JOB as FARM_JOB, HOSTED_IF};
 use super::pkg_signing::{CHECK_JOB, CHECK_STEPS, SIGN_ENV, SIGN_JOB, SUMS_IF, Step};
-use super::signing_run::{MACOS_SIGN_IF, SIGN_CODE_IF};
+use super::signing_run::{MACOS_SIGN_IF, SIGN_JOB_IF};
 use super::{with_in, workflows};
 
 /// The repository's artifacts.yml.
@@ -79,7 +79,7 @@ fn unsigned_program(name: &str, identifier: &str) -> String {
 /// The head of the signing job up to its environment, as the file writes it.
 fn sign_head() -> String {
     format!(
-        "  {SIGN_CODE_JOB}:\n    needs: [{COMPILE_JOB}, {FARM_JOB}]\n    if: {SIGN_CODE_IF}\n    runs-on: macos-15\n    timeout-minutes: 15\n    environment: {SIGN_ENV}\n"
+        "  {SIGN_CODE_JOB}:\n    needs: [{COMPILE_JOB}, {FARM_JOB}]\n    if: {SIGN_JOB_IF}\n    runs-on: macos-15\n    timeout-minutes: 15\n    environment: {SIGN_ENV}\n"
     )
 }
 
@@ -220,16 +220,16 @@ fn the_signing_job_with_other_needs_condition_runner_scope_or_environment_is_ref
     // scope or an env of its own, or with a key (`continue-on-error`) its steps would not hold.
     let text = artifacts_yml();
     let head = sign_head();
-    let wanted = format!("artifacts.yml: job {SIGN_CODE_JOB} needs the exact `if: {SIGN_CODE_IF}`");
+    let wanted = format!("artifacts.yml: job {SIGN_CODE_JOB} needs the exact `if: {SIGN_JOB_IF}`");
     let dispatch = with_in(
         &text,
         &head,
-        &head.replace(SIGN_CODE_IF, "${{ github.ref == 'refs/heads/main' }}"),
+        &head.replace(SIGN_JOB_IF, "${{ github.ref == 'refs/heads/main' }}"),
     );
     assert_refused(&dispatch, &wanted);
     // Without a status function, a job one of whose needs was skipped is skipped: the signing
     // would never run, whichever compile job ran.
-    let skipped = with_in(&text, &head, &head.replace(SIGN_CODE_IF, MACOS_SIGN_IF));
+    let skipped = with_in(&text, &head, &head.replace(SIGN_JOB_IF, MACOS_SIGN_IF));
     assert_refused(&skipped, &wanted);
     let wanted = format!(
         "artifacts.yml: job {SIGN_CODE_JOB} must need exactly [\"{COMPILE_JOB}\", \"{FARM_JOB}\"]"

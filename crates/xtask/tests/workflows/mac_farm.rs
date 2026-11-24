@@ -19,7 +19,12 @@
 //!   needs other than exactly `version`, grants other rights than exactly [`PERMISSIONS`], calls
 //!   another workflow than [`CALL`], or passes another `with:` than [`CALL_WITH`];
 //! - a job other than [`CALLER_JOB`] calls [`CALL`]: a local call anywhere else is refused by
-//!   [`super::lint`]'s pin rule, which lets this one through ([`local_call_allowed`]).
+//!   [`super::lint`]'s pin rule, which lets this one through ([`local_call_allowed`]);
+//! - a job whose needs, at any depth, include [`HOSTED_JOB`] or [`CALLER_JOB`] ([`after_compile`])
+//!   has an `if:` that does not start with [`AFTER_COMPILE`]: one of the two is skipped in every
+//!   run, and GitHub reads an `if:` that names no status function as `success() && ...`, which a
+//!   skipped job it needs at any depth makes false, so that job and every job after it would be
+//!   skipped on every run (the signed pkgs, the attestations and their bundles never made).
 //!
 //! [`file_problems`] refuses [`FILE`] when:
 //! - it has a top-level key outside [`TOP_LEVEL`] (an `env:` or `defaults:` beside `jobs` would
@@ -77,6 +82,11 @@ pub const FARM_IF: &str =
 /// The `if:` of [`HOSTED_JOB`]: the negation of [`FARM_IF`].
 pub const HOSTED_IF: &str =
     "${{ vars.FARM_ADDRESS == '' || github.repository != 'komira-ai/hostkeeper' }}";
+
+/// How the `if:` of every job after the two compile jobs ([`after_compile`]) starts: the job
+/// never runs after a failure or a cancel, but a skipped job it needs does not stop it. Followed
+/// by ` }}` or by ` && ` and the rest of the condition.
+pub const AFTER_COMPILE: &str = "${{ !cancelled() && !failure()";
 
 /// The keys [`CALLER_JOB`] may have.
 pub const CALLER_KEYS: [&str; 6] = ["if", "name", "needs", "permissions", "uses", "with"];
@@ -193,9 +203,56 @@ pub fn shape(step: &Node) -> String {
     shape
 }
 
+/// The jobs of `doc` whose needs, at any depth, include [`HOSTED_JOB`] or [`CALLER_JOB`], in
+/// the order of the file.
+pub fn after_compile(doc: &Node) -> Vec<String> {
+    let jobs = entry(doc, "jobs").map_or(&[][..], entries);
+    let needs: BTreeMap<&str, Vec<String>> = jobs
+        .iter()
+        .filter_map(|(name, j)| Some((name.as_str()?, names(entry(j, "needs")))))
+        .collect();
+    let compiled = |start: &str| {
+        let mut seen = vec![start.to_owned()];
+        let mut todo = vec![start.to_owned()];
+        while let Some(name) = todo.pop() {
+            for need in needs.get(name.as_str()).map_or(&[][..], Vec::as_slice) {
+                if need == HOSTED_JOB || need == CALLER_JOB {
+                    return true;
+                }
+                if !seen.contains(need) {
+                    seen.push(need.clone());
+                    todo.push(need.clone());
+                }
+            }
+        }
+        false
+    };
+    jobs.iter()
+        .filter_map(|(name, _)| name.as_str())
+        .filter(|name| compiled(name))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Whether `condition`, the `if:` of a job after the compile jobs, starts with
+/// [`AFTER_COMPILE`] as a whole term.
+fn starts_after_compile(condition: Option<&str>) -> bool {
+    condition
+        .and_then(|c| c.strip_prefix(AFTER_COMPILE))
+        .is_some_and(|rest| rest == " }}" || rest.starts_with(" && "))
+}
+
 /// One line per rule of this module that `doc`, artifacts.yml, breaks.
 pub fn artifacts_problems(doc: &Node) -> Vec<String> {
     let mut problems = Vec::new();
+    for name in after_compile(doc) {
+        if !starts_after_compile(text_of(job(doc, &name), "if")) {
+            problems.push(format!(
+                "artifacts.yml: job {name} needs {HOSTED_JOB} or {CALLER_JOB}, one of which every \
+                 run skips, so its `if:` must start with `{AFTER_COMPILE}`"
+            ));
+        }
+    }
     if text_of(job(doc, HOSTED_JOB), "if") != Some(HOSTED_IF) {
         problems.push(format!(
             "artifacts.yml: job {HOSTED_JOB} needs the exact `if: {HOSTED_IF}`"

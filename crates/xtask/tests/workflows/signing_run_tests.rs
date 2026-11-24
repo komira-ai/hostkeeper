@@ -10,7 +10,7 @@ use super::pkg_signing::{CHECK_JOB, SIGN_JOB};
 use super::release::SIGN_IF;
 use super::signing_run::{
     ALLOWED, INPUT_PROBLEM, MACOS_SIGN_IF, REFUSE_IF, REFUSE_NAME, REFUSE_PROBLEM, REFUSE_RUN,
-    SIGN_CODE_IF,
+    SIGN_JOB_IF,
 };
 use super::{with_in, workflows};
 
@@ -289,20 +289,20 @@ fn the_evaluator_reads_a_boolean_input_as_a_boolean_and_starts_with_ignoring_cas
 #[test]
 fn the_committed_artifacts_yml_has_the_one_input_the_refusal_first_and_signs_under_the_condition() {
     // Catches: the rules refusing the committed file, or the signing condition missing from a
-    // signing job or a step of build-macos that takes or checks the signed programs (two jobs
-    // under it and sign-code under its own, once no compile job failed,
-    // the download of the signed programs, the two records of the packaged hostkeeper's
-    // signature and the two checks of the packaged programs).
+    // signing job or a step of build-macos that takes or checks the signed programs (the three
+    // signing jobs under the jobs' condition, once no job they need failed, and no job under the
+    // steps' one; the download of the signed programs, the two records of the packaged
+    // hostkeeper's signature and the two checks of the packaged programs).
     let text = artifacts_yml();
     assert_eq!(lint("artifacts.yml", &text), Vec::<String>::new());
     assert_eq!(
         text.matches(&format!("\n    if: {MACOS_SIGN_IF}\n"))
             .count(),
-        2
+        0
     );
     assert_eq!(
-        text.matches(&format!("\n    if: {SIGN_CODE_IF}\n")).count(),
-        1
+        text.matches(&format!("\n    if: {SIGN_JOB_IF}\n")).count(),
+        3
     );
     assert_eq!(
         text.matches(&format!("        if: {MACOS_SIGN_IF}\n"))
@@ -435,11 +435,11 @@ fn a_signing_job_under_the_push_only_condition_is_refused() {
         (SIGN_JOB, "[version, build-macos]"),
         (CHECK_JOB, "[version, sign-pkg]"),
     ] {
-        let head = format!("  {job}:\n    needs: {needs}\n    if: {MACOS_SIGN_IF}\n");
-        let push_only = with_in(&text, &head, &head.replace(MACOS_SIGN_IF, SIGN_IF));
+        let head = format!("  {job}:\n    needs: {needs}\n    if: {SIGN_JOB_IF}\n");
+        let push_only = with_in(&text, &head, &head.replace(SIGN_JOB_IF, SIGN_IF));
         assert_refused(
             &push_only,
-            &format!("artifacts.yml: job {job} needs the exact `if: {MACOS_SIGN_IF}`"),
+            &format!("artifacts.yml: job {job} needs the exact `if: {SIGN_JOB_IF}`"),
         );
     }
 }

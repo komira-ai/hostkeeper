@@ -40,8 +40,10 @@ use super::pkg_signing;
 use super::release_macos;
 use super::yaml::{self, Node, Value};
 
-/// The `if:` of the attest job: a push to main. The only condition under which a token can sign.
-pub const SIGN_IF: &str = "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}";
+/// The `if:` of artifacts.yml's attest and verify jobs: a push to main, once no job they need
+/// failed or was cancelled (one of the two compile jobs they need, at some depth, is always
+/// skipped: [`super::mac_farm::AFTER_COMPILE`]). The only condition under which a token can sign.
+pub const SIGN_IF: &str = "${{ !cancelled() && !failure() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}";
 
 /// The `if:` of the plan job: a run of main, by hand, on the schedule, or the completion of a
 /// push run on main of this repository.

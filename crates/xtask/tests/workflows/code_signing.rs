@@ -7,7 +7,7 @@
 //!   calls `mac-farm.yml`, which compiles them on a farm Mac instead and uploads them as the same
 //!   artifact (the rules of both are [`super::mac_farm`]'s).
 //! - **The key is held by one job that runs no repository code.** [`SIGN_CODE_JOB`] runs under
-//!   [`SIGN_CODE_IF`] in the environment [`SIGN_ENV`] on `macos-15`, needs exactly [`COMPILE_JOB`]
+//!   [`SIGN_JOB_IF`] in the environment [`SIGN_ENV`] on `macos-15`, needs exactly [`COMPILE_JOB`]
 //!   and [`FARM_JOB`] (one of which is skipped),
 //!   holds `contents: read` alone, has the `env:` [`CODE_IDENTITY`] alone, and its steps are
 //!   exactly [`SIGN_CODE_STEPS`], in order: no checkout, no cargo. A secret that is not set stops
@@ -35,7 +35,7 @@ use super::pkg_signing::{
     ALWAYS, SIGN_ENV, SUMS_IF, Step, artifact, job_problems, pairs, steps_problems, uses_of,
 };
 use super::release::{job, names, steps, text_of};
-use super::signing_run::{self, MACOS_SIGN_IF, SIGN_CODE_IF};
+use super::signing_run::{self, MACOS_SIGN_IF, SIGN_JOB_IF};
 use super::yaml::Node;
 
 /// The job that compiles the programs.
@@ -319,7 +319,7 @@ fn sign_code_problems(doc: &Node) -> Vec<String> {
     let mut problems = job_problems(
         doc,
         SIGN_CODE_JOB,
-        (&[COMPILE_JOB, FARM_JOB], SIGN_CODE_IF),
+        (&[COMPILE_JOB, FARM_JOB], SIGN_JOB_IF),
         &[("IDENTITY", CODE_IDENTITY)],
     );
     let j = job(doc, SIGN_CODE_JOB);

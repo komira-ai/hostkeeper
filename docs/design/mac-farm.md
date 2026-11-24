@@ -64,9 +64,12 @@ uploaded them as the artifact `macho-unsigned-macos-arm64`, which `sign-code` si
   sets the version, builds xtask, joins the farm's tailnet, runs the same `cargo build --locked
   --release` on a farm Mac with `RELEASE_COMMIT` and an `--output` for each program, and uploads
   them as the same artifact.
-- `sign-code` and `build-macos` need both compile jobs. `build-macos` already ran under
-  `!cancelled() && !failure()`; `sign-code` now runs under the same guard in front of its signing
-  condition, since a job one of whose needs was skipped runs only under a status function.
+- `sign-code` and `build-macos` need both compile jobs. GitHub reads an `if:` that names no status
+  function as `success() && ...`, which is false once any job it needs, at any depth, was skipped.
+  So every job after the compile jobs, not only those that need them directly (`sign-code`,
+  `build-macos`, `sign-pkg`, `check-pkg`, `sums`, `attest`, `verify`), starts its `if:` with
+  `!cancelled() && !failure()`. `build-macos` and `sums` already did; the workflow lint
+  (`mac_farm.rs`) refuses a job after a compile job whose `if:` does not.
 - A farm that cannot be reached, or a build that fails there, fails the run as a failed build on a
   hosted Mac fails `compile-macos`; re-run the job once the farm answers.
 

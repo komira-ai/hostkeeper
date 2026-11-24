@@ -53,6 +53,7 @@ mod linux_packages_tests;
 mod linux_releases;
 mod linux_releases_tests;
 mod mac_farm;
+mod mac_farm_skip_tests;
 mod mac_farm_tests;
 mod merge_queue;
 mod merge_queue_tests;
