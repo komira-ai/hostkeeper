@@ -1,6 +1,7 @@
 //! The Mac nonce's binding to the request it was issued for, across the format change that
 //! added it, and a Mac's own host id taken over from the key it held before a new MDM
-//! enrollment (docs/design/hostkeeper-mdm.md, sections 5.1 and 5.2), over a scratch directory.
+//! enrollment (sections 5.1 and 5.2 of docs/design/hostkeeper-mdm.md, which was removed with the
+//! MDM and is in the history of the repository), over a scratch directory.
 
 mod support;
 

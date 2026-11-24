@@ -10,8 +10,7 @@ The daemon stages a package its installer names from the host's package manager
 (`hostkeeper-install`), and uses this crate for `stores` (a Mac's start renders `stores.toml` from
 managed preferences), `entry::fetch_pinned` (the artifact of a `macos-pkg` entry, whose package the
 installer checks the signature of) and, at its start, for `remove_orphan_fetches`, which removes
-the staging files a fetch left. `hostkeeper-pxe` (the `pxe` program) uses `bundle`, `net`, `gh` and `ports`, and
-`hostkeeper-mdm-gate` uses `stores`.
+the staging files a fetch left. `hostkeeper-pxe` (the `pxe` program) uses `bundle`, `net`, `gh` and `ports`.
 
 | module | what it holds |
 |---|---|

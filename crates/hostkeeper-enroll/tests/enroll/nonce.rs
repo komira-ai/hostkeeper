@@ -1,4 +1,5 @@
-//! The Mac nonce (docs/design/hostkeeper-mdm.md, section 5.3): the enroller reads the managed
+//! The Mac nonce (section 5.3 of docs/design/hostkeeper-mdm.md, which was removed with the MDM and
+//! is in the history of the repository): the enroller reads the managed
 //! preferences in each step that enrolls, posts `Enroll` once more with the nonce they hold for
 //! its own request, then polls; and it posts nothing more for a file it cannot trust or use.
 
