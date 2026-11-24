@@ -328,7 +328,12 @@ const JOB_ENV: [(&str, &str); 2] = [
 
 /// What is wrong with the job-level keys of the job `name`: a key outside [`JOB_KEYS`] (and
 /// `environment` for [`SIGN_JOB`]), another `if`, runner, `needs`, `permissions` or `env`.
-pub fn job_problems(doc: &Node, name: &str, needs: &[&str], env: &[(&str, &str)]) -> Vec<String> {
+pub fn job_problems(
+    doc: &Node,
+    name: &str,
+    (needs, condition): (&[&str], &str),
+    env: &[(&str, &str)],
+) -> Vec<String> {
     let j = job(doc, name);
     let mut problems = Vec::new();
     let Some(node) = j else {
@@ -341,9 +346,9 @@ pub fn job_problems(doc: &Node, name: &str, needs: &[&str], env: &[(&str, &str)]
             problems.push(format!("artifacts.yml: job {name} has the key {key}"));
         }
     }
-    if text_of(j, "if") != Some(MACOS_SIGN_IF) {
+    if text_of(j, "if") != Some(condition) {
         problems.push(format!(
-            "artifacts.yml: job {name} needs the exact `if: {MACOS_SIGN_IF}`"
+            "artifacts.yml: job {name} needs the exact `if: {condition}`"
         ));
     }
     if text_of(j, "runs-on") != Some("macos-15") {
@@ -406,7 +411,12 @@ pub fn steps_problems(name: &str, found: &[Node], want: &[Step], list: &str) -> 
 /// What is wrong with [`SIGN_JOB`]: its job keys, its environment, or a step that differs from
 /// [`SIGN_STEPS`] (one missing, added, changed or moved).
 fn sign_problems(doc: &Node) -> Vec<String> {
-    let mut problems = job_problems(doc, SIGN_JOB, &["build-macos", "version"], &JOB_ENV);
+    let mut problems = job_problems(
+        doc,
+        SIGN_JOB,
+        (&["build-macos", "version"], MACOS_SIGN_IF),
+        &JOB_ENV,
+    );
     let j = job(doc, SIGN_JOB);
     if j.is_none() {
         return problems;
@@ -569,7 +579,12 @@ fn secret_problems(doc: &Node) -> Vec<String> {
 /// What is wrong with [`CHECK_JOB`]: its job keys, a step that differs from [`CHECK_STEPS`],
 /// or another job uploading an `assets-pkg-*` artifact.
 fn check_problems(doc: &Node) -> Vec<String> {
-    let mut problems = job_problems(doc, CHECK_JOB, &["sign-pkg", "version"], &JOB_ENV);
+    let mut problems = job_problems(
+        doc,
+        CHECK_JOB,
+        (&["sign-pkg", "version"], MACOS_SIGN_IF),
+        &JOB_ENV,
+    );
     if let Some(j) = job(doc, CHECK_JOB) {
         problems.extend(steps_problems(
             CHECK_JOB,

@@ -6,6 +6,9 @@
 # Where the code and its dependencies live.
 github.com
 crates.io
+# The Rust release's toolchain tarballs `cargo xtask mac-farm` sends to a farm Mac
+# (static.rust-lang.org, pinned in crates/xtask/src/mac_farm/toolchain.toml).
+rust-lang.org
 # The page of a RustSec advisory, which the advisories issue links each advisory to.
 rustsec.org
 

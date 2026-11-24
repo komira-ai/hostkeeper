@@ -13,8 +13,9 @@ use super::code_signing::{
     WRITE_ALREADY_EXISTS,
 };
 use super::lint::lint;
+use super::mac_farm::{CALLER_JOB as FARM_JOB, HOSTED_IF};
 use super::pkg_signing::{CHECK_JOB, CHECK_STEPS, SIGN_ENV, SIGN_JOB, SUMS_IF, Step};
-use super::signing_run::MACOS_SIGN_IF;
+use super::signing_run::{MACOS_SIGN_IF, SIGN_CODE_IF};
 use super::{with_in, workflows};
 
 /// The repository's artifacts.yml.
@@ -78,21 +79,21 @@ fn unsigned_program(name: &str, identifier: &str) -> String {
 /// The head of the signing job up to its environment, as the file writes it.
 fn sign_head() -> String {
     format!(
-        "  {SIGN_CODE_JOB}:\n    needs: [{COMPILE_JOB}]\n    if: {MACOS_SIGN_IF}\n    runs-on: macos-15\n    timeout-minutes: 15\n    environment: {SIGN_ENV}\n"
+        "  {SIGN_CODE_JOB}:\n    needs: [{COMPILE_JOB}, {FARM_JOB}]\n    if: {SIGN_CODE_IF}\n    runs-on: macos-15\n    timeout-minutes: 15\n    environment: {SIGN_ENV}\n"
     )
 }
 
 /// The head of the compile job, as the file writes it.
 fn compile_head() -> String {
     format!(
-        "  {COMPILE_JOB}:\n    name: compile macos-arm64\n    needs: [version]\n    runs-on: macos-15\n    timeout-minutes: 45\n    permissions:\n      contents: read\n"
+        "  {COMPILE_JOB}:\n    name: compile macos-arm64\n    needs: [version]\n    if: {HOSTED_IF}\n    runs-on: macos-15\n    timeout-minutes: 45\n    permissions:\n      contents: read\n"
     )
 }
 
 /// The head of the packaging job, as the file writes it.
 fn build_head() -> String {
     format!(
-        "  {BUILD_JOB}:\n    name: macos-arm64\n    needs: [version, {COMPILE_JOB}, {SIGN_CODE_JOB}]\n    if: {SUMS_IF}\n"
+        "  {BUILD_JOB}:\n    name: macos-arm64\n    needs: [version, {COMPILE_JOB}, {FARM_JOB}, {SIGN_CODE_JOB}]\n    if: {SUMS_IF}\n"
     )
 }
 
@@ -188,20 +189,27 @@ fn the_compile_job_with_other_needs_runner_scope_environment_or_upload_is_refuse
         &environment,
         &format!("artifacts.yml: job {COMPILE_JOB} must be in no environment"),
     );
-    let upload = format!("          name: {UNSIGNED_MACHO}\n          path: |\n");
+    // The upload of the hosted job, after its last build (mac-farm.yml uploads the same
+    // artifact, from another file).
+    let upload = format!(
+        "--bin hostkeeper-bootstrap\n      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1\n        with:\n          name: {UNSIGNED_MACHO}\n"
+    );
     let renamed = with_in(
         &text,
         &upload,
-        "          name: macho-compiled\n          path: |\n",
+        &upload.replace(UNSIGNED_MACHO, "macho-compiled"),
     );
     let no_upload = format!(
         "artifacts.yml: job {COMPILE_JOB} does not upload the four programs as {UNSIGNED_MACHO}"
     );
     assert_refused(&renamed, &no_upload);
+    let paths = format!(
+        "{upload}          path: |\n            target/release/hostkeeper\n            target/release/hk\n            target/release/hello\n            target/release/hostkeeper-bootstrap\n"
+    );
     let fewer = with_in(
         &text,
-        "            target/release/hello\n            target/release/hostkeeper-bootstrap\n",
-        "            target/release/hello\n",
+        &paths,
+        &paths.replace("            target/release/hostkeeper-bootstrap\n", ""),
     );
     assert_refused(&fewer, &no_upload);
 }
@@ -212,24 +220,32 @@ fn the_signing_job_with_other_needs_condition_runner_scope_or_environment_is_ref
     // scope or an env of its own, or with a key (`continue-on-error`) its steps would not hold.
     let text = artifacts_yml();
     let head = sign_head();
+    let wanted = format!("artifacts.yml: job {SIGN_CODE_JOB} needs the exact `if: {SIGN_CODE_IF}`");
     let dispatch = with_in(
         &text,
         &head,
-        &head.replace(MACOS_SIGN_IF, "${{ github.ref == 'refs/heads/main' }}"),
+        &head.replace(SIGN_CODE_IF, "${{ github.ref == 'refs/heads/main' }}"),
     );
-    assert_refused(
-        &dispatch,
-        &format!("artifacts.yml: job {SIGN_CODE_JOB} needs the exact `if: {MACOS_SIGN_IF}`"),
+    assert_refused(&dispatch, &wanted);
+    // Without a status function, a job one of whose needs was skipped is skipped: the signing
+    // would never run, whichever compile job ran.
+    let skipped = with_in(&text, &head, &head.replace(SIGN_CODE_IF, MACOS_SIGN_IF));
+    assert_refused(&skipped, &wanted);
+    let wanted = format!(
+        "artifacts.yml: job {SIGN_CODE_JOB} must need exactly [\"{COMPILE_JOB}\", \"{FARM_JOB}\"]"
     );
-    let needs = with_in(
-        &text,
-        &head,
-        &head.replace("[compile-macos]", "[compile-macos, version]"),
-    );
-    assert_refused(
-        &needs,
-        &format!("artifacts.yml: job {SIGN_CODE_JOB} must need exactly [\"{COMPILE_JOB}\"]"),
-    );
+    for needs in [
+        "[compile-macos, compile-macos-farm, version]",
+        "[compile-macos]",
+        "[compile-macos-farm]",
+    ] {
+        let changed = with_in(
+            &text,
+            &head,
+            &head.replace("[compile-macos, compile-macos-farm]", needs),
+        );
+        assert_refused(&changed, &wanted);
+    }
     let environment = with_in(
         &text,
         &head,
@@ -633,14 +649,14 @@ fn the_packaging_job_with_other_needs_or_condition_or_that_builds_is_refused() {
         &text,
         &head,
         &head.replace(
+            "[version, compile-macos, compile-macos-farm, sign-code]",
             "[version, compile-macos, sign-code]",
-            "[version, compile-macos]",
         ),
     );
     assert_refused(
         &needs,
         &format!(
-            "artifacts.yml: job {BUILD_JOB} must need exactly [\"{COMPILE_JOB}\", \"{SIGN_CODE_JOB}\", \"version\"]"
+            "artifacts.yml: job {BUILD_JOB} must need exactly [\"{COMPILE_JOB}\", \"{FARM_JOB}\", \"{SIGN_CODE_JOB}\", \"version\"]"
         ),
     );
     let condition = with_in(&text, &head, &head.replace(SUMS_IF, "${{ always() }}"));

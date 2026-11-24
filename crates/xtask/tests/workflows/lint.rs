@@ -9,12 +9,15 @@
 //! - a step's (or a job's) `uses:` is not an action pinned to a full 40-character commit SHA
 //!   followed on the same line by a version comment (`# v1.2.3`; the value may be quoted, and
 //!   the spaces before and after `#` are free), or names a local path (a
-//!   local action or reusable workflow is code this lint does not read). In [`farm::FILE`]
+//!   local action or reusable workflow is code this lint does not read), but the one call of
+//!   [`mac_farm::CALL`] from artifacts.yml ([`mac_farm::local_call_allowed`]), a workflow of
+//!   this directory that this lint reads ([`mac_farm::file_problems`]). In [`farm::FILE`]
 //!   alone, [`farm::FARM_CONNECT`] is pinned by commit with no version comment: komira tags no
 //!   release of it;
 //! - a job has no `runs-on` (but a job of [`callers::CALLERS`], or of [`callers::TEMPLATE`], that
-//!   calls the CI client, and the job of [`cp_deploy::calls_updater`] that calls
-//!   docker-swarm-updater's deploy workflow), or a runner that is not one of [`HOSTED_RUNNERS`]: a runner group, a
+//!   calls the CI client, the job of [`cp_deploy::calls_updater`] that calls
+//!   docker-swarm-updater's deploy workflow, and the job of [`mac_farm::calls_farm`] that calls
+//!   the farm build), or a runner that is not one of [`HOSTED_RUNNERS`]: a runner group, a
 //!   custom label (a
 //!   self-hosted or a paid larger runner), or an expression other than `${{ matrix.<key> }}`,
 //!   whose values are read from the job's own `strategy.matrix` (a list
@@ -49,6 +52,8 @@
 //! - it is [`pr_device::FILE`] and breaks a rule of its own ([`pr_device::problems`]);
 //! - it is [`farm::FILE`] and breaks a rule of its own ([`farm::problems`]: its triggers, its one
 //!   job, its rights, farm-connect's inputs, and the `local: 0` check after the build);
+//! - it is [`mac_farm::FILE`] and breaks a rule of its own ([`mac_farm::file_problems`]: its one
+//!   trigger, `workflow_call`, its one job, its rights and its steps);
 //! - it is neither [`PRIVILEGED_WORKFLOW`] nor [`net_install::FILE`], it does not run for a pull
 //!   request, and a job of it, or what sits beside `jobs`, names root as above (`sudo` as a word,
 //!   `--privileged`, `--cap-add`), whatever its trigger: root runs in those two workflows, on
@@ -102,6 +107,7 @@ use super::desired;
 
 use super::downloads;
 use super::farm;
+use super::mac_farm;
 use super::net_install;
 use super::one_command;
 use super::packages;
@@ -141,6 +147,11 @@ pub struct Allowed {
 ///   [`cp_deploy`] holds the rest of its shape.
 /// - `advisories.yml` / `advisories`: `issues`, to open, rewrite or close the one issue that
 ///   lists the security advisories against the dependencies, on a run of main.
+/// - `artifacts.yml` / `compile-macos-farm` and `mac-farm.yml` / `compile`, the job it calls:
+///   `id-token`, for the tailnet join to the build farm alone, where the farm is configured and
+///   the file runs in this repository ([`mac_farm::FARM_IF`]); [`mac_farm`] holds the called
+///   job's steps exactly, so no other action or command runs while it holds the token, and the
+///   token is `mac-farm.yml`'s, which can sign nothing that names artifacts.yml as its signer.
 /// - `release-red.yml` / `red`: `issues`, to open, update or close the `RELEASE-RED` issue of a
 ///   completed run of `release.yml` or `privileged.yml` on main ([`release_red::RED_IF`]);
 ///   [`release_red`] holds the rest of its shape.
@@ -186,6 +197,18 @@ pub const WRITE_ALLOWED: &[Allowed] = &[
         job: advisories::JOB,
         scope: "issues",
         condition: advisories::ISSUE_IF,
+    },
+    Allowed {
+        file: "artifacts.yml",
+        job: mac_farm::CALLER_JOB,
+        scope: "id-token",
+        condition: mac_farm::FARM_IF,
+    },
+    Allowed {
+        file: mac_farm::FILE,
+        job: mac_farm::JOB,
+        scope: "id-token",
+        condition: mac_farm::FARM_IF,
     },
     Allowed {
         file: release_red::FILE,
@@ -337,6 +360,9 @@ pub fn version_comment<'a>(text: &'a str, line: usize, value: &str) -> Option<&'
 /// What is wrong with the `uses:` value `value` on `line` of `text`, the workflow `file`, if
 /// anything.
 fn pin_problem(file: &str, text: &str, line: usize, value: &str) -> Option<String> {
+    if mac_farm::local_call_allowed(file, value) {
+        return None;
+    }
     if value.starts_with('.') {
         return Some(format!("line {line}: `uses: {value}` names a local path"));
     }
@@ -434,7 +460,10 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
         // reusable workflow is refused.
         let calls_client = callers::caller(file, name).is_some()
             && callers::job_uses(job).is_some_and(callers::names_set_desired);
-        if !calls_client && !cp_deploy::calls_updater(file, name, job) {
+        if !calls_client
+            && !cp_deploy::calls_updater(file, name, job)
+            && !mac_farm::calls_farm(file, name, job)
+        {
             problems.extend(runner_problems(name, job));
         }
         if on_pull_request {
@@ -459,6 +488,9 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
     }
     if file == farm::FILE {
         problems.extend(farm::problems(&doc));
+    }
+    if file == mac_farm::FILE {
+        problems.extend(mac_farm::file_problems(&doc));
     }
     if net_install_file {
         problems.extend(net_install::problems(&doc));

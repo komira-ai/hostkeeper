@@ -588,7 +588,8 @@ the example service of `examples/hello`: `hello` is signed like the other progra
 rendered by `hostkeeper_launchd::service_plist`. The artifacts workflow builds them on a
 GitHub-hosted Apple silicon runner, on each push to `main` and by hand, never on a pull request.
 The four Mach-O programs (`hostkeeper`, `hk`, `hello` and `hostkeeper-bootstrap`) are compiled by
-`compile-macos` and, on a push to `main` or in a signing run
+`compile-macos` (or, where the build farm is configured, on a farm Mac by `compile-macos-farm`:
+[design/mac-farm.md](design/mac-farm.md)) and, on a push to `main` or in a signing run
 ([The signing run](#the-signing-run)), signed by `sign-code` before `build-macos` packages them;
 any other run by hand packages the linker's ad hoc signatures.
 
@@ -844,7 +845,10 @@ The signing is in `.github/workflows/artifacts.yml`, on a push to `main` and in 
 
 1. `compile-macos`, with no secret, compiles the four programs (`cargo build --locked --release`,
    with the release's version and commit) and uploads them as the artifact
-   `macho-unsigned-macos-arm64`.
+   `macho-unsigned-macos-arm64`. Where the build farm is configured (the organisation's variable
+   `FARM_ADDRESS` is set), `compile-macos-farm` compiles them on a farm Mac instead, through
+   `mac-farm.yml`, and uploads the same artifact; exactly one of the two runs
+   ([design/mac-farm.md](design/mac-farm.md)).
 2. `sign-code`, in the environment `pkg-signing`, runs no repository code (no checkout, no cargo),
    so no build script or dependency runs where the key is. A secret that is not set stops it by
    its name (the organisation secrets `MACOS_APPLICATION_P12`, the PKCS#12 of the identity's key

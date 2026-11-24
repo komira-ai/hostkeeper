@@ -35,8 +35,12 @@ const COMMAND: &str = concat!("Command::", "new");
 const CFG_TEST: &str = concat!("#[cfg(", "test)]");
 
 /// The test files that start a process on purpose, and why.
-const PROCESS_TESTS: [(&str, &str); 21] = [
+const PROCESS_TESTS: [(&str, &str); 22] = [
     ("tests/cli.rs", "runs the xtask binary as a process"),
+    (
+        "tests/mac_farm_cli.rs",
+        "runs the xtask binary as a process on mac-farm's flags and exit statuses",
+    ),
     (
         "tests/farm_build_cli.rs",
         "runs the xtask binary as a process on farm-build, with the fake buck2 as its buck2",
