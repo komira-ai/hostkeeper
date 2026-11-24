@@ -283,9 +283,9 @@ below and runs the three commands of step 3 (the design, section 5.3). A server 
 way moves to it by hand, with this procedure, after every such install: the baseline lives in files
 on the root disk, so a server reinstalled by hand (after a new root disk, say) comes back without
 it, and its Console stays blank: no kernel console and no login prompt on `ttyS1`. The procedure is
-the same for every Ubuntu server; run it on **one server at a time**. On a fresh install step 2
-usually finds nothing to take out (and `/etc/default/grub.d/` may hold no `.cfg` file at all, so
-`grep` says so); the login prompt is on the Console as soon as step 3 has run, and the kernel's
+the same for every Ubuntu server; run it on **one server at a time**. On a fresh install step 2 can
+find nothing to take out (and `/etc/default/grub.d/` may hold no `.cfg` file at all, so `grep` says
+so); the login prompt is on the Console as soon as step 3 has restarted the getty, and the kernel's
 lines from the reboot of step 5 on.
 
 1. **Take the server out of placement first.** A reboot (step 5) stops every service on it, so
