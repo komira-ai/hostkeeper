@@ -400,17 +400,16 @@ impl Coordinator {
 
     /// The features of the answer to a gRPC heartbeat that announced `announced`, whose answer
     /// agreed `agreed` (those it named that this coordinator advertises): with them, the features
-    /// of [`crate::features::OFFERED`] this coordinator advertises, in its order. An agent that announced none is
-    /// answered none.
+    /// this coordinator advertises and offers unnamed ([`crate::features::offered`]: `ssh-v1` only
+    /// while it holds an SSH user CA), in its order. An agent that announced none is answered none.
     pub(crate) fn offering(&self, announced: &[String], agreed: &[String]) -> Vec<String> {
         if announced.is_empty() {
             return Vec::new();
         }
+        let holds_ssh_ca = self.ssh.is_some();
         self.features
             .iter()
-            .filter(|name| {
-                agreed.contains(name) || crate::features::OFFERED.contains(&name.as_str())
-            })
+            .filter(|name| agreed.contains(name) || crate::features::offered(name, holds_ssh_ca))
             .cloned()
             .collect()
     }

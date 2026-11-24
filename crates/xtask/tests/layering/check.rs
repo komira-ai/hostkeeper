@@ -54,7 +54,8 @@ pub type Layer = (
 
 /// Every crate of the workspace but those of [`NO_ROW`], in name order. The dev column is what
 /// each crate's tests use: the coordinator's tests turn on `hostkeeper-oidc`'s `testkit` feature
-/// (a fake issuer), which a dev-dependency can do and a normal dependency must not; the daemon's and the link's tests run a
+/// (a fake issuer), which a dev-dependency can do and a normal dependency must not, and run the
+/// daemon's heartbeat loop against it (`hostkeeper-link`'s `testing` feature); the daemon's and the link's tests run a
 /// coordinator in process, behind a listener's TLS (`hostkeeper-tls`), and the daemon's run the
 /// example service hello's hook in process;
 /// hello's tests read its output with the hook contract; `hk`'s tests forward its calls to a coordinator built from its
@@ -101,7 +102,7 @@ pub const LAYERS: [Layer; 30] = [
     (
         COORDINATOR,
         &[CONFIG, CONSOLE, ENROLLMENT, OIDC, PROTO, RELEASE, TLS, WIRE],
-        &[CONSOLE, OIDC],
+        &[CONSOLE, LINK, OIDC],
     ),
     (
         DAEMON,

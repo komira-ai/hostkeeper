@@ -47,6 +47,7 @@ mod services_repository;
 mod sessions;
 mod ssh;
 mod ssh_heartbeat;
+mod ssh_offer;
 mod support;
 mod targets;
 mod trusted_publishers;

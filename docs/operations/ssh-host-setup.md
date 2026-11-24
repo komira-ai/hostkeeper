@@ -2,8 +2,11 @@
 
 What a Linux host's daemon does with the SSH access the coordinator sends (`ssh-v1`,
 `docs/design/ssh-through-coordinator.md` sections 3 and 6). Nothing in it runs until the coordinator
-sends a record (`HeartbeatResponse.ssh`) in a reply that advertises `ssh-v1`; today's coordinator
-sends none. A Mac's daemon announces `ssh-v1` too and runs the same steps over Remote Login; what is different there is in `docs/macos.md`, "Remote Login for ssh through the coordinator", and adds the states `no_include` and `blocked_by_access_group`.
+sends a record (`HeartbeatResponse.ssh`) in a reply that advertises `ssh-v1`. A daemon names `ssh-v1`
+only once a reply advertised it; a coordinator that holds an SSH user CA (`--ssh-ca-secret-file`) advertises
+it in its answer to every gRPC heartbeat that announces features, named or not, so a daemon names it at its
+next heartbeat and is sent the record in that answer. A coordinator without the CA offers it to none and
+sends no record. A Mac's daemon announces `ssh-v1` too and runs the same steps over Remote Login; what is different there is in `docs/macos.md`, "Remote Login for ssh through the coordinator", and adds the states `no_include` and `blocked_by_access_group`.
 
 ## What the daemon writes
 
