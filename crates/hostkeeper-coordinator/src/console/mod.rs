@@ -139,11 +139,44 @@ pub const fn default_bounds() -> Bounds {
     }
 }
 
-/// Why a stream is stopped from outside it, and by whom: an operator's name, or `coordinator`.
+/// Who a stream's `console_close` line is by: an operator's name (or `coordinator`), and the API
+/// token the operator acted with, which the line records as `api_token`, as the other lines of a
+/// call made with an API token do.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct By {
+    name: String,
+    api_token: Option<String>,
+}
+
+impl By {
+    /// `by`'s name and API token, kept.
+    pub(crate) fn of(by: &(impl AuditBy + ?Sized)) -> Self {
+        Self::named(by.by_name(), by.by_token())
+    }
+
+    /// The name `name`, acting with the API token `api_token`, if any.
+    pub(crate) fn named(name: &str, api_token: Option<&str>) -> Self {
+        Self {
+            name: name.to_owned(),
+            api_token: api_token.map(str::to_owned),
+        }
+    }
+}
+
+impl AuditBy for By {
+    fn by_name(&self) -> &str {
+        &self.name
+    }
+    fn by_token(&self) -> Option<&str> {
+        self.api_token.as_deref()
+    }
+}
+
+/// Why a stream is stopped from outside it, and by whom: an operator, or `coordinator`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Stop {
     pub(crate) close: Close,
-    pub(crate) by: String,
+    pub(crate) by: By,
 }
 
 /// A stream attached to a session, as the sessions table knows it.
@@ -170,7 +203,7 @@ impl Live {
             if first {
                 *stop = Some(Stop {
                     close,
-                    by: by.by_name().to_owned(),
+                    by: By::of(by),
                 });
             }
             first
