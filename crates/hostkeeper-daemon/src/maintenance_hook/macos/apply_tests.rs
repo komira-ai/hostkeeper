@@ -550,6 +550,43 @@ fn a_failing_install_fails_naming_the_step_and_exit_code_alone() {
     assert_eq!(mac.installs().len(), 1);
 }
 
+/// Proves: a major upgrade whose `startosinstall` exits 1, having echoed its standard input to
+/// both streams, fails the step `macos_install_failed` with a detail that names `startosinstall`
+/// and the exit code alone; the report line is that ending and the one log line is that detail.
+///
+/// Catches: the installer's output (here the password) carried into the error, the report or the
+/// log of a failed major upgrade; a failed `startosinstall` reported as a restart under way.
+#[test]
+fn a_failing_major_upgrade_fails_naming_the_step_and_exit_code_alone() {
+    let files = Files::new("macos-apply-major-fails");
+    let app = files.installer(APP_27, true);
+    let mac = Mac::on_26(LIST_MAJOR);
+    mac.script().install = Ok(LaunchctlOutput {
+        code: Some(1),
+        stdout: input(),
+        stderr: input(),
+    });
+    let detail = "startosinstall: the program exited with code 1";
+    let ended = mac.hook(&files, HookStep::Cutover, &params(true));
+    assert_eq!(ended, failed_ending(REASON_INSTALL_FAILED, detail));
+    let report = ended.report().to_line();
+    assert_eq!(
+        report,
+        format!(
+            r#"{{"class":"release","detail":"{detail}","promotion_pending":false,"reason":"macos_install_failed"}}"#
+        )
+    );
+    assert!(!report.contains(PASSWORD));
+    assert_eq!(mac.lines(), [detail]);
+    let installs = mac.installs();
+    assert_eq!(installs.len(), 1);
+    assert_eq!(
+        installs[0].program,
+        app.join("Contents/Resources/startosinstall")
+    );
+    assert_eq!(installs[0].step, STEP_UPGRADE);
+}
+
 /// Proves: an update-account file with another mode, or none, is refused
 /// `update_account_refused`, naming the file and the problem, before any Apple program runs, any
 /// plan is kept or anything is recorded; and the restart of a reboot under way in this boot is

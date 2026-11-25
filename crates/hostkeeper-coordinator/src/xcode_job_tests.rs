@@ -3,6 +3,7 @@
 //! job's loop over files; and a coordinator with no feed. The parse of the list is in
 //! `xcode_feed_tests.rs`; the job over a database is in `store/postgres/tests/xcode_jobs.rs`.
 
+use std::io::Write as _;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -10,16 +11,20 @@ use std::time::Duration;
 use hostkeeper_oidc::Dial;
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 
+use crate::audit_actions::XCODE_REMOVE;
+use crate::host_groups_support::{SELF, World};
 use crate::jobs::periodic;
-use crate::marks_support::operator;
+use crate::marks_support::{operator, start};
+use crate::ops::AuditEntry;
 use crate::repository_origin::RepositoryOrigin;
 use crate::repository_origin_support::{FakeOrigin, Then, refusing_dial, response};
 use crate::service::Coordinator;
-use crate::testutil::{Log, Rig};
+use crate::testutil::{Log, Rig, scratch};
 use crate::xcode_feed::{
     Channel, FEED_EVERY, FeedError, FeedUrl, KnownReleases, MemoryReleases, XcodeHeld, XcodeId,
     XcodeRelease, XcodeVersion, read_every,
 };
+use crate::xcode_store::{Archive, Digesting, XcodeStore};
 
 /// A copy of the 12 newest entries of the Xcode Releases site's `data.json`: the newest release is
 /// 27.2 (27B52).
@@ -428,4 +433,235 @@ async fn a_store_that_panics_fails_the_read() {
         farm.rig.coordinator.read_xcode_feed().await,
         Err(FeedError::Keep(_))
     ));
+}
+
+/// Every alert of the coordinator after one more observation, of every kind.
+fn all_alerts(coordinator: &Coordinator) -> Vec<proto::Alert> {
+    coordinator
+        .observe_alerts()
+        .expect("the alerts are observed");
+    coordinator
+        .list_alerts(&operator(), proto::ListAlertsRequest {})
+        .expect("the alerts are listed")
+        .alerts
+}
+
+/// The dial a test makes of the fake origin.
+type DialOf = fn(&FakeOrigin) -> Dial;
+
+/// The three ways the read of the list fails, as the dial of each.
+fn failing_reads() -> Vec<(&'static str, DialOf)> {
+    vec![
+        ("status-500", |fake| {
+            fake.dial_all(Then::Write(response("500 Internal Server Error", b"")))
+        }),
+        ("garbage", |fake| {
+            fake.dial_all(Then::Write(response("200 OK", b"<html>no</html>")))
+        }),
+        ("refused", |_| refusing_dial()),
+    ]
+}
+
+/// The log line `line` without its timestamp, level and target: what the job said, then its fields.
+fn said(line: &str) -> &str {
+    line.split_once(" WARN ")
+        .map_or(line, |(_, rest)| rest)
+        .split_once(": ")
+        .map_or(line, |(_, rest)| rest)
+}
+
+/// Proves: with nothing waiting (the store holds the newest release the list kept), a read of
+/// the list that fails (an answer of 500, a body that is not a list, a refused connection)
+/// leaves the alerts of every kind exactly as they were, the empty list, and logs the one warning
+/// that names the failure and the address.
+///
+/// Catches: a failed read that raises an alert of its own (of any kind, which the filtered
+/// tests above cannot see), and a failure that is not logged.
+#[tokio::test]
+async fn a_failed_read_raises_no_alert_when_nothing_is_waiting() {
+    let wants = [
+        "the list of Xcode releases could not be read; the job reads it again at its next run why=the list could not be read: the origin answered 500 url=https://origin.test/data.json",
+        "the list of Xcode releases could not be read; the job reads it again at its next run why=the list is not a JSON array of releases: expected value at line 1 column 1 url=https://origin.test/data.json",
+        "the list of Xcode releases could not be read; the job reads it again at its next run why=the list could not be read: the connection failed url=https://origin.test/data.json",
+    ];
+    for ((name, dial), want) in failing_reads().into_iter().zip(wants) {
+        let farm = farm(&format!("xcode-job-nothing-{name}"), Some(FEED), dial);
+        farm.known
+            .keep(&[release("27.1", "27A9275", Channel::Release)])
+            .expect("the list is kept");
+        farm.held.set(vec![id("27.1", "27A9275")]);
+        assert_eq!(all_alerts(&farm.rig.coordinator), vec![], "{name}");
+        farm.rig.coordinator.xcode_feed_job().await;
+        assert_eq!(all_alerts(&farm.rig.coordinator), vec![], "{name}");
+        assert_eq!(said(&failure_line(&farm.log)), want, "{name}");
+    }
+}
+
+/// Proves: with a newer release kept and not held, the one `xcode_release_waiting` alert there is
+/// before a failed read of the list (an answer of 500, a body that is not a list, a refused
+/// connection) is the whole alert list after it, unchanged and not doubled, and the list kept
+/// stands.
+///
+/// Catches: a failed read that clears the alert of the release waiting, repeats it, or adds an
+/// alert of another kind beside it.
+#[tokio::test]
+async fn a_failed_read_leaves_the_one_waiting_alert_as_it_was() {
+    for (name, dial) in failing_reads() {
+        let farm = farm(&format!("xcode-job-waiting-{name}"), Some(FEED), dial);
+        let kept = vec![
+            release("27.2", "27B52", Channel::Release),
+            release("27.1", "27A9275", Channel::Release),
+        ];
+        farm.known.keep(&kept).expect("the list is kept");
+        farm.held.set(vec![id("27.1", "27A9275")]);
+        let before = all_alerts(&farm.rig.coordinator);
+        assert_eq!(before.len(), 1, "{name}: {before:?}");
+        assert_eq!(before[0].kind(), proto::AlertKind::XcodeReleaseWaiting);
+        assert_eq!(before[0].version, "27.2");
+        farm.rig.coordinator.xcode_feed_job().await;
+        assert_eq!(all_alerts(&farm.rig.coordinator), before, "{name}");
+        assert_eq!(farm.known.known(), Ok(kept), "{name}");
+        assert!(failure_line(&farm.log).contains("WARN"), "{name}");
+    }
+}
+
+/// Stores an archive of `version` and `build` whose bytes name the build in `store`.
+fn stored(store: &XcodeStore, version: &str, build: &str) -> Archive {
+    let bytes = format!("xip of {build}").into_bytes();
+    let mut digest = Digesting::default();
+    digest.feed(&bytes);
+    let sha256 = digest.finish();
+    let (path, mut file) = store.upload_file(&sha256).expect("an upload file");
+    file.write_all(&bytes).expect("written");
+    drop(file);
+    let archive = Archive {
+        sha256,
+        id: id(version, build),
+        size: u64::try_from(bytes.len()).expect("a size"),
+        by: "uploader".to_owned(),
+        at_unix: 1_800_000_000,
+    };
+    let _changing = store.changing();
+    store.commit(&path, &archive).expect("committed");
+    archive
+}
+
+/// The sha256 of each archive `store` holds, newest release first.
+fn held_by(store: &XcodeStore) -> Vec<String> {
+    store
+        .archives()
+        .expect("listed")
+        .into_iter()
+        .map(|archive| archive.sha256)
+        .collect()
+}
+
+/// The entry the pruning of `archive` is audited as, by its number `seq`.
+fn removal(seq: u64, archive: &Archive) -> AuditEntry {
+    AuditEntry {
+        seq,
+        by: "coordinator".to_owned(),
+        action: XCODE_REMOVE.to_owned(),
+        service: None,
+        node_id: None,
+        host_group: None,
+        reason: Some(format!(
+            "pruned: Xcode {} ({}), sha256 {}",
+            archive.id.version, archive.id.build, archive.sha256
+        )),
+        subject: Some(format!(
+            "Xcode {} ({}) {}",
+            archive.id.version, archive.id.build, archive.sha256
+        )),
+        source: None,
+        api_token: None,
+    }
+}
+
+/// Proves: the job `xcode-feed`, run once over a real Xcode store holding the archives of 27.1,
+/// 27.2 and 27.3 and a group that keeps 1 Xcode release, prunes the store to 27.3 whether the
+/// list is read (200) or the read fails (500): the two older archives' files are gone, and the
+/// audit holds exactly one `xcode_remove` by `coordinator` for each of them, naming the release
+/// and archive; a second run changes nothing.
+///
+/// Catches: a job that does not prune, one that prunes only when the list was read (the prune
+/// must not wait for the origin), and a prune with no audit line or under another name.
+#[tokio::test]
+async fn the_job_prunes_the_store_whether_the_list_is_read_or_not() {
+    let reads: [(&str, Vec<u8>, &str); 2] = [
+        ("read", FIXTURE.to_vec(), "200 OK"),
+        ("failed", Vec::new(), "500 Internal Server Error"),
+    ];
+    for (name, body, status) in reads {
+        let mut world = World::new(&format!("xcode-job-prune-{name}"));
+        let log = Log::default();
+        let _guard = log.install();
+        let dir = world.rig.dir.path().join("xcode");
+        std::fs::create_dir(&dir).expect("the store's directory");
+        let store =
+            Arc::new(XcodeStore::open(&dir, 1 << 20, std::time::UNIX_EPOCH).expect("a store"));
+        let spare = scratch(&format!("xcode-job-prune-{name}-spare"));
+        let placeholder = start(&spare, &world.rig.clock, "");
+        let built = std::mem::replace(&mut world.rig.coordinator, placeholder);
+        let fake = FakeOrigin::new();
+        let origin = RepositoryOrigin::new(fake.roots())
+            .expect("the origin client")
+            .with_dial(fake.dial_all(Then::Write(response(status, &body))));
+        world.rig.coordinator = built
+            .with_repository_origin(origin)
+            .with_xcode_feed(Some(FeedUrl::parse(FEED).expect("a feed address")))
+            .with_xcode_store(Arc::clone(&store));
+        let policy = proto::RolloutPolicy {
+            maintenance: Some(proto::MaintenancePolicy {
+                xcode_keep: 1,
+                ..proto::MaintenancePolicy::default()
+            }),
+            ..proto::RolloutPolicy::default()
+        };
+        world
+            .put_with("alpha", &[SELF], Some(policy), None)
+            .expect("a group put");
+        let oldest = stored(&store, "27.1", "27A10");
+        let second = stored(&store, "27.2", "27B20");
+        let newest = stored(&store, "27.3", "27C30");
+        assert_eq!(
+            held_by(&store),
+            vec![
+                newest.sha256.clone(),
+                second.sha256.clone(),
+                oldest.sha256.clone()
+            ]
+        );
+
+        world.rig.coordinator.xcode_feed_job().await;
+
+        assert_eq!(held_by(&store), vec![newest.sha256.clone()], "{name}");
+        for gone in [&second, &oldest] {
+            assert!(!store.archive_path(&gone.sha256).exists(), "{name}");
+            assert!(
+                !dir.join(format!("{}.json", gone.sha256)).exists(),
+                "{name}"
+            );
+        }
+        assert!(store.archive_path(&newest.sha256).exists(), "{name}");
+        let removals: Vec<AuditEntry> = world
+            .audit()
+            .into_iter()
+            .filter(|entry| entry.action == XCODE_REMOVE)
+            .collect();
+        assert_eq!(removals.len(), 2, "{name}: {removals:?}");
+        assert_eq!(
+            removals,
+            vec![
+                removal(removals[0].seq, &second),
+                removal(removals[1].seq, &oldest)
+            ],
+            "{name}"
+        );
+        let audited = world.audit();
+        world.rig.coordinator.xcode_feed_job().await;
+        assert_eq!(world.audit(), audited, "{name}");
+        assert_eq!(held_by(&store), vec![newest.sha256], "{name}");
+        assert_eq!(failure_line(&log).is_empty(), name == "read", "{name}");
+    }
 }

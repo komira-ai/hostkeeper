@@ -894,8 +894,6 @@ On a Mac:
   Until they do, a build that does not set `DEVELOPER_DIR` uses `xcode-select`'s default, which a
   run with `xcode` can move: change a group's `xcode_default`, or install a new `latest`, while
   its builds can be re-run.
-- **The store's prune does not read the Xcodes the Macs report**, so it never keeps an older
-  release because a Mac has it.
 - **A Mac with FileVault on is never ordered `macos`.** The report does not yet say whether the
   update account is a FileVault user, so every Mac not reported off is left out
   (`filevault_not_ready`). The authenticated restart is built in the daemon for when it does.
