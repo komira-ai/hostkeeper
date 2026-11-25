@@ -635,6 +635,7 @@ impl Rig {
 
     /// [`Rig::run`] with arguments that need not be text.
     pub fn run_os(&self, opts: Opts<'_>, args: &[OsString]) -> Ran {
+        let _alone = alone();
         let mut stdin = std::io::Cursor::new(opts.stdin);
         let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
         let roots = opts.roots;
@@ -692,4 +693,15 @@ pub fn call(rig: &Rig, port: u16, words: &[&str]) -> Vec<String> {
     let mut all = rig.globals(port);
     all.extend(args(words));
     all
+}
+
+/// Held by whatever starts a program in a test or runs `hk` in this process, for as long as it
+/// does. A run of `hk xcode add` holds an `flock` on its lock file, and a program started by
+/// another thread of this process holds the same lock (the child shares the file until it
+/// executes) while it is being started; with one such thing at a time no run is ever refused by
+/// a child that another test is starting.
+pub fn alone() -> std::sync::MutexGuard<'static, ()> {
+    static ONE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    ONE.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }

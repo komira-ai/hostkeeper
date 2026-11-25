@@ -409,8 +409,8 @@ static UMASK: Mutex<()> = Mutex::new(());
 
 /// Proves: under a umask of 000 the first `hk xcode add` (flags only) makes `~/.hostkeeper` and
 /// `~/.hostkeeper/xcode` with mode 0700 and its lock with mode 0600 (the lock as the store sees it
-/// while the run holds it), and no more than that is made there but the record, 0600, and the lock
-/// is gone afterwards.
+/// while the run holds it, and as it stays afterwards), and no more than that is made there but the
+/// record, 0600.
 #[test]
 fn under_a_umask_of_000_what_it_makes_is_private() {
     let add = Add::new("umask");
@@ -440,7 +440,8 @@ fn under_a_umask_of_000_what_it_makes_is_private() {
         .map(|held| held.as_ref().map(|(_, mode)| *mode))
         .collect();
     assert_eq!(modes, [Some(0o600); 5]);
-    assert!(!add.kept(".lock").exists());
+    // The lock file stays, as private as it was while held.
+    assert_eq!(mode(add.kept(".lock")), 0o600);
 }
 
 /// Proves: `hk xcode add` off macOS refuses at once (exit 1) naming the verb and the system, with

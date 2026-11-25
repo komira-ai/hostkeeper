@@ -286,10 +286,14 @@ fn put(
             reply(tls, 400, "{\"error\":\"digest_mismatch\"}");
         };
     };
-    let Some((first, last, size)) = range_of(&range) else {
+    let Some((first, last, size)) = range_of(&range).filter(|(f, l, s)| f <= l && l < s) else {
         return reply(tls, 400, "{\"error\":\"bad_request\"}");
     };
     let act = state.puts.pop_front();
+    // A partial that holds every byte is finished by any part: nothing is appended.
+    if state.partial.len() == size && size == archive.len() && act.is_none() {
+        return finish(tls, state, archive);
+    }
     let append = |state: &mut State, part: &[u8]| {
         if first == state.partial.len() {
             state.partial.extend_from_slice(part);
@@ -321,6 +325,27 @@ fn put(
         return reply(tls, 400, "{\"error\":\"bad_request\"}");
     }
     append(state, body);
+    finish_with(tls, state, archive, size, matches!(act, Some(Put::Lose)));
+}
+
+/// The end of a part of a store that holds every byte: hashed, stored or refused.
+fn finish(
+    tls: &mut StreamOwned<ServerConnection, std::net::TcpStream>,
+    state: &mut State,
+    archive: &[u8],
+) {
+    finish_with(tls, state, archive, archive.len(), false);
+}
+
+/// The answer to a part after which the store holds `state.partial`, of an archive of `size`.
+fn finish_with(
+    tls: &mut StreamOwned<ServerConnection, std::net::TcpStream>,
+    state: &mut State,
+    archive: &[u8],
+    size: usize,
+    lose: bool,
+) {
+    let sha = sha256(archive);
     let answer = if state.partial.len() < size {
         Some((202, format!("{{\"received\":{}}}", state.partial.len())))
     } else if sha256(&state.partial) == sha {
@@ -333,7 +358,7 @@ fn put(
         state.partial.clear();
         Some((400, "{\"error\":\"digest_mismatch\"}".to_owned()))
     };
-    if let (Some((status, text)), false) = (answer, matches!(act, Some(Put::Lose))) {
+    if let (Some((status, text)), false) = (answer, lose) {
         reply(tls, status, &text);
     }
 }
@@ -527,6 +552,25 @@ fn a_partial_the_store_holds_is_continued_by_the_first_put() {
     let (ran, waits) = go(&add, &fake, &path);
     assert_eq!(ran.code, 0, "{ran:?}");
     assert_eq!(fake.ranges(), ["bytes 250-1003/1004"]);
+    assert_eq!(waits, Vec::<u64>::new());
+    assert_eq!(fake.stored(), Some(archive()));
+}
+
+/// Proves: a partial that holds every byte of the archive (the store stopped after the last block
+/// and before the commit) is finished by one `PUT` of the last byte again, `Content-Range: bytes
+/// 1003-1003/1004`, which is a valid range, not `bytes 1004-1003/1004`; the run ends `stored:` with
+/// exit 0 and no wait is made.
+#[test]
+fn a_partial_that_holds_every_byte_is_finished_by_the_last_byte_again() {
+    let state = State {
+        partial: archive(),
+        ..State::default()
+    };
+    let (add, fake, path) = rig("full-partial", state);
+    let (ran, waits) = go(&add, &fake, &path);
+    assert_eq!(ran.code, 0, "{ran:?}");
+    assert_eq!(ran.stdout, stored_line());
+    assert_eq!(fake.ranges(), ["bytes 1003-1003/1004"]);
     assert_eq!(waits, Vec::<u64>::new());
     assert_eq!(fake.stored(), Some(archive()));
 }

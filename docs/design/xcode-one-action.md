@@ -1,9 +1,11 @@
 # Adding an Xcode in one action
 
 Status: design. Built so far: `hk xcode verify` and its record (section 5, X2), as a hand-written method of the generated
-service `xcode` (section 2.7 last paragraph), and the first half of `hk xcode add` (X3): sections 2.2 to 2.4 without resume,
-2.6 and 2.7, and the summary of the Macs (2.5, in `xcode_add/summary/`), in `crates/hostkeeper-hk/src/xcode_add/`. Not built
-yet: resume (2.4, section 3). It changes how an operator brings a new Xcode into the store of
+service `xcode` (section 2.7 last paragraph); `hk xcode add` (X3, X4): sections 2.2 to 2.4 with resume, 2.6 and 2.7, and the
+summary of the Macs (2.5, in `xcode_add/summary/`), in `crates/hostkeeper-hk/src/xcode_add/` and `xcode_push/resume.rs`; the
+coordinator's side of resume (section 3: the query, `Content-Range`, the partial, its lock, removal, lapse, `Xcode.List.uploads`,
+`crates/hostkeeper-coordinator/src/xcode_put_range.rs` and `xcode_partial.rs`); and the console's Xcode page (X5,
+`ui/pages/xcode.js`). It changes how an operator brings a new Xcode into the store of
 [maintenance-updates.md](maintenance-updates.md) section 2.0 (Built: `hk xcode-push`, `crates/hostkeeper-hk/src/xcode_push/`;
 the store and its route, `crates/hostkeeper-coordinator/src/xcode_put.rs` and `xcode_store.rs`), and how the Mac proof's
 operator-side steps are run ([mac-proof.md](../operations/mac-proof.md) MP-X1 to MP-X6). Facts about this repository were read on
@@ -139,8 +141,9 @@ In order, the first that applies:
    and a newer release is waiting, the summary ends with `Xcode 27.3 is waiting: hk xcode add 27.3`.
 
 **One run at a time.** `hk` holds an exclusive lock, `~/.hostkeeper/xcode/.lock`, from the first step to the last, since two runs
-on one Mac would share the expansion directory and the records. A second run exits 1 naming the first (its process id), and
-never waits.
+on one Mac would share the expansion directory and the records. The lock is an exclusive `flock(2)` on that file, which the system lets go when the run's process ends however it ends, so there is
+no stale lock and no process id to be taken for another program's; the file itself stays. The run that holds it writes its process
+id into the file, which is only what a second run names when it exits 1, and the second never waits.
 
 ### 2.3 The checks, and the record that saves the expansion
 
@@ -187,7 +190,9 @@ step 2 has just recomputed. Trusting it does not trust the file name or anyone e
   again from the offset the coordinator then reports, five times in all, each after a wait that doubles from 2 seconds. Then
   `hk` stops with `the upload stopped at 7.31 of 11.92 GB; run hk xcode add again to continue` (exit 1). The coordinator keeps
   the partial upload for 24 hours (section 3), so the next run, even from another terminal or another operator's Mac with the
-  same archive, continues it. The waits come from an injected clock in tests (T10).
+  same archive, continues it. A partial that holds every byte (the coordinator stopped after the last block and before the
+  commit) is finished by sending the archive's last byte again, `Content-Range: bytes <size-1>-<size-1>/<size>`; the coordinator
+  then hashes what it holds and commits it (section 3). The waits come from an injected clock in tests (T10).
 - **An older coordinator** has no such query. Its `/v1/xcode/` route on the private listener takes `PUT` alone and answers the
   `GET` `405 method_not_allowed` (Built: `xcode_put.rs`, the method is its first check). On a 405, `hk` sends the whole archive in
   one request, as `xcode-push` does today, and says that this coordinator cannot resume. A 404 means the coordinator has no

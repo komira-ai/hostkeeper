@@ -849,6 +849,7 @@ fn init_under_umask(name: &str, umask: &str) -> (Rig, Output2) {
     let server = Server::canned(&rig.pki, 200, "{}");
     let empty = rig.path("empty-path");
     std::fs::create_dir(&empty).expect("a directory");
+    let _alone = crate::rig::alone();
     let out = Command::new("/bin/sh")
         .args(["-c", &format!("umask {umask}; exec \"$0\" \"$@\"")])
         .arg(env!("CARGO_BIN_EXE_hk"))

@@ -250,8 +250,9 @@ fn a_path_given_is_taken_whatever_its_name() {
     );
 }
 
-/// Makes the lock file of a test's home as another run of `hk` would, holding `pid`.
-fn hold(add: &Add, pid: &str) {
+/// Makes the lock file of a test's home as another run of `hk` would, holding `pid` and the
+/// `flock` of it (`locked`), which lasts as long as the returned file is open.
+fn hold(add: &Add, pid: &str, locked: bool) -> std::fs::File {
     let dir = add.rig.path("home/.hostkeeper/xcode");
     std::fs::create_dir_all(&dir).expect("directories");
     for d in [add.rig.path("home/.hostkeeper"), dir.clone()] {
@@ -260,19 +261,24 @@ fn hold(add: &Add, pid: &str) {
     let lock = dir.join(".lock");
     std::fs::write(&lock, pid).expect("the lock file");
     std::fs::set_permissions(&lock, std::fs::Permissions::from_mode(0o600)).expect("a mode");
+    let file = std::fs::File::open(&lock).expect("the lock file, open");
+    if locked {
+        rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive)
+            .expect("the lock");
+    }
+    file
 }
 
-/// Proves: a second run while a process that is alive holds the lock exits 1 at once, naming that
-/// process id and the lock file, with no program run, nothing asked of the store and the lock file
-/// as it was (never waiting).
+/// Proves: a second run while another holds the lock exits 1 at once, naming that process id and
+/// the lock file, with no program run, nothing asked of the store and the lock file as it was
+/// (never waiting).
 #[test]
 fn a_second_run_while_one_holds_the_lock_exits_1_naming_it() {
     let add = Add::new("lock-held");
     add.file("Xcode_27.2.xip", &archive_bytes(), 100);
     let server = Store::default().serve(&add.rig);
-    // This test's own process is a process that is alive.
-    let pid = std::process::id().to_string();
-    hold(&add, &format!("{pid}\n"));
+    let pid = "4242";
+    let _held = hold(&add, &format!("{pid}\n"), true);
     let ran = add.add(&server, &[]);
     let lock = add.kept(".lock");
     assert_eq!(
@@ -298,33 +304,60 @@ fn a_second_run_while_one_holds_the_lock_exits_1_naming_it() {
     );
 }
 
-/// Proves: a lock whose process is gone (a process id no system gives out), or that names none
-/// (an empty file, a word), is stale: the run takes it over and goes on; the lock file holds this
-/// run's process id and has mode 0600 while the run is in progress (as the store sees it asked),
-/// and is gone when the run ends, so the next run finds nothing to take over.
+/// Proves: a lock that is held and has no process id in its file yet (the holder has the lock and
+/// has not written its id, the moment in which a lock file looks empty) is not taken over: the run
+/// exits 1 naming the lock file, and the file is not removed or written.
 #[test]
-fn a_lock_whose_process_is_gone_is_taken_over() {
-    for (n, stale) in ["2000000000\n", "", "not a process id", "-5"]
+fn a_lock_held_before_its_process_id_is_written_is_not_taken_over() {
+    let add = Add::new("lock-empty");
+    add.file("Xcode_27.2.xip", &archive_bytes(), 100);
+    let server = Store::default().serve(&add.rig);
+    let _held = hold(&add, "", true);
+    let ran = add.add(&server, &[]);
+    let lock = add.kept(".lock");
+    assert_eq!(
+        (ran.code, ran.stdout.as_str(), ran.stderr.as_str()),
+        (
+            1,
+            "",
+            format!(
+                "hk: another hk xcode add is running (it holds {}); wait for it to end, then \
+                 run hk xcode add again\n",
+                lock.display()
+            )
+            .as_str()
+        )
+    );
+    assert!(server.seen().is_empty());
+    assert_eq!(std::fs::read_to_string(&lock).expect("kept"), "");
+}
+
+/// Proves: a lock file that nobody holds (the process that wrote its id is gone, or the file has
+/// no id, or a word, or a process id that is alive and is another program's) is free: the run
+/// takes it and goes on; the file holds this run's process id and has mode 0600 while the run is
+/// in progress (as the store sees it asked), and the next run takes it again.
+#[test]
+fn a_lock_file_nobody_holds_is_taken() {
+    for (n, left) in ["2000000000\n", "", "not a process id", "-5"]
         .into_iter()
         .enumerate()
     {
         let add = Add::new(&format!("lock-stale-{n}"));
         add.file("Xcode_27.2.xip", &archive_bytes(), 100);
-        hold(&add, stale);
+        drop(hold(&add, left, false));
         let (server, watched) = Store::default().serve_watching(&add.rig, &add.kept(".lock"));
         let ran = add.add(&server, &[]);
-        assert_eq!(ran.code, 0, "{stale:?}: {ran:?}");
+        assert_eq!(ran.code, 0, "{left:?}: {ran:?}");
         let watched = watched.lock().expect("the record").clone();
         // Two `Xcode.List`, the query of the upload, the upload and the `Hosts.List` of the summary.
-        assert_eq!(watched.len(), 5, "{stale:?}");
+        assert_eq!(watched.len(), 5, "{left:?}");
         for held in watched {
             assert_eq!(
                 held,
                 Some((format!("{}\n", std::process::id()), 0o600)),
-                "{stale:?}"
+                "{left:?}"
             );
         }
-        assert!(!add.kept(".lock").exists(), "{stale:?}");
         assert_eq!(add.add(&server, &[]).code, 0);
     }
 }
@@ -338,10 +371,11 @@ fn the_lock_is_let_go_when_a_run_ends_and_a_link_is_refused() {
     let server = Store::default().serve(&add.rig);
     let bad = add.file("Xcode_27.2.xip", b"not an xip", 100);
     assert_eq!(add.add(&server, &[&bad]).code, 2);
-    assert!(!add.kept(".lock").exists());
+    // The file stays; nobody holds it, so the next run takes it.
     let good = add.file("Xcode_27.2.xip", &archive_bytes(), 100);
     assert_eq!(add.add(&server, &[&good]).code, 0);
     let lock = add.kept(".lock");
+    std::fs::remove_file(&lock).expect("the lock file");
     let elsewhere = add.rig.path("elsewhere");
     std::fs::write(&elsewhere, b"").expect("a file");
     std::os::unix::fs::symlink(&elsewhere, &lock).expect("a link");

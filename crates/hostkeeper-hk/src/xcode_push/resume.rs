@@ -15,6 +15,10 @@
 //! replaces. Then the run stops saying how far the upload got, and the next run continues, since
 //! the coordinator keeps the partial upload.
 //!
+//! A partial that holds every byte of the archive is finished by sending the archive's last byte
+//! again (`Content-Range: bytes <size-1>-<size-1>/<size>`): the store keeps what it holds, hashes
+//! it and commits it.
+//!
 //! A `405` of the query is a coordinator that cannot resume (its route takes `PUT` alone): the
 //! archive goes in one request, as it did before. A `404` is a coordinator with no Xcode store.
 //! Any other status of the query, and every other answer of a `PUT`, ends the run as a refusal
@@ -132,7 +136,15 @@ fn within(at: u64, archive: &Archive<'_>) -> Flow<u64> {
 
 /// One `PUT` of the rest of the archive from `at`, and how it ended.
 fn attempt(w: &mut World<'_>, target: &Target, archive: &mut Archive<'_>, at: u64) -> Flow<Try> {
-    let (status, text) = match send(w, target, archive, at, true)? {
+    // A store that holds every byte (a partial whose last block was synced and whose commit did
+    // not happen) has no byte left to be sent, and no range of none: the last byte is sent again,
+    // which tells the store to hash what it holds and commit it.
+    let from = if at >= archive.size {
+        archive.size.saturating_sub(1)
+    } else {
+        at
+    };
+    let (status, text) = match send(w, target, archive, from, true)? {
         Sent::Cut(why) => {
             return Ok(Try::Again {
                 at: None,
