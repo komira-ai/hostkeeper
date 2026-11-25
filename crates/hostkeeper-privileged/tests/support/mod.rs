@@ -4,9 +4,10 @@
 //! the host of the self-update tests.
 //!
 //! A wait of this module ([`wait_until`], [`wait_for_file`]) polls a state systemd or the fixture
-//! reaches (a file written, a unit active) and sleeps between looks; it never bounds the time it
-//! waits and nothing asserts how long it took. A test that hangs is ended by the job's
-//! `timeout-minutes` in privileged.yml (in net-install.yml for the network-install tests).
+//! reaches (a file written, a unit active) and sleeps between looks; it looks at most [`LOOKS`]
+//! times and then fails the test naming the wait, so that a state that never comes ends the test
+//! with a failure (and the workflow's journal steps run) instead of a job cancelled at its
+//! `timeout-minutes`; the bound counts looks, and nothing asserts how long a wait took.
 //!
 //! The first-boot tests' harness is in submodules: [`spawn`] (a child process killed when dropped,
 //! and [`spawn::poll`], a wait of a bounded number of looks that fails with the last state it
@@ -144,17 +145,60 @@ pub fn start_serve(rig: &Rig, unit: &str) {
     run_ok(SYSTEMD_RUN, &rig.serve_command(unit));
 }
 
-/// Waits until `done` holds, looking every [`POLL`].
-pub fn wait_until(mut done: impl FnMut() -> bool) {
-    while !done() {
-        std::thread::sleep(POLL);
+/// How many looks a wait of this module makes before it fails the test: with [`POLL`], five
+/// minutes. Not [`spawn::LOOKS`], the first-boot harness's own bound.
+pub const LOOKS: u32 = 6000;
+
+/// Waits until `done` holds, looking every [`POLL`], at most [`LOOKS`] times.
+///
+/// # Panics
+/// `done` never held in [`LOOKS`] looks; the message names the caller's line.
+#[track_caller]
+pub fn wait_until(done: impl FnMut() -> bool) {
+    wait_looks(LOOKS, POLL, done);
+}
+
+/// Looks with `done` until it holds, at most `looks` times with `pause` between two looks.
+///
+/// # Panics
+/// `done` never held in `looks` looks; the message names the caller's line. Tested without root
+/// in `tests/support_wait.rs`.
+#[track_caller]
+pub fn wait_looks(looks: u32, pause: Duration, mut done: impl FnMut() -> bool) {
+    for _ in 0..looks {
+        if done() {
+            return;
+        }
+        std::thread::sleep(pause);
     }
+    let at = std::panic::Location::caller();
+    panic!(
+        "a wait for a state of systemd or the fixture at {}:{}: not reached in {looks} looks",
+        at.file(),
+        at.line()
+    );
 }
 
 /// Waits until the file at `path` exists: the fixture writes its pid file once it runs. When
 /// `ended` says the step's run has returned first, the file will never come: fails at once.
+///
+/// # Panics
+/// The step ended first, or the file did not come in [`LOOKS`] looks (that message names
+/// the caller's line).
+#[track_caller]
 pub fn wait_for_file(path: &Path, ended: impl Fn() -> bool) {
-    wait_until(|| {
+    wait_for_file_looks(LOOKS, POLL, path, ended);
+}
+
+/// [`wait_for_file`] with its bound and pause given: at most `looks` looks, `pause` apart.
+/// Tested without root in `tests/support_wait.rs`.
+///
+/// # Panics
+/// The step ended first, or the file did not come in `looks` looks (that message names the
+/// caller's line).
+#[track_caller]
+pub fn wait_for_file_looks(looks: u32, pause: Duration, path: &Path, ended: impl Fn() -> bool) {
+    wait_looks(looks, pause, || {
         let written = path.exists();
         assert!(
             written || !ended(),
