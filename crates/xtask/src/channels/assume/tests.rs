@@ -23,6 +23,12 @@ fn scratch(name: &str) -> TestDir {
 /// A token endpoint on the loopback address that answers its one request with `status` and
 /// `body`: the URL (with a query already, as the runner's is) and what it was asked.
 fn token_endpoint(status: &'static str, body: String) -> (String, mpsc::Receiver<Vec<String>>) {
+    token_endpoints(vec![(status, body)])
+}
+
+/// A token endpoint on the loopback address that answers one request per connection with each
+/// of `answers` in turn, then closes: the URL and, per request, what it was asked.
+fn token_endpoints(answers: Vec<(&'static str, String)>) -> (String, mpsc::Receiver<Vec<String>>) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
     let url = format!(
         "http://{}/token?api-version=2.0",
@@ -30,25 +36,28 @@ fn token_endpoint(status: &'static str, body: String) -> (String, mpsc::Receiver
     );
     let (sent, asked) = mpsc::channel();
     std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().expect("accept");
-        let mut reader = BufReader::new(stream.try_clone().expect("clone"));
-        let mut lines = Vec::new();
-        loop {
-            let mut line = String::new();
-            reader.read_line(&mut line).expect("request");
-            if line.trim_end().is_empty() {
-                break;
+        for (status, body) in answers {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut lines = Vec::new();
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).expect("request");
+                if line.trim_end().is_empty() {
+                    break;
+                }
+                lines.push(line.trim_end().to_owned());
             }
-            lines.push(line.trim_end().to_owned());
+            // Nobody may be listening: a test that does not read what was asked drops the
+            // receiver.
+            let _ = sent.send(lines);
+            let head = format!(
+                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            stream.write_all(head.as_bytes()).expect("head");
+            stream.write_all(body.as_bytes()).expect("body");
         }
-        // Nobody may be listening: a test that does not read what was asked drops the receiver.
-        let _ = sent.send(lines);
-        let head = format!(
-            "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            body.len()
-        );
-        stream.write_all(head.as_bytes()).expect("head");
-        stream.write_all(body.as_bytes()).expect("body");
     });
     (url, asked)
 }
@@ -121,6 +130,8 @@ struct Run {
     log: Log,
     env_file: PathBuf,
     aws: FakeAws,
+    /// The pauses before each repeated token request, in order.
+    pauses: Vec<Duration>,
 }
 
 fn run_with(
@@ -142,12 +153,15 @@ fn run_with(
         env_file: env_file.clone(),
         writes: Vec::new(),
     };
+    let pauses = RefCell::new(Vec::new());
+    let pause = |wait| pauses.borrow_mut().push(wait);
     let mut request = Request {
         role_arn: ROLE,
         session_name: "hostkeeper-release-42",
         region: "us-east-1",
         env_file: &env_file,
         https_only,
+        pause: &pause,
     };
     change(&mut request);
     let result = assume(&aws, &mut log, &oidc, &request);
@@ -157,6 +171,7 @@ fn run_with(
         log,
         env_file,
         aws,
+        pauses: pauses.into_inner(),
     }
 }
 
@@ -255,7 +270,9 @@ fn a_failed_token_request_stops_before_aws_and_writes_nothing() {
     let Err(Error::Failed(why)) = &run.result else {
         panic!("{:?}", run.result);
     };
-    assert!(why.starts_with("the OIDC token request failed: "), "{why}");
+    // A refusal is not asked again: the runner's answer would be the same.
+    assert_eq!(why, "the OIDC token request failed: http status: 403");
+    assert!(run.pauses.is_empty());
     assert!(!why.contains(BEARER), "{why}");
     assert!(run.aws.calls.borrow().is_empty());
     assert!(!run.env_file.exists());
@@ -281,6 +298,7 @@ fn a_token_answer_without_a_value_is_refused() {
             "{name}: {why}"
         );
         assert!(run.aws.calls.borrow().is_empty(), "{name}");
+        assert!(run.pauses.is_empty(), "{name}");
     }
 }
 
@@ -299,6 +317,7 @@ fn the_token_is_only_asked_for_over_https() {
     };
     assert!(why.starts_with("the OIDC token request failed: "), "{why}");
     assert!(run.aws.calls.borrow().is_empty());
+    assert!(run.pauses.is_empty());
 }
 
 #[test]
@@ -475,6 +494,7 @@ fn a_missing_oidc_offer_fails_before_anything_is_masked() {
             region: "us-east-1",
             env_file: &env_file,
             https_only: true,
+            pause: &|_| panic!("no token request is made"),
         },
     );
     assert_eq!(
@@ -562,6 +582,7 @@ fn a_log_that_cannot_be_written_fails_before_the_exchange() {
             region: "us-east-1",
             env_file: &env_file,
             https_only: false,
+            pause: &|_| panic!("no token request is made"),
         },
     );
     let Err(Error::Spawn { what, why }) = result else {
@@ -592,7 +613,8 @@ fn an_env_file_that_cannot_be_appended_to_fails_after_the_masks() {
 
 #[test]
 fn an_answer_cut_short_is_a_failed_token_request() {
-    // Catches: half a token taken for the token when the connection drops mid-answer.
+    // Catches: half a token taken for the token when the connection drops mid-answer, and a
+    // dropped connection not asked again.
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
     let url = format!("http://{}/token", listener.local_addr().expect("addr"));
     std::thread::spawn(move || {
@@ -610,6 +632,10 @@ fn an_answer_cut_short_is_a_failed_token_request() {
         panic!("{:?}", run.result);
     };
     assert!(why.starts_with("the OIDC token request failed: "), "{why}");
+    // A cut answer is asked again; the endpoint is gone after its one answer, so every repeat
+    // fails to connect and the request ends after the last pause.
+    assert!(why.ends_with(" (asked 6 times)"), "{why}");
+    assert_eq!(run.pauses, PAUSES);
     assert!(run.aws.calls.borrow().is_empty());
 }
 
@@ -638,6 +664,7 @@ fn a_session_name_must_start_with_the_products_prefix() {
             region: "us-east-1",
             env_file: &dir.join("env"),
             https_only: true,
+            pause: &|_| panic!("no token request is made"),
         };
         let e = assume(&aws, &mut Vec::new(), &oidc, &request).unwrap_err();
         assert_eq!(
@@ -650,4 +677,176 @@ fn a_session_name_must_start_with_the_products_prefix() {
         );
     }
     assert!(aws.calls.borrow().is_empty());
+}
+
+#[test]
+fn a_token_service_that_answers_503_then_504_is_asked_again_and_its_token_exchanged() {
+    // Catches: a release job failed by GitHub's token service being unavailable for seconds,
+    // and repeats that do not wait the first two pauses, in that order.
+    let (url, asked) = token_endpoints(vec![
+        ("503 Service Unavailable", "busy".to_owned()),
+        ("504 Gateway Timeout", "busy".to_owned()),
+        ("200 OK", format!(r#"{{"value":"{JWT}"}}"#)),
+    ]);
+    let run = run_with("busy", &url, false, FakeAws::says(true, STS, ""), |_| {});
+    assert_eq!(
+        run.result,
+        Ok(vec![
+            "assumed the role; its credentials are masked and reach the steps after this one"
+                .to_owned()
+        ])
+    );
+    assert_eq!(
+        run.pauses,
+        [Duration::from_secs(5), Duration::from_secs(10)]
+    );
+    // Every request carried the audience and the bearer.
+    let requests: Vec<Vec<String>> = asked.iter().collect();
+    assert_eq!(requests.len(), 3);
+    for request in &requests {
+        assert_eq!(
+            request[0],
+            "GET /token?api-version=2.0&audience=sts.amazonaws.com HTTP/1.1"
+        );
+        assert!(
+            request
+                .iter()
+                .any(|l| l.eq_ignore_ascii_case(&format!("authorization: Bearer {BEARER}"))),
+            "{request:?}"
+        );
+    }
+    // The bearer is masked once, and the token once: the repeats add no line to the log.
+    assert_eq!(
+        masked(&run),
+        [ROLE, BEARER, JWT, "AKIAFAKE", "fake-secret", "fake-session"]
+    );
+    assert_eq!(run.aws.calls.borrow().len(), 1);
+}
+
+#[test]
+fn a_token_service_that_stays_unavailable_is_asked_six_times_then_fails() {
+    // Catches: a request repeated without end, or more or fewer times than the pauses allow,
+    // and a final failure that does not say how often it was asked.
+    let (url, asked) = token_endpoints(
+        (0..PAUSES.len() + 1)
+            .map(|_| ("503 Service Unavailable", "busy".to_owned()))
+            .collect(),
+    );
+    let run = run_with(
+        "unavailable",
+        &url,
+        false,
+        FakeAws::says(true, STS, ""),
+        |_| {},
+    );
+    assert_eq!(
+        run.result,
+        Err(Error::Failed(
+            "the OIDC token request failed: http status: 503 (asked 6 times)".to_owned()
+        ))
+    );
+    assert_eq!(run.pauses, PAUSES);
+    assert_eq!(asked.iter().count(), 6);
+    assert!(run.aws.calls.borrow().is_empty());
+    assert!(!run.env_file.exists());
+    assert_eq!(masked(&run), [ROLE, BEARER]);
+}
+
+#[test]
+fn a_refusal_after_an_unavailable_answer_ends_the_request_and_says_how_often_it_was_asked() {
+    // Catches: a 4xx answer asked again because an earlier answer was transient.
+    let (url, _) = token_endpoints(vec![
+        ("502 Bad Gateway", "busy".to_owned()),
+        ("401 Unauthorized", "no".to_owned()),
+    ]);
+    let run = run_with(
+        "then-refused",
+        &url,
+        false,
+        FakeAws::says(true, STS, ""),
+        |_| {},
+    );
+    assert_eq!(
+        run.result,
+        Err(Error::Failed(
+            "the OIDC token request failed: http status: 401 (asked 2 times)".to_owned()
+        ))
+    );
+    assert_eq!(run.pauses, [Duration::from_secs(5)]);
+    assert!(run.aws.calls.borrow().is_empty());
+}
+
+#[test]
+fn only_a_5xx_answer_or_a_transport_failure_is_transient() {
+    // Catches: a refusal (4xx), a redirect or a size or https refusal asked again, and the
+    // edges of the 5xx class taken wrong.
+    for (code, expected) in [
+        (499, false),
+        (500, true),
+        (503, true),
+        (504, true),
+        (599, true),
+        (600, false),
+        (429, false),
+        (404, false),
+        (301, false),
+    ] {
+        assert_eq!(
+            transient(&ureq::Error::StatusCode(code)),
+            expected,
+            "{code}"
+        );
+    }
+    for error in [
+        ureq::Error::Io(std::io::Error::from(std::io::ErrorKind::ConnectionReset)),
+        ureq::Error::Timeout(ureq::Timeout::Global),
+        ureq::Error::ConnectionFailed,
+    ] {
+        assert!(transient(&error), "{error}");
+    }
+    for error in [
+        ureq::Error::RequireHttpsOnly("http://127.0.0.1/".to_owned()),
+        ureq::Error::BodyExceedsLimit(MAX_TOKEN_ANSWER),
+        ureq::Error::HostNotFound,
+        ureq::Error::TooManyRedirects,
+        ureq::Error::BadUri("no uri".to_owned()),
+    ] {
+        assert!(!transient(&error), "{error}");
+    }
+}
+
+#[test]
+fn a_connection_dropped_before_the_answer_is_asked_again_and_its_token_exchanged() {
+    // Catches: a transport failure (the connection closed with no answer) taken as final.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let url = format!("http://{}/token", listener.local_addr().expect("addr"));
+    std::thread::spawn(move || {
+        for answer in [None, Some(format!(r#"{{"value":"{JWT}"}}"#))] {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut line = String::new();
+            while reader.read_line(&mut line).expect("request") > 2 {
+                line.clear();
+            }
+            // The first connection is closed without a word.
+            if let Some(body) = answer {
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                stream.write_all(head.as_bytes()).expect("head");
+                stream.write_all(body.as_bytes()).expect("body");
+            }
+        }
+    });
+    let run = run_with("dropped", &url, false, FakeAws::says(true, STS, ""), |_| {});
+    assert_eq!(
+        run.result,
+        Ok(vec![
+            "assumed the role; its credentials are masked and reach the steps after this one"
+                .to_owned()
+        ])
+    );
+    assert_eq!(run.pauses, [Duration::from_secs(5)]);
+    assert_eq!(run.aws.calls.borrow().len(), 1);
 }
