@@ -145,7 +145,8 @@ pub fn start_serve(rig: &Rig, unit: &str) {
     run_ok(SYSTEMD_RUN, &rig.serve_command(unit));
 }
 
-/// How many looks a wait of this module makes before it fails the test.
+/// How many looks a wait of this module makes before it fails the test: with [`POLL`], five
+/// minutes. Not [`spawn::LOOKS`], the first-boot harness's own bound.
 pub const LOOKS: u32 = 6000;
 
 /// Waits until `done` holds, looking every [`POLL`], at most [`LOOKS`] times.
@@ -186,7 +187,18 @@ pub fn wait_looks(looks: u32, pause: Duration, mut done: impl FnMut() -> bool) {
 /// the caller's line).
 #[track_caller]
 pub fn wait_for_file(path: &Path, ended: impl Fn() -> bool) {
-    wait_until(|| {
+    wait_for_file_looks(LOOKS, POLL, path, ended);
+}
+
+/// [`wait_for_file`] with its bound and pause given: at most `looks` looks, `pause` apart.
+/// Tested without root in `tests/support_wait.rs`.
+///
+/// # Panics
+/// The step ended first, or the file did not come in `looks` looks (that message names the
+/// caller's line).
+#[track_caller]
+pub fn wait_for_file_looks(looks: u32, pause: Duration, path: &Path, ended: impl Fn() -> bool) {
+    wait_looks(looks, pause, || {
         let written = path.exists();
         assert!(
             written || !ended(),
