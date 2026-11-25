@@ -98,6 +98,7 @@ impl Coordinator {
                 waiting,
                 keep: 0,
                 max_bytes: 0,
+            uploads: Vec::new(),
             });
         };
         let archives = store.archives().map_err(|why| {
@@ -110,6 +111,7 @@ impl Coordinator {
             waiting,
             keep: self.xcode_keep_largest().max(1),
             max_bytes: store.max_bytes(),
+        uploads: Vec::new(),
         })
     }
 

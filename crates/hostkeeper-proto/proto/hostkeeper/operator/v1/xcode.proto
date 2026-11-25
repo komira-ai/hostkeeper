@@ -75,6 +75,10 @@ enum XcodeRefusal {
   XCODE_REFUSAL_STORE_FAILED = 6;
   // UNAVAILABLE: the audit entry could not be written. Nothing was removed.
   XCODE_REFUSAL_AUDIT_UNAVAILABLE = 7;
+  // FAILED_PRECONDITION: `Remove` of a SHA-256 the store holds only as a partial upload whose
+  // writer's lock is fresh (written within the last 30 seconds). Nothing was removed; asking again
+  // once the upload stops is safe.
+  XCODE_REFUSAL_PARTIAL_LOCKED = 8;
 }
 
 message ListXcodeRequest {}
@@ -119,6 +123,29 @@ message ListXcodeResponse {
   uint32 keep = 4;
   // The most bytes one upload may be (`--xcode-max-bytes`); 0 without a store.
   uint64 max_bytes = 5;
+  // The uploads in progress: the partial uploads the store keeps (each resumed from its last byte
+  // by `PUT` with `Content-Range`), oldest first. Empty without a store.
+  repeated XcodeUpload uploads = 6;
+}
+
+// A partial upload the store keeps: the bytes received so far of one archive, named by the
+// SHA-256 the whole must have. Removed when it is stored, when its final hash differs, by
+// `Remove` of its SHA-256, or when it is not written for 24 hours.
+message XcodeUpload {
+  // The SHA-256 the whole archive must have, 64 lower-case hex characters.
+  string sha256 = 1;
+  // The release's version the upload names.
+  string version = 2;
+  // The release's build the upload names.
+  string build = 3;
+  // The bytes received so far.
+  uint64 received_bytes = 4;
+  // The archive's whole size in bytes.
+  uint64 size_bytes = 5;
+  // The name of the operator whose request started it.
+  string started_by = 6;
+  // When bytes were last written to it, in unix seconds.
+  uint64 last_write_unix = 7;
 }
 
 message RemoveXcodeRequest {

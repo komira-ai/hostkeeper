@@ -77,6 +77,7 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
                 waiting: Some(waiting()),
                 keep: 2,
                 max_bytes: 21_474_836_480,
+                uploads: Vec::new(),
             }),
         ),
         (
