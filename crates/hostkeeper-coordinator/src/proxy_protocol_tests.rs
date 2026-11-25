@@ -74,11 +74,11 @@ fn a_source_contains_its_address_or_the_addresses_of_its_network() {
     let network = source("192.0.2.0/24");
     assert!(network.contains(ip("192.0.2.0")));
     assert!(network.contains(ip("192.0.2.255")));
-    assert!(!network.contains(ip("192.0.3.1")));
+    assert!(!network.contains(ip("198.51.100.1")));
 
-    let v6 = source("2001:db8::/32");
-    assert!(v6.contains(ip("2001:db8:ffff::5")));
-    assert!(!v6.contains(ip("2001:db9::1")));
+    let v6 = source("2001:db8::/48");
+    assert!(v6.contains(ip("2001:db8:0:ffff::5")));
+    assert!(!v6.contains(ip("2001:db8:1::1")));
     assert!(!v6.contains(ip("192.0.2.1")));
 
     let host6 = source("2001:db8::1");

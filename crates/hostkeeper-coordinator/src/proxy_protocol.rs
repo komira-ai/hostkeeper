@@ -11,7 +11,7 @@
 //! header it sends fails that handshake. Without the flag no header is read on any connection.
 //!
 //! The header ([`read`]) is version 2 (binary) or version 1 (text), as the
-//! [specification](https://www.haproxy.org/download/3.0/doc/proxy-protocol.txt) defines them. A
+//! PROXY protocol specification (`proxy-protocol.txt`, published with HAProxy) defines them. A
 //! header that says the proxy itself made the connection (version 2's `LOCAL`, version 1's
 //! `UNKNOWN`) or names no IP source (version 2's `AF_UNSPEC` and `AF_UNIX`) is taken, and the
 //! connection has no address: a heartbeat on it records none, so the proxy's own address is never
