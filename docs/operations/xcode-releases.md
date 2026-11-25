@@ -138,9 +138,9 @@ The store keeps the newest releases, as many as the largest `xcode_keep` of any 
 policy (and at least one), and removes the rest, newest first, each removal audited before it is made. A release older than those the store keeps
 is refused `not_kept` when it is pushed, before its body is read and again under the store's lock
 before it is stored, so the release just pushed always stays. A
-release a host reports installed is never removed; the prune does not read the Xcodes the Macs report
-yet (they decide only what is due on a Mac and what its run removes, below), so today none is held
-back by that rule. The prune runs after each stored upload and in the daily read of the list.
+release a host reports installed is never removed, nor refused `not_kept`: the prune reads the Xcodes
+each Mac's last report names (by version and build, in `Xcode-<version>.app` or in another directory,
+such as `Xcode.app`), and keeps each of them however old. The prune runs after each stored upload and in the daily read of the list.
 Each archive it removes is audited first, as `xcode_remove` by `coordinator`, with the reason `pruned:
 Xcode <version> (<build>), sha256 <sha256>`.
 

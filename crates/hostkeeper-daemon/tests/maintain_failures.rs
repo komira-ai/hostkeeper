@@ -8,11 +8,14 @@ mod support_maintain;
 
 use std::sync::Arc;
 
+use hostkeeper_daemon::maintenance_state::run_state;
 use hostkeeper_daemon::testing::AdditiveFault;
 use hostkeeper_daemon::{Refusal, Reply};
 use hostkeeper_hook::Verdict;
 use hostkeeper_proto::hostkeeper::agent::v1::MaintenanceKind;
-use hostkeeper_steps::maintenance::{Kind, MaintenanceRecord, RunStep};
+use hostkeeper_steps::maintenance::{
+    Kind, MAINTENANCE_DIR, MAINTENANCE_RECORD_FILE, MaintenanceRecord, RunStep,
+};
 use support::{Rig, name};
 use support_maintain::{HOOK, ORDER, RUN, draining, launched, maintain, order_of, record, terms};
 
@@ -393,4 +396,54 @@ fn a_deferred_host_takes_a_new_turn() {
     expected.step = RunStep::Done;
     expected.kinds[0].applied = true;
     assert_eq!(record(&rig), Some(expected));
+}
+
+/// The password of the update account in the macOS hook's own tests: the install program there
+/// echoes it to both of its streams.
+const PASSWORD: &str = "Up date=pa\"ss$HOME\\1";
+/// The report line the macOS hook writes for a failed `softwareupdate --install` that echoed the
+/// password (`a_failing_install_fails_naming_the_step_and_exit_code_alone`): the step and the exit
+/// code alone.
+const MACOS_INSTALL_REPORT: &str = r#"{"class":"release","detail":"softwareupdate --install: the program exited with code 1","promotion_pending":false,"reason":"macos_install_failed"}"#;
+
+/// Catches the hook's report of a failed install (its reason and detail, from a program that
+/// echoed the update account's password) reaching the run record other than as the step, the exit
+/// and that reason and detail: the `macos` cutover exits 1 with the report line, so the turn halts,
+/// the record's halted reason is exactly the words of the report, the run state says the same
+/// words, and the record's bytes on disk hold no password.
+#[test]
+fn a_failed_macos_install_halts_the_record_with_the_reports_words_alone() {
+    let rig = host("maintain-failures-macos-install");
+    rig.launcher
+        .additive_replies(HOOK, &[(0, ""), (1, MACOS_INSTALL_REPORT)]);
+    let daemon = rig.daemon();
+    let reply = daemon.order(&maintain(&[MaintenanceKind::Macos]));
+    let why = "apply macos: exit 1, macos_install_failed: softwareupdate --install: the program exited with code 1";
+    assert_eq!(reply, finished(Verdict::Halt, why));
+    let mut expected = MaintenanceRecord::new(
+        RUN,
+        ORDER,
+        1,
+        &[Kind::Macos],
+        vec![name("alpha"), name("beta")],
+    )
+    .expect("a record");
+    expected.step = RunStep::Apply;
+    expected.drained = vec![name("alpha"), name("beta")];
+    expected.halted = Some(why.to_owned());
+    let stored = record(&rig).expect("a record");
+    assert_eq!(stored, expected);
+    assert_eq!(run_state(&stored).halted_reason, why);
+    let bytes = std::fs::read(
+        rig.state
+            .parent()
+            .expect("the state's parent")
+            .join(MAINTENANCE_DIR)
+            .join(MAINTENANCE_RECORD_FILE),
+    )
+    .expect("the record's file");
+    assert!(
+        !String::from_utf8_lossy(&bytes).contains(PASSWORD),
+        "the password is in the record"
+    );
 }

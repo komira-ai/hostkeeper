@@ -702,7 +702,7 @@ argument and no environment variable, and uploads nothing when the signature che
 `xcode_release_waiting` stands from the feed's new release until the store holds it.
 
 The Linux path is proven end to end in process (Built: `crates/hostkeeper-daemon/tests/maintenance_linux_e2e.rs`, over
-`tests/support_linux`): the real coordinator schedules and orders each turn from the hosts' heartbeats, and on each host the real
+`tests/support_e2e` and `tests/support_linux`): the real coordinator schedules and orders each turn from the hosts' heartbeats, and on each host the real
 daemon runs it from its run record through the real maintenance hook's `prepare`, `cutover` and `verify` over fake `apt-get`,
 `systemctl`, a fake service that declares `drain` and `resume`, and a fake boot id. It shows the Update button's turn (stage, drain,
 install, reboot, check in the new boot, resume, done, nothing due after, `updates_due` cleared), the same turn for a host that has a
@@ -712,6 +712,25 @@ order twice, a `reboot`-only run that installs nothing, and a drain deadline tha
 `prepare` of `reboot` is the real kind's there (it succeeds and runs nothing: a restart has nothing to download); the `linux`
 kind's stage is answered by the test, and its programs are tested in the hook's own crate (`maintenance_hook/linux/tests.rs`,
 `stage_tests.rs`), where the hook's `prepare` of `reboot` alone and of `linux` with `reboot` is run too.
+
+The Mac path is proven end to end in process the same way (Built: `crates/hostkeeper-daemon/tests/maintenance_macos_e2e.rs`, over
+`tests/support_e2e` and `tests/support_mac`): the real coordinator, with its Xcode store, orders each turn from the heartbeats of Macs
+that name the platform `darwin-arm64`, and on each Mac the real daemon runs it from its run record through the real maintenance hook's
+`macos` and `xcode` kinds (their stage and their apply) and the real Mac collectors, over fake `sw_vers`, `ioreg`, `softwareupdate`,
+`fdesetup`, `pkgutil`, `dscl`, `sysadminctl`, `startosinstall`, `xip`, `codesign`, `xcodebuild` and `xcode-select`, the update
+account's file (mode 0600) and a boot id that changes at the Mac's restart. It shows the Update button's turn with FileVault off
+(stage with the download, drain, `softwareupdate --install ... --restart` with the password on standard input alone and in no
+argument, log line, heartbeat, run record or halt reason, restart, check of the new build, resume, done, nothing due after,
+`updates_due` cleared); a Mac whose FileVault was turned on after the report it was ordered on, installed without `--restart` and then
+restarted by `fdesetup authrestart -inputplist` with the property list on standard input; a major upgrade that fetches the full
+installer at stage, runs `startosinstall` and removes the installer app at the check; a macOS and Xcode turn that restarts after macOS
+and only then installs the store's Xcode (fetched, expanded and checked at stage while the Mac serves), selects the order's default
+and removes the old Xcode beyond `xcode_keep`; a Mac with no update account, one whose account holds no Secure Token, one with an
+`mdm_conflict` and one that reports FileVault on, each skipped for `macos` with its `skipped_because` while the run goes on; a full
+disk, and a store archive `xip` cannot expand, each deferring at stage with nothing drained or installed; a failed install and a check
+that finds the wrong build, each halting the Mac cordoned with no resume and no rollback until Put back; a Mac silent past its
+`return_secs` that the job `alerts` notes `maintenance_not_back`, and not a second before; and a coordinator and a daemon that restart
+mid-turn without starting the order twice or installing twice.
 
 ## 9. Questions for the owner
 
