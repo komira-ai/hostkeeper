@@ -151,7 +151,8 @@ pub const LOOKS: u32 = 6000;
 /// Waits until `done` holds, looking every [`POLL`], at most [`LOOKS`] times.
 ///
 /// # Panics
-/// `done` never held in [`LOOKS`] looks.
+/// `done` never held in [`LOOKS`] looks; the message names the caller's line.
+#[track_caller]
 pub fn wait_until(done: impl FnMut() -> bool) {
     wait_looks(LOOKS, POLL, done);
 }
@@ -159,7 +160,9 @@ pub fn wait_until(done: impl FnMut() -> bool) {
 /// Looks with `done` until it holds, at most `looks` times with `pause` between two looks.
 ///
 /// # Panics
-/// `done` never held in `looks` looks.
+/// `done` never held in `looks` looks; the message names the caller's line. Tested without root
+/// in `tests/support_wait.rs`.
+#[track_caller]
 pub fn wait_looks(looks: u32, pause: Duration, mut done: impl FnMut() -> bool) {
     for _ in 0..looks {
         if done() {
@@ -167,11 +170,21 @@ pub fn wait_looks(looks: u32, pause: Duration, mut done: impl FnMut() -> bool) {
         }
         std::thread::sleep(pause);
     }
-    panic!("a wait for a state of systemd or the fixture: not reached in {looks} looks");
+    let at = std::panic::Location::caller();
+    panic!(
+        "a wait for a state of systemd or the fixture at {}:{}: not reached in {looks} looks",
+        at.file(),
+        at.line()
+    );
 }
 
 /// Waits until the file at `path` exists: the fixture writes its pid file once it runs. When
 /// `ended` says the step's run has returned first, the file will never come: fails at once.
+///
+/// # Panics
+/// The step ended first, or the file did not come in [`LOOKS`] looks (that message names
+/// the caller's line).
+#[track_caller]
 pub fn wait_for_file(path: &Path, ended: impl Fn() -> bool) {
     wait_until(|| {
         let written = path.exists();
@@ -246,38 +259,4 @@ impl Clock for FakeClock {
     }
 
     fn sleep_secs(&self, _secs: u64) {}
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A wait whose state never comes fails the test, naming the bound, after exactly that many
-    /// looks, instead of looking for good.
-    #[test]
-    #[should_panic(expected = "not reached in 3 looks")]
-    fn a_wait_for_a_state_that_never_comes_fails_after_its_looks() {
-        let mut looked = 0;
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            wait_looks(3, Duration::ZERO, || {
-                looked += 1;
-                false
-            });
-        }));
-        assert_eq!(looked, 3);
-        if let Err(panic) = outcome {
-            std::panic::resume_unwind(panic);
-        }
-    }
-
-    /// A wait returns at the look the state holds at and looks no more.
-    #[test]
-    fn a_wait_returns_at_the_look_the_state_holds_at() {
-        let mut looked = 0;
-        wait_looks(10, Duration::ZERO, || {
-            looked += 1;
-            looked == 4
-        });
-        assert_eq!(looked, 4);
-    }
 }
