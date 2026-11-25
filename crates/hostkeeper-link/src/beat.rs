@@ -24,7 +24,8 @@
 //! at most 16 names held; only a name this release knows carries a version or a reason, so with
 //! the one it knows the report is a few hundred bytes and at most about 4 KiB) is counted and
 //! never dropped either. The host's BMC ([`Heartbeat::bmc`], as `bmc`: an address and a MAC) is
-//! counted and never dropped. The host's maintenance report ([`Heartbeat::maintenance`], as `maintenance`: the
+//! counted and never dropped, and so is its serial console baseline ([`Heartbeat::serial_console`],
+//! as `serial_console`: a port, a state and a detail). The host's maintenance report ([`Heartbeat::maintenance`], as `maintenance`: the
 //! daemon's own message, at most about 5 KiB) is counted and never dropped.
 
 use hostkeeper_config::names::{ServiceName, Version};
@@ -43,6 +44,7 @@ use crate::ports::{Drift, HeldHalt};
 use crate::prerequisites::PrerequisitesReport;
 use crate::probe::RemoteLoginProbe;
 use crate::repositories::RepositoriesReport;
+use crate::serial_console::SerialConsoleReport;
 
 /// The most bytes of a heartbeat: its JSON on the JSON route, its encoded message on the gRPC one.
 pub const MAX_HEARTBEAT_BYTES: usize = 16 * 1024;
@@ -495,6 +497,9 @@ pub struct Heartbeat {
     /// BMC, a daemon that is not root, a Mac). Sent over gRPC only, and counted toward the bound
     /// on both.
     pub bmc: Option<BmcReport>,
+    /// Where the serial console baseline stands on the host; none from a daemon whose config
+    /// names no port. Sent over gRPC only, and counted toward the bound on both.
+    pub serial_console: Option<SerialConsoleReport>,
     /// What the daemon last found of the host's maintenance (`maintenance-v1`); none from a
     /// daemon that has none, or to a coordinator that does not advertise the feature. Sent over
     /// gRPC only, and counted toward the bound on both.
@@ -584,6 +589,9 @@ impl Heartbeat {
         }
         if let Some(report) = &self.bmc {
             beat.insert("bmc".to_owned(), report.to_json());
+        }
+        if let Some(report) = &self.serial_console {
+            beat.insert("serial_console".to_owned(), report.to_json());
         }
         if let Some(report) = &self.maintenance {
             beat.insert("maintenance".to_owned(), maintenance_json(report));

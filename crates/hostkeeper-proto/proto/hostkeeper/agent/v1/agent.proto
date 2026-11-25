@@ -256,6 +256,14 @@ message HeartbeatRequest {
   // directory only the grant allows. UNSPECIFIED: not reported, by an agent that predates the
   // field; the coordinator reads that as unknown, never as granted. Read only over gRPC.
   FullDiskAccess full_disk_access = 19;
+  // The serial console baseline the daemon keeps on the host's port: the GRUB file that puts
+  // the kernel's console (and GRUB's terminal, on a `ttyS<n>`) on it, and its getty held at
+  // 115200 baud (docs/design/console-broker.md, section 5.2). Sent in every heartbeat by a Linux
+  // daemon whose config names a `serial_console`, read only over gRPC; absent from any other
+  // daemon and from one that predates it. The coordinator keeps the last report it read, in
+  // memory, and shows it with the host; a report that breaks a rule of `SerialConsoleReport` is
+  // dropped and the one kept stays, and a heartbeat without one leaves the one kept as it is.
+  optional SerialConsoleReport serial_console = 20;
 }
 
 // The LAN settings of a host's BMC, as the daemon read them from the BMC (Get LAN Configuration
@@ -266,6 +274,23 @@ message BmcReport {
   string ip = 1;
   // The BMC's MAC address, six pairs of lower-case hex digits split by `:`; never all zeros.
   string mac = 2;
+}
+
+// What a host's daemon found and did of the serial console baseline on its port.
+message SerialConsoleReport {
+  // The port the daemon config names: `ttyS<n>` or `ttyAMA<n>`, `n` from 0 to 99.
+  string port = 1;
+  // `applied` (the files are in place, the getty is enabled and running, and the running
+  // kernel's command line holds the port's console), `reboot_pending` (the files and the getty
+  // are in place, and the running kernel's command line does not hold the port's console yet:
+  // it does from the host's next boot, and the daemon never reboots the host), `failed` (a step
+  // failed; `detail` names it) or `unsupported` (the host cannot take the baseline; `detail`
+  // says why, and nothing was written): a closed set, at most 32 bytes. A reader counts any
+  // other as `other`.
+  string state = 2;
+  // The step that failed or the reason the host cannot take the baseline (`update_grub`,
+  // `service_manager`), at most 128 bytes; empty for `applied` and `reboot_pending`.
+  string detail = 3;
 }
 
 // What a host's daemon did with the sshd access the coordinator sent (`SshAccess`).

@@ -73,6 +73,7 @@ pub mod prerequisites;
 pub mod probe;
 mod proto_map;
 pub mod repositories;
+pub mod serial_console;
 #[cfg(feature = "testing")]
 pub mod testing;
 mod wire_map;
@@ -107,8 +108,8 @@ pub use ports::{
     BmcSource, CertSource, CertState, ClientIdentity, ClockSleeper, CoordinatorLink, Dispatch,
     Drift, FactsSink, HeldHalt, HeldHalts, Job, LinkError, Log, MaintainSink, MaintenanceSource,
     Observation, OperatorKeysSink, OrderSink, PrerequisitesSink, RecordedService,
-    RemoteLoginProbeSource, RenewalSource, ReplyFault, RepositorySink, ServiceObserver,
-    ServiceRecords, Sleeper, SshSink, StopFlag, ThreadDispatch, Tick, TrustFault,
+    RemoteLoginProbeSource, RenewalSource, ReplyFault, RepositorySink, SerialConsoleSource,
+    ServiceObserver, ServiceRecords, Sleeper, SshSink, StopFlag, ThreadDispatch, Tick, TrustFault,
     TrustedRootSource, UnixClock, Unsendable,
 };
 pub use prerequisites::{
@@ -117,3 +118,4 @@ pub use prerequisites::{
 };
 pub use probe::{ProbeStep, RemoteLoginProbe};
 pub use repositories::{MAX_REFUSAL_REASON, PushedSet, RepositoriesReport, RepositoryRefusal};
+pub use serial_console::SerialConsoleReport;

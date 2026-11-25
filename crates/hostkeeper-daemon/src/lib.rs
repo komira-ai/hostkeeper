@@ -50,6 +50,9 @@
 //! - [`ipmi`]: the BMC a Linux host's enrollment claims ask for its MAC, over `/dev/ipmi0`.
 //! - [`bmc`]: the BMC's address and MAC a Linux host's heartbeats report, read over the same
 //!   device every ten minutes.
+//! - [`serial_baseline`]: the serial console baseline (the GRUB file, the getty's drop-in and the
+//!   getty) a Linux host whose config names a `serial_console` keeps, looked at every ten minutes
+//!   and reported in its heartbeats as `applied` or `reboot_pending`.
 //! - [`mac`]: the real adapters of a Mac's package check (`getxattr`, `codesign`) and claims
 //!   (`ioreg`), over the process port of the launchd adapters.
 //! - [`ssh_host_mac`]: the Mac's host of the sshd setup that trusts the coordinator's SSH user CA:
@@ -228,6 +231,7 @@ pub mod rollback_floor;
 pub mod run_units;
 pub mod seed;
 pub mod selfupdate;
+pub mod serial_baseline;
 pub mod ssh_effective;
 pub mod ssh_files;
 pub mod ssh_host;

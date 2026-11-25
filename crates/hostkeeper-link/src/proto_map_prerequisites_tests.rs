@@ -29,6 +29,7 @@ fn beat(report: Option<PrerequisitesReport>) -> Heartbeat {
         prerequisites: report,
         ssh: None,
         bmc: None,
+        serial_console: None,
         maintenance: None,
     }
 }

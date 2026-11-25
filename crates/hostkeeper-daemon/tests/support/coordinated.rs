@@ -411,6 +411,7 @@ impl Host {
             prerequisites: None,
             maintenance: None,
             bmc: None,
+            serial_console: None,
         };
         Host {
             heartbeater: links.heartbeater(&daemon),

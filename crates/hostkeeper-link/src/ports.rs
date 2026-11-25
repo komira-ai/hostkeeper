@@ -22,6 +22,7 @@ use crate::order::{MaintainOrder, Order, OrderRef, OrderResult, Reply};
 use crate::prerequisites::{PrerequisitesReport, PushedPrerequisites};
 use crate::probe::RemoteLoginProbe;
 use crate::repositories::{PushedSet, RepositoriesReport};
+use crate::serial_console::SerialConsoleReport;
 
 /// What a reply was refused for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -173,6 +174,12 @@ pub trait TrustedRootSource: Send + Sync {
 /// with no BMC it can read.
 pub trait BmcSource: Send + Sync {
     fn bmc(&self) -> Option<BmcReport>;
+}
+
+/// The serial console baseline the daemon keeps on the host's port, read at every heartbeat:
+/// none from a daemon whose config names no port.
+pub trait SerialConsoleSource: Send + Sync {
+    fn report(&self) -> Option<SerialConsoleReport>;
 }
 
 /// The Remote Login probe a Mac's daemon ran at its start, read at every heartbeat: none until it

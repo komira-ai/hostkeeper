@@ -20,6 +20,7 @@ use crate::host_facts::PushedFacts;
 use crate::host_ssh::{PushedSsh, SshReport};
 use crate::operator_keys::{KeysReport, PushedKeys};
 use crate::order::{MaintainOrder, Order, OrderRef, OrderResult, Outcome, Reply};
+use crate::ports::SerialConsoleSource;
 use crate::ports::{
     BmcSource, CertSource, CertState, ClientIdentity, CoordinatorLink, Dispatch, FactsSink,
     HeldHalt, HeldHalts, Job, LinkError, Log, MaintainSink, MaintenanceSource, Observation,
@@ -30,6 +31,10 @@ use crate::ports::{
 use crate::prerequisites::{PrerequisitesReport, PushedPrerequisites};
 use crate::probe::RemoteLoginProbe;
 use crate::repositories::{PushedSet, RepositoriesReport};
+pub use serial_console::FakeSerialConsole;
+
+#[path = "testing_serial_console.rs"]
+mod serial_console;
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 
 /// A lock that a panicking test thread did not spoil: what it holds is still the fake's state.
@@ -802,6 +807,8 @@ pub struct World {
     probing: bool,
     /// The host's BMC, which the ports always hold: it reports none until it is set.
     pub bmc: Arc<FakeBmc>,
+    /// The host's serial console baseline, which the ports always hold: none until it is set.
+    pub serial_console: Arc<FakeSerialConsole>,
     /// The managed block of operator keys; the ports hold it only after
     /// [`World::keeping_operator_keys`].
     pub operator_keys: Arc<FakeOperatorKeys>,
@@ -848,6 +855,7 @@ impl World {
             probe: Arc::default(),
             probing: false,
             bmc: Arc::default(),
+            serial_console: Arc::default(),
             operator_keys: Arc::default(),
             keeping_operator_keys: false,
             prerequisites: Arc::default(),
@@ -948,6 +956,7 @@ impl World {
                 .keeping_prerequisites
                 .then(|| Arc::clone(&self.prerequisites) as Arc<dyn PrerequisitesSink>),
             bmc: Some(Arc::clone(&self.bmc) as Arc<dyn BmcSource>),
+            serial_console: Some(Arc::clone(&self.serial_console) as Arc<dyn SerialConsoleSource>),
             maintenance: self
                 .keeping_maintenance
                 .then(|| Arc::clone(&self.maintenance) as Arc<dyn MaintenanceSource>),
