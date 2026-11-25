@@ -3,6 +3,38 @@
 
 use super::*;
 
+/// A `pkgutil` that exits 0 saying `report` on its standard output.
+pub(super) fn reports(report: &str) -> Program {
+    let stdout = report.as_bytes().to_vec();
+    Box::new(move |_| {
+        Ok(Ran {
+            code: Some(0),
+            stdout: stdout.clone(),
+            ..Ran::default()
+        })
+    })
+}
+
+impl Mac {
+    /// The run of `pkgutil --check-signature` on the archive of `entry`.
+    pub(super) fn pkgutil_run(&self, entry: &XcodeEntry) -> Spawn {
+        let dir = self.path(&format!("{STAGING}/{}", entry.sha256));
+        Spawn {
+            program: PathBuf::from(PKGUTIL),
+            args: vec![
+                OsString::from("--check-signature"),
+                dir.join(ARCHIVE).into_os_string(),
+            ],
+            env: vec![(
+                "PATH".to_owned(),
+                "/usr/bin:/bin:/usr/sbin:/sbin".to_owned(),
+            )],
+            cwd: dir,
+            deadline: self.deadline(PKGUTIL_SECS),
+        }
+    }
+}
+
 /// The deferral of an archive whose signature check ended as `why`.
 fn not_apple(why: &str) -> Result<(), KindError> {
     deferral(
