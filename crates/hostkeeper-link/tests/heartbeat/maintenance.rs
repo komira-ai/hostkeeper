@@ -68,6 +68,17 @@ fn full_report() -> pb::MaintenanceReport {
             halted_reason: "a halt".to_owned(),
         }),
         look_failed: "apt: it failed".to_owned(),
+        probe: Some(pb::MaintenanceProbe {
+            run_id: "run-0".to_owned(),
+            probed_unix: 1_700_000_050,
+            steps: vec![pb::MaintenanceProbeStep {
+                name: "console".to_owned(),
+                exit_code: Some(0),
+                output: "root".to_owned(),
+                cut: false,
+            }],
+        }),
+        on_demand: vec![pb::MaintenanceKind::Probe.into()],
     }
 }
 
