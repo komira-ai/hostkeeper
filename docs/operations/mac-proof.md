@@ -337,7 +337,7 @@ what no test can do is run Apple's programs on a real archive (`AGENTS.md` B9), 
   another property list, a new status), the record's text becomes the new fixture in the same pull request as the code that reads it.
   Change the paths in `Mac::system` (`xcode_push/mod.rs`), `tests/golden/xcode_push.txt` and `docs/operations/xcode-releases.md` when a
   program is elsewhere on this macOS.
-- If `programs.xcodes` shows no `xcodes`, nothing changes: it is an operator prerequisite of `hk xcode-push <version>`
+- If `programs.xcodes` shows no `xcodes`, nothing changes: it is an operator prerequisite of `hk xcode add <version>`
   (`docs/operations/xcode-releases.md`), and the file form needs none.
 - If `archive.kind` is `AA01` or `AEA1` (or the download page offers a `.aar` or `.aea`), the run fails at the kind and the design's
   sections 2.0 and 2.4 need that variant: new code, with the commands copied from the record of `programs.optional` and `archiveutil`,
@@ -378,7 +378,7 @@ plutil -extract ProductBuildVersion raw -o - Xcode*.app/Contents/version.plist
 /usr/bin/xip --help 2>&1 | head -30     # root shell: is there a switch that skips the signature
 ```
 
-The `pkgutil` and `xip` argv are exactly those of `hk xcode-push`: `crates/hostkeeper-hk/src/xcode_push/signature.rs:119-127`
+The `pkgutil` and `xip` argv are exactly those of `hk xcode add`: `crates/hostkeeper-hk/src/xcode_push/signature.rs:119-127`
 and `archive.rs:173-181` (there the cwd is the expansion directory; here the staging directory). The expected statuses are at
 `signature.rs:27-34`. Expected (recalled, not checked): `xip --expand` verifies the signature of a signed archive, and a
 switch exists to skip it; the install never uses it.
@@ -389,7 +389,7 @@ SHA-256, time and peak disk use, whether a partial `.app` is left in `bad`, the 
 Decides:
 - if good exits 0 and bad exits non-zero with no `.app` -> keep "xip --expand checks Apple's signature" in section 2.4 step 1; the stage step treats non-zero as refusal and removes its staging directory.
 - if bad exits 0 or leaves an `.app` -> section 2.4 step 1 and section 2.2 run `pkgutil --check-signature` in stage (judged as `signature.rs:27-34`) and the store's SHA-256 is the integrity check.
-- if `pkgutil` fails on a genuine Apple archive -> fix the parser and constants in `signature.rs`; this blocks `hk xcode-push`.
+- if `pkgutil` fails on a genuine Apple archive -> fix the parser and constants in `signature.rs`; this blocks `hk xcode add`.
 - if `xip` works in a root shell but fails or hangs from launchd -> section 2.4 "as root with no sign-in" is wrong for expansion; decide the path before building.
 - if codesign fails -> write the flags that pass into the stage step's check (section 2.4 step 1).
 - if time or disk differ from the design -> set section 2.4's free-space figure and the stage timeout from them.
@@ -471,7 +471,7 @@ Decides:
 
 Settles [V] of section 2.4 step 2 (`-exportPlatform`, `-importPlatform`, "xcode-push then also uploads them"). Runs: a root
 shell, then a launchd job. Precondition: MP-I3 done. The export needs Apple and about 10 GB: run it on a Mac with Apple
-reachable, never in a drained turn. Not built: `hk xcode-push` uploads only the `.xip` (`crates/hostkeeper-hk/src/xcode_push/mod.rs`).
+reachable, never in a drained turn. Not built: `hk xcode add` uploads only the `.xip` (`crates/hostkeeper-hk/src/xcode_push/mod.rs`).
 
 ```sh
 DEV=/Applications/Xcode-VER.app/Contents/Developer
@@ -494,7 +494,7 @@ Xcode, per user or machine-wide, and whether two exports of one platform have on
 
 Decides:
 - if `-exportPlatform` is not a flag -> section 2.4 names a flag that does not exist: write the recorded flags, and say the export contacts Apple, so it runs on the operator's Mac or the fetcher.
-- if `-importPlatform <file>` works offline from launchd and a job can use the runtime -> keep the import as a hook step, the file stored beside the archive with its own SHA-256 (new store file type next to `<sha256>.xip`, an additive route per B8), and `hk xcode-push` gains an upload.
+- if `-importPlatform <file>` works offline from launchd and a job can use the runtime -> keep the import as a hook step, the file stored beside the archive with its own SHA-256 (new store file type next to `<sha256>.xip`, an additive route per B8), and `hk xcode add` gains an upload.
 - if it needs the network or an Apple session, or fails from launchd -> drop "imported on each Mac" from section 2.4; platforms come another way (`xcrun simctl runtime add <dmg>`, record whether it works offline) or are left to a person.
 - if the runtime is per Xcode or per user -> MP-I5's removal step also lists and removes the runtimes.
 

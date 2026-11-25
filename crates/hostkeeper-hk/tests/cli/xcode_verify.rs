@@ -205,12 +205,11 @@ fn a_record_that_cannot_replace_the_old_one_is_an_error() {
             .contains(&format!("hk: cannot replace {}: ", path.display())),
         "{ran:?}"
     );
-    assert!(
-        !proof
-            .record_path(ARCHIVE)
-            .with_extension("json.new")
-            .exists()
-    );
+    assert!(!{
+        let mut new = proof.record_path(ARCHIVE).into_os_string();
+        new.push(".new");
+        Path::new(&new).exists()
+    });
 }
 
 /// Proves: a check that fails still prints the record and writes it, with the verdict naming the
@@ -398,7 +397,7 @@ fn the_scratch_directory_is_removed_after_every_run() {
     assert_eq!(proof.beside(), ["Xcode_27.2.xip"]);
 }
 
-/// Proves: `hk xcode --help` lists `verify` after `list` and `remove`, with its one-paragraph doc,
+/// Proves: `hk xcode --help` lists `add` and `verify` after `list` and `remove`, with its one-paragraph doc,
 /// and `docs/cli.md`'s text lists it after them with its flag; a service that is not `xcode` has no `verify`; and an unknown method is still
 /// refused.
 #[test]
@@ -414,19 +413,20 @@ fn verify_is_listed_beside_list_and_remove() {
         .filter(|l| !l.starts_with("      "))
         .map(str::trim)
         .collect();
-    assert_eq!(methods, ["list", "remove", "verify"]);
+    assert_eq!(methods, ["list", "remove", "add", "verify"]);
     assert!(
         ran.stdout
             .contains("\n  verify\n      Checks an Xcode archive on the operator's own Mac")
     );
     let doc = hostkeeper_hk::markdown(hostkeeper_proto::ctl::COMMANDS);
     let at = |heading: &str| doc.find(heading).unwrap_or_else(|| panic!("{heading}"));
-    let (list, remove, verify) = (
+    let (list, remove, add, verify) = (
         at("#### `hk xcode list`"),
         at("#### `hk xcode remove`"),
+        at("#### `hk xcode add`"),
         at("#### `hk xcode verify`"),
     );
-    assert!(list < remove && remove < verify);
+    assert!(list < remove && remove < add && add < verify);
     assert!(doc[verify..].starts_with("#### `hk xcode verify`\n\nChecks an Xcode"));
     assert!(
         doc[verify..].contains("| `--apple-root` | FILE | Apple's root certificate (DER or PEM)")
@@ -443,15 +443,16 @@ fn verify_is_listed_beside_list_and_remove() {
     assert!(ran.stderr.contains("no service xcode"), "{ran:?}");
 }
 
-/// Proves: what `hk xcode --help` and `hk xcode verify --help` print is exactly the text in the
+/// Proves: what `hk xcode --help` `hk xcode add --help` and `hk xcode verify --help` print is exactly the text in the
 /// golden files, so a change of the verbs' help is a change of a file the review sees.
 #[test]
 fn the_help_of_xcode_equals_its_golden_files() {
     let rig = Rig::new("xcode-verify-golden");
     let golden = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden");
     let mut stale = Vec::new();
-    let cases: [(&str, &[&str]); 2] = [
+    let cases: [(&str, &[&str]); 3] = [
         ("service_xcode.txt", &["xcode", "--help"]),
+        ("xcode_add.txt", &["xcode", "add", "--help"]),
         ("xcode_verify.txt", &["xcode", "verify", "--help"]),
     ];
     for (file, words) in cases {

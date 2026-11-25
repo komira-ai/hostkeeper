@@ -28,7 +28,9 @@ fn hand_methods(out: &mut String, service: &str) {
             "\n#### `{PROGRAM} {} {}`\n\n{}\n",
             method.service, method.method, method.doc
         );
-        out.push_str("\n| flag | value | meaning |\n|---|---|---|\n");
+        if !method.flags.is_empty() {
+            out.push_str("\n| flag | value | meaning |\n|---|---|---|\n");
+        }
         for flag in method.flags {
             let _ = writeln!(
                 out,

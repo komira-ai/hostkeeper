@@ -6,9 +6,10 @@
 //! and printed on stdout as it is written. A section a check did not reach is `null`.
 //!
 //! A reader ignores the keys it does not know, so a record grows only by new keys (AGENTS.md B8).
-//! `hk xcode add` will keep a record of its own kind at the same path, `"record":
-//! "hk-xcode-add-v1"`, written through [`write`] too; it reads only `archive`, `verdict` and the
-//! `version` and `build` of `expansion`, and uses a record only when `verdict` is `pass`.
+//! `hk xcode add` keeps a record of its own kind at the same path, `"record": "hk-xcode-add-v1"`
+//! ([`Add`]), written through [`write`] too, with only what it computed; it reads only
+//! `archive`, `verdict` and the `version` and `build` of `expansion`, and uses a record only when
+//! `verdict` is `pass`. It never replaces a record of `hk xcode verify` that passed.
 
 use serde::Serialize;
 
@@ -17,6 +18,9 @@ use crate::{Flow, Stop};
 
 /// The `record` key of the record `hk xcode verify` writes.
 pub(crate) const VERIFY: &str = "hk-xcode-verify-v1";
+
+/// The `record` key of the record `hk xcode add` writes.
+pub(crate) const ADD: &str = "hk-xcode-add-v1";
 
 /// The verdict of a record whose checks all passed.
 pub(crate) const PASS: &str = "pass";
@@ -186,6 +190,31 @@ pub(crate) struct Verify {
     pub(crate) toc: Option<Toc>,
     pub(crate) expansion: Option<Expansion>,
     pub(crate) verdict: String,
+}
+
+/// The signature, as far as `hk xcode add` read it: the status `pkgutil` gave.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct AddSignature {
+    pub(crate) status: String,
+}
+
+/// What `hk xcode add` read from the expanded app: the version, the build, and `codesign` on it.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct AddExpansion {
+    pub(crate) version: String,
+    pub(crate) build: String,
+    pub(crate) codesign: Output,
+}
+
+/// The record of `hk xcode add`, written when all its checks passed.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct Add {
+    pub(crate) record: &'static str,
+    pub(crate) hk: String,
+    pub(crate) archive: Archive,
+    pub(crate) signature: AddSignature,
+    pub(crate) expansion: AddExpansion,
+    pub(crate) verdict: &'static str,
 }
 
 /// The JSON of `record`, indented, and one newline.

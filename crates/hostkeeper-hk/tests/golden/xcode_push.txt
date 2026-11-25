@@ -1,23 +1,4 @@
 hk xcode-push <version> | <archive.xip>
-    Brings an Xcode release into the coordinator's Xcode store, from the operator's own Mac
-    signed in to the Apple developer account; macOS only. In order, and nothing is uploaded when
-    a step fails:
-    1. Given a version (27.2): xcodes download <version> --directory
-       $HOME/Downloads/hk-xcode-push/<version>, in the operator's own session, with this
-       terminal (a two-factor prompt is answered here); the directory must then hold one .xip.
-       Given a path: that file.
-    2. pkgutil --check-signature <archive> must exit 0, with the status signed Apple Software
-       and a chain ending at Apple Root CA (by its SHA-256 fingerprint).
-    3. The archive's SHA-256 and size; then its version (CFBundleShortVersionString) and
-       build (ProductBuildVersion), read with plutil from the app that xip --expand makes in
-       .hk-xcode-push-expansion beside the archive, which is removed before and afterwards.
-       Given a version, the archive's must be it.
-    4. PUT /v1/xcode/<sha256>?version=<version>&build=<build>: the archive unmodified and
-       streamed. The answer, the archive stored, is printed; a refusal prints
-       refused: <code> and exits 3 (401, 403), 2 (other 4xx) or 1. The answer is waited for
-       30 minutes at least once the archive is sent.
-
-It takes the global flags --endpoint, --ca-file, --token-file and --timeout-secs, all but the
-last required (or given by the settings file). The token is read from its file into memory and sent only as the request's
-bearer: never in an argument, the environment of a program it runs, or an output line.
---token-stdin, --github-oidc-audience and --response-file are not taken.
+    A second name of hk xcode add, kept for one release, that takes exactly one version or path.
+    It writes `hk xcode-push is now hk xcode add` on stderr, then does what hk xcode add does
+    with the same argument; hk xcode add --help says each step.

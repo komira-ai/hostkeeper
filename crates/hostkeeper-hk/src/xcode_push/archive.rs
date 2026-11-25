@@ -1,5 +1,6 @@
-//! The archive of `hk xcode-push`: where it comes from (`xcodes download`, or the file given), its
-//! SHA-256 and size, and the version and build of the app in it.
+//! The archive of `hk xcode add`: its SHA-256 and size, and the version and build of the app in
+//! it, which `xip --expand` makes and `codesign` verifies. Which file it is, and how it is
+//! downloaded, is `crate::xcode_add::find`.
 
 use std::fs::File;
 use std::io::Read as _;
@@ -9,6 +10,7 @@ use std::process::Stdio;
 use sha2::{Digest as _, Sha256};
 
 use super::{Mac, command, failed, finish, say};
+use crate::xcode_record::Output;
 use crate::{Flow, World};
 
 /// The most bytes of a build: as the coordinator's store takes it.
@@ -26,63 +28,6 @@ pub(crate) fn is_version(text: &[u8]) -> bool {
 pub(crate) fn is_build(text: &[u8]) -> bool {
     (1..=MAX_BUILD_BYTES).contains(&text.len())
         && text.iter().all(|b| b.is_ascii_alphanumeric() || *b == b'.')
-}
-
-/// The archive of `version`, downloaded by `xcodes` into `$HOME/Downloads/hk-xcode-push/<version>`
-/// in the operator's own session: its standard streams are this process's, so that a two-factor
-/// prompt is answered at the terminal. The directory must then hold exactly one `.xip`.
-pub(crate) fn download(w: &mut World<'_>, mac: &Mac, version: &str) -> Flow<PathBuf> {
-    let home = match &w.home {
-        Some(home) if !home.as_os_str().is_empty() => home.clone(),
-        _ => {
-            return Err(failed(
-                "hk xcode-push downloads into $HOME/Downloads, and $HOME is not set",
-            ));
-        }
-    };
-    let dir = home.join("Downloads").join("hk-xcode-push").join(version);
-    std::fs::create_dir_all(&dir)
-        .map_err(|error| failed(&format!("cannot make {} ({error})", dir.display())))?;
-    say(
-        w,
-        &format!(
-            "downloading Xcode {version} with {} into {}",
-            mac.xcodes.display(),
-            dir.display()
-        ),
-    );
-    let mut xcodes = command(&mac.xcodes);
-    xcodes
-        .arg("download")
-        .arg(version)
-        .arg("--directory")
-        .arg(&dir)
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit());
-    finish(
-        xcodes,
-        &format!("{} download {version}", mac.xcodes.display()),
-    )?;
-    let mut found: Vec<PathBuf> = std::fs::read_dir(&dir)
-        .map_err(|error| failed(&format!("cannot read {} ({error})", dir.display())))?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "xip"))
-        .collect();
-    found.sort();
-    match found.as_slice() {
-        [one] => Ok(one.clone()),
-        [] => Err(failed(&format!(
-            "{} download {version} left no .xip in {}",
-            mac.xcodes.display(),
-            dir.display()
-        ))),
-        _ => Err(failed(&format!(
-            "{} holds more than one .xip; name the one to push, or leave one",
-            dir.display()
-        ))),
-    }
 }
 
 /// The archive at `path`, open for reading: it must be a file. The error says why it is not.
@@ -107,11 +52,16 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 /// The SHA-256 of the archive `file`, in lower-case hex, and its size in bytes: read from its
-/// start to its end once, in pieces, never whole. The error says why it could not be read.
-pub(crate) fn digest_of(file: &mut File) -> Result<(String, u64), String> {
+/// start to its end once, in blocks of `block` bytes, never whole; `seen` is told how many bytes
+/// are through after each block. The error says why it could not be read.
+pub(crate) fn digest_blocks(
+    file: &mut File,
+    block: usize,
+    mut seen: impl FnMut(u64),
+) -> Result<(String, u64), String> {
     let mut sha = Sha256::new();
     let mut size: u64 = 0;
-    let mut piece = vec![0_u8; 1 << 20];
+    let mut piece = vec![0_u8; block];
     loop {
         let n = file
             .read(&mut piece)
@@ -121,13 +71,14 @@ pub(crate) fn digest_of(file: &mut File) -> Result<(String, u64), String> {
         }
         sha.update(piece.get(..n).unwrap_or_default());
         size = size.saturating_add(u64::try_from(n).unwrap_or(u64::MAX));
+        seen(size);
     }
     Ok((hex(&sha.finalize()), size))
 }
 
-/// [`digest_of`] as the failure that ends a push.
-pub(crate) fn digest(file: &mut File) -> Flow<(String, u64)> {
-    digest_of(file).map_err(|why| failed(&why))
+/// [`digest_blocks`] in blocks of 1 MiB, with nothing said on the way.
+pub(crate) fn digest_of(file: &mut File) -> Result<(String, u64), String> {
+    digest_blocks(file, 1 << 20, |_| {})
 }
 
 /// The directory an archive is expanded into: removed, with all it holds, when it is dropped.
@@ -154,20 +105,27 @@ fn plist_value(mac: &Mac, file: &Path, key: &str) -> Flow<String> {
 }
 
 /// The name of the directory beside the archive that it is expanded into: one name, so that what
-/// a push stopped by a signal left there is removed by the next.
+/// a run stopped by a signal left there is removed by the next.
 pub(crate) const EXPANSION: &str = ".hk-xcode-push-expansion";
+
+/// What the expanded app says: the version and the build it is, and `codesign` on it.
+pub(crate) struct Release {
+    pub(crate) version: String,
+    pub(crate) build: String,
+    pub(crate) codesign: Output,
+}
 
 /// The version and the build of the Xcode in the archive at `path`: `xip --expand` makes the app
 /// in [`EXPANSION`] beside the archive (on its volume, so that no other disk fills), removed
 /// first if it is there, and the version is the app's `CFBundleShortVersionString`
 /// (`Contents/Info.plist`) and the build its `ProductBuildVersion` (`Contents/version.plist`).
-/// The directory is removed afterwards.
-pub(crate) fn release(w: &mut World<'_>, mac: &Mac, path: &Path) -> Flow<(String, String)> {
+/// `codesign --verify --deep --strict` must pass on the app. The directory is removed afterwards.
+pub(crate) fn release(w: &mut World<'_>, mac: &Mac, path: &Path) -> Flow<Release> {
     let archive = std::path::absolute(path)
         .map_err(|error| failed(&format!("cannot resolve {} ({error})", path.display())))?;
     let beside = archive.parent().unwrap_or(Path::new("/"));
     let dir = beside.join(EXPANSION);
-    // What an earlier push left: it is not there, or it is removed, or making it fails below.
+    // What an earlier run left: it is not there, or it is removed, or making it fails below.
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir(&dir)
         .map_err(|error| failed(&format!("cannot make {} ({error})", dir.display())))?;
@@ -217,6 +175,39 @@ pub(crate) fn release(w: &mut World<'_>, mac: &Mac, path: &Path) -> Flow<(String
             app.display()
         )));
     }
+    let codesign = sign_check(mac, app)?;
     drop(expansion);
-    Ok((version, build))
+    Ok(Release {
+        version,
+        build,
+        codesign,
+    })
+}
+
+/// `codesign --verify --deep --strict` on `app`: what it printed; the failure when it does not
+/// exit 0 or cannot be run.
+fn sign_check(mac: &Mac, app: &Path) -> Flow<Output> {
+    let mut codesign = command(&mac.codesign);
+    codesign
+        .args(["--verify", "--deep", "--strict"])
+        .arg(app)
+        .stdin(Stdio::null());
+    let what = format!(
+        "{} --verify --deep --strict {}",
+        mac.codesign.display(),
+        app.display()
+    );
+    let out = codesign
+        .output()
+        .map_err(|error| failed(&format!("cannot run {} ({error})", mac.codesign.display())))?;
+    let done = Output {
+        exit: out.status.code(),
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+    };
+    if out.status.success() {
+        return Ok(done);
+    }
+    let said = done.stderr.lines().next().unwrap_or_default();
+    Err(failed(&format!("{what} failed ({}): {said}", out.status)))
 }

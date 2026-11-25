@@ -1,4 +1,4 @@
-//! `hk xcode-push` against stand-ins for the Mac's programs (`xcodes`, `pkgutil`, `xip`,
+//! `hk xcode-push` (the second name of `hk xcode add`, whose own cases are in `xcode_add`) against stand-ins for the Mac's programs (`xcodes`, `pkgutil`, `xip`,
 //! `plutil`: the test binary `hk-fake-mac-tool` under each name, which records its arguments and
 //! environment) and a fake Xcode store on a loopback port of 0 that refuses a body whose SHA-256
 //! is not its path's.
@@ -11,7 +11,7 @@ use sha2::{Digest as _, Sha256};
 use crate::rig::{Early, Opts, Ran, Reply, Rig, Server, TOKEN, args, call, closed_port};
 
 /// The bytes of the archive of the tests.
-const ARCHIVE: &[u8] = b"the bytes of an Xcode archive, as Apple ships them";
+const ARCHIVE: &[u8] = b"xar!, the bytes of an Xcode archive, as Apple ships them";
 
 /// What `pkgutil --check-signature` says of an archive Apple signed.
 const SIGNED_BY_APPLE: &str = "\
@@ -39,6 +39,34 @@ Package \"Xcode_27.2.xip\":
            68 C5 BE 91 B5 A1 10 01 F0 24
 ";
 
+/// The path `Xcode.List` is called on.
+const LIST: &str = "/hostkeeper.operator.v1.Xcode/List";
+
+/// The requests of `server` that are uploads.
+fn puts(server: &Server) -> Vec<crate::rig::Seen> {
+    server
+        .seen()
+        .into_iter()
+        .filter(|seen| seen.method == "PUT")
+        .collect()
+}
+
+/// A store that answers `Xcode.List` an empty store and every upload with `status` and `body`.
+fn refusing_store(rig: &Rig, status: u16, body: &str) -> Server {
+    let body = body.to_owned();
+    Server::serve(
+        &rig.pki,
+        || (),
+        move |(), request| {
+            if request.target == LIST {
+                Reply::new(200, EMPTY_STORE)
+            } else {
+                Reply::new(status, body.clone())
+            }
+        },
+    )
+}
+
 /// The lower-case hex SHA-256 of `bytes`.
 fn sha256(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
@@ -47,13 +75,20 @@ fn sha256(bytes: &[u8]) -> String {
         .collect()
 }
 
-/// A fake Xcode store: a `PUT /v1/xcode/<sha256>?...` whose body has that SHA-256 is stored
-/// (201 and the JSON of the archive); one whose body does not is refused 400 `digest_mismatch`.
+/// What `Xcode.List` answers: a store with nothing in it.
+const EMPTY_STORE: &str = "{\"configured\":true}";
+
+/// A fake Xcode store: `Xcode.List` is answered an empty store; a `PUT /v1/xcode/<sha256>?...`
+/// whose body has that SHA-256 is stored (201 and the JSON of the archive); one whose body does
+/// not is refused 400 `digest_mismatch`.
 fn store(rig: &Rig) -> Server {
     Server::serve(
         &rig.pki,
         || (),
         |(), request| {
+            if request.target == LIST {
+                return Reply::new(200, EMPTY_STORE);
+            }
             let named = request
                 .target
                 .strip_prefix("/v1/xcode/")
@@ -84,7 +119,7 @@ impl Push {
         let bin = rig.path("bin");
         std::fs::create_dir(&bin).expect("the bin directory");
         let fake = Path::new(env!("CARGO_BIN_EXE_hk-fake-mac-tool"));
-        for tool in ["xcodes", "pkgutil", "xip", "plutil"] {
+        for tool in ["xcodes", "pkgutil", "xip", "plutil", "codesign", "df"] {
             // A link, not a copy: a copy is a file open for writing, which a process another
             // test forks meanwhile could hold when this one runs it.
             std::fs::hard_link(fake, bin.join(tool)).expect("a stand-in");
@@ -95,9 +130,13 @@ impl Push {
             pkgutil: bin.join("pkgutil"),
             xip: bin.join("xip"),
             plutil: bin.join("plutil"),
+            codesign: bin.join("codesign"),
+            df: bin.join("df"),
+            clock: crate::verify_rig::clock,
             ..Mac::system()
         };
         let push = Push { rig, mac };
+        push.tool("df.out", crate::verify_rig::df(900_000_000).as_bytes());
         push.tool("pkgutil.out", SIGNED_BY_APPLE.as_bytes());
         push.tool("xip.version", b"27.2\n");
         push.tool("xip.product-build", b"27B52\n");
@@ -150,6 +189,9 @@ impl Push {
         names
     }
 }
+
+/// What the second name says on stderr before anything else.
+const NOTICE: &str = "hk xcode-push is now hk xcode add\n";
 
 /// The last line `ran` wrote to stderr.
 fn last_line(ran: &Ran) -> &str {
@@ -221,7 +263,7 @@ fn a_signature_check_that_fails_uploads_nothing() {
         let ran = push.run(server.port, &["xcode-push", &archive]);
         assert_eq!(ran.code, 1, "{n}: {ran:?}");
         assert!(last_line(&ran).ends_with(says), "{n}: {ran:?}");
-        assert!(server.seen().is_empty(), "{n}: the store saw a request");
+        assert!(puts(&server).is_empty(), "{n}: the store saw a request");
         assert_eq!(
             push.record("pkgutil.args"),
             format!("--check-signature\t{archive}\n"),
@@ -249,7 +291,7 @@ fn a_good_archive_uploads_exactly_its_bytes_under_their_sha256() {
     let server = store(&push.rig);
     let ran = push.run(server.port, &["xcode-push", &archive]);
     assert_eq!(ran.code, 0, "{ran:?}");
-    let seen = server.seen();
+    let seen = puts(&server);
     assert_eq!(seen.len(), 1, "{seen:#?}");
     let put = &seen[0];
     let sha = sha256(ARCHIVE);
@@ -260,20 +302,28 @@ fn a_good_archive_uploads_exactly_its_bytes_under_their_sha256() {
     );
     assert_eq!(put.body, ARCHIVE);
     assert_eq!(sha256(&put.body), sha);
-    assert_eq!(put.header("content-length"), Some("50"));
+    assert_eq!(
+        put.header("content-length"),
+        Some(ARCHIVE.len().to_string().as_str())
+    );
     assert_eq!(put.header("content-type"), Some("application/octet-stream"));
     assert_eq!(put.header("expect"), Some("100-continue"));
     assert_eq!(
         put.header("authorization"),
         Some(format!("Bearer {TOKEN}").as_str())
     );
+    // `hk xcode add` answers `stored: ...` on stdout, not the store's JSON.
     assert_eq!(
         ran.stdout,
-        format!("{{\"sha256\":\"{sha}\",\"version\":\"27.2\",\"build\":\"27B52\",\"size\":50}}\n")
+        format!(
+            "stored: Xcode 27.2 (27B52), sha256 {sha}, {} bytes\n",
+            ARCHIVE.len()
+        )
     );
     assert!(
-        ran.stderr
-            .contains(&format!("hk: Xcode 27.2 (27B52): sha256 {sha}, 50 bytes\n")),
+        ran.stderr.contains(&format!(
+            "hk: sha256 {sha}, 56 B; the store holds no archive of these bytes\n"
+        )),
         "{ran:?}"
     );
     let absolute = std::path::absolute(&archive).expect("absolute");
@@ -306,7 +356,7 @@ fn given_a_version_xcodes_downloads_that_version_only() {
         push.record("xcodes.args"),
         format!("download\t27.2\t--directory\t{}\n", into.display())
     );
-    let seen = server.seen();
+    let seen = puts(&server);
     assert_eq!(seen.len(), 1, "{seen:#?}");
     assert_eq!(seen[0].body, ARCHIVE);
     assert_eq!(
@@ -338,35 +388,46 @@ fn the_token_is_in_no_argument_environment_or_output_line() {
     assert!(!ran.stdout.contains(TOKEN));
     assert!(!ran.stderr.contains(TOKEN));
     assert_eq!(
-        server.seen()[0].header("authorization"),
+        puts(&server)[0].header("authorization"),
         Some(format!("Bearer {TOKEN}").as_str())
     );
 }
 
-/// Proves: a body whose SHA-256 is not the path's (the file changed after it was hashed) is
-/// refused by the store, and the push exits 2 with `refused: digest_mismatch`.
+/// Proves: the store's refusal `digest_mismatch` (a body whose SHA-256 is not the path's) ends the
+/// push with exit 2, a line in words that the archive changed after it was hashed and what to do,
+/// and `refused: digest_mismatch`; and bytes added to the archive after it was hashed (here, by
+/// the expansion) are not sent: the body is exactly the bytes that were hashed.
 #[test]
 fn a_body_whose_sha256_differs_from_its_path_is_refused() {
     let push = Push::new("mismatch");
-    push.tool("xip.append", b", and more");
     let archive = push.archive();
-    let server = store(&push.rig);
+    let server = refusing_store(&push.rig, 400, "{\"error\":\"digest_mismatch\"}");
     let ran = push.run(server.port, &["xcode-push", &archive]);
     assert_eq!(ran.code, 2, "{ran:?}");
     assert!(
         ran.stderr.ends_with(
-            "hk: the coordinator refused the upload (HTTP 400)\nrefused: digest_mismatch\n"
+            "run hk xcode add again\nhk: the coordinator refused the upload (HTTP 400)\nrefused: digest_mismatch\n"
+        ),
+        "{ran:?}"
+    );
+    assert!(
+        ran.stderr.contains(
+            "hk: the bytes sent are not the ones whose SHA-256 was asked to be stored: the archive \
+             changed after it was hashed; "
         ),
         "{ran:?}"
     );
     assert_eq!(ran.stdout, "");
-    let seen = server.seen();
+
+    let push = Push::new("grown");
+    push.tool("xip.append", b", and more");
+    let archive = push.archive();
+    let server = store(&push.rig);
+    let ran = push.run(server.port, &["xcode-push", &archive]);
+    assert_eq!(ran.code, 0, "{ran:?}");
+    let seen = puts(&server);
     assert_eq!(seen.len(), 1, "{seen:#?}");
-    assert_eq!(
-        seen[0].target,
-        format!("/v1/xcode/{}?version=27.2&build=27B52", sha256(ARCHIVE))
-    );
-    assert_eq!(seen[0].body, [ARCHIVE, b", and more".as_slice()].concat());
+    assert_eq!(seen[0].body, ARCHIVE);
 }
 
 /// Proves: a refusal the coordinator makes from the request's head alone, with no
@@ -376,7 +437,13 @@ fn a_body_whose_sha256_differs_from_its_path_is_refused() {
 fn a_refusal_before_the_body_is_read_before_any_byte_of_the_archive_is_sent() {
     let push = Push::new("early");
     let archive = push.archive();
-    let server = Early::refusing(&push.rig.pki, 409, "{\"error\":\"not_listed\"}");
+    let server = Early::refusing_after(
+        &push.rig.pki,
+        2,
+        EMPTY_STORE,
+        409,
+        "{\"error\":\"not_listed\"}",
+    );
     let ran = push.run(server.port, &["xcode-push", &archive]);
     assert_eq!(ran.code, 2, "{ran:?}");
     assert!(
@@ -407,12 +474,12 @@ fn off_macos_it_refuses_with_a_clear_message() {
         (
             1,
             "",
-            "hk: hk xcode-push runs on macOS only, on the Mac signed in to the Apple developer \
+            "hk xcode-push is now hk xcode add\nhk: hk xcode-push runs on macOS only, on the Mac signed in to the Apple developer \
              account: it runs xcodes, pkgutil and xip, which are macOS programs, and this system \
              is linux\n"
         )
     );
-    assert!(server.seen().is_empty());
+    assert!(puts(&server).is_empty());
     for tool in ["xcodes", "pkgutil", "xip", "plutil"] {
         assert_eq!(push.record(&format!("{tool}.args")), "", "{tool} ran");
     }
@@ -441,26 +508,26 @@ fn a_download_that_does_not_give_one_archive_uploads_nothing() {
         ),
         (
             "missing",
-            "(No such file or directory (os error 2)); nothing was uploaded",
+            "is not installed, so Xcode 27.2 cannot be downloaded here; either install it \
+             (brew install xcodesorg/made/xcodes), or download the archive in a browser from \
+             Apple's developer downloads page (https://developer.apple.com/download/all/) into \
+             ~/Downloads and run hk xcode add 27.2 again; nothing was uploaded",
         ),
         (
             "none",
             "home/Downloads/hk-xcode-push/27.2; nothing was uploaded",
         ),
         (
-            "two",
-            "home/Downloads/hk-xcode-push/27.2 holds more than one .xip; name the one to push, \
-             or leave one; nothing was uploaded",
+            "other-version-only",
+            "home/Downloads/hk-xcode-push/27.2; nothing was uploaded",
         ),
         (
             "homeless",
-            "hk xcode-push downloads into $HOME/Downloads, and $HOME is not set; nothing was \
-             uploaded",
+            "hk xcode-push keeps its records and its lock under $HOME, which is not set",
         ),
         (
             "empty-home",
-            "hk xcode-push downloads into $HOME/Downloads, and $HOME is not set; nothing was \
-             uploaded",
+            "hk xcode-push keeps its records and its lock under $HOME, which is not set",
         ),
     ];
     for (case, says) in cases {
@@ -472,8 +539,8 @@ fn a_download_that_does_not_give_one_archive_uploads_nothing() {
                 push.tool("xcodes.exit", b"3");
             }
             "missing" => push.mac.xcodes = push.rig.path("bin/no-such-xcodes"),
-            "two" => {
-                push.tool("xcodes.xip", ARCHIVE);
+            "other-version-only" => {
+                // xcodes leaves a file, but it is named for another version.
                 std::fs::create_dir_all(push.rig.path(into)).expect("the directory");
                 push.rig
                     .put(&format!("{into}/Xcode-27.1.xip"), b"older", 0o644);
@@ -489,7 +556,7 @@ fn a_download_that_does_not_give_one_archive_uploads_nothing() {
         let ran = push.run_with(opts, server.port, &["xcode-push", "27.2"]);
         assert_eq!(ran.code, 1, "{case}: {ran:?}");
         assert!(last_line(&ran).ends_with(says), "{case}: {ran:?}");
-        assert!(server.seen().is_empty(), "{case}");
+        assert!(puts(&server).is_empty(), "{case}");
         assert_eq!(push.record("pkgutil.args"), "", "{case}: checked");
     }
 }
@@ -531,7 +598,7 @@ fn an_archive_whose_release_cannot_be_read_uploads_nothing() {
         ),
         (
             "other",
-            "/Xcode-27.2.xip is Xcode 27.1 (27B52), not 27.2; nothing was uploaded",
+            "/Xcode-27.2.xip is Xcode 27.1 (27B52); nothing was uploaded",
         ),
     ];
     for (case, says) in cases {
@@ -557,7 +624,7 @@ fn an_archive_whose_release_cannot_be_read_uploads_nothing() {
         let ran = push.run(server.port, &words);
         assert_eq!(ran.code, 1, "{case}: {ran:?}");
         assert!(last_line(&ran).ends_with(says), "{case}: {ran:?}");
-        assert!(server.seen().is_empty(), "{case}");
+        assert!(puts(&server).is_empty(), "{case}");
         let left: Vec<String> = push
             .beside()
             .into_iter()
@@ -594,7 +661,7 @@ fn a_path_that_is_not_an_archive_uploads_nothing() {
             (1, format!("hk: {says}").as_str())
         );
     }
-    assert!(server.seen().is_empty());
+    assert!(puts(&server).is_empty());
     assert_eq!(push.record("pkgutil.args"), "");
 }
 
@@ -647,13 +714,24 @@ fn the_stores_refusals_end_the_push_by_their_status() {
     let push = Push::new("refusals");
     let archive = push.archive();
     for (status, body, code, says) in cases {
-        let server = Server::canned(&push.rig.pki, status, body);
+        let server = refusing_store(&push.rig, status, body);
         let ran = push.run(server.port, &["xcode-push", &archive]);
         assert_eq!((ran.code, last_line(&ran)), (code, says), "{status} {body}");
         assert_eq!(ran.stdout, "");
-        assert_eq!(server.seen().len(), 1);
+        assert_eq!(puts(&server).len(), 1);
     }
-    let ran = push.run(closed_port(), &["xcode-push", &archive]);
+    let hangs_up = Server::serve(
+        &push.rig.pki,
+        || (),
+        |(), request| {
+            if request.target == LIST {
+                Reply::new(200, EMPTY_STORE)
+            } else {
+                Reply::hang_up()
+            }
+        },
+    );
+    let ran = push.run(hangs_up.port, &["xcode-push", &archive]);
     assert_eq!(ran.code, 1, "{ran:?}");
     assert!(
         last_line(&ran).ends_with("; the coordinator keeps nothing of an upload that does not end"),
@@ -789,7 +867,7 @@ fn its_usage_errors_exit_2_before_anything_runs() {
         let ran = rig.run(Opts::real().mac(&push.mac), &words);
         assert_eq!(
             (ran.code, ran.stdout.as_str(), ran.stderr.as_str()),
-            (2, "", format!("hk: {says}\n").as_str()),
+            (2, "", format!("{NOTICE}hk: {says}\n").as_str()),
             "{words:?}"
         );
     }

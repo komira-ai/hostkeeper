@@ -20,7 +20,13 @@
 //! - `maintenance`: the `Maintenance` calls' requests, their enum flags' usage errors, and the
 //!   answer of every one through the real gateway of an empty coordinator;
 //! - `xcode`: the commands of the service `xcode`: their paths, bodies, answers and a refusal;
-//! - `xcode_push`: `hk xcode-push`, on stand-ins for the Mac's programs and a fake Xcode store;
+//! - `xcode_push`: `hk xcode-push`, the second name of `hk xcode add`, on stand-ins for the Mac's
+//!   programs and a fake Xcode store;
+//! - `add_rig`: what the next three share, stand-ins of the Mac's programs and a fake store that
+//!   answers `Xcode.List`;
+//! - `xcode_add_find`: which archive `hk xcode add` takes, and the lock;
+//! - `xcode_add`: the run: store first, the record, progress, the refusals of the store, the token;
+//! - `xcode_add_checks`: the checks before the upload, one by one;
 //! - `verify_rig`: what the next two share, the stand-ins of the Mac's programs for `hk xcode verify`, a
 //!   clock of the tests' own and a root certificate of their own making;
 //! - `xcode_verify`: `hk xcode verify`'s record, arguments, refusals and help;
@@ -28,6 +34,7 @@
 //! - `tailnet_wait`: `hk tailnet-wait`, its probe of a loopback server, its recorded waits and its
 //!   rejoin through a stand-in `tailscale`.
 
+mod add_rig;
 mod answers;
 mod flags;
 mod gateway;
@@ -46,6 +53,9 @@ mod tailnet_wait;
 mod transport;
 mod verify_rig;
 mod xcode;
+mod xcode_add;
+mod xcode_add_checks;
+mod xcode_add_find;
 mod xcode_push;
 mod xcode_verify;
 mod xcode_verify_checks;

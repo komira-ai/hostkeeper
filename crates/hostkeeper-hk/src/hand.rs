@@ -25,30 +25,47 @@ pub(crate) struct Method {
     pub(crate) method: &'static str,
     /// What it does, in the one paragraph `--help` and `docs/cli.md` show.
     pub(crate) doc: &'static str,
-    /// Its own flags, at least one (the global flags are not listed here).
+    /// Its own flags, none or more (the global flags are not listed here).
     pub(crate) flags: &'static [Flag],
     pub(crate) run: Run,
 }
 
 /// Every hand method.
-pub(crate) const METHODS: &[Method] = &[Method {
-    service: "xcode",
-    method: "verify",
-    doc: "Checks an Xcode archive on the operator's own Mac, macOS only, and writes the record of \
+pub(crate) const METHODS: &[Method] = &[
+    Method {
+        service: "xcode",
+        method: "add",
+        doc: "Brings an Xcode release into the coordinator's store from the operator's own Mac, \
+              macOS only: `hk xcode add` takes the newest Xcode_<version>.xip in ~/Downloads (or \
+              the release waiting, downloaded with xcodes), `hk xcode add 27.2` the archive of that \
+              version (downloaded with xcodes when ~/Downloads has none), `hk xcode add <path>` \
+              that file. It checks the archive's kind and Apple's signature, reads its version and \
+              build from the expanded app (keeping a record that saves the next expansion), asks \
+              the store first (an archive it holds ends the run with exit 0), and uploads with \
+              progress. One run at a time per Mac. Not a gateway call. `hk xcode add --help` says \
+              each step; `hk xcode-push` is a second name for one release.",
+        flags: &[],
+        run: crate::xcode_add::xcode_add,
+    },
+    Method {
+        service: "xcode",
+        method: "verify",
+        doc: "Checks an Xcode archive on the operator's own Mac, macOS only, and writes the record of \
           what it found to ~/.hostkeeper/xcode/<sha256>.json, mode 0600, and to stdout: the \
           programs, the archive's kind, Apple's signature and published root, a damaged copy and a \
           file that is no archive, the archive's table of contents, and the expansion with the \
           version and build read from the app. Not a gateway call: no coordinator is asked. \
           Exits 0 when the verdict is pass and 1 otherwise; `hk xcode verify --help` says each \
           check.",
-    flags: &[Flag {
-        name: "--apple-root",
-        value: "FILE",
-        help: "Apple's root certificate (DER or PEM), in place of fetching it over HTTPS from \
+        flags: &[Flag {
+            name: "--apple-root",
+            value: "FILE",
+            help: "Apple's root certificate (DER or PEM), in place of fetching it over HTTPS from \
                Apple's certificate authority page.",
-    }],
-    run: crate::xcode_verify::xcode_verify,
-}];
+        }],
+        run: crate::xcode_verify::xcode_verify,
+    },
+];
 
 /// The hand methods of the service whose command word is `service`.
 pub(crate) fn of(service: &str) -> impl Iterator<Item = &'static Method> {

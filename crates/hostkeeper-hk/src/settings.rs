@@ -27,7 +27,7 @@ use crate::home::Home;
 use crate::{Flow, Stop, World};
 
 /// The path of the method `hk settings init` calls to show that the values work.
-const LIST_PATH: &str = "/hostkeeper.operator.v1.Xcode/List";
+pub(crate) const LIST_PATH: &str = "/hostkeeper.operator.v1.Xcode/List";
 
 /// What the file gives.
 #[derive(Default)]

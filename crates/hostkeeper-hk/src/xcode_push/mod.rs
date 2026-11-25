@@ -1,27 +1,18 @@
-//! `hk xcode-push <version> | <archive.xip>`: brings an Xcode release into the coordinator's Xcode
-//! store from the operator's own Mac. It is not a gateway call: it runs programs of the Mac and
-//! streams the archive to `PUT /v1/xcode/<sha256>?version=<version>&build=<build>` on the private
-//! listener. In order, each step ending the push before anything is uploaded when it fails:
+//! The Mac's programs and the steps `hk xcode add` ([`crate::xcode_add`]) and `hk xcode verify`
+//! ([`crate::xcode_verify`]) share, each ending the run before anything is uploaded when it
+//! fails:
 //!
-//! 1. the archive: given a version, `xcodes download <version> --directory <dir>` in the
-//!    operator's own session (their Keychain; a two-factor prompt is answered at the terminal),
-//!    into `$HOME/Downloads/hk-xcode-push/<version>`, which must then hold exactly one `.xip`; given
-//!    a path, that file ([`archive`]);
-//! 2. Apple's signature: `pkgutil --check-signature` must exit 0, say the status
-//!    `signed Apple Software` and name a chain that ends at Apple Root CA, by its SHA-256
-//!    ([`signature`]);
-//! 3. the archive's SHA-256 and size, then its version and build, read from the app that
-//!    `xip --expand` makes in a directory beside the archive, which is removed afterwards
-//!    ([`archive`]); given a version, the archive's must be it;
-//! 4. the upload, unmodified and streamed, with the operator's token in the request's header
-//!    and nowhere else ([`upload`]).
+//! - [`archive`]: the archive's SHA-256 and size, and its version and build, read from the app
+//!   that `xip --expand` makes in a directory beside the archive, which `codesign --verify
+//!   --deep --strict` must pass and which is removed afterwards;
+//! - [`signature`]: Apple's signature, `pkgutil --check-signature` must exit 0, say the status
+//!   `signed Apple Software` and name a chain that ends at Apple Root CA, by its SHA-256;
+//! - [`upload`]: the archive, unmodified and streamed, with the operator's token in the request's
+//!   header and nowhere else.
 //!
-//! The programs it runs are the [`Mac`]'s, which also holds the ones `hk xcode verify`
-//! ([`crate::xcode_verify`]) runs.
-//!
-//! It takes `--endpoint`, `--ca-file`, `--token-file` and `--timeout-secs`. The token and the CA
-//! are read before the download, so that a mistake in either ends the push at once. The token is
-//! never an argument, an environment variable or an output line of a program it runs.
+//! The programs are the [`Mac`]'s. [`target`] reads the coordinator's address, the CA and the token
+//! before anything else, so that a mistake in any ends the run at once. The token is never an
+//! argument, an environment variable or an output line of a program `hk` runs.
 
 pub(crate) mod archive;
 pub(crate) mod signature;
@@ -29,8 +20,6 @@ pub(crate) mod signature;
 mod tests;
 pub(crate) mod upload;
 
-use std::ffi::OsString;
-use std::os::unix::ffi::OsStringExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -39,13 +28,10 @@ use crate::args::Globals;
 use crate::body::{read_file, read_path};
 use crate::call::{is_endpoint, private};
 use crate::encode::visible;
-use crate::help::XCODE_PUSH_HELP;
 use crate::send::{agent, certificates};
 use crate::{Flow, PROGRAM, Stop, World};
 
-use archive::is_version;
-
-/// The system `hk xcode-push` and `hk xcode verify` run on, the programs of the Mac they run, and
+/// The system `hk xcode add` and `hk xcode verify` run on, the programs of the Mac they run, and
 /// the two things `verify` reads from outside: Apple's root certificate and a clock.
 #[derive(Debug, Clone)]
 pub struct Mac {
@@ -166,9 +152,9 @@ pub(crate) fn finish(mut program: Command, what: &str) -> Flow<Vec<u8>> {
     }
 }
 
-/// Writes `hk: <text>` and a newline to stderr: what the push is doing.
+/// Writes `hk: <text>` and a newline to stderr: what the run is doing.
 pub(crate) fn say(w: &mut World<'_>, text: &str) {
-    // A stderr that cannot be written to does not stop the push.
+    // A stderr that cannot be written to does not stop the run.
     let _ = writeln!(w.stderr, "{PROGRAM}: {text}");
 }
 
@@ -184,12 +170,12 @@ pub(crate) struct Target {
     pub(crate) timeout_secs: u32,
 }
 
-/// The coordinator and the token of `globals`: the usage error when a flag is missing, refused or
-/// unreadable.
-fn target(globals: &Globals) -> Flow<Target> {
+/// The coordinator and the token of `globals` for the verb `word` (`xcode add`, `xcode-push`):
+/// the usage error when a flag is missing, refused or unreadable.
+pub(crate) fn target(globals: &Globals, word: &str) -> Flow<Target> {
     if globals.token_stdin || globals.audience.is_some() || globals.response_file.is_some() {
         return Err(Stop::usage(format!(
-            "{PROGRAM} xcode-push takes --token-file only: --token-stdin, --github-oidc-audience \
+            "{PROGRAM} {word} takes --token-file only: --token-stdin, --github-oidc-audience \
              and --response-file are not for it (stdin is the terminal xcodes asks a two-factor \
              code on)"
         )));
@@ -198,7 +184,7 @@ fn target(globals: &Globals) -> Flow<Target> {
         (&globals.endpoint, &globals.ca_file, &globals.token_file)
     else {
         return Err(Stop::usage(format!(
-            "{PROGRAM} xcode-push needs --endpoint, --ca-file and --token-file"
+            "{PROGRAM} {word} needs --endpoint, --ca-file and --token-file"
         )));
     };
     if !is_endpoint(endpoint) {
@@ -230,78 +216,10 @@ fn target(globals: &Globals) -> Flow<Target> {
     })
 }
 
-/// `hk xcode-push`: `args` are the words after `xcode-push`, among which the global flags are
-/// taken; `globals` are those given before it.
-pub(crate) fn xcode_push(w: &mut World<'_>, mut globals: Globals, args: &[Vec<u8>]) -> Flow<()> {
-    let mut words: Vec<&[u8]> = Vec::new();
-    let mut at = 0;
-    while let Some(arg) = args.get(at) {
-        if matches!(arg.as_slice(), b"--help" | b"-h") {
-            let _ = writeln!(w.stdout, "{XCODE_PUSH_HELP}");
-            return Ok(());
-        }
-        if let Some(took) = globals.take(args.get(at..).unwrap_or_default())? {
-            at += took;
-            continue;
-        }
-        if arg.starts_with(b"-") {
-            return Err(Stop::usage(
-                [
-                    format!("{PROGRAM} xcode-push has no flag ").as_bytes(),
-                    crate::args::flag_of(arg),
-                ]
-                .concat(),
-            ));
-        }
-        words.push(arg);
-        at += 1;
-    }
-    if w.mac.os != "macos" {
-        return Err(Stop::fail(format!(
-            "{PROGRAM} xcode-push runs on macOS only, on the Mac signed in to the Apple developer \
-             account: it runs xcodes, pkgutil and xip, which are macOS programs, and this system \
-             is {}",
-            w.mac.os
-        )));
-    }
-    let [word] = words.as_slice() else {
-        return Err(Stop::usage(format!(
-            "{PROGRAM} xcode-push takes one Xcode version (27.2) or the path of an archive \
-             (~/Downloads/Xcode_27.2.xip)"
-        )));
-    };
-    crate::settings::fill(w, &mut globals)?;
-    let target = target(&globals)?;
-    let mac = w.mac.clone();
-    let wanted = is_version(word).then(|| String::from_utf8_lossy(word).into_owned());
-    let path = match &wanted {
-        Some(version) => archive::download(w, &mac, version)?,
-        None => PathBuf::from(OsString::from_vec(word.to_vec())),
-    };
-    let mut file = archive::open(&path)?;
-    signature::check(w, &mac, &path)?;
-    let (sha256, size) = archive::digest(&mut file)?;
-    let (version, build) = archive::release(w, &mac, &path)?;
-    if let Some(wanted) = wanted
-        && wanted != version
-    {
-        return Err(failed(&format!(
-            "{} is Xcode {version} ({build}), not {wanted}",
-            path.display()
-        )));
-    }
-    say(
-        w,
-        &format!("Xcode {version} ({build}): sha256 {sha256}, {size} bytes"),
-    );
-    upload::put(
-        w,
-        &target,
-        upload::Archive {
-            file,
-            sha256: &sha256,
-            version: &version,
-            build: &build,
-        },
-    )
+/// The failure that the volume of `dir` has less than three times the archive's `size` free, the
+/// margin the farm Mac's stage uses; the expansion of the archive makes this much.
+pub(crate) fn free_check(mac: &Mac, dir: &Path, size: u64) -> Flow<()> {
+    use crate::xcode_verify::free::{enough, free_bytes};
+    let free = free_bytes(mac, dir).map_err(|why| failed(&why))?;
+    enough(free, size, dir).map_err(|why| failed(&why))
 }

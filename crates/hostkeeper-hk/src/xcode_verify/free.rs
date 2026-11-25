@@ -14,7 +14,7 @@ const MARGIN: u64 = 3;
 
 /// The bytes free on the volume of `dir`: the `Available` column of the one line `df -Pk` prints
 /// for it, in KiB. The error says why that could not be read.
-pub(super) fn free_bytes(mac: &Mac, dir: &Path) -> Result<u64, String> {
+pub(crate) fn free_bytes(mac: &Mac, dir: &Path) -> Result<u64, String> {
     let out = tool(&mac.df, &[&"-Pk", &dir], None);
     if out.exit != Some(0) {
         return Err(format!(
@@ -35,7 +35,7 @@ pub(super) fn free_bytes(mac: &Mac, dir: &Path) -> Result<u64, String> {
 
 /// The Available column of the last line of a report of `df -Pk`, in bytes: the number before the
 /// first word that ends with `%` (the capacity), the first word being a file system's name.
-pub(super) fn available(report: &str) -> Option<u64> {
+pub(crate) fn available(report: &str) -> Option<u64> {
     let line = report.lines().rfind(|line| !line.trim().is_empty())?;
     let words: Vec<&str> = line.split_whitespace().collect();
     // Counting from the second word, the capacity's place is the Available column's index.
@@ -48,7 +48,7 @@ pub(super) fn available(report: &str) -> Option<u64> {
 
 /// Whether `free` bytes are enough to expand an archive of `size` bytes: the failure, naming both
 /// numbers, when they are not.
-pub(super) fn enough(free: u64, size: u64, dir: &Path) -> Result<(), String> {
+pub(crate) fn enough(free: u64, size: u64, dir: &Path) -> Result<(), String> {
     let needed = size.saturating_mul(MARGIN);
     if free >= needed {
         return Ok(());

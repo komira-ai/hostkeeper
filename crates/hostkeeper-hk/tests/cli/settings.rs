@@ -256,7 +256,7 @@ fn xcode_push_takes_the_file() {
         (without.code, without.stderr.as_str()),
         (
             2,
-            "hk: hk xcode-push needs --endpoint, --ca-file and --token-file\n"
+            "hk xcode-push is now hk xcode add\nhk: hk xcode-push needs --endpoint, --ca-file and --token-file\n"
         )
     );
     let server = Server::canned(&rig.pki, 200, "{}");
@@ -269,7 +269,10 @@ fn xcode_push_takes_the_file() {
         (with.code, with.stderr),
         (
             2,
-            format!("hk: --token-file {open} may be read by its group or others; make it 0600\n")
+            format!(
+                "hk xcode-push is now hk xcode add\nhk: --token-file {open} may be read by its \
+                 group or others; make it 0600\n"
+            )
         )
     );
 }

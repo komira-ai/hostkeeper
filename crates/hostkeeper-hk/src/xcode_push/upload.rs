@@ -1,22 +1,28 @@
-//! The upload of `hk xcode-push`: `PUT /v1/xcode/<sha256>?version=<version>&build=<build>` on the
-//! coordinator's private listener, the archive as the body, unmodified and streamed from the file,
-//! and the operator's token as the bearer, in the request's header and nowhere else.
+//! The upload of `hk xcode add`: `PUT /v1/xcode/<sha256>?version=<version>&build=<build>` on the
+//! coordinator's private listener, the archive as the body, unmodified and streamed from the file
+//! in one request, and the operator's token as the bearer, in the request's header and nowhere
+//! else.
 //!
 //! The request says `Expect: 100-continue`, so that a refusal the coordinator makes before it
 //! reads the body (`not_listed`, `already_held`, `not_kept`, a token it does not take) is read
-//! before the archive is sent. The coordinator's answer is `201` and the JSON of the archive
-//! stored, which is printed, or `{"error":"<code>"}`, which ends the push with `refused: <code>`
-//! on stderr and an exit code of its status: 3 for 401 and 403 (the caller), 2 for the other
-//! 4xx (the request), 1 for anything else.
+//! before the archive is sent. While the body is sent, the progress is written to stderr
+//! ([`crate::xcode_add::progress`]). The coordinator's answer is `201` and the JSON of the archive
+//! stored, or `{"error":"<code>"}`, which ends the run with a line in words saying what the code
+//! means and what to do ([`words`]), the line `hk: the coordinator refused the upload (HTTP <n>)`,
+//! `refused: <code>` on stderr and an exit code of its status: 3 for 401 and 403 (the caller), 2
+//! for the other 4xx (the request), 1 for anything else.
 
 use std::fs::File;
-use std::io::{Seek as _, SeekFrom};
+use std::io::{Read, Seek as _, SeekFrom, Write};
 use std::time::Duration;
+
+use ureq::SendBody;
 
 use super::{Target, failed, say};
 use crate::call::is_reason;
 use crate::encode::trim;
 use crate::send::one_line;
+use crate::xcode_add::progress::Progress;
 use crate::{Flow, PROGRAM, Stop, World};
 
 /// The most bytes of an answer that are read: the store's answers are a line of JSON.
@@ -28,6 +34,7 @@ pub(crate) const ANSWER_SECS: u64 = 1800;
 /// The archive to upload: the file, and the release and SHA-256 it was read to be.
 pub(crate) struct Archive<'a> {
     pub(crate) file: File,
+    pub(crate) size: u64,
     pub(crate) sha256: &'a str,
     pub(crate) version: &'a str,
     pub(crate) build: &'a str,
@@ -50,7 +57,86 @@ pub(crate) fn exit_of_status(status: u16) -> u8 {
     }
 }
 
-/// Uploads `archive` to the store of `target`; the answer on stdout, or the refusal.
+/// What a refusal `code` of the store means and what to do about it, for the release `version`
+/// (`build`); `None` for a code this does not know.
+pub(crate) fn words(code: &[u8], version: &str, build: &str) -> Option<String> {
+    let text = match code {
+        b"not_listed" => format!(
+            "the coordinator's list of Xcode releases does not name Xcode {version} ({build}), and \
+             the store takes only a release the list names; wait for the daily list to name it, \
+             or check what {PROGRAM} xcode list shows as waiting"
+        ),
+        b"not_kept" => format!(
+            "the store keeps only the newest releases, and Xcode {version} is older than they \
+             ({PROGRAM} xcode list says how many it keeps); to keep more, raise xcode_keep of a \
+             host group"
+        ),
+        b"already_held" => format!(
+            "the store holds an archive of Xcode {version} already, from other bytes; {PROGRAM} \
+             xcode list names it, and {PROGRAM} xcode remove --sha256 <its sha256> --reason <why> \
+             removes it if these bytes are the ones to keep"
+        ),
+        b"xcode_version_taken" => format!(
+            "the store holds another build of Xcode {version}; {PROGRAM} xcode list names it, and \
+             {PROGRAM} xcode remove --sha256 <its sha256> --reason <why> removes it if build \
+             {build} is the one to keep"
+        ),
+        b"upload_in_progress" => format!(
+            "another upload of Xcode {version} is in progress; wait for it to end, then run \
+             {PROGRAM} xcode add again"
+        ),
+        b"partial_differs" => format!(
+            "the store keeps a partial upload of these bytes with another size, version or build \
+             than Xcode {version} ({build}); remove it with {PROGRAM} xcode remove --sha256 \
+             <this archive's sha256> --reason <why>, then run {PROGRAM} xcode add again"
+        ),
+        b"too_large" => format!(
+            "the archive is larger than the store takes one upload to be ({PROGRAM} xcode list \
+             shows max_bytes); the coordinator's --xcode-max-bytes sets it"
+        ),
+        b"digest_mismatch" => format!(
+            "the bytes sent are not the ones whose SHA-256 was asked to be stored: the archive \
+             changed after it was hashed; run {PROGRAM} xcode add again"
+        ),
+        b"unauthorized" => "the coordinator does not take the token; check the file --token-file \
+                           (or token_file of the settings file) names, and that it holds an \
+                           operator's token"
+            .to_owned(),
+        b"forbidden" => "the token is a CI token, which the Xcode store does not take; use an \
+                        operator's token"
+            .to_owned(),
+        _ => return None,
+    };
+    Some(text)
+}
+
+/// The body of the request: the first `size` bytes of the archive's file, which tell `progress` how
+/// many bytes have been read.
+struct Body<'a> {
+    file: File,
+    /// The archive's size when it was hashed: no more than this is read, so that bytes added to
+    /// the file since are not sent.
+    size: u64,
+    read: u64,
+    progress: Progress,
+    out: &'a mut dyn Write,
+}
+
+impl Read for Body<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let left = self.size.saturating_sub(self.read);
+        let end = buf.len().min(usize::try_from(left).unwrap_or(usize::MAX));
+        let n = self.file.read(buf.get_mut(..end).unwrap_or_default())?;
+        self.read = self
+            .read
+            .saturating_add(u64::try_from(n).unwrap_or(u64::MAX));
+        self.progress.at(self.read, self.out);
+        Ok(n)
+    }
+}
+
+/// Uploads `archive` to the store of `target`, with its progress on stderr; `Ok` when the store
+/// answers `201`, the refusal otherwise.
 pub(crate) fn put(w: &mut World<'_>, target: &Target, mut archive: Archive<'_>) -> Flow<()> {
     archive
         .file
@@ -67,6 +153,14 @@ pub(crate) fn put(w: &mut World<'_>, target: &Target, mut archive: Archive<'_>) 
     // answer is waited for `ANSWER_SECS` at least, as long as the coordinator takes to sync a
     // file of up to `--xcode-max-bytes`, audit it and put it in place.
     let answer = Duration::from_secs(ANSWER_SECS.max(u64::from(target.timeout_secs)));
+    let (terminal, clock) = (w.stderr_terminal, w.mac.clock);
+    let mut body = Body {
+        file: archive.file,
+        size: archive.size,
+        read: 0,
+        progress: Progress::new("uploading", archive.size, terminal, clock),
+        out: &mut *w.stderr,
+    };
     let sent = target
         .agent
         .put(&url)
@@ -76,8 +170,10 @@ pub(crate) fn put(w: &mut World<'_>, target: &Target, mut archive: Archive<'_>) 
         .build()
         .header("Authorization", format!("Bearer {}", target.token))
         .header("Content-Type", "application/octet-stream")
+        .header("Content-Length", archive.size.to_string())
         .header("Expect", "100-continue")
-        .send(archive.file);
+        .send(SendBody::from_reader(&mut body));
+    body.progress.finish(body.out);
     let mut response = sent.map_err(|error| {
         Stop::fail(format!(
             "no answer from {} ({}); the coordinator keeps nothing of an upload that does not \
@@ -88,26 +184,23 @@ pub(crate) fn put(w: &mut World<'_>, target: &Target, mut archive: Archive<'_>) 
     })?;
     let status = response.status().as_u16();
     // An answer that cannot be read is as much of it as was read: the status says what happened.
-    let body = response
+    let text = response
         .body_mut()
         .with_config()
         .limit(MAX_ANSWER_BYTES)
         .read_to_vec()
         .unwrap_or_default();
     if status == 201 {
-        let mut text = body;
-        text.push(b'\n');
-        return w
-            .stdout
-            .write_all(&text)
-            .and_then(|()| w.stdout.flush())
-            .map_err(|_| Stop::fail("the archive is stored, and the answer cannot be written"));
+        return Ok(());
     }
-    let Some(code) = error_code(&body) else {
+    let Some(code) = error_code(&text) else {
         return Err(Stop::fail(format!(
             "the answer (HTTP {status}) is not the Xcode store's"
         )));
     };
+    if let Some(said) = words(code, archive.version, archive.build) {
+        let _ = writeln!(w.stderr, "{PROGRAM}: {said}");
+    }
     let _ = writeln!(
         w.stderr,
         "{PROGRAM}: the coordinator refused the upload (HTTP {status})"

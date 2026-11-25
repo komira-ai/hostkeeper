@@ -4,7 +4,7 @@ The coordinator reads the list of Xcode releases once a day (`--xcode-feed-url`;
 the reading off) and keeps it. A failed read is a log line and another try the next day, never an alert.
 
 With `--xcode-dir` it also keeps a private store of the Xcode archives themselves. This page says what
-the store holds, how an archive gets into it (`hk xcode-push`) and out of it, and what an operator
+the store holds, how an archive gets into it (`hk xcode add`) and out of it, and what an operator
 sees.
 
 ## The store
@@ -33,44 +33,79 @@ left uploads); a newer one may be an upload another coordinator of the directory
 
 `--xcode-max-bytes` (default 21474836480, 20 GiB; at least 1) is the most bytes of one archive.
 
-## Pushing a release from your Mac: `hk xcode-push`
+## Adding a release from your Mac: `hk xcode add`
 
 When the alert `xcode_release_waiting` names a release, an operator brings it in with one command on
 their own Mac, the one signed in to the organisation's Apple developer account:
 
 ```
-hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> xcode-push 27.2
-hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> xcode-push ~/Downloads/Xcode_27.2.xip
+hk xcode add 27.2
+hk xcode add ~/Downloads/Xcode_27.2.xip
+hk xcode add
 ```
 
-It runs on macOS only (anywhere else it says so and stops) and needs `xcodes` on the `PATH` for the
-first form. In order, and a step that fails uploads nothing:
+The coordinator's address, the CA and the token file come from the settings file
+`~/.hostkeeper/hk.toml` (`hk settings init`, [cli.md](../cli.md)); the global flags `--endpoint`,
+`--ca-file` and `--token-file` override it. `hk xcode-push <version> | <path>` is a second name of the
+same command for one release: it says `hk xcode-push is now hk xcode add` on stderr and then does what
+`hk xcode add` does.
 
-1. Given a version, `xcodes download <version> --directory ~/Downloads/hk-xcode-push/<version>`, in
-   your own session: `xcodes` uses the Apple sign-in kept in your Keychain, and asks for a two-factor
-   code at the terminal only when Apple has ended that session. The directory must then hold exactly
-   one `.xip` (the archive is kept there afterwards). Given a path, `hk` takes that file, downloaded
-   in a browser from Apple's developer site.
-2. `pkgutil --check-signature` on the archive must exit 0, give the status `signed Apple Software`
+It runs on macOS only (anywhere else it says so and stops). One run at a time per Mac: the lock
+`~/.hostkeeper/xcode/.lock` holds the running process's id, and a second run exits 1 naming it and
+does not wait; a lock whose process is gone is taken over. In order, and a step that fails uploads
+nothing:
+
+1. **The archive.** A path: that file. A version: the newest file named for it in `~/Downloads` or in
+   `~/Downloads/hk-xcode-push/<version>`, else `xcodes download <version> --directory
+   ~/Downloads/hk-xcode-push/<version>` in your own session: `xcodes` uses the Apple sign-in kept in your
+   Keychain, and asks for a two-factor code at the terminal only when Apple has ended that session. A
+   missing `xcodes` is said with the two ways out: install it, or download the archive in a browser
+   from Apple's developer downloads page and run `hk xcode add` again. Nothing given: the file directly
+   in `~/Downloads` named for the highest version, then the newest; with none, the release the store
+   waits for (as if its version were given), and when none waits, `the store holds the newest release
+   (27.2, 27B52); nothing to add` and exit 0. `hk` picks a file up on its own only when its name is
+   `Xcode`, `_` or `-`, a version and `.xip` (`Xcode_27.2.xip`, `Xcode-26.1.1.xip`); a trailing `.0` of
+   a version does not count (`27.2` is `Xcode_27.2.0.xip`). Any other name is taken only as a path.
+2. **The kind**, from the first four bytes: `xar!` (a `.xip`) goes on; `AA01` (Apple Archive) and
+   `AEA1` (Apple Encrypted Archive) stop with `archive_kind_unsupported: <kind>` (exit 1), since the
+   farm Macs defer them; anything else is `not_an_xip` (exit 2).
+3. **The SHA-256 and size**, read once in 8 MiB blocks; on a terminal the progress is one line
+   rewritten in place.
+4. **The store is asked** (`Xcode.List`). An archive of these bytes already held prints `already in the
+   store: Xcode 27.2 (27B52)` and ends with exit 0, running nothing else; with a version given and the
+   held archive another version, `version_mismatch` (exit 1). With nothing given, a newer release
+   waiting is named with the line that adds it.
+5. `pkgutil --check-signature` on the archive must exit 0, give the status `signed Apple Software`
    (Apple's own signature, not a developer's) and a certificate chain that ends at Apple Root CA,
    matched by its SHA-256 fingerprint.
-3. `hk` computes the archive's SHA-256 and size, then reads its version (`CFBundleShortVersionString`)
-   and build (`ProductBuildVersion`) with `plutil` from the app that `xip --expand` makes in a directory
-   beside the archive, `.hk-xcode-push-expansion`, which it removes afterwards (and first, if an
-   interrupted push left it). That takes as much free space as an installed Xcode, on the archive's
-   volume, and some minutes. Given a version, the archive's must be it.
-4. The archive is uploaded unmodified and streamed with the `PUT` below, with your token from
-   `--token-file` as the bearer: the token is never an argument, an environment variable of a program
-   `hk` runs, or a line it prints. The request says `Expect: 100-continue`, so a refusal the
-   coordinator makes before the body (`not_listed`, `already_held`, `not_kept`, `unauthorized`) comes
-   back before the archive is sent.
+6. **The version and build.** `~/.hostkeeper/xcode/<sha256>.json` is used, and the expansion skipped,
+   when it is the user's own with mode 0600, names this SHA-256 and size, has the verdict `pass` and
+   holds a version and a build; any other record is ignored and replaced after a fresh expansion.
+   Otherwise the archive's volume must have three times its size free (`free_space_short`, naming both
+   numbers), then `xip --expand` makes the app in `.hk-xcode-push-expansion` beside the archive
+   (removed afterwards, and first if an interrupted run left it), `plutil` reads
+   `CFBundleShortVersionString` and `ProductBuildVersion`, `codesign --verify --deep --strict` must
+   pass on the app, and the record `hk-xcode-add-v1` is written. A passing record of `hk xcode verify`
+   is never replaced. Given a version, the archive's must be it (`version_mismatch`).
+7. **The store is asked again** with the release known. The same release from other bytes, or another
+   build of the version, stops the run naming the line `hk xcode remove --sha256 <sha256> --reason
+   <why>` that removes the held archive first, if the new bytes are the ones to keep.
+8. The archive is uploaded unmodified and streamed with the `PUT` below (the bytes that were hashed, no
+   more), with your token from the settings file or `--token-file` as the bearer: the token is never an
+   argument, an environment variable of a program `hk` runs, or a line it prints. The request says
+   `Expect: 100-continue`, so a refusal the coordinator makes before the body comes back before the
+   archive is sent. The progress goes to stderr (one line rewritten in place on a terminal, otherwise
+   one line per tenth of the archive); `stored: Xcode 27.2 (27B52), sha256 <sha256>, <n> bytes` goes to
+   stdout.
 
 `--timeout-secs` bounds the connection and the wait for the coordinator's `100 Continue`; once the
 archive is sent, its answer is waited for 30 minutes at least, as long as the coordinator may take to
-sync, audit and store it. The answer, the archive stored, is printed. A refusal prints `refused:
-<error>` (the table below) and exits 3 for 401 and 403, 2 for another 4xx and 1 otherwise; an upload cut
-off before its answer keeps nothing in the store and is pushed again. `--token-stdin` is not taken: the
-terminal is `xcodes`'s, for the two-factor prompt.
+sync, audit and store it. A refusal of the store is said in words with what to do, then `refused:
+<error>` (the table below); the exit code is 3 for `unauthorized` and `forbidden`, 2 for another 4xx
+(`not_listed`, `not_kept`, `already_held`, `xcode_version_taken`, `upload_in_progress`,
+`too_large`, `digest_mismatch`) and 1 otherwise. A coordinator with no store (no `--xcode-dir`) is exit
+1. An upload cut off before its answer keeps nothing in the store and is run again. `--token-stdin` is
+not taken: the terminal is `xcodes`'s, for the two-factor prompt.
 
 ## Pushing an archive: `PUT /v1/xcode/<sha256>?version=<version>&build=<build>`
 
@@ -197,7 +232,7 @@ version and build and the macOS it requires, and the alert's `version` is the re
 is one alert, for the newest such release. See it with `hk alerts list`.
 
 It clears when the store holds that release or a newer one. What to do: push the release with
-`hk xcode-push <version>` (above), from a Mac signed in to the Apple developer account. Without `--xcode-dir` the store
+`hk xcode add <version>` (above), from a Mac signed in to the Apple developer account. Without `--xcode-dir` the store
 holds nothing, so the alert stands while the list holds a release.
 
 ## The alert `xcode_version_taken`

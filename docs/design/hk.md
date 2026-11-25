@@ -92,7 +92,7 @@ the tunnel's keepalive is 30 seconds. The default audit reason of a certificate 
 Built after the rest of this design, by [xcode-one-action.md](xcode-one-action.md) section 2.1 (X1). `hk` reads
 `$HOME/.hostkeeper/hk.toml`, a TOML table of three strings, `endpoint`, `ca_file` and `token_file`, each the default
 of the global flag of the same name. It is read by the verbs that use these flags (a gateway call, `ssh`,
-`ssh-proxy`, `ssh-revoke`, `ssh-status` and `xcode-push`) when one of them is missing, and by no other verb:
+`ssh-proxy`, `ssh-revoke`, `ssh-status` and `xcode add`, with `xcode-push` its second name) when one of them is missing, and by no other verb:
 `--help`, `--version`, `ssh-known-host` and `tailnet-wait` (which takes no token) never read it.
 
 - A flag on the command line wins. A key neither gives leaves the flag required, with the usage error it had

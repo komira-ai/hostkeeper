@@ -275,6 +275,43 @@ fn the_doc_check_reads_settings_init() {
     );
 }
 
+/// Catches the doc check refusing `hk xcode add` as hk takes it (in a fenced line with no flags,
+/// with a version, with a path, with a global flag or in a span, `--help` too), and passing it with
+/// two arguments, a flag it has not, or a token that is not a file.
+#[test]
+fn the_doc_check_reads_xcode_add() {
+    let good = fenced("hk xcode add")
+        + &fenced("hk xcode add 27.2")
+        + &fenced("hk xcode add ~/Downloads/Xcode_27.2.xip")
+        + &fenced_call("xcode add 27.2")
+        + &fenced("hk --timeout-secs 30 xcode add --help")
+        + "`hk xcode add`, `hk xcode add [<version> | <archive.xip>]` and `hk xcode add --help`.\n";
+    assert_eq!(doc_problems("docs/x.md", &good), Vec::<String>::new());
+    assert_eq!(
+        command_of("hk xcode add 27.2"),
+        Ok(Some("xcode add".to_owned()))
+    );
+    let one = "hk xcode add takes at most one Xcode version (27.2) or the path of an archive \
+               (~/Downloads/Xcode_27.2.xip)";
+    let token = "hk xcode add takes --token-file only: --token-stdin, --github-oidc-audience and \
+                 --response-file are not for it (stdin is the terminal xcodes asks a two-factor \
+                 code on)";
+    let cases = [
+        ("hk xcode add 27.2 27.1", one),
+        ("hk xcode add --force", "hk xcode add has no flag --force"),
+        ("hk xcode add --token-stdin", token),
+        ("hk --response-file r xcode add", token),
+    ];
+    for (line, problem) in cases {
+        let error = command_of(line).expect_err(line);
+        assert_eq!(error, format!("{line}\n{problem}"));
+    }
+    assert_eq!(
+        doc_problems("docs/x.md", "`hk xcode add --force`"),
+        ["docs/x.md: `hk xcode add --force`: xcode add has no flag --force"]
+    );
+}
+
 /// Catches the doc check refusing `hk xcode verify` as hk takes it (in a fenced line, with no
 /// endpoint, or in a span, `--help` and a global flag too), and passing it with no archive, two,
 /// `--apple-root` twice or without a value, a flag it has not, or in a span with a flag it has
@@ -310,8 +347,8 @@ fn the_doc_check_reads_xcode_verify() {
             "hk xcode verify has no flag --force",
         ),
         (
-            "hk xcode add a.xip",
-            "the service xcode has no method add; 'hk xcode --help' lists them",
+            "hk xcode push a.xip",
+            "the service xcode has no method push; 'hk xcode --help' lists them",
         ),
     ];
     for (line, problem) in cases {
@@ -319,10 +356,10 @@ fn the_doc_check_reads_xcode_verify() {
         assert_eq!(error, format!("{line}\n{problem}"));
     }
     assert_eq!(
-        doc_problems("docs/x.md", "`hk xcode verify --force` and `hk xcode add`"),
+        doc_problems("docs/x.md", "`hk xcode verify --force` and `hk xcode push`"),
         [
             "docs/x.md: `hk xcode verify --force`: xcode verify has no flag --force",
-            "docs/x.md: `hk xcode add`: the service xcode has no method add"
+            "docs/x.md: `hk xcode push`: the service xcode has no method push"
         ]
     );
 }

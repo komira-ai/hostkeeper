@@ -2,7 +2,7 @@
 //! (written by `hostkeeper_hk::markdown`), then a service and a method of the command table
 //! hk serves (`hostkeeper_hk::is_served`), then that method's flags; or one of the hand verbs
 //! of the ssh tunnel, `ssh <host-id>`, `ssh-proxy`, `ssh-revoke` and `ssh-status`, or
-//! `xcode-push <version>|<archive>`, `tailnet-wait` and `settings init`, which are not in the table (a word after `ssh` that is a method of the service `ssh` is that method, any
+//! `xcode-push <version>|<archive>` (until X7), `tailnet-wait` and `settings init`, which are not in the table (a word after `ssh` that is a method of the service `ssh` is that method, any
 //! other is a host id).
 //!
 //! The rules are those of hk's own parser (`crates/hostkeeper-hk/src/dispatch.rs`), each word in
@@ -391,7 +391,10 @@ pub(crate) const HAND_VERBS: &[&str] = &[
 
 /// The methods of a generated service that hk has by hand (`hostkeeper_hk`'s `hand.rs`): the
 /// service, the method and the flags of its own.
-pub(crate) const HAND_METHODS: &[(&str, &str, &[&str])] = &[("xcode", "verify", &["--apple-root"])];
+pub(crate) const HAND_METHODS: &[(&str, &str, &[&str])] = &[
+    ("xcode", "add", &[]),
+    ("xcode", "verify", &["--apple-root"]),
+];
 
 /// The flags of its own of the hand method `method` of `service`, when it is one.
 pub(crate) fn hand_method(service: &str, method: &str) -> Option<&'static [&'static str]> {
@@ -555,6 +558,46 @@ fn settings(line: &mut Line<'_>, words: &[String]) -> Result<Parsed, String> {
     Ok(Parsed::Call("settings".to_owned()))
 }
 
+/// What `words` (the words after `xcode add`) ask for: at most one version or archive path, and the
+/// global flags, of which the token file is the only credential and none is needed (the settings
+/// file gives what the line lacks); in hk's words.
+fn xcode_add(line: &mut Line<'_>, words: &[String]) -> Result<Parsed, String> {
+    let mut paths = 0;
+    let mut at = 0;
+    while let Some(word) = words.get(at) {
+        let flag = flag_of(word);
+        if matches!(flag, "--help" | "-h") {
+            return Ok(Parsed::Help);
+        }
+        if word.starts_with('-') {
+            match line.global(&words[at..])? {
+                Some(took) => at += took,
+                None => return Err(format!("hk xcode add has no flag {flag}")),
+            }
+        } else {
+            paths += 1;
+            at += 1;
+        }
+    }
+    if paths > 1 {
+        return Err(
+            "hk xcode add takes at most one Xcode version (27.2) or the path of an \
+                    archive (~/Downloads/Xcode_27.2.xip)"
+                .to_owned(),
+        );
+    }
+    let has = |name: &str| line.given.iter().any(|g| g == name);
+    if has("token-stdin") || has("github-oidc-audience") || has("response-file") {
+        return Err(
+            "hk xcode add takes --token-file only: --token-stdin, --github-oidc-audience and \
+             --response-file are not for it (stdin is the terminal xcodes asks a two-factor code \
+             on)"
+            .to_owned(),
+        );
+    }
+    Ok(Parsed::Call("xcode add".to_owned()))
+}
+
 /// What `words` (the words after `xcode verify`) ask for: one archive, `--apple-root` once with
 /// a value, and the global flags, none of which it needs; in hk's words.
 fn xcode_verify(line: &mut Line<'_>, words: &[String]) -> Result<Parsed, String> {
@@ -712,7 +755,11 @@ pub(crate) fn parse(
             return hand(&mut line, service, &words[at..]);
         }
         if hand_method(service, method).is_some() {
-            return xcode_verify(&mut line, &words[at + 1..]);
+            return if method == "add" {
+                xcode_add(&mut line, &words[at + 1..])
+            } else {
+                xcode_verify(&mut line, &words[at + 1..])
+            };
         }
         return Err(format!(
             "the service {service} has no method {method}; 'hk {service} --help' lists them"

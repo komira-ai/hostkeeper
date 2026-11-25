@@ -1,7 +1,9 @@
 # Adding an Xcode in one action
 
 Status: design. Built so far: `hk xcode verify` and its record (section 5, X2), as a hand-written method of the generated
-service `xcode` (section 2.7 last paragraph). Nothing else here is built. It changes how an operator brings a new Xcode into the store of
+service `xcode` (section 2.7 last paragraph), and the first half of `hk xcode add` (X3): sections 2.2 to 2.4 without resume,
+2.6 and 2.7, in `crates/hostkeeper-hk/src/xcode_add/`. Not built yet: the summary of the Macs (2.5), which runs where
+`xcode_add/summary.rs` is, and resume (2.4, section 3). It changes how an operator brings a new Xcode into the store of
 [maintenance-updates.md](maintenance-updates.md) section 2.0 (Built: `hk xcode-push`, `crates/hostkeeper-hk/src/xcode_push/`;
 the store and its route, `crates/hostkeeper-coordinator/src/xcode_put.rs` and `xcode_store.rs`), and how the Mac proof's
 operator-side steps are run ([mac-proof.md](../operations/mac-proof.md) MP-X1 to MP-X6). Facts about this repository were read on

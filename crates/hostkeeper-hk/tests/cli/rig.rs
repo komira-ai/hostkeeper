@@ -320,8 +320,11 @@ pub struct Early {
 }
 
 impl Early {
-    /// A server that refuses its one request with `status` and `body` from its head alone.
-    pub fn refusing(pki: &Pki, status: u16, body: &str) -> Early {
+    /// A server that refuses its one request with `status` and `body` from its head alone, after
+    /// `lists` requests that are read whole and answered `200` with `first` (what `Xcode.List` is
+    /// asked before an upload).
+    pub fn refusing_after(pki: &Pki, lists: usize, first: &str, status: u16, body: &str) -> Early {
+        let first = first.to_owned();
         let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback listener");
         let port = listener.local_addr().expect("its address").port();
         let config = server_config(pki);
@@ -332,8 +335,23 @@ impl Early {
         );
         let heard = Arc::new((Mutex::new(None), Condvar::new()));
         let record = Arc::clone(&heard);
+        let config_first = Arc::clone(&config);
         std::thread::spawn(move || {
             let serve = || -> Option<Heard> {
+                for _ in 0..lists {
+                    let (stream, _) = listener.accept().ok()?;
+                    let conn = rustls::ServerConnection::new(Arc::clone(&config_first)).ok()?;
+                    let mut tls = rustls::StreamOwned::new(conn, stream);
+                    read_request(&mut tls)?;
+                    let reply = format!(
+                        "HTTP/1.1 200 X\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+                         Connection: close\r\n\r\n{first}",
+                        first.len()
+                    );
+                    tls.write_all(reply.as_bytes()).ok()?;
+                    tls.conn.send_close_notify();
+                    let _ = tls.flush();
+                }
                 let (stream, _) = listener.accept().ok()?;
                 let conn = rustls::ServerConnection::new(config).ok()?;
                 let mut tls = rustls::StreamOwned::new(conn, stream);
@@ -459,6 +477,8 @@ pub struct Opts<'a> {
     /// The `tailscale` and the wait of `hk tailnet-wait`; when `None`, a `tailscale` that does
     /// not exist and a wait that returns at once, so no test runs the host's own.
     pub tailnet: Option<&'a Tailnet<'a>>,
+    /// Whether standard error is a terminal.
+    pub terminal: bool,
 }
 
 impl<'a> Opts<'a> {
@@ -476,6 +496,7 @@ impl<'a> Opts<'a> {
             ssh: None,
             mac: None,
             tailnet: None,
+            terminal: false,
         }
     }
 
@@ -515,6 +536,12 @@ impl<'a> Opts<'a> {
 
     pub fn tailnet(mut self, tailnet: &'a Tailnet<'a>) -> Self {
         self.tailnet = Some(tailnet);
+        self
+    }
+
+    /// A run whose standard error is a terminal.
+    pub fn terminal(mut self) -> Self {
+        self.terminal = true;
         self
     }
 
@@ -632,6 +659,7 @@ impl Rig {
                 opts.home.or_else(|| Some(self.path("home")))
             },
             uid: opts.uid.unwrap_or(own),
+            stderr_terminal: opts.terminal,
             oidc_url: opts.oidc.map(|(url, _)| url.as_bytes().to_vec()),
             oidc_token: opts.oidc.map(|(_, token)| token.as_bytes().to_vec()),
             web_roots: &web_roots,

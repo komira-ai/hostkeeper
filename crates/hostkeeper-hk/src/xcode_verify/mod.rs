@@ -31,7 +31,7 @@
 //! 0 on `pass` and 1 otherwise.
 
 mod expansion;
-mod free;
+pub(crate) mod free;
 mod programs;
 mod root;
 mod run;
@@ -94,7 +94,7 @@ fn kind_of(first: &[u8]) -> &'static str {
 }
 
 /// The first four bytes of the file at `path`.
-fn first_bytes(path: &Path) -> Result<Vec<u8>, String> {
+pub(crate) fn first_bytes(path: &Path) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::new();
     std::fs::File::open(path)
         .and_then(|file| file.take(4).read_to_end(&mut bytes))
