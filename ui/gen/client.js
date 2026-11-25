@@ -27,6 +27,7 @@ export function createClient(call) {
       setBootDevice: (request) => call("hostkeeper.operator.v1.Console/SetBootDevice", request),
       list: (request) => call("hostkeeper.operator.v1.Console/List", request),
       close: (request) => call("hostkeeper.operator.v1.Console/Close", request),
+      probe: (request) => call("hostkeeper.operator.v1.Console/Probe", request),
     }),
     enrollment: Object.freeze({
       list: (request) => call("hostkeeper.operator.v1.Enrollment/List", request),

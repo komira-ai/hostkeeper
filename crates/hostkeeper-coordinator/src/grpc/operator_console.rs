@@ -3,7 +3,9 @@
 //! The adapter has no rule of its own: each method calls its handler in [`crate::console`] with
 //! the caller the router admitted, off the runtime's threads (a power call runs the BMC tool and
 //! waits for it, and every call that acts appends an audit line), and a refusal is the status
-//! [`refusal::console`] makes of it; a handler that did not finish is `store_failed`.
+//! [`refusal::console`] makes of it; a handler that did not finish is `store_failed`. `Probe`,
+//! which waits on the host's serial console, runs as a task of the runtime instead, which goes on
+//! to its clean-up when its caller leaves.
 
 use std::sync::Arc;
 
@@ -85,5 +87,20 @@ impl Api for ConsoleService {
         request: Request<proto::CloseConsoleRequest>,
     ) -> Result<Response<proto::CloseConsoleResponse>, Status> {
         self.run(request, Coordinator::console_close).await
+    }
+
+    async fn probe(
+        &self,
+        request: Request<proto::ProbeConsoleRequest>,
+    ) -> Result<Response<proto::ProbeConsoleResponse>, Status> {
+        let caller = caller_of(&request);
+        let coordinator = Arc::clone(&self.coordinator);
+        // A task of its own: a caller who leaves mid-read does not cut the session's clean-up.
+        let probing = tokio::spawn(coordinator.console_probe(caller, request.into_inner()));
+        probing
+            .await
+            .unwrap_or(Err(ConsoleRefusal::StoreFailed))
+            .map(Response::new)
+            .map_err(refusal::console)
     }
 }

@@ -15,6 +15,10 @@
 //!   device (Serial over LAN through the BMC tool for a Linux server, Screen Sharing's TCP port
 //!   for a Mac, [`device`]) and bridges it until either end ends, a limit or a close stops it, and
 //!   cleans up (the payload deactivated, one close line).
+//! - [`Coordinator::console_probe`] ([`probe`]): `Console/Probe`, a session opened as `Open`
+//!   opens one, attached in the coordinator by a client that types nothing and reads the serial
+//!   console until a byte count, a quiet time or a wait passes, then ended as a stream ends; what
+//!   it read is classified ([`classify`]).
 //! - [`sweep`]: the tick that ends unattached sessions, closes attached ones at their idle and
 //!   total limits or when their operator's token (or browser session) or entry is gone, the drain at stop and the
 //!   start line.
@@ -72,11 +76,13 @@ pub use ipmitool::Ipmitool;
 pub(crate) use sweep::{drained, sweep_every};
 
 mod address;
+mod classify;
 mod device;
 mod files;
 mod flags;
 mod ipmitool;
 mod power;
+mod probe;
 pub(crate) mod route;
 mod sessions;
 mod stream;
@@ -93,11 +99,13 @@ mod owner_tests;
 #[cfg(test)]
 mod power_tests;
 #[cfg(test)]
+mod probe_tests;
+#[cfg(test)]
 mod route_tests;
 #[cfg(test)]
 mod sessions_tests;
 #[cfg(test)]
-mod stream_tests;
+pub(crate) mod stream_tests;
 #[cfg(test)]
 pub(crate) mod support;
 #[cfg(test)]
@@ -211,6 +219,16 @@ impl Live {
     }
 }
 
+/// A timer: the future of `Duration`'s passing. [`sleeping`] in the coordinator; a test's double
+/// is told when each is armed and fires it, so that no test waits on a clock.
+pub(crate) type Timer =
+    Arc<dyn Fn(Duration) -> futures::future::BoxFuture<'static, ()> + Send + Sync>;
+
+/// The timer of the runtime's clock.
+pub(crate) fn sleeping() -> Timer {
+    Arc::new(|duration| Box::pin(tokio::time::sleep(duration)))
+}
+
 /// The sessions, and the streams attached to them, by host id; one lock for both.
 pub(crate) struct Table {
     pub(crate) sessions: Sessions,
@@ -235,6 +253,8 @@ pub struct Console {
     quiet: Duration,
     bmcs: Mutex<BTreeMap<MacAddress, Arc<Mutex<()>>>>,
     random: Random,
+    /// How a probe's read is timed.
+    timer: Timer,
     /// Told when a call finds its BMC's lock held and waits for it: a test's progress event.
     #[cfg(test)]
     waits: Mutex<Option<std::sync::mpsc::Sender<()>>>,
@@ -293,6 +313,7 @@ impl Console {
             quiet: DEFAULT_QUIET,
             bmcs: Mutex::new(BTreeMap::new()),
             random: os_random(),
+            timer: sleeping(),
             #[cfg(test)]
             waits: Mutex::new(None),
         }
@@ -329,6 +350,13 @@ impl Console {
     #[cfg(test)]
     pub(crate) fn with_random(mut self, random: Random) -> Self {
         self.random = random;
+        self
+    }
+
+    /// The same console timing a probe's read with `timer`.
+    #[cfg(test)]
+    pub(crate) fn with_timer(mut self, timer: Timer) -> Self {
+        self.timer = timer;
         self
     }
 

@@ -428,3 +428,80 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Client<S> {
         before
     }
 }
+
+/// A timer armed: its duration, and what fires it.
+type Armed = (Duration, tokio::sync::oneshot::Sender<()>);
+
+/// The timer double of a probe's read: each timer armed is recorded with its duration and fires
+/// only when the test fires that duration; the count of timers armed is the probe's progress
+/// event (the read began, a piece of bytes was read).
+#[derive(Clone)]
+pub(crate) struct Timers {
+    armed: Arc<std::sync::Mutex<Vec<Armed>>>,
+    count: Arc<tokio::sync::watch::Sender<usize>>,
+}
+
+impl Timers {
+    /// No timer armed yet.
+    pub(crate) fn new() -> Self {
+        Self {
+            armed: Arc::default(),
+            count: Arc::new(tokio::sync::watch::channel(0).0),
+        }
+    }
+
+    /// The timer of the console.
+    pub(crate) fn timer(&self) -> super::Timer {
+        let timers = self.clone();
+        Arc::new(move |duration| {
+            let (fire, fired) = tokio::sync::oneshot::channel();
+            timers.armed.lock().expect("lock").push((duration, fire));
+            timers.count.send_modify(|count| *count += 1);
+            Box::pin(async move {
+                // A timer the test never fires never passes.
+                if fired.await.is_err() {
+                    std::future::pending::<()>().await;
+                }
+            })
+        })
+    }
+
+    /// Waits until `count` timers in all have been armed.
+    pub(crate) async fn armed(&self, count: usize) {
+        let mut seen = self.count.subscribe();
+        seen.wait_for(|armed| *armed >= count)
+            .await
+            .expect("the count is kept");
+    }
+
+    /// The durations armed so far, in order.
+    pub(crate) fn durations(&self) -> Vec<Duration> {
+        let armed = self.armed.lock().expect("lock");
+        armed.iter().map(|(duration, _)| *duration).collect()
+    }
+
+    /// Fires every timer of `duration` armed so far that has not fired.
+    pub(crate) fn fire(&self, duration: Duration) {
+        let mut armed = self.armed.lock().expect("lock");
+        let (due, kept) = std::mem::take(&mut *armed)
+            .into_iter()
+            .partition::<Vec<_>, _>(|(of, _)| *of == duration);
+        *armed = kept;
+        for (_, fire) in due {
+            // A timer whose read has moved on is fired for nobody.
+            let _ = fire.send(());
+        }
+    }
+}
+
+impl Live {
+    /// [`Self::new`] whose probes are timed by the double it answers with.
+    pub(crate) fn timed(name: &str) -> (Self, Timers) {
+        let mut live = Self::new(name);
+        let timers = Timers::new();
+        let coordinator = Arc::get_mut(&mut live.coordinator).expect("not shared yet");
+        let console = std::mem::take(&mut coordinator.console);
+        coordinator.console = console.with_timer(timers.timer());
+        (live, timers)
+    }
+}
