@@ -548,28 +548,6 @@ fn a_download_that_keeps_breaking_defers_after_its_attempts() {
     mac.assert_clean();
 }
 
-/// Proves: a copy an interrupted stage left in the entry's directory is resumed from its length,
-/// and a file there longer than the archive is not taken for a part of it: it is cut and the
-/// archive read from byte 0.
-#[test]
-fn a_copy_left_by_an_interrupted_stage_resumes_from_its_length() {
-    let entry = entry_of(ARCHIVE_BYTES);
-    let archive = format!("{STAGING}/{}/{ARCHIVE}", entry.sha256);
-    let mut longer = ARCHIVE_BYTES.to_vec();
-    longer.extend_from_slice(b"more");
-    for (left, first) in [(ARCHIVE_BYTES[..4].to_vec(), 4), (longer, 0)] {
-        let mac = Mac::new("xcs-left");
-        mac.trusted_staging();
-        mac.file(&archive, &left);
-        assert_eq!(mac.run(std::slice::from_ref(&entry)), Ok(()), "{first}");
-        assert_eq!(
-            mac.store.asked(),
-            [(format!("/v1/xcode/{}", entry.sha256), first)]
-        );
-        assert_eq!(*lock(&mac.runner.archives), [ARCHIVE_BYTES.to_vec()]);
-    }
-}
-
 /// Proves: the order's SHA-256 is the only path the store is read by. An entry whose SHA-256 is
 /// not 64 lower-case hex characters (a path, upper case, too short), whose version or build is
 /// not one the stage takes, or whose size is 0 defers `xcode_order_invalid` before the store is

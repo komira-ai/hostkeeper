@@ -83,6 +83,28 @@ fn maintenance_hook_prepare_defers_an_xcode_order_on_a_full_disk() {
     mac.assert_clean();
 }
 
+/// Proves: a copy an interrupted stage left in the entry's directory is resumed from its length,
+/// and a file there longer than the archive is not taken for a part of it: it is cut and the
+/// archive read from byte 0.
+#[test]
+fn a_copy_left_by_an_interrupted_stage_resumes_from_its_length() {
+    let entry = entry_of(ARCHIVE_BYTES);
+    let archive = format!("{STAGING}/{}/{ARCHIVE}", entry.sha256);
+    let mut longer = ARCHIVE_BYTES.to_vec();
+    longer.extend_from_slice(b"more");
+    for (left, first) in [(ARCHIVE_BYTES[..4].to_vec(), 4), (longer, 0)] {
+        let mac = Mac::new("xcs-left");
+        mac.trusted_staging();
+        mac.file(&archive, &left);
+        assert_eq!(mac.run(std::slice::from_ref(&entry)), Ok(()), "{first}");
+        assert_eq!(
+            mac.store.asked(),
+            [(format!("/v1/xcode/{}", entry.sha256), first)]
+        );
+        assert_eq!(*lock(&mac.runner.archives), [ARCHIVE_BYTES.to_vec()]);
+    }
+}
+
 /// Proves: a complete archive an interrupted stage left in the entry's directory, of the order's
 /// size but other bytes, is not taken for the archive: the stage defers `xcode_archive_mismatch`
 /// with the whole detail (its size and SHA-256 and the order's), the store is not asked, `xip`
