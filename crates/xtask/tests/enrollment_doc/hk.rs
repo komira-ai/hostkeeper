@@ -2,7 +2,7 @@
 //! (written by `hostkeeper_hk::markdown`), then a service and a method of the command table
 //! hk serves (`hostkeeper_hk::is_served`), then that method's flags; or one of the hand verbs
 //! of the ssh tunnel, `ssh <host-id>`, `ssh-proxy`, `ssh-revoke` and `ssh-status`, or
-//! `xcode-push <version>|<archive>`, which are not in the table (a word after `ssh` that is a method of the service `ssh` is that method, any
+//! `xcode-push <version>|<archive>`, `tailnet-wait` and `settings init`, which are not in the table (a word after `ssh` that is a method of the service `ssh` is that method, any
 //! other is a host id).
 //!
 //! The rules are those of hk's own parser (`crates/hostkeeper-hk/src/dispatch.rs`), each word in
@@ -386,6 +386,7 @@ pub(crate) const HAND_VERBS: &[&str] = &[
     "ssh-status",
     "xcode-push",
     "tailnet-wait",
+    "settings",
 ];
 
 /// What `hk xcode-push` says when it is not given exactly one version or archive.
@@ -419,6 +420,9 @@ pub(crate) fn hand_flags(verb: &str) -> &'static [&'static str] {
 fn hand(line: &mut Line<'_>, verb: &str, words: &[String]) -> Result<Parsed, String> {
     if verb == "tailnet-wait" {
         return tailnet_wait(line, words);
+    }
+    if verb == "settings" {
+        return settings(line, words);
     }
     let own = hand_flags(verb);
     let mut host: Option<&str> = None;
@@ -494,6 +498,49 @@ fn hand(line: &mut Line<'_>, verb: &str, words: &[String]) -> Result<Parsed, Str
     }
     line.call_needs()?;
     Ok(Parsed::Call(verb.to_owned()))
+}
+
+/// What `words` (the words after `settings`) ask for: the one word `init`, the global flags, the
+/// three of `--endpoint`, `--ca-file` and `--token-file`, and no other credential and no
+/// `--response-file`; in hk's words.
+fn settings(line: &mut Line<'_>, words: &[String]) -> Result<Parsed, String> {
+    let mut rest: Vec<&str> = Vec::new();
+    let mut at = 0;
+    while let Some(word) = words.get(at) {
+        let flag = flag_of(word);
+        if matches!(flag, "--help" | "-h") {
+            return Ok(Parsed::Help);
+        }
+        if word.starts_with('-') {
+            match line.global(&words[at..])? {
+                Some(took) => at += took,
+                None => return Err(format!("hk settings has no flag {flag}")),
+            }
+        } else {
+            rest.push(word);
+            at += 1;
+        }
+    }
+    if rest != ["init"] {
+        return Err(
+            "settings takes the one word init; 'hk settings --help' says what it does".to_owned(),
+        );
+    }
+    let has = |name: &str| line.given.iter().any(|g| g == name);
+    if has("token-stdin") || has("github-oidc-audience") || has("response-file") {
+        return Err(
+            "hk settings init takes --token-file only: --token-stdin, --github-oidc-audience and \
+             --response-file are not for it"
+                .to_owned(),
+        );
+    }
+    if !(has("endpoint") && has("ca-file") && has("token-file")) {
+        return Err("hk settings init needs --endpoint, --ca-file and --token-file".to_owned());
+    }
+    if !is_endpoint(&line.endpoint) {
+        return Err("--endpoint takes https://<host>[:<port>]".to_owned());
+    }
+    Ok(Parsed::Call("settings".to_owned()))
 }
 
 /// What `words` (the words after `tailnet-wait`) ask for: `--attempts` and `--interval-secs`,

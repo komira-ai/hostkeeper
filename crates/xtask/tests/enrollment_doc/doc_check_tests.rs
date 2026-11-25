@@ -227,3 +227,50 @@ fn the_doc_check_reads_tailnet_wait() {
         ["docs/x.md: `hk tailnet-wait --ping`: tailnet-wait has no flag --ping"]
     );
 }
+
+/// Catches the doc check refusing `hk settings init` as hk takes it (in a fenced line or a span,
+/// `--help` too), and passing it with another word, a flag it has not, another credential or
+/// without one of the three flags, each in hk's own words.
+#[test]
+fn the_doc_check_reads_settings_init() {
+    let all = "hk --endpoint https://coordinator.example:8443 --ca-file ca.pem --token-file t";
+    let good = format!("```sh\n{all} settings init\n```\n")
+        + "`hk settings init --endpoint URL --ca-file PATH --token-file PATH` and `hk settings --help`.\n";
+    assert_eq!(doc_problems("docs/x.md", &good), Vec::<String>::new());
+    assert_eq!(
+        command_of(&format!("{all} settings init")),
+        Ok(Some("settings".to_owned()))
+    );
+    let credential = "hk settings init takes --token-file only: --token-stdin, \
+                      --github-oidc-audience and --response-file are not for it";
+    let one = "settings takes the one word init; 'hk settings --help' says what it does";
+    let cases = [
+        (format!("{all} settings"), one),
+        (format!("{all} settings other"), one),
+        (format!("{all} settings init again"), one),
+        (
+            format!("{all} settings init --force"),
+            "hk settings has no flag --force",
+        ),
+        (format!("{all} settings init --token-stdin"), credential),
+        (format!("{all} settings init --response-file r"), credential),
+        (
+            "hk --endpoint https://coordinator.example:8443 --ca-file ca.pem settings init"
+                .to_owned(),
+            "hk settings init needs --endpoint, --ca-file and --token-file",
+        ),
+        (
+            "hk --endpoint http://coordinator.example --ca-file ca.pem --token-file t settings init"
+                .to_owned(),
+            "--endpoint takes https://<host>[:<port>]",
+        ),
+    ];
+    for (line, problem) in cases {
+        let error = command_of(&line).expect_err(&line);
+        assert_eq!(error, format!("{line}\n{problem}"));
+    }
+    assert_eq!(
+        doc_problems("docs/x.md", "`hk settings init --force`"),
+        ["docs/x.md: `hk settings init --force`: settings has no flag --force"]
+    );
+}
