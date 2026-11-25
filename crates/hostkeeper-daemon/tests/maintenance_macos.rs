@@ -21,7 +21,8 @@ use hostkeeper_daemon::maintenance_mac::{FreeSpace, MacPorts, MacReadiness};
 use hostkeeper_daemon::maintenance_macos::{Macos, MacosPorts};
 use hostkeeper_daemon::maintenance_softwareupdate::MacosMajor;
 use hostkeeper_launchd::{
-    BOOT_SESSION_UUID, FakeLaunchctl, LaunchctlError, LaunchctlOutput, parse_boot_session_uuid,
+    BOOT_SESSION_UUID, FakeLaunchctl, LaunchctlError, LaunchctlOutput, PlatformKind,
+    parse_boot_session_uuid,
 };
 use hostkeeper_link::testing::{FakeClock, RecordingLog};
 use hostkeeper_link::{Dispatch, Job};
@@ -175,6 +176,7 @@ fn reported_with(
     ];
     let source = maintenance_source(
         &daemon,
+        PlatformKind::Macos,
         LinuxScope::default(),
         collectors,
         Arc::new(FakeClock::new(NOW, 0)),

@@ -6,9 +6,10 @@
 //! on a Mac but owned by the test's user, and device management's settings), the programs the
 //! maintenance hook and the daemon's report run (`sw_vers`, `ioreg`, `softwareupdate`, `fdesetup`,
 //! `pkgutil`, `dscl`, `sysadminctl`, `xcode-select`, each Xcode's `xcodebuild`, `xip`, `codesign`
-//! and the installer app's `startosinstall`), the coordinator's Xcode store as the hook's stage
-//! reads it, a boot id that changes when the Mac restarts, and one service, `alpha`, whose hook
-//! declares `drain` and `resume`.
+//! and the installer app's `startosinstall`, and the probe's `stat`, `who`, `id`, `launchctl` and
+//! `env`, which answer as a farm Mac did with nobody logged in), the coordinator's Xcode store as
+//! the hook's stage reads it, a boot id that changes when the Mac restarts, and one service,
+//! `alpha`, whose hook declares `drain` and `resume`.
 //!
 //! Every program the maintenance hook runs is one line of the Mac's effects, in order, with its
 //! arguments (a path under the scratch directory written as the Mac's own path), beside each hook
@@ -18,7 +19,8 @@
 //! its own schedule.
 //!
 //! The maintenance hook's `prepare`, `cutover`, restart and `verify` are the real hook's over the
-//! real `macos` kind (its stage and its apply) and the real `xcode` kind (its stage and its apply),
+//! real `macos` kind (its stage and its apply), the real `xcode` kind (its stage and its apply)
+//! and the real `probe` kind (its clock at [`PROBED_UNIX`]),
 //! each over the fake Mac's programs and files, and the daemon's report is the real Mac
 //! collectors' (`macos`, `mac`, `xcode`, `update-account`, `mdm`) over the same programs and files.
 //! The Mac's heartbeats name the platform `darwin-arm64`, as a Mac's daemon does.
@@ -27,7 +29,11 @@
 //! when `fdesetup authrestart` follows it; the restart (`Node::reboot`) boots the Mac into the
 //! build the install put on it, with nothing listed by `softwareupdate` any more; `Node::come_back`
 //! does the same for a Mac whose daemon already stopped.
-#![allow(dead_code, reason = "each test binary uses part of the shared support")]
+#![allow(
+    dead_code,
+    unused_imports,
+    reason = "each test binary uses part of the shared support, and of what it re-exports"
+)]
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -40,7 +46,8 @@ use hostkeeper_daemon::maintenance_collect::{Collector, HostRoot};
 use hostkeeper_daemon::maintenance_hook::macos::{AccountFile, Apply, Installers, Programs, Stage};
 use hostkeeper_daemon::maintenance_hook::xcode::{self, store::Store};
 use hostkeeper_daemon::maintenance_hook::{
-    Ending as HookEnding, HookStep, Kind, MacosKind, Rebooter, Registry, Unwired, XcodeKind,
+    Ending as HookEnding, HookStep, Kind, MacosKind, ProbeKind, Rebooter, Registry, Unwired,
+    XcodeKind,
 };
 use hostkeeper_daemon::maintenance_mac::{FreeSpace, MacPorts, MacReadiness};
 use hostkeeper_daemon::maintenance_macos::{Macos, MacosPorts};
@@ -51,7 +58,7 @@ use hostkeeper_daemon::maintenance_xcode::Xcodes;
 use hostkeeper_launchd::{
     Launchctl, LaunchctlError, LaunchctlOutput, PlatformKind, StdinError, StdinRun,
 };
-use hostkeeper_link::{Got, Limit, Log};
+use hostkeeper_link::{Got, Limit, Log, UnixClock};
 use hostkeeper_package::gh::{Ran, Runner, Spawn};
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use hostkeeper_proto::hostkeeper::operator::v1 as op;
@@ -158,6 +165,14 @@ const IOREG_PROGRAM: &str = "/usr/sbin/ioreg";
 const PKGUTIL_PROGRAM: &str = "/usr/sbin/pkgutil";
 const DSCL: &str = "/usr/bin/dscl";
 const SYSADMINCTL: &str = "/usr/sbin/sysadminctl";
+/// The probe's programs the other constants do not name.
+pub const STAT: &str = "/usr/bin/stat";
+pub const WHO: &str = "/usr/bin/who";
+pub const ID: &str = "/usr/bin/id";
+pub const LAUNCHCTL: &str = "/bin/launchctl";
+pub const ENV: &str = "/usr/bin/env";
+/// The second the probe's clock reads.
+pub const PROBED_UNIX: u64 = 1_900_000_500;
 
 /// The `xcodebuild` of the Xcode `version`, by its path on the Mac.
 pub fn xcodebuild(version: &str) -> String {

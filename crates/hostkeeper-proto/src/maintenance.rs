@@ -6,7 +6,7 @@
 use crate::hostkeeper::agent::v1::MaintenanceReport;
 
 /// The most bytes a report keeping every bound encodes to.
-pub const MAX_REPORT_BYTES: usize = 5120;
+pub const MAX_REPORT_BYTES: usize = 7168;
 
 /// The most Xcodes of `xcodes`.
 pub const MAX_XCODES: usize = 6;
@@ -16,6 +16,14 @@ pub const MAX_DUE: usize = 12;
 pub const MAX_MDM_CONFLICTS: usize = 16;
 /// The most kinds of `run.applied`.
 pub const MAX_APPLIED: usize = 4;
+/// The most kinds of `on_demand`.
+pub const MAX_ON_DEMAND: usize = 4;
+/// The most steps of `probe.steps`.
+pub const MAX_PROBE_STEPS: usize = 8;
+/// The most bytes of a probe step's `name`.
+pub const MAX_PROBE_NAME: usize = 32;
+/// The most bytes of a probe step's `output`.
+pub const MAX_PROBE_OUTPUT: usize = 128;
 
 /// The most bytes of each of `host.os_name`, `host.os_version`, `host.os_build` and
 /// `host.hardware_serial`.
@@ -73,6 +81,7 @@ pub enum MaintenanceReportError {
 pub fn check_report(report: &MaintenanceReport) -> Result<(), MaintenanceReportError> {
     let mac = report.mac.as_ref();
     let run = report.run.as_ref();
+    let probe = report.probe.as_ref();
     let counts = [
         ("xcodes", report.xcodes.len(), MAX_XCODES),
         (
@@ -86,6 +95,12 @@ pub fn check_report(report: &MaintenanceReport) -> Result<(), MaintenanceReportE
             run.map_or(0, |r| r.applied.len()),
             MAX_APPLIED,
         ),
+        (
+            "probe.steps",
+            probe.map_or(0, |p| p.steps.len()),
+            MAX_PROBE_STEPS,
+        ),
+        ("on_demand", report.on_demand.len(), MAX_ON_DEMAND),
     ];
     if let Some((field, count, max)) = counts.into_iter().find(|&(_, count, max)| count > max) {
         return Err(MaintenanceReportError::TooMany { field, count, max });
@@ -155,12 +170,23 @@ pub fn check_report(report: &MaintenanceReport) -> Result<(), MaintenanceReportE
         ]
     });
     let look_failed = [("look_failed", report.look_failed.as_str(), MAX_LOOK_FAILED)];
+    let probe_texts = probe.into_iter().flat_map(|p| {
+        std::iter::once(("probe.run_id", p.run_id.as_str(), MAX_RUN_ID)).chain(
+            p.steps.iter().flat_map(|step| {
+                [
+                    ("probe.step_name", step.name.as_str(), MAX_PROBE_NAME),
+                    ("probe.step_output", step.output.as_str(), MAX_PROBE_OUTPUT),
+                ]
+            }),
+        )
+    });
     match host
         .chain(xcodes)
         .chain(mac_texts)
         .chain(due)
         .chain(run_texts)
         .chain(look_failed)
+        .chain(probe_texts)
         .find(|&(_, text, max)| text.len() > max)
     {
         Some((field, text, max)) => Err(MaintenanceReportError::TooLong {

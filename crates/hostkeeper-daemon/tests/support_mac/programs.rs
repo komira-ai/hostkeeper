@@ -70,6 +70,10 @@ impl Machine {
                 false => ok("FileVault is Off.\n"),
             },
             (FDESETUP, ["supportsauthrestart"]) => ok("true\n"),
+            (STAT, ["-f", "%Su", "/dev/console"]) => ok("root\n"),
+            (WHO, []) | (ENV, []) => ok(""),
+            (ID, []) => ok("uid=0(root) gid=0(wheel) groups=0(wheel)\n"),
+            (LAUNCHCTL, ["managername"]) => ok("System\n"),
             (FDESETUP, ["list"]) => ok(FILEVAULT_USERS),
             (PKGUTIL_PROGRAM, ["--pkg-info=com.apple.pkg.CLTools_Executables"]) => ok(PKGUTIL),
             (DSCL, [".", "-read", user, "RecordName", "IsHidden"])

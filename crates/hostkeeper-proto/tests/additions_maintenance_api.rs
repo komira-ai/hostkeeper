@@ -562,7 +562,7 @@ fn the_maintenance_service_has_its_six_unary_calls_in_the_command_table() {
 
 /// Proves: every request field of `Maintenance` is a plain flag, none is secret, each command
 /// takes its flags in the proto's order, and the enum flags take exactly the values the design
-/// names (the unspecified zero is no flag value): `--kinds` the four kinds, `--states` the six
+/// names (the unspecified zero is no flag value): `--kinds` the five kinds, `--states` the six
 /// states.
 /// Catches: a request field that `hk` would not take as a flag, a reason marked secret, a flag
 /// that moved, and an enum flag that offers `unspecified` or lacks a value.
@@ -624,7 +624,7 @@ fn every_maintenance_request_field_is_a_flag_and_none_is_secret() {
     };
     assert_eq!(
         values("schedule", "kinds"),
-        ["macos", "xcode", "linux", "reboot"]
+        ["macos", "xcode", "linux", "reboot", "probe"]
     );
     assert_eq!(
         values("list", "states"),

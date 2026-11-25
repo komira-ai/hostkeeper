@@ -204,6 +204,9 @@ enum MaintenanceSkip {
 
 message ScheduleMaintenanceRequest {
   // The kinds to apply, each at most once; empty: every kind that is due on each host.
+  // `probe` is never due and never taken by an empty list: it is named alone, with `host_ids`,
+  // and a run of it holds each host named whose daemon lists `probe` on demand
+  // (`MaintenanceReport.on_demand`); `invalid_request` with another kind or with `host_group`.
   repeated hostkeeper.agent.v1.MaintenanceKind kinds = 1;
   // The hosts, 1 to 32, by node id: one host, or a selection. Empty when `host_group` is set.
   repeated string host_ids = 2;

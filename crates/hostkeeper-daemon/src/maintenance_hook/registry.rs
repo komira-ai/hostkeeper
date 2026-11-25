@@ -1,7 +1,7 @@
 //! The kinds of maintenance a platform has work for ([`Registry::for_platform`]). Each is a stub
 //! ([`Unsupported`]) until its platform's work is written; `super::registry_for` puts the work
-//! that is written (a Linux host's `linux` and `reboot`, a Mac's `macos` and `xcode`) in place of the stub on
-//! a host.
+//! that is written (a Linux host's `linux` and `reboot`, a Mac's `macos`, `xcode` and `probe`) in
+//! place of the stub on a host.
 
 use std::collections::BTreeMap;
 
@@ -22,11 +22,11 @@ impl Registry {
         Registry::default()
     }
 
-    /// The kinds a host of `platform` has: `macos`, `xcode` and `reboot` on a Mac; `linux` and
-    /// `reboot` on Linux, under systemd or OpenRC.
+    /// The kinds a host of `platform` has: `macos`, `xcode`, `reboot` and `probe` on a Mac;
+    /// `linux` and `reboot` on Linux, under systemd or OpenRC.
     pub fn for_platform(platform: PlatformKind) -> Registry {
         let kinds: &[Kind] = match platform {
-            PlatformKind::Macos => &[Kind::Macos, Kind::Xcode, Kind::Reboot],
+            PlatformKind::Macos => &[Kind::Macos, Kind::Xcode, Kind::Reboot, Kind::Probe],
             PlatformKind::Linux | PlatformKind::Openrc => &[Kind::Linux, Kind::Reboot],
         };
         kinds.iter().fold(Registry::new(), |registry, kind| {
