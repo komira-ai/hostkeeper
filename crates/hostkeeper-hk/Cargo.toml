@@ -42,10 +42,10 @@ base64.workspace = true
 clap.workspace = true
 # The command table `hk` is generated from, and the `Ssh` client and its messages.
 hostkeeper-proto = { path = "../hostkeeper-proto" }
-# The user id `hk` runs as, which owns what `~/.hostkeeper` holds (`geteuid`, a safe call), the
-# monotonic clock the seconds of `hk xcode verify`'s expansion are read from, and the `flock` that
-# keeps a second `hk xcode add` out.
-rustix = { workspace = true, features = ["fs", "process", "time"] }
+# The user id `hk` runs as, which owns what `~/.hostkeeper` holds (`geteuid`, a safe call), whether
+# the process of a lock's id is alive (`hk xcode add`'s lock), and the monotonic clock the seconds
+# of `hk xcode verify`'s expansion are read from.
+rustix = { workspace = true, features = ["process", "time"] }
 # The system's roots, which the runner's token request is trusted by.
 rustls-native-certs.workspace = true
 # The SHA-256 of an Xcode archive, which names it in the store.
@@ -85,6 +85,8 @@ hostkeeper-oidc = { path = "../hostkeeper-oidc", features = ["testkit"] }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
 http-body-util.workspace = true
 hyper.workspace = true
+# The umask a test of `hk xcode add` runs under (`fs::Mode`).
+rustix = { workspace = true, features = ["fs", "process"] }
 # Reads the recorded request bodies back as the fixture's and the real protos' messages.
 prost-reflect = { workspace = true, features = ["serde"] }
 rcgen.workspace = true
