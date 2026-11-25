@@ -178,6 +178,25 @@ line.
 |---|---|---|
 | `--host-id` | STRING | The host whose session ends. |
 
+#### `hk console probe`
+
+`/hostkeeper.operator.v1.Console/Probe`
+
+Reads a Linux server's serial console without typing and says what it saw: opens a session
+as `Open` does (the same checks, refusals and `console_open` line), attaches it in the
+coordinator, reads until `max_bytes` came, `quiet_secs` passed without a byte or
+`wait_secs` passed, then ends it as a stream ends (the payload deactivated, one
+`console_close` line). It sends the host no byte, not even a newline. A Mac is `no_bmc_mac`; a
+device not reached, or that fails before the host sent a byte, is refused with its cause.
+
+| flag | value | meaning |
+|---|---|---|
+| `--host-id` | STRING | The host's id. |
+| `--reason` | STRING | Why the console is probed; the `console_open` line carries it. |
+| `--wait-secs` | UINT32 | The longest the read lasts, in seconds: 1 to 900 (`invalid_request` otherwise). `hk` waits this long beyond its own timeout. |
+| `--quiet-secs` | UINT32 | The read ends once this many seconds pass with no byte from the host, from its start or from the last byte; 0 is the coordinator's `--console-quiet-s`. |
+| `--max-bytes` | UINT32 | The read ends once this many bytes came: 0 is 65536; above 1048576 is `invalid_request`. |
+
 ### `enrollment`
 
 The service `Enrollment` of the package `hostkeeper.operator.v1`. The hosts waiting for an operator to approve their enrollment.

@@ -319,7 +319,8 @@ pub(crate) fn console(refusal: ConsoleRefusal) -> Status {
         ConsoleRefusal::DeviceUnreachable
         | ConsoleRefusal::BmcBusy
         | ConsoleRefusal::AuditUnavailable
-        | ConsoleRefusal::BmcFailed => Code::Unavailable,
+        | ConsoleRefusal::BmcFailed
+        | ConsoleRefusal::BmcSolBusy => Code::Unavailable,
     };
     refused(code, refusal.as_str_name(), "CONSOLE_REFUSAL_")
 }

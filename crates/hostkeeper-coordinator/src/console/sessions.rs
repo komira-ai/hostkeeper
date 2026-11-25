@@ -22,11 +22,21 @@ use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::ConsoleRefusal as Refusal;
 
 use super::{host_id, required_reason};
+
 use crate::audit_actions::AuditOnly;
 use crate::operator::Caller;
 use crate::ops::AuditBy;
 use crate::reconcile::COORDINATOR;
 use crate::service::Coordinator;
+
+/// A session `Open` took: its id and kind, how long it waits to be attached, and the address its
+/// attach dials first.
+pub(super) struct Opened {
+    pub(super) id: SessionId,
+    pub(super) kind: Kind,
+    pub(super) window: Duration,
+    pub(super) address: proto::ConsoleAddress,
+}
 
 impl Coordinator {
     /// `Console/Open`: takes the host's session slot and writes the audit line, as the module
@@ -41,12 +51,38 @@ impl Coordinator {
         caller: &Caller,
         request: &proto::OpenConsoleRequest,
     ) -> Result<proto::OpenConsoleResponse, Refusal> {
+        let opened = self.open_session(caller, &request.host_id, &request.reason, false)?;
+        Ok(proto::OpenConsoleResponse {
+            kind: proto_kind(opened.kind).into(),
+            session: opened.id.to_string(),
+            expires_in_secs: opened.window.as_secs(),
+            quiet_secs: match opened.kind {
+                Kind::Serial => self.console.quiet.as_secs(),
+                Kind::Screen => 0,
+            },
+            address: Some(opened.address),
+        })
+    }
+
+    /// The steps of `Open` for the host `host_id`, opened for `reason` by `caller`: the session,
+    /// in the table and audited. `serial` asks for a Linux server's serial console, which a Mac
+    /// has not (`no_bmc_mac`, as `Power` says).
+    ///
+    /// # Errors
+    /// As [`Self::console_open`].
+    pub(super) fn open_session(
+        &self,
+        caller: &Caller,
+        host_id: &str,
+        reason: &str,
+        serial: bool,
+    ) -> Result<Opened, Refusal> {
         let (by, grant) = self.console_grant(caller, Need::Console)?;
-        let host = host_id(&request.host_id)?;
-        let reason = required_reason(&request.reason)?;
+        let host = super::host_id(host_id)?;
+        let reason = required_reason(reason)?;
         let refuse = |cause| self.console_denied(by, &host, "open", &reason, cause);
         let device = self
-            .console_device(&host, &grant.targets, false)
+            .console_device(&host, &grant.targets, serial)
             .map_err(refuse)?;
         let now = (self.clock)();
         let mut table = self.console.lock_table();
@@ -85,15 +121,11 @@ impl Coordinator {
             reason,
             attachment: None,
         });
-        Ok(proto::OpenConsoleResponse {
-            kind: proto_kind(device.kind).into(),
-            session,
-            expires_in_secs: sessions.window().as_secs(),
-            quiet_secs: match device.kind {
-                Kind::Serial => self.console.quiet.as_secs(),
-                Kind::Screen => 0,
-            },
-            address: Some(device.first.to_proto()),
+        Ok(Opened {
+            id,
+            kind: device.kind,
+            window: sessions.window(),
+            address: device.first.to_proto(),
         })
     }
 

@@ -4,7 +4,8 @@
 //! `BootDevice` and `ConsoleAddressSource` (`proto/hostkeeper/operator/v1/console.proto`,
 //! docs/design/console-broker.md). The fields that name a BMC's address in the answers, added
 //! after the console shipped, are tested against the release that shipped it in
-//! `additions_bmc.rs`.
+//! `additions_bmc.rs`; the probe (`Console.Probe`, its messages and enums, and the refusal
+//! `bmc_sol_busy`), added after it too, at the end of this file.
 //!
 //! Nothing existing changed: the release before knows none of them, a reader of it that meets one
 //! of the new messages keeps every byte, and this build reads what that release wrote (a message of
@@ -260,11 +261,11 @@ fn the_console_enums_have_an_unspecified_zero_and_fixed_numbers() {
 
 /// Catches: a `Console` call missing, renamed, streaming or carrying other messages than the
 /// design names, and one that the command table (and so `hk` and the web app's client) does
-/// not list: the service has exactly `Open`, `Power`, `SetBootDevice`, `List` and `Close`, each
-/// unary, and the table names them `console open`, `console power`, `console set-boot-device`,
-/// `console list` and `console close`.
+/// not list: the service has exactly `Open`, `Power`, `SetBootDevice`, `List`, `Close` and
+/// `Probe`, each unary, and the table names them `console open`, `console power`, `console
+/// set-boot-device`, `console list`, `console close` and `console probe`.
 #[test]
-fn the_console_service_has_its_five_unary_calls_in_the_command_table() {
+fn the_console_service_has_its_six_unary_calls_in_the_command_table() {
     let pool = current_pool();
     let service = pool
         .get_service_by_name("hostkeeper.operator.v1.Console")
@@ -294,6 +295,7 @@ fn the_console_service_has_its_five_unary_calls_in_the_command_table() {
             "ListConsoleSessionsResponse",
         ),
         ("Close", "CloseConsoleRequest", "CloseConsoleResponse"),
+        ("Probe", "ProbeConsoleRequest", "ProbeConsoleResponse"),
     ];
     let expected: Vec<(String, String, String, bool)> = expected
         .iter()
@@ -321,6 +323,7 @@ fn the_console_service_has_its_five_unary_calls_in_the_command_table() {
             ("console", "set-boot-device"),
             ("console", "list"),
             ("console", "close"),
+            ("console", "probe"),
         ]
     );
 }
@@ -363,6 +366,11 @@ fn every_console_request_field_is_a_flag_and_none_is_secret() {
             ("set-boot-device", "efi"),
             ("set-boot-device", "reason"),
             ("close", "host-id"),
+            ("probe", "host-id"),
+            ("probe", "reason"),
+            ("probe", "wait-secs"),
+            ("probe", "quiet-secs"),
+            ("probe", "max-bytes"),
         ]
     );
     let values = |method: &str, flag: &str| -> Vec<&str> {
@@ -380,4 +388,172 @@ fn every_console_request_field_is_a_flag_and_none_is_secret() {
         ["status", "on", "off", "soft", "cycle", "reset"]
     );
     assert_eq!(values("set-boot-device", "device"), ["pxe", "disk", "bios"]);
+}
+
+// The probe (`Console.Probe`), added after the console shipped: `ProbeConsoleRequest`,
+// `ProbeConsoleResponse`, `ConsoleProbeFinding`, `ConsoleProbeClass`, `ConsoleProbeEnd` and the
+// refusal `bmc_sol_busy` (22). Its release before is modelled twice: the baseline, which knows none
+// of the console, and a client of the release that shipped the console without the probe, which
+// read a refusal as its number (`RefusalNumberBefore`).
+
+/// An answer with every field set.
+fn answer() -> op::ProbeConsoleResponse {
+    op::ProbeConsoleResponse {
+        findings: vec![
+            op::ConsoleProbeFinding {
+                class: op::ConsoleProbeClass::FirmwareOutput.into(),
+                evidence: "Press <DEL> to run setup".to_owned(),
+            },
+            op::ConsoleProbeFinding {
+                class: op::ConsoleProbeClass::LoginPrompt.into(),
+                evidence: "node-02 login:".to_owned(),
+            },
+        ],
+        from_boot: true,
+        bytes_read: 4_096,
+        ended: op::ConsoleProbeEnd::Quiet.into(),
+        cause: "client_left".to_owned(),
+    }
+}
+
+/// Catches: a message or enum of the probe that the release before already knows, that does not
+/// read back as written, or whose bytes a reader of that release drops.
+#[test]
+fn the_probe_messages_are_new_and_an_older_reader_keeps_their_bytes() {
+    let older = baseline_pool();
+    let blind = older
+        .get_message_by_name("hostkeeper.operator.v1.ListHostsRequest")
+        .expect("a message of the release before");
+    assert_eq!(blind.fields().count(), 0);
+    let messages = [
+        (
+            "ProbeConsoleRequest",
+            round_trip(&op::ProbeConsoleRequest {
+                host_id: "node-02".to_owned(),
+                reason: "after the BIOS change".to_owned(),
+                wait_secs: 300,
+                quiet_secs: 60,
+                max_bytes: 1 << 20,
+            }),
+        ),
+        ("ProbeConsoleResponse", round_trip(&answer())),
+        ("ConsoleProbeFinding", round_trip(&answer().findings[0])),
+    ];
+    for (name, bytes) in messages {
+        let name = format!("hostkeeper.operator.v1.{name}");
+        assert!(older.get_message_by_name(&name).is_none(), "{name} is new");
+        let read = DynamicMessage::decode(blind.clone(), bytes.as_slice()).expect("decodes");
+        assert_eq!(read.encode_to_vec(), bytes, "{name}");
+    }
+    for name in ["ConsoleProbeClass", "ConsoleProbeEnd"] {
+        let name = format!("hostkeeper.operator.v1.{name}");
+        assert!(older.get_enum_by_name(&name).is_none(), "{name} is new");
+    }
+}
+
+/// A refusal as a client of the release that shipped the console without the probe decodes it:
+/// the enum's number, whatever it is.
+#[derive(Clone, PartialEq, prost::Message)]
+struct RefusalNumberBefore {
+    #[prost(int32, tag = "1")]
+    refusal: i32,
+}
+
+/// Catches: a new value of the probe renumbered or a value of the console moved, which would make
+/// an older client read another refusal than the one sent; an unknown number (a refusal newer than
+/// the reader) is kept as its number and judged unspecified, not taken for another.
+#[test]
+fn the_probe_enums_have_fixed_numbers_and_the_new_refusal_is_unknown_to_older_readers() {
+    assert_eq!(
+        [
+            op::ConsoleRefusal::StoreFailed as i32,
+            op::ConsoleRefusal::BmcSolBusy as i32,
+        ],
+        [21, 22]
+    );
+    assert_eq!(
+        op::ConsoleRefusal::BmcSolBusy.as_str_name(),
+        "CONSOLE_REFUSAL_BMC_SOL_BUSY"
+    );
+    assert_eq!(
+        [
+            op::ConsoleProbeClass::Unspecified,
+            op::ConsoleProbeClass::Silent,
+            op::ConsoleProbeClass::LoginPrompt,
+            op::ConsoleProbeClass::KernelOutput,
+            op::ConsoleProbeClass::FirmwareOutput,
+            op::ConsoleProbeClass::OtherOutput,
+        ]
+        .map(|class| class as i32),
+        [0, 1, 2, 3, 4, 5]
+    );
+    assert_eq!(
+        [
+            op::ConsoleProbeEnd::Unspecified,
+            op::ConsoleProbeEnd::MaxBytes,
+            op::ConsoleProbeEnd::Quiet,
+            op::ConsoleProbeEnd::Wait,
+            op::ConsoleProbeEnd::StreamEnded,
+        ]
+        .map(|end| end as i32),
+        [0, 1, 2, 3, 4]
+    );
+    let sent = RefusalNumberBefore {
+        refusal: op::ConsoleRefusal::BmcSolBusy as i32,
+    };
+    let read = RefusalNumberBefore::decode(sent.encode_to_vec().as_slice()).expect("reads");
+    assert_eq!(read.refusal, 22);
+    assert_eq!(op::ConsoleRefusal::try_from(23).ok(), None);
+    let future = op::ConsoleProbeFinding {
+        class: 9,
+        evidence: String::new(),
+    };
+    let read = op::ConsoleProbeFinding::decode(round_trip(&future).as_slice()).expect("reads");
+    assert_eq!(read.class, 9);
+    assert_eq!(read.class(), op::ConsoleProbeClass::Unspecified);
+}
+
+/// Catches: a probe request that a caller who names no window could not send, or an answer that
+/// a coordinator could not leave empty: an empty message reads as the defaults (a wait of 0, which
+/// the coordinator refuses rather than guesses, and no finding).
+#[test]
+fn an_empty_message_reads_as_the_defaults_of_each_probe_message() {
+    let request = op::ProbeConsoleRequest::decode(&[][..]).expect("decodes");
+    assert_eq!(request, op::ProbeConsoleRequest::default());
+    assert_eq!(request.wait_secs, 0);
+    let answer = op::ProbeConsoleResponse::decode(&[][..]).expect("decodes");
+    assert_eq!(answer.ended(), op::ConsoleProbeEnd::Unspecified);
+    assert!(answer.findings.is_empty());
+}
+
+/// Catches: a field of the probe renumbered, retyped or made a list where it was one value.
+#[test]
+fn the_probe_fields_have_their_numbers() {
+    let now = current_pool();
+    let fields = [
+        ("ProbeConsoleRequest", "host_id", 1, false),
+        ("ProbeConsoleRequest", "reason", 2, false),
+        ("ProbeConsoleRequest", "wait_secs", 3, false),
+        ("ProbeConsoleRequest", "quiet_secs", 4, false),
+        ("ProbeConsoleRequest", "max_bytes", 5, false),
+        ("ProbeConsoleResponse", "findings", 1, true),
+        ("ProbeConsoleResponse", "from_boot", 2, false),
+        ("ProbeConsoleResponse", "bytes_read", 3, false),
+        ("ProbeConsoleResponse", "ended", 4, false),
+        ("ProbeConsoleResponse", "cause", 5, false),
+        ("ConsoleProbeFinding", "class", 1, false),
+        ("ConsoleProbeFinding", "evidence", 2, false),
+    ];
+    for (message, field, number, list) in fields {
+        let name = format!("hostkeeper.operator.v1.{message}");
+        let found = now
+            .get_message_by_name(&name)
+            .and_then(|message| message.get_field_by_name(field))
+            .unwrap_or_else(|| panic!("{name}.{field}"));
+        assert_eq!(
+            (found.number(), found.is_list()),
+            (number, list),
+            "{name}.{field}"
+        );
+    }
 }
