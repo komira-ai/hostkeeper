@@ -52,3 +52,7 @@ impl InstallerLock {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "lock_tests.rs"]
+mod tests;

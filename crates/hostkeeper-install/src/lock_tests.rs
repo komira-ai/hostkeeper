@@ -43,3 +43,23 @@ fn a_lock_whose_file_cannot_be_opened_is_an_error() {
     assert!(lock.hold().is_err());
     assert!(lock.try_hold().is_err());
 }
+
+/// Proves a dropped `Held` lets the next holder in while another descriptor of its open file
+/// still lives, as a child process spawned meanwhile holds a copy of every descriptor until its
+/// exec.
+///
+/// Catches: a lock released only by closing its descriptor, which a concurrent spawn keeps held
+/// for the moment the child takes to exec, so the next `try_hold` finds it held with no holder.
+#[test]
+fn a_dropped_lock_is_free_while_a_copy_of_its_descriptor_lives() {
+    let dir = scratch();
+    let lock = InstallerLock::new(&dir.path().join("installer.lock"));
+    let held = lock.hold().unwrap();
+    let copy = held._file.try_clone().unwrap();
+    drop(held);
+    assert!(
+        lock.try_hold().unwrap().is_some(),
+        "the dropped lock is free"
+    );
+    drop(copy);
+}

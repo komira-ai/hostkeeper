@@ -214,3 +214,7 @@ impl<'a> Placer<'a> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "placer_tests.rs"]
+mod tests;
