@@ -35,6 +35,7 @@ mod older;
 mod process;
 mod rig;
 mod secrets;
+mod settings;
 mod ssh;
 mod surface;
 mod tailnet_wait;

@@ -18,6 +18,6 @@ hk xcode-push <version> | <archive.xip>
        30 minutes at least once the archive is sent.
 
 It takes the global flags --endpoint, --ca-file, --token-file and --timeout-secs, all but the
-last required. The token is read from its file into memory and sent only as the request's
+last required (or given by the settings file). The token is read from its file into memory and sent only as the request's
 bearer: never in an argument, the environment of a program it runs, or an output line.
 --token-stdin, --github-oidc-audience and --response-file are not taken.

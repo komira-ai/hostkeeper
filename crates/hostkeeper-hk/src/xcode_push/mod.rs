@@ -210,6 +210,7 @@ pub(crate) fn xcode_push(w: &mut World<'_>, mut globals: Globals, args: &[Vec<u8
              (~/Downloads/Xcode_27.2.xip)"
         )));
     };
+    crate::settings::fill(w, &mut globals)?;
     let target = target(&globals)?;
     let mac = w.mac.clone();
     let wanted = is_version(word).then(|| String::from_utf8_lossy(word).into_owned());

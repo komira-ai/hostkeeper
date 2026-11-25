@@ -5,7 +5,7 @@
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener};
-use std::os::unix::fs::PermissionsExt as _;
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 
@@ -451,6 +451,8 @@ pub struct Opts<'a> {
     pub roots: Vec<Vec<u8>>,
     pub home: Option<PathBuf>,
     pub no_home: bool,
+    /// The user id the run is as; the test's own when `None`.
+    pub uid: Option<u32>,
     pub ssh: Option<&'a Recorder>,
     /// The system and the programs of `hk xcode-push`; the real ones when `None`.
     pub mac: Option<&'a Mac>,
@@ -470,6 +472,7 @@ impl<'a> Opts<'a> {
             roots: Vec::new(),
             home: None,
             no_home: false,
+            uid: None,
             ssh: None,
             mac: None,
             tailnet: None,
@@ -517,6 +520,12 @@ impl<'a> Opts<'a> {
 
     pub fn home(mut self, home: &Path) -> Self {
         self.home = Some(home.to_path_buf());
+        self
+    }
+
+    /// A run as the user `uid`, whoever the test is.
+    pub fn uid(mut self, uid: u32) -> Self {
+        self.uid = Some(uid);
         self
     }
 
@@ -610,6 +619,7 @@ impl Rig {
             wait: &|_| {},
         };
         let tailnet = opts.tailnet.unwrap_or(&default_tailnet);
+        let own = std::fs::metadata(self.path("")).expect("the scratch").uid();
         let mut world = World {
             table: opts.table,
             stamp: opts.stamp,
@@ -621,6 +631,7 @@ impl Rig {
             } else {
                 opts.home.or_else(|| Some(self.path("home")))
             },
+            uid: opts.uid.unwrap_or(own),
             oidc_url: opts.oidc.map(|(url, _)| url.as_bytes().to_vec()),
             oidc_token: opts.oidc.map(|(_, token)| token.as_bytes().to_vec()),
             web_roots: &web_roots,

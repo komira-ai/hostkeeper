@@ -14,7 +14,7 @@ use crate::rig::{Rig, Server, TOKEN, closed_port};
     clippy::disallowed_methods,
     reason = "the tests of a process pass on the variable the coverage tool names, and nothing else"
 )]
-fn coverage_env() -> Vec<(String, std::ffi::OsString)> {
+pub fn coverage_env() -> Vec<(String, std::ffi::OsString)> {
     std::env::vars_os()
         .filter_map(|(name, value)| {
             let name = name.into_string().ok()?;

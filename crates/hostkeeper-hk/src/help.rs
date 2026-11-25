@@ -1,4 +1,4 @@
-//! The help texts: of `hk`, of a service, of a method, of the ssh commands, of `xcode-push` and of `tailnet-wait`. All of it is
+//! The help texts: of `hk`, of a service, of a method, of the ssh commands, of `settings`, of `xcode-push` and of `tailnet-wait`. All of it is
 //! written from the command table and says `hk`, whatever name the program is called by.
 
 use std::fmt::Write as _;
@@ -59,6 +59,17 @@ its version and build are read from the app `xip --expand` makes, and it is uplo
 and streamed, `PUT /v1/xcode/<sha256>?version=<version>&build=<build>`; a step that fails \
 uploads nothing. It needs --endpoint, --ca-file and --token-file, and takes no other \
 credential; `hk xcode-push --help` says each step.
+
+`hk settings init --endpoint URL --ca-file PATH --token-file PATH` writes the settings file \
+`$HOME/.hostkeeper/hk.toml`, which gives `--endpoint`, `--ca-file` and `--token-file` their \
+default for every command that takes them (a call, the ssh commands and `xcode-push`; not \
+`tailnet-wait`, which takes no token). A flag on the command line wins over the file; a flag \
+that neither gives is missing, as without a file. The file is a TOML table of the strings \
+`endpoint`, `ca_file` and `token_file`: an address and two paths, never a token. A key of \
+another name is ignored, with `hk: <path>: unknown key <name> ignored` on stderr. hk refuses a \
+file, or a `$HOME/.hostkeeper`, that is a link, that another user owns or that its group or \
+others may write, naming the path; `--token-stdin` and `--github-oidc-audience` leave the \
+file's token file unused. `hk settings --help` says what init does.
 
 `hk tailnet-wait [--attempts N] [--interval-secs S]` is not a gateway call either: run by a CI \
 job right after it joined the tailnet, it asks the coordinator's `GET /v1/version`, with no \
@@ -172,7 +183,7 @@ hk ssh-known-host <pins-file> %H %t %K %f
     Run by ssh itself, as the KnownHostsCommand of hk ssh: says whether a host key is pinned.
 
 These take the global flags --endpoint, --ca-file, --token-file and --timeout-secs, all but the
-last required, and are built into hk. The token is read from the file; --token-stdin,
+last required (or given by the settings file), and are built into hk. The token is read from the file; --token-stdin,
 --github-oidc-audience and --response-file are not taken.";
 
 /// The help of `hk tailnet-wait`.
@@ -194,6 +205,25 @@ hk tailnet-wait [--attempts N] [--interval-secs S]
 --attempts N is 1 to 100, 6 by default; --interval-secs S is 0 to 600, 10 by default. It takes
 the global flags --endpoint and --ca-file, both required, and --timeout-secs. It takes no token:
 --token-file, --token-stdin, --github-oidc-audience and --response-file are not taken.";
+
+/// The help of `hk settings`.
+pub(crate) const SETTINGS_HELP: &str = "\
+hk settings init --endpoint URL --ca-file PATH --token-file PATH
+    Writes $HOME/.hostkeeper/hk.toml, the defaults of --endpoint, --ca-file and --token-file for
+    every command that takes them. In order:
+    1. The three flags are all required; the two paths must be absolute, since the file keeps
+       them. $HOME/.hostkeeper and $HOME/.hostkeeper/xcode are made with mode 0700 when they
+       are missing, whatever the umask; one that exists is checked (not a link, the user's own,
+       not writable by group or others) and keeps its mode.
+    2. A file that is there already is not replaced: hk says so and exits 2.
+    3. One Xcode.List call is made with the three values, checked as any call checks them (the
+       endpoint, the CA file, a token file only its owner may read). Nothing is written when it
+       fails: its refusal or error is said with the path that was not written.
+    4. $HOME/.hostkeeper/hk.toml is made with mode 0600, and one line on stdout names it.
+
+The file is read by every command that needs a flag it gives; see `hk --help`. It takes the
+global flags --endpoint, --ca-file, --token-file and --timeout-secs. --token-stdin,
+--github-oidc-audience and --response-file are not taken.";
 
 /// The help of `hk xcode-push`.
 pub(crate) const XCODE_PUSH_HELP: &str = "\
@@ -217,6 +247,6 @@ hk xcode-push <version> | <archive.xip>
        30 minutes at least once the archive is sent.
 
 It takes the global flags --endpoint, --ca-file, --token-file and --timeout-secs, all but the
-last required. The token is read from its file into memory and sent only as the request's
+last required (or given by the settings file). The token is read from its file into memory and sent only as the request's
 bearer: never in an argument, the environment of a program it runs, or an output line.
 --token-stdin, --github-oidc-audience and --response-file are not taken.";

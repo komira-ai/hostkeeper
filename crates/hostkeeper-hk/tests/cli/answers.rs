@@ -312,6 +312,7 @@ fn an_answer_that_cannot_be_written_is_a_failure() {
         stdout: &mut stdout,
         stderr: &mut stderr,
         home: None,
+        uid: 0,
         oidc_url: None,
         oidc_token: None,
         web_roots: &web_roots,

@@ -7,10 +7,12 @@
 //! `hk ssh-known-host` that ssh runs. [`xcode_push`] is `hk xcode-push`, which brings an Xcode
 //! release into the coordinator's Xcode store from the operator's own Mac. [`tailnet_wait`] is
 //! `hk tailnet-wait`, which waits for the coordinator after a CI runner joined the tailnet and
-//! rejoins it once when the coordinator does not answer.
+//! rejoins it once when the coordinator does not answer. [`settings`] is the file
+//! `$HOME/.hostkeeper/hk.toml`, which gives `--endpoint`, `--ca-file` and `--token-file` their
+//! defaults, and `hk settings init`, which writes it; [`home`] makes and checks `~/.hostkeeper`.
 //!
 //! - [`run`]: a command line against a [`World`], which holds everything it reads and writes: the
-//!   command table, the streams, the home directory, the runner's token request, the program
+//!   command table, the streams, the home directory and the user's id, the runner's token request, the program
 //!   that runs the ssh verbs, the programs of the Mac that `hk xcode-push` runs and the
 //!   `tailscale` and the clock of `hk tailnet-wait`. The tests of this crate run it with fakes for
 //!   all of them.
@@ -31,7 +33,9 @@ mod dispatch;
 mod doc;
 mod encode;
 mod help;
+mod home;
 mod send;
+mod settings;
 pub mod ssh;
 pub mod stamp;
 mod table;
@@ -70,6 +74,8 @@ pub struct World<'a> {
     pub stderr: &'a mut dyn Write,
     /// The operator's home directory, where the ssh commands keep their key and certificates.
     pub home: Option<PathBuf>,
+    /// The user id `hk` runs as: the owner `~/.hostkeeper` and the settings file in it must have.
+    pub uid: u32,
     /// The URL of the GitHub Actions runner's token request, which the job's runner sets.
     pub oidc_url: Option<Vec<u8>>,
     /// The bearer token of that request, which the job's runner sets.
@@ -162,6 +168,7 @@ pub fn main() -> ExitCode {
         stdout: &mut stdout,
         stderr: &mut stderr,
         home: env_of("HOME").map(PathBuf::from),
+        uid: rustix::process::geteuid().as_raw(),
         oidc_url: env_of("ACTIONS_ID_TOKEN_REQUEST_URL").map(OsString::into_vec),
         oidc_token: env_of("ACTIONS_ID_TOKEN_REQUEST_TOKEN").map(OsString::into_vec),
         web_roots: &system_roots,

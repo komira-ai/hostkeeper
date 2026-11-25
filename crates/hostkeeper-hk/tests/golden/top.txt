@@ -16,15 +16,17 @@ Four commands are not gateway calls: the SSH tunnel is built into hk. `hk ssh <h
 
 `hk xcode-push <version> | <archive.xip>` is not a gateway call either: on macOS only, it brings an Xcode release into the coordinator's Xcode store. Given a version, it downloads the archive with `xcodes download <version>` in the operator's own session (a two-factor prompt is answered at the terminal); given a file, it takes the file. Apple's signature must be on it (`pkgutil --check-signature`: exit 0, `signed Apple Software`, a chain ending at Apple Root CA), its version and build are read from the app `xip --expand` makes, and it is uploaded unmodified and streamed, `PUT /v1/xcode/<sha256>?version=<version>&build=<build>`; a step that fails uploads nothing. It needs --endpoint, --ca-file and --token-file, and takes no other credential; `hk xcode-push --help` says each step.
 
+`hk settings init --endpoint URL --ca-file PATH --token-file PATH` writes the settings file `$HOME/.hostkeeper/hk.toml`, which gives `--endpoint`, `--ca-file` and `--token-file` their default for every command that takes them (a call, the ssh commands and `xcode-push`; not `tailnet-wait`, which takes no token). A flag on the command line wins over the file; a flag that neither gives is missing, as without a file. The file is a TOML table of the strings `endpoint`, `ca_file` and `token_file`: an address and two paths, never a token. A key of another name is ignored, with `hk: <path>: unknown key <name> ignored` on stderr. hk refuses a file, or a `$HOME/.hostkeeper`, that is a link, that another user owns or that its group or others may write, naming the path; `--token-stdin` and `--github-oidc-audience` leave the file's token file unused. `hk settings --help` says what init does.
+
 `hk tailnet-wait [--attempts N] [--interval-secs S]` is not a gateway call either: run by a CI job right after it joined the tailnet, it asks the coordinator's `GET /v1/version`, with no token, up to N times (6 by default) with S seconds between two tries (10 by default), until any HTTP answer comes; when none does, it runs `tailscale down`, then `tailscale up`, and asks as many times again. It ends 0 at the first answer, with one line saying which try it was, and 1 when neither round had one, saying how each ended. It needs --endpoint and --ca-file, takes --timeout-secs for each try, and takes no token; `hk tailnet-wait --help` says each step.
 
 Global flags:
   --endpoint URL
-      The coordinator's private listener, as https://<host>[:<port>]. Needed for a call.
+      The coordinator's private listener, as https://<host>[:<port>]. Needed for a call, unless the settings file gives it.
   --ca-file PATH
-      PEM certificates of the CA the coordinator's certificate must chain to; no other root is trusted for the coordinator. Needed for a call.
+      PEM certificates of the CA the coordinator's certificate must chain to; no other root is trusted for the coordinator. Needed for a call, unless the settings file gives it.
   --token-file PATH
-      Read the bearer token (an operator token) from this file, which only its owner may read; one trailing newline is dropped. The token is never an argument, an environment variable or a line of output.
+      Read the bearer token (an operator token) from this file, which only its owner may read; one trailing newline is dropped. The token is never an argument, an environment variable or a line of output. The settings file's `token_file` is the default when no other credential is given.
   --token-stdin
       Read the bearer token from stdin instead.
   --github-oidc-audience AUDIENCE

@@ -310,8 +310,8 @@ fn deliver(w: &mut World<'_>, body: &[u8], response_file: Option<&[u8]>) -> Flow
         .map_err(|_| Stop::fail("cannot write the answer"))
 }
 
-/// The one call of `command`: checks the flags, builds the body, gets the credential, posts, and
-/// answers. `request` is the `--request` value.
+/// The one call of `command`: [`exchange`], and its answer delivered. `request` is the `--request`
+/// value.
 pub(crate) fn call(
     w: &mut World<'_>,
     globals: &Globals,
@@ -319,6 +319,19 @@ pub(crate) fn call(
     given: &Given<'_>,
     request: Option<&[u8]>,
 ) -> Flow<()> {
+    let answer = exchange(w, globals, command, given, request)?;
+    deliver(w, &answer, globals.response_file.as_deref())
+}
+
+/// The body of the gateway's `200` to the call of `command`: checks the flags, builds the body,
+/// gets the credential and posts. A refusal is said on stderr and ends with its exit code.
+pub(crate) fn exchange(
+    w: &mut World<'_>,
+    globals: &Globals,
+    command: &Command,
+    given: &Given<'_>,
+    request: Option<&[u8]>,
+) -> Flow<Vec<u8>> {
     let Some(endpoint) = &globals.endpoint else {
         return Err(Stop::usage("a call needs --endpoint"));
     };
@@ -359,7 +372,7 @@ pub(crate) fn call(
     )
     .map_err(|error| Stop::fail(format!("no answer from {endpoint} ({error})")))?;
     if answer.status == 200 {
-        return deliver(w, &answer.body, globals.response_file.as_deref());
+        return Ok(answer.body);
     }
     let not_gateway = || {
         Stop::fail(format!(
