@@ -10,7 +10,10 @@
 // itself does not travel through this API: an operator's Mac uploads it with
 // `PUT /v1/xcode/<sha256>?version=<version>&build=<build>` on the same listener, and a host
 // reads it with `GET /v1/xcode/<sha256>` on the listener hosts use, with byte ranges; both are
-// plain HTTP with no generated command line.
+// plain HTTP with no generated command line. A `PUT` with `Content-Range: bytes <first>-<last>/<size>`
+// sends one part of the archive, which the store keeps as a partial upload until the last part
+// completes it, and `GET /v1/xcode/<sha256>/upload` on the first listener says how much of an
+// archive the store holds (docs/operations/xcode-releases.md).
 //
 // Authentication: `Xcode` takes the operator's credential only; no CI token reaches it (see
 // operator.proto). The upload takes the operator's token as a bearer and refuses a client

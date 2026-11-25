@@ -175,8 +175,9 @@ fn the_xcode_refusals_and_the_alert_kind_have_fixed_numbers_and_tokens() {
             op::XcodeRefusal::UnknownArchive as i32,
             op::XcodeRefusal::StoreFailed as i32,
             op::XcodeRefusal::AuditUnavailable as i32,
+            op::XcodeRefusal::PartialLocked as i32,
         ],
-        [0, 1, 2, 3, 4, 5, 6, 7]
+        [0, 1, 2, 3, 4, 5, 6, 7, 8]
     );
     let current = current_pool();
     let refusal = current
@@ -201,6 +202,7 @@ fn the_xcode_refusals_and_the_alert_kind_have_fixed_numbers_and_tokens() {
             "unknown_archive",
             "store_failed",
             "audit_unavailable",
+            "partial_locked",
         ]
     );
     assert_eq!(op::AlertKind::XcodeVersionTaken as i32, 18);
