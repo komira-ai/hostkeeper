@@ -15,6 +15,9 @@ use super::*;
 use crate::maintenance_collect::LinuxScope;
 
 const USER_HIDDEN: &str = include_str!("../tests/fixtures/maintenance/account/user-hidden.txt");
+/// A hidden account as `dscl -read` writes it on macOS 27.2.1, read on a farm Mac.
+const USER_HIDDEN_NATIVE: &str =
+    include_str!("../tests/fixtures/maintenance/account/user-hidden-native.txt");
 const USER_VISIBLE: &str = include_str!("../tests/fixtures/maintenance/account/user-visible.txt");
 const USER_NOT_HIDDEN: &str =
     include_str!("../tests/fixtures/maintenance/account/user-not-hidden.txt");
@@ -187,11 +190,13 @@ fn an_account_with_a_token_that_is_not_an_admin_or_hidden_is_reported_so() {
     assert_eq!(rig.collect(), Ok(section_of(true, false, true, false, 0)));
 }
 
-/// Proves `IsHidden: 1` hides the account and `IsHidden: 0` or no `IsHidden` does not.
+/// Proves `IsHidden: 1` hides the account, written with or without the native prefix macOS 27
+/// writes (`dsAttrTypeNative:IsHidden: 1`), and `IsHidden: 0` or no `IsHidden` does not.
 #[test]
 fn only_an_is_hidden_of_one_hides_the_account() {
     for (user, hidden) in [
         (USER_HIDDEN, true),
+        (USER_HIDDEN_NATIVE, true),
         (USER_NOT_HIDDEN, false),
         (USER_VISIBLE, false),
     ] {

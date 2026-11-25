@@ -173,6 +173,34 @@ fn a_mac_leaves_out_a_hidden_account() {
     assert_eq!(source.login_account().expect("bob").gid, 21);
 }
 
+/// Catches a hidden administrator counted as visible on macOS 27, whose `dscl -read` writes the
+/// key with its native prefix, as read on a farm Mac (`dsAttrTypeNative:IsHidden: 1`, before the
+/// other keys): the Mac's one visible administrator is still the login account, where two would
+/// leave the operator keys with none.
+#[test]
+fn a_mac_leaves_out_an_account_dscl_marks_hidden_with_the_native_prefix() {
+    let record =
+        "dsAttrTypeNative:IsHidden: 1\nNFSHomeDirectory: /Volumes/homes/bob\nPrimaryGroupID: 20\n";
+    let (source, _) = mac(
+        "alice 501\nbob 502\n",
+        "GroupMembership: alice bob\n",
+        &[("alice", ALICE), ("bob", record)],
+    );
+    assert_eq!(source.login_account().expect("alice").name, "alice");
+    assert!(is_hidden("dsAttrTypeNative:IsHidden: 1\nRecordName: bob\n"));
+    assert!(!is_hidden(
+        "dsAttrTypeNative:IsHidden: 0\nRecordName: bob\n"
+    ));
+    assert_eq!(
+        dscl_value(
+            "dsAttrTypeNative:IsHidden:\n 1\nRecordName: bob\n",
+            "IsHidden"
+        ),
+        Some("1".to_owned())
+    );
+    assert_eq!(dscl_value("dsAttrTypeNative:Other: 1\n", "IsHidden"), None);
+}
+
 /// Proves a Mac with no administrator the rule picks is refused, and one with two is refused with
 /// their number; neither reason holds a name.
 #[test]

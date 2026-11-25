@@ -5,11 +5,13 @@
 //! The account's name comes from the root-only update-account file ([`crate::update_account`]),
 //! through the port [`AccountName`]; a Mac without the file has no update account, and the state
 //! is all false with no program run. The rest is read with `dscl` (the user record, whose exit
-//! 56, `eDSRecordNotFound`, is read as the account being absent **[V]**, and the group `admin`)
-//! and with `sysadminctl -secureTokenStatus`, which is reported to write its answer to standard
-//! error **[V]**: both streams are read. An answer with neither the enabled nor the disabled line
-//! is counted as an unparsed line and reads as no token, never guessed. Nested groups are not
-//! followed, as in [`crate::login_account`].
+//! 56, `eDSRecordNotFound`, is read as the account being absent, and the group `admin`) and with
+//! `sysadminctl -secureTokenStatus`, which writes its answer to standard error, naming the account
+//! by its full name (`RealName`), and exits 0, also for an unknown user: both streams are read.
+//! Each of these was shown as root on macOS 27.2.1 (docs/design/maintenance-updates.md, section
+//! 10.1.2). An answer with neither the enabled nor the disabled line is counted as an unparsed line
+//! and reads as no token, never guessed. Nested groups are not followed, as in
+//! [`crate::login_account`].
 //!
 //! **The password.** This collector learns the name alone: the reader's one call gives the
 //! account, the name is copied out and the account, with its password, is dropped at once. The
