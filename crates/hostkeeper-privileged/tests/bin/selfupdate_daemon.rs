@@ -461,6 +461,7 @@ fn file_links(
         dispatch: Arc::new(ThreadDispatch),
         stop,
         bmc: None,
+        serial_console: None,
     }
 }
 

@@ -98,6 +98,8 @@ impl Api for AgentService {
                 .hear_operator_keys(&identity, request.get_ref());
             self.coordinator
                 .hear_ssh_report(&identity, request.get_ref());
+            self.coordinator
+                .hear_serial_console_report(&identity, request.get_ref());
             // Where the host was heard from and the host keys it reports, for the tunnels.
             let from = request
                 .extensions()

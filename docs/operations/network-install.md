@@ -118,7 +118,9 @@ gain one: every machine of the answer set fetches it over plain HTTP. Make it ro
 writes by group and others (`chown root:root`, `chmod 0600`): `prepare` and `serve` load it with the
 daemon's own loader and refuse what the daemon would refuse, before a seed is made. The boot host
 keeps a copy as `/etc/pxe/hostkeeper.toml` (step 5), a file of its own beside the host's
-own `/etc/hostkeeper/hostkeeper.toml`.
+own `/etc/hostkeeper/hostkeeper.toml`. Add `serial_console = "ttyS1"`, the port of `serve`'s
+`serial-console`: the installed host's daemon then keeps the serial console baseline the seed
+wrote, and puts it back if it is lost ([console.md](console.md#the-daemon-keeps-the-serial-baseline)).
 
 ### 3a. Write the repository entries of the installed hosts
 

@@ -75,6 +75,7 @@ pub fn idle_links() -> Links {
         dispatch: Arc::new(ManualDispatch::default()),
         stop: StopFlag::default(),
         bmc: None,
+        serial_console: None,
     }
 }
 

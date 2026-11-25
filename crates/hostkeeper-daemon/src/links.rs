@@ -64,8 +64,8 @@ use hostkeeper_link::{
     BmcSource, CertSource, ClientIdentity, CoordinatorLink, Dispatch, FullDiskAccessSource,
     GrpcLinkError, GrpcMtlsLink, Heartbeat, Heartbeater, JsonMtlsLink, LinkError, LoopConfig,
     MaintainSink, MaintenanceSource, NegotiatedLink, OperatorKeysSink, Platform, Ports,
-    PrerequisitesSink, RemoteLoginProbeSource, Reply, RepositorySink, Sleeper, SshSink, StopFlag,
-    TcpDial, TcpTransport, Tick, UnixClock,
+    PrerequisitesSink, RemoteLoginProbeSource, Reply, RepositorySink, SerialConsoleSource, Sleeper,
+    SshSink, StopFlag, TcpDial, TcpTransport, Tick, UnixClock,
 };
 use hostkeeper_observe::ProcessRunner;
 use hostkeeper_observe::command::MAX_STDOUT;
@@ -167,6 +167,9 @@ pub struct Links {
     pub maintenance: Option<Arc<dyn MaintenanceSource>>,
     /// The host's BMC ([`crate::bmc`]), which every heartbeat reports; none on a Mac.
     pub bmc: Option<Arc<dyn BmcSource>>,
+    /// The host's serial console baseline ([`crate::serial_baseline`]), which every heartbeat
+    /// reports; none on a host whose config names no `serial_console`.
+    pub serial_console: Option<Arc<dyn SerialConsoleSource>>,
 }
 
 impl Links {
@@ -263,6 +266,7 @@ impl Links {
                     Arc::new(DaemonMaintain::new(Arc::clone(daemon))) as Arc<dyn MaintainSink>
                 }),
                 bmc: self.bmc.clone(),
+                serial_console: self.serial_console.clone(),
             },
         )
     }

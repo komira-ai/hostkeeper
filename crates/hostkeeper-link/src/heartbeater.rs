@@ -122,8 +122,8 @@ use crate::order::{
 use crate::ports::{
     BmcSource, CertSource, CertState, CoordinatorLink, Dispatch, FactsSink, HeldHalts, LinkError,
     Log, MaintainSink, MaintenanceSource, OperatorKeysSink, OrderSink, PrerequisitesSink,
-    RecordedService, RemoteLoginProbeSource, RenewalSource, RepositorySink, ServiceObserver,
-    ServiceRecords, Sleeper, SshSink, Tick, TrustedRootSource, UnixClock,
+    RecordedService, RemoteLoginProbeSource, RenewalSource, RepositorySink, SerialConsoleSource,
+    ServiceObserver, ServiceRecords, Sleeper, SshSink, Tick, TrustedRootSource, UnixClock,
 };
 
 /// The period when the daemon is given none: 15 seconds.
@@ -202,6 +202,8 @@ pub struct Ports {
     pub prerequisites: Option<Arc<dyn PrerequisitesSink>>,
     /// The host's BMC; none on a host whose daemon reads none (a Mac), which then sends none.
     pub bmc: Option<Arc<dyn BmcSource>>,
+    /// The host's serial console baseline; none on a host whose config names no port.
+    pub serial_console: Option<Arc<dyn SerialConsoleSource>>,
     /// The host's maintenance facts; none on a host that has no collector, which then announces
     /// no `maintenance-v1` and sends no report; nor does a host with no [`Ports::maintain`].
     pub maintenance: Option<Arc<dyn MaintenanceSource>>,
@@ -591,6 +593,7 @@ impl Heartbeater {
             ssh: self.ports.ssh.as_ref().and_then(|sink| sink.report()),
             prerequisites: self.ports.prerequisites.as_ref().map(|sink| sink.report()),
             bmc: self.ports.bmc.as_ref().and_then(|source| source.bmc()),
+            serial_console: self.ports.serial_console.as_ref().and_then(|s| s.report()),
             maintenance: self
                 .ports
                 .maintenance

@@ -25,8 +25,13 @@
 //! power management so that the Mac never sleeps (`pmset`); `false` leaves the host's power
 //! settings as they are.
 //!
+//! `serial_console` (a port, `ttyS<n>` or `ttyAMA<n>`; absent by default) is the host's serial
+//! console: a Linux daemon under systemd keeps the serial console baseline on that port
+//! ([`crate::serial_console`]) and reports it in its heartbeats. Left out, the daemon writes
+//! nothing of the baseline and reports none.
+//!
 //! Every table refuses a key it does not know, and the error names the key and its table. Every
-//! key is required except `release_channel`, `keep_awake` and those of `[bounds]`, which default to
+//! key is required except `release_channel`, `keep_awake`, `serial_console` and those of `[bounds]`, which default to
 //! the values above (`keep_awake` to `true`); `release_channel` may be left out (it is read when present and checked as an `https://`
 //! URL); a missing
 //! `[trusted_signers]` is refused, because there is no unsigned mode. There is no list of
@@ -40,6 +45,7 @@
 
 use std::path::Path;
 
+use crate::serial_console::SerialConsole;
 use crate::table::{self, Fields, Problem, Shape};
 use crate::trust::{TrustError, read_trusted};
 use crate::url;
@@ -69,6 +75,7 @@ const TOP: &[(&str, Shape)] = &[
     ("ca_sha256", Shape::Value),
     ("release_channel", Shape::Value),
     ("keep_awake", Shape::Value),
+    ("serial_console", Shape::Value),
     ("trusted_signers", Shape::Table(SIGNERS)),
     ("bounds", Shape::Table(BOUNDS)),
 ];
@@ -290,6 +297,14 @@ pub struct DaemonConfig {
     /// Whether a Mac's daemon keeps its host from sleeping (`keep_awake`, default `true`); no
     /// other platform's daemon reads it.
     pub keep_awake: bool,
+    /// The host's serial console (`serial_console`), whose baseline a Linux daemon keeps; `None`
+    /// when the config leaves the key out.
+    pub serial_console: Option<SerialConsole>,
+}
+
+fn serial_console(fields: &Fields<'_>) -> Result<SerialConsole, Problem> {
+    let key = "serial_console";
+    SerialConsole::parse(fields.string(key)?).map_err(|why| fields.invalid(key, why.to_string()))
 }
 
 fn https(fields: &Fields<'_>, key: &str) -> Result<HttpsUrl, Problem> {
@@ -386,6 +401,10 @@ fn read(document: &toml::Table) -> Result<DaemonConfig, Problem> {
         keep_awake: top
             .get("keep_awake")
             .map_or(Ok(true), |_| top.boolean("keep_awake"))?,
+        serial_console: top
+            .get("serial_console")
+            .map(|_| serial_console(&top))
+            .transpose()?,
     })
 }
 

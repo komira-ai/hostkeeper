@@ -77,6 +77,7 @@ fn host(rig: &Rig, keys: Option<Arc<dyn OperatorKeysSink>>) -> (Heartbeater, Arc
         prerequisites: None,
         maintenance: None,
         bmc: None,
+        serial_console: None,
     };
     (links.heartbeater(&daemon), link)
 }

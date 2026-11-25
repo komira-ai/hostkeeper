@@ -192,6 +192,9 @@ by their route and are not in the menu.
   group selected and, for a host in none, the blank "Unassigned" (a host in no group is ordered no package). Pages label a host with no group "Unassigned". Choosing another group
   and pressing **Move** calls `HostGroups.Move` after a confirmation, with the reason "moved in the
   console" (the form has no reason field); choosing the blank moves the host to no group. A refused List is shown inline and the rest of the page renders.
+  The Overview (`ui/serialbaseline.js`) shows a "Serial console" row, the port and the state of the daemon's serial console
+  baseline from the last heartbeat (`heartbeat.serialConsole`; no row when the heartbeat carries none), and a warning while the state
+  is reboot pending (the kernel's console moves to the port at the host's next reboot; hostkeeper does not reboot the host) or failed.
 - **Remote SSH** (a tab of the Host page, `ui/sshpanel.js`; design:
   [SSH through the coordinator](design/ssh-through-coordinator.md) section 13): the tab says whether the host's SSH host keys are
   pinned (`Ssh.HostKeys`, read with the page) and lists them. When none is pinned, or the host reports others than the pinned ones, and

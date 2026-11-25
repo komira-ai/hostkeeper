@@ -34,6 +34,7 @@ mod prerequisites;
 mod remote_login_probe;
 mod repositories;
 mod resend;
+mod serial_console;
 mod size;
 mod tls;
 mod typed_orders;

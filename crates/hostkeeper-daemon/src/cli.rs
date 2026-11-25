@@ -533,6 +533,12 @@ pub fn host_links(
         link: Arc::new(link),
         certs,
         bmc: crate::bmc::at_host(kind, Arc::clone(&clock)),
+        serial_console: crate::serial_baseline::at_host(
+            kind,
+            ctx.config.serial_console.as_ref(),
+            Arc::clone(&clock),
+            log.clone(),
+        ),
         full_disk_access: Some(crate::full_disk_access::at_host(
             kind,
             Arc::clone(&clock),

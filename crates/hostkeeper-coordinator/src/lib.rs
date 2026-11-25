@@ -234,6 +234,7 @@ pub(crate) mod repository_serve;
 pub mod retry;
 pub mod rollouts;
 mod running;
+pub(crate) mod serial_console_report;
 pub mod service;
 mod service_errors;
 pub(crate) mod service_put;

@@ -111,6 +111,14 @@ pub(crate) fn heartbeat(beat: &Heartbeat) -> Result<pb::HeartbeatRequest, Unsend
             ip: report.ip.clone(),
             mac: report.mac.clone(),
         }),
+        serial_console: beat
+            .serial_console
+            .as_ref()
+            .map(|report| pb::SerialConsoleReport {
+                port: report.port.clone(),
+                state: report.state.clone(),
+                detail: report.detail.clone(),
+            }),
         maintenance: beat.maintenance.clone(),
     })
 }
@@ -628,6 +636,10 @@ mod local_halt_tests;
 #[cfg(test)]
 #[path = "proto_map_bmc_tests.rs"]
 mod bmc_tests;
+
+#[cfg(test)]
+#[path = "proto_map_serial_console_tests.rs"]
+mod serial_console_tests;
 
 #[cfg(test)]
 #[path = "proto_map_maintenance_tests.rs"]

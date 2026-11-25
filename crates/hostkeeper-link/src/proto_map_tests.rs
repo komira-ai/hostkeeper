@@ -60,6 +60,7 @@ fn beat(platform: Platform, services: Vec<ServiceFacts>) -> Heartbeat {
         ssh: None,
         prerequisites: None,
         bmc: None,
+        serial_console: None,
         maintenance: None,
     }
 }

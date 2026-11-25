@@ -147,6 +147,9 @@ pub struct Coordinator {
     pub(crate) operator_keys: crate::operator_keys::OperatorKeys,
     /// What each host's daemon last reported of its SSH access ([`crate::ssh_heartbeat`]).
     pub(crate) ssh_reports: crate::ssh_heartbeat::SshReports,
+    /// What each host's daemon last reported of its serial console baseline
+    /// ([`crate::serial_console_report`]).
+    pub(crate) serial_console_reports: crate::serial_console_report::SerialConsoleReports,
     /// The host prerequisites file and the hosts' reports ([`crate::prerequisites`]).
     pub(crate) prerequisites: crate::prerequisites::HostPrerequisites,
     /// What each host heard runs ([`crate::running`]).
@@ -225,6 +228,7 @@ impl Coordinator {
             repository_reports: crate::repository_push::Reports::default(),
             operator_keys: crate::operator_keys::OperatorKeys::default(),
             ssh_reports: crate::ssh_heartbeat::SshReports::default(),
+            serial_console_reports: crate::serial_console_report::SerialConsoleReports::default(),
             prerequisites: crate::prerequisites::HostPrerequisites::default(),
             running: crate::running::Kept::default(),
             console: crate::console::Console::default(),

@@ -25,6 +25,7 @@ fn beat(platform: Platform) -> Heartbeat {
         ssh: None,
         prerequisites: None,
         bmc: None,
+        serial_console: None,
         maintenance: None,
     }
 }

@@ -124,6 +124,7 @@ impl Coordinator {
                         crate::full_disk_access::show(&fleet, &id, &mut host);
                         self.show_operator_keys(&fleet, &id, &mut host);
                         self.show_ssh_report(&fleet, &id, &mut host);
+                        self.show_serial_console_report(&id, &mut host);
                         self.show_prerequisites(&fleet, &id, &mut host);
                         crate::maintenance::show_maintenance(&fleet, &id, &mut host, unix_now);
                         host
@@ -181,6 +182,7 @@ impl Coordinator {
             crate::full_disk_access::show(&fleet, &id, &mut host);
             self.show_operator_keys(&fleet, &id, &mut host);
             self.show_ssh_report(&fleet, &id, &mut host);
+            self.show_serial_console_report(&id, &mut host);
             self.show_prerequisites(&fleet, &id, &mut host);
             crate::maintenance::show_maintenance(&fleet, &id, &mut host, unix_now);
             // The verdict of a `clear_record` the host reported, which no rule reads.
@@ -288,6 +290,7 @@ impl Coordinator {
             self.running.forget(&id);
             self.operator_keys.forget(&id);
             self.ssh_reports.forget(&id);
+            self.serial_console_reports.forget(&id);
             self.prerequisites.forget(&id);
             tracing::info!(host_id = %id, "a retired host held no update: slot freed");
             enrollment.retire(&id);
