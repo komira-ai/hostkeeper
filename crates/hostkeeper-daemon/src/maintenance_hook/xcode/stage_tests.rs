@@ -974,5 +974,7 @@ fn a_staging_directory_swapped_in_before_the_fetch_is_refused() {
     assert!(mac.runner.ran().is_empty());
     mac.assert_clean();
 }
+
+// The stage as the maintenance hook runs it, and the stage over an archive a stage left.
 #[path = "stage_hook_tests.rs"]
 mod hook;
