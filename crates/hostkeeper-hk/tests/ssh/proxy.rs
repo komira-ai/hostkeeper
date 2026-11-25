@@ -225,8 +225,9 @@ fn a_refused_signing_ends_the_proxy() {
     assert_eq!(rig.seen(|s| s.opens.len()), 0);
 }
 
-/// Proves: when ssh has gone away (its end of the pipe is closed), the proxy ends cleanly at the
-/// first byte it cannot hand on, instead of reading on.
+/// Proves: when ssh has gone away (its end of the pipe is closed), the proxy ends cleanly: it
+/// stops handing bytes on at the first it cannot, the tunnel is closed and audited `host_closed`,
+/// and nothing is said.
 #[test]
 fn a_proxy_ends_when_its_output_is_closed() {
     let rig = Rig::start();
@@ -240,6 +241,7 @@ fn a_proxy_ends_when_its_output_is_closed() {
         Closed,
     );
     assert_eq!((code, diag.as_str()), (0, ""));
+    assert_eq!(rig.audited(), "host_closed");
 }
 
 /// Proves: a stream that fails before the coordinator says `opened` is that failure, as its

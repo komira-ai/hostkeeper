@@ -6,6 +6,7 @@ mod commands;
 mod fake;
 mod programs;
 mod proxy;
+mod signals;
 mod stamp;
 mod state;
 mod usage;
